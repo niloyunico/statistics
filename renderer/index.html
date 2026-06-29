@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>UNICO Healthcare — Statistics Suite</title>
+<!-- Offline IBM Plex fonts (vendored locally, no internet) -->
+<link rel="stylesheet" href="vendor/fonts/ibm-plex.css"/>
+<link rel="stylesheet" href="unico/theme.css"/>
+</head>
+<body>
+<div id="root"></div>
+<!-- Off-screen render target for PDF/print export (Reports). Only this node is
+     shown under @media print; #root is hidden. See theme.css + reports.jsx. -->
+<div id="pdf-root"></div>
+<!-- Vendored libraries — run fully offline, no CDN -->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/babel.min.js"></script>
+<!-- Database bridge: hydrate localStorage from the on-disk DB, then mirror every
+     change back to it. Runs before the app's stores read localStorage. -->
+<script>
+(function(){
+  var n = window.unicoNative;
+  if(!n){ return; } // opened outside the desktop shell — fall back to plain localStorage
+  try{
+    // 1) Hydrate: disk database is the source of truth at startup.
+    var snap = n.snapshot || {};
+    for(var k in snap){ if(Object.prototype.hasOwnProperty.call(snap,k)){ try{ localStorage.setItem(k, snap[k]); }catch(e){} } }
+  }catch(e){ try{ console.error('[unico-db] hydrate', e); }catch(_){} }
+  try{
+    function snapshotAll(){ var all={}; for(var i=0;i<localStorage.length;i++){ var key=localStorage.key(i); all[key]=localStorage.getItem(key); } return all; }
+    window.unicoSnapshotAll = snapshotAll;
+    window.unicoFlushNow = function(){ try{ return n.persist(snapshotAll()); }catch(e){ return Promise.resolve(); } };
+    window.unicoNative = n;
+    // 2) Mirror: persist the full state to disk (debounced) on any write.
+    var timer=null;
+    function schedule(){ clearTimeout(timer); timer=setTimeout(function(){ try{ n.persist(snapshotAll()); }catch(e){} }, 200); }
+    var proto = Object.getPrototypeOf(localStorage) || window.Storage.prototype;
+    ['setItem','removeItem','clear'].forEach(function(m){
+      var orig = proto[m];
+      proto[m] = function(){ var r = orig.apply(this, arguments); schedule(); return r; };
+    });
+  }catch(e){ try{ console.error('[unico-db] mirror', e); }catch(_){} }
+})();
+</script>
+<script src="unico/config.js"></script>
+<script src="unico/data.js"></script>
+<script src="unico/store.js"></script>
+<script src="unico/staff-seed.js"></script>
+<script src="unico/staff-data.js"></script>
+<script src="unico/quality-data.js"></script>
+<script src="unico/quality-store.js"></script>
+<script type="text/babel" src="unico/charts.jsx"></script>
+<script type="text/babel" src="unico/charts3d.jsx"></script>
+<script type="text/babel" src="unico/charts-extra.jsx"></script>
+<script type="text/babel" src="unico/ui.jsx"></script>
+<script type="text/babel" src="unico/feedback.jsx"></script>
+<script type="text/babel" src="unico/dashboard.jsx"></script>
+<script type="text/babel" src="unico/department.jsx"></script>
+<script type="text/babel" src="unico/comparison.jsx"></script>
+<script type="text/babel" src="unico/manage.jsx"></script>
+<script type="text/babel" src="unico/staff.jsx"></script>
+<script type="text/babel" src="unico/staff-profile.jsx"></script>
+<script type="text/babel" src="unico/input.jsx"></script>
+<script type="text/babel" src="unico/reports.jsx"></script>
+<script type="text/babel" src="unico/quality.jsx"></script>
+<script type="text/babel" src="unico/quality-edit.jsx"></script>
+<script type="text/babel" src="unico/quality-entry.jsx"></script>
+<script type="text/babel" src="unico/quality-scorecard.jsx"></script>
+<script type="text/babel" src="unico/quality-trends.jsx"></script>
+<script type="text/babel" src="unico/quality-catalog.jsx"></script>
+<script type="text/babel" src="unico/quality-capa.jsx"></script>
+<script type="text/babel" src="unico/charts-gallery.jsx"></script>
+<script type="text/babel" src="unico/login.jsx"></script>
+<script type="text/babel" src="unico/auth-login.jsx"></script>
+<script type="text/babel" src="unico/search.jsx"></script>
+<script type="text/babel" src="unico/app.jsx"></script>
+</body>
+</html>
