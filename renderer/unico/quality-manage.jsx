@@ -104,7 +104,8 @@
     const q = ind.quarters || {};
     if (QM_QS.some(k => q[k] != null && q[k] !== '')) return true;
     const filled = o => o && Object.keys(o).some(k => o[k] != null && o[k] !== '');
-    return filled(ind.months) || filled(ind.mNum) || filled(ind.qNum) || filled(ind.qDen) || filled(ind.mDen);
+    // A denominator alone is not a measurement — only numerators / direct values count.
+    return filled(ind.months) || filled(ind.mNum) || filled(ind.qNum);
   }
   function qmNewId(name) {
     return window.qualitySlug ? window.qualitySlug(name)
@@ -193,6 +194,9 @@
       const n = ind.mNum && ind.mNum[m];
       if (n == null || n === '') return null;
       const d = needsDen ? (ind.mDen && ind.mDen[m]) : null;
+      // rate/% need BOTH numerator and denominator — a numerator alone is not yet
+      // computable (don't let a missing denominator divide-by-zero into a fake 0).
+      if (needsDen && (d == null || d === '')) return null;
       return (typeof window !== 'undefined' && window.qiFormulaCompute) ? window.qiFormulaCompute(f, n, d) : Number(n);
     };
     const monthStatus = (val) => {
@@ -281,32 +285,27 @@
     const [sec, setSec] = useState('identity');
     const toggle = (k) => setSec(s => (s === k ? '' : k));
     const patch = (p) => Q.patchIndicator(deptKey, ind.id, p);
-    // Change the measurement formula WITHOUT losing data: the value grid stores
-    // direct values in `months` but formula values in `mNum`/`mDen`, and the store
-    // only rolls quarters up from the bucket matching the active formula. So when
-    // the formula crosses the direct boundary we carry each month's current
-    // (computed) value into the new bucket — for rate/% targets we seed a matching
-    // denominator (×mult) so the displayed value is preserved exactly.
-    const changeFormula = (newF) => {
+    // Change how the indicator is measured. The previously-entered numbers live in
+    // value buckets (quarters / qNum / qDen / mNum / mDen / months) and the store
+    // recomputes from whichever bucket the active formula uses — so we DON'T rewrite
+    // those buckets (rewriting would fabricate a denominator or drop the real
+    // numerator ÷ denominator, and would miss quarter-only data entirely). We change
+    // only the `formula` and warn, because the same numbers are now interpreted under
+    // the new measurement (re-check the benchmark / numerator / denominator).
+    const changeFormula = async (newF) => {
       const oldF = qmFormulaOf(ind);
       if (!newF || newF === oldF) return;
-      const compute = (m) => {
-        if (oldF === 'direct') { const v = ind.months && ind.months[m]; return (v == null || v === '') ? null : Number(v); }
-        const n = ind.mNum && ind.mNum[m]; if (n == null || n === '') return null;
-        const d = oldF !== 'count' ? (ind.mDen && ind.mDen[m]) : null;
-        return (typeof window !== 'undefined' && window.qiFormulaCompute) ? window.qiFormulaCompute(oldF, n, d) : Number(n);
-      };
-      const p = { formula: newF }; const months = {}, mNum = {}, mDen = {}; let any = false;
-      const mult = newF === 'rate1000' ? 1000 : 100;
-      QM_MONTHS.forEach(m => {
-        const v = compute(m); if (v == null) return; any = true;
-        if (newF === 'direct') months[m] = v;
-        else if (newF === 'count') mNum[m] = v;
-        else { mNum[m] = v; mDen[m] = mult; }
-      });
-      if (any) { if (newF === 'direct') p.months = months; else { p.mNum = mNum; if (newF !== 'count') p.mDen = mDen; } }
-      patch(p);
-      if (any) qmToast('Measurement changed — your monthly values were carried over');
+      const lab = (ff) => (QM_FORMULAS.find(x => x[0] === ff) || [])[1] || ff;
+      if (qmHasData(ind)) {
+        const ok = await qmConfirm({
+          title: 'Change how this is measured?',
+          message: `Switching from “${lab(oldF)}” to “${lab(newF)}” keeps the values you already entered, but they are now interpreted and benchmarked under the new measurement — re-check the benchmark and, for rate / percentage, the numerator ÷ denominator.`,
+          confirmLabel: 'Change measurement',
+        }, 'Change measurement type? Existing values are kept but re-interpreted under the new formula.');
+        if (!ok) return;
+      }
+      patch({ formula: newF });
+      qmToast('Measurement type changed');
     };
     const f = qmFormulaOf(ind);
     const isFormula = f !== 'direct';
