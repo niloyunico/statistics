@@ -124,7 +124,7 @@ function ChartsGallery({dept, setRoute}){
       try{
         if(native&&typeof native.exportPDF==='function'){
           const res=await native.exportPDF({pageSize:'A4',landscape:true,defaultName:`UNICO-${d.short}-charts`});
-          if(res&&res.ok) toast('Charts PDF saved · '+res.path,'success');
+          if(res&&res.ok) toast('Charts PDF'+(res.path?' saved · '+res.path:' ready — save it from the print dialog'),'success');
           else if(res&&res.canceled){ /* dismissed — stay quiet */ }
           else toast((res&&res.error)||'PDF export failed','error');
         }else{

@@ -60,12 +60,45 @@ through the same MongoDB-backed sync.
 
 ## Data model
 
-The whole app state is stored as **one shared document** in the `appdata`
-collection (`_id: "shared"`) — a faithful port of the desktop app's single-file
-store. The server reads it to hydrate the page and writes it back on every
-(debounced) change. Concurrent editors are last-writer-wins, which suits a
-single-team statistics tool; per-collection REST APIs can be layered on later if
-multi-user merge becomes a requirement.
+MongoDB collections in the `unico` database. The three datasets that used to be
+hardcoded in the renderer now live in the database — the server injects each into
+the page (synchronously, before the app scripts run) and also exposes a read API:
+
+| Collection    | Was hardcoded in            | Injected as                  | Read API            |
+| ------------- | --------------------------- | ---------------------------- | ------------------- |
+| `departments` | `unico/data.js` (monthly stats) | `window.__UNICO_DEPARTMENTS__` | `GET /api/departments` |
+| `staff`       | `unico/staff-seed.js` (nurse/PCA) | `window.__UNICO_STAFF__`       | `GET /api/staff`       |
+| `quality`     | `unico/quality-data.js` (indicators) | `window.__UNICO_QUALITY__`   | `GET /api/quality`     |
+
+Re-seed / refresh from the JSON snapshots in `server/seed/` with:
+```bat
+npm --prefix server run seed-departments            REM departments (insert if empty)
+npm --prefix server run seed-departments -- --force REM departments (overwrite)
+npm --prefix server run seed-data                   REM staff + quality (insert if empty)
+npm --prefix server run seed-data -- staff --force  REM one dataset, overwrite
+```
+On first boot against an empty database the server auto-seeds all three.
+
+Plus:
+
+- **`appdata`** — one shared document (`_id: "shared"`) holding the rest of the
+  app state (user edits/overrides, staff, quality entries, CAPA, custom columns,
+  settings) as a mirror of the browser's `localStorage`. The server injects it as
+  `window.__UNICO_SNAPSHOT__` and the web bridge writes it back via `PUT /api/data`
+  on every (debounced) change. `PUT /api/data` accepts only a flat string→string
+  map (the localStorage shape) and is capped to guard the shared doc.
+
+Concurrent editors are last-writer-wins, which suits a single-team statistics
+tool. Editing a department's monthly numbers in the app currently records an
+override in `appdata` (also in the DB); a future enhancement can write those
+edits straight back to the `departments` collection.
+
+> Note: because the departments, staff, and quality data now come from the
+> database, the app must be opened **through this server** (it no longer ships
+> built-in records). Opening the renderer files outside the server yields empty
+> lists by design. The staff config (departments/designations/qualifications used
+> by the add-staff forms) and the synthetic-staff fallback generator remain in
+> `staff-data.js` — those are logic, not the real records, which now live in the DB.
 
 ---
 

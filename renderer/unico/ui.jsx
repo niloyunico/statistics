@@ -37,6 +37,91 @@ const DEPT_ICON = { er:I.pulse, opd:I.user, nicu:I.heart, endoscopy:I.activity, 
   sicu:I.bed, dialysis:I.activity, lvl10:I.bed, lvl9:I.bed, ldr:I.heart, micu:I.pulse,
   ccu:I.heart, cathlab:I.activity, ctvs:I.syringe, homecare:I.user };
 
+/* ---- Mega-modules: the app is split into three top-level workspaces. The top-bar
+   ModuleSwitch flips between them; the Sidebar shows ONLY the active module's
+   sections. The active module is DERIVED from the current route.view (no separate
+   state), so deep links / breadcrumb jumps keep the right module highlighted. ---- */
+const UNICO_MODULES = [
+  { id:'stats',   label:'Statistics',         short:'Statistics', icon:I.grid,  home:'dashboard' },
+  { id:'datacol', label:'Data Collection',    short:'Data',       icon:I.input, home:'dcReview' },
+  { id:'staff',   label:'Staff Management',   short:'Staff',      icon:I.steth, home:'nurseHome' },
+  { id:'quality', label:'Quality Indicators', short:'Quality',    icon:I.heart, home:'quality' },
+  { id:'users',   label:'User Management',    short:'Users',      icon:I.user,  home:'users' },
+];
+const UNICO_MODULE_VIEWS = {
+  stats:  ['dashboard','departments','compare','gallery','manage','input','reports','settings'],
+  datacol:['dcPatient','dcQuality','dcResponsibles','dcShare','dcFields','dcReview'],
+  staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffProfile','staffForm'],
+  quality:['quality','qualityDept','qualityEdit','qualityEntry','qualityDataEntry','qualityScore','qualityTrend','qualityCatalog','qualityAssign','qualityManage','qualityCapa','qualityReport','qualityReportQ','qualityIncidents'],
+  users:  ['users'],
+};
+function unicoModuleOf(view){
+  for(let i=0;i<UNICO_MODULES.length;i++){ const m=UNICO_MODULES[i]; if((UNICO_MODULE_VIEWS[m.id]||[]).indexOf(view)>=0) return m.id; }
+  return 'stats';
+}
+function unicoSidebarGroups(moduleId){
+  if(moduleId==='datacol') return [
+    {sec:'Data Collection', items:[
+      {id:'dcPatient',label:'Patient Statistics',icon:I.input},
+      {id:'dcQuality',label:'Quality Data',icon:I.activity},
+      {id:'dcResponsibles',label:'Responsible Persons',icon:I.user},
+      {id:'dcShare',label:'Share Links',icon:I.arrowR},
+      {id:'dcFields',label:'Form Fields',icon:I.filter},
+      {id:'dcReview',label:'Review & History',icon:I.doc},
+    ]},
+  ];
+  if(moduleId==='staff') return [
+    {sec:'Nurse Management', items:[{id:'nurseHome',label:'Dashboard',icon:I.grid},{id:'nurses',label:'Directory',icon:I.layers},{id:'nurseCompliance',label:'Compliance',icon:I.heart}]},
+    {sec:'PCA Management',   items:[{id:'pcaHome',label:'Dashboard',icon:I.grid},{id:'pca',label:'Directory',icon:I.layers},{id:'pcaCompliance',label:'Compliance',icon:I.heart}]},
+  ];
+  if(moduleId==='quality') return [
+    {sec:'Quality Indicators', items:[
+      {id:'quality',label:'Dashboard',icon:I.grid,match:['quality','qualityDept']},
+      {id:'qualityScore',label:'Scorecard',icon:I.layers},
+      {id:'qualityTrend',label:'Trends',icon:I.trend},
+      {id:'qualityReport',label:'Monthly Report',icon:I.doc},
+      {id:'qualityReportQ',label:'Quarterly Report',icon:I.layers},
+      {id:'qualityIncidents',label:'Incident Reports',icon:I.activity},
+      {id:'qualityDataEntry',label:'Quality Data Entry',icon:I.activity},
+      {id:'qualityManage',label:'Manage Indicators',icon:I.edit},
+      {id:'qualityCatalog',label:'Catalog',icon:I.doc},
+      {id:'qualityAssign',label:'Assign by Department',icon:I.grid},
+      {id:'qualityCapa',label:'Action Plans',icon:I.check},
+    ]},
+  ];
+  if(moduleId==='users') return [
+    {sec:'User Management', items:[
+      {id:'users',label:'All Users & Roles',icon:I.user},
+    ]},
+  ];
+  return [
+    {sec:'Overview', items:[
+      {id:'dashboard',label:'Dashboard',icon:I.grid},
+      {id:'departments',label:'Departments',icon:I.layers},
+      {id:'compare',label:'Compare',icon:I.trend},
+      {id:'manage',label:'Manage Depts',icon:I.edit},
+      {id:'input',label:'Data Entry',icon:I.input},
+      {id:'reports',label:'Reports',icon:I.doc},
+      {id:'settings',label:'Settings',icon:I.gear},
+    ]},
+  ];
+}
+// Top-bar workspace switcher. Selecting a module jumps to that module's home view.
+function ModuleSwitch({route, setRoute}){
+  const cur=unicoModuleOf(route.view);
+  return (
+    <div className="seg modswitch" style={{flexShrink:0,marginRight:10}} title="Switch workspace">
+      {UNICO_MODULES.map(m=>(
+        <button key={m.id} className={cur===m.id?'on':''} title={m.label}
+          onClick={()=>{ if(cur!==m.id) setRoute({view:m.home}); }}
+          style={{display:'inline-flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>
+          <Ic d={m.icon} s={15}/><span className="modswitch-lbl">{m.short}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // Resolve a reporting-period selection to the concrete list of in-range month
 // keys (chronological). Returns null for "all" — meaning no filtering. Shared by
 // the top-bar PeriodPill (for its label) and the Dashboard (for actual filtering).
@@ -57,16 +142,10 @@ function unicoPeriodMonths(allMonths, period){
 window.unicoPeriodMonths=unicoPeriodMonths;
 
 function Sidebar({route, setRoute, collapsed, depts}){
-  const groups = window.UNICO.GROUPS;
-  const nav=[
-    {id:'dashboard',label:'Dashboard',icon:I.grid},
-    {id:'departments',label:'Departments',icon:I.layers},
-    {id:'compare',label:'Compare',icon:I.trend},
-    {id:'manage',label:'Manage Depts',icon:I.edit},
-    {id:'input',label:'Data Entry',icon:I.input},
-    {id:'reports',label:'Reports',icon:I.doc},
-    {id:'settings',label:'Settings',icon:I.gear},
-  ];
+  const activeMod = unicoModuleOf(route.view);
+  const groups = unicoSidebarGroups(activeMod);
+  const curMod = UNICO_MODULES.find(m=>m.id===activeMod) || UNICO_MODULES[0];
+  const isOn = it => it.match ? it.match.indexOf(route.view)>=0 : route.view===it.id;
   return (
     <aside className="sb">
       <div className="sb-brand">
@@ -74,51 +153,53 @@ function Sidebar({route, setRoute, collapsed, depts}){
         <img className="sb-logo-mark" src="unico/logo-mark.svg" alt="UNICO"/>
       </div>
       <div className="sb-scroll">
-        <div className="sb-sec">Overview</div>
-        {nav.map(n=>(
-          <div key={n.id} className={'sb-item'+(route.view===n.id?' active':'')} onClick={()=>setRoute({view:n.id})}>
-            <Ic d={n.icon} s={18}/><span className="lbl">{n.label}</span>
-          </div>
-        ))}
-        <div className="sb-sec">Nurse Management</div>
-        {[{id:'nurseHome',label:'Dashboard',icon:I.grid},{id:'nurses',label:'Directory',icon:I.layers},{id:'nurseCompliance',label:'Compliance',icon:I.heart}].map(n=>(
-          <div key={n.id} className={'sb-item'+(route.view===n.id?' active':'')} onClick={()=>setRoute({view:n.id})}>
-            <Ic d={n.icon} s={18}/><span className="lbl">{n.label}</span>
-          </div>
-        ))}
-        <div className="sb-sec">PCA Management</div>
-        {[{id:'pcaHome',label:'Dashboard',icon:I.grid},{id:'pca',label:'Directory',icon:I.layers},{id:'pcaCompliance',label:'Compliance',icon:I.heart}].map(n=>(
-          <div key={n.id} className={'sb-item'+(route.view===n.id?' active':'')} onClick={()=>setRoute({view:n.id})}>
-            <Ic d={n.icon} s={18}/><span className="lbl">{n.label}</span>
-          </div>
-        ))}
-        <div className="sb-sec">Quality Indicators</div>
-        {[{id:'quality',label:'Dashboard',icon:I.grid},{id:'qualityScore',label:'Scorecard',icon:I.layers},{id:'qualityTrend',label:'Trends',icon:I.trend},{id:'qualityCatalog',label:'Catalog',icon:I.doc},{id:'qualityEntry',label:'Monthly Entry',icon:I.input},{id:'qualityCapa',label:'Action Plans',icon:I.check}].map(n=>{
-          const match={quality:['quality','qualityDept'],qualityScore:['qualityScore'],qualityTrend:['qualityTrend'],qualityCatalog:['qualityCatalog'],qualityEntry:['qualityEntry'],qualityCapa:['qualityCapa']};
-          return (
-            <div key={n.id} className={'sb-item'+(match[n.id].includes(route.view)?' active':'')} onClick={()=>setRoute({view:n.id})}>
-              <Ic d={n.icon} s={18}/><span className="lbl">{n.label}</span>
-            </div>
-          );
-        })}
-        <div className="sb-sec" style={{display:'flex',alignItems:'center'}}>Departments<span className="spacer" style={{flex:1}}/>
-          <span onClick={()=>setRoute({view:'manage'})} title="Add / manage" style={{cursor:'pointer',color:'#7e8da0',display:'grid',placeItems:'center',padding:'0 2px'}}><Ic d={I.plus} s={15}/></span>
+        {/* current workspace label — mirrors the top-bar ModuleSwitch so the admin always knows where they are */}
+        <div className="sb-sec" style={{display:'flex',alignItems:'center',gap:7,color:'var(--blue)'}}>
+          <Ic d={curMod.icon} s={14}/><span style={{fontWeight:800,letterSpacing:.3}}>{curMod.label}</span>
         </div>
-        {depts.map(d=>(
-          <div key={d.id} className={'sb-item'+(route.view==='departments'&&route.dept===d.id?' active':'')}
-            onClick={()=>setRoute({view:'departments',dept:d.id})} title={d.name}>
-            <Ic d={DEPT_ICON[d.id]||I.activity} s={17}/>
-            <span className="lbl">{d.short}</span>
-            <span className="badge num">{d.total}</span>
-          </div>
+        {groups.map((g,gi)=>(
+          <React.Fragment key={gi}>
+            <div className="sb-sec">{g.sec}</div>
+            {g.items.map(n=>(
+              <div key={n.id} className={'sb-item'+(isOn(n)?' active':'')} onClick={()=>setRoute({view:n.id})}>
+                <Ic d={n.icon} s={18}/><span className="lbl">{n.label}</span>
+              </div>
+            ))}
+          </React.Fragment>
         ))}
+        {activeMod==='stats' && (
+          <>
+            <div className="sb-sec" style={{display:'flex',alignItems:'center'}}>Departments<span className="spacer" style={{flex:1}}/>
+              <span onClick={()=>setRoute({view:'manage'})} title="Add / manage" style={{cursor:'pointer',color:'#7e8da0',display:'grid',placeItems:'center',padding:'0 2px'}}><Ic d={I.plus} s={15}/></span>
+            </div>
+            {depts.map(d=>(
+              <div key={d.id} className={'sb-item'+(route.view==='departments'&&route.dept===d.id?' active':'')}
+                onClick={()=>setRoute({view:'departments',dept:d.id})} title={d.name}>
+                <Ic d={DEPT_ICON[d.id]||I.activity} s={17}/>
+                <span className="lbl">{d.short}</span>
+                <span className="badge num">{d.total}</span>
+              </div>
+            ))}
+          </>
+        )}
       </div>
       <div className="sb-foot">
-        <div className="avatar">NN</div>
-        <div className="who" style={{minWidth:0}}>
-          <div style={{color:'#fff',fontSize:12.5,fontWeight:600,whiteSpace:'nowrap'}}>Nasif Ahammed Niloy</div>
-          <div style={{color:'#83909f',fontSize:10.5,whiteSpace:'nowrap'}}>Administrator</div>
-        </div>
+        {(()=>{
+          const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
+          const name=(u&&u.name)||'Nasif Ahammed Niloy';
+          const role=u?(u.role==='collector'?'Data Collector':u.role):'Administrator';
+          const initials=String(name).split(/\s+/).map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()||'U';
+          return (<>
+            <div className="avatar">{initials}</div>
+            <div className="who" style={{minWidth:0,flex:1}}>
+              <div style={{color:'#fff',fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{name}</div>
+              <div style={{color:'#83909f',fontSize:10.5,whiteSpace:'nowrap'}}>{role}</div>
+            </div>
+            <a href="/logout" title="Sign out" style={{marginLeft:'auto',display:'grid',placeItems:'center',width:32,height:32,borderRadius:8,color:'#cfe0f0',background:'rgba(255,255,255,.08)',textDecoration:'none',flexShrink:0}}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+            </a>
+          </>);
+        })()}
       </div>
     </aside>
   );
@@ -190,6 +271,7 @@ function TopBar({route, setRoute, onBurger, crumbs, actions, depts=[], onFill, p
   return (
     <div className="topbar">
       <button className="tb-burger" onClick={onBurger} title="Toggle menu"><Ic d={I.grid} s={16}/></button>
+      <ModuleSwitch route={route} setRoute={setRoute}/>
       <div className="crumb">
         {crumbs.map((c,i)=>(
           <React.Fragment key={i}>
@@ -278,4 +360,4 @@ function SectionTitle({icon,title,sub,right}){
   );
 }
 
-Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle });
+Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, ModuleSwitch, unicoModuleOf });

@@ -134,7 +134,7 @@ function QualityTrends({setRoute}){
   const [indId,setIndId]=React.useState(inds[0]?inds[0].id:null);
   const ind=inds.find(x=>x.id===indId)||inds[0]||null;
   const [mode,setMode]=React.useState('line');       // line | bar
-  const [gran,setGran]=React.useState('quarterly');   // quarterly | monthly
+  const [gran,setGran]=React.useState('monthly');     // quarterly | monthly
 
   /* keep indicator valid when department changes */
   React.useEffect(()=>{
@@ -147,8 +147,9 @@ function QualityTrends({setRoute}){
 
   /* ---- build chart points ---- */
   const points = gran==='monthly'
-    ? QMONTHS.map(([label,q])=>{ const status=indStatus(ind,q); const v=qtNum(ind,q);
-        return {label:label+' · '+q, short:label.split(' ')[0], q, v, status, pretty:v==null?'–':qtPretty(ind,q)}; })
+    ? QMONTHS.map(([label,q])=>{ const mk=label.replace(' ','-'); const raw=(typeof qMonthRaw==='function')?qMonthRaw(ind,mk):null;
+        const v=raw; const status=indMonthStatus(ind,mk,q);
+        return {label, short:label.split(' ')[0], q, v, status, pretty:v==null?'–':(indIsPct(ind)?v+'%':fmt(v))}; })
     : QS.map(q=>{ const status=indStatus(ind,q); const v=qtNum(ind,q);
         return {label:QLABEL[q], short:QSHORT[q], q, v, status, pretty:v==null?'–':qtPretty(ind,q)}; });
 
@@ -190,7 +191,7 @@ function QualityTrends({setRoute}){
 
   return (
     <div className="grid" style={{gap:16}}>
-      <SectionTitle icon={I.trend} title="Quality Trends" sub="Per-indicator trend & cross-department benchmarking · FY 2025–2026"/>
+      <SectionTitle icon={I.trend} title="Quality Trends" sub="Per-indicator trend & cross-department benchmarking · Jun 2025 – May 2026"/>
 
       {/* selectors */}
       <div className="card" style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
@@ -230,7 +231,7 @@ function QualityTrends({setRoute}){
         </div>
         {gran==='monthly'&&(
           <div style={{padding:'8px 16px',fontSize:11,color:'var(--muted)',background:'var(--blue-50)',borderBottom:'1px solid var(--line-2)'}}>
-            Monthly view expands each quarter's reported value across its months (source data is reported quarterly).
+            Monthly view shows each month's reported value (Jun 2025 – May 2026); months with no value fall back to their quarter.
           </div>
         )}
         <div className="card-b">

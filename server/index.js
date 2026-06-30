@@ -8,6 +8,7 @@ const express = require('express');
 const cors = require('cors');
 const { getUsers, getAppData, setAppData, usingMongo } = require('./db');
 const auth = require('./auth');
+const session = require('./session');
 
 const app = express();
 app.use(express.json({ limit: '12mb' })); // app-state snapshots can be sizable
@@ -34,6 +35,9 @@ app.post('/api/login', async (req, res) => {
     const valid = user && user.active !== false && await auth.verify(password, user.passwordHash);
     if (!valid) return res.status(401).json({ ok: false, error: 'Invalid username or password.' });
     const token = auth.sign(user);
+    // Also drop an httpOnly session cookie so the browser portal is signed in
+    // (desktop/Bearer clients simply ignore it and keep using the token).
+    session.setSession(res, token);
     res.json({ ok: true, token, user: { username: user.username, name: user.name || user.username, role: user.role || 'User' } });
   } catch (e) {
     res.status(500).json({ ok: false, error: 'Server error. Is the database reachable?' });
@@ -52,17 +56,10 @@ app.get('/api/me', (req, res) => {
 // --- app data sync (the whole app state as one shared document) ---
 // REQUIRE_AUTH=false (default) = local "PC software" mode: the data endpoints are
 // open so the web shim can sync without a login wall. Set REQUIRE_AUTH=true to
-// require a signed-in user (multi-user / shared-server deployments).
-const REQUIRE_AUTH = String(process.env.REQUIRE_AUTH || '').toLowerCase() === 'true';
-function requireAuth(req, res, next) {
-  if (!REQUIRE_AUTH) { req.user = null; return next(); } // open local mode
-  const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : '';
-  const claims = auth.check(token);
-  if (!claims) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
-  req.user = claims;
-  next();
-}
+// require a signed-in user (the admin login portal — see web.js / session.js).
+// The gate accepts either the session cookie (browser portal) or a Bearer token
+// (desktop builds).
+const requireAuth = session.requireApi;
 
 app.get('/api/data', requireAuth, async (req, res) => {
   try { const d = await getAppData(); res.json({ ok: true, data: d.data, updatedAt: d.updatedAt }); }
@@ -72,6 +69,13 @@ app.get('/api/data', requireAuth, async (req, res) => {
 app.put('/api/data', requireAuth, async (req, res) => {
   const data = req.body && req.body.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return res.status(400).json({ ok: false, error: 'A data object is required.' });
+  // The app state is a mirror of localStorage: a flat map of string->string. Enforce
+  // that shape so a malformed/abusive payload can't bloat or corrupt the shared doc.
+  const keys = Object.keys(data);
+  if (keys.length > 5000) return res.status(413).json({ ok: false, error: 'Too many keys.' });
+  for (const k of keys) {
+    if (typeof data[k] !== 'string') return res.status(400).json({ ok: false, error: 'All values must be strings (localStorage snapshot).' });
+  }
   try { const r = await setAppData(data); res.json({ ok: true, updatedAt: r.updatedAt }); }
   catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }
 });

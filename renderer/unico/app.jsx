@@ -5,8 +5,8 @@ function App(){
   const store=window.useDeptStore();
   const staff=window.useStaffStore();
   const depts=store.depts;
-  const [route,setRoute]=useState({view:'dashboard'});
-  const [collapsed,setCollapsed]=useState(false);
+  const [route,setRoute]=useState(()=> (typeof window!=='undefined' && window.__UNICO_INITIAL_ROUTE__) || {view:'dashboard'});
+  const [collapsed,setCollapsed]=useState(()=> typeof window!=='undefined' && window.innerWidth<=820);
   const [layout,setLayout]=useState('executive');
   const [period,setPeriod]=useState({mode:'all'});
   const [locked,setLocked]=useState(()=>!!(window.unicoLock&&window.unicoLock.isEnabled()));
@@ -69,6 +69,9 @@ function App(){
   } else if(route.view==='qualityEntry'){
     crumbs=['UNICO','Quality','Monthly Entry'];
     body=<QualityEntry setRoute={setRoute}/>;
+  } else if(route.view==='qualityDataEntry'){
+    crumbs=['UNICO','Quality','Quality Data Entry'];
+    body=<DataQualityForm prefill={{area:route.area,responsible:route.responsible}}/>;
   } else if(route.view==='qualityScore'){
     crumbs=['UNICO','Quality','Scorecard'];
     body=<QualityScorecard setRoute={setRoute}/>;
@@ -78,9 +81,45 @@ function App(){
   } else if(route.view==='qualityCatalog'){
     crumbs=['UNICO','Quality','Catalog'];
     body=<QualityCatalog setRoute={setRoute}/>;
+  } else if(route.view==='qualityAssign'){
+    crumbs=['UNICO','Quality','Assign by Department'];
+    body=<QualityAssign setRoute={setRoute}/>;
+  } else if(route.view==='qualityManage'){
+    crumbs=['UNICO','Quality','Manage Indicators'];
+    body=<QualityManageIndicators setRoute={setRoute}/>;
   } else if(route.view==='qualityCapa'){
     crumbs=['UNICO','Quality','Action Plans'];
     body=<QualityCAPA setRoute={setRoute}/>;
+  } else if(route.view==='qualityIncidents'){
+    crumbs=['UNICO','Quality','Incident Reports'];
+    body=<QualityIncidentReport setRoute={setRoute}/>;
+  } else if(route.view==='qualityReport'){
+    crumbs=['UNICO','Quality','Monthly Report'];
+    body=<QualityReport setRoute={setRoute} mode="monthly"/>;
+  } else if(route.view==='qualityReportQ'){
+    crumbs=['UNICO','Quality','Quarterly Report'];
+    body=<QualityReport setRoute={setRoute} mode="quarterly"/>;
+  } else if(route.view==='dcPatient'){
+    crumbs=['UNICO','Data Collection','Patient Statistics'];
+    body=<DataPatientForm depts={depts} prefill={{dept:route.dept,responsible:route.responsible,month:route.month}}/>;
+  } else if(route.view==='dcQuality'){
+    crumbs=['UNICO','Data Collection','Quality Data'];
+    body=<DataQualityForm prefill={{area:route.area,responsible:route.responsible}}/>;
+  } else if(route.view==='dcResponsibles'){
+    crumbs=['UNICO','Data Collection','Responsible Persons'];
+    body=<DataResponsibles depts={depts}/>;
+  } else if(route.view==='dcReview'){
+    crumbs=['UNICO','Data Collection','Review & History'];
+    body=<DataReview/>;
+  } else if(route.view==='dcShare'){
+    crumbs=['UNICO','Data Collection','Share Links'];
+    body=<DataShareLinks depts={depts}/>;
+  } else if(route.view==='dcFields'){
+    crumbs=['UNICO','Data Collection','Form Fields'];
+    body=<DataFields setRoute={setRoute}/>;
+  } else if(route.view==='users'){
+    crumbs=['UNICO','User Management'];
+    body=<UserAdmin setRoute={setRoute}/>;
   } else if(route.view==='nurseHome'){
     crumbs=['UNICO','Nurse Management','Dashboard'];
     body=<WorkforceDashboard store={staff} setRoute={setRoute} role="Nurse"/>;
@@ -110,6 +149,11 @@ function App(){
 
   if(window.unicoSession && window.unicoSession.configured() && !authed){ return <CloudLogin onLogin={()=>setAuthed(true)}/>; }
   if(locked){ return <LockScreen onUnlock={()=>setLocked(false)}/>; }
+  // Data collectors get ONLY the data-collection portal (submit forms + their own
+  // history) — every other module (dashboard, statistics, staff, quality…) is hidden.
+  if(typeof window!=='undefined' && window.__UNICO_USER__ && window.__UNICO_USER__.role==='collector' && typeof CollectorPortal!=='undefined'){
+    return <CollectorPortal/>;
+  }
 
   return (
     <div className={'app'+(collapsed?' collapsed':'')}>

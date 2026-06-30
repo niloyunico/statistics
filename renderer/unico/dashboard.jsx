@@ -48,7 +48,14 @@ function DeptMiniCard({d,onOpen}){
 function ReportingCompliance({depts, onFill}){
   const MO=window.UNICO.MONTH_ORDER, MF=window.UNICO.MONTHS_FULL;
   const allM=[...new Set(depts.flatMap(d=>d.months))].sort((a,b)=>MO.indexOf(a)-MO.indexOf(b));
-  const recent=allM.slice(-5);
+  const yearOf=m=>String(m||'').split('-')[1]||'';
+  const yLabel=y=>y&&y.length===2?'20'+y:(y||'');
+  const years=[...new Set(allM.map(yearOf))].filter(Boolean).sort();
+  const [year,setYear]=React.useState(()=>years[years.length-1]||'');
+  const curYear=years.indexOf(year)>=0?year:(years[years.length-1]||'');
+  // Show the selected year's months (fall back to the last 5 overall if none).
+  const monthsOfYear=allM.filter(m=>yearOf(m)===curYear);
+  const recent=monthsOfYear.length?monthsOfYear:allM.slice(-5);
   let reported=0, missing=0;
   const rows=depts.map(d=>{
     const first=d.months[0];
@@ -64,7 +71,12 @@ function ReportingCompliance({depts, onFill}){
   return (
     <div className="card">
       <div className="card-h">
-        <h3>Reporting Compliance</h3><span className="sub">running months · missing department stats</span><span className="spacer"/>
+        <h3>Reporting Compliance</h3><span className="sub">{curYear?yLabel(curYear):'running months'} · missing department stats</span><span className="spacer"/>
+        {years.length>1&&(
+          <div className="seg" style={{marginRight:8}} title="Switch reporting year">
+            {years.map(y=><button key={y} className={curYear===y?'on':''} onClick={()=>setYear(y)}>{yLabel(y)}</button>)}
+          </div>
+        )}
         <span className="chip " style={{background:pct>=90?'var(--pos-bg)':pct>=70?'#fdf3e3':'var(--neg-bg)',color:pct>=90?'var(--pos)':pct>=70?'var(--amber)':'var(--neg)'}}>{pct}% complete</span>
         <span className="tag num" style={{marginLeft:8}}>{missing} pending</span>
       </div>

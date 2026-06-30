@@ -9,11 +9,11 @@ function ragOf(rate){
   return {label:'Red',color:'#d23a52',bg:'rgba(210,58,82,.12)',bar:'#d23a52'};
 }
 
-/* indicator in a dept with the most breach quarters; ties -> first encountered */
+/* indicator in a dept with the most breach months; ties -> first encountered */
 function topRiskIndicator(d){
   let best=null,bestB=0;
   (d.indicators||[]).forEach(ind=>{
-    let b=0; QS.forEach(q=>{ if(indStatus(ind,q)==='breach') b++; });
+    let b=0; QMONTHS.forEach(m=>{ if(indMonthStatus(ind,m[0].replace(' ','-'),m[1])==='breach') b++; });
     if(b>bestB){ bestB=b; best=ind; }
   });
   return best?{name:best.name,breaches:bestB}:null;
@@ -40,7 +40,7 @@ function exportQualityScorecard(rows,totals,fmt){
   const heads=['Department','Indicators','Zero-Defect %','Breaches','RAG','Top Risk Indicator'];
   const th=heads.map(h=>`<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:6px 8px;font-family:Calibri,Arial;text-align:left;font-size:11pt">${h}</th>`).join('');
   const trs=rows.map((r,i)=>{
-    const risk=r.risk?`${r.risk.name} (${r.risk.breaches} breach quarter${r.risk.breaches!==1?'s':''})`:'—';
+    const risk=r.risk?`${r.risk.name} (${r.risk.breaches} breach month${r.risk.breaches!==1?'s':''})`:'—';
     const cells=[r.name,r.indicators,r.rate+'%',r.breach,r.rag.label,risk];
     return `<tr style="background:${i%2?'#eef6fb':'#fff'}">${cells.map(c=>`<td style="border:1px solid #b9c6d2;padding:5px 8px;font-family:Calibri,Arial;font-size:10.5pt">${esc(c)}</td>`).join('')}</tr>`;
   }).join('');
@@ -91,7 +91,7 @@ function QualityScorecard({setRoute}){
 
   return (
     <div className="grid" style={{gap:16}}>
-      <SectionTitle icon={I.layers} title="Quality Scorecard" sub="Hospital-wide quality performance across all departments · FY 2025–2026"
+      <SectionTitle icon={I.layers} title="Quality Scorecard" sub="Hospital-wide quality performance across all departments · Jun 2025 – May 2026"
         right={
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
             <button className="btn sm" onClick={()=>exportQualityScorecard(sorted,totals,'word')}><Ic d={I.doc} s={14}/>Word</button>
@@ -104,7 +104,7 @@ function QualityScorecard({setRoute}){
         <Kpi label="Departments" val={fmt(totals.depts)} foot="reporting quality KPIs" color="#0090ca"/>
         <Kpi label="Indicators" val={fmt(totals.indicators)} foot="tracked across departments" color="#6a52d4"/>
         <Kpi label="Zero-Defect Rate" val={totals.zeroDefect+'%'} foot="aggregate on-benchmark vs measured" color="#1f9d57"/>
-        <Kpi label="Total Breaches" val={fmt(totals.breach)} foot="indicator-quarters off benchmark" color={totals.breach>0?'#d23a52':'#1f9d57'}/>
+        <Kpi label="Total Breaches" val={fmt(totals.breach)} foot="indicator-months off benchmark" color={totals.breach>0?'#d23a52':'#1f9d57'}/>
       </div>
 
       <div className="grid" style={{gridTemplateColumns:'1.45fr 1fr'}}>
@@ -142,7 +142,7 @@ function QualityScorecard({setRoute}){
                     </td>
                     <td style={{textAlign:'center'}}><span className="chip" style={{background:r.rag.bg,color:r.rag.color}}>{r.rag.label}</span></td>
                     <td style={{textAlign:'left',fontSize:11.5,color:'var(--muted)',fontFamily:"'IBM Plex Sans'"}}>
-                      {r.risk?<span><span style={{color:'var(--ink-2)',fontWeight:600}}>{r.risk.name}</span> · {r.risk.breaches} breach Q</span>:<span style={{color:'var(--pos)'}}>No breaches</span>}
+                      {r.risk?<span><span style={{color:'var(--ink-2)',fontWeight:600}}>{r.risk.name}</span> · {r.risk.breaches} breach mo</span>:<span style={{color:'var(--pos)'}}>No breaches</span>}
                     </td>
                   </tr>
                 ))}

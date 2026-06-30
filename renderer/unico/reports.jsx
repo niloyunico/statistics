@@ -165,7 +165,7 @@ function Reports({depts}){
     document.body.classList.add('pdf-export-mode'); // print only the report (#pdf-root)
     try{
       const res=await native.exportPDF({pageSize, landscape:orient==='landscape', defaultName:`UNICO-${type}-report`});
-      if(res&&res.ok) setNote({ok:true,text:'PDF saved · '+res.path});
+      if(res&&res.ok) setNote({ok:true,text:'PDF'+(res.path?' saved · '+res.path:' ready — save it from the print dialog')});
       else if(res&&res.canceled){ /* user dismissed the save dialog — stay quiet */ }
       else setNote({ok:false,text:(res&&res.error)||'Export failed.'});
     }catch(e){ setNote({ok:false,text:String(e&&e.message?e.message:e)}); }

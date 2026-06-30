@@ -68,6 +68,57 @@ async function setAppData(data) {
   return { updatedAt };
 }
 
+/* ---- departments (the monthly statistics, moved out of the renderer) ---- */
+// Returns the canonical department definitions (metadata + months[] + data[]),
+// ordered, with the Mongo _id stripped (the renderer keys off `id`).
+async function getDepartments() {
+  if (process.env.MONGODB_URI) {
+    await ensureClient();
+    const docs = await dbHandle().collection('departments').find({}).sort({ order: 1, _id: 1 }).toArray();
+    return docs.map((d) => { const { _id, ...rest } = d; return rest; });
+  }
+  // dev/in-memory: serve the on-disk seed directly so the app still has data.
+  try { return require('./seed-departments').loadSeed(); } catch (e) { return []; }
+}
+
+// Populate the departments collection from the seed on first run (idempotent).
+async function ensureDepartmentsSeeded() {
+  if (!process.env.MONGODB_URI) return { seeded: 0, existing: 0 };
+  await ensureClient();
+  const { seedDepartments } = require('./seed-departments');
+  return seedDepartments(dbHandle());
+}
+
+/* ---- staff + quality (also moved out of the renderer; see seed-data.js) ---- */
+async function getRendererData(name) {
+  if (process.env.MONGODB_URI) {
+    await ensureClient();
+    return require('./seed-data').getCollection(dbHandle(), name);
+  }
+  try { return require('./seed-data').loadSeed(name); } catch (e) { return []; }
+}
+async function getStaff() { return getRendererData('staff'); }
+async function getQuality() { return getRendererData('quality'); }
+async function ensureRendererSeeded(name) {
+  if (!process.env.MONGODB_URI) return { name, seeded: 0, existing: 0 };
+  await ensureClient();
+  return require('./seed-data').seedOne(dbHandle(), name);
+}
+
+// Live MongoDB database handle (or null in the dev in-memory mode) — lets feature
+// modules (e.g. data-collection.js) own their own collections without re-wiring
+// the connection logic that lives here.
+async function getDbHandle() {
+  if (!process.env.MONGODB_URI) return null;
+  await ensureClient();
+  return dbHandle();
+}
+
 async function close() { if (_client) { await _client.close(); _client = null; _users = null; } }
 
-module.exports = { getUsers, getAppData, setAppData, close, usingMongo: () => !!process.env.MONGODB_URI };
+module.exports = {
+  getUsers, getAppData, setAppData,
+  getDepartments, ensureDepartmentsSeeded,
+  getStaff, getQuality, ensureRendererSeeded, getDbHandle,
+  close, usingMongo: () => !!process.env.MONGODB_URI,
+};

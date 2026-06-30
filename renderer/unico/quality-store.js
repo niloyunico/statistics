@@ -6,17 +6,19 @@
    The merged objects keep the exact shape of QUALITY_SEED entries, so existing
    readers work unchanged once pointed at qualityData()/useQualityStore().
 
-   Persistence: localStorage 'unico_quality_v1' (auto-mirrored to disk by preload). */
+   Persistence: localStorage 'unico_quality_v2' (auto-mirrored to disk by preload).
+   (v2: reset for the NQI monthly dataset; any stale v1 overlay is ignored.) */
 (function () {
-  const KEY = 'unico_quality_v1';
+  const KEY = 'unico_quality_v2';
   const QS = ['Q1', 'Q2', 'Q3', 'Q4'];
 
-  // Canonical quarter <-> month mapping (matches quality.jsx QMONTHS / the app's FY).
+  // Canonical quarter <-> month mapping — the NQI report's 12-month fiscal year
+  // Jun-2025 … May-2026, three months per quarter (matches quality.jsx QMONTHS).
   const QUARTER_MONTHS = {
-    Q1: ['Aug-25', 'Sep-25', 'Oct-25'],
-    Q2: ['Nov-25', 'Dec-25'],
-    Q3: ['Jan-26', 'Feb-26', 'Mar-26'],
-    Q4: ['Apr-26', 'May-26'],
+    Q1: ['Jun-25', 'Jul-25', 'Aug-25'],
+    Q2: ['Sep-25', 'Oct-25', 'Nov-25'],
+    Q3: ['Dec-25', 'Jan-26', 'Feb-26'],
+    Q4: ['Mar-26', 'Apr-26', 'May-26'],
   };
   const MONTH_QUARTER = {};
   Object.keys(QUARTER_MONTHS).forEach(q => QUARTER_MONTHS[q].forEach(m => { MONTH_QUARTER[m] = q; }));
@@ -56,7 +58,7 @@
   }
 
   // Object-valued indicator fields that deep-merge (rather than replace) on patch.
-  const NESTED = ['quarters', 'quarterRemarks', 'months', 'qNum', 'qDen', 'mNum', 'mDen'];
+  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen'];
 
   function mergeIndicator(seedInd, patch) {
     const ind = Object.assign({}, seedInd, patch || {});
@@ -126,10 +128,31 @@
       return Object.assign({}, o, { depts });
     });
 
+    // Persistent master catalogue of admin-defined indicators (survives even
+    // before any department reports them). Lives alongside `depts` in the same
+    // overlay blob, so it mirrors to disk/MongoDB through the very same bridge.
+    const catalog = overlay.catalog || [];
+    const catNorm = (s) => (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
+
     return {
       depts: merged,
+      catalog,
       get: (key) => merged.find(d => d.key === key),
       isEdited: (key) => !!overlay.depts[key],
+
+      // master catalogue: add (de-duped by name) / remove a standalone indicator def
+      addCatalogIndicator: (def) => setOverlay(o => {
+        const nn = catNorm(def && def.name);
+        if (!nn) return o;
+        const list = o.catalog || [];
+        if (list.some(c => catNorm(c.name) === nn)) return o; // already defined
+        return Object.assign({}, o, { catalog: [...list, def] });
+      }),
+      removeCatalogIndicator: (name) => setOverlay(o => {
+        const nn = catNorm(name);
+        const list = o.catalog || [];
+        return Object.assign({}, o, { catalog: list.filter(c => catNorm(c.name) !== nn) });
+      }),
 
       patchIndicator: (deptKey, indId, patch) => patchDept(deptKey, cur => {
         const all = Object.assign({}, cur.indPatches || {});

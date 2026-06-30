@@ -15,7 +15,7 @@ const QED_STATUSES = ['Excellent', 'Very Good', 'Good', 'Satisfactory', 'Needs I
 const QED_VALTYPES = ['Count', '%', 'Rate'];
 const QED_DIRS = [['lower_is_better', '↓ Lower is better'], ['higher_is_better', '↑ Higher is better']];
 const QED_FORMULAS = [['direct', 'Direct value (type the value)'], ['count', 'Count of events'], ['rate1000', 'Rate per 1000'], ['rate100', 'Rate per 100'], ['pct', 'Percentage (%)']];
-const QED_MFULL = { 'Aug-25': 'Aug 25', 'Sep-25': 'Sep 25', 'Oct-25': 'Oct 25', 'Nov-25': 'Nov 25', 'Dec-25': 'Dec 25', 'Jan-26': 'Jan 26', 'Feb-26': 'Feb 26', 'Mar-26': 'Mar 26', 'Apr-26': 'Apr 26', 'May-26': 'May 26' };
+const QED_MFULL = { 'Jun-25': 'June 2025', 'Jul-25': 'July 2025', 'Aug-25': 'August 2025', 'Sep-25': 'September 2025', 'Oct-25': 'October 2025', 'Nov-25': 'November 2025', 'Dec-25': 'December 2025', 'Jan-26': 'January 2026', 'Feb-26': 'February 2026', 'Mar-26': 'March 2026', 'Apr-26': 'April 2026', 'May-26': 'May 2026' };
 
 function qedNum(v) { return v === '' || v == null ? null : Number(v); }
 
@@ -36,7 +36,7 @@ function qedLibrary() {
       benchmark: `${def.dir === 'higher' ? '≥' : '≤'} ${def.benchmark}${pct ? '%' : ''}${def.unit ? ' ' + def.unit : ''}`,
       benchmarkValue: typeof def.benchmark === 'number' ? def.benchmark : '',
       goalDirection: def.dir === 'higher' ? 'higher_is_better' : 'lower_is_better',
-      quarters: { Q1: null, Q2: null, Q3: null, Q4: null }, quarterRemarks: {}, qNum: {}, qDen: {}, remarks: '',
+      quarters: { Q1: null, Q2: null, Q3: null, Q4: null }, quarterRemarks: {}, qNum: {}, qDen: {}, months: {}, monthRemarks: {}, mNum: {}, mDen: {}, remarks: '',
     };
   });
 }
@@ -44,8 +44,9 @@ function qedLibrary() {
 /* ---- one indicator's editable row ---- */
 function QEdIndicator({ deptKey, ind, Q, onRemove }) {
   const [openCfg, setOpenCfg] = React.useState(false);
-  const [openMonths, setOpenMonths] = React.useState(false);
-  const QM = window.QUALITY_QUARTER_MONTHS;
+  const QM = window.QUALITY_QUARTER_MONTHS || {};
+  const QED_MONTHS = QS.reduce((a, q) => a.concat(QM[q] || []), []); // 12 months, in order
+  const QED_MQ = {}; QS.forEach(q => (QM[q] || []).forEach(m => { QED_MQ[m] = q; }));
   const patch = (p) => Q.patchIndicator(deptKey, ind.id, p);
   const formula = ind.formula || 'direct';
   const isFormula = formula !== 'direct';
@@ -54,13 +55,19 @@ function QEdIndicator({ deptKey, ind, Q, onRemove }) {
   const inp = { padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6, fontFamily: 'IBM Plex Mono', fontSize: 12.5, width: '100%', textAlign: 'right', outline: 'none', background: '#fff' };
   const txt = { padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6, fontFamily: 'inherit', fontSize: 12, width: '100%', outline: 'none', background: '#fff' };
 
-  // does a quarter draw from monthly numerators?
-  const monthsHaveData = (q) => (QM[q] || []).some(m => isFormula
-    ? (ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '')
-    : (ind.months && ind.months[m] != null && ind.months[m] !== ''));
-  const monthCount = (q) => (QM[q] || []).filter(m => isFormula
-    ? (ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '')
-    : (ind.months && ind.months[m] != null && ind.months[m] !== '')).length;
+  // computed value + status for one month
+  const monthVal = (m) => {
+    if (!isFormula) { const v = ind.months && ind.months[m]; return (v == null || v === '') ? null : Number(v); }
+    const n = ind.mNum && ind.mNum[m];
+    if (n == null || n === '') return null;
+    const d = needsDen ? (ind.mDen && ind.mDen[m]) : null;
+    return window.qiFormulaCompute ? window.qiFormulaCompute(formula, n, d) : Number(n);
+  };
+  const monthStatus = (val) => {
+    if (val == null) return 'na';
+    const b = ind.benchmarkValue; if (b == null || b === '') return 'ok';
+    return ind.goalDirection === 'higher_is_better' ? (val >= b ? 'ok' : 'breach') : (val <= b ? 'ok' : 'breach');
+  };
 
   const numHead = ind.numLabel || 'Numerator';
   const denHead = ind.denLabel || 'Denominator';
@@ -102,38 +109,31 @@ function QEdIndicator({ deptKey, ind, Q, onRemove }) {
         </div>
       )}
 
-      {/* quarter values */}
+      {/* month-wise values */}
       <div style={{ overflowX: 'auto' }}>
         <table className="tbl rpt" style={{ fontSize: 11.5 }}>
-          <thead><tr><th style={{ textAlign: 'left', width: 80 }}>Quarter</th>
+          <thead><tr><th style={{ textAlign: 'left', width: 120 }}>Month</th>
             {isFormula && <th style={{ width: 80 }}>{numHead}</th>}
             {needsDen && <th style={{ width: 80 }}>{denHead}</th>}
             <th style={{ width: 76 }}>Value</th><th style={{ textAlign: 'left' }}>Status</th><th style={{ textAlign: 'left' }}>Remark</th></tr></thead>
           <tbody>
-            {QS.map(q => {
-              const fromMonths = monthsHaveData(q);
-              const v = ind.quarters ? ind.quarters[q] : null;
-              const s = indStatus(ind, q);
+            {QED_MONTHS.map(m => {
+              const val = monthVal(m);
+              const s = monthStatus(val);
               const tone = s === 'ok' ? '#1f9d57' : s === 'breach' ? '#d23a52' : '#9aa6b4';
-              const qn = ind.qNum ? ind.qNum[q] : null, qd = ind.qDen ? ind.qDen[q] : null;
               return (
-                <tr key={q}>
-                  <td style={{ textAlign: 'left', fontWeight: 600 }}>{QSHORT[q]}</td>
-                  {isFormula && <td style={{ padding: 3 }}>{fromMonths
-                    ? <span style={{ display: 'block', textAlign: 'right', color: 'var(--faint)', fontSize: 9.5 }}>{monthCount(q)} mo</span>
-                    : <input style={inp} type="number" value={qn ?? ''} onChange={e => patch({ qNum: { [q]: qedNum(e.target.value) } })} placeholder="—" />}</td>}
-                  {needsDen && <td style={{ padding: 3 }}>{fromMonths
-                    ? <span style={{ display: 'block', textAlign: 'right', color: 'var(--faint)', fontSize: 9.5 }}>·</span>
-                    : <input style={inp} type="number" value={qd ?? ''} onChange={e => patch({ qDen: { [q]: qedNum(e.target.value) } })} placeholder="—" />}</td>}
+                <tr key={m}>
+                  <td style={{ textAlign: 'left', fontWeight: 600 }}>{QED_MFULL[m] || m}
+                    <span style={{ color: 'var(--faint)', fontWeight: 400, fontSize: 9.5, marginLeft: 5 }}>{QED_MQ[m]}</span></td>
+                  {isFormula && <td style={{ padding: 3 }}><input style={inp} type="number" title={numHead} value={(ind.mNum && ind.mNum[m] != null) ? ind.mNum[m] : ''} onChange={e => patch({ mNum: { [m]: qedNum(e.target.value) } })} placeholder="—" /></td>}
+                  {needsDen && <td style={{ padding: 3 }}><input style={inp} type="number" title={denHead} value={(ind.mDen && ind.mDen[m] != null) ? ind.mDen[m] : ''} onChange={e => patch({ mDen: { [m]: qedNum(e.target.value) } })} placeholder="—" /></td>}
                   <td style={{ padding: 3 }}>
                     {isFormula
-                      ? <span title="Computed" style={{ display: 'block', textAlign: 'right', fontFamily: 'IBM Plex Mono', fontWeight: 600, color: 'var(--blue-700)' }}>{v == null ? '—' : v}</span>
-                      : (fromMonths
-                        ? <span title="From monthly values" style={{ display: 'block', textAlign: 'right', fontFamily: 'IBM Plex Mono', color: 'var(--blue-700)', fontWeight: 600 }}>{v == null ? '—' : v}<div style={{ fontSize: 8, color: 'var(--faint)', fontWeight: 400 }}>from {monthCount(q)} mo</div></span>
-                        : <input style={inp} type="number" value={v ?? ''} onChange={e => patch({ quarters: { [q]: qedNum(e.target.value) } })} placeholder="—" />)}
+                      ? <span title="Computed from numerator ÷ denominator" style={{ display: 'block', textAlign: 'right', fontFamily: 'IBM Plex Mono', fontWeight: 600, color: 'var(--blue-700)' }}>{val == null ? '—' : val}</span>
+                      : <input style={inp} type="number" value={(ind.months && ind.months[m] != null) ? ind.months[m] : ''} onChange={e => patch({ months: { [m]: qedNum(e.target.value) } })} placeholder="—" />}
                   </td>
                   <td style={{ textAlign: 'left' }}><span className="chip" style={{ background: tone + '1c', color: tone }}>{s === 'ok' ? 'On benchmark' : s === 'breach' ? 'Breach' : 'n/r'}</span></td>
-                  <td style={{ padding: 3 }}><input style={{ ...txt, textAlign: 'left' }} value={(ind.quarterRemarks && ind.quarterRemarks[q]) || ''} onChange={e => patch({ quarterRemarks: { [q]: e.target.value } })} placeholder="optional note" /></td>
+                  <td style={{ padding: 3 }}><input style={{ ...txt, textAlign: 'left' }} value={(ind.monthRemarks && ind.monthRemarks[m]) || ''} onChange={e => patch({ monthRemarks: { [m]: e.target.value } })} placeholder="optional note" /></td>
                 </tr>
               );
             })}
@@ -141,33 +141,14 @@ function QEdIndicator({ deptKey, ind, Q, onRemove }) {
         </table>
       </div>
 
-      {/* monthly drill-down */}
-      <div>
-        <button className="btn sm" style={{ borderStyle: 'dashed' }} onClick={() => setOpenMonths(o => !o)}>
-          <Ic d={I.cal} s={13} />{openMonths ? 'Hide monthly detail' : 'Monthly detail (optional)'}
-        </button>
-        {openMonths && (
-          <div style={{ marginTop: 8, background: 'var(--panel-2)', border: '1px solid var(--line-2)', borderRadius: 8, padding: '10px 12px' }}>
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>
-              {isFormula ? `Enter ${numHead}${needsDen ? ' & ' + denHead : ''} per month — quarters aggregate from these (numerators${needsDen ? ' & denominators' : ''} summed, then the formula applied).`
-                : 'Enter month values where you have them — the quarter totals (Count) or averages (%) from these.'}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(110px,1fr))', gap: 8 }}>
-              {QS.map(q => (QM[q] || []).map(m => (
-                <div key={m} style={{ border: '1px solid var(--line-2)', borderRadius: 7, padding: '6px 7px', background: '#fff' }}>
-                  <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 4 }}>{QED_MFULL[m] || m} <span style={{ color: 'var(--faint)' }}>· {QSHORT[q]}</span></div>
-                  {isFormula
-                    ? <div style={{ display: 'flex', gap: 4 }}>
-                      <input style={{ ...inp, fontSize: 11.5 }} type="number" title={numHead} value={(ind.mNum && ind.mNum[m] != null) ? ind.mNum[m] : ''} onChange={e => patch({ mNum: { [m]: qedNum(e.target.value) } })} placeholder="num" />
-                      {needsDen && <input style={{ ...inp, fontSize: 11.5 }} type="number" title={denHead} value={(ind.mDen && ind.mDen[m] != null) ? ind.mDen[m] : ''} onChange={e => patch({ mDen: { [m]: qedNum(e.target.value) } })} placeholder="den" />}
-                    </div>
-                    : <input style={inp} type="number" value={(ind.months && ind.months[m] != null) ? ind.months[m] : ''} onChange={e => patch({ months: { [m]: qedNum(e.target.value) } })} placeholder="—" />}
-                </div>
-              )))}
-            </div>
-          </div>
-        )}
-      </div>
+      {/* read-only quarter rollup (kept for the Quarterly Report) */}
+      {QS.some(q => ind.quarters && ind.quarters[q] != null && ind.quarters[q] !== '') && (
+        <div style={{ fontSize: 10.5, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600, color: 'var(--ink-2)' }}>Quarter rollup</span>
+          {QS.map(q => { const v = ind.quarters ? ind.quarters[q] : null; return <span key={q} style={{ fontFamily: 'IBM Plex Mono' }}>{QSHORT[q]} <b style={{ color: 'var(--ink)' }}>{v == null || v === '' ? '—' : v}</b></span>; })}
+          <span style={{ color: 'var(--faint)' }}>· auto-summed from months</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -243,7 +224,7 @@ function QualityDeptEdit({ deptKey, setRoute }) {
   if (!dept) return <div style={{ padding: 40 }}>No quality data to edit.</div>;
   const edited = Q.isEdited(dept.key);
 
-  const addCustom = () => Q.addIndicator(dept.key, { id: window.qualitySlug('new indicator'), name: '', formula: 'direct', valueType: 'Count', benchmark: '0 (zero defect)', benchmarkValue: 0, goalDirection: 'lower_is_better', quarters: { Q1: null, Q2: null, Q3: null, Q4: null }, quarterRemarks: {}, remarks: '' });
+  const addCustom = () => Q.addIndicator(dept.key, { id: window.qualitySlug('new indicator'), name: '', formula: 'direct', valueType: 'Count', benchmark: '0 (zero defect)', benchmarkValue: 0, goalDirection: 'lower_is_better', quarters: { Q1: null, Q2: null, Q3: null, Q4: null }, quarterRemarks: {}, months: {}, monthRemarks: {}, mNum: {}, mDen: {}, remarks: '' });
   const addFromLib = (it) => { Q.addIndicator(dept.key, Object.assign({}, it, { id: window.qualitySlug(it.name) })); };
   const removeIndicator = async (ind) => {
     let ok = true;

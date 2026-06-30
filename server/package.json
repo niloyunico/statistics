@@ -9,6 +9,8 @@
     "start": "node index.js",
     "web": "node web.js",
     "seed": "node seed-admin.js",
+    "seed-departments": "node seed-departments.js",
+    "seed-data": "node seed-data.js",
     "test": "node test/auth.test.js"
   },
   "dependencies": {

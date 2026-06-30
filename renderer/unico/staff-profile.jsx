@@ -8,11 +8,26 @@ function yearsFromDOJ(doj){
   return y<1?`${Math.max(1,Math.round(days/30.44))} months`:`${y.toFixed(1)} yrs`;
 }
 
+/* UNICO experience = time served at UNICO, derived live from Date of Joining
+   (≠ total_experience which may include prior facilities). Returns y/mo breakdown. */
+function unicoTenure(doj){
+  if(!doj) return null;
+  const d=new Date(doj); if(isNaN(d)) return null;
+  const now=new Date(); if(d>now) return null;
+  let months=(now.getFullYear()-d.getFullYear())*12+(now.getMonth()-d.getMonth());
+  if(now.getDate()<d.getDate()) months--;
+  if(months<0) months=0;
+  const years=Math.floor(months/12), mo=months%12;
+  const text = years>0 ? (mo>0?`${years} yr${years>1?'s':''} ${mo} mo`:`${years} yr${years>1?'s':''}`) : `${mo} mo`;
+  return {months, years, mo, decimalYears:Math.round(months/12*10)/10, text};
+}
+
 /* ---------------- Profile (read-only + notes) ---------------- */
 function StaffProfile({store, empId, setRoute}){
   const e=store.get(empId);
   const [note,setNote]=React.useState('');
   if(!e) return <div style={{padding:40}}>Staff not found. <button className="btn sm" onClick={()=>setRoute({view:'nurses'})}>Back to roster</button></div>;
+  const tenure=unicoTenure(e.doj);
   const backView=e.role==='PCA'?'pca':'nurses';
   const field=(l,v,mono)=>(
     <div style={{display:'flex',flexDirection:'column',gap:3}}>
@@ -48,7 +63,9 @@ function StaffProfile({store, empId, setRoute}){
           </div>
           <div style={{fontSize:13.5,color:'var(--muted)',marginTop:3}}>{e.designation||'—'} · {e.current_department||'—'}</div>
         </div>
-        <div style={{textAlign:'center'}}><div className="num" style={{fontSize:22,fontWeight:600,color:'var(--blue)'}}>{e.total_experience_text||'—'}</div><div style={{fontSize:11,color:'var(--muted)'}}>experience</div></div>
+        <div style={{textAlign:'center'}}><div className="num" style={{fontSize:22,fontWeight:600,color:'var(--blue)'}}>{e.total_experience_text||'—'}</div><div style={{fontSize:11,color:'var(--muted)'}}>total experience</div></div>
+        <div style={{width:1,height:42,background:'var(--line)'}}/>
+        <div style={{textAlign:'center'}} title={e.doj?`Joined ${e.doj}`:'No joining date on file'}><div className="num" style={{fontSize:22,fontWeight:600,color:'#1f9d57'}}>{tenure?tenure.text:'—'}</div><div style={{fontSize:11,color:'var(--muted)'}}>UNICO experience</div></div>
         <div style={{width:1,height:42,background:'var(--line)'}}/>
         <div style={{textAlign:'center'}}><VaccBadge status={e.hepatitis_b_vaccination}/><div style={{fontSize:11,color:'var(--muted)',marginTop:5}}>Hep-B status</div></div>
       </div>
@@ -58,7 +75,7 @@ function StaffProfile({store, empId, setRoute}){
         {sec('Job',<>{field('Designation',e.designation)}{field('Department',e.current_department)}{field('Date of Joining',e.doj,true)}{field('Total Experience',e.total_experience_text)}</>)}
       </div>
       <div className="grid" style={{gridTemplateColumns:'1fr 1fr'}}>
-        {sec('Experience',<>{field('Total (years)',e.total_experience_years!=null?(Math.round(e.total_experience_years*10)/10)+' yrs':'',true)}{field('Previous Experience',e.previous_experience)}</>)}
+        {sec('Experience',<>{field('UNICO Experience',tenure?`${tenure.text}  ·  since ${e.doj}`:'',true)}{field('Total (years)',e.total_experience_years!=null?(Math.round(e.total_experience_years*10)/10)+' yrs':'',true)}{field('Previous Experience',e.previous_experience)}</>)}
         {sec('Compliance',<>{field('Special Training',e.special_training)}<div style={{display:'flex',flexDirection:'column',gap:3}}><span style={{fontSize:10.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,fontWeight:600}}>Hep-B Vaccination</span><div><VaccBadge status={e.hepatitis_b_vaccination}/></div></div>{field('Remarks',e.remarks)}</>)}
       </div>
 
