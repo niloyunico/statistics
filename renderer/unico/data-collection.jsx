@@ -360,7 +360,7 @@
     const benchmarkQ = (curInd && curInd.benchmark) || '';
     const incCount = incidents.length;
     const formulaTextQ = isRate
-      ? (indNameQ + ' = (' + numLabel + ' \u00f7 ' + denLabel + ') \u00d7 ' + mult + '   \u00b7   ' + numLabel + ' = number of incidents')
+      ? (indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult + '   ·   ' + numLabel + ' = number of incidents')
       : (indNameQ + ' = number of incidents this month');
 
     // Prefill the incident list (and denominator) from existing data on month/indicator change.
@@ -409,7 +409,7 @@
     return (
       <div className="grid" style={{ gap: 14, maxWidth: 760 }}>
         <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Log the month's incidents — the count / rate is calculated automatically." />
-        {done && <Banner ok onClose={() => setDone(null)}>Saved \u2713 \u2014 {done.area} \u00b7 {monthLabel(done.month)} sent for admin review.</Banner>}
+        {done && <Banner ok onClose={() => setDone(null)}>Saved ✓ — {done.area} · {monthLabel(done.month)} sent for admin review.</Banner>}
         <Card>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Field label="Quality area / unit">
@@ -425,9 +425,9 @@
           </div>
           <Field label="Indicator">
             <select style={inputStyle} value={indId} onChange={(e) => setIndId(e.target.value)}>
-              <option value="">Select\u2026</option>
+              <option value="">Select…</option>
               {inds.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-              <option value="__new__">\u2795 Add a new indicator\u2026</option>
+              <option value="__new__">➕ Add a new indicator…</option>
             </select>
           </Field>
           {isNew && (
@@ -454,7 +454,7 @@
           {showEntry && (
             <>
               <div style={{ background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9, padding: '10px 13px', marginBottom: 13, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--blue-700)' }}>
-                <b style={{ fontStyle: 'italic', marginRight: 6 }}>\u0192</b>{formulaTextQ}
+                <b style={{ fontStyle: 'italic', marginRight: 6 }}>ƒ</b>{formulaTextQ}
               </div>
               {isRate && (
                 <Field label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(denominator)</span></span>}>
@@ -468,7 +468,7 @@
                   <span style={{ flex: 1 }} />
                   <button className="btn sm" onClick={addIncident}><Ic d={I.plus} s={13} />Add incident</button>
                 </div>
-                {incidents.length === 0 && <div style={{ fontSize: 12, color: 'var(--muted)' }}>No incidents \u2014 the {isRate ? 'numerator' : 'count'} stays 0. Click \u201cAdd incident\u201d for each event that occurred.</div>}
+                {incidents.length === 0 && <div style={{ fontSize: 12, color: 'var(--muted)' }}>No incidents — the {isRate ? 'numerator' : 'count'} stays 0. Click “Add incident” for each event that occurred.</div>}
                 {incidents.map((inc, i) => (
                   <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--panel-2)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -483,14 +483,14 @@
                         <input style={{ ...inputStyle, gridColumn: 'span 2' }} value={inc.patientName} onChange={(e) => setInc(i, 'patientName', e.target.value)} placeholder="Patient name" />
                         <input style={inputStyle} type="number" min="0" value={inc.age} onChange={(e) => setInc(i, 'age', e.target.value)} placeholder="Age" />
                         <select style={inputStyle} value={inc.gender} onChange={(e) => setInc(i, 'gender', e.target.value)}>
-                          <option value="">Gender\u2026</option><option>Male</option><option>Female</option><option>Other</option>
+                          <option value="">Gender…</option><option>Male</option><option>Female</option><option>Other</option>
                         </select>
                         <input style={inputStyle} value={inc.diagnosis} onChange={(e) => setInc(i, 'diagnosis', e.target.value)} placeholder="Diagnosis" />
                         <label style={{ fontSize: 10, color: 'var(--muted)' }}>Date of admission<input style={inputStyle} type="date" value={inc.admissionDate} onChange={(e) => setInc(i, 'admissionDate', e.target.value)} /></label>
                         <label style={{ fontSize: 10, color: 'var(--muted)' }}>Date of procedure <span style={{ color: 'var(--faint)' }}>(if any)</span><input style={inputStyle} type="date" value={inc.procedureDate} onChange={(e) => setInc(i, 'procedureDate', e.target.value)} /></label>
                       </div>
                       <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4, marginTop: 2 }}>Incident, cause &amp; CAPA</div>
-                      <textarea style={{ ...inputStyle, minHeight: 42 }} value={inc.details} onChange={(e) => setInc(i, 'details', e.target.value)} placeholder="Incident details \u2014 what happened" />
+                      <textarea style={{ ...inputStyle, minHeight: 42 }} value={inc.details} onChange={(e) => setInc(i, 'details', e.target.value)} placeholder="Incident details — what happened" />
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
                         <textarea style={{ ...inputStyle, minHeight: 38 }} value={inc.finding} onChange={(e) => setInc(i, 'finding', e.target.value)} placeholder="Finding / observation" />
                         <textarea style={{ ...inputStyle, minHeight: 38 }} value={inc.corrective} onChange={(e) => setInc(i, 'corrective', e.target.value)} placeholder="Corrective action" />
@@ -506,7 +506,7 @@
                 <span className="num" style={{ fontSize: 22, fontWeight: 800, color: 'var(--blue-700)' }}>{result}</span>
                 {unitQ ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)' }}>{unitQ}</span> : (isRate && mult === 100 ? <span style={{ color: 'var(--ink-2)' }}>%</span> : null)}
                 <span style={{ flex: 1 }} />
-                <span style={{ fontSize: 11, color: 'var(--muted)' }}>{isRate ? (numLabel + ' = ' + incCount) : (incCount + ' incident(s)')}{benchmarkQ ? '   \u00b7   Benchmark ' + benchmarkQ : ''}</span>
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>{isRate ? (numLabel + ' = ' + incCount) : (incCount + ' incident(s)')}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</span>
               </div>
             </>
           )}
@@ -517,7 +517,7 @@
               </Field>}
           <Field label="Remark (optional)"><input style={inputStyle} value={remark} onChange={(e) => setRemark(e.target.value)} placeholder="Any note for this month" /></Field>
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving\u2026' : 'Save monthly value'}</button>
+            <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : 'Save monthly value'}</button>
             <button className="btn" disabled={busy} onClick={() => { setIncidents([]); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
           </div>
         </Card>
