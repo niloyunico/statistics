@@ -1219,11 +1219,11 @@ function QCAdmin({Q,q,onQ,initialDept}){
       {view==='assign' && (
       <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
         <div style={{padding:'13px 16px',borderBottom:'1px solid #e8edf3'}}><div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Assign by Department</div><div style={{fontSize:11.5,color:P.muted}}>Which department reports which indicator — all {assignNames.length} catalog indicators. Tick a cell to assign / unassign.</div></div>
-        <div style={{overflowX:'auto'}}>
+        <div style={{overflowX:'auto',overflowY:'auto',maxHeight:'calc(100vh - 250px)'}}>
           <table style={{borderCollapse:'collapse',fontSize:12,width:'100%'}}>
             <thead><tr>
-              <th style={{textAlign:'left',padding:'10px 14px',fontSize:10.5,textTransform:'uppercase',letterSpacing:'.3px',color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#f7f9fc',position:'sticky',left:0,zIndex:3,minWidth:230}}>Indicator</th>
-              {assignCols.map(c=><th key={c.key} title={c.name} style={{padding:'10px 6px',fontSize:10,color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#f7f9fc',textAlign:'center',whiteSpace:'nowrap'}}>{c.short}</th>)}
+              <th style={{textAlign:'left',padding:'10px 14px',fontSize:10.5,textTransform:'uppercase',letterSpacing:'.3px',color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#eef2f7',position:'sticky',left:0,top:0,zIndex:5,minWidth:230}}>Indicator</th>
+              {assignCols.map(c=><th key={c.key} title={c.name} style={{padding:'10px 6px',fontSize:10,color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#eef2f7',textAlign:'center',whiteSpace:'nowrap',position:'sticky',top:0,zIndex:4}}>{c.short}</th>)}
             </tr></thead>
             <tbody>
               {assignNames.map(rec=>{ const rmeas=measureOf(rec.formula); return (
@@ -1347,6 +1347,30 @@ const QC_ICONS = {
   dataentry:'M4 4h16v16H4zM4 9h16M9 4v16',
   actionplans:'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11'
 };
+
+// Quality rendered INSIDE the global app shell (ui.jsx Sidebar/TopBar) — the 8 views
+// live in the global sidebar submenu now, so this renders just the one the route
+// selects, with no dedicated console chrome. `view` is a module id; the Admin view
+// keeps its own Manage / Assign / Catalog sub-nav.
+function QualityView({ view, initialDept, setRoute }){
+  const Q = window.useQualityStore();
+  const depts = (Q.depts || []).filter(d => d.indicators && d.indicators.length);
+  const [q, setQ] = useState('');
+  const v = view || 'dashboard';
+  return (
+    <div style={{ fontFamily:"'IBM Plex Sans',system-ui,sans-serif", color:P.ink }}>
+      {v==='dashboard'   && <QCDashboard depts={depts}/>}
+      {v==='scorecard'   && <QCScorecard depts={depts}/>}
+      {v==='trends'      && <QCTrends depts={depts}/>}
+      {v==='reports'     && <QCReports depts={depts}/>}
+      {v==='incidents'   && <QCIncidents depts={depts}/>}
+      {v==='actionplans' && <QCActionPlans depts={depts}/>}
+      {v==='dataentry'   && <QCDataEntry/>}
+      {v==='admin'       && <QCAdmin Q={Q} q={q} onQ={setQ} initialDept={initialDept}/>}
+    </div>
+  );
+}
+window.QualityView = QualityView;
 
 function QualityConsole({ onExit, initialView, initialDept, setRoute }){
   const Q = window.useQualityStore();

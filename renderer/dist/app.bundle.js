@@ -3482,7 +3482,7 @@ const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'input', 'reports', 'settings'],
   datacol: ['dcPatient', 'dcQuality', 'dcResponsibles', 'dcShare', 'dcFields', 'dcReview'],
   staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffProfile', 'staffForm'],
-  quality: ['quality'],
+  quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityReport', 'qualityReportQ', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub'],
   users: ['users']
 };
 function unicoModuleOf(view) {
@@ -3553,12 +3553,48 @@ function unicoSidebarGroups(moduleId) {
     }]
   }];
   if (moduleId === 'quality') return [{
-    sec: 'Quality Indicators',
+    sec: 'Monitor',
     items: [{
       id: 'quality',
-      label: 'Open Quality Console',
+      label: 'Dashboard',
       icon: I.grid,
-      match: ['quality']
+      match: ['quality', 'qualityDept']
+    }, {
+      id: 'qualityScore',
+      label: 'Scorecard',
+      icon: I.layers
+    }, {
+      id: 'qualityTrend',
+      label: 'Trends',
+      icon: I.trend
+    }]
+  }, {
+    sec: 'Reporting',
+    items: [{
+      id: 'qualityReport',
+      label: 'Reports',
+      icon: I.doc,
+      match: ['qualityReport', 'qualityReportQ']
+    }, {
+      id: 'qualityIncidents',
+      label: 'Incident Reports',
+      icon: I.activity
+    }]
+  }, {
+    sec: 'Administration',
+    items: [{
+      id: 'qualityManage',
+      label: 'Indicator Administration',
+      icon: I.edit,
+      match: ['qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityEdit']
+    }, {
+      id: 'qualityDataEntry',
+      label: 'Quality Data Entry',
+      icon: I.input
+    }, {
+      id: 'qualityCapa',
+      label: 'Action Plans',
+      icon: I.check
     }]
   }];
   if (moduleId === 'users') return [{
@@ -17386,7 +17422,9 @@ function QCAdmin({
     }
   }, "Which department reports which indicator \u2014 all ", assignNames.length, " catalog indicators. Tick a cell to assign / unassign.")), React.createElement("div", {
     style: {
-      overflowX: 'auto'
+      overflowX: 'auto',
+      overflowY: 'auto',
+      maxHeight: 'calc(100vh - 250px)'
     }
   }, React.createElement("table", {
     style: {
@@ -17404,10 +17442,11 @@ function QCAdmin({
       color: P.muted,
       fontWeight: 700,
       borderBottom: '1px solid #dde3ec',
-      background: '#f7f9fc',
+      background: '#eef2f7',
       position: 'sticky',
       left: 0,
-      zIndex: 3,
+      top: 0,
+      zIndex: 5,
       minWidth: 230
     }
   }, "Indicator"), assignCols.map(c => React.createElement("th", {
@@ -17419,9 +17458,12 @@ function QCAdmin({
       color: P.muted,
       fontWeight: 700,
       borderBottom: '1px solid #dde3ec',
-      background: '#f7f9fc',
+      background: '#eef2f7',
       textAlign: 'center',
-      whiteSpace: 'nowrap'
+      whiteSpace: 'nowrap',
+      position: 'sticky',
+      top: 0,
+      zIndex: 4
     }
   }, c.short)))), React.createElement("tbody", null, assignNames.map(rec => {
     const rmeas = measureOf(rec.formula);
@@ -17977,6 +18019,40 @@ const QC_ICONS = {
   dataentry: 'M4 4h16v16H4zM4 9h16M9 4v16',
   actionplans: 'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11'
 };
+function QualityView({
+  view,
+  initialDept,
+  setRoute
+}) {
+  const Q = window.useQualityStore();
+  const depts = (Q.depts || []).filter(d => d.indicators && d.indicators.length);
+  const [q, setQ] = useState('');
+  const v = view || 'dashboard';
+  return React.createElement("div", {
+    style: {
+      fontFamily: "'IBM Plex Sans',system-ui,sans-serif",
+      color: P.ink
+    }
+  }, v === 'dashboard' && React.createElement(QCDashboard, {
+    depts: depts
+  }), v === 'scorecard' && React.createElement(QCScorecard, {
+    depts: depts
+  }), v === 'trends' && React.createElement(QCTrends, {
+    depts: depts
+  }), v === 'reports' && React.createElement(QCReports, {
+    depts: depts
+  }), v === 'incidents' && React.createElement(QCIncidents, {
+    depts: depts
+  }), v === 'actionplans' && React.createElement(QCActionPlans, {
+    depts: depts
+  }), v === 'dataentry' && React.createElement(QCDataEntry, null), v === 'admin' && React.createElement(QCAdmin, {
+    Q: Q,
+    q: q,
+    onQ: setQ,
+    initialDept: initialDept
+  }));
+}
+window.QualityView = QualityView;
 function QualityConsole({
   onExit,
   initialView,
@@ -23910,6 +23986,41 @@ function App() {
       depts: depts,
       store: store
     });
+  } else if (route.view && route.view.indexOf('quality') === 0) {
+    const QV_MAP = {
+      quality: 'dashboard',
+      qualityScore: 'scorecard',
+      qualityTrend: 'trends',
+      qualityReport: 'reports',
+      qualityReportQ: 'reports',
+      qualityIncidents: 'incidents',
+      qualityDataEntry: 'dataentry',
+      qualityManage: 'admin',
+      qualityCatalog: 'admin',
+      qualityAssign: 'admin',
+      qualityCapa: 'actionplans',
+      qualityDept: 'dashboard',
+      qualityEdit: 'admin',
+      qualityEntry: 'dataentry',
+      qualityHub: 'dashboard'
+    };
+    const QTITLE = {
+      dashboard: 'Dashboard',
+      scorecard: 'Scorecard',
+      trends: 'Trends',
+      reports: 'Reports',
+      incidents: 'Incident Reports',
+      admin: 'Indicator Administration',
+      dataentry: 'Quality Data Entry',
+      actionplans: 'Action Plans'
+    };
+    const qv = route.qview || QV_MAP[route.view] || 'dashboard';
+    crumbs = ['UNICO', 'Quality Indicators', QTITLE[qv] || 'Dashboard'];
+    body = typeof QualityView !== 'undefined' ? React.createElement(QualityView, {
+      view: qv,
+      initialDept: route.dept,
+      setRoute: setRoute
+    }) : null;
   } else if (route.view === 'dcPatient') {
     crumbs = ['UNICO', 'Data Collection', 'Patient Statistics'];
     body = React.createElement(DataPatientForm, {
@@ -24022,33 +24133,6 @@ function App() {
   }
   if (typeof window !== 'undefined' && window.__UNICO_USER__ && window.__UNICO_USER__.role === 'collector' && typeof CollectorPortal !== 'undefined') {
     return React.createElement(CollectorPortal, null);
-  }
-  if (route.view && route.view.indexOf('quality') === 0 && typeof QualityConsole !== 'undefined') {
-    const QV_MAP = {
-      quality: 'dashboard',
-      qualityScore: 'scorecard',
-      qualityTrend: 'trends',
-      qualityReport: 'reports',
-      qualityReportQ: 'reports',
-      qualityIncidents: 'incidents',
-      qualityDataEntry: 'dataentry',
-      qualityManage: 'admin',
-      qualityCatalog: 'admin',
-      qualityAssign: 'admin',
-      qualityCapa: 'actionplans',
-      qualityDept: 'dashboard',
-      qualityEdit: 'admin',
-      qualityEntry: 'dataentry',
-      qualityHub: 'dashboard'
-    };
-    return React.createElement(QualityConsole, {
-      initialView: route.qview || QV_MAP[route.view] || 'dashboard',
-      initialDept: route.dept,
-      setRoute: setRoute,
-      onExit: () => setRoute({
-        view: 'dashboard'
-      })
-    });
   }
   return React.createElement("div", {
     className: 'app' + (collapsed ? ' collapsed' : '')

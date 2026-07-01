@@ -52,7 +52,7 @@ const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','input','reports','settings'],
   datacol:['dcPatient','dcQuality','dcResponsibles','dcShare','dcFields','dcReview'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffProfile','staffForm'],
-  quality:['quality'],
+  quality:['quality','qualityScore','qualityTrend','qualityReport','qualityReportQ','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub'],
   users:  ['users'],
 };
 function unicoModuleOf(view){
@@ -74,11 +74,22 @@ function unicoSidebarGroups(moduleId){
     {sec:'Nurse Management', items:[{id:'nurseHome',label:'Dashboard',icon:I.grid},{id:'nurses',label:'Directory',icon:I.layers},{id:'nurseCompliance',label:'Compliance',icon:I.heart}]},
     {sec:'PCA Management',   items:[{id:'pcaHome',label:'Dashboard',icon:I.grid},{id:'pca',label:'Directory',icon:I.layers},{id:'pcaCompliance',label:'Compliance',icon:I.heart}]},
   ];
-  // Quality Indicators opens a dedicated full-screen console (window.QualityConsole)
-  // with its OWN sidebar, so the global submenu is only the single entry point.
+  // Quality module (window.QualityView) now renders inside the global shell; these
+  // are its views. Each id is a route.view that app.jsx maps to a quality view.
   if(moduleId==='quality') return [
-    {sec:'Quality Indicators', items:[
-      {id:'quality',label:'Open Quality Console',icon:I.grid,match:['quality']},
+    {sec:'Monitor', items:[
+      {id:'quality',label:'Dashboard',icon:I.grid,match:['quality','qualityDept']},
+      {id:'qualityScore',label:'Scorecard',icon:I.layers},
+      {id:'qualityTrend',label:'Trends',icon:I.trend},
+    ]},
+    {sec:'Reporting', items:[
+      {id:'qualityReport',label:'Reports',icon:I.doc,match:['qualityReport','qualityReportQ']},
+      {id:'qualityIncidents',label:'Incident Reports',icon:I.activity},
+    ]},
+    {sec:'Administration', items:[
+      {id:'qualityManage',label:'Indicator Administration',icon:I.edit,match:['qualityManage','qualityCatalog','qualityAssign','qualityEdit']},
+      {id:'qualityDataEntry',label:'Quality Data Entry',icon:I.input},
+      {id:'qualityCapa',label:'Action Plans',icon:I.check},
     ]},
   ];
   if(moduleId==='users') return [

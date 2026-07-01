@@ -57,6 +57,14 @@ function App(){
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];
     body=<Settings depts={depts} store={store}/>;
+  } else if(route.view && route.view.indexOf('quality')===0){
+    // Quality module renders INSIDE the global shell now (window.QualityView); the 8
+    // views are the quality submenu. Legacy quality* routes map to a module id.
+    const QV_MAP={quality:'dashboard',qualityScore:'scorecard',qualityTrend:'trends',qualityReport:'reports',qualityReportQ:'reports',qualityIncidents:'incidents',qualityDataEntry:'dataentry',qualityManage:'admin',qualityCatalog:'admin',qualityAssign:'admin',qualityCapa:'actionplans',qualityDept:'dashboard',qualityEdit:'admin',qualityEntry:'dataentry',qualityHub:'dashboard'};
+    const QTITLE={dashboard:'Dashboard',scorecard:'Scorecard',trends:'Trends',reports:'Reports',incidents:'Incident Reports',admin:'Indicator Administration',dataentry:'Quality Data Entry',actionplans:'Action Plans'};
+    const qv=route.qview||QV_MAP[route.view]||'dashboard';
+    crumbs=['UNICO','Quality Indicators',QTITLE[qv]||'Dashboard'];
+    body= (typeof QualityView!=='undefined') ? <QualityView view={qv} initialDept={route.dept} setRoute={setRoute}/> : null;
   } else if(route.view==='dcPatient'){
     crumbs=['UNICO','Data Collection','Patient Statistics'];
     body=<DataPatientForm depts={depts} prefill={{dept:route.dept,responsible:route.responsible,month:route.month}}/>;
@@ -111,13 +119,6 @@ function App(){
   // history) — every other module (dashboard, statistics, staff, quality…) is hidden.
   if(typeof window!=='undefined' && window.__UNICO_USER__ && window.__UNICO_USER__.role==='collector' && typeof CollectorPortal!=='undefined'){
     return <CollectorPortal/>;
-  }
-  // Quality Indicators is now a dedicated full-screen console with its OWN dark
-  // sidebar (window.QualityConsole). Every legacy quality* route resolves here; the
-  // console handles Manage/Assign/Catalog + Dashboard/Scorecard/… sub-nav internally.
-  if(route.view && route.view.indexOf('quality')===0 && typeof QualityConsole!=='undefined'){
-    const QV_MAP={quality:'dashboard',qualityScore:'scorecard',qualityTrend:'trends',qualityReport:'reports',qualityReportQ:'reports',qualityIncidents:'incidents',qualityDataEntry:'dataentry',qualityManage:'admin',qualityCatalog:'admin',qualityAssign:'admin',qualityCapa:'actionplans',qualityDept:'dashboard',qualityEdit:'admin',qualityEntry:'dataentry',qualityHub:'dashboard'};
-    return <QualityConsole initialView={route.qview||QV_MAP[route.view]||'dashboard'} initialDept={route.dept} setRoute={setRoute} onExit={()=>setRoute({view:'dashboard'})}/>;
   }
 
   return (
