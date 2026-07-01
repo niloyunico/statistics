@@ -105,6 +105,7 @@ function qiCompute(f, n, d){
   if(f==='count'||f==='direct') return n;
   if(d==null||d===''||Number(d)===0) return null; d=Number(d);
   if(f==='rate1000') return Math.round(n/d*1000*100)/100;
+  if(f==='avg') return Math.round(n/d*100)/100; // mean/average = num ÷ den (no multiplier)
   return Math.round(n/d*100*100)/100; // rate100 & pct
 }
 
@@ -165,6 +166,7 @@ function fmtVal(ind, v){
 function measureOf(f){
   if(f==='pct') return { name:'Percentage', color:P.teal, letter:'%' };
   if(f==='rate1000'||f==='rate100') return { name:'Rate', color:P.violet, letter:'R' };
+  if(f==='avg') return { name:'Average', color:P.violet, letter:'x̄' };
   return { name:'Count', color:P.blue, letter:'C' };
 }
 
@@ -213,6 +215,7 @@ function formulaText(ind){
   const den = ind.denLabel || 'denominator';
   if(f==='direct') return (ind.name||'Value')+' = entered value';
   if(f==='count') return 'value = '+num;
+  if(f==='avg') return 'average = '+num+' ÷ '+den;
   return '('+num+' ÷ '+den+') '+(f==='rate1000' ? '× 1000' : '× 100');
 }
 
@@ -608,7 +611,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
    MongoDB). Handles the value (direct/count) or numerator+denominator (rate/%),
    the month remark, and full CRUD of the incident list. */
 function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
-  const isRate = ['pct', 'rate100', 'rate1000'].indexOf(ind.formula) >= 0;
+  const isRate = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0;
   const g = (o, k) => (o && o[k] != null && o[k] !== '') ? String(o[k]) : '';
   const [val, setVal] = useState(() => g(ind.months, mk));
   const [num, setNum] = useState(() => g(ind.mNum, mk));
@@ -1128,7 +1131,7 @@ function qcHeatColors(s){
 // rate/% → annual rate (Σnum/Σden, else average of reported months). Status is
 // "breach" if ANY month breached, else "ok" if any reported, else "na".
 function qcAnnualCell(ind, months){
-  const rate = ['pct','rate100','rate1000'].indexOf(ind.formula) >= 0 || isPctInd(ind);
+  const rate = ['pct','rate100','rate1000','avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
   let anyRep=false, anyBreach=false, sum=0, num=0, den=0, valSum=0, nRep=0;
   (months||MONTHS).forEach(m=>{
     let v = monthRaw(ind, m[0]); if(v==null) v = qtrRaw(ind, m[2]);
@@ -3096,11 +3099,12 @@ function QCAdmin({Q,q,onQ,initialDept}){
 
   const CATS = ['Healthcare-Associated Infection','Infection Prevention','Patient Safety','Clinical Outcomes','Staff Safety','Staff Competency','Activity / Volume','Medication Safety'];
   const FREQ = ['Monthly','Quarterly','Annually','Bi-annually'];
-  const FORMULAS = [['direct','Direct value — enter the number as-is'],['count','Count — a running tally (numerator only)'],['rate1000','Rate per 1000 — numerator ÷ denominator × 1000'],['rate100','Rate per 100 — numerator ÷ denominator × 100'],['pct','Percentage — numerator ÷ denominator × 100']];
+  const FORMULAS = [['direct','Direct value — enter the number as-is'],['count','Count — a running tally (numerator only)'],['avg','Average (mean) — numerator ÷ denominator (e.g. avg length of stay)'],['rate1000','Rate per 1000 — numerator ÷ denominator × 1000'],['rate100','Rate per 100 — numerator ÷ denominator × 100'],['pct','Percentage — numerator ÷ denominator × 100']];
   const DIRS = [['lower_is_better','↓ Lower is better'],['higher_is_better','↑ Higher is better']];
   const FORMULA_HINT = {
     direct:'The value is entered directly each month; no numerator/denominator needed.',
     count:'A simple count (e.g. number of events). Only the numerator is captured.',
+    avg:'A mean/average — numerator ÷ denominator with no multiplier (e.g. average length of stay = total patient-hours ÷ number of patients). Quarters roll up as the opportunity-weighted average (Σ numerator ÷ Σ denominator).',
     rate1000:'A rate expressed per 1000 denominator-units (e.g. per 1000 device-days).',
     rate100:'A rate expressed per 100 denominator-units.',
     pct:'A percentage of the denominator (numerator ÷ denominator × 100).'
@@ -3200,7 +3204,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const dirHigh = selInd && selInd.goalDirection==='higher_is_better';
   const benchSet = selInd && selInd.benchmarkValue!=null && selInd.benchmarkValue!=='';
   const needsNum = selInd && selInd.formula!=='direct';
-  const needsDen = selInd && (selInd.formula==='rate1000'||selInd.formula==='rate100'||selInd.formula==='pct');
+  const needsDen = selInd && (selInd.formula==='rate1000'||selInd.formula==='rate100'||selInd.formula==='pct'||selInd.formula==='avg');
 
   // ---- assign matrix ----
   // Rows = EVERY catalog indicator (all 96 in the Formula Library / HQI_STANDARDS)
@@ -3254,7 +3258,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const ql2=(q||'').trim().toLowerCase();
   const catGroups={};
   STD.forEach(s=>{ if(ql2 && !((s.name||'').toLowerCase().includes(ql2)||(s.expr||'').toLowerCase().includes(ql2)||(s.ref||'').toLowerCase().includes(ql2)||(s.code||'').toLowerCase()===ql2)) return; (catGroups[s.sec]=catGroups[s.sec]||[]).push(s); });
-  const measTypeC = f=>({pct:'%',rate1000:'Rate',rate100:'Rate',count:'Count',direct:'Count'}[f]||'Count');
+  const measTypeC = f=>({pct:'%',rate1000:'Rate',rate100:'Rate',avg:'Rate',count:'Count',direct:'Count'}[f]||'Count');
   const measColC = f=> f==='pct'?P.teal : (f==='rate1000'||f==='rate100')?P.violet : P.blue;
   const libSections = Object.keys(catGroups).sort().map(sec=>({ sec, name:(typeof HQI_SECN!=='undefined'&&HQI_SECN[sec])||sec, count:catGroups[sec].length, rows:catGroups[sec] }));
 

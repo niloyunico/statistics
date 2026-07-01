@@ -755,8 +755,28 @@ window.QI_CORRECTIONS = {
     "goalDirection": "lower_is_better",
     "reference": "NKF KDOQI Clinical Practice Guideline for Vascular Access: 2019 Update (Am J Kidney Dis. 2020;75(4)(suppl 2):S1-S164)",
     "referenceUrl": "https://www.ajkd.org/article/S0272-6386(19)31137-0/fulltext"
+  },
+  "average length of stay at the emergency department": {
+    "canonicalName": "Average Length of Stay at the Emergency Department",
+    "formula": "avg",
+    "numLabel": "Total ED patient-hours",
+    "denLabel": "Number of ED patient visits",
+    "numeratorDef": "Sum of the length of stay of every patient managed in the Emergency Department during the month = Σ (time of departure/disposition from the ED − time of ED arrival or triage registration), expressed in hours. Include every disposition (discharged, admitted/transferred to a ward, referred out, LAMA/DAMA, death in ED).",
+    "denominatorDef": "Total number of Emergency Department patient visits during the same month (every patient who arrived and was dispositioned) — the same visits whose stays are summed in the numerator.",
+    "unit": "hours",
+    "benchmarkValue": 4,
+    "benchmark": "≤ 4 hours",
+    "benchmarkNote": "Average ED length of stay = total ED patient-hours ÷ number of ED visits (a mean DURATION, not a percentage or a count). ≤ 4 hours total ED LOS is a widely used throughput target (e.g. the NHS A&E 4-hour standard); many hospitals set ≤ 4 h for discharged and ≤ 6 h for admitted patients. Adjust the benchmark and the unit (hours or minutes) to your hospital's agreed target.",
+    "goalDirection": "lower_is_better",
+    "reference": "CMS Hospital Outpatient Quality Reporting — ED Throughput (OP-18: median time from ED arrival to ED departure for discharged patients); NHS A&E 4-hour standard; ACEP ED crowding / boarding resources",
+    "referenceUrl": "https://www.cms.gov/medicare/quality/hospital-outpatient-quality-reporting-program"
   }
 };
+// ED average-length-of-stay aliases → the SAME correction, so the fix lands regardless of the
+// exact name the indicator was saved under (variants seen: with/without "the", "(ED)", dashes).
+['average length of stay (emergency department)', 'average length of stay - emergency department', 'average length of stay in the emergency department', 'average length of stay at emergency department', 'average length of stay (ed)', 'average ed length of stay', 'ed average length of stay', 'emergency department average length of stay', 'average length of stay emergency department', 'ed alos', 'alos (ed)'].forEach(function (k) {
+  window.QI_CORRECTIONS[k] = window.QI_CORRECTIONS['average length of stay at the emergency department'];
+});
 window.QI_CORRECTIONS_BY_DEFID = {
   "cauti": {
     "canonicalName": "Catheter-Associated Urinary Tract Infection (CAUTI) Rate",

@@ -511,10 +511,12 @@
     const per1000 = /per\s*1[.,\s]?0{3}\b|\/\s*1[.,\s]?0{3}\b/.test(rateProbe);
     const per100 = !per1000 && /per\s*100\b/.test(rateProbe);
     const pctText = !per1000 && !per100 && (/%/.test(rateProbe) || /\bpercent/.test(rateProbe));
-    const formula = (declared === 'rate1000' || declared === 'rate100' || declared === 'pct' || declared === 'count') ? declared
+    const formula = (declared === 'rate1000' || declared === 'rate100' || declared === 'pct' || declared === 'count' || declared === 'avg') ? declared
       : per1000 ? 'rate1000' : per100 ? 'rate100' : pctText ? 'pct' : (declared || 'count');
-    const isRate = formula === 'rate1000' || formula === 'rate100' || formula === 'pct';
-    const mult = formula === 'rate1000' ? 1000 : (formula === 'rate100' || formula === 'pct') ? 100 : 1000;
+    // 'avg' (mean = numerator ÷ denominator, e.g. average length of stay) is captured like a
+    // rate — collector enters both numerator and denominator — but with no multiplier (×1).
+    const isRate = formula === 'rate1000' || formula === 'rate100' || formula === 'pct' || formula === 'avg';
+    const mult = formula === 'rate1000' ? 1000 : formula === 'avg' ? 1 : (formula === 'rate100' || formula === 'pct') ? 100 : 1000;
     const vt = def.valueType || (formula === 'pct' ? '%' : isRate ? 'Rate' : 'Count');
     // parse the denominator's unit out of the benchmark, e.g. "per 1,000 discharges" -> "Discharges"
     const denMatch = rateProbe.match(/per\s*1[.,\s]?0{2,3}\s+([a-z][a-z\- ]{1,28})/) || rateProbe.match(/per\s*100\s+([a-z][a-z\- ]{1,28})/);
@@ -571,7 +573,9 @@
     // medication errors, ETT removals, re-admissions…): lower-is-better and NOT hand
     // hygiene / a utilization rate. For these the collector records each incident with its
     // patient + CAPA detail, and the count auto-derives from how many are logged.
-    const isIncidentType = !isHandHygiene && (def.goalDirection ? def.goalDirection !== 'higher_is_better' : true);
+    // 'avg' (a continuous mean like average length of stay) is NOT an adverse-event log,
+    // even though it is lower-is-better — so it must never fall into the incident register.
+    const isIncidentType = !isHandHygiene && def.formula !== 'avg' && (def.goalDirection ? def.goalDirection !== 'higher_is_better' : true);
     // NSI (needle-stick injury) logs BOTH the source patient AND the injured staff member
     // (victim) + their employee id — enabled per-indicator via the `victimField` flag.
     const victimField = !!def.victimField;
@@ -592,11 +596,13 @@
     const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : (Number(den) || 0);
     const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
-    const rateUnit = (unitRaw && /per|%/.test(unitRaw)) ? unitRaw : (formula === 'pct' ? '%' : ('per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '')));
+    const rateUnit = (unitRaw && /per|%/.test(unitRaw)) ? unitRaw : (formula === 'pct' ? '%' : formula === 'avg' ? (unitRaw || 'average') : ('per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '')));
     const unitQ = computeAsRate ? rateUnit : (unitRaw || 'count');
-    const formulaTextQ = computeAsRate
-      ? (indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult)
-      : (indNameQ + ' = ' + numLabel);
+    const formulaTextQ = formula === 'avg'
+      ? (indNameQ + ' = ' + numLabel + ' ÷ ' + denLabel + (unitRaw ? ' (' + unitRaw + ')' : ''))
+      : computeAsRate
+        ? (indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult)
+        : (indNameQ + ' = ' + numLabel);
     // Standardised measurement guide (formula / worked example / interpretation / reference)
     // for the selected indicator, from the Hospital Quality Indicator Framework.
     const guide = hqiGuideFor(indNameQ);

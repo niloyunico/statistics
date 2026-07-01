@@ -48,12 +48,17 @@
   }
   function saveOverlay(o) { try { localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { } }
 
-  // Formula-based value: count = numerator; rate1000/rate100/pct = num/den × mult.
+  // Formula-based value: count = numerator; rate1000/rate100/pct = num/den × mult;
+  // avg = num/den (mean, no multiplier).
   function qiFormulaCompute(formula, num, den) {
     const n = Number(num) || 0, d = Number(den) || 0;
     if (formula === 'count') return n;
     if (!d) return 0;
     if (formula === 'rate1000') return Math.round((n / d) * 1000 * 100) / 100;
+    // mean / average = numerator ÷ denominator (no multiplier), e.g. average length of stay
+    // = total patient-hours ÷ number of patients. Quarter roll-ups sum num & den first, so
+    // this yields the opportunity-weighted average, not a mean-of-means.
+    if (formula === 'avg') return Math.round((n / d) * 100) / 100;
     return Math.round((n / d) * 100 * 100) / 100; // rate100 / pct
   }
 

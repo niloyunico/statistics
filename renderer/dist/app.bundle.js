@@ -1203,8 +1203,28 @@ window.QI_CORRECTIONS = {
     "goalDirection": "lower_is_better",
     "reference": "NKF KDOQI Clinical Practice Guideline for Vascular Access: 2019 Update (Am J Kidney Dis. 2020;75(4)(suppl 2):S1-S164)",
     "referenceUrl": "https://www.ajkd.org/article/S0272-6386(19)31137-0/fulltext"
+  },
+  "average length of stay at the emergency department": {
+    "canonicalName": "Average Length of Stay at the Emergency Department",
+    "formula": "avg",
+    "numLabel": "Total ED patient-hours",
+    "denLabel": "Number of ED patient visits",
+    "numeratorDef": "Sum of the length of stay of every patient managed in the Emergency Department during the month = Σ (time of departure/disposition from the ED − time of ED arrival or triage registration), expressed in hours. Include every disposition (discharged, admitted/transferred to a ward, referred out, LAMA/DAMA, death in ED).",
+    "denominatorDef": "Total number of Emergency Department patient visits during the same month (every patient who arrived and was dispositioned) — the same visits whose stays are summed in the numerator.",
+    "unit": "hours",
+    "benchmarkValue": 4,
+    "benchmark": "≤ 4 hours",
+    "benchmarkNote": "Average ED length of stay = total ED patient-hours ÷ number of ED visits (a mean DURATION, not a percentage or a count). ≤ 4 hours total ED LOS is a widely used throughput target (e.g. the NHS A&E 4-hour standard); many hospitals set ≤ 4 h for discharged and ≤ 6 h for admitted patients. Adjust the benchmark and the unit (hours or minutes) to your hospital's agreed target.",
+    "goalDirection": "lower_is_better",
+    "reference": "CMS Hospital Outpatient Quality Reporting — ED Throughput (OP-18: median time from ED arrival to ED departure for discharged patients); NHS A&E 4-hour standard; ACEP ED crowding / boarding resources",
+    "referenceUrl": "https://www.cms.gov/medicare/quality/hospital-outpatient-quality-reporting-program"
   }
 };
+// ED average-length-of-stay aliases → the SAME correction, so the fix lands regardless of the
+// exact name the indicator was saved under (variants seen: with/without "the", "(ED)", dashes).
+['average length of stay (emergency department)', 'average length of stay - emergency department', 'average length of stay in the emergency department', 'average length of stay at emergency department', 'average length of stay (ed)', 'average ed length of stay', 'ed average length of stay', 'emergency department average length of stay', 'average length of stay emergency department', 'ed alos', 'alos (ed)'].forEach(function (k) {
+  window.QI_CORRECTIONS[k] = window.QI_CORRECTIONS['average length of stay at the emergency department'];
+});
 window.QI_CORRECTIONS_BY_DEFID = {
   "cauti": {
     "canonicalName": "Catheter-Associated Urinary Tract Infection (CAUTI) Rate",
@@ -1577,12 +1597,17 @@ window.QI_CORRECTIONS_BY_DEFID = {
   }
   function saveOverlay(o) { try { localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { } }
 
-  // Formula-based value: count = numerator; rate1000/rate100/pct = num/den × mult.
+  // Formula-based value: count = numerator; rate1000/rate100/pct = num/den × mult;
+  // avg = num/den (mean, no multiplier).
   function qiFormulaCompute(formula, num, den) {
     const n = Number(num) || 0, d = Number(den) || 0;
     if (formula === 'count') return n;
     if (!d) return 0;
     if (formula === 'rate1000') return Math.round((n / d) * 1000 * 100) / 100;
+    // mean / average = numerator ÷ denominator (no multiplier), e.g. average length of stay
+    // = total patient-hours ÷ number of patients. Quarter roll-ups sum num & den first, so
+    // this yields the opportunity-weighted average, not a mean-of-means.
+    if (formula === 'avg') return Math.round((n / d) * 100) / 100;
     return Math.round((n / d) * 100 * 100) / 100; // rate100 / pct
   }
 
@@ -14399,6 +14424,7 @@ function qiCompute(f, n, d) {
   if (d == null || d === '' || Number(d) === 0) return null;
   d = Number(d);
   if (f === 'rate1000') return Math.round(n / d * 1000 * 100) / 100;
+  if (f === 'avg') return Math.round(n / d * 100) / 100;
   return Math.round(n / d * 100 * 100) / 100;
 }
 function monthRaw(ind, mk) {
@@ -14477,6 +14503,11 @@ function measureOf(f) {
     color: P.violet,
     letter: 'R'
   };
+  if (f === 'avg') return {
+    name: 'Average',
+    color: P.violet,
+    letter: 'x̄'
+  };
   return {
     name: 'Count',
     color: P.blue,
@@ -14518,6 +14549,7 @@ function formulaText(ind) {
   const den = ind.denLabel || 'denominator';
   if (f === 'direct') return (ind.name || 'Value') + ' = entered value';
   if (f === 'count') return 'value = ' + num;
+  if (f === 'avg') return 'average = ' + num + ' ÷ ' + den;
   return '(' + num + ' ÷ ' + den + ') ' + (f === 'rate1000' ? '× 1000' : '× 100');
 }
 function statusColorFor(s) {
@@ -15507,7 +15539,7 @@ function QCIndEdit({
   isNew,
   onClose
 }) {
-  const isRate = ['pct', 'rate100', 'rate1000'].indexOf(ind.formula) >= 0;
+  const isRate = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0;
   const g = (o, k) => o && o[k] != null && o[k] !== '' ? String(o[k]) : '';
   const [val, setVal] = useState(() => g(ind.months, mk));
   const [num, setNum] = useState(() => g(ind.mNum, mk));
@@ -17039,7 +17071,7 @@ function qcHeatColors(s) {
   };
 }
 function qcAnnualCell(ind, months) {
-  const rate = ['pct', 'rate100', 'rate1000'].indexOf(ind.formula) >= 0 || isPctInd(ind);
+  const rate = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
   let anyRep = false,
     anyBreach = false,
     sum = 0,
@@ -22608,11 +22640,12 @@ function QCAdmin({
   const [expand, setExpand] = useState('');
   const CATS = ['Healthcare-Associated Infection', 'Infection Prevention', 'Patient Safety', 'Clinical Outcomes', 'Staff Safety', 'Staff Competency', 'Activity / Volume', 'Medication Safety'];
   const FREQ = ['Monthly', 'Quarterly', 'Annually', 'Bi-annually'];
-  const FORMULAS = [['direct', 'Direct value — enter the number as-is'], ['count', 'Count — a running tally (numerator only)'], ['rate1000', 'Rate per 1000 — numerator ÷ denominator × 1000'], ['rate100', 'Rate per 100 — numerator ÷ denominator × 100'], ['pct', 'Percentage — numerator ÷ denominator × 100']];
+  const FORMULAS = [['direct', 'Direct value — enter the number as-is'], ['count', 'Count — a running tally (numerator only)'], ['avg', 'Average (mean) — numerator ÷ denominator (e.g. avg length of stay)'], ['rate1000', 'Rate per 1000 — numerator ÷ denominator × 1000'], ['rate100', 'Rate per 100 — numerator ÷ denominator × 100'], ['pct', 'Percentage — numerator ÷ denominator × 100']];
   const DIRS = [['lower_is_better', '↓ Lower is better'], ['higher_is_better', '↑ Higher is better']];
   const FORMULA_HINT = {
     direct: 'The value is entered directly each month; no numerator/denominator needed.',
     count: 'A simple count (e.g. number of events). Only the numerator is captured.',
+    avg: 'A mean/average — numerator ÷ denominator with no multiplier (e.g. average length of stay = total patient-hours ÷ number of patients). Quarters roll up as the opportunity-weighted average (Σ numerator ÷ Σ denominator).',
     rate1000: 'A rate expressed per 1000 denominator-units (e.g. per 1000 device-days).',
     rate100: 'A rate expressed per 100 denominator-units.',
     pct: 'A percentage of the denominator (numerator ÷ denominator × 100).'
@@ -22839,7 +22872,7 @@ function QCAdmin({
   const dirHigh = selInd && selInd.goalDirection === 'higher_is_better';
   const benchSet = selInd && selInd.benchmarkValue != null && selInd.benchmarkValue !== '';
   const needsNum = selInd && selInd.formula !== 'direct';
-  const needsDen = selInd && (selInd.formula === 'rate1000' || selInd.formula === 'rate100' || selInd.formula === 'pct');
+  const needsDen = selInd && (selInd.formula === 'rate1000' || selInd.formula === 'rate100' || selInd.formula === 'pct' || selInd.formula === 'avg');
   const assignShort = nm => {
     const s = (nm || '').replace(/\s*(Ward|Department)\s*/g, ' ').trim();
     return s.length > 12 ? s.slice(0, 11).trim() + '…' : s;
@@ -22935,6 +22968,7 @@ function QCAdmin({
     pct: '%',
     rate1000: 'Rate',
     rate100: 'Rate',
+    avg: 'Rate',
     count: 'Count',
     direct: 'Count'
   })[f] || 'Count';
@@ -28965,9 +28999,9 @@ window.LockScreen = LockScreen;
     const per1000 = /per\s*1[.,\s]?0{3}\b|\/\s*1[.,\s]?0{3}\b/.test(rateProbe);
     const per100 = !per1000 && /per\s*100\b/.test(rateProbe);
     const pctText = !per1000 && !per100 && (/%/.test(rateProbe) || /\bpercent/.test(rateProbe));
-    const formula = declared === 'rate1000' || declared === 'rate100' || declared === 'pct' || declared === 'count' ? declared : per1000 ? 'rate1000' : per100 ? 'rate100' : pctText ? 'pct' : declared || 'count';
-    const isRate = formula === 'rate1000' || formula === 'rate100' || formula === 'pct';
-    const mult = formula === 'rate1000' ? 1000 : formula === 'rate100' || formula === 'pct' ? 100 : 1000;
+    const formula = declared === 'rate1000' || declared === 'rate100' || declared === 'pct' || declared === 'count' || declared === 'avg' ? declared : per1000 ? 'rate1000' : per100 ? 'rate100' : pctText ? 'pct' : declared || 'count';
+    const isRate = formula === 'rate1000' || formula === 'rate100' || formula === 'pct' || formula === 'avg';
+    const mult = formula === 'rate1000' ? 1000 : formula === 'avg' ? 1 : formula === 'rate100' || formula === 'pct' ? 100 : 1000;
     const vt = def.valueType || (formula === 'pct' ? '%' : isRate ? 'Rate' : 'Count');
     const denMatch = rateProbe.match(/per\s*1[.,\s]?0{2,3}\s+([a-z][a-z\- ]{1,28})/) || rateProbe.match(/per\s*100\s+([a-z][a-z\- ]{1,28})/);
     const denGuess = denMatch ? denMatch[1].trim().replace(/\b\w/g, c => c.toUpperCase()) : '';
@@ -29063,7 +29097,7 @@ window.LockScreen = LockScreen;
         });
       });
     }, [isHandHygiene, numMode, hhDepartments]);
-    const isIncidentType = !isHandHygiene && (def.goalDirection ? def.goalDirection !== 'higher_is_better' : true);
+    const isIncidentType = !isHandHygiene && def.formula !== 'avg' && (def.goalDirection ? def.goalDirection !== 'higher_is_better' : true);
     const victimField = !!def.victimField;
     const blankIncident = () => ({
       patientName: '',
@@ -29091,9 +29125,9 @@ window.LockScreen = LockScreen;
     const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : Number(den) || 0;
     const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
-    const rateUnit = unitRaw && /per|%/.test(unitRaw) ? unitRaw : formula === 'pct' ? '%' : 'per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '');
+    const rateUnit = unitRaw && /per|%/.test(unitRaw) ? unitRaw : formula === 'pct' ? '%' : formula === 'avg' ? unitRaw || 'average' : 'per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '');
     const unitQ = computeAsRate ? rateUnit : unitRaw || 'count';
-    const formulaTextQ = computeAsRate ? indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult : indNameQ + ' = ' + numLabel;
+    const formulaTextQ = formula === 'avg' ? indNameQ + ' = ' + numLabel + ' ÷ ' + denLabel + (unitRaw ? ' (' + unitRaw + ')' : '') : computeAsRate ? indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult : indNameQ + ' = ' + numLabel;
     const guide = hqiGuideFor(indNameQ);
     useEffect(() => {
       const blankG = {
