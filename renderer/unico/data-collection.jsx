@@ -1267,6 +1267,7 @@
 
     const [sel, setSel] = useState({});                 // bulk selection: id -> true
     const [rejectFor, setRejectFor] = useState(null);   // {ids:[...]} -> reject-reason modal
+    const [grouped, setGrouped] = useState(true);       // group the table by department
     // Run approve/reject over one OR many submissions (bulk), then reload.
     const runAction = async (ids, kind, reason) => {
       if (!ids || !ids.length) return;
@@ -1286,6 +1287,36 @@
     const pendingRows = (rows || []).filter((s) => s.status === 'pending');
     const selIds = pendingRows.filter((s) => sel[s.id]).map((s) => s.id);
     const allSelected = pendingRows.length > 0 && selIds.length === pendingRows.length;
+    // Group submissions by DEPARTMENT (canonical name), so a department's patient + quality
+    // submissions sit together; quality rows get a blue fill, patient rows a green fill.
+    const groupKey = (s) => (s.type === 'quality'
+      ? ((window.DEPTMAP && window.DEPTMAP.nameFromQualityKey(s.area)) || s.areaName)
+      : ((window.DEPTMAP && window.DEPTMAP.nameFromId(s.department)) || s.departmentName)) || '—';
+    const groups = {}; (rows || []).forEach((s) => { const k = groupKey(s); (groups[k] = groups[k] || []).push(s); });
+    const groupNames = Object.keys(groups).sort();
+    const rowFill = (s) => s.type === 'quality' ? 'rgba(0,144,202,.06)' : 'rgba(31,157,87,.06)';
+    const submissionRow = (s) => (
+      <tr key={s.id} style={{ background: grouped ? rowFill(s) : undefined }}>
+        <td>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
+        <td style={{ whiteSpace: 'nowrap' }} className="num">{when(s.submittedAt)}</td>
+        <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)' }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
+        <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px' }}>⚠ {dupCount[dupKey(s)]}×</span>}</td>
+        <td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 320 }}>{valuesSummary(s)}</td>
+        <td style={{ whiteSpace: 'nowrap' }}>{(s.responsible && s.responsible.name) || '—'}</td>
+        <td style={{ whiteSpace: 'nowrap' }}>{s.submittedBy || '—'}</td>
+        <td>{statusChip(s.status)}</td>
+        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+          <button className="btn sm" onClick={() => setDetail(s)} style={{ marginRight: 5 }}><Ic d={I.search} s={13} />View</button>
+          {s.status === 'pending' && (
+            <>
+              <button className="btn sm pri" disabled={busy === s.id} onClick={() => act(s.id, 'approve')} style={{ marginRight: 5 }}><Ic d={I.check} s={13} />Approve</button>
+              <button className="btn sm" disabled={busy === s.id} onClick={() => act(s.id, 'reject')}>Reject</button>
+            </>
+          )}
+          {s.status !== 'pending' && s.reviewedBy && <span style={{ fontSize: 11, color: 'var(--muted)' }}>{s.reviewedBy}</span>}
+        </td>
+      </tr>
+    );
 
     const statusChip = (st) => {
       const map = { pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)'] };
@@ -1312,8 +1343,19 @@
           </div>
         )}
 
-        <div className="seg" style={{ alignSelf: 'flex-start' }}>
-          {tabs.map(([id, l]) => <button key={id} className={filter === id ? 'on' : ''} onClick={() => setFilter(id)}>{l}{id === 'pending' && stats && stats.pending ? ' (' + stats.pending + ')' : ''}</button>)}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div className="seg">
+            {tabs.map(([id, l]) => <button key={id} className={filter === id ? 'on' : ''} onClick={() => setFilter(id)}>{l}{id === 'pending' && stats && stats.pending ? ' (' + stats.pending + ')' : ''}</button>)}
+          </div>
+          <span style={{ flex: 1 }} />
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} />
+            Group by department
+          </label>
+          <span style={{ fontSize: 11, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'rgba(31,157,87,.35)' }} /> Patient</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'rgba(0,144,202,.35)' }} /> Quality</span>
+          </span>
         </div>
 
         {selIds.length > 0 && (
@@ -1331,28 +1373,16 @@
             : rows.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No {filter === 'all' ? '' : filter} submissions.</div>
               : <table className="tbl" style={{ width: '100%' }}>
                 <thead><tr><th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={(e) => { if (e.target.checked) { const m = {}; pendingRows.forEach((s) => { m[s.id] = true; }); setSel(m); } else setSel({}); }} /></th><th>When</th><th>Type</th><th>Target</th><th>Data</th><th>Responsible</th><th>By</th><th>Status</th><th></th></tr></thead>
-                <tbody>{rows.map((s) => (
-                  <tr key={s.id}>
-                    <td>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
-                    <td style={{ whiteSpace: 'nowrap' }} className="num">{when(s.submittedAt)}</td>
-                    <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)' }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
-                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px' }}>⚠ {dupCount[dupKey(s)]}×</span>}</td>
-                    <td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 320 }}>{valuesSummary(s)}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>{(s.responsible && s.responsible.name) || '—'}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>{s.submittedBy || '—'}</td>
-                    <td>{statusChip(s.status)}</td>
-                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <button className="btn sm" onClick={() => setDetail(s)} style={{ marginRight: 5 }}><Ic d={I.search} s={13} />View</button>
-                      {s.status === 'pending' && (
-                        <>
-                          <button className="btn sm pri" disabled={busy === s.id} onClick={() => act(s.id, 'approve')} style={{ marginRight: 5 }}><Ic d={I.check} s={13} />Approve</button>
-                          <button className="btn sm" disabled={busy === s.id} onClick={() => act(s.id, 'reject')}>Reject</button>
-                        </>
-                      )}
-                      {s.status !== 'pending' && s.reviewedBy && <span style={{ fontSize: 11, color: 'var(--muted)' }}>{s.reviewedBy}</span>}
-                    </td>
-                  </tr>
-                ))}</tbody>
+                <tbody>
+                  {grouped
+                    ? groupNames.map((g) => (
+                      <React.Fragment key={g}>
+                        <tr><td colSpan={9} style={{ background: 'var(--panel-2)', fontWeight: 700, color: 'var(--ink)', padding: '7px 12px', borderTop: '1px solid var(--line-2)' }}>{g} <span style={{ fontWeight: 500, color: 'var(--muted)', fontSize: 12 }}>· {groups[g].length} submission{groups[g].length > 1 ? 's' : ''}</span></td></tr>
+                        {groups[g].map(submissionRow)}
+                      </React.Fragment>
+                    ))
+                    : rows.map(submissionRow)}
+                </tbody>
               </table>}
         </Card>
         {detail && <SubmissionDetail s={detail} canEdit={true} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}

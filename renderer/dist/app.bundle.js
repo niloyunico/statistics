@@ -16854,6 +16854,22 @@ function qcDonutData(d) {
     color: QC_PAL[i % QC_PAL.length]
   })).filter(x => x.value > 0);
 }
+function qcStatusComp(d, months) {
+  const st = deptStat(d, months);
+  return [{
+    label: 'On benchmark',
+    value: st.ok || 0,
+    color: '#2fb56a'
+  }, {
+    label: 'Breaches',
+    value: st.breach || 0,
+    color: '#e2445c'
+  }, {
+    label: 'Not reported',
+    value: st.na || 0,
+    color: '#c3ccd8'
+  }].filter(x => x.value > 0);
+}
 function qcChartEl(d, style, ind, tone, months) {
   months = months || MONTHS;
   if (!ind) return React.createElement("div", {
@@ -16976,27 +16992,20 @@ function qcChartEl(d, style, ind, tone, months) {
   }
   if (style === 'donut') {
     const dd = qcDonutData(d);
-    return dd.length > 1 ? React.createElement("div", {
+    const pie = dd.length > 1 ? dd : qcStatusComp(d, months);
+    return React.createElement("div", {
       style: {
         display: 'grid',
         placeItems: 'center',
         minHeight: 205
       }
     }, W.Donut({
-      data: dd,
+      data: pie,
       size: 188,
-      centerValue: dd.reduce((s, x) => s + x.value, 0),
-      centerLabel: 'Breaches',
+      centerValue: pie.reduce((s, x) => s + x.value, 0),
+      centerLabel: dd.length > 1 ? 'Breaches' : 'Ind-months',
       flat: true
-    })) : W.Bar3D({
-      data: rows,
-      x: 'mon',
-      y: 'val',
-      height: 205,
-      color: tone,
-      multi: false,
-      flat: true
-    });
+    }));
   }
   return W.Bar3D({
     data: rows,
@@ -18846,14 +18855,14 @@ function QCReportBuilder({
       cards: cards,
       tone: tone
     }), sections.chart && (() => {
-      const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r => r.has && r.val !== 0);
+      const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r => r.has);
       if (!chartable) return React.createElement("div", {
         style: {
           margin: '4px 0 8px'
         }
       }, React.createElement("div", {
         style: uSub
-      }, "Status heatmap \xB7 ", chartInd ? 'zero-defect — no values to chart' : 'no data'), React.createElement(QCHeatLegend, null), React.createElement(QCHeatGrid, {
+      }, "Status heatmap \xB7 ", chartInd ? 'no values to chart' : 'no data'), React.createElement(QCHeatLegend, null), React.createElement(QCHeatGrid, {
         d: d,
         months: pMonths
       }));
@@ -18865,31 +18874,35 @@ function QCReportBuilder({
       }, chartStyles.length > 1 && React.createElement("div", {
         style: uSub
       }, QC_CHART_STYLE_LABEL[cs] || cs), qcChartEl(d, cs, chartInd, tone, pMonths)));
-    })(), sections.breachDonut && dd.length > 1 && !chartStyles.includes('donut') && React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        background: P.panel2,
-        borderRadius: 9,
-        padding: '10px 14px',
-        marginTop: 6
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 10.5,
-        color: P.muted,
-        textTransform: 'uppercase',
-        letterSpacing: .3,
-        fontWeight: 600,
-        width: 88
-      }
-    }, "Breach composition"), window.Donut({
-      data: dd,
-      size: 104,
-      thickness: 20,
-      flat: true
-    })), sections.table && React.createElement(MonthTable, {
+    })(), sections.breachDonut && !chartStyles.includes('donut') && (() => {
+      const pie = dd.length > 1 ? dd : qcStatusComp(d, pMonths);
+      if (!pie.length) return null;
+      return React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          background: P.panel2,
+          borderRadius: 9,
+          padding: '10px 14px',
+          marginTop: 6
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          color: P.muted,
+          textTransform: 'uppercase',
+          letterSpacing: .3,
+          fontWeight: 600,
+          width: 88
+        }
+      }, dd.length > 1 ? 'Breach composition' : 'Status mix'), window.Donut({
+        data: pie,
+        size: 104,
+        thickness: 20,
+        flat: true
+      }));
+    })(), sections.table && React.createElement(MonthTable, {
       d: d,
       detailInd: detailed ? page.ind : null
     }), sections.indTrend && React.createElement(QCIndTrend, {
@@ -31378,6 +31391,7 @@ window.LockScreen = LockScreen;
     }, [filter]);
     const [sel, setSel] = useState({});
     const [rejectFor, setRejectFor] = useState(null);
+    const [grouped, setGrouped] = useState(true);
     const runAction = async (ids, kind, reason) => {
       if (!ids || !ids.length) return;
       setBusy('bulk');
@@ -31414,155 +31428,19 @@ window.LockScreen = LockScreen;
     const pendingRows = (rows || []).filter(s => s.status === 'pending');
     const selIds = pendingRows.filter(s => sel[s.id]).map(s => s.id);
     const allSelected = pendingRows.length > 0 && selIds.length === pendingRows.length;
-    const statusChip = st => {
-      const map = {
-        pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'],
-        approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'],
-        rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)']
-      };
-      const m = map[st] || ['—', 'var(--panel-2)', 'var(--muted)'];
-      return React.createElement("span", {
-        style: {
-          fontSize: 11,
-          fontWeight: 700,
-          padding: '3px 9px',
-          borderRadius: 999,
-          background: m[1],
-          color: m[2]
-        }
-      }, m[0]);
-    };
-    const tabs = [['pending', 'Pending'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']];
-    return React.createElement("div", {
-      className: "grid",
+    const groupKey = s => (s.type === 'quality' ? window.DEPTMAP && window.DEPTMAP.nameFromQualityKey(s.area) || s.areaName : window.DEPTMAP && window.DEPTMAP.nameFromId(s.department) || s.departmentName) || '—';
+    const groups = {};
+    (rows || []).forEach(s => {
+      const k = groupKey(s);
+      (groups[k] = groups[k] || []).push(s);
+    });
+    const groupNames = Object.keys(groups).sort();
+    const rowFill = s => s.type === 'quality' ? 'rgba(0,144,202,.06)' : 'rgba(31,157,87,.06)';
+    const submissionRow = s => React.createElement("tr", {
+      key: s.id,
       style: {
-        gap: 14
+        background: grouped ? rowFill(s) : undefined
       }
-    }, React.createElement(SectionTitle, {
-      icon: I.doc,
-      title: "Review & History",
-      sub: "Every submission with time, data and status. Submissions stay pending until an admin approves \u2014 approval applies them to the live dashboard.",
-      right: React.createElement(React.Fragment, null, React.createElement("button", {
-        className: "btn sm",
-        onClick: load
-      }, React.createElement(Ic, {
-        d: I.trend,
-        s: 14
-      }), "Refresh"))
-    }), stats && React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 10,
-        flexWrap: 'wrap'
-      }
-    }, React.createElement(StatCard, {
-      label: "Total",
-      value: stats.total
-    }), React.createElement(StatCard, {
-      label: "Pending",
-      value: stats.pending,
-      color: stats.pending ? '#b8860b' : 'var(--ink)'
-    }), React.createElement(StatCard, {
-      label: "Approved",
-      value: stats.approved,
-      color: "var(--pos)"
-    }), React.createElement(StatCard, {
-      label: "Rejected",
-      value: stats.rejected,
-      color: "var(--rose)"
-    }), React.createElement(StatCard, {
-      label: "Patient",
-      value: stats.patient,
-      color: "var(--blue)"
-    }), React.createElement(StatCard, {
-      label: "Quality",
-      value: stats.quality,
-      color: "var(--blue)"
-    })), React.createElement("div", {
-      className: "seg",
-      style: {
-        alignSelf: 'flex-start'
-      }
-    }, tabs.map(([id, l]) => React.createElement("button", {
-      key: id,
-      className: filter === id ? 'on' : '',
-      onClick: () => setFilter(id)
-    }, l, id === 'pending' && stats && stats.pending ? ' (' + stats.pending + ')' : ''))), selIds.length > 0 && React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '8px 12px',
-        background: 'var(--blue-50)',
-        border: '1px solid var(--blue-100,#cfe6f7)',
-        borderRadius: 9
-      }
-    }, React.createElement("b", {
-      style: {
-        fontSize: 12.5
-      }
-    }, selIds.length, " selected"), React.createElement("button", {
-      className: "btn sm pri",
-      disabled: busy === 'bulk',
-      onClick: () => runAction(selIds, 'approve')
-    }, React.createElement(Ic, {
-      d: I.check,
-      s: 13
-    }), "Approve selected"), React.createElement("button", {
-      className: "btn sm",
-      disabled: busy === 'bulk',
-      style: {
-        color: 'var(--rose)'
-      },
-      onClick: () => setRejectFor({
-        ids: selIds
-      })
-    }, "Reject selected"), React.createElement("span", {
-      style: {
-        flex: 1
-      }
-    }), React.createElement("button", {
-      className: "btn sm",
-      onClick: () => setSel({})
-    }, "Clear")), React.createElement(Card, {
-      style: {
-        padding: 0,
-        overflow: 'hidden'
-      }
-    }, rows === null ? React.createElement("div", {
-      style: {
-        padding: 24,
-        color: 'var(--muted)'
-      }
-    }, "Loading\u2026") : rows.length === 0 ? React.createElement("div", {
-      style: {
-        padding: 24,
-        color: 'var(--muted)',
-        textAlign: 'center'
-      }
-    }, "No ", filter === 'all' ? '' : filter, " submissions.") : React.createElement("table", {
-      className: "tbl",
-      style: {
-        width: '100%'
-      }
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
-      style: {
-        width: 30
-      }
-    }, React.createElement("input", {
-      type: "checkbox",
-      checked: allSelected,
-      onChange: e => {
-        if (e.target.checked) {
-          const m = {};
-          pendingRows.forEach(s => {
-            m[s.id] = true;
-          });
-          setSel(m);
-        } else setSel({});
-      }
-    })), React.createElement("th", null, "When"), React.createElement("th", null, "Type"), React.createElement("th", null, "Target"), React.createElement("th", null, "Data"), React.createElement("th", null, "Responsible"), React.createElement("th", null, "By"), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, rows.map(s => React.createElement("tr", {
-      key: s.id
     }, React.createElement("td", null, s.status === 'pending' ? React.createElement("input", {
       type: "checkbox",
       checked: !!sel[s.id],
@@ -31642,7 +31520,228 @@ window.LockScreen = LockScreen;
         fontSize: 11,
         color: 'var(--muted)'
       }
-    }, s.reviewedBy))))))), detail && React.createElement(SubmissionDetail, {
+    }, s.reviewedBy)));
+    const statusChip = st => {
+      const map = {
+        pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'],
+        approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'],
+        rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)']
+      };
+      const m = map[st] || ['—', 'var(--panel-2)', 'var(--muted)'];
+      return React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '3px 9px',
+          borderRadius: 999,
+          background: m[1],
+          color: m[2]
+        }
+      }, m[0]);
+    };
+    const tabs = [['pending', 'Pending'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']];
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 14
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.doc,
+      title: "Review & History",
+      sub: "Every submission with time, data and status. Submissions stay pending until an admin approves \u2014 approval applies them to the live dashboard.",
+      right: React.createElement(React.Fragment, null, React.createElement("button", {
+        className: "btn sm",
+        onClick: load
+      }, React.createElement(Ic, {
+        d: I.trend,
+        s: 14
+      }), "Refresh"))
+    }), stats && React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement(StatCard, {
+      label: "Total",
+      value: stats.total
+    }), React.createElement(StatCard, {
+      label: "Pending",
+      value: stats.pending,
+      color: stats.pending ? '#b8860b' : 'var(--ink)'
+    }), React.createElement(StatCard, {
+      label: "Approved",
+      value: stats.approved,
+      color: "var(--pos)"
+    }), React.createElement(StatCard, {
+      label: "Rejected",
+      value: stats.rejected,
+      color: "var(--rose)"
+    }), React.createElement(StatCard, {
+      label: "Patient",
+      value: stats.patient,
+      color: "var(--blue)"
+    }), React.createElement(StatCard, {
+      label: "Quality",
+      value: stats.quality,
+      color: "var(--blue)"
+    })), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      className: "seg"
+    }, tabs.map(([id, l]) => React.createElement("button", {
+      key: id,
+      className: filter === id ? 'on' : '',
+      onClick: () => setFilter(id)
+    }, l, id === 'pending' && stats && stats.pending ? ' (' + stats.pending + ')' : ''))), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("label", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: 'var(--ink-2)',
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: grouped,
+      onChange: e => setGrouped(e.target.checked)
+    }), "Group by department"), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 10
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 10,
+        height: 10,
+        borderRadius: 2,
+        background: 'rgba(31,157,87,.35)'
+      }
+    }), " Patient"), React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 10,
+        height: 10,
+        borderRadius: 2,
+        background: 'rgba(0,144,202,.35)'
+      }
+    }), " Quality"))), selIds.length > 0 && React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '8px 12px',
+        background: 'var(--blue-50)',
+        border: '1px solid var(--blue-100,#cfe6f7)',
+        borderRadius: 9
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 12.5
+      }
+    }, selIds.length, " selected"), React.createElement("button", {
+      className: "btn sm pri",
+      disabled: busy === 'bulk',
+      onClick: () => runAction(selIds, 'approve')
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 13
+    }), "Approve selected"), React.createElement("button", {
+      className: "btn sm",
+      disabled: busy === 'bulk',
+      style: {
+        color: 'var(--rose)'
+      },
+      onClick: () => setRejectFor({
+        ids: selIds
+      })
+    }, "Reject selected"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setSel({})
+    }, "Clear")), React.createElement(Card, {
+      style: {
+        padding: 0,
+        overflow: 'hidden'
+      }
+    }, rows === null ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026") : rows.length === 0 ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)',
+        textAlign: 'center'
+      }
+    }, "No ", filter === 'all' ? '' : filter, " submissions.") : React.createElement("table", {
+      className: "tbl",
+      style: {
+        width: '100%'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: {
+        width: 30
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: allSelected,
+      onChange: e => {
+        if (e.target.checked) {
+          const m = {};
+          pendingRows.forEach(s => {
+            m[s.id] = true;
+          });
+          setSel(m);
+        } else setSel({});
+      }
+    })), React.createElement("th", null, "When"), React.createElement("th", null, "Type"), React.createElement("th", null, "Target"), React.createElement("th", null, "Data"), React.createElement("th", null, "Responsible"), React.createElement("th", null, "By"), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, grouped ? groupNames.map(g => React.createElement(React.Fragment, {
+      key: g
+    }, React.createElement("tr", null, React.createElement("td", {
+      colSpan: 9,
+      style: {
+        background: 'var(--panel-2)',
+        fontWeight: 700,
+        color: 'var(--ink)',
+        padding: '7px 12px',
+        borderTop: '1px solid var(--line-2)'
+      }
+    }, g, " ", React.createElement("span", {
+      style: {
+        fontWeight: 500,
+        color: 'var(--muted)',
+        fontSize: 12
+      }
+    }, "\xB7 ", groups[g].length, " submission", groups[g].length > 1 ? 's' : ''))), groups[g].map(submissionRow))) : rows.map(submissionRow)))), detail && React.createElement(SubmissionDetail, {
       s: detail,
       canEdit: true,
       onClose: () => setDetail(null),

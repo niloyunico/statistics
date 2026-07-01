@@ -1065,6 +1065,16 @@ function qcDeptCompareRows(d, months){
 function qcDonutData(d){
   return (d.indicators||[]).map((ind,i)=>({label:ind.name, value:countBreaches(ind), color:QC_PAL[i%QC_PAL.length]})).filter(x=>x.value>0);
 }
+/* Status composition (on-benchmark / breach / not-reported indicator-months) — always has
+   slices, so a pie can render even for a zero-defect (no-breach) department. */
+function qcStatusComp(d, months){
+  const st=deptStat(d, months);
+  return [
+    {label:'On benchmark', value:st.ok||0, color:'#2fb56a'},
+    {label:'Breaches', value:st.breach||0, color:'#e2445c'},
+    {label:'Not reported', value:st.na||0, color:'#c3ccd8'},
+  ].filter(x=>x.value>0);
+}
 /* Chart dispatcher — every element uses window.* (cross-IIFE) + flat for print. */
 function qcChartEl(d, style, ind, tone, months){
   months = months || MONTHS;
@@ -1080,9 +1090,8 @@ function qcChartEl(d, style, ind, tone, months){
   if(style==='stacked'){ const sr=qcIndSeries(d); return sr.length>1 ? W.StackedBar({data:qcDeptCompareRows(d, months), x:'mon', series:sr, height:210}) : W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true}); }
   if(style==='pct'){ const sr=qcIndSeries(d); return sr.length>1 ? W.StackedPctBar({data:qcDeptCompareRows(d, months), x:'mon', series:sr, height:210, flat:true}) : W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true}); }
   if(style==='horizontal'){ const vals=qcMonthVals(ind, months); return W.HBar({rows:months.map((m,i)=>({label:m[1], value:vals[i]||0, color:tone})), height:Math.max(150,months.length*22)}); }
-  if(style==='donut'){ const dd=qcDonutData(d); return dd.length>1
-      ? <div style={{display:'grid',placeItems:'center',minHeight:205}}>{W.Donut({data:dd, size:188, centerValue:dd.reduce((s,x)=>s+x.value,0), centerLabel:'Breaches', flat:true})}</div>
-      : W.Bar3D({data:rows, x:'mon', y:'val', height:205, color:tone, multi:false, flat:true}); }
+  if(style==='donut'){ const dd=qcDonutData(d); const pie=dd.length>1?dd:qcStatusComp(d, months);
+      return <div style={{display:'grid',placeItems:'center',minHeight:205}}>{W.Donut({data:pie, size:188, centerValue:pie.reduce((s,x)=>s+x.value,0), centerLabel:dd.length>1?'Breaches':'Ind-months', flat:true})}</div>; }
   return W.Bar3D({data:rows, x:'mon', y:'val', height:205, color:tone, multi:false, flat:true}); // bar3d + default
 }
 
@@ -1746,13 +1755,14 @@ function QCReportBuilder({depts}){
             <span style={{background:color+'1c',color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11.5}}>{status}</span>
           </div>
           {sections.kpis&&<KpiCards cards={cards} tone={tone}/>}
-          {/* Value charts are meaningless for zero-defect data (all 0s render blank) —
-              fall back to a status heatmap so the page is never empty. */}
+          {/* Render the selected chart(s) whenever the lead indicator has ANY reported month
+              (zero-defect data still charts — flat bars against the benchmark). Only fall
+              back to a status heatmap when there is no reported data at all. */}
           {sections.chart&&(() => {
-            const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r=>r.has && r.val!==0);
+            const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r=>r.has);
             if(!chartable) return (
               <div style={{margin:'4px 0 8px'}}>
-                <div style={uSub}>Status heatmap · {chartInd?'zero-defect — no values to chart':'no data'}</div>
+                <div style={uSub}>Status heatmap · {chartInd?'no values to chart':'no data'}</div>
                 <QCHeatLegend/><QCHeatGrid d={d} months={pMonths}/>
               </div>
             );
@@ -1763,12 +1773,13 @@ function QCReportBuilder({depts}){
               </div>
             ));
           })()}
-          {sections.breachDonut&&dd.length>1&&!chartStyles.includes('donut')&&(
+          {sections.breachDonut&&!chartStyles.includes('donut')&&(()=>{ const pie=dd.length>1?dd:qcStatusComp(d, pMonths); if(!pie.length) return null;
+            return (
             <div style={{display:'flex',alignItems:'center',gap:10,background:P.panel2,borderRadius:9,padding:'10px 14px',marginTop:6}}>
-              <div style={{fontSize:10.5,color:P.muted,textTransform:'uppercase',letterSpacing:.3,fontWeight:600,width:88}}>Breach composition</div>
-              {window.Donut({data:dd, size:104, thickness:20, flat:true})}
+              <div style={{fontSize:10.5,color:P.muted,textTransform:'uppercase',letterSpacing:.3,fontWeight:600,width:88}}>{dd.length>1?'Breach composition':'Status mix'}</div>
+              {window.Donut({data:pie, size:104, thickness:20, flat:true})}
             </div>
-          )}
+          );})()}
           {sections.table&&<MonthTable d={d} detailInd={detailed?page.ind:null}/>}
           {sections.indTrend&&<QCIndTrend d={d} months={pMonths}/>}
           {sections.indicatorDetail&&detailed&&page.ind&&<IndicatorDetail d={d} ind={page.ind}/>}
