@@ -62,8 +62,12 @@ async function getAppData() {
   }
   return _memApp;
 }
+// Overlay keys that were retired by the quality rebuild; strip them on every write so a
+// client mirroring its (still-stale) localStorage can't resurrect them into the shared blob.
+const STALE_OVERLAY_KEYS = ['unico_quality_v1', 'unico_qentries_v1'];
 async function setAppData(data) {
   const updatedAt = Date.now();
+  if (data && typeof data === 'object') { STALE_OVERLAY_KEYS.forEach((k) => { if (k in data) delete data[k]; }); }
   if (process.env.MONGODB_URI) {
     await ensureClient();
     await dbHandle().collection('appdata').updateOne({ _id: 'shared' }, { $set: { data, updatedAt } }, { upsert: true });

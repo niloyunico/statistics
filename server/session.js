@@ -49,12 +49,24 @@ function userFromReq(req) {
   return auth.check(tokenFromReq(req));
 }
 
+// Parse TOKEN_TTL (e.g. '12h', '30m', '7d', or a bare number of seconds) to milliseconds so
+// the cookie lifetime tracks the JWT expiry instead of a hardcoded 12h that could drift.
+function ttlMs() {
+  const raw = String(process.env.TOKEN_TTL || '12h').trim();
+  const m = raw.match(/^(\d+)\s*([smhd]?)$/i);
+  if (!m) return 12 * 60 * 60 * 1000;
+  const n = parseInt(m[1], 10);
+  const unit = (m[2] || 's').toLowerCase();
+  const mult = unit === 'd' ? 86400 : unit === 'h' ? 3600 : unit === 'm' ? 60 : 1;
+  return n * mult * 1000;
+}
+
 function setSession(res, token) {
   res.cookie(COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
     secure: String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true',
-    maxAge: 12 * 60 * 60 * 1000, // mirror the default 12h token TTL
+    maxAge: ttlMs(), // track the configured token TTL (default 12h)
     path: '/',
   });
 }

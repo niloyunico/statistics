@@ -48,7 +48,7 @@ function UAUserForm({ user, roles, onClose, onSaved }) {
   const [active, setActive] = useState(user ? user.active !== false : true);
   const [password, setPassword] = useState('');
   const [departments, setDepartments] = useState(user && user.departments ? user.departments.join(', ') : '');
-  const [qualityAreas, setQualityAreas] = useState(user && user.qualityAreas ? user.qualityAreas.join(', ') : '');
+  const [allQualityAreas, setAllQualityAreas] = useState(user ? !!user.allQualityAreas : false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -61,7 +61,9 @@ function UAUserForm({ user, roles, onClose, onSaved }) {
     if (!editing && password.length < 6) return setErr('Password must be at least 6 characters.');
     setBusy(true);
     try {
-      const scope = role === 'collector' ? { departments: list(departments), qualityAreas: list(qualityAreas) } : { departments: [], qualityAreas: [] };
+      // Quality areas are DERIVED server-side from departments (+ hospital-wide flag), so we
+      // only send the department list and the flag — never a separate qualityAreas array.
+      const scope = role === 'collector' ? { departments: list(departments), allQualityAreas } : { departments: [], allQualityAreas: false };
       if (editing) {
         await uaApi('PATCH', '/api/users/' + encodeURIComponent(user.username), { name, role, active, ...scope });
       } else {
@@ -96,11 +98,18 @@ function UAUserForm({ user, roles, onClose, onSaved }) {
           </div>
           {role === 'collector' && (
             <>
-              <div className="field"><label>Departments (comma-separated)</label>
-                <input style={txt} value={departments} onChange={e => setDepartments(e.target.value)} placeholder="e.g. MICU, CCU" />
+              <div className="field"><label>Departments (comma-separated ids)</label>
+                <input style={txt} value={departments} onChange={e => setDepartments(e.target.value)} placeholder="e.g. micu, ccu" />
               </div>
-              <div className="field"><label>Quality areas (comma-separated)</label>
-                <input style={txt} value={qualityAreas} onChange={e => setQualityAreas(e.target.value)} placeholder="e.g. Infection Control" />
+              <div className="field"><label>Quality areas <span style={{ fontWeight: 400, color: 'var(--muted)' }}>· auto from departments</span></label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--ink-2)', cursor: 'pointer', margin: '2px 0 8px' }}>
+                  <input type="checkbox" checked={allQualityAreas} onChange={e => setAllQualityAreas(e.target.checked)} />
+                  Hospital-wide — every quality area
+                </label>
+                {(() => {
+                  const areas = allQualityAreas ? (window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : []) : (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(list(departments)) : []);
+                  return <div style={{ fontSize: 12.5, color: areas.length ? 'var(--ink-2)' : 'var(--muted)' }}>{areas.length ? areas.map(k => window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(k) : k).join(', ') : 'None yet — add departments above, or tick hospital-wide.'}</div>;
+                })()}
               </div>
             </>
           )}

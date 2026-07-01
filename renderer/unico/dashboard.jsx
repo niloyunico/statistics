@@ -145,10 +145,14 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
   const rangeShort=activeMonths.length?`${fmtKey(activeMonths[0])}–${fmtKey(activeMonths[activeMonths.length-1])}`:'—';
   const rangeFull=activeMonths.length?`${MF[activeMonths[0]]||activeMonths[0]} – ${MF[activeMonths[activeMonths.length-1]]||activeMonths[activeMonths.length-1]}`:'—';
   const D=Object.fromEntries(depts.map(d=>[d.id,d]));
-  const er=D.er, opd=D.opd, ot=D.ot, cath=D.cathlab;
-  // aggregate ICU admissions
-  const icus=['micu','sicu','ccu','nicu'].map(id=>D[id]);
-  const icuTotal=icus.reduce((s,d)=>s+d.total,0);
+  // Departments can be renamed/deleted or simply absent from the DB, so a hardcoded id may
+  // not resolve — fall back to a BLANK shape so KPI cards/charts degrade gracefully instead
+  // of crashing with "Cannot read property total/series of undefined".
+  const BLANK={latest:{},series:[],prev:null,total:0,delta:0,cols:[]};
+  const dg=id=>D[id]||BLANK;
+  const er=dg('er'), opd=dg('opd'), ot=dg('ot'), cath=dg('cathlab');
+  // aggregate ICU admissions (null-safe: skip any ICU dept that isn't present)
+  const icuTotal=['micu','sicu','ccu','nicu'].reduce((s,id)=>s+(D[id]?.total||0),0);
   const procTotal=['endoscopy','ot','cathlab','dialysis','ctvs'].reduce((s,id)=>s+(D[id]?.total||0),0);
 
   const kpis=(
@@ -160,7 +164,7 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
       <KpiCard label="Procedures" value={fmt(procTotal)} icon={I.activity} tone="#0f9b8e"
         foot="OT · Cath · Endo · Dialysis" spark={ot.series.map(r=>r.ot)} sparkColor="#0f9b8e"/>
       <KpiCard label="Critical Care Vol." value={fmt(icuTotal)} icon={I.heart} tone="#6a52d4"
-        foot="MICU · SICU · CCU · NICU" spark={D.micu.series.map(r=>r.adm)} sparkColor="#6a52d4"/>
+        foot="MICU · SICU · CCU · NICU" spark={dg('micu').series.map(r=>r.adm)} sparkColor="#6a52d4"/>
     </div>
   );
 
@@ -216,9 +220,9 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
 
   if(layout==='analytics'){
     const erSeries=[{id:'reg',label:'ER Reg',color:'#0b66d0'},{id:'adm',label:'Admission',color:'#0f9b8e'},{id:'total',label:'Total ED',color:'#e08a1e'}];
-    const dia=D.dialysis;
+    const dia=dg('dialysis');
     const diaSeries=[{id:'conv',label:'Conventional',color:'#0b66d0'},{id:'modi',label:'Modi-SLED',color:'#0f9b8e'},{id:'sled',label:'SLED',color:'#e08a1e'}];
-    const cathMix=D.cathlab.cols.filter(c=>c.id!=='total').map((c,i)=>({label:c.label,value:D.cathlab.series.reduce((s,r)=>s+(r[c.id]||0),0),color:PALETTE[i]}));
+    const cathMix=(cath.cols||[]).filter(c=>c.id!=='total').map((c,i)=>({label:c.label,value:cath.series.reduce((s,r)=>s+(r[c.id]||0),0),color:PALETTE[i]}));
     return (
       <div className="grid" style={{gap:16}}>
         {kpis}
@@ -229,7 +233,7 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
           </div>
           <div className="card">
             <div className="card-h"><h3>Cath Lab — Procedure Mix</h3><span className="spacer"/><span className="tag">Donut</span></div>
-            <div className="card-b" style={{display:'grid',placeItems:'center',minHeight:250}}><Donut data={cathMix} centerValue={D.cathlab.total} centerLabel="Total"/></div>
+            <div className="card-b" style={{display:'grid',placeItems:'center',minHeight:250}}><Donut data={cathMix} centerValue={cath.total} centerLabel="Total"/></div>
           </div>
         </div>
         <div className="grid" style={{gridTemplateColumns:'1fr 1.4fr'}}>

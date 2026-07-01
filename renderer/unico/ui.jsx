@@ -26,6 +26,7 @@ const I = {
   edit:'M4 20h4l11-11-4-4L4 16zM14 5l4 4',
   print:'M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z',
   arrowR:'M5 12h14M13 6l6 6-6 6',
+  grip:'M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01',
 };
 function Ic({d,s=18,sw=1.9,c='currentColor',fill='none',style}){
   return <svg width={s} height={s} viewBox="0 0 24 24" fill={fill} stroke={c} strokeWidth={sw}

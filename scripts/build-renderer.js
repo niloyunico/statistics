@@ -48,6 +48,7 @@ const INDEX = path.join(RENDERER, 'index.html');
 const MANIFEST = [
   // --- head data/stores (plain JS) — must run before the components ---
   { file: 'config.js', jsx: false },
+  { file: 'deptmap.js', jsx: false },
   { file: 'data.js', jsx: false },
   { file: 'store.js', jsx: false },
   { file: 'staff-seed.js', jsx: false },

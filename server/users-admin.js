@@ -13,6 +13,7 @@
  */
 const db = require('./db');
 const auth = require('./auth');
+const deptmap = require('./deptmap');
 
 const ROLES = ['Administrator', 'collector', 'User'];
 
@@ -25,6 +26,7 @@ function safe(u) {
     active: u.active !== false,
     departments: Array.isArray(u.departments) ? u.departments : [],
     qualityAreas: Array.isArray(u.qualityAreas) ? u.qualityAreas : [],
+    allQualityAreas: !!u.allQualityAreas,
     createdAt: u.createdAt || null,
     updatedAt: u.updatedAt || null,
   };
@@ -71,11 +73,16 @@ function mount(app, opts) {
     try {
       const users = await db.getUsers();
       if (await users.findOne({ username })) return res.status(409).json({ ok: false, error: 'That username already exists.' });
+      const departments = role === 'collector' ? cleanList(b.departments) : [];
+      const allQualityAreas = role === 'collector' ? !!b.allQualityAreas : false;
       const doc = {
         username, name: String(b.name || username).trim(), role,
         active: b.active !== false,
-        departments: role === 'collector' ? cleanList(b.departments) : [],
-        qualityAreas: role === 'collector' ? cleanList(b.qualityAreas) : [],
+        departments,
+        allQualityAreas,
+        // Quality areas DERIVE from the department list (or ALL areas when hospital-wide),
+        // so a collector is assigned ONCE and gets both statistics + quality.
+        qualityAreas: role === 'collector' ? await deptmap.deriveQualityAreas(departments, allQualityAreas) : [],
         passwordHash: await auth.hash(password),
         createdAt: Date.now(), updatedAt: Date.now(),
       };
@@ -99,10 +106,14 @@ function mount(app, opts) {
       if (b.active != null) set.active = !!b.active;
       const role = set.role || u.role;
       if (role === 'collector') {
-        if (b.departments != null) set.departments = cleanList(b.departments);
-        if (b.qualityAreas != null) set.qualityAreas = cleanList(b.qualityAreas);
+        const departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
+        const allQualityAreas = (b.allQualityAreas != null) ? !!b.allQualityAreas : !!u.allQualityAreas;
+        if (b.departments != null) set.departments = departments;
+        set.allQualityAreas = allQualityAreas;
+        // Recompute derived quality areas from the (possibly updated) department list.
+        set.qualityAreas = await deptmap.deriveQualityAreas(departments, allQualityAreas);
       } else if (set.role && set.role !== 'collector') {
-        set.departments = []; set.qualityAreas = [];
+        set.departments = []; set.qualityAreas = []; set.allQualityAreas = false;
       }
 
       // Never strand the system without an active administrator.

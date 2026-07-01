@@ -31,6 +31,7 @@ const {
 const auth = require('./auth');
 const session = require('./session');
 const dataCollection = require('./data-collection');
+const deptmap = require('./deptmap');
 
 // Parse login-form posts (the portal uses a plain HTML form, no JS required).
 app.use(express.urlencoded({ extended: false }));
@@ -125,6 +126,10 @@ async function serveIndex(req, res) {
   ]);
   let snap = (appRes && appRes.data) || {};
   let depts = deptRes || [], staff = staffRes || [], quality = qualRes || [];
+  // Canonical department identity map (id <-> quality key <-> canonical name), built from
+  // the FULL (unscoped) datasets so the client can resolve ANY department/quality key to
+  // ONE canonical name everywhere. Reference data only — safe for every role.
+  const deptMap = deptmap.fromArrays(deptRes || [], qualRes || []);
 
   // Resolve the signed-in user's scope. A "collector" gets a DATA-LIMITED view:
   // only their assigned departments + quality areas are injected (no staff / shared
@@ -167,6 +172,7 @@ async function serveIndex(req, res) {
     'window.__UNICO_DEPARTMENTS__=' + safeJSON(depts) + ';' +
     'window.__UNICO_STAFF__=' + safeJSON(staff) + ';' +
     'window.__UNICO_QUALITY__=' + safeJSON(quality) + ';' +
+    'window.__UNICO_DEPT_MAP__=' + safeJSON(deptMap) + ';' +
     'window.__UNICO_USER__=' + safeJSON(userInject) + ';' +
     (req.unicoLanding ? 'window.__UNICO_INITIAL_ROUTE__=' + safeJSON(req.unicoLanding) + ';' : '') +
     '</script>\n' +

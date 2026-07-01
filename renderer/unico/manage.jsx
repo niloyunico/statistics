@@ -9,10 +9,16 @@ function DeptModal({initial, onClose, onSave, groups}){
   const [desc,setDesc]=React.useState(initial?.desc||'');
   const [cols,setCols]=React.useState(()=> initial?.cols?.map(c=>({label:c.label,pct:!!c.pct})) || [{label:'Patients',pct:false}]);
   const [err,setErr]=React.useState('');
+  const [dragIdx,setDragIdx]=React.useState(null);   // row being dragged
+  const [overIdx,setOverIdx]=React.useState(null);   // row hovered as drop target
 
   const addCol=()=>setCols(c=>[...c,{label:'',pct:false}]);
   const setCol=(i,patch)=>setCols(c=>c.map((x,j)=>j===i?{...x,...patch}:x));
   const rmCol=(i)=>setCols(c=>c.filter((_,j)=>j!==i));
+  // Reorder metrics (first metric is the headline figure, so order is meaningful).
+  const moveCol=(from,to)=>{ if(from==null||to==null||from===to) return;
+    setCols(cs=>{ const a=cs.slice(); const [m]=a.splice(from,1); a.splice(to,0,m); return a; }); };
+  const endDrag=()=>{ setDragIdx(null); setOverIdx(null); };
 
   const save=()=>{
     if(!name.trim()){ setErr('Department name is required'); return; }
@@ -56,13 +62,23 @@ function DeptModal({initial, onClose, onSave, groups}){
           <div>
             <div style={{display:'flex',alignItems:'center',marginBottom:8}}>
               <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)'}}>Custom metrics</div>
-              <span style={{fontSize:11,color:'var(--muted)',marginLeft:8}}>first metric is the headline figure</span>
+              <span style={{fontSize:11,color:'var(--muted)',marginLeft:8}}>drag <Ic d={I.grip} s={11} style={{verticalAlign:'-1px',opacity:.7}}/> to reorder · first metric is the headline figure</span>
               <span className="spacer" style={{flex:1}}/>
               <button className="btn sm" onClick={addCol}><Ic d={I.plus} s={14}/>Add metric</button>
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
               {cols.map((c,i)=>(
-                <div key={i} style={{display:'flex',alignItems:'center',gap:9}}>
+                <div key={i}
+                  onDragOver={e=>{ if(dragIdx==null) return; e.preventDefault(); e.dataTransfer.dropEffect='move'; if(overIdx!==i) setOverIdx(i); }}
+                  onDrop={e=>{ e.preventDefault(); moveCol(dragIdx,i); endDrag(); }}
+                  style={{display:'flex',alignItems:'center',gap:9,padding:'2px 4px',borderRadius:8,transition:'background .12s,box-shadow .12s',
+                    background: (overIdx===i&&dragIdx!=null&&dragIdx!==i)?'var(--blue-50)':'transparent',
+                    boxShadow: (overIdx===i&&dragIdx!=null&&dragIdx!==i)?'inset 0 0 0 1px var(--blue)':'none',
+                    opacity: dragIdx===i?.45:1}}>
+                  <span title="Drag to reorder" draggable
+                    onDragStart={e=>{ setDragIdx(i); e.dataTransfer.effectAllowed='move'; try{e.dataTransfer.setData('text/plain',String(i));}catch(_){} }}
+                    onDragEnd={endDrag}
+                    style={{cursor:'grab',color:'var(--muted)',display:'grid',placeItems:'center',flexShrink:0,touchAction:'none'}}><Ic d={I.grip} s={16} sw={2.6}/></span>
                   <span style={{width:22,height:22,borderRadius:6,display:'grid',placeItems:'center',fontSize:11,fontWeight:700,
                     background:i===0?'var(--blue)':'var(--panel-2)',color:i===0?'#fff':'var(--muted)',flexShrink:0}}>{i+1}</span>
                   <input value={c.label} onChange={e=>setCol(i,{label:e.target.value})} placeholder={i===0?'Primary metric (e.g. Total Patients)':'Metric name'}

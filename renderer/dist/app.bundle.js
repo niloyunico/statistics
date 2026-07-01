@@ -9,6 +9,37 @@
 window.UNICO_DEFAULT_API = ''; // empty = NO login, app runs fully offline. Put a server URL here later to re-enable cloud login.
 
 ;
+/* ===== deptmap.js ===== */
+/* UNICO — client-side canonical department map helper.
+ * Thin wrapper over window.__UNICO_DEPT_MAP__ (injected by server/web.js from
+ * departments.qualityKey + quality.deptId). ONE place to resolve a department id or a
+ * quality-area key to the single canonical NAME shown everywhere, so Statistics and
+ * Quality never disagree ("Cath Lab" not "Cathlab"). See server/deptmap.js.
+ */
+(function () {
+  function M() {
+    return (typeof window !== 'undefined' && window.__UNICO_DEPT_MAP__) ||
+      { byId: {}, idToQk: {}, qkToId: {}, patientDepts: [], allKeys: [] };
+  }
+  function nameFromId(id) { const e = M().byId[id]; return (e && e.name) || id; }
+  function qkFromId(id) { return M().idToQk[id] || null; }
+  function idFromQk(key) { return M().qkToId[key] || null; }
+  // Canonical display name for a quality-area key (falls back to the key itself).
+  function nameFromQualityKey(key) { const id = idFromQk(key); return id ? nameFromId(id) : key; }
+  function isQualityOnly(id) { const e = M().byId[id]; return !!(e && e.qualityOnly); }
+  function allAreaKeys() { return (M().allKeys || []).slice(); }
+  function patientDeptIds() { return (M().patientDepts || []).slice(); }
+  // Quality areas derived from a canonical department-id list (mirrors server deriveQualityAreas).
+  function areasFromDepts(ids, allQualityAreas) {
+    if (allQualityAreas) return allAreaKeys();
+    const out = [];
+    (ids || []).forEach((id) => { const qk = qkFromId(id); if (qk && out.indexOf(qk) < 0) out.push(qk); });
+    return out;
+  }
+  window.DEPTMAP = { map: M, nameFromId, qkFromId, idFromQk, nameFromQualityKey, isQualityOnly, allAreaKeys, patientDeptIds, areasFromDepts };
+})();
+
+;
 /* ===== data.js ===== */
 // UNICO HOSPITALS PLC — Patient Flow Census
 // The monthly statistics now live in MongoDB (the `departments` collection) and
@@ -1534,9 +1565,13 @@ window.QI_CORRECTIONS_BY_DEFID = {
       // Formula indicators: compute each quarter from monthly num/den (aggregate
       // rates by SUMMING numerators & denominators) or from the direct quarter num/den.
       const q2 = Object.assign({}, ind.quarters || {});
+      const needDen = f !== 'count'; // rate/pct/rate1000 require a denominator to be meaningful
       QS.forEach(q => {
         const ms = QUARTER_MONTHS[q] || [];
-        const haveMonths = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '');
+        // A month only counts toward the rollup if it has a numerator AND (for rate/pct) a
+        // denominator — otherwise summing empty denominators yields den=0 → a false on-benchmark 0.
+        const haveMonths = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''
+          && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
         let num, den;
         if (haveMonths) {
           num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
@@ -1546,7 +1581,8 @@ window.QI_CORRECTIONS_BY_DEFID = {
           if (n == null || n === '') return; // no data this quarter → leave as-is (null)
           num = n; den = (ind.qDen || {})[q];
         }
-        q2[q] = qiFormulaCompute(f, num, den);
+        // No denominator for a rate/pct ⇒ show "no data" (null), not a misleading 0.
+        q2[q] = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
       });
       ind.quarters = q2;
     } else if (ind.months && Object.keys(ind.months).length) {
@@ -1558,17 +1594,37 @@ window.QI_CORRECTIONS_BY_DEFID = {
     return ind;
   }
 
+  // The ONE canonical display name for a quality department = its linked Statistics
+  // department name (via window.DEPTMAP / __UNICO_DEPT_MAP__). Resolves by the quality
+  // doc's deptId link, else by mapping its key. Falls back to the doc's own name.
+  function canonicalDeptName(seedDept) {
+    try {
+      if (typeof window === 'undefined' || !window.DEPTMAP) return null;
+      const id = (seedDept && seedDept.deptId) || window.DEPTMAP.idFromQk(seedDept && seedDept.key);
+      if (id) return window.DEPTMAP.nameFromId(id);
+    } catch (e) { }
+    return null;
+  }
+
   function mergeDept(seedDept, ov) {
-    if (!ov) return seedDept;
-    const removed = new Set(ov.indRemoved || []);
-    const patches = ov.indPatches || {};
-    const inds = (seedDept.indicators || [])
-      .filter(i => !removed.has(i.id))
-      .map(i => mergeIndicator(i, patches[i.id]));
-    (ov.indAdded || []).forEach(a => { if (!removed.has(a.id)) inds.push(mergeIndicator(a, patches[a.id])); });
-    const dept = Object.assign({}, seedDept, { indicators: inds });
-    if (ov.executive) dept.executive = Object.assign({}, seedDept.executive || {}, ov.executive);
-    if (ov.meta) dept.meta = Object.assign({}, seedDept.meta || {}, ov.meta);
+    let dept;
+    if (!ov) {
+      dept = seedDept;
+    } else {
+      const removed = new Set(ov.indRemoved || []);
+      const patches = ov.indPatches || {};
+      const inds = (seedDept.indicators || [])
+        .filter(i => !removed.has(i.id))
+        .map(i => mergeIndicator(i, patches[i.id]));
+      (ov.indAdded || []).forEach(a => { if (!removed.has(a.id)) inds.push(mergeIndicator(a, patches[a.id])); });
+      dept = Object.assign({}, seedDept, { indicators: inds });
+      if (ov.executive) dept.executive = Object.assign({}, seedDept.executive || {}, ov.executive);
+      if (ov.meta) dept.meta = Object.assign({}, seedDept.meta || {}, ov.meta);
+    }
+    // Show the single canonical Statistics name everywhere quality is rendered (keeps the
+    // `key` as the stable identity — only the displayed `name` becomes canonical).
+    const cn = canonicalDeptName(seedDept);
+    if (cn && cn !== dept.name) dept = Object.assign({}, dept, { name: cn });
     return dept;
   }
 
@@ -3407,7 +3463,8 @@ const I = {
   x: 'M6 6l12 12M18 6L6 18',
   edit: 'M4 20h4l11-11-4-4L4 16zM14 5l4 4',
   print: 'M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z',
-  arrowR: 'M5 12h14M13 6l6 6-6 6'
+  arrowR: 'M5 12h14M13 6l6 6-6 6',
+  grip: 'M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01'
 };
 function Ic({
   d,
@@ -5118,12 +5175,20 @@ function Dashboard({
   const rangeShort = activeMonths.length ? `${fmtKey(activeMonths[0])}–${fmtKey(activeMonths[activeMonths.length - 1])}` : '—';
   const rangeFull = activeMonths.length ? `${MF[activeMonths[0]] || activeMonths[0]} – ${MF[activeMonths[activeMonths.length - 1]] || activeMonths[activeMonths.length - 1]}` : '—';
   const D = Object.fromEntries(depts.map(d => [d.id, d]));
-  const er = D.er,
-    opd = D.opd,
-    ot = D.ot,
-    cath = D.cathlab;
-  const icus = ['micu', 'sicu', 'ccu', 'nicu'].map(id => D[id]);
-  const icuTotal = icus.reduce((s, d) => s + d.total, 0);
+  const BLANK = {
+    latest: {},
+    series: [],
+    prev: null,
+    total: 0,
+    delta: 0,
+    cols: []
+  };
+  const dg = id => D[id] || BLANK;
+  const er = dg('er'),
+    opd = dg('opd'),
+    ot = dg('ot'),
+    cath = dg('cathlab');
+  const icuTotal = ['micu', 'sicu', 'ccu', 'nicu'].reduce((s, id) => s + (D[id]?.total || 0), 0);
   const procTotal = ['endoscopy', 'ot', 'cathlab', 'dialysis', 'ctvs'].reduce((s, id) => s + (D[id]?.total || 0), 0);
   const kpis = React.createElement("div", {
     className: "grid",
@@ -5161,7 +5226,7 @@ function Dashboard({
     icon: I.heart,
     tone: "#6a52d4",
     foot: "MICU \xB7 SICU \xB7 CCU \xB7 NICU",
-    spark: D.micu.series.map(r => r.adm),
+    spark: dg('micu').series.map(r => r.adm),
     sparkColor: "#6a52d4"
   }));
   const qualityKpis = function () {
@@ -5304,7 +5369,7 @@ function Dashboard({
       label: 'Total ED',
       color: '#e08a1e'
     }];
-    const dia = D.dialysis;
+    const dia = dg('dialysis');
     const diaSeries = [{
       id: 'conv',
       label: 'Conventional',
@@ -5318,9 +5383,9 @@ function Dashboard({
       label: 'SLED',
       color: '#e08a1e'
     }];
-    const cathMix = D.cathlab.cols.filter(c => c.id !== 'total').map((c, i) => ({
+    const cathMix = (cath.cols || []).filter(c => c.id !== 'total').map((c, i) => ({
       label: c.label,
-      value: D.cathlab.series.reduce((s, r) => s + (r[c.id] || 0), 0),
+      value: cath.series.reduce((s, r) => s + (r[c.id] || 0), 0),
       color: PALETTE[i]
     }));
     return React.createElement("div", {
@@ -5365,7 +5430,7 @@ function Dashboard({
       }
     }, React.createElement(Donut, {
       data: cathMix,
-      centerValue: D.cathlab.total,
+      centerValue: cath.total,
       centerLabel: "Total"
     })))), React.createElement("div", {
       className: "grid",
@@ -6492,6 +6557,8 @@ function DeptModal({
     pct: false
   }]);
   const [err, setErr] = React.useState('');
+  const [dragIdx, setDragIdx] = React.useState(null);
+  const [overIdx, setOverIdx] = React.useState(null);
   const addCol = () => setCols(c => [...c, {
     label: '',
     pct: false
@@ -6501,6 +6568,19 @@ function DeptModal({
     ...patch
   } : x));
   const rmCol = i => setCols(c => c.filter((_, j) => j !== i));
+  const moveCol = (from, to) => {
+    if (from == null || to == null || from === to) return;
+    setCols(cs => {
+      const a = cs.slice();
+      const [m] = a.splice(from, 1);
+      a.splice(to, 0, m);
+      return a;
+    });
+  };
+  const endDrag = () => {
+    setDragIdx(null);
+    setOverIdx(null);
+  };
   const save = () => {
     if (!name.trim()) {
       setErr('Department name is required');
@@ -6639,7 +6719,14 @@ function DeptModal({
       color: 'var(--muted)',
       marginLeft: 8
     }
-  }, "first metric is the headline figure"), React.createElement("span", {
+  }, "drag ", React.createElement(Ic, {
+    d: I.grip,
+    s: 11,
+    style: {
+      verticalAlign: '-1px',
+      opacity: .7
+    }
+  }), " to reorder \xB7 first metric is the headline figure"), React.createElement("span", {
     className: "spacer",
     style: {
       flex: 1
@@ -6658,12 +6745,52 @@ function DeptModal({
     }
   }, cols.map((c, i) => React.createElement("div", {
     key: i,
+    onDragOver: e => {
+      if (dragIdx == null) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (overIdx !== i) setOverIdx(i);
+    },
+    onDrop: e => {
+      e.preventDefault();
+      moveCol(dragIdx, i);
+      endDrag();
+    },
     style: {
       display: 'flex',
       alignItems: 'center',
-      gap: 9
+      gap: 9,
+      padding: '2px 4px',
+      borderRadius: 8,
+      transition: 'background .12s,box-shadow .12s',
+      background: overIdx === i && dragIdx != null && dragIdx !== i ? 'var(--blue-50)' : 'transparent',
+      boxShadow: overIdx === i && dragIdx != null && dragIdx !== i ? 'inset 0 0 0 1px var(--blue)' : 'none',
+      opacity: dragIdx === i ? .45 : 1
     }
   }, React.createElement("span", {
+    title: "Drag to reorder",
+    draggable: true,
+    onDragStart: e => {
+      setDragIdx(i);
+      e.dataTransfer.effectAllowed = 'move';
+      try {
+        e.dataTransfer.setData('text/plain', String(i));
+      } catch (_) {}
+    },
+    onDragEnd: endDrag,
+    style: {
+      cursor: 'grab',
+      color: 'var(--muted)',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0,
+      touchAction: 'none'
+    }
+  }, React.createElement(Ic, {
+    d: I.grip,
+    s: 16,
+    sw: 2.6
+  })), React.createElement("span", {
     style: {
       width: 22,
       height: 22,
@@ -14337,7 +14464,7 @@ function catOf(n) {
 }
 function stdMatch(name) {
   const n = (name || '').toLowerCase();
-  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of ett|unplanned extubation|extubation/, 'D8'], [/accidental removal of catheter/, 'L5']];
+  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of ett|unplanned extubation|extubation/, 'D8'], [/accidental removal of catheter/, 'L5'], [/catheter dislodgement|dislodgement/, 'L4']];
   for (const [re, code] of T) {
     if (re.test(n)) return code;
   }
@@ -16706,6 +16833,48 @@ function qcHeatColors(s) {
     col: P.faint
   };
 }
+function qcAnnualCell(ind, months) {
+  const rate = ['pct', 'rate100', 'rate1000'].indexOf(ind.formula) >= 0 || isPctInd(ind);
+  let anyRep = false,
+    anyBreach = false,
+    sum = 0,
+    num = 0,
+    den = 0,
+    valSum = 0,
+    nRep = 0;
+  (months || MONTHS).forEach(m => {
+    let v = monthRaw(ind, m[0]);
+    if (v == null) v = qtrRaw(ind, m[2]);
+    if (v == null || v === '') return;
+    anyRep = true;
+    if (qStatus(ind, v) === 'breach') anyBreach = true;
+    if (rate) {
+      nRep++;
+      valSum += Number(v) || 0;
+      const n = ind.mNum && ind.mNum[m[0]],
+        d = ind.mDen && ind.mDen[m[0]];
+      if (n != null && n !== '' && d != null && d !== '') {
+        num += Number(n) || 0;
+        den += Number(d) || 0;
+      }
+    } else sum += Number(v) || 0;
+  });
+  if (!anyRep) return {
+    rep: false,
+    status: 'na',
+    value: null,
+    count: 0,
+    isRate: rate
+  };
+  const value = rate ? den > 0 ? window.qiFormulaCompute(ind.formula || 'pct', num, den) : nRep ? Math.round(valSum / nRep * 100) / 100 : 0 : sum;
+  return {
+    rep: true,
+    status: anyBreach ? 'breach' : 'ok',
+    value,
+    count: rate ? 0 : sum,
+    isRate: rate
+  };
+}
 function QCHeatGrid({
   d,
   months
@@ -16956,15 +17125,18 @@ function QCReportBuilder({
         ind
       }));
     });
-    if (reportType === 'heatmap') return chosen.map(d => ({
-      kind: 'heatmap',
-      dept: d
+    if (reportType === 'heatmap') return chosen.length ? [{
+      kind: 'heatmap'
+    }] : [];
+    if (reportType === 'monthly') return pMonths.map(m => ({
+      kind: 'monthly',
+      month: m
     }));
     return chosen.map(d => ({
       kind: 'summary',
       dept: d
     }));
-  }, [chosen, reportType, selectedDepts]);
+  }, [chosen, reportType, selectedDepts, pMonths]);
   const pageCount = Math.max(1, pages.length);
   const pi = Math.min(pageIdx, pageCount - 1);
   const cur = pages[pi];
@@ -17550,13 +17722,36 @@ function QCReportBuilder({
     n,
     total
   }) {
-    const d = page.dept;
-    const tone = qcTone(d);
-    const {
-      status,
-      color
-    } = qcDeptStatus(d, pMonths);
-    const cards = qcDeptKpis(d, pMonths);
+    const names = [];
+    const seen = new Set();
+    chosen.forEach(d => (d.indicators || []).forEach(ind => {
+      if (!seen.has(ind.name)) {
+        seen.add(ind.name);
+        names.push(ind.name);
+      }
+    }));
+    const findInd = (d, name) => (d.indicators || []).find(i => i.name === name);
+    const set = new Set(pMonths.map(m => m[1]));
+    const incs = [];
+    chosen.forEach(d => qcIncidentsOf(d).forEach(r => {
+      if (set.has(r.month)) incs.push({
+        dept: d.name,
+        ind: r.ind,
+        x: r.x,
+        month: r.month
+      });
+    }));
+    const line = (l, v) => v ? React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, React.createElement("b", {
+      style: {
+        color: P.ink
+      }
+    }, l, ":"), " ", v) : null;
     return React.createElement("div", null, React.createElement(Header, null), React.createElement("div", {
       style: {
         marginTop: 18
@@ -17567,58 +17762,433 @@ function QCReportBuilder({
         display: 'flex',
         alignItems: 'center',
         gap: 9,
-        marginBottom: 12
+        marginBottom: 10
       }
     }, React.createElement("span", {
       style: {
         width: 30,
         height: 30,
         borderRadius: 8,
-        background: tone + '1c',
+        background: P.blue + '1c',
         display: 'grid',
         placeItems: 'center',
         flexShrink: 0
       }
     }, React.createElement(DocIc, {
-      c: tone
+      c: P.blue
     })), React.createElement("div", {
       style: {
         fontWeight: 700,
         fontSize: 15,
         color: P.ink
       }
-    }, d.name, " \xB7 Year-wise heatmap"), React.createElement("span", {
+    }, "Indicator \xD7 Department heatmap \xB7 ", rangeLabel), React.createElement("span", {
       style: {
         flex: 1
       }
     }), React.createElement("span", {
+      className: "tag"
+    }, chosen.length, " dept \xB7 ", names.length, " indicators")), React.createElement(QCHeatLegend, null), React.createElement("div", {
       style: {
-        background: color + '1c',
-        color,
-        padding: '3px 10px',
-        borderRadius: 20,
-        fontWeight: 700,
-        fontSize: 11.5
+        overflowX: 'auto'
       }
-    }, status)), React.createElement(KpiCards, {
-      cards: cards,
-      tone: tone
-    }), React.createElement("div", {
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 9.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: {
+        ...thl,
+        minWidth: 172
+      }
+    }, "Quality Indicator"), React.createElement("th", {
+      style: {
+        ...thc,
+        minWidth: 42
+      }
+    }, "Total"), React.createElement("th", {
+      style: {
+        ...thl,
+        minWidth: 88,
+        textTransform: 'none'
+      }
+    }, "Benchmark"), chosen.map(d => React.createElement("th", {
+      key: d.key,
+      style: {
+        ...thc,
+        minWidth: 42
+      }
+    }, d.name)))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+      colSpan: chosen.length + 3,
+      style: {
+        padding: 14,
+        textAlign: 'center',
+        color: P.faint
+      }
+    }, "No indicators for the selected departments.")) : names.map(name => {
+      let tot = 0,
+        anyCount = false,
+        bench = '';
+      const cells = chosen.map(d => {
+        const ind = findInd(d, name);
+        if (!ind) return {
+          none: true
+        };
+        if (!bench) bench = benchExpr(ind);
+        const a = qcAnnualCell(ind, pMonths);
+        if (a.rep && !a.isRate) {
+          anyCount = true;
+          tot += a.count;
+        }
+        return {
+          ind,
+          a
+        };
+      });
+      return React.createElement("tr", {
+        key: name,
+        style: {
+          borderBottom: '1px solid ' + P.line2
+        }
+      }, React.createElement("td", {
+        style: {
+          padding: '5px 8px',
+          textAlign: 'left',
+          fontWeight: 600,
+          color: P.ink,
+          whiteSpace: 'nowrap'
+        }
+      }, name), React.createElement("td", {
+        style: {
+          textAlign: 'center',
+          fontFamily: MONO,
+          fontWeight: 700,
+          color: tot > 0 ? P.rose : P.ink2
+        }
+      }, anyCount ? tot : '—'), React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          color: P.ink2,
+          fontSize: 9,
+          whiteSpace: 'nowrap'
+        }
+      }, bench || '—'), cells.map((c, i) => c.none ? React.createElement("td", {
+        key: i,
+        style: {
+          textAlign: 'center',
+          color: P.faint,
+          fontSize: 9
+        }
+      }, "\u2014") : React.createElement("td", {
+        key: i,
+        style: {
+          textAlign: 'center',
+          padding: '3px 2px'
+        }
+      }, React.createElement("span", {
+        title: name + ' · ' + chosen[i].name + ' · ' + (c.a.status === 'na' ? 'not reported' : c.a.status === 'breach' ? 'breach' : 'on benchmark'),
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          minWidth: 34,
+          height: 22,
+          borderRadius: 5,
+          background: qcHeatColors(c.a.status).bg,
+          color: qcHeatColors(c.a.status).col,
+          fontFamily: MONO,
+          fontWeight: 700,
+          fontSize: 9.5
+        }
+      }, c.a.status === 'na' ? '·' : fmtVal(c.ind, c.a.value)))));
+    })))), incs.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 14
+      }
+    }, React.createElement("div", {
       style: {
         fontSize: 9.5,
         fontWeight: 700,
-        color: P.muted,
+        color: P.rose,
         textTransform: 'uppercase',
         letterSpacing: .4,
-        margin: '6px 0 4px'
+        marginBottom: 6
       }
-    }, "Indicator \xD7 month status \xB7 ", rangeLabel), React.createElement(QCHeatLegend, null), React.createElement(QCHeatGrid, {
-      d: d,
-      months: pMonths
-    }), React.createElement(QCIncidentBlock, {
-      d: d,
-      months: pMonths
-    })), React.createElement(Footer, {
+    }, "Occurred incident details \xB7 ", rangeLabel, " (", incs.length, ")"), incs.map((r, i) => {
+      const x = r.x;
+      const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.admissionDate && 'adm ' + x.admissionDate].filter(Boolean).join(' · ');
+      return React.createElement("div", {
+        key: i,
+        style: {
+          border: '1px solid #f1c6cd',
+          borderRadius: 8,
+          padding: '9px 11px',
+          marginBottom: 8,
+          background: '#fffafb',
+          pageBreakInside: 'avoid'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 8,
+          flexWrap: 'wrap',
+          alignItems: 'baseline',
+          marginBottom: meta ? 4 : 2
+        }
+      }, React.createElement("b", {
+        style: {
+          fontSize: 11.5,
+          color: P.ink
+        }
+      }, r.ind), React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: P.blue,
+          fontWeight: 600
+        }
+      }, r.dept), React.createElement("span", {
+        style: {
+          fontSize: 9.5,
+          color: P.muted
+        }
+      }, r.month)), meta && React.createElement("div", {
+        style: {
+          fontSize: 10,
+          color: P.muted,
+          marginBottom: 4
+        }
+      }, meta), line('Diagnosis', x.diagnosis), line('Incident', x.details), line('Finding', x.finding), line('Corrective', x.corrective), line('Preventive', x.preventive), line('Remark', x.remark));
+    }))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function MonthlyPage({
+    page,
+    n,
+    total
+  }) {
+    const m = page.month;
+    const names = [];
+    const seen = new Set();
+    chosen.forEach(d => (d.indicators || []).forEach(ind => {
+      if (!seen.has(ind.name)) {
+        seen.add(ind.name);
+        names.push(ind.name);
+      }
+    }));
+    const findInd = (d, name) => (d.indicators || []).find(i => i.name === name);
+    const incs = [];
+    chosen.forEach(d => qcIncidentsOf(d).forEach(r => {
+      if (r.month === m[1]) incs.push({
+        dept: d.name,
+        ind: r.ind,
+        x: r.x
+      });
+    }));
+    const line = (l, v) => v ? React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, React.createElement("b", {
+      style: {
+        color: P.ink
+      }
+    }, l, ":"), " ", v) : null;
+    return React.createElement("div", null, React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      className: "qc-band",
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 10
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        background: P.blue + '1c',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, React.createElement(DocIc, {
+      c: P.blue
+    })), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 15,
+        color: P.ink
+      }
+    }, m[1], " \xB7 All-department status"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      className: "tag"
+    }, chosen.length, " dept \xB7 ", names.length, " indicators")), React.createElement(QCHeatLegend, null), React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 9.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: {
+        ...thl,
+        minWidth: 180
+      }
+    }, "Quality Indicator"), chosen.map(d => React.createElement("th", {
+      key: d.key,
+      style: {
+        ...thc,
+        minWidth: 44
+      }
+    }, d.name)), React.createElement("th", {
+      style: {
+        ...thc,
+        minWidth: 46,
+        color: P.ink2
+      }
+    }, "Total"))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+      colSpan: chosen.length + 2,
+      style: {
+        padding: 14,
+        textAlign: 'center',
+        color: P.faint
+      }
+    }, "No indicators for the selected departments.")) : names.map(name => {
+      let tot = 0,
+        any = false;
+      const cells = chosen.map(d => {
+        const ind = findInd(d, name);
+        if (!ind) return {
+          none: true
+        };
+        let v = monthRaw(ind, m[0]);
+        if (v == null) v = qtrRaw(ind, m[2]);
+        const s = qStatus(ind, v);
+        if (v != null) {
+          any = true;
+          if (!isPctInd(ind)) tot += Number(v) || 0;
+        }
+        return {
+          ind,
+          v,
+          s
+        };
+      });
+      return React.createElement("tr", {
+        key: name,
+        style: {
+          borderBottom: '1px solid ' + P.line2
+        }
+      }, React.createElement("td", {
+        style: {
+          padding: '5px 8px',
+          textAlign: 'left',
+          fontWeight: 600,
+          color: P.ink,
+          whiteSpace: 'nowrap'
+        }
+      }, name), cells.map((c, i) => c.none ? React.createElement("td", {
+        key: i,
+        style: {
+          textAlign: 'center',
+          color: P.faint,
+          fontSize: 9
+        }
+      }, "\u2014") : React.createElement("td", {
+        key: i,
+        style: {
+          textAlign: 'center',
+          padding: '3px 2px'
+        }
+      }, React.createElement("span", {
+        title: name + ' · ' + chosen[i].name + ' · ' + (c.s === 'na' ? 'not reported' : c.s === 'breach' ? 'breach' : 'on benchmark'),
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          minWidth: 34,
+          height: 22,
+          borderRadius: 5,
+          ...qcHeatColors(c.s),
+          fontFamily: MONO,
+          fontWeight: 700,
+          fontSize: 9.5
+        }
+      }, c.s === 'na' ? '·' : fmtVal(c.ind, c.v)))), React.createElement("td", {
+        style: {
+          textAlign: 'center',
+          fontFamily: MONO,
+          fontWeight: 700,
+          color: tot > 0 ? P.rose : P.ink2
+        }
+      }, any ? tot : '—'));
+    })))), incs.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.rose,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Occurred incident details in ", m[1], " (", incs.length, ")"), incs.map((r, i) => {
+      const x = r.x;
+      const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.admissionDate && 'adm ' + x.admissionDate].filter(Boolean).join(' · ');
+      return React.createElement("div", {
+        key: i,
+        style: {
+          border: '1px solid #f1c6cd',
+          borderRadius: 8,
+          padding: '9px 11px',
+          marginBottom: 8,
+          background: '#fffafb',
+          pageBreakInside: 'avoid'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 8,
+          flexWrap: 'wrap',
+          alignItems: 'baseline',
+          marginBottom: meta ? 4 : 2
+        }
+      }, React.createElement("b", {
+        style: {
+          fontSize: 11.5,
+          color: P.ink
+        }
+      }, r.ind), React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: P.blue,
+          fontWeight: 600
+        }
+      }, r.dept)), meta && React.createElement("div", {
+        style: {
+          fontSize: 10,
+          color: P.muted,
+          marginBottom: 4
+        }
+      }, meta), line('Diagnosis', x.diagnosis), line('Incident', x.details), line('Finding', x.finding), line('Corrective', x.corrective), line('Preventive', x.preventive), line('Remark', x.remark));
+    }))), React.createElement(Footer, {
       n: n,
       total: total
     }));
@@ -17952,6 +18522,10 @@ function QCReportBuilder({
     page: pg,
     n: i + 1,
     total: pages.length
+  }) : pg.kind === 'monthly' ? React.createElement(MonthlyPage, {
+    page: pg,
+    n: i + 1,
+    total: pages.length
   }) : React.createElement(DeptPage, {
     page: pg,
     n: i + 1,
@@ -17993,11 +18567,12 @@ function QCReportBuilder({
     style: {
       width: '100%'
     }
-  }, [['summary', 'Summary'], ['detail', 'Detailed'], ['heatmap', 'Heatmap'], ['compare', 'Comparison']].map(([id, l]) => React.createElement("button", {
+  }, [['summary', 'Summary'], ['detail', 'Detailed'], ['heatmap', 'Heatmap'], ['monthly', 'Monthly'], ['compare', 'Comparison']].map(([id, l]) => React.createElement("button", {
     key: id,
     className: reportType === id ? 'on' : '',
     style: {
-      flex: 1
+      flex: 1,
+      padding: '7px 4px'
     },
     onClick: () => {
       setReportType(id);
@@ -18009,7 +18584,7 @@ function QCReportBuilder({
       color: P.muted,
       marginTop: 6
     }
-  }, reportType === 'summary' ? 'KPI cards + chart per department, one page each.' : reportType === 'detail' ? 'Every indicator × month with benchmark & RAG, per department.' : reportType === 'heatmap' ? 'Year-wise indicator × month status grid per department, with occurred-incident details auto-included.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
+  }, reportType === 'summary' ? 'KPI cards + chart per department, one page each.' : reportType === 'detail' ? 'Every indicator × month with benchmark & RAG, per department.' : reportType === 'heatmap' ? 'Year-wise indicator × DEPARTMENT matrix (all departments on one page, like the NQI sheet), colour-coded by status, with the year’s occurred-incident details.' : reportType === 'monthly' ? 'Month-wise, ALL-department matrix (indicator × department) — one page per month, with that month’s occurred-incident details (like the NQI monthly sheet).' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
     value: period.mode,
     onChange: e => setPeriod({
       mode: e.target.value,
@@ -18350,6 +18925,10 @@ function QCReportBuilder({
       padding: '60px 0'
     }
   }, "Nothing to preview.") : cur.kind === 'compare' ? React.createElement(ComparePage, null) : cur.kind === 'heatmap' ? React.createElement(HeatmapPage, {
+    page: cur,
+    n: pi + 1,
+    total: pageCount
+  }) : cur.kind === 'monthly' ? React.createElement(MonthlyPage, {
     page: cur,
     n: pi + 1,
     total: pageCount
@@ -19422,7 +20001,13 @@ function QCAdmin({
   const patch = obj => {
     if (sel.deptKey && sel.id) Q.patchIndicator(sel.deptKey, sel.id, obj);
   };
-  const patchField = f => e => patch({
+  const patchDef = obj => {
+    if (!sel.id) return;
+    const targets = (Q.depts || []).filter(d => (d.indicators || []).some(i => i.id === sel.id)).map(d => d.key);
+    if (sel.deptKey && targets.indexOf(sel.deptKey) < 0) targets.push(sel.deptKey);
+    targets.forEach(k => Q.patchIndicator(k, sel.id, obj));
+  };
+  const patchField = f => e => patchDef({
     [f]: e.target.value
   });
   const patchMonthVal = idx => e => {
@@ -19533,20 +20118,24 @@ function QCAdmin({
     };
   };
   const rowsByKey = {};
+  const stdByName = {};
   (typeof HQI_STANDARDS !== 'undefined' && HQI_STANDARDS || []).forEach(s => {
-    rowsByKey['std:' + s.code] = {
-      key: 'std:' + s.code,
+    const rk = 'std:' + s.code;
+    rowsByKey[rk] = {
+      key: rk,
       code: s.code,
       name: s.name,
       formula: s.ft || 'direct',
       tmpl: stdTemplate(s),
       set: new Set()
     };
+    if (!stdByName[norm(s.name)]) stdByName[norm(s.name)] = rk;
   });
   depts.forEach(d => (d.indicators || []).forEach(i => {
     const code = stdMatch(i.name);
-    if (code && rowsByKey['std:' + code]) {
-      rowsByKey['std:' + code].set.add(d.key);
+    const rk = code && rowsByKey['std:' + code] ? 'std:' + code : stdByName[norm(i.name)];
+    if (rk) {
+      rowsByKey[rk].set.add(d.key);
     } else {
       const k = 'cus:' + norm(i.name);
       if (!rowsByKey[k]) rowsByKey[k] = {
@@ -19570,7 +20159,7 @@ function QCAdmin({
   const toggleAssign = (rec, dk) => {
     if (rec.set.has(dk)) {
       const d = (Q.depts || []).find(x => x.key === dk);
-      const inst = d && (d.indicators || []).find(x => rec.code ? stdMatch(x.name) === rec.code : norm(x.name) === norm(rec.name));
+      const inst = d && (d.indicators || []).find(x => rec.code && stdMatch(x.name) === rec.code || norm(x.name) === norm(rec.name));
       if (inst) Q.removeIndicator(dk, inst.id);
     } else {
       const c = Object.assign({}, rec.tmpl, {
@@ -20966,10 +21555,10 @@ function QCAdmin({
   }, "drives status")), React.createElement("input", {
     type: "number",
     value: selInd.benchmarkValue == null ? '' : selInd.benchmarkValue,
-    onInput: e => patch({
+    onInput: e => patchDef({
       benchmarkValue: e.target.value === '' ? null : Number(e.target.value)
     }),
-    onChange: e => patch({
+    onChange: e => patchDef({
       benchmarkValue: e.target.value === '' ? null : Number(e.target.value)
     }),
     placeholder: "e.g. 0 or 90",
@@ -22037,7 +22626,7 @@ function QualityView({
   setRoute
 }) {
   const Q = window.useQualityStore();
-  const depts = (Q.depts || []).filter(d => d.indicators && d.indicators.length);
+  const depts = (Q.depts || []).filter(d => d.key && d.indicators && d.indicators.length);
   const [q, setQ] = useState('');
   const v = view || 'dashboard';
   return React.createElement("div", {
@@ -22073,7 +22662,7 @@ function QualityConsole({
   setRoute
 }) {
   const Q = window.useQualityStore();
-  const depts = (Q.depts || []).filter(d => d.indicators && d.indicators.length);
+  const depts = (Q.depts || []).filter(d => d.key && d.indicators && d.indicators.length);
   const [module, setModule] = useState(initialView || 'dashboard');
   const [gq, setGq] = useState('');
   const [wsOpen, setWsOpen] = useState(false);
@@ -24588,7 +25177,12 @@ window.LockScreen = LockScreen;
       if (i >= 0 && i + 1 < order.length) return order[i + 1];
       return last;
     }
-    return order[Math.min(order.length - 1, 24)] || '';
+    const MMM = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const now = new Date();
+    const curKey = MMM[now.getMonth()] + '-' + String(now.getFullYear()).slice(-2);
+    const ci = order.indexOf(curKey);
+    if (ci >= 0) return order[Math.max(0, ci - 1)];
+    return order[order.length - 1] || '';
   }
   function staffNames() {
     const s = window.STAFF_SEED || window.__UNICO_STAFF__ || [];
@@ -24747,6 +25341,7 @@ window.LockScreen = LockScreen;
       password: '',
       departments: [],
       qualityAreas: [],
+      allQualityAreas: false,
       qualityIndicators: {},
       active: true
     });
@@ -24774,10 +25369,8 @@ window.LockScreen = LockScreen;
         [key]: has ? e[key].filter(x => x !== val) : [...e[key], val]
       };
     });
-    const deptName = id => {
-      const d = (depts || []).find(x => x.id === id);
-      return d ? d.short : id;
-    };
+    const deptName = id => (window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : ((depts || []).find(x => x.id === id) || {}).short) || id;
+    const derivedAreas = editing ? editing.allQualityAreas ? window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [] : window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : editing.qualityAreas || [] : [];
     return React.createElement("div", {
       className: "grid",
       style: {
@@ -24910,34 +25503,49 @@ window.LockScreen = LockScreen;
         }
       }, d.short);
     }))), React.createElement(Field, {
-      label: "Assigned quality areas (optional)"
-    }, React.createElement("div", {
+      label: "Quality areas",
+      hint: "Assigned automatically from the departments above \u2014 one assignment covers both patient statistics and quality, so they can never drift apart."
+    }, React.createElement("label", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: 'var(--ink-2)',
+        marginBottom: 9,
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: !!editing.allQualityAreas,
+      onChange: e => setEditing(ed => ({
+        ...ed,
+        allQualityAreas: e.target.checked
+      }))
+    }), "Hospital-wide \u2014 every quality area (e.g. Infection Control)"), derivedAreas.length ? React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
         gap: 7
       }
-    }, areas.map(a => {
-      const on = editing.qualityAreas.includes(a.key);
-      return React.createElement("span", {
-        key: a.key,
-        onClick: () => setEditing(ed => ({
-          ...ed,
-          qualityAreas: ed.qualityAreas.includes(a.key) ? ed.qualityAreas.filter(x => x !== a.key) : [...ed.qualityAreas, a.key]
-        })),
-        style: {
-          cursor: 'pointer',
-          userSelect: 'none',
-          padding: '5px 10px',
-          borderRadius: 999,
-          fontSize: 12,
-          fontWeight: 600,
-          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-          background: on ? 'var(--blue-50)' : '#fff',
-          color: on ? 'var(--blue-700)' : 'var(--ink-2)'
-        }
-      }, a.name);
-    }))), editing.qualityAreas.length > 0 && React.createElement(Field, {
+    }, derivedAreas.map(ak => React.createElement("span", {
+      key: ak,
+      style: {
+        padding: '5px 10px',
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 600,
+        border: '1px solid var(--blue)',
+        background: 'var(--blue-50)',
+        color: 'var(--blue-700)'
+      }
+    }, window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(ak) : ak))) : React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, "None yet \u2014 pick departments above, or tick \u201CHospital-wide\u201D.")), derivedAreas.length > 0 && React.createElement(Field, {
       label: "Specific indicators per area (optional)",
       hint: "Leave all unticked in an area to allow every indicator of that area. Tick some to restrict this person to just those."
     }, React.createElement("div", {
@@ -24945,7 +25553,7 @@ window.LockScreen = LockScreen;
         display: 'grid',
         gap: 10
       }
-    }, editing.qualityAreas.map(ak => {
+    }, derivedAreas.map(ak => {
       const list = areaInds[ak] || [];
       const aName = (areas.find(a => a.key === ak) || {}).name || ak;
       if (!list.length) return null;
@@ -25057,7 +25665,7 @@ window.LockScreen = LockScreen;
       style: {
         color: 'var(--muted)'
       }
-    }, "\u2014")), React.createElement("td", null, (r.departments || []).map(deptName).join(', ') || '—'), React.createElement("td", null, (r.qualityAreas || []).join(', ') || '—'), React.createElement("td", {
+    }, "\u2014")), React.createElement("td", null, (r.departments || []).map(deptName).join(', ') || '—'), React.createElement("td", null, r.allQualityAreas ? 'All areas (hospital-wide)' : (r.qualityAreas || []).map(k => window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(k) : k).join(', ') || '—'), React.createElement("td", {
       style: {
         textAlign: 'right',
         whiteSpace: 'nowrap'
@@ -25509,7 +26117,7 @@ window.LockScreen = LockScreen;
     });
     const [month, setMonth] = useState(defMonth);
     const [den, setDen] = useState('');
-    const [numMode, setNumMode] = useState('group');
+    const [numMode, setNumMode] = useState('direct');
     const [groups, setGroups] = useState({
       nurse: '',
       doctor: '',
@@ -25614,6 +26222,37 @@ window.LockScreen = LockScreen;
     } : r));
     const addDeptRow = () => setDeptRows(rs => [...rs, blankDeptRow()]);
     const delDeptRow = i => setDeptRows(rs => rs.filter((_, j) => j !== i));
+    const isHandHygiene = /hand\s*hygiene/i.test(indNameQ || '');
+    const hhDepartments = useMemo(() => {
+      const isOverall = a => /overall\s*hospital/i.test(a && (a.name || a.key) || '');
+      const nameOf = a => window.DEPTMAP && window.DEPTMAP.nameFromQualityKey ? window.DEPTMAP.nameFromQualityKey(a.key) : a.name || a.key;
+      const seen = new Set();
+      const out = [];
+      (areas || []).forEach(a => {
+        if (!a || !a.key || isOverall(a)) return;
+        const n = nameOf(a);
+        if (n && !seen.has(n)) {
+          seen.add(n);
+          out.push(n);
+        }
+      });
+      return out;
+    }, [areas]);
+    useEffect(() => {
+      if (!(isHandHygiene && numMode === 'dept' && hhDepartments.length)) return;
+      setDeptRows(prev => {
+        const same = prev.length === hhDepartments.length && prev.every((r, i) => r.dept === hhDepartments[i]);
+        if (same) return prev;
+        const byName = {};
+        prev.forEach(r => {
+          if (r.dept) byName[r.dept] = r;
+        });
+        return hhDepartments.map(n => byName[n] || {
+          ...blankDeptRow(),
+          dept: n
+        });
+      });
+    }, [isHandHygiene, numMode, hhDepartments]);
     const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : Number(directNum) || 0;
     const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : Number(den) || 0;
     const denEntered = denNum > 0;
@@ -25640,7 +26279,7 @@ window.LockScreen = LockScreen;
         setGroupsDen(blankG);
         setDeptRows([]);
         setDirectNum('');
-        setNumMode('group');
+        setNumMode('direct');
         setDen('');
         return;
       }
@@ -25673,7 +26312,13 @@ window.LockScreen = LockScreen;
         }
       });
       const rawNum = curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' ? curInd.mNum[month] : !isRate && curInd.months && curInd.months[month] != null && curInd.months[month] !== '' ? curInd.months[month] : null;
-      if (Array.isArray(dep) && dep.length) {
+      if (!isHandHygiene) {
+        setDeptRows([]);
+        setGroups(blankG);
+        setGroupsDen(blankG);
+        setDirectNum(rawNum != null ? String(rawNum) : '');
+        setNumMode('direct');
+      } else if (Array.isArray(dep) && dep.length) {
         setDeptRows(dep.map(toRow));
         setNumMode('dept');
         setGroups(blankG);
@@ -25696,7 +26341,7 @@ window.LockScreen = LockScreen;
         setGroups(blankG);
         setGroupsDen(blankG);
         setDirectNum('');
-        setNumMode('group');
+        setNumMode('dept');
       }
       setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
       const cp = curInd.capa && curInd.capa[month];
@@ -26198,7 +26843,7 @@ window.LockScreen = LockScreen;
       style: {
         flex: 1
       }
-    }), React.createElement("div", {
+    }), isHandHygiene && React.createElement("div", {
       className: "seg"
     }, React.createElement("button", {
       className: numMode === 'group' ? 'on' : '',
@@ -26207,7 +26852,7 @@ window.LockScreen = LockScreen;
       className: numMode === 'dept' ? 'on' : '',
       onClick: () => {
         setNumMode('dept');
-        if (deptRows.length === 0) setDeptRows([blankDeptRow()]);
+        if (!isHandHygiene && deptRows.length === 0) setDeptRows([blankDeptRow()]);
       }
     }, "By department"), React.createElement("button", {
       className: numMode === 'direct' ? 'on' : '',
@@ -26278,7 +26923,11 @@ window.LockScreen = LockScreen;
         color: 'var(--muted)',
         marginBottom: 8
       }
-    }, "Enter each department\u2019s ", numLabel.toLowerCase(), isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : '', " by staff group \u2014 every department & group rolls up to the hospital total."), deptRows.map((r, i) => {
+    }, isHandHygiene ? React.createElement(React.Fragment, null, "All ", React.createElement("b", {
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }, hhDepartments.length), " departments are listed below \u2014 just fill in each department\u2019s ", numLabel.toLowerCase(), isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : '', " by staff group. They roll up to the hospital total automatically.") : React.createElement(React.Fragment, null, "Enter each department\u2019s ", numLabel.toLowerCase(), isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : '', " by staff group \u2014 every department & group rolls up to the hospital total.")), deptRows.map((r, i) => {
       const rn = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].n) || 0), 0);
       const rd = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].d) || 0), 0);
       const rv = isRate ? rd > 0 ? Math.round(rn / rd * mult * 100) / 100 + (formula === 'pct' ? '%' : '') : '—' : rn;
@@ -26298,7 +26947,15 @@ window.LockScreen = LockScreen;
           gap: 8,
           marginBottom: 8
         }
-      }, React.createElement("input", {
+      }, isHandHygiene ? React.createElement("div", {
+        style: {
+          flex: 1,
+          fontWeight: 700,
+          fontSize: 13,
+          color: 'var(--ink)',
+          padding: '5px 2px'
+        }
+      }, r.dept) : React.createElement("input", {
         style: {
           ...inputStyle,
           flex: 1,
@@ -26317,7 +26974,7 @@ window.LockScreen = LockScreen;
           color: 'var(--blue-700)',
           whiteSpace: 'nowrap'
         }
-      }, rv), deptRows.length > 1 && React.createElement("button", {
+      }, rv), !isHandHygiene && deptRows.length > 1 && React.createElement("button", {
         className: "icon-btn",
         title: "Remove department",
         style: {
@@ -26382,7 +27039,7 @@ window.LockScreen = LockScreen;
         flexWrap: 'wrap',
         marginTop: 2
       }
-    }, React.createElement("button", {
+    }, !isHandHygiene && React.createElement("button", {
       className: "btn sm",
       onClick: addDeptRow
     }, React.createElement(Ic, {
@@ -28177,7 +28834,7 @@ function UAUserForm({
   const [active, setActive] = useState(user ? user.active !== false : true);
   const [password, setPassword] = useState('');
   const [departments, setDepartments] = useState(user && user.departments ? user.departments.join(', ') : '');
-  const [qualityAreas, setQualityAreas] = useState(user && user.qualityAreas ? user.qualityAreas.join(', ') : '');
+  const [allQualityAreas, setAllQualityAreas] = useState(user ? !!user.allQualityAreas : false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const txt = {
@@ -28199,10 +28856,10 @@ function UAUserForm({
     try {
       const scope = role === 'collector' ? {
         departments: list(departments),
-        qualityAreas: list(qualityAreas)
+        allQualityAreas
       } : {
         departments: [],
-        qualityAreas: []
+        allQualityAreas: false
       };
       if (editing) {
         await uaApi('PATCH', '/api/users/' + encodeURIComponent(user.username), {
@@ -28320,19 +28977,41 @@ function UAUserForm({
     onChange: e => setActive(e.target.checked)
   }), "Active")), role === 'collector' && React.createElement(React.Fragment, null, React.createElement("div", {
     className: "field"
-  }, React.createElement("label", null, "Departments (comma-separated)"), React.createElement("input", {
+  }, React.createElement("label", null, "Departments (comma-separated ids)"), React.createElement("input", {
     style: txt,
     value: departments,
     onChange: e => setDepartments(e.target.value),
-    placeholder: "e.g. MICU, CCU"
+    placeholder: "e.g. micu, ccu"
   })), React.createElement("div", {
     className: "field"
-  }, React.createElement("label", null, "Quality areas (comma-separated)"), React.createElement("input", {
-    style: txt,
-    value: qualityAreas,
-    onChange: e => setQualityAreas(e.target.value),
-    placeholder: "e.g. Infection Control"
-  }))), !editing && React.createElement("div", {
+  }, React.createElement("label", null, "Quality areas ", React.createElement("span", {
+    style: {
+      fontWeight: 400,
+      color: 'var(--muted)'
+    }
+  }, "\xB7 auto from departments")), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 13,
+      color: 'var(--ink-2)',
+      cursor: 'pointer',
+      margin: '2px 0 8px'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: allQualityAreas,
+    onChange: e => setAllQualityAreas(e.target.checked)
+  }), "Hospital-wide \u2014 every quality area"), (() => {
+    const areas = allQualityAreas ? window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [] : window.DEPTMAP ? window.DEPTMAP.areasFromDepts(list(departments)) : [];
+    return React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: areas.length ? 'var(--ink-2)' : 'var(--muted)'
+      }
+    }, areas.length ? areas.map(k => window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(k) : k).join(', ') : 'None yet — add departments above, or tick hospital-wide.');
+  })())), !editing && React.createElement("div", {
     className: "field"
   }, React.createElement("label", null, "Password"), React.createElement("input", {
     style: txt,

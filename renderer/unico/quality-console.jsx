@@ -251,6 +251,7 @@ function stdMatch(name){
     [/vascular access complication/,'H5'], [/de-lining/,'H6'], [/infection rate/,'H7'],
     [/post-procedure complication/,'J1'], [/training compliance/,'L1'],
     [/accidental removal of ett|unplanned extubation|extubation/,'D8'], [/accidental removal of catheter/,'L5'],
+    [/catheter dislodgement|dislodgement/,'L4'],
   ];
   for(const [re,code] of T){ if(re.test(n)) return code; }
   return null;
@@ -1089,6 +1090,28 @@ function qcHeatColors(s){
   if(s==='ok')     return {bg:'#e7f6ed', col:P.green};
   return {bg:'#f1f4f8', col:P.faint};
 }
+// Year-wise aggregate of ONE indicator over a set of report months, for the
+// indicator × department heatmap matrix. Count/direct → SUM (total incidence);
+// rate/% → annual rate (Σnum/Σden, else average of reported months). Status is
+// "breach" if ANY month breached, else "ok" if any reported, else "na".
+function qcAnnualCell(ind, months){
+  const rate = ['pct','rate100','rate1000'].indexOf(ind.formula) >= 0 || isPctInd(ind);
+  let anyRep=false, anyBreach=false, sum=0, num=0, den=0, valSum=0, nRep=0;
+  (months||MONTHS).forEach(m=>{
+    let v = monthRaw(ind, m[0]); if(v==null) v = qtrRaw(ind, m[2]);
+    if(v==null || v==='') return;
+    anyRep=true; if(qStatus(ind, v)==='breach') anyBreach=true;
+    if(rate){ nRep++; valSum += Number(v)||0;
+      const n = ind.mNum && ind.mNum[m[0]], d = ind.mDen && ind.mDen[m[0]];
+      if(n!=null && n!=='' && d!=null && d!=='') { num += Number(n)||0; den += Number(d)||0; }
+    } else sum += Number(v)||0;
+  });
+  if(!anyRep) return { rep:false, status:'na', value:null, count:0, isRate:rate };
+  const value = rate
+    ? (den>0 ? window.qiFormulaCompute(ind.formula||'pct', num, den) : (nRep ? Math.round(valSum/nRep*100)/100 : 0))
+    : sum;
+  return { rep:true, status: anyBreach?'breach':'ok', value, count: rate?0:sum, isRate:rate };
+}
 function QCHeatGrid({d, months}){
   months = months || MONTHS;
   const inds=(d.indicators||[]);
@@ -1193,9 +1216,10 @@ function QCReportBuilder({depts}){
         const list=inds.length?inds:(d.indicators||[]);
         return (list.length?list:[null]).map(ind=>({kind:'detail', dept:d, ind}));
       });
-    if(reportType==='heatmap') return chosen.map(d=>({kind:'heatmap', dept:d}));
+    if(reportType==='heatmap') return chosen.length ? [{kind:'heatmap'}] : [];
+    if(reportType==='monthly') return pMonths.map(m=>({kind:'monthly', month:m}));
     return chosen.map(d=>({kind:'summary', dept:d}));
-  },[chosen,reportType,selectedDepts]);
+  },[chosen,reportType,selectedDepts,pMonths]);
   const pageCount=Math.max(1,pages.length);
   const pi=Math.min(pageIdx,pageCount-1);
   const cur=pages[pi];
@@ -1371,25 +1395,139 @@ function QCReportBuilder({depts}){
     );
   }
 
+  /* Year-wise indicator × DEPARTMENT matrix — the NQI-style board sheet: indicators
+     down the rows, departments across the columns, plus Total-incidence & Benchmark
+     columns. One page for all selected departments, with the year's incident details. */
   function HeatmapPage({page,n,total}){
-    const d=page.dept; const tone=qcTone(d);
-    const {status,color}=qcDeptStatus(d, pMonths);
-    const cards=qcDeptKpis(d, pMonths);
+    // union of indicator names across the chosen departments, in first-seen order
+    const names=[]; const seen=new Set();
+    chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ if(!seen.has(ind.name)){ seen.add(ind.name); names.push(ind.name); } }));
+    const findInd=(d,name)=>(d.indicators||[]).find(i=>i.name===name);
+    const set=new Set(pMonths.map(m=>m[1]));
+    const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ if(set.has(r.month)) incs.push({dept:d.name, ind:r.ind, x:r.x, month:r.month}); }));
+    const line=(l,v)=> v? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5}}><b style={{color:P.ink}}>{l}:</b> {v}</div>:null;
     return (
       <div>
         <Header/>
         <div style={{marginTop:18}}>
-          <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
-            <span style={{width:30,height:30,borderRadius:8,background:tone+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={tone}/></span>
-            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>{d.name} · Year-wise heatmap</div>
-            <span style={{flex:1}}/>
-            <span style={{background:color+'1c',color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11.5}}>{status}</span>
+          <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:10}}>
+            <span style={{width:30,height:30,borderRadius:8,background:P.blue+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={P.blue}/></span>
+            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>Indicator × Department heatmap · {rangeLabel}</div>
+            <span style={{flex:1}}/><span className="tag">{chosen.length} dept · {names.length} indicators</span>
           </div>
-          <KpiCards cards={cards} tone={tone}/>
-          <div style={{fontSize:9.5,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:.4,margin:'6px 0 4px'}}>Indicator × month status · {rangeLabel}</div>
           <QCHeatLegend/>
-          <QCHeatGrid d={d} months={pMonths}/>
-          <QCIncidentBlock d={d} months={pMonths}/>
+          <div style={{overflowX:'auto'}}>
+            <table style={{borderCollapse:'collapse',width:'100%',fontSize:9.5}}>
+              <thead><tr>
+                <th style={{...thl,minWidth:172}}>Quality Indicator</th>
+                <th style={{...thc,minWidth:42}}>Total</th>
+                <th style={{...thl,minWidth:88,textTransform:'none'}}>Benchmark</th>
+                {chosen.map(d=><th key={d.key} style={{...thc,minWidth:42}}>{d.name}</th>)}
+              </tr></thead>
+              <tbody>{names.length===0
+                ? <tr><td colSpan={chosen.length+3} style={{padding:14,textAlign:'center',color:P.faint}}>No indicators for the selected departments.</td></tr>
+                : names.map(name=>{
+                let tot=0, anyCount=false, bench='';
+                const cells=chosen.map(d=>{ const ind=findInd(d,name); if(!ind) return {none:true};
+                  if(!bench) bench=benchExpr(ind);
+                  const a=qcAnnualCell(ind, pMonths);
+                  if(a.rep && !a.isRate){ anyCount=true; tot+=a.count; }
+                  return {ind,a}; });
+                return (
+                  <tr key={name} style={{borderBottom:'1px solid '+P.line2}}>
+                    <td style={{padding:'5px 8px',textAlign:'left',fontWeight:600,color:P.ink,whiteSpace:'nowrap'}}>{name}</td>
+                    <td style={{textAlign:'center',fontFamily:MONO,fontWeight:700,color:tot>0?P.rose:P.ink2}}>{anyCount?tot:'—'}</td>
+                    <td style={{padding:'4px 8px',color:P.ink2,fontSize:9,whiteSpace:'nowrap'}}>{bench||'—'}</td>
+                    {cells.map((c,i)=> c.none
+                      ? <td key={i} style={{textAlign:'center',color:P.faint,fontSize:9}}>—</td>
+                      : <td key={i} style={{textAlign:'center',padding:'3px 2px'}}><span title={name+' · '+chosen[i].name+' · '+(c.a.status==='na'?'not reported':c.a.status==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:34,height:22,borderRadius:5,background:qcHeatColors(c.a.status).bg,color:qcHeatColors(c.a.status).col,fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{c.a.status==='na'?'·':fmtVal(c.ind,c.a.value)}</span></td>)}
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+          {incs.length>0 && (
+            <div style={{marginTop:14}}>
+              <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Occurred incident details · {rangeLabel} ({incs.length})</div>
+              {incs.map((r,i)=>{ const x=r.x; const meta=[x.patientName, x.uhid&&('UHID '+x.uhid), [x.age,x.gender].filter(Boolean).join('/'), x.admissionDate&&('adm '+x.admissionDate)].filter(Boolean).join(' · ');
+                return (
+                <div key={i} style={{border:'1px solid #f1c6cd',borderRadius:8,padding:'9px 11px',marginBottom:8,background:'#fffafb',pageBreakInside:'avoid'}}>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'baseline',marginBottom:meta?4:2}}>
+                    <b style={{fontSize:11.5,color:P.ink}}>{r.ind}</b><span style={{fontSize:10,color:P.blue,fontWeight:600}}>{r.dept}</span><span style={{fontSize:9.5,color:P.muted}}>{r.month}</span>
+                  </div>
+                  {meta&&<div style={{fontSize:10,color:P.muted,marginBottom:4}}>{meta}</div>}
+                  {line('Diagnosis',x.diagnosis)}{line('Incident',x.details)}{line('Finding',x.finding)}{line('Corrective',x.corrective)}{line('Preventive',x.preventive)}{line('Remark',x.remark)}
+                </div>);
+              })}
+            </div>
+          )}
+        </div>
+        <Footer n={n} total={total}/>
+      </div>
+    );
+  }
+
+  /* Month-wise, ALL-department matrix (indicator × department) — like the NQI Excel
+     monthly sheets — one page per month, with that month's incident details. */
+  function MonthlyPage({page,n,total}){
+    const m=page.month;
+    const names=[]; const seen=new Set();
+    chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ if(!seen.has(ind.name)){ seen.add(ind.name); names.push(ind.name); } }));
+    const findInd=(d,name)=>(d.indicators||[]).find(i=>i.name===name);
+    const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ if(r.month===m[1]) incs.push({dept:d.name, ind:r.ind, x:r.x}); }));
+    const line=(l,v)=> v? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5}}><b style={{color:P.ink}}>{l}:</b> {v}</div>:null;
+    return (
+      <div>
+        <Header/>
+        <div style={{marginTop:18}}>
+          <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:10}}>
+            <span style={{width:30,height:30,borderRadius:8,background:P.blue+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={P.blue}/></span>
+            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>{m[1]} · All-department status</div>
+            <span style={{flex:1}}/><span className="tag">{chosen.length} dept · {names.length} indicators</span>
+          </div>
+          <QCHeatLegend/>
+          <div style={{overflowX:'auto'}}>
+            <table style={{borderCollapse:'collapse',width:'100%',fontSize:9.5}}>
+              <thead><tr>
+                <th style={{...thl,minWidth:180}}>Quality Indicator</th>
+                {chosen.map(d=><th key={d.key} style={{...thc,minWidth:44}}>{d.name}</th>)}
+                <th style={{...thc,minWidth:46,color:P.ink2}}>Total</th>
+              </tr></thead>
+              <tbody>{names.length===0
+                ? <tr><td colSpan={chosen.length+2} style={{padding:14,textAlign:'center',color:P.faint}}>No indicators for the selected departments.</td></tr>
+                : names.map(name=>{
+                let tot=0, any=false;
+                const cells=chosen.map(d=>{ const ind=findInd(d,name); if(!ind) return {none:true};
+                  let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); const s=qStatus(ind,v);
+                  if(v!=null){ any=true; if(!isPctInd(ind)) tot+=Number(v)||0; }
+                  return {ind,v,s}; });
+                return (
+                  <tr key={name} style={{borderBottom:'1px solid '+P.line2}}>
+                    <td style={{padding:'5px 8px',textAlign:'left',fontWeight:600,color:P.ink,whiteSpace:'nowrap'}}>{name}</td>
+                    {cells.map((c,i)=> c.none
+                      ? <td key={i} style={{textAlign:'center',color:P.faint,fontSize:9}}>—</td>
+                      : <td key={i} style={{textAlign:'center',padding:'3px 2px'}}><span title={name+' · '+chosen[i].name+' · '+(c.s==='na'?'not reported':c.s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:34,height:22,borderRadius:5,...qcHeatColors(c.s),fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{c.s==='na'?'·':fmtVal(c.ind,c.v)}</span></td>)}
+                    <td style={{textAlign:'center',fontFamily:MONO,fontWeight:700,color:tot>0?P.rose:P.ink2}}>{any?tot:'—'}</td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+          {incs.length>0 && (
+            <div style={{marginTop:14}}>
+              <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Occurred incident details in {m[1]} ({incs.length})</div>
+              {incs.map((r,i)=>{ const x=r.x; const meta=[x.patientName, x.uhid&&('UHID '+x.uhid), [x.age,x.gender].filter(Boolean).join('/'), x.admissionDate&&('adm '+x.admissionDate)].filter(Boolean).join(' · ');
+                return (
+                <div key={i} style={{border:'1px solid #f1c6cd',borderRadius:8,padding:'9px 11px',marginBottom:8,background:'#fffafb',pageBreakInside:'avoid'}}>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'baseline',marginBottom:meta?4:2}}>
+                    <b style={{fontSize:11.5,color:P.ink}}>{r.ind}</b><span style={{fontSize:10,color:P.blue,fontWeight:600}}>{r.dept}</span>
+                  </div>
+                  {meta&&<div style={{fontSize:10,color:P.muted,marginBottom:4}}>{meta}</div>}
+                  {line('Diagnosis',x.diagnosis)}{line('Incident',x.details)}{line('Finding',x.finding)}{line('Corrective',x.corrective)}{line('Preventive',x.preventive)}{line('Remark',x.remark)}
+                </div>);
+              })}
+            </div>
+          )}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -1516,6 +1654,8 @@ function QCReportBuilder({depts}){
                 ? <ComparePage/>
                 : pg.kind==='heatmap'
                 ? <HeatmapPage page={pg} n={i+1} total={pages.length}/>
+                : pg.kind==='monthly'
+                ? <MonthlyPage page={pg} n={i+1} total={pages.length}/>
                 : <DeptPage page={pg} n={i+1} total={pages.length}/>}
             </section>
           ))}
@@ -1529,12 +1669,12 @@ function QCReportBuilder({depts}){
             <div>
               {fieldLabel('Report type')}
               <div className="seg" style={{width:'100%'}}>
-                {[['summary','Summary'],['detail','Detailed'],['heatmap','Heatmap'],['compare','Comparison']].map(([id,l])=>(
-                  <button key={id} className={reportType===id?'on':''} style={{flex:1}} onClick={()=>{setReportType(id);setPageIdx(0);}}>{l}</button>
+                {[['summary','Summary'],['detail','Detailed'],['heatmap','Heatmap'],['monthly','Monthly'],['compare','Comparison']].map(([id,l])=>(
+                  <button key={id} className={reportType===id?'on':''} style={{flex:1,padding:'7px 4px'}} onClick={()=>{setReportType(id);setPageIdx(0);}}>{l}</button>
                 ))}
               </div>
               <div style={{fontSize:11,color:P.muted,marginTop:6}}>
-                {reportType==='summary'?'KPI cards + chart per department, one page each.':reportType==='detail'?'Every indicator × month with benchmark & RAG, per department.':reportType==='heatmap'?'Year-wise indicator × month status grid per department, with occurred-incident details auto-included.':'All selected departments on one comparison page.'}
+                {reportType==='summary'?'KPI cards + chart per department, one page each.':reportType==='detail'?'Every indicator × month with benchmark & RAG, per department.':reportType==='heatmap'?'Year-wise indicator × DEPARTMENT matrix (all departments on one page, like the NQI sheet), colour-coded by status, with the year’s occurred-incident details.':reportType==='monthly'?'Month-wise, ALL-department matrix (indicator × department) — one page per month, with that month’s occurred-incident details (like the NQI monthly sheet).':'All selected departments on one comparison page.'}
               </div>
             </div>
             <div>
@@ -1623,6 +1763,7 @@ function QCReportBuilder({depts}){
                 : !cur ? <div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Nothing to preview.</div>
                 : cur.kind==='compare' ? <ComparePage/>
                 : cur.kind==='heatmap' ? <HeatmapPage page={cur} n={pi+1} total={pageCount}/>
+                : cur.kind==='monthly' ? <MonthlyPage page={cur} n={pi+1} total={pageCount}/>
                 : <DeptPage page={cur} n={pi+1} total={pageCount}/>}
             </div>
           </div>
@@ -2141,7 +2282,17 @@ function QCAdmin({Q,q,onQ,initialDept}){
 
   // ---- edit helpers (ALL through Q) ----
   const patch = (obj)=>{ if(sel.deptKey&&sel.id) Q.patchIndicator(sel.deptKey,sel.id,obj); };
-  const patchField = (f)=> (e)=> patch({[f]:e.target.value});
+  // COMMON INDICATOR MODULE: editing an indicator's DEFINITION (formula / benchmark / labels /
+  // reference / measurement) fans out to EVERY department that reports this indicator id, so it
+  // is edited ONCE and shows the SAME details everywhere. (Month VALUES stay per-department via
+  // `patch` above.) All departments share the same indicator id, so matching by id is exact.
+  const patchDef = (obj)=>{
+    if(!sel.id) return;
+    const targets = (Q.depts||[]).filter(d=>(d.indicators||[]).some(i=>i.id===sel.id)).map(d=>d.key);
+    if(sel.deptKey && targets.indexOf(sel.deptKey)<0) targets.push(sel.deptKey);
+    targets.forEach(k=> Q.patchIndicator(k, sel.id, obj));
+  };
+  const patchField = (f)=> (e)=> patchDef({[f]:e.target.value});
   const patchMonthVal = (idx)=> (e)=>{ const v=e.target.value; const nv=(v===''?null:Number(v)); const obj={ months:{ [MONTHS[idx][0]]: nv } }; if(selInd && selInd.formula==='count') obj.mNum={ [MONTHS[idx][0]]: nv }; patch(obj); };
   const patchMonthNum = (idx)=> (e)=>{ const v=e.target.value; patch({ mNum:{ [MONTHS[idx][0]]: (v===''?null:Number(v)) } }); };
   const patchMonthDen = (idx)=> (e)=>{ const v=e.target.value; patch({ mDen:{ [MONTHS[idx][0]]: (v===''?null:Number(v)) } }); };
@@ -2174,12 +2325,18 @@ function QCAdmin({Q,q,onQ,initialDept}){
     reference:s.ref||'', formulaText:s.expr||'', months:{},
   }; };
   const rowsByKey={};
+  const stdByName={}; // normalized catalog name -> std row key: a safety net so an in-use
+  // indicator whose name IS a catalog indicator but which stdMatch() has no alias for still
+  // merges into the one catalog row instead of spawning a duplicate "custom" row.
   ((typeof HQI_STANDARDS!=='undefined'&&HQI_STANDARDS)||[]).forEach(s=>{
-    rowsByKey['std:'+s.code]={ key:'std:'+s.code, code:s.code, name:s.name, formula:s.ft||'direct', tmpl:stdTemplate(s), set:new Set() };
+    const rk='std:'+s.code;
+    rowsByKey[rk]={ key:rk, code:s.code, name:s.name, formula:s.ft||'direct', tmpl:stdTemplate(s), set:new Set() };
+    if(!stdByName[norm(s.name)]) stdByName[norm(s.name)]=rk;
   });
   depts.forEach(d=>(d.indicators||[]).forEach(i=>{
     const code=stdMatch(i.name);
-    if(code && rowsByKey['std:'+code]){ rowsByKey['std:'+code].set.add(d.key); }
+    const rk = (code && rowsByKey['std:'+code]) ? 'std:'+code : stdByName[norm(i.name)];
+    if(rk){ rowsByKey[rk].set.add(d.key); }
     else { const k='cus:'+norm(i.name); if(!rowsByKey[k]) rowsByKey[k]={ key:k, code:null, name:i.name, formula:i.formula, tmpl:i, set:new Set() }; rowsByKey[k].set.add(d.key); }
   }));
   const assignNames = Object.values(rowsByKey).sort((a,b)=> (a.name||'').localeCompare(b.name||'')); // STABLE alphabetical: ticking a cell no longer reorders rows
@@ -2189,7 +2346,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const toggleAssign = (rec,dk)=>{
     if(rec.set.has(dk)){
       const d=(Q.depts||[]).find(x=>x.key===dk);
-      const inst=d&&(d.indicators||[]).find(x=> rec.code ? stdMatch(x.name)===rec.code : norm(x.name)===norm(rec.name));
+      const inst=d&&(d.indicators||[]).find(x=> (rec.code && stdMatch(x.name)===rec.code) || norm(x.name)===norm(rec.name));
       if(inst) Q.removeIndicator(dk,inst.id);
     } else {
       const c=Object.assign({},rec.tmpl,{ id:window.qualitySlug(rec.tmpl.name||rec.name) }); Q.addIndicator(dk,c);
@@ -2418,7 +2575,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
                   </div>
                   <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
                     <div style={{display:'flex',flexDirection:'column',gap:5}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Goal direction <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>which way is good?</span></label><select value={selInd.goalDirection||'lower_is_better'} onChange={patchField('goalDirection')} style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,background:'#fff',outline:'none'}}>{DIRS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
-                    <div style={{display:'flex',flexDirection:'column',gap:5}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Benchmark value <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>drives status</span></label><input type="number" value={selInd.benchmarkValue==null?'':selInd.benchmarkValue} onInput={e=>patch({benchmarkValue: e.target.value===''?null:Number(e.target.value)})} onChange={e=>patch({benchmarkValue: e.target.value===''?null:Number(e.target.value)})} placeholder="e.g. 0 or 90" style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,fontFamily:MONO,background:'#fff',outline:'none',textAlign:'right'}}/></div>
+                    <div style={{display:'flex',flexDirection:'column',gap:5}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Benchmark value <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>drives status</span></label><input type="number" value={selInd.benchmarkValue==null?'':selInd.benchmarkValue} onInput={e=>patchDef({benchmarkValue: e.target.value===''?null:Number(e.target.value)})} onChange={e=>patchDef({benchmarkValue: e.target.value===''?null:Number(e.target.value)})} placeholder="e.g. 0 or 90" style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,fontFamily:MONO,background:'#fff',outline:'none',textAlign:'right'}}/></div>
                     <div style={{display:'flex',flexDirection:'column',gap:5,gridColumn:'1 / -1'}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Benchmark description <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>free text shown on reports</span></label><input value={selInd.benchmark||''} onInput={patchField('benchmark')} onChange={patchField('benchmark')} placeholder="e.g. 0 (zero defect) · ≥ 90% of moments" style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,background:'#fff',outline:'none'}}/></div>
                   </div>
                 </div>
@@ -2639,7 +2796,7 @@ const QC_ICONS = {
 // keeps its own Manage / Assign / Catalog sub-nav.
 function QualityView({ view, initialDept, setRoute }){
   const Q = window.useQualityStore();
-  const depts = (Q.depts || []).filter(d => d.indicators && d.indicators.length);
+  const depts = (Q.depts || []).filter(d => d.key && d.indicators && d.indicators.length);
   const [q, setQ] = useState('');
   const v = view || 'dashboard';
   return (
@@ -2659,7 +2816,7 @@ window.QualityView = QualityView;
 
 function QualityConsole({ onExit, initialView, initialDept, setRoute }){
   const Q = window.useQualityStore();
-  const depts = (Q.depts||[]).filter(d => d.indicators && d.indicators.length);
+  const depts = (Q.depts||[]).filter(d => d.key && d.indicators && d.indicators.length);
 
   const [module, setModule] = useState(initialView || 'dashboard');
   const [gq, setGq] = useState('');

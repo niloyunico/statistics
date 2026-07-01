@@ -30,8 +30,15 @@
       if (i >= 0 && i + 1 < order.length) return order[i + 1];
       return last;
     }
-    // no data yet — pick a recent month near the middle of the catalog
-    return order[Math.min(order.length - 1, 24)] || '';
+    // no data yet — default to the last COMPLETED reporting month (previous calendar month
+    // relative to today), falling back to the newest catalog month. Date-relative so the
+    // default stays sensible as the fiscal year advances (was a fixed magic index).
+    const MMM = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const now = new Date();
+    const curKey = MMM[now.getMonth()] + '-' + String(now.getFullYear()).slice(-2);
+    const ci = order.indexOf(curKey);
+    if (ci >= 0) return order[Math.max(0, ci - 1)];
+    return order[order.length - 1] || '';
   }
   function staffNames() {
     const s = window.STAFF_SEED || window.__UNICO_STAFF__ || [];
@@ -97,7 +104,7 @@
     const load = () => dcApi.get('/api/responsibles').then((r) => setList(r.ok ? r.responsibles : [])).catch(() => setList([]));
     useEffect(() => { load(); }, []);
 
-    const blank = () => ({ name: '', title: '', phone: '', staffId: null, empId: '', password: '', departments: [], qualityAreas: [], qualityIndicators: {}, active: true });
+    const blank = () => ({ name: '', title: '', phone: '', staffId: null, empId: '', password: '', departments: [], qualityAreas: [], allQualityAreas: false, qualityIndicators: {}, active: true });
     const save = () => {
       if (!editing.name.trim()) { toast('Name is required', 'error'); return; }
       dcApi.post('/api/responsibles', editing).then((r) => {
@@ -112,7 +119,14 @@
     };
     const toggle = (key, arr, val) => setEditing((e) => { const has = e[key].includes(val); return { ...e, [key]: has ? e[key].filter((x) => x !== val) : [...e[key], val] }; });
 
-    const deptName = (id) => { const d = (depts || []).find((x) => x.id === id); return d ? d.short : id; };
+    const deptName = (id) => (window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : ((depts || []).find((x) => x.id === id) || {}).short) || id;
+    // Quality areas are DERIVED from the assigned departments (or ALL areas when hospital-wide),
+    // so a person is assigned ONCE and covers both statistics and quality (matches the server).
+    const derivedAreas = editing
+      ? (editing.allQualityAreas
+          ? (window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [])
+          : (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : (editing.qualityAreas || [])))
+      : [];
 
     return (
       <div className="grid" style={{ gap: 14 }}>
@@ -150,19 +164,21 @@
                 })}
               </div>
             </Field>
-            <Field label="Assigned quality areas (optional)">
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                {areas.map((a) => {
-                  const on = editing.qualityAreas.includes(a.key);
-                  return <span key={a.key} onClick={() => setEditing((ed) => ({ ...ed, qualityAreas: ed.qualityAreas.includes(a.key) ? ed.qualityAreas.filter((x) => x !== a.key) : [...ed.qualityAreas, a.key] }))}
-                    style={{ cursor: 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)' }}>{a.name}</span>;
-                })}
-              </div>
+            <Field label="Quality areas" hint="Assigned automatically from the departments above — one assignment covers both patient statistics and quality, so they can never drift apart.">
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9, cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!editing.allQualityAreas} onChange={(e) => setEditing((ed) => ({ ...ed, allQualityAreas: e.target.checked }))} />
+                Hospital-wide — every quality area (e.g. Infection Control)
+              </label>
+              {derivedAreas.length
+                ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                    {derivedAreas.map((ak) => <span key={ak} style={{ padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid var(--blue)', background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(ak) : ak}</span>)}
+                  </div>
+                : <div style={{ fontSize: 12, color: 'var(--muted)' }}>None yet — pick departments above, or tick “Hospital-wide”.</div>}
             </Field>
-            {editing.qualityAreas.length > 0 && (
+            {derivedAreas.length > 0 && (
               <Field label="Specific indicators per area (optional)" hint="Leave all unticked in an area to allow every indicator of that area. Tick some to restrict this person to just those.">
                 <div style={{ display: 'grid', gap: 10 }}>
-                  {editing.qualityAreas.map((ak) => {
+                  {derivedAreas.map((ak) => {
                     const list = areaInds[ak] || [];
                     const aName = (areas.find((a) => a.key === ak) || {}).name || ak;
                     if (!list.length) return null;
@@ -202,7 +218,7 @@
                     <td>{r.title || '—'}</td>
                     <td>{r.empId ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--blue-700)' }} title="Has a login account">🔑 {r.empId}</span> : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
                     <td>{(r.departments || []).map(deptName).join(', ') || '—'}</td>
-                    <td>{(r.qualityAreas || []).join(', ') || '—'}</td>
+                    <td>{r.allQualityAreas ? 'All areas (hospital-wide)' : ((r.qualityAreas || []).map((k) => window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(k) : k).join(', ') || '—')}</td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button className="icon-btn" title="Edit" onClick={() => setEditing({ ...blank(), ...r })}><Ic d={I.edit} s={14} /></button>
                       <button className="icon-btn" title="Remove" style={{ color: 'var(--rose)' }} onClick={() => remove(r.id)}><Ic d={I.x} s={14} /></button>
@@ -424,7 +440,9 @@
     // Other) which add up to the total, or typed DIRECTLY. For rate/% indicators each
     // group also carries its OWN denominator (the totals are their sums). The old
     // per-incident logging module is intentionally gone for this collector form.
-    const [numMode, setNumMode] = useState('group'); // 'group' | 'dept' | 'direct'
+    // 'group' | 'dept' | 'direct'. The staff-group / by-department breakdown is
+    // Hand-Hygiene-ONLY; every other indicator uses the simple 'direct' entry.
+    const [numMode, setNumMode] = useState('direct');
     const [groups, setGroups] = useState({ nurse: '', doctor: '', pca: '', other: '' });
     const [groupsDen, setGroupsDen] = useState({ nurse: '', doctor: '', pca: '', other: '' });
     // "By department" = a department × staff-group matrix, each cell {n,d}. Rolls up.
@@ -482,6 +500,31 @@
     const setDeptCell = (i, k, f, v) => setDeptRows((rs) => rs.map((r, j) => (j === i ? { ...r, g: { ...r.g, [k]: { ...r.g[k], [f]: v } } } : r)));
     const addDeptRow = () => setDeptRows((rs) => [...rs, blankDeptRow()]);
     const delDeptRow = (i) => setDeptRows((rs) => rs.filter((_, j) => j !== i));
+
+    // Hand Hygiene Compliance is a WHOLE-HOSPITAL indicator collected across every
+    // department, so its "By department" matrix is a common gateway that pre-lists
+    // EVERY department as a ready-to-fill row (no typing / adding one by one). This
+    // special-casing applies ONLY to Hand Hygiene; other indicators are unchanged.
+    const isHandHygiene = /hand\s*hygiene/i.test(indNameQ || '');
+    const hhDepartments = useMemo(() => {
+      const isOverall = (a) => /overall\s*hospital/i.test((a && (a.name || a.key)) || '');
+      const nameOf = (a) => ((window.DEPTMAP && window.DEPTMAP.nameFromQualityKey) ? window.DEPTMAP.nameFromQualityKey(a.key) : (a.name || a.key));
+      const seen = new Set(); const out = [];
+      (areas || []).forEach((a) => { if (!a || !a.key || isOverall(a)) return; const n = nameOf(a); if (n && !seen.has(n)) { seen.add(n); out.push(n); } });
+      return out;
+    }, [areas]);
+    // Seed / keep the matrix in sync with the full department list for Hand Hygiene,
+    // preserving any numbers already typed for a department that stays in the list.
+    useEffect(() => {
+      if (!(isHandHygiene && numMode === 'dept' && hhDepartments.length)) return;
+      setDeptRows((prev) => {
+        const same = prev.length === hhDepartments.length && prev.every((r, i) => r.dept === hhDepartments[i]);
+        if (same) return prev;
+        const byName = {}; prev.forEach((r) => { if (r.dept) byName[r.dept] = r; });
+        return hhDepartments.map((n) => byName[n] || { ...blankDeptRow(), dept: n });
+      });
+    }, [isHandHygiene, numMode, hhDepartments]);
+
     const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : (Number(directNum) || 0);
     // Every indicator can take a denominator: rate indicators REQUIRE it; counts may
     // OPTIONALLY add one to compute a rate. In "By group" / "By department" modes the total
@@ -503,7 +546,7 @@
     useEffect(() => {
       const blankG = { nurse: '', doctor: '', pca: '', other: '' };
       const toG = (o) => ({ nurse: o && o.nurse != null ? String(o.nurse) : '', doctor: o && o.doctor != null ? String(o.doctor) : '', pca: o && o.pca != null ? String(o.pca) : '', other: o && o.other != null ? String(o.other) : '' });
-      if (!curInd) { setGroups(blankG); setGroupsDen(blankG); setDeptRows([]); setDirectNum(''); setNumMode('group'); setDen(''); return; }
+      if (!curInd) { setGroups(blankG); setGroupsDen(blankG); setDeptRows([]); setDirectNum(''); setNumMode('direct'); setDen(''); return; }
       const g = curInd.mGroups && curInd.mGroups[month];
       const gd = curInd.mGroupsDen && curInd.mGroupsDen[month];
       const dep = curInd.mDeptBreakdown && curInd.mDeptBreakdown[month];
@@ -513,7 +556,12 @@
       const rawNum = (curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '') ? curInd.mNum[month]
         : (!isRate && curInd.months && curInd.months[month] != null && curInd.months[month] !== '') ? curInd.months[month]
         : null;
-      if (Array.isArray(dep) && dep.length) {
+      if (!isHandHygiene) {
+        // Non-Hand-Hygiene indicators use ONLY the simple direct numerator (+ denominator)
+        // entry — the staff-group / by-department breakdown is Hand-Hygiene-only.
+        setDeptRows([]); setGroups(blankG); setGroupsDen(blankG);
+        setDirectNum(rawNum != null ? String(rawNum) : ''); setNumMode('direct');
+      } else if (Array.isArray(dep) && dep.length) {
         setDeptRows(dep.map(toRow)); setNumMode('dept'); setGroups(blankG); setGroupsDen(blankG); setDirectNum('');
       } else if (g && typeof g === 'object') {
         setDeptRows([]); setGroups(toG(g)); setGroupsDen(gd && typeof gd === 'object' ? toG(gd) : blankG);
@@ -521,7 +569,8 @@
       } else if (rawNum != null) {
         setDeptRows([]); setDirectNum(String(rawNum)); setGroups(blankG); setGroupsDen(blankG); setNumMode('direct');
       } else {
-        setDeptRows([]); setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('group');
+        // Hand Hygiene with no data yet opens straight into the all-departments gateway.
+        setDeptRows([]); setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('dept');
       }
       setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
       const cp = curInd.capa && curInd.capa[month];
@@ -666,11 +715,15 @@
                   <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{numLabel}{isRate ? ' (numerator ÷ denominator)' : ''}</div>
                   <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{numerator}{isRate ? ' / ' + denNum : ''}</span>
                   <span style={{ flex: 1 }} />
-                  <div className="seg">
-                    <button className={numMode === 'group' ? 'on' : ''} onClick={() => setNumMode('group')}>By group</button>
-                    <button className={numMode === 'dept' ? 'on' : ''} onClick={() => { setNumMode('dept'); if (deptRows.length === 0) setDeptRows([blankDeptRow()]); }}>By department</button>
-                    <button className={numMode === 'direct' ? 'on' : ''} onClick={() => setNumMode('direct')}>Direct value</button>
-                  </div>
+                  {/* Staff-group / by-department breakdown is Hand-Hygiene-only. Every other
+                      indicator just enters the value directly, so the mode switch is hidden. */}
+                  {isHandHygiene && (
+                    <div className="seg">
+                      <button className={numMode === 'group' ? 'on' : ''} onClick={() => setNumMode('group')}>By group</button>
+                      <button className={numMode === 'dept' ? 'on' : ''} onClick={() => { setNumMode('dept'); if (!isHandHygiene && deptRows.length === 0) setDeptRows([blankDeptRow()]); }}>By department</button>
+                      <button className={numMode === 'direct' ? 'on' : ''} onClick={() => setNumMode('direct')}>Direct value</button>
+                    </div>
+                  )}
                 </div>
                 {numMode === 'group' ? (
                   <>
@@ -695,7 +748,7 @@
                   </>
                 ) : numMode === 'dept' ? (
                   <>
-                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>Enter each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group — every department &amp; group rolls up to the hospital total.</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>{isHandHygiene ? <>All <b style={{ color: 'var(--ink-2)' }}>{hhDepartments.length}</b> departments are listed below — just fill in each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group. They roll up to the hospital total automatically.</> : <>Enter each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group — every department &amp; group rolls up to the hospital total.</>}</div>
                     {deptRows.map((r, i) => {
                       const rn = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].n) || 0), 0);
                       const rd = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].d) || 0), 0);
@@ -703,9 +756,11 @@
                       return (
                         <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--panel-2)' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                            <input style={{ ...inputStyle, flex: 1, fontWeight: 600 }} value={r.dept} onChange={(e) => setDeptName(i, e.target.value)} placeholder="Department (e.g. OPD)" />
+                            {isHandHygiene
+                              ? <div style={{ flex: 1, fontWeight: 700, fontSize: 13, color: 'var(--ink)', padding: '5px 2px' }}>{r.dept}</div>
+                              : <input style={{ ...inputStyle, flex: 1, fontWeight: 600 }} value={r.dept} onChange={(e) => setDeptName(i, e.target.value)} placeholder="Department (e.g. OPD)" />}
                             <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)', whiteSpace: 'nowrap' }}>{rv}</span>
-                            {deptRows.length > 1 && <button className="icon-btn" title="Remove department" style={{ width: 26, height: 26, border: 0, background: 'transparent', color: 'var(--rose)' }} onClick={() => delDeptRow(i)}><Ic d={I.x} s={13} /></button>}
+                            {!isHandHygiene && deptRows.length > 1 && <button className="icon-btn" title="Remove department" style={{ width: 26, height: 26, border: 0, background: 'transparent', color: 'var(--rose)' }} onClick={() => delDeptRow(i)}><Ic d={I.x} s={13} /></button>}
                           </div>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
                             {GROUP_KEYS.map(([k, lbl]) => (
@@ -722,7 +777,7 @@
                       );
                     })}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 2 }}>
-                      <button className="btn sm" onClick={addDeptRow}><Ic d={I.plus} s={13} />Add department</button>
+                      {!isHandHygiene && <button className="btn sm" onClick={addDeptRow}><Ic d={I.plus} s={13} />Add department</button>}
                       <span style={{ flex: 1 }} />
                       <span style={{ fontSize: 11, color: 'var(--muted)' }}>Total {numLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{deptTot.n}</b>{isRate ? <> · Total {denLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{deptTot.d}</b></> : null}</span>
                     </div>

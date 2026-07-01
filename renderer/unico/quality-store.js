@@ -95,9 +95,13 @@
       // Formula indicators: compute each quarter from monthly num/den (aggregate
       // rates by SUMMING numerators & denominators) or from the direct quarter num/den.
       const q2 = Object.assign({}, ind.quarters || {});
+      const needDen = f !== 'count'; // rate/pct/rate1000 require a denominator to be meaningful
       QS.forEach(q => {
         const ms = QUARTER_MONTHS[q] || [];
-        const haveMonths = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '');
+        // A month only counts toward the rollup if it has a numerator AND (for rate/pct) a
+        // denominator — otherwise summing empty denominators yields den=0 → a false on-benchmark 0.
+        const haveMonths = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''
+          && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
         let num, den;
         if (haveMonths) {
           num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
@@ -107,7 +111,8 @@
           if (n == null || n === '') return; // no data this quarter → leave as-is (null)
           num = n; den = (ind.qDen || {})[q];
         }
-        q2[q] = qiFormulaCompute(f, num, den);
+        // No denominator for a rate/pct ⇒ show "no data" (null), not a misleading 0.
+        q2[q] = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
       });
       ind.quarters = q2;
     } else if (ind.months && Object.keys(ind.months).length) {
@@ -119,17 +124,37 @@
     return ind;
   }
 
+  // The ONE canonical display name for a quality department = its linked Statistics
+  // department name (via window.DEPTMAP / __UNICO_DEPT_MAP__). Resolves by the quality
+  // doc's deptId link, else by mapping its key. Falls back to the doc's own name.
+  function canonicalDeptName(seedDept) {
+    try {
+      if (typeof window === 'undefined' || !window.DEPTMAP) return null;
+      const id = (seedDept && seedDept.deptId) || window.DEPTMAP.idFromQk(seedDept && seedDept.key);
+      if (id) return window.DEPTMAP.nameFromId(id);
+    } catch (e) { }
+    return null;
+  }
+
   function mergeDept(seedDept, ov) {
-    if (!ov) return seedDept;
-    const removed = new Set(ov.indRemoved || []);
-    const patches = ov.indPatches || {};
-    const inds = (seedDept.indicators || [])
-      .filter(i => !removed.has(i.id))
-      .map(i => mergeIndicator(i, patches[i.id]));
-    (ov.indAdded || []).forEach(a => { if (!removed.has(a.id)) inds.push(mergeIndicator(a, patches[a.id])); });
-    const dept = Object.assign({}, seedDept, { indicators: inds });
-    if (ov.executive) dept.executive = Object.assign({}, seedDept.executive || {}, ov.executive);
-    if (ov.meta) dept.meta = Object.assign({}, seedDept.meta || {}, ov.meta);
+    let dept;
+    if (!ov) {
+      dept = seedDept;
+    } else {
+      const removed = new Set(ov.indRemoved || []);
+      const patches = ov.indPatches || {};
+      const inds = (seedDept.indicators || [])
+        .filter(i => !removed.has(i.id))
+        .map(i => mergeIndicator(i, patches[i.id]));
+      (ov.indAdded || []).forEach(a => { if (!removed.has(a.id)) inds.push(mergeIndicator(a, patches[a.id])); });
+      dept = Object.assign({}, seedDept, { indicators: inds });
+      if (ov.executive) dept.executive = Object.assign({}, seedDept.executive || {}, ov.executive);
+      if (ov.meta) dept.meta = Object.assign({}, seedDept.meta || {}, ov.meta);
+    }
+    // Show the single canonical Statistics name everywhere quality is rendered (keeps the
+    // `key` as the stable identity — only the displayed `name` becomes canonical).
+    const cn = canonicalDeptName(seedDept);
+    if (cn && cn !== dept.name) dept = Object.assign({}, dept, { name: cn });
     return dept;
   }
 

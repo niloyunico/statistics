@@ -15,6 +15,7 @@
 const { getDbHandle, getUsers } = require('./db');
 const auth = require('./auth');
 const session = require('./session');
+const deptmap = require('./deptmap');
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
@@ -90,15 +91,32 @@ async function saveResponsible(input) {
   };
   if (!doc.name) throw new Error('Name is required.');
   if (empId && !/^[a-z0-9._-]{3,40}$/.test(empId)) throw new Error('Emp ID must be 3-40 chars: letters, numbers, . _ -');
+  // Pre-validate the collector-login side BEFORE persisting the responsible, so a predictable
+  // user-sync failure (admin id / missing password) can't leave a saved responsible behind
+  // that a client retry would then DUPLICATE (a retry without input.id mints a new genId).
+  if (empId) {
+    const usersPre = await getUsers();
+    const exPre = await usersPre.findOne({ username: empId });
+    if (exPre && exPre.role === 'Administrator') throw new Error('That ID belongs to an administrator.');
+    if (!exPre && !(input && input.password)) throw new Error('A password is required to create the login for "' + empId + '".');
+  }
   const id = input && input.id ? String(input.id) : genId('resp');
   const c = await col('responsibles');
+  const existing = c ? await c.findOne({ _id: id }) : (mem.responsibles.find((r) => r.id === id) || null);
+  // UNIFIED ASSIGNMENT: quality areas DERIVE from the single department list (or ALL areas
+  // for a hospital-wide role), so assigning a person once covers BOTH the statistics data
+  // module and quality — there is no second hand-maintained qualityAreas array to drift.
+  // allQualityAreas is preserved across saves (the legacy UI doesn't send it) so a
+  // hospital-wide infection-control role isn't silently downgraded on an unrelated edit.
+  const allQA = (input && input.allQualityAreas != null) ? !!input.allQualityAreas : !!(existing && existing.allQualityAreas);
+  doc.allQualityAreas = allQA;
+  doc.qualityAreas = await deptmap.deriveQualityAreas(doc.departments, allQA);
   let rec;
   if (!c) {
     const i = mem.responsibles.findIndex((r) => r.id === id);
     rec = { id, ...doc, createdAt: i >= 0 ? mem.responsibles[i].createdAt : now, updatedAt: now };
     if (i >= 0) mem.responsibles[i] = rec; else mem.responsibles.push(rec);
   } else {
-    const existing = await c.findOne({ _id: id });
     const base = { ...doc, createdAt: existing ? existing.createdAt : now, updatedAt: now };
     await c.replaceOne({ _id: id }, base, { upsert: true });
     rec = { id, ...base };
@@ -106,7 +124,7 @@ async function saveResponsible(input) {
   // When an emp ID is set, keep a matching collector LOGIN account in sync so the
   // person can sign in and get a data-limited, per-user view of their departments.
   if (empId) {
-    await upsertCollectorUser({ empId, password: input && input.password, name: doc.name, departments: doc.departments, qualityAreas: doc.qualityAreas, qualityIndicators: doc.qualityIndicators, active: doc.active, responsibleId: id });
+    await upsertCollectorUser({ empId, password: input && input.password, name: doc.name, departments: doc.departments, qualityAreas: doc.qualityAreas, allQualityAreas: allQA, qualityIndicators: doc.qualityIndicators, active: doc.active, responsibleId: id });
   }
   return { ...rec, hasLogin: !!empId };
 }
@@ -117,7 +135,7 @@ async function saveResponsible(input) {
 async function upsertCollectorUser(opts) {
   const empId = String(opts.empId).toLowerCase();
   const users = await getUsers();
-  const set = { name: opts.name || empId, role: 'collector', active: opts.active !== false, departments: opts.departments || [], qualityAreas: opts.qualityAreas || [], qualityIndicators: normQualityIndicators(opts.qualityIndicators) };
+  const set = { name: opts.name || empId, role: 'collector', active: opts.active !== false, departments: opts.departments || [], qualityAreas: opts.qualityAreas || [], allQualityAreas: !!opts.allQualityAreas, qualityIndicators: normQualityIndicators(opts.qualityIndicators) };
   if (opts.responsibleId) set.responsibleId = opts.responsibleId;
   if (opts.password) set.passwordHash = await auth.hash(String(opts.password));
   const existing = await users.findOne({ username: empId });
@@ -153,7 +171,7 @@ async function getUserScope(username) {
   const users = await getUsers();
   const u = await users.findOne({ username: String(username).toLowerCase() });
   if (!u) return null;
-  return { username: u.username, name: u.name || u.username, role: u.role || 'User', departments: u.departments || [], qualityAreas: u.qualityAreas || [], qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {} };
+  return { username: u.username, name: u.name || u.username, role: u.role || 'User', departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {} };
 }
 
 async function deleteResponsible(id) {
@@ -288,11 +306,13 @@ async function applyQuality(spec) {
   const indicators = Array.isArray(doc.indicators) ? doc.indicators.map((i) => Object.assign({}, i)) : [];
   let ind = indicators.find((i) => i.id === spec.indicatorId);
   if (!ind) {
-    ind = { id: spec.indicatorId, name: spec.indicatorName, valueType: spec.valueType || 'Count', benchmark: spec.benchmark || '', goalDirection: spec.goalDirection || 'lower_is_better', months: {}, monthRemarks: {} };
+    ind = { id: spec.indicatorId, name: spec.indicatorName, valueType: spec.valueType || 'Count', benchmark: spec.benchmark || '', benchmarkValue: (spec.benchmarkValue != null ? spec.benchmarkValue : null), goalDirection: spec.goalDirection || 'lower_is_better', months: {}, monthRemarks: {} };
     indicators.push(ind);
   }
   // Persist the calculation definition so the rich entry form re-renders on reselect.
   if (spec.formula) ind.formula = spec.formula;
+  if (spec.benchmark) ind.benchmark = spec.benchmark;
+  if (spec.benchmarkValue != null) ind.benchmarkValue = spec.benchmarkValue;
   if (spec.numLabel) ind.numLabel = spec.numLabel;
   if (spec.denLabel) ind.denLabel = spec.denLabel;
   if (spec.unit) ind.unit = spec.unit;
@@ -302,8 +322,17 @@ async function applyQuality(spec) {
   if (spec.deptBreakdown) ind.mDeptBreakdown = Object.assign({}, ind.mDeptBreakdown || {}, { [spec.month]: spec.deptBreakdown });
   // Monthly storage (no quarters). For rate/%, keep numerator/denominator per month.
   if (spec.entryMode === 'rate') {
-    ind.mNum = Object.assign({}, ind.mNum || {}, { [spec.month]: spec.num });
-    ind.mDen = Object.assign({}, ind.mDen || {}, { [spec.month]: spec.den });
+    let num = spec.num, den = Number(spec.den) || 0;
+    const mlt = Number(spec.mult) || 100;
+    const computed = den > 0 ? Math.round((Number(spec.num) / den) * mlt * 100) / 100 : 0;
+    // If an admin corrected the computed value while the submission was pending
+    // (a value-only edit), back-solve the numerator from the edited value so the
+    // quarter rollup — which reads mNum/mDen, not months — reflects the correction.
+    if (spec.value != null && spec.value !== '' && den > 0 && Number(spec.value) !== computed) {
+      num = Math.round((Number(spec.value) / mlt) * den * 100) / 100;
+    }
+    ind.mNum = Object.assign({}, ind.mNum || {}, { [spec.month]: num });
+    ind.mDen = Object.assign({}, ind.mDen || {}, { [spec.month]: den });
   }
   ind.months = Object.assign({}, ind.months || {}, { [spec.month]: spec.value });
   if (spec.remark) ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [spec.month]: spec.remark });
@@ -386,6 +415,8 @@ async function approveSubmission(id, by) {
   const s = await getSubmissionById(id);
   if (!s) throw new Error('Submission not found.');
   if (s.status === 'approved') return { ok: true, submission: s, already: true };
+  // Only a PENDING submission may be applied — never re-apply a rejected one to live data.
+  if (s.status !== 'pending') throw new Error('Only pending submissions can be approved (this one is "' + s.status + '").');
   if (s.type === 'patient') await applyPatient(s);
   else if (s.type === 'quality') await applyQuality(s);
   else throw new Error('Unknown submission type.');
@@ -498,7 +529,7 @@ async function shortlinkMeta(code) {
     ok: true, type: 'quality', label: link.label, responsible: link.responsible,
     area: { key: area._id, name: area.name },
     indicators: (area.indicators || []).map((i) => ({ id: i.id, name: i.name, valueType: i.valueType })),
-    months: (function () { const out = []; [25, 26, 27].forEach((yy) => { MONTHS.forEach((m) => out.push({ key: m + '-' + yy, label: m + ' 20' + yy })); }); return out; })(),
+    months: (function () { const out = []; const yy = new Date().getFullYear() % 100; [yy - 1, yy, yy + 1].forEach((y) => { MONTHS.forEach((m) => out.push({ key: m + '-' + y, label: m + ' 20' + y })); }); return out; })(),
   };
 }
 async function shortlinkSubmit(code, body) {
@@ -509,7 +540,7 @@ async function shortlinkSubmit(code, body) {
     const spec = await buildPatientSpec({ department: link.department, month: body && body.month, values: body && body.values });
     return { ok: true, submission: await createSubmission(spec, meta) };
   }
-  const spec = await buildQualitySpec({ area: link.area, indicatorId: body && body.indicatorId, indicatorName: body && body.indicatorName, quarter: body && body.quarter, year: body && body.year, value: body && body.value, remark: body && body.remark });
+  const spec = await buildQualitySpec({ area: link.area, indicatorId: body && body.indicatorId, indicatorName: body && body.indicatorName, month: body && body.month, value: body && body.value, remark: body && body.remark });
   return { ok: true, submission: await createSubmission(spec, meta) };
 }
 
@@ -551,7 +582,7 @@ function shortlinkPage(code) {
     + 'html+=\'<div class="grid2">\';m.cols.forEach(function(c){html+=field(c.label+(c.pct?" (%)":""),\'<input type="number" step="any" data-col="\'+esc(c.id)+\'"/>\');});html+=\'</div>\';}'
     + 'else{var opts=m.indicators.map(function(i){return \'<option value="\'+esc(i.id)+\'">\'+esc(i.name)+\'</option>\';}).join("");'
     + 'html+=field("Indicator",\'<select id="f_ind">\'+opts+\'</select>\');'
-    + 'html+=\'<div class="grid2">\'+field("Quarter",\'<select id="f_q">\'+m.quarters.map(function(q){return \'<option>\'+q+\'</option>\';}).join("")+\'</select>\')+field("Year",\'<input id="f_year" value="2025-2026"/>\')+\'</div>\';'
+    + 'html+=field("Reporting month",\'<select id="f_month">\'+(m.months||[]).map(function(mm){return \'<option value="\'+esc(mm.key)+\'">\'+esc(mm.label)+\'</option>\';}).join("")+\'</select>\');'
     + 'html+=field("Value",\'<input id="f_val" type="number" step="any"/>\');html+=field("Remark (optional)",\'<input id="f_remark"/>\');}'
     + 'html+=\'<button id="sb" class="btn">Submit</button><div id="msg"></div>\';root.innerHTML=html;'
     + 'document.getElementById("sb").onclick=function(){submit(m);};'
@@ -559,7 +590,7 @@ function shortlinkPage(code) {
     + 'function submit(m){var btn=document.getElementById("sb"),msg=document.getElementById("msg");var body;'
     + 'if(m.type==="patient"){var mo=(document.getElementById("f_month").value||"").trim();if(!mo){msg.innerHTML=\'<span class="err">Enter the reporting month.</span>\';return;}'
     + 'var values={};root.querySelectorAll("[data-col]").forEach(function(inp){if(inp.value!=="")values[inp.getAttribute("data-col")]=inp.value;});body={month:mo,values:values};}'
-    + 'else{body={indicatorId:document.getElementById("f_ind").value,quarter:document.getElementById("f_q").value,year:document.getElementById("f_year").value,value:document.getElementById("f_val").value,remark:document.getElementById("f_remark").value};}'
+    + 'else{body={indicatorId:document.getElementById("f_ind").value,month:document.getElementById("f_month").value,value:document.getElementById("f_val").value,remark:document.getElementById("f_remark").value};}'
     + 'btn.disabled=true;btn.textContent="Submitting…";msg.innerHTML="";'
     + 'fetch("/s/"+code+"/submit",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(r){'
     + 'if(r&&r.ok){root.innerHTML=\'<div class="done"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#1f9d57" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-6"/></svg><h2>Thank you!</h2><p class="muted">Your submission was recorded and sent for review.</p><button class="btn" onclick="location.reload()">Submit another</button></div>\';}'
@@ -614,7 +645,9 @@ async function createQualityArea(input) {
   const base = 'area-' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'dept');
   let _id = base, n = 1;
   while (await c.findOne({ _id })) { _id = base + '-' + (++n); }
-  await c.insertOne({ _id, name, indicators: [], createdAt: Date.now() });
+  // Store `key` explicitly: getCollection() strips `_id`, so the renderer reads `key`.
+  // Omitting it left the doc with key:undefined, which broke the overlay/heatmap.
+  await c.insertOne({ _id, key: _id, name, indicators: [], createdAt: Date.now() });
   return { ok: true, area: { key: _id, name, indicatorCount: 0 } };
 }
 async function renameQualityArea(key, input) {
@@ -643,14 +676,25 @@ function mount(app, opts) {
     if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
     next();
   };
+  // Collectors may only submit for departments/quality areas they are assigned to. Admins
+  // and open local mode (no req.user) are unrestricted. Returns an error string, or null.
+  const denyIfOutOfScope = async (req, kind, target) => {
+    if (!req.user || req.user.role !== 'collector') return null;
+    const scope = await getUserScope(req.user.sub);
+    const allowed = kind === 'patient' ? ((scope && scope.departments) || []) : ((scope && scope.qualityAreas) || []);
+    const what = kind === 'patient' ? 'department' : 'quality area';
+    if (!target) return 'A ' + what + ' is required.';
+    if (!allowed.includes(target)) return 'You are not assigned to that ' + what + '.';
+    return null;
+  };
 
   app.get('/api/responsibles', guard, async (req, res) => {
     try { res.json({ ok: true, responsibles: await getResponsibles() }); } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
-  app.post('/api/responsibles', guard, async (req, res) => {
+  app.post('/api/responsibles', guard, adminOnly, async (req, res) => {
     try { res.json({ ok: true, responsible: await saveResponsible(req.body || {}) }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
-  app.delete('/api/responsibles/:id', guard, async (req, res) => {
+  app.delete('/api/responsibles/:id', guard, adminOnly, async (req, res) => {
     try { await deleteResponsible(req.params.id); res.json({ ok: true }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
 
@@ -675,10 +719,18 @@ function mount(app, opts) {
     try { res.json({ ok: true, stats: await getStats() }); } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.post('/api/submissions/patient', guard, async (req, res) => {
-    try { res.json(await submitPatient(req.body || {}, { submittedBy: who(req), source: 'app' })); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+    try {
+      const deny = await denyIfOutOfScope(req, 'patient', String((req.body && req.body.department) || '').trim());
+      if (deny) return res.status(403).json({ ok: false, error: deny });
+      res.json(await submitPatient(req.body || {}, { submittedBy: who(req), source: 'app' }));
+    } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
   app.post('/api/submissions/quality', guard, async (req, res) => {
-    try { res.json(await submitQuality(req.body || {}, { submittedBy: who(req), source: 'app' })); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+    try {
+      const deny = await denyIfOutOfScope(req, 'quality', String((req.body && req.body.area) || '').trim());
+      if (deny) return res.status(403).json({ ok: false, error: deny });
+      res.json(await submitQuality(req.body || {}, { submittedBy: who(req), source: 'app' }));
+    } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
   // Admin: manage quality departments / areas (create / rename / delete).
   app.get('/api/quality/areas', guard, async (req, res) => {
