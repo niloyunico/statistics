@@ -28542,7 +28542,15 @@ window.LockScreen = LockScreen;
         width: '100%'
       }
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Name"), React.createElement("th", null, "Title"), React.createElement("th", null, "Login"), React.createElement("th", null, "Departments"), React.createElement("th", null, "Quality areas"), React.createElement("th", null))), React.createElement("tbody", null, list.map(r => React.createElement("tr", {
-      key: r.id
+      key: r.id,
+      onClick: () => setEditing({
+        ...blank(),
+        ...r
+      }),
+      title: "Tap to edit",
+      style: {
+        cursor: 'pointer'
+      }
     }, React.createElement("td", {
       style: {
         fontWeight: 600
@@ -28559,6 +28567,7 @@ window.LockScreen = LockScreen;
         color: 'var(--muted)'
       }
     }, "\u2014")), React.createElement("td", null, (r.departments || []).map(deptName).join(', ') || '—'), React.createElement("td", null, r.allQualityAreas ? 'All areas (hospital-wide)' : (r.qualityAreas || []).map(k => window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(k) : k).join(', ') || '—'), React.createElement("td", {
+      onClick: e => e.stopPropagation(),
       style: {
         textAlign: 'right',
         whiteSpace: 'nowrap'
@@ -30767,7 +30776,7 @@ window.LockScreen = LockScreen;
         zIndex: 400,
         display: 'grid',
         placeItems: 'center',
-        padding: 20
+        padding: 'clamp(6px,3vw,20px)'
       }
     }, React.createElement("div", {
       onMouseDown: e => e.stopPropagation(),
@@ -30775,9 +30784,8 @@ window.LockScreen = LockScreen;
         background: 'var(--panel)',
         border: '1px solid var(--line)',
         borderRadius: 12,
-        width: 580,
-        maxWidth: '100%',
-        maxHeight: '90vh',
+        width: 'min(580px,96vw)',
+        maxHeight: '92vh',
         overflow: 'auto',
         boxShadow: 'var(--shadow-pop)'
       }
@@ -30787,7 +30795,11 @@ window.LockScreen = LockScreen;
         alignItems: 'center',
         gap: 10,
         padding: '14px 16px',
-        borderBottom: '1px solid var(--line-2)'
+        borderBottom: '1px solid var(--line-2)',
+        position: 'sticky',
+        top: 0,
+        background: 'var(--panel)',
+        zIndex: 3
       }
     }, React.createElement(Ic, {
       d: I.doc,
@@ -30795,7 +30807,11 @@ window.LockScreen = LockScreen;
     }), React.createElement("div", {
       style: {
         fontWeight: 700,
-        fontSize: 14
+        fontSize: 14,
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
       }
     }, "Submission \xB7 ", s.type === 'quality' ? s.areaName : s.departmentName), React.createElement("span", {
       style: {
@@ -30804,13 +30820,14 @@ window.LockScreen = LockScreen;
     }), React.createElement("button", {
       className: "icon-btn",
       style: {
-        width: 28,
-        height: 28
+        width: 30,
+        height: 30,
+        flexShrink: 0
       },
       onClick: onClose
     }, React.createElement(Ic, {
       d: I.x,
-      s: 14
+      s: 16
     }))), React.createElement("div", {
       style: {
         padding: '14px 16px',
@@ -31378,7 +31395,13 @@ window.LockScreen = LockScreen;
       style: {
         display: 'flex',
         gap: 8,
-        justifyContent: 'flex-end'
+        justifyContent: 'flex-end',
+        position: 'sticky',
+        bottom: 0,
+        background: 'var(--panel)',
+        paddingTop: 8,
+        marginTop: 2,
+        borderTop: '1px solid var(--line-2)'
       }
     }, React.createElement("button", {
       className: "btn sm",
@@ -31417,8 +31440,9 @@ window.LockScreen = LockScreen;
         background: 'var(--panel)',
         border: '1px solid var(--line)',
         borderRadius: 12,
-        width: 470,
-        maxWidth: '100%',
+        width: 'min(470px,96vw)',
+        maxHeight: '92vh',
+        overflow: 'auto',
         boxShadow: 'var(--shadow-pop)'
       }
     }, React.createElement("div", {
@@ -31558,10 +31582,15 @@ window.LockScreen = LockScreen;
     const rowFill = s => s.type === 'quality' ? 'rgba(0,144,202,.06)' : 'rgba(31,157,87,.06)';
     const submissionRow = s => React.createElement("tr", {
       key: s.id,
+      onClick: () => setDetail(s),
+      title: "Open to view / edit",
       style: {
-        background: grouped ? rowFill(s) : undefined
+        background: grouped ? rowFill(s) : undefined,
+        cursor: 'pointer'
       }
-    }, React.createElement("td", null, s.status === 'pending' ? React.createElement("input", {
+    }, React.createElement("td", {
+      onClick: e => e.stopPropagation()
+    }, s.status === 'pending' ? React.createElement("input", {
       type: "checkbox",
       checked: !!sel[s.id],
       onChange: e => setSel(m => Object.assign({}, m, {
@@ -31619,6 +31648,7 @@ window.LockScreen = LockScreen;
         whiteSpace: 'nowrap'
       }
     }, s.submittedBy || '—'), React.createElement("td", null, statusChip(s.status)), React.createElement("td", {
+      onClick: e => e.stopPropagation(),
       style: {
         textAlign: 'right',
         whiteSpace: 'nowrap'
@@ -32252,7 +32282,12 @@ window.LockScreen = LockScreen;
         width: '100%'
       }
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Submitted on"), isEdits ? React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "For"), React.createElement("th", null, "Reason")) : isQ ? React.createElement(React.Fragment, null, React.createElement("th", null, "Area"), React.createElement("th", null, "Indicator"), React.createElement("th", null, "Quarter")) : React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "Month")), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, shown.map(s => React.createElement("tr", {
-      key: s.id
+      key: s.id,
+      onClick: () => setDetail(s),
+      title: "Tap to view",
+      style: {
+        cursor: 'pointer'
+      }
     }, React.createElement("td", {
       className: "num",
       style: {

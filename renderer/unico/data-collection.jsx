@@ -241,13 +241,13 @@
               : <table className="tbl" style={{ width: '100%' }}>
                 <thead><tr><th>Name</th><th>Title</th><th>Login</th><th>Departments</th><th>Quality areas</th><th></th></tr></thead>
                 <tbody>{list.map((r) => (
-                  <tr key={r.id}>
+                  <tr key={r.id} onClick={() => setEditing({ ...blank(), ...r })} title="Tap to edit" style={{ cursor: 'pointer' }}>
                     <td style={{ fontWeight: 600 }}>{r.name}</td>
                     <td>{r.title || '—'}</td>
                     <td>{r.empId ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--blue-700)' }} title="Has a login account">🔑 {r.empId}</span> : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
                     <td>{(r.departments || []).map(deptName).join(', ') || '—'}</td>
                     <td>{r.allQualityAreas ? 'All areas (hospital-wide)' : ((r.qualityAreas || []).map((k) => window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(k) : k).join(', ') || '—')}</td>
-                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button className="icon-btn" title="Edit" onClick={() => setEditing({ ...blank(), ...r })}><Ic d={I.edit} s={14} /></button>
                       <button className="icon-btn" title="Remove" style={{ color: 'var(--rose)' }} onClick={() => remove(r.id)}><Ic d={I.x} s={14} /></button>
                     </td>
@@ -1076,11 +1076,11 @@
       }).catch(() => { setBusy(false); toast('Could not save', 'error'); });
     };
     return (
-      <div onMouseDown={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.42)', zIndex: 400, display: 'grid', placeItems: 'center', padding: 20 }}>
-        <div onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, width: 580, maxWidth: '100%', maxHeight: '90vh', overflow: 'auto', boxShadow: 'var(--shadow-pop)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderBottom: '1px solid var(--line-2)' }}>
-            <Ic d={I.doc} s={16} /><div style={{ fontWeight: 700, fontSize: 14 }}>Submission · {s.type === 'quality' ? s.areaName : s.departmentName}</div>
-            <span style={{ flex: 1 }} /><button className="icon-btn" style={{ width: 28, height: 28 }} onClick={onClose}><Ic d={I.x} s={14} /></button>
+      <div onMouseDown={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.42)', zIndex: 400, display: 'grid', placeItems: 'center', padding: 'clamp(6px,3vw,20px)' }}>
+        <div onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, width: 'min(580px,96vw)', maxHeight: '92vh', overflow: 'auto', boxShadow: 'var(--shadow-pop)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderBottom: '1px solid var(--line-2)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 3 }}>
+            <Ic d={I.doc} s={16} /><div style={{ fontWeight: 700, fontSize: 14, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Submission · {s.type === 'quality' ? s.areaName : s.departmentName}</div>
+            <span style={{ flex: 1 }} /><button className="icon-btn" style={{ width: 30, height: 30, flexShrink: 0 }} onClick={onClose}><Ic d={I.x} s={16} /></button>
           </div>
           <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 13 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5 }}>
@@ -1242,7 +1242,7 @@
               {editable ? <input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" /> : <div>{s.note || '—'}</div>}
             </div>
             {editable && <div style={{ fontSize: 11, color: 'var(--muted)' }}>Edits are allowed while the submission is pending. Approve it from the table to apply the values to live data.</div>}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', position: 'sticky', bottom: 0, background: 'var(--panel)', paddingTop: 8, marginTop: 2, borderTop: '1px solid var(--line-2)' }}>
               <button className="btn sm" onClick={onClose}>Close</button>
               {editable && <button className="btn pri sm" onClick={save} disabled={busy}><Ic d={I.check} s={14} />{busy ? 'Saving…' : 'Save changes'}</button>}
             </div>
@@ -1258,7 +1258,7 @@
     const [reason, setReason] = useState('');
     return (
       <div onMouseDown={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.42)', zIndex: 420, display: 'grid', placeItems: 'center', padding: 20 }}>
-        <div onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, width: 470, maxWidth: '100%', boxShadow: 'var(--shadow-pop)' }}>
+        <div onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, width: 'min(470px,96vw)', maxHeight: '92vh', overflow: 'auto', boxShadow: 'var(--shadow-pop)' }}>
           <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line-2)', fontWeight: 700, fontSize: 14 }}>Reject {ids.length > 1 ? ids.length + ' submissions' : 'submission'}</div>
           <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>Pick a reason or type your own — it is saved in history and shown to the collector.</div>
@@ -1320,8 +1320,8 @@
     const groupNames = Object.keys(groups).sort();
     const rowFill = (s) => s.type === 'quality' ? 'rgba(0,144,202,.06)' : 'rgba(31,157,87,.06)';
     const submissionRow = (s) => (
-      <tr key={s.id} style={{ background: grouped ? rowFill(s) : undefined }}>
-        <td>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
+      <tr key={s.id} onClick={() => setDetail(s)} title="Open to view / edit" style={{ background: grouped ? rowFill(s) : undefined, cursor: 'pointer' }}>
+        <td onClick={(e) => e.stopPropagation()}>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
         <td style={{ whiteSpace: 'nowrap' }} className="num">{when(s.submittedAt)}</td>
         <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)' }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
         <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px' }}>⚠ {dupCount[dupKey(s)]}×</span>}{s.isCorrection && <span title={s.correctionReason || 'Correction / edit request'} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#7c4dd6', background: 'rgba(124,77,214,.12)', borderRadius: 999, padding: '1px 7px' }}>✎ correction</span>}</td>
@@ -1329,7 +1329,7 @@
         <td style={{ whiteSpace: 'nowrap' }}>{(s.responsible && s.responsible.name) || '—'}</td>
         <td style={{ whiteSpace: 'nowrap' }}>{s.submittedBy || '—'}</td>
         <td>{statusChip(s.status)}</td>
-        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+        <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
           <button className="btn sm" onClick={() => setDetail(s)} style={{ marginRight: 5 }}><Ic d={I.search} s={13} />View</button>
           {s.status === 'pending' && (
             <>
@@ -1559,7 +1559,7 @@
             : <div style={{ overflowX: 'auto' }}><table className="tbl" style={{ width: '100%' }}>
               <thead><tr><th>Submitted on</th>{isEdits ? <React.Fragment><th>Department</th><th>For</th><th>Reason</th></React.Fragment> : (isQ ? <React.Fragment><th>Area</th><th>Indicator</th><th>Quarter</th></React.Fragment> : <React.Fragment><th>Department</th><th>Month</th></React.Fragment>)}<th>Status</th><th></th></tr></thead>
               <tbody>{shown.map((s) => (
-                <tr key={s.id}>
+                <tr key={s.id} onClick={() => setDetail(s)} title="Tap to view" style={{ cursor: 'pointer' }}>
                   <td className="num" style={{ whiteSpace: 'nowrap' }}>{when(s.submittedAt)}</td>
                   {isEdits
                     ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.type === 'quality' ? s.areaName : s.departmentName}</td><td>{(s.type === 'quality' ? (s.indicatorName || '') + ' · ' : '') + monthLabel(s.month)}</td><td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 260 }}>{s.correctionReason || '—'}{s.status === 'rejected' && s.rejectReason ? <div style={{ color: 'var(--rose)', fontSize: 11, marginTop: 2 }}>Rejected: {s.rejectReason}</div> : null}</td></React.Fragment>
