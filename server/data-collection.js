@@ -785,6 +785,10 @@ function mount(app, opts) {
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
         if (b.num != null && b.num !== '' && !isNaN(Number(b.num))) patch.num = Number(b.num);   // rate numerator
         if (b.den != null && b.den !== '' && !isNaN(Number(b.den))) patch.den = Number(b.den);   // rate denominator
+        // Full breakdown edits: department × staff-group matrix, and/or staff-group totals.
+        if (Array.isArray(b.deptBreakdown)) { const bd = sanitizeDeptBreakdown(b.deptBreakdown); if (bd) patch.deptBreakdown = bd; }
+        if (b.groups) { const g = sanitizeGroupMap(b.groups); if (g) patch.groups = g; }
+        if (b.groupsDen) { const gd = sanitizeGroupMap(b.groupsDen); if (gd) patch.groupsDen = gd; }
         if (b.remark != null) patch.remark = String(b.remark);
         // Re-assign to a different quality area.
         if (b.area) { patch.area = String(b.area).trim(); if (b.areaName) patch.areaName = String(b.areaName).trim(); }

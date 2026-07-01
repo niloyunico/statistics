@@ -1001,7 +1001,25 @@
     const [qnum, setQnum] = useState(s.num == null ? '' : s.num);
     const [qden, setQden] = useState(s.den == null ? '' : s.den);
     const rateMult = Number(s.mult) || (s.formula === 'rate1000' ? 1000 : 100);
-    const shownVal = isRate ? (Number(qden) > 0 ? Math.round((Number(qnum) / Number(qden)) * rateMult * 100) / 100 : 0) : qval;
+    // Hand-hygiene-style submissions carry a FULL breakdown: department × staff-group numerator/
+    // denominator (deptBreakdown). Show & edit the whole thing; num/den/value derive from it.
+    const GROUPS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
+    const [deptBreak, setDeptBreak] = useState(() => (Array.isArray(s.deptBreakdown) && s.deptBreakdown.length)
+      ? s.deptBreakdown.map((r) => ({ dept: r.dept, g: GROUPS.reduce((o, [k]) => (o[k] = { n: (r.g && r.g[k] && r.g[k].n != null) ? r.g[k].n : '', d: (r.g && r.g[k] && r.g[k].d != null) ? r.g[k].d : '' }, o), {}) }))
+      : null);
+    const hasDeptBreak = !!(deptBreak && deptBreak.length);
+    const setBreakCell = (i, k, f, v) => setDeptBreak((a) => a.map((r, j) => (j === i ? { ...r, g: { ...r.g, [k]: { ...r.g[k], [f]: v } } } : r)));
+    const breakTot = hasDeptBreak ? deptBreak.reduce((acc, r) => { GROUPS.forEach(([k]) => { acc.n += Number(r.g[k].n) || 0; acc.d += Number(r.g[k].d) || 0; }); return acc; }, { n: 0, d: 0 }) : null;
+    // Staff-group-only breakdown (no per-department matrix): groups{}/groupsDen{} — any collector.
+    const [grp, setGrp] = useState(() => (!(Array.isArray(s.deptBreakdown) && s.deptBreakdown.length) && s.groups && typeof s.groups === 'object')
+      ? GROUPS.reduce((o, [k]) => (o[k] = { n: (s.groups[k] != null ? s.groups[k] : ''), d: (s.groupsDen && s.groupsDen[k] != null ? s.groupsDen[k] : '') }, o), {})
+      : null);
+    const hasGrp = !!grp;
+    const setGrpCell = (k, f, v) => setGrp((g) => ({ ...g, [k]: { ...g[k], [f]: v } }));
+    const grpTot = hasGrp ? GROUPS.reduce((acc, [k]) => { acc.n += Number(grp[k].n) || 0; acc.d += Number(grp[k].d) || 0; return acc; }, { n: 0, d: 0 }) : null;
+    const effNum = hasDeptBreak ? breakTot.n : (hasGrp ? grpTot.n : qnum);
+    const effDen = hasDeptBreak ? breakTot.d : (hasGrp ? grpTot.d : qden);
+    const shownVal = isRate ? (Number(effDen) > 0 ? Math.round((Number(effNum) / Number(effDen)) * rateMult * 100) / 100 : 0) : qval;
     const [remark, setRemark] = useState(s.remark || '');
     const [note, setNote] = useState(s.note || '');
     const [busy, setBusy] = useState(false);
@@ -1029,7 +1047,14 @@
       setBusy(true);
       const body = { note, month };
       if (s.type === 'patient') { body.values = vals; if (target && target !== s.department) { body.department = target; body.departmentName = (deptOpts.find((d) => d.id === target) || {}).name || target; } }
-      else { body.value = isRate ? shownVal : qval; body.remark = remark; if (isRate) { body.num = qnum; body.den = qden; } if (target && target !== s.area) { body.area = target; body.areaName = (areaOpts.find((a) => a.key === target) || {}).name || target; } if (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) body.incidents = incidents; }
+      else {
+        body.value = isRate ? shownVal : qval; body.remark = remark;
+        if (isRate) { body.num = effNum; body.den = effDen; }        // totals derive from the breakdown
+        if (hasDeptBreak) body.deptBreakdown = deptBreak;
+        if (hasGrp) { body.groups = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {}); body.groupsDen = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {}); }
+        if (target && target !== s.area) { body.area = target; body.areaName = (areaOpts.find((a) => a.key === target) || {}).name || target; }
+        if (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) body.incidents = incidents;
+      }
       dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), body).then((r) => {
         setBusy(false);
         if (r.ok) { toast('Submission updated', 'success'); onSaved && onSaved(r.submission); }
@@ -1084,8 +1109,9 @@
                   ))}
                 </div>
               ) : (
+                <>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  {isRate && (
+                  {isRate && !hasDeptBreak && !hasGrp && (
                     <>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>{s.numLabel || 'Numerator'}</label>
@@ -1108,6 +1134,52 @@
                     {editable ? <input style={inputStyle} value={remark} onChange={(e) => setRemark(e.target.value)} /> : <div>{s.remark || '—'}</div>}
                   </div>
                 </div>
+                {(hasDeptBreak || hasGrp) && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 8 }}>{hasDeptBreak ? 'By department × staff group' : 'By staff group'} <span style={{ fontWeight: 500, color: 'var(--muted)', textTransform: 'none' }}>· total {effNum} / {effDen} = {shownVal}{s.unit ? ' ' + s.unit : ''}</span></div>
+                    {hasGrp && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                        {GROUPS.map(([k, lbl]) => (
+                          <div key={k}>
+                            <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', marginBottom: 3 }}>{lbl}</div>
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              {editable ? <input type="number" step="any" style={{ ...inputStyle, padding: '6px 7px' }} value={grp[k].n} onChange={(e) => setGrpCell(k, 'n', e.target.value)} placeholder="num" /> : <div className="num" style={{ fontSize: 13 }}>{grp[k].n || 0}</div>}
+                              {isRate && (editable ? <input type="number" step="any" style={{ ...inputStyle, padding: '6px 7px' }} value={grp[k].d} onChange={(e) => setGrpCell(k, 'd', e.target.value)} placeholder="den" /> : <div className="num" style={{ fontSize: 13 }}>{grp[k].d || 0}</div>)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {hasDeptBreak && (
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        {deptBreak.map((r, i) => {
+                          const rn = GROUPS.reduce((s2, [k]) => s2 + (Number(r.g[k].n) || 0), 0);
+                          const rd = GROUPS.reduce((s2, [k]) => s2 + (Number(r.g[k].d) || 0), 0);
+                          return (
+                            <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', background: 'var(--panel-2)' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink)', flex: 1 }}>{r.dept}</div>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--blue-700)' }}>{rn}{isRate ? '/' + rd : ''}</span>
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+                                {GROUPS.map(([k, lbl]) => (
+                                  <div key={k}>
+                                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', marginBottom: 2 }}>{lbl}</div>
+                                    <div style={{ display: 'flex', gap: 3 }}>
+                                      {editable ? <input type="number" step="any" style={{ ...inputStyle, padding: '5px 6px', fontSize: 12 }} value={r.g[k].n} onChange={(e) => setBreakCell(i, k, 'n', e.target.value)} placeholder="num" /> : <div className="num" style={{ fontSize: 12 }}>{r.g[k].n || 0}</div>}
+                                      {isRate && (editable ? <input type="number" step="any" style={{ ...inputStyle, padding: '5px 6px', fontSize: 12 }} value={r.g[k].d} onChange={(e) => setBreakCell(i, k, 'd', e.target.value)} placeholder="den" /> : <div className="num" style={{ fontSize: 12 }}>{r.g[k].d || 0}</div>)}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+                </>
               )}
             </div>
             {s.type === 'quality' && (editable || incidents.length > 0) && (

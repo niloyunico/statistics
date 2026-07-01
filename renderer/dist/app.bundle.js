@@ -30532,7 +30532,58 @@ window.LockScreen = LockScreen;
     const [qnum, setQnum] = useState(s.num == null ? '' : s.num);
     const [qden, setQden] = useState(s.den == null ? '' : s.den);
     const rateMult = Number(s.mult) || (s.formula === 'rate1000' ? 1000 : 100);
-    const shownVal = isRate ? Number(qden) > 0 ? Math.round(Number(qnum) / Number(qden) * rateMult * 100) / 100 : 0 : qval;
+    const GROUPS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
+    const [deptBreak, setDeptBreak] = useState(() => Array.isArray(s.deptBreakdown) && s.deptBreakdown.length ? s.deptBreakdown.map(r => ({
+      dept: r.dept,
+      g: GROUPS.reduce((o, [k]) => (o[k] = {
+        n: r.g && r.g[k] && r.g[k].n != null ? r.g[k].n : '',
+        d: r.g && r.g[k] && r.g[k].d != null ? r.g[k].d : ''
+      }, o), {})
+    })) : null);
+    const hasDeptBreak = !!(deptBreak && deptBreak.length);
+    const setBreakCell = (i, k, f, v) => setDeptBreak(a => a.map((r, j) => j === i ? {
+      ...r,
+      g: {
+        ...r.g,
+        [k]: {
+          ...r.g[k],
+          [f]: v
+        }
+      }
+    } : r));
+    const breakTot = hasDeptBreak ? deptBreak.reduce((acc, r) => {
+      GROUPS.forEach(([k]) => {
+        acc.n += Number(r.g[k].n) || 0;
+        acc.d += Number(r.g[k].d) || 0;
+      });
+      return acc;
+    }, {
+      n: 0,
+      d: 0
+    }) : null;
+    const [grp, setGrp] = useState(() => !(Array.isArray(s.deptBreakdown) && s.deptBreakdown.length) && s.groups && typeof s.groups === 'object' ? GROUPS.reduce((o, [k]) => (o[k] = {
+      n: s.groups[k] != null ? s.groups[k] : '',
+      d: s.groupsDen && s.groupsDen[k] != null ? s.groupsDen[k] : ''
+    }, o), {}) : null);
+    const hasGrp = !!grp;
+    const setGrpCell = (k, f, v) => setGrp(g => ({
+      ...g,
+      [k]: {
+        ...g[k],
+        [f]: v
+      }
+    }));
+    const grpTot = hasGrp ? GROUPS.reduce((acc, [k]) => {
+      acc.n += Number(grp[k].n) || 0;
+      acc.d += Number(grp[k].d) || 0;
+      return acc;
+    }, {
+      n: 0,
+      d: 0
+    }) : null;
+    const effNum = hasDeptBreak ? breakTot.n : hasGrp ? grpTot.n : qnum;
+    const effDen = hasDeptBreak ? breakTot.d : hasGrp ? grpTot.d : qden;
+    const shownVal = isRate ? Number(effDen) > 0 ? Math.round(Number(effNum) / Number(effDen) * rateMult * 100) / 100 : 0 : qval;
     const [remark, setRemark] = useState(s.remark || '');
     const [note, setNote] = useState(s.note || '');
     const [busy, setBusy] = useState(false);
@@ -30593,8 +30644,13 @@ window.LockScreen = LockScreen;
         body.value = isRate ? shownVal : qval;
         body.remark = remark;
         if (isRate) {
-          body.num = qnum;
-          body.den = qden;
+          body.num = effNum;
+          body.den = effDen;
+        }
+        if (hasDeptBreak) body.deptBreakdown = deptBreak;
+        if (hasGrp) {
+          body.groups = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {});
+          body.groupsDen = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {});
         }
         if (target && target !== s.area) {
           body.area = target;
@@ -30806,13 +30862,13 @@ window.LockScreen = LockScreen;
         fontWeight: 700,
         fontSize: 15
       }
-    }, vals[c.id] == null ? '—' : vals[c.id])))) : React.createElement("div", {
+    }, vals[c.id] == null ? '—' : vals[c.id])))) : React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
         gap: 10
       }
-    }, isRate && React.createElement(React.Fragment, null, React.createElement("div", {
+    }, isRate && !hasDeptBreak && !hasGrp && React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         display: 'flex',
         flexDirection: 'column',
@@ -30903,7 +30959,165 @@ window.LockScreen = LockScreen;
       style: inputStyle,
       value: remark,
       onChange: e => setRemark(e.target.value)
-    }) : React.createElement("div", null, s.remark || '—')))), s.type === 'quality' && (editable || incidents.length > 0) && React.createElement("div", null, React.createElement("div", {
+    }) : React.createElement("div", null, s.remark || '—'))), (hasDeptBreak || hasGrp) && React.createElement("div", {
+      style: {
+        marginTop: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--ink-2)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 8
+      }
+    }, hasDeptBreak ? 'By department × staff group' : 'By staff group', " ", React.createElement("span", {
+      style: {
+        fontWeight: 500,
+        color: 'var(--muted)',
+        textTransform: 'none'
+      }
+    }, "\xB7 total ", effNum, " / ", effDen, " = ", shownVal, s.unit ? ' ' + s.unit : '')), hasGrp && React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, 1fr)',
+        gap: 8
+      }
+    }, GROUPS.map(([k, lbl]) => React.createElement("div", {
+      key: k
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        marginBottom: 3
+      }
+    }, lbl), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 4
+      }
+    }, editable ? React.createElement("input", {
+      type: "number",
+      step: "any",
+      style: {
+        ...inputStyle,
+        padding: '6px 7px'
+      },
+      value: grp[k].n,
+      onChange: e => setGrpCell(k, 'n', e.target.value),
+      placeholder: "num"
+    }) : React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 13
+      }
+    }, grp[k].n || 0), isRate && (editable ? React.createElement("input", {
+      type: "number",
+      step: "any",
+      style: {
+        ...inputStyle,
+        padding: '6px 7px'
+      },
+      value: grp[k].d,
+      onChange: e => setGrpCell(k, 'd', e.target.value),
+      placeholder: "den"
+    }) : React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 13
+      }
+    }, grp[k].d || 0)))))), hasDeptBreak && React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 8
+      }
+    }, deptBreak.map((r, i) => {
+      const rn = GROUPS.reduce((s2, [k]) => s2 + (Number(r.g[k].n) || 0), 0);
+      const rd = GROUPS.reduce((s2, [k]) => s2 + (Number(r.g[k].d) || 0), 0);
+      return React.createElement("div", {
+        key: i,
+        style: {
+          border: '1px solid var(--line)',
+          borderRadius: 8,
+          padding: '8px 10px',
+          background: 'var(--panel-2)'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 6
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 12,
+          fontWeight: 700,
+          color: 'var(--ink)',
+          flex: 1
+        }
+      }, r.dept), React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          color: 'var(--blue-700)'
+        }
+      }, rn, isRate ? '/' + rd : '')), React.createElement("div", {
+        style: {
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: 6
+        }
+      }, GROUPS.map(([k, lbl]) => React.createElement("div", {
+        key: k
+      }, React.createElement("div", {
+        style: {
+          fontSize: 10,
+          fontWeight: 700,
+          color: 'var(--muted)',
+          marginBottom: 2
+        }
+      }, lbl), React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 3
+        }
+      }, editable ? React.createElement("input", {
+        type: "number",
+        step: "any",
+        style: {
+          ...inputStyle,
+          padding: '5px 6px',
+          fontSize: 12
+        },
+        value: r.g[k].n,
+        onChange: e => setBreakCell(i, k, 'n', e.target.value),
+        placeholder: "num"
+      }) : React.createElement("div", {
+        className: "num",
+        style: {
+          fontSize: 12
+        }
+      }, r.g[k].n || 0), isRate && (editable ? React.createElement("input", {
+        type: "number",
+        step: "any",
+        style: {
+          ...inputStyle,
+          padding: '5px 6px',
+          fontSize: 12
+        },
+        value: r.g[k].d,
+        onChange: e => setBreakCell(i, k, 'd', e.target.value),
+        placeholder: "den"
+      }) : React.createElement("div", {
+        className: "num",
+        style: {
+          fontSize: 12
+        }
+      }, r.g[k].d || 0)))))));
+    }))))), s.type === 'quality' && (editable || incidents.length > 0) && React.createElement("div", null, React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
