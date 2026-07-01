@@ -1011,6 +1011,7 @@ window.QI_CORRECTIONS = {
     "numLabel": "Number of NSI cases",
     "denLabel": "Total healthcare workers",
     "denAdminOnly": true,
+    "victimField": true,
     "numeratorDef": "Count every reported needlestick / sharps (NSI) injury sustained by a healthcare worker during the month. Each distinct injury event = 1 case.",
     "denominatorDef": "Total number of healthcare workers at risk during the period (the hospital's staff headcount). This is a fixed figure set by the administrator — data collectors enter only the number of NSI cases. Rate = (NSI cases / total healthcare workers) x 100.",
     "unit": "per 100 healthcare workers",
@@ -1027,6 +1028,7 @@ window.QI_CORRECTIONS = {
     "numLabel": "Number of NSI cases",
     "denLabel": "Total healthcare workers",
     "denAdminOnly": true,
+    "victimField": true,
     "numeratorDef": "Count every reported needlestick / sharps (NSI) injury sustained by a healthcare worker during the month. Each distinct injury event = 1 case.",
     "denominatorDef": "Total number of healthcare workers at risk during the period (the hospital's staff headcount). This is a fixed figure set by the administrator — data collectors enter only the number of NSI cases. Rate = (NSI cases / total healthcare workers) x 100.",
     "unit": "per 100 healthcare workers",
@@ -1360,6 +1362,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     "numLabel": "Number of NSI cases",
     "denLabel": "Total healthcare workers",
     "denAdminOnly": true,
+    "victimField": true,
     "numeratorDef": "Count every reported needlestick / sharps (NSI) injury sustained by a healthcare worker during the month. Each distinct injury event = 1 case.",
     "denominatorDef": "Total number of healthcare workers at risk during the period (the hospital's staff headcount). This is a fixed figure set by the administrator — data collectors enter only the number of NSI cases. Rate = (NSI cases / total healthcare workers) x 100.",
     "unit": "per 100 healthcare workers",
@@ -1591,7 +1594,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
   // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
   // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are
   // never touched, so entered data is preserved.
-  const CORRECT_FIELDS = ['formula', 'numLabel', 'denLabel', 'numeratorDef', 'denominatorDef', 'unit', 'benchmark', 'benchmarkValue', 'benchmarkNote', 'goalDirection', 'reference', 'referenceUrl', 'denAdminOnly'];
+  const CORRECT_FIELDS = ['formula', 'numLabel', 'denLabel', 'numeratorDef', 'denominatorDef', 'unit', 'benchmark', 'benchmarkValue', 'benchmarkNote', 'goalDirection', 'reference', 'referenceUrl', 'denAdminOnly', 'victimField'];
   function correctedBase(seedInd) {
     try {
       const C = (typeof window !== 'undefined') && window.QI_CORRECTIONS;
@@ -15194,7 +15197,7 @@ function QCCellDetail({
       gridTemplateColumns: '1fr 1fr',
       columnGap: 16
     }
-  }, field('UHID', x.uhid), field('Patient', x.patientName), field('Age / Sex', [x.age, x.gender].filter(Boolean).join(' / ')), field('Diagnosis', x.diagnosis), field('Admission', x.admissionDate), field('Procedure date', x.procedureDate)), field('Incident details', x.details), field('Finding / root cause', x.finding), field('Corrective action', x.corrective), field('Preventive action', x.preventive), field('Remark', x.remark));
+  }, field('UHID', x.uhid), field('Patient', x.patientName), field('Age / Sex', [x.age, x.gender].filter(Boolean).join(' / ')), field('Diagnosis', x.diagnosis), field('Admission', x.admissionDate), field('Procedure date', x.procedureDate), field('Victim (staff)', x.victimName), field('Victim emp ID / UHID', x.victimId)), field('Incident details', x.details), field('Finding / root cause', x.finding), field('Corrective action', x.corrective), field('Preventive action', x.preventive), field('Remark', x.remark));
   const viewCard = r => {
     const isBr = r.s === 'breach';
     const col = isBr ? P.rose : P.green;
@@ -17090,10 +17093,13 @@ function QCHeatGrid({
   }, React.createElement("table", {
     style: {
       borderCollapse: 'collapse',
-      width: '100%'
+      width: '100%',
+      maxWidth: '100%',
+      tableLayout: 'fixed'
     }
   }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
     style: {
+      width: 160,
       textAlign: 'left',
       padding: '6px 8px',
       fontSize: 9,
@@ -17129,7 +17135,6 @@ function QCHeatGrid({
       textAlign: 'left',
       fontWeight: 600,
       color: P.ink,
-      whiteSpace: 'nowrap',
       fontSize: 9.5
     }
   }, ind.name, " ", React.createElement("span", {
@@ -17153,7 +17158,7 @@ function QCHeatGrid({
       style: {
         display: 'inline-grid',
         placeItems: 'center',
-        minWidth: 30,
+        minWidth: 22,
         height: 24,
         borderRadius: 5,
         background: c.bg,
@@ -18394,7 +18399,6 @@ function QCReportBuilder({
   }) => React.createElement("div", {
     className: "pdf-foot",
     style: {
-      marginTop: 20,
       borderTop: '1px solid ' + P.line,
       paddingTop: 8,
       fontSize: 9.5,
@@ -18516,6 +18520,7 @@ function QCReportBuilder({
         borderCollapse: 'collapse',
         width: '100%',
         maxWidth: '100%',
+        tableLayout: 'fixed',
         marginTop: 14,
         fontSize: detailInd ? 10 : 10.5
       }
@@ -18526,20 +18531,26 @@ function QCReportBuilder({
     }, React.createElement("th", {
       style: {
         ...thl,
-        minWidth: 110
+        width: 120
       }
     }, "Indicator"), React.createElement("th", {
       style: {
         ...thl,
         textTransform: 'none',
         fontSize: 8.5,
-        minWidth: 60
+        width: 56
       }
     }, "Benchmark"), pMonths.map(m => React.createElement("th", {
       key: m[0],
-      style: thc
+      style: {
+        ...thc,
+        width: 33
+      }
     }, m[1].split(' ')[0])), React.createElement("th", {
-      style: thc
+      style: {
+        ...thc,
+        width: 48
+      }
     }, "Trend"))), React.createElement("tbody", null, rows.map(ind => React.createElement("tr", {
       key: ind.id,
       style: {
@@ -18730,9 +18741,9 @@ function QCReportBuilder({
     const cards = detailed ? chartInd ? qcIndKpis(chartInd, pMonths) : [] : qcDeptKpis(d, pMonths);
     const dd = qcDonutData(d);
     return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -18903,9 +18914,9 @@ function QCReportBuilder({
       }
     }, l, ":"), " ", v) : null;
     return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -18971,22 +18982,24 @@ function QCReportBuilder({
       style: {
         borderCollapse: 'collapse',
         width: '100%',
+        maxWidth: '100%',
+        tableLayout: 'fixed',
         fontSize: 9.5
       }
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
       style: {
         ...thl,
-        minWidth: 172
+        width: 130
       }
     }, "Quality Indicator"), React.createElement("th", {
       style: {
         ...thc,
-        minWidth: 42
+        width: 36
       }
     }, "Total"), React.createElement("th", {
       style: {
         ...thl,
-        minWidth: 88,
+        width: 62,
         textTransform: 'none'
       }
     }, "Benchmark"), chosen.map(d => React.createElement("th", {
@@ -19033,7 +19046,7 @@ function QCReportBuilder({
           textAlign: 'left',
           fontWeight: 600,
           color: P.ink,
-          whiteSpace: 'nowrap'
+          wordBreak: 'break-word'
         }
       }, name), React.createElement("td", {
         style: {
@@ -19046,8 +19059,7 @@ function QCReportBuilder({
         style: {
           padding: '4px 8px',
           color: P.ink2,
-          fontSize: 9,
-          whiteSpace: 'nowrap'
+          fontSize: 9
         }
       }, bench || '—'), cells.map((c, i) => c.none ? React.createElement("td", {
         key: i,
@@ -19178,9 +19190,9 @@ function QCReportBuilder({
       }
     }, l, ":"), " ", v) : null;
     return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -19246,12 +19258,14 @@ function QCReportBuilder({
       style: {
         borderCollapse: 'collapse',
         width: '100%',
+        maxWidth: '100%',
+        tableLayout: 'fixed',
         fontSize: 9.5
       }
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
       style: {
         ...thl,
-        minWidth: 180
+        width: 140
       }
     }, "Quality Indicator"), chosen.map(d => React.createElement("th", {
       key: d.key,
@@ -19262,7 +19276,7 @@ function QCReportBuilder({
     }, d.name)), React.createElement("th", {
       style: {
         ...thc,
-        minWidth: 46,
+        width: 40,
         color: P.ink2
       }
     }, "Total"))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
@@ -19304,7 +19318,7 @@ function QCReportBuilder({
           textAlign: 'left',
           fontWeight: 600,
           color: P.ink,
-          whiteSpace: 'nowrap'
+          wordBreak: 'break-word'
         }
       }, name), cells.map((c, i) => c.none ? React.createElement("td", {
         key: i,
@@ -19422,9 +19436,9 @@ function QCReportBuilder({
       color: r.color
     })).sort((a, b) => b.value - a.value);
     return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -19559,9 +19573,9 @@ function QCReportBuilder({
     const agg = qcAggStat(chosen, pMonths);
     const tone = agg.rate >= 90 ? P.green : agg.rate >= 70 ? P.amber : P.rose;
     return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -19682,9 +19696,9 @@ function QCReportBuilder({
     total
   }) {
     return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -19781,9 +19795,9 @@ function QCReportBuilder({
       }
     }, l, ":"), " ", v) : null;
     return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -19956,9 +19970,9 @@ function QCReportBuilder({
       (bySec[r.sec] = bySec[r.sec] || []).push(r);
     });
     return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -20043,7 +20057,7 @@ function QCReportBuilder({
     total
   }) {
     const part = page.part || 'overview';
-    const isHH = ind => /hand\s*hygiene/i.test(ind && ind.name || '');
+    const isHH = ind => /hand\s*hygiene/i.test(ind && ind.name || '') && (ind.formula === 'pct' || ind.formula === 'direct' || isPctInd(ind));
     const hh = [];
     chosen.forEach(d => (d.indicators || []).forEach(ind => {
       if (isHH(ind)) hh.push({
@@ -20052,9 +20066,9 @@ function QCReportBuilder({
       });
     }));
     if (!hh.length) return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -20086,7 +20100,7 @@ function QCReportBuilder({
     if (!primary) primary = hh.slice().sort((a, b) => reportedCount(b.ind) - reportedCount(a.ind))[0];
     const pind = primary.ind;
     const bench = pind.benchmarkValue != null && pind.benchmarkValue !== '' ? Number(pind.benchmarkValue) : 90;
-    const higher = pind.goalDirection !== 'lower_is_better';
+    const higher = true;
     const whoStat = pct => pct == null ? {
       label: '—',
       color: P.faint,
@@ -20107,39 +20121,36 @@ function QCReportBuilder({
     const monthAgg = m => {
       let num = 0,
         den = 0,
-        haveND = false;
-      const vs = [];
-      let any = false;
+        ndCount = 0,
+        total = 0;
+      const comps = [];
       hh.forEach(({
         ind
       }) => {
+        const v = monthRaw(ind, m[0]);
+        if (v == null) return;
+        total++;
+        comps.push(v);
         const nn = ind.mNum && ind.mNum[m[0]],
           dd = ind.mDen && ind.mDen[m[0]];
-        if (nn != null && nn !== '' && dd != null && dd !== '') {
+        if (nn != null && nn !== '' && dd != null && dd !== '' && Number(dd) > 0) {
           num += Number(nn);
           den += Number(dd);
-          haveND = true;
-          any = true;
-        } else {
-          const v = monthRaw(ind, m[0]);
-          if (v != null) {
-            vs.push(v);
-            any = true;
-          }
+          ndCount++;
         }
       });
-      if (!any) return {
+      if (!total) return {
         value: null,
         num: null,
         den: null
       };
-      if (haveND && den > 0) return {
+      if (ndCount === total && den > 0) return {
         value: Math.round(num / den * 10000) / 100,
         num,
         den
       };
       return {
-        value: vs.length ? Math.round(vs.reduce((s, x) => s + x, 0) / vs.length * 100) / 100 : null,
+        value: Math.round(comps.reduce((s, x) => s + x, 0) / comps.length * 100) / 100,
         num: null,
         den: null
       };
@@ -20212,9 +20223,9 @@ function QCReportBuilder({
         }
       }, "No hand-hygiene data in this period");
       return React.createElement("div", {
+        className: "qc-rpage",
         style: {
-          position: 'relative',
-          minHeight: '100%'
+          position: 'relative'
         }
       }, sections.watermark && React.createElement(QCWatermark, {
         text: confidential ? 'CONFIDENTIAL' : orgName
@@ -20355,33 +20366,57 @@ function QCReportBuilder({
         value: dd > 0 ? Math.round(nn / dd * 10000) / 100 : null
       };
     }).filter(r => r.d > 0 || r.n > 0) : [];
-    const byDept = {};
+    const deptGroups = {};
     hh.forEach(h => {
-      if (!byDept[h.d.key]) byDept[h.d.key] = h;
+      (deptGroups[h.d.key] = deptGroups[h.d.key] || {
+        name: h.d.name,
+        inds: []
+      }).inds.push(h.ind);
     });
-    const deptLatest = h => {
+    const deptLatest = inds => {
       for (let i = pMonths.length - 1; i >= 0; i--) {
-        const v = monthRaw(h.ind, pMonths[i][0]);
-        if (v != null) return {
-          month: pMonths[i],
-          value: Math.round(v * 100) / 100
-        };
+        const mk = pMonths[i][0];
+        let num = 0,
+          den = 0,
+          ndCount = 0,
+          total = 0;
+        const comps = [];
+        inds.forEach(ind => {
+          const v = monthRaw(ind, mk);
+          if (v == null) return;
+          total++;
+          comps.push(v);
+          const nn = ind.mNum && ind.mNum[mk],
+            dd = ind.mDen && ind.mDen[mk];
+          if (nn != null && nn !== '' && dd != null && dd !== '' && Number(dd) > 0) {
+            num += Number(nn);
+            den += Number(dd);
+            ndCount++;
+          }
+        });
+        if (total) {
+          const value = ndCount === total && den > 0 ? Math.round(num / den * 10000) / 100 : Math.round(comps.reduce((s, x) => s + x, 0) / comps.length * 100) / 100;
+          return {
+            month: pMonths[i],
+            value
+          };
+        }
       }
       return null;
     };
-    const deptRows = Object.keys(byDept).map(k => {
-      const h = byDept[k];
-      const dl = deptLatest(h);
+    const deptRows = Object.keys(deptGroups).map(k => {
+      const g = deptGroups[k];
+      const dl = deptLatest(g.inds);
       return dl ? {
-        label: (h.d.name || '').slice(0, 20),
+        label: (g.name || '').slice(0, 20),
         value: dl.value,
         month: dl.month[1].split(' ')[0]
       } : null;
     }).filter(Boolean).sort((a, b) => b.value - a.value);
     return React.createElement("div", {
+      className: "qc-rpage",
       style: {
-        position: 'relative',
-        minHeight: '100%'
+        position: 'relative'
       }
     }, sections.watermark && React.createElement(QCWatermark, {
       text: confidential ? 'CONFIDENTIAL' : orgName
@@ -20521,11 +20556,11 @@ function QCReportBuilder({
       });
       return;
     }
-    setExporting(true);
-    setNote(null);
-    document.body.classList.add('pdf-export-mode');
-    try {
-      if (native && typeof native.exportPDF === 'function') {
+    if (native && typeof native.exportPDF === 'function' && !native.isWeb) {
+      setExporting(true);
+      setNote(null);
+      document.body.classList.add('pdf-export-mode');
+      try {
         const res = await native.exportPDF({
           pageSize,
           landscape: orient === 'landscape',
@@ -20533,14 +20568,101 @@ function QCReportBuilder({
         });
         if (res && res.ok) setNote({
           ok: true,
-          text: res.path ? 'PDF saved · ' + res.path : 'PDF ready — save from the dialog.'
-        });else if (res && res.canceled) {} else if (res && res.error) setNote({
+          text: res.path ? 'PDF saved · ' + res.path : 'PDF ready.'
+        });else if (res && res.error) setNote({
           ok: false,
           text: res.error
         });
-      } else {
-        window.print();
+      } catch (e) {
+        setNote({
+          ok: false,
+          text: String(e && e.message || e)
+        });
+      } finally {
+        document.body.classList.remove('pdf-export-mode');
+        setExporting(false);
       }
+      return;
+    }
+    const H = window.html2canvas,
+      J = window.jspdf && window.jspdf.jsPDF;
+    if (H && J) {
+      setExporting(true);
+      setNote(null);
+      const stage = document.getElementById('pdf-root');
+      let els = [],
+        prev = [];
+      try {
+        if (!stage) throw new Error('render target missing');
+        document.body.classList.add('qc-pdfcap');
+        els = Array.prototype.slice.call(stage.querySelectorAll('.pdf-page'));
+        if (!els.length) throw new Error('nothing to export');
+        prev = els.map(el => el.getAttribute('style') || '');
+        els.forEach(el => {
+          el.style.width = pageW + 'px';
+          el.style.height = pageMinH + 'px';
+          el.style.boxSizing = 'border-box';
+          el.style.padding = '28px 30px';
+          el.style.background = '#fff';
+          el.style.overflow = 'hidden';
+          el.style.margin = '0';
+        });
+        try {
+          if (document.fonts && document.fonts.ready) await document.fonts.ready;
+        } catch (e) {}
+        await new Promise(r => setTimeout(r, 70));
+        const fmt = pageSize === 'A3' ? 'a3' : pageSize === 'Letter' ? 'letter' : 'a4',
+          ori = orient === 'landscape' ? 'l' : 'p';
+        const doc = new J({
+          orientation: ori,
+          unit: 'pt',
+          format: fmt,
+          compress: true
+        });
+        const pw = doc.internal.pageSize.getWidth(),
+          ph = doc.internal.pageSize.getHeight();
+        for (let i = 0; i < els.length; i++) {
+          const canvas = await H(els[i], {
+            scale: 2,
+            backgroundColor: '#ffffff',
+            useCORS: true,
+            logging: false
+          });
+          if (i > 0) doc.addPage(fmt, ori);
+          doc.addImage(canvas.toDataURL('image/jpeg', 0.94), 'JPEG', 0, 0, pw, ph, undefined, 'FAST');
+        }
+        els.forEach((el, i) => el.setAttribute('style', prev[i]));
+        els = [];
+        document.body.classList.remove('qc-pdfcap');
+        doc.save('UNICO-quality-' + reportType + '-' + new Date().toISOString().slice(0, 10) + '.pdf');
+        setNote({
+          ok: true,
+          text: 'PDF downloaded.'
+        });
+      } catch (e) {
+        try {
+          els.forEach((el, i) => el.setAttribute('style', prev[i]));
+        } catch (_) {}
+        document.body.classList.remove('qc-pdfcap');
+        setNote({
+          ok: false,
+          text: 'Direct PDF failed (' + String(e && e.message || e) + '); opening Print instead.'
+        });
+        try {
+          document.body.classList.add('pdf-export-mode');
+          window.print();
+          setTimeout(() => document.body.classList.remove('pdf-export-mode'), 600);
+        } catch (_) {}
+      } finally {
+        setExporting(false);
+      }
+      return;
+    }
+    setExporting(true);
+    setNote(null);
+    document.body.classList.add('pdf-export-mode');
+    try {
+      window.print();
     } catch (e) {
       setNote({
         ok: false,
@@ -21506,7 +21628,9 @@ function QCReportBuilder({
       boxShadow: '0 4px 18px rgba(0,0,0,.12)',
       padding: '28px 30px',
       width: pageW,
-      minHeight: pageMinH,
+      height: pageMinH,
+      boxSizing: 'border-box',
+      overflow: 'hidden',
       margin: '0 auto',
       transition: 'width .25s'
     }
@@ -28940,6 +29064,7 @@ window.LockScreen = LockScreen;
       });
     }, [isHandHygiene, numMode, hhDepartments]);
     const isIncidentType = !isHandHygiene && (def.goalDirection ? def.goalDirection !== 'higher_is_better' : true);
+    const victimField = !!def.victimField;
     const blankIncident = () => ({
       patientName: '',
       uhid: '',
@@ -28947,6 +29072,8 @@ window.LockScreen = LockScreen;
       gender: '',
       diagnosis: '',
       admissionDate: '',
+      victimName: '',
+      victimId: '',
       details: '',
       finding: '',
       corrective: '',
@@ -29077,6 +29204,8 @@ window.LockScreen = LockScreen;
         gender: x.gender || '',
         diagnosis: x.diagnosis || '',
         admissionDate: x.admissionDate || '',
+        victimName: x.victimName || '',
+        victimId: x.victimId || '',
         details: x.details || '',
         finding: x.finding || '',
         corrective: x.corrective || '',
@@ -29148,6 +29277,8 @@ window.LockScreen = LockScreen;
           gender: x.gender,
           diagnosis: x.diagnosis,
           admissionDate: x.admissionDate,
+          victimName: x.victimName,
+          victimId: x.victimId,
           details: x.details,
           finding: x.finding,
           corrective: x.corrective,
@@ -29974,7 +30105,44 @@ window.LockScreen = LockScreen;
       value: x.diagnosis,
       onChange: e => setIncidentField(i, 'diagnosis', e.target.value),
       placeholder: "Diagnosis"
-    }))), React.createElement(Field, {
+    }))), victimField && React.createElement("div", {
+      style: {
+        marginBottom: 4,
+        padding: '9px 11px',
+        borderRadius: 8,
+        background: 'var(--warn-bg,#fff4e0)',
+        border: '1px solid #f0d9a8'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: '#9a6b00',
+        textTransform: 'uppercase',
+        letterSpacing: .3,
+        marginBottom: 6
+      }
+    }, "Injured staff member (victim)"), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 8
+      }
+    }, React.createElement(Field, {
+      label: "Victim name (staff)"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: x.victimName,
+      onChange: e => setIncidentField(i, 'victimName', e.target.value),
+      placeholder: "Employee name"
+    })), React.createElement(Field, {
+      label: "Victim emp ID / UHID"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: x.victimId,
+      onChange: e => setIncidentField(i, 'victimId', e.target.value),
+      placeholder: "Emp ID / UHID"
+    })))), React.createElement(Field, {
       label: "Incident details"
     }, React.createElement("textarea", {
       style: {
@@ -30326,17 +30494,25 @@ window.LockScreen = LockScreen;
     });
     const [vals, setVals] = useState(() => Object.assign({}, s.values || {}));
     const [qval, setQval] = useState(s.value == null ? '' : s.value);
+    const isRate = s.type === 'quality' && (s.entryMode === 'rate' || s.formula === 'rate1000' || s.formula === 'pct' || s.num != null || s.den != null);
+    const [qnum, setQnum] = useState(s.num == null ? '' : s.num);
+    const [qden, setQden] = useState(s.den == null ? '' : s.den);
+    const rateMult = Number(s.mult) || (s.formula === 'rate1000' ? 1000 : 100);
+    const shownVal = isRate ? Number(qden) > 0 ? Math.round(Number(qnum) / Number(qden) * rateMult * 100) / 100 : 0 : qval;
     const [remark, setRemark] = useState(s.remark || '');
     const [note, setNote] = useState(s.note || '');
     const [busy, setBusy] = useState(false);
     const [month, setMonth] = useState(s.month || '');
     const [target, setTarget] = useState(s.type === 'patient' ? s.department || '' : s.area || '');
     const [incidents, setIncidents] = useState(() => s.type === 'quality' && Array.isArray(s.incidents) ? s.incidents.map(x => Object.assign({}, x)) : []);
-    const monthOpts = s.type === 'quality' ? window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [s.month] : typeof MO === 'function' ? function () {
-      const o = MO();
-      const i = o.indexOf('Jan-25');
-      return i >= 0 ? o.slice(i) : o.slice(-24);
-    }() : [s.month];
+    const monthOpts = function () {
+      const base = s.type === 'quality' ? window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [] : typeof MO === 'function' ? function () {
+        const o = MO();
+        const i = o.indexOf('Jan-25');
+        return i >= 0 ? o.slice(i) : o.slice(-24);
+      }() : [];
+      return s.month && base.indexOf(s.month) < 0 ? [s.month].concat(base) : base.length ? base : [s.month];
+    }();
     const areaOpts = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
       key: d.key,
       name: d.name
@@ -30380,8 +30556,12 @@ window.LockScreen = LockScreen;
           body.departmentName = (deptOpts.find(d => d.id === target) || {}).name || target;
         }
       } else {
-        body.value = qval;
+        body.value = isRate ? shownVal : qval;
         body.remark = remark;
+        if (isRate) {
+          body.num = qnum;
+          body.den = qden;
+        }
         if (target && target !== s.area) {
           body.area = target;
           body.areaName = (areaOpts.find(a => a.key === target) || {}).name || target;
@@ -30598,7 +30778,7 @@ window.LockScreen = LockScreen;
         gridTemplateColumns: '1fr 1fr',
         gap: 10
       }
-    }, React.createElement("div", {
+    }, isRate && React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         display: 'flex',
         flexDirection: 'column',
@@ -30609,7 +30789,53 @@ window.LockScreen = LockScreen;
         fontSize: 11.5,
         color: 'var(--muted)'
       }
-    }, s.indicatorName || 'Value'), editable ? React.createElement("input", {
+    }, s.numLabel || 'Numerator'), editable ? React.createElement("input", {
+      type: "number",
+      step: "any",
+      style: inputStyle,
+      value: qnum,
+      onChange: e => setQnum(e.target.value)
+    }) : React.createElement("div", {
+      className: "num",
+      style: {
+        fontWeight: 700,
+        fontSize: 15
+      }
+    }, s.num == null ? '—' : s.num)), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, s.denLabel || 'Denominator'), editable ? React.createElement("input", {
+      type: "number",
+      step: "any",
+      style: inputStyle,
+      value: qden,
+      onChange: e => setQden(e.target.value)
+    }) : React.createElement("div", {
+      className: "num",
+      style: {
+        fontWeight: 700,
+        fontSize: 15
+      }
+    }, s.den == null ? '—' : s.den))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, s.indicatorName || 'Value', isRate ? ' (computed)' : '', s.unit ? ' · ' + s.unit : ''), editable && !isRate ? React.createElement("input", {
       type: "number",
       step: "any",
       style: inputStyle,
@@ -30621,7 +30847,14 @@ window.LockScreen = LockScreen;
         fontWeight: 700,
         fontSize: 15
       }
-    }, s.value == null ? '—' : s.value)), React.createElement("div", {
+    }, isRate ? shownVal : s.value == null ? '—' : s.value, s.benchmark ? React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 500,
+        color: 'var(--muted)',
+        marginLeft: 6
+      }
+    }, "\xB7 benchmark ", s.benchmark) : null)), React.createElement("div", {
       style: {
         display: 'flex',
         flexDirection: 'column',

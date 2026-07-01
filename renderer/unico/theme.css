@@ -367,3 +367,22 @@ table.tbl tr.tot td{font-weight:700;color:var(--ink);background:var(--panel-2);b
 .gs-foot{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-top:1px solid var(--line);background:var(--panel-2);font-size:11px;color:var(--muted)}
 .gs-tip{display:flex;align-items:center;gap:5px}
 
+
+
+/* ---------- QC report page shell — fixed-size preview, flowing print ---------- */
+/* On SCREEN the report preview sheet is a fixed A4 box; make the page a flex column so
+   the footer pins to the bottom and short pages don't leave the footer floating mid-page.
+   In PRINT revert to a plain flowing block so long content still breaks across sheets
+   (flex/min-height:100% on the fragmenting container stops Chromium paginating). */
+.qc-rpage{display:flex;flex-direction:column;min-height:100%}
+.qc-rpage .pdf-foot{margin-top:auto}
+@media print{
+  .qc-rpage{display:block;min-height:0}
+  .qc-rpage .pdf-foot{margin-top:12px}
+}
+
+
+/* Direct PDF export: html2canvas can't rasterize a display:none node, so during a one-click
+   export we reveal #pdf-root off-canvas (never visible) and let it be captured page by page. */
+body.qc-pdfcap #pdf-root{display:block !important;position:fixed;left:-11000px;top:0;z-index:-1}
+body.qc-pdfcap #pdf-root .pdf-doc{background:transparent}

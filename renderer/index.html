@@ -16,6 +16,9 @@
 <!-- Vendored libraries — run fully offline, no CDN -->
 <script src="vendor/react.production.min.js"></script>
 <script src="vendor/react-dom.production.min.js"></script>
+<!-- PDF export (offline, vendored): powers the Report Builder's one-click PDF download -->
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/html2canvas.min.js"></script>
 <!-- Database bridge: hydrate localStorage from the on-disk DB, then mirror every
      change back to it. Runs before the app's stores read localStorage. -->
 <script>
@@ -47,6 +50,6 @@
      concatenated into ONE cacheable bundle by scripts/build-renderer.js, so the
      browser no longer downloads Babel (3.14 MB) or compiles JSX at runtime. Rebuilt
      by `npm run web`; the ?v= token is the bundle's content hash (auto-updated). -->
-<script src="dist/app.bundle.js?v=23159c8571"></script>
+<script src="dist/app.bundle.js?v=fe3a47623f"></script>
 </body>
 </html>

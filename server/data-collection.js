@@ -252,10 +252,12 @@ async function buildQualitySpec(payload) {
         // patient & incident demographics (per-incident report fields)
         uhid: S(x && x.uhid), patientName: S(x && x.patientName), age: S(x && x.age), gender: S(x && x.gender),
         diagnosis: S(x && x.diagnosis), admissionDate: S(x && x.admissionDate), procedureDate: S(x && x.procedureDate),
+        // NSI (needle-stick) also records the injured staff member (victim) + their emp id.
+        victimName: S(x && x.victimName), victimId: S(x && x.victimId),
         // narrative + CAPA
         details: S(x && x.details), finding: S(x && x.finding), corrective: S(x && x.corrective), preventive: S(x && x.preventive),
         remark: S(x && x.remark),
-      })).filter((x) => x.details || x.finding || x.corrective || x.preventive || x.uhid || x.patientName || x.diagnosis || x.remark)
+      })).filter((x) => x.details || x.finding || x.corrective || x.preventive || x.uhid || x.patientName || x.diagnosis || x.remark || x.victimName || x.victimId)
     : null;
   // Derive a NUMERIC benchmark threshold (dashboards/scorecard flag breaches from
   // benchmarkValue; a display string like "≤ 5%" is not enough). Prefer explicit
@@ -781,12 +783,14 @@ function mount(app, opts) {
         if (b.department) { patch.department = String(b.department).trim(); if (b.departmentName) patch.departmentName = String(b.departmentName).trim(); }
       } else if (s.type === 'quality') {
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
+        if (b.num != null && b.num !== '' && !isNaN(Number(b.num))) patch.num = Number(b.num);   // rate numerator
+        if (b.den != null && b.den !== '' && !isNaN(Number(b.den))) patch.den = Number(b.den);   // rate denominator
         if (b.remark != null) patch.remark = String(b.remark);
         // Re-assign to a different quality area.
         if (b.area) { patch.area = String(b.area).trim(); if (b.areaName) patch.areaName = String(b.areaName).trim(); }
         // Edit the incident/patient/CAPA details attached to this quality submission.
         if (Array.isArray(b.incidents)) {
-          const IF = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'admissionDate', 'procedureDate', 'details', 'finding', 'corrective', 'preventive', 'remark'];
+          const IF = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'details', 'finding', 'corrective', 'preventive', 'remark'];
           patch.incidents = b.incidents.map((x) => { const o = {}; IF.forEach((k) => { if (x && x[k] != null && x[k] !== '') o[k] = String(x[k]); }); return o; }).filter((o) => Object.keys(o).length);
         }
       }

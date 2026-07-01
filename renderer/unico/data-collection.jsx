@@ -572,7 +572,10 @@
     // hygiene / a utilization rate. For these the collector records each incident with its
     // patient + CAPA detail, and the count auto-derives from how many are logged.
     const isIncidentType = !isHandHygiene && (def.goalDirection ? def.goalDirection !== 'higher_is_better' : true);
-    const blankIncident = () => ({ patientName: '', uhid: '', age: '', gender: '', diagnosis: '', admissionDate: '', details: '', finding: '', corrective: '', preventive: '', remark: '' });
+    // NSI (needle-stick injury) logs BOTH the source patient AND the injured staff member
+    // (victim) + their employee id — enabled per-indicator via the `victimField` flag.
+    const victimField = !!def.victimField;
+    const blankIncident = () => ({ patientName: '', uhid: '', age: '', gender: '', diagnosis: '', admissionDate: '', victimName: '', victimId: '', details: '', finding: '', corrective: '', preventive: '', remark: '' });
     const addIncident = () => setIncidents((a) => [...a, blankIncident()]);
     const setIncidentField = (i, k, v) => setIncidents((a) => a.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
     const delIncident = (i) => setIncidents((a) => a.filter((_, j) => j !== i));
@@ -640,7 +643,7 @@
       setCapa(cp && typeof cp === 'object' ? { finding: cp.finding || '', corrective: cp.corrective || '', preventive: cp.preventive || '' } : { finding: '', corrective: '', preventive: '' });
       // Load any incident reports already recorded for this indicator × month.
       const incs = (curInd.incidents && Array.isArray(curInd.incidents[month])) ? curInd.incidents[month] : [];
-      setIncidents(incs.map((x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', admissionDate: x.admissionDate || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' })));
+      setIncidents(incs.map((x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', admissionDate: x.admissionDate || '', victimName: x.victimName || '', victimId: x.victimId || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' })));
     }, [indId, month]); // eslint-disable-line
 
     // The numerator (by group or direct) drives the count / rate.
@@ -681,7 +684,7 @@
         capa: (capa.finding || capa.corrective || capa.preventive) ? { finding: capa.finding, corrective: capa.corrective, preventive: capa.preventive } : undefined,
         // Per-incident reports (only those with something filled in). The server stores
         // them on the indicator's month; the count above already reflects how many.
-        incidents: incidents.length ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, admissionDate: x.admissionDate, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : undefined,
+        incidents: incidents.length ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, admissionDate: x.admissionDate, victimName: x.victimName, victimId: x.victimId, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : undefined,
         remark,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
@@ -887,6 +890,15 @@
                         <Field label="Admission date"><input type="date" style={inputStyle} value={x.admissionDate} onChange={(e) => setIncidentField(i, 'admissionDate', e.target.value)} /></Field>
                         <Field label="Diagnosis"><input style={inputStyle} value={x.diagnosis} onChange={(e) => setIncidentField(i, 'diagnosis', e.target.value)} placeholder="Diagnosis" /></Field>
                       </div>
+                      {victimField && (
+                        <div style={{ marginBottom: 4, padding: '9px 11px', borderRadius: 8, background: 'var(--warn-bg,#fff4e0)', border: '1px solid #f0d9a8' }}>
+                          <div style={{ fontSize: 10.5, fontWeight: 700, color: '#9a6b00', textTransform: 'uppercase', letterSpacing: .3, marginBottom: 6 }}>Injured staff member (victim)</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                            <Field label="Victim name (staff)"><input style={inputStyle} value={x.victimName} onChange={(e) => setIncidentField(i, 'victimName', e.target.value)} placeholder="Employee name" /></Field>
+                            <Field label="Victim emp ID / UHID"><input style={inputStyle} value={x.victimId} onChange={(e) => setIncidentField(i, 'victimId', e.target.value)} placeholder="Emp ID / UHID" /></Field>
+                          </div>
+                        </div>
+                      )}
                       <Field label="Incident details"><textarea style={{ ...inputStyle, minHeight: 40 }} value={x.details} onChange={(e) => setIncidentField(i, 'details', e.target.value)} placeholder="What happened" /></Field>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                         <Field label="Finding / root cause"><textarea style={{ ...inputStyle, minHeight: 40 }} value={x.finding} onChange={(e) => setIncidentField(i, 'finding', e.target.value)} placeholder="Root cause" /></Field>
@@ -978,6 +990,12 @@
     const pctOf = {}; ((dept && dept.cols) || []).forEach((c) => { pctOf[c.id] = !!c.pct; });
     const [vals, setVals] = useState(() => Object.assign({}, s.values || {}));
     const [qval, setQval] = useState(s.value == null ? '' : s.value);
+    // Rate/% indicators store a numerator + denominator; show/edit those too (the "full data").
+    const isRate = s.type === 'quality' && (s.entryMode === 'rate' || s.formula === 'rate1000' || s.formula === 'pct' || s.num != null || s.den != null);
+    const [qnum, setQnum] = useState(s.num == null ? '' : s.num);
+    const [qden, setQden] = useState(s.den == null ? '' : s.den);
+    const rateMult = Number(s.mult) || (s.formula === 'rate1000' ? 1000 : 100);
+    const shownVal = isRate ? (Number(qden) > 0 ? Math.round((Number(qnum) / Number(qden)) * rateMult * 100) / 100 : 0) : qval;
     const [remark, setRemark] = useState(s.remark || '');
     const [note, setNote] = useState(s.note || '');
     const [busy, setBusy] = useState(false);
@@ -985,9 +1003,14 @@
     const [month, setMonth] = useState(s.month || '');
     const [target, setTarget] = useState(s.type === 'patient' ? (s.department || '') : (s.area || ''));
     const [incidents, setIncidents] = useState(() => (s.type === 'quality' && Array.isArray(s.incidents)) ? s.incidents.map((x) => Object.assign({}, x)) : []);
-    const monthOpts = s.type === 'quality'
-      ? (window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [s.month])
-      : (typeof MO === 'function' ? (function () { const o = MO(); const i = o.indexOf('Jan-25'); return i >= 0 ? o.slice(i) : o.slice(-24); })() : [s.month]);
+    const monthOpts = (function () {
+      const base = s.type === 'quality'
+        ? (window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [])
+        : (typeof MO === 'function' ? (function () { const o = MO(); const i = o.indexOf('Jan-25'); return i >= 0 ? o.slice(i) : o.slice(-24); })() : []);
+      // ALWAYS include the submission's ACTUAL month, even if it's outside the standard fiscal
+      // year (e.g. Jun-26) — otherwise the dropdown silently falls back to the first option.
+      return (s.month && base.indexOf(s.month) < 0) ? [s.month].concat(base) : (base.length ? base : [s.month]);
+    })();
     const areaOpts = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), []);
     const deptOpts = React.useMemo(() => dcAllDepts(), []);
     const setInc = (i, k, v) => setIncidents((a) => a.map((x, j) => (j === i ? Object.assign({}, x, { [k]: v }) : x)));
@@ -1000,7 +1023,7 @@
       setBusy(true);
       const body = { note, month };
       if (s.type === 'patient') { body.values = vals; if (target && target !== s.department) { body.department = target; body.departmentName = (deptOpts.find((d) => d.id === target) || {}).name || target; } }
-      else { body.value = qval; body.remark = remark; if (target && target !== s.area) { body.area = target; body.areaName = (areaOpts.find((a) => a.key === target) || {}).name || target; } if (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) body.incidents = incidents; }
+      else { body.value = isRate ? shownVal : qval; body.remark = remark; if (isRate) { body.num = qnum; body.den = qden; } if (target && target !== s.area) { body.area = target; body.areaName = (areaOpts.find((a) => a.key === target) || {}).name || target; } if (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) body.incidents = incidents; }
       dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), body).then((r) => {
         setBusy(false);
         if (r.ok) { toast('Submission updated', 'success'); onSaved && onSaved(r.submission); }
@@ -1056,9 +1079,23 @@
                 </div>
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  {isRate && (
+                    <>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>{s.numLabel || 'Numerator'}</label>
+                        {editable ? <input type="number" step="any" style={inputStyle} value={qnum} onChange={(e) => setQnum(e.target.value)} /> : <div className="num" style={{ fontWeight: 700, fontSize: 15 }}>{s.num == null ? '—' : s.num}</div>}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>{s.denLabel || 'Denominator'}</label>
+                        {editable ? <input type="number" step="any" style={inputStyle} value={qden} onChange={(e) => setQden(e.target.value)} /> : <div className="num" style={{ fontWeight: 700, fontSize: 15 }}>{s.den == null ? '—' : s.den}</div>}
+                      </div>
+                    </>
+                  )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>{s.indicatorName || 'Value'}</label>
-                    {editable ? <input type="number" step="any" style={inputStyle} value={qval} onChange={(e) => setQval(e.target.value)} /> : <div className="num" style={{ fontWeight: 700, fontSize: 15 }}>{s.value == null ? '—' : s.value}</div>}
+                    <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>{s.indicatorName || 'Value'}{isRate ? ' (computed)' : ''}{s.unit ? ' · ' + s.unit : ''}</label>
+                    {(editable && !isRate)
+                      ? <input type="number" step="any" style={inputStyle} value={qval} onChange={(e) => setQval(e.target.value)} />
+                      : <div className="num" style={{ fontWeight: 700, fontSize: 15 }}>{isRate ? shownVal : (s.value == null ? '—' : s.value)}{s.benchmark ? <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--muted)', marginLeft: 6 }}>· benchmark {s.benchmark}</span> : null}</div>}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>Remark</label>

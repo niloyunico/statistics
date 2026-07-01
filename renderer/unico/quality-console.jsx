@@ -520,6 +520,8 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
         {field('Diagnosis', x.diagnosis)}
         {field('Admission', x.admissionDate)}
         {field('Procedure date', x.procedureDate)}
+        {field('Victim (staff)', x.victimName)}
+        {field('Victim emp ID / UHID', x.victimId)}
       </div>
       {field('Incident details', x.details)}
       {field('Finding / root cause', x.finding)}
@@ -1148,18 +1150,18 @@ function QCHeatGrid({d, months}){
   const inds=(d.indicators||[]);
   return (
     <div style={{overflowX:'auto'}}>
-      <table style={{borderCollapse:'collapse',width:'100%'}}>
+      <table style={{borderCollapse:'collapse',width:'100%',maxWidth:'100%',tableLayout:'fixed'}}>
         <thead><tr>
-          <th style={{textAlign:'left',padding:'6px 8px',fontSize:9,color:P.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.3px',borderBottom:'1px solid '+P.line}}>Indicator</th>
+          <th style={{width:160,textAlign:'left',padding:'6px 8px',fontSize:9,color:P.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.3px',borderBottom:'1px solid '+P.line}}>Indicator</th>
           {months.map(m=><th key={m[0]} style={{padding:'6px 2px',fontSize:8.5,color:P.muted,fontWeight:700,textAlign:'center',borderBottom:'1px solid '+P.line}}>{m[1].split(' ')[0]}</th>)}
         </tr></thead>
         <tbody>{inds.length===0
           ? <tr><td colSpan={months.length+1} style={{padding:14,textAlign:'center',color:P.faint,fontSize:11}}>No indicators assigned.</td></tr>
           : inds.map(ind=>(
           <tr key={ind.id}>
-            <td style={{padding:'3px 8px',textAlign:'left',fontWeight:600,color:P.ink,whiteSpace:'nowrap',fontSize:9.5}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
+            <td style={{padding:'3px 8px',textAlign:'left',fontWeight:600,color:P.ink,fontSize:9.5}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
             {months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); const s=qStatus(ind,v); const c=qcHeatColors(s);
-              return <td key={m[0]} style={{padding:'3px 2px',textAlign:'center'}}><span title={ind.name+' · '+m[1]+' · '+(s==='na'?'not reported':s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:30,height:24,borderRadius:5,background:c.bg,color:c.col,fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{s==='na'?'·':fmtVal(ind,v)}</span></td>;
+              return <td key={m[0]} style={{padding:'3px 2px',textAlign:'center'}}><span title={ind.name+' · '+m[1]+' · '+(s==='na'?'not reported':s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:22,height:24,borderRadius:5,background:c.bg,color:c.col,fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{s==='na'?'·':fmtVal(ind,v)}</span></td>;
             })}
           </tr>
         ))}</tbody>
@@ -1617,7 +1619,7 @@ function QCReportBuilder({depts}){
     </div>
   );
   const Footer=({n,total})=>(
-    <div className="pdf-foot" style={{marginTop:20,borderTop:'1px solid '+P.line,paddingTop:8,fontSize:9.5,color:P.faint,display:'flex'}}>
+    <div className="pdf-foot" style={{borderTop:'1px solid '+P.line,paddingTop:8,fontSize:9.5,color:P.faint,display:'flex'}}>
       <span>{orgName}</span><span style={{flex:1}}/>
       <span style={{fontFamily:MONO}}>Page {n} of {total}</span><span style={{flex:1}}/>
       <span>{(footerNote?footerNote+' · ':'')+(confidential?'Confidential · ':'')+pageSize+' '+orient}</span>
@@ -1650,12 +1652,12 @@ function QCReportBuilder({depts}){
   const MonthTable=({d,detailInd})=>{
     const rows=detailInd?[detailInd]:(d.indicators||[]);
     return (
-      <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',maxWidth:'100%',marginTop:14,fontSize:detailInd?10:10.5}}>
+      <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',maxWidth:'100%',tableLayout:'fixed',marginTop:14,fontSize:detailInd?10:10.5}}>
         <thead><tr style={{background:P.panel2}}>
-          <th style={{...thl,minWidth:110}}>Indicator</th>
-          <th style={{...thl,textTransform:'none',fontSize:8.5,minWidth:60}}>Benchmark</th>
-          {pMonths.map(m=><th key={m[0]} style={thc}>{m[1].split(' ')[0]}</th>)}
-          <th style={thc}>Trend</th>
+          <th style={{...thl,width:120}}>Indicator</th>
+          <th style={{...thl,textTransform:'none',fontSize:8.5,width:56}}>Benchmark</th>
+          {pMonths.map(m=><th key={m[0]} style={{...thc,width:33}}>{m[1].split(' ')[0]}</th>)}
+          <th style={{...thc,width:48}}>Trend</th>
         </tr></thead>
         <tbody>{rows.map(ind=>(
           <tr key={ind.id} style={{borderBottom:'1px solid '+P.line2}}>
@@ -1723,7 +1725,7 @@ function QCReportBuilder({depts}){
     const cards=detailed?(chartInd?qcIndKpis(chartInd, pMonths):[]):qcDeptKpis(d, pMonths);
     const dd=qcDonutData(d);
     return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:18}}>
@@ -1787,7 +1789,7 @@ function QCReportBuilder({depts}){
     const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ if(set.has(r.month)) incs.push({dept:d.name, ind:r.ind, x:r.x, month:r.month}); }));
     const line=(l,v)=> v? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5}}><b style={{color:P.ink}}>{l}:</b> {v}</div>:null;
     return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:18}}>
@@ -1803,11 +1805,11 @@ function QCReportBuilder({depts}){
           </div>
           <QCHeatLegend/>
           <div style={{overflowX:'auto'}}>
-            <table style={{borderCollapse:'collapse',width:'100%',fontSize:9.5}}>
+            <table style={{borderCollapse:'collapse',width:'100%',maxWidth:'100%',tableLayout:'fixed',fontSize:9.5}}>
               <thead><tr>
-                <th style={{...thl,minWidth:172}}>Quality Indicator</th>
-                <th style={{...thc,minWidth:42}}>Total</th>
-                <th style={{...thl,minWidth:88,textTransform:'none'}}>Benchmark</th>
+                <th style={{...thl,width:130}}>Quality Indicator</th>
+                <th style={{...thc,width:36}}>Total</th>
+                <th style={{...thl,width:62,textTransform:'none'}}>Benchmark</th>
                 {chosen.map(d=><th key={d.key} style={{...thc,minWidth:42}}>{d.name}</th>)}
               </tr></thead>
               <tbody>{names.length===0
@@ -1821,9 +1823,9 @@ function QCReportBuilder({depts}){
                   return {ind,a}; });
                 return (
                   <tr key={name} style={{borderBottom:'1px solid '+P.line2}}>
-                    <td style={{padding:'5px 8px',textAlign:'left',fontWeight:600,color:P.ink,whiteSpace:'nowrap'}}>{name}</td>
+                    <td style={{padding:'5px 8px',textAlign:'left',fontWeight:600,color:P.ink,wordBreak:'break-word'}}>{name}</td>
                     <td style={{textAlign:'center',fontFamily:MONO,fontWeight:700,color:tot>0?P.rose:P.ink2}}>{anyCount?tot:'—'}</td>
-                    <td style={{padding:'4px 8px',color:P.ink2,fontSize:9,whiteSpace:'nowrap'}}>{bench||'—'}</td>
+                    <td style={{padding:'4px 8px',color:P.ink2,fontSize:9}}>{bench||'—'}</td>
                     {cells.map((c,i)=> c.none
                       ? <td key={i} style={{textAlign:'center',color:P.faint,fontSize:9}}>—</td>
                       : <td key={i} style={{textAlign:'center',padding:'3px 2px'}}><span title={name+' · '+chosen[i].name+' · '+(c.a.status==='na'?'not reported':c.a.status==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:34,height:22,borderRadius:5,background:qcHeatColors(c.a.status).bg,color:qcHeatColors(c.a.status).col,fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{c.a.status==='na'?'·':fmtVal(c.ind,c.a.value)}</span></td>)}
@@ -1864,7 +1866,7 @@ function QCReportBuilder({depts}){
     const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ if(r.month===m[1]) incs.push({dept:d.name, ind:r.ind, x:r.x}); }));
     const line=(l,v)=> v? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5}}><b style={{color:P.ink}}>{l}:</b> {v}</div>:null;
     return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:18}}>
@@ -1880,11 +1882,11 @@ function QCReportBuilder({depts}){
           </div>
           <QCHeatLegend/>
           <div style={{overflowX:'auto'}}>
-            <table style={{borderCollapse:'collapse',width:'100%',fontSize:9.5}}>
+            <table style={{borderCollapse:'collapse',width:'100%',maxWidth:'100%',tableLayout:'fixed',fontSize:9.5}}>
               <thead><tr>
-                <th style={{...thl,minWidth:180}}>Quality Indicator</th>
+                <th style={{...thl,width:140}}>Quality Indicator</th>
                 {chosen.map(d=><th key={d.key} style={{...thc,minWidth:44}}>{d.name}</th>)}
-                <th style={{...thc,minWidth:46,color:P.ink2}}>Total</th>
+                <th style={{...thc,width:40,color:P.ink2}}>Total</th>
               </tr></thead>
               <tbody>{names.length===0
                 ? <tr><td colSpan={chosen.length+2} style={{padding:14,textAlign:'center',color:P.faint}}>No indicators for the selected departments.</td></tr>
@@ -1896,7 +1898,7 @@ function QCReportBuilder({depts}){
                   return {ind,v,s}; });
                 return (
                   <tr key={name} style={{borderBottom:'1px solid '+P.line2}}>
-                    <td style={{padding:'5px 8px',textAlign:'left',fontWeight:600,color:P.ink,whiteSpace:'nowrap'}}>{name}</td>
+                    <td style={{padding:'5px 8px',textAlign:'left',fontWeight:600,color:P.ink,wordBreak:'break-word'}}>{name}</td>
                     {cells.map((c,i)=> c.none
                       ? <td key={i} style={{textAlign:'center',color:P.faint,fontSize:9}}>—</td>
                       : <td key={i} style={{textAlign:'center',padding:'3px 2px'}}><span title={name+' · '+chosen[i].name+' · '+(c.s==='na'?'not reported':c.s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:34,height:22,borderRadius:5,...qcHeatColors(c.s),fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{c.s==='na'?'·':fmtVal(c.ind,c.v)}</span></td>)}
@@ -1933,7 +1935,7 @@ function QCReportBuilder({depts}){
     const hbar=rows.map(r=>({label:r.d.name, value:r.rate, color:r.color})).sort((a,b)=>b.value-a.value);
     // ComparePage is always the single base page, so it is inherently the lead sheet.
     return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:18}}>
@@ -1973,7 +1975,7 @@ function QCReportBuilder({depts}){
     const agg=qcAggStat(chosen, pMonths);
     const tone=agg.rate>=90?P.green:agg.rate>=70?P.amber:P.rose;
     return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',textAlign:'center',padding:'60px 20px 30px'}}>
           {showLogo&&<img src="unico/logo.svg" alt="UNICO Healthcare" style={{height:66,marginBottom:26}}/>}
@@ -2013,7 +2015,7 @@ function QCReportBuilder({depts}){
   };
   function TocPage({n,total}){
     return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:18}}>
@@ -2045,7 +2047,7 @@ function QCReportBuilder({depts}){
     const stCol=s=>s==='Closed'?P.green:s==='In Progress'?P.amber:P.rose;
     const line=(l,v)=> v? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5}}><b style={{color:P.ink}}>{l}:</b> {v}</div>:null;
     return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:18}}>
@@ -2095,7 +2097,7 @@ function QCReportBuilder({depts}){
     rows.sort((a,b)=>a.code.localeCompare(b.code));
     const bySec={}; rows.forEach(r=>{ (bySec[r.sec]=bySec[r.sec]||[]).push(r); });
     return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:18}}>
@@ -2128,10 +2130,12 @@ function QCReportBuilder({depts}){
      builder chrome (Header/Footer/KpiCards) and the console's monthRaw/qStatus math. */
   function HHPage({page,n,total}){
     const part=page.part||'overview';
-    const isHH=ind=>/hand\s*hygiene/i.test((ind&&ind.name)||'');
+    // Only percentage-typed hand-hygiene indicators belong on a compliance report — a
+    // count/rate1000 indicator's monthRaw() is not a percentage and must not be averaged in.
+    const isHH=ind=>/hand\s*hygiene/i.test((ind&&ind.name)||'') && (ind.formula==='pct'||ind.formula==='direct'||isPctInd(ind));
     const hh=[]; chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ if(isHH(ind)) hh.push({d,ind}); }));
     if(!hh.length) return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:60,textAlign:'center'}}>
@@ -2146,20 +2150,23 @@ function QCReportBuilder({depts}){
     if(!primary) primary=hh.slice().sort((a,b)=>reportedCount(b.ind)-reportedCount(a.ind))[0];
     const pind=primary.ind;
     const bench=(pind.benchmarkValue!=null&&pind.benchmarkValue!=='')?Number(pind.benchmarkValue):90;
-    const higher=pind.goalDirection!=='lower_is_better';
+    const higher=true; // hand-hygiene compliance is always higher-is-better (WHO ≥ benchmark)
     const whoStat=pct=>pct==null?{label:'—',color:P.faint,bg:'#f4f6f9'}
       :pct>=bench?{label:'Compliant',color:P.green,bg:'#e7f6ed'}
       :pct>=75?{label:'Needs improvement',color:P.amber,bg:'#fff5e6'}
       :{label:'Unacceptable',color:P.rose,bg:'#fbe9ec'};
-    // Per-month aggregate compliance across all selected HH indicators: Σnum/Σden when
-    // numerator+denominator are present, else the mean of already-computed monthly values.
-    const monthAgg=m=>{ let num=0,den=0,haveND=false; const vs=[]; let any=false;
-      hh.forEach(({ind})=>{ const nn=ind.mNum&&ind.mNum[m[0]], dd=ind.mDen&&ind.mDen[m[0]];
-        if(nn!=null&&nn!==''&&dd!=null&&dd!==''){ num+=Number(nn); den+=Number(dd); haveND=true; any=true; }
-        else { const v=monthRaw(ind,m[0]); if(v!=null){ vs.push(v); any=true; } } });
-      if(!any) return {value:null,num:null,den:null};
-      if(haveND&&den>0) return {value:Math.round(num/den*10000)/100, num, den};
-      return {value:vs.length?Math.round(vs.reduce((s,x)=>s+x,0)/vs.length*100)/100:null, num:null, den:null};
+    // Per-month compliance pooled across ALL selected HH indicators. When every reporting
+    // indicator carries numerator+denominator we pool Σnum/Σden (opportunity-weighted, the
+    // epidemiologically correct rate); if any reports a direct % (no den) we fall back to an
+    // unweighted mean of each indicator's monthly value so none is dropped, and leave num/den
+    // null so the table's Compliant/Opportunities columns never show a partial figure.
+    const monthAgg=m=>{ let num=0,den=0,ndCount=0,total=0; const comps=[];
+      hh.forEach(({ind})=>{ const v=monthRaw(ind,m[0]); if(v==null) return; total++; comps.push(v);
+        const nn=ind.mNum&&ind.mNum[m[0]], dd=ind.mDen&&ind.mDen[m[0]];
+        if(nn!=null&&nn!==''&&dd!=null&&dd!==''&&Number(dd)>0){ num+=Number(nn); den+=Number(dd); ndCount++; } });
+      if(!total) return {value:null,num:null,den:null};
+      if(ndCount===total&&den>0) return {value:Math.round(num/den*10000)/100, num, den};
+      return {value:Math.round(comps.reduce((s,x)=>s+x,0)/comps.length*100)/100, num:null, den:null};
     };
     const series=pMonths.map(m=>Object.assign({m, label:m[1].split(' ')[0]}, monthAgg(m)));
     const withVal=series.filter(r=>r.value!=null);
@@ -2187,7 +2194,7 @@ function QCReportBuilder({depts}){
             : (typeof window.LineChart==='function' ? window.LineChart({data:chartRows, x:'mon', y:'val', height:205, color:tone, area:true, flat:true}) : null))
         : <div style={{height:120,display:'grid',placeItems:'center',color:P.faint,fontSize:12}}>No hand-hygiene data in this period</div>;
       return (
-        <div style={{position:'relative',minHeight:'100%'}}>
+        <div className="qc-rpage" style={{position:'relative'}}>
           {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
           <Header/>
           <div style={{marginTop:18}}>
@@ -2225,11 +2232,20 @@ function QCReportBuilder({depts}){
     const gMonth=(()=>{ for(let i=pMonths.length-1;i>=0;i--){ const mk=pMonths[i][0]; const g=pind.mGroups&&pind.mGroups[mk]; if(g&&Object.keys(g).some(k=>g[k]!=null&&g[k]!=='')) return pMonths[i]; } return null; })();
     const GROUP_KEYS=[['nurse','Nurse'],['doctor','Doctor'],['pca','PCA'],['other','Other']];
     const groupRows=gMonth?GROUP_KEYS.map(([k,lbl])=>{ const gN=(pind.mGroups[gMonth[0]]||{}); const gD=(pind.mGroupsDen&&pind.mGroupsDen[gMonth[0]])||{}; const nn=Number(gN[k])||0, dd=Number(gD[k])||0; return {label:lbl,n:nn,d:dd,value:dd>0?Math.round(nn/dd*10000)/100:null}; }).filter(r=>r.d>0||r.n>0):[];
-    const byDept={}; hh.forEach(h=>{ if(!byDept[h.d.key]) byDept[h.d.key]=h; });
-    const deptLatest=h=>{ for(let i=pMonths.length-1;i>=0;i--){ const v=monthRaw(h.ind,pMonths[i][0]); if(v!=null) return {month:pMonths[i],value:Math.round(v*100)/100}; } return null; };
-    const deptRows=Object.keys(byDept).map(k=>{ const h=byDept[k]; const dl=deptLatest(h); return dl?{label:(h.d.name||'').slice(0,20), value:dl.value, month:dl.month[1].split(' ')[0]}:null; }).filter(Boolean).sort((a,b)=>b.value-a.value);
+    // Group ALL hand-hygiene indicators by department, then take each department's compliance
+    // at its latest reported month — pooled Σnum/Σden when every reporting indicator has a
+    // denominator, else the mean — so a department with >1 HH indicator isn't misrepresented.
+    const deptGroups={}; hh.forEach(h=>{ (deptGroups[h.d.key]=deptGroups[h.d.key]||{name:h.d.name, inds:[]}).inds.push(h.ind); });
+    const deptLatest=inds=>{ for(let i=pMonths.length-1;i>=0;i--){ const mk=pMonths[i][0];
+      let num=0,den=0,ndCount=0,total=0; const comps=[];
+      inds.forEach(ind=>{ const v=monthRaw(ind,mk); if(v==null) return; total++; comps.push(v);
+        const nn=ind.mNum&&ind.mNum[mk], dd=ind.mDen&&ind.mDen[mk];
+        if(nn!=null&&nn!==''&&dd!=null&&dd!==''&&Number(dd)>0){ num+=Number(nn); den+=Number(dd); ndCount++; } });
+      if(total){ const value=(ndCount===total&&den>0)?Math.round(num/den*10000)/100:Math.round(comps.reduce((s,x)=>s+x,0)/comps.length*100)/100; return {month:pMonths[i], value}; } }
+      return null; };
+    const deptRows=Object.keys(deptGroups).map(k=>{ const g=deptGroups[k]; const dl=deptLatest(g.inds); return dl?{label:(g.name||'').slice(0,20), value:dl.value, month:dl.month[1].split(' ')[0]}:null; }).filter(Boolean).sort((a,b)=>b.value-a.value);
     return (
-      <div style={{position:'relative',minHeight:'100%'}}>
+      <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:18}}>
@@ -2270,15 +2286,54 @@ function QCReportBuilder({depts}){
   async function doExportPDF(){
     const native=window.unicoNative;
     if(chosen.length===0){ setNote({ok:false,text:'Select at least one department first.'}); return; }
-    setExporting(true); setNote(null); document.body.classList.add('pdf-export-mode');
-    try{
-      if(native&&typeof native.exportPDF==='function'){
-        const res=await native.exportPDF({pageSize, landscape:orient==='landscape', defaultName:'UNICO-quality-'+reportType+'-report'});
-        if(res&&res.ok) setNote({ok:true,text:res.path?('PDF saved · '+res.path):'PDF ready — save from the dialog.'});
-        else if(res&&res.canceled){ /* silent */ }
+    // Desktop app: keep the superior native (Chromium printToPDF, vector) export.
+    if(native&&typeof native.exportPDF==='function'&&!native.isWeb){
+      setExporting(true); setNote(null); document.body.classList.add('pdf-export-mode');
+      try{ const res=await native.exportPDF({pageSize, landscape:orient==='landscape', defaultName:'UNICO-quality-'+reportType+'-report'});
+        if(res&&res.ok) setNote({ok:true,text:res.path?('PDF saved · '+res.path):'PDF ready.'});
         else if(res&&res.error) setNote({ok:false,text:res.error});
-      } else { window.print(); }
-    }catch(e){ setNote({ok:false,text:String(e&&e.message||e)}); }
+      }catch(e){ setNote({ok:false,text:String(e&&e.message||e)}); }
+      finally{ document.body.classList.remove('pdf-export-mode'); setExporting(false); }
+      return;
+    }
+    // Web: TRUE one-click download — rasterize every report page (html2canvas) into a jsPDF.
+    const H=window.html2canvas, J=window.jspdf&&window.jspdf.jsPDF;
+    if(H&&J){
+      setExporting(true); setNote(null);
+      const stage=document.getElementById('pdf-root'); let els=[], prev=[];
+      try{
+        if(!stage) throw new Error('render target missing');
+        document.body.classList.add('qc-pdfcap');
+        els=Array.prototype.slice.call(stage.querySelectorAll('.pdf-page'));
+        if(!els.length) throw new Error('nothing to export');
+        prev=els.map(el=>el.getAttribute('style')||'');
+        // Size each report page to an exact on-screen A4 sheet so one capture = one PDF page.
+        els.forEach(el=>{ el.style.width=pageW+'px'; el.style.height=pageMinH+'px'; el.style.boxSizing='border-box'; el.style.padding='28px 30px'; el.style.background='#fff'; el.style.overflow='hidden'; el.style.margin='0'; });
+        try{ if(document.fonts&&document.fonts.ready) await document.fonts.ready; }catch(e){}
+        await new Promise(r=>setTimeout(r,70));
+        const fmt=pageSize==='A3'?'a3':pageSize==='Letter'?'letter':'a4', ori=orient==='landscape'?'l':'p';
+        const doc=new J({orientation:ori,unit:'pt',format:fmt,compress:true});
+        const pw=doc.internal.pageSize.getWidth(), ph=doc.internal.pageSize.getHeight();
+        for(let i=0;i<els.length;i++){
+          const canvas=await H(els[i],{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false});
+          if(i>0) doc.addPage(fmt,ori);
+          doc.addImage(canvas.toDataURL('image/jpeg',0.94),'JPEG',0,0,pw,ph,undefined,'FAST');
+        }
+        els.forEach((el,i)=>el.setAttribute('style',prev[i])); els=[];
+        document.body.classList.remove('qc-pdfcap');
+        doc.save('UNICO-quality-'+reportType+'-'+new Date().toISOString().slice(0,10)+'.pdf');
+        setNote({ok:true,text:'PDF downloaded.'});
+      }catch(e){
+        try{ els.forEach((el,i)=>el.setAttribute('style',prev[i])); }catch(_){}
+        document.body.classList.remove('qc-pdfcap');
+        setNote({ok:false,text:'Direct PDF failed ('+String(e&&e.message||e)+'); opening Print instead.'});
+        try{ document.body.classList.add('pdf-export-mode'); window.print(); setTimeout(()=>document.body.classList.remove('pdf-export-mode'),600); }catch(_){}
+      }finally{ setExporting(false); }
+      return;
+    }
+    // Last resort: browser print dialog (choose "Save as PDF").
+    setExporting(true); setNote(null); document.body.classList.add('pdf-export-mode');
+    try{ window.print(); }catch(e){ setNote({ok:false,text:String(e&&e.message||e)}); }
     finally{ document.body.classList.remove('pdf-export-mode'); setExporting(false); }
   }
   function qcExportBuilder(fmt){
@@ -2591,7 +2646,7 @@ function QCReportBuilder({depts}){
             </div>
           </div>
           <div style={{padding:26,background:'#eef1f5',overflowX:'auto'}}>
-            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,margin:'0 auto',transition:'width .25s'}}>
+            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,height:pageMinH,boxSizing:'border-box',overflow:'hidden',margin:'0 auto',transition:'width .25s'}}>
               {chosen.length===0?<div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>{indMode==='custom'?'Tick at least one indicator (Custom mode), or switch Indicators back to All.':'Select at least one department.'}</div>
                 : !cur ? <div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Nothing to preview.</div>
                 : cur.kind==='cover' ? <CoverPage n={pi+1} total={pageCount}/>
