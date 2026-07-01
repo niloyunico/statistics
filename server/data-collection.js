@@ -46,6 +46,17 @@ function genId(prefix) { return (prefix || 'id') + '-' + Date.now().toString(36)
 function normQualityIndicators(qi) { const out = {}; if (!qi || typeof qi !== 'object' || Array.isArray(qi)) return out; Object.keys(qi).forEach((k) => { const key = String(k); const list = qi[k]; if (!Array.isArray(list)) return; const ids = list.map((x) => String(x == null ? '' : x).trim()).filter(Boolean); if (ids.length) out[key] = ids; }); return out; }
 // Sanitize a per-staff-group breakdown (e.g. { nurse, doctor, pca, other }) to numbers.
 function sanitizeGroupMap(g) { if (!g || typeof g !== 'object' || Array.isArray(g)) return null; const out = {}; let any = false; Object.keys(g).forEach((k) => { const n = Number(g[k]); out[String(k)] = isNaN(n) ? 0 : n; any = true; }); return any ? out : null; }
+// Sanitize a department × staff-group matrix: [{ dept, g:{ group:{n,d} } }].
+function sanitizeDeptBreakdown(arr) {
+  if (!Array.isArray(arr)) return null;
+  const out = arr.map((r) => {
+    const g = (r && r.g && typeof r.g === 'object' && !Array.isArray(r.g)) ? r.g : {};
+    const gg = {};
+    Object.keys(g).forEach((k) => { const c = g[k] || {}; gg[String(k)] = { n: Number(c.n) || 0, d: Number(c.d) || 0 }; });
+    return { dept: String((r && r.dept) || '').slice(0, 80), g: gg };
+  }).filter((r) => r.dept || Object.keys(r.g).some((k) => r.g[k].n || r.g[k].d));
+  return out.length ? out : null;
+}
 function normResp(r) {
   if (!r) return null;
   if (typeof r === 'string') return { name: r.trim() };
@@ -231,6 +242,7 @@ async function buildQualitySpec(payload) {
     // Optional numerator breakdown by staff group (Nurse / Doctor / Other).
     groups: sanitizeGroupMap(payload && payload.groups),
     groupsDen: sanitizeGroupMap(payload && payload.groupsDen),
+    deptBreakdown: sanitizeDeptBreakdown(payload && payload.deptBreakdown),
     isNewIndicator: isNew, valueType: (payload && payload.valueType) || (found && found.valueType) || 'Count',
     benchmark: (payload && payload.benchmark) || (found && found.benchmark) || '',
     goalDirection: (payload && payload.goalDirection) || (found && found.goalDirection) || 'lower_is_better',
@@ -277,6 +289,7 @@ async function applyQuality(spec) {
   if (Array.isArray(spec.incidents)) ind.incidents = Object.assign({}, ind.incidents || {}, { [spec.month]: spec.incidents });
   if (spec.groups) ind.mGroups = Object.assign({}, ind.mGroups || {}, { [spec.month]: spec.groups });
   if (spec.groupsDen) ind.mGroupsDen = Object.assign({}, ind.mGroupsDen || {}, { [spec.month]: spec.groupsDen });
+  if (spec.deptBreakdown) ind.mDeptBreakdown = Object.assign({}, ind.mDeptBreakdown || {}, { [spec.month]: spec.deptBreakdown });
   // Monthly storage (no quarters). For rate/%, keep numerator/denominator per month.
   if (spec.entryMode === 'rate') {
     ind.mNum = Object.assign({}, ind.mNum || {}, { [spec.month]: spec.num });

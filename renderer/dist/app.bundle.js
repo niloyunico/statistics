@@ -22651,6 +22651,18 @@ window.LockScreen = LockScreen;
       title: e.designation || e.role || ''
     }));
   }
+  function dcAllDepts() {
+    try {
+      if (window.buildDepts) {
+        const ov = JSON.parse(localStorage.getItem('unico_store_v3')) || {};
+        const merged = window.buildDepts(ov);
+        if (Array.isArray(merged) && merged.length) return merged;
+      }
+    } catch (e) {}
+    return (window.UNICO && window.UNICO.DEPARTMENTS || []).map(d => ({
+      ...d
+    }));
+  }
   function Card(props) {
     return React.createElement("div", {
       style: {
@@ -23254,17 +23266,19 @@ window.LockScreen = LockScreen;
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     const lockResp = !!(me && me.role === 'collector');
     const isAdmin = !lockResp;
-    const [depList, setDepList] = useState(() => (window.UNICO && window.UNICO.DEPARTMENTS || depts || []).map(d => ({
+    const baseList = useMemo(() => (depts && depts.length ? depts : dcAllDepts()).map(d => ({
       ...d
-    })));
-    const all = depList;
+    })), [depts]);
+    const [colOverride, setColOverride] = useState(null);
     const refreshDepts = () => dcApi.get('/api/departments').then(r => {
-      if (r.ok) setDepList(r.departments.map(d => ({
-        ...d
-      })));
+      if (r.ok) setColOverride(Object.fromEntries(r.departments.map(d => [d.id, d.cols])));
     }).catch(() => {});
+    const all = useMemo(() => colOverride ? baseList.map(d => colOverride[d.id] ? {
+      ...d,
+      cols: colOverride[d.id]
+    } : d) : baseList, [baseList, colOverride]);
     const [deptId, setDeptId] = useState(prefill && prefill.dept || all[0] && all[0].id || '');
-    const dept = useMemo(() => all.find(d => d.id === deptId) || all[0], [deptId, depList]);
+    const dept = useMemo(() => all.find(d => d.id === deptId) || all[0], [deptId, all]);
     const [month, setMonth] = useState(prefill && prefill.month || '');
     const [values, setValues] = useState({});
     const [responsible, setResponsible] = useState(lockResp ? me.name || '' : prefill && prefill.responsible || '');
@@ -23566,6 +23580,7 @@ window.LockScreen = LockScreen;
       pca: '',
       other: ''
     });
+    const [deptRows, setDeptRows] = useState([]);
     const [directNum, setDirectNum] = useState('');
     const [capa, setCapa] = useState({
       finding: '',
@@ -23610,8 +23625,55 @@ window.LockScreen = LockScreen;
     const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
     const groupSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groups[k]) || 0), 0);
     const groupDenSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groupsDen[k]) || 0), 0);
-    const numerator = numMode === 'group' ? groupSum : Number(directNum) || 0;
-    const denNum = numMode === 'group' ? groupDenSum : Number(den) || 0;
+    const deptTot = deptRows.reduce((acc, r) => {
+      GROUP_KEYS.forEach(([k]) => {
+        acc.n += Number(r.g[k].n) || 0;
+        acc.d += Number(r.g[k].d) || 0;
+      });
+      return acc;
+    }, {
+      n: 0,
+      d: 0
+    });
+    const blankDeptRow = () => ({
+      dept: '',
+      g: {
+        nurse: {
+          n: '',
+          d: ''
+        },
+        doctor: {
+          n: '',
+          d: ''
+        },
+        pca: {
+          n: '',
+          d: ''
+        },
+        other: {
+          n: '',
+          d: ''
+        }
+      }
+    });
+    const setDeptName = (i, v) => setDeptRows(rs => rs.map((r, j) => j === i ? {
+      ...r,
+      dept: v
+    } : r));
+    const setDeptCell = (i, k, f, v) => setDeptRows(rs => rs.map((r, j) => j === i ? {
+      ...r,
+      g: {
+        ...r.g,
+        [k]: {
+          ...r.g[k],
+          [f]: v
+        }
+      }
+    } : r));
+    const addDeptRow = () => setDeptRows(rs => [...rs, blankDeptRow()]);
+    const delDeptRow = i => setDeptRows(rs => rs.filter((_, j) => j !== i));
+    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : Number(directNum) || 0;
+    const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : Number(den) || 0;
     const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
     const rateUnit = unitRaw && /per|%/.test(unitRaw) ? unitRaw : formula === 'pct' ? '%' : 'per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '');
@@ -23634,6 +23696,7 @@ window.LockScreen = LockScreen;
       if (!curInd) {
         setGroups(blankG);
         setGroupsDen(blankG);
+        setDeptRows([]);
         setDirectNum('');
         setNumMode('group');
         setDen('');
@@ -23641,18 +23704,53 @@ window.LockScreen = LockScreen;
       }
       const g = curInd.mGroups && curInd.mGroups[month];
       const gd = curInd.mGroupsDen && curInd.mGroupsDen[month];
+      const dep = curInd.mDeptBreakdown && curInd.mDeptBreakdown[month];
+      const cellStr = (row, k, f) => {
+        const v = row && row.g && row.g[k] && row.g[k][f];
+        return v == null ? '' : String(v);
+      };
+      const toRow = row => ({
+        dept: row && row.dept || '',
+        g: {
+          nurse: {
+            n: cellStr(row, 'nurse', 'n'),
+            d: cellStr(row, 'nurse', 'd')
+          },
+          doctor: {
+            n: cellStr(row, 'doctor', 'n'),
+            d: cellStr(row, 'doctor', 'd')
+          },
+          pca: {
+            n: cellStr(row, 'pca', 'n'),
+            d: cellStr(row, 'pca', 'd')
+          },
+          other: {
+            n: cellStr(row, 'other', 'n'),
+            d: cellStr(row, 'other', 'd')
+          }
+        }
+      });
       const rawNum = curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' ? curInd.mNum[month] : !isRate && curInd.months && curInd.months[month] != null && curInd.months[month] !== '' ? curInd.months[month] : null;
-      if (g && typeof g === 'object') {
+      if (Array.isArray(dep) && dep.length) {
+        setDeptRows(dep.map(toRow));
+        setNumMode('dept');
+        setGroups(blankG);
+        setGroupsDen(blankG);
+        setDirectNum('');
+      } else if (g && typeof g === 'object') {
+        setDeptRows([]);
         setGroups(toG(g));
         setGroupsDen(gd && typeof gd === 'object' ? toG(gd) : blankG);
         setDirectNum('');
         setNumMode('group');
       } else if (rawNum != null) {
+        setDeptRows([]);
         setDirectNum(String(rawNum));
         setGroups(blankG);
         setGroupsDen(blankG);
         setNumMode('direct');
       } else {
+        setDeptRows([]);
         setGroups(blankG);
         setGroupsDen(blankG);
         setDirectNum('');
@@ -23695,7 +23793,7 @@ window.LockScreen = LockScreen;
         return;
       }
       if (isRate && !(denNum > 0)) {
-        toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : ''), 'error');
+        toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ''), 'error');
         return;
       }
       const matched = resps.find(r => r.name === responsible);
@@ -23718,6 +23816,13 @@ window.LockScreen = LockScreen;
         den: computeAsRate ? denNum : undefined,
         groups: numMode === 'group' ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
         groupsDen: numMode === 'group' && computeAsRate ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
+        deptBreakdown: numMode === 'dept' ? deptRows.map(r => ({
+          dept: r.dept || '',
+          g: GROUP_KEYS.reduce((o, [k]) => (o[k] = {
+            n: Number(r.g[k].n) || 0,
+            d: Number(r.g[k].d) || 0
+          }, o), {})
+        })) : undefined,
         capa: capa.finding || capa.corrective || capa.preventive ? {
           finding: capa.finding,
           corrective: capa.corrective,
@@ -23751,6 +23856,7 @@ window.LockScreen = LockScreen;
             pca: '',
             other: ''
           });
+          setDeptRows([]);
           setDirectNum('');
           setCapa({
             finding: '',
@@ -24145,7 +24251,7 @@ window.LockScreen = LockScreen;
         background: 'var(--blue-50)',
         color: 'var(--blue-700)'
       }
-    }, numerator, isRate ? ' / ' + groupDenSum : ''), React.createElement("span", {
+    }, numerator, isRate ? ' / ' + denNum : ''), React.createElement("span", {
       style: {
         flex: 1
       }
@@ -24155,6 +24261,12 @@ window.LockScreen = LockScreen;
       className: numMode === 'group' ? 'on' : '',
       onClick: () => setNumMode('group')
     }, "By group"), React.createElement("button", {
+      className: numMode === 'dept' ? 'on' : '',
+      onClick: () => {
+        setNumMode('dept');
+        if (deptRows.length === 0) setDeptRows([blankDeptRow()]);
+      }
+    }, "By department"), React.createElement("button", {
       className: numMode === 'direct' ? 'on' : '',
       onClick: () => setNumMode('direct')
     }, "Direct value"))), numMode === 'group' ? React.createElement(React.Fragment, null, React.createElement("div", {
@@ -24217,7 +24329,140 @@ window.LockScreen = LockScreen;
       style: {
         color: 'var(--ink-2)'
       }
-    }, groupDenSum)))) : React.createElement(Field, {
+    }, groupDenSum)))) : numMode === 'dept' ? React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginBottom: 8
+      }
+    }, "Enter each department\u2019s ", numLabel.toLowerCase(), isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : '', " by staff group \u2014 every department & group rolls up to the hospital total."), deptRows.map((r, i) => {
+      const rn = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].n) || 0), 0);
+      const rd = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].d) || 0), 0);
+      const rv = isRate ? rd > 0 ? Math.round(rn / rd * mult * 100) / 100 + (formula === 'pct' ? '%' : '') : '—' : rn;
+      return React.createElement("div", {
+        key: i,
+        style: {
+          border: '1px solid var(--line)',
+          borderRadius: 8,
+          padding: '10px 12px',
+          marginBottom: 8,
+          background: 'var(--panel-2)'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 8
+        }
+      }, React.createElement("input", {
+        style: {
+          ...inputStyle,
+          flex: 1,
+          fontWeight: 600
+        },
+        value: r.dept,
+        onChange: e => setDeptName(i, e.target.value),
+        placeholder: "Department (e.g. OPD)"
+      }), React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '2px 9px',
+          borderRadius: 999,
+          background: 'var(--blue-50)',
+          color: 'var(--blue-700)',
+          whiteSpace: 'nowrap'
+        }
+      }, rv), deptRows.length > 1 && React.createElement("button", {
+        className: "icon-btn",
+        title: "Remove department",
+        style: {
+          width: 26,
+          height: 26,
+          border: 0,
+          background: 'transparent',
+          color: 'var(--rose)'
+        },
+        onClick: () => delDeptRow(i)
+      }, React.createElement(Ic, {
+        d: I.x,
+        s: 13
+      }))), React.createElement("div", {
+        style: {
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: 8
+        }
+      }, GROUP_KEYS.map(([k, lbl]) => React.createElement("div", {
+        key: k
+      }, React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          color: 'var(--muted)',
+          marginBottom: 3
+        }
+      }, lbl), React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 4
+        }
+      }, React.createElement("input", {
+        type: "number",
+        min: "0",
+        step: "any",
+        style: {
+          ...inputStyle,
+          padding: '6px 7px'
+        },
+        value: r.g[k].n,
+        onChange: e => setDeptCell(i, k, 'n', e.target.value),
+        placeholder: isRate ? 'num' : '0'
+      }), isRate && React.createElement("input", {
+        type: "number",
+        min: "0",
+        step: "any",
+        style: {
+          ...inputStyle,
+          padding: '6px 7px'
+        },
+        value: r.g[k].d,
+        onChange: e => setDeptCell(i, k, 'd', e.target.value),
+        placeholder: "den"
+      }))))));
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+        marginTop: 2
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: addDeptRow
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 13
+    }), "Add department"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "Total ", numLabel.toLowerCase(), " = ", React.createElement("b", {
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }, deptTot.n), isRate ? React.createElement(React.Fragment, null, " \xB7 Total ", denLabel.toLowerCase(), " = ", React.createElement("b", {
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }, deptTot.d)) : null))) : React.createElement(Field, {
       label: React.createElement("span", null, numLabel, " ", React.createElement("span", {
         style: {
           color: 'var(--muted)',
@@ -24398,6 +24643,7 @@ window.LockScreen = LockScreen;
           pca: '',
           other: ''
         });
+        setDeptRows([]);
         setDirectNum('');
         setCapa({
           finding: '',
@@ -24454,7 +24700,7 @@ window.LockScreen = LockScreen;
     onSaved
   }) {
     const editable = canEdit && s.status === 'pending';
-    const dept = s.type === 'patient' ? (window.UNICO && window.UNICO.DEPARTMENTS || []).find(d => d.id === s.department) : null;
+    const dept = s.type === 'patient' ? dcAllDepts().find(d => d.id === s.department) : null;
     const cols = dept && dept.cols || (s.values ? Object.keys(s.values).map(id => ({
       id,
       label: id
@@ -25400,7 +25646,7 @@ window.LockScreen = LockScreen;
   function DataShareLinks({
     depts
   }) {
-    const all = window.UNICO && window.UNICO.DEPARTMENTS || depts || [];
+    const all = depts && depts.length ? depts : dcAllDepts();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
       key: d.key,
       name: d.name
@@ -25608,7 +25854,7 @@ window.LockScreen = LockScreen;
   }
   function reportedRecords() {
     const out = [];
-    const liveDepts = window.UNICO && window.UNICO.DEPARTMENTS || [];
+    const liveDepts = dcAllDepts();
     liveDepts.forEach(d => (d.series || []).forEach(r => {
       const values = {};
       Object.keys(r).forEach(k => {
@@ -25785,7 +26031,7 @@ window.LockScreen = LockScreen;
   }
   function CollectorPortal() {
     const user = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
-    const depts = window.UNICO && window.UNICO.DEPARTMENTS || [];
+    const depts = dcAllDepts();
     const areas = window.qualityData ? window.qualityData() : [];
     const hasPatient = depts.length > 0;
     const hasQuality = areas.length > 0;

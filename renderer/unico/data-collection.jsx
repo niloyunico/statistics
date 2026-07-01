@@ -37,6 +37,22 @@
     const s = window.STAFF_SEED || window.__UNICO_STAFF__ || [];
     return s.filter((e) => e && e.name).map((e) => ({ name: e.name, title: e.designation || e.role || '' }));
   }
+  // The COMPLETE department list = base (window.UNICO.DEPARTMENTS) + custom departments
+  // from the unico_store_v3 overlay. A newly-created custom department lives ONLY in
+  // that overlay — it is never written to the `departments` collection / /api/departments —
+  // so base-only sources miss it. For collectors the server injects a copy of that overlay
+  // already scoped to their assignments, so their assigned custom department shows up here
+  // too. Use this everywhere a department picker/list is built.
+  function dcAllDepts() {
+    try {
+      if (window.buildDepts) {
+        const ov = JSON.parse(localStorage.getItem('unico_store_v3')) || {};
+        const merged = window.buildDepts(ov);
+        if (Array.isArray(merged) && merged.length) return merged;
+      }
+    } catch (e) { /* fall back to base injection below */ }
+    return ((window.UNICO && window.UNICO.DEPARTMENTS) || []).map((d) => ({ ...d }));
+  }
 
   // ---- small UI atoms ----
   function Card(props) {
@@ -237,11 +253,16 @@
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
     const lockResp = !!(me && me.role === 'collector');
     const isAdmin = !lockResp; // admins (and open local mode) may manage custom fields
-    const [depList, setDepList] = useState(() => (((window.UNICO && window.UNICO.DEPARTMENTS) || depts || []).map((d) => ({ ...d }))));
-    const all = depList;
-    const refreshDepts = () => dcApi.get('/api/departments').then((r) => { if (r.ok) setDepList(r.departments.map((d) => ({ ...d }))); }).catch(() => {});
+    // Merged base + custom departments (from the passed prop, else read the overlay).
+    // Includes custom departments, which /api/departments does NOT return.
+    const baseList = useMemo(() => ((depts && depts.length) ? depts : dcAllDepts()).map((d) => ({ ...d })), [depts]);
+    // /api/departments only carries the latest custom COLUMNS for base departments
+    // (admins add fields there); merge those in without dropping custom departments.
+    const [colOverride, setColOverride] = useState(null);
+    const refreshDepts = () => dcApi.get('/api/departments').then((r) => { if (r.ok) setColOverride(Object.fromEntries(r.departments.map((d) => [d.id, d.cols]))); }).catch(() => {});
+    const all = useMemo(() => (colOverride ? baseList.map((d) => (colOverride[d.id] ? { ...d, cols: colOverride[d.id] } : d)) : baseList), [baseList, colOverride]);
     const [deptId, setDeptId] = useState((prefill && prefill.dept) || (all[0] && all[0].id) || '');
-    const dept = useMemo(() => all.find((d) => d.id === deptId) || all[0], [deptId, depList]);
+    const dept = useMemo(() => all.find((d) => d.id === deptId) || all[0], [deptId, all]);
     const [month, setMonth] = useState((prefill && prefill.month) || '');
     const [values, setValues] = useState({});
     const [responsible, setResponsible] = useState(lockResp ? (me.name || '') : ((prefill && prefill.responsible) || ''));
@@ -401,9 +422,11 @@
     // Other) which add up to the total, or typed DIRECTLY. For rate/% indicators each
     // group also carries its OWN denominator (the totals are their sums). The old
     // per-incident logging module is intentionally gone for this collector form.
-    const [numMode, setNumMode] = useState('group'); // 'group' | 'direct'
+    const [numMode, setNumMode] = useState('group'); // 'group' | 'dept' | 'direct'
     const [groups, setGroups] = useState({ nurse: '', doctor: '', pca: '', other: '' });
     const [groupsDen, setGroupsDen] = useState({ nurse: '', doctor: '', pca: '', other: '' });
+    // "By department" = a department × staff-group matrix, each cell {n,d}. Rolls up.
+    const [deptRows, setDeptRows] = useState([]); // [{ dept, g:{nurse:{n,d},doctor:{n,d},pca:{n,d},other:{n,d}} }]
     const [directNum, setDirectNum] = useState('');
     // Optional observation + corrective / preventive action (CAPA) for the month.
     const [capa, setCapa] = useState({ finding: '', corrective: '', preventive: '' });
@@ -450,12 +473,18 @@
     const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
     const groupSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groups[k]) || 0), 0);
     const groupDenSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groupsDen[k]) || 0), 0);
-    const numerator = numMode === 'group' ? groupSum : (Number(directNum) || 0);
+    // "By department" mode: department × staff-group matrix (each cell num/den) rolls up.
+    const deptTot = deptRows.reduce((acc, r) => { GROUP_KEYS.forEach(([k]) => { acc.n += Number(r.g[k].n) || 0; acc.d += Number(r.g[k].d) || 0; }); return acc; }, { n: 0, d: 0 });
+    const blankDeptRow = () => ({ dept: '', g: { nurse: { n: '', d: '' }, doctor: { n: '', d: '' }, pca: { n: '', d: '' }, other: { n: '', d: '' } } });
+    const setDeptName = (i, v) => setDeptRows((rs) => rs.map((r, j) => (j === i ? { ...r, dept: v } : r)));
+    const setDeptCell = (i, k, f, v) => setDeptRows((rs) => rs.map((r, j) => (j === i ? { ...r, g: { ...r.g, [k]: { ...r.g[k], [f]: v } } } : r)));
+    const addDeptRow = () => setDeptRows((rs) => [...rs, blankDeptRow()]);
+    const delDeptRow = (i) => setDeptRows((rs) => rs.filter((_, j) => j !== i));
+    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : (Number(directNum) || 0);
     // Every indicator can take a denominator: rate indicators REQUIRE it; counts may
-    // OPTIONALLY add one to compute a rate. In "By group" mode each staff group carries
-    // its OWN denominator and the total denominator is their sum; in "Direct value"
-    // mode the single denominator field is used.
-    const denNum = numMode === 'group' ? groupDenSum : (Number(den) || 0);
+    // OPTIONALLY add one to compute a rate. In "By group" / "By department" modes the total
+    // denominator is the sum of the group/matrix cells; "Direct value" uses the single field.
+    const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : (Number(den) || 0);
     const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
     const rateUnit = (unitRaw && /per|%/.test(unitRaw)) ? unitRaw : (formula === 'pct' ? '%' : ('per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '')));
@@ -472,20 +501,25 @@
     useEffect(() => {
       const blankG = { nurse: '', doctor: '', pca: '', other: '' };
       const toG = (o) => ({ nurse: o && o.nurse != null ? String(o.nurse) : '', doctor: o && o.doctor != null ? String(o.doctor) : '', pca: o && o.pca != null ? String(o.pca) : '', other: o && o.other != null ? String(o.other) : '' });
-      if (!curInd) { setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('group'); setDen(''); return; }
+      if (!curInd) { setGroups(blankG); setGroupsDen(blankG); setDeptRows([]); setDirectNum(''); setNumMode('group'); setDen(''); return; }
       const g = curInd.mGroups && curInd.mGroups[month];
       const gd = curInd.mGroupsDen && curInd.mGroupsDen[month];
+      const dep = curInd.mDeptBreakdown && curInd.mDeptBreakdown[month];
+      const cellStr = (row, k, f) => { const v = row && row.g && row.g[k] && row.g[k][f]; return v == null ? '' : String(v); };
+      const toRow = (row) => ({ dept: (row && row.dept) || '', g: { nurse: { n: cellStr(row, 'nurse', 'n'), d: cellStr(row, 'nurse', 'd') }, doctor: { n: cellStr(row, 'doctor', 'n'), d: cellStr(row, 'doctor', 'd') }, pca: { n: cellStr(row, 'pca', 'n'), d: cellStr(row, 'pca', 'd') }, other: { n: cellStr(row, 'other', 'n'), d: cellStr(row, 'other', 'd') } } });
       // existing total numerator: rate → mNum[month]; count → months[month]
       const rawNum = (curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '') ? curInd.mNum[month]
         : (!isRate && curInd.months && curInd.months[month] != null && curInd.months[month] !== '') ? curInd.months[month]
         : null;
-      if (g && typeof g === 'object') {
-        setGroups(toG(g)); setGroupsDen(gd && typeof gd === 'object' ? toG(gd) : blankG);
+      if (Array.isArray(dep) && dep.length) {
+        setDeptRows(dep.map(toRow)); setNumMode('dept'); setGroups(blankG); setGroupsDen(blankG); setDirectNum('');
+      } else if (g && typeof g === 'object') {
+        setDeptRows([]); setGroups(toG(g)); setGroupsDen(gd && typeof gd === 'object' ? toG(gd) : blankG);
         setDirectNum(''); setNumMode('group');
       } else if (rawNum != null) {
-        setDirectNum(String(rawNum)); setGroups(blankG); setGroupsDen(blankG); setNumMode('direct');
+        setDeptRows([]); setDirectNum(String(rawNum)); setGroups(blankG); setGroupsDen(blankG); setNumMode('direct');
       } else {
-        setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('group');
+        setDeptRows([]); setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('group');
       }
       setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
       const cp = curInd.capa && curInd.capa[month];
@@ -510,7 +544,7 @@
       if (isNew && !newInd.name.trim()) { toast('Enter the new indicator name', 'error'); return; }
       if (!month) { toast('Pick a month', 'error'); return; }
       if (qLocked) { toast('This month already has data — only an administrator can change it.', 'error'); return; }
-      if (isRate && !(denNum > 0)) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : ''), 'error'); return; }
+      if (isRate && !(denNum > 0)) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ''), 'error'); return; }
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/quality', {
@@ -523,12 +557,13 @@
         value: computeAsRate ? undefined : numerator, num: computeAsRate ? numerator : undefined, den: computeAsRate ? denNum : undefined,
         groups: numMode === 'group' ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
         groupsDen: (numMode === 'group' && computeAsRate) ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
+        deptBreakdown: numMode === 'dept' ? deptRows.map((r) => ({ dept: r.dept || '', g: GROUP_KEYS.reduce((o, [k]) => (o[k] = { n: Number(r.g[k].n) || 0, d: Number(r.g[k].d) || 0 }, o), {}) })) : undefined,
         capa: (capa.finding || capa.corrective || capa.preventive) ? { finding: capa.finding, corrective: capa.corrective, preventive: capa.preventive } : undefined,
         remark,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ area: area.name, month }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
+        if (r.ok) { setDone({ area: area.name, month }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -627,10 +662,11 @@
               <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginBottom: 13 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                   <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{numLabel}{isRate ? ' (numerator ÷ denominator)' : ''}</div>
-                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{numerator}{isRate ? ' / ' + groupDenSum : ''}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{numerator}{isRate ? ' / ' + denNum : ''}</span>
                   <span style={{ flex: 1 }} />
                   <div className="seg">
                     <button className={numMode === 'group' ? 'on' : ''} onClick={() => setNumMode('group')}>By group</button>
+                    <button className={numMode === 'dept' ? 'on' : ''} onClick={() => { setNumMode('dept'); if (deptRows.length === 0) setDeptRows([blankDeptRow()]); }}>By department</button>
                     <button className={numMode === 'direct' ? 'on' : ''} onClick={() => setNumMode('direct')}>Direct value</button>
                   </div>
                 </div>
@@ -654,6 +690,40 @@
                         <span>Total {denLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{groupDenSum}</b></span>
                       </div>
                     )}
+                  </>
+                ) : numMode === 'dept' ? (
+                  <>
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>Enter each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group — every department &amp; group rolls up to the hospital total.</div>
+                    {deptRows.map((r, i) => {
+                      const rn = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].n) || 0), 0);
+                      const rd = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].d) || 0), 0);
+                      const rv = isRate ? (rd > 0 ? Math.round((rn / rd) * mult * 100) / 100 + (formula === 'pct' ? '%' : '') : '—') : rn;
+                      return (
+                        <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--panel-2)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                            <input style={{ ...inputStyle, flex: 1, fontWeight: 600 }} value={r.dept} onChange={(e) => setDeptName(i, e.target.value)} placeholder="Department (e.g. OPD)" />
+                            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)', whiteSpace: 'nowrap' }}>{rv}</span>
+                            {deptRows.length > 1 && <button className="icon-btn" title="Remove department" style={{ width: 26, height: 26, border: 0, background: 'transparent', color: 'var(--rose)' }} onClick={() => delDeptRow(i)}><Ic d={I.x} s={13} /></button>}
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                            {GROUP_KEYS.map(([k, lbl]) => (
+                              <div key={k}>
+                                <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', marginBottom: 3 }}>{lbl}</div>
+                                <div style={{ display: 'flex', gap: 4 }}>
+                                  <input type="number" min="0" step="any" style={{ ...inputStyle, padding: '6px 7px' }} value={r.g[k].n} onChange={(e) => setDeptCell(i, k, 'n', e.target.value)} placeholder={isRate ? 'num' : '0'} />
+                                  {isRate && <input type="number" min="0" step="any" style={{ ...inputStyle, padding: '6px 7px' }} value={r.g[k].d} onChange={(e) => setDeptCell(i, k, 'd', e.target.value)} placeholder="den" />}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 2 }}>
+                      <button className="btn sm" onClick={addDeptRow}><Ic d={I.plus} s={13} />Add department</button>
+                      <span style={{ flex: 1 }} />
+                      <span style={{ fontSize: 11, color: 'var(--muted)' }}>Total {numLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{deptTot.n}</b>{isRate ? <> · Total {denLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{deptTot.d}</b></> : null}</span>
+                    </div>
                   </>
                 ) : (
                   <Field label={<span>{numLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(enter the number directly)</span></span>} hint={numDef || undefined}>
@@ -689,7 +759,7 @@
           {qLocked && <Banner>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)} — submission is locked for data collectors. Ask an administrator to change it.</Banner>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <button className="btn pri" disabled={busy || qLocked} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qLocked ? 'Locked — already recorded' : 'Save monthly value')}</button>
-            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
+            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
           </div>
         </Card>
       </div>
@@ -715,7 +785,7 @@
   // (PATCH /api/submissions/:id) before approving; collectors see it read-only.
   function SubmissionDetail({ s, canEdit, onClose, onSaved }) {
     const editable = canEdit && s.status === 'pending';
-    const dept = s.type === 'patient' ? (((window.UNICO && window.UNICO.DEPARTMENTS) || []).find((d) => d.id === s.department)) : null;
+    const dept = s.type === 'patient' ? (dcAllDepts().find((d) => d.id === s.department)) : null;
     const cols = (dept && dept.cols) || (s.values ? Object.keys(s.values).map((id) => ({ id, label: id })) : []);
     const pctOf = {}; ((dept && dept.cols) || []).forEach((c) => { pctOf[c.id] = !!c.pct; });
     const [vals, setVals] = useState(() => Object.assign({}, s.values || {}));
@@ -993,7 +1063,7 @@
 
   /* ============================ Share Links ============================ */
   function DataShareLinks({ depts }) {
-    const all = (window.UNICO && window.UNICO.DEPARTMENTS) || depts || [];
+    const all = (depts && depts.length) ? depts : dcAllDepts();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), []);
     const [links, setLinks] = useState(null);
     const [resps, setResps] = useState([]);
@@ -1073,7 +1143,7 @@
   // "My data" so the records match what the month dropdown flags as "reported".
   function reportedRecords() {
     const out = [];
-    const liveDepts = (window.UNICO && window.UNICO.DEPARTMENTS) || [];
+    const liveDepts = dcAllDepts();
     liveDepts.forEach((d) => (d.series || []).forEach((r) => {
       const values = {}; Object.keys(r).forEach((k) => { if (k !== 'month' && k !== 'full') values[k] = r[k]; });
       out.push({ id: 'rec-p-' + d.id + '-' + r.month, type: 'patient', department: d.id, departmentName: d.name, month: r.month, values, status: 'reported', submittedAt: null });
@@ -1149,7 +1219,9 @@
 
   function CollectorPortal() {
     const user = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
-    const depts = (window.UNICO && window.UNICO.DEPARTMENTS) || [];
+    // Merged list so a newly-created custom department the collector is assigned to
+    // appears (and so the Patient Statistics tab shows when they only own a custom one).
+    const depts = dcAllDepts();
     const areas = (window.qualityData ? window.qualityData() : []);
     const hasPatient = depts.length > 0;
     const hasQuality = areas.length > 0;
