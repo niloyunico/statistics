@@ -589,6 +589,41 @@ function signupPage(opts) {
     + '</form></body></html>';
 }
 
+/* ---------------- quality departments / areas (admin CRUD) ---------------- */
+async function getQualityAreas() {
+  const c = await col('quality');
+  if (!c) return [];
+  const docs = await c.find({}).sort({ name: 1 }).toArray();
+  return docs.map((d) => ({ key: d._id, name: d.name || d._id, indicatorCount: Array.isArray(d.indicators) ? d.indicators.length : 0 }));
+}
+async function createQualityArea(input) {
+  const name = String((input && input.name) || '').trim();
+  if (!name) throw new Error('Department / area name is required.');
+  const c = await col('quality');
+  if (!c) throw new Error('Database not available.');
+  const base = 'area-' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'dept');
+  let _id = base, n = 1;
+  while (await c.findOne({ _id })) { _id = base + '-' + (++n); }
+  await c.insertOne({ _id, name, indicators: [], createdAt: Date.now() });
+  return { ok: true, area: { key: _id, name, indicatorCount: 0 } };
+}
+async function renameQualityArea(key, input) {
+  const name = String((input && input.name) || '').trim();
+  if (!name) throw new Error('Name is required.');
+  const c = await col('quality');
+  if (!c) throw new Error('Database not available.');
+  const r = await c.updateOne({ _id: String(key) }, { $set: { name } });
+  if (!r.matchedCount) throw new Error('Department not found.');
+  return { ok: true };
+}
+async function deleteQualityArea(key) {
+  const c = await col('quality');
+  if (!c) throw new Error('Database not available.');
+  const r = await c.deleteOne({ _id: String(key) });
+  if (!r.deletedCount) throw new Error('Department not found.');
+  return { ok: true };
+}
+
 /* ---------------- route registration ---------------- */
 function mount(app, opts) {
   const guard = (opts && opts.requireApi) || function (req, res, next) { next(); };
@@ -634,6 +669,19 @@ function mount(app, opts) {
   });
   app.post('/api/submissions/quality', guard, async (req, res) => {
     try { res.json(await submitQuality(req.body || {}, { submittedBy: who(req), source: 'app' })); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+  });
+  // Admin: manage quality departments / areas (create / rename / delete).
+  app.get('/api/quality/areas', guard, async (req, res) => {
+    try { res.json({ ok: true, areas: await getQualityAreas() }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+  });
+  app.post('/api/quality/areas', guard, adminOnly, async (req, res) => {
+    try { res.json(await createQualityArea(req.body || {})); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+  });
+  app.patch('/api/quality/areas/:key', guard, adminOnly, async (req, res) => {
+    try { res.json(await renameQualityArea(req.params.key, req.body || {})); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+  });
+  app.delete('/api/quality/areas/:key', guard, adminOnly, async (req, res) => {
+    try { res.json(await deleteQualityArea(req.params.key)); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
   // Admin: manage custom fields on a department's data-collection form.
   app.post('/api/departments/:id/fields', guard, adminOnly, async (req, res) => {

@@ -71,6 +71,7 @@ const MANIFEST = [
   { file: 'input.jsx', jsx: true },
   { file: 'reports.jsx', jsx: true },
   { file: 'quality-console.jsx', jsx: true },
+  { file: 'quality-dept-manage.jsx', jsx: true },
   { file: 'charts-gallery.jsx', jsx: true },
   { file: 'login.jsx', jsx: true },
   { file: 'auth-login.jsx', jsx: true },

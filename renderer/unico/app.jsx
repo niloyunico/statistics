@@ -57,6 +57,11 @@ function App(){
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];
     body=<Settings depts={depts} store={store}/>;
+  } else if(route.view==='qualityDeptManage'){
+    // Standalone Manage-Departments screen (its own file); handled BEFORE the quality
+    // catch-all so it does not get routed into QualityView.
+    crumbs=['UNICO','Quality Indicators','Manage Departments'];
+    body= (typeof QualityDeptManage!=='undefined') ? <QualityDeptManage setRoute={setRoute}/> : null;
   } else if(route.view && route.view.indexOf('quality')===0){
     // Quality module renders INSIDE the global shell now (window.QualityView); the 8
     // views are the quality submenu. Legacy quality* routes map to a module id.

@@ -53,7 +53,7 @@ const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','input','reports','settings'],
   datacol:['dcPatient','dcQuality','dcResponsibles','dcShare','dcFields','dcReview'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffProfile','staffForm'],
-  quality:['quality','qualityScore','qualityTrend','qualityReport','qualityReportQ','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub'],
+  quality:['quality','qualityScore','qualityTrend','qualityReport','qualityReportQ','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   users:  ['users'],
 };
 function unicoModuleOf(view){
@@ -88,6 +88,7 @@ function unicoSidebarGroups(moduleId){
       {id:'qualityIncidents',label:'Incident Reports',icon:I.activity},
     ]},
     {sec:'Administration', items:[
+      {id:'qualityDeptManage',label:'Manage Departments',icon:I.layers},
       {id:'qualityManage',label:'Indicator Administration',icon:I.edit,match:['qualityManage','qualityCatalog','qualityAssign','qualityEdit']},
       {id:'qualityDataEntry',label:'Quality Data Entry',icon:I.input},
       {id:'qualityCapa',label:'Action Plans',icon:I.check},

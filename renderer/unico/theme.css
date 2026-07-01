@@ -302,6 +302,15 @@ table.tbl tr.tot td{font-weight:700;color:var(--ink);background:var(--panel-2);b
   body.pdf-export-mode .pdf-doc.portrait .pdf-page{ page:rpt-port; }
 }
 
+/* ---------- QC Report Builder — on-screen sheet parity + exported-page polish ---------- */
+/* Zebra striping on the exported quality month-wise table + keep the branded department
+   band from splitting across a page break. Purely cosmetic — not load-bearing. */
+.pdf-page .qc-rpt-tbl tr:nth-child(even) td{ background:#fbfdff; }
+@media print{
+  .pdf-page .qc-band{ break-inside:avoid; page-break-inside:avoid; }
+  .pdf-page .qc-rpt-tbl thead{ display:table-header-group; }
+}
+
 /* ---------- global toast feedback (feedback.jsx) ---------- */
 #uni-toast-root{position:fixed;inset:0;z-index:2000;pointer-events:none}
 .uni-toast-stack{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:9px;align-items:flex-end;max-width:min(380px,92vw);z-index:2000}

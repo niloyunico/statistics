@@ -412,8 +412,10 @@
     const fyMonths = (window.QUALITY_QUARTER_MONTHS) ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
     const monthOpts = (fyMonths && fyMonths.length) ? fyMonths : (() => { const o = MO(); const i = o.indexOf('Jun-25'); return i >= 0 ? o.slice(i, i + 12) : o.slice(0, 12); })();
     const defMonth = monthOpts[monthOpts.length - 1] || '';
-    const [areaKey, setAreaKey] = useState((prefill && prefill.area) || (areas[0] && areas[0].key) || '');
-    const area = useMemo(() => areas.find((a) => a.key === areaKey) || areas[0], [areaKey]);
+    // Default to the first area that actually HAS indicators (so a collector never
+    // lands on an empty area), falling back to the first area.
+    const [areaKey, setAreaKey] = useState((prefill && prefill.area) || ((areas.find((a) => a.indicators && a.indicators.length) || areas[0] || {}).key) || '');
+    const area = useMemo(() => areas.find((a) => a.key === areaKey) || areas[0], [areas, areaKey]);
     const [indId, setIndId] = useState('');
     const [newInd, setNewInd] = useState({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' });
     const [month, setMonth] = useState(defMonth);
@@ -586,9 +588,9 @@
               </select>
             </Field>
           </div>
-          <Field label="Indicator">
+          <Field label="Indicator" hint={inds.length === 0 ? ('No indicators are assigned to ' + (area ? area.name : 'this area') + ' yet. Ask an administrator to assign them (Quality → Assign by Department), then reload this page.') : undefined}>
             <select style={inputStyle} value={indId} onChange={(e) => setIndId(e.target.value)}>
-              <option value="">Select…</option>
+              <option value="">{inds.length ? 'Select…' : '— no indicators for this area —'}</option>
               {inds.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
           </Field>

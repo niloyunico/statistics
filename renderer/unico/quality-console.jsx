@@ -973,107 +973,567 @@ function QCSpark({ind,w=92,h=24}){
   const breach=MONTHS.some(m=>monthStatus(ind,m[0])==='breach'); const col=breach?P.rose:P.green;
   return (<svg width={w} height={h}><path d={path} fill="none" stroke={col} strokeWidth="1.5"/>{pts.map((p,i)=>p.y!=null&&<circle key={i} cx={p.x} cy={p.y} r="1.5" fill={col}/>)}</svg>);
 }
-function QCReports({depts}){
-  const [dept,setDept]=useState('all');
-  const rd = useMemo(()=> dept==='all'? null : (depts.find(d=>d.key===dept)||null), [depts,dept]);
-  const inds = useMemo(()=> rd ? (rd.indicators||[]) : (depts||[]).flatMap(d=>d.indicators||[]), [depts,rd]);
-  const st = useMemo(()=>{ let ok=0,breach=0; (depts||[]).forEach(d=>{ if(rd&&d.key!==rd.key) return; const s=deptStat(d); ok+=s.ok; breach+=s.breach; }); return {breach, rate:(ok+breach)?Math.round(ok*100/(ok+breach)):100}; }, [depts,rd]);
-  const scopeName = rd? rd.name : 'All departments';
-  const incCount = useMemo(()=> (depts||[]).reduce((n,d)=> (rd&&d.key!==rd.key)?n:(n+qcIncidentsOf(d).length),0), [depts,rd]);
-  const rows = rd? (rd.indicators||[]).map(ind=>({d:rd,ind})) : (depts||[]).flatMap(d=>(d.indicators||[]).map(ind=>({d,ind})));
-  const EXP=[['pdf','PDF'],['excel','Excel'],['word','Word'],['csv','CSV']];
-  return (
-    <div>
-      <div style={{display:'flex',alignItems:'center',gap:13,marginBottom:16,flexWrap:'wrap'}}>
-        <div style={{width:40,height:40,borderRadius:11,background:'#eef8fc',color:'#0090ca',display:'grid',placeItems:'center',flexShrink:0}}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7"></path></svg>
-        </div>
-        <div style={{flex:1,minWidth:0}}>
-          <h1 style={{margin:0,fontSize:21,fontWeight:700,color:P.ink,letterSpacing:'-.3px'}}>Monthly Quality Report</h1>
-          <div style={{fontSize:12.5,color:P.muted,marginTop:2}}>Charts, month-wise values &amp; incident details · FY 2025–26</div>
-        </div>
-        <select value={dept} onChange={e=>setDept(e.target.value)} style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,fontWeight:600,background:'#fff',color:P.ink,outline:'none'}}>
-          <option value="all">All departments</option>
-          {depts.map(o=> <option key={o.key} value={o.key}>{o.name}</option>)}
-        </select>
-      </div>
+/* ============================================================================
+   QC REPORT BUILDER — the Reports view. A statistics-Report-Builder (reports.jsx)
+   clone powered by QUALITY data. REPLACES the old QCReports. Both mount sites
+   (QualityView, QualityConsole) keep working via the QCReports alias at the end.
+   NOTE: chart components + PALETTE live in other per-file IIFEs, so they are
+   consumed via window.* (bare names do NOT resolve across build-renderer bundling).
+   ============================================================================ */
+const QC_PAGE_SIZES={A4:[700,1.414],A3:[815,1.414],Letter:[700,1.294]};
+const QC_CHART_STYLE_LABEL={bar3d:'3D Bars',bar:'Bar',line:'Line',area:'Area + Benchmark',combo:'Bar + Line',grouped:'Grouped',stacked:'Stacked',pct:'100% Stacked',horizontal:'Horizontal',donut:'Composition'};
+const QC_REPORT_STYLES=[['bar3d','3D'],['bar','Bar'],['line','Line'],['area','Area'],['combo','Bar+Line'],['grouped','Grouped'],['stacked','Stacked'],['pct','100%'],['horizontal','Horizontal'],['donut','Donut']];
 
-      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:14,background:'#fff',border:'1px solid '+P.line,borderRadius:10,padding:'10px 13px'}}>
-        <span style={{fontSize:12,fontWeight:700,color:P.ink2}}>Export full report (all departments + incident details):</span>
-        {EXP.map(([f,l])=>(
-          <button key={f} onClick={()=>qcExport(depts,f)} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 12px',border:'1px solid '+P.line,borderRadius:7,background:'#fff',color:P.ink2,fontSize:12,fontWeight:600,cursor:'pointer'}}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m0 0l4-4m-4 4l-4-4M4 19h16"/></svg>{l}
-          </button>
-        ))}
-        <span style={{flex:1}}/>
-        <span style={{fontSize:11,color:P.muted}}>{depts.length} departments · {incCount} incident{incCount!==1?'s':''} in scope</span>
-      </div>
+/* palette cycle (window.PALETTE from charts.jsx; local fallback so a missing global never throws) */
+const QC_PAL = (typeof window!=='undefined' && window.PALETTE) || ['#0b66d0','#0f9b8e','#e08a1e','#6a52d4','#d23a52','#2bb3a3','#8a93a3','#4f8df7','#1f9d57','#c2486f'];
+function qcTone(d){ const k=(d&&d.key)||''; return QC_PAL[(k.charCodeAt(0)||0)%QC_PAL.length]; }
 
-      <div style={{display:'grid',gridTemplateColumns:'220px 1fr',gap:14,marginBottom:14}}>
-        <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,padding:'14px 16px',display:'flex',flexDirection:'column',alignItems:'center',gap:6}}>
-          <div style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'.4px',alignSelf:'flex-start'}}>Compliance</div>
-          <QCDonut rate={st.rate}/>
-          <div style={{fontSize:11,color:P.muted}}><b style={{color:P.rose}}>{st.breach}</b> breach-cells · {inds.length} indicators</div>
-        </div>
-        <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,padding:'14px 16px'}}>
-          <div style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'.4px',marginBottom:10}}>Breaches by month — {scopeName}</div>
-          <QCMonthBars inds={inds}/>
-        </div>
-      </div>
+/* One value per month over the given axis, month fallback -> quarter (seed is quarter-only). */
+function qcMonthVals(ind, months){
+  months = months || MONTHS;
+  return months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); return v; });
+}
+/* Rows shaped for the window.* charts: {mon, mfull, q, val, has, bench}. */
+function qcChartRows(ind, months){
+  months = months || MONTHS;
+  const bench=(ind.benchmarkValue==null||ind.benchmarkValue==='')?null:Number(ind.benchmarkValue);
+  const vals=qcMonthVals(ind, months);
+  return months.map((m,i)=>{ const v=vals[i]; return {mon:m[1].split(' ')[0], mfull:m[1], q:m[2], val:v==null?0:v, has:v!=null, bench}; });
+}
+/* Representative indicator for a department: worst-performing with data, else first with data, else [0]. */
+function qcLeadIndicator(d){
+  const withData=(d.indicators||[]).filter(hasData);
+  if(!withData.length) return (d.indicators||[])[0]||null;
+  return withData.slice().sort((a,b)=>countBreaches(b)-countBreaches(a))[0];
+}
+/* Per-department derived status (QCDashboard L352-355, verbatim logic). */
+function qcDeptStatus(d, months){
+  const st=deptStat(d, months); const brRate=(st.ok+st.breach)?st.breach/(st.ok+st.breach):0;
+  const status=brRate>0.16?'Needs Improvement':brRate>0.06?'Good':'Excellent';
+  return {status, color:statusColorFor(status), st};
+}
+/* Up-to-6 indicators with data, shaped as chart series ({id,key,label,color}). */
+function qcIndSeries(d){
+  return (d.indicators||[]).filter(hasData).slice(0,6)
+    .map((ind,i)=>({id:'i'+i, key:'i'+i, label:ind.name, color:QC_PAL[i%QC_PAL.length]}));
+}
+/* One row per month, one column per (up-to-6) indicator — for grouped/stacked/pct charts. */
+function qcDeptCompareRows(d, months){
+  months = months || MONTHS;
+  const inds=(d.indicators||[]).filter(hasData).slice(0,6);
+  return months.map((m,mi)=>{ const row={mon:m[1].split(' ')[0]};
+    inds.forEach((ind,i)=>{ row['i'+i]=qcMonthVals(ind, months)[mi]||0; }); return row; });
+}
+/* Breach composition per indicator (donut slices). */
+function qcDonutData(d){
+  return (d.indicators||[]).map((ind,i)=>({label:ind.name, value:countBreaches(ind), color:QC_PAL[i%QC_PAL.length]})).filter(x=>x.value>0);
+}
+/* Chart dispatcher — every element uses window.* (cross-IIFE) + flat for print. */
+function qcChartEl(d, style, ind, tone, months){
+  months = months || MONTHS;
+  if(!ind) return <div style={{height:150,display:'grid',placeItems:'center',color:P.faint,fontSize:12}}>No data</div>;
+  const rows=qcChartRows(ind, months); const bench=rows.length?rows[0].bench:null;
+  const W=window;
+  if(style==='bar')  return W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true});
+  if(style==='line') return W.LineChart({data:rows, x:'mon', y:'val', height:195, color:tone, area:false, flat:true});
+  if(style==='area') return bench!=null ? W.AreaTargetChart({data:rows, x:'mon', y:'val', target:bench, height:195, color:tone, flat:true})
+                                        : W.LineChart({data:rows, x:'mon', y:'val', height:195, color:tone, area:true, flat:true});
+  if(style==='combo') return W.ComboChart({data:rows, x:'mon', barKey:'val', lineKey:'bench', barColor:tone, lineColor:P.amber, barLabel:ind.name, lineLabel:'Benchmark', height:210, flat:true});
+  if(style==='grouped'){ const sr=qcIndSeries(d); return sr.length>1 ? W.GroupedBar({data:qcDeptCompareRows(d, months), x:'mon', series:sr, height:210}) : W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true}); }
+  if(style==='stacked'){ const sr=qcIndSeries(d); return sr.length>1 ? W.StackedBar({data:qcDeptCompareRows(d, months), x:'mon', series:sr, height:210}) : W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true}); }
+  if(style==='pct'){ const sr=qcIndSeries(d); return sr.length>1 ? W.StackedPctBar({data:qcDeptCompareRows(d, months), x:'mon', series:sr, height:210, flat:true}) : W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true}); }
+  if(style==='horizontal'){ const vals=qcMonthVals(ind, months); return W.HBar({rows:months.map((m,i)=>({label:m[1], value:vals[i]||0, color:tone})), height:Math.max(150,months.length*22)}); }
+  if(style==='donut'){ const dd=qcDonutData(d); return dd.length>1
+      ? <div style={{display:'grid',placeItems:'center',minHeight:205}}>{W.Donut({data:dd, size:188, centerValue:dd.reduce((s,x)=>s+x.value,0), centerLabel:'Breaches', flat:true})}</div>
+      : W.Bar3D({data:rows, x:'mon', y:'val', height:205, color:tone, multi:false, flat:true}); }
+  return W.Bar3D({data:rows, x:'mon', y:'val', height:205, color:tone, multi:false, flat:true}); // bar3d + default
+}
 
-      <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
-        <div style={{padding:'14px 18px',borderBottom:'1px solid '+P.line2,display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',background:'linear-gradient(150deg,#ffffff,#f5fafd)'}}>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:15,fontWeight:700,color:P.ink}}>UNICO Hospitals — {scopeName}</div>
-            <div style={{fontSize:11.5,color:P.muted}}>Quality Indicator Report · FY 2025–26 · Jun 2025 – May 2026</div>
-          </div>
-          <div style={{textAlign:'center'}}>
-            <div style={{fontFamily:MONO,fontSize:18,fontWeight:700,color:P.green}}>{st.rate}%</div>
-            <div style={{fontSize:10,color:P.faint,textTransform:'uppercase',letterSpacing:'.4px'}}>zero-defect</div>
-          </div>
-          <div style={{textAlign:'center'}}>
-            <div style={{fontFamily:MONO,fontSize:18,fontWeight:700,color:P.rose}}>{st.breach}</div>
-            <div style={{fontSize:10,color:P.faint,textTransform:'uppercase',letterSpacing:'.4px'}}>breaches</div>
-          </div>
+/* Department-level KPI cards (Summary page + Compare rows) — mirrors QCDashboard L313-318. */
+function qcDeptKpis(d, months){
+  const st=deptStat(d, months);
+  const inds=(d.indicators||[]);
+  const breaches=st.breach;
+  let latest='—', latestStatus='na';
+  for(let i=months.length-1;i>=0;i--){ const m=months[i];
+    const rep=inds.some(ind=>monthStatus(ind,m[0])!=='na');
+    if(rep){ latest=m[1]; latestStatus=inds.some(ind=>monthStatus(ind,m[0])==='breach')?'breach':'ok'; break; } }
+  return [
+    ['Zero-Defect %', st.rate+'%',         st.rate>=90?P.green:st.rate>=70?P.amber:P.rose, st.ok+' on benchmark · '+breaches+' breaches'],
+    ['Breaches',      String(breaches),    breaches>0?P.rose:P.green, 'indicator-months off benchmark'],
+    ['Indicators',    String(inds.length), P.violet, 'reporting quality KPIs'],
+    ['Latest',        latest.split(' ')[0]+' '+(latestStatus==='breach'?'✕':latestStatus==='ok'?'✓':'·'), statusColorFor(latestStatus==='breach'?'Needs Improvement':latestStatus==='ok'?'Excellent':''), 'most recent reported month'],
+  ];
+}
+/* Indicator-level KPI cards (Detailed page) — LATEST / TOTAL|AVG / PEAK|WORST / BREACHES. */
+function qcIndKpis(ind, months){
+  const vals=months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); return v; });
+  const nn=vals.filter(v=>v!=null);
+  let lastIdx=-1; for(let i=vals.length-1;i>=0;i--){ if(vals[i]!=null){ lastIdx=i; break; } }
+  const latest = lastIdx<0?null:vals[lastIdx];
+  const total  = nn.reduce((s,v)=>s+v,0);
+  const higher = ind.goalDirection==='higher_is_better';
+  const peak   = nn.length ? (higher?Math.min.apply(null,nn):Math.max.apply(null,nn)) : null;
+  const avg    = nn.length ? total/nn.length : null;
+  const event  = isEventIndicator(ind);
+  const cards=[['Latest', latest==null?'—':fmtVal(ind,latest), statusColorFor(qStatus(ind,latest)==='breach'?'Poor':qStatus(ind,latest)==='ok'?'Excellent':''), benchExpr(ind)]];
+  if(event){ cards.push(['YTD Total', fmtVal(ind,total), P.blue, 'summed over period']); cards.push(['Peak (worst)', peak==null?'—':fmtVal(ind,peak), P.amber, 'worst month']); }
+  else     { cards.push(['Average', avg==null?'—':fmtVal(ind,avg), P.blue, 'mean over period']); cards.push(['Worst', peak==null?'—':fmtVal(ind,peak), P.amber, higher?'lowest month':'highest month']); }
+  cards.push(['Breaches', String(countBreaches(ind)), countBreaches(ind)>0?P.rose:P.green, 'months off benchmark']);
+  return cards;
+}
+
+function QCReportBuilder({depts}){
+  const allKeys = depts.map(d=>d.key);
+  const [reportType,setReportType] = useState('summary');
+  const [period,setPeriod]         = useState({mode:'all'});
+  const [chartStyles,setChartStyles]= useState(['bar3d']);
+  const [hdrTitle,setHdrTitle]     = useState('Quality Indicator Report');
+  const [hdrSub,setHdrSub]         = useState('');
+  const [orgName,setOrgName]       = useState('UNICO HOSPITALS PLC');
+  const [showLogo,setShowLogo]     = useState(true);
+  const [confidential,setConfidential]= useState(true);
+  const [footerNote,setFooterNote] = useState('');
+  const [pageSize,setPageSize]     = useState('A4');
+  const [orient,setOrient]         = useState('portrait');
+  const [selectedDepts,setSelectedDepts]= useState(allKeys.slice(0,4));
+  const [pageIdx,setPageIdx]       = useState(0);
+  const [exporting,setExporting]   = useState(false);
+  const [note,setNote]             = useState(null);
+
+  const toggleStyle=s=>setChartStyles(a=>a.includes(s)?(a.length>1?a.filter(x=>x!==s):a):[...a,s]);
+  const toggleDept =k=>setSelectedDepts(s=>s.includes(k)?s.filter(x=>x!==k):[...s,k]);
+  const chosen=depts.filter(d=>selectedDepts.includes(d.key));
+
+  /* period -> months (fixed 12-entry FY axis, filtered) */
+  const pMonths=(()=>{
+    const q=Q=>MONTHS.filter(m=>m[2]===Q);
+    if(period.mode==='q1')    return q('Q1');
+    if(period.mode==='q2')    return q('Q2');
+    if(period.mode==='q3')    return q('Q3');
+    if(period.mode==='q4')    return q('Q4');
+    if(period.mode==='h1')    return MONTHS.slice(0,6);
+    if(period.mode==='h2')    return MONTHS.slice(6);
+    if(period.mode==='last3') return MONTHS.slice(-3);
+    if(period.mode==='custom'){ const a=MONTHS.findIndex(m=>m[0]===period.from), b=MONTHS.findIndex(m=>m[0]===period.to);
+      if(a>=0&&b>=0){ const lo=Math.min(a,b),hi=Math.max(a,b); return MONTHS.slice(lo,hi+1); } return MONTHS; }
+    return MONTHS;
+  })();
+  const rangeLabel = pMonths.length ? (pMonths[0][1]+' – '+pMonths[pMonths.length-1][1]) : 'FY 2025–26';
+
+  /* sheet sizing (identical to stats §4.1) */
+  const [base,ratio]=QC_PAGE_SIZES[pageSize];
+  const portrait=orient==='portrait';
+  const pageW=portrait?base:Math.round(base*ratio);
+  const pageMinH=portrait?Math.round(base*ratio):base;
+
+  /* flat page-list — Detailed: one page per (dept × indicator); Summary: per dept; Compare: single */
+  const pages = React.useMemo(()=>{
+    if(reportType==='compare') return chosen.length ? [{kind:'compare'}] : [];
+    if(reportType==='detail')
+      return chosen.flatMap(d=>{
+        const inds=(d.indicators||[]).filter(hasData);
+        const list=inds.length?inds:(d.indicators||[]);
+        return (list.length?list:[null]).map(ind=>({kind:'detail', dept:d, ind}));
+      });
+    return chosen.map(d=>({kind:'summary', dept:d}));
+  },[chosen,reportType,selectedDepts]);
+  const pageCount=Math.max(1,pages.length);
+  const pi=Math.min(pageIdx,pageCount-1);
+  const cur=pages[pi];
+
+  useEffect(()=>{ setPageIdx(0); },[reportType, selectedDepts.length]);
+
+  /* ---- shared inline style helpers (quality-styled clone of stats §3) ---- */
+  const fieldLabel=t=><div style={{fontSize:11.5,fontWeight:600,color:P.ink2,marginBottom:7}}>{t}</div>;
+  const sel2={padding:'9px 11px',border:'1px solid '+P.line,borderRadius:7,fontSize:13,fontFamily:'inherit',background:'#fff'};
+  const pill=(on)=>({display:'flex',alignItems:'center',gap:4,padding:'5px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?P.blue:P.line),background:on?'#eef8fc':'#fff',color:on?P.blue700:P.muted});
+  const Tick=()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>;
+  const DownIc=()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m0 0l4-4m-4 4l-4-4M4 19h16"/></svg>;
+  const DocIc=({c})=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c||P.blue} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7"></path></svg>;
+  const expBtn={display:'inline-flex',alignItems:'center',gap:6,padding:'6px 12px',border:'1px solid '+P.line,borderRadius:7,background:'#fff',color:P.ink2,fontSize:12,fontWeight:600,cursor:'pointer'};
+  const uSub={fontSize:9.5,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:.4,margin:'8px 0 2px'};
+
+  /* ---- branded page fragments ---- */
+  const Header=()=>(
+    <div className="qc-band" style={{display:'flex',alignItems:'center',gap:12,borderBottom:'2px solid '+P.blue,paddingBottom:14}}>
+      {showLogo&&<img src="unico/logo.svg" alt="UNICO Healthcare" style={{height:38}}/>}
+      <div>
+        <div style={{fontSize:14,fontWeight:700,color:P.ink}}>{hdrTitle||'Quality Report'}</div>
+        <div style={{fontSize:10.5,color:P.muted,letterSpacing:.4,textTransform:'uppercase',marginTop:2}}>{(hdrSub?hdrSub+' · ':'')+rangeLabel}</div>
+      </div>
+      <span style={{flex:1}}/>
+      <div style={{textAlign:'right',fontSize:10,color:P.faint}}>Generated<br/><b style={{fontFamily:MONO,color:P.ink2}}>{new Date().toLocaleDateString()}</b></div>
+    </div>
+  );
+  const Footer=({n,total})=>(
+    <div className="pdf-foot" style={{marginTop:20,borderTop:'1px solid '+P.line,paddingTop:8,fontSize:9.5,color:P.faint,display:'flex'}}>
+      <span>{orgName}</span><span style={{flex:1}}/>
+      <span style={{fontFamily:MONO}}>Page {n} of {total}</span><span style={{flex:1}}/>
+      <span>{(footerNote?footerNote+' · ':'')+(confidential?'Confidential · ':'')+pageSize+' '+orient}</span>
+    </div>
+  );
+
+  const KpiCards=({cards,tone})=>(
+    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:16}}>
+      {cards.map((c,i)=>(
+        <div key={i} style={{background:P.panel2,borderRadius:7,padding:'9px 11px',borderLeft:'3px solid '+tone}}>
+          <div style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:.3}}>{c[0]}</div>
+          <div style={{fontFamily:MONO,fontSize:18,fontWeight:600,color:c[2]||P.ink,lineHeight:1.15,margin:'2px 0'}}>{c[1]}</div>
+          {c[3]&&<div style={{fontSize:9,color:P.faint,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{c[3]}</div>}
         </div>
-        <div style={{overflowX:'auto'}}>
-          <table style={{borderCollapse:'collapse',fontSize:11,width:'100%',minWidth:1040}}>
-            <thead>
-              <tr style={{background:P.panel2}}>
-                {rd?null:<th style={{textAlign:'left',padding:'8px 8px',fontSize:9.5,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2}}>Dept</th>}
-                <th style={{textAlign:'left',padding:'8px 10px',fontSize:10,textTransform:'uppercase',letterSpacing:'.2px',color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2,minWidth:180}}>Indicator</th>
-                <th style={{textAlign:'left',padding:'8px 8px',fontSize:9.5,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2,width:92}}>Benchmark</th>
-                {MONTHS.map(m=> <th key={m[0]} style={{textAlign:'center',padding:'8px 4px',fontSize:9,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2}}>{m[1].split(' ')[0]}</th>)}
-                <th style={{textAlign:'center',padding:'8px 6px',fontSize:9,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2}}>Trend</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({d,ind})=>(
-                <tr key={d.key+'/'+ind.id} style={{borderBottom:'1px solid '+P.line2}}>
-                  {rd?null:<td style={{padding:'6px 8px',textAlign:'left',fontSize:10,color:P.muted,whiteSpace:'nowrap'}}>{d.name}</td>}
-                  <td style={{padding:'7px 10px',textAlign:'left',fontWeight:600,color:P.ink}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
-                  <td style={{padding:'7px 8px',textAlign:'left',fontFamily:MONO,fontSize:10,color:P.ink2}}>{benchExpr(ind)}</td>
-                  {MONTHS.map(m=>{
-                    const v=monthRaw(ind,m[0]); const s=monthStatus(ind,m[0]);
-                    const col= s==='breach'?P.rose : s==='ok'?P.green : P.faint;
-                    const bg= s==='breach'?'#fbe9ec' : s==='ok'?'#e7f6ed' : '#f4f6f9';
-                    const disp = s==='na' ? '·' : fmtVal(ind,v);
-                    return (
-                      <td key={m[0]} style={{textAlign:'center',padding:'4px 3px'}}>
-                        <span style={{display:'inline-block',minWidth:30,padding:'3px 4px',borderRadius:5,background:bg,color:col,fontFamily:MONO,fontWeight:600,fontSize:10}}>{disp}</span>
-                      </td>
-                    );
-                  })}
-                  <td style={{textAlign:'center',padding:'4px 6px'}}><QCSpark ind={ind}/></td>
-                </tr>
-              ))}
-            </tbody>
+      ))}
+    </div>
+  );
+
+  /* month-wise table cell */
+  const MonthCell=({ind,m})=>{
+    let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]);
+    const s=qStatus(ind,v);
+    const col=s==='breach'?P.rose:s==='ok'?P.green:P.faint;
+    const bg =s==='breach'?'#fbe9ec':s==='ok'?'#e7f6ed':'#f4f6f9';
+    return <td style={{textAlign:'center',padding:'4px 3px'}}><span style={{display:'inline-block',minWidth:30,padding:'3px 4px',borderRadius:5,background:bg,color:col,fontFamily:MONO,fontWeight:600,fontSize:10}}>{s==='na'?'·':fmtVal(ind,v)}</span></td>;
+  };
+  const thc={textAlign:'center',padding:'8px 4px',fontSize:9,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2};
+  const thl={textAlign:'left',padding:'8px 10px',fontSize:10,textTransform:'uppercase',letterSpacing:'.2px',color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2};
+
+  const MonthTable=({d,detailInd})=>{
+    const rows=detailInd?[detailInd]:(d.indicators||[]);
+    return (
+      <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',marginTop:14,fontSize:detailInd?10.5:11}}>
+        <thead><tr style={{background:P.panel2}}>
+          <th style={{...thl,minWidth:170}}>Indicator</th>
+          <th style={{...thl,textTransform:'none',fontSize:9.5,minWidth:80}}>Benchmark</th>
+          {pMonths.map(m=><th key={m[0]} style={thc}>{m[1].split(' ')[0]}</th>)}
+          <th style={thc}>Trend</th>
+        </tr></thead>
+        <tbody>{rows.map(ind=>(
+          <tr key={ind.id} style={{borderBottom:'1px solid '+P.line2}}>
+            <td style={{padding:'7px 10px',textAlign:'left',fontWeight:600,color:P.ink}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
+            <td style={{padding:'7px 8px',textAlign:'left',fontFamily:MONO,fontSize:10,color:P.ink2}}>{benchExpr(ind)}</td>
+            {pMonths.map(m=><MonthCell key={m[0]} ind={ind} m={m}/>)}
+            <td style={{textAlign:'center',padding:'4px 6px'}}><QCSpark ind={ind}/></td>
+          </tr>
+        ))}</tbody>
+      </table>
+    );
+  };
+
+  /* Detailed: formula/definition block + optional incident sub-table */
+  const IndicatorDetail=({d,ind})=>{
+    const code=stdMatch(ind.name); const g=guideOf(code);
+    const incs = isEventIndicator(ind) ? qcIncidentsOf(d).filter(r=>r.ind===ind.name) : [];
+    return (
+      <div style={{marginTop:14}}>
+        <div style={{background:P.panel2,border:'1px solid '+P.line,borderRadius:9,padding:'11px 14px',fontSize:11.5,color:P.ink2}}>
+          <div style={{fontSize:9.5,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Definition &amp; formula</div>
+          <div style={{fontFamily:MONO,fontSize:11,color:P.ink,marginBottom:5}}>{formulaText(ind)}</div>
+          {ind.numeratorDef&&<div><b>Numerator:</b> {ind.numeratorDef}</div>}
+          {ind.denominatorDef&&<div><b>Denominator:</b> {ind.denominatorDef}</div>}
+          {(g&&g.rationale)&&<div style={{marginTop:5,color:P.muted}}>{g.rationale}</div>}
+          <div style={{marginTop:5,color:P.muted}}>Benchmark <b style={{color:P.ink2}}>{benchExpr(ind)}</b>{code?(' · '+(HQI_SECN[code[0]]||'')+' ('+code+')'):(' · '+catOf(ind.name))}</div>
+        </div>
+        {incs.length>0&&(
+          <div style={{marginTop:12}}>
+            <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:5}}>Incident details ({incs.length})</div>
+            <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',fontSize:9.5}}>
+              <thead><tr style={{background:'#fbeef0'}}>
+                {['Month','UHID','Patient','Age/Sex','Details','Finding','Corrective','Preventive'].map(h=>
+                  <th key={h} style={{textAlign:'left',padding:'5px 6px',fontSize:9,color:P.rose,fontWeight:700,borderBottom:'1px solid #e0b6bf'}}>{h}</th>)}
+              </tr></thead>
+              <tbody>{incs.map((r,i)=>{ const x=r.x; return (
+                <tr key={i} style={{borderBottom:'1px solid '+P.line2,verticalAlign:'top'}}>
+                  <td style={{padding:'4px 6px'}}>{r.month}</td>
+                  <td style={{padding:'4px 6px',fontFamily:MONO}}>{x.uhid||''}</td>
+                  <td style={{padding:'4px 6px'}}>{x.patientName||''}</td>
+                  <td style={{padding:'4px 6px'}}>{(x.age||'')+(x.gender?(' / '+x.gender):'')}</td>
+                  <td style={{padding:'4px 6px'}}>{x.details||''}</td>
+                  <td style={{padding:'4px 6px'}}>{x.finding||''}</td>
+                  <td style={{padding:'4px 6px'}}>{x.corrective||''}</td>
+                  <td style={{padding:'4px 6px'}}>{x.preventive||''}</td>
+                </tr>); })}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  function DeptPage({page,n,total}){
+    const d=page.dept; const tone=qcTone(d);
+    const {status,color}=qcDeptStatus(d, pMonths);
+    const detailed=page.kind==='detail';
+    const chartInd=detailed?page.ind:qcLeadIndicator(d);
+    const leadInd=qcLeadIndicator(d);
+    const code=leadInd?stdMatch(leadInd.name):null;
+    const secLabel=code?(HQI_SECN[code[0]]||code):(leadInd?catOf(leadInd.name):'Quality');
+    const cards=detailed?(chartInd?qcIndKpis(chartInd, pMonths):[]):qcDeptKpis(d, pMonths);
+    const dd=qcDonutData(d);
+    return (
+      <div>
+        <Header/>
+        <div style={{marginTop:18}}>
+          <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
+            <span style={{width:30,height:30,borderRadius:8,background:tone+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={tone}/></span>
+            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>{d.name}{detailed&&page.ind?(' · '+page.ind.name):''}</div>
+            <span className="tag">{secLabel}</span>
+            <span style={{flex:1}}/>
+            <span style={{background:color+'1c',color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11.5}}>{status}</span>
+          </div>
+          <KpiCards cards={cards} tone={tone}/>
+          {chartStyles.map((cs)=>(
+            <div key={cs} style={{margin:'4px 0 8px'}}>
+              {chartStyles.length>1&&<div style={uSub}>{QC_CHART_STYLE_LABEL[cs]||cs}</div>}
+              {qcChartEl(d, cs, chartInd, tone, pMonths)}
+            </div>
+          ))}
+          {dd.length>1&&!chartStyles.includes('donut')&&(
+            <div style={{display:'flex',alignItems:'center',gap:10,background:P.panel2,borderRadius:9,padding:'10px 14px',marginTop:6}}>
+              <div style={{fontSize:10.5,color:P.muted,textTransform:'uppercase',letterSpacing:.3,fontWeight:600,width:88}}>Breach composition</div>
+              {window.Donut({data:dd, size:104, thickness:20, flat:true})}
+            </div>
+          )}
+          <MonthTable d={d} detailInd={detailed?page.ind:null}/>
+          {detailed&&page.ind&&<IndicatorDetail d={d} ind={page.ind}/>}
+        </div>
+        <Footer n={n} total={total}/>
+      </div>
+    );
+  }
+
+  function ComparePage(){
+    const rows=chosen.map(d=>{ const s=qcDeptStatus(d, pMonths); return {d, st:s.st, status:s.status, color:s.color, breaches:s.st.breach, rate:s.st.rate, inds:(d.indicators||[]).length}; });
+    const hbar=rows.map(r=>({label:r.d.name, value:r.rate, color:r.color})).sort((a,b)=>b.value-a.value);
+    return (
+      <div>
+        <Header/>
+        <div style={{marginTop:18}}>
+          <div className="qc-band" style={{fontWeight:700,fontSize:15,marginBottom:12,color:P.ink}}>Cross-department comparison · {chosen.length} departments</div>
+          <div style={{marginBottom:16}}>{window.HBar({rows:hbar, height:Math.max(160,rows.length*30)})}</div>
+          <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',fontSize:11.5}}>
+            <thead><tr style={{background:P.panel2}}>
+              {['Department','Section / Focus','Indicators','Zero-Defect %','Breaches','Status'].map((h,i)=>
+                <th key={h} style={{...(i===0?thl:thc),textAlign:i===0?'left':(i>=2?'center':'left'),textTransform:'none',fontSize:10}}>{h}</th>)}
+            </tr></thead>
+            <tbody>{rows.map(r=>{ const lead=qcLeadIndicator(r.d); const code=lead?stdMatch(lead.name):null; const sec=code?(HQI_SECN[code[0]]||code):(lead?catOf(lead.name):'—');
+              return (
+              <tr key={r.d.key} style={{borderBottom:'1px solid '+P.line2}}>
+                <td style={{padding:'7px 10px',fontWeight:600,color:P.ink}}>{r.d.name}</td>
+                <td style={{padding:'7px 10px',color:P.ink2}}>{sec}</td>
+                <td style={{padding:'7px 10px',textAlign:'center',fontFamily:MONO}}>{r.inds}</td>
+                <td style={{padding:'7px 10px',textAlign:'center',fontFamily:MONO,fontWeight:600,color:r.rate>=90?P.green:r.rate>=70?P.amber:P.rose}}>{r.rate}%</td>
+                <td style={{padding:'7px 10px',textAlign:'center',fontFamily:MONO,color:r.breaches>0?P.rose:P.green}}>{r.breaches}</td>
+                <td style={{padding:'7px 10px',textAlign:'center'}}><span style={{background:r.color+'1c',color:r.color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11}}>{r.status}</span></td>
+              </tr>); })}</tbody>
           </table>
+        </div>
+        <Footer n={1} total={1}/>
+      </div>
+    );
+  }
+
+  /* ---- print / export ---- */
+  const doPrint=()=>{ try{ document.body.classList.add('pdf-export-mode'); window.print(); }catch(e){} finally{ setTimeout(()=>document.body.classList.remove('pdf-export-mode'),500); } };
+  async function doExportPDF(){
+    const native=window.unicoNative;
+    if(chosen.length===0){ setNote({ok:false,text:'Select at least one department first.'}); return; }
+    setExporting(true); setNote(null); document.body.classList.add('pdf-export-mode');
+    try{
+      if(native&&typeof native.exportPDF==='function'){
+        const res=await native.exportPDF({pageSize, landscape:orient==='landscape', defaultName:'UNICO-quality-'+reportType+'-report'});
+        if(res&&res.ok) setNote({ok:true,text:res.path?('PDF saved · '+res.path):'PDF ready — save from the dialog.'});
+        else if(res&&res.canceled){ /* silent */ }
+        else if(res&&res.error) setNote({ok:false,text:res.error});
+      } else { window.print(); }
+    }catch(e){ setNote({ok:false,text:String(e&&e.message||e)}); }
+    finally{ document.body.classList.remove('pdf-export-mode'); setExporting(false); }
+  }
+  function qcExportBuilder(fmt){
+    // Single scope contract for EVERY export path: PDF/Print and Excel/Word/CSV all
+    // export exactly the on-screen selection. If nothing is selected we early-return
+    // with the same note doExportPDF uses (instead of silently exporting all depts),
+    // so the four export families can never disagree about what they emit.
+    if(chosen.length===0){ setNote({ok:false,text:'Select at least one department first.'}); return; }
+    const scope=chosen;
+    const date=new Date().toISOString().slice(0,10);
+    const baseName='UNICO-quality-'+reportType+'-'+date;
+    if(fmt==='csv'){
+      const rows=[['Department','Indicator','Benchmark','Goal'].concat(pMonths.map(m=>m[1]))];
+      scope.forEach(d=>(d.indicators||[]).forEach(ind=>rows.push(
+        [d.name,ind.name,benchExpr(ind),ind.goalDirection==='higher_is_better'?'higher is better':'lower is better']
+        .concat(pMonths.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
+      rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
+      scope.forEach(d=>qcIncidentsOf(d).forEach(r=>{ const x=r.x; rows.push([d.name,r.ind,r.month,x.uhid||'',x.patientName||'',x.age||'',x.gender||'',x.diagnosis||'',x.details||'',x.finding||'',x.corrective||'',x.preventive||'']); }));
+      return qcDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), baseName+'.csv','text/csv;charset=utf-8');
+    }
+    // Honour the Page setup control (A4 / A3 / Letter + orientation) in the exported
+    // Office doc, instead of hardcoding A4 as the inherited stats msExport does.
+    const page=pageSize+(orient==='landscape'?' landscape':'');
+    const html='<html xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><style>@page{size:'+page+';margin:1cm}</style></head><body>'
+      +'<h1 style="font-family:Calibri;color:#0072a3;margin:0">'+qcEsc(hdrTitle)+'</h1>'
+      +'<div style="font-family:Calibri;color:#555;margin:2px 0 12px">'+qcEsc(orgName)+' · '+qcEsc(rangeLabel)+(confidential?' · Confidential':'')+'</div>'
+      +qcReportHTML(scope)+'</body></html>';
+    if(fmt==='excel') return qcDownload(html, baseName+'.xls','application/vnd.ms-excel');
+    if(fmt==='word')  return qcDownload(html, baseName+'.doc','application/msword');
+  }
+
+  const pdfRoot = typeof document!=='undefined' ? document.getElementById('pdf-root') : null;
+  const chevStyle={width:28,height:28,borderRadius:7,border:'1px solid '+P.line,background:'#fff',display:'grid',placeItems:'center',color:P.muted,cursor:'pointer'};
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:16}}>
+      {/* title bar + toolbar */}
+      <div style={{display:'flex',alignItems:'center',gap:13,flexWrap:'wrap'}}>
+        <div style={{width:40,height:40,borderRadius:11,background:'#eef8fc',color:'#0090ca',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c="#0090ca"/></div>
+        <div style={{flex:1,minWidth:0}}>
+          <h1 style={{margin:0,fontSize:21,fontWeight:700,color:P.ink,letterSpacing:'-.3px'}}>Report Builder</h1>
+          <div style={{fontSize:12.5,color:P.muted,marginTop:2}}>Compose and export board-ready quality reports</div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+          <button onClick={doPrint} style={expBtn}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z"/></svg>Print</button>
+          <button onClick={()=>doExportPDF()} disabled={exporting||chosen.length===0} style={{...expBtn,background:P.blue,borderColor:P.blue,color:'#fff',opacity:(exporting||chosen.length===0)?.6:1}}><DownIc/>{exporting?'Exporting…':'Export PDF'}</button>
+          {[['excel','Excel'],['word','Word'],['csv','CSV']].map(([f,l])=>
+            <button key={f} onClick={()=>qcExportBuilder(f)} disabled={chosen.length===0} style={{...expBtn,opacity:chosen.length===0?.6:1,cursor:chosen.length===0?'default':'pointer'}}><DownIc/>{l}</button>)}
+        </div>
+      </div>
+
+      {note&&(
+        <div onClick={()=>setNote(null)} style={{display:'flex',alignItems:'center',gap:9,padding:'10px 14px',borderRadius:8,fontSize:12.5,fontWeight:600,cursor:'pointer',
+          color:note.ok?P.green:P.rose,background:note.ok?'#e7f6ed':'#fbe9ec',border:'1px solid '+(note.ok?'#bfe6cd':'#f1c6cd')}}>
+          <span style={{wordBreak:'break-all'}}>{note.text}</span><span style={{flex:1}}/><span style={{fontSize:15}}>✕</span>
+        </div>
+      )}
+
+      {/* off-screen portal — renders EVERY page for print / export regardless of the pager.
+          Driven off the SAME `pages` memo the on-screen pager uses (single source of truth),
+          branching per page KIND rather than per report TYPE, so a future multi-page
+          comparison automatically flows into the PDF instead of silently dropping pages. */}
+      {pdfRoot && chosen.length>0 && ReactDOM.createPortal(
+        <div className={"pdf-doc"+(portrait?' portrait':'')}>
+          {/* Honour the Page setup control on the WEB print path too. theme.css only
+              defines A4 @page rules (rpt-land/rpt-port); this dynamic override makes
+              window.print()/PDF respect the chosen A4/A3/Letter + orientation so the
+              printed sheet matches the on-screen preview and the Office export. */}
+          <style>{'@media print{body.pdf-export-mode .pdf-doc .pdf-page{page:qc-rpt-sheet}@page qc-rpt-sheet{size:'+pageSize+(portrait?' portrait':' landscape')+';margin:6mm}}'}</style>
+          {pages.map((pg,i)=>(
+            <section className="pdf-page" key={i}>
+              {pg.kind==='compare'
+                ? <ComparePage/>
+                : <DeptPage page={pg} n={i+1} total={pages.length}/>}
+            </section>
+          ))}
+        </div>, pdfRoot)}
+
+      <div style={{display:'grid',gridTemplateColumns:'320px 1fr',gap:16,alignItems:'start'}}>
+        {/* configuration */}
+        <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12}}>
+          <div style={{padding:'13px 16px',borderBottom:'1px solid '+P.line2}}><h3 style={{margin:0,fontSize:13.5,fontWeight:600,color:P.ink}}>Configuration</h3></div>
+          <div style={{padding:16,display:'flex',flexDirection:'column',gap:16}}>
+            <div>
+              {fieldLabel('Report type')}
+              <div className="seg" style={{width:'100%'}}>
+                {[['summary','Summary'],['detail','Detailed'],['compare','Comparison']].map(([id,l])=>(
+                  <button key={id} className={reportType===id?'on':''} style={{flex:1}} onClick={()=>{setReportType(id);setPageIdx(0);}}>{l}</button>
+                ))}
+              </div>
+              <div style={{fontSize:11,color:P.muted,marginTop:6}}>
+                {reportType==='summary'?'KPI cards + chart per department, one page each.':reportType==='detail'?'Every indicator × month with benchmark & RAG, per department.':'All selected departments on one comparison page.'}
+              </div>
+            </div>
+            <div>
+              {fieldLabel('Reporting period')}
+              <select value={period.mode} onChange={e=>setPeriod({mode:e.target.value,from:MONTHS[0][0],to:MONTHS[11][0]})} style={{...sel2,width:'100%'}}>
+                <option value="all">Full FY (Jun 2025 – May 2026)</option>
+                <option value="q1">Q1 · Jun–Aug 25</option>
+                <option value="q2">Q2 · Sep–Nov 25</option>
+                <option value="q3">Q3 · Dec–Feb 26</option>
+                <option value="q4">Q4 · Mar–May 26</option>
+                <option value="h1">First half (Jun–Nov 25)</option>
+                <option value="h2">Second half (Dec–May 26)</option>
+                <option value="last3">Last 3 months</option>
+                <option value="custom">Custom range…</option>
+              </select>
+              {period.mode==='custom'&&(
+                <div style={{display:'flex',gap:8,marginTop:8,alignItems:'center'}}>
+                  <select value={period.from} onChange={e=>setPeriod(p=>({...p,from:e.target.value}))} style={{...sel2,flex:1}}>{MONTHS.map(m=><option key={m[0]} value={m[0]}>{m[1]}</option>)}</select>
+                  <span style={{fontSize:12,color:P.muted}}>to</span>
+                  <select value={period.to} onChange={e=>setPeriod(p=>({...p,to:e.target.value}))} style={{...sel2,flex:1}}>{MONTHS.map(m=><option key={m[0]} value={m[0]}>{m[1]}</option>)}</select>
+                </div>
+              )}
+            </div>
+            <div>
+              {fieldLabel('Chart styles — pick one or more (each renders per department)')}
+              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                {QC_REPORT_STYLES.map(([id,l])=>{ const on=chartStyles.includes(id);
+                  return <button key={id} onClick={()=>toggleStyle(id)} style={pill(on)}>{on&&<Tick/>}{l}</button>; })}
+              </div>
+            </div>
+            <div>
+              {fieldLabel('Header & footer editor')}
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                <input value={hdrTitle} onChange={e=>setHdrTitle(e.target.value)} placeholder="Report title (header)" style={{...sel2,width:'100%'}}/>
+                <input value={hdrSub} onChange={e=>setHdrSub(e.target.value)} placeholder="Subtitle (optional)" style={{...sel2,width:'100%'}}/>
+                <input value={orgName} onChange={e=>setOrgName(e.target.value)} placeholder="Footer — hospital / org name" style={{...sel2,width:'100%'}}/>
+                <input value={footerNote} onChange={e=>setFooterNote(e.target.value)} placeholder="Footer note (optional)" style={{...sel2,width:'100%'}}/>
+                <div style={{display:'flex',gap:16}}>
+                  <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:P.ink2}}><input type="checkbox" checked={showLogo} onChange={e=>setShowLogo(e.target.checked)}/>Show logo</label>
+                  <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:P.ink2}}><input type="checkbox" checked={confidential} onChange={e=>setConfidential(e.target.checked)}/>Confidential mark</label>
+                </div>
+              </div>
+            </div>
+            <div>
+              {fieldLabel('Page setup')}
+              <div style={{display:'flex',gap:8}}>
+                <select value={pageSize} onChange={e=>setPageSize(e.target.value)} style={{...sel2,flex:1}}><option>A4</option><option>A3</option><option>Letter</option></select>
+                <div className="seg">
+                  {[['portrait','Portrait'],['landscape','Landscape']].map(([id,l])=>(
+                    <button key={id} className={orient===id?'on':''} onClick={()=>setOrient(id)}>{l}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:11.5,fontWeight:600,color:P.ink2,marginBottom:7,display:'flex'}}>Departments<span style={{flex:1}}/>
+                <button onClick={()=>setSelectedDepts(selectedDepts.length===depts.length?[]:allKeys)} style={{border:0,background:'none',color:P.blue,fontSize:11,fontWeight:600,cursor:'pointer'}}>
+                  {selectedDepts.length===depts.length?'Clear all':'Select all'}</button>
+              </div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                {depts.map(d=>{ const on=selectedDepts.includes(d.key);
+                  return <button key={d.key} onClick={()=>toggleDept(d.key)} style={{...pill(on),maxWidth:170,overflow:'hidden'}}>{on&&<Tick/>}<span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{d.name}</span></button>; })}
+              </div>
+            </div>
+            <div style={{background:P.panel2,border:'1px solid '+P.line,borderRadius:8,padding:'11px 13px',fontSize:12,color:P.muted}}>
+              <b style={{color:P.ink}}>{chosen.length}</b> departments · <b style={{color:P.ink}}>{reportType}</b> · {pageSize} {orient} · {pMonths.length} month{pMonths.length!==1?'s':''}
+            </div>
+          </div>
+        </div>
+
+        {/* live preview */}
+        <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,padding:0,overflow:'hidden'}}>
+          <div className="card-h" style={{background:P.panel2}}>
+            <h3 style={{margin:0,fontSize:13.5,fontWeight:600,color:P.ink}}>Live Preview</h3>
+            <span className="sub" style={{fontSize:11.5,color:P.muted}}>{pageSize} · {orient}</span>
+            <span style={{flex:1}}/>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <button style={{...chevStyle,opacity:pi<=0?.4:1,cursor:pi<=0?'default':'pointer'}} disabled={pi<=0} onClick={()=>setPageIdx(p=>Math.max(0,p-1))}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{transform:'rotate(180deg)'}}><path d="M9 18l6-6-6-6"/></svg></button>
+              <span style={{fontFamily:MONO,fontSize:11.5,fontWeight:600,color:P.ink2}}>Page {pi+1} of {pageCount}</span>
+              <button style={{...chevStyle,opacity:pi>=pageCount-1?.4:1,cursor:pi>=pageCount-1?'default':'pointer'}} disabled={pi>=pageCount-1} onClick={()=>setPageIdx(p=>Math.min(pageCount-1,p+1))}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
+            </div>
+          </div>
+          <div style={{padding:26,background:'#eef1f5',overflowX:'auto'}}>
+            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,margin:'0 auto',transition:'width .25s'}}>
+              {chosen.length===0?<div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Select at least one department.</div>
+                : !cur ? <div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Nothing to preview.</div>
+                : cur.kind==='compare' ? <ComparePage/>
+                : <DeptPage page={cur} n={pi+1} total={pageCount}/>}
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+function QCReports({depts}){ return <QCReportBuilder depts={depts}/>; }
 
 /* ===== part: mod-incidents.jsx ===== */
 function QCIncidents({depts}){
@@ -1487,6 +1947,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const depts = (Q.depts||[]).filter(d=>(d.indicators||[]).length);
 
   const [view,setView]=useState('manage');            // manage | assign | catalog
+  const [assignQ,setAssignQ]=useState('');            // Assign-by-Department indicator search
   const [tab,setTab]=useState('identity');
   const [sel,setSel]=useState(()=> initialDept? {deptKey:initialDept,id:null} : {deptKey:null,id:null});
   const [scope,setScope]=useState('all');
@@ -1618,8 +2079,10 @@ function QCAdmin({Q,q,onQ,initialDept}){
     if(code && rowsByKey['std:'+code]){ rowsByKey['std:'+code].set.add(d.key); }
     else { const k='cus:'+norm(i.name); if(!rowsByKey[k]) rowsByKey[k]={ key:k, code:null, name:i.name, formula:i.formula, tmpl:i, set:new Set() }; rowsByKey[k].set.add(d.key); }
   }));
-  const assignNames = Object.values(rowsByKey).sort((a,b)=> b.set.size-a.set.size || a.name.localeCompare(b.name));
+  const assignNames = Object.values(rowsByKey).sort((a,b)=> (a.name||'').localeCompare(b.name||'')); // STABLE alphabetical: ticking a cell no longer reorders rows
   const assignCount = {}; assignCols.forEach(c=>{ assignCount[c.key] = assignNames.reduce((n,r)=> n + (r.set.has(c.key)?1:0), 0); });
+  const _aq = assignQ.trim().toLowerCase();
+  const assignRows = _aq ? assignNames.filter(r=> (r.name||'').toLowerCase().includes(_aq)) : assignNames;
   const toggleAssign = (rec,dk)=>{
     if(rec.set.has(dk)){
       const d=(Q.depts||[]).find(x=>x.key===dk);
@@ -1933,7 +2396,11 @@ function QCAdmin({Q,q,onQ,initialDept}){
       {/* ============ ASSIGN ============ */}
       {view==='assign' && (
       <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
-        <div style={{padding:'13px 16px',borderBottom:'1px solid #e8edf3'}}><div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Assign by Department</div><div style={{fontSize:11.5,color:P.muted}}>Which department reports which indicator — all {assignNames.length} catalog indicators. Tick a cell to assign / unassign.</div></div>
+        <div style={{padding:'13px 16px',borderBottom:'1px solid #e8edf3',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+          <div style={{flex:1,minWidth:200}}><div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Assign by Department</div><div style={{fontSize:11.5,color:P.muted}}>Which department reports which indicator — all {assignNames.length} catalog indicators. Tick a cell to assign / unassign.</div></div>
+          <input value={assignQ} onChange={e=>setAssignQ(e.target.value)} placeholder="Search indicator..." style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,background:'#fff',outline:'none',minWidth:230}}/>
+          {_aq && <span style={{fontSize:11.5,color:P.muted,whiteSpace:'nowrap'}}>{assignRows.length} of {assignNames.length}</span>}
+        </div>
         <div style={{overflowX:'auto',overflowY:'auto',maxHeight:'calc(100vh - 250px)'}}>
           <table style={{borderCollapse:'collapse',fontSize:12,width:'100%'}}>
             <thead><tr>
@@ -1941,7 +2408,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
               {assignCols.map(c=><th key={c.key} title={c.name+' - '+assignCount[c.key]+' assigned'} style={{padding:'10px 6px',fontSize:10,color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#eef2f7',textAlign:'center',whiteSpace:'nowrap',position:'sticky',top:0,zIndex:4}}><div>{c.short}</div><div style={{fontFamily:MONO,fontSize:9.5,fontWeight:700,color:P.blue,marginTop:2}}>{assignCount[c.key]}</div></th>)}
             </tr></thead>
             <tbody>
-              {assignNames.map(rec=>{ const rmeas=measureOf(rec.formula); return (
+              {assignRows.map(rec=>{ const rmeas=measureOf(rec.formula); return (
               <tr key={rec.key} style={{borderBottom:'1px solid #eef1f5'}}>
                 <td style={{padding:'8px 14px',textAlign:'left',position:'sticky',left:0,background:'#fff',zIndex:1}}><div style={{display:'flex',alignItems:'center',gap:8}}><span style={{width:7,height:7,borderRadius:'50%',background:rmeas.color,flexShrink:0}}></span><span style={{fontWeight:600,color:P.ink}}>{rec.name}</span></div></td>
                 {assignCols.map(c=>{ const on=rec.set.has(c.key); return (
