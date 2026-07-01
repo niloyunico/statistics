@@ -17965,12 +17965,43 @@ const QC_ICONS = {
 function QualityConsole({
   onExit,
   initialView,
-  initialDept
+  initialDept,
+  setRoute
 }) {
   const Q = window.useQualityStore();
   const depts = (Q.depts || []).filter(d => d.indicators && d.indicators.length);
   const [module, setModule] = useState(initialView || 'dashboard');
   const [gq, setGq] = useState('');
+  const [wsOpen, setWsOpen] = useState(false);
+  const WORKSPACES = [{
+    id: 'stats',
+    label: 'Statistics',
+    home: 'dashboard'
+  }, {
+    id: 'datacol',
+    label: 'Data Collection',
+    home: 'dcReview'
+  }, {
+    id: 'staff',
+    label: 'Staff Management',
+    home: 'nurseHome'
+  }, {
+    id: 'quality',
+    label: 'Quality Indicators',
+    home: 'quality',
+    current: true
+  }, {
+    id: 'users',
+    label: 'User Management',
+    home: 'users'
+  }];
+  const goWorkspace = w => {
+    setWsOpen(false);
+    if (w.current) return;
+    if (setRoute) setRoute({
+      view: w.home
+    });else if (onExit) onExit();
+  };
   const crumbTitle = {
     dashboard: 'Dashboard',
     scorecard: 'Scorecard',
@@ -18036,8 +18067,13 @@ function QualityConsole({
       overflow: 'hidden'
     }
   }, React.createElement("div", {
-    onClick: () => onExit && onExit(),
-    title: "Back to UNICO",
+    style: {
+      position: 'relative',
+      flexShrink: 0
+    }
+  }, React.createElement("div", {
+    onClick: () => setWsOpen(o => !o),
+    title: "Switch workspace",
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -18045,7 +18081,6 @@ function QualityConsole({
       padding: '0 16px',
       height: 56,
       borderBottom: '1px solid rgba(255,255,255,.07)',
-      flexShrink: 0,
       cursor: 'pointer'
     }
   }, React.createElement("div", {
@@ -18063,7 +18098,8 @@ function QualityConsole({
     }
   }, "U"), React.createElement("div", {
     style: {
-      minWidth: 0
+      minWidth: 0,
+      flex: 1
     }
   }, React.createElement("div", {
     style: {
@@ -18081,7 +18117,85 @@ function QualityConsole({
       letterSpacing: '.7px',
       textTransform: 'uppercase'
     }
-  }, "Hospital Analytics"))), React.createElement("div", {
+  }, "Hospital Analytics")), React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "#83909f",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    style: {
+      flexShrink: 0,
+      transform: wsOpen ? 'rotate(180deg)' : 'none',
+      transition: 'transform .15s'
+    }
+  }, React.createElement("path", {
+    d: "M6 9l6 6 6-6"
+  }))), wsOpen && React.createElement(React.Fragment, null, React.createElement("div", {
+    onClick: () => setWsOpen(false),
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 40
+    }
+  }), React.createElement("div", {
+    style: {
+      position: 'absolute',
+      top: 52,
+      left: 12,
+      right: 12,
+      zIndex: 41,
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 10,
+      boxShadow: '0 12px 34px rgba(6,14,26,.45)',
+      padding: 6
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.5px',
+      padding: '6px 10px 4px'
+    }
+  }, "Switch workspace"), WORKSPACES.map(w => React.createElement("div", {
+    key: w.id,
+    onClick: () => goWorkspace(w),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '8px 10px',
+      borderRadius: 7,
+      cursor: 'pointer',
+      fontSize: 13,
+      fontWeight: w.current ? 700 : 500,
+      color: w.current ? P.blue700 : P.ink,
+      background: w.current ? P.blue50 : 'transparent'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: w.current ? P.blue : '#cdd6e2',
+      flexShrink: 0
+    }
+  }), React.createElement("span", {
+    style: {
+      flex: 1,
+      whiteSpace: 'nowrap'
+    }
+  }, w.label), w.current && React.createElement("span", {
+    style: {
+      fontSize: 9.5,
+      color: P.faint
+    }
+  }, "current")))))), React.createElement("div", {
     style: {
       flex: 1,
       overflowY: 'auto',
@@ -23707,6 +23821,7 @@ function App() {
     return React.createElement(QualityConsole, {
       initialView: route.qview || QV_MAP[route.view] || 'dashboard',
       initialDept: route.dept,
+      setRoute: setRoute,
       onExit: () => setRoute({
         view: 'dashboard'
       })
