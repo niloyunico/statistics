@@ -81,6 +81,27 @@ function scopeQualityOverlay(raw, qualityAreas) {
   } catch (e) { return {}; }
 }
 
+// Same idea for Patient Statistics: admin edits to a department's metric columns /
+// config live in the `unico_store_v3` overlay, which collectors also never received.
+// Give collectors ONLY the config parts (custom depts, renames/col overrides, order,
+// deletions) scoped to their assigned departments — never the stat VALUE overlay
+// (entries/removed), which they submit via /api/submissions and read from the DB.
+function scopeDeptOverlay(raw, deptIds) {
+  try {
+    const ov = typeof raw === 'string' ? JSON.parse(raw) : (raw && typeof raw === 'object' ? raw : null);
+    if (!ov) return null;
+    const ids = deptIds || [];
+    const inScope = (id) => ids.indexOf(id) >= 0;
+    const out = {};
+    if (Array.isArray(ov.custom)) out.custom = ov.custom.filter((d) => d && inScope(d.id));
+    if (ov.renames && typeof ov.renames === 'object') { out.renames = {}; Object.keys(ov.renames).forEach((id) => { if (inScope(id)) out.renames[id] = ov.renames[id]; }); }
+    if (Array.isArray(ov.order)) out.order = ov.order.filter(inScope);
+    if (Array.isArray(ov.deleted)) out.deleted = ov.deleted.filter(inScope);
+    const has = Object.keys(out).some((k) => (Array.isArray(out[k]) ? out[k].length : Object.keys(out[k]).length));
+    return has ? out : null;
+  } catch (e) { return null; }
+}
+
 async function serveIndex(req, res) {
   let html;
   try { html = fs.readFileSync(INDEX_FILE, 'utf8'); }
@@ -109,9 +130,14 @@ async function serveIndex(req, res) {
     depts = depts.filter((d) => da.includes(d.id));
     quality = quality.filter((q) => qa.includes(q.key));
     staff = [];
-    // Not the full shared blob — just the admin's quality DEFINITION overlay, scoped
-    // to this collector's areas, so their Data Collection form reflects console edits.
-    snap = scopeQualityOverlay(appRes && appRes.data && appRes.data['unico_quality_v2'], qa);
+    // Not the full shared blob — only the DEFINITION/CONFIG overlays a collector needs,
+    // scoped to their own areas/departments, so BOTH Data Collection forms reflect the
+    // admin's edits (quality measurement type / assignment; patient metric columns).
+    snap = {};
+    const qov = scopeQualityOverlay(appRes && appRes.data && appRes.data['unico_quality_v2'], qa);
+    if (qov && qov['unico_quality_v2']) snap['unico_quality_v2'] = qov['unico_quality_v2'];
+    const dov = scopeDeptOverlay(appRes && appRes.data && appRes.data['unico_store_v3'], da);
+    if (dov) snap['unico_store_v3'] = JSON.stringify(dov);
   }
   const userInject = scopeUser
     ? { username: scopeUser.username, name: scopeUser.name, role: scopeUser.role, departments: scopeUser.departments, qualityAreas: scopeUser.qualityAreas }
