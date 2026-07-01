@@ -171,6 +171,10 @@ button{font-family:inherit;cursor:pointer}
   /* wide tables scroll inside their card instead of overflowing the viewport */
   .card{overflow-x:auto !important}
   table.tbl{min-width:520px}
+  /* fat-finger friendly: floor tiny inline-styled inputs/selects to a tappable height
+     (the breakdown matrix, staff-group cells and chip forms use very small padding). */
+  input,select,textarea{min-height:38px}
+  table.tbl input,table.tbl select{min-height:32px}
 }
 @media (max-width:520px){
   .topbar .crumb{font-size:12px;max-width:38vw;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}

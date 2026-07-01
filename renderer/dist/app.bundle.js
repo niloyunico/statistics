@@ -17150,17 +17150,26 @@ function QCHeatGrid({
       letterSpacing: '.3px',
       borderBottom: '1px solid ' + P.line
     }
-  }, "Indicator"), months.map(m => React.createElement("th", {
-    key: m[0],
-    style: {
-      padding: '6px 2px',
-      fontSize: 8.5,
-      color: P.muted,
-      fontWeight: 700,
-      textAlign: 'center',
-      borderBottom: '1px solid ' + P.line
-    }
-  }, m[1].split(' ')[0])))), React.createElement("tbody", null, inds.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+  }, "Indicator"), months.map(m => {
+    const p = m[0].split('-');
+    return React.createElement("th", {
+      key: m[0],
+      style: {
+        padding: '6px 2px',
+        fontSize: 8.5,
+        color: P.muted,
+        fontWeight: 700,
+        textAlign: 'center',
+        borderBottom: '1px solid ' + P.line
+      }
+    }, React.createElement("div", null, p[0]), React.createElement("div", {
+      style: {
+        fontWeight: 400,
+        fontSize: '.82em',
+        opacity: .55
+      }
+    }, "'" + p[1]));
+  }))), React.createElement("tbody", null, inds.length === 0 ? React.createElement("tr", null, React.createElement("td", {
     colSpan: months.length + 1,
     style: {
       padding: 14,
@@ -18581,13 +18590,22 @@ function QCReportBuilder({
         fontSize: 8.5,
         width: 56
       }
-    }, "Benchmark"), pMonths.map(m => React.createElement("th", {
-      key: m[0],
-      style: {
-        ...thc,
-        width: 33
-      }
-    }, m[1].split(' ')[0])), React.createElement("th", {
+    }, "Benchmark"), pMonths.map(m => {
+      const p = m[0].split('-');
+      return React.createElement("th", {
+        key: m[0],
+        style: {
+          ...thc,
+          width: 33
+        }
+      }, React.createElement("div", null, p[0]), React.createElement("div", {
+        style: {
+          fontWeight: 400,
+          fontSize: '.82em',
+          opacity: .6
+        }
+      }, "'" + p[1]));
+    }), React.createElement("th", {
       style: {
         ...thc,
         width: 48
@@ -20645,17 +20663,17 @@ function QCReportBuilder({
         prev = els.map(el => el.getAttribute('style') || '');
         els.forEach(el => {
           el.style.width = pageW + 'px';
-          el.style.height = pageMinH + 'px';
           el.style.boxSizing = 'border-box';
           el.style.padding = '28px 30px';
           el.style.background = '#fff';
-          el.style.overflow = 'hidden';
           el.style.margin = '0';
+          el.style.height = 'auto';
+          el.style.overflow = 'visible';
         });
         try {
           if (document.fonts && document.fonts.ready) await document.fonts.ready;
         } catch (e) {}
-        await new Promise(r => setTimeout(r, 70));
+        await new Promise(r => setTimeout(r, 80));
         const fmt = pageSize === 'A3' ? 'a3' : pageSize === 'Letter' ? 'letter' : 'a4',
           ori = orient === 'landscape' ? 'l' : 'p';
         const doc = new J({
@@ -20666,15 +20684,41 @@ function QCReportBuilder({
         });
         const pw = doc.internal.pageSize.getWidth(),
           ph = doc.internal.pageSize.getHeight();
+        let firstPage = true;
         for (let i = 0; i < els.length; i++) {
-          const canvas = await H(els[i], {
+          const el = els[i];
+          if (el.scrollHeight <= pageMinH) {
+            el.style.height = pageMinH + 'px';
+            el.style.overflow = 'hidden';
+          }
+          const canvas = await H(el, {
             scale: 2,
             backgroundColor: '#ffffff',
             useCORS: true,
             logging: false
           });
-          if (i > 0) doc.addPage(fmt, ori);
-          doc.addImage(canvas.toDataURL('image/jpeg', 0.94), 'JPEG', 0, 0, pw, ph, undefined, 'FAST');
+          el.style.height = 'auto';
+          el.style.overflow = 'visible';
+          const cW = canvas.width,
+            cH = canvas.height,
+            pxPerPt = cW / pw,
+            pageHpx = Math.round(ph * pxPerPt);
+          let y = 0;
+          do {
+            const sliceH = Math.min(pageHpx, cH - y);
+            let srcC = canvas;
+            if (sliceH < cH) {
+              const tmp = document.createElement('canvas');
+              tmp.width = cW;
+              tmp.height = sliceH;
+              tmp.getContext('2d').drawImage(canvas, 0, y, cW, sliceH, 0, 0, cW, sliceH);
+              srcC = tmp;
+            }
+            if (!firstPage) doc.addPage(fmt, ori);
+            firstPage = false;
+            doc.addImage(srcC.toDataURL('image/jpeg', 0.94), 'JPEG', 0, 0, pw, sliceH / pxPerPt, undefined, 'FAST');
+            y += sliceH;
+          } while (cH - y > 2);
         }
         els.forEach((el, i) => el.setAttribute('style', prev[i]));
         els = [];
@@ -20682,7 +20726,7 @@ function QCReportBuilder({
         doc.save('UNICO-quality-' + reportType + '-' + new Date().toISOString().slice(0, 10) + '.pdf');
         setNote({
           ok: true,
-          text: 'PDF downloaded.'
+          text: 'PDF downloaded (' + (ori === 'l' ? 'landscape' : 'portrait') + ').'
         });
       } catch (e) {
         try {
@@ -28719,7 +28763,9 @@ window.LockScreen = LockScreen;
       if (st === 'rejected') return ' · ✗ rejected';
       return reported.has(m) ? ' · ✓ reported' : '';
     };
-    const lockedMonth = lockResp && (monthStatus[month] === 'pending' || monthStatus[month] === 'approved' || reported.has(month));
+    const monthPending = lockResp && monthStatus[month] === 'pending';
+    const pCorrection = lockResp && !monthPending && (monthStatus[month] === 'approved' || reported.has(month));
+    const [reason, setReason] = useState('');
     const cols = dept && dept.cols || [];
     const last = dept && dept.data && dept.data.length ? dept.data[dept.data.length - 1] : {};
     const submit = () => {
@@ -28728,8 +28774,12 @@ window.LockScreen = LockScreen;
         toast('Pick a month', 'error');
         return;
       }
-      if (lockedMonth) {
-        toast('This month is already submitted/recorded — only an administrator can change it.', 'error');
+      if (monthPending) {
+        toast('A submission for this month is already pending review.', 'error');
+        return;
+      }
+      if (pCorrection && !reason.trim()) {
+        toast('Please add a reason for the correction.', 'error');
         return;
       }
       const matched = resps.find(r => r.name === responsible);
@@ -28747,17 +28797,21 @@ window.LockScreen = LockScreen;
         } : responsible ? {
           name: responsible
         } : null,
-        note
+        note,
+        isCorrection: pCorrection,
+        correctionReason: pCorrection ? reason.trim() : ''
       }).then(r => {
         setBusy(false);
         if (r.ok) {
           setDone({
             month,
-            dept: dept.name
+            dept: dept.name,
+            correction: pCorrection
           });
           setValues({});
           setNote('');
-          toast('Submitted for review', 'success');
+          setReason('');
+          toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success');
         } else toast(r.error || 'Submission failed', 'error');
       }).catch(e => {
         setBusy(false);
@@ -28882,7 +28936,14 @@ window.LockScreen = LockScreen;
       value: note,
       onChange: e => setNote(e.target.value),
       placeholder: "Any comment about this submission"
-    })), lockedMonth && React.createElement(Banner, null, dept ? dept.name : '', " \xB7 ", monthLabel(month), " is already ", monthStatus[month] || 'on record', " \u2014 submission is locked for data collectors. Ask an administrator to make changes."), React.createElement("div", {
+    })), pCorrection && React.createElement(React.Fragment, null, React.createElement(Banner, null, dept ? dept.name : '', " \xB7 ", monthLabel(month), " is already recorded \u2014 submitting sends a ", React.createElement("b", null, "correction (edit request)"), " to an administrator. The recorded value won\u2019t change until it is approved."), React.createElement(Field, {
+      label: "Reason for the correction"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: reason,
+      onChange: e => setReason(e.target.value),
+      placeholder: "e.g. wrong count entered \u2014 should be Y not X"
+    }))), monthPending && React.createElement(Banner, null, dept ? dept.name : '', " \xB7 ", monthLabel(month), " already has a submission pending review \u2014 wait for the admin to approve or reject it before editing."), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -28890,17 +28951,18 @@ window.LockScreen = LockScreen;
       }
     }, React.createElement("button", {
       className: "btn pri",
-      disabled: busy || lockedMonth,
+      disabled: busy || monthPending,
       onClick: submit
     }, React.createElement(Ic, {
       d: I.check,
       s: 15
-    }), busy ? 'Submitting…' : lockedMonth ? 'Locked — already recorded' : 'Submit'), React.createElement("button", {
+    }), busy ? 'Submitting…' : monthPending ? 'Pending review' : pCorrection ? 'Submit correction for review' : 'Submit'), React.createElement("button", {
       className: "btn",
       disabled: busy,
       onClick: () => {
         setValues({});
         setNote('');
+        setReason('');
         setDone(null);
       }
     }, "Clear"))));
@@ -29264,6 +29326,7 @@ window.LockScreen = LockScreen;
     const ratePending = computeAsRate && numerator > 0 && !(denNum > 0);
     const qExists = !!(curInd && (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
     const qCorrection = lockResp && !isNew && qExists;
+    const [qReason, setQReason] = useState('');
     const submit = () => {
       if (!area) {
         toast('Select an area', 'error');
@@ -29281,6 +29344,10 @@ window.LockScreen = LockScreen;
         toast('Pick a month', 'error');
         return;
       }
+      if (qCorrection && !qReason.trim()) {
+        toast('Please add a reason for the correction.', 'error');
+        return;
+      }
       if (isRate && !(denNum > 0)) {
         toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ''), 'error');
         return;
@@ -29291,6 +29358,8 @@ window.LockScreen = LockScreen;
       dcApi.post('/api/submissions/quality', {
         area: area.key,
         month,
+        isCorrection: qCorrection,
+        correctionReason: qCorrection ? qReason.trim() : '',
         indicatorId: isNew ? '' : indId,
         indicatorName: isNew ? newInd.name : curInd && curInd.name,
         valueType: computeAsRate ? formula === 'pct' ? '%' : 'Rate' : 'Count',
@@ -30444,7 +30513,14 @@ window.LockScreen = LockScreen;
       style: {
         flex: 1
       }
-    }, curInd && curInd.name || 'This indicator', " already has data for ", monthLabel(month), ". Submitting sends a ", React.createElement("b", null, "correction"), " to an administrator for review \u2014 the recorded value won\u2019t change until it is approved.")), React.createElement("div", {
+    }, curInd && curInd.name || 'This indicator', " already has data for ", monthLabel(month), ". Submitting sends a ", React.createElement("b", null, "correction"), " to an administrator for review \u2014 the recorded value won\u2019t change until it is approved.")), qCorrection && React.createElement(Field, {
+      label: "Reason for the correction"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: qReason,
+      onChange: e => setQReason(e.target.value),
+      placeholder: "e.g. wrong denominator \u2014 should be Y not X"
+    })), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -30776,7 +30852,51 @@ window.LockScreen = LockScreen;
     }), s.rejectReason && React.createElement(Meta, {
       label: "Reject reason",
       value: s.rejectReason
-    })), editable && React.createElement("div", {
+    }), s.isCorrection && React.createElement(Meta, {
+      label: "Edit request",
+      value: "Correction \u2014 pending approval"
+    }), s.isCorrection && s.correctionReason && React.createElement(Meta, {
+      label: "Correction reason",
+      value: s.correctionReason
+    })), s.priorValues && React.createElement("div", {
+      style: {
+        border: '1px solid #f0d9a8',
+        background: 'var(--warn-bg,#fff4e0)',
+        borderRadius: 9,
+        padding: '10px 12px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#9a6b00',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Previously on record \u2014 old vs new"), s.type === 'patient' ? React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 12,
+        fontSize: 12
+      }
+    }, cols.map(c => {
+      const oldV = (s.priorValues.values || {})[c.id];
+      const newV = vals[c.id];
+      const changed = String(oldV == null ? '' : oldV) !== String(newV == null ? '' : newV);
+      return React.createElement("div", {
+        key: c.id,
+        style: {
+          color: changed ? 'var(--rose)' : 'var(--ink-2)'
+        }
+      }, React.createElement("b", null, c.label, ":"), " ", oldV == null ? '—' : oldV, changed ? ' → ' + (newV == null || newV === '' ? '—' : newV) : '');
+    })) : React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--ink-2)'
+      }
+    }, "Value ", React.createElement("b", null, s.priorValues.value == null ? '—' : s.priorValues.value), s.priorValues.num != null ? ' · num ' + s.priorValues.num + ' / den ' + (s.priorValues.den == null ? '—' : s.priorValues.den) : '', " \u2192 now ", React.createElement("b", null, isRate ? shownVal : qval === '' ? '—' : qval))), editable && React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
@@ -31473,7 +31593,18 @@ window.LockScreen = LockScreen;
         borderRadius: 999,
         padding: '1px 6px'
       }
-    }, "\u26A0 ", dupCount[dupKey(s)], "\xD7")), React.createElement("td", {
+    }, "\u26A0 ", dupCount[dupKey(s)], "\xD7"), s.isCorrection && React.createElement("span", {
+      title: s.correctionReason || 'Correction / edit request',
+      style: {
+        marginLeft: 6,
+        fontSize: 10,
+        fontWeight: 700,
+        color: '#7c4dd6',
+        background: 'rgba(124,77,214,.12)',
+        borderRadius: 999,
+        padding: '1px 7px'
+      }
+    }, "\u270E correction")), React.createElement("td", {
       style: {
         fontSize: 12,
         color: 'var(--ink-2)',
@@ -32043,12 +32174,15 @@ window.LockScreen = LockScreen;
     const merged = subs.concat(reportedRecords().filter(r => !subKeys.has(keyOf(r)))).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     const patientRows = merged.filter(s => s.type !== 'quality');
     const qualityRows = merged.filter(s => s.type === 'quality');
+    const editRows = subs.filter(s => s.isCorrection).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     const avail = [];
     if (patientRows.length) avail.push('patient');
     if (qualityRows.length) avail.push('quality');
+    if (editRows.length) avail.push('edits');
     const active = avail.indexOf(view) >= 0 ? view : avail[0] || 'patient';
     const isQ = active === 'quality';
-    const shown = isQ ? qualityRows : patientRows;
+    const isEdits = active === 'edits';
+    const shown = isEdits ? editRows : isQ ? qualityRows : patientRows;
     return React.createElement(React.Fragment, null, React.createElement(Card, {
       style: {
         padding: 0,
@@ -32081,7 +32215,13 @@ window.LockScreen = LockScreen;
     }, React.createElement(Ic, {
       d: I.activity,
       s: 13
-    }), "Quality Data (", qualityRows.length, ")")), React.createElement("span", {
+    }), "Quality Data (", qualityRows.length, ")"), avail.indexOf('edits') >= 0 && React.createElement("button", {
+      className: active === 'edits' ? 'on' : '',
+      onClick: () => setView('edits')
+    }, React.createElement(Ic, {
+      d: I.edit,
+      s: 13
+    }), "Edit Requests (", editRows.length, ")")), React.createElement("span", {
       style: {
         flex: 1
       }
@@ -32111,14 +32251,30 @@ window.LockScreen = LockScreen;
       style: {
         width: '100%'
       }
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Submitted on"), isQ ? React.createElement(React.Fragment, null, React.createElement("th", null, "Area"), React.createElement("th", null, "Indicator"), React.createElement("th", null, "Quarter")) : React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "Month")), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, shown.map(s => React.createElement("tr", {
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Submitted on"), isEdits ? React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "For"), React.createElement("th", null, "Reason")) : isQ ? React.createElement(React.Fragment, null, React.createElement("th", null, "Area"), React.createElement("th", null, "Indicator"), React.createElement("th", null, "Quarter")) : React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "Month")), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, shown.map(s => React.createElement("tr", {
       key: s.id
     }, React.createElement("td", {
       className: "num",
       style: {
         whiteSpace: 'nowrap'
       }
-    }, when(s.submittedAt)), isQ ? React.createElement(React.Fragment, null, React.createElement("td", {
+    }, when(s.submittedAt)), isEdits ? React.createElement(React.Fragment, null, React.createElement("td", {
+      style: {
+        fontWeight: 600
+      }
+    }, s.type === 'quality' ? s.areaName : s.departmentName), React.createElement("td", null, (s.type === 'quality' ? (s.indicatorName || '') + ' · ' : '') + monthLabel(s.month)), React.createElement("td", {
+      style: {
+        fontSize: 12,
+        color: 'var(--ink-2)',
+        maxWidth: 260
+      }
+    }, s.correctionReason || '—', s.status === 'rejected' && s.rejectReason ? React.createElement("div", {
+      style: {
+        color: 'var(--rose)',
+        fontSize: 11,
+        marginTop: 2
+      }
+    }, "Rejected: ", s.rejectReason) : null)) : isQ ? React.createElement(React.Fragment, null, React.createElement("td", {
       style: {
         fontWeight: 600
       }

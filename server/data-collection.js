@@ -391,6 +391,11 @@ async function createSubmission(spec, meta) {
     submittedBy: (meta && meta.submittedBy) || 'local',
     source: (meta && meta.source) || 'app',
     submittedAt: Date.now(),
+    // Correction / edit-request markers (absent/false for a normal new submission).
+    isCorrection: !!(meta && meta.isCorrection),
+    correctionReason: String((meta && meta.correctionReason) || ''),
+    correctionFor: (meta && meta.correctionFor) || null,
+    priorValues: (meta && meta.priorValues) || null,
   });
   const c = await col('submissions');
   if (!c) { const out = Object.assign({ id: genId('sub') }, rec); mem.submissions.unshift(out); return out; }
@@ -398,8 +403,36 @@ async function createSubmission(spec, meta) {
   await c.insertOne(Object.assign({ _id }, rec));
   return Object.assign({ id: _id }, rec);
 }
-async function submitPatient(payload, meta) { return { ok: true, submission: await createSubmission(await buildPatientSpec(payload), Object.assign({}, payload, meta)) }; }
-async function submitQuality(payload, meta) { return { ok: true, submission: await createSubmission(await buildQualitySpec(payload), Object.assign({}, payload, meta)) }; }
+// Server-authoritative "old value" snapshot for a correction (never trust the client's old value).
+async function snapshotPatientPrior(spec) {
+  try {
+    const c = await col('departments'); if (!c) return null;
+    const d = await c.findOne({ _id: String(spec.department) }); if (!d) return null;
+    const idx = (d.months || []).indexOf(spec.month); if (idx < 0) return null;
+    return { values: Object.assign({}, (d.data || [])[idx] || {}) };
+  } catch (e) { return null; }
+}
+async function snapshotQualityPrior(spec) {
+  try {
+    const c = await col('quality'); if (!c) return null;
+    const d = await c.findOne({ _id: String(spec.area) }); if (!d) return null;
+    const ind = (d.indicators || []).find((i) => i.id === spec.indicatorId); if (!ind) return null;
+    const m = spec.month;
+    return { value: (ind.months || {})[m], num: (ind.mNum || {})[m], den: (ind.mDen || {})[m], incidents: (ind.incidents || {})[m] || null };
+  } catch (e) { return null; }
+}
+async function submitPatient(payload, meta) {
+  const spec = await buildPatientSpec(payload);
+  const m = Object.assign({}, payload, meta);
+  if (m.isCorrection) m.priorValues = await snapshotPatientPrior(spec);
+  return { ok: true, submission: await createSubmission(spec, m) };
+}
+async function submitQuality(payload, meta) {
+  const spec = await buildQualitySpec(payload);
+  const m = Object.assign({}, payload, meta);
+  if (m.isCorrection) m.priorValues = await snapshotQualityPrior(spec);
+  return { ok: true, submission: await createSubmission(spec, m) };
+}
 
 async function getSubmissionById(id) {
   const c = await col('submissions');

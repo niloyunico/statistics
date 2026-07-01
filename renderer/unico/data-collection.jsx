@@ -342,25 +342,30 @@
     }, [subs, deptId]);
     const reported = new Set((dept && dept.months) || []);
     const monthTag = (m) => { const st = monthStatus[m]; if (st === 'approved') return ' · ✓ approved'; if (st === 'pending') return ' · ⏳ pending'; if (st === 'rejected') return ' · ✗ rejected'; return reported.has(m) ? ' · ✓ reported' : ''; };
-    // A collector cannot re-submit a month already submitted/approved or on record;
-    // only an administrator may change it (rejected submissions may be re-sent).
-    const lockedMonth = lockResp && (monthStatus[month] === 'pending' || monthStatus[month] === 'approved' || reported.has(month));
+    // A still-PENDING month is a hard block (correcting it would duplicate the pending row).
+    // An already-recorded/approved month becomes a CORRECTION (edit request): it goes to the
+    // admin and never overwrites live data until approved. (Rejected months may be re-sent.)
+    const monthPending = lockResp && monthStatus[month] === 'pending';
+    const pCorrection = lockResp && !monthPending && (monthStatus[month] === 'approved' || reported.has(month));
+    const [reason, setReason] = useState(''); // correction reason (edit request)
     const cols = (dept && dept.cols) || [];
     const last = (dept && dept.data && dept.data.length) ? dept.data[dept.data.length - 1] : {};
 
     const submit = () => {
       if (!dept) return;
       if (!month) { toast('Pick a month', 'error'); return; }
-      if (lockedMonth) { toast('This month is already submitted/recorded — only an administrator can change it.', 'error'); return; }
+      if (monthPending) { toast('A submission for this month is already pending review.', 'error'); return; }
+      if (pCorrection && !reason.trim()) { toast('Please add a reason for the correction.', 'error'); return; }
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/patient', {
         department: dept.id, month, values,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
         note,
+        isCorrection: pCorrection, correctionReason: pCorrection ? reason.trim() : '',
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ month, dept: dept.name }); setValues({}); setNote(''); toast('Submitted for review', 'success'); }
+        if (r.ok) { setDone({ month, dept: dept.name, correction: pCorrection }); setValues({}); setNote(''); setReason(''); toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success'); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch((e) => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -405,10 +410,16 @@
           </div>
           {isAdmin && dept && <div style={{ border: '1px dashed var(--line)', borderRadius: 9, padding: '10px 12px', margin: '2px 0 12px', background: 'var(--panel-2)' }}><DeptFieldManager dept={dept} onChange={refreshDepts} /></div>}
           <Field label="Note (optional)"><input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Any comment about this submission" /></Field>
-          {lockedMonth && <Banner>{dept ? dept.name : ''} · {monthLabel(month)} is already {monthStatus[month] || 'on record'} — submission is locked for data collectors. Ask an administrator to make changes.</Banner>}
+          {pCorrection && (
+            <>
+              <Banner>{dept ? dept.name : ''} · {monthLabel(month)} is already recorded — submitting sends a <b>correction (edit request)</b> to an administrator. The recorded value won’t change until it is approved.</Banner>
+              <Field label="Reason for the correction"><input style={inputStyle} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. wrong count entered — should be Y not X" /></Field>
+            </>
+          )}
+          {monthPending && <Banner>{dept ? dept.name : ''} · {monthLabel(month)} already has a submission pending review — wait for the admin to approve or reject it before editing.</Banner>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="btn pri" disabled={busy || lockedMonth} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Submitting…' : (lockedMonth ? 'Locked — already recorded' : 'Submit')}</button>
-            <button className="btn" disabled={busy} onClick={() => { setValues({}); setNote(''); setDone(null); }}>Clear</button>
+            <button className="btn pri" disabled={busy || monthPending} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Submitting…' : (monthPending ? 'Pending review' : (pCorrection ? 'Submit correction for review' : 'Submit'))}</button>
+            <button className="btn" disabled={busy} onClick={() => { setValues({}); setNote(''); setReason(''); setDone(null); }}>Clear</button>
           </div>
         </Card>
       </div>
@@ -668,16 +679,18 @@
       (curInd.months && curInd.months[month] != null && curInd.months[month] !== '')
     ));
     const qCorrection = lockResp && !isNew && qExists;
+    const [qReason, setQReason] = useState(''); // correction reason (quality edit request)
     const submit = () => {
       if (!area) { toast('Select an area', 'error'); return; }
       if (!indId) { toast('Select an indicator', 'error'); return; }
       if (isNew && !newInd.name.trim()) { toast('Enter the new indicator name', 'error'); return; }
       if (!month) { toast('Pick a month', 'error'); return; }
+      if (qCorrection && !qReason.trim()) { toast('Please add a reason for the correction.', 'error'); return; }
       if (isRate && !(denNum > 0)) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ''), 'error'); return; }
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/quality', {
-        area: area.key, month,
+        area: area.key, month, isCorrection: qCorrection, correctionReason: qCorrection ? qReason.trim() : '',
         indicatorId: isNew ? '' : indId,
         indicatorName: isNew ? newInd.name : (curInd && curInd.name),
         valueType: computeAsRate ? (formula === 'pct' ? '%' : 'Rate') : 'Count', entryMode: computeAsRate ? 'rate' : 'count', mult,
@@ -963,6 +976,7 @@
               <span style={{ flex: 1 }}>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)}. Submitting sends a <b>correction</b> to an administrator for review — the recorded value won’t change until it is approved.</span>
             </div>
           )}
+          {qCorrection && <Field label="Reason for the correction"><input style={inputStyle} value={qReason} onChange={(e) => setQReason(e.target.value)} placeholder="e.g. wrong denominator — should be Y not X" /></Field>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>
             <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
@@ -1079,7 +1093,17 @@
               {s.reviewedBy && <Meta label="Reviewed by" value={s.reviewedBy + (s.reviewedAt ? ' · ' + when(s.reviewedAt) : '')} />}
               {s.editedBy && <Meta label="Last edited by" value={s.editedBy + (s.editedAt ? ' · ' + when(s.editedAt) : '')} />}
               {s.rejectReason && <Meta label="Reject reason" value={s.rejectReason} />}
+              {s.isCorrection && <Meta label="Edit request" value="Correction — pending approval" />}
+              {s.isCorrection && s.correctionReason && <Meta label="Correction reason" value={s.correctionReason} />}
             </div>
+            {s.priorValues && (
+              <div style={{ border: '1px solid #f0d9a8', background: 'var(--warn-bg,#fff4e0)', borderRadius: 9, padding: '10px 12px' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#9a6b00', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 6 }}>Previously on record — old vs new</div>
+                {s.type === 'patient'
+                  ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 12 }}>{cols.map((c) => { const oldV = (s.priorValues.values || {})[c.id]; const newV = vals[c.id]; const changed = String(oldV == null ? '' : oldV) !== String(newV == null ? '' : newV); return <div key={c.id} style={{ color: changed ? 'var(--rose)' : 'var(--ink-2)' }}><b>{c.label}:</b> {oldV == null ? '—' : oldV}{changed ? ' → ' + (newV == null || newV === '' ? '—' : newV) : ''}</div>; })}</div>
+                  : <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>Value <b>{s.priorValues.value == null ? '—' : s.priorValues.value}</b>{s.priorValues.num != null ? ' · num ' + s.priorValues.num + ' / den ' + (s.priorValues.den == null ? '—' : s.priorValues.den) : ''} → now <b>{isRate ? shownVal : (qval === '' ? '—' : qval)}</b></div>}
+              </div>
+            )}
             {editable && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, padding: '10px 12px', background: 'var(--panel-2)', border: '1px dashed var(--line)', borderRadius: 9 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1300,7 +1324,7 @@
         <td>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
         <td style={{ whiteSpace: 'nowrap' }} className="num">{when(s.submittedAt)}</td>
         <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)' }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
-        <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px' }}>⚠ {dupCount[dupKey(s)]}×</span>}</td>
+        <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px' }}>⚠ {dupCount[dupKey(s)]}×</span>}{s.isCorrection && <span title={s.correctionReason || 'Correction / edit request'} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#7c4dd6', background: 'rgba(124,77,214,.12)', borderRadius: 999, padding: '1px 7px' }}>✎ correction</span>}</td>
         <td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 320 }}>{valuesSummary(s)}</td>
         <td style={{ whiteSpace: 'nowrap' }}>{(s.responsible && s.responsible.name) || '—'}</td>
         <td style={{ whiteSpace: 'nowrap' }}>{s.submittedBy || '—'}</td>
@@ -1508,10 +1532,13 @@
     // Split into Patient / Quality tabs (like the top-level forms).
     const patientRows = merged.filter((s) => s.type !== 'quality');
     const qualityRows = merged.filter((s) => s.type === 'quality');
-    const avail = []; if (patientRows.length) avail.push('patient'); if (qualityRows.length) avail.push('quality');
+    // Edit Requests = the collector's own corrections (built from RAW subs, not the de-duped merge).
+    const editRows = subs.filter((s) => s.isCorrection).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
+    const avail = []; if (patientRows.length) avail.push('patient'); if (qualityRows.length) avail.push('quality'); if (editRows.length) avail.push('edits');
     const active = avail.indexOf(view) >= 0 ? view : (avail[0] || 'patient');
     const isQ = active === 'quality';
-    const shown = isQ ? qualityRows : patientRows;
+    const isEdits = active === 'edits';
+    const shown = isEdits ? editRows : (isQ ? qualityRows : patientRows);
     return (
       <>
       <Card style={{ padding: 0, overflow: 'hidden' }}>
@@ -1521,6 +1548,7 @@
             <div className="seg">
               {avail.indexOf('patient') >= 0 && <button className={active === 'patient' ? 'on' : ''} onClick={() => setView('patient')}><Ic d={I.input} s={13} />Patient Statistics ({patientRows.length})</button>}
               {avail.indexOf('quality') >= 0 && <button className={active === 'quality' ? 'on' : ''} onClick={() => setView('quality')}><Ic d={I.activity} s={13} />Quality Data ({qualityRows.length})</button>}
+              {avail.indexOf('edits') >= 0 && <button className={active === 'edits' ? 'on' : ''} onClick={() => setView('edits')}><Ic d={I.edit} s={13} />Edit Requests ({editRows.length})</button>}
             </div>
           )}
           <span style={{ flex: 1 }} />
@@ -1529,13 +1557,15 @@
         {rows === null ? <div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div>
           : merged.length === 0 ? <div style={{ padding: 28, color: 'var(--muted)', textAlign: 'center' }}>No data yet for your assigned departments.</div>
             : <div style={{ overflowX: 'auto' }}><table className="tbl" style={{ width: '100%' }}>
-              <thead><tr><th>Submitted on</th>{isQ ? <React.Fragment><th>Area</th><th>Indicator</th><th>Quarter</th></React.Fragment> : <React.Fragment><th>Department</th><th>Month</th></React.Fragment>}<th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Submitted on</th>{isEdits ? <React.Fragment><th>Department</th><th>For</th><th>Reason</th></React.Fragment> : (isQ ? <React.Fragment><th>Area</th><th>Indicator</th><th>Quarter</th></React.Fragment> : <React.Fragment><th>Department</th><th>Month</th></React.Fragment>)}<th>Status</th><th></th></tr></thead>
               <tbody>{shown.map((s) => (
                 <tr key={s.id}>
                   <td className="num" style={{ whiteSpace: 'nowrap' }}>{when(s.submittedAt)}</td>
-                  {isQ
-                    ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.areaName}</td><td>{s.indicatorName}</td><td>{s.quarter}</td></React.Fragment>
-                    : <React.Fragment><td style={{ fontWeight: 600 }}>{s.departmentName}</td><td>{monthLabel(s.month)}</td></React.Fragment>}
+                  {isEdits
+                    ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.type === 'quality' ? s.areaName : s.departmentName}</td><td>{(s.type === 'quality' ? (s.indicatorName || '') + ' · ' : '') + monthLabel(s.month)}</td><td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 260 }}>{s.correctionReason || '—'}{s.status === 'rejected' && s.rejectReason ? <div style={{ color: 'var(--rose)', fontSize: 11, marginTop: 2 }}>Rejected: {s.rejectReason}</div> : null}</td></React.Fragment>
+                    : (isQ
+                      ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.areaName}</td><td>{s.indicatorName}</td><td>{s.quarter}</td></React.Fragment>
+                      : <React.Fragment><td style={{ fontWeight: 600 }}>{s.departmentName}</td><td>{monthLabel(s.month)}</td></React.Fragment>)}
                   <td>{statusChip(s.status)}</td>
                   <td style={{ textAlign: 'right' }}><button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View</button></td>
                 </tr>

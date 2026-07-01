@@ -1165,7 +1165,7 @@ function QCHeatGrid({d, months}){
       <table style={{borderCollapse:'collapse',width:'100%',maxWidth:'100%',tableLayout:'fixed'}}>
         <thead><tr>
           <th style={{width:160,textAlign:'left',padding:'6px 8px',fontSize:9,color:P.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.3px',borderBottom:'1px solid '+P.line}}>Indicator</th>
-          {months.map(m=><th key={m[0]} style={{padding:'6px 2px',fontSize:8.5,color:P.muted,fontWeight:700,textAlign:'center',borderBottom:'1px solid '+P.line}}>{m[1].split(' ')[0]}</th>)}
+          {months.map(m=>{ const p=m[0].split('-'); return <th key={m[0]} style={{padding:'6px 2px',fontSize:8.5,color:P.muted,fontWeight:700,textAlign:'center',borderBottom:'1px solid '+P.line}}><div>{p[0]}</div><div style={{fontWeight:400,fontSize:'.82em',opacity:.55}}>{"'"+p[1]}</div></th>; })}
         </tr></thead>
         <tbody>{inds.length===0
           ? <tr><td colSpan={months.length+1} style={{padding:14,textAlign:'center',color:P.faint,fontSize:11}}>No indicators assigned.</td></tr>
@@ -1668,7 +1668,7 @@ function QCReportBuilder({depts}){
         <thead><tr style={{background:P.panel2}}>
           <th style={{...thl,width:120}}>Indicator</th>
           <th style={{...thl,textTransform:'none',fontSize:8.5,width:56}}>Benchmark</th>
-          {pMonths.map(m=><th key={m[0]} style={{...thc,width:33}}>{m[1].split(' ')[0]}</th>)}
+          {pMonths.map(m=>{ const p=m[0].split('-'); return <th key={m[0]} style={{...thc,width:33}}><div>{p[0]}</div><div style={{fontWeight:400,fontSize:'.82em',opacity:.6}}>{"'"+p[1]}</div></th>; })}
           <th style={{...thc,width:48}}>Trend</th>
         </tr></thead>
         <tbody>{rows.map(ind=>(
@@ -2322,21 +2322,35 @@ function QCReportBuilder({depts}){
         if(!els.length) throw new Error('nothing to export');
         prev=els.map(el=>el.getAttribute('style')||'');
         // Size each report page to an exact on-screen A4 sheet so one capture = one PDF page.
-        els.forEach(el=>{ el.style.width=pageW+'px'; el.style.height=pageMinH+'px'; el.style.boxSizing='border-box'; el.style.padding='28px 30px'; el.style.background='#fff'; el.style.overflow='hidden'; el.style.margin='0'; });
+        // Off-screen: give each page the sheet width (portrait OR landscape) at natural height.
+        els.forEach(el=>{ el.style.width=pageW+'px'; el.style.boxSizing='border-box'; el.style.padding='28px 30px'; el.style.background='#fff'; el.style.margin='0'; el.style.height='auto'; el.style.overflow='visible'; });
         try{ if(document.fonts&&document.fonts.ready) await document.fonts.ready; }catch(e){}
-        await new Promise(r=>setTimeout(r,70));
+        await new Promise(r=>setTimeout(r,80));
         const fmt=pageSize==='A3'?'a3':pageSize==='Letter'?'letter':'a4', ori=orient==='landscape'?'l':'p';
         const doc=new J({orientation:ori,unit:'pt',format:fmt,compress:true});
         const pw=doc.internal.pageSize.getWidth(), ph=doc.internal.pageSize.getHeight();
+        let firstPage=true;
         for(let i=0;i<els.length;i++){
-          const canvas=await H(els[i],{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false});
-          if(i>0) doc.addPage(fmt,ori);
-          doc.addImage(canvas.toDataURL('image/jpeg',0.94),'JPEG',0,0,pw,ph,undefined,'FAST');
+          const el=els[i];
+          // short page -> fill one sheet (footer pinned to bottom); tall page stays natural and is sliced
+          if(el.scrollHeight<=pageMinH){ el.style.height=pageMinH+'px'; el.style.overflow='hidden'; }
+          const canvas=await H(el,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false});
+          el.style.height='auto'; el.style.overflow='visible';
+          const cW=canvas.width, cH=canvas.height, pxPerPt=cW/pw, pageHpx=Math.round(ph*pxPerPt);
+          let y=0;
+          do{
+            const sliceH=Math.min(pageHpx, cH-y);
+            let srcC=canvas;
+            if(sliceH<cH){ const tmp=document.createElement('canvas'); tmp.width=cW; tmp.height=sliceH; tmp.getContext('2d').drawImage(canvas,0,y,cW,sliceH,0,0,cW,sliceH); srcC=tmp; }
+            if(!firstPage) doc.addPage(fmt,ori); firstPage=false;
+            doc.addImage(srcC.toDataURL('image/jpeg',0.94),'JPEG',0,0,pw,sliceH/pxPerPt,undefined,'FAST');
+            y+=sliceH;
+          } while(cH-y>2);
         }
         els.forEach((el,i)=>el.setAttribute('style',prev[i])); els=[];
         document.body.classList.remove('qc-pdfcap');
         doc.save('UNICO-quality-'+reportType+'-'+new Date().toISOString().slice(0,10)+'.pdf');
-        setNote({ok:true,text:'PDF downloaded.'});
+        setNote({ok:true,text:'PDF downloaded ('+(ori==='l'?'landscape':'portrait')+').'});
       }catch(e){
         try{ els.forEach((el,i)=>el.setAttribute('style',prev[i])); }catch(_){}
         document.body.classList.remove('qc-pdfcap');
