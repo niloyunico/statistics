@@ -1003,7 +1003,7 @@
   }
   // Full submission viewer. Admins can correct a PENDING submission's values
   // (PATCH /api/submissions/:id) before approving; collectors see it read-only.
-  function SubmissionDetail({ s, canEdit, onClose, onSaved }) {
+  function SubmissionDetail({ s, canEdit, fullEdit = true, onClose, onSaved }) {
     const editable = canEdit && s.status === 'pending';
     const dept = s.type === 'patient' ? (dcAllDepts().find((d) => d.id === s.department)) : null;
     const cols = (dept && dept.cols) || (s.values ? Object.keys(s.values).map((id) => ({ id, label: id })) : []);
@@ -1104,7 +1104,7 @@
                   : <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>Value <b>{s.priorValues.value == null ? '—' : s.priorValues.value}</b>{s.priorValues.num != null ? ' · num ' + s.priorValues.num + ' / den ' + (s.priorValues.den == null ? '—' : s.priorValues.den) : ''} → now <b>{isRate ? shownVal : (qval === '' ? '—' : qval)}</b></div>}
               </div>
             )}
-            {editable && (
+            {editable && fullEdit && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, padding: '10px 12px', background: 'var(--panel-2)', border: '1px dashed var(--line)', borderRadius: 9 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>Reporting month</label>
@@ -1241,7 +1241,7 @@
               <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>Note</label>
               {editable ? <input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" /> : <div>{s.note || '—'}</div>}
             </div>
-            {editable && <div style={{ fontSize: 11, color: 'var(--muted)' }}>Edits are allowed while the submission is pending. Approve it from the table to apply the values to live data.</div>}
+            {editable && <div style={{ fontSize: 11, color: 'var(--muted)' }}>Edits are allowed while the submission is pending. {fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'}</div>}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', position: 'sticky', bottom: 0, background: 'var(--panel)', paddingTop: 8, marginTop: 2, borderTop: '1px solid var(--line-2)' }}>
               <button className="btn sm" onClick={onClose}>Close</button>
               {editable && <button className="btn pri sm" onClick={save} disabled={busy}><Ic d={I.check} s={14} />{busy ? 'Saving…' : 'Save changes'}</button>}
@@ -1514,6 +1514,9 @@
     const [rows, setRows] = useState(null);
     const [detail, setDetail] = useState(null);
     const [view, setView] = useState('patient');
+    const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
+    // A collector may edit only their OWN still-PENDING submission (values only).
+    const ownsSub = (s) => !!s && s.status === 'pending' && [me.name, me.username].filter(Boolean).some((n) => n === s.submittedBy || (s.responsible && s.responsible.name === n));
     const load = () => dcApi.get('/api/submissions?limit=300').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
     useEffect(() => { load(); }, []);
     const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
@@ -1572,7 +1575,7 @@
               ))}</tbody>
             </table></div>}
       </Card>
-      {detail && <SubmissionDetail s={detail} canEdit={false} onClose={() => setDetail(null)} />}
+      {detail && <SubmissionDetail s={detail} canEdit={ownsSub(detail)} fullEdit={false} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}
       </>
     );
   }

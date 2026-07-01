@@ -797,23 +797,32 @@ function mount(app, opts) {
     try { res.json(await rejectSubmission(req.params.id, who(req), req.body && req.body.reason)); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
   // Admin: correct a PENDING submission's values/note before approving it.
-  app.patch('/api/submissions/:id', guard, adminOnly, async (req, res) => {
+  app.patch('/api/submissions/:id', guard, async (req, res) => {
     try {
       const s = await getSubmissionById(req.params.id);
       if (!s) return res.status(404).json({ ok: false, error: 'Submission not found.' });
       if (s.status !== 'pending') return res.status(400).json({ ok: false, error: 'Only pending submissions can be edited.' });
+      // Admins edit anything; a collector may edit only their OWN pending submission (values
+      // only — not re-assigning it to a different department/area/month).
+      const isAdmin = !(req.user && req.user.role && req.user.role !== 'Administrator');
+      if (!isAdmin) {
+        const scope = await getUserScope(req.user.sub);
+        const mine = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
+        const owns = mine.includes(s.submittedBy) || (s.responsible && mine.includes(s.responsible.name));
+        if (!owns) return res.status(403).json({ ok: false, error: 'You can only edit your own submissions.' });
+      }
       const b = req.body || {};
       const patch = { editedBy: who(req), editedAt: Date.now() };
       if (b.note != null) patch.note = String(b.note);
-      if (b.month) patch.month = String(b.month).trim(); // month editable for BOTH types
+      if (isAdmin && b.month) patch.month = String(b.month).trim(); // month re-assign is admin-only
       if (s.type === 'patient') {
         if (b.values && typeof b.values === 'object') {
           const out = {};
           Object.keys(b.values).forEach((k) => { const v = b.values[k]; if (v !== '' && v != null && !isNaN(Number(v))) out[k] = Number(v); });
           patch.values = out;
         }
-        // Re-assign to a different department (collector picked the wrong one).
-        if (b.department) { patch.department = String(b.department).trim(); if (b.departmentName) patch.departmentName = String(b.departmentName).trim(); }
+        // Re-assign to a different department (admin only).
+        if (isAdmin && b.department) { patch.department = String(b.department).trim(); if (b.departmentName) patch.departmentName = String(b.departmentName).trim(); }
       } else if (s.type === 'quality') {
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
         if (b.num != null && b.num !== '' && !isNaN(Number(b.num))) patch.num = Number(b.num);   // rate numerator
@@ -823,8 +832,8 @@ function mount(app, opts) {
         if (b.groups) { const g = sanitizeGroupMap(b.groups); if (g) patch.groups = g; }
         if (b.groupsDen) { const gd = sanitizeGroupMap(b.groupsDen); if (gd) patch.groupsDen = gd; }
         if (b.remark != null) patch.remark = String(b.remark);
-        // Re-assign to a different quality area.
-        if (b.area) { patch.area = String(b.area).trim(); if (b.areaName) patch.areaName = String(b.areaName).trim(); }
+        // Re-assign to a different quality area (admin only).
+        if (isAdmin && b.area) { patch.area = String(b.area).trim(); if (b.areaName) patch.areaName = String(b.areaName).trim(); }
         // Edit the incident/patient/CAPA details attached to this quality submission.
         if (Array.isArray(b.incidents)) {
           const IF = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'details', 'finding', 'corrective', 'preventive', 'remark'];

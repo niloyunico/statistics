@@ -30611,6 +30611,7 @@ window.LockScreen = LockScreen;
   function SubmissionDetail({
     s,
     canEdit,
+    fullEdit = true,
     onClose,
     onSaved
   }) {
@@ -30913,7 +30914,7 @@ window.LockScreen = LockScreen;
         fontSize: 12,
         color: 'var(--ink-2)'
       }
-    }, "Value ", React.createElement("b", null, s.priorValues.value == null ? '—' : s.priorValues.value), s.priorValues.num != null ? ' · num ' + s.priorValues.num + ' / den ' + (s.priorValues.den == null ? '—' : s.priorValues.den) : '', " \u2192 now ", React.createElement("b", null, isRate ? shownVal : qval === '' ? '—' : qval))), editable && React.createElement("div", {
+    }, "Value ", React.createElement("b", null, s.priorValues.value == null ? '—' : s.priorValues.value), s.priorValues.num != null ? ' · num ' + s.priorValues.num + ' / den ' + (s.priorValues.den == null ? '—' : s.priorValues.den) : '', " \u2192 now ", React.createElement("b", null, isRate ? shownVal : qval === '' ? '—' : qval))), editable && fullEdit && React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
@@ -31391,7 +31392,7 @@ window.LockScreen = LockScreen;
         fontSize: 11,
         color: 'var(--muted)'
       }
-    }, "Edits are allowed while the submission is pending. Approve it from the table to apply the values to live data."), React.createElement("div", {
+    }, "Edits are allowed while the submission is pending. ", fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -32169,6 +32170,8 @@ window.LockScreen = LockScreen;
     const [rows, setRows] = useState(null);
     const [detail, setDetail] = useState(null);
     const [view, setView] = useState('patient');
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
+    const ownsSub = s => !!s && s.status === 'pending' && [me.name, me.username].filter(Boolean).some(n => n === s.submittedBy || s.responsible && s.responsible.name === n);
     const load = () => dcApi.get('/api/submissions?limit=300').then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
     useEffect(() => {
       load();
@@ -32329,8 +32332,13 @@ window.LockScreen = LockScreen;
       s: 13
     }), "View")))))))), detail && React.createElement(SubmissionDetail, {
       s: detail,
-      canEdit: false,
-      onClose: () => setDetail(null)
+      canEdit: ownsSub(detail),
+      fullEdit: false,
+      onClose: () => setDetail(null),
+      onSaved: () => {
+        setDetail(null);
+        load();
+      }
     }));
   }
   function CollectorStatus({
