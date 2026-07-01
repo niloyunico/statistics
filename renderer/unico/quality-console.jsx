@@ -1083,6 +1083,63 @@ function qcIndKpis(ind, months){
   return cards;
 }
 
+/* ---- Year-wise status heatmap (indicator × month), legend + auto incident block ---- */
+function qcHeatColors(s){
+  if(s==='breach') return {bg:P.rose, col:'#fff'};
+  if(s==='ok')     return {bg:'#e7f6ed', col:P.green};
+  return {bg:'#f1f4f8', col:P.faint};
+}
+function QCHeatGrid({d, months}){
+  months = months || MONTHS;
+  const inds=(d.indicators||[]);
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table style={{borderCollapse:'collapse',width:'100%'}}>
+        <thead><tr>
+          <th style={{textAlign:'left',padding:'6px 8px',fontSize:9,color:P.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.3px',borderBottom:'1px solid '+P.line}}>Indicator</th>
+          {months.map(m=><th key={m[0]} style={{padding:'6px 2px',fontSize:8.5,color:P.muted,fontWeight:700,textAlign:'center',borderBottom:'1px solid '+P.line}}>{m[1].split(' ')[0]}</th>)}
+        </tr></thead>
+        <tbody>{inds.length===0
+          ? <tr><td colSpan={months.length+1} style={{padding:14,textAlign:'center',color:P.faint,fontSize:11}}>No indicators assigned.</td></tr>
+          : inds.map(ind=>(
+          <tr key={ind.id}>
+            <td style={{padding:'3px 8px',textAlign:'left',fontWeight:600,color:P.ink,whiteSpace:'nowrap',fontSize:9.5}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
+            {months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); const s=qStatus(ind,v); const c=qcHeatColors(s);
+              return <td key={m[0]} style={{padding:'3px 2px',textAlign:'center'}}><span title={ind.name+' · '+m[1]+' · '+(s==='na'?'not reported':s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:30,height:24,borderRadius:5,background:c.bg,color:c.col,fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{s==='na'?'·':fmtVal(ind,v)}</span></td>;
+            })}
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+function QCHeatLegend(){
+  const item=(bg,txt)=>(<span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:10,color:P.muted}}><span style={{width:13,height:13,borderRadius:3,background:bg,border:'1px solid '+P.line2}}/>{txt}</span>);
+  return <div style={{display:'flex',gap:16,flexWrap:'wrap',margin:'2px 0 8px'}}>{item('#e7f6ed','on benchmark')}{item(P.rose,'breach')}{item('#f1f4f8','not reported')}</div>;
+}
+// Auto-included occurred-incident details for a department (filtered to the period).
+function QCIncidentBlock({d, months}){
+  const set = months ? new Set(months.map(m=>m[1])) : null;
+  const inc = qcIncidentsOf(d).filter(r=> !set || set.has(r.month));
+  if(!inc.length) return null;
+  const line=(lbl,v)=> v? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5}}><b style={{color:P.ink}}>{lbl}:</b> {v}</div> : null;
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Occurred incident details ({inc.length}) — auto-included</div>
+      {inc.map((r,i)=>{ const x=r.x; const meta=[x.patientName, x.uhid&&('UHID '+x.uhid), [x.age,x.gender].filter(Boolean).join('/'), x.admissionDate&&('adm '+x.admissionDate)].filter(Boolean).join(' · ');
+        return (
+        <div key={i} style={{border:'1px solid #f1c6cd',borderRadius:8,padding:'9px 11px',marginBottom:8,background:'#fffafb',pageBreakInside:'avoid'}}>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'baseline',marginBottom:meta?4:2}}>
+            <b style={{fontSize:11.5,color:P.ink}}>{r.ind}</b><span style={{fontSize:10,color:P.rose,fontWeight:600}}>{r.month}</span>
+          </div>
+          {meta&&<div style={{fontSize:10,color:P.muted,marginBottom:4}}>{meta}</div>}
+          {line('Diagnosis', x.diagnosis)}{line('Incident', x.details)}{line('Finding', x.finding)}{line('Corrective', x.corrective)}{line('Preventive', x.preventive)}{line('Remark', x.remark)}
+        </div>
+      ); })}
+    </div>
+  );
+}
+
 function QCReportBuilder({depts}){
   const allKeys = depts.map(d=>d.key);
   const [reportType,setReportType] = useState('summary');
@@ -1136,6 +1193,7 @@ function QCReportBuilder({depts}){
         const list=inds.length?inds:(d.indicators||[]);
         return (list.length?list:[null]).map(ind=>({kind:'detail', dept:d, ind}));
       });
+    if(reportType==='heatmap') return chosen.map(d=>({kind:'heatmap', dept:d}));
     return chosen.map(d=>({kind:'summary', dept:d}));
   },[chosen,reportType,selectedDepts]);
   const pageCount=Math.max(1,pages.length);
@@ -1281,12 +1339,23 @@ function QCReportBuilder({depts}){
             <span style={{background:color+'1c',color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11.5}}>{status}</span>
           </div>
           <KpiCards cards={cards} tone={tone}/>
-          {chartStyles.map((cs)=>(
-            <div key={cs} style={{margin:'4px 0 8px'}}>
-              {chartStyles.length>1&&<div style={uSub}>{QC_CHART_STYLE_LABEL[cs]||cs}</div>}
-              {qcChartEl(d, cs, chartInd, tone, pMonths)}
-            </div>
-          ))}
+          {/* Value charts are meaningless for zero-defect data (all 0s render blank) —
+              fall back to a status heatmap so the page is never empty. */}
+          {(() => {
+            const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r=>r.has && r.val!==0);
+            if(!chartable) return (
+              <div style={{margin:'4px 0 8px'}}>
+                <div style={uSub}>Status heatmap · {chartInd?'zero-defect — no values to chart':'no data'}</div>
+                <QCHeatLegend/><QCHeatGrid d={d} months={pMonths}/>
+              </div>
+            );
+            return chartStyles.map((cs)=>(
+              <div key={cs} style={{margin:'4px 0 8px'}}>
+                {chartStyles.length>1&&<div style={uSub}>{QC_CHART_STYLE_LABEL[cs]||cs}</div>}
+                {qcChartEl(d, cs, chartInd, tone, pMonths)}
+              </div>
+            ));
+          })()}
           {dd.length>1&&!chartStyles.includes('donut')&&(
             <div style={{display:'flex',alignItems:'center',gap:10,background:P.panel2,borderRadius:9,padding:'10px 14px',marginTop:6}}>
               <div style={{fontSize:10.5,color:P.muted,textTransform:'uppercase',letterSpacing:.3,fontWeight:600,width:88}}>Breach composition</div>
@@ -1295,6 +1364,32 @@ function QCReportBuilder({depts}){
           )}
           <MonthTable d={d} detailInd={detailed?page.ind:null}/>
           {detailed&&page.ind&&<IndicatorDetail d={d} ind={page.ind}/>}
+          {!detailed&&<QCIncidentBlock d={d} months={pMonths}/>}
+        </div>
+        <Footer n={n} total={total}/>
+      </div>
+    );
+  }
+
+  function HeatmapPage({page,n,total}){
+    const d=page.dept; const tone=qcTone(d);
+    const {status,color}=qcDeptStatus(d, pMonths);
+    const cards=qcDeptKpis(d, pMonths);
+    return (
+      <div>
+        <Header/>
+        <div style={{marginTop:18}}>
+          <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
+            <span style={{width:30,height:30,borderRadius:8,background:tone+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={tone}/></span>
+            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>{d.name} · Year-wise heatmap</div>
+            <span style={{flex:1}}/>
+            <span style={{background:color+'1c',color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11.5}}>{status}</span>
+          </div>
+          <KpiCards cards={cards} tone={tone}/>
+          <div style={{fontSize:9.5,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:.4,margin:'6px 0 4px'}}>Indicator × month status · {rangeLabel}</div>
+          <QCHeatLegend/>
+          <QCHeatGrid d={d} months={pMonths}/>
+          <QCIncidentBlock d={d} months={pMonths}/>
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -1419,6 +1514,8 @@ function QCReportBuilder({depts}){
             <section className="pdf-page" key={i}>
               {pg.kind==='compare'
                 ? <ComparePage/>
+                : pg.kind==='heatmap'
+                ? <HeatmapPage page={pg} n={i+1} total={pages.length}/>
                 : <DeptPage page={pg} n={i+1} total={pages.length}/>}
             </section>
           ))}
@@ -1432,12 +1529,12 @@ function QCReportBuilder({depts}){
             <div>
               {fieldLabel('Report type')}
               <div className="seg" style={{width:'100%'}}>
-                {[['summary','Summary'],['detail','Detailed'],['compare','Comparison']].map(([id,l])=>(
+                {[['summary','Summary'],['detail','Detailed'],['heatmap','Heatmap'],['compare','Comparison']].map(([id,l])=>(
                   <button key={id} className={reportType===id?'on':''} style={{flex:1}} onClick={()=>{setReportType(id);setPageIdx(0);}}>{l}</button>
                 ))}
               </div>
               <div style={{fontSize:11,color:P.muted,marginTop:6}}>
-                {reportType==='summary'?'KPI cards + chart per department, one page each.':reportType==='detail'?'Every indicator × month with benchmark & RAG, per department.':'All selected departments on one comparison page.'}
+                {reportType==='summary'?'KPI cards + chart per department, one page each.':reportType==='detail'?'Every indicator × month with benchmark & RAG, per department.':reportType==='heatmap'?'Year-wise indicator × month status grid per department, with occurred-incident details auto-included.':'All selected departments on one comparison page.'}
               </div>
             </div>
             <div>
@@ -1525,6 +1622,7 @@ function QCReportBuilder({depts}){
               {chosen.length===0?<div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Select at least one department.</div>
                 : !cur ? <div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Nothing to preview.</div>
                 : cur.kind==='compare' ? <ComparePage/>
+                : cur.kind==='heatmap' ? <HeatmapPage page={cur} n={pi+1} total={pageCount}/>
                 : <DeptPage page={cur} n={pi+1} total={pageCount}/>}
             </div>
           </div>

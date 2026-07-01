@@ -58,7 +58,7 @@ function safeJSON(value) {
 // the Quality console. Build a minimal `unico_quality_v2` overlay for the snapshot:
 // only the collector's own areas, and only DEFINITION fields (value fields like
 // months/incidents are stripped so recorded data and the entry lock are untouched).
-function scopeQualityOverlay(raw, qualityAreas) {
+function scopeQualityOverlay(raw, qualityAreas, qualityIndicators) {
   try {
     const ov = typeof raw === 'string' ? JSON.parse(raw) : (raw && typeof raw === 'object' ? raw : null);
     if (!ov || !ov.depts) return {};
@@ -67,12 +67,18 @@ function scopeQualityOverlay(raw, qualityAreas) {
       if (!o || typeof o !== 'object') return o;
       const c = {}; Object.keys(o).forEach((k) => { if (VALUE_FIELDS.indexOf(k) < 0) c[k] = o[k]; }); return c;
     };
+    const qi = (qualityIndicators && typeof qualityIndicators === 'object') ? qualityIndicators : {};
     const depts = {};
     (qualityAreas || []).forEach((k) => {
       const d = ov.depts[k]; if (!d) return;
       const nd = {};
-      if (d.indPatches) { nd.indPatches = {}; Object.keys(d.indPatches).forEach((id) => { nd.indPatches[id] = stripValues(d.indPatches[id]); }); }
-      if (Array.isArray(d.indAdded)) nd.indAdded = d.indAdded.map(stripValues);
+      // Per-indicator scope: when qualityIndicators[area] is a non-empty list, the
+      // OVERLAY-added indicators must be narrowed too (they live here, not in the seed
+      // `quality` collection that web.js filters below) — otherwise the restriction
+      // leaks every admin-assigned indicator to the collector.
+      const allow = (Array.isArray(qi[k]) && qi[k].length) ? new Set(qi[k].map(String)) : null;
+      if (d.indPatches) { nd.indPatches = {}; Object.keys(d.indPatches).forEach((id) => { if (!allow || allow.has(String(id))) nd.indPatches[id] = stripValues(d.indPatches[id]); }); }
+      if (Array.isArray(d.indAdded)) nd.indAdded = d.indAdded.map(stripValues).filter((a) => !allow || allow.has(String(a && a.id)));
       if (Array.isArray(d.indRemoved)) nd.indRemoved = d.indRemoved;
       depts[k] = nd;
     });
@@ -144,7 +150,7 @@ async function serveIndex(req, res) {
     // scoped to their own areas/departments, so BOTH Data Collection forms reflect the
     // admin's edits (quality measurement type / assignment; patient metric columns).
     snap = {};
-    const qov = scopeQualityOverlay(appRes && appRes.data && appRes.data['unico_quality_v2'], qa);
+    const qov = scopeQualityOverlay(appRes && appRes.data && appRes.data['unico_quality_v2'], qa, qi);
     if (qov && qov['unico_quality_v2']) snap['unico_quality_v2'] = qov['unico_quality_v2'];
     const dov = scopeDeptOverlay(appRes && appRes.data && appRes.data['unico_store_v3'], da);
     if (dov) snap['unico_store_v3'] = JSON.stringify(dov);

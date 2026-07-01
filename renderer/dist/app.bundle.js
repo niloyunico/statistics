@@ -16692,6 +16692,207 @@ function qcIndKpis(ind, months) {
   cards.push(['Breaches', String(countBreaches(ind)), countBreaches(ind) > 0 ? P.rose : P.green, 'months off benchmark']);
   return cards;
 }
+function qcHeatColors(s) {
+  if (s === 'breach') return {
+    bg: P.rose,
+    col: '#fff'
+  };
+  if (s === 'ok') return {
+    bg: '#e7f6ed',
+    col: P.green
+  };
+  return {
+    bg: '#f1f4f8',
+    col: P.faint
+  };
+}
+function QCHeatGrid({
+  d,
+  months
+}) {
+  months = months || MONTHS;
+  const inds = d.indicators || [];
+  return React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '6px 8px',
+      fontSize: 9,
+      color: P.muted,
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      borderBottom: '1px solid ' + P.line
+    }
+  }, "Indicator"), months.map(m => React.createElement("th", {
+    key: m[0],
+    style: {
+      padding: '6px 2px',
+      fontSize: 8.5,
+      color: P.muted,
+      fontWeight: 700,
+      textAlign: 'center',
+      borderBottom: '1px solid ' + P.line
+    }
+  }, m[1].split(' ')[0])))), React.createElement("tbody", null, inds.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+    colSpan: months.length + 1,
+    style: {
+      padding: 14,
+      textAlign: 'center',
+      color: P.faint,
+      fontSize: 11
+    }
+  }, "No indicators assigned.")) : inds.map(ind => React.createElement("tr", {
+    key: ind.id
+  }, React.createElement("td", {
+    style: {
+      padding: '3px 8px',
+      textAlign: 'left',
+      fontWeight: 600,
+      color: P.ink,
+      whiteSpace: 'nowrap',
+      fontSize: 9.5
+    }
+  }, ind.name, " ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400
+    }
+  }, ind.goalDirection === 'higher_is_better' ? '↑' : '↓')), months.map(m => {
+    let v = monthRaw(ind, m[0]);
+    if (v == null) v = qtrRaw(ind, m[2]);
+    const s = qStatus(ind, v);
+    const c = qcHeatColors(s);
+    return React.createElement("td", {
+      key: m[0],
+      style: {
+        padding: '3px 2px',
+        textAlign: 'center'
+      }
+    }, React.createElement("span", {
+      title: ind.name + ' · ' + m[1] + ' · ' + (s === 'na' ? 'not reported' : s === 'breach' ? 'breach' : 'on benchmark'),
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        minWidth: 30,
+        height: 24,
+        borderRadius: 5,
+        background: c.bg,
+        color: c.col,
+        fontFamily: MONO,
+        fontWeight: 700,
+        fontSize: 9.5
+      }
+    }, s === 'na' ? '·' : fmtVal(ind, v)));
+  }))))));
+}
+function QCHeatLegend() {
+  const item = (bg, txt) => React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      fontSize: 10,
+      color: P.muted
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 13,
+      height: 13,
+      borderRadius: 3,
+      background: bg,
+      border: '1px solid ' + P.line2
+    }
+  }), txt);
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 16,
+      flexWrap: 'wrap',
+      margin: '2px 0 8px'
+    }
+  }, item('#e7f6ed', 'on benchmark'), item(P.rose, 'breach'), item('#f1f4f8', 'not reported'));
+}
+function QCIncidentBlock({
+  d,
+  months
+}) {
+  const set = months ? new Set(months.map(m => m[1])) : null;
+  const inc = qcIncidentsOf(d).filter(r => !set || set.has(r.month));
+  if (!inc.length) return null;
+  const line = (lbl, v) => v ? React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.ink2,
+      lineHeight: 1.5
+    }
+  }, React.createElement("b", {
+    style: {
+      color: P.ink
+    }
+  }, lbl, ":"), " ", v) : null;
+  return React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.rose,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "Occurred incident details (", inc.length, ") \u2014 auto-included"), inc.map((r, i) => {
+    const x = r.x;
+    const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.admissionDate && 'adm ' + x.admissionDate].filter(Boolean).join(' · ');
+    return React.createElement("div", {
+      key: i,
+      style: {
+        border: '1px solid #f1c6cd',
+        borderRadius: 8,
+        padding: '9px 11px',
+        marginBottom: 8,
+        background: '#fffafb',
+        pageBreakInside: 'avoid'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap',
+        alignItems: 'baseline',
+        marginBottom: meta ? 4 : 2
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 11.5,
+        color: P.ink
+      }
+    }, r.ind), React.createElement("span", {
+      style: {
+        fontSize: 10,
+        color: P.rose,
+        fontWeight: 600
+      }
+    }, r.month)), meta && React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.muted,
+        marginBottom: 4
+      }
+    }, meta), line('Diagnosis', x.diagnosis), line('Incident', x.details), line('Finding', x.finding), line('Corrective', x.corrective), line('Preventive', x.preventive), line('Remark', x.remark));
+  }));
+}
 function QCReportBuilder({
   depts
 }) {
@@ -16755,6 +16956,10 @@ function QCReportBuilder({
         ind
       }));
     });
+    if (reportType === 'heatmap') return chosen.map(d => ({
+      kind: 'heatmap',
+      dept: d
+    }));
     return chosen.map(d => ({
       kind: 'summary',
       dept: d
@@ -17282,14 +17487,27 @@ function QCReportBuilder({
     }, status)), React.createElement(KpiCards, {
       cards: cards,
       tone: tone
-    }), chartStyles.map(cs => React.createElement("div", {
-      key: cs,
-      style: {
-        margin: '4px 0 8px'
-      }
-    }, chartStyles.length > 1 && React.createElement("div", {
-      style: uSub
-    }, QC_CHART_STYLE_LABEL[cs] || cs), qcChartEl(d, cs, chartInd, tone, pMonths))), dd.length > 1 && !chartStyles.includes('donut') && React.createElement("div", {
+    }), (() => {
+      const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r => r.has && r.val !== 0);
+      if (!chartable) return React.createElement("div", {
+        style: {
+          margin: '4px 0 8px'
+        }
+      }, React.createElement("div", {
+        style: uSub
+      }, "Status heatmap \xB7 ", chartInd ? 'zero-defect — no values to chart' : 'no data'), React.createElement(QCHeatLegend, null), React.createElement(QCHeatGrid, {
+        d: d,
+        months: pMonths
+      }));
+      return chartStyles.map(cs => React.createElement("div", {
+        key: cs,
+        style: {
+          margin: '4px 0 8px'
+        }
+      }, chartStyles.length > 1 && React.createElement("div", {
+        style: uSub
+      }, QC_CHART_STYLE_LABEL[cs] || cs), qcChartEl(d, cs, chartInd, tone, pMonths)));
+    })(), dd.length > 1 && !chartStyles.includes('donut') && React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -17319,6 +17537,87 @@ function QCReportBuilder({
     }), detailed && page.ind && React.createElement(IndicatorDetail, {
       d: d,
       ind: page.ind
+    }), !detailed && React.createElement(QCIncidentBlock, {
+      d: d,
+      months: pMonths
+    })), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function HeatmapPage({
+    page,
+    n,
+    total
+  }) {
+    const d = page.dept;
+    const tone = qcTone(d);
+    const {
+      status,
+      color
+    } = qcDeptStatus(d, pMonths);
+    const cards = qcDeptKpis(d, pMonths);
+    return React.createElement("div", null, React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      className: "qc-band",
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 12
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        background: tone + '1c',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, React.createElement(DocIc, {
+      c: tone
+    })), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 15,
+        color: P.ink
+      }
+    }, d.name, " \xB7 Year-wise heatmap"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        background: color + '1c',
+        color,
+        padding: '3px 10px',
+        borderRadius: 20,
+        fontWeight: 700,
+        fontSize: 11.5
+      }
+    }, status)), React.createElement(KpiCards, {
+      cards: cards,
+      tone: tone
+    }), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.muted,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        margin: '6px 0 4px'
+      }
+    }, "Indicator \xD7 month status \xB7 ", rangeLabel), React.createElement(QCHeatLegend, null), React.createElement(QCHeatGrid, {
+      d: d,
+      months: pMonths
+    }), React.createElement(QCIncidentBlock, {
+      d: d,
+      months: pMonths
     })), React.createElement(Footer, {
       n: n,
       total: total
@@ -17649,7 +17948,11 @@ function QCReportBuilder({
   }, React.createElement("style", null, '@media print{body.pdf-export-mode .pdf-doc .pdf-page{page:qc-rpt-sheet}@page qc-rpt-sheet{size:' + pageSize + (portrait ? ' portrait' : ' landscape') + ';margin:6mm}}'), pages.map((pg, i) => React.createElement("section", {
     className: "pdf-page",
     key: i
-  }, pg.kind === 'compare' ? React.createElement(ComparePage, null) : React.createElement(DeptPage, {
+  }, pg.kind === 'compare' ? React.createElement(ComparePage, null) : pg.kind === 'heatmap' ? React.createElement(HeatmapPage, {
+    page: pg,
+    n: i + 1,
+    total: pages.length
+  }) : React.createElement(DeptPage, {
     page: pg,
     n: i + 1,
     total: pages.length
@@ -17690,7 +17993,7 @@ function QCReportBuilder({
     style: {
       width: '100%'
     }
-  }, [['summary', 'Summary'], ['detail', 'Detailed'], ['compare', 'Comparison']].map(([id, l]) => React.createElement("button", {
+  }, [['summary', 'Summary'], ['detail', 'Detailed'], ['heatmap', 'Heatmap'], ['compare', 'Comparison']].map(([id, l]) => React.createElement("button", {
     key: id,
     className: reportType === id ? 'on' : '',
     style: {
@@ -17706,7 +18009,7 @@ function QCReportBuilder({
       color: P.muted,
       marginTop: 6
     }
-  }, reportType === 'summary' ? 'KPI cards + chart per department, one page each.' : reportType === 'detail' ? 'Every indicator × month with benchmark & RAG, per department.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
+  }, reportType === 'summary' ? 'KPI cards + chart per department, one page each.' : reportType === 'detail' ? 'Every indicator × month with benchmark & RAG, per department.' : reportType === 'heatmap' ? 'Year-wise indicator × month status grid per department, with occurred-incident details auto-included.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
     value: period.mode,
     onChange: e => setPeriod({
       mode: e.target.value,
@@ -18046,7 +18349,11 @@ function QCReportBuilder({
       color: P.faint,
       padding: '60px 0'
     }
-  }, "Nothing to preview.") : cur.kind === 'compare' ? React.createElement(ComparePage, null) : React.createElement(DeptPage, {
+  }, "Nothing to preview.") : cur.kind === 'compare' ? React.createElement(ComparePage, null) : cur.kind === 'heatmap' ? React.createElement(HeatmapPage, {
+    page: cur,
+    n: pi + 1,
+    total: pageCount
+  }) : React.createElement(DeptPage, {
     page: cur,
     n: pi + 1,
     total: pageCount
