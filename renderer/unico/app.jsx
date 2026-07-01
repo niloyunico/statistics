@@ -117,7 +117,7 @@ function App(){
   // console handles Manage/Assign/Catalog + Dashboard/Scorecard/… sub-nav internally.
   if(route.view && route.view.indexOf('quality')===0 && typeof QualityConsole!=='undefined'){
     const QV_MAP={quality:'dashboard',qualityScore:'scorecard',qualityTrend:'trends',qualityReport:'reports',qualityReportQ:'reports',qualityIncidents:'incidents',qualityDataEntry:'dataentry',qualityManage:'admin',qualityCatalog:'admin',qualityAssign:'admin',qualityCapa:'actionplans',qualityDept:'dashboard',qualityEdit:'admin',qualityEntry:'dataentry',qualityHub:'dashboard'};
-    return <QualityConsole initialView={route.qview||QV_MAP[route.view]||'dashboard'} initialDept={route.dept} onExit={()=>setRoute({view:'dashboard'})}/>;
+    return <QualityConsole initialView={route.qview||QV_MAP[route.view]||'dashboard'} initialDept={route.dept} setRoute={setRoute} onExit={()=>setRoute({view:'dashboard'})}/>;
   }
 
   return (

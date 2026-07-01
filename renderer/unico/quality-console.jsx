@@ -881,15 +881,37 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const needsDen = selInd && (selInd.formula==='rate1000'||selInd.formula==='rate100'||selInd.formula==='pct');
 
   // ---- assign matrix ----
+  // Rows = EVERY catalog indicator (all 96 in the Formula Library / HQI_STANDARDS)
+  // so ANY of them can be assigned to ANY department — not only the ones already in
+  // use. Existing department indicators are matched to their catalog code via
+  // stdMatch(); an indicator matching no standard is kept as its own "custom" row so
+  // nothing already assigned disappears.
   const assignCols = depts.map(d=>({key:d.key, short:(d.name||'').replace(/Ward|Department/g,'').trim().slice(0,8), name:d.name}));
-  const byName={};
-  depts.forEach(d=>(d.indicators||[]).forEach(i=>{ const k=norm(i.name); if(!byName[k]) byName[k]={key:k,name:i.name,formula:i.formula,tmpl:i,set:new Set()}; byName[k].set.add(d.key); }));
-  const assignNames = Object.values(byName).sort((a,b)=> b.set.size-a.set.size || a.name.localeCompare(b.name));
+  const stdTemplate = (s)=>{ const ft=s.ft||'direct'; return {
+    name:s.name, formula:ft,
+    valueType: ft==='pct'?'%':(ft==='rate1000'||ft==='rate100')?'Rate':'Count',
+    unit:s.unit||'', numLabel:s.num||'Numerator', denLabel:s.den||'Denominator',
+    benchmark:s.bench||'', benchmarkValue:(s.bv==null?'':s.bv),
+    goalDirection: s.dir==='high'?'higher_is_better':'lower_is_better',
+    reference:s.ref||'', formulaText:s.expr||'', months:{},
+  }; };
+  const rowsByKey={};
+  ((typeof HQI_STANDARDS!=='undefined'&&HQI_STANDARDS)||[]).forEach(s=>{
+    rowsByKey['std:'+s.code]={ key:'std:'+s.code, code:s.code, name:s.name, formula:s.ft||'direct', tmpl:stdTemplate(s), set:new Set() };
+  });
+  depts.forEach(d=>(d.indicators||[]).forEach(i=>{
+    const code=stdMatch(i.name);
+    if(code && rowsByKey['std:'+code]){ rowsByKey['std:'+code].set.add(d.key); }
+    else { const k='cus:'+norm(i.name); if(!rowsByKey[k]) rowsByKey[k]={ key:k, code:null, name:i.name, formula:i.formula, tmpl:i, set:new Set() }; rowsByKey[k].set.add(d.key); }
+  }));
+  const assignNames = Object.values(rowsByKey).sort((a,b)=> b.set.size-a.set.size || a.name.localeCompare(b.name));
   const toggleAssign = (rec,dk)=>{
     if(rec.set.has(dk)){
-      const d=(Q.depts||[]).find(x=>x.key===dk); const inst=d&&(d.indicators||[]).find(x=>norm(x.name)===rec.key); if(inst) Q.removeIndicator(dk,inst.id);
+      const d=(Q.depts||[]).find(x=>x.key===dk);
+      const inst=d&&(d.indicators||[]).find(x=> rec.code ? stdMatch(x.name)===rec.code : norm(x.name)===norm(rec.name));
+      if(inst) Q.removeIndicator(dk,inst.id);
     } else {
-      const c=Object.assign({},rec.tmpl,{ id:window.qualitySlug(rec.tmpl.name) }); Q.addIndicator(dk,c);
+      const c=Object.assign({},rec.tmpl,{ id:window.qualitySlug(rec.tmpl.name||rec.name) }); Q.addIndicator(dk,c);
     }
   };
 
@@ -1196,7 +1218,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
       {/* ============ ASSIGN ============ */}
       {view==='assign' && (
       <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
-        <div style={{padding:'13px 16px',borderBottom:'1px solid #e8edf3'}}><div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Assign by Department</div><div style={{fontSize:11.5,color:P.muted}}>Which department reports which standard indicator. Tick a cell to assign it.</div></div>
+        <div style={{padding:'13px 16px',borderBottom:'1px solid #e8edf3'}}><div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Assign by Department</div><div style={{fontSize:11.5,color:P.muted}}>Which department reports which indicator — all {assignNames.length} catalog indicators. Tick a cell to assign / unassign.</div></div>
         <div style={{overflowX:'auto'}}>
           <table style={{borderCollapse:'collapse',fontSize:12,width:'100%'}}>
             <thead><tr>
@@ -1326,12 +1348,25 @@ const QC_ICONS = {
   actionplans:'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11'
 };
 
-function QualityConsole({ onExit, initialView, initialDept }){
+function QualityConsole({ onExit, initialView, initialDept, setRoute }){
   const Q = window.useQualityStore();
   const depts = (Q.depts||[]).filter(d => d.indicators && d.indicators.length);
 
   const [module, setModule] = useState(initialView || 'dashboard');
   const [gq, setGq] = useState('');
+  const [wsOpen, setWsOpen] = useState(false);
+
+  // Switch to another UNICO workspace — leaves the console and hands control back to
+  // the app's default shell (which has its own switcher to return here). Mirrors
+  // ui.jsx UNICO_MODULES so the console isn't a dead end.
+  const WORKSPACES = [
+    { id:'stats',   label:'Statistics',         home:'dashboard' },
+    { id:'datacol', label:'Data Collection',    home:'dcReview' },
+    { id:'staff',   label:'Staff Management',   home:'nurseHome' },
+    { id:'quality', label:'Quality Indicators', home:'quality', current:true },
+    { id:'users',   label:'User Management',    home:'users' },
+  ];
+  const goWorkspace = (w) => { setWsOpen(false); if(w.current) return; if(setRoute) setRoute({view:w.home}); else if(onExit) onExit(); };
 
   const crumbTitle = {
     dashboard:'Dashboard', scorecard:'Scorecard', trends:'Trends',
