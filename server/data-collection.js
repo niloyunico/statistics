@@ -237,6 +237,14 @@ async function buildQualitySpec(payload) {
         remark: S(x && x.remark),
       })).filter((x) => x.details || x.finding || x.corrective || x.preventive || x.uhid || x.patientName || x.diagnosis || x.remark)
     : null;
+  // Derive a NUMERIC benchmark threshold (dashboards/scorecard flag breaches from
+  // benchmarkValue; a display string like "≤ 5%" is not enough). Prefer explicit
+  // payload/found values, else parse the first number out of the benchmark text.
+  const benchStr = (payload && payload.benchmark) || (found && found.benchmark) || '';
+  let benchmarkValue = (payload && payload.benchmarkValue);
+  if (benchmarkValue == null || benchmarkValue === '') benchmarkValue = (found && found.benchmarkValue != null) ? found.benchmarkValue : null;
+  if ((benchmarkValue == null || benchmarkValue === '') && benchStr) { const bm = String(benchStr).match(/-?\d+(?:\.\d+)?/); if (bm) benchmarkValue = Number(bm[0]); }
+  benchmarkValue = (benchmarkValue == null || benchmarkValue === '' || isNaN(Number(benchmarkValue))) ? null : Number(benchmarkValue);
   return {
     type: 'quality', area, areaName: doc.name || area, indicatorId: indId, indicatorName: indName, capa, incidents,
     // Optional numerator breakdown by staff group (Nurse / Doctor / Other).
@@ -244,10 +252,12 @@ async function buildQualitySpec(payload) {
     groupsDen: sanitizeGroupMap(payload && payload.groupsDen),
     deptBreakdown: sanitizeDeptBreakdown(payload && payload.deptBreakdown),
     isNewIndicator: isNew, valueType: (payload && payload.valueType) || (found && found.valueType) || 'Count',
-    benchmark: (payload && payload.benchmark) || (found && found.benchmark) || '',
+    benchmark: benchStr, benchmarkValue: benchmarkValue,
     goalDirection: (payload && payload.goalDirection) || (found && found.goalDirection) || 'lower_is_better',
     // calculation definition (named inputs + unit) so the rich entry form persists
-    formula: entryMode === 'rate' ? (mult === 1000 ? 'rate1000' : 'pct') : 'count',
+    formula: entryMode === 'rate'
+      ? ((formulaIn === 'rate1000' || formulaIn === 'rate100' || formulaIn === 'pct') ? formulaIn : (mult === 1000 ? 'rate1000' : 'pct'))
+      : 'count',
     numLabel: (payload && payload.numLabel) || (found && found.numLabel) || '',
     denLabel: (payload && payload.denLabel) || (found && found.denLabel) || '',
     unit: (payload && payload.unit) || (found && found.unit) || '',

@@ -144,9 +144,9 @@
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
                 {(depts || []).map((d) => {
                   const on = editing.departments.includes(d.id);
-                  return <span key={d.id} onClick={() => toggle('departments', 'departments', d.id) || toggle('departments', null, d.id)}
+                  return <span key={d.id} onClick={() => setEditing((ed) => ({ ...ed, departments: ed.departments.includes(d.id) ? ed.departments.filter((x) => x !== d.id) : [...ed.departments, d.id] }))}
                     style={{ cursor: 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)' }}
-                    onClickCapture={(e) => { e.stopPropagation(); setEditing((ed) => ({ ...ed, departments: ed.departments.includes(d.id) ? ed.departments.filter((x) => x !== d.id) : [...ed.departments, d.id] })); }}>{d.short}</span>;
+                   >{d.short}</span>;
                 })}
               </div>
             </Field>

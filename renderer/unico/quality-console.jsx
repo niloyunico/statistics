@@ -2042,7 +2042,12 @@ function QCActionPlans({depts}){
 
 /* ===== part: mod-admin.jsx ===== */
 function QCAdmin({Q,q,onQ,initialDept}){
-  const depts = (Q.depts||[]).filter(d=>(d.indicators||[]).length);
+  // `depts` = only departments that already report an indicator (used for the grouped
+  // Manage listing where empty groups are intentionally hidden). `allDepts` = every
+  // department, used wherever we need to ASSIGN/move/scope — otherwise a department
+  // with zero indicators is invisible and can never receive its first indicator.
+  const allDepts = (Q.depts||[]);
+  const depts = allDepts.filter(d=>(d.indicators||[]).length);
 
   const [view,setView]=useState('manage');            // manage | assign | catalog
   const [assignQ,setAssignQ]=useState('');            // Assign-by-Department indicator search
@@ -2128,7 +2133,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const measureChips=[ chip(mf==='all','All',()=>setMf('all')), chip(mf==='Count','Count',()=>setMf('Count')), chip(mf==='Rate','Rate',()=>setMf('Rate')), chip(mf==='Percentage','%',()=>setMf('Percentage')) ];
   const statusChips=[ chip(sf==='all','All',()=>setSf('all')), chip(sf==='data','Has data',()=>setSf('data')), chip(sf==='breach','Breaches',()=>setSf('breach')) ];
 
-  const scopeOptions=[{key:'all',label:'All departments'}].concat(depts.map(d=>({key:d.key,label:d.name+' · '+(d.indicators||[]).length})));
+  const scopeOptions=[{key:'all',label:'All departments'}].concat(allDepts.map(d=>({key:d.key,label:d.name+' · '+(d.indicators||[]).length})));
 
   // ---- selected indicator (live from store) ----
   const selInd = sel.deptKey && sel.id ? findInd(sel.deptKey,sel.id) : null;
@@ -2137,7 +2142,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
   // ---- edit helpers (ALL through Q) ----
   const patch = (obj)=>{ if(sel.deptKey&&sel.id) Q.patchIndicator(sel.deptKey,sel.id,obj); };
   const patchField = (f)=> (e)=> patch({[f]:e.target.value});
-  const patchMonthVal = (idx)=> (e)=>{ const v=e.target.value; patch({ months:{ [MONTHS[idx][0]]: (v===''?null:Number(v)) } }); };
+  const patchMonthVal = (idx)=> (e)=>{ const v=e.target.value; const nv=(v===''?null:Number(v)); const obj={ months:{ [MONTHS[idx][0]]: nv } }; if(selInd && selInd.formula==='count') obj.mNum={ [MONTHS[idx][0]]: nv }; patch(obj); };
   const patchMonthNum = (idx)=> (e)=>{ const v=e.target.value; patch({ mNum:{ [MONTHS[idx][0]]: (v===''?null:Number(v)) } }); };
   const patchMonthDen = (idx)=> (e)=>{ const v=e.target.value; patch({ mDen:{ [MONTHS[idx][0]]: (v===''?null:Number(v)) } }); };
   const patchMonthRemark = (idx)=> (e)=> patch({ monthRemarks:{ [MONTHS[idx][0]]: e.target.value } });
@@ -2159,7 +2164,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
   // use. Existing department indicators are matched to their catalog code via
   // stdMatch(); an indicator matching no standard is kept as its own "custom" row so
   // nothing already assigned disappears.
-  const assignCols = depts.map(d=>({key:d.key, short:(d.name||'').replace(/Ward|Department/g,'').trim().slice(0,8), name:d.name}));
+  const assignCols = allDepts.map(d=>({key:d.key, short:(d.name||'').replace(/Ward|Department/g,'').trim().slice(0,8), name:d.name}));
   const stdTemplate = (s)=>{ const ft=s.ft||'direct'; return {
     name:s.name, formula:ft,
     valueType: ft==='pct'?'%':(ft==='rate1000'||ft==='rate100')?'Rate':'Count',
@@ -2352,7 +2357,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
                 <div style={{marginTop:11,border:'1px solid #dceffa',borderRadius:9,background:'#eef8fc',padding:'11px 13px'}}>
                   <div style={{fontSize:11.5,fontWeight:600,marginBottom:8,color:P.ink}}>Copy this indicator (with its values) to:</div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:6}}>
-                    {depts.filter(d=>d.key!==sel.deptKey).map(d=>(
+                    {allDepts.filter(d=>d.key!==sel.deptKey).map(d=>(
                       <label key={d.key} style={{display:'flex',alignItems:'center',gap:7,fontSize:12,background:'#fff',border:'1px solid #dde3ec',borderRadius:7,padding:'6px 9px',cursor:'pointer'}}>
                         <input type="checkbox" checked={!!copyT[d.key]} onChange={()=>setCopyT(t=>Object.assign({},t,{[d.key]:!t[d.key]}))}/>
                         <span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{d.name}</span>
@@ -2476,7 +2481,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
                 {/* PLACEMENT */}
                 {tab==='place' && (
                 <div>
-                  <div style={{display:'flex',flexDirection:'column',gap:5,maxWidth:280,marginBottom:18}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Department <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>move this indicator</span></label><select value={sel.deptKey} onChange={onMove} style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,background:'#fff',outline:'none'}}>{depts.map(d=><option key={d.key} value={d.key}>{d.name}</option>)}</select></div>
+                  <div style={{display:'flex',flexDirection:'column',gap:5,maxWidth:280,marginBottom:18}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Department <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>move this indicator</span></label><select value={sel.deptKey} onChange={onMove} style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,background:'#fff',outline:'none'}}>{allDepts.map(d=><option key={d.key} value={d.key}>{d.name}</option>)}</select></div>
                   <div style={{borderTop:'1px solid #e8edf3',paddingTop:16}}>
                     <div style={{fontSize:11,fontWeight:700,color:'#d23a52',textTransform:'uppercase',letterSpacing:'.4px',marginBottom:9}}>Danger zone</div>
                     <button onClick={onDelete} style={{display:'inline-flex',alignItems:'center',gap:6,border:'1px solid #f1c6cd',background:'#fff',color:'#d23a52',padding:'8px 13px',borderRadius:8,fontSize:12.5,fontWeight:600,cursor:'pointer'}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>Delete indicator</button>
@@ -2719,7 +2724,7 @@ function QualityConsole({ onExit, initialView, initialDept, setRoute }){
                 <div style={{fontSize:9.5,fontWeight:700,color:P.faint,textTransform:'uppercase',letterSpacing:'.5px',padding:'6px 10px 4px'}}>Switch workspace</div>
                 {WORKSPACES.map(w => (
                   <div key={w.id} onClick={()=> goWorkspace(w)}
-                    style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,cursor:'pointer',fontSize:13,fontWeight:w.current?700:500,color:w.current?P.blue700:P.ink,background:w.current?P.blue50:'transparent'}}>
+                    style={{display:'flex',alignItems:'center',gap:9,padding:'8px 10px',borderRadius:7,cursor:'pointer',fontSize:13,fontWeight:w.current?700:500,color:w.current?P.blue700:P.ink,background:w.current?'#eef8fc':'transparent'}}>
                     <span style={{width:8,height:8,borderRadius:'50%',background:w.current?P.blue:'#cdd6e2',flexShrink:0}}></span>
                     <span style={{flex:1,whiteSpace:'nowrap'}}>{w.label}</span>
                     {w.current && <span style={{fontSize:9.5,color:P.faint}}>current</span>}

@@ -19264,7 +19264,8 @@ function QCAdmin({
   onQ,
   initialDept
 }) {
-  const depts = (Q.depts || []).filter(d => (d.indicators || []).length);
+  const allDepts = Q.depts || [];
+  const depts = allDepts.filter(d => (d.indicators || []).length);
   const [view, setView] = useState('manage');
   const [assignQ, setAssignQ] = useState('');
   const [tab, setTab] = useState('identity');
@@ -19412,7 +19413,7 @@ function QCAdmin({
   const scopeOptions = [{
     key: 'all',
     label: 'All departments'
-  }].concat(depts.map(d => ({
+  }].concat(allDepts.map(d => ({
     key: d.key,
     label: d.name + ' · ' + (d.indicators || []).length
   })));
@@ -19426,11 +19427,16 @@ function QCAdmin({
   });
   const patchMonthVal = idx => e => {
     const v = e.target.value;
-    patch({
+    const nv = v === '' ? null : Number(v);
+    const obj = {
       months: {
-        [MONTHS[idx][0]]: v === '' ? null : Number(v)
+        [MONTHS[idx][0]]: nv
       }
-    });
+    };
+    if (selInd && selInd.formula === 'count') obj.mNum = {
+      [MONTHS[idx][0]]: nv
+    };
+    patch(obj);
   };
   const patchMonthNum = idx => e => {
     const v = e.target.value;
@@ -19504,7 +19510,7 @@ function QCAdmin({
   const benchSet = selInd && selInd.benchmarkValue != null && selInd.benchmarkValue !== '';
   const needsNum = selInd && selInd.formula !== 'direct';
   const needsDen = selInd && (selInd.formula === 'rate1000' || selInd.formula === 'rate100' || selInd.formula === 'pct');
-  const assignCols = depts.map(d => ({
+  const assignCols = allDepts.map(d => ({
     key: d.key,
     short: (d.name || '').replace(/Ward|Department/g, '').trim().slice(0, 8),
     name: d.name
@@ -20414,7 +20420,7 @@ function QCAdmin({
       gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))',
       gap: 6
     }
-  }, depts.filter(d => d.key !== sel.deptKey).map(d => React.createElement("label", {
+  }, allDepts.filter(d => d.key !== sel.deptKey).map(d => React.createElement("label", {
     key: d.key,
     style: {
       display: 'flex',
@@ -21324,7 +21330,7 @@ function QCAdmin({
       background: '#fff',
       outline: 'none'
     }
-  }, depts.map(d => React.createElement("option", {
+  }, allDepts.map(d => React.createElement("option", {
     key: d.key,
     value: d.key
   }, d.name)))), React.createElement("div", {
@@ -22273,7 +22279,7 @@ function QualityConsole({
       fontSize: 13,
       fontWeight: w.current ? 700 : 500,
       color: w.current ? P.blue700 : P.ink,
-      background: w.current ? P.blue50 : 'transparent'
+      background: w.current ? '#eef8fc' : 'transparent'
     }
   }, React.createElement("span", {
     style: {
@@ -24887,7 +24893,10 @@ window.LockScreen = LockScreen;
       const on = editing.departments.includes(d.id);
       return React.createElement("span", {
         key: d.id,
-        onClick: () => toggle('departments', 'departments', d.id) || toggle('departments', null, d.id),
+        onClick: () => setEditing(ed => ({
+          ...ed,
+          departments: ed.departments.includes(d.id) ? ed.departments.filter(x => x !== d.id) : [...ed.departments, d.id]
+        })),
         style: {
           cursor: 'pointer',
           userSelect: 'none',
@@ -24898,13 +24907,6 @@ window.LockScreen = LockScreen;
           border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
           background: on ? 'var(--blue-50)' : '#fff',
           color: on ? 'var(--blue-700)' : 'var(--ink-2)'
-        },
-        onClickCapture: e => {
-          e.stopPropagation();
-          setEditing(ed => ({
-            ...ed,
-            departments: ed.departments.includes(d.id) ? ed.departments.filter(x => x !== d.id) : [...ed.departments, d.id]
-          }));
         }
       }, d.short);
     }))), React.createElement(Field, {
