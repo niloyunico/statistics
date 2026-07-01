@@ -11,32 +11,69 @@ window.UNICO_DEFAULT_API = ''; // empty = NO login, app runs fully offline. Put 
 ;
 /* ===== deptmap.js ===== */
 /* UNICO — client-side canonical department map helper.
- * Thin wrapper over window.__UNICO_DEPT_MAP__ (injected by server/web.js from
- * departments.qualityKey + quality.deptId). ONE place to resolve a department id or a
- * quality-area key to the single canonical NAME shown everywhere, so Statistics and
- * Quality never disagree ("Cath Lab" not "Cathlab"). See server/deptmap.js.
+ *
+ * ONE place to resolve a department id or a quality-area key to the single canonical NAME
+ * shown everywhere, so Statistics and Quality never disagree ("Cath Lab" not "Cathlab").
+ *
+ * Source of truth = window.__UNICO_DEPT_MAP__ (injected by server/web.js). BUT if that is
+ * missing/empty (older server, or a page that didn't get it), we BUILD the same map on the
+ * client from the always-injected globals window.__UNICO_DEPARTMENTS__ (id/name/qualityKey)
+ * + window.__UNICO_QUALITY__ (key/deptId). This makes name resolution robust regardless of
+ * server version, so a raw id/key is never shown where a name should be. See server/deptmap.js.
  */
 (function () {
-  function M() {
-    return (typeof window !== 'undefined' && window.__UNICO_DEPT_MAP__) ||
-      { byId: {}, idToQk: {}, qkToId: {}, patientDepts: [], allKeys: [] };
+  var _cache = null;
+
+  function buildFromGlobals() {
+    var w = window;
+    var deps = w.__UNICO_DEPARTMENTS__ || (w.UNICO && w.UNICO.DEPARTMENTS) || [];
+    var quals = w.__UNICO_QUALITY__ || w.QUALITY_SEED || [];
+    var byId = {}, idToQk = {}, qkToId = {}, patientDepts = [], allKeys = [];
+    (deps || []).forEach(function (d) {
+      if (!d || !d.id) return;
+      byId[d.id] = { id: d.id, name: d.name || d.id, qualityKey: d.qualityKey || null };
+      patientDepts.push(d.id);
+      if (d.qualityKey) { idToQk[d.id] = d.qualityKey; qkToId[d.qualityKey] = d.id; }
+    });
+    (quals || []).forEach(function (q) {
+      if (!q) return;
+      var key = q.key || q._id;
+      if (key) allKeys.push(key);
+      var id = q.deptId || qkToId[key];
+      if (key && id) { qkToId[key] = id; if (!idToQk[id]) idToQk[id] = key; }
+      if (q.deptId === '__hospital__' || key === 'Overall Hospital') {
+        byId['__hospital__'] = { id: '__hospital__', name: q.name || 'Overall Hospital', qualityKey: key, qualityOnly: true };
+      }
+    });
+    return { byId: byId, idToQk: idToQk, qkToId: qkToId, patientDepts: patientDepts, allKeys: allKeys.filter(function (v, i, a) { return a.indexOf(v) === i; }) };
   }
-  function nameFromId(id) { const e = M().byId[id]; return (e && e.name) || id; }
+
+  function M() {
+    if (_cache) return _cache;
+    var injected = (typeof window !== 'undefined' && window.__UNICO_DEPT_MAP__) || null;
+    if (injected && injected.byId && Object.keys(injected.byId).length) { _cache = injected; return _cache; }
+    // Injected map absent/empty -> build it from the raw globals (always present).
+    try { _cache = buildFromGlobals(); } catch (e) { _cache = { byId: {}, idToQk: {}, qkToId: {}, patientDepts: [], allKeys: [] }; }
+    return _cache;
+  }
+
+  function nameFromId(id) { var e = M().byId[id]; return (e && e.name) || id; }
   function qkFromId(id) { return M().idToQk[id] || null; }
   function idFromQk(key) { return M().qkToId[key] || null; }
   // Canonical display name for a quality-area key (falls back to the key itself).
-  function nameFromQualityKey(key) { const id = idFromQk(key); return id ? nameFromId(id) : key; }
-  function isQualityOnly(id) { const e = M().byId[id]; return !!(e && e.qualityOnly); }
+  function nameFromQualityKey(key) { var id = idFromQk(key); return id ? nameFromId(id) : key; }
+  function isQualityOnly(id) { var e = M().byId[id]; return !!(e && e.qualityOnly); }
   function allAreaKeys() { return (M().allKeys || []).slice(); }
   function patientDeptIds() { return (M().patientDepts || []).slice(); }
   // Quality areas derived from a canonical department-id list (mirrors server deriveQualityAreas).
   function areasFromDepts(ids, allQualityAreas) {
     if (allQualityAreas) return allAreaKeys();
-    const out = [];
-    (ids || []).forEach((id) => { const qk = qkFromId(id); if (qk && out.indexOf(qk) < 0) out.push(qk); });
+    var out = [];
+    (ids || []).forEach(function (id) { var qk = qkFromId(id); if (qk && out.indexOf(qk) < 0) out.push(qk); });
     return out;
   }
-  window.DEPTMAP = { map: M, nameFromId, qkFromId, idFromQk, nameFromQualityKey, isQualityOnly, allAreaKeys, patientDeptIds, areasFromDepts };
+
+  window.DEPTMAP = { map: M, refresh: function () { _cache = null; }, nameFromId: nameFromId, qkFromId: qkFromId, idFromQk: idFromQk, nameFromQualityKey: nameFromQualityKey, isQualityOnly: isQualityOnly, allAreaKeys: allAreaKeys, patientDeptIds: patientDeptIds, areasFromDepts: areasFromDepts };
 })();
 
 ;
@@ -148,6 +185,15 @@ window.UNICO = { DEPARTMENTS, GROUPS, MONTHS_FULL, MONTH_ORDER, HOSPITAL };
       const idx=d.months.indexOf(e.month);
       if(idx>=0) d.data[idx]={...d.data[idx],...e.row};
       else { d.months.push(e.month); d.data.push({...e.row}); }
+    });
+    // Normalise partially-populated department docs so a missing short / group /
+    // primaryLabel never renders blank (e.g. CT OT was added without a short code,
+    // which showed as an empty sidebar row).
+    list.forEach(d=>{
+      if(!d.short||!String(d.short).trim()) d.short=(String(d.name||d.id||'').replace(/[^A-Za-z0-9]+/g,'').slice(0,6))||String(d.id||'').slice(0,6);
+      if(!d.group||!String(d.group).trim()) d.group='General';
+      if(!d.primaryLabel){ const pc=(d.cols||[]).find(c=>c.id===d.primary)||(d.cols||[])[0]; d.primaryLabel=pc?pc.label:(d.primary||''); }
+      if(d.desc==null) d.desc='';
     });
     list.forEach(recompute);
     // ordering
@@ -1601,7 +1647,9 @@ window.QI_CORRECTIONS_BY_DEFID = {
     try {
       if (typeof window === 'undefined' || !window.DEPTMAP) return null;
       const id = (seedDept && seedDept.deptId) || window.DEPTMAP.idFromQk(seedDept && seedDept.key);
-      if (id) return window.DEPTMAP.nameFromId(id);
+      if (!id) return null;
+      const nm = window.DEPTMAP.nameFromId(id);
+      if (nm && nm !== id) return nm; // only a REAL resolved name — never fall back to the raw id
     } catch (e) { }
     return null;
   }
@@ -20095,9 +20143,13 @@ function QCAdmin({
   const benchSet = selInd && selInd.benchmarkValue != null && selInd.benchmarkValue !== '';
   const needsNum = selInd && selInd.formula !== 'direct';
   const needsDen = selInd && (selInd.formula === 'rate1000' || selInd.formula === 'rate100' || selInd.formula === 'pct');
+  const assignShort = nm => {
+    const s = (nm || '').replace(/\s*(Ward|Department)\s*/g, ' ').trim();
+    return s.length > 12 ? s.slice(0, 11).trim() + '…' : s;
+  };
   const assignCols = allDepts.map(d => ({
     key: d.key,
-    short: (d.name || '').replace(/Ward|Department/g, '').trim().slice(0, 8),
+    short: assignShort(d.name),
     name: d.name
   }));
   const stdTemplate = s => {
@@ -25369,7 +25421,12 @@ window.LockScreen = LockScreen;
         [key]: has ? e[key].filter(x => x !== val) : [...e[key], val]
       };
     });
-    const deptName = id => (window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : ((depts || []).find(x => x.id === id) || {}).short) || id;
+    const deptName = id => {
+      const mapped = window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : null;
+      if (mapped && mapped !== id) return mapped;
+      const d = (depts || []).find(x => x.id === id);
+      return d && (d.name || d.short) || id;
+    };
     const derivedAreas = editing ? editing.allQualityAreas ? window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [] : window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : editing.qualityAreas || [] : [];
     return React.createElement("div", {
       className: "grid",
@@ -26137,6 +26194,7 @@ window.LockScreen = LockScreen;
       corrective: '',
       preventive: ''
     });
+    const [incidents, setIncidents] = useState([]);
     const [remark, setRemark] = useState('');
     const [responsible, setResponsible] = useState(lockResp ? me.name || '' : prefill && prefill.responsible || '');
     const [busy, setBusy] = useState(false);
@@ -26253,7 +26311,28 @@ window.LockScreen = LockScreen;
         });
       });
     }, [isHandHygiene, numMode, hhDepartments]);
-    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : Number(directNum) || 0;
+    const isIncidentType = !isHandHygiene && (def.goalDirection ? def.goalDirection !== 'higher_is_better' : true);
+    const blankIncident = () => ({
+      patientName: '',
+      uhid: '',
+      age: '',
+      gender: '',
+      diagnosis: '',
+      admissionDate: '',
+      details: '',
+      finding: '',
+      corrective: '',
+      preventive: '',
+      remark: ''
+    });
+    const addIncident = () => setIncidents(a => [...a, blankIncident()]);
+    const setIncidentField = (i, k, v) => setIncidents(a => a.map((x, j) => j === i ? {
+      ...x,
+      [k]: v
+    } : x));
+    const delIncident = i => setIncidents(a => a.filter((_, j) => j !== i));
+    const autoCount = isIncidentType && incidents.length > 0;
+    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : autoCount ? incidents.length : Number(directNum) || 0;
     const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : Number(den) || 0;
     const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
@@ -26281,6 +26360,12 @@ window.LockScreen = LockScreen;
         setDirectNum('');
         setNumMode('direct');
         setDen('');
+        setIncidents([]);
+        setCapa({
+          finding: '',
+          corrective: '',
+          preventive: ''
+        });
         return;
       }
       const g = curInd.mGroups && curInd.mGroups[month];
@@ -26354,6 +26439,20 @@ window.LockScreen = LockScreen;
         corrective: '',
         preventive: ''
       });
+      const incs = curInd.incidents && Array.isArray(curInd.incidents[month]) ? curInd.incidents[month] : [];
+      setIncidents(incs.map(x => ({
+        patientName: x.patientName || '',
+        uhid: x.uhid || '',
+        age: x.age || '',
+        gender: x.gender || '',
+        diagnosis: x.diagnosis || '',
+        admissionDate: x.admissionDate || '',
+        details: x.details || '',
+        finding: x.finding || '',
+        corrective: x.corrective || '',
+        preventive: x.preventive || '',
+        remark: x.remark || ''
+      })));
     }, [indId, month]);
     const result = computeAsRate ? denNum > 0 ? Math.round(numerator / denNum * mult * 100) / 100 : 0 : numerator;
     const qExists = !!(curInd && (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
@@ -26415,6 +26514,19 @@ window.LockScreen = LockScreen;
           corrective: capa.corrective,
           preventive: capa.preventive
         } : undefined,
+        incidents: incidents.length ? incidents.map(x => ({
+          patientName: x.patientName,
+          uhid: x.uhid,
+          age: x.age,
+          gender: x.gender,
+          diagnosis: x.diagnosis,
+          admissionDate: x.admissionDate,
+          details: x.details,
+          finding: x.finding,
+          corrective: x.corrective,
+          preventive: x.preventive,
+          remark: x.remark
+        })) : undefined,
         remark,
         responsible: lockResp ? {
           name: me.name
@@ -26450,6 +26562,7 @@ window.LockScreen = LockScreen;
             corrective: '',
             preventive: ''
           });
+          setIncidents([]);
           setDen('');
           setRemark('');
           if (isNew) {
@@ -27062,13 +27175,27 @@ window.LockScreen = LockScreen;
       style: {
         color: 'var(--ink-2)'
       }
-    }, deptTot.d)) : null))) : React.createElement(Field, {
+    }, deptTot.d)) : null))) : autoCount ? React.createElement(Field, {
       label: React.createElement("span", null, numLabel, " ", React.createElement("span", {
         style: {
           color: 'var(--muted)',
           fontWeight: 400
         }
-      }, "(enter the number directly)")),
+      }, "(auto \u2014 one per incident logged below)"))
+    }, React.createElement("div", {
+      style: {
+        ...inputStyle,
+        background: 'var(--panel-2)',
+        fontWeight: 700,
+        color: 'var(--ink)'
+      }
+    }, incidents.length)) : React.createElement(Field, {
+      label: React.createElement("span", null, numLabel, " ", React.createElement("span", {
+        style: {
+          color: 'var(--muted)',
+          fontWeight: 400
+        }
+      }, "(enter the number directly", isIncidentType ? ', or log each incident below' : '', ")")),
       hint: numDef || undefined
     }, React.createElement("input", {
       type: "number",
@@ -27078,7 +27205,196 @@ window.LockScreen = LockScreen;
       value: directNum,
       onChange: e => setDirectNum(e.target.value),
       placeholder: isRate ? 'Total ' + (numLabel || 'numerator').toLowerCase() + ' this month' : 'Total this month'
+    }))), isIncidentType && React.createElement("div", {
+      style: {
+        border: '1px solid var(--line)',
+        borderRadius: 9,
+        padding: '12px 14px',
+        marginBottom: 13
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 6,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink-2)'
+      }
+    }, "Incident reports"), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "log each occurrence with patient & CAPA detail \u2014 the count fills in automatically"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '2px 9px',
+        borderRadius: 999,
+        background: 'var(--blue-50)',
+        color: 'var(--blue-700)'
+      }
+    }, incidents.length, " logged")), incidents.map((x, i) => React.createElement("div", {
+      key: i,
+      style: {
+        border: '1px solid var(--line)',
+        borderRadius: 8,
+        padding: '11px 12px',
+        marginBottom: 8,
+        background: 'var(--panel-2)'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        marginBottom: 6
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--rose)',
+        textTransform: 'uppercase',
+        letterSpacing: .3
+      }
+    }, "Incident ", i + 1), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "btn sm",
+      style: {
+        color: 'var(--rose)',
+        borderColor: '#f1c6cd'
+      },
+      onClick: () => delIncident(i)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 12
+    }), "Remove")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 8
+      }
+    }, React.createElement(Field, {
+      label: "Patient name"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: x.patientName,
+      onChange: e => setIncidentField(i, 'patientName', e.target.value),
+      placeholder: "Name"
+    })), React.createElement(Field, {
+      label: "UHID"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: x.uhid,
+      onChange: e => setIncidentField(i, 'uhid', e.target.value),
+      placeholder: "Hospital ID"
+    })), React.createElement(Field, {
+      label: "Age"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: x.age,
+      onChange: e => setIncidentField(i, 'age', e.target.value),
+      placeholder: "e.g. 54"
+    })), React.createElement(Field, {
+      label: "Sex"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: x.gender,
+      onChange: e => setIncidentField(i, 'gender', e.target.value),
+      placeholder: "M / F"
+    })), React.createElement(Field, {
+      label: "Admission date"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: x.admissionDate,
+      onChange: e => setIncidentField(i, 'admissionDate', e.target.value),
+      placeholder: "YYYY-MM-DD"
+    })), React.createElement(Field, {
+      label: "Diagnosis"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: x.diagnosis,
+      onChange: e => setIncidentField(i, 'diagnosis', e.target.value),
+      placeholder: "Diagnosis"
+    }))), React.createElement(Field, {
+      label: "Incident details"
+    }, React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 40
+      },
+      value: x.details,
+      onChange: e => setIncidentField(i, 'details', e.target.value),
+      placeholder: "What happened"
+    })), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 8
+      }
+    }, React.createElement(Field, {
+      label: "Finding / root cause"
+    }, React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 40
+      },
+      value: x.finding,
+      onChange: e => setIncidentField(i, 'finding', e.target.value),
+      placeholder: "Root cause"
+    })), React.createElement(Field, {
+      label: "Corrective action"
+    }, React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 40
+      },
+      value: x.corrective,
+      onChange: e => setIncidentField(i, 'corrective', e.target.value),
+      placeholder: "Action taken to correct"
     }))), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 8
+      }
+    }, React.createElement(Field, {
+      label: "Preventive action"
+    }, React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 40
+      },
+      value: x.preventive,
+      onChange: e => setIncidentField(i, 'preventive', e.target.value),
+      placeholder: "Prevent recurrence"
+    })), React.createElement(Field, {
+      label: "Remark"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: x.remark,
+      onChange: e => setIncidentField(i, 'remark', e.target.value),
+      placeholder: "Optional note"
+    }))))), React.createElement("button", {
+      className: "btn sm",
+      onClick: addIncident
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 13
+    }), "Add incident")), React.createElement("div", {
       style: {
         border: '1px solid var(--line)',
         borderRadius: 9,

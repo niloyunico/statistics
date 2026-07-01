@@ -36,6 +36,15 @@
       if(idx>=0) d.data[idx]={...d.data[idx],...e.row};
       else { d.months.push(e.month); d.data.push({...e.row}); }
     });
+    // Normalise partially-populated department docs so a missing short / group /
+    // primaryLabel never renders blank (e.g. CT OT was added without a short code,
+    // which showed as an empty sidebar row).
+    list.forEach(d=>{
+      if(!d.short||!String(d.short).trim()) d.short=(String(d.name||d.id||'').replace(/[^A-Za-z0-9]+/g,'').slice(0,6))||String(d.id||'').slice(0,6);
+      if(!d.group||!String(d.group).trim()) d.group='General';
+      if(!d.primaryLabel){ const pc=(d.cols||[]).find(c=>c.id===d.primary)||(d.cols||[])[0]; d.primaryLabel=pc?pc.label:(d.primary||''); }
+      if(d.desc==null) d.desc='';
+    });
     list.forEach(recompute);
     // ordering
     if(store.order&&store.order.length){

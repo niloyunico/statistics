@@ -2315,7 +2315,8 @@ function QCAdmin({Q,q,onQ,initialDept}){
   // use. Existing department indicators are matched to their catalog code via
   // stdMatch(); an indicator matching no standard is kept as its own "custom" row so
   // nothing already assigned disappears.
-  const assignCols = allDepts.map(d=>({key:d.key, short:(d.name||'').replace(/Ward|Department/g,'').trim().slice(0,8), name:d.name}));
+  const assignShort = (nm)=>{ const s=(nm||'').replace(/\s*(Ward|Department)\s*/g,' ').trim(); return s.length>12 ? s.slice(0,11).trim()+'…' : s; };
+  const assignCols = allDepts.map(d=>({key:d.key, short:assignShort(d.name), name:d.name}));
   const stdTemplate = (s)=>{ const ft=s.ft||'direct'; return {
     name:s.name, formula:ft,
     valueType: ft==='pct'?'%':(ft==='rate1000'||ft==='rate100')?'Rate':'Count',

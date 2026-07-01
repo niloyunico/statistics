@@ -131,7 +131,9 @@
     try {
       if (typeof window === 'undefined' || !window.DEPTMAP) return null;
       const id = (seedDept && seedDept.deptId) || window.DEPTMAP.idFromQk(seedDept && seedDept.key);
-      if (id) return window.DEPTMAP.nameFromId(id);
+      if (!id) return null;
+      const nm = window.DEPTMAP.nameFromId(id);
+      if (nm && nm !== id) return nm; // only a REAL resolved name — never fall back to the raw id
     } catch (e) { }
     return null;
   }
