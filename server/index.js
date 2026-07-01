@@ -6,11 +6,16 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const { getUsers, getAppData, setAppData, usingMongo } = require('./db');
 const auth = require('./auth');
 const session = require('./session');
 
 const app = express();
+// gzip/brotli every response. Registered FIRST so it wraps the inlined index.html
+// (~157 KB of DB-snapshot JSON), the app bundle, and every /api payload. Transparent
+// Accept-Encoding negotiation; the default 1 KB threshold skips tiny health/login JSON.
+app.use(compression());
 app.use(express.json({ limit: '12mb' })); // app-state snapshots can be sizable
 
 const origins = (process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);

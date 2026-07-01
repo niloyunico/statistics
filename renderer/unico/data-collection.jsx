@@ -251,12 +251,16 @@
     }, [subs, deptId]);
     const reported = new Set((dept && dept.months) || []);
     const monthTag = (m) => { const st = monthStatus[m]; if (st === 'approved') return ' · ✓ approved'; if (st === 'pending') return ' · ⏳ pending'; if (st === 'rejected') return ' · ✗ rejected'; return reported.has(m) ? ' · ✓ reported' : ''; };
+    // A collector cannot re-submit a month already submitted/approved or on record;
+    // only an administrator may change it (rejected submissions may be re-sent).
+    const lockedMonth = lockResp && (monthStatus[month] === 'pending' || monthStatus[month] === 'approved' || reported.has(month));
     const cols = (dept && dept.cols) || [];
     const last = (dept && dept.data && dept.data.length) ? dept.data[dept.data.length - 1] : {};
 
     const submit = () => {
       if (!dept) return;
       if (!month) { toast('Pick a month', 'error'); return; }
+      if (lockedMonth) { toast('This month is already submitted/recorded — only an administrator can change it.', 'error'); return; }
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/patient', {
@@ -310,8 +314,9 @@
           </div>
           {isAdmin && dept && <div style={{ border: '1px dashed var(--line)', borderRadius: 9, padding: '10px 12px', margin: '2px 0 12px', background: 'var(--panel-2)' }}><DeptFieldManager dept={dept} onChange={refreshDepts} /></div>}
           <Field label="Note (optional)"><input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Any comment about this submission" /></Field>
+          {lockedMonth && <Banner>{dept ? dept.name : ''} · {monthLabel(month)} is already {monthStatus[month] || 'on record'} — submission is locked for data collectors. Ask an administrator to make changes.</Banner>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Submitting…' : 'Submit'}</button>
+            <button className="btn pri" disabled={busy || lockedMonth} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Submitting…' : (lockedMonth ? 'Locked — already recorded' : 'Submit')}</button>
             <button className="btn" disabled={busy} onClick={() => { setValues({}); setNote(''); setDone(null); }}>Clear</button>
           </div>
         </Card>
@@ -349,18 +354,42 @@
     const isNew = indId === '__new__';
     const curInd = inds.find((i) => i.id === indId);
     const def = isNew ? newInd : (curInd || {});
-    const vt = def.valueType || (def.formula === 'pct' ? '%' : def.formula === 'rate1000' ? 'Rate (per 1000)' : 'Count');
-    const formula = def.formula || (window.qualityIsPct && window.qualityIsPct({ valueType: vt }) ? (/1000/.test(vt) ? 'rate1000' : 'pct') : 'count');
-    const isRate = formula === 'pct' || formula === 'rate1000';
-    const mult = formula === 'rate1000' ? 1000 : 100;
-    const numLabel = def.numLabel || 'Numerator';
-    const denLabel = def.denLabel || 'Denominator';
-    const unitQ = def.unit || (formula === 'rate1000' ? 'per 1000' : '');
+    const benchmarkQ = (curInd && curInd.benchmark) || def.benchmark || '';
+    const unitRaw = def.unit || '';
+    // Many indicators read like a RATE in their benchmark / unit (e.g. "< 0.75 per
+    // 1,000 discharges", "per 100 patient-days", "≥ 90%") yet are stored as a plain
+    // count, so the form never asks for a denominator. Detect the rate from the
+    // benchmark / unit when the indicator hasn't explicitly declared one. The server
+    // persists whatever calculation the form submits onto the indicator at approval,
+    // so entering it as a rate also corrects the indicator's definition going forward.
+    const declared = def.formula;
+    const rateProbe = (benchmarkQ + ' ' + unitRaw).toLowerCase();
+    const per1000 = /per\s*1[.,\s]?0{3}\b|\/\s*1[.,\s]?0{3}\b/.test(rateProbe);
+    const per100 = !per1000 && /per\s*100\b/.test(rateProbe);
+    const pctText = !per1000 && !per100 && (/%/.test(rateProbe) || /\bpercent/.test(rateProbe));
+    const formula = (declared === 'rate1000' || declared === 'rate100' || declared === 'pct' || declared === 'count') ? declared
+      : per1000 ? 'rate1000' : per100 ? 'rate100' : pctText ? 'pct' : (declared || 'count');
+    const isRate = formula === 'rate1000' || formula === 'rate100' || formula === 'pct';
+    const mult = formula === 'rate1000' ? 1000 : (formula === 'rate100' || formula === 'pct') ? 100 : 1000;
+    const vt = def.valueType || (formula === 'pct' ? '%' : isRate ? 'Rate' : 'Count');
+    // parse the denominator's unit out of the benchmark, e.g. "per 1,000 discharges" -> "Discharges"
+    const denMatch = rateProbe.match(/per\s*1[.,\s]?0{2,3}\s+([a-z][a-z\- ]{1,28})/) || rateProbe.match(/per\s*100\s+([a-z][a-z\- ]{1,28})/);
+    const denGuess = denMatch ? denMatch[1].trim().replace(/\b\w/g, (c) => c.toUpperCase()) : '';
+    const numLabel = def.numLabel || (isRate ? 'Cases (incidents)' : 'Numerator');
+    const denLabel = def.denLabel || denGuess || 'Denominator';
+    const numDef = def.numeratorDef || '';
+    const denDef = def.denominatorDef || (isRate ? ('Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.') : '');
     const indNameQ = (def.name || newInd.name) || 'Result';
-    const benchmarkQ = (curInd && curInd.benchmark) || '';
     const incCount = incidents.length;
-    const formulaTextQ = isRate
-      ? (indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult + '   ·   ' + numLabel + ' = number of incidents')
+    // Every indicator can take a denominator: rate indicators REQUIRE it; counts may
+    // OPTIONALLY add one to compute a rate (per 1000) instead of a plain count.
+    const denNum = Number(den);
+    const denEntered = den !== '' && denNum > 0;
+    const computeAsRate = isRate || denEntered;
+    const rateUnit = (unitRaw && /per|%/.test(unitRaw)) ? unitRaw : (formula === 'pct' ? '%' : ('per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '')));
+    const unitQ = computeAsRate ? rateUnit : (unitRaw || 'count');
+    const formulaTextQ = computeAsRate
+      ? (indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult + '   ·   ' + numLabel + ' = number of incidents this month')
       : (indNameQ + ' = number of incidents this month');
 
     // Prefill the incident list (and denominator) from existing data on month/indicator change.
@@ -372,20 +401,30 @@
         diagnosis: x.diagnosis || '', admissionDate: x.admissionDate || '', procedureDate: x.procedureDate || '',
         details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '',
       })) : []);
-      if (isRate) setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
+      setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
     }, [indId, month]);
 
     // The number of incidents drives the count / numerator automatically (0 if none).
-    const result = isRate ? (Number(den) > 0 ? Math.round((incCount / Number(den)) * mult * 100) / 100 : 0) : incCount;
+    const result = computeAsRate ? (denNum > 0 ? Math.round((incCount / denNum) * mult * 100) / 100 : 0) : incCount;
     const addIncident = () => setIncidents((arr) => [...arr, { uhid: '', patientName: '', age: '', gender: '', diagnosis: '', admissionDate: '', procedureDate: '', details: '', finding: '', corrective: '', preventive: '', remark: '' }]);
     const setInc = (i, k, v) => setIncidents((arr) => arr.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
     const delInc = (i) => setIncidents((arr) => arr.filter((_, j) => j !== i));
 
+    // A data collector cannot overwrite a month that already has recorded data; only
+    // an administrator may change it (a fresh "Add a new indicator" is always allowed).
+    const qExists = !!(curInd && (
+      (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length) ||
+      (curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '') ||
+      (curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '') ||
+      (curInd.months && curInd.months[month] != null && curInd.months[month] !== '')
+    ));
+    const qLocked = lockResp && !isNew && qExists;
     const submit = () => {
       if (!area) { toast('Select an area', 'error'); return; }
       if (!indId) { toast('Select an indicator', 'error'); return; }
       if (isNew && !newInd.name.trim()) { toast('Enter the new indicator name', 'error'); return; }
       if (!month) { toast('Pick a month', 'error'); return; }
+      if (qLocked) { toast('This month already has data — only an administrator can change it.', 'error'); return; }
       if (isRate && (den === '' || Number(den) <= 0)) { toast('Enter ' + denLabel + ' (denominator)', 'error'); return; }
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
@@ -393,9 +432,10 @@
         area: area.key, month,
         indicatorId: isNew ? '' : indId,
         indicatorName: isNew ? newInd.name : (curInd && curInd.name),
-        valueType: vt, entryMode: isRate ? 'rate' : 'count', mult,
-        formula, numLabel: isRate ? numLabel : undefined, denLabel: isRate ? denLabel : undefined, unit: unitQ,
-        value: isRate ? undefined : incCount, num: isRate ? incCount : undefined, den: isRate ? den : undefined,
+        valueType: computeAsRate ? (formula === 'pct' ? '%' : 'Rate') : 'Count', entryMode: computeAsRate ? 'rate' : 'count', mult,
+        formula: computeAsRate ? (isRate ? formula : 'rate1000') : 'count',
+        numLabel: computeAsRate ? numLabel : undefined, denLabel: computeAsRate ? denLabel : undefined, unit: unitQ,
+        value: computeAsRate ? undefined : incCount, num: computeAsRate ? incCount : undefined, den: computeAsRate ? den : undefined,
         incidents, remark,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
@@ -453,14 +493,20 @@
           )}
           {showEntry && (
             <>
-              <div style={{ background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9, padding: '10px 13px', marginBottom: 13, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--blue-700)' }}>
-                <b style={{ fontStyle: 'italic', marginRight: 6 }}>ƒ</b>{formulaTextQ}
+              <div style={{ background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9, padding: '10px 13px', marginBottom: 13, fontSize: 12, color: 'var(--blue-700)' }}>
+                <div style={{ fontFamily: 'var(--mono)' }}><b style={{ fontStyle: 'italic', marginRight: 6 }}>ƒ</b>{formulaTextQ}</div>
+                {(isRate || numDef) && (
+                  <div style={{ marginTop: 7, paddingTop: 7, borderTop: '1px solid var(--blue-100,#cfe6f7)', color: 'var(--ink-2)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {numDef && <div><b>{numLabel}:</b> {numDef}</div>}
+                    {isRate && <div><b>How to count {denLabel} (denominator):</b> {denDef}</div>}
+                  </div>
+                )}
               </div>
-              {isRate && (
-                <Field label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(denominator)</span></span>}>
-                  <input type="number" step="any" style={inputStyle} value={den} onChange={(e) => setDen(e.target.value)} placeholder="0" />
-                </Field>
-              )}
+              <Field
+                label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{isRate ? '(denominator — required)' : '(denominator — optional, for a rate)'}</span></span>}
+                hint={isRate ? denDef : ('Leave blank to record a plain count. Enter the base for ' + monthLabel(month) + ' (e.g. total procedures / discharges / patient-days) to compute a rate per ' + mult + '.')}>
+                <input type="number" step="any" style={inputStyle} value={den} onChange={(e) => setDen(e.target.value)} placeholder={isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)'} />
+              </Field>
               <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginBottom: 13 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: incidents.length ? 10 : 0 }}>
                   <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>Incidents in {monthLabel(month)}</div>
@@ -504,9 +550,9 @@
               <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '13px 16px', marginBottom: 4, background: 'var(--panel-2)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4 }}>Computed value</div>
                 <span className="num" style={{ fontSize: 22, fontWeight: 800, color: 'var(--blue-700)' }}>{result}</span>
-                {unitQ ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)' }}>{unitQ}</span> : (isRate && mult === 100 ? <span style={{ color: 'var(--ink-2)' }}>%</span> : null)}
+                {unitQ ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)' }}>{unitQ}</span> : null}
                 <span style={{ flex: 1 }} />
-                <span style={{ fontSize: 11, color: 'var(--muted)' }}>{isRate ? (numLabel + ' = ' + incCount) : (incCount + ' incident(s)')}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</span>
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>{computeAsRate ? (numLabel + ' = ' + incCount + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '')) : (incCount + ' incident(s)')}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</span>
               </div>
             </>
           )}
@@ -516,8 +562,9 @@
                 <ResponsiblePicker value={responsible} onChange={setResponsible} suggestions={assigned} />
               </Field>}
           <Field label="Remark (optional)"><input style={inputStyle} value={remark} onChange={(e) => setRemark(e.target.value)} placeholder="Any note for this month" /></Field>
+          {qLocked && <Banner>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)} — submission is locked for data collectors. Ask an administrator to change it.</Banner>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : 'Save monthly value'}</button>
+            <button className="btn pri" disabled={busy || qLocked} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qLocked ? 'Locked — already recorded' : 'Save monthly value')}</button>
             <button className="btn" disabled={busy} onClick={() => { setIncidents([]); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
           </div>
         </Card>

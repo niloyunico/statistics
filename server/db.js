@@ -17,7 +17,12 @@ let _memUsers = null, _memApp = { data: {}, updatedAt: 0 };
 async function ensureClient() {
   if (_client) return _client;
   const { MongoClient } = require('mongodb');
-  _client = new MongoClient(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 8000 });
+  _client = new MongoClient(process.env.MONGODB_URI, {
+    serverSelectionTimeoutMS: 8000,
+    maxPoolSize: 10,
+    minPoolSize: 2,        // keep warm sockets so idle drops don't force a re-handshake
+    maxIdleTimeMS: 60000,
+  });
   await _client.connect();
   return _client;
 }

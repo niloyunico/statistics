@@ -16,7 +16,6 @@
 <!-- Vendored libraries — run fully offline, no CDN -->
 <script src="vendor/react.production.min.js"></script>
 <script src="vendor/react-dom.production.min.js"></script>
-<script src="vendor/babel.min.js"></script>
 <!-- Database bridge: hydrate localStorage from the on-disk DB, then mirror every
      change back to it. Runs before the app's stores read localStorage. -->
 <script>
@@ -44,44 +43,10 @@
   }catch(e){ try{ console.error('[unico-db] mirror', e); }catch(_){} }
 })();
 </script>
-<script src="unico/config.js"></script>
-<script src="unico/data.js"></script>
-<script src="unico/store.js"></script>
-<script src="unico/staff-seed.js"></script>
-<script src="unico/staff-data.js"></script>
-<script src="unico/quality-data.js"></script>
-<script src="unico/quality-store.js"></script>
-<script type="text/babel" src="unico/charts.jsx"></script>
-<script type="text/babel" src="unico/charts3d.jsx"></script>
-<script type="text/babel" src="unico/charts-extra.jsx"></script>
-<script type="text/babel" src="unico/ui.jsx"></script>
-<script type="text/babel" src="unico/feedback.jsx"></script>
-<script type="text/babel" src="unico/dashboard.jsx"></script>
-<script type="text/babel" src="unico/department.jsx"></script>
-<script type="text/babel" src="unico/comparison.jsx"></script>
-<script type="text/babel" src="unico/manage.jsx"></script>
-<script type="text/babel" src="unico/staff.jsx"></script>
-<script type="text/babel" src="unico/staff-profile.jsx"></script>
-<script type="text/babel" src="unico/input.jsx"></script>
-<script type="text/babel" src="unico/reports.jsx"></script>
-<script type="text/babel" src="unico/quality.jsx"></script>
-<script type="text/babel" src="unico/quality-edit.jsx"></script>
-<script type="text/babel" src="unico/quality-entry.jsx"></script>
-<script type="text/babel" src="unico/quality-scorecard.jsx"></script>
-<script type="text/babel" src="unico/quality-trends.jsx"></script>
-<script type="text/babel" src="unico/quality-catalog.jsx"></script>
-<script type="text/babel" src="unico/quality-assign.jsx"></script>
-<script type="text/babel" src="unico/quality-manage.jsx"></script>
-<script type="text/babel" src="unico/quality-capa.jsx"></script>
-<script type="text/babel" src="unico/quality-report.jsx"></script>
-<script type="text/babel" src="unico/quality-incident-report.jsx"></script>
-<script type="text/babel" src="unico/charts-gallery.jsx"></script>
-<script type="text/babel" src="unico/login.jsx"></script>
-<script type="text/babel" src="unico/auth-login.jsx"></script>
-<script type="text/babel" src="unico/search.jsx"></script>
-<script type="text/babel" src="unico/data-collection.jsx"></script>
-<script type="text/babel" src="unico/user-admin.jsx"></script>
-<script type="text/babel" src="unico/data-fields.jsx"></script>
-<script type="text/babel" src="unico/app.jsx"></script>
+<!-- App code: every renderer module (head stores + all JSX) is pre-transpiled and
+     concatenated into ONE cacheable bundle by scripts/build-renderer.js, so the
+     browser no longer downloads Babel (3.14 MB) or compiles JSX at runtime. Rebuilt
+     by `npm run web`; the ?v= token is the bundle's content hash (auto-updated). -->
+<script src="dist/app.bundle.js?v=3edf1d8cc6"></script>
 </body>
 </html>

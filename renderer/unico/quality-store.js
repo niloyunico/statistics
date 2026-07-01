@@ -60,9 +60,33 @@
   // Object-valued indicator fields that deep-merge (rather than replace) on patch.
   const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen'];
 
+  // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
+  // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are
+  // never touched, so entered data is preserved.
+  const CORRECT_FIELDS = ['formula', 'numLabel', 'denLabel', 'numeratorDef', 'denominatorDef', 'unit', 'benchmark', 'benchmarkValue', 'benchmarkNote', 'goalDirection', 'reference', 'referenceUrl'];
+  function correctedBase(seedInd) {
+    try {
+      const C = (typeof window !== 'undefined') && window.QI_CORRECTIONS;
+      if (!C) return seedInd;
+      const corr = C[String((seedInd && seedInd.name) || '').trim().toLowerCase().replace(/\s+/g, ' ')];
+      if (!corr) return seedInd;
+      const base = Object.assign({}, seedInd);
+      CORRECT_FIELDS.forEach(k => { if (corr[k] !== undefined && corr[k] !== null && corr[k] !== '') base[k] = corr[k]; });
+      // Keep the legacy `valueType` in sync with the corrected formula (several UI
+      // surfaces still derive the %/measure from it), and drop any stale cached
+      // `formulaText` so downstream screens recompute it from the corrected labels.
+      if (corr.formula) base.valueType = corr.formula === 'pct' ? '%' : (corr.formula === 'count' ? 'Count' : 'Rate');
+      delete base.formulaText;
+      return base;
+    } catch (e) { return seedInd; }
+  }
+
   function mergeIndicator(seedInd, patch) {
-    const ind = Object.assign({}, seedInd, patch || {});
-    if (patch) NESTED.forEach(k => { if (patch[k]) ind[k] = Object.assign({}, seedInd[k] || {}, patch[k]); });
+    // Apply the authoritative correction to the BASE so an explicit user edit (patch)
+    // still wins, but every uncorrected indicator gets the right formula/reference.
+    const corrected = correctedBase(seedInd);
+    const ind = Object.assign({}, corrected, patch || {});
+    if (patch) NESTED.forEach(k => { if (patch[k]) ind[k] = Object.assign({}, corrected[k] || {}, patch[k]); });
 
     const f = ind.formula;
     if (f && f !== 'direct') {

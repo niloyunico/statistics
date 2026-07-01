@@ -189,7 +189,7 @@ function Reports({depts}){
         </div>
       )}
       {pdfRoot && ReactDOM.createPortal(
-        <div className="pdf-doc">
+        <div className={"pdf-doc"+(orient==='portrait'?' portrait':'')}>
           {chosen.length>0 && (type==='compare'
             ? <section className="pdf-page"><ComparePage/></section>
             : chosen.map((d,i)=><section className="pdf-page" key={d.id}><DeptPage d={d} n={i+1} total={pages}/></section>))}

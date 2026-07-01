@@ -26,7 +26,7 @@ const fs = require('fs');
 const app = require('./index'); // the existing API app (login / me / data / health)
 const {
   getAppData, getDepartments, getStaff, getQuality, getUsers,
-  ensureDepartmentsSeeded, ensureRendererSeeded, usingMongo,
+  ensureDepartmentsSeeded, ensureRendererSeeded, usingMongo, getDbHandle,
 } = require('./db');
 const auth = require('./auth');
 const session = require('./session');
@@ -57,13 +57,18 @@ async function serveIndex(req, res) {
   try { html = fs.readFileSync(INDEX_FILE, 'utf8'); }
   catch (e) { return res.status(500).type('text').send('renderer/index.html not found'); }
 
-  let snap = {};
-  let depts = [], staff = [], quality = [];
-  try { const d = await getAppData(); snap = (d && d.data) || {}; }
-  catch (e) { /* DB unreachable -> empty snapshot; user edits/overrides simply absent */ }
-  try { depts = await getDepartments(); } catch (e) { /* keep empty; /api/departments reports the error */ }
-  try { staff = await getStaff(); } catch (e) { /* keep empty */ }
-  try { quality = await getQuality(); } catch (e) { /* keep empty */ }
+  // Fetch all four datasets CONCURRENTLY — one wall-clock round-trip instead of four
+  // serial ones, so the shell starts streaming sooner. Each query falls back
+  // independently (.catch), preserving the per-dataset failure tolerance the previous
+  // sequential try/catches had: a slow/unreachable query blanks only its own data.
+  const [appRes, deptRes, staffRes, qualRes] = await Promise.all([
+    getAppData().catch(() => null),           // DB unreachable -> empty snapshot
+    getDepartments().catch(() => []),         // /api/departments reports the error
+    getStaff().catch(() => []),
+    getQuality().catch(() => []),
+  ]);
+  let snap = (appRes && appRes.data) || {};
+  let depts = deptRes || [], staff = staffRes || [], quality = qualRes || [];
 
   // Resolve the signed-in user's scope. A "collector" gets a DATA-LIMITED view:
   // only their assigned departments + quality areas are injected (no staff / shared
@@ -262,7 +267,31 @@ require('./users-admin').mount(app, { requireApi: session.requireApi });
 
 // All other renderer assets (jsx/js/css/svg/fonts) are static. index:false so our
 // handler owns "/". The /api/* routes were registered by ./index before this.
-app.use(express.static(RENDERER, { index: false }));
+// The app's own source (jsx/js/css) is transpiled in-browser by Babel, so it MUST
+// NOT be cached — otherwise edits don't show until a manual hard-refresh. Mark those
+// no-store (revalidated every load); large immutable vendor libs may still cache.
+app.use(express.static(RENDERER, {
+  index: false,
+  setHeaders: function (res, filePath) {
+    // The content-hashed app bundle (dist/app.bundle.js?v=<hash>) is immutable: any
+    // change produces a new hash -> new URL, so cache it hard for a year. THIS is
+    // what makes repeat loads instant (no re-download, and never any re-transpile).
+    if (/[\\/]dist[\\/]/i.test(filePath)) {
+      res.set('Cache-Control', 'public, max-age=31536000, immutable');
+      return;
+    }
+    // Vendored libs (react/react-dom) and fonts are stable across deploys -> a week.
+    if (/[\\/]vendor[\\/]/i.test(filePath)) {
+      res.set('Cache-Control', 'public, max-age=604800');
+      return;
+    }
+    // Everything else app-authored (theme.css, any unbundled .js/.jsx, html) carries
+    // no version token, so keep it revalidated so edits show without a hard refresh.
+    if (/\.(jsx|css|html|js)$/i.test(filePath)) {
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    }
+  },
+}));
 
 // Fail fast: in login mode a missing/insecure JWT secret would let anyone forge
 // tokens. (No-op in the default open local mode.)
@@ -278,6 +307,10 @@ if (String(process.env.REQUIRE_AUTH || '').toLowerCase() === 'true') {
 const PORT = process.env.WEB_PORT || process.env.PORT || 8080;
 
 function start() {
+  // Warm the Mongo connection pool now so the first visitor doesn't pay the
+  // SRV+TLS+topology handshake on the request path. Fire-and-forget: never blocks
+  // listen, and is a harmless no-op in dev in-memory mode (getDbHandle -> null).
+  getDbHandle().catch(() => { /* first real request will surface any DB error */ });
   const server = app.listen(PORT, () => {
     const authMode = String(process.env.REQUIRE_AUTH || '').toLowerCase() === 'true' ? 'login required' : 'open (local PC mode)';
     console.log('');

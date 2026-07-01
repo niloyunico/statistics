@@ -139,18 +139,50 @@ button{font-family:inherit;cursor:pointer}
   .app:not(.collapsed) .sb .lbl,.app:not(.collapsed) .sb .sb-sec{display:initial !important}
   .sb-brand{display:none}
   .topbar{position:relative;z-index:1400;padding:0 10px;gap:8px}
+  /* keep the breadcrumb from pushing the row wide; the workspace switcher can scroll */
+  .topbar .crumb{flex-shrink:1;min-width:0;max-width:42vw;overflow:hidden;white-space:nowrap}
+  .modswitch{flex-shrink:1;min-width:0;overflow-x:auto}
+  .modswitch::-webkit-scrollbar{display:none}
+  /* hide the dashboard density toggle (Executive/Operational/Analytics) on small
+     screens so it never crowds the top bar — it lives in .tb-right as a .seg,
+     distinct from the .modswitch workspace switcher which stays. */
+  .topbar .tb-right .seg{display:none}
+  /* the content column contains its children; wide tables get their own scroll
+     (below) so nothing forces a full-page horizontal scrollbar. */
+  .main{min-width:0;overflow-x:hidden}
   .content{padding:14px 12px 64px}
-  /* collapse 2- and 3-column inline form grids (substring matches both) */
-  [style*="grid-template-columns: 1fr 1fr"]{grid-template-columns:1fr !important}
-  /* Manage Indicators master/detail → single column on narrow screens */
+
+  /* Collapse FIXED multi-column page & form grids to ONE column. auto-fit /
+     auto-fill grids are intentionally untouched — they already reflow via their
+     minmax() floor. These substrings never match an auto-fit value ("fr 1fr"
+     doesn't occur there) nor the 3-column mini bar-rows ("…px 1fr …px"). */
+  [style*="fr 1fr"],            /* 1fr 1fr · 1fr 1fr 1fr · 1.4fr 1fr · 2fr 1fr … */
+  [style*="1fr 1."],           /* 1fr 1.4fr · 1fr 1.25fr · 1fr 1.55fr */
+  [style*="repeat(2"],
+  [style*="repeat(3"],
+  [style*="repeat(4"],
+  [style*="320px 1fr"],[style*="340px 1fr"],[style*="230px 1fr"],[style*="200px 1fr"],[style*="160px 1fr"],
   .qm-split{grid-template-columns:1fr !important}
+
+  /* Section titles, card headers & toolbars wrap their action buttons below the
+     title instead of overflowing the row. */
+  .sec-head,.card-h{flex-wrap:wrap}
+
   /* wide tables scroll inside their card instead of overflowing the viewport */
   .card{overflow-x:auto !important}
   table.tbl{min-width:520px}
 }
 @media (max-width:520px){
-  .topbar .crumb{font-size:12px;max-width:46vw;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .topbar .crumb{font-size:12px;max-width:38vw;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
   .content{padding:12px 9px 64px}
+  .card-b{padding:13px}
+  .card-h{padding:11px 13px}
+  /* let the section title text truncate rather than shove buttons off-screen */
+  .sec-head>div{min-width:0}
+  .sec-head>div>div{white-space:normal;overflow-wrap:anywhere}
+  /* comfortable tap targets + tighter wide tables */
+  .btn,.btn.sm{padding:7px 11px}
+  table.tbl{min-width:460px}
 }
 
 .grid{display:grid;gap:14px}
@@ -239,26 +271,35 @@ table.tbl tr.tot td{font-weight:700;color:var(--ink);background:var(--panel-2);b
   body.pdf-export-mode #root{display:none !important}
   body.pdf-export-mode #pdf-root{display:block !important}
 
-  /* one report page per printed sheet; printToPDF sets the physical page size.
-     Full-height flex column so the footer is pinned to the bottom of each page. */
+  /* Each report "page" (e.g. one department) STARTS on a fresh sheet, then its
+     content FLOWS across as many sheets as it needs. IMPORTANT: no flex / no
+     min-height:100vh on the fragmenting container — those stop Chromium from
+     breaking long content across sheets, so it gets clipped at the page edge
+     instead of continuing (this was the "page breaks not working" bug). */
   .pdf-page{
     box-sizing:border-box;
     width:100%;
-    min-height:100vh;
     padding:13mm 12mm;
     background:#fff;
     color:var(--ink);
-    break-after:page;
-    page-break-after:always;
-    display:flex;
-    flex-direction:column;
   }
-  .pdf-page > *{ flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
-  .pdf-foot{ margin-top:auto !important; }
-  .pdf-page:last-child{break-after:auto;page-break-after:auto}
+  /* first page flows from the top; every subsequent report page starts a new sheet */
+  .pdf-page + .pdf-page{ break-before:page; page-break-before:always; }
+  .pdf-foot{ margin-top:12px; }
 
-  /* keep charts, tables and KPI rows from splitting across a page boundary */
-  .pdf-page table,.pdf-page .tbl,.pdf-page svg{break-inside:avoid;page-break-inside:avoid}
+  /* Let long tables paginate ROW-BY-ROW and repeat their header on each new sheet;
+     keep individual rows, KPI cards and charts from splitting mid-element. */
+  .pdf-page thead,.pdf-doc thead,.tbl thead{ display:table-header-group; }
+  .pdf-page tr,.pdf-doc tr,.tbl tr{ break-inside:avoid; page-break-inside:avoid; }
+  .pdf-page svg,.pdf-page .card,.pdf-page .kpi,.pdf-page .qc-kpi{ break-inside:avoid; page-break-inside:avoid; }
+
+  /* Orientation: the web print path can't read the desktop's landscape/size hint,
+     so force it from CSS. Reports are landscape by default (matches the desktop
+     export); reports.jsx flags portrait via .pdf-doc.portrait when chosen. */
+  @page rpt-land{ size:A4 landscape; margin:6mm; }
+  @page rpt-port{ size:A4 portrait;  margin:6mm; }
+  body.pdf-export-mode .pdf-page{ page:rpt-land; }
+  body.pdf-export-mode .pdf-doc.portrait .pdf-page{ page:rpt-port; }
 }
 
 /* ---------- global toast feedback (feedback.jsx) ---------- */
