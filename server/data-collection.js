@@ -770,16 +770,25 @@ function mount(app, opts) {
       const b = req.body || {};
       const patch = { editedBy: who(req), editedAt: Date.now() };
       if (b.note != null) patch.note = String(b.note);
+      if (b.month) patch.month = String(b.month).trim(); // month editable for BOTH types
       if (s.type === 'patient') {
         if (b.values && typeof b.values === 'object') {
           const out = {};
           Object.keys(b.values).forEach((k) => { const v = b.values[k]; if (v !== '' && v != null && !isNaN(Number(v))) out[k] = Number(v); });
           patch.values = out;
         }
-        if (b.month) patch.month = String(b.month).trim();
+        // Re-assign to a different department (collector picked the wrong one).
+        if (b.department) { patch.department = String(b.department).trim(); if (b.departmentName) patch.departmentName = String(b.departmentName).trim(); }
       } else if (s.type === 'quality') {
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
         if (b.remark != null) patch.remark = String(b.remark);
+        // Re-assign to a different quality area.
+        if (b.area) { patch.area = String(b.area).trim(); if (b.areaName) patch.areaName = String(b.areaName).trim(); }
+        // Edit the incident/patient/CAPA details attached to this quality submission.
+        if (Array.isArray(b.incidents)) {
+          const IF = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'admissionDate', 'procedureDate', 'details', 'finding', 'corrective', 'preventive', 'remark'];
+          patch.incidents = b.incidents.map((x) => { const o = {}; IF.forEach((k) => { if (x && x[k] != null && x[k] !== '') o[k] = String(x[k]); }); return o; }).filter((o) => Object.keys(o).length);
+        }
       }
       res.json({ ok: true, submission: await setSubmissionStatus(req.params.id, patch) });
     } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }

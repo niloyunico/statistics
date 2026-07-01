@@ -521,6 +521,10 @@
     const denGuess = denMatch ? denMatch[1].trim().replace(/\b\w/g, (c) => c.toUpperCase()) : '';
     const numLabel = def.numLabel || (isRate ? 'Cases (incidents)' : 'Numerator');
     const denLabel = def.denLabel || denGuess || 'Denominator';
+    // Some denominators are a hospital-wide figure the ADMIN owns (e.g. NSI's "Total
+    // healthcare workers"): data collectors see it read-only and enter only the numerator.
+    const denAdminOnly = !!def.denAdminOnly;
+    const denLockedForCollector = denAdminOnly && lockResp;
     const numDef = def.numeratorDef || '';
     const denDef = def.denominatorDef || (isRate ? ('Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.') : '');
     const indNameQ = (def.name || newInd.name) || 'Result';
@@ -625,7 +629,13 @@
         // Hand Hygiene with no data yet opens straight into the all-departments gateway.
         setDeptRows([]); setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('dept');
       }
-      setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
+      // Admin-set denominators (e.g. NSI's total healthcare workers) carry forward the last
+      // value recorded for ANY month, so the figure is always shown even in a fresh month.
+      const denThisMonth = (curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '') ? curInd.mDen[month] : null;
+      const denCarry = (denAdminOnly && denThisMonth == null && curInd.mDen)
+        ? Object.keys(curInd.mDen).map((k) => curInd.mDen[k]).filter((v) => v != null && v !== '').pop()
+        : null;
+      setDen(denThisMonth != null ? String(denThisMonth) : (denCarry != null ? String(denCarry) : ''));
       const cp = curInd.capa && curInd.capa[month];
       setCapa(cp && typeof cp === 'object' ? { finding: cp.finding || '', corrective: cp.corrective || '', preventive: cp.preventive || '' } : { finding: '', corrective: '', preventive: '' });
       // Load any incident reports already recorded for this indicator × month.
@@ -767,9 +777,9 @@
               )}
               {numMode === 'direct' && !isIncidentType && (
                 <Field
-                  label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{isRate ? '(denominator — required)' : '(denominator — optional, for a rate)'}</span></span>}
-                  hint={isRate ? denDef : ('Leave blank to record a plain count. Enter the base for ' + monthLabel(month) + ' (e.g. total procedures / discharges / patient-days) to compute a rate per ' + mult + '.')}>
-                  <input type="number" step="any" style={inputStyle} value={den} onChange={(e) => setDen(e.target.value)} placeholder={isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)'} />
+                  label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{denLockedForCollector ? '(set by administrator)' : denAdminOnly ? '(admin-set — applies to all months)' : isRate ? '(denominator — required)' : '(denominator — optional, for a rate)'}</span></span>}
+                  hint={denLockedForCollector ? (denLabel + ' is maintained by the administrator — you enter only the numerator above.') : (isRate ? denDef : ('Leave blank to record a plain count. Enter the base for ' + monthLabel(month) + ' (e.g. total procedures / discharges / patient-days) to compute a rate per ' + mult + '.'))}>
+                  <input type="number" step="any" readOnly={denLockedForCollector} style={{ ...inputStyle, ...(denLockedForCollector ? { background: 'var(--panel-2)', color: 'var(--ink-2)', cursor: 'not-allowed' } : {}) }} value={den} onChange={(e) => { if (!denLockedForCollector) setDen(e.target.value); }} placeholder={denLockedForCollector ? 'Set by administrator' : (isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)')} />
                 </Field>
               )}
               <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginBottom: 13 }}>
@@ -895,9 +905,9 @@
                   and the computed value — so a rate isn't stuck at 0 for a hidden field. */}
               {isIncidentType && numMode === 'direct' && (
                 <Field
-                  label={<span>{denLabel} <span style={{ color: (isRate && !(denNum > 0)) ? 'var(--rose)' : 'var(--muted)', fontWeight: isRate ? 700 : 400 }}>{isRate ? '(denominator — required to compute the rate)' : '(denominator — optional, for a rate)'}</span></span>}
-                  hint={isRate ? denDef : ('Leave blank to record a plain count of incidents. Enter the base for ' + monthLabel(month) + ' (e.g. total patient-days) to compute a rate per ' + mult + '.')}>
-                  <input type="number" step="any" style={{ ...inputStyle, ...(isRate && !(denNum > 0) ? { borderColor: 'var(--rose)' } : {}) }} value={den} onChange={(e) => setDen(e.target.value)} placeholder={isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)'} />
+                  label={<span>{denLabel} <span style={{ color: (isRate && !(denNum > 0) && !denLockedForCollector) ? 'var(--rose)' : 'var(--muted)', fontWeight: isRate ? 700 : 400 }}>{denLockedForCollector ? '(set by administrator)' : denAdminOnly ? '(admin-set — applies to all months)' : isRate ? '(denominator — required to compute the rate)' : '(denominator — optional, for a rate)'}</span></span>}
+                  hint={denLockedForCollector ? (denLabel + ' is maintained by the administrator — you enter only the number of cases above.') : (isRate ? denDef : ('Leave blank to record a plain count of incidents. Enter the base for ' + monthLabel(month) + ' (e.g. total patient-days) to compute a rate per ' + mult + '.'))}>
+                  <input type="number" step="any" readOnly={denLockedForCollector} style={{ ...inputStyle, ...(denLockedForCollector ? { background: 'var(--panel-2)', color: 'var(--ink-2)', cursor: 'not-allowed' } : (isRate && !(denNum > 0) ? { borderColor: 'var(--rose)' } : {})) }} value={den} onChange={(e) => { if (!denLockedForCollector) setDen(e.target.value); }} placeholder={denLockedForCollector ? 'Set by administrator' : (isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)')} />
                 </Field>
               )}
               <div style={{ border: '1px solid ' + (ratePending ? '#f1c6cd' : 'var(--line)'), borderRadius: 9, padding: '13px 16px', marginBottom: 4, background: 'var(--panel-2)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -971,14 +981,26 @@
     const [remark, setRemark] = useState(s.remark || '');
     const [note, setNote] = useState(s.note || '');
     const [busy, setBusy] = useState(false);
+    // Admin can also fix the MONTH, RE-ASSIGN the department/area, and edit incident details.
+    const [month, setMonth] = useState(s.month || '');
+    const [target, setTarget] = useState(s.type === 'patient' ? (s.department || '') : (s.area || ''));
+    const [incidents, setIncidents] = useState(() => (s.type === 'quality' && Array.isArray(s.incidents)) ? s.incidents.map((x) => Object.assign({}, x)) : []);
+    const monthOpts = s.type === 'quality'
+      ? (window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [s.month])
+      : (typeof MO === 'function' ? (function () { const o = MO(); const i = o.indexOf('Jan-25'); return i >= 0 ? o.slice(i) : o.slice(-24); })() : [s.month]);
+    const areaOpts = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), []);
+    const deptOpts = React.useMemo(() => dcAllDepts(), []);
+    const setInc = (i, k, v) => setIncidents((a) => a.map((x, j) => (j === i ? Object.assign({}, x, { [k]: v }) : x)));
+    const INC_FIELDS = [['uhid', 'UHID'], ['patientName', 'Patient name'], ['diagnosis', 'Diagnosis'], ['details', 'What happened'], ['finding', 'Root cause / finding'], ['corrective', 'Corrective action'], ['preventive', 'Preventive action']];
     const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
     const Meta = ({ label, value }) => (
       <div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{label}</div><div style={{ fontWeight: 600, color: 'var(--ink)' }}>{value}</div></div>
     );
     const save = () => {
       setBusy(true);
-      const body = { note };
-      if (s.type === 'patient') body.values = vals; else { body.value = qval; body.remark = remark; }
+      const body = { note, month };
+      if (s.type === 'patient') { body.values = vals; if (target && target !== s.department) { body.department = target; body.departmentName = (deptOpts.find((d) => d.id === target) || {}).name || target; } }
+      else { body.value = qval; body.remark = remark; if (target && target !== s.area) { body.area = target; body.areaName = (areaOpts.find((a) => a.key === target) || {}).name || target; } if (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) body.incidents = incidents; }
       dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), body).then((r) => {
         setBusy(false);
         if (r.ok) { toast('Submission updated', 'success'); onSaved && onSaved(r.submission); }
@@ -1004,6 +1026,20 @@
               {s.editedBy && <Meta label="Last edited by" value={s.editedBy + (s.editedAt ? ' · ' + when(s.editedAt) : '')} />}
               {s.rejectReason && <Meta label="Reject reason" value={s.rejectReason} />}
             </div>
+            {editable && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, padding: '10px 12px', background: 'var(--panel-2)', border: '1px dashed var(--line)', borderRadius: 9 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>Reporting month</label>
+                  <select style={inputStyle} value={month} onChange={(e) => setMonth(e.target.value)}>{monthOpts.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>Re-assign {s.type === 'patient' ? 'department' : 'quality area'}</label>
+                  {s.type === 'patient'
+                    ? <select style={inputStyle} value={target} onChange={(e) => setTarget(e.target.value)}>{deptOpts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
+                    : <select style={inputStyle} value={target} onChange={(e) => setTarget(e.target.value)}>{areaOpts.map((a) => <option key={a.key} value={a.key}>{a.name}</option>)}</select>}
+                </div>
+              </div>
+            )}
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 8 }}>Submitted data</div>
               {s.type === 'patient' ? (
@@ -1031,6 +1067,37 @@
                 </div>
               )}
             </div>
+            {s.type === 'quality' && (editable || incidents.length > 0) && (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', textTransform: 'uppercase', letterSpacing: .4 }}>Incident / CAPA details</div>
+                  <span style={{ flex: 1 }} />
+                  {editable && <button className="btn sm" onClick={() => setIncidents((a) => [...a, {}])}><Ic d={I.plus} s={12} />Add incident</button>}
+                </div>
+                {incidents.length === 0 && <div style={{ fontSize: 12, color: 'var(--muted)' }}>No incidents logged.</div>}
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {incidents.map((inc, i) => (
+                    <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', background: 'var(--panel-2)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                        <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-2)' }}>Incident {i + 1}</div>
+                        <span style={{ flex: 1 }} />
+                        {editable && <button className="icon-btn" title="Remove" style={{ width: 24, height: 24, color: 'var(--rose)' }} onClick={() => setIncidents((a) => a.filter((_, j) => j !== i))}><Ic d={I.x} s={12} /></button>}
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        {INC_FIELDS.map(([k, lbl]) => (
+                          <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 3, gridColumn: (k === 'details' || k === 'finding' || k === 'corrective' || k === 'preventive') ? '1 / -1' : 'auto' }}>
+                            <label style={{ fontSize: 10.5, color: 'var(--muted)' }}>{lbl}</label>
+                            {editable
+                              ? <input style={{ ...inputStyle, padding: '6px 8px', fontSize: 12 }} value={inc[k] || ''} onChange={(e) => setInc(i, k, e.target.value)} />
+                              : <div style={{ fontSize: 12 }}>{inc[k] || '—'}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>Note</label>
               {editable ? <input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" /> : <div>{s.note || '—'}</div>}
@@ -1046,205 +1113,32 @@
     );
   }
 
-  /* ============================ Quality Report (A4, print-ready) ============================
-     Standalone auto-generated report of the quality indicators, rendered into #pdf-root and
-     printed via the shared pdf-export-mode path. Reads the SAME window.qualityData() the forms
-     use (so it reflects the backend-computed quarters/values), and reuses the global chart
-     components (Donut / Bar3D / BarChart). Lives inside Data Collection so it never touches the
-     quality-console / app / ui refactor. */
-  function QualityReportDoc() {
-    const areas = (typeof window.qualityData === 'function' ? window.qualityData() : (window.QUALITY_SEED || [])).filter((a) => a && a.indicators && a.indicators.length);
-    const QM = (typeof window !== 'undefined' && window.QUALITY_QUARTER_MONTHS) || { Q1: ['Jun-25', 'Jul-25', 'Aug-25'], Q2: ['Sep-25', 'Oct-25', 'Nov-25'], Q3: ['Dec-25', 'Jan-26', 'Feb-26'], Q4: ['Mar-26', 'Apr-26', 'May-26'] };
-    const QS = ['Q1', 'Q2', 'Q3', 'Q4'];
-    const qval = (ind, q) => (ind.quarters ? ind.quarters[q] : null);
-    const qstatus = (ind, q) => { const v = qval(ind, q); if (v == null || v === '') return 'na'; const b = ind.benchmarkValue; if (b == null || b === '') return 'ok'; return ind.goalDirection === 'higher_is_better' ? (v >= b ? 'ok' : 'breach') : (v <= b ? 'ok' : 'breach'); };
-    const fmtv = (ind, q) => { const v = qval(ind, q); return (v == null || v === '') ? '—' : v; };
-    let ok = 0, breach = 0, na = 0, totalInd = 0;
-    areas.forEach((a) => { totalInd += a.indicators.length; a.indicators.forEach((ind) => QS.forEach((q) => { const s = qstatus(ind, q); if (s === 'ok') ok++; else if (s === 'breach') breach++; else na++; })); });
-    const compliance = ok + breach ? Math.round(ok * 100 / (ok + breach)) : 100;
-    const donut = [{ label: 'On benchmark', value: ok, color: '#1f9d57' }, { label: 'Breach', value: breach, color: '#d23a52' }, { label: 'Not reported', value: na, color: '#c4ccd6' }].filter((x) => x.value > 0);
-    const breachByQ = QS.map((q) => { let b = 0; areas.forEach((a) => a.indicators.forEach((ind) => { if (qstatus(ind, q) === 'breach') b++; })); return { label: q, value: b }; });
-    let date = ''; try { date = new Date().toISOString().slice(0, 10); } catch (e) { }
-    const hospital = 'UNICO Hospitals';
-    const tone = { ok: ['#1f9d57', '#e7f6ec'], breach: ['#d23a52', '#fdeaec'], na: ['#8a93a3', '#eef1f5'] };
-    const th = { textAlign: 'left', fontSize: 10, textTransform: 'uppercase', letterSpacing: .4, color: '#5b6672', padding: '6px 8px', borderBottom: '2px solid #d7dee7' };
-    const td = { fontSize: 11, padding: '5px 8px', borderBottom: '1px solid #eef1f5', color: '#1f2a37' };
-    const cell = (s, v) => <span style={{ display: 'inline-block', minWidth: 30, textAlign: 'center', padding: '2px 6px', borderRadius: 6, fontWeight: 700, fontSize: 10.5, background: tone[s][1], color: tone[s][0] }}>{v}</span>;
-    const KPI = ({ label, value, color, foot }) => (
-      <div style={{ border: '1px solid #e2e8f0', borderLeft: '4px solid ' + (color || '#0090ca'), borderRadius: 8, padding: '10px 13px' }}>
-        <div style={{ fontSize: 10.5, fontWeight: 700, color: '#5b6672', textTransform: 'uppercase', letterSpacing: .3 }}>{label}</div>
-        <div style={{ fontSize: 26, fontWeight: 800, color: color || '#0f2c4d', lineHeight: 1.1 }}>{value}</div>
-        {foot ? <div style={{ fontSize: 10, color: '#8a93a3' }}>{foot}</div> : null}
-      </div>
-    );
-    const Foot = () => <div className="pdf-foot" style={{ marginTop: 12, color: '#9aa6b4', fontSize: 9, borderTop: '1px solid #e4e9f0', paddingTop: 6 }}>{hospital} · Confidential · Generated {date}</div>;
+  // Reject-reason dialog (single or bulk) — preset reasons + free text; shown in history.
+  function RejectModal({ ids, busy, onCancel, onConfirm }) {
+    const presets = ['Wrong value / data-entry error', 'Wrong month', 'Duplicate submission', 'Incomplete data', 'Not verified with records'];
+    const [reason, setReason] = useState('');
     return (
-      <div className="pdf-doc">
-        {/* summary page */}
-        <section className="pdf-page" style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", color: '#16202e' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', borderBottom: '2px solid #0090ca', paddingBottom: 8, marginBottom: 14 }}>
-            <div><div style={{ fontSize: 20, fontWeight: 800, color: '#0072a3' }}>{hospital}</div><div style={{ fontSize: 13, fontWeight: 600 }}>Quality Indicator Report</div></div>
-            <div style={{ textAlign: 'right', fontSize: 10.5, color: '#8a93a3' }}>Generated {date}<br />NQI · Jun 2025 – May 2026</div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
-            <KPI label="Areas / units" value={areas.length} color="#0090ca" />
-            <KPI label="Indicators" value={totalInd} color="#6a52d4" />
-            <KPI label="Compliance" value={compliance + '%'} color="#1f9d57" foot={ok + ' on benchmark · ' + breach + ' breaches'} />
-            <KPI label="Breaches" value={breach} color={breach ? '#d23a52' : '#1f9d57'} />
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 16, marginBottom: 4 }}>
-            <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Compliance mix</div>
-              <div style={{ display: 'grid', placeItems: 'center' }}>{typeof Donut === 'function' ? <Donut data={donut.length ? donut : [{ label: 'n/a', value: 1, color: '#c4ccd6' }]} size={158} centerValue={compliance + '%'} centerLabel="on benchmark" flat /> : null}</div>
+      <div onMouseDown={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.42)', zIndex: 420, display: 'grid', placeItems: 'center', padding: 20 }}>
+        <div onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, width: 470, maxWidth: '100%', boxShadow: 'var(--shadow-pop)' }}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line-2)', fontWeight: 700, fontSize: 14 }}>Reject {ids.length > 1 ? ids.length + ' submissions' : 'submission'}</div>
+          <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Pick a reason or type your own — it is saved in history and shown to the collector.</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {presets.map((p) => <span key={p} onClick={() => setReason(p)} style={{ cursor: 'pointer', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (reason === p ? 'var(--rose)' : 'var(--line)'), background: reason === p ? '#fbe9ec' : '#fff', color: reason === p ? 'var(--rose)' : 'var(--ink-2)' }}>{p}</span>)}
             </div>
-            <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Breaches by quarter</div>
-              {typeof Bar3D === 'function' ? <Bar3D data={breachByQ} x="label" y="value" height={185} color="#d23a52" flat /> : (typeof BarChart === 'function' ? <BarChart data={breachByQ} x="label" y="value" height={185} color="#d23a52" flat /> : null)}
+            <textarea style={{ ...inputStyle, minHeight: 62, resize: 'vertical' }} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)" />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn sm" onClick={onCancel}>Cancel</button>
+              <button className="btn sm" style={{ background: 'var(--rose)', borderColor: 'var(--rose)', color: '#fff' }} disabled={busy} onClick={() => onConfirm(reason)}>{busy ? 'Rejecting…' : 'Reject'}</button>
             </div>
           </div>
-          <div style={{ marginTop: 12, border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr><th style={th}>Area / unit</th>{QS.map((q) => <th key={q} style={{ ...th, textAlign: 'center' }}>{q}</th>)}<th style={{ ...th, textAlign: 'right' }}>Compliance</th></tr></thead>
-              <tbody>{areas.map((a) => { let aok = 0, ab = 0; a.indicators.forEach((ind) => QS.forEach((q) => { const s = qstatus(ind, q); if (s === 'ok') aok++; else if (s === 'breach') ab++; })); const rate = aok + ab ? Math.round(aok * 100 / (aok + ab)) : 100; return (
-                <tr key={a.key}><td style={{ ...td, fontWeight: 600 }}>{a.name} <span style={{ color: '#8a93a3', fontWeight: 400 }}>· {a.indicators.length} ind.</span></td>
-                  {QS.map((q) => { let b = 0, rep = 0; a.indicators.forEach((ind) => { const s = qstatus(ind, q); if (s === 'breach') b++; if (s !== 'na') rep++; }); const s = rep === 0 ? 'na' : b > 0 ? 'breach' : 'ok'; return <td key={q} style={{ ...td, textAlign: 'center' }}>{cell(s, rep === 0 ? '–' : b > 0 ? b : '✓')}</td>; })}
-                  <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{rate}%</td></tr>
-              ); })}</tbody>
-            </table>
-          </div>
-          <Foot />
-        </section>
-        {/* one page per area */}
-        {areas.map((a) => {
-          const chartData = a.indicators.map((ind) => { let v = null; for (let i = QS.length - 1; i >= 0; i--) { const x = qval(ind, QS[i]); if (x != null && x !== '') { v = x; break; } } return { label: (ind.name || '').slice(0, 18), value: Number(v) || 0 }; });
-          return (
-            <section className="pdf-page" key={a.key} style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", color: '#16202e' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', borderBottom: '2px solid #0090ca', paddingBottom: 6, marginBottom: 12 }}>
-                <div><div style={{ fontSize: 16, fontWeight: 800, color: '#0072a3' }}>{a.name}</div><div style={{ fontSize: 11, color: '#5b6672' }}>Quality indicators · {a.indicators.length}</div></div>
-                <div style={{ textAlign: 'right', fontSize: 10, color: '#8a93a3' }}>{hospital} · {date}</div>
-              </div>
-              <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
-                <thead><tr><th style={th}>Indicator</th><th style={th}>Benchmark</th>{QS.map((q) => <th key={q} style={{ ...th, textAlign: 'center' }}>{q}</th>)}<th style={th}>Unit</th></tr></thead>
-                <tbody>{a.indicators.map((ind) => (
-                  <tr key={ind.id}><td style={{ ...td, fontWeight: 600 }}>{ind.name}</td><td style={td}>{ind.benchmark || (ind.benchmarkValue != null && ind.benchmarkValue !== '' ? (ind.goalDirection === 'higher_is_better' ? '≥ ' : '≤ ') + ind.benchmarkValue : '—')}</td>
-                    {QS.map((q) => <td key={q} style={{ ...td, textAlign: 'center' }}>{cell(qstatus(ind, q), fmtv(ind, q))}</td>)}
-                    <td style={td}>{ind.unit || ''}</td></tr>
-                ))}</tbody>
-              </table>
-              {chartData.some((d) => d.value) && typeof BarChart === 'function' && (
-                <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Latest reported value by indicator</div>
-                  <BarChart data={chartData} x="label" y="value" height={195} color="#0090ca" flat />
-                </div>
-              )}
-              <Foot />
-            </section>
-          );
-        })}
-      </div>
-    );
-  }
-
-  /* ============================ Hand Hygiene Compliance report (A4) ============================
-     A dedicated WHO-style report for Hand Hygiene Compliance: monthly compliance trend vs the
-     ≥90% benchmark, staff-group breakdown (Nurse/Doctor/PCA/Other) and department breakdown for
-     the latest reported month, plus a monthly table & WHO interpretation. Reads the same
-     window.qualityData() the forms write (mNum/mDen, mGroups/mGroupsDen, mDeptBreakdown). */
-  function HHReportDoc() {
-    const areas = (typeof window.qualityData === 'function' ? window.qualityData() : []);
-    const HH = [];
-    areas.forEach((a) => (a.indicators || []).forEach((ind) => { if (/hand\s*hygiene/i.test(ind.name || '')) HH.push({ area: a, ind }); }));
-    const QM = window.QUALITY_QUARTER_MONTHS || { Q1: ['Jun-25', 'Jul-25', 'Aug-25'], Q2: ['Sep-25', 'Oct-25', 'Nov-25'], Q3: ['Dec-25', 'Jan-26', 'Feb-26'], Q4: ['Mar-26', 'Apr-26', 'May-26'] };
-    const months = ['Q1', 'Q2', 'Q3', 'Q4'].reduce((x, q) => x.concat(QM[q] || []), []);
-    const mComp = (ind, m) => { const n = ind.mNum && ind.mNum[m], d = ind.mDen && ind.mDen[m]; if (n != null && n !== '' && d != null && d !== '' && Number(d) > 0) return Math.round((Number(n) / Number(d)) * 10000) / 100; const v = ind.months && ind.months[m]; return (v != null && v !== '') ? Number(v) : null; };
-    let primary = null;
-    HH.forEach((h) => { if (!primary && /overall|hospital/i.test((h.area.name || '') + ' ' + (h.ind.name || ''))) primary = h.ind; });
-    if (!primary && HH.length) primary = HH[0].ind;
-    const hospital = 'UNICO Hospitals';
-    let date = ''; try { date = new Date().toISOString().slice(0, 10); } catch (e) { }
-    const bench = (primary && primary.benchmarkValue != null && primary.benchmarkValue !== '') ? Number(primary.benchmarkValue) : 90;
-    const whoStatus = (pct) => pct == null ? { label: '—', color: '#8a93a3' } : pct >= 90 ? { label: 'Compliant', color: '#1f9d57' } : pct >= 75 ? { label: 'Needs improvement', color: '#e08a1e' } : { label: 'Unacceptable', color: '#d23a52' };
-    const shortM = (m) => (monthLabel(m) || m).replace(' 20', ' ');
-    const series = primary ? months.map((m) => ({ m, label: shortM(m), value: mComp(primary, m) })).filter((r) => r.value != null) : [];
-    const latest = series.length ? series[series.length - 1] : null;
-    const avg = series.length ? Math.round(series.reduce((s, r) => s + r.value, 0) / series.length * 10) / 10 : null;
-    const latestM = latest ? latest.m : months[months.length - 1];
-    const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
-    const gN = primary && primary.mGroups && primary.mGroups[latestM];
-    const gD = primary && primary.mGroupsDen && primary.mGroupsDen[latestM];
-    const groupChart = (gN && gD) ? GROUP_KEYS.map(([k, lbl]) => { const n = Number(gN[k]) || 0, d = Number(gD[k]) || 0; return { label: lbl, value: d > 0 ? Math.round(n / d * 10000) / 100 : 0, n, d }; }).filter((x) => x.d > 0) : [];
-    const dep = primary && primary.mDeptBreakdown && primary.mDeptBreakdown[latestM];
-    const deptChart = Array.isArray(dep) ? dep.map((row) => { let n = 0, d = 0; Object.keys(row.g || {}).forEach((k) => { n += Number(row.g[k].n) || 0; d += Number(row.g[k].d) || 0; }); return { label: (row.dept || '—').slice(0, 16), value: d > 0 ? Math.round(n / d * 10000) / 100 : 0, n, d }; }).filter((x) => x.d > 0) : [];
-    const th = { textAlign: 'left', fontSize: 10, textTransform: 'uppercase', letterSpacing: .4, color: '#5b6672', padding: '6px 8px', borderBottom: '2px solid #d7dee7' };
-    const td = { fontSize: 11, padding: '5px 8px', borderBottom: '1px solid #eef1f5', color: '#1f2a37' };
-    const KPI = ({ label, value, color, foot }) => (<div style={{ border: '1px solid #e2e8f0', borderLeft: '4px solid ' + (color || '#0090ca'), borderRadius: 8, padding: '10px 13px' }}><div style={{ fontSize: 10.5, fontWeight: 700, color: '#5b6672', textTransform: 'uppercase', letterSpacing: .3 }}>{label}</div><div style={{ fontSize: 24, fontWeight: 800, color: color || '#0f2c4d', lineHeight: 1.1 }}>{value}</div>{foot ? <div style={{ fontSize: 10, color: '#8a93a3' }}>{foot}</div> : null}</div>);
-    const Foot = () => <div className="pdf-foot" style={{ marginTop: 12, color: '#9aa6b4', fontSize: 9, borderTop: '1px solid #e4e9f0', paddingTop: 6 }}>{hospital} · Hand Hygiene Compliance · Confidential · Generated {date} · WHO benchmark ≥ {bench}%</div>;
-    if (!primary) return <div className="pdf-doc"><section className="pdf-page" style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", padding: 20 }}><h2 style={{ color: '#0072a3' }}>Hand Hygiene Compliance Report</h2><p>No Hand Hygiene Compliance indicator found in the quality data. Record it first in Quality Data.</p></section></div>;
-    const lst = latest ? latest.value : null; const st = whoStatus(lst);
-    return (
-      <div className="pdf-doc">
-        <section className="pdf-page" style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", color: '#16202e' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', borderBottom: '2px solid #0090ca', paddingBottom: 8, marginBottom: 14 }}>
-            <div><div style={{ fontSize: 20, fontWeight: 800, color: '#0072a3' }}>{hospital}</div><div style={{ fontSize: 13, fontWeight: 600 }}>Hand Hygiene Compliance Report</div></div>
-            <div style={{ textAlign: 'right', fontSize: 10.5, color: '#8a93a3' }}>Generated {date}<br />WHO 5 Moments · benchmark ≥ {bench}%</div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
-            <KPI label={'Latest (' + (latest ? latest.label : '—') + ')'} value={lst != null ? lst + '%' : '—'} color={st.color} foot={st.label} />
-            <KPI label="Average" value={avg != null ? avg + '%' : '—'} color="#0090ca" foot={series.length + ' months reported'} />
-            <KPI label="Benchmark" value={'≥ ' + bench + '%'} color="#6a52d4" foot="WHO compliant target" />
-            <KPI label="Months on target" value={series.filter((r) => r.value >= bench).length + '/' + series.length} color="#1f9d57" />
-          </div>
-          <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, marginBottom: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Monthly compliance trend (%)</div>
-            {series.length && typeof LineChart === 'function' ? <LineChart data={series} x="label" y="value" height={200} color="#1f9d57" flat /> : (typeof BarChart === 'function' ? <BarChart data={series} x="label" y="value" height={200} color="#1f9d57" flat /> : null)}
-            <div style={{ fontSize: 10, color: '#8a93a3', marginTop: 4 }}>Monthly compliance %. WHO compliant target ≥ {bench}%.</div>
-          </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={th}>Month</th><th style={{ ...th, textAlign: 'right' }}>Compliant</th><th style={{ ...th, textAlign: 'right' }}>Opportunities</th><th style={{ ...th, textAlign: 'right' }}>Compliance</th><th style={th}>Status</th></tr></thead>
-            <tbody>{series.map((r) => { const n = primary.mNum && primary.mNum[r.m], d = primary.mDen && primary.mDen[r.m]; const s = whoStatus(r.value); return (
-              <tr key={r.m}><td style={{ ...td, fontWeight: 600 }}>{monthLabel(r.m)}</td><td style={{ ...td, textAlign: 'right' }}>{n != null ? n : '—'}</td><td style={{ ...td, textAlign: 'right' }}>{d != null ? d : '—'}</td><td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{r.value}%</td><td style={td}><span style={{ fontSize: 10, fontWeight: 700, color: s.color }}>{s.label}</span></td></tr>
-            ); })}
-            {series.length === 0 && <tr><td colSpan={5} style={{ ...td, textAlign: 'center', color: '#8a93a3' }}>No hand hygiene data recorded yet.</td></tr>}</tbody>
-          </table>
-          <Foot />
-        </section>
-        {(groupChart.length || deptChart.length) ? (
-          <section className="pdf-page" style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", color: '#16202e' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', borderBottom: '2px solid #0090ca', paddingBottom: 6, marginBottom: 12 }}>
-              <div><div style={{ fontSize: 16, fontWeight: 800, color: '#0072a3' }}>Breakdown — {latest ? latest.label : monthLabel(latestM)}</div><div style={{ fontSize: 11, color: '#5b6672' }}>Hand hygiene compliance by staff group &amp; department</div></div>
-              <div style={{ textAlign: 'right', fontSize: 10, color: '#8a93a3' }}>{hospital} · {date}</div>
-            </div>
-            {groupChart.length ? (
-              <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, marginBottom: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>By staff group (compliance %)</div>
-                {typeof BarChart === 'function' ? <BarChart data={groupChart} x="label" y="value" height={175} color="#0090ca" flat /> : null}
-                <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}><thead><tr><th style={th}>Group</th><th style={{ ...th, textAlign: 'right' }}>Compliant</th><th style={{ ...th, textAlign: 'right' }}>Opportunities</th><th style={{ ...th, textAlign: 'right' }}>Compliance</th></tr></thead><tbody>{groupChart.map((g) => <tr key={g.label}><td style={{ ...td, fontWeight: 600 }}>{g.label}</td><td style={{ ...td, textAlign: 'right' }}>{g.n}</td><td style={{ ...td, textAlign: 'right' }}>{g.d}</td><td style={{ ...td, textAlign: 'right', fontWeight: 700, color: whoStatus(g.value).color }}>{g.value}%</td></tr>)}</tbody></table>
-              </div>
-            ) : null}
-            {deptChart.length ? (
-              <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>By department (compliance %)</div>
-                {typeof BarChart === 'function' ? <BarChart data={deptChart} x="label" y="value" height={190} color="#6a52d4" flat /> : null}
-              </div>
-            ) : null}
-            <div style={{ marginTop: 12, background: '#eef8fc', border: '1px solid #cfe6f7', borderRadius: 9, padding: '10px 13px', fontSize: 11, color: '#0072a3' }}>
-              <b>Interpretation (WHO):</b> ≥ {bench}% compliant · 75–89% needs improvement (re-audit within 2 weeks) · &lt; 75% unacceptable (escalate). Reference: WHO (2009), Guidelines on Hand Hygiene in Health Care.
-            </div>
-            <Foot />
-          </section>
-        ) : null}
+        </div>
       </div>
     );
   }
 
   function DataReview() {
     const [rows, setRows] = useState(null);
-    const [report, setReport] = useState(null); // null | 'quality' | 'hh'
-    useEffect(() => { const cleanup = () => { try { document.body.classList.remove('pdf-export-mode'); } catch (e) { } }; window.addEventListener('afterprint', cleanup); return () => window.removeEventListener('afterprint', cleanup); }, []);
-    const printReport = (kind) => {
-      const go = () => { try { document.body.classList.add('pdf-export-mode'); window.print(); } catch (e) { } };
-      if (report === kind) go(); else { setReport(kind); setTimeout(go, 240); }
-    };
     const [stats, setStats] = useState(null);
     const [filter, setFilter] = useState('pending');
     const [busy, setBusy] = useState('');
@@ -1256,16 +1150,27 @@
     };
     useEffect(() => { setRows(null); load(); }, [filter]);
 
-    const act = (id, kind) => {
-      let reason = '';
-      if (kind === 'reject') { reason = (window.prompt && window.prompt('Reason for rejecting (optional):')) || ''; }
-      setBusy(id);
-      dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? { reason } : {}).then((r) => {
-        setBusy('');
-        if (r.ok) { toast(kind === 'approve' ? 'Approved — applied to live data' : 'Submission rejected', kind === 'approve' ? 'success' : 'info'); load(); }
-        else toast(r.error || 'Action failed', 'error');
-      }).catch(() => { setBusy(''); toast('Action failed', 'error'); });
+    const [sel, setSel] = useState({});                 // bulk selection: id -> true
+    const [rejectFor, setRejectFor] = useState(null);   // {ids:[...]} -> reject-reason modal
+    // Run approve/reject over one OR many submissions (bulk), then reload.
+    const runAction = async (ids, kind, reason) => {
+      if (!ids || !ids.length) return;
+      setBusy('bulk');
+      let ok = 0;
+      for (const id of ids) {
+        try { const r = await dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? { reason: reason || '' } : {}); if (r && r.ok) ok++; } catch (e) { }
+      }
+      setBusy(''); setSel({}); setRejectFor(null);
+      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
+      load();
     };
+    const act = (id, kind) => { if (kind === 'reject') { setRejectFor({ ids: [id] }); } else { runAction([id], 'approve'); } };
+    // Track multiple submissions for the SAME target + month (possible duplicates).
+    const dupKey = (s) => s.type + '|' + (s.type === 'quality' ? ((s.area || '') + '|' + (s.indicatorId || s.indicatorName || '')) : (s.department || '')) + '|' + s.month;
+    const dupCount = {}; (rows || []).forEach((s) => { const k = dupKey(s); dupCount[k] = (dupCount[k] || 0) + 1; });
+    const pendingRows = (rows || []).filter((s) => s.status === 'pending');
+    const selIds = pendingRows.filter((s) => sel[s.id]).map((s) => s.id);
+    const allSelected = pendingRows.length > 0 && selIds.length === pendingRows.length;
 
     const statusChip = (st) => {
       const map = { pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)'] };
@@ -1278,8 +1183,6 @@
       <div className="grid" style={{ gap: 14 }}>
         <SectionTitle icon={I.doc} title="Review & History" sub="Every submission with time, data and status. Submissions stay pending until an admin approves — approval applies them to the live dashboard."
           right={<>
-            <button className="btn sm pri" onClick={() => printReport('hh')} title="Hand Hygiene Compliance report (WHO) — trend, staff-group & department breakdown" style={{ background: '#3ab5a7', borderColor: '#3ab5a7' }}><Ic d={I.download} s={14} />Hand Hygiene Report</button>
-            <button className="btn sm pri" onClick={() => printReport('quality')} title="Generate a print-ready A4 quality report with graphs"><Ic d={I.download} s={14} />Quality Report (PDF)</button>
             <button className="btn sm" onClick={load}><Ic d={I.trend} s={14} />Refresh</button>
           </>} />
 
@@ -1298,16 +1201,27 @@
           {tabs.map(([id, l]) => <button key={id} className={filter === id ? 'on' : ''} onClick={() => setFilter(id)}>{l}{id === 'pending' && stats && stats.pending ? ' (' + stats.pending + ')' : ''}</button>)}
         </div>
 
+        {selIds.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9 }}>
+            <b style={{ fontSize: 12.5 }}>{selIds.length} selected</b>
+            <button className="btn sm pri" disabled={busy === 'bulk'} onClick={() => runAction(selIds, 'approve')}><Ic d={I.check} s={13} />Approve selected</button>
+            <button className="btn sm" disabled={busy === 'bulk'} style={{ color: 'var(--rose)' }} onClick={() => setRejectFor({ ids: selIds })}>Reject selected</button>
+            <span style={{ flex: 1 }} />
+            <button className="btn sm" onClick={() => setSel({})}>Clear</button>
+          </div>
+        )}
+
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           {rows === null ? <div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div>
             : rows.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No {filter === 'all' ? '' : filter} submissions.</div>
               : <table className="tbl" style={{ width: '100%' }}>
-                <thead><tr><th>When</th><th>Type</th><th>Target</th><th>Data</th><th>Responsible</th><th>By</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={(e) => { if (e.target.checked) { const m = {}; pendingRows.forEach((s) => { m[s.id] = true; }); setSel(m); } else setSel({}); }} /></th><th>When</th><th>Type</th><th>Target</th><th>Data</th><th>Responsible</th><th>By</th><th>Status</th><th></th></tr></thead>
                 <tbody>{rows.map((s) => (
                   <tr key={s.id}>
+                    <td>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
                     <td style={{ whiteSpace: 'nowrap' }} className="num">{when(s.submittedAt)}</td>
                     <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)' }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
-                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}</td>
+                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px' }}>⚠ {dupCount[dupKey(s)]}×</span>}</td>
                     <td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 320 }}>{valuesSummary(s)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{(s.responsible && s.responsible.name) || '—'}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{s.submittedBy || '—'}</td>
@@ -1327,7 +1241,7 @@
               </table>}
         </Card>
         {detail && <SubmissionDetail s={detail} canEdit={true} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}
-        {report && typeof document !== 'undefined' && document.getElementById('pdf-root') && ReactDOM.createPortal(report === 'hh' ? <HHReportDoc /> : <QualityReportDoc />, document.getElementById('pdf-root'))}
+        {rejectFor && <RejectModal ids={rejectFor.ids} busy={busy === 'bulk'} onCancel={() => setRejectFor(null)} onConfirm={(reason) => runAction(rejectFor.ids, 'reject', reason)} />}
       </div>
     );
   }

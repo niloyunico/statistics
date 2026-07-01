@@ -423,10 +423,12 @@ function Reports({depts}){
   const pdfRoot = typeof document!=='undefined' ? document.getElementById('pdf-root') : null;
 
   // Segmented mode toggle — shared by both modes so they stay mutually reachable.
+  const hasQualityReports = typeof window.QualityReportsPanel==='function';
   const modeSeg=(
     <div className="seg">
       <button className={mode==='builder'?'on':''} onClick={()=>setMode('builder')}>Report Builder</button>
       <button className={mode==='monthly'?'on':''} onClick={()=>setMode('monthly')}>Monthly Statistics Report</button>
+      {hasQualityReports && <button className={mode==='quality'?'on':''} onClick={()=>setMode('quality')}>Quality &amp; Hand Hygiene</button>}
     </div>
   );
 
@@ -435,6 +437,16 @@ function Reports({depts}){
       <SectionTitle icon={I.doc} title="Reports" sub="Statistical & board-ready reporting"
         right={modeSeg}/>
       <MonthlyStatsReport depts={depts}/>
+    </div>
+  );
+
+  if(mode==='quality') return (
+    <div className="grid" style={{gap:16}}>
+      <SectionTitle icon={I.doc} title="Reports" sub="Quality indicators & Hand Hygiene — board-ready reporting"
+        right={modeSeg}/>
+      {hasQualityReports
+        ? React.createElement(window.QualityReportsPanel)
+        : <Card><div style={{padding:24,color:'var(--muted)',textAlign:'center'}}>Quality reports module is not loaded.</div></Card>}
     </div>
   );
 
