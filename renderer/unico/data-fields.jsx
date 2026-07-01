@@ -68,7 +68,7 @@ function DataFields({ setRoute }) {
             <select style={sel} value={areaKey} onChange={e => setAreaKey(e.target.value)}>
               {areas.map(a => <option key={a.key} value={a.key}>{a.name}</option>)}
             </select>
-            <button className="btn pri sm" title="Add custom / from library, set benchmark" onClick={() => setRoute({ view: 'qualityEdit', dept: area && area.key })}><Ic d={I.edit} s={14} />Manage indicators</button>
+            <button className="btn pri sm" title="Add custom / from library, set benchmark" onClick={() => setRoute({ view: 'quality', qview: 'admin', dept: area && area.key })}><Ic d={I.edit} s={14} />Manage indicators</button>
           </div>
           <div className="card-b">
             <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 12 }}>

@@ -52,7 +52,7 @@ const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','input','reports','settings'],
   datacol:['dcPatient','dcQuality','dcResponsibles','dcShare','dcFields','dcReview'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffProfile','staffForm'],
-  quality:['quality','qualityDept','qualityEdit','qualityEntry','qualityDataEntry','qualityScore','qualityTrend','qualityCatalog','qualityAssign','qualityManage','qualityCapa','qualityReport','qualityReportQ','qualityIncidents'],
+  quality:['quality'],
   users:  ['users'],
 };
 function unicoModuleOf(view){
@@ -74,19 +74,11 @@ function unicoSidebarGroups(moduleId){
     {sec:'Nurse Management', items:[{id:'nurseHome',label:'Dashboard',icon:I.grid},{id:'nurses',label:'Directory',icon:I.layers},{id:'nurseCompliance',label:'Compliance',icon:I.heart}]},
     {sec:'PCA Management',   items:[{id:'pcaHome',label:'Dashboard',icon:I.grid},{id:'pca',label:'Directory',icon:I.layers},{id:'pcaCompliance',label:'Compliance',icon:I.heart}]},
   ];
+  // Quality Indicators opens a dedicated full-screen console (window.QualityConsole)
+  // with its OWN sidebar, so the global submenu is only the single entry point.
   if(moduleId==='quality') return [
     {sec:'Quality Indicators', items:[
-      {id:'quality',label:'Dashboard',icon:I.grid,match:['quality','qualityDept']},
-      {id:'qualityScore',label:'Scorecard',icon:I.layers},
-      {id:'qualityTrend',label:'Trends',icon:I.trend},
-      {id:'qualityReport',label:'Monthly Report',icon:I.doc},
-      {id:'qualityReportQ',label:'Quarterly Report',icon:I.layers},
-      {id:'qualityIncidents',label:'Incident Reports',icon:I.activity},
-      {id:'qualityDataEntry',label:'Quality Data Entry',icon:I.activity},
-      {id:'qualityManage',label:'Manage Indicators',icon:I.edit},
-      {id:'qualityCatalog',label:'Catalog',icon:I.doc},
-      {id:'qualityAssign',label:'Assign by Department',icon:I.grid},
-      {id:'qualityCapa',label:'Action Plans',icon:I.check},
+      {id:'quality',label:'Open Quality Console',icon:I.grid,match:['quality']},
     ]},
   ];
   if(moduleId==='users') return [
@@ -348,7 +340,7 @@ function Delta({v}){
 }
 function SectionTitle({icon,title,sub,right}){
   return (
-    <div style={{display:'flex',alignItems:'center',gap:11,margin:'4px 0 12px'}}>
+    <div className="sec-head" style={{display:'flex',alignItems:'center',gap:11,margin:'4px 0 12px'}}>
       {icon&&<div style={{width:30,height:30,borderRadius:8,background:'var(--blue-50)',color:'var(--blue)',display:'grid',placeItems:'center'}}><Ic d={icon} s={17}/></div>}
       <div>
         <div style={{fontSize:15,fontWeight:700,color:'var(--ink)'}}>{title}</div>

@@ -93,7 +93,7 @@ function GlobalSearch({setRoute, depts}){
       key:'quality', title:'Quality departments', total:qual.filter(d=>matches(q,d.name,d.key,d.overallStatus)).length,
       items:qList.map(d=>({id:'q-'+d.key, kind:'quality', label:d.name,
         sub:(d.overallStatus?d.overallStatus+' · ':'')+(d.indicators.length+' indicators'),
-        icon:I.heart, route:{view:'qualityDept',dept:d.key}}))
+        icon:I.heart, route:{view:'quality',qview:'reports',dept:d.key}}))
     });
     return out;
   },[q,depts,allStaff]);

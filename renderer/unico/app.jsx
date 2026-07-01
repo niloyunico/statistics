@@ -57,48 +57,6 @@ function App(){
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];
     body=<Settings depts={depts} store={store}/>;
-  } else if(route.view==='quality'){
-    crumbs=['UNICO','Quality Indicators'];
-    body=<QualityModule setRoute={setRoute}/>;
-  } else if(route.view==='qualityDept'){
-    crumbs=['UNICO','Quality',route.dept];
-    body=<QualityDept deptKey={route.dept} setRoute={setRoute}/>;
-  } else if(route.view==='qualityEdit'){
-    crumbs=['UNICO','Quality',route.dept,'Edit'];
-    body=<QualityDeptEdit deptKey={route.dept} setRoute={setRoute}/>;
-  } else if(route.view==='qualityEntry'){
-    crumbs=['UNICO','Quality','Monthly Entry'];
-    body=<QualityEntry setRoute={setRoute}/>;
-  } else if(route.view==='qualityDataEntry'){
-    crumbs=['UNICO','Quality','Quality Data Entry'];
-    body=<DataQualityForm prefill={{area:route.area,responsible:route.responsible}}/>;
-  } else if(route.view==='qualityScore'){
-    crumbs=['UNICO','Quality','Scorecard'];
-    body=<QualityScorecard setRoute={setRoute}/>;
-  } else if(route.view==='qualityTrend'){
-    crumbs=['UNICO','Quality','Trends'];
-    body=<QualityTrends setRoute={setRoute}/>;
-  } else if(route.view==='qualityCatalog'){
-    crumbs=['UNICO','Quality','Catalog'];
-    body=<QualityCatalog setRoute={setRoute}/>;
-  } else if(route.view==='qualityAssign'){
-    crumbs=['UNICO','Quality','Assign by Department'];
-    body=<QualityAssign setRoute={setRoute}/>;
-  } else if(route.view==='qualityManage'){
-    crumbs=['UNICO','Quality','Manage Indicators'];
-    body=<QualityManageIndicators setRoute={setRoute}/>;
-  } else if(route.view==='qualityCapa'){
-    crumbs=['UNICO','Quality','Action Plans'];
-    body=<QualityCAPA setRoute={setRoute}/>;
-  } else if(route.view==='qualityIncidents'){
-    crumbs=['UNICO','Quality','Incident Reports'];
-    body=<QualityIncidentReport setRoute={setRoute}/>;
-  } else if(route.view==='qualityReport'){
-    crumbs=['UNICO','Quality','Monthly Report'];
-    body=<QualityReport setRoute={setRoute} mode="monthly"/>;
-  } else if(route.view==='qualityReportQ'){
-    crumbs=['UNICO','Quality','Quarterly Report'];
-    body=<QualityReport setRoute={setRoute} mode="quarterly"/>;
   } else if(route.view==='dcPatient'){
     crumbs=['UNICO','Data Collection','Patient Statistics'];
     body=<DataPatientForm depts={depts} prefill={{dept:route.dept,responsible:route.responsible,month:route.month}}/>;
@@ -153,6 +111,13 @@ function App(){
   // history) — every other module (dashboard, statistics, staff, quality…) is hidden.
   if(typeof window!=='undefined' && window.__UNICO_USER__ && window.__UNICO_USER__.role==='collector' && typeof CollectorPortal!=='undefined'){
     return <CollectorPortal/>;
+  }
+  // Quality Indicators is now a dedicated full-screen console with its OWN dark
+  // sidebar (window.QualityConsole). Every legacy quality* route resolves here; the
+  // console handles Manage/Assign/Catalog + Dashboard/Scorecard/… sub-nav internally.
+  if(route.view && route.view.indexOf('quality')===0 && typeof QualityConsole!=='undefined'){
+    const QV_MAP={quality:'dashboard',qualityScore:'scorecard',qualityTrend:'trends',qualityReport:'reports',qualityReportQ:'reports',qualityIncidents:'incidents',qualityDataEntry:'dataentry',qualityManage:'admin',qualityCatalog:'admin',qualityAssign:'admin',qualityCapa:'actionplans',qualityDept:'dashboard',qualityEdit:'admin',qualityEntry:'dataentry',qualityHub:'dashboard'};
+    return <QualityConsole initialView={route.qview||QV_MAP[route.view]||'dashboard'} initialDept={route.dept} onExit={()=>setRoute({view:'dashboard'})}/>;
   }
 
   return (

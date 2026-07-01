@@ -168,13 +168,18 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
   const qualityKpis=(function(){
     if(!window.qualityData) return null;
     const QQ=['Q1','Q2','Q3','Q4'];
+    // Quarter status, inline (self-contained — the Quality module now lives in the console).
+    const qs=(ind,q)=>{ const v=ind.quarters?ind.quarters[q]:null; if(v==null||v==='')return 'na'; const b=ind.benchmarkValue; if(b==null||b==='')return 'ok'; return ind.goalDirection==='higher_is_better'?(v>=b?'ok':'breach'):(v<=b?'ok':'breach'); };
     const qd=window.qualityData().filter(d=>d.indicators&&d.indicators.length);
     let okC=0,brC=0;
-    qd.forEach(d=>d.indicators.forEach(ind=>QQ.forEach(q=>{ const s=(typeof indStatus!=='undefined')?indStatus(ind,q):'na'; if(s==='ok')okC++; else if(s==='breach')brC++; })));
+    qd.forEach(d=>d.indicators.forEach(ind=>QQ.forEach(q=>{ const s=qs(ind,q); if(s==='ok')okC++; else if(s==='breach')brC++; })));
     const zero=okC+brC?Math.round(okC*100/(okC+brC)):100;
-    let cOpen=0,cOver=0;
-    try{ const plans=JSON.parse(localStorage.getItem('unico_capa_v1'))||[]; cOpen=plans.filter(p=>p.status!=='Done').length; cOver=plans.filter(p=>(typeof capaIsOverdue!=='undefined')?capaIsOverdue(p):false).length; }catch(e){}
-    return {depts:qd.length, zero:zero, breach:brC, capaOpen:cOpen, capaOverdue:cOver};
+    // Action Plans (CAPA): the console stores a status map {'<deptKey>/<indId>':'Open'|'In Progress'|'Closed'}.
+    let capaMap={}; try{ capaMap=JSON.parse(localStorage.getItem('unico_capa_v1'))||{}; }catch(e){}
+    if(Array.isArray(capaMap)) capaMap={}; // ignore any stale legacy array format
+    let open=0;
+    qd.forEach(d=>d.indicators.forEach(ind=>{ if(QQ.some(q=>qs(ind,q)==='breach') && capaMap[d.key+'/'+ind.id]!=='Closed') open++; }));
+    return {depts:qd.length, zero:zero, breach:brC, capaOpen:open};
   })();
   const qCard=(label,val,foot,color,route)=>(
     <div className="card anim-pop" onClick={()=>setRoute&&setRoute(route)} style={{padding:'15px 18px',borderLeft:'4px solid '+color,display:'flex',flexDirection:'column',minHeight:104,cursor:setRoute?'pointer':'default'}}>
@@ -188,9 +193,8 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
       <SectionTitle icon={I.heart} title="Quality & Safety" sub={`hospital-wide quality indicators · ${qualityKpis.depts} departments · click to open`}/>
       <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))'}}>
         {qCard('Zero-Defect Rate', qualityKpis.zero+'%', 'on-benchmark indicator-quarters', qualityKpis.zero>=90?'#1f9d57':qualityKpis.zero>=70?'#e08a1e':'#d23a52', {view:'quality'})}
-        {qCard('Open Breaches', fmt(qualityKpis.breach), 'indicator-quarters off benchmark', qualityKpis.breach>0?'#d23a52':'#1f9d57', {view:'quality'})}
-        {qCard('Open CAPAs', fmt(qualityKpis.capaOpen), 'action plans not done', qualityKpis.capaOpen>0?'#0090ca':'#1f9d57', {view:'qualityCapa'})}
-        {qCard('Overdue CAPAs', fmt(qualityKpis.capaOverdue), 'past due, not done', qualityKpis.capaOverdue>0?'#d23a52':'#1f9d57', {view:'qualityCapa'})}
+        {qCard('Open Breaches', fmt(qualityKpis.breach), 'indicator-quarters off benchmark', qualityKpis.breach>0?'#d23a52':'#1f9d57', {view:'quality',qview:'incidents'})}
+        {qCard('Open Action Plans', fmt(qualityKpis.capaOpen), 'breaches not yet closed', qualityKpis.capaOpen>0?'#0090ca':'#1f9d57', {view:'quality',qview:'actionplans'})}
       </div>
     </div>
   ) : null;
