@@ -26490,7 +26490,7 @@ window.LockScreen = LockScreen;
     const result = computeAsRate ? denNum > 0 ? Math.round(numerator / denNum * mult * 100) / 100 : 0 : numerator;
     const ratePending = computeAsRate && numerator > 0 && !(denNum > 0);
     const qExists = !!(curInd && (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
-    const qLocked = lockResp && !isNew && qExists;
+    const qCorrection = lockResp && !isNew && qExists;
     const submit = () => {
       if (!area) {
         toast('Select an area', 'error');
@@ -26506,10 +26506,6 @@ window.LockScreen = LockScreen;
       }
       if (!month) {
         toast('Pick a month', 'error');
-        return;
-      }
-      if (qLocked) {
-        toast('This month already has data — only an administrator can change it.', 'error');
         return;
       }
       if (isRate && !(denNum > 0)) {
@@ -27590,7 +27586,28 @@ window.LockScreen = LockScreen;
       value: remark,
       onChange: e => setRemark(e.target.value),
       placeholder: "Any note for this month"
-    })), qLocked && React.createElement(Banner, null, curInd && curInd.name || 'This indicator', " already has data for ", monthLabel(month), " \u2014 submission is locked for data collectors. Ask an administrator to change it."), React.createElement("div", {
+    })), qCorrection && React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 9,
+        padding: '11px 14px',
+        borderRadius: 9,
+        fontSize: 12.5,
+        fontWeight: 600,
+        marginBottom: 14,
+        color: '#9a6b00',
+        background: 'var(--warn-bg,#fff4e0)',
+        border: '1px solid #f0d9a8'
+      }
+    }, React.createElement(Ic, {
+      d: I.doc,
+      s: 16
+    }), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }, curInd && curInd.name || 'This indicator', " already has data for ", monthLabel(month), ". Submitting sends a ", React.createElement("b", null, "correction"), " to an administrator for review \u2014 the recorded value won\u2019t change until it is approved.")), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -27598,12 +27615,12 @@ window.LockScreen = LockScreen;
       }
     }, React.createElement("button", {
       className: "btn pri",
-      disabled: busy || qLocked,
+      disabled: busy,
       onClick: submit
     }, React.createElement(Ic, {
       d: I.check,
       s: 15
-    }), busy ? 'Saving…' : qLocked ? 'Locked — already recorded' : 'Save monthly value'), React.createElement("button", {
+    }), busy ? 'Saving…' : qCorrection ? 'Submit correction for review' : 'Save monthly value'), React.createElement("button", {
       className: "btn",
       disabled: busy,
       onClick: () => {

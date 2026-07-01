@@ -913,9 +913,14 @@
                 <ResponsiblePicker value={responsible} onChange={setResponsible} suggestions={assigned} />
               </Field>}
           <Field label="Remark (optional)"><input style={inputStyle} value={remark} onChange={(e) => setRemark(e.target.value)} placeholder="Any note for this month" /></Field>
-          {qLocked && <Banner>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)} — submission is locked for data collectors. Ask an administrator to change it.</Banner>}
+          {qCorrection && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 600, marginBottom: 14, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', border: '1px solid #f0d9a8' }}>
+              <Ic d={I.doc} s={16} />
+              <span style={{ flex: 1 }}>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)}. Submitting sends a <b>correction</b> to an administrator for review — the recorded value won’t change until it is approved.</span>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="btn pri" disabled={busy || qLocked} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qLocked ? 'Locked — already recorded' : 'Save monthly value')}</button>
+            <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>
             <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
           </div>
         </Card>
