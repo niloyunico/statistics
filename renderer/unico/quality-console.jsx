@@ -985,6 +985,37 @@ const QC_PAGE_SIZES={A4:[700,1.414],A3:[815,1.414],Letter:[700,1.294]};
 const QC_CHART_STYLE_LABEL={bar3d:'3D Bars',bar:'Bar',line:'Line',area:'Area + Benchmark',combo:'Bar + Line',grouped:'Grouped',stacked:'Stacked',pct:'100% Stacked',horizontal:'Horizontal',donut:'Composition'};
 const QC_REPORT_STYLES=[['bar3d','3D'],['bar','Bar'],['line','Line'],['area','Area'],['combo','Bar+Line'],['grouped','Grouped'],['stacked','Stacked'],['pct','100%'],['horizontal','Horizontal'],['donut','Donut']];
 
+/* Report templates — each is a full `sections` preset plus the report type it forces.
+   Booleans are stored 1/0 here purely for brevity; applyTemplate coerces to real
+   booleans (!!) before writing them into `sections` state (never 1/0 in state). */
+const QC_TEMPLATES = {
+  board:   { label:'Board Report',        type:'summary',
+    sec:{execSummary:1,kpis:1,chart:1,breachDonut:1,table:1,incidents:0,indicatorDetail:0,
+         ragHeatmap:1,deptRanking:1,benchmarkCompare:0,indTrend:0,
+         incidentAppendix:0,standardsRefs:0,
+         cover:1,toc:1,periodCompare:1,watermark:1,signatures:1} },
+  nabh:    { label:'NABH/JCI Accreditation', type:'detail',
+    sec:{execSummary:1,kpis:1,chart:1,breachDonut:0,table:1,incidents:1,indicatorDetail:1,
+         ragHeatmap:1,deptRanking:0,benchmarkCompare:1,indTrend:1,
+         incidentAppendix:1,standardsRefs:1,
+         cover:1,toc:1,periodCompare:0,watermark:1,signatures:1} },
+  exec:    { label:'Executive Summary',   type:'summary',
+    sec:{execSummary:1,kpis:1,chart:0,breachDonut:0,table:0,incidents:0,indicatorDetail:0,
+         ragHeatmap:1,deptRanking:1,benchmarkCompare:0,indTrend:0,
+         incidentAppendix:0,standardsRefs:0,
+         cover:1,toc:0,periodCompare:1,watermark:1,signatures:1} },
+  incident:{ label:'Incident-CAPA',       type:'summary',
+    sec:{execSummary:1,kpis:0,chart:0,breachDonut:1,table:0,incidents:1,indicatorDetail:0,
+         ragHeatmap:0,deptRanking:0,benchmarkCompare:0,indTrend:0,
+         incidentAppendix:1,standardsRefs:1,
+         cover:1,toc:1,periodCompare:0,watermark:1,signatures:1} },
+  full:    { label:'Full Detailed',       type:'detail',
+    sec:{execSummary:1,kpis:1,chart:1,breachDonut:1,table:1,incidents:1,indicatorDetail:1,
+         ragHeatmap:1,deptRanking:1,benchmarkCompare:1,indTrend:1,
+         incidentAppendix:1,standardsRefs:1,
+         cover:1,toc:1,periodCompare:1,watermark:1,signatures:1} },
+};
+
 /* palette cycle (window.PALETTE from charts.jsx; local fallback so a missing global never throws) */
 const QC_PAL = (typeof window!=='undefined' && window.PALETTE) || ['#0b66d0','#0f9b8e','#e08a1e','#6a52d4','#d23a52','#2bb3a3','#8a93a3','#4f8df7','#1f9d57','#c2486f'];
 function qcTone(d){ const k=(d&&d.key)||''; return QC_PAL[(k.charCodeAt(0)||0)%QC_PAL.length]; }
@@ -1181,6 +1212,27 @@ function QCReportBuilder({depts}){
   const [exporting,setExporting]   = useState(false);
   const [note,setNote]             = useState(null);
 
+  /* ---- section toggles + templates (advanced-extensions foundation) ---- */
+  const [sections,setSections]=useState({
+    // existing page bodies, now gated
+    execSummary:true, kpis:true, chart:true, breachDonut:true, table:true, incidents:true, indicatorDetail:true,
+    // advanced charts
+    ragHeatmap:false, deptRanking:false, benchmarkCompare:false, indTrend:false,
+    // appendix + refs
+    incidentAppendix:false, standardsRefs:false,
+    // structure/polish
+    cover:false, toc:false, periodCompare:false, watermark:false, signatures:false,
+  });
+  const [activeTemplate,setActiveTemplate]=useState('custom');
+  const [compareBaseline,setCompareBaseline]=useState('prev'); // 'prev' | 'yoy'
+  const [sig,setSig]=useState({prepared:'',reviewed:'',approved:''}); // signature names
+  // Flip one toggle; a manual change means the config is no longer a named preset.
+  const setSec=(k,v)=>{ setSections(s=>({...s,[k]:v})); setActiveTemplate('custom'); };
+  // Apply a full preset (coercing the 1/0 shorthand to real booleans) + its report type.
+  const applyTemplate=(id)=>{ const t=QC_TEMPLATES[id]; if(!t) return;
+    setSections(s=>{ const o={...s}; Object.keys(t.sec).forEach(k=>o[k]=!!t.sec[k]); return o; });
+    setReportType(t.type); setPageIdx(0); setActiveTemplate(id); };
+
   const toggleStyle=s=>setChartStyles(a=>a.includes(s)?(a.length>1?a.filter(x=>x!==s):a):[...a,s]);
   const toggleDept =k=>setSelectedDepts(s=>s.includes(k)?s.filter(x=>x!==k):[...s,k]);
   const chosen=depts.filter(d=>selectedDepts.includes(d.key));
@@ -1207,19 +1259,26 @@ function QCReportBuilder({depts}){
   const pageW=portrait?base:Math.round(base*ratio);
   const pageMinH=portrait?Math.round(base*ratio):base;
 
-  /* flat page-list — Detailed: one page per (dept × indicator); Summary: per dept; Compare: single */
+  /* flat page-list — Detailed: one page per (dept × indicator); Summary: per dept; Compare: single.
+     The report-type branch produces `base`; then toggle-driven structural pages (cover/TOC
+     at the front, appendix/refs at the end) wrap it, so they flow into preview + PDF alike. */
   const pages = React.useMemo(()=>{
-    if(reportType==='compare') return chosen.length ? [{kind:'compare'}] : [];
-    if(reportType==='detail')
-      return chosen.flatMap(d=>{
+    let base;
+    if(reportType==='compare') base = chosen.length ? [{kind:'compare'}] : [];
+    else if(reportType==='detail')
+      base = chosen.flatMap(d=>{
         const inds=(d.indicators||[]).filter(hasData);
         const list=inds.length?inds:(d.indicators||[]);
         return (list.length?list:[null]).map(ind=>({kind:'detail', dept:d, ind}));
       });
-    if(reportType==='heatmap') return chosen.length ? [{kind:'heatmap'}] : [];
-    if(reportType==='monthly') return pMonths.map(m=>({kind:'monthly', month:m}));
-    return chosen.map(d=>({kind:'summary', dept:d}));
-  },[chosen,reportType,selectedDepts,pMonths]);
+    else if(reportType==='heatmap') base = chosen.length ? [{kind:'heatmap'}] : [];
+    else if(reportType==='monthly') base = pMonths.map(m=>({kind:'monthly', month:m}));
+    else base = chosen.map(d=>({kind:'summary', dept:d}));
+    if(!base.length) return base; // nothing selected — no structural pages either
+    const pre=[]; if(sections.cover) pre.push({kind:'cover'}); if(sections.toc) pre.push({kind:'toc'});
+    const extra=[]; if(sections.incidentAppendix) extra.push({kind:'appendix'}); if(sections.standardsRefs) extra.push({kind:'refs'});
+    return [...pre, ...base, ...extra];
+  },[chosen,reportType,selectedDepts,pMonths,sections]);
   const pageCount=Math.max(1,pages.length);
   const pi=Math.min(pageIdx,pageCount-1);
   const cur=pages[pi];

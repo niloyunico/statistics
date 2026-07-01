@@ -16601,6 +16601,128 @@ const QC_CHART_STYLE_LABEL = {
   donut: 'Composition'
 };
 const QC_REPORT_STYLES = [['bar3d', '3D'], ['bar', 'Bar'], ['line', 'Line'], ['area', 'Area'], ['combo', 'Bar+Line'], ['grouped', 'Grouped'], ['stacked', 'Stacked'], ['pct', '100%'], ['horizontal', 'Horizontal'], ['donut', 'Donut']];
+const QC_TEMPLATES = {
+  board: {
+    label: 'Board Report',
+    type: 'summary',
+    sec: {
+      execSummary: 1,
+      kpis: 1,
+      chart: 1,
+      breachDonut: 1,
+      table: 1,
+      incidents: 0,
+      indicatorDetail: 0,
+      ragHeatmap: 1,
+      deptRanking: 1,
+      benchmarkCompare: 0,
+      indTrend: 0,
+      incidentAppendix: 0,
+      standardsRefs: 0,
+      cover: 1,
+      toc: 1,
+      periodCompare: 1,
+      watermark: 1,
+      signatures: 1
+    }
+  },
+  nabh: {
+    label: 'NABH/JCI Accreditation',
+    type: 'detail',
+    sec: {
+      execSummary: 1,
+      kpis: 1,
+      chart: 1,
+      breachDonut: 0,
+      table: 1,
+      incidents: 1,
+      indicatorDetail: 1,
+      ragHeatmap: 1,
+      deptRanking: 0,
+      benchmarkCompare: 1,
+      indTrend: 1,
+      incidentAppendix: 1,
+      standardsRefs: 1,
+      cover: 1,
+      toc: 1,
+      periodCompare: 0,
+      watermark: 1,
+      signatures: 1
+    }
+  },
+  exec: {
+    label: 'Executive Summary',
+    type: 'summary',
+    sec: {
+      execSummary: 1,
+      kpis: 1,
+      chart: 0,
+      breachDonut: 0,
+      table: 0,
+      incidents: 0,
+      indicatorDetail: 0,
+      ragHeatmap: 1,
+      deptRanking: 1,
+      benchmarkCompare: 0,
+      indTrend: 0,
+      incidentAppendix: 0,
+      standardsRefs: 0,
+      cover: 1,
+      toc: 0,
+      periodCompare: 1,
+      watermark: 1,
+      signatures: 1
+    }
+  },
+  incident: {
+    label: 'Incident-CAPA',
+    type: 'summary',
+    sec: {
+      execSummary: 1,
+      kpis: 0,
+      chart: 0,
+      breachDonut: 1,
+      table: 0,
+      incidents: 1,
+      indicatorDetail: 0,
+      ragHeatmap: 0,
+      deptRanking: 0,
+      benchmarkCompare: 0,
+      indTrend: 0,
+      incidentAppendix: 1,
+      standardsRefs: 1,
+      cover: 1,
+      toc: 1,
+      periodCompare: 0,
+      watermark: 1,
+      signatures: 1
+    }
+  },
+  full: {
+    label: 'Full Detailed',
+    type: 'detail',
+    sec: {
+      execSummary: 1,
+      kpis: 1,
+      chart: 1,
+      breachDonut: 1,
+      table: 1,
+      incidents: 1,
+      indicatorDetail: 1,
+      ragHeatmap: 1,
+      deptRanking: 1,
+      benchmarkCompare: 1,
+      indTrend: 1,
+      incidentAppendix: 1,
+      standardsRefs: 1,
+      cover: 1,
+      toc: 1,
+      periodCompare: 1,
+      watermark: 1,
+      signatures: 1
+    }
+  }
+};
 const QC_PAL = typeof window !== 'undefined' && window.PALETTE || ['#0b66d0', '#0f9b8e', '#e08a1e', '#6a52d4', '#d23a52', '#2bb3a3', '#8a93a3', '#4f8df7', '#1f9d57', '#c2486f'];
 function qcTone(d) {
   const k = d && d.key || '';
@@ -17139,6 +17261,54 @@ function QCReportBuilder({
   const [pageIdx, setPageIdx] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [note, setNote] = useState(null);
+  const [sections, setSections] = useState({
+    execSummary: true,
+    kpis: true,
+    chart: true,
+    breachDonut: true,
+    table: true,
+    incidents: true,
+    indicatorDetail: true,
+    ragHeatmap: false,
+    deptRanking: false,
+    benchmarkCompare: false,
+    indTrend: false,
+    incidentAppendix: false,
+    standardsRefs: false,
+    cover: false,
+    toc: false,
+    periodCompare: false,
+    watermark: false,
+    signatures: false
+  });
+  const [activeTemplate, setActiveTemplate] = useState('custom');
+  const [compareBaseline, setCompareBaseline] = useState('prev');
+  const [sig, setSig] = useState({
+    prepared: '',
+    reviewed: '',
+    approved: ''
+  });
+  const setSec = (k, v) => {
+    setSections(s => ({
+      ...s,
+      [k]: v
+    }));
+    setActiveTemplate('custom');
+  };
+  const applyTemplate = id => {
+    const t = QC_TEMPLATES[id];
+    if (!t) return;
+    setSections(s => {
+      const o = {
+        ...s
+      };
+      Object.keys(t.sec).forEach(k => o[k] = !!t.sec[k]);
+      return o;
+    });
+    setReportType(t.type);
+    setPageIdx(0);
+    setActiveTemplate(id);
+  };
   const toggleStyle = s => setChartStyles(a => a.includes(s) ? a.length > 1 ? a.filter(x => x !== s) : a : [...a, s]);
   const toggleDept = k => setSelectedDepts(s => s.includes(k) ? s.filter(x => x !== k) : [...s, k]);
   const chosen = depts.filter(d => selectedDepts.includes(d.key));
@@ -17169,10 +17339,10 @@ function QCReportBuilder({
   const pageW = portrait ? base : Math.round(base * ratio);
   const pageMinH = portrait ? Math.round(base * ratio) : base;
   const pages = React.useMemo(() => {
-    if (reportType === 'compare') return chosen.length ? [{
+    let base;
+    if (reportType === 'compare') base = chosen.length ? [{
       kind: 'compare'
-    }] : [];
-    if (reportType === 'detail') return chosen.flatMap(d => {
+    }] : [];else if (reportType === 'detail') base = chosen.flatMap(d => {
       const inds = (d.indicators || []).filter(hasData);
       const list = inds.length ? inds : d.indicators || [];
       return (list.length ? list : [null]).map(ind => ({
@@ -17180,19 +17350,32 @@ function QCReportBuilder({
         dept: d,
         ind
       }));
-    });
-    if (reportType === 'heatmap') return chosen.length ? [{
+    });else if (reportType === 'heatmap') base = chosen.length ? [{
       kind: 'heatmap'
-    }] : [];
-    if (reportType === 'monthly') return pMonths.map(m => ({
+    }] : [];else if (reportType === 'monthly') base = pMonths.map(m => ({
       kind: 'monthly',
       month: m
-    }));
-    return chosen.map(d => ({
+    }));else base = chosen.map(d => ({
       kind: 'summary',
       dept: d
     }));
-  }, [chosen, reportType, selectedDepts, pMonths]);
+    if (!base.length) return base;
+    const pre = [];
+    if (sections.cover) pre.push({
+      kind: 'cover'
+    });
+    if (sections.toc) pre.push({
+      kind: 'toc'
+    });
+    const extra = [];
+    if (sections.incidentAppendix) extra.push({
+      kind: 'appendix'
+    });
+    if (sections.standardsRefs) extra.push({
+      kind: 'refs'
+    });
+    return [...pre, ...base, ...extra];
+  }, [chosen, reportType, selectedDepts, pMonths, sections]);
   const pageCount = Math.max(1, pages.length);
   const pi = Math.min(pageIdx, pageCount - 1);
   const cur = pages[pi];
@@ -25228,7 +25411,21 @@ window.LockScreen = LockScreen;
     }).then(r => r.json())
   };
   const MO = () => window.UNICO && window.UNICO.MONTH_ORDER || [];
-  const monthLabel = k => window.UNICO && window.UNICO.MONTHS_FULL && window.UNICO.MONTHS_FULL[k] || k;
+  const MONS_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const MONS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const monthLabel = k => {
+    if (window.UNICO && window.UNICO.MONTHS_FULL && window.UNICO.MONTHS_FULL[k]) return window.UNICO.MONTHS_FULL[k];
+    const p = String(k || '').split('-');
+    const mi = MONS_ABBR.indexOf(p[0]);
+    return mi >= 0 && p[1] ? MONS_LONG[mi] + ' 20' + p[1] : k;
+  };
+  const dcWideMonths = () => {
+    const out = [];
+    for (let yy = 24; yy <= 28; yy++) {
+      MONS_ABBR.forEach(m => out.push(m + '-' + String(yy).padStart(2, '0')));
+    }
+    return out;
+  };
   function defaultMonthFor(dept) {
     const order = MO();
     if (dept && dept.months && dept.months.length) {
@@ -26189,15 +26386,11 @@ window.LockScreen = LockScreen;
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     const lockResp = !!(me && me.role === 'collector');
     const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
-    const monthOpts = fyMonths && fyMonths.length ? fyMonths : (() => {
-      const o = MO();
-      const i = o.indexOf('Jun-25');
-      return i >= 0 ? o.slice(i, i + 12) : o.slice(0, 12);
-    })();
-    const defMonth = monthOpts[monthOpts.length - 1] || '';
+    const monthOpts = dcWideMonths();
+    const defMonth = (fyMonths && fyMonths.length ? fyMonths[fyMonths.length - 1] : 'May-26') || monthOpts[monthOpts.length - 1] || '';
     const [areaKey, setAreaKey] = useState(prefill && prefill.area || (areas.find(a => a.indicators && a.indicators.length) || areas[0] || {}).key || '');
     const area = useMemo(() => areas.find(a => a.key === areaKey) || areas[0], [areas, areaKey]);
-    const [indId, setIndId] = useState('');
+    const [indId, setIndId] = useState(prefill && prefill.indicatorId || '');
     const [newInd, setNewInd] = useState({
       name: '',
       formula: 'count',
@@ -26205,7 +26398,7 @@ window.LockScreen = LockScreen;
       denLabel: '',
       unit: ''
     });
-    const [month, setMonth] = useState(defMonth);
+    const [month, setMonth] = useState(prefill && prefill.month || defMonth);
     const [den, setDen] = useState('');
     const [numMode, setNumMode] = useState('direct');
     const [groups, setGroups] = useState({
@@ -26237,7 +26430,12 @@ window.LockScreen = LockScreen;
     useEffect(() => {
       if (!lockResp) dcApi.get('/api/responsibles').then(r => setResps(r.ok ? r.responsibles : [])).catch(() => {});
     }, []);
+    const firstAreaRef = React.useRef(true);
     useEffect(() => {
+      if (firstAreaRef.current) {
+        firstAreaRef.current = false;
+        return;
+      }
       setIndId('');
     }, [areaKey]);
     const inds = area && area.indicators || [];
@@ -26317,6 +26515,10 @@ window.LockScreen = LockScreen;
     const hhDepartments = useMemo(() => {
       const isOverall = a => /overall\s*hospital/i.test(a && (a.name || a.key) || '');
       const nameOf = a => window.DEPTMAP && window.DEPTMAP.nameFromQualityKey ? window.DEPTMAP.nameFromQualityKey(a.key) : a.name || a.key;
+      if (area && area.key && !isOverall(area)) {
+        const n = nameOf(area);
+        return n ? [n] : [];
+      }
       const seen = new Set();
       const out = [];
       (areas || []).forEach(a => {
@@ -26328,7 +26530,7 @@ window.LockScreen = LockScreen;
         }
       });
       return out;
-    }, [areas]);
+    }, [areas, area]);
     useEffect(() => {
       if (!(isHandHygiene && numMode === 'dept' && hhDepartments.length)) return;
       setDeptRows(prev => {
@@ -27066,7 +27268,15 @@ window.LockScreen = LockScreen;
         color: 'var(--muted)',
         marginBottom: 8
       }
-    }, isHandHygiene ? React.createElement(React.Fragment, null, "All ", React.createElement("b", {
+    }, isHandHygiene ? hhDepartments.length === 1 ? React.createElement(React.Fragment, null, "Enter ", React.createElement("b", {
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }, hhDepartments[0]), "\u2019s ", numLabel.toLowerCase(), isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : '', " by staff group. Pick ", React.createElement("b", {
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }, "Overall Hospital"), " above to enter every department at once.") : React.createElement(React.Fragment, null, "All ", React.createElement("b", {
       style: {
         color: 'var(--ink-2)'
       }
@@ -29022,6 +29232,257 @@ window.LockScreen = LockScreen;
       onClose: () => setDetail(null)
     }));
   }
+  function CollectorStatus({
+    onFill
+  }) {
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length), []);
+    const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [];
+    const monthOpts = dcWideMonths();
+    const [month, setMonth] = useState((fyMonths.length ? fyMonths[fyMonths.length - 1] : 'May-26') || '');
+    const [subs, setSubs] = useState(null);
+    useEffect(() => {
+      dcApi.get('/api/submissions?limit=500').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
+    }, []);
+    const hasData = (ind, m) => {
+      const f = o => o && o[m] != null && o[m] !== '';
+      return f(ind.mNum) || f(ind.mDen) || f(ind.months) || ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
+    };
+    const pendingFor = (areaKey, ind, m) => (subs || []).some(s => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
+    const statusOf = (areaKey, ind, m) => hasData(ind, m) ? 'recorded' : pendingFor(areaKey, ind, m) ? 'pending' : 'none';
+    const tone = {
+      recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'],
+      pending: ['#9a6b00', '#fff4e0', 'Pending'],
+      none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted']
+    };
+    let totalInd = 0,
+      rec = 0,
+      pend = 0;
+    areas.forEach(a => a.indicators.forEach(ind => {
+      totalInd++;
+      const s = statusOf(a.key, ind, month);
+      if (s === 'recorded') rec++;else if (s === 'pending') pend++;
+    }));
+    const notSub = totalInd - rec - pend;
+    const pct = totalInd ? Math.round((rec + pend) * 100 / totalInd) : 0;
+    const sel = {
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 8,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      background: '#fff'
+    };
+    const Kpi = ({
+      label,
+      val,
+      color
+    }) => React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 110,
+        border: '1px solid var(--line)',
+        borderLeft: '4px solid ' + color,
+        borderRadius: 10,
+        padding: '12px 14px',
+        background: '#fff'
+      }
+    }, React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 22,
+        fontWeight: 800,
+        color
+      }
+    }, val), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        fontWeight: 600
+      }
+    }, label));
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 700,
+        color: 'var(--ink)'
+      }
+    }, "Submission status"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("label", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)',
+        fontWeight: 600
+      }
+    }, "Month"), React.createElement("select", {
+      style: sel,
+      value: month,
+      onChange: e => setMonth(e.target.value)
+    }, monthOpts.map(m => React.createElement("option", {
+      key: m,
+      value: m
+    }, monthLabel(m))))), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--muted)'
+      }
+    }, "Which of your assigned indicators are submitted for ", React.createElement("b", {
+      style: {
+        color: 'var(--ink)'
+      }
+    }, monthLabel(month)), ". ", React.createElement("span", {
+      style: {
+        color: 'var(--rose)',
+        fontWeight: 600
+      }
+    }, "Red = still needs data."), " ", React.createElement("b", {
+      style: {
+        color: 'var(--blue-700)'
+      }
+    }, "Tap any indicator to fill or correct it \u2192")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement(Kpi, {
+      label: "Coverage",
+      val: pct + '%',
+      color: "#0090ca"
+    }), React.createElement(Kpi, {
+      label: "Recorded",
+      val: rec,
+      color: "var(--pos)"
+    }), React.createElement(Kpi, {
+      label: "Pending review",
+      val: pend,
+      color: "#9a6b00"
+    }), React.createElement(Kpi, {
+      label: "Not submitted",
+      val: notSub,
+      color: notSub ? 'var(--rose)' : 'var(--pos)'
+    })), subs === null ? React.createElement("div", {
+      style: {
+        padding: 20,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026") : React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))',
+        gap: 12
+      }
+    }, areas.map(a => {
+      let ar = 0,
+        ap = 0;
+      a.indicators.forEach(ind => {
+        const s = statusOf(a.key, ind, month);
+        if (s === 'recorded') ar++;else if (s === 'pending') ap++;
+      });
+      const acov = a.indicators.length ? Math.round((ar + ap) * 100 / a.indicators.length) : 0;
+      return React.createElement("div", {
+        key: a.key,
+        style: {
+          border: '1px solid var(--line)',
+          borderRadius: 11,
+          background: '#fff',
+          overflow: 'hidden'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '11px 13px',
+          borderBottom: '1px solid var(--line-2)'
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 13,
+          fontWeight: 700,
+          color: 'var(--ink)',
+          minWidth: 0,
+          flex: 1,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, a.name), React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '2px 9px',
+          borderRadius: 999,
+          background: acov === 100 ? 'var(--pos-bg)' : acov > 0 ? '#fff4e0' : 'var(--neg-bg)',
+          color: acov === 100 ? 'var(--pos)' : acov > 0 ? '#9a6b00' : 'var(--rose)'
+        }
+      }, ar + ap, "/", a.indicators.length)), React.createElement("div", {
+        style: {
+          padding: '4px 0'
+        }
+      }, a.indicators.map(ind => {
+        const st = statusOf(a.key, ind, month);
+        const t = tone[st];
+        return React.createElement("div", {
+          key: ind.id,
+          onClick: () => onFill && onFill(a.key, ind.id, month),
+          title: st === 'recorded' ? 'View / submit a correction' : 'Click to fill this now',
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '7px 13px',
+            cursor: 'pointer'
+          },
+          onMouseEnter: e => {
+            e.currentTarget.style.background = 'var(--panel-2)';
+          },
+          onMouseLeave: e => {
+            e.currentTarget.style.background = 'transparent';
+          }
+        }, React.createElement("div", {
+          style: {
+            fontSize: 12,
+            color: 'var(--ink-2)',
+            minWidth: 0,
+            flex: 1,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }
+        }, ind.name), React.createElement("span", {
+          style: {
+            fontSize: 10.5,
+            fontWeight: 700,
+            padding: '2px 8px',
+            borderRadius: 999,
+            background: t[1],
+            color: t[0],
+            whiteSpace: 'nowrap'
+          }
+        }, t[2]), React.createElement(Ic, {
+          d: I.chevR,
+          s: 13,
+          c: "var(--faint)"
+        }));
+      })));
+    })));
+  }
   function CollectorPortal() {
     const user = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
     const depts = dcAllDepts();
@@ -29029,10 +29490,20 @@ window.LockScreen = LockScreen;
     const hasPatient = depts.length > 0;
     const hasQuality = areas.length > 0;
     const tabs = [];
-    if (hasPatient) tabs.push(['patient', 'Patient Statistics', I.input]);
+    if (hasQuality) tabs.push(['status', 'Submission status', I.grid]);
     if (hasQuality) tabs.push(['quality', 'Quality Data', I.activity]);
+    if (hasPatient) tabs.push(['patient', 'Patient Statistics', I.input]);
     tabs.push(['history', 'My Submissions', I.doc]);
     const [tab, setTab] = useState(tabs[0][0]);
+    const [jump, setJump] = useState(null);
+    const fillFor = (area, indicatorId, m) => {
+      setJump({
+        area,
+        indicatorId,
+        month: m
+      });
+      setTab('quality');
+    };
     const tabBtn = (id, label, icon) => React.createElement("button", {
       key: id,
       onClick: () => setTab(id),
@@ -29153,9 +29624,15 @@ window.LockScreen = LockScreen;
       prefill: {
         responsible: user.name
       }
+    }), tab === 'status' && hasQuality && React.createElement(CollectorStatus, {
+      onFill: fillFor
     }), tab === 'quality' && hasQuality && React.createElement(DataQualityForm, {
+      key: jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month : 'q',
       prefill: {
-        responsible: user.name
+        responsible: user.name,
+        area: jump && jump.area,
+        indicatorId: jump && jump.indicatorId,
+        month: jump && jump.month
       }
     }), tab === 'history' && React.createElement(CollectorHistory, null)));
   }

@@ -21,7 +21,16 @@
 
   // ---- shared helpers ----
   const MO = () => (window.UNICO && window.UNICO.MONTH_ORDER) || [];
-  const monthLabel = (k) => (window.UNICO && window.UNICO.MONTHS_FULL && window.UNICO.MONTHS_FULL[k]) || k;
+  const MONS_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const MONS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const monthLabel = (k) => {
+    if (window.UNICO && window.UNICO.MONTHS_FULL && window.UNICO.MONTHS_FULL[k]) return window.UNICO.MONTHS_FULL[k];
+    const p = String(k || '').split('-'); const mi = MONS_ABBR.indexOf(p[0]);
+    return (mi >= 0 && p[1]) ? (MONS_LONG[mi] + ' 20' + p[1]) : k;
+  };
+  // A wide list of month keys (several fiscal years each way) so the reporting-month
+  // dropdown isn't limited to the current FY — any month / year is selectable.
+  const dcWideMonths = () => { const out = []; for (let yy = 24; yy <= 28; yy++) { MONS_ABBR.forEach((m) => out.push(m + '-' + String(yy).padStart(2, '0'))); } return out; };
   function defaultMonthFor(dept) {
     const order = MO();
     if (dept && dept.months && dept.months.length) {
@@ -445,15 +454,15 @@
     // Months = the quality FY (Jun-25…May-26), read from the store so it stays in
     // sync with the dashboard/quarters; default to the latest FY month.
     const fyMonths = (window.QUALITY_QUARTER_MONTHS) ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
-    const monthOpts = (fyMonths && fyMonths.length) ? fyMonths : (() => { const o = MO(); const i = o.indexOf('Jun-25'); return i >= 0 ? o.slice(i, i + 12) : o.slice(0, 12); })();
-    const defMonth = monthOpts[monthOpts.length - 1] || '';
+    const monthOpts = dcWideMonths();
+    const defMonth = ((fyMonths && fyMonths.length) ? fyMonths[fyMonths.length - 1] : 'May-26') || monthOpts[monthOpts.length - 1] || '';
     // Default to the first area that actually HAS indicators (so a collector never
     // lands on an empty area), falling back to the first area.
     const [areaKey, setAreaKey] = useState((prefill && prefill.area) || ((areas.find((a) => a.indicators && a.indicators.length) || areas[0] || {}).key) || '');
     const area = useMemo(() => areas.find((a) => a.key === areaKey) || areas[0], [areas, areaKey]);
-    const [indId, setIndId] = useState('');
+    const [indId, setIndId] = useState((prefill && prefill.indicatorId) || '');
     const [newInd, setNewInd] = useState({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' });
-    const [month, setMonth] = useState(defMonth);
+    const [month, setMonth] = useState((prefill && prefill.month) || defMonth);
     const [den, setDen] = useState('');
     // Numerator entry: either broken down BY STAFF GROUP (Nurse / Doctor / PCA /
     // Other) which add up to the total, or typed DIRECTLY. For rate/% indicators each
@@ -479,7 +488,10 @@
     const [guideOpen, setGuideOpen] = useState(false); // HQI guide collapsed by default (click "Show" to expand)
     const [resps, setResps] = useState([]);
     useEffect(() => { if (!lockResp) dcApi.get('/api/responsibles').then((r) => setResps(r.ok ? r.responsibles : [])).catch(() => {}); }, []);
-    useEffect(() => { setIndId(''); }, [areaKey]);
+    // Reset the indicator when the AREA changes — but skip the first run so a jumped-in
+    // prefill (area + indicator) from the Submission-status board isn't cleared on mount.
+    const firstAreaRef = React.useRef(true);
+    useEffect(() => { if (firstAreaRef.current) { firstAreaRef.current = false; return; } setIndId(''); }, [areaKey]);
 
     const inds = (area && area.indicators) || [];
     const assigned = resps.filter((r) => (r.qualityAreas || []).includes(areaKey));
@@ -531,10 +543,14 @@
     const hhDepartments = useMemo(() => {
       const isOverall = (a) => /overall\s*hospital/i.test((a && (a.name || a.key)) || '');
       const nameOf = (a) => ((window.DEPTMAP && window.DEPTMAP.nameFromQualityKey) ? window.DEPTMAP.nameFromQualityKey(a.key) : (a.name || a.key));
+      // A specific department area lists ONLY that department, so a per-department
+      // collector enters just their own hand-hygiene figures. The hospital-wide
+      // "Overall Hospital" area lists EVERY department (for the roll-up).
+      if (area && area.key && !isOverall(area)) { const n = nameOf(area); return n ? [n] : []; }
       const seen = new Set(); const out = [];
       (areas || []).forEach((a) => { if (!a || !a.key || isOverall(a)) return; const n = nameOf(a); if (n && !seen.has(n)) { seen.add(n); out.push(n); } });
       return out;
-    }, [areas]);
+    }, [areas, area]);
     // Seed / keep the matrix in sync with the full department list for Hand Hygiene,
     // preserving any numbers already typed for a department that stays in the list.
     useEffect(() => {
@@ -794,7 +810,7 @@
                   </>
                 ) : numMode === 'dept' ? (
                   <>
-                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>{isHandHygiene ? <>All <b style={{ color: 'var(--ink-2)' }}>{hhDepartments.length}</b> departments are listed below — just fill in each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group. They roll up to the hospital total automatically.</> : <>Enter each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group — every department &amp; group rolls up to the hospital total.</>}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>{isHandHygiene ? (hhDepartments.length === 1 ? <>Enter <b style={{ color: 'var(--ink-2)' }}>{hhDepartments[0]}</b>’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group. Pick <b style={{ color: 'var(--ink-2)' }}>Overall Hospital</b> above to enter every department at once.</> : <>All <b style={{ color: 'var(--ink-2)' }}>{hhDepartments.length}</b> departments are listed below — just fill in each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group. They roll up to the hospital total automatically.</>) : <>Enter each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group — every department &amp; group rolls up to the hospital total.</>}</div>
                     {deptRows.map((r, i) => {
                       const rn = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].n) || 0), 0);
                       const rd = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].d) || 0), 0);
@@ -1379,6 +1395,71 @@
     );
   }
 
+  /* Submission-status board: which of the collector's assigned quality indicators are
+     Recorded / Pending / Not-submitted for a chosen month. Responsive (auto-fit cards). */
+  function CollectorStatus({ onFill }) {
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), []);
+    const fyMonths = (window.QUALITY_QUARTER_MONTHS) ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [];
+    const monthOpts = dcWideMonths();
+    const [month, setMonth] = useState((fyMonths.length ? fyMonths[fyMonths.length - 1] : 'May-26') || '');
+    const [subs, setSubs] = useState(null);
+    useEffect(() => { dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
+    const hasData = (ind, m) => { const f = (o) => o && o[m] != null && o[m] !== ''; return f(ind.mNum) || f(ind.mDen) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0); };
+    const pendingFor = (areaKey, ind, m) => (subs || []).some((s) => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
+    const statusOf = (areaKey, ind, m) => hasData(ind, m) ? 'recorded' : pendingFor(areaKey, ind, m) ? 'pending' : 'none';
+    const tone = { recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'], pending: ['#9a6b00', '#fff4e0', 'Pending'], none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted'] };
+    let totalInd = 0, rec = 0, pend = 0;
+    areas.forEach((a) => a.indicators.forEach((ind) => { totalInd++; const s = statusOf(a.key, ind, month); if (s === 'recorded') rec++; else if (s === 'pending') pend++; }));
+    const notSub = totalInd - rec - pend;
+    const pct = totalInd ? Math.round((rec + pend) * 100 / totalInd) : 0;
+    const sel = { padding: '9px 11px', border: '1px solid var(--line)', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', background: '#fff' };
+    const Kpi = ({ label, val, color }) => (<div style={{ flex: 1, minWidth: 110, border: '1px solid var(--line)', borderLeft: '4px solid ' + color, borderRadius: 10, padding: '12px 14px', background: '#fff' }}><div className="num" style={{ fontSize: 22, fontWeight: 800, color }}>{val}</div><div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>{label}</div></div>);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink)' }}>Submission status</div>
+          <span style={{ flex: 1 }} />
+          <label style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>Month</label>
+          <select style={sel} value={month} onChange={(e) => setMonth(e.target.value)}>{monthOpts.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select>
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>Which of your assigned indicators are submitted for <b style={{ color: 'var(--ink)' }}>{monthLabel(month)}</b>. <span style={{ color: 'var(--rose)', fontWeight: 600 }}>Red = still needs data.</span> <b style={{ color: 'var(--blue-700)' }}>Tap any indicator to fill or correct it →</b></div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <Kpi label="Coverage" val={pct + '%'} color="#0090ca" />
+          <Kpi label="Recorded" val={rec} color="var(--pos)" />
+          <Kpi label="Pending review" val={pend} color="#9a6b00" />
+          <Kpi label="Not submitted" val={notSub} color={notSub ? 'var(--rose)' : 'var(--pos)'} />
+        </div>
+        {subs === null ? <div style={{ padding: 20, color: 'var(--muted)' }}>Loading…</div> : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))', gap: 12 }}>
+            {areas.map((a) => {
+              let ar = 0, ap = 0; a.indicators.forEach((ind) => { const s = statusOf(a.key, ind, month); if (s === 'recorded') ar++; else if (s === 'pending') ap++; });
+              const acov = a.indicators.length ? Math.round((ar + ap) * 100 / a.indicators.length) : 0;
+              return (
+                <div key={a.key} style={{ border: '1px solid var(--line)', borderRadius: 11, background: '#fff', overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px', borderBottom: '1px solid var(--line-2)' }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', minWidth: 0, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.name}</div>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: acov === 100 ? 'var(--pos-bg)' : acov > 0 ? '#fff4e0' : 'var(--neg-bg)', color: acov === 100 ? 'var(--pos)' : acov > 0 ? '#9a6b00' : 'var(--rose)' }}>{ar + ap}/{a.indicators.length}</span>
+                  </div>
+                  <div style={{ padding: '4px 0' }}>
+                    {a.indicators.map((ind) => { const st = statusOf(a.key, ind, month); const t = tone[st]; return (
+                      <div key={ind.id} onClick={() => onFill && onFill(a.key, ind.id, month)} title={st === 'recorded' ? 'View / submit a correction' : 'Click to fill this now'}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 13px', cursor: 'pointer' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--panel-2)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                        <div style={{ fontSize: 12, color: 'var(--ink-2)', minWidth: 0, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ind.name}</div>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: t[1], color: t[0], whiteSpace: 'nowrap' }}>{t[2]}</span>
+                        <Ic d={I.chevR} s={13} c="var(--faint)" />
+                      </div>
+                    ); })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function CollectorPortal() {
     const user = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
     // Merged list so a newly-created custom department the collector is assigned to
@@ -1388,10 +1469,15 @@
     const hasPatient = depts.length > 0;
     const hasQuality = areas.length > 0;
     const tabs = [];
-    if (hasPatient) tabs.push(['patient', 'Patient Statistics', I.input]);
+    if (hasQuality) tabs.push(['status', 'Submission status', I.grid]);
     if (hasQuality) tabs.push(['quality', 'Quality Data', I.activity]);
+    if (hasPatient) tabs.push(['patient', 'Patient Statistics', I.input]);
     tabs.push(['history', 'My Submissions', I.doc]);
     const [tab, setTab] = useState(tabs[0][0]);
+    // Interactive: clicking an indicator on the status board jumps to the Quality Data
+    // form pre-filled for that area / indicator / month (turns the board into a to-do list).
+    const [jump, setJump] = useState(null);
+    const fillFor = (area, indicatorId, m) => { setJump({ area, indicatorId, month: m }); setTab('quality'); };
 
     const tabBtn = (id, label, icon) => (
       <button key={id} onClick={() => setTab(id)} style={{
@@ -1420,7 +1506,8 @@
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>{tabs.map((t) => tabBtn(t[0], t[1], t[2]))}</div>
           {tab === 'patient' && hasPatient && <DataPatientForm depts={depts} prefill={{ responsible: user.name }} />}
-          {tab === 'quality' && hasQuality && <DataQualityForm prefill={{ responsible: user.name }} />}
+          {tab === 'status' && hasQuality && <CollectorStatus onFill={fillFor} />}
+          {tab === 'quality' && hasQuality && <DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month }} />}
           {tab === 'history' && <CollectorHistory />}
         </div>
       </div>
