@@ -27,12 +27,15 @@ function safe(u) {
     departments: Array.isArray(u.departments) ? u.departments : [],
     qualityAreas: Array.isArray(u.qualityAreas) ? u.qualityAreas : [],
     allQualityAreas: !!u.allQualityAreas,
+    qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {},
     createdAt: u.createdAt || null,
     updatedAt: u.updatedAt || null,
   };
 }
 const norm = (s) => String(s || '').trim().toLowerCase();
 const cleanList = (v) => Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean) : [];
+// Specific-indicator access map: { areaKey: [indicatorId,...] } — empty lists dropped.
+const cleanQI = (qi) => { const out = {}; if (!qi || typeof qi !== 'object' || Array.isArray(qi)) return out; Object.keys(qi).forEach(k => { const list = Array.isArray(qi[k]) ? qi[k].map(x => String(x).trim()).filter(Boolean) : []; if (list.length) out[String(k)] = list; }); return out; };
 
 // Count active administrators (so we never strand the system without one).
 async function activeAdminCount(users) {
@@ -80,9 +83,10 @@ function mount(app, opts) {
         active: b.active !== false,
         departments,
         allQualityAreas,
-        // Quality areas DERIVE from the department list (or ALL areas when hospital-wide),
-        // so a collector is assigned ONCE and gets both statistics + quality.
-        qualityAreas: role === 'collector' ? await deptmap.deriveQualityAreas(departments, allQualityAreas) : [],
+        // Quality areas = departments' auto areas UNION custom/extra areas (b.qualityAreas), or
+        // ALL when hospital-wide. Assign once + optional custom access on top.
+        qualityAreas: role === 'collector' ? await deptmap.deriveQualityAreas(departments, allQualityAreas, cleanList(b.qualityAreas)) : [],
+        qualityIndicators: role === 'collector' ? cleanQI(b.qualityIndicators) : {}, // specific-indicator access
         passwordHash: await auth.hash(password),
         createdAt: Date.now(), updatedAt: Date.now(),
       };
@@ -108,12 +112,14 @@ function mount(app, opts) {
       if (role === 'collector') {
         const departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
         const allQualityAreas = (b.allQualityAreas != null) ? !!b.allQualityAreas : !!u.allQualityAreas;
+        const customAreas = (b.qualityAreas != null) ? cleanList(b.qualityAreas) : [];
         if (b.departments != null) set.departments = departments;
         set.allQualityAreas = allQualityAreas;
-        // Recompute derived quality areas from the (possibly updated) department list.
-        set.qualityAreas = await deptmap.deriveQualityAreas(departments, allQualityAreas);
+        // Departments' auto areas UNION custom/extra areas (assign-once + custom access on top).
+        set.qualityAreas = await deptmap.deriveQualityAreas(departments, allQualityAreas, customAreas);
+        if (b.qualityIndicators != null) set.qualityIndicators = cleanQI(b.qualityIndicators);
       } else if (set.role && set.role !== 'collector') {
-        set.departments = []; set.qualityAreas = []; set.allQualityAreas = false;
+        set.departments = []; set.qualityAreas = []; set.allQualityAreas = false; set.qualityIndicators = {};
       }
 
       // Never strand the system without an active administrator.

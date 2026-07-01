@@ -40,7 +40,14 @@ window.UNICO_DEFAULT_API = ''; // empty = NO login, app runs fully offline. Put 
       var key = q.key || q._id;
       if (key) allKeys.push(key);
       var id = q.deptId || qkToId[key];
-      if (key && id) { qkToId[key] = id; if (!idToQk[id]) idToQk[id] = key; }
+      if (key && id) {
+        qkToId[key] = id; if (!idToQk[id]) idToQk[id] = key;
+        // Fallback name from the quality doc when the (scoped) departments list didn't supply
+        // one — e.g. a hospital-wide collector whose __UNICO_DEPARTMENTS__ is scoped to empty.
+        // Ensures a real label ("OPD"/"Cathlab") instead of a raw slug id even without the
+        // server-injected map; the injected map still upgrades these to canonical names.
+        if (!byId[id]) byId[id] = { id: id, name: q.name || key, qualityKey: key };
+      }
       if (q.deptId === '__hospital__' || key === 'Overall Hospital') {
         byId['__hospital__'] = { id: '__hospital__', name: q.name || 'Overall Hospital', qualityKey: key, qualityOnly: true };
       }
@@ -9292,7 +9299,7 @@ function StaffForm({
       flexDirection: 'column',
       gap: 20
     }
-  }, sec('Personal', React.createElement(React.Fragment, null, field('Emp ID', inp('emp_id', 'UNC-0000'), !editing && linkBtn('auto', () => set('emp_id', store.nextEmpId()))), field('Name *', inp('name', 'Full name')), field('Phone', inp('phone', '01XXXXXXXXX')), field('Qualification', cmb('qualification', S.qualificationsFor(f.role))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', cmb('designation', S.designationsFor(f.role))), field('Current Department', cmb('current_department', S.DEPARTMENTS)), field('Date of Joining', inp('doj', 'YYYY-MM-DD')), field('Total Experience', inp('total_experience_text', 'e.g. 4.5 yrs'), linkBtn('from DOJ', () => {
+  }, sec('Personal', React.createElement(React.Fragment, null, field('Emp ID', inp('emp_id', 'UNC-0000'), !editing && linkBtn('auto', () => set('emp_id', store.nextEmpId()))), field('Name *', inp('name', 'Full name')), field('Phone', inp('phone', '01XXXXXXXXX')), field('Qualification', cmb('qualification', S.qualificationsFor(f.role))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', cmb('designation', S.designationsFor(f.role))), field('Current Department', cmb('current_department', S.DEPARTMENTS)), field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date')), field('Total Experience', inp('total_experience_text', 'e.g. 4.5 yrs'), linkBtn('from DOJ', () => {
     const r = yearsFromDOJ(f.doj);
     if (r) set('total_experience_text', r);else setErr('Enter a valid DOJ first');
   })))), sec('Experience & Compliance', React.createElement(React.Fragment, null, field('Previous Experience', inp('previous_experience', 'Prior facilities / roles')), field('Special Training', inp('special_training', 'e.g. BLS, ACLS')), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), field('Remarks', inp('remarks', 'Any notes')))), err && React.createElement("div", {
@@ -15583,6 +15590,7 @@ function QCIndEdit({
       lineHeight: 1.4
     }
   }) : React.createElement("input", {
+    type: /date/i.test(k) ? 'date' : 'text',
     value: incs[i][k] || '',
     onChange: e => setF(i, k, e.target.value),
     style: inp
@@ -25427,7 +25435,13 @@ window.LockScreen = LockScreen;
       const d = (depts || []).find(x => x.id === id);
       return d && (d.name || d.short) || id;
     };
-    const derivedAreas = editing ? editing.allQualityAreas ? window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [] : window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : editing.qualityAreas || [] : [];
+    const derivedAreas = editing ? editing.allQualityAreas ? window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [] : window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : [] : [];
+    const customAreas = editing ? (editing.qualityAreas || []).filter(k => !derivedAreas.includes(k)) : [];
+    const effectiveAreas = editing ? editing.allQualityAreas ? derivedAreas : [...derivedAreas, ...customAreas] : [];
+    const toggleCustomArea = k => setEditing(ed => ({
+      ...ed,
+      qualityAreas: (ed.qualityAreas || []).includes(k) ? ed.qualityAreas.filter(x => x !== k) : [...(ed.qualityAreas || []), k]
+    }));
     return React.createElement("div", {
       className: "grid",
       style: {
@@ -25547,6 +25561,7 @@ window.LockScreen = LockScreen;
           ...ed,
           departments: ed.departments.includes(d.id) ? ed.departments.filter(x => x !== d.id) : [...ed.departments, d.id]
         })),
+        title: deptName(d.id) + (d.custom ? ' (custom)' : ''),
         style: {
           cursor: 'pointer',
           userSelect: 'none',
@@ -25558,10 +25573,10 @@ window.LockScreen = LockScreen;
           background: on ? 'var(--blue-50)' : '#fff',
           color: on ? 'var(--blue-700)' : 'var(--ink-2)'
         }
-      }, d.short);
+      }, d.short || deptName(d.id));
     }))), React.createElement(Field, {
       label: "Quality areas",
-      hint: "Assigned automatically from the departments above \u2014 one assignment covers both patient statistics and quality, so they can never drift apart."
+      hint: "Auto-granted by the departments above (assign once). Tick extra areas below for custom access."
     }, React.createElement("label", {
       style: {
         display: 'inline-flex',
@@ -25580,29 +25595,47 @@ window.LockScreen = LockScreen;
         ...ed,
         allQualityAreas: e.target.checked
       }))
-    }), "Hospital-wide \u2014 every quality area (e.g. Infection Control)"), derivedAreas.length ? React.createElement("div", {
+    }), "Hospital-wide \u2014 every quality area (e.g. Infection Control)"), !editing.allQualityAreas && React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
         gap: 7
       }
-    }, derivedAreas.map(ak => React.createElement("span", {
-      key: ak,
-      style: {
-        padding: '5px 10px',
-        borderRadius: 999,
-        fontSize: 12,
-        fontWeight: 600,
-        border: '1px solid var(--blue)',
-        background: 'var(--blue-50)',
-        color: 'var(--blue-700)'
-      }
-    }, window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(ak) : ak))) : React.createElement("div", {
+    }, areas.map(a => {
+      const auto = derivedAreas.includes(a.key);
+      const on = auto || (editing.qualityAreas || []).includes(a.key);
+      return React.createElement("span", {
+        key: a.key,
+        onClick: () => {
+          if (!auto) toggleCustomArea(a.key);
+        },
+        title: auto ? 'From an assigned department' : 'Custom extra access',
+        style: {
+          cursor: auto ? 'default' : 'pointer',
+          userSelect: 'none',
+          padding: '5px 10px',
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 600,
+          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+          background: on ? 'var(--blue-50)' : '#fff',
+          color: on ? 'var(--blue-700)' : 'var(--ink-2)',
+          opacity: auto ? 0.85 : 1
+        }
+      }, a.name, auto && React.createElement("span", {
+        style: {
+          fontSize: 9,
+          fontWeight: 700,
+          marginLeft: 4,
+          opacity: 0.7
+        }
+      }, "AUTO"));
+    })), editing.allQualityAreas && React.createElement("div", {
       style: {
         fontSize: 12,
         color: 'var(--muted)'
       }
-    }, "None yet \u2014 pick departments above, or tick \u201CHospital-wide\u201D.")), derivedAreas.length > 0 && React.createElement(Field, {
+    }, "All ", areas.length, " quality areas (hospital-wide).")), effectiveAreas.length > 0 && React.createElement(Field, {
       label: "Specific indicators per area (optional)",
       hint: "Leave all unticked in an area to allow every indicator of that area. Tick some to restrict this person to just those."
     }, React.createElement("div", {
@@ -25610,7 +25643,7 @@ window.LockScreen = LockScreen;
         display: 'grid',
         gap: 10
       }
-    }, derivedAreas.map(ak => {
+    }, effectiveAreas.map(ak => {
       const list = areaInds[ak] || [];
       const aName = (areas.find(a => a.key === ak) || {}).name || ak;
       if (!list.length) return null;
@@ -26199,7 +26232,7 @@ window.LockScreen = LockScreen;
     const [responsible, setResponsible] = useState(lockResp ? me.name || '' : prefill && prefill.responsible || '');
     const [busy, setBusy] = useState(false);
     const [done, setDone] = useState(null);
-    const [guideOpen, setGuideOpen] = useState(true);
+    const [guideOpen, setGuideOpen] = useState(false);
     const [resps, setResps] = useState([]);
     useEffect(() => {
       if (!lockResp) dcApi.get('/api/responsibles').then(r => setResps(r.ok ? r.responsibles : [])).catch(() => {});
@@ -26331,7 +26364,7 @@ window.LockScreen = LockScreen;
       [k]: v
     } : x));
     const delIncident = i => setIncidents(a => a.filter((_, j) => j !== i));
-    const autoCount = isIncidentType && incidents.length > 0;
+    const autoCount = isIncidentType;
     const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : autoCount ? incidents.length : Number(directNum) || 0;
     const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : Number(den) || 0;
     const denEntered = denNum > 0;
@@ -26455,6 +26488,7 @@ window.LockScreen = LockScreen;
       })));
     }, [indId, month]);
     const result = computeAsRate ? denNum > 0 ? Math.round(numerator / denNum * mult * 100) / 100 : 0 : numerator;
+    const ratePending = computeAsRate && numerator > 0 && !(denNum > 0);
     const qExists = !!(curInd && (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
     const qLocked = lockResp && !isNew && qExists;
     const submit = () => {
@@ -26611,7 +26645,7 @@ window.LockScreen = LockScreen;
     }, areas.map(a => React.createElement("option", {
       key: a.key,
       value: a.key
-    }, a.name)))), React.createElement(Field, {
+    }, /overall\s*hospital/i.test(a.key) ? 'All Departments (Overall Hospital)' : a.name)))), React.createElement(Field, {
       label: "Reporting month"
     }, React.createElement("select", {
       style: inputStyle,
@@ -26907,7 +26941,7 @@ window.LockScreen = LockScreen;
       style: {
         color: 'var(--ink-2)'
       }
-    }, "Reference:"), " ", guide.reference)))), numMode === 'direct' && React.createElement(Field, {
+    }, "Reference:"), " ", guide.reference)))), numMode === 'direct' && !isIncidentType && React.createElement(Field, {
       label: React.createElement("span", null, denLabel, " ", React.createElement("span", {
         style: {
           color: 'var(--muted)',
@@ -27318,10 +27352,10 @@ window.LockScreen = LockScreen;
     })), React.createElement(Field, {
       label: "Admission date"
     }, React.createElement("input", {
+      type: "date",
       style: inputStyle,
       value: x.admissionDate,
-      onChange: e => setIncidentField(i, 'admissionDate', e.target.value),
-      placeholder: "YYYY-MM-DD"
+      onChange: e => setIncidentField(i, 'admissionDate', e.target.value)
     })), React.createElement(Field, {
       label: "Diagnosis"
     }, React.createElement("input", {
@@ -27394,9 +27428,29 @@ window.LockScreen = LockScreen;
     }, React.createElement(Ic, {
       d: I.plus,
       s: 13
-    }), "Add incident")), React.createElement("div", {
+    }), "Add incident")), isIncidentType && numMode === 'direct' && React.createElement(Field, {
+      label: React.createElement("span", null, denLabel, " ", React.createElement("span", {
+        style: {
+          color: isRate && !(denNum > 0) ? 'var(--rose)' : 'var(--muted)',
+          fontWeight: isRate ? 700 : 400
+        }
+      }, isRate ? '(denominator — required to compute the rate)' : '(denominator — optional, for a rate)')),
+      hint: isRate ? denDef : 'Leave blank to record a plain count of incidents. Enter the base for ' + monthLabel(month) + ' (e.g. total patient-days) to compute a rate per ' + mult + '.'
+    }, React.createElement("input", {
+      type: "number",
+      step: "any",
       style: {
-        border: '1px solid var(--line)',
+        ...inputStyle,
+        ...(isRate && !(denNum > 0) ? {
+          borderColor: 'var(--rose)'
+        } : {})
+      },
+      value: den,
+      onChange: e => setDen(e.target.value),
+      placeholder: isRate ? 'Total ' + denLabel.toLowerCase() + ' this month' : 'Optional — total base (blank = count)'
+    })), React.createElement("div", {
+      style: {
+        border: '1px solid ' + (ratePending ? '#f1c6cd' : 'var(--line)'),
         borderRadius: 9,
         padding: '13px 16px',
         marginBottom: 4,
@@ -27419,9 +27473,9 @@ window.LockScreen = LockScreen;
       style: {
         fontSize: 22,
         fontWeight: 800,
-        color: 'var(--blue-700)'
+        color: ratePending ? 'var(--muted)' : 'var(--blue-700)'
       }
-    }, result), unitQ ? React.createElement("span", {
+    }, ratePending ? '—' : result), unitQ ? React.createElement("span", {
       style: {
         fontFamily: 'var(--mono)',
         fontSize: 12,
@@ -27431,12 +27485,18 @@ window.LockScreen = LockScreen;
       style: {
         flex: 1
       }
-    }), React.createElement("span", {
+    }), ratePending ? React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--rose)'
+      }
+    }, numLabel, " = ", numerator, " \xB7 enter ", denLabel, " (denominator) to compute the rate") : React.createElement("span", {
       style: {
         fontSize: 11,
         color: 'var(--muted)'
       }
-    }, computeAsRate ? numLabel + ' = ' + numerator + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '') : numLabel + ' = ' + numerator, benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : '')), React.createElement("div", {
+    }, computeAsRate ? numLabel + ' = ' + numerator + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '') : numLabel + ' = ' + numerator, benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : '')), /hand\s*hygiene/i.test(indNameQ) && React.createElement("div", {
       style: {
         border: '1px solid var(--line)',
         borderRadius: 9,
@@ -29151,6 +29211,22 @@ function UAUserForm({
   const [password, setPassword] = useState('');
   const [departments, setDepartments] = useState(user && user.departments ? user.departments.join(', ') : '');
   const [allQualityAreas, setAllQualityAreas] = useState(user ? !!user.allQualityAreas : false);
+  const [qualityAreas, setQualityAreas] = useState(user && Array.isArray(user.qualityAreas) ? user.qualityAreas : []);
+  const [qualityIndicators, setQualityIndicators] = useState(user && user.qualityIndicators && typeof user.qualityIndicators === 'object' && !Array.isArray(user.qualityIndicators) ? user.qualityIndicators : {});
+  const qAreas = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
+    key: d.key,
+    name: d.name
+  })), []);
+  const qAreaInds = React.useMemo(() => {
+    const m = {};
+    (window.qualityData ? window.qualityData() : []).forEach(d => {
+      m[d.key] = (d.indicators || []).map(i => ({
+        id: i.id,
+        name: i.name
+      }));
+    });
+    return m;
+  }, []);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const txt = {
@@ -29172,10 +29248,14 @@ function UAUserForm({
     try {
       const scope = role === 'collector' ? {
         departments: list(departments),
-        allQualityAreas
+        allQualityAreas,
+        qualityAreas,
+        qualityIndicators
       } : {
         departments: [],
-        allQualityAreas: false
+        allQualityAreas: false,
+        qualityAreas: [],
+        qualityIndicators: {}
       };
       if (editing) {
         await uaApi('PATCH', '/api/users/' + encodeURIComponent(user.username), {
@@ -29291,43 +29371,153 @@ function UAUserForm({
     type: "checkbox",
     checked: active,
     onChange: e => setActive(e.target.checked)
-  }), "Active")), role === 'collector' && React.createElement(React.Fragment, null, React.createElement("div", {
-    className: "field"
-  }, React.createElement("label", null, "Departments (comma-separated ids)"), React.createElement("input", {
-    style: txt,
-    value: departments,
-    onChange: e => setDepartments(e.target.value),
-    placeholder: "e.g. micu, ccu"
-  })), React.createElement("div", {
-    className: "field"
-  }, React.createElement("label", null, "Quality areas ", React.createElement("span", {
-    style: {
-      fontWeight: 400,
-      color: 'var(--muted)'
-    }
-  }, "\xB7 auto from departments")), React.createElement("label", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      fontSize: 13,
-      color: 'var(--ink-2)',
-      cursor: 'pointer',
-      margin: '2px 0 8px'
-    }
-  }, React.createElement("input", {
-    type: "checkbox",
-    checked: allQualityAreas,
-    onChange: e => setAllQualityAreas(e.target.checked)
-  }), "Hospital-wide \u2014 every quality area"), (() => {
-    const areas = allQualityAreas ? window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [] : window.DEPTMAP ? window.DEPTMAP.areasFromDepts(list(departments)) : [];
-    return React.createElement("div", {
+  }), "Active")), role === 'collector' && (() => {
+    const derived = allQualityAreas ? window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [] : window.DEPTMAP ? window.DEPTMAP.areasFromDepts(list(departments)) : [];
+    const effective = allQualityAreas ? derived : [...derived, ...qualityAreas.filter(k => !derived.includes(k))];
+    const toggleArea = k => setQualityAreas(qa => qa.includes(k) ? qa.filter(x => x !== k) : [...qa, k]);
+    const depNames = list(departments).map(id => window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : id);
+    return React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "field"
+    }, React.createElement("label", null, "Departments ", React.createElement("span", {
       style: {
-        fontSize: 12.5,
-        color: areas.length ? 'var(--ink-2)' : 'var(--muted)'
+        fontWeight: 400,
+        color: 'var(--muted)'
       }
-    }, areas.length ? areas.map(k => window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(k) : k).join(', ') : 'None yet — add departments above, or tick hospital-wide.');
-  })())), !editing && React.createElement("div", {
+    }, "\xB7 ids, comma-separated (incl. custom like ctot)")), React.createElement("input", {
+      style: txt,
+      value: departments,
+      onChange: e => setDepartments(e.target.value),
+      placeholder: "e.g. micu, ccu, ctot"
+    }), depNames.length > 0 && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginTop: 4
+      }
+    }, depNames.join(' · '))), React.createElement("div", {
+      className: "field"
+    }, React.createElement("label", null, "Quality areas ", React.createElement("span", {
+      style: {
+        fontWeight: 400,
+        color: 'var(--muted)'
+      }
+    }, "\xB7 AUTO from departments + custom extras")), React.createElement("label", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 13,
+        color: 'var(--ink-2)',
+        cursor: 'pointer',
+        margin: '2px 0 8px'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: allQualityAreas,
+      onChange: e => setAllQualityAreas(e.target.checked)
+    }), "Hospital-wide \u2014 every quality area"), !allQualityAreas && React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6
+      }
+    }, qAreas.map(a => {
+      const auto = derived.includes(a.key);
+      const on = auto || qualityAreas.includes(a.key);
+      return React.createElement("span", {
+        key: a.key,
+        onClick: () => {
+          if (!auto) toggleArea(a.key);
+        },
+        title: auto ? 'From a department' : 'Custom access',
+        style: {
+          cursor: auto ? 'default' : 'pointer',
+          padding: '4px 9px',
+          borderRadius: 999,
+          fontSize: 11.5,
+          fontWeight: 600,
+          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+          background: on ? 'var(--blue-50)' : '#fff',
+          color: on ? 'var(--blue-700)' : 'var(--ink-2)',
+          opacity: auto ? 0.85 : 1
+        }
+      }, a.name, auto && React.createElement("span", {
+        style: {
+          fontSize: 8.5,
+          fontWeight: 700,
+          marginLeft: 3,
+          opacity: 0.7
+        }
+      }, "AUTO"));
+    }))), effective.length > 0 && React.createElement("div", {
+      className: "field"
+    }, React.createElement("label", null, "Specific indicators ", React.createElement("span", {
+      style: {
+        fontWeight: 400,
+        color: 'var(--muted)'
+      }
+    }, "\xB7 leave empty in an area = all indicators")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 8
+      }
+    }, effective.map(ak => {
+      const inds = qAreaInds[ak] || [];
+      if (!inds.length) return null;
+      const aName = (qAreas.find(a => a.key === ak) || {}).name || ak;
+      const sel = qualityIndicators[ak] || [];
+      const setSel = ids => setQualityIndicators(m => {
+        const n = {
+          ...m
+        };
+        if (ids && ids.length) n[ak] = ids;else delete n[ak];
+        return n;
+      });
+      return React.createElement("div", {
+        key: ak,
+        style: {
+          padding: '8px 10px',
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line)',
+          borderRadius: 8
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          fontWeight: 700,
+          color: 'var(--ink-2)',
+          marginBottom: 6
+        }
+      }, aName, " ", React.createElement("span", {
+        style: {
+          fontWeight: 500,
+          color: 'var(--muted)'
+        }
+      }, "\xB7 ", sel.length ? sel.length + ' selected' : 'all')), React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6
+        }
+      }, inds.map(ind => {
+        const on = sel.includes(ind.id);
+        return React.createElement("span", {
+          key: ind.id,
+          onClick: () => setSel(on ? sel.filter(x => x !== ind.id) : [...sel, ind.id]),
+          style: {
+            cursor: 'pointer',
+            padding: '3px 8px',
+            borderRadius: 999,
+            fontSize: 11,
+            fontWeight: 600,
+            border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+            background: on ? 'var(--blue-50)' : '#fff',
+            color: on ? 'var(--blue-700)' : 'var(--ink-2)'
+          }
+        }, ind.name);
+      })));
+    }))));
+  })(), !editing && React.createElement("div", {
     className: "field"
   }, React.createElement("label", null, "Password"), React.createElement("input", {
     style: txt,

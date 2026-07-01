@@ -49,6 +49,10 @@ function UAUserForm({ user, roles, onClose, onSaved }) {
   const [password, setPassword] = useState('');
   const [departments, setDepartments] = useState(user && user.departments ? user.departments.join(', ') : '');
   const [allQualityAreas, setAllQualityAreas] = useState(user ? !!user.allQualityAreas : false);
+  const [qualityAreas, setQualityAreas] = useState(user && Array.isArray(user.qualityAreas) ? user.qualityAreas : []);
+  const [qualityIndicators, setQualityIndicators] = useState(user && user.qualityIndicators && typeof user.qualityIndicators === 'object' && !Array.isArray(user.qualityIndicators) ? user.qualityIndicators : {});
+  const qAreas = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({ key: d.key, name: d.name })), []);
+  const qAreaInds = React.useMemo(() => { const m = {}; (window.qualityData ? window.qualityData() : []).forEach(d => { m[d.key] = (d.indicators || []).map(i => ({ id: i.id, name: i.name })); }); return m; }, []);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -63,7 +67,9 @@ function UAUserForm({ user, roles, onClose, onSaved }) {
     try {
       // Quality areas are DERIVED server-side from departments (+ hospital-wide flag), so we
       // only send the department list and the flag — never a separate qualityAreas array.
-      const scope = role === 'collector' ? { departments: list(departments), allQualityAreas } : { departments: [], allQualityAreas: false };
+      const scope = role === 'collector'
+        ? { departments: list(departments), allQualityAreas, qualityAreas, qualityIndicators }
+        : { departments: [], allQualityAreas: false, qualityAreas: [], qualityIndicators: {} };
       if (editing) {
         await uaApi('PATCH', '/api/users/' + encodeURIComponent(user.username), { name, role, active, ...scope });
       } else {
@@ -96,23 +102,39 @@ function UAUserForm({ user, roles, onClose, onSaved }) {
               <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />Active
             </label>
           </div>
-          {role === 'collector' && (
-            <>
-              <div className="field"><label>Departments (comma-separated ids)</label>
-                <input style={txt} value={departments} onChange={e => setDepartments(e.target.value)} placeholder="e.g. micu, ccu" />
+          {role === 'collector' && (() => {
+            const derived = allQualityAreas ? (window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : []) : (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(list(departments)) : []);
+            const effective = allQualityAreas ? derived : [...derived, ...qualityAreas.filter(k => !derived.includes(k))];
+            const toggleArea = (k) => setQualityAreas(qa => qa.includes(k) ? qa.filter(x => x !== k) : [...qa, k]);
+            const depNames = list(departments).map(id => window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : id);
+            return <>
+              <div className="field"><label>Departments <span style={{ fontWeight: 400, color: 'var(--muted)' }}>· ids, comma-separated (incl. custom like ctot)</span></label>
+                <input style={txt} value={departments} onChange={e => setDepartments(e.target.value)} placeholder="e.g. micu, ccu, ctot" />
+                {depNames.length > 0 && <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4 }}>{depNames.join(' · ')}</div>}
               </div>
-              <div className="field"><label>Quality areas <span style={{ fontWeight: 400, color: 'var(--muted)' }}>· auto from departments</span></label>
+              <div className="field"><label>Quality areas <span style={{ fontWeight: 400, color: 'var(--muted)' }}>· AUTO from departments + custom extras</span></label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--ink-2)', cursor: 'pointer', margin: '2px 0 8px' }}>
                   <input type="checkbox" checked={allQualityAreas} onChange={e => setAllQualityAreas(e.target.checked)} />
                   Hospital-wide — every quality area
                 </label>
-                {(() => {
-                  const areas = allQualityAreas ? (window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : []) : (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(list(departments)) : []);
-                  return <div style={{ fontSize: 12.5, color: areas.length ? 'var(--ink-2)' : 'var(--muted)' }}>{areas.length ? areas.map(k => window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(k) : k).join(', ') : 'None yet — add departments above, or tick hospital-wide.'}</div>;
-                })()}
+                {!allQualityAreas && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {qAreas.map(a => { const auto = derived.includes(a.key); const on = auto || qualityAreas.includes(a.key);
+                    return <span key={a.key} onClick={() => { if (!auto) toggleArea(a.key); }} title={auto ? 'From a department' : 'Custom access'}
+                      style={{ cursor: auto ? 'default' : 'pointer', padding: '4px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)', opacity: auto ? 0.85 : 1 }}>{a.name}{auto && <span style={{ fontSize: 8.5, fontWeight: 700, marginLeft: 3, opacity: 0.7 }}>AUTO</span>}</span>; })}
+                </div>}
               </div>
-            </>
-          )}
+              {effective.length > 0 && <div className="field"><label>Specific indicators <span style={{ fontWeight: 400, color: 'var(--muted)' }}>· leave empty in an area = all indicators</span></label>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {effective.map(ak => { const inds = qAreaInds[ak] || []; if (!inds.length) return null; const aName = (qAreas.find(a => a.key === ak) || {}).name || ak; const sel = qualityIndicators[ak] || [];
+                    const setSel = (ids) => setQualityIndicators(m => { const n = { ...m }; if (ids && ids.length) n[ak] = ids; else delete n[ak]; return n; });
+                    return <div key={ak} style={{ padding: '8px 10px', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 8 }}>
+                      <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>{aName} <span style={{ fontWeight: 500, color: 'var(--muted)' }}>· {sel.length ? sel.length + ' selected' : 'all'}</span></div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{inds.map(ind => { const on = sel.includes(ind.id); return <span key={ind.id} onClick={() => setSel(on ? sel.filter(x => x !== ind.id) : [...sel, ind.id])} style={{ cursor: 'pointer', padding: '3px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)' }}>{ind.name}</span>; })}</div>
+                    </div>; })}
+                </div>
+              </div>}
+            </>;
+          })()}
           {!editing && (
             <div className="field"><label>Password</label>
               <input style={txt} type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 6 characters" />

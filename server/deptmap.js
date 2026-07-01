@@ -54,11 +54,13 @@ function invalidate() { _cache = null; _ts = 0; }
 // Quality areas DERIVED from a canonical department-id list (+ hospital-wide flag).
 // This is the single rule the whole app uses so "assign a person once" covers both the
 // statistics data module and the quality module.
-async function deriveQualityAreas(departmentIds, allQualityAreas) {
+// customAreas = extra quality-area keys assigned directly (custom access beyond departments).
+async function deriveQualityAreas(departmentIds, allQualityAreas, customAreas) {
   const map = await get();
   if (allQualityAreas) return map.allKeys.slice();
   const out = [];
   (departmentIds || []).forEach((id) => { const qk = map.idToQk[id]; if (qk && out.indexOf(qk) < 0) out.push(qk); });
+  (customAreas || []).forEach((k) => { const key = String(k); if (key && out.indexOf(key) < 0) out.push(key); });
   return out;
 }
 

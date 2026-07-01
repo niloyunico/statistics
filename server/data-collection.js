@@ -110,7 +110,9 @@ async function saveResponsible(input) {
   // hospital-wide infection-control role isn't silently downgraded on an unrelated edit.
   const allQA = (input && input.allQualityAreas != null) ? !!input.allQualityAreas : !!(existing && existing.allQualityAreas);
   doc.allQualityAreas = allQA;
-  doc.qualityAreas = await deptmap.deriveQualityAreas(doc.departments, allQA);
+  // Effective areas = departments' auto areas UNION any custom/extra areas the admin picked
+  // (doc.qualityAreas came from input). Custom access rides on top of the assign-once default.
+  doc.qualityAreas = await deptmap.deriveQualityAreas(doc.departments, allQA, doc.qualityAreas);
   let rec;
   if (!c) {
     const i = mem.responsibles.findIndex((r) => r.id === id);

@@ -28,7 +28,14 @@
       var key = q.key || q._id;
       if (key) allKeys.push(key);
       var id = q.deptId || qkToId[key];
-      if (key && id) { qkToId[key] = id; if (!idToQk[id]) idToQk[id] = key; }
+      if (key && id) {
+        qkToId[key] = id; if (!idToQk[id]) idToQk[id] = key;
+        // Fallback name from the quality doc when the (scoped) departments list didn't supply
+        // one — e.g. a hospital-wide collector whose __UNICO_DEPARTMENTS__ is scoped to empty.
+        // Ensures a real label ("OPD"/"Cathlab") instead of a raw slug id even without the
+        // server-injected map; the injected map still upgrades these to canonical names.
+        if (!byId[id]) byId[id] = { id: id, name: q.name || key, qualityKey: key };
+      }
       if (q.deptId === '__hospital__' || key === 'Overall Hospital') {
         byId['__hospital__'] = { id: '__hospital__', name: q.name || 'Overall Hospital', qualityKey: key, qualityOnly: true };
       }

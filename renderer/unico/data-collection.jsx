@@ -130,8 +130,13 @@
     const derivedAreas = editing
       ? (editing.allQualityAreas
           ? (window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [])
-          : (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : (editing.qualityAreas || [])))
+          : (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : []))
       : [];
+    // Custom = areas the admin picked directly (editing.qualityAreas) that aren't already
+    // auto-granted by a department. Effective access = derived ∪ custom (or ALL if hospital-wide).
+    const customAreas = editing ? (editing.qualityAreas || []).filter((k) => !derivedAreas.includes(k)) : [];
+    const effectiveAreas = editing ? (editing.allQualityAreas ? derivedAreas : [...derivedAreas, ...customAreas]) : [];
+    const toggleCustomArea = (k) => setEditing((ed) => ({ ...ed, qualityAreas: (ed.qualityAreas || []).includes(k) ? ed.qualityAreas.filter((x) => x !== k) : [...(ed.qualityAreas || []), k] }));
 
     return (
       <div className="grid" style={{ gap: 14 }}>
@@ -164,26 +169,35 @@
                 {(depts || []).map((d) => {
                   const on = editing.departments.includes(d.id);
                   return <span key={d.id} onClick={() => setEditing((ed) => ({ ...ed, departments: ed.departments.includes(d.id) ? ed.departments.filter((x) => x !== d.id) : [...ed.departments, d.id] }))}
+                    title={deptName(d.id) + (d.custom ? ' (custom)' : '')}
                     style={{ cursor: 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)' }}
-                   >{d.short}</span>;
+                   >{d.short || deptName(d.id)}</span>;
                 })}
               </div>
             </Field>
-            <Field label="Quality areas" hint="Assigned automatically from the departments above — one assignment covers both patient statistics and quality, so they can never drift apart.">
+            <Field label="Quality areas" hint="Auto-granted by the departments above (assign once). Tick extra areas below for custom access.">
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9, cursor: 'pointer' }}>
                 <input type="checkbox" checked={!!editing.allQualityAreas} onChange={(e) => setEditing((ed) => ({ ...ed, allQualityAreas: e.target.checked }))} />
                 Hospital-wide — every quality area (e.g. Infection Control)
               </label>
-              {derivedAreas.length
-                ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                    {derivedAreas.map((ak) => <span key={ak} style={{ padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid var(--blue)', background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(ak) : ak}</span>)}
-                  </div>
-                : <div style={{ fontSize: 12, color: 'var(--muted)' }}>None yet — pick departments above, or tick “Hospital-wide”.</div>}
+              {!editing.allQualityAreas && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                  {areas.map((a) => {
+                    const auto = derivedAreas.includes(a.key);
+                    const on = auto || (editing.qualityAreas || []).includes(a.key);
+                    return <span key={a.key} onClick={() => { if (!auto) toggleCustomArea(a.key); }}
+                      title={auto ? 'From an assigned department' : 'Custom extra access'}
+                      style={{ cursor: auto ? 'default' : 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)', opacity: auto ? 0.85 : 1 }}>
+                      {a.name}{auto && <span style={{ fontSize: 9, fontWeight: 700, marginLeft: 4, opacity: 0.7 }}>AUTO</span>}</span>;
+                  })}
+                </div>
+              )}
+              {editing.allQualityAreas && <div style={{ fontSize: 12, color: 'var(--muted)' }}>All {areas.length} quality areas (hospital-wide).</div>}
             </Field>
-            {derivedAreas.length > 0 && (
+            {effectiveAreas.length > 0 && (
               <Field label="Specific indicators per area (optional)" hint="Leave all unticked in an area to allow every indicator of that area. Tick some to restrict this person to just those.">
                 <div style={{ display: 'grid', gap: 10 }}>
-                  {derivedAreas.map((ak) => {
+                  {effectiveAreas.map((ak) => {
                     const list = areaInds[ak] || [];
                     const aName = (areas.find((a) => a.key === ak) || {}).name || ak;
                     if (!list.length) return null;
@@ -462,7 +476,7 @@
     const [responsible, setResponsible] = useState(lockResp ? (me.name || '') : ((prefill && prefill.responsible) || ''));
     const [busy, setBusy] = useState(false);
     const [done, setDone] = useState(null);
-    const [guideOpen, setGuideOpen] = useState(true);
+    const [guideOpen, setGuideOpen] = useState(false); // HQI guide collapsed by default (click "Show" to expand)
     const [resps, setResps] = useState([]);
     useEffect(() => { if (!lockResp) dcApi.get('/api/responsibles').then((r) => setResps(r.ok ? r.responsibles : [])).catch(() => {}); }, []);
     useEffect(() => { setIndId(''); }, [areaKey]);
@@ -542,8 +556,10 @@
     const addIncident = () => setIncidents((a) => [...a, blankIncident()]);
     const setIncidentField = (i, k, v) => setIncidents((a) => a.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
     const delIncident = (i) => setIncidents((a) => a.filter((_, j) => j !== i));
-    // When incidents are logged for an adverse-event indicator, the count IS how many.
-    const autoCount = isIncidentType && incidents.length > 0;
+    // Adverse-event (incident) indicators are AUTO-ONLY: the numerator = the number of
+    // incidents logged below. The field is read-only (no manual typing) — start at 0 and
+    // it fills in as incidents are added.
+    const autoCount = isIncidentType;
 
     const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n
       : autoCount ? incidents.length : (Number(directNum) || 0);
@@ -603,22 +619,25 @@
 
     // The numerator (by group or direct) drives the count / rate.
     const result = computeAsRate ? (denNum > 0 ? Math.round((numerator / denNum) * mult * 100) / 100 : 0) : numerator;
+    // A rate needs its denominator: when a numerator is present but the denominator is
+    // still blank, the value can't be computed yet — show "—" + a prompt, not a false 0.
+    const ratePending = computeAsRate && numerator > 0 && !(denNum > 0);
 
-    // A data collector cannot overwrite a month that already has recorded data; only
-    // an administrator may change it (a fresh "Add a new indicator" is always allowed).
+    // When a month already has recorded data, a data collector can still submit — but
+    // it's flagged as a CORRECTION that goes to an administrator for review (it doesn't
+    // overwrite the live value until approved). A fresh "Add a new indicator" is never a correction.
     const qExists = !!(curInd && (
       (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length) ||
       (curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '') ||
       (curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '') ||
       (curInd.months && curInd.months[month] != null && curInd.months[month] !== '')
     ));
-    const qLocked = lockResp && !isNew && qExists;
+    const qCorrection = lockResp && !isNew && qExists;
     const submit = () => {
       if (!area) { toast('Select an area', 'error'); return; }
       if (!indId) { toast('Select an indicator', 'error'); return; }
       if (isNew && !newInd.name.trim()) { toast('Enter the new indicator name', 'error'); return; }
       if (!month) { toast('Pick a month', 'error'); return; }
-      if (qLocked) { toast('This month already has data — only an administrator can change it.', 'error'); return; }
       if (isRate && !(denNum > 0)) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ''), 'error'); return; }
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
@@ -655,7 +674,7 @@
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Field label="Quality area / unit">
               <select style={inputStyle} value={areaKey} onChange={(e) => setAreaKey(e.target.value)}>
-                {areas.map((a) => <option key={a.key} value={a.key}>{a.name}</option>)}
+                {areas.map((a) => <option key={a.key} value={a.key}>{/overall\s*hospital/i.test(a.key) ? 'All Departments (Overall Hospital)' : a.name}</option>)}
               </select>
             </Field>
             <Field label="Reporting month">
@@ -730,7 +749,7 @@
                   )}
                 </div>
               )}
-              {numMode === 'direct' && (
+              {numMode === 'direct' && !isIncidentType && (
                 <Field
                   label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{isRate ? '(denominator — required)' : '(denominator — optional, for a rate)'}</span></span>}
                   hint={isRate ? denDef : ('Leave blank to record a plain count. Enter the base for ' + monthLabel(month) + ' (e.g. total procedures / discharges / patient-days) to compute a rate per ' + mult + '.')}>
@@ -839,7 +858,7 @@
                         <Field label="UHID"><input style={inputStyle} value={x.uhid} onChange={(e) => setIncidentField(i, 'uhid', e.target.value)} placeholder="Hospital ID" /></Field>
                         <Field label="Age"><input style={inputStyle} value={x.age} onChange={(e) => setIncidentField(i, 'age', e.target.value)} placeholder="e.g. 54" /></Field>
                         <Field label="Sex"><input style={inputStyle} value={x.gender} onChange={(e) => setIncidentField(i, 'gender', e.target.value)} placeholder="M / F" /></Field>
-                        <Field label="Admission date"><input style={inputStyle} value={x.admissionDate} onChange={(e) => setIncidentField(i, 'admissionDate', e.target.value)} placeholder="YYYY-MM-DD" /></Field>
+                        <Field label="Admission date"><input type="date" style={inputStyle} value={x.admissionDate} onChange={(e) => setIncidentField(i, 'admissionDate', e.target.value)} /></Field>
                         <Field label="Diagnosis"><input style={inputStyle} value={x.diagnosis} onChange={(e) => setIncidentField(i, 'diagnosis', e.target.value)} placeholder="Diagnosis" /></Field>
                       </div>
                       <Field label="Incident details"><textarea style={{ ...inputStyle, minHeight: 40 }} value={x.details} onChange={(e) => setIncidentField(i, 'details', e.target.value)} placeholder="What happened" /></Field>
@@ -856,13 +875,25 @@
                   <button className="btn sm" onClick={addIncident}><Ic d={I.plus} s={13} />Add incident</button>
                 </div>
               )}
-              <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '13px 16px', marginBottom: 4, background: 'var(--panel-2)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              {/* For incident indicators the denominator lives HERE — next to the incidents
+                  and the computed value — so a rate isn't stuck at 0 for a hidden field. */}
+              {isIncidentType && numMode === 'direct' && (
+                <Field
+                  label={<span>{denLabel} <span style={{ color: (isRate && !(denNum > 0)) ? 'var(--rose)' : 'var(--muted)', fontWeight: isRate ? 700 : 400 }}>{isRate ? '(denominator — required to compute the rate)' : '(denominator — optional, for a rate)'}</span></span>}
+                  hint={isRate ? denDef : ('Leave blank to record a plain count of incidents. Enter the base for ' + monthLabel(month) + ' (e.g. total patient-days) to compute a rate per ' + mult + '.')}>
+                  <input type="number" step="any" style={{ ...inputStyle, ...(isRate && !(denNum > 0) ? { borderColor: 'var(--rose)' } : {}) }} value={den} onChange={(e) => setDen(e.target.value)} placeholder={isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)'} />
+                </Field>
+              )}
+              <div style={{ border: '1px solid ' + (ratePending ? '#f1c6cd' : 'var(--line)'), borderRadius: 9, padding: '13px 16px', marginBottom: 4, background: 'var(--panel-2)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4 }}>Computed value</div>
-                <span className="num" style={{ fontSize: 22, fontWeight: 800, color: 'var(--blue-700)' }}>{result}</span>
+                <span className="num" style={{ fontSize: 22, fontWeight: 800, color: ratePending ? 'var(--muted)' : 'var(--blue-700)' }}>{ratePending ? '—' : result}</span>
                 {unitQ ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)' }}>{unitQ}</span> : null}
                 <span style={{ flex: 1 }} />
-                <span style={{ fontSize: 11, color: 'var(--muted)' }}>{computeAsRate ? (numLabel + ' = ' + numerator + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '')) : (numLabel + ' = ' + numerator)}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</span>
+                {ratePending
+                  ? <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--rose)' }}>{numLabel} = {numerator} · enter {denLabel} (denominator) to compute the rate</span>
+                  : <span style={{ fontSize: 11, color: 'var(--muted)' }}>{computeAsRate ? (numLabel + ' = ' + numerator + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '')) : (numLabel + ' = ' + numerator)}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</span>}
               </div>
+              {/hand\s*hygiene/i.test(indNameQ) && (
               <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginTop: 13 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 8 }}>Observation &amp; action <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 11 }}>(optional)</span></div>
                 <div style={{ display: 'grid', gap: 8 }}>
@@ -873,6 +904,7 @@
                   </div>
                 </div>
               </div>
+              )}
             </>
           )}
           {lockResp

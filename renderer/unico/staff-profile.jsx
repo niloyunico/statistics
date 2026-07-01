@@ -172,7 +172,7 @@ function StaffForm({store, empId, setRoute, role}){
           {sec('Job',<>
             {field('Designation',cmb('designation',S.designationsFor(f.role)))}
             {field('Current Department',cmb('current_department',S.DEPARTMENTS))}
-            {field('Date of Joining',inp('doj','YYYY-MM-DD'))}
+            {field('Date of Joining',inp('doj','YYYY-MM-DD','date'))}
             {field('Total Experience',inp('total_experience_text','e.g. 4.5 yrs'), linkBtn('from DOJ',()=>{const r=yearsFromDOJ(f.doj);if(r)set('total_experience_text',r);else setErr('Enter a valid DOJ first');}))}
           </>)}
           {sec('Experience & Compliance',<>

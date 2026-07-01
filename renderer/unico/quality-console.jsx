@@ -645,7 +645,7 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
       <label style={lbl}>{label}</label>
       {ta
         ? <textarea value={incs[i][k] || ''} onChange={e => setF(i, k, e.target.value)} rows={2} style={{ ...inp, resize: 'vertical', lineHeight: 1.4 }} />
-        : <input value={incs[i][k] || ''} onChange={e => setF(i, k, e.target.value)} style={inp} />}
+        : <input type={/date/i.test(k) ? 'date' : 'text'} value={incs[i][k] || ''} onChange={e => setF(i, k, e.target.value)} style={inp} />}
     </div>
   );
 
