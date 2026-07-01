@@ -72,6 +72,11 @@ app.get('/api/data', requireAuth, async (req, res) => {
 });
 
 app.put('/api/data', requireAuth, async (req, res) => {
+  // Data COLLECTORS must never write the shared app-state doc. Their session carries
+  // only a scoped, value-stripped copy of the quality overlay (see web.js), so
+  // mirroring their localStorage back here would clobber the admin's full overlay.
+  // Collectors persist real data through /api/submissions — accept and no-op here.
+  if (req.user && req.user.role === 'collector') return res.json({ ok: true, skipped: true });
   const data = req.body && req.body.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return res.status(400).json({ ok: false, error: 'A data object is required.' });
   // The app state is a mirror of localStorage: a flat map of string->string. Enforce

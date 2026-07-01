@@ -52,6 +52,35 @@ function safeJSON(value) {
 }
 
 // Serve "/" and "/index.html" with the live DB snapshot + web bridge injected.
+// Collectors are served an EMPTY app-state blob (no shared admin state), but they
+// still need the admin's quality DEFINITION edits so their Data Collection form
+// shows the correct measurement type / benchmark / labels an admin configured in
+// the Quality console. Build a minimal `unico_quality_v2` overlay for the snapshot:
+// only the collector's own areas, and only DEFINITION fields (value fields like
+// months/incidents are stripped so recorded data and the entry lock are untouched).
+function scopeQualityOverlay(raw, qualityAreas) {
+  try {
+    const ov = typeof raw === 'string' ? JSON.parse(raw) : (raw && typeof raw === 'object' ? raw : null);
+    if (!ov || !ov.depts) return {};
+    const VALUE_FIELDS = ['months', 'monthRemarks', 'mNum', 'mDen', 'quarters', 'quarterRemarks', 'qNum', 'qDen', 'incidents'];
+    const stripValues = (o) => {
+      if (!o || typeof o !== 'object') return o;
+      const c = {}; Object.keys(o).forEach((k) => { if (VALUE_FIELDS.indexOf(k) < 0) c[k] = o[k]; }); return c;
+    };
+    const depts = {};
+    (qualityAreas || []).forEach((k) => {
+      const d = ov.depts[k]; if (!d) return;
+      const nd = {};
+      if (d.indPatches) { nd.indPatches = {}; Object.keys(d.indPatches).forEach((id) => { nd.indPatches[id] = stripValues(d.indPatches[id]); }); }
+      if (Array.isArray(d.indAdded)) nd.indAdded = d.indAdded.map(stripValues);
+      if (Array.isArray(d.indRemoved)) nd.indRemoved = d.indRemoved;
+      depts[k] = nd;
+    });
+    if (!Object.keys(depts).length) return {};
+    return { 'unico_quality_v2': JSON.stringify({ depts: depts }) };
+  } catch (e) { return {}; }
+}
+
 async function serveIndex(req, res) {
   let html;
   try { html = fs.readFileSync(INDEX_FILE, 'utf8'); }
@@ -80,7 +109,9 @@ async function serveIndex(req, res) {
     depts = depts.filter((d) => da.includes(d.id));
     quality = quality.filter((q) => qa.includes(q.key));
     staff = [];
-    snap = {};
+    // Not the full shared blob — just the admin's quality DEFINITION overlay, scoped
+    // to this collector's areas, so their Data Collection form reflects console edits.
+    snap = scopeQualityOverlay(appRes && appRes.data && appRes.data['unico_quality_v2'], qa);
   }
   const userInject = scopeUser
     ? { username: scopeUser.username, name: scopeUser.name, role: scopeUser.role, departments: scopeUser.departments, qualityAreas: scopeUser.qualityAreas }
