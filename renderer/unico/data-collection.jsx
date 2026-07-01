@@ -77,10 +77,11 @@
     const [list, setList] = useState(null);
     const [editing, setEditing] = useState(null); // the record being added/edited
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), []);
+    const areaInds = useMemo(() => { const m = {}; (window.qualityData ? window.qualityData() : []).forEach((d) => { m[d.key] = (d.indicators || []).map((i) => ({ id: i.id, name: i.name })); }); return m; }, []);
     const load = () => dcApi.get('/api/responsibles').then((r) => setList(r.ok ? r.responsibles : [])).catch(() => setList([]));
     useEffect(() => { load(); }, []);
 
-    const blank = () => ({ name: '', title: '', phone: '', staffId: null, empId: '', password: '', departments: [], qualityAreas: [], active: true });
+    const blank = () => ({ name: '', title: '', phone: '', staffId: null, empId: '', password: '', departments: [], qualityAreas: [], qualityIndicators: {}, active: true });
     const save = () => {
       if (!editing.name.trim()) { toast('Name is required', 'error'); return; }
       dcApi.post('/api/responsibles', editing).then((r) => {
@@ -142,6 +143,31 @@
                 })}
               </div>
             </Field>
+            {editing.qualityAreas.length > 0 && (
+              <Field label="Specific indicators per area (optional)" hint="Leave all unticked in an area to allow every indicator of that area. Tick some to restrict this person to just those.">
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {editing.qualityAreas.map((ak) => {
+                    const list = areaInds[ak] || [];
+                    const aName = (areas.find((a) => a.key === ak) || {}).name || ak;
+                    if (!list.length) return null;
+                    const sel = (editing.qualityIndicators && editing.qualityIndicators[ak]) || [];
+                    const setSel = (ids) => setEditing((ed) => { const qi = { ...(ed.qualityIndicators || {}) }; if (ids && ids.length) qi[ak] = ids; else delete qi[ak]; return { ...ed, qualityIndicators: qi }; });
+                    return (
+                      <div key={ak} style={{ padding: '10px 12px', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 9 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 7 }}>{aName} <span style={{ fontWeight: 500, color: 'var(--muted)' }}>· {sel.length ? sel.length + ' selected' : 'all indicators'}</span></div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                          {list.map((ind) => {
+                            const on = sel.includes(ind.id);
+                            return <span key={ind.id} onClick={() => setSel(on ? sel.filter((x) => x !== ind.id) : [...sel, ind.id])}
+                              style={{ cursor: 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)' }}>{ind.name}</span>;
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Field>
+            )}
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <button className="btn pri" onClick={save}><Ic d={I.check} s={15} />Save</button>
               <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
@@ -371,11 +397,13 @@
     const [newInd, setNewInd] = useState({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' });
     const [month, setMonth] = useState(defMonth);
     const [den, setDen] = useState('');
-    // Numerator entry: either broken down BY STAFF GROUP (Nurse / Doctor / Other —
-    // PCA & other departments) which add up to the total, or typed DIRECTLY. The old
+    // Numerator entry: either broken down BY STAFF GROUP (Nurse / Doctor / PCA /
+    // Other) which add up to the total, or typed DIRECTLY. For rate/% indicators each
+    // group also carries its OWN denominator (the totals are their sums). The old
     // per-incident logging module is intentionally gone for this collector form.
     const [numMode, setNumMode] = useState('group'); // 'group' | 'direct'
-    const [groups, setGroups] = useState({ nurse: '', doctor: '', other: '' });
+    const [groups, setGroups] = useState({ nurse: '', doctor: '', pca: '', other: '' });
+    const [groupsDen, setGroupsDen] = useState({ nurse: '', doctor: '', pca: '', other: '' });
     const [directNum, setDirectNum] = useState('');
     // Optional observation + corrective / preventive action (CAPA) for the month.
     const [capa, setCapa] = useState({ finding: '', corrective: '', preventive: '' });
@@ -419,12 +447,16 @@
     const numDef = def.numeratorDef || '';
     const denDef = def.denominatorDef || (isRate ? ('Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.') : '');
     const indNameQ = (def.name || newInd.name) || 'Result';
-    const groupSum = (Number(groups.nurse) || 0) + (Number(groups.doctor) || 0) + (Number(groups.other) || 0);
+    const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
+    const groupSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groups[k]) || 0), 0);
+    const groupDenSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groupsDen[k]) || 0), 0);
     const numerator = numMode === 'group' ? groupSum : (Number(directNum) || 0);
     // Every indicator can take a denominator: rate indicators REQUIRE it; counts may
-    // OPTIONALLY add one to compute a rate (per 1000) instead of a plain count.
-    const denNum = Number(den);
-    const denEntered = den !== '' && denNum > 0;
+    // OPTIONALLY add one to compute a rate. In "By group" mode each staff group carries
+    // its OWN denominator and the total denominator is their sum; in "Direct value"
+    // mode the single denominator field is used.
+    const denNum = numMode === 'group' ? groupDenSum : (Number(den) || 0);
+    const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
     const rateUnit = (unitRaw && /per|%/.test(unitRaw)) ? unitRaw : (formula === 'pct' ? '%' : ('per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '')));
     const unitQ = computeAsRate ? rateUnit : (unitRaw || 'count');
@@ -438,19 +470,22 @@
     // Prefill the numerator (group breakdown or direct) + denominator from existing
     // data on month / indicator change.
     useEffect(() => {
-      if (!curInd) { setGroups({ nurse: '', doctor: '', other: '' }); setDirectNum(''); setNumMode('group'); setDen(''); return; }
+      const blankG = { nurse: '', doctor: '', pca: '', other: '' };
+      const toG = (o) => ({ nurse: o && o.nurse != null ? String(o.nurse) : '', doctor: o && o.doctor != null ? String(o.doctor) : '', pca: o && o.pca != null ? String(o.pca) : '', other: o && o.other != null ? String(o.other) : '' });
+      if (!curInd) { setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('group'); setDen(''); return; }
       const g = curInd.mGroups && curInd.mGroups[month];
+      const gd = curInd.mGroupsDen && curInd.mGroupsDen[month];
       // existing total numerator: rate → mNum[month]; count → months[month]
       const rawNum = (curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '') ? curInd.mNum[month]
         : (!isRate && curInd.months && curInd.months[month] != null && curInd.months[month] !== '') ? curInd.months[month]
         : null;
       if (g && typeof g === 'object') {
-        setGroups({ nurse: g.nurse != null ? String(g.nurse) : '', doctor: g.doctor != null ? String(g.doctor) : '', other: g.other != null ? String(g.other) : '' });
+        setGroups(toG(g)); setGroupsDen(gd && typeof gd === 'object' ? toG(gd) : blankG);
         setDirectNum(''); setNumMode('group');
       } else if (rawNum != null) {
-        setDirectNum(String(rawNum)); setGroups({ nurse: '', doctor: '', other: '' }); setNumMode('direct');
+        setDirectNum(String(rawNum)); setGroups(blankG); setGroupsDen(blankG); setNumMode('direct');
       } else {
-        setGroups({ nurse: '', doctor: '', other: '' }); setDirectNum(''); setNumMode('group');
+        setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('group');
       }
       setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
       const cp = curInd.capa && curInd.capa[month];
@@ -475,7 +510,7 @@
       if (isNew && !newInd.name.trim()) { toast('Enter the new indicator name', 'error'); return; }
       if (!month) { toast('Pick a month', 'error'); return; }
       if (qLocked) { toast('This month already has data — only an administrator can change it.', 'error'); return; }
-      if (isRate && (den === '' || Number(den) <= 0)) { toast('Enter ' + denLabel + ' (denominator)', 'error'); return; }
+      if (isRate && !(denNum > 0)) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : ''), 'error'); return; }
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/quality', {
@@ -485,14 +520,15 @@
         valueType: computeAsRate ? (formula === 'pct' ? '%' : 'Rate') : 'Count', entryMode: computeAsRate ? 'rate' : 'count', mult,
         formula: computeAsRate ? (isRate ? formula : 'rate1000') : 'count',
         numLabel: computeAsRate ? numLabel : undefined, denLabel: computeAsRate ? denLabel : undefined, unit: unitQ,
-        value: computeAsRate ? undefined : numerator, num: computeAsRate ? numerator : undefined, den: computeAsRate ? den : undefined,
-        groups: numMode === 'group' ? { nurse: Number(groups.nurse) || 0, doctor: Number(groups.doctor) || 0, other: Number(groups.other) || 0 } : undefined,
+        value: computeAsRate ? undefined : numerator, num: computeAsRate ? numerator : undefined, den: computeAsRate ? denNum : undefined,
+        groups: numMode === 'group' ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
+        groupsDen: (numMode === 'group' && computeAsRate) ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
         capa: (capa.finding || capa.corrective || capa.preventive) ? { finding: capa.finding, corrective: capa.corrective, preventive: capa.preventive } : undefined,
         remark,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ area: area.name, month }); setGroups({ nurse: '', doctor: '', other: '' }); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
+        if (r.ok) { setDone({ area: area.name, month }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -500,7 +536,7 @@
     const showEntry = (indId && !isNew) || (isNew && newInd.name);
     return (
       <div className="grid" style={{ gap: 14, maxWidth: 760 }}>
-        <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Enter the month's value — by staff group (Nurse / Doctor / Other) or directly — the count / rate is calculated automatically." />
+        <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Enter the month's value — by staff group (Nurse / Doctor / PCA / Other) or directly — the count / rate is calculated automatically." />
         {done && <Banner ok onClose={() => setDone(null)}>Saved ✓ — {done.area} · {monthLabel(done.month)} sent for admin review.</Banner>}
         <Card>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -581,15 +617,17 @@
                   )}
                 </div>
               )}
-              <Field
-                label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{isRate ? '(denominator — required)' : '(denominator — optional, for a rate)'}</span></span>}
-                hint={isRate ? denDef : ('Leave blank to record a plain count. Enter the base for ' + monthLabel(month) + ' (e.g. total procedures / discharges / patient-days) to compute a rate per ' + mult + '.')}>
-                <input type="number" step="any" style={inputStyle} value={den} onChange={(e) => setDen(e.target.value)} placeholder={isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)'} />
-              </Field>
+              {numMode === 'direct' && (
+                <Field
+                  label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{isRate ? '(denominator — required)' : '(denominator — optional, for a rate)'}</span></span>}
+                  hint={isRate ? denDef : ('Leave blank to record a plain count. Enter the base for ' + monthLabel(month) + ' (e.g. total procedures / discharges / patient-days) to compute a rate per ' + mult + '.')}>
+                  <input type="number" step="any" style={inputStyle} value={den} onChange={(e) => setDen(e.target.value)} placeholder={isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)'} />
+                </Field>
+              )}
               <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginBottom: 13 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{numLabel}{isRate ? ' (numerator)' : ''}</div>
-                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{numerator}</span>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{numLabel}{isRate ? ' (numerator ÷ denominator)' : ''}</div>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{numerator}{isRate ? ' / ' + groupDenSum : ''}</span>
                   <span style={{ flex: 1 }} />
                   <div className="seg">
                     <button className={numMode === 'group' ? 'on' : ''} onClick={() => setNumMode('group')}>By group</button>
@@ -599,13 +637,23 @@
                 {numMode === 'group' ? (
                   <>
                     <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>
-                      Enter the {(numLabel || 'value').toLowerCase()} for each staff group — they add up to the total {isRate ? 'numerator' : 'value'}.
+                      {isRate
+                        ? ('Enter each staff group’s ' + numLabel.toLowerCase() + ' (numerator) and ' + denLabel.toLowerCase() + ' (denominator) — they add up to the totals.')
+                        : ('Enter the ' + (numLabel || 'value').toLowerCase() + ' for each staff group — they add up to the total value.')}
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-                      <Field label="Nurse"><input type="number" min="0" step="any" style={inputStyle} value={groups.nurse} onChange={(e) => setGroups((g) => ({ ...g, nurse: e.target.value }))} placeholder="0" /></Field>
-                      <Field label="Doctor"><input type="number" min="0" step="any" style={inputStyle} value={groups.doctor} onChange={(e) => setGroups((g) => ({ ...g, doctor: e.target.value }))} placeholder="0" /></Field>
-                      <Field label={<span>Other <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(PCA / other dept.)</span></span>}><input type="number" min="0" step="any" style={inputStyle} value={groups.other} onChange={(e) => setGroups((g) => ({ ...g, other: e.target.value }))} placeholder="0" /></Field>
-                    </div>
+                    {GROUP_KEYS.map(([k, lbl]) => (
+                      <div key={k} style={{ display: 'grid', gridTemplateColumns: isRate ? '78px 1fr 1fr' : '78px 1fr', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>{lbl}</div>
+                        <input type="number" min="0" step="any" style={inputStyle} value={groups[k]} onChange={(e) => setGroups((g) => ({ ...g, [k]: e.target.value }))} placeholder={isRate ? 'numerator' : '0'} />
+                        {isRate && <input type="number" min="0" step="any" style={inputStyle} value={groupsDen[k]} onChange={(e) => setGroupsDen((g) => ({ ...g, [k]: e.target.value }))} placeholder="denominator" />}
+                      </div>
+                    ))}
+                    {isRate && (
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                        <span>Total {numLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{groupSum}</b></span>
+                        <span>Total {denLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{groupDenSum}</b></span>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <Field label={<span>{numLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(enter the number directly)</span></span>} hint={numDef || undefined}>
@@ -641,7 +689,7 @@
           {qLocked && <Banner>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)} — submission is locked for data collectors. Ask an administrator to change it.</Banner>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <button className="btn pri" disabled={busy || qLocked} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qLocked ? 'Locked — already recorded' : 'Save monthly value')}</button>
-            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', other: '' }); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
+            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
           </div>
         </Card>
       </div>
@@ -750,8 +798,113 @@
     );
   }
 
+  /* ============================ Quality Report (A4, print-ready) ============================
+     Standalone auto-generated report of the quality indicators, rendered into #pdf-root and
+     printed via the shared pdf-export-mode path. Reads the SAME window.qualityData() the forms
+     use (so it reflects the backend-computed quarters/values), and reuses the global chart
+     components (Donut / Bar3D / BarChart). Lives inside Data Collection so it never touches the
+     quality-console / app / ui refactor. */
+  function QualityReportDoc() {
+    const areas = (typeof window.qualityData === 'function' ? window.qualityData() : (window.QUALITY_SEED || [])).filter((a) => a && a.indicators && a.indicators.length);
+    const QM = (typeof window !== 'undefined' && window.QUALITY_QUARTER_MONTHS) || { Q1: ['Jun-25', 'Jul-25', 'Aug-25'], Q2: ['Sep-25', 'Oct-25', 'Nov-25'], Q3: ['Dec-25', 'Jan-26', 'Feb-26'], Q4: ['Mar-26', 'Apr-26', 'May-26'] };
+    const QS = ['Q1', 'Q2', 'Q3', 'Q4'];
+    const qval = (ind, q) => (ind.quarters ? ind.quarters[q] : null);
+    const qstatus = (ind, q) => { const v = qval(ind, q); if (v == null || v === '') return 'na'; const b = ind.benchmarkValue; if (b == null || b === '') return 'ok'; return ind.goalDirection === 'higher_is_better' ? (v >= b ? 'ok' : 'breach') : (v <= b ? 'ok' : 'breach'); };
+    const fmtv = (ind, q) => { const v = qval(ind, q); return (v == null || v === '') ? '—' : v; };
+    let ok = 0, breach = 0, na = 0, totalInd = 0;
+    areas.forEach((a) => { totalInd += a.indicators.length; a.indicators.forEach((ind) => QS.forEach((q) => { const s = qstatus(ind, q); if (s === 'ok') ok++; else if (s === 'breach') breach++; else na++; })); });
+    const compliance = ok + breach ? Math.round(ok * 100 / (ok + breach)) : 100;
+    const donut = [{ label: 'On benchmark', value: ok, color: '#1f9d57' }, { label: 'Breach', value: breach, color: '#d23a52' }, { label: 'Not reported', value: na, color: '#c4ccd6' }].filter((x) => x.value > 0);
+    const breachByQ = QS.map((q) => { let b = 0; areas.forEach((a) => a.indicators.forEach((ind) => { if (qstatus(ind, q) === 'breach') b++; })); return { label: q, value: b }; });
+    let date = ''; try { date = new Date().toISOString().slice(0, 10); } catch (e) { }
+    const hospital = 'UNICO Hospitals';
+    const tone = { ok: ['#1f9d57', '#e7f6ec'], breach: ['#d23a52', '#fdeaec'], na: ['#8a93a3', '#eef1f5'] };
+    const th = { textAlign: 'left', fontSize: 10, textTransform: 'uppercase', letterSpacing: .4, color: '#5b6672', padding: '6px 8px', borderBottom: '2px solid #d7dee7' };
+    const td = { fontSize: 11, padding: '5px 8px', borderBottom: '1px solid #eef1f5', color: '#1f2a37' };
+    const cell = (s, v) => <span style={{ display: 'inline-block', minWidth: 30, textAlign: 'center', padding: '2px 6px', borderRadius: 6, fontWeight: 700, fontSize: 10.5, background: tone[s][1], color: tone[s][0] }}>{v}</span>;
+    const KPI = ({ label, value, color, foot }) => (
+      <div style={{ border: '1px solid #e2e8f0', borderLeft: '4px solid ' + (color || '#0090ca'), borderRadius: 8, padding: '10px 13px' }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, color: '#5b6672', textTransform: 'uppercase', letterSpacing: .3 }}>{label}</div>
+        <div style={{ fontSize: 26, fontWeight: 800, color: color || '#0f2c4d', lineHeight: 1.1 }}>{value}</div>
+        {foot ? <div style={{ fontSize: 10, color: '#8a93a3' }}>{foot}</div> : null}
+      </div>
+    );
+    const Foot = () => <div className="pdf-foot" style={{ marginTop: 12, color: '#9aa6b4', fontSize: 9, borderTop: '1px solid #e4e9f0', paddingTop: 6 }}>{hospital} · Confidential · Generated {date}</div>;
+    return (
+      <div className="pdf-doc">
+        {/* summary page */}
+        <section className="pdf-page" style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", color: '#16202e' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', borderBottom: '2px solid #0090ca', paddingBottom: 8, marginBottom: 14 }}>
+            <div><div style={{ fontSize: 20, fontWeight: 800, color: '#0072a3' }}>{hospital}</div><div style={{ fontSize: 13, fontWeight: 600 }}>Quality Indicator Report</div></div>
+            <div style={{ textAlign: 'right', fontSize: 10.5, color: '#8a93a3' }}>Generated {date}<br />NQI · Jun 2025 – May 2026</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
+            <KPI label="Areas / units" value={areas.length} color="#0090ca" />
+            <KPI label="Indicators" value={totalInd} color="#6a52d4" />
+            <KPI label="Compliance" value={compliance + '%'} color="#1f9d57" foot={ok + ' on benchmark · ' + breach + ' breaches'} />
+            <KPI label="Breaches" value={breach} color={breach ? '#d23a52' : '#1f9d57'} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 16, marginBottom: 4 }}>
+            <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Compliance mix</div>
+              <div style={{ display: 'grid', placeItems: 'center' }}>{typeof Donut === 'function' ? <Donut data={donut.length ? donut : [{ label: 'n/a', value: 1, color: '#c4ccd6' }]} size={158} centerValue={compliance + '%'} centerLabel="on benchmark" flat /> : null}</div>
+            </div>
+            <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Breaches by quarter</div>
+              {typeof Bar3D === 'function' ? <Bar3D data={breachByQ} x="label" y="value" height={185} color="#d23a52" flat /> : (typeof BarChart === 'function' ? <BarChart data={breachByQ} x="label" y="value" height={185} color="#d23a52" flat /> : null)}
+            </div>
+          </div>
+          <div style={{ marginTop: 12, border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr><th style={th}>Area / unit</th>{QS.map((q) => <th key={q} style={{ ...th, textAlign: 'center' }}>{q}</th>)}<th style={{ ...th, textAlign: 'right' }}>Compliance</th></tr></thead>
+              <tbody>{areas.map((a) => { let aok = 0, ab = 0; a.indicators.forEach((ind) => QS.forEach((q) => { const s = qstatus(ind, q); if (s === 'ok') aok++; else if (s === 'breach') ab++; })); const rate = aok + ab ? Math.round(aok * 100 / (aok + ab)) : 100; return (
+                <tr key={a.key}><td style={{ ...td, fontWeight: 600 }}>{a.name} <span style={{ color: '#8a93a3', fontWeight: 400 }}>· {a.indicators.length} ind.</span></td>
+                  {QS.map((q) => { let b = 0, rep = 0; a.indicators.forEach((ind) => { const s = qstatus(ind, q); if (s === 'breach') b++; if (s !== 'na') rep++; }); const s = rep === 0 ? 'na' : b > 0 ? 'breach' : 'ok'; return <td key={q} style={{ ...td, textAlign: 'center' }}>{cell(s, rep === 0 ? '–' : b > 0 ? b : '✓')}</td>; })}
+                  <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{rate}%</td></tr>
+              ); })}</tbody>
+            </table>
+          </div>
+          <Foot />
+        </section>
+        {/* one page per area */}
+        {areas.map((a) => {
+          const chartData = a.indicators.map((ind) => { let v = null; for (let i = QS.length - 1; i >= 0; i--) { const x = qval(ind, QS[i]); if (x != null && x !== '') { v = x; break; } } return { label: (ind.name || '').slice(0, 18), value: Number(v) || 0 }; });
+          return (
+            <section className="pdf-page" key={a.key} style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", color: '#16202e' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', borderBottom: '2px solid #0090ca', paddingBottom: 6, marginBottom: 12 }}>
+                <div><div style={{ fontSize: 16, fontWeight: 800, color: '#0072a3' }}>{a.name}</div><div style={{ fontSize: 11, color: '#5b6672' }}>Quality indicators · {a.indicators.length}</div></div>
+                <div style={{ textAlign: 'right', fontSize: 10, color: '#8a93a3' }}>{hospital} · {date}</div>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
+                <thead><tr><th style={th}>Indicator</th><th style={th}>Benchmark</th>{QS.map((q) => <th key={q} style={{ ...th, textAlign: 'center' }}>{q}</th>)}<th style={th}>Unit</th></tr></thead>
+                <tbody>{a.indicators.map((ind) => (
+                  <tr key={ind.id}><td style={{ ...td, fontWeight: 600 }}>{ind.name}</td><td style={td}>{ind.benchmark || (ind.benchmarkValue != null && ind.benchmarkValue !== '' ? (ind.goalDirection === 'higher_is_better' ? '≥ ' : '≤ ') + ind.benchmarkValue : '—')}</td>
+                    {QS.map((q) => <td key={q} style={{ ...td, textAlign: 'center' }}>{cell(qstatus(ind, q), fmtv(ind, q))}</td>)}
+                    <td style={td}>{ind.unit || ''}</td></tr>
+                ))}</tbody>
+              </table>
+              {chartData.some((d) => d.value) && typeof BarChart === 'function' && (
+                <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Latest reported value by indicator</div>
+                  <BarChart data={chartData} x="label" y="value" height={195} color="#0090ca" flat />
+                </div>
+              )}
+              <Foot />
+            </section>
+          );
+        })}
+      </div>
+    );
+  }
+
   function DataReview() {
     const [rows, setRows] = useState(null);
+    const [reportOn, setReportOn] = useState(false);
+    useEffect(() => { const cleanup = () => { try { document.body.classList.remove('pdf-export-mode'); } catch (e) { } }; window.addEventListener('afterprint', cleanup); return () => window.removeEventListener('afterprint', cleanup); }, []);
+    const printReport = () => {
+      const go = () => { try { document.body.classList.add('pdf-export-mode'); window.print(); } catch (e) { } };
+      if (reportOn) go(); else { setReportOn(true); setTimeout(go, 220); }
+    };
     const [stats, setStats] = useState(null);
     const [filter, setFilter] = useState('pending');
     const [busy, setBusy] = useState('');
@@ -784,7 +937,10 @@
     return (
       <div className="grid" style={{ gap: 14 }}>
         <SectionTitle icon={I.doc} title="Review & History" sub="Every submission with time, data and status. Submissions stay pending until an admin approves — approval applies them to the live dashboard."
-          right={<button className="btn sm" onClick={load}><Ic d={I.trend} s={14} />Refresh</button>} />
+          right={<>
+            <button className="btn sm pri" onClick={printReport} title="Generate a print-ready A4 quality report with graphs"><Ic d={I.download} s={14} />Quality Report (PDF)</button>
+            <button className="btn sm" onClick={load}><Ic d={I.trend} s={14} />Refresh</button>
+          </>} />
 
         {stats && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -830,6 +986,7 @@
               </table>}
         </Card>
         {detail && <SubmissionDetail s={detail} canEdit={true} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}
+        {reportOn && typeof document !== 'undefined' && document.getElementById('pdf-root') && ReactDOM.createPortal(<QualityReportDoc />, document.getElementById('pdf-root'))}
       </div>
     );
   }

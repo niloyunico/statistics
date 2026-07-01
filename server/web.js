@@ -128,7 +128,17 @@ async function serveIndex(req, res) {
   if (scopeUser && scopeUser.role === 'collector') {
     const da = scopeUser.departments || [], qa = scopeUser.qualityAreas || [];
     depts = depts.filter((d) => da.includes(d.id));
-    quality = quality.filter((q) => qa.includes(q.key));
+    // Area scoping (qa) is preserved exactly; when qualityIndicators[area] is a
+    // non-empty array, additionally narrow that area's indicators to those ids.
+    // Empty/absent entry => keep ALL indicators (BACKWARD-COMPAT). The area object is
+    // shallow-cloned so the shared getQuality() result is never mutated.
+    const qi = (scopeUser.qualityIndicators && typeof scopeUser.qualityIndicators === 'object') ? scopeUser.qualityIndicators : {};
+    quality = quality.filter((q) => qa.includes(q.key)).map((q) => {
+      const allow = qi[q.key];
+      if (!Array.isArray(allow) || !allow.length) return q; // no per-indicator scope -> all indicators
+      const allowSet = new Set(allow.map(String));
+      return Object.assign({}, q, { indicators: (q.indicators || []).filter((i) => allowSet.has(String(i.id))) });
+    });
     staff = [];
     // Not the full shared blob — only the DEFINITION/CONFIG overlays a collector needs,
     // scoped to their own areas/departments, so BOTH Data Collection forms reflect the

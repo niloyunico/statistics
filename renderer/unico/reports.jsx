@@ -19,8 +19,257 @@ function reportChartEl(d,style,tone,fs,donutData){
   return <Bar3D data={fs} x="month" y={d.primary} height={205} color={tone} flat/>; // bar3d + default
 }
 
+/* ==================================================================
+   Monthly Statistics Report — board-ready statistical reporting.
+   Mirrors the Quality report (quality-console.jsx qc*) but DIVERGES:
+   - no compliance/benchmark/breach concept (statistics has no targets)
+   - no incident details
+   - HETEROGENEOUS metrics: each dept has its own d.cols / d.primary,
+     so the table is grouped-by-department, one row per metric.
+   - months are dynamic (d.months + window.UNICO.MONTH_ORDER/MONTHS_FULL),
+     not a hardcoded 12-entry MONTHS array.
+   Reuses window charts (Spark/BarChart/ComboChart) + #pdf-root export.
+   ================================================================== */
+const MONO="'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
+
+function msEsc(s){ return ((s==null?'':s)+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function msDownload(content, filename, mime){
+  try{ const blob=new Blob([content],{type:mime}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click();
+    setTimeout(()=>{ try{document.body.removeChild(a);}catch(e){} URL.revokeObjectURL(url); },600);
+  }catch(e){}
+}
+// A metric may be absent/null in some months -> null renders as '–' / gap.
+function msVal(d, colId, monthKey){
+  const r = d.series.find(s=>s.month===monthKey);
+  const v = r ? r[colId] : null;
+  return (v==null || v==='') ? null : v;
+}
+// pct columns hold an already-computed percentage; append '%'.
+function msFmt(col, v){ return v==null ? '–' : (col.pct ? (fmt(v)+'%') : fmt(v)); }
+// Representative (headline) metric for a department.
+function msPrimaryCol(d){ return (d.cols||[]).find(c=>c.id===d.primary) || (d.cols||[])[0] || {id:d.primary,label:d.primaryLabel||d.primary}; }
+
+// Full multi-department report HTML — per dept: stat line + one standalone
+// table over that dept's OWN d.months axis. No incident section (§5.3).
+function msReportHTML(depts){
+  const date=new Date().toISOString().slice(0,10);
+  let body='<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Monthly Statistics Report</h1>'
+    +'<div style="font-family:Calibri;color:#555;margin-bottom:12px">FY 2025-26 · generated '+date+' · Confidential</div>';
+  depts.forEach(d=>{
+    const pc=msPrimaryCol(d), tot=d.series.reduce((s,r)=>s+(r[d.primary]||0),0), peak=d.series.length?Math.max(...d.series.map(r=>r[d.primary]||0)):0;
+    body+='<h2 style="font-family:Calibri;color:#16202e;margin:16px 0 3px">'+msEsc(d.name)+'</h2>'
+      +'<div style="font-family:Calibri;color:#555;margin-bottom:6px">Total '+msEsc(pc.label)+': <b>'+fmt(tot)+'</b> · Peak: <b>'+fmt(peak)+'</b> · Metrics: '+d.cols.length+'</div>';
+    const th=['Metric'].concat(d.months.map(k=>msEsc((window.UNICO.MONTHS_FULL[k]||k)))).map(h=>'<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">'+h+'</th>').join('');
+    const trs=d.cols.map((col,i)=>{
+      const cells=['<span style="font-weight:'+(col.id===d.primary?700:400)+'">'+msEsc(col.label)+'</span>']
+        .concat(d.series.map(r=>{ const v=r[col.id]; return msEsc(v==null||v===''?'–':(col.pct?fmt(v)+'%':fmt(v))); }));
+      return '<tr style="background:'+(i%2?'#eef6fb':'#fff')+'">'+cells.map((c,ci)=>'<td style="border:1px solid #b9c6d2;padding:4px 7px;font-family:Calibri;font-size:10pt;'+(ci?'text-align:center':'')+'">'+c+'</td>').join('')+'</tr>';
+    }).join('');
+    body+='<table border="1" style="border-collapse:collapse"><thead><tr>'+th+'</tr></thead><tbody>'+trs+'</tbody></table>';
+  });
+  return body;
+}
+// PDF / Excel / Word / CSV — buttons ALWAYS export all depts (§5.1).
+function msExport(depts, f){
+  const base='UNICO-Statistics-Report-'+new Date().toISOString().slice(0,10);
+  if(f==='csv'){
+    // CSV uses the UNION month axis; blank cells for months a dept lacks (§7.3).
+    const AX=[...new Set(depts.flatMap(d=>d.months))].sort((a,b)=>window.UNICO.MONTH_ORDER.indexOf(a)-window.UNICO.MONTH_ORDER.indexOf(b));
+    const rows=[['Department','Metric','Type'].concat(AX.map(k=>window.UNICO.MONTHS_FULL[k]||k))];
+    depts.forEach(d=>d.cols.forEach(col=>{
+      rows.push([d.name, col.label+(col.id===d.primary?' (primary)':''), col.pct?'percent':'count']
+        .concat(AX.map(k=>{ const r=d.series.find(s=>s.month===k); const v=r?r[col.id]:null; return (v==null||v==='')?'':(col.pct?v+'%':v); })));
+    }));
+    msDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), base+'.csv','text/csv;charset=utf-8');
+    return;
+  }
+  const html='<html xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><style>@page{size:A4 landscape;margin:1cm}</style></head><body>'+msReportHTML(depts)+'</body></html>';
+  if(f==='excel') return msDownload(html, base+'.xls','application/vnd.ms-excel');
+  if(f==='word')  return msDownload(html, base+'.doc','application/msword');
+  if(f==='pdf'){
+    const root=typeof document!=='undefined'?document.getElementById('pdf-root'):null; const native=window.unicoNative;
+    if(!root){ try{window.print();}catch(e){} return; }
+    root.innerHTML='<div class="pdf-page" style="padding:9mm 10mm;font-family:Calibri,Arial">'+msReportHTML(depts)+'</div>';
+    document.body.classList.add('pdf-export-mode');
+    const done=()=>{ root.innerHTML=''; document.body.classList.remove('pdf-export-mode'); };
+    if(native&&typeof native.exportPDF==='function'){ Promise.resolve(native.exportPDF({pageSize:'A4',landscape:true,defaultName:base})).catch(()=>{}).then(done); }
+    else { try{window.print();}catch(e){} setTimeout(done,700); }
+  }
+}
+
+// Per-row trend sparkline over the dept's OWN month axis (nulls -> 0; §6.3).
+function MSSpark({d, colId}){
+  const AX=[...new Set(d.months)].sort((a,b)=>window.UNICO.MONTH_ORDER.indexOf(a)-window.UNICO.MONTH_ORDER.indexOf(b));
+  const vals=AX.map(k=>{ const r=d.series.find(s=>s.month===k); const v=r?r[colId]:null; return (v==null||v==='')?0:v; });
+  if(!vals.some(v=>v>0)) return <span style={{color:'var(--faint)',fontSize:10,fontFamily:MONO}}>–</span>;
+  const col = colId===d.primary ? PALETTE[0] : '#3ab5a7';
+  return <Spark values={vals} color={col} w={92} h={24} fill={false}/>;
+}
+
+// Hand-rolled summed-primary month bar chart over the union axis (fallback / headline).
+function MSBars({scope, AX, color=PALETTE[0]}){
+  const data=AX.map(k=>({label:k.split('-')[0], v: scope.reduce((s,d)=>{ const r=d.series.find(x=>x.month===k); return s+((r&&r[d.primary])||0); },0)}));
+  const max=Math.max(1,...data.map(d=>d.v));
+  return (<div style={{display:'flex',alignItems:'flex-end',gap:5,height:180}}>
+    {data.map((d,i)=>(<div key={i} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4,height:'100%',justifyContent:'flex-end'}}>
+      <span style={{fontSize:8.5,fontFamily:MONO,color:'var(--muted)'}}>{d.v||''}</span>
+      <div title={d.label+': '+d.v} style={{width:'100%',maxWidth:26,background:d.v?color:'var(--line-2)',borderRadius:'3px 3px 0 0',height:(d.v/max*100)+'%',minHeight:3}}/>
+      <span style={{fontSize:8,color:'var(--faint)'}}>{d.label}</span>
+    </div>))}
+  </div>);
+}
+
+function MonthlyStatsReport({depts}){
+  const [dept,setDept]=React.useState('all');
+  const MF=window.UNICO.MONTHS_FULL, MO=window.UNICO.MONTH_ORDER;
+  const scope = dept==='all' ? depts : depts.filter(d=>d.id===dept);
+  // union month axis across scope, chronological
+  const AX = [...new Set(scope.flatMap(d=>d.months))].sort((a,b)=>MO.indexOf(a)-MO.indexOf(b));
+  const scopeName = dept==='all' ? 'All departments' : ((scope[0]&&scope[0].name)||'—');
+  const single = dept!=='all' ? scope[0] : null;
+  const primaryLabel = single ? (msPrimaryCol(single).label||single.primaryLabel||'Volume') : 'Volume';
+
+  // KPI aggregation over scope, each dept summed on its own primary (§3.1).
+  const kpi = scope.reduce((a,d)=>{
+    const fs=d.series;
+    const tot=fs.reduce((s,r)=>s+(r[d.primary]||0),0);
+    const peak=fs.length?Math.max(...fs.map(r=>r[d.primary]||0)):0;
+    a.total+=tot; a.peak=Math.max(a.peak,peak); a.months=Math.max(a.months,fs.length);
+    return a;
+  },{total:0,peak:0,months:0});
+  const avg = kpi.months?Math.round(kpi.total/kpi.months):0;
+  const metricCount = scope.reduce((n,d)=>n+d.cols.length,0);
+
+  // Combined summed-primary series over AX for the headline all-depts chart (§6.1b).
+  const barData = AX.map(k=>({ month:k.split('-')[0], val: scope.reduce((s,d)=>{ const r=d.series.find(x=>x.month===k); return s+((r&&r[d.primary])||0); },0) }));
+
+  const hasCombo = typeof window.ComboChart==='function';
+  const cardBox={background:'#fff',border:'1px solid var(--line)',borderRadius:12,padding:'14px 16px',boxShadow:'0 1px 2px rgba(20,32,46,.06)'};
+  const EXP=[['pdf','PDF'],['excel','Excel'],['word','Word'],['csv','CSV']];
+  const expBtn={display:'inline-flex',alignItems:'center',gap:6,padding:'6px 12px',border:'1px solid var(--line)',borderRadius:7,background:'#fff',color:'var(--ink-2)',fontSize:12,fontWeight:600,cursor:'pointer'};
+
+  // Primary-metric chart for the right card (§6.1 / §6.2).
+  const primaryChart=()=>{
+    if(single){
+      const pctCol=single.cols.find(c=>c.pct);
+      const lineKey=pctCol?pctCol.id:single.primary;
+      if(hasCombo) return <ComboChart data={single.series} x="month" barKey={single.primary} lineKey={lineKey}
+        barLabel={msPrimaryCol(single).label} lineLabel={(single.cols.find(c=>c.id===lineKey)||{}).label||'Trend'}
+        barColor={PALETTE[0]} lineColor="#e08a1e" height={210} flat/>;
+      return <BarChart data={single.series} x="month" y={single.primary} height={200} color={PALETTE[0]} flat/>;
+    }
+    // all-departments: bar+line of the summed primary (fall back to bars / MSBars).
+    if(hasCombo) return <ComboChart data={barData} x="month" barKey="val" lineKey="val" barLabel="Total" lineLabel="Trend" barColor={PALETTE[0]} lineColor="#e08a1e" height={210} flat/>;
+    if(typeof window.BarChart==='function') return <BarChart data={barData} x="month" y="val" height={200} color={PALETTE[0]} flat/>;
+    return <MSBars scope={scope} AX={AX} color={PALETTE[0]}/>;
+  };
+
+  const firstLabel = AX.length?(MF[AX[0]]||AX[0]):'—';
+  const lastLabel = AX.length?(MF[AX[AX.length-1]]||AX[AX.length-1]):'—';
+
+  return (
+    <div>
+      {/* §5 export toolbar — always exports ALL depts (the selector filters the view only) */}
+      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:14,background:'#fff',border:'1px solid var(--line)',borderRadius:10,padding:'10px 13px'}}>
+        <span style={{fontSize:12,fontWeight:700,color:'var(--ink)'}}>Export full report (all departments, all metrics):</span>
+        {EXP.map(([f,l])=>(
+          <button key={f} onClick={()=>msExport(depts,f)} style={expBtn}><Ic d={I.download} s={14}/>{l}</button>
+        ))}
+        <span style={{flex:1}}/>
+        <span style={{fontSize:11,color:'var(--muted)'}}>{depts.length} departments · {depts.reduce((n,d)=>n+d.cols.length,0)} metrics in scope</span>
+      </div>
+
+      {/* department scope selector (§3.3) */}
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+        <span style={{fontSize:12,fontWeight:600,color:'var(--ink-2)'}}>Scope</span>
+        <select value={dept} onChange={e=>setDept(e.target.value)} style={{padding:'8px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:12.5,fontWeight:600,background:'#fff',color:'var(--ink)',outline:'none'}}>
+          <option value="all">All departments</option>
+          {depts.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+      </div>
+
+      {/* §3 summary cards: KPI block (220px) + primary-metric chart (1fr) */}
+      <div style={{display:'grid',gridTemplateColumns:'220px 1fr',gap:14,marginBottom:14}}>
+        <div style={{...cardBox,display:'flex',flexDirection:'column',gap:12}}>
+          {/* DIVERGENCE: no compliance donut — statistics has no benchmark.
+              Show primary-metric KPIs aggregated over scope instead (§3.1/§7.1). */}
+          {[['Total',fmt(kpi.total)],['Peak month',fmt(kpi.peak)],['Avg / month',fmt(avg)]].map(([l,v])=>(
+            <div key={l}>
+              <div style={{fontSize:10,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.4px'}}>{l}</div>
+              <div style={{fontFamily:MONO,fontSize:22,fontWeight:700,color:'var(--ink)'}}>{v}</div>
+            </div>
+          ))}
+          <div style={{fontSize:11,color:'var(--muted)',borderTop:'1px solid var(--line-2)',paddingTop:10}}>
+            <b style={{color:'var(--ink)'}}>{metricCount}</b> metrics · {scope.length} department{scope.length!==1?'s':''}
+          </div>
+          {single&&<div><Delta v={single.delta}/></div>}
+        </div>
+        <div style={cardBox}>
+          <div style={{fontSize:11,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'.4px',marginBottom:10}}>Monthly {primaryLabel} — {scopeName}</div>
+          {primaryChart()}
+        </div>
+      </div>
+
+      {/* §4 month-wise table — grouped by department, one row per metric */}
+      <div style={{background:'#fff',border:'1px solid var(--line)',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
+        <div style={{padding:'14px 18px',borderBottom:'1px solid var(--line-2)',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',background:'linear-gradient(150deg,#ffffff,#f5fafd)'}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:15,fontWeight:700,color:'var(--ink)'}}>UNICO Hospitals — {scopeName}</div>
+            <div style={{fontSize:11.5,color:'var(--muted)'}}>Monthly Statistics Report · FY 2025–26 · {firstLabel} – {lastLabel}</div>
+          </div>
+          {/* DIVERGENCE: no zero-defect/breaches — statistics has no benchmarks (§4.4/§7.1) */}
+          <div style={{textAlign:'center'}}>
+            <div style={{fontFamily:MONO,fontSize:18,fontWeight:700,color:PALETTE[0]}}>{fmt(kpi.total)}</div>
+            <div style={{fontSize:10,color:'var(--faint)',textTransform:'uppercase',letterSpacing:'.4px'}}>total</div>
+          </div>
+          <div style={{textAlign:'center'}}>
+            <div style={{fontFamily:MONO,fontSize:18,fontWeight:700,color:'#3ab5a7'}}>{metricCount}</div>
+            <div style={{fontSize:10,color:'var(--faint)',textTransform:'uppercase',letterSpacing:'.4px'}}>metrics</div>
+          </div>
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{borderCollapse:'collapse',fontSize:11,width:'100%',minWidth:380+AX.length*46}}>
+            <thead>
+              <tr style={{background:'#f7f9fc'}}>
+                {dept==='all'&&<th style={{textAlign:'left',padding:'8px 8px',fontSize:9.5,color:'var(--muted)',fontWeight:700,borderBottom:'1px solid var(--line)',background:'#f7f9fc'}}>Dept</th>}
+                <th style={{textAlign:'left',padding:'8px 10px',fontSize:10,textTransform:'uppercase',letterSpacing:'.2px',color:'var(--muted)',fontWeight:700,borderBottom:'1px solid var(--line)',background:'#f7f9fc',minWidth:190}}>Metric</th>
+                {AX.map(k=><th key={k} style={{textAlign:'center',padding:'8px 4px',fontSize:9,color:'var(--muted)',fontWeight:700,borderBottom:'1px solid var(--line)',background:'#f7f9fc'}}>{k.split('-')[0]}</th>)}
+                <th style={{textAlign:'center',padding:'8px 6px',fontSize:9,color:'var(--muted)',fontWeight:700,borderBottom:'1px solid var(--line)',background:'#f7f9fc'}}>Trend</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scope.map(d=>d.cols.map(col=>{
+                const isPrimary=col.id===d.primary;
+                return (
+                  <tr key={d.id+'/'+col.id} style={{borderBottom:'1px solid var(--line-2)'}}>
+                    {dept==='all'&&<td style={{padding:'6px 8px',textAlign:'left',fontSize:10,color:'var(--muted)',whiteSpace:'nowrap',fontWeight:600}}>{col===d.cols[0]?d.name:''}</td>}
+                    <td style={{padding:'7px 10px',textAlign:'left',fontWeight:600,color:'var(--ink)'}}>{col.label}{isPrimary?' ★':''}</td>
+                    {AX.map(k=>{
+                      const v=msVal(d,col.id,k);
+                      const bg = v==null ? 'transparent' : (isPrimary?'#eef6fb':'#f4f6f9');
+                      const cc = v==null ? 'var(--faint)' : 'var(--ink)';
+                      return (
+                        <td key={k} style={{textAlign:'center',padding:'4px 3px'}}>
+                          <span style={{display:'inline-block',minWidth:30,padding:'3px 4px',borderRadius:5,background:bg,color:cc,fontFamily:MONO,fontWeight:600,fontSize:10}}>{v==null?'·':msFmt(col,v)}</span>
+                        </td>
+                      );
+                    })}
+                    <td style={{textAlign:'center',padding:'4px 6px'}}><MSSpark d={d} colId={col.id}/></td>
+                  </tr>
+                );
+              }))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Reports({depts}){
   const MO=window.UNICO.MONTH_ORDER, MF=window.UNICO.MONTHS_FULL;
+  const [mode,setMode]=React.useState('builder'); // 'builder' | 'monthly'
   const [sel,setSel]=React.useState(depts.slice(0,4).map(d=>d.id));
   const [type,setType]=React.useState('summary');
   const [period,setPeriod]=React.useState({mode:'all'});
@@ -173,13 +422,30 @@ function Reports({depts}){
   };
   const pdfRoot = typeof document!=='undefined' ? document.getElementById('pdf-root') : null;
 
+  // Segmented mode toggle — shared by both modes so they stay mutually reachable.
+  const modeSeg=(
+    <div className="seg">
+      <button className={mode==='builder'?'on':''} onClick={()=>setMode('builder')}>Report Builder</button>
+      <button className={mode==='monthly'?'on':''} onClick={()=>setMode('monthly')}>Monthly Statistics Report</button>
+    </div>
+  );
+
+  if(mode==='monthly') return (
+    <div className="grid" style={{gap:16}}>
+      <SectionTitle icon={I.doc} title="Reports" sub="Statistical & board-ready reporting"
+        right={modeSeg}/>
+      <MonthlyStatsReport depts={depts}/>
+    </div>
+  );
+
   return (
     <div className="grid" style={{gap:16}}>
       <SectionTitle icon={I.doc} title="Report Builder" sub="Compose and export board-ready statistical reports"
-        right={<>
+        right={<div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          {modeSeg}
           <button className="btn sm" onClick={doPrint}><Ic d={I.print} s={15}/>Print</button>
           <button className="btn pri sm" onClick={doExport} disabled={exporting||chosen.length===0}><Ic d={I.download} s={15}/>{exporting?'Exporting…':'Export PDF'}</button>
-        </>}/>
+        </div>}/>
       {note&&(
         <div style={{display:'flex',alignItems:'center',gap:9,padding:'10px 14px',borderRadius:8,fontSize:12.5,fontWeight:600,
           color:note.ok?'var(--pos)':'var(--rose)',background:note.ok?'var(--pos-bg)':'var(--neg-bg)',border:'1px solid '+(note.ok?'#bfe6cd':'#f1c6cd')}}>
@@ -556,7 +822,7 @@ function Settings({depts, store}){
             <div style={{fontSize:11.5,color:'var(--muted)',marginBottom:10}}>All data is stored in a local database on this PC. Back it up to a file you can keep safe or move to another PC.</div>
             <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
               <button className="btn pri" onClick={doBackup}><Ic d={I.download} s={15}/>Back up all data…</button>
-              <button className="btn" onClick={doRestore}><Ic d={I.upload||I.layers} s={15}/>Restore from backup…</button>
+              <button className="btn" onClick={doRestore}><Ic d={I.upload} s={15}/>Restore from backup…</button>
             </div>
             {dbFile&&<div className="col-chip" style={{marginTop:12,maxWidth:'100%',wordBreak:'break-all'}} title={dbFile}><Ic d={I.doc} s={13}/>Database: {dbFile}</div>}
             <div style={{height:1,background:'var(--line-2)',margin:'16px 0'}}/>

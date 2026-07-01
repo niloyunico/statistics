@@ -19,6 +19,19 @@ const session = require('./session');
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
 
+// Server-side copy of quality-store.js QUARTER_MONTHS (lines 17-22) so the DB holds
+// authoritative computed quarters that always agree with the client's rollup.
+const QUARTER_MONTHS = { Q1: ['Jun-25', 'Jul-25', 'Aug-25'], Q2: ['Sep-25', 'Oct-25', 'Nov-25'], Q3: ['Dec-25', 'Jan-26', 'Feb-26'], Q4: ['Mar-26', 'Apr-26', 'May-26'] };
+// Mirrors quality-store.js qiFormulaCompute (count=num; rate1000/rate100/pct = num/den*mult).
+function qiFormulaCompute(formula, num, den) { const n = Number(num) || 0, d = Number(den) || 0; if (formula === 'count') return n; if (!d) return 0; if (formula === 'rate1000') return Math.round((n / d) * 1000 * 100) / 100; return Math.round((n / d) * 100 * 100) / 100; }
+function indIsPct(ind) { const t = ((ind && ind.valueType) || '').toString().toLowerCase(); return t.indexOf('%') >= 0 || t.startsWith('per'); }
+// Benchmark status for one quarter value, per CONTRACT: null/'' benchmark => 'n-a';
+// higher_is_better => value>=bench 'ok' else 'breach'; else value<=bench 'ok' else 'breach'.
+function indStatus(ind, value) { const braw = (ind && ind.benchmarkValue != null && ind.benchmarkValue !== '') ? ind.benchmarkValue : (ind && ind.benchmark); const bn = Number(braw); if (braw == null || braw === '' || isNaN(bn)) return 'n-a'; if (value == null || value === '') return 'n-a'; const higher = String((ind && ind.goalDirection) || '') === 'higher_is_better'; const ok = higher ? Number(value) >= bn : Number(value) <= bn; return ok ? 'ok' : 'breach'; }
+// Pure: recompute ind.quarters + ind.quarterStatus + ind.status from monthly data.
+// Mirrors quality-store.js mergeIndicator rollup so server/client never disagree.
+function recomputeQuarters(ind) { if (!ind || typeof ind !== 'object') return ind; const f = ind.formula; const quarters = Object.assign({}, ind.quarters || {}); const quarterStatus = {}; Object.keys(QUARTER_MONTHS).forEach((q) => { const ms = QUARTER_MONTHS[q]; let val; if (f && f !== 'direct') { const haveMonths = ms.some((m) => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''); if (haveMonths) { const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0); const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0); val = qiFormulaCompute(f, num, den); } else { const n = (ind.qNum || {})[q]; if (n == null || n === '') return; val = qiFormulaCompute(f, n, (ind.qDen || {})[q]); } } else { const months = ind.months || {}; const vals = ms.map((m) => months[m]).filter((v) => v != null && v !== '').map(Number); if (!vals.length) return; val = indIsPct(ind) ? Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100 : vals.reduce((s, x) => s + x, 0); } quarters[q] = val; quarterStatus[q] = indStatus(ind, val); }); ind.quarters = quarters; ind.quarterStatus = quarterStatus; const present = Object.keys(quarterStatus); ind.status = present.some((q) => quarterStatus[q] === 'breach') ? 'breach' : (present.some((q) => quarterStatus[q] === 'ok') ? 'ok' : 'n-a'); return ind; }
+
 function monthRank(key) {
   const p = String(key || '').split('-');
   const idx = MONTHS.indexOf(p[0]);
@@ -27,6 +40,12 @@ function monthRank(key) {
   return (2000 + yy) * 12 + idx;
 }
 function genId(prefix) { return (prefix || 'id') + '-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e8).toString(36); }
+// Per-collector "specific indicator" access map (CONTRACT): areaKey -> [indicatorId,...].
+// Empty/non-array entries are DROPPED so a present-but-empty map == no scoping; only a
+// non-empty array scopes an area, preserving BACKWARD-COMPAT full-area access.
+function normQualityIndicators(qi) { const out = {}; if (!qi || typeof qi !== 'object' || Array.isArray(qi)) return out; Object.keys(qi).forEach((k) => { const key = String(k); const list = qi[k]; if (!Array.isArray(list)) return; const ids = list.map((x) => String(x == null ? '' : x).trim()).filter(Boolean); if (ids.length) out[key] = ids; }); return out; }
+// Sanitize a per-staff-group breakdown (e.g. { nurse, doctor, pca, other }) to numbers.
+function sanitizeGroupMap(g) { if (!g || typeof g !== 'object' || Array.isArray(g)) return null; const out = {}; let any = false; Object.keys(g).forEach((k) => { const n = Number(g[k]); out[String(k)] = isNaN(n) ? 0 : n; any = true; }); return any ? out : null; }
 function normResp(r) {
   if (!r) return null;
   if (typeof r === 'string') return { name: r.trim() };
@@ -55,6 +74,7 @@ async function saveResponsible(input) {
     empId: empId || null,
     departments: Array.isArray(input && input.departments) ? input.departments.map(String) : [],
     qualityAreas: Array.isArray(input && input.qualityAreas) ? input.qualityAreas.map(String) : [],
+    qualityIndicators: normQualityIndicators(input && input.qualityIndicators),
     active: !(input && input.active === false),
   };
   if (!doc.name) throw new Error('Name is required.');
@@ -75,7 +95,7 @@ async function saveResponsible(input) {
   // When an emp ID is set, keep a matching collector LOGIN account in sync so the
   // person can sign in and get a data-limited, per-user view of their departments.
   if (empId) {
-    await upsertCollectorUser({ empId, password: input && input.password, name: doc.name, departments: doc.departments, qualityAreas: doc.qualityAreas, active: doc.active, responsibleId: id });
+    await upsertCollectorUser({ empId, password: input && input.password, name: doc.name, departments: doc.departments, qualityAreas: doc.qualityAreas, qualityIndicators: doc.qualityIndicators, active: doc.active, responsibleId: id });
   }
   return { ...rec, hasLogin: !!empId };
 }
@@ -86,7 +106,7 @@ async function saveResponsible(input) {
 async function upsertCollectorUser(opts) {
   const empId = String(opts.empId).toLowerCase();
   const users = await getUsers();
-  const set = { name: opts.name || empId, role: 'collector', active: opts.active !== false, departments: opts.departments || [], qualityAreas: opts.qualityAreas || [] };
+  const set = { name: opts.name || empId, role: 'collector', active: opts.active !== false, departments: opts.departments || [], qualityAreas: opts.qualityAreas || [], qualityIndicators: normQualityIndicators(opts.qualityIndicators) };
   if (opts.responsibleId) set.responsibleId = opts.responsibleId;
   if (opts.password) set.passwordHash = await auth.hash(String(opts.password));
   const existing = await users.findOne({ username: empId });
@@ -122,7 +142,7 @@ async function getUserScope(username) {
   const users = await getUsers();
   const u = await users.findOne({ username: String(username).toLowerCase() });
   if (!u) return null;
-  return { username: u.username, name: u.name || u.username, role: u.role || 'User', departments: u.departments || [], qualityAreas: u.qualityAreas || [] };
+  return { username: u.username, name: u.name || u.username, role: u.role || 'User', departments: u.departments || [], qualityAreas: u.qualityAreas || [], qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {} };
 }
 
 async function deleteResponsible(id) {
@@ -209,9 +229,8 @@ async function buildQualitySpec(payload) {
   return {
     type: 'quality', area, areaName: doc.name || area, indicatorId: indId, indicatorName: indName, capa, incidents,
     // Optional numerator breakdown by staff group (Nurse / Doctor / Other).
-    groups: (payload && payload.groups && typeof payload.groups === 'object')
-      ? { nurse: Number(payload.groups.nurse) || 0, doctor: Number(payload.groups.doctor) || 0, other: Number(payload.groups.other) || 0 }
-      : null,
+    groups: sanitizeGroupMap(payload && payload.groups),
+    groupsDen: sanitizeGroupMap(payload && payload.groupsDen),
     isNewIndicator: isNew, valueType: (payload && payload.valueType) || (found && found.valueType) || 'Count',
     benchmark: (payload && payload.benchmark) || (found && found.benchmark) || '',
     goalDirection: (payload && payload.goalDirection) || (found && found.goalDirection) || 'lower_is_better',
@@ -257,6 +276,7 @@ async function applyQuality(spec) {
   if (spec.unit) ind.unit = spec.unit;
   if (Array.isArray(spec.incidents)) ind.incidents = Object.assign({}, ind.incidents || {}, { [spec.month]: spec.incidents });
   if (spec.groups) ind.mGroups = Object.assign({}, ind.mGroups || {}, { [spec.month]: spec.groups });
+  if (spec.groupsDen) ind.mGroupsDen = Object.assign({}, ind.mGroupsDen || {}, { [spec.month]: spec.groupsDen });
   // Monthly storage (no quarters). For rate/%, keep numerator/denominator per month.
   if (spec.entryMode === 'rate') {
     ind.mNum = Object.assign({}, ind.mNum || {}, { [spec.month]: spec.num });
@@ -266,6 +286,10 @@ async function applyQuality(spec) {
   if (spec.remark) ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [spec.month]: spec.remark });
   // Incident / CAPA (Corrective & Preventive Action) for the month, when provided.
   if (spec.capa) ind.capa = Object.assign({}, ind.capa || {}, { [spec.month]: Object.assign({ value: spec.value, recordedAt: Date.now() }, spec.capa) });
+  // Recompute authoritative quarter rollups + benchmark status from the just-written
+  // monthly data. `ind` is the same reference held in `indicators`, so the in-place
+  // mutation is persisted by the $set below.
+  recomputeQuarters(ind);
   await c.updateOne({ _id: spec.area }, { $set: { indicators } });
 }
 
@@ -690,6 +714,6 @@ module.exports = {
   submitPatient, submitQuality, approveSubmission, rejectSubmission,
   buildPatientSpec, buildQualitySpec, createSubmission,
   createShortlink, getShortlinks, deleteShortlink, shortlinkMeta, shortlinkSubmit,
-  registerCollector, upsertCollectorUser, getUserScope,
+  registerCollector, upsertCollectorUser, getUserScope, recomputeQuarters,
   addDepartmentField, removeDepartmentField,
 };

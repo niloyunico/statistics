@@ -476,14 +476,19 @@ function QCDashboard({ depts, Q }) {
 /* Full incident-report drill-down for one department × month — opened by clicking a
    heatmap cell. Lists every indicator reported that month (breaches first) with its
    value vs benchmark, plus the FULL detail of every logged incident / CAPA. */
-function QCCellDetail({ dep, mk, mlabel, onClose }){
+function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
+  const canEdit = qcCanEdit() && !!Q;
+  const [editId, setEditId] = useState(null);   // indicator id being edited (null = none)
+  const [addOpen, setAddOpen] = useState(false);
+
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => { if (e.key === 'Escape') { if (editId) setEditId(null); else onClose(); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, editId]);
 
-  const rows = (dep.indicators || []).map(ind => {
+  const allInds = dep.indicators || [];
+  const rowFor = (ind) => {
     const incsRaw = (ind.incidents && Array.isArray(ind.incidents[mk])) ? ind.incidents[mk] : [];
     const incs = incsRaw.filter(x => x && (x.details || x.finding || x.corrective || x.preventive || x.patientName || x.uhid || x.diagnosis || x.remark));
     return {
@@ -491,9 +496,11 @@ function QCCellDetail({ dep, mk, mlabel, onClose }){
       capa: (ind.capa && ind.capa[mk]) ? ind.capa[mk] : null,
       remark: (ind.monthRemarks && ind.monthRemarks[mk]) || ''
     };
-  }).filter(r => r.s !== 'na');
-  rows.sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
-  const breaches = rows.filter(r => r.s === 'breach').length;
+  };
+  const reported = allInds.map(rowFor).filter(r => r.s !== 'na')
+    .sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
+  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na');
+  const breaches = reported.filter(r => r.s === 'breach').length;
 
   const field = (label, val) => val ? (
     <div style={{ marginBottom: 7 }}>
@@ -521,6 +528,31 @@ function QCCellDetail({ dep, mk, mlabel, onClose }){
     </div>
   );
 
+  const viewCard = (r) => {
+    const isBr = r.s === 'breach';
+    const col = isBr ? P.rose : P.green;
+    const hasDetail = r.incs.length > 0 || r.capa;
+    return (
+      <div key={r.ind.id} style={{ border: '1px solid ' + (isBr ? '#f1c6cd' : '#dde3ec'), borderLeft: '4px solid ' + col, borderRadius: 10, padding: '12px 15px', marginBottom: 11, background: isBr ? '#fef6f7' : '#fff' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: P.ink }}>{r.ind.name}</div>
+          <span style={{ fontSize: 10, fontWeight: 700, color: col, background: col + '1c', padding: '2px 9px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: '.3px' }}>{isBr ? 'Breach' : 'On benchmark'}</span>
+          <div style={{ marginLeft: 'auto', fontFamily: MONO, fontSize: 14, fontWeight: 700, color: col }}>{fmtVal(r.ind, r.v)}</div>
+          <div style={{ fontSize: 11.5, color: P.muted }}>vs {benchExpr(r.ind)}</div>
+          {canEdit && <button onClick={() => { setAddOpen(false); setEditId(r.ind.id); }} title="Edit this reading & incident report" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid #cfe6f4', background: '#eef8fc', color: '#0090ca', padding: '4px 10px', borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>Edit</button>}
+        </div>
+        {r.remark && <div style={{ fontSize: 12, color: P.ink2, marginTop: 7, fontStyle: 'italic' }}>“{r.remark}”</div>}
+        {r.incs.map((x, i) => incidentCard(x, i))}
+        {r.incs.length === 0 && r.capa && incidentCard({ details: r.capa.incidentDetails, finding: r.capa.finding, corrective: r.capa.corrective, preventive: r.capa.preventive }, 0)}
+        {isBr && !hasDetail && <div style={{ fontSize: 11.5, color: P.muted, marginTop: 8, padding: '8px 10px', background: '#f7f9fc', borderRadius: 7 }}>No incident report logged for this breach.{canEdit ? ' Click Edit to add one.' : ' Add details in Quality Data Entry.'}</div>}
+      </div>
+    );
+  };
+
+  const editIndOf = (id) => allInds.find(i => i.id === id);
+  const editing = editId ? editIndOf(editId) : null;
+  const editingUnreported = editing && monthStatus(editing, mk) === 'na';
+
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(13,27,46,.55)', zIndex: 6000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '38px 16px', overflowY: 'auto' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', width: 'min(760px,100%)', borderRadius: 14, boxShadow: '0 24px 60px rgba(5,12,24,.4)', overflow: 'hidden' }}>
@@ -528,7 +560,8 @@ function QCCellDetail({ dep, mk, mlabel, onClose }){
           <div>
             <div style={{ fontSize: 16.5, fontWeight: 700, color: P.ink }}>{dep.name} <span style={{ color: P.muted, fontWeight: 600, fontSize: 13 }}>· {mlabel}</span></div>
             <div style={{ fontSize: 12, color: P.muted, marginTop: 2 }}>
-              {rows.length} indicator{rows.length !== 1 ? 's' : ''} reported · <b style={{ color: breaches ? P.rose : P.green }}>{breaches} breach{breaches !== 1 ? 'es' : ''}</b>
+              {reported.length} indicator{reported.length !== 1 ? 's' : ''} reported · <b style={{ color: breaches ? P.rose : P.green }}>{breaches} breach{breaches !== 1 ? 'es' : ''}</b>
+              {canEdit && <span style={{ marginLeft: 8, color: '#0090ca', fontWeight: 700 }}>· admin edit</span>}
             </div>
           </div>
           <button onClick={onClose} title="Close (Esc)" style={{ marginLeft: 'auto', width: 32, height: 32, borderRadius: 8, border: '1px solid #dde3ec', background: '#fff', color: P.muted, cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
@@ -536,27 +569,138 @@ function QCCellDetail({ dep, mk, mlabel, onClose }){
           </button>
         </div>
         <div style={{ padding: '14px 20px 20px', maxHeight: '72vh', overflowY: 'auto' }}>
-          {rows.length === 0 && <div style={{ fontSize: 13, color: P.muted, padding: '24px 0', textAlign: 'center' }}>No indicators were reported for this month.</div>}
-          {rows.map((r, ri) => {
-            const isBr = r.s === 'breach';
-            const col = isBr ? P.rose : P.green;
-            const hasDetail = r.incs.length > 0 || r.capa;
-            return (
-              <div key={ri} style={{ border: '1px solid ' + (isBr ? '#f1c6cd' : '#dde3ec'), borderLeft: '4px solid ' + col, borderRadius: 10, padding: '12px 15px', marginBottom: 11, background: isBr ? '#fef6f7' : '#fff' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 700, color: P.ink }}>{r.ind.name}</div>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: col, background: col + '1c', padding: '2px 9px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: '.3px' }}>{isBr ? 'Breach' : 'On benchmark'}</span>
-                  <div style={{ marginLeft: 'auto', fontFamily: MONO, fontSize: 14, fontWeight: 700, color: col }}>{fmtVal(r.ind, r.v)}</div>
-                  <div style={{ fontSize: 11.5, color: P.muted }}>vs {benchExpr(r.ind)}</div>
-                </div>
-                {r.remark && <div style={{ fontSize: 12, color: P.ink2, marginTop: 7, fontStyle: 'italic' }}>“{r.remark}”</div>}
-                {r.incs.map((x, i) => incidentCard(x, i))}
-                {r.incs.length === 0 && r.capa && incidentCard({ details: r.capa.incidentDetails, finding: r.capa.finding, corrective: r.capa.corrective, preventive: r.capa.preventive }, 0)}
-                {isBr && !hasDetail && <div style={{ fontSize: 11.5, color: P.muted, marginTop: 8, padding: '8px 10px', background: '#f7f9fc', borderRadius: 7 }}>No incident report was logged for this breach. Add details in Quality Data Entry.</div>}
-              </div>
-            );
-          })}
+          {reported.length === 0 && !editing && <div style={{ fontSize: 13, color: P.muted, padding: '24px 0', textAlign: 'center' }}>No indicators were reported for this month.{canEdit ? ' Use “Add a reading” below.' : ''}</div>}
+
+          {reported.map((r) => (editId === r.ind.id
+            ? <QCIndEdit key={r.ind.id} dep={dep} ind={r.ind} mk={mk} mlabel={mlabel} Q={Q} onClose={() => setEditId(null)} />
+            : viewCard(r)))}
+
+          {/* editing an indicator that had no reading yet (create path) */}
+          {editing && editingUnreported && <QCIndEdit key={editing.id} dep={dep} ind={editing} mk={mk} mlabel={mlabel} Q={Q} isNew onClose={() => setEditId(null)} />}
+
+          {/* admin: add a reading for an indicator not yet reported this month */}
+          {canEdit && !editId && unreported.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              {!addOpen
+                ? <button onClick={() => setAddOpen(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px dashed #b9c6d2', background: '#f7f9fc', color: P.ink2, padding: '9px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"></path></svg>Add a reading for another indicator</button>
+                : <div style={{ border: '1px solid #dde3ec', borderRadius: 9, padding: '11px 13px', background: '#f7f9fc' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: P.muted, textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: 7 }}>Add a reading — pick an indicator</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                      {unreported.map(ind => (
+                        <button key={ind.id} onClick={() => { setAddOpen(false); setEditId(ind.id); }} style={{ border: '1px solid #cfe6f4', background: '#eef8fc', color: '#0072a3', padding: '6px 11px', borderRadius: 20, fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}>{ind.name}</button>
+                      ))}
+                    </div>
+                    <button onClick={() => setAddOpen(false)} style={{ marginTop: 9, border: 'none', background: 'transparent', color: P.muted, fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+                  </div>}
+            </div>
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* Admin editor for ONE indicator's reading + incident report(s) in a given month.
+   Local form state; commits everything at once through Q.patchIndicator (overlay ->
+   MongoDB). Handles the value (direct/count) or numerator+denominator (rate/%),
+   the month remark, and full CRUD of the incident list. */
+function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
+  const isRate = ['pct', 'rate100', 'rate1000'].indexOf(ind.formula) >= 0;
+  const g = (o, k) => (o && o[k] != null && o[k] !== '') ? String(o[k]) : '';
+  const [val, setVal] = useState(() => g(ind.months, mk));
+  const [num, setNum] = useState(() => g(ind.mNum, mk));
+  const [den, setDen] = useState(() => g(ind.mDen, mk));
+  const [remark, setRemark] = useState(() => (ind.monthRemarks && ind.monthRemarks[mk]) || '');
+  const [incs, setIncs] = useState(() => (ind.incidents && Array.isArray(ind.incidents[mk])) ? ind.incidents[mk].map(x => Object.assign({}, x)) : []);
+
+  const setF = (i, k, v) => setIncs(a => a.map((x, j) => j === i ? Object.assign({}, x, { [k]: v }) : x));
+  const addInc = () => setIncs(a => [...a, { source: 'admin edit' }]);
+  const delInc = (i) => setIncs(a => a.filter((_, j) => j !== i));
+
+  const num2 = num === '' ? null : Number(num), den2 = den === '' ? null : Number(den);
+  const preview = isRate ? fmtVal(ind, window.qiFormulaCompute(ind.formula, num2 || 0, den2 || 0)) : null;
+
+  const save = () => {
+    const patch = { monthRemarks: { [mk]: remark } };
+    if (isRate) { patch.mNum = { [mk]: num2 }; patch.mDen = { [mk]: den2 }; }
+    else { const v = val === '' ? null : Number(val); patch.months = { [mk]: v }; if (ind.formula === 'count') patch.mNum = { [mk]: v }; }
+    const clean = incs.map(x => {
+      const o = {}; Object.keys(x).forEach(k => { const s = (x[k] == null ? '' : String(x[k])).trim(); if (s) o[k] = s; });
+      return o;
+    }).filter(o => Object.keys(o).filter(k => k !== 'source').length);
+    patch.incidents = { [mk]: clean };
+    Q.patchIndicator(dep.key, ind.id, patch);
+    onClose();
+  };
+  const clearAll = () => {
+    Q.patchIndicator(dep.key, ind.id, { months: { [mk]: null }, mNum: { [mk]: null }, mDen: { [mk]: null }, incidents: { [mk]: [] }, monthRemarks: { [mk]: '' } });
+    onClose();
+  };
+
+  const inp = { width: '100%', padding: '7px 9px', border: '1px solid #dde3ec', borderRadius: 7, fontFamily: 'inherit', fontSize: 12.5, color: P.ink, background: '#fff', outline: 'none', boxSizing: 'border-box' };
+  const lbl = { fontSize: 10, fontWeight: 700, color: P.muted, textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: 3, display: 'block' };
+  const fin = (label, i, k, ta) => (
+    <div style={{ marginBottom: 8 }}>
+      <label style={lbl}>{label}</label>
+      {ta
+        ? <textarea value={incs[i][k] || ''} onChange={e => setF(i, k, e.target.value)} rows={2} style={{ ...inp, resize: 'vertical', lineHeight: 1.4 }} />
+        : <input value={incs[i][k] || ''} onChange={e => setF(i, k, e.target.value)} style={inp} />}
+    </div>
+  );
+
+  return (
+    <div style={{ border: '1.5px solid #27a8db', borderRadius: 11, padding: '13px 15px', marginBottom: 11, background: '#fbfdff', boxShadow: '0 2px 10px rgba(0,144,202,.10)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 11 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: P.ink }}>{ind.name}</div>
+        <span style={{ fontSize: 10, fontWeight: 700, color: '#0090ca', background: '#eef8fc', padding: '2px 9px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: '.3px' }}>{isNew ? 'New reading' : 'Editing'} · {mlabel}</span>
+        <div style={{ marginLeft: 'auto', fontSize: 11, color: P.muted }}>Benchmark {benchExpr(ind)}</div>
+      </div>
+
+      {/* value */}
+      <div style={{ display: 'grid', gridTemplateColumns: isRate ? '1fr 1fr auto' : '1fr', gap: 12, alignItems: 'end', marginBottom: 11 }}>
+        {isRate ? (
+          <>
+            <div><label style={lbl}>{ind.numLabel || 'Numerator'}</label><input type="number" step="any" value={num} onChange={e => setNum(e.target.value)} style={inp} /></div>
+            <div><label style={lbl}>{ind.denLabel || 'Denominator'}</label><input type="number" step="any" value={den} onChange={e => setDen(e.target.value)} style={inp} /></div>
+            <div style={{ paddingBottom: 7, fontFamily: MONO, fontSize: 13, fontWeight: 700, color: P.ink }}>= {preview}</div>
+          </>
+        ) : (
+          <div><label style={lbl}>Value</label><input type="number" step="any" value={val} onChange={e => setVal(e.target.value)} style={inp} /></div>
+        )}
+      </div>
+      <div style={{ marginBottom: 12 }}><label style={lbl}>Month remark (optional)</label><input value={remark} onChange={e => setRemark(e.target.value)} style={inp} /></div>
+
+      {/* incidents CRUD */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: P.muted, textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: 6 }}>Incident report(s) · {incs.length}</div>
+      {incs.map((x, i) => (
+        <div key={i} style={{ border: '1px solid #e3e9f1', borderRadius: 9, padding: '11px 12px', marginBottom: 9, background: '#fff' }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: P.rose, textTransform: 'uppercase', letterSpacing: '.3px' }}>Incident {i + 1}</div>
+            <button onClick={() => delInc(i)} title="Delete this incident" style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid #f1c6cd', background: '#fff', color: '#d23a52', padding: '3px 9px', borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"></path></svg>Delete</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
+            {fin('Patient name', i, 'patientName')}
+            {fin('UHID', i, 'uhid')}
+            {fin('Age', i, 'age')}
+            {fin('Sex', i, 'gender')}
+            {fin('Admission date', i, 'admissionDate')}
+            {fin('Procedure date', i, 'procedureDate')}
+          </div>
+          {fin('Diagnosis', i, 'diagnosis', true)}
+          {fin('Incident details', i, 'details', true)}
+          {fin('Finding / root cause', i, 'finding', true)}
+          {fin('Corrective action', i, 'corrective', true)}
+          {fin('Preventive action', i, 'preventive', true)}
+          {fin('Remark', i, 'remark')}
+        </div>
+      ))}
+      <button onClick={addInc} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px dashed #b9c6d2', background: '#fff', color: P.ink2, padding: '7px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"></path></svg>Add incident</button>
+
+      {/* actions */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 14, paddingTop: 12, borderTop: '1px solid #e8edf3' }}>
+        <button onClick={save} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: 0, background: '#0090ca', color: '#fff', padding: '9px 16px', borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,144,202,.4)' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"></path></svg>Save changes</button>
+        <button onClick={onClose} style={{ border: '1px solid #dde3ec', background: '#fff', color: P.ink2, padding: '9px 14px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+        {!isNew && <button onClick={clearAll} title="Delete this month's reading + incidents" style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid #f1c6cd', background: '#fff', color: '#d23a52', padding: '9px 14px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"></path></svg>Delete reading</button>}
       </div>
     </div>
   );

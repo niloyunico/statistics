@@ -10,6 +10,7 @@ const I = {
   search:'M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12',
   chevR:'M9 6l6 6-6 6',
   download:'M12 3v12m0 0l4-4m-4 4l-4-4M4 19h16',
+  upload:'M12 21V9m0 0l4 4m-4-4l-4 4M4 5h16',
   filter:'M3 5h18l-7 8v6l-4-2v-4z',
   plus:'M12 5v14M5 12h14',
   check:'M4 12l5 5L20 6',
