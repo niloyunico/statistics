@@ -1,0 +1,23758 @@
+/* ===== config.js ===== */
+/* UNICO build configuration.
+   Set UNICO_DEFAULT_API to the HTTPS address of YOUR deployed UNICO auth/data
+   server BEFORE building the .exe. Then everyone who installs the .exe just
+   signs in — no settings to configure.
+
+   IMPORTANT: this is only the server ADDRESS (a URL), never a password. The
+   database connection string lives ONLY on that server, never in this app. */
+window.UNICO_DEFAULT_API = ''; // empty = NO login, app runs fully offline. Put a server URL here later to re-enable cloud login.
+
+;
+/* ===== data.js ===== */
+// UNICO HOSPITALS PLC — Patient Flow Census
+// The monthly statistics now live in MongoDB (the `departments` collection) and
+// are injected by the Express web server as window.__UNICO_DEPARTMENTS__ before
+// this script runs. There are NO hardcoded monthly numbers in this file anymore.
+// To edit the seed data: server/seed/departments.json, then
+//   npm --prefix server run seed-departments -- --force
+
+// Lifetime month catalog: generated across many years so the suite keeps working
+// indefinitely — every month gets a proper label and a stable chronological order
+// (sorting/period logic everywhere relies on MONTH_ORDER.indexOf).
+const _MMM  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const _MFULL= ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTHS_FULL = {};
+const MONTH_ORDER = [];
+for (let y = 2024; y <= 2045; y++) {
+  for (let m = 0; m < 12; m++) {
+    const key = _MMM[m] + '-' + String(y).slice(-2);
+    MONTHS_FULL[key] = _MFULL[m] + ' ' + y;
+    MONTH_ORDER.push(key);
+  }
+}
+
+// Department definitions (metadata + months[] + monthly data[]) come from the
+// database via the server-injected global. Clone so the computed helpers below
+// never mutate the injected source.
+const DEPARTMENTS = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_DEPARTMENTS__))
+  ? window.__UNICO_DEPARTMENTS__.map(d => ({ ...d }))
+  : [];
+
+// Attach the derived fields the app expects (series/total/latest/prev/delta/peak),
+// guarded so a department with no rows can't throw.
+DEPARTMENTS.forEach(d => {
+  d.months = Array.isArray(d.months) ? d.months : [];
+  d.data   = Array.isArray(d.data) ? d.data : [];
+  d.cols   = Array.isArray(d.cols) ? d.cols : [];
+  d.fullMonths = d.months.map(m => MONTHS_FULL[m] || m);
+  d.series = d.data.map((row, i) => ({ month: d.months[i], full: MONTHS_FULL[d.months[i]] || d.months[i], ...row }));
+  if (!d.series.length) { d.total = 0; d.latest = {}; d.prev = null; d.delta = 0; d.peak = 0; return; }
+  d.total = d.series.reduce((s, r) => s + (r[d.primary] || 0), 0);
+  d.latest = d.series[d.series.length - 1];
+  d.prev = d.series.length > 1 ? d.series[d.series.length - 2] : null;
+  const cur = d.latest[d.primary] || 0;
+  const prev = d.prev ? (d.prev[d.primary] || 0) : 0;
+  d.delta = prev === 0 ? (cur > 0 ? 100 : 0) : Math.round(((cur - prev) / prev) * 100);
+  d.peak = Math.max(0, ...d.series.map(r => r[d.primary] || 0));
+});
+
+const GROUPS = [...new Set(DEPARTMENTS.map(d => d.group))];
+
+// Hospital-wide rollups for the dashboard (guarded against missing departments).
+const HOSPITAL = {
+  name: "UNICO Hospitals PLC",
+  reportRange: "Aug 2025 – May 2026",
+  generated: "05/18/2026",
+  kpis: (function () {
+    const find = id => DEPARTMENTS.find(d => d.id === id);
+    const er = find("er"), opd = find("opd"), ot = find("ot"), cath = find("cathlab");
+    return {
+      erLatest: (er && er.latest && er.latest.total) || 0,
+      opdTotal: (opd && opd.total) || 0,
+      otTotal: (ot && ot.total) || 0,
+      cathTotal: (cath && cath.total) || 0,
+    };
+  })()
+};
+
+window.UNICO = { DEPARTMENTS, GROUPS, MONTHS_FULL, MONTH_ORDER, HOSPITAL };
+
+;
+/* ===== store.js ===== */
+/* UNICO — department store: CRUD + custom columns, persisted to localStorage */
+(function(){
+  const KEY='unico_store_v3';
+  const load=()=>{ try{ const s=JSON.parse(localStorage.getItem(KEY)); return s&&typeof s==='object'?s:null; }catch(e){ return null; } };
+  const blank=()=>({ custom:[], renames:{}, deleted:[], entries:[], order:[] });
+
+  function recompute(d){
+    d.series=d.data.map((row,i)=>({ month:d.months[i], full:window.UNICO.MONTHS_FULL[d.months[i]]||d.months[i], ...row }));
+    if(!d.series.length){
+      d.total=0; d.latest={}; d.prev=null; d.delta=0; d.peak=0; d.avg=0; return d;
+    }
+    d.total=d.series.reduce((s,r)=>s+(r[d.primary]||0),0);
+    d.latest=d.series[d.series.length-1];
+    d.prev=d.series.length>1?d.series[d.series.length-2]:null;
+    const cur=d.latest[d.primary]||0, prev=d.prev?(d.prev[d.primary]||0):0;
+    d.delta=prev===0?(cur>0?100:0):Math.round(((cur-prev)/prev)*100);
+    d.peak=Math.max(...d.series.map(r=>r[d.primary]||0));
+    d.avg=Math.round(d.total/d.series.length);
+    return d;
+  }
+
+  function buildDepts(store){
+    const base=window.UNICO.DEPARTMENTS.map(d=>({...d, custom:false, months:[...d.months], data:d.data.map(r=>({...r})), cols:d.cols.map(c=>({...c}))}));
+    const custom=(store.custom||[]).map(d=>({...d, custom:true, months:[...(d.months||[])], data:(d.data||[]).map(r=>({...r})), cols:(d.cols||[]).map(c=>({...c}))}));
+    let list=[...base,...custom].filter(d=>!(store.deleted||[]).includes(d.id));
+    // renames / overrides
+    list.forEach(d=>{ const r=(store.renames||{})[d.id]; if(r){ Object.assign(d,r); } });
+    // explicitly-deleted months (a later entry for the same month re-adds it)
+    const removed=store.removed||{};
+    list.forEach(d=>{ const rm=removed[d.id]; if(rm&&rm.length){ for(let i=d.months.length-1;i>=0;i--){ if(rm.includes(d.months[i])){ d.months.splice(i,1); d.data.splice(i,1); } } } });
+    // entries merge
+    const byId=Object.fromEntries(list.map(d=>[d.id,d]));
+    (store.entries||[]).forEach(e=>{
+      const d=byId[e.dept]; if(!d) return;
+      const idx=d.months.indexOf(e.month);
+      if(idx>=0) d.data[idx]={...d.data[idx],...e.row};
+      else { d.months.push(e.month); d.data.push({...e.row}); }
+    });
+    list.forEach(recompute);
+    // ordering
+    if(store.order&&store.order.length){
+      list.sort((a,b)=>{ const ia=store.order.indexOf(a.id), ib=store.order.indexOf(b.id);
+        return (ia<0?999:ia)-(ib<0?999:ib); });
+    }
+    return list;
+  }
+
+  function useDeptStore(){
+    const [store,setStore]=React.useState(()=>load()||blank());
+    const hist=React.useRef([]);
+    const [canUndo,setCanUndo]=React.useState(false);
+    React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(store)); },[store]);
+    const depts=React.useMemo(()=>buildDepts(store),[store]);
+
+    // Snapshot the current state before every change so it can be undone.
+    const commit=(updater)=>{ hist.current=[...hist.current.slice(-49), store]; setCanUndo(true); setStore(typeof updater==='function'?updater(store):updater); };
+
+    const api={
+      depts,
+      entries:store.entries||[],
+      canUndo,
+      addEntry:(e)=>commit(s=>({...s, entries:[...(s.entries||[]), e]})),
+      clearEntries:()=>commit(s=>({...s, entries:[]})),
+      addDept:(def)=>commit(s=>({...s, custom:[...(s.custom||[]), def], order:[...(s.order||[]), def.id]})),
+      updateDept:(id,patch)=>commit(s=>{
+        const isCustom=(s.custom||[]).some(d=>d.id===id);
+        if(isCustom) return {...s, custom:s.custom.map(d=>d.id===id?{...d,...patch}:d)};
+        return {...s, renames:{...(s.renames||{}), [id]:{...(s.renames||{})[id], ...patch}}};
+      }),
+      deleteDept:(id)=>commit(s=>{
+        const isCustom=(s.custom||[]).some(d=>d.id===id);
+        if(isCustom) return {...s, custom:s.custom.filter(d=>d.id!==id), entries:(s.entries||[]).filter(e=>e.dept!==id)};
+        return {...s, deleted:[...(s.deleted||[]), id]};
+      }),
+      // Remove a single month's data for a department (built-in or custom).
+      deleteMonth:(id,month)=>commit(s=>{
+        const isCustom=(s.custom||[]).some(d=>d.id===id);
+        const entries=(s.entries||[]).filter(e=>!(e.dept===id&&e.month===month));
+        if(isCustom){
+          return {...s, entries, custom:s.custom.map(d=>{ if(d.id!==id) return d; const idx=(d.months||[]).indexOf(month); if(idx<0) return d; return {...d, months:d.months.filter((_,i)=>i!==idx), data:(d.data||[]).filter((_,i)=>i!==idx)}; })};
+        }
+        const removed={...(s.removed||{})}; removed[id]=[...(removed[id]||[]).filter(m=>m!==month), month];
+        return {...s, entries, removed};
+      }),
+      reset:()=>commit(blank()),
+      undo:()=>{ const h=hist.current; if(!h.length) return; const prev=h[h.length-1]; hist.current=h.slice(0,-1); setCanUndo(hist.current.length>0); setStore(prev); }
+    };
+    return api;
+  }
+
+  window.useDeptStore=useDeptStore;
+  window.buildDepts=buildDepts;
+})();
+
+;
+/* ===== staff-seed.js ===== */
+/* UNICO — staff (nurse + PCA) records.
+   The records now live in MongoDB (the `staff` collection) and are injected by the
+   Express web server as window.__UNICO_STAFF__ before this script runs. No hardcoded
+   staff data remains here. To edit the seed: server/seed/staff.json then
+   npm --prefix server run seed-data -- staff --force */
+window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_STAFF__)) ? window.__UNICO_STAFF__ : [];
+
+;
+/* ===== staff-data.js ===== */
+/* UNICO — Workforce / HR data: config, seed staff, store, analytics (mirrors NEMS) */
+(function(){
+  const DEPARTMENTS=["MICU","SICU","CCU","NICU","Emergency","Dialysis","LDR","Level-10","Level-9",
+    "Endoscopy","Cath Lab","OT","OPD","Oncology","Radiology","DayCare","HomeCare","Infection Control",
+    "Quality & Training","Cardiology"];
+  const DESIGNATIONS=["Staff Nurse","Senior Staff Nurse","Charge Nurse","Acting Charge Nurse",
+    "Nurse Manager","Senior Manager","Instructor","Team Leader","Infection Control Nurse","Supervisor","OT Incharge Nurse"];
+  const QUALIFICATIONS=["Diploma","B.Sc","Post B.Sc","PBSC","BSC MSN","MSS","NCLEX RN","Diploma in Midwifery","Diploma in Renal Nursing"];
+  const VACCINATION_STATES=["Completed","Vaccinated","1 dose","2 dose","3 dose","Not Completed","Unknown"];
+  const TRAININGS=["BLS","ACLS","ICU Care","Wound Care","Dialysis","Infection Control","Cath Lab Assist",
+    "OT Scrub","Neonatal Resuscitation","Triage","Phlebotomy","Ventilator Management",""];
+
+  // PCA (Patient Care Assistant) role config
+  const ROLES=["Nurse","PCA"];
+  const PCA_DESIGNATIONS=["Patient Care Assistant","Senior PCA","ICU PCA","Ward Assistant","OT Helper","PCA Trainee"];
+  const PCA_QUALIFICATIONS=["SSC","HSC","PCA Certificate","Care Giving Course","Nursing Aide Diploma","Basic First Aid"];
+  const PCA_TRAININGS=["BLS","Patient Handling","Hygiene & Bed Care","Infection Control","Vital Signs","Specimen Transport",""];
+  function designationsFor(role){ return role==="PCA"?PCA_DESIGNATIONS:DESIGNATIONS; }
+  function qualificationsFor(role){ return role==="PCA"?PCA_QUALIFICATIONS:QUALIFICATIONS; }
+
+  const FIRST=["Ayesha","Farzana","Nusrat","Tahmina","Ruma","Shirin","Kamrun","Sabina","Rokeya","Mahmuda",
+    "Salma","Nasrin","Jahanara","Rebeka","Parvin","Shahida","Morsheda","Anjuman","Dilruba","Hosne",
+    "Rakib","Sohel","Imran","Jahid","Mizan","Faruk","Arif","Masud","Sumon","Tanvir",
+    "Robiul","Shamim","Hasan","Kawsar","Babul","Nayeem","Saiful","Jewel"];
+  const LAST=["Akter","Begum","Khatun","Rahman","Islam","Hossain","Sultana","Nahar","Chowdhury","Ahmed",
+    "Khan","Sarkar","Das","Roy","Haque","Mia","Uddin","Siddiqua","Jahan","Parvez"];
+
+  // deterministic PRNG
+  function lcg(seed){ let s=seed%2147483647; if(s<=0)s+=2147483646; return ()=> (s=s*16807%2147483647)/2147483647; }
+
+  function seedStaff(){
+    const rnd=lcg(98765); const out=[];
+    function push(nameIdx, role){
+      const first=FIRST[nameIdx%FIRST.length], last=LAST[(nameIdx*7+3)%LAST.length];
+      const dept=DEPARTMENTS[Math.floor(rnd()*DEPARTMENTS.length)];
+      let desig, qual, trainPool, trainProb;
+      if(role==='PCA'){
+        const dr=rnd(); desig = dr<0.55?"Patient Care Assistant":dr<0.74?"Senior PCA":dr<0.85?"Ward Assistant":dr<0.93?"ICU PCA":PCA_DESIGNATIONS[Math.floor(rnd()*PCA_DESIGNATIONS.length)];
+        qual=PCA_QUALIFICATIONS[Math.floor(rnd()*4)]; trainPool=PCA_TRAININGS; trainProb=0.6;
+      } else {
+        const dr=rnd(); desig = dr<0.5?"Staff Nurse":dr<0.72?"Senior Staff Nurse":dr<0.84?"Charge Nurse":
+          dr<0.9?"Acting Charge Nurse":dr<0.94?"Team Leader":dr<0.97?"Nurse Manager":DESIGNATIONS[Math.floor(rnd()*DESIGNATIONS.length)];
+        qual=QUALIFICATIONS[Math.floor(rnd()*4)]; trainPool=TRAININGS; trainProb=0.78;
+      }
+      const startY=2018, span=8.2; const yfrac=rnd()*span; const doyear=startY+Math.floor(yfrac);
+      const domonth=1+Math.floor(rnd()*12); const doday=1+Math.floor(rnd()*27);
+      const doj=`${doyear}-${String(domonth).padStart(2,'0')}-${String(doday).padStart(2,'0')}`;
+      const expYears=Math.round((2026.4 - (doyear+ (domonth-1)/12))*10)/10 + Math.round(rnd()*3*10)/10;
+      const vr=rnd(); const vacc = vr<0.58?"Completed":vr<0.70?"3 dose":vr<0.80?"2 dose":vr<0.88?"1 dose":vr<0.95?"Not Completed":"Unknown";
+      const training = rnd()<trainProb ? trainPool[Math.floor(rnd()*(trainPool.length-1))] : "";
+      const hasPhone = rnd()<0.85;
+      const phone = hasPhone ? `01${[3,5,6,7,8,9][Math.floor(rnd()*6)]}${Math.floor(10000000+rnd()*89999999)}` : "";
+      const idx=out.length;
+      out.push({
+        id:idx+1, emp_id:`UNC-${String(101+idx).padStart(4,'0')}`, role,
+        name:`${first} ${last}`, phone,
+        qualification:qual, designation:desig, current_department:dept,
+        doj, total_experience_years:Math.max(0.3,Math.round(expYears*10)/10),
+        total_experience_text: expYears<1?`${Math.max(1,Math.round(expYears*12))} months`:`${expYears.toFixed(1)} yrs`,
+        previous_experience: rnd()<0.4?`${1+Math.floor(rnd()*6)} yrs at other facility`:"",
+        special_training:training,
+        hepatitis_b_vaccination:vacc,
+        remarks: rnd()<0.2?"On night rotation":"",
+        is_active:true, notes:[], created_at:Date.now()
+      });
+    }
+    for(let i=0;i<38;i++) push(i,'Nurse');
+    for(let i=0;i<18;i++) push(i+9,'PCA');
+    return out;
+  }
+
+  function byRole(list){ const m={}; list.filter(e=>e.is_active).forEach(e=>{const k=e.role||'Nurse';m[k]=(m[k]||0)+1;}); return Object.entries(m); }
+  function uniqueVals(list,key){ return [...new Set(list.filter(e=>e.is_active&&e[key]&&e[key].trim()).map(e=>e[key].trim()))].sort(); }
+
+  // ---------- analytics (mirror services/analytics.py) ----------
+  const VACC_OK=["Completed","Vaccinated","3 dose"];
+  function kpis(list){
+    const active=list.filter(e=>e.is_active);
+    const total=active.length;
+    const depts=new Set(active.map(e=>e.current_department).filter(Boolean)).size;
+    if(!total) return {total_staff:0,departments:0,vaccinated_pct:0,trained_pct:0};
+    const vacc=active.filter(e=>VACC_OK.includes(e.hepatitis_b_vaccination)).length;
+    const trained=active.filter(e=>e.special_training&&e.special_training.trim()).length;
+    return {total_staff:total,departments:depts,
+      vaccinated_pct:Math.round(vacc*1000/total)/10, trained_pct:Math.round(trained*1000/total)/10};
+  }
+  function countBy(list,key){
+    const m={}; list.filter(e=>e.is_active&&e[key]).forEach(e=>{m[e[key]]=(m[e[key]]||0)+1;});
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  }
+  function vaccinationBreakdown(list){
+    const m={}; list.filter(e=>e.is_active).forEach(e=>{const k=e.hepatitis_b_vaccination||"Unknown";m[k]=(m[k]||0)+1;});
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  }
+  function experienceBuckets(list){
+    const b={"<1y":0,"1-3y":0,"3-5y":0,"5-10y":0,"10y+":0};
+    list.filter(e=>e.is_active).forEach(e=>{const y=e.total_experience_years; if(y==null)return;
+      if(y<1)b["<1y"]++;else if(y<3)b["1-3y"]++;else if(y<5)b["3-5y"]++;else if(y<10)b["5-10y"]++;else b["10y+"]++;});
+    return Object.entries(b);
+  }
+  function joinersByYear(list){
+    const m={}; list.filter(e=>e.is_active&&e.doj).forEach(e=>{const y=e.doj.slice(0,4);m[y]=(m[y]||0)+1;});
+    return Object.entries(m).sort((a,b)=>a[0]-b[0]);
+  }
+  function recentJoiners(list,n=6){
+    return list.filter(e=>e.is_active&&e.doj).sort((a,b)=>b.doj.localeCompare(a.doj)).slice(0,n);
+  }
+  function compliance(list){
+    const a=list.filter(e=>e.is_active);
+    const missing_vaccination=a.filter(e=>["Not Completed","Unknown","1 dose"].includes(e.hepatitis_b_vaccination));
+    const missing_training=a.filter(e=>!e.special_training||!e.special_training.trim());
+    const missing_phone=a.filter(e=>!e.phone||!e.phone.trim());
+    return {missing_vaccination,missing_training,missing_phone};
+  }
+  function anniversaries(list,nDays=45){
+    const today=new Date(); const horizon=new Date(today.getTime()+nDays*86400000); const out=[];
+    list.filter(e=>e.is_active&&e.doj).forEach(e=>{
+      const d=new Date(e.doj); let annv=new Date(today.getFullYear(),d.getMonth(),d.getDate());
+      if(annv<today) annv=new Date(today.getFullYear()+1,d.getMonth(),d.getDate());
+      if(annv>=today&&annv<=horizon){ const years=annv.getFullYear()-d.getFullYear(); if(years>0) out.push({e,annv,years}); }
+    });
+    return out.sort((a,b)=>a.annv-b.annv);
+  }
+
+  // ---------- store ----------
+  const KEY='unico_staff_v3';
+  function realSeed(){ return (window.STAFF_SEED&&window.STAFF_SEED.length)
+    ? window.STAFF_SEED.map(e=>({...e,fav:!!e.fav,notes:e.notes||[]}))
+    : seedStaff(); }
+  function load(){ try{const s=JSON.parse(localStorage.getItem(KEY)); return Array.isArray(s)?s:null;}catch(e){return null;} }
+  function useStaffStore(){
+    const [staff,setStaff]=React.useState(()=>load()||realSeed());
+    React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(staff)); },[staff]);
+    const api={
+      staff,
+      get:(id)=>staff.find(e=>e.id===id),
+      nextEmpId:()=>{ const max=staff.reduce((m,e)=>{const n=parseInt((e.emp_id||'').replace(/\D/g,''))||0;return Math.max(m,n);},100); return `UNC-${String(max+1).padStart(4,'0')}`; },
+      create:(data)=>setStaff(s=>{ const id=Math.max(0,...s.map(e=>e.id))+1; return [...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]; }),
+      update:(id,patch)=>setStaff(s=>s.map(e=>e.id===id?{...e,...patch}:e)),
+      remove:(id)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:false}:e)),
+      restore:(id)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:true}:e)),
+      destroy:(id)=>setStaff(s=>s.filter(e=>e.id!==id)),
+      addNote:(id,text)=>setStaff(s=>s.map(e=>e.id===id?{...e,notes:[...(e.notes||[]),{id:Date.now(),text,author:'Dr. A. Rahman',ts:Date.now()}]}:e)),
+      delNote:(id,nid)=>setStaff(s=>s.map(e=>e.id===id?{...e,notes:(e.notes||[]).filter(n=>n.id!==nid)}:e)),
+      toggleFav:(id)=>setStaff(s=>s.map(e=>e.id===id?{...e,fav:!e.fav}:e)),
+      reset:()=>setStaff(realSeed())
+    };
+    return api;
+  }
+
+  window.STAFF={DEPARTMENTS,DESIGNATIONS,QUALIFICATIONS,VACCINATION_STATES,TRAININGS,VACC_OK,
+    ROLES,PCA_DESIGNATIONS,PCA_QUALIFICATIONS,PCA_TRAININGS,designationsFor,qualificationsFor,
+    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,joinersByYear,recentJoiners,compliance,anniversaries,byRole,uniqueVals};
+  window.useStaffStore=useStaffStore;
+})();
+
+;
+/* ===== quality-data.js ===== */
+/* UNICO — Quality Indicators.
+   The reports now live in MongoDB (the `quality` collection) and are injected by the
+   Express web server as window.__UNICO_QUALITY__ before this script runs. No hardcoded
+   quality data remains here. To edit the seed: server/seed/quality.json then
+   npm --prefix server run seed-data -- quality --force */
+window.QUALITY_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_QUALITY__)) ? window.__UNICO_QUALITY__ : [];
+
+;
+/* ===== quality-guide.js ===== */
+/* UNICO — Hospital Quality Indicator Framework reference (window.HQI_GUIDE).
+   96 indicators across 13 domains (A–M). Imported from the Claude Design project
+   "Quality indicators module organization". Powers the Quality Console Catalog view.
+   Plain data — loaded as a head script before the renderer components. */
+window.HQI_GUIDE = {"A1":{"name":"Hand Hygiene Compliance","unit":"%","benchmark":">90%","formula":"(Actions PERFORMED ÷ Opportunities OBSERVED) × 100","numDef":"Count of hand hygiene actions (soap/water or alcohol hand-rub) performed during structured observation. Each cleansing act = 1 performed action.","denDef":"Count of hand hygiene OPPORTUNITIES observed (any WHO 5 Moment: before patient contact, before aseptic procedure, after body fluid exposure, after patient contact, after patient surroundings).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Month of March – 4 wards: Actions performed (numerator) = 1,350 Opportunities observed (denom) = 1,480 (1,350 ÷ 1,480) × 100 = 91.2% ✅ ABOVE target (>90%) — Compliant","interpretation":"≥90%: Compliant. 75–89%: Needs improvement; re-audit within 2 weeks. <75%: Unacceptable; escalate immediately.","reference":"WHO (2009). Guidelines on Hand Hygiene in Health Care"},"A2":{"name":"CAUTI Rate","unit":"per 1,000 cath-days","benchmark":"<1","formula":"(No. of CAUTIs ÷ Total urinary catheter-days) × 1,000","numDef":"CAUTIs meeting NHSN definition: catheter in place >2 days on event date AND ≥1 symptom PLUS positive urine culture (≥10⁵ CFU/mL, ≤2 organisms).","denDef":"SUM of daily midnight census of patients with indwelling urinary catheter in situ. Each patient with catheter on any given day = 1 catheter-day.","multiplier":"× 1,000 → expressed per 1,000 cath-days","source":"See data collection methods in hospital QI policy","example":"ICU – April: Sum of daily catheter census (30 days) = 420 cath-days CAUTI events confirmed = 1 (1 ÷ 420) × 1,000 = 2.38 ❌ ABOVE target (<1) — RCA required","interpretation":"<1: Compliant. >1: Audit bundle (daily necessity review, closed drainage, perineal hygiene, unobstructed flow). Each CAUTI event requires individual RCA.","reference":"CDC/NHSN (2024). CAUTI Event Surveillance Definition"},"A3":{"name":"CLABSI Rate","unit":"per 1,000 line-days","benchmark":"<1","formula":"(No. of CLABSIs ÷ Total central line-days) × 1,000","numDef":"Primary BSIs meeting NHSN CLABSI definition: central line in place >2 days on event date AND blood culture positive with recognised pathogen, no other infection source.","denDef":"SUM of daily midnight census of patients with any central line in situ (CVC, PICC, tunneled catheter). Each patient with a line per day = 1 line-day.","multiplier":"× 1,000 → expressed per 1,000 line-days","source":"See data collection methods in hospital QI policy","example":"ICU – Q2: Line-days: Apr=180, May=190, Jun=175 → Total=545 CLABSI events = 2 (2 ÷ 545) × 1,000 = 3.67 ❌ ABOVE target (<1) — Immediate bundle audit","interpretation":"<1: Compliant. >1: Review insertion technique, maximal sterile barrier, CHG skin prep, daily line necessity, hub decontamination.","reference":"CDC/NHSN (2024). CLABSI Event Surveillance Definition"},"A4":{"name":"VAP Rate","unit":"per 1,000 vent-days","benchmark":"<1","formula":"(No. of VAP events ÷ Total ventilator-days) × 1,000","numDef":"VAP events per NHSN VAE criteria: ventilated >2 days AND new infiltrate on CXR PLUS fever/leucocytosis PLUS purulent secretions PLUS positive lower respiratory culture.","denDef":"SUM of daily midnight census of patients on mechanical ventilation via ETT or tracheostomy (any mode). Each ventilated patient per day = 1 vent-day.","multiplier":"× 1,000 → expressed per 1,000 vent-days","source":"See data collection methods in hospital QI policy","example":"ICU – May (20-bed unit): 10 ventilated patients/day × 31 days = 310 vent-days VAP events = 2 (2 ÷ 310) × 1,000 = 6.45 ❌ ABOVE target (<1) — Audit VAP bundle immediately","interpretation":"<1: Compliant. >1: Audit VAP bundle: HOB 30–45°, oral CHG, daily sedation interruption, daily weaning assessment, subglottic suction.","reference":"CDC/NHSN (2024). VAP/VAE Surveillance Definition"},"A5":{"name":"Surgical Site Infection (SSI) Rate","unit":"%","benchmark":"<1–2%","formula":"(No. of SSIs ÷ Total procedures of same type) × 100","numDef":"SSIs within 30 days (or 90 days for implants) classified as Superficial Incisional, Deep Incisional, or Organ/Space per NHSN. Each distinct SSI counted once per procedure type.","denDef":"Total surgical procedures in the specific procedure category being measured. Report each procedure type separately (e.g., hip replacements, C-sections).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Orthopaedic – H1 (Jan–Jun): Total hip replacements = 120 SSIs within 90 days = 2 (2 ÷ 120) × 100 = 1.67% ❌ ABOVE 1% target — Review antibiotic timing, skin prep, sterile technique","interpretation":"<1%: Acceptable for clean procedures. 1–2%: Monitor. >2%: Formal RCA, theatre environmental cultures.","reference":"CDC/NHSN (2024). SSI Surveillance Definition; WHO (2018). Global Guidelines for Prevention of SSI"},"A6":{"name":"Phlebitis Rate (Peripheral IV Site)","unit":"%","benchmark":"≤5%","formula":"(No. of IV sites with phlebitis ÷ Total IV sites assessed) × 100","numDef":"Peripheral IV sites with VIP Score ≥2 (pain, erythema, swelling or induration) during audit. Each affected site = 1 event; a patient with 2 affected sites counts as 2.","denDef":"Total peripheral IV sites actively in use and assessed during the audit. Each site counted separately regardless of number per patient.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Ward 3 – Weekly audit: Active IV sites assessed = 42 Sites with VIP Score ≥2 = 4 (4 ÷ 42) × 100 = 9.5% ❌ ABOVE target (≤5%) — Review IV technique, rotation (max 72–96 h)","interpretation":"≤5%: Acceptable. 5–10%: Review insertion and maintenance. >10%: Immediate quality review; re-train staff.","reference":"INS (2021). Infusion Therapy Standards of Practice; Jackson A (1998). VIP Score"},"A7":{"name":"MRSA / MDRO Infection Rate","unit":"per 1,000 pt-days","benchmark":"Minimize/track","formula":"(No. of HA-MRSA/MDRO infections ÷ Total patient-days) × 1,000","numDef":"Confirmed healthcare-associated MRSA or MDRO infections occurring ≥48 h after admission. Includes MRSA, VRE, ESBL, CRE, and other MDROs per local policy.","denDef":"SUM of daily midnight inpatient census. Each patient present at midnight = 1 patient-day.","multiplier":"× 1,000 → expressed per 1,000 pt-days","source":"See data collection methods in hospital QI policy","example":"Hospital – June: Sum of daily midnight census (30 days) = 2,800 pt-days HA-MRSA infections confirmed = 3 (3 ÷ 2,800) × 1,000 = 1.07 per 1,000 pt-days ⚠️ Track vs prior months; any HA-MRSA requires transmission chain investigation","interpretation":"Monitor trend. Any HA-MRSA/MDRO: line-listing investigation. Rising rate: investigate source, review contact precautions, cohort nursing.","reference":"CDC/NHSN (2024). MDRO & CDI Prevention Module; WHO (2022). Global Action Plan on AMR"},"A8":{"name":"Overall Hospital-Acquired Infection (HAI) Rate","unit":"%","benchmark":"<5%","formula":"(Total No. of all HAIs ÷ Total patient-days) × 100","numDef":"Total confirmed HAIs across ALL categories (CAUTI, CLABSI, VAP, SSI, MRSA, C. diff, etc.) meeting standard surveillance definitions in the reporting period.","denDef":"SUM of daily midnight inpatient census over the same reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1 (~200-bed, ~85% occupancy, 90 days): Patient-days = 200 × 0.85 × 90 = 15,300 All HAIs across all categories = 45 (45 ÷ 15,300) × 100 = 0.29% ✅ BELOW 5% target — Continue prevention bundles","interpretation":"<5%: Target met. 5–10%: Review all HAI subtypes; identify dominant category and apply targeted bundle. >10%: Hospital-wide IPC audit.","reference":"WHO (2022). Global Report on IPC; Allegranzi B et al (2011). Lancet 377:228"},"A9":{"name":"Blood Culture Contamination Rate","unit":"%","benchmark":"<3%","formula":"(No. of contaminated blood culture sets ÷ Total blood culture sets collected) × 100","numDef":"Blood culture sets where a skin commensal (CoNS, Micrococcus, Bacillus, Corynebacterium, viridans strep) is in only 1 of 2 bottles with no clinical evidence of true bacteraemia — classified as contamination by the treating team.","denDef":"Total blood culture SETS collected (1 aerobic + 1 anaerobic bottle = 1 set from one venipuncture). Count sets, not individual bottles.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Month of July – Hospital-wide: Blood culture sets collected = 480 Sets classified as contaminated = 18 (18 ÷ 480) × 100 = 3.75% ❌ ABOVE target (<3%) — Review venipuncture technique; reinforce 2% CHG/70% alcohol skin prep","interpretation":"<3%: Acceptable. 3–5%: Phlebotomy retraining; ensure 30-sec drying time. >5%: Formal competency reassessment.","reference":"CLSI (2022). Principles and Procedures for Blood Cultures. CLSI M47-A2"},"A10":{"name":"Surgical Antibiotic Prophylaxis Timing Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients with antibiotic ≤60 min before incision ÷ Total eligible patients) × 100","numDef":"Patients who received prophylactic antibiotic within 60 min before skin incision (within 120 min for vancomycin/fluoroquinolones), documented in anaesthesia chart and verified against incision time.","denDef":"Total eligible surgical patients requiring antibiotic prophylaxis per protocol, excluding those already on therapeutic antibiotics covering the prophylaxis indication.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – August: Eligible procedures requiring prophylaxis = 95 Antibiotic given ≤60 min of incision = 88 (7 given >60 min before — too early; sub-therapeutic at incision) (88 ÷ 95) × 100 = 92.6% ❌ BELOW 100% — Embed antibiotic timing check in anaesthesia induction protocol","interpretation":"100%: Required. Both too early (>60 min) and too late (post-incision) = inadequate tissue levels = failure.","reference":"SCIP Inf-1; WHO (2018). Global Guidelines for Prevention of SSI; Bratzler DW et al (2013). Am J Health Syst Pharm"},"A11":{"name":"CSSD Sterilization (BI) Compliance","unit":"%","benchmark":"100%","formula":"(No. of cycles with PASSING biological indicator ÷ Total BI-tested cycles) × 100","numDef":"Sterilization cycles where the biological indicator (BI) spore test shows NO GROWTH (negative = kill achieved). BI: Geobacillus stearothermophilus spores for steam; Bacillus atrophaeus for ETO.","denDef":"Total sterilization cycles with a BI tested during the period (per protocol: every day of use for steam; every cycle for ETO).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"CSSD – September: BI-tested sterilization cycles = 62 POSITIVE BI (FAIL: spore growth) = 1 NEGATIVE BI (PASS: no growth) = 61 (61 ÷ 62) × 100 = 98.4% ❌ BELOW 100% — QUARANTINE failed-cycle load; steriliser out-of-service; recall if already distributed","interpretation":"100%: Mandatory. Any positive BI = steriliser failure. Quarantine full load, recall all items, remove steriliser from service pending re-qualification.","reference":"AAMI/ANSI ST79:2017; ISO 11138-3:2017"},"A12":{"name":"Biomedical Waste Segregation Compliance","unit":"%","benchmark":"100%","formula":"(No. of compliant audit observations ÷ Total audit observations) × 100","numDef":"Audit observations where waste was correctly colour-coded per protocol (e.g., yellow = infectious/pathological, red = anatomical, black = general, sharps container = sharps). ALL bin types correct = 1 compliant observation.","denDef":"Total waste audit observations conducted (each ward/area visit = 1 observation; or each container inspected = 1 observation — define and apply consistently).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital-wide audit – October: Ward/area observations = 80 Compliant (all bins correct) = 74 Non-compliant (sharps in yellow ×3, general in biohazard ×2, overfilled ×1) = 6 (74 ÷ 80) × 100 = 92.5% ❌ BELOW 100% — Re-educate; sharps in wrong bin = needlestick risk (incident report required)","interpretation":"100%: Required by law. Sharps in wrong container = needlestick risk; immediate incident report. Re-train non-compliant areas within 5 days; re-audit.","reference":"WHO (2014). Safe Management of Wastes from Health-Care Activities, 2nd ed."},"A13":{"name":"Needle Stick / Sharps Injury","unit":"Count","benchmark":"0","formula":"Total count of reported needlestick and sharps injuries per reporting period","numDef":"All reported incidents of accidental puncture/laceration by a used needle, lancet, scalpel, or other sharp medical device potentially contaminated with blood or body fluids. Each unique incident = 1 count.","denDef":"N/A — this is a count. Optional secondary rate: (count ÷ total FTE staff) × 100 = rate per 100 FTEs.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"H1 (January–June) Hospital-wide: Nurse recapping needle post-injection = 2 events Lab technician during blood tube work = 1 event Surgeon suture needle injury in OT = 1 event Total sharps injuries = 4 Target: 0 | All 4: post-exposure assessment within 2 h, source patient status, PEP if indicated, RCA","interpretation":"Target: 0 (zero tolerance). Every sharps injury = preventable sentinel event. Rising counts = audit sharps disposal compliance; consider needle-free devices.","reference":"OSHA Bloodborne Pathogens Standard 29 CFR 1910.1030; WHO (2018). Preventing Needlestick Injuries"},"A14":{"name":"Isolation / Transmission-Precaution Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients in correct isolation ÷ Total patients requiring isolation) × 100","numDef":"Patients requiring transmission-based precautions (Contact, Droplet, or Airborne) who are correctly placed AND maintained: appropriate room/cohort, correct PPE, proper signage posted, documented in nursing notes.","denDef":"Total patients identified as requiring transmission-based precautions during the audit period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Weekly audit – November: Patients requiring isolation precautions = 18 Correctly isolated with all requirements = 16 Non-compliant (PPE not worn ×1, wrong precaution type ×1) = 2 (16 ÷ 18) × 100 = 88.9% ❌ BELOW 100% — Immediate education; re-audit within 24 h","interpretation":"100%: Required. Incorrect isolation type (e.g. Droplet only for airborne pathogen) = serious transmission risk. Immediate correction required.","reference":"CDC/HICPAC (2007, updated 2023). Guideline for Isolation Precautions in Hospitals"},"B1":{"name":"Medication Error","unit":"Count","benchmark":"0","formula":"Total count of all reported medication errors per reporting period","numDef":"Reported errors in any phase: (1) Prescribing, (2) Transcription, (3) Dispensing, (4) Administration. Include near-misses (caught before reaching patient).","denDef":"N/A — count per period. Secondary metric: (errors ÷ total doses administered) × 1,000.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Month of February: Prescribing errors = 3 Dispensing errors = 2 Administration errors (reached patient) = 5 Near-misses (caught before patient) = 8 Total errors reaching patient = 10 | Near-misses = 8 Target: 0 | All events: categorise, RCA, trend analysis","interpretation":"Target: 0 errors reaching patients. Low reporting often means under-reporting, not absence of errors. High near-miss reporting = healthy safety culture.","reference":"ISMP (2023). Medication Error Reporting Program; NQF (2011). Safe Practices for Better Healthcare"},"B2":{"name":"Adverse Drug Reaction (ADR) Rate","unit":"Count (by severity)","benchmark":"Track","formula":"Total count of confirmed ADRs per period, stratified by severity","numDef":"Confirmed ADRs per WHO-UMC causality assessment. Severity: Mild (no intervention), Moderate (therapy change/hospitalisation), Severe (life-threatening/permanent damage), Fatal.","denDef":"N/A for count. For rate: (ADR count ÷ total admissions) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Q3 (July–September): Mild ADRs (rash, nausea) = 12 Moderate ADRs (therapy change) = 3 Severe ADRs (anaphylaxis → ICU) = 1 Fatal ADRs = 0 Total ADRs = 16 All 16: pharmacovigilance database. Severe ADR: RCA + regulatory notification + allergy record updated","interpretation":"Track over time. Focus action on severe/fatal ADRs. Update allergy record immediately after any confirmed ADR.","reference":"WHO (2002). The Importance of Pharmacovigilance; ICH E2A (1994). Clinical Safety Data Management"},"B3":{"name":"Medication Reconciliation Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients with completed reconciliation ÷ Total admissions or discharges) × 100","numDef":"Patients with complete medication reconciliation at BOTH admission (BPMH from ≥2 sources: patient/carer + pharmacy + GP) AND discharge (reconciled discharge list vs BPMH; all discrepancies resolved). Report admission and discharge rates separately.","denDef":"Total patient admissions (for admission rate) or total discharges (for discharge rate). Apply denominator consistently for each metric.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Month of March – Medical Ward (50 admissions): BPMH reconciliation completed (admission) = 46 Discharge reconciliation completed = 44 Admission: (46 ÷ 50) × 100 = 92% Discharge: (44 ÷ 50) × 100 = 88% Both ❌ BELOW 100% — Implement pharmacy-led BPMH service","interpretation":"100%: Required. Unreconciled discrepancies = leading cause of medication errors at care transitions.","reference":"JCI (2021). IPSG.3; ISMP (2011). Medication Reconciliation to Prevent Adverse Drug Events"},"B4":{"name":"High-Alert Medication Double-Check Compliance","unit":"%","benchmark":"100%","formula":"(No. of high-alert doses with documented double-check ÷ Total high-alert doses administered) × 100","numDef":"High-alert doses where an independent double-check was performed (two nurses independently verify: right drug, concentration, dose, rate, patient, route) AND both nurses' signatures appear on the MAR.","denDef":"Total high-alert medication doses administered. ISMP high-alert drugs: insulin, IV heparin, concentrated electrolytes (KCl), IV opioids, chemotherapy, anticoagulants, neuromuscular blockers, vasoactive drugs.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – Week 15–21 April: Total high-alert doses administered = 140 (Insulin ×60, IV heparin ×35, KCl ×20, IV opioids ×25) Doses with documented double-check = 133 (133 ÷ 140) × 100 = 95.0% ❌ BELOW 100% — Identify which drugs/shifts missed; double-check MANDATORY for all ISMP high-alert drugs","interpretation":"100%: Mandatory. Missed double-check = policy violation. Address barriers: staffing, time pressure. 'No one available to check' = escalate to supervisor.","reference":"ISMP (2023). High-Alert Medications in Acute Care Settings; JCI (2021). MMU.5"},"B5":{"name":"Verbal / Telephone Order Read-Back Compliance","unit":"%","benchmark":"100%","formula":"(No. of verbal/telephone orders with documented read-back ÷ Total verbal/telephone orders) × 100","numDef":"Orders where: (1) receiver read complete order back to prescriber, (2) prescriber verbally confirmed accuracy, (3) documented in medical record with receiver's signature, AND (4) prescriber countersigned within 24 hours.","denDef":"Total verbal and telephone orders received and documented during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – Month of May: Total verbal/telephone orders = 45 With complete read-back + countersign within 24 h = 38 (38 ÷ 45) × 100 = 84.4% ❌ BELOW 100% — Identify non-countersigning prescribers; raise at medical staff meeting","interpretation":"100%: Required. Verbal orders carry high error risk. Read-back must include: drug name spelled out, dose with units, route, frequency.","reference":"JCI (2021). IPSG.2; TJC NPSG 02.01.01"},"B6":{"name":"LASA Drug Storage / Labeling Compliance","unit":"%","benchmark":"100%","formula":"(No. of LASA drugs correctly stored and labeled ÷ Total LASA drugs audited) × 100","numDef":"LASA drug pairs/groups found on audit to be: physically separated, labeled with Tall Man lettering (e.g., hydrALAZINE vs. hydrOXYzine), with auxiliary warning stickers. ALL criteria met = 1 compliant entry.","denDef":"Total LASA drug items/storage locations audited. Each drug in each location counted separately (ward stock, IV room, dispensary).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital-wide audit – June: LASA drug storage locations audited = 65 Fully compliant = 58 Non-compliant (dopamine adj to dobutamine ×3, no Tall Man ×4) = 7 (58 ÷ 65) × 100 = 89.2% ❌ BELOW 100% — Separate adjacently-stored pairs; update bin labels","interpretation":"100%: Required. LASA mix-ups are a leading cause of serious medication errors. Physically separate AND label clearly with Tall Man lettering.","reference":"ISMP (2023). LASA Drug Name List; WHO (2019). Medication Without Harm Challenge"},"B7":{"name":"Controlled Drug Count Accuracy","unit":"%","benchmark":"100%","formula":"(No. of shift counts with zero discrepancy ÷ Total shift counts performed) × 100","numDef":"Controlled drug shift-end counts where physical count exactly matches: opening balance + additions – administrations – documented wastage, as recorded in the controlled drug register. Zero discrepancy = 1 passing count.","denDef":"Total controlled drug shift counts performed during the period (typically one count per shift per ward; 2–3 per day per location).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – July (3 shifts/day × 31 days = 93 counts): Total shift counts performed = 93 Counts with discrepancy = 2 Counts with zero discrepancy = 91 (91 ÷ 93) × 100 = 97.8% ❌ BELOW 100% — Both discrepancies: investigate; notify pharmacy and ward manager immediately","interpretation":"100%: Required. Any discrepancy: document, notify, investigate. Escalate to security if theft suspected. Never delay investigation.","reference":"DEA 21 CFR Part 1304; Local Narcotics & Pharmacy Regulations"},"B8":{"name":"STAT Medication Administration Timeliness","unit":"%","benchmark":"≥90%","formula":"(No. of STAT orders administered within TAT ÷ Total STAT orders) × 100","numDef":"STAT medication orders administered to the patient within the defined TAT from order time (commonly 30 min; varies by policy and drug type).","denDef":"Total STAT medication orders received during the reporting period (identified in MAR or pharmacy system by 'STAT' urgency designation).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – August: Total STAT orders received = 85 Administered within 30 minutes = 79 Delayed (>30 min) = 6 (79 ÷ 85) × 100 = 92.9% ✅ AT/ABOVE target (≥90%) — Compliant. Review 6 delays.","interpretation":"≥90%: Acceptable. <90%: Identify systemic causes: drug not stocked on ward, pharmacy supply delays, nurse:patient ratio.","reference":"ISMP (2011). Guidelines for Timely Medication Administration; TJC MM.04.01.01"},"C1":{"name":"Patient Identification (2-Identifier) Compliance","unit":"%","benchmark":"100%","formula":"(No. of care interactions with 2-identifier verification ÷ Total care interactions audited) × 100","numDef":"Care interactions (medication admin, blood transfusion, specimen collection, invasive procedure, surgery, imaging) where the healthcare worker verified TWO patient identifiers (full name + DOB + MRN — any two of three) BEFORE the care action.","denDef":"Total patient care interactions observed or audited during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Monthly audit – Medical & Surgical Wards: Care interactions observed (medication ×80, specimens ×50, IV bags ×40, blood admin ×30) = 200 Interactions with 2-identifier verification = 192 Without proper identification = 8 (192 ÷ 200) × 100 = 96% ❌ BELOW 100% — Review 8 failures; reinforce at daily safety huddle","interpretation":"100%: Mandatory. Blood transfusion without 2-ID = potential fatal wrong-blood event. Escalate persistent non-compliance to department head.","reference":"JCI (2021). IPSG.1; TJC NPSG 01.01.01"},"C2":{"name":"Patient Fall Rate","unit":"per 1,000 pt-days","benchmark":"≤3.3","formula":"(No. of patient falls ÷ Total patient-days) × 1,000","numDef":"Total patient falls during the period regardless of injury outcome. A fall = unplanned descent to floor or lower level, witnessed or not. Includes: found-on-floor, assisted falls, falls from bed/chair/commode.","denDef":"SUM of daily midnight inpatient census over the reporting period.","multiplier":"× 1,000 → expressed per 1,000 pt-days","source":"See data collection methods in hospital QI policy","example":"Medical Ward (30 beds) – Q3 (92 days): Average 26 patients/day × 92 days = 2,392 patient-days Patient falls reported = 7 (7 ÷ 2,392) × 1,000 = 2.93 per 1,000 pt-days ✅ BELOW target (≤3.3) — Compliant. Review all 7 falls individually.","interpretation":"≤3.3 per 1,000 pt-days: Acceptable. >3.3: Review fall risk assessment, care plan, hourly rounding, bed alarms, call bell accessibility, environment hazards.","reference":"NDNQI (2023). Nursing-Sensitive Quality Indicators; JCI (2021). QPS Standards"},"C3":{"name":"Falls with Injury","unit":"Count","benchmark":"0","formula":"Total count of falls resulting in any patient injury per reporting period","numDef":"Falls resulting in ANY degree of injury: Minor (bruise/abrasion), Moderate (suture/splint needed), Major (surgery/fracture/neurological deficit), or Fatal. Each injurious fall = 1 count.","denDef":"N/A — count per period. Optional: (injurious falls ÷ total falls) × 100 = injury rate per fall.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital-wide – Q2: Total falls = 18 No injury: 11 | Minor (bruising): 5 | Moderate (laceration/suture): 2 | Major (hip fracture): 1 Total injurious falls = 5 + 2 + 1 = 8 Target: 0 ❌ Hip fracture = serious adverse event requiring formal RCA and senior management escalation","interpretation":"Target: 0. Every injurious fall must be investigated. Major falls (fracture, surgery, death) = serious adverse event or sentinel event.","reference":"NDNQI (2023); AHRQ (2013). Preventing Falls in Hospitals Toolkit"},"C4":{"name":"Hospital-Acquired Pressure Ulcer (HAPU) Rate","unit":"per 1,000 pt-days","benchmark":"<0.75","formula":"(No. of new Stage 2–4 pressure injuries ÷ Total patient-days) × 1,000","numDef":"Patients developing a NEW pressure injury of Stage 2 (partial skin loss), Stage 3 (full skin loss), Stage 4 (full tissue loss), or Unstageable — appearing for the FIRST TIME >72 h after hospital admission. Injuries documented at admission are excluded.","denDef":"SUM of daily midnight inpatient census over the reporting period.","multiplier":"× 1,000 → expressed per 1,000 pt-days","source":"See data collection methods in hospital QI policy","example":"Medical Ward – Q2 (91 days, avg 28 patients/day): Total patient-days = 28 × 91 = 2,548 New hospital-acquired Stage 2+ injuries = 2 (2 ÷ 2,548) × 1,000 = 0.785 per 1,000 pt-days ❌ ABOVE target (<0.75) — Review: Was admission skin assessment done? Was repositioning schedule followed?","interpretation":"<0.75 per 1,000 pt-days: Acceptable. >0.75: Review bundle: Braden/Waterlow score, 2-hourly repositioning, pressure-relieving surfaces, moisture management, nutrition.","reference":"NPUAP/EPUAP/PPPIA (2019). Clinical Practice Guideline for Pressure Injury Prevention; NDNQI (2023)"},"C5":{"name":"VTE / DVT Prophylaxis Compliance","unit":"%","benchmark":"100%","formula":"(No. of eligible patients who received VTE prophylaxis ÷ Total eligible patients) × 100","numDef":"Eligible adult inpatients who received appropriate VTE prophylaxis (mechanical: TED stockings/pneumatic compression AND/OR pharmacological: LMWH/UFH per risk score) initiated by end of day 2 of admission.","denDef":"All admitted adults identified as eligible (moderate/high risk on Caprini or Padua score), EXCLUDING those with active bleeding, bleeding disorder, or other absolute contraindication.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – September: Eligible patients (moderate/high VTE risk) = 55 Received appropriate prophylaxis by day 2 = 52 (52 ÷ 55) × 100 = 94.5% ❌ BELOW 100% — Review 3 patients: documented contraindication? Missed order? Missing risk assessment?","interpretation":"100%: Target. Missing prophylaxis in eligible patients = preventable DVT/PE risk. Embed VTE risk assessment in admission workflow.","reference":"ACCP (2012). Antithrombotic Therapy Guidelines, 9th ed.; JCI (2021). IPSG.6"},"C6":{"name":"Hospital-Acquired DVT","unit":"Count","benchmark":"0","formula":"Total count of confirmed DVT events occurring ≥48 h after admission per reporting period","numDef":"Confirmed new DVT events (proximal or distal, upper or lower limb) diagnosed ≥48 h after hospital admission, confirmed by Doppler ultrasound or venography (hospital-acquired, not community-acquired).","denDef":"N/A — count per period. Optional rate: (count ÷ total eligible admissions) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1 (January–March): Hospital-acquired DVT events confirmed = 2 (Both in post-surgical patients without timely LMWH prophylaxis) Target: 0 ❌ Both cases: formal RCA; review VTE prophylaxis prescribing and administration compliance","interpretation":"Target: 0. Any hospital-acquired DVT = preventable adverse event. Confirm: Was prophylaxis prescribed AND administered? If so, was dosing correct (renal function, weight-based)?","reference":"ACCP (2012); JCI (2021). QPS Standards"},"C7":{"name":"Wrong-Site / -Patient / -Procedure Events","unit":"Count","benchmark":"0","formula":"Total count of wrong-site, wrong-patient, or wrong-procedure events per reporting period","numDef":"Events where a surgical or invasive procedure was performed on the wrong anatomical site, wrong patient, or wrong procedure was carried out — regardless of patient harm outcome. Include near-misses caught before procedure completion.","denDef":"N/A — count per period (sentinel event by definition).","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Reporting Period – Full Year: Wrong-site surgery events = 0 Wrong-patient events = 0 Wrong-procedure events = 0 ✅ Target: 0 — Maintained Continue: pre-op site marking, Time-Out compliance, checklist monitoring NOTE: Even ONE event = sentinel event requiring external review and system redesign","interpretation":"Target: 0 (absolute). Any event = mandatory sentinel event investigation, regulatory notification, system redesign. Prevention: permanent site marking, Time-Out with full team pause, consistent checklist use every case.","reference":"TJC Universal Protocol NPSG 01.03.01; JCI (2021). IPSG.4; WHO (2009). Surgical Safety Checklist"},"C8":{"name":"Surgical Safety Checklist Compliance","unit":"%","benchmark":"100%","formula":"(No. of procedures with all 3 checklist phases completed ÷ Total surgical procedures) × 100","numDef":"Surgical procedures where ALL THREE phases of the WHO Surgical Safety Checklist were FULLY completed and signed: Phase 1 – Sign In (before anaesthesia induction), Phase 2 – Time Out (before skin incision, full team pause), Phase 3 – Sign Out (before patient leaves OT).","denDef":"Total surgical and invasive procedures performed in the OT during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – October: Total surgical procedures = 148 All 3 phases fully documented = 141 Incomplete (Sign-Out missing ×5, Time-Out verbal only ×2) = 7 (141 ÷ 148) × 100 = 95.3% ❌ BELOW 100% — Identify non-compliant teams; reinforce at surgical staff meeting","interpretation":"100%: Mandatory. The Time-Out is the most critical phase — last chance to catch wrong-patient/site/side errors. An undone checklist = unacceptable safety gap.","reference":"WHO (2009). Surgical Safety Checklist; Haynes AB et al (2009). NEJM 360(5):491"},"C9":{"name":"Restraint Use Appropriateness / Monitoring","unit":"%","benchmark":"100%","formula":"(No. of restrained patients with full compliance ÷ Total restrained patients) × 100","numDef":"Restrained patients who have ALL documented: (1) Valid medical/nursing order with clinical justification, (2) Least restrictive restraint type, (3) Monitoring per protocol (skin/neuro checks every 15–120 min), (4) Regular reassessment of continued need, (5) Patient/family education documented.","denDef":"Total patients in restraints on the audit day or during the audit period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU & Medical Ward – November: Patients in restraints = 12 Fully compliant with all requirements = 10 Non-compliant (no 2-h skin check ×1, no order ×1) = 2 (10 ÷ 12) × 100 = 83.3% ❌ BELOW 100% — Patient without order: obtain order immediately; document as incident","interpretation":"100%: Required. Restraint without a valid order = potential abuse or unlawful detention. Poor monitoring = risk of pressure injuries, limb ischaemia, aspiration. Review alternatives before applying restraints.","reference":"TJC RC.02.01.01; CMS CoP 42 CFR 482.13(e); JCI (2021). PFR Standards"},"C10":{"name":"Pain Assessment & Reassessment Compliance","unit":"%","benchmark":"≥90%","formula":"(No. of patients with documented assessment AND reassessment ÷ Total patients requiring assessment) × 100","numDef":"Patients with: (1) Initial pain assessment documented at admission using a validated scale (NRS 0–10, VAS, FLACC for paediatrics, CPOT for non-verbal), AND (2) Reassessment documented at appropriate interval following any pain intervention (30–60 min after oral analgesic, 15–30 min after IV).","denDef":"Total patients for whom pain assessment is applicable during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – Week of 10–16 November: Patients requiring pain assessment = 64 With initial assessment + timely reassessment = 59 Missing reassessment post-analgesic = 5 (59 ÷ 64) × 100 = 92.2% ✅ AT/ABOVE target (≥90%) — Compliant. Review 5 missing reassessments for nurse education.","interpretation":"≥90%: Acceptable. <90%: Review documentation compliance. Pain scores must be recorded as the 5th vital sign. Reassessment confirms analgesic effectiveness.","reference":"JCI (2021). COP Standards; TJC PC.01.02.07; NRS/VAS/FLACC/CPOT validated scales"},"C11":{"name":"Critical Value Reporting Timeliness","unit":"%","benchmark":"100%","formula":"(No. of critical values communicated within TAT ÷ Total critical values generated) × 100","numDef":"Critical laboratory or radiology results communicated to the responsible treating clinician within the defined TAT from result verification (e.g., 30–60 min per policy), with documentation of: result, time communicated, clinician name, read-back confirmed.","denDef":"Total critical values (lab/radiology) generated during the period per the hospital critical value list (e.g., K+ >6.5, pH <7.2, Hb <6 g/dL, glucose <50 mg/dL, INR >6.0, platelets <20,000/µL).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Lab – December: Total critical values generated = 115 Communicated to clinician within 30 min = 110 Delayed (>30 min) = 5 (110 ÷ 115) × 100 = 95.7% ❌ BELOW 100% — Review 5 delayed cases: clinician unreachable? Escalation pathway followed?","interpretation":"100%: Required. A missed or delayed critical value can cause patient death (e.g., unrecognised hyperkalaemia → cardiac arrest). If clinician unreachable: escalate to next senior immediately. Document ALL attempts with timestamps.","reference":"TJC NPSG 02.03.01; CLIA 42 CFR 493.1291; CAP (2021). Commission on Laboratory Accreditation"},"C12":{"name":"Patient Handover (SBAR) Compliance","unit":"%","benchmark":"100%","formula":"(No. of handovers using SBAR format ÷ Total handovers observed/audited) × 100","numDef":"Patient handovers (shift-to-shift, ward-to-ICU, dept-to-dept) where the structured SBAR format was used: S (Situation — patient ID, diagnosis, bed), B (Background — relevant history, medications), A (Assessment — current status, vital signs, concerns), R (Recommendation — specific action required from receiving team).","denDef":"Total patient handovers observed or audited during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – January (3 shifts/day × 30 days = 90 handovers): Handovers audited = 90 Using complete SBAR structure = 79 Missing one or more SBAR components = 11 (79 ÷ 90) × 100 = 87.8% ❌ BELOW 100% — Most commonly missed: Recommendation component; reinforce at nursing education session","interpretation":"100%: Target. The 'Recommendation' component is critical — it defines what action is expected from the receiving team. Standardise with printed/electronic SBAR template.","reference":"JCI (2021). IPSG.2.2; WHO (2007). Communication During Patient Handovers. Patient Safety Solutions Vol 1 Sol 3"},"D1":{"name":"Gross Hospital Mortality Rate","unit":"%","benchmark":"Track locally","formula":"(No. of inpatient deaths ÷ Total discharges including deaths) × 100","numDef":"Total patients who died during the hospital stay (inpatient death), regardless of cause or length of stay. Includes deaths in all wards, ICU, ER, and OT.","denDef":"Total hospital discharges during the same period including ALL dispositions: discharged alive, transferred, AMA discharges, and deaths.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3: Total discharges (alive 4,150 + deaths 50) = 4,200 Inpatient deaths = 50 (50 ÷ 4,200) × 100 = 1.19% Action: Compare to prior quarter and national benchmark; categorise by ward/diagnosis; review unexpected deaths with M&M committee","interpretation":"Track and benchmark vs. national data for hospital type. Distinguish expected (palliative/end-stage) from unexpected deaths. Unexpected mortality requires peer review and potential RCA.","reference":"AHRQ (2020). Inpatient Quality Indicators; CMS Inpatient Quality Reporting Program"},"D2":{"name":"ICU Mortality Rate","unit":"%","benchmark":"Track (risk-adjusted)","formula":"(No. of ICU deaths ÷ Total ICU admissions) × 100","numDef":"Number of patients who die while admitted to the ICU during the reporting period.","denDef":"Total ICU admissions during the same period. Count each distinct ICU admission separately — a re-admitted patient counts as a new admission.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU (20 beds) – Month of February: ICU admissions = 45 | ICU deaths = 9 Crude mortality = (9 ÷ 45) × 100 = 20% Risk-adjusted: If APACHE II predicted mortality = 25%, SMR = Observed ÷ Expected = 9 ÷ (45×0.25) = 9÷11.25 = 0.80 SMR <1.0 = performing BETTER than predicted by illness severity ✅","interpretation":"Crude rate alone is insufficient — must be risk-adjusted (APACHE II/IV, SOFA score). SMR <1.0: better than predicted. SMR >1.0: investigate staffing, treatment delays, complications.","reference":"SCCM (2020). ICU Quality Metrics; Knaus WA et al (1985). APACHE II. Crit Care Med 13(10):818"},"D3":{"name":"ICU Re-admission within 48 h","unit":"%","benchmark":"<5%","formula":"(No. of patients re-admitted to ICU within 48 h ÷ Total ICU discharges to ward) × 100","numDef":"Patients re-admitted to the ICU within 48 hours of a planned transfer to the general ward (step-down). Excludes return for a NEW unrelated acute problem not related to the original ICU admission.","denDef":"Total planned ICU discharges (step-down transfers to ward) during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – Q2 (April–June): Total planned ICU step-downs to ward = 96 Re-admitted to ICU within 48 h = 4 (4 ÷ 96) × 100 = 4.2% ✅ BELOW target (<5%) — Compliant. Review all 4 cases for premature discharge factors.","interpretation":"<5%: Acceptable. >5%: Review ICU discharge criteria quality. High rate = premature step-down; review: was patient haemodynamically stable for ≥6 h? Were vasopressors fully weaned? Were NEWS2 scores reassuring?","reference":"SCCM (2020). ICU Quality Metrics; Rosenberg AL et al (2001). Crit Care Med 29(8):1547"},"D4":{"name":"Re-admission within 30 Days","unit":"%","benchmark":"Track/minimize","formula":"(No. of re-admissions within 30 days ÷ Total eligible discharges) × 100","numDef":"Patients re-admitted to hospital within 30 calendar days of prior discharge for any cause (all-cause) or related diagnosis (condition-specific). Count each re-admission episode separately.","denDef":"Total eligible patient discharges during the period. Exclude: planned readmissions for chemotherapy/dialysis, transfers, AMA discharges where return was anticipated.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – March: Total eligible discharges = 850 Re-admitted within 30 days = 68 Top reasons: HF exacerbation ×15, COPD ×12, wound complications ×8 (68 ÷ 850) × 100 = 8.0% Action: Implement targeted post-discharge interventions for top readmission diagnoses","interpretation":"Track against national benchmark. High rate = inadequate discharge planning or premature discharge. Key interventions: discharge education, medication reconciliation, 48 h post-discharge phone call, early outpatient follow-up within 7 days.","reference":"CMS Hospital Readmissions Reduction Program (HRRP); Jencks SF et al (2009). NEJM 360(14):1418"},"D5":{"name":"Re-intubation within 48 h","unit":"%","benchmark":"<10%","formula":"(No. of re-intubations within 48 h ÷ Total planned extubations) × 100","numDef":"Mechanically ventilated patients who require re-intubation within 48 hours of a planned, intentional extubation (following a successful spontaneous breathing trial) due to respiratory failure, airway compromise, or inability to protect the airway.","denDef":"Total planned extubations during the period (following successful SBT). Exclude unplanned/accidental extubations.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – Q1 (January–March): Total planned extubations = 52 Re-intubated within 48 h = 4 (4 ÷ 52) × 100 = 7.7% ✅ BELOW target (<10%) — Compliant. Review 4 re-intubated cases: Were SBT criteria met? Was RSBI checked? Was post-extubation NIV/HFNO used?","interpretation":"<10%: Acceptable. 10–20%: Review extubation criteria (SBT >30 min passed, RSBI <105, GCS adequate, manageable secretions, adequate cough). >20%: Protocol redesign.","reference":"Epstein SK & Ciubotaru RL (1998). Am J Respir Crit Care Med 158(2):266; SCCM (2020)"},"D6":{"name":"Return to ICU","unit":"Count / %","benchmark":"0 / minimize","formula":"(No. of returns to ICU ÷ Total ICU discharges to ward) × 100 OR total count","numDef":"Patients discharged from ICU to the general ward who required transfer back to ICU during the same hospitalisation, for clinical deterioration related to or arising from the original ICU admission.","denDef":"Total ICU discharges to the general ward during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – H1 (January–June): ICU discharges to ward = 220 Returns to ICU = 8 (8 ÷ 220) × 100 = 3.6% Action: Review: Were all 8 stepped down appropriately? Were NEWS2 scores monitored hourly post-transfer? Were vital signs stable for ≥12 h before step-down?","interpretation":"Target: 0 / minimize. Each return to ICU should trigger clinical review of step-down decision quality. Consider implementing a step-down/HDU intermediate level for borderline cases.","reference":"SCCM (2020). ICU Quality Metrics; Rosenberg AL et al (2001). Crit Care Med 29(8):1547"},"D7":{"name":"Unplanned Return to OT","unit":"%","benchmark":"Minimize","formula":"(No. of unplanned OT returns ÷ Total surgical procedures) × 100","numDef":"Patients requiring an unplanned, emergency return to the operating theatre during the same hospitalisation as index surgery, for a surgical complication (post-op haemorrhage, anastomotic leak, retained foreign body, wound dehiscence requiring re-exploration).","denDef":"Total surgical procedures performed during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgery Dept – Q3: Total surgical procedures = 1,050 Unplanned returns to OT (post-gastrectomy haem ×2, anastomotic leak ×2, wound dehiscence ×3) = 7 (7 ÷ 1,050) × 100 = 0.67% Action: Each case reviewed at Morbidity & Mortality meeting; identify technical vs patient factors","interpretation":"Minimize. Each case requires formal M&M review. Classify: Technical failure, Patient factors, or System factors. Trend upward = skills or resource review needed.","reference":"ACS NSQIP (2022). Surgical Quality Improvement Program; Clavien-Dindo Classification (2009)"},"D8":{"name":"Accidental Removal of ETT (Unplanned Extubation)","unit":"per 100 vent-days","benchmark":"<1","formula":"(No. of unplanned extubations ÷ Total ventilator-days) × 100","numDef":"Unplanned or accidental ETT or tracheostomy tube removals during the period. Includes: patient self-extubation, accidental extubation during turning/transport, equipment failure causing ETT displacement.","denDef":"SUM of daily midnight census of mechanically ventilated patients during the reporting period.","multiplier":"See formula above","source":"See data collection methods in hospital QI policy","example":"ICU – April: Total ventilator-days = 280 Unplanned extubations (both patient self-extubation overnight) = 2 (2 ÷ 280) × 100 = 0.71 per 100 vent-days ✅ BELOW target (<1) — Compliant. Review: Was sedation appropriate? Was ETT securement checked each shift?","interpretation":"<1 per 100 vent-days: Acceptable. >1: Review sedation (RASS target), ETT securement method (purpose-made holder vs tape), patient positioning during procedures, wrist restraint appropriateness.","reference":"Girard TD et al (2008). Lancet 371(9607):126; Damasceno MC et al (2013). Rev Bras Ter Intensiva"},"D9":{"name":"LAMA / DAMA Rate","unit":"%","benchmark":"Minimize","formula":"(No. of LAMA/DAMA discharges ÷ Total hospital discharges) × 100","numDef":"Patients who leave (or are discharged by legal guardian) Against Medical Advice before the treating physician has clinically cleared them. LAMA = patient self-discharges; DAMA = family/guardian takes patient against advice.","denDef":"Total hospital discharges during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – May: Total discharges = 1,100 LAMA/DAMA discharges (financial ×9, personal/family ×8, dissatisfied with care ×5) = 22 (22 ÷ 1,100) × 100 = 2.0% Action: Review reasons by category; address financial support, communication gaps, interpreter service availability","interpretation":"Minimize. High LAMA rates indicate: financial barriers, language barriers, care dissatisfaction. Each LAMA: document education, risk explanation, AMA form, social work referral where appropriate.","reference":"Alfandre DJ (2009). Mayo Clin Proc 84(3):255; WHO (2014). AMA Discharge"},"D10":{"name":"Cardiac Arrest (Code Blue) Events","unit":"Count","benchmark":"Track","formula":"Total count of in-hospital cardiac arrest (IHCA) events per reporting period","numDef":"Unresponsive patients with absent or agonal respirations and no palpable central pulse requiring CPR, occurring in the hospital setting. Each distinct arrest event = 1 count.","denDef":"N/A — count per period. Rate option: (events ÷ patient-days) × 1,000 for trend analysis.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – H2 (July–December): Total Code Blue events = 14 Location: ICU step-down ×3, Medical ward ×5, Surgical ward ×4, ED ×2 Shockable rhythm (VF/pVT) ×4, Non-shockable (PEA/Asystole) ×10 Action: Review all 14 for antecedent early warning signs (MEWS >5 in 6 h before arrest? MET call made?)","interpretation":"Track trend and location. Ward-based arrests may indicate missed early warning signs. Review: Were NEWS2/MEWS scores monitored? Were MET calls activated appropriately?","reference":"AHA (2020). ACLS Guidelines; Chan PS et al (2008). NEJM 359(1):11; Utstein Style Reporting"},"D11":{"name":"Cardiac Arrest Survival (ROSC)","unit":"%","benchmark":"≥25%","formula":"(No. of IHCA patients achieving sustained ROSC ÷ Total IHCA events) × 100","numDef":"In-hospital cardiac arrest patients who achieve sustained return of spontaneous circulation (ROSC) for ≥20 minutes following CPR. Document: time of arrest, rhythm, time to first defibrillation, time of ROSC, medications given.","denDef":"Total in-hospital cardiac arrest events during the period for which resuscitation was ATTEMPTED (exclude patients with valid DNR orders).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q4: Total IHCA events (resuscitation attempted) = 12 Patients achieving sustained ROSC ≥20 min = 4 (4 ÷ 12) × 100 = 33.3% ✅ ABOVE target (≥25%) — Compliant. Monitor: of 4 ROSC patients, how many survived to discharge with good neurological outcome?","interpretation":"≥25% ROSC: Acceptable. Track further: survival to discharge and neurological outcome (CPC 1–2 = good). Time to defibrillation for shockable rhythm (target <2 min) = most modifiable predictor of ROSC.","reference":"AHA (2020). ACLS Guidelines; ILCOR (2020); Nolan JP et al (2021). Resuscitation 161:1; Utstein Style"},"E1":{"name":"Informed Consent Completeness","unit":"%","benchmark":"100%","formula":"(No. of procedures with complete consent documentation ÷ Total procedures requiring consent) × 100","numDef":"Invasive procedures/surgeries with a consent form complete with ALL elements: (1) Procedure described in plain language, (2) Risks and benefits documented, (3) Alternatives listed, (4) Patient/guardian signature, (5) Witness signature, (6) Date and time, (7) Physician signature.","denDef":"Total procedures requiring informed consent during the period (surgery, invasive diagnostics, blood transfusion, experimental treatment).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT & Endoscopy – June: Procedures requiring consent = 165 Consent forms with all required elements = 158 Incomplete (missing patient sig ×3, missing witness ×2, risks not documented ×2) = 7 (158 ÷ 165) × 100 = 95.8% ❌ BELOW 100% — Each incomplete consent = patient rights violation; retrain consenting physicians","interpretation":"100%: Required. Any missing element = legal, ethical, and accreditation risk. NEVER proceed to elective procedure without complete consent.","reference":"JCI (2021). PFR.5; TJC RI.01.03.01; Beauchamp TL & Childress JF (2019). Principles of Biomedical Ethics, 8th ed."},"E2":{"name":"Initial Nursing Assessment within 24 h","unit":"%","benchmark":"100%","formula":"(No. of patients with completed nursing assessment within 24 h ÷ Total admissions) × 100","numDef":"Newly admitted patients with a documented initial nursing assessment completed within 24 hours of admission including: chief complaint, physical assessment, vital signs, pain score, fall risk (Morse/Braden), pressure ulcer risk (Braden), nutritional screen, psychosocial, allergy documentation.","denDef":"Total patient admissions during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – July: Total admissions = 95 Initial nursing assessments within 24 h = 91 (91 ÷ 95) × 100 = 95.8% ❌ BELOW 100% — 4 missing: review after-hours admission workload, staffing levels, documentation training","interpretation":"100%: Required. Early assessment identifies falls risk, pressure injury risk, nutrition needs, pain, and medication safety concerns. Late assessments delay care planning.","reference":"JCI (2021). AOP.1; TJC PC.01.02.01"},"E3":{"name":"Nursing Care Plan Documentation","unit":"%","benchmark":"100%","formula":"(No. of patients with documented care plan ÷ Total admitted patients) × 100","numDef":"Admitted patients with an individualized nursing care plan documented within 24–48 h of admission addressing: nursing diagnoses (NANDA), patient outcomes (NOC), planned interventions (NIC), and regular evaluation documentation.","denDef":"Total admitted patients during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – Q2: Total admitted patients = 310 Nursing care plans documented within 48 h = 298 (298 ÷ 310) × 100 = 96.1% ❌ BELOW 100% — 12 missing; focus on weekend admissions where care plans are often delayed","interpretation":"100%: Required. Care plans direct individualised care, prevent errors of omission, and support continuity across shifts. Assess QUALITY not just presence.","reference":"JCI (2021). AOP.1; NANDA International (2021). Nursing Diagnoses, 12th ed. Thieme"},"E4":{"name":"Discharge Summary Timeliness","unit":"%","benchmark":"≥90%","formula":"(No. of discharge summaries completed within TAT ÷ Total discharges) × 100","numDef":"Patient discharges where the discharge summary (final diagnosis, procedures, results, medications, follow-up, pending investigations) is completed within the defined TAT (e.g., 24 h for inpatients; 72 h for complex cases) and available in the medical record.","denDef":"Total patient discharges during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1: Total discharges = 3,200 Summaries completed within 24 h = 2,920 (2,920 ÷ 3,200) × 100 = 91.25% ✅ ABOVE target (≥90%) — Compliant. Identify which specialties have lowest compliance for targeted feedback.","interpretation":"≥90%: Acceptable. Delayed summaries disrupt continuity of care, affect GP management, delay insurance/coding. Incomplete summaries = leading cause of medication errors and preventable readmissions.","reference":"JCI (2021). ACC.3; TJC RC.02.04.01"},"E5":{"name":"Allergy Documentation Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients with allergy status documented ÷ Total admissions) × 100","numDef":"Patients admitted with allergy/adverse drug reaction status documented in the medical record at/within admission: either NKDA (No Known Drug Allergies) OR specific allergy with: drug name, type of reaction, severity.","denDef":"Total patient admissions during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – August: Total admissions = 680 Allergy status documented at admission = 665 Not documented = 15 (665 ÷ 680) × 100 = 97.8% ❌ BELOW 100% — 15 patients at risk: retrospectively document allergy status and add alert immediately","interpretation":"100%: Required. An undocumented allergy = risk every time a medication is prescribed or dispensed. 'NKDA' is also a critical and acceptable documentation.","reference":"JCI (2021). IPSG.3; TJC NPSG 03.06.01"},"E6":{"name":"Medication Chart Completeness","unit":"%","benchmark":"100%","formula":"(No. of complete medication charts ÷ Total charts audited) × 100","numDef":"Medication charts meeting ALL completeness criteria: (1) Patient name + MRN + DOB, (2) Generic drug name, (3) Dose in metric units, (4) Route of administration, (5) Frequency/schedule, (6) Start and stop dates, (7) Prescriber name, designation, and legible signature, (8) Allergy section completed.","denDef":"Total medication charts audited during the period (monthly random sample).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Monthly Audit – September: Medication charts audited = 120 Meeting all completeness criteria = 108 Non-compliant (missing dose ×4, unsigned ×5, no allergy section ×3) = 12 (108 ÷ 120) × 100 = 90% ❌ BELOW 100% — Unsigned orders cannot legally be dispensed; immediate corrective action required","interpretation":"100%: Required. Incomplete charts = leading source of prescribing and dispensing errors. Unsigned orders cannot be dispensed legally. Report to medical staff meeting; repeated non-compliance = individual coaching.","reference":"JCI (2021). MMU Standards; ISMP (2023); TJC MM.04.01.01"},"E7":{"name":"Patient / Family Education Documentation","unit":"%","benchmark":"≥90%","formula":"(No. of patients with documented education ÷ Total eligible patients) × 100","numDef":"Patients/families with documented education on their condition, medications, treatments, and discharge plan during hospital stay. Documentation must include: topics taught, teaching method, patient/family's demonstrated understanding (teach-back or return demonstration), and date.","denDef":"Total eligible patients (all admitted patients capable of receiving education or whose families are available).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – Q3: Eligible patients = 240 Documented education with all components = 215 (215 ÷ 240) × 100 = 89.6% ❌ BELOW 90% target — 25 without documentation; identify barrier: language, literacy, cognitive impairment; arrange interpreter or pictorial aids","interpretation":"≥90%: Acceptable. Effective education reduces readmissions, home medication errors, and complications. Use teach-back to verify understanding. Document in patient's preferred language.","reference":"JCI (2021). PFE.2; TJC PC.02.03.01"},"F1":{"name":"Partograph Compliance","unit":"%","benchmark":"100%","formula":"(No. of labours with completed partograph ÷ Total labours monitored) × 100","numDef":"Labours with a complete, contemporaneously completed partograph found in the clinical record. 'Complete' = ALL sections filled: FHR every 30 min, contractions every 30 min, cervical dilation plotted with alert and action lines, fetal descent, liquor, moulding, maternal vital signs every 4 h, urine output, oxytocin rate, medications.","denDef":"Total labouring women managed in the LDR unit during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"LDR – October: Total labouring patients = 85 Partographs fully completed = 78 Incomplete/missing (FHR not plotted ×4, alert/action lines absent ×3) = 7 (78 ÷ 85) × 100 = 91.8% ❌ BELOW 100% — Incomplete partograph = inability to detect prolonged labour or fetal distress; retrain midwives urgently","interpretation":"100%: Required. Failure to plot = inability to recognise when the action line is crossed (requiring augmentation or expedited delivery). Missing partograph = unsafe labour monitoring.","reference":"WHO (2014). Recommendations for Augmentation of Labour; FIGO (2018). Partograph Guidelines"},"F2":{"name":"Fetal Heart Rate (FHR) Monitoring Compliance","unit":"%","benchmark":"100%","formula":"(No. of deliveries with appropriate FHR monitoring ÷ Total deliveries) × 100","numDef":"Deliveries with appropriate FHR monitoring per risk stratification: LOW RISK: Intermittent auscultation every 15 min in active labour, every 5 min in second stage. HIGH RISK (pre-eclampsia, IUGR, meconium, augmented labour): Continuous CTG, interpreted using FIGO classification.","denDef":"Total deliveries (vaginal + caesarean) during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"LDR – Q4 (October–December): Total deliveries = 220 With appropriate monitoring per risk category = 210 Non-compliant (high-risk without CTG ×5, CTG not interpreted/documented ×5) = 10 (210 ÷ 220) × 100 = 95.5% ❌ BELOW 100% — 5 high-risk patients without CTG = serious safety gap; immediate corrective action","interpretation":"100%: Required. Inadequate FHR monitoring is a leading cause of intrapartum fetal hypoxia, birth asphyxia, and neonatal brain injury. All high-risk labours require continuous CTG interpreted at regular intervals.","reference":"ACOG Practice Bulletin #106 (2021). Intrapartum FHR Monitoring; FIGO (2015). Intrapartum Monitoring Guidelines"},"F3":{"name":"Caesarean-Section Rate","unit":"%","benchmark":"Track (WHO optimal: 10–15%)","formula":"(No. of caesarean deliveries ÷ Total deliveries) × 100","numDef":"Total deliveries by caesarean section (emergency + elective combined). For benchmarking: analyse separately using Robson 10-Group Classification to identify which patient populations are driving the CS rate.","denDef":"Total deliveries (live births + stillbirths delivered ≥20 weeks) via any route during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Obstetric Dept – H1: Total deliveries = 480 Caesarean sections (elective 90 + emergency 78) = 168 (168 ÷ 480) × 100 = 35.0% Robson analysis: Group 1 (nullipara, cephalic, term, spontaneous): CS rate 12% — investigate Group 5 (previous CS): CS rate 85% — consider VBAC programme","interpretation":"WHO optimal: 10–15% for population benefit. >25–30% suggests over-medicalisation. Use Robson Classification for targeted action — Group 5 and Group 2 are primary drivers in most settings.","reference":"WHO (2015). Statement on Caesarean Section Rates; Robson MS (2001). BJOG; Betrán AP et al (2016). PLoS ONE"},"F4":{"name":"Postpartum Haemorrhage (PPH) Rate","unit":"%","benchmark":"Minimize","formula":"(No. of deliveries with PPH ÷ Total deliveries) × 100","numDef":"Deliveries complicated by PPH: blood loss ≥500 mL within 24 h of vaginal delivery (primary PPH) OR ≥1,000 mL within 24 h of caesarean section. Severe PPH = ≥1,000 mL vaginal or ≥1,500 mL CS. Document: volume, cause (4 T's: Tone/Trauma/Tissue/Thrombin), treatments.","denDef":"Total deliveries during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"LDR – Q1: Total deliveries = 300 PPH events (≥500 mL vaginal or ≥1,000 mL CS) = 24 (Severe PPH ≥1,000 mL vaginal = 6) (24 ÷ 300) × 100 = 8.0% Action: Was AMTSL applied in ALL deliveries? Was oxytocin given within 1 min of birth?","interpretation":"Global average 5–10%. Rising rate: Audit active management of 3rd stage (AMTSL) compliance — single most effective prevention. Investigate severe PPH cases individually.","reference":"WHO (2012). Recommendations for Prevention and Treatment of PPH; ACOG Practice Bulletin 183 (2017)"},"F5":{"name":"Birth Asphyxia Rate","unit":"per 1,000 live births","benchmark":"Minimize","formula":"(No. of births with APGAR <7 at 5 min OR requiring resuscitation ÷ Total live births) × 1,000","numDef":"Live born neonates with 5-minute APGAR score <7 AND/OR who required positive-pressure ventilation, cardiac compressions, or medications (epinephrine) at birth. Document: gestational age, mode of delivery, APGAR at 1 and 5 min, interventions, cord gas.","denDef":"Total live births during the reporting period. Count each live birth separately.","multiplier":"× 1,000 → expressed per 1,000 live births","source":"See data collection methods in hospital QI policy","example":"Maternity Unit – November: Total live births = 120 Neonates with APGAR <7 at 5 min or requiring PPV = 6 (6 ÷ 120) × 1,000 = 50 per 1,000 live births Action: Review all 6: Were intrapartum risk factors present? Was FHR monitored? Was competent resuscitator present?","interpretation":"Minimize. Each case requiring PPV or greater needs NRP debrief. Identify modifiable factors: meconium management, delayed CS decision, inadequate FHR monitoring, under-trained birth attendants.","reference":"WHO (2012). Born Too Soon; AAP/AHA Neonatal Resuscitation Program (NRP), 7th ed. (2015)"},"F6":{"name":"Neonatal Mortality Rate","unit":"per 1,000 live births","benchmark":"Track (national)","formula":"(No. of neonatal deaths in first 28 days ÷ Total live births) × 1,000","numDef":"Deaths occurring in liveborn infants from birth up to (not including) 28 completed days of life. Includes: Early neonatal deaths (0–6 days) and Late neonatal deaths (7–27 days). Exclude stillbirths.","denDef":"Total live births during the same period. NOT total births — stillbirths are EXCLUDED from denominator.","multiplier":"× 1,000 → expressed per 1,000 live births","source":"See data collection methods in hospital QI policy","example":"Hospital – Calendar Year: Total live births = 1,800 Neonatal deaths (Early 0–6 days: 8 + Late 7–27 days: 3) = 11 (11 ÷ 1,800) × 1,000 = 6.1 per 1,000 live births All 11 deaths reviewed in Perinatal Mortality Review Committee","interpretation":"Track and compare with national/regional benchmark. Each neonatal death = formal Perinatal Mortality Review to identify preventable factors.","reference":"WHO (2023). Neonatal Mortality Fact Sheet; UNICEF (2023). State of the World's Children"},"F7":{"name":"Breastfeeding Initiation within 1 h","unit":"%","benchmark":"≥90%","formula":"(No. of neonates with breastfeeding within 1 h ÷ Total eligible live births) × 100","numDef":"Liveborn neonates where the first breastfeed (direct breastfeeding — infant placed to breast and latches) is initiated within ONE HOUR of birth, documented by midwife/nursing staff.","denDef":"Total live births minus exclusions. Exclude: neonates born severely compromised (APGAR <4 at 5 min), mothers with absolute contraindications to breastfeeding, surgical deliveries where mother is unconscious.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Maternity Unit – December: Total eligible live births = 115 (of 120; 5 excluded) Breastfeeding initiated within 1 h = 100 (100 ÷ 115) × 100 = 87% ❌ BELOW 90% — Were all mothers informed antenatally? Were staff trained in BFHI Step 4 (skin-to-skin)?","interpretation":"≥90%: Target. Early initiation within 1 h is the single most effective action to improve exclusive breastfeeding. Skin-to-skin contact (BFHI Step 4) is the primary intervention. Review unnecessary procedures delaying skin-to-skin contact.","reference":"WHO/UNICEF (2018). Baby-Friendly Hospital Initiative (BFHI) — 10 Steps; WHO (2017). Breastfeeding Guidelines"},"F8":{"name":"NICU CLABSI Rate","unit":"per 1,000 line-days","benchmark":"<1","formula":"(No. of CLABSI events in NICU ÷ Total NICU central line-days) × 1,000","numDef":"Primary BSIs meeting NHSN CLABSI criteria in NICU patients with central line >2 calendar days. Includes: umbilical arterial/venous catheters (UAC/UVC), PICC lines, and surgical central lines.","denDef":"SUM of daily midnight census of NICU patients with any central line in situ (UAC + UVC + PICC + surgical lines).","multiplier":"× 1,000 → expressed per 1,000 line-days","source":"See data collection methods in hospital QI policy","example":"NICU – January: Total NICU central line-days = 180 CLABSI events confirmed = 1 (1 ÷ 180) × 1,000 = 5.56 per 1,000 line-days ❌ WELL ABOVE target (<1) — Full NICU CLABSI bundle audit: maximal barrier precautions, CHG skin care (if GA-appropriate), daily line necessity review","interpretation":"<1 per 1,000 NICU line-days: Target. NICU patients are critically vulnerable — premature neonates have immature immune systems and fragile skin. Any NICU CLABSI = full RCA and immediate bundle audit.","reference":"CDC/NHSN (2024). NICU Component CLABSI Definitions; Polin RA et al (2012). Pediatrics 129(4):e1085"},"F9":{"name":"Kangaroo Mother Care (KMC) Compliance","unit":"%","benchmark":"≥90%","formula":"(No. of eligible neonates receiving KMC ÷ Total eligible neonates) × 100","numDef":"Eligible preterm (<37 weeks) or low-birth-weight (<2,000 g) neonates who receive KMC (prolonged skin-to-skin contact, prone between mother's breasts, neonate in diaper and hat only) for WHO-recommended minimum of 8 hours/day, documented in nursing records.","denDef":"Total eligible preterm/LBW neonates admitted to NICU or Postnatal Ward during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"NICU – Q2: Eligible preterm/LBW neonates = 45 Receiving KMC as per protocol = 39 (39 ÷ 45) × 100 = 86.7% ❌ BELOW 90% — Review 6 not receiving KMC: on ventilator? Mother absent? Staff not initiating? Document specific barrier for each case.","interpretation":"≥90%: Target. KMC reduces neonatal mortality by 36% and severe infection by 47% (Cochrane evidence). Barriers: maternal illness, staff not initiating, cultural factors. Promote KMC initiation within 24 h of birth for clinically stable neonates.","reference":"WHO (2022). Recommendations for Care of Preterm/LBW Infant; Conde-Agudelo A et al (2016). Cochrane Rev CD002771"},"G1":{"name":"Door-to-Balloon Time ≤90 min","unit":"%","benchmark":"≥90%","formula":"(No. of STEMI patients with D2B ≤90 min ÷ Total STEMI patients with primary PCI) × 100","numDef":"STEMI patients treated with primary PCI where the time from FIRST MEDICAL CONTACT or hospital arrival (Door) to FIRST BALLOON INFLATION in the infarct-related artery is ≤90 minutes.","denDef":"Total STEMI patients treated with primary PCI during the period. Exclude patients transferred from another hospital (D2B clock definition changes for transfers).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Cath Lab – Q3: Total STEMI patients treated with primary PCI = 22 Door-to-Balloon ≤90 min = 19 Exceeding 90 min (CCU delay ×1, cath lab not ready ×1, after-hours delay ×1) = 3 (19 ÷ 22) × 100 = 86.4% ❌ BELOW 90% — Streamline cath lab activation; review 24/7 primary PCI capability","interpretation":"≥90%: International target. Sub-process targets: ED-to-ECG <10 min; ECG-to-cath-lab-activation <10 min; cath-lab-door-to-balloon <30 min.","reference":"ACC/AHA (2013). STEMI Guideline. Circulation 127(4):529; O'Gara PT et al (2013). JACC 61(4):e78; TJC AMI-8a"},"G2":{"name":"Post-PCI Complication","unit":"Count","benchmark":"0","formula":"Total count of major post-PCI adverse events within 24–48 h per period","numDef":"Major adverse cardiovascular events (MACE) and procedural complications within 24–48 h of PCI: Death, Q-wave MI, Emergency CABG, Stroke/TIA, Contrast-induced nephropathy (creatinine rise ≥25% or ≥0.5 mg/dL within 48 h), Major bleeding (TIMI major), Target vessel occlusion/no-reflow.","denDef":"N/A — count per period. Rate: (events ÷ total PCI procedures) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Cath Lab – October: Total PCI procedures = 38 Contrast nephropathy (CrCl rise >25%) = 2 No-reflow requiring GP IIb/IIIa = 1 Major bleeding (femoral haematoma needing transfusion) = 1 Total complications = 4 | Rate = (4 ÷ 38) × 100 = 10.5% Each case: formal M&M review + NCDR registry entry","interpretation":"Target: 0 for serious events (death, stroke, emergency CABG). Contrast nephropathy: pre-hydration, minimise contrast volume. Bleeding: use radial access; weight-based anticoagulation.","reference":"ACC/AHA (2021). Guideline for Coronary Artery Revascularisation; Levine GN et al (2011). Circulation 124:e574; NCDR CathPCI"},"G3":{"name":"Puncture Site Hematoma","unit":"Count","benchmark":"0","formula":"Total count of vascular access site hematomas >5 cm post-cardiac catheterisation per period","numDef":"Patients developing a clinically significant vascular access site haematoma (>5 cm diameter, or requiring additional intervention, or causing haemodynamic compromise) within 24 hours of cardiac catheterisation via femoral or radial access.","denDef":"N/A — count per period. Rate: (count ÷ total catheterisations) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Cath Lab – Q4: Total cardiac catheterisations = 185 Access site haematomas >5 cm = 4 (femoral ×3, radial after compression failure ×1) Rate = (4 ÷ 185) × 100 = 2.2% Review: Manual compression time adequate? Was weight-based anticoagulation used? Was fluoroscopy-guided femoral puncture employed?","interpretation":"Target: 0 significant haematomas. Femoral access = higher risk than radial. Primary prevention: shift to radial access. Maintain adequate manual or mechanical compression post-procedure.","reference":"ACC/AHA (2012). Expert Consensus on Vascular Closure Devices; NCDR CathPCI Registry Definitions"},"G4":{"name":"Door-to-ECG ≤10 min","unit":"%","benchmark":"≥90%","formula":"(No. of ACS/chest pain patients with ECG within 10 min ÷ Total ACS/chest pain presentations) × 100","numDef":"Patients presenting with acute chest pain or other ACS symptoms who have a 12-lead ECG obtained within 10 minutes of ED arrival/first medical contact. Document: triage arrival timestamp + ECG acquisition timestamp on ECG printout.","denDef":"Total patients presenting to ED with acute chest pain or suspected ACS during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – November: Total ACS/chest pain presentations = 55 ECGs obtained within 10 min of arrival = 48 (48 ÷ 55) × 100 = 87.3% ❌ BELOW 90% — Train triage nurses to perform 12-lead ECG WITHOUT waiting for physician; embed in triage protocol for all chest pain","interpretation":"≥90%: Target. ECG within 10 min is the critical step to activate STEMI protocol BEFORE physician assessment. ECG machine must be immediately accessible in triage area.","reference":"ACC/AHA (2014). NSTEMI/UA Guideline; TJC AMI-1; O'Gara PT et al (2013). Circulation 127(4):529"},"G5":{"name":"STEMI Door-to-Needle Time (Fibrinolysis)","unit":"%","benchmark":"≥90%","formula":"(No. of STEMI patients with fibrinolysis within 30 min ÷ Total eligible STEMI patients) × 100","numDef":"STEMI patients treated with fibrinolytic therapy (alteplase, tenecteplase, or streptokinase) where the time from hospital arrival (Door) to initiation of IV fibrinolytic infusion (Needle) is ≤30 minutes.","denDef":"Total eligible STEMI patients treated with fibrinolysis (in settings where primary PCI is not available or not achievable within 120 min).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital (no on-site primary PCI) – Q2: Eligible STEMI patients given fibrinolysis = 18 Door-to-Needle ≤30 min (pharmacy delay ×2, consent delay ×1, physician delay ×1) = 14 (14 ÷ 18) × 100 = 77.8% ❌ BELOW 90% — Pre-mix fibrinolytic; pre-printed STEMI order set; streamline contraindication screening","interpretation":"≥90%: Target. Fibrinolysis is time-critical: maximum benefit when given within 30 min of arrival. Pre-prepare drug, pre-screen contraindications, pre-print order set.","reference":"ACC/AHA (2013). STEMI Guideline. Circulation 127(4):529; TJC AMI-7a"},"G6":{"name":"Heart Failure 30-Day Readmission","unit":"%","benchmark":"Minimize (<25%)","formula":"(No. of HF patients readmitted within 30 days ÷ Total HF discharges) × 100","numDef":"Heart failure patients readmitted to any hospital within 30 calendar days of index HF discharge for any cause (all-cause readmission) or cardiovascular cause (condition-specific).","denDef":"Total HF index discharges during the period (primary diagnosis coded as HF — ICD-10 I50.x). Exclude planned readmissions.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"CCU/Cardiology – H1: Total HF index discharges = 145 Readmitted within 30 days = 32 (HF exacerbation ×18, AKI ×5, pneumonia ×4, other ×5) (32 ÷ 145) × 100 = 22.1% Action: Root causes = medication non-adherence + delayed follow-up; implement structured discharge bundle","interpretation":"Minimize. CMS benchmark <25%. Key interventions: (1) 48 h post-discharge phone call, (2) follow-up within 7 days, (3) written fluid/salt restriction instructions, (4) daily weight monitoring with action plan, (5) medication reconciliation at discharge.","reference":"CMS Hospital Readmissions Reduction Program (HRRP) — HF Measure (HF-30); AHRQ (2020)"},"H1":{"name":"Dialysis Adequacy — URR","unit":"%","benchmark":"≥65%","formula":"URR (%) = [(Pre-BUN − Post-BUN) ÷ Pre-BUN] × 100","numDef":"Pre-dialysis BUN MINUS Post-dialysis BUN. Pre-BUN: drawn before session starts. Post-BUN: drawn at session end using slow-flow technique (reduce blood pump to 50 mL/min for 15 sec, then 0 for 15 sec, draw from arterial port). Both in mg/dL.","denDef":"Pre-dialysis BUN value alone serves as the denominator (it represents the starting level of uraemic waste).Population compliance rate = (patients achieving URR ≥65% ÷ total patients dialysed) × 100","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Patient A – Single HD session: Pre-dialysis BUN (numerator input) = 72 mg/dL Post-dialysis BUN = 22 mg/dL Step 1: Numerator = 72 − 22 = 50 Step 2: Denominator = 72 Step 3: URR = (50 ÷ 72) × 100 = 69.4% ✅ 69.4% — ABOVE target (≥65%) — Adequate dialysis Unit aggregate (30 patients): 27 achieve URR ≥65% → (27÷30)×100 = 90% compliance","interpretation":"≥65%: Adequate. <65%: Under-dialysis; review session duration, blood flow rate (QB), dialyser clearance (KoA), vascular access flow. Population target: ≥90% of patients achieving URR ≥65% per month.","reference":"KDOQI (2015). Hemodialysis Adequacy Update. Am J Kidney Dis 66(5):884; Tattersall JE et al (1996). NDT 11(6):1030"},"H2":{"name":"Kt/V Achievement","unit":"Ratio ≥1.2 target","benchmark":"≥90% achieve Kt/V ≥1.2","formula":"Kt/V = −ln(R − 0.008×t) + (4 − 3.5×R) × UF/W [Daugirdas 2nd generation formula]","numDef":"Formula inputs: R = Post-BUN ÷ Pre-BUN (as a decimal fraction) t = Dialysis session duration in HOURS UF = Total ultrafiltration volume removed in LITRES W = Post-dialysis patient body weight in KILOGRAMS","denDef":"N/A — Kt/V is a dimensionless ratio, not a simple fraction. It represents cleared blood volume (K×t) relative to urea distribution volume (V).Population compliance = (patients achieving Kt/V ≥1.2 ÷ total dialysed) × 100","multiplier":"N/A — result is a dimensionless ratio","source":"See data collection methods in hospital QI policy","example":"Patient B – Single HD session: Pre-BUN = 80, Post-BUN = 24 → R = 24÷80 = 0.30 Session duration t = 4 hours Ultrafiltration UF = 2.5 litres | Post-weight W = 70 kg Step 1: −ln(R − 0.008×t) = −ln(0.30 − 0.032) = −ln(0.268) = 1.316 Step 2: (4 − 3.5×R) × UF/W = (4 − 1.05) × (2.5÷70) = 2.95 × 0.0357 = 0.105 Step 3: Kt/V = 1.316 + 0.105 = 1.42 ✅ Kt/V 1.42 — ABOVE target (≥1.2) — Adequate dialysis dose","interpretation":"Kt/V ≥1.2 per session (3×/week HD): Adequate. 1.0–1.2: Borderline; review session time, blood flow, dialyser, access. <1.0: Under-dialysis; urgent review. Unit target: ≥90% of patients achieving Kt/V ≥1.2 per month.","reference":"KDOQI (2015). Hemodialysis Adequacy Update; Daugirdas JT (1993). JASN 4(5):819; KDIGO (2019)"},"H3":{"name":"Water Quality Compliance","unit":"%","benchmark":"100%","formula":"(No. of water tests meeting AAMI/ISO standards ÷ Total water tests performed) × 100","numDef":"Dialysis water and dialysate quality tests in which ALL measured parameters are within AAMI/ISO limits: Bacteria <100 CFU/mL (product water), Endotoxins <0.25 EU/mL, Chloramines <0.1 mg/L, and other chemical contaminants within RO specifications.","denDef":"Total water quality tests performed during the period (bacteriology: monthly; endotoxin: monthly; chemical/conductivity: as per RO maintenance schedule).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – Q3: Total water quality tests (bacteria, endotoxins, chemicals) = 18 Tests meeting all AAMI/ISO standards = 17 1 test FAILED (bacterial count 120 CFU/mL — above 100 CFU/mL limit) (17 ÷ 18) × 100 = 94.4% ❌ BELOW 100% — Immediately stop dialysis from this water source; disinfect system; retest before resuming","interpretation":"100%: Required. Contaminated water causes: bacteraemia, endotoxaemia, pyrogenic reactions, haemolysis, and death. Any failed test = stop dialysis, disinfect system, retest, and assess patient notification need.","reference":"AAMI/ANSI 23500:2019; ISO 23500-1 to 23500-5; KDIGO (2019). Haemodialysis Adequacy Guideline"},"H4":{"name":"Intradialytic Hypotension (IDH)","unit":"Count / rate per sessions","benchmark":"0 / minimize","formula":"Count of HD sessions with IDH events (OR IDH rate = events ÷ total sessions × 100)","numDef":"Haemodialysis sessions with symptomatic IDH: systolic BP drop ≥20 mmHg from pre-dialysis baseline AND symptomatic (cramps, nausea, dizziness, near-syncope) OR absolute SBP <90 mmHg. Document: BP nadir, time in session, intervention required.","denDef":"Total haemodialysis sessions run during the reporting period.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit (40 patients, 3×/week) – February: Total HD sessions = 40 × 3 × 4 weeks = 480 sessions Sessions with IDH events = 32 IDH rate = (32 ÷ 480) × 100 = 6.7% Review: Are dry weights accurate? Is UF rate >13 mL/kg/h? Are antihypertensives taken before dialysis?","interpretation":"Target: 0 / minimize. IDH occurs in 20–30% of HD sessions globally. Interventions: accurate dry weight, UF rate limits (≤10–13 mL/kg/h), cool dialysate temperature (35.5°C), dietary Na+ restriction, antihypertensive timing.","reference":"KDOQI (2015). HD Adequacy Update; Flythe JE et al (2015). CJASN 10(8):1538; KDIGO (2019)"},"H5":{"name":"Vascular Access Complication","unit":"Count","benchmark":"0","formula":"Total count of vascular access complications per reporting period","numDef":"Documented complications: (1) Thrombosis (clotting of AVF/AVG/catheter), (2) Stenosis (requiring intervention), (3) Access infection (local or systemic), (4) Aneurysm/pseudoaneurysm, (5) High recirculation (>15%), (6) Access failure/abandonment. Report each type separately.","denDef":"N/A — count per period. Rate: (complications ÷ access-patient-months) for trend analysis.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – Q1: Thrombosis events (AVF/graft) = 3 Catheter-related infections = 2 Stenosis (requiring angioplasty) = 2 Total vascular access complications = 7 Target: 0 | Each complication: Review — Was poor flow recorded in sessions before event? Was monthly physical exam done?","interpretation":"Target: 0. Rising access complications = inadequate surveillance. Implement monthly physical exam (thrill, bruit, arm swelling) and monthly recirculation/flow measurement. Low blood flow (<200 mL/min for ≥3 sessions) = refer for fistulogram.","reference":"KDOQI (2006). Clinical Practice Guidelines for Vascular Access. Am J Kidney Dis 48(Suppl 1):S176"},"H6":{"name":"Accidental De-lining of Catheter","unit":"Count","benchmark":"0","formula":"Total count of accidental catheter line disconnection events during active dialysis","numDef":"Incidents where the blood circuit (arterial or venous line) accidentally disconnects from the patient's vascular access catheter during an active dialysis session, resulting in blood loss, air embolism risk, or session interruption.","denDef":"N/A — count per period. Rate: (count ÷ total sessions) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – H1: Arterial line (patient movement ×2) = 2 events Venous line (unsecured Luer-lock ×1) = 1 event Total accidental de-linings = 3 Target: 0 All 3: incident report + blood loss estimation + RCA Action: Double-check Luer-lock tightness; tape and secure lines; educate patients on movement restriction during dialysis","interpretation":"Target: 0. Each de-lining = risk of significant blood loss and air embolism. Prevention: tight Luer-lock connections (double-checked), secure all lines with tape, use clamps, patient education on movement restriction during sessions.","reference":"KDOQI (2006). Vascular Access Guidelines; Hospital Dialysis Nursing Policy"},"H7":{"name":"Dialysis Access Infection Rate","unit":"Count / per 1,000 access-days","benchmark":"0","formula":"(No. of dialysis access infections ÷ Total access-days) × 1,000 OR total count","numDef":"Confirmed infections related to the dialysis vascular access: (1) CRBSI (positive blood cultures, no other source, concordant catheter tip culture), (2) AVF/graft bacteraemia, (3) Exit-site infection (erythema + induration + discharge at catheter exit site).","denDef":"For rate: Total access-days = SUM of daily census of patients with each access type in use. For count: N/A.","multiplier":"× 1,000 → expressed per 1,000 access-days","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – March: Total catheter access-days = 420 Confirmed catheter-related BSIs = 1 Rate = (1 ÷ 420) × 1,000 = 2.38 per 1,000 catheter-days ❌ Above benchmark — Review: Is 'Scrub the Hub' protocol followed? (70% alcohol, minimum 15-sec scrub before every access)","interpretation":"Target: 0. Infectious complications are the leading cause of hospitalisation and death in dialysis patients. Prioritise AVF creation over catheters. For catheters: strict aseptic hub care (70% alcohol, ≥15 sec scrub time) before every access.","reference":"CDC/NHSN (2024). Dialysis Event Surveillance Module; KDOQI (2006). Vascular Access Guidelines"},"H8":{"name":"Missed / Shortened Dialysis Sessions","unit":"%","benchmark":"Minimize (<5%)","formula":"(No. of missed or shortened sessions ÷ Total scheduled sessions) × 100","numDef":"Scheduled HD sessions that were: (A) Completely MISSED (patient did not attend or session cancelled), OR (B) SHORTENED by >10% of prescribed time without a documented clinical justification.","denDef":"Total scheduled haemodialysis sessions for all enrolled patients during the period (standard: 3 sessions/week per patient).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit (40 patients) – April: Total scheduled sessions = 40 × 3 × 4 = 480 sessions Missed sessions (patient non-attendance ×8, unit cancelled ×4) = 12 Shortened sessions (>10% below prescribed time) = 8 Total missed/shortened = 20 (20 ÷ 480) × 100 = 4.2% ✅ BELOW 5% target — Compliant. Contact missed patients; investigate cancelled sessions.","interpretation":"Minimize (<5%). Missed dialysis = direct reduction in Kt/V and URR → uraemia, hyperkalaemia, fluid overload. Investigate reasons: transport barriers, work conflicts, symptoms. Provide patient education on consequences.","reference":"KDOQI (2015). Hemodialysis Adequacy Update; Saran R et al (2003). NDT 18(5):1001"},"I1":{"name":"On-Time First-Case Start","unit":"%","benchmark":"≥90%","formula":"(No. of first cases starting on time ÷ Total first cases scheduled) × 100","numDef":"Scheduled first surgical cases of the operating day where the surgical incision (knife to skin) occurs AT OR BEFORE the scheduled incision time as recorded in the OT booking system.","denDef":"Total first cases scheduled during the reporting period (one first case per OT room per operating day).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – May: Total first cases scheduled = 80 Incision at/before scheduled time = 66 Late (patient not ready ×6, consent issue ×3, surgeon late ×3, equipment ×2) = 14 (66 ÷ 80) × 100 = 82.5% ❌ BELOW 90% — Address: pre-op call protocol, consent completion day before, patient transport 90 min before first case","interpretation":"≥90%: Target. Late first case = cascade delay for ALL subsequent cases in that OT room. Implement: pre-op checklist completed day before, anaesthesia assessment prior day, OT set-up team 60 min before.","reference":"AORN (2022). Perioperative Standards and Recommended Practices; NHS England (2021). Theatre Efficiency Standards"},"I2":{"name":"Elective Case Cancellation Rate","unit":"%","benchmark":"<5%","formula":"(No. of elective cases cancelled on day of surgery ÷ Total scheduled elective cases) × 100","numDef":"Elective (non-emergency) surgical procedures cancelled on the actual day of surgery after the patient has arrived in hospital or the OT area. Cancellations before day of surgery are excluded. Categorise by reason.","denDef":"Total elective surgical cases scheduled during the period (includes both cancelled and performed cases).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – Q2: Total scheduled elective cases = 620 Day-of-surgery cancellations = 28 Top reasons: Medically unfit on day ×10, Insufficient OT time ×7, Patient refused ×5, No ICU bed ×4, Equipment ×2 (28 ÷ 620) × 100 = 4.5% ✅ BELOW 5% target — Compliant. Target the 10 'unfit on day' cancellations by strengthening pre-assessment clinic.","interpretation":"<5%: Acceptable. >5%: Review preadmission assessment and OT scheduling. 'Medically unfit on day' = most preventable cause — strengthen pre-operative assessment clinic.","reference":"AORN (2022). Perioperative Standards; NHS England (2021). Elective Recovery Plan"},"I3":{"name":"Instrument / Sponge Count Compliance","unit":"%","benchmark":"100%","formula":"(No. of procedures with complete count at all required timepoints ÷ Total surgical procedures) × 100","numDef":"Surgical procedures where ALL three mandatory count timepoints are completed AND fully documented: (1) Opening count (before start), (2) Interim count (before wound closure begins), (3) Closing count (after wound closure, before patient leaves table). Both scrub nurse + circulating nurse must confirm and sign.","denDef":"Total surgical procedures performed during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT – June: Total surgical procedures = 240 All 3 count phases fully documented = 235 Non-compliant (closing count not signed ×3, interim count missing ×2) = 5 (235 ÷ 240) × 100 = 97.9% ❌ BELOW 100% — Any undocumented count = risk of retained surgical item (RSI) — a sentinel event","interpretation":"100%: Mandatory. Retained surgical items cause patient harm requiring reoperation and are a TJC Sentinel Event. X-ray must be taken before OT closure if count discrepancy. NEVER close the wound until all counts confirmed correct.","reference":"AORN (2022). Guideline for Prevention of Retained Surgical Items; WHO (2009). Surgical Safety Checklist"},"I4":{"name":"Specimen Labeling Error Rate","unit":"Count","benchmark":"0","formula":"Total count of surgical specimen labeling errors per reporting period","numDef":"Surgical specimen labeling errors: (1) Unlabeled specimens, (2) Mislabeled specimens (wrong patient name, wrong site/laterality, wrong specimen type), (3) Specimens lost in transit between OT and pathology, (4) Inappropriate fixative or container used. Each error = 1 event.","denDef":"N/A — count per period. Rate: (errors ÷ total specimens collected) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3: Total specimens sent to pathology = 580 Labeling errors (wrong patient name ×1, site not labeled ×1, unlabeled ×1) = 3 Rate = (3 ÷ 580) × 100 = 0.52% | Target: 0 ❌ All 3: patient ID re-verification, repeat biopsy if needed, incident report, corrective action","interpretation":"Target: 0. Mislabeled specimens can lead to wrong diagnosis, wrong patient treatment, and wrong surgical decisions. Label specimens in the presence of the specimen. Two-identifier labeling required: patient name + MRN.","reference":"CAP (2021). Laboratory Accreditation Standards; TJC NPSG 01.01.01"},"I5":{"name":"Anaesthesia-Related Complication Rate","unit":"Count","benchmark":"0","formula":"Total count of anaesthesia-related adverse events per reporting period","numDef":"Adverse events directly attributable to anaesthesia: (1) Anaphylaxis/allergic reaction, (2) Pulmonary aspiration of gastric contents, (3) Awareness under general anaesthesia (AUGA), (4) Anaesthesia-related cardiac arrest, (5) Severe laryngospasm/bronchospasm requiring unplanned intubation, (6) Accidental airway loss, (7) Anaesthetic overdose.","denDef":"N/A — count per period. Rate: (events ÷ total anaesthetic procedures) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Anaesthesia Dept – H1: Total anaesthetic procedures = 1,200 Anaesthesia-related adverse events: Anaphylaxis to rocuronium = 1 Post-extubation laryngospasm = 1 Total events = 2 | Rate = (2 ÷ 1,200) × 100 = 0.17% Both events: formal debrief + M&M committee review","interpretation":"Target: 0 for serious/life-threatening events. BIS monitoring reduces anaesthesia awareness. Pre-operative fasting prevents aspiration. All events: report to Anaesthesia Department quality committee.","reference":"ASA (2019). Standards for Basic Anesthetic Monitoring; APSF; Merry AF et al (2010). Anaesthesia 65(10):1021"},"I6":{"name":"PACU Recovery Delay Rate","unit":"%","benchmark":"Minimize","formula":"(No. of patients with non-clinical delayed PACU discharge ÷ Total PACU admissions) × 100","numDef":"Post-operative patients whose discharge from PACU is delayed beyond the institution-defined threshold (commonly >2 hours from PACU arrival) for NON-CLINICAL reasons. Exclude clinically justified delays: active haemorrhage, unstable vital signs, uncontrolled pain, persistent PONV.","denDef":"Total PACU admissions during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"PACU – July: Total PACU admissions = 155 Patients with non-clinical delay >2 h = 12 (No ward bed ×6, pain uncontrolled ×3, PONV persistent ×2, awaiting surgeon ×1) (12 ÷ 155) × 100 = 7.7% Clinical delays (pain/PONV): 5 = anaesthesia/nursing quality issue | Non-clinical (no bed): 6 = bed management/system issue","interpretation":"Minimize. PACU delays block OT flow and reduce throughput. Stratify by reason: clinical (acceptable) vs non-clinical (system failure). Address 'no ward bed' delays with proactive bed management during the surgical day.","reference":"ASPAN (2021). Evidence-Based PACU Practice Guideline; Aldrete JA (1995). Modified Aldrete Recovery Score"},"J1":{"name":"Post-Procedure Complication","unit":"Count","benchmark":"0","formula":"Total count of post-endoscopy complications per reporting period","numDef":"Clinically significant complications during or within 30 days of endoscopic procedure: (1) Perforation, (2) Significant bleeding (transfusion, hospitalisation, or intervention), (3) Post-polypectomy syndrome, (4) Aspiration pneumonia, (5) Bacteraemia/sepsis, (6) Cardiorespiratory event requiring unplanned intervention. Exclude minor self-resolving symptoms.","denDef":"N/A — count per period. Rate: (complications ÷ total endoscopy procedures) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – Q2: Total endoscopy procedures = 385 Polypectomy haemorrhage (endoscopic haemostasis) = 2 Aspiration during EGD (mild) = 1 Perforation = 0 Total significant complications = 3 | Rate = (3 ÷ 385) × 100 = 0.78% Each case: complication log + M&M review","interpretation":"Target: 0 for serious (perforation, death). Perforation = immediate senior GI/surgical review; consider endoscopic closure vs surgery. Each complication reviewed at department M&M meeting.","reference":"ASGE (2015). Quality Indicators for GI Endoscopic Procedures. Gastrointest Endosc 81(1):17; BSG (2019)"},"J2":{"name":"Endoscope Reprocessing Compliance","unit":"%","benchmark":"100%","formula":"(No. of endoscopes reprocessed per full protocol ÷ Total endoscopes reprocessed) × 100","numDef":"Endoscopes processed following ALL mandatory steps: (1) Point-of-use pre-cleaning immediately after procedure, (2) Leak testing, (3) Manual cleaning with enzymatic detergent (all channels brushed), (4) Rinse, (5) HLD in approved automated endoscope reprocessor (AER) with verified chemical concentration, (6) Rinse with purified water, (7) Alcohol flush, forced-air dry, and dry cabinet storage. ALL steps = 1 compliant cycle.","denDef":"Total endoscopes reprocessed during the reporting period (each reprocessing cycle = 1 count).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – August: Total endoscope reprocessing cycles = 140 Cycles with full protocol compliance = 136 Non-compliant (enzymatic soak time short ×2, AER chemical concentration not verified ×2) = 4 (136 ÷ 140) × 100 = 97.1% ❌ BELOW 100% — 4 potentially inadequately decontaminated scopes; assess patient notification; retrain reprocessing staff immediately","interpretation":"100%: Mandatory. Inadequate reprocessing has caused patient-to-patient transmission of hepatitis B, C, CROs, and Mycobacteria. Any deviation = potential exposure incident requiring traceability audit and patient notification assessment.","reference":"SGNA (2022). Standards for Infection Prevention; ESGE/ESGENA (2018). Endoscope Reprocessing Guideline; AORN (2022)"},"J3":{"name":"Perforation Rate","unit":"%","benchmark":"<0.1%","formula":"(No. of iatrogenic perforations ÷ Total endoscopic procedures) × 100","numDef":"Iatrogenic (procedure-caused) bowel, oesophageal, or gastric perforations occurring DURING or within 24 hours of an endoscopic procedure (diagnostic or therapeutic). Includes instrument-related, pneumatic dilatation-related, EMR/ESD-related perforations.","denDef":"Total endoscopic procedures during the period. Report rate by procedure type for meaningful benchmarking (diagnostic colonoscopy vs therapeutic EMR/ESD).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – H1: Total endoscopic procedures = 820 Confirmed iatrogenic perforations = 1 (sigmoid perforation during colonoscopy in diverticular disease patient) (1 ÷ 820) × 100 = 0.12% Target: <0.1% (borderline) — RCA: Was diverticulosis known? Was excess force used?","interpretation":"<0.1%: Target for diagnostic procedures. Higher for therapeutic EMR/ESD (up to 0.5%). Any perforation = surgical emergency. Recognise early (abdominal pain, tachycardia, free air). Early endoscopic closure reduces need for surgery.","reference":"ASGE (2015). Quality Indicators for GI Endoscopy; Pohl H et al (2012). Gastrointest Endosc 75(6):1218"},"J4":{"name":"Post-Polypectomy Bleeding","unit":"Count","benchmark":"0","formula":"Total count of significant post-polypectomy bleeding events per reporting period","numDef":"Clinically significant bleeding during or within 30 days of colonoscopic polypectomy requiring: blood transfusion (≥2 units pRBC), hospital admission, repeat endoscopy for haemostasis, interventional radiology, or surgery. Exclude minor oozing controlled immediately at polypectomy with no further consequences.","denDef":"N/A — count per period. Rate: (events ÷ total polypectomies) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – Q3: Total polypectomy procedures = 185 Significant post-polypectomy bleeding (antiplatelet therapy not stopped: aspirin ×2, clopidogrel ×1) = 3 Rate = (3 ÷ 185) × 100 = 1.6% | Target: 0 Action: Review antiplatelet bridging protocol; screen all patients for antiplatelet/anticoagulant use before scheduling","interpretation":"Target: 0 significant events. Risk factors: polyp >20 mm, right colon, hot snare, anticoagulant use, diabetes, renal failure. Prevention: cold snare for <10 mm, clip prophylaxis for large polyps, periprocedural anticoagulant management protocol.","reference":"ASGE (2015). Quality Indicators; ESGE (2022). Post-Polypectomy Bleeding Guideline"},"K1":{"name":"Triage-to-Consult (Door-to-Doctor) Time","unit":"% per triage category","benchmark":"≥90%","formula":"(No. of ED patients seen within TAT per triage category ÷ Total ED presentations) × 100","numDef":"ED patients assessed by a physician within the TAT for their triage priority: P1 (Resuscitation): ≤0 min (immediate); P2 (Emergent): ≤30 min; P3 (Urgent): ≤60 min; P4 (Less urgent): ≤120 min; P5 (Non-urgent): ≤240 min. Report each category separately.","denDef":"Total ED presentations during the period. Stratify by triage category for meaningful compliance reporting.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – September: Total registered patients = 1,400 P1 (seen ≤10 min): 45/50 = 90% ✅ P2 (seen ≤30 min): 180/210 = 85.7% ❌ P3 (seen ≤60 min): 680/820 = 82.9% ❌ Overall: (45+180+680)÷(50+210+820) × 100 = 905÷1,080 = 83.8% P2 = 85.7% — BELOW 90% — Review ED physician coverage during peak hours","interpretation":"≥90% within TAT per triage level: Acceptable. Low compliance = insufficient physician staffing, poor triage accuracy, or inadequate care flow. Implement: nurse-initiated treatment protocols, physician-in-triage during peak hours.","reference":"ACEP (2019). Emergency Severity Index (ESI); Canadian Triage and Acuity Scale (CTAS) 2020; WHO (2015). Emergency Care Guidelines"},"K2":{"name":"Left Without Being Seen (LWBS) Rate","unit":"%","benchmark":"<2%","formula":"(No. of registered patients leaving without physician assessment ÷ Total registered ED presentations) × 100","numDef":"Registered ED patients who left the department WITHOUT being assessed/examined by a physician, after completing triage registration. Includes patients who walked out while waiting or left against advice before physician contact.","denDef":"Total registered ED presentations during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – October: Total registered patients = 1,520 Patients who left without physician assessment = 24 (24 ÷ 1,520) × 100 = 1.58% ✅ BELOW 2% target — Compliant. Investigate LWBS reasons: long wait, perceived non-urgent condition, time of day pattern.","interpretation":"<2%: Acceptable. >2%: Excess wait time is the primary driver. Interventions: physician-in-triage, fast-track stream for low-acuity patients, better waiting room communication of expected wait times.","reference":"ACEP (2019). Emergency Department Guidelines; Hobbs D et al (2000). Ann Emerg Med 35(4):328"},"K3":{"name":"ED Re-attendance within 72 h","unit":"%","benchmark":"<5%","formula":"(No. of unplanned ED re-attendances within 72 h ÷ Total ED discharges) × 100","numDef":"Patients who return to the same ED within 72 hours of prior ED DISCHARGE for the SAME or RELATED complaint (unplanned). Exclude: planned return visits organised by ED physician, or entirely unrelated new complaints.","denDef":"Total ED discharges (patients sent home) during the reporting period. Exclude admitted patients.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – Q4: Total ED discharges (non-admitted) = 6,200 Unplanned re-attendances within 72 h for same complaint = 155 (155 ÷ 6,200) × 100 = 2.5% Top diagnoses at re-attendance: Abdominal pain 25%, Chest pain 18%, Head injury 15% Action: Review initial discharge decisions and discharge instructions for these diagnoses","interpretation":"Target: <5%. High re-attendance = premature discharge, inadequate discharge instructions, or under-treatment. Implement structured discharge instructions with safety-net advice ('when to return').","reference":"ACEP (2019); NHS England. Unplanned Re-attendance Standard"},"K4":{"name":"Door-to-Needle for Stroke Thrombolysis","unit":"%","benchmark":"≥80%","formula":"(No. of stroke patients receiving tPA within 60 min ÷ Total eligible strokes treated) × 100","numDef":"Eligible ischaemic stroke patients who received IV alteplase (tPA) within 60 minutes of hospital arrival (Door-to-Needle ≤60 min). Eligibility: ischaemic stroke confirmed on CT, onset <4.5 h, no contraindications, NIHSS documented.","denDef":"Total eligible ischaemic stroke patients treated with IV thrombolysis during the period (excludes intracerebral haemorrhage, contraindications, onset >4.5 h, patient/family refusal).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – H1: Eligible ischaemic stroke patients thrombolysed = 15 Door-to-Needle ≤60 min = 11 D2N >60 min (CT delay ×2, neurology delay ×1, consent ×1) = 4 (11 ÷ 15) × 100 = 73.3% ❌ BELOW 80% — Implement Code Stroke protocol; CT reserved for stroke activations; tPA pre-drawn in stroke bay","interpretation":"≥80%: Target (aim for DTN ≤45 min ideally). Every 15 min reduction in DTN prevents ~1 in 100 patients from serious disability. Implement: Code Stroke from triage, direct-to-CT, tPA bedside preparation, CT read within 10 min.","reference":"AHA/ASA (2019). Stroke Guidelines. Stroke 50(12):e344; Fonarow GC et al (2014). JAMA 311(14):1433; ESO (2021)"},"L1":{"name":"Mandatory Training Compliance","unit":"%","benchmark":"≥90%","formula":"(No. of staff with all mandatory training completed ÷ Total staff required) × 100","numDef":"Staff who have completed ALL required mandatory training modules by their due date. Mandatory modules typically include: Fire safety, Hand hygiene, Infection control, Manual handling, BLS, Information governance, Safeguarding, Medication safety. ALL modules complete = 1 compliant staff member.","denDef":"Total staff required to complete mandatory training during the period (all contracted staff per department, stratified by role where applicable).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Annual Report: Total staff required to complete mandatory training = 850 Staff with ALL modules completed = 790 (790 ÷ 850) × 100 = 92.9% ✅ ABOVE 90% target — Compliant. Identify 60 non-compliant staff for immediate follow-up.","interpretation":"≥90%: Acceptable. <90%: Immediate management escalation. Non-compliant clinical staff should not be deployed to patient care until training is complete (per hospital policy).","reference":"JCI (2021). SQE.3; TJC HR.01.05.01; Hospital Training & Competency Policy"},"L2":{"name":"BLS / ACLS Certification Rate","unit":"%","benchmark":"≥90%","formula":"(No. of staff with current valid certification ÷ Total staff required to hold certification) × 100","numDef":"Designated clinical staff who hold a CURRENT, VALID BLS/ACLS/PALS certification issued by an accredited provider (AHA, ERC, or equivalent) with expiry date not past at time of audit.","denDef":"Total staff in designated roles required to hold BLS/ACLS/PALS per hospital policy (clinical nursing — BLS; ICU/CCU/ED/OT nursing — ACLS; paediatric wards — PALS; all physicians — BLS/ACLS).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3 Audit: Total nursing staff requiring BLS = 450 | With valid BLS = 428 → BLS Rate = (428÷450)×100 = 95.1% ✅ Total staff requiring ACLS = 120 | With valid ACLS = 108 → ACLS Rate = (108÷120)×100 = 90.0% ✅ Both ≥90% — Compliant. Schedule renewal for 22 BLS-expired and 12 ACLS-expired staff.","interpretation":"≥90%: Acceptable. <90%: Identify expired staff by ward; prioritise ICU/ED/CCU for immediate renewal. Staff with expired certification in high-acuity areas must not work unsupervised until recertified.","reference":"AHA (2020). BLS/ACLS Provider Guidelines; JCI (2021). SQE Standards; Hospital Credentialing Policy"},"L3":{"name":"Induction Completion within 30 Days","unit":"%","benchmark":"100%","formula":"(No. of new staff completing induction within 30 days ÷ Total new staff) × 100","numDef":"Newly joined employees who completed the FULL structured induction/orientation program within 30 calendar days of their first day. Induction must include: hospital orientation, key policies, infection control, fire safety, patient safety, IT/EMR access, and role-specific competency sign-off.","denDef":"Total new employees who joined the hospital during the reporting period (all staff grades: permanent, contract, agency).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – November: New staff joined = 35 Completed full induction within 30 days = 32 Not completed (sick leave ×1, late IT access ×2) = 3 (32 ÷ 35) × 100 = 91.4% ❌ BELOW 100% — Ensure IT access granted on Day 1; clinical staff must complete induction BEFORE patient-facing duties begin","interpretation":"100%: Target. Incomplete induction = staff unaware of essential safety policies. Clinical staff without induction must not be deployed to patient care. Address IT access delays and scheduling conflicts proactively.","reference":"JCI (2021). SQE.7; TJC HR.01.04.01; Hospital HR Onboarding Policy"},"L4":{"name":"Accidental Catheter Dislodgement","unit":"Count","benchmark":"0","formula":"Total count of accidental catheter dislodgements per reporting period","numDef":"Accidental dislodgements (partial or complete displacement from intended position) of any indwelling catheter or tube during patient care: urinary catheter, nasogastric tube, IV/arterial line, chest drain, surgical drain, epidural catheter. Each event = 1 count.","denDef":"N/A — count per period. Rate: (dislodgements ÷ patient-days with device) × 1,000.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – December: Urinary catheter dislodgements (turning ×2, self-removal ×1) = 3 NG tube dislodgements (patient transfer ×2) = 2 IV cannula dislodgements (ambulation, poor securement ×4) = 4 Total accidental dislodgements = 9 | Target: 0 Each event: incident report + RCA + corrective action plan","interpretation":"Target: 0. Repeated dislodgements in same ward = systemic problem. Review: Are securing devices used? Are patients educated on catheter management? Are staff using correct handling technique during repositioning?","reference":"JCI (2021). QPS Standards; NDNQI (2023); Hospital Nursing Care Standards"},"L5":{"name":"Accidental Removal of Catheter","unit":"Count","benchmark":"0","formula":"Total count of accidental catheter removals per reporting period","numDef":"Accidental FULL removal of an indwelling catheter by: (1) Patient action (self-removal, especially confused/agitated patients), (2) Family/visitor action, (3) Staff error during care activities. Distinguished from dislodgement (L4) which is partial displacement.","denDef":"N/A — count per period. Rate: (removals ÷ patient-days with device) × 1,000.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1: Urinary catheter removals (by confused patients) = 6 CVC removed by family member = 1 NG tube removed by patient = 4 Total accidental catheter removals = 11 | Target: 0 CVC removed by family = serious; patient/family education was inadequate Actions: Agitation management review; daily device necessity; patient/family education; appropriate restraint discussion","interpretation":"Target: 0. Frequent self-removal by confused patients: Review sedation/analgesia appropriateness, device necessity, and patient/family education. CVC self-removal by family member = failure of patient/family education.","reference":"JCI (2021). QPS Standards; NDNQI (2023); Hospital Nursing Care & Device Management Policy"},"M1":{"name":"Patient Satisfaction Score","unit":"% or mean score","benchmark":"≥85%","formula":"Method 1 (Top-box): (No. rating ≥4/5 or 'Very Good/Excellent' ÷ Total surveyed) × 100Method 2 (Mean score): Sum of all scores ÷ Total respondents","numDef":"Method 1: Patients who rate overall hospital experience as 'Excellent' (5/5) or 'Very Good' (4/5).Method 2: Arithmetic sum of all individual overall satisfaction scores divided by number of responses.","denDef":"Method 1: Total completed satisfaction surveys received. Method 2: Total completed surveys.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – January: Surveys distributed = 200 | Surveys returned = 145 Method 1 (Top-box): Patients rating 4–5 out of 5 = 124 (124 ÷ 145) × 100 = 85.5% ✅ AT/ABOVE target (≥85%) Method 2 (Mean): Sum of all scores = 610 ÷ 145 = 4.21/5 Lowest-scoring domain: Staff responsiveness (3.8/5) — target for improvement","interpretation":"≥85%: Acceptable. <85%: Analyse by HCAHPS domain to identify specific improvement areas. Low nursing responsiveness: review call bell response time. Low cleanliness: audit housekeeping. Share monthly results with all clinical teams.","reference":"HCAHPS (2024). Hospital Consumer Assessment of Healthcare Providers; JCI (2021). PFR Standards; Press Ganey Associates (2023)"},"M2":{"name":"Complaint Resolution within TAT","unit":"%","benchmark":"≥90%","formula":"(No. of complaints resolved within TAT ÷ Total complaints received) × 100","numDef":"Formally logged patient/family complaints that were: (1) Acknowledged within 24 working hours, AND (2) Fully investigated with resolution response provided within the defined TAT (e.g., 5 working days for verbal, 30 working days for written/formal), AND (3) Outcome documented in the complaint management system.","denDef":"Total formal patient/family complaints received and registered during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3: Total formal complaints received = 35 Verbal complaints resolved within 5 days: 18/20 = 90% Written complaints resolved within 30 days: 13/15 = 86.7% Overall: (18+13)÷(20+15) = 31÷35 × 100 = 88.6% ❌ BELOW 90% — Identify 4 unresolved; escalate to Patient Relations manager; notify complainant of delay","interpretation":"≥90%: Acceptable. <90%: Review complaint caseload capacity and investigation process. Every complaint = patient safety learning opportunity. Categorise by type (clinical, communication, attitude, environment) and report to department heads.","reference":"JCI (2021). PFR.3 — Complaint and Grievance Management; TJC RI.01.07.01; Hospital Patient Relations Policy"}};
+
+window.HQI_SECTIONS = {A:"Infection Prevention & Control",B:"Medication Safety",C:"Patient Safety (IPSG)",D:"Clinical Outcomes & Mortality",E:"Documentation & Process",F:"Maternal & Neonatal (LDR / NICU)",G:"Cardiac / Cath Lab / CCU",H:"Dialysis",I:"Surgery / OT / Anaesthesia",J:"Endoscopy",K:"Emergency",L:"Staff / Device Safety / Training",M:"Patient Experience"};
+
+;
+/* ===== quality-corrections.js ===== */
+/* UNICO — authoritative quality-indicator corrections (AUTO-GENERATED, web-verified).
+   QI_CORRECTIONS: by indicator name (applied in quality-store.js by name).
+   QI_CORRECTIONS_BY_DEFID: by QI_DEFS id (applied in the Catalog/library). */
+window.QI_CORRECTIONS = {
+  "catheter-associated uti (cauti)": {
+    "canonicalName": "Catheter-Associated Urinary Tract Infection (CAUTI) Rate",
+    "formula": "rate1000",
+    "numLabel": "CAUTIs",
+    "denLabel": "Urinary catheter-days",
+    "numeratorDef": "Number of CAUTI events meeting the NHSN UTI surveillance definition (symptomatic UTI/SUTI) in patients who had an indwelling urinary catheter in place for >2 consecutive days (day of catheter placement = Day 1) in an inpatient location on the date of event, with the catheter in place on that date or removed the day before. Count each qualifying event once.",
+    "denominatorDef": "Total number of indwelling urinary catheter-days, obtained by counting, once each day at the same time each day during the surveillance month, the number of patients in the location with one or more indwelling urinary catheters, and summing these daily counts over the month (electronic counts allowed if validated to within 5% of manual counts).",
+    "unit": "per 1000 catheter-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 catheter-days",
+    "benchmarkNote": "NHSN primary benchmark is the SIR < 1.0 vs the NHSN baseline (fewer infections observed than predicted); pooled-mean CAUTI rate is roughly 1.0 per 1000 catheter-days but varies widely by unit type and is not an official fixed threshold",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 7: Urinary Tract Infection (CAUTI) Events; CDC NHSN SIR Guide (A Guide to the SIR)",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/7psccauticurrent.pdf"
+  },
+  "cauti rate (per 1000 cath-days)": {
+    "canonicalName": "Catheter-Associated Urinary Tract Infection (CAUTI) Rate",
+    "formula": "rate1000",
+    "numLabel": "CAUTIs",
+    "denLabel": "Urinary catheter-days",
+    "numeratorDef": "Number of CAUTI events meeting the NHSN UTI surveillance definition (symptomatic UTI/SUTI) in patients who had an indwelling urinary catheter in place for >2 consecutive days (day of catheter placement = Day 1) in an inpatient location on the date of event, with the catheter in place on that date or removed the day before. Count each qualifying event once.",
+    "denominatorDef": "Total number of indwelling urinary catheter-days, obtained by counting, once each day at the same time each day during the surveillance month, the number of patients in the location with one or more indwelling urinary catheters, and summing these daily counts over the month (electronic counts allowed if validated to within 5% of manual counts).",
+    "unit": "per 1000 catheter-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 catheter-days",
+    "benchmarkNote": "NHSN primary benchmark is the SIR < 1.0 vs the NHSN baseline (fewer infections observed than predicted); pooled-mean CAUTI rate is roughly 1.0 per 1000 catheter-days but varies widely by unit type and is not an official fixed threshold",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 7: Urinary Tract Infection (CAUTI) Events; CDC NHSN SIR Guide (A Guide to the SIR)",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/7psccauticurrent.pdf"
+  },
+  "central line-associated bloodstream infection (clabsi)": {
+    "canonicalName": "Central Line-Associated Bloodstream Infection (CLABSI) Rate",
+    "formula": "rate1000",
+    "numLabel": "CLABSIs",
+    "denLabel": "Central line-days",
+    "numeratorDef": "Number of laboratory-confirmed bloodstream infections (LCBI) meeting the NHSN CLABSI definition: a primary LCBI not secondary to an infection at another site, in a patient with an eligible central line in place for >2 consecutive calendar days (following first access in an inpatient location) on the date of event, with the line present on that date or removed the day before.",
+    "denominatorDef": "Total number of central line-days, summed by counting the number of patients with one or more central lines in the location once each day at the same time each day during the surveillance month.",
+    "unit": "per 1000 central line-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 central line-days",
+    "benchmarkNote": "SIR < 1.0 vs NHSN baseline; pooled-mean CLABSI rate ~1.0 per 1000 central line-days (varies by unit type)",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 4: Bloodstream Infection Event (CLABSI); CDC NHSN SIR Guide",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/4psc_clabscurrent.pdf"
+  },
+  "ventilator-associated pneumonia (vap)": {
+    "canonicalName": "Ventilator-Associated Pneumonia (VAP) Rate",
+    "formula": "rate1000",
+    "numLabel": "VAP events",
+    "denLabel": "Ventilator-days",
+    "numeratorDef": "Number of pneumonia events meeting the NHSN PNEU/VAP surveillance criteria in a patient who was on mechanical ventilation with the ventilator in place on the date of event or the day before. (Note: the NHSN PNEU/VAP definition has NO minimum ventilation-duration requirement; the '>2 consecutive ventilator-days' rule belongs to the separate VAE algorithm, not to VAP/PNEU. For adult and pediatric inpatient locations NHSN replaced in-plan VAP surveillance with the VAE algorithm in January 2013 [PedVAE for pediatric locations]; the PNEU/VAP protocol remains available for in-plan PedVAP surveillance in pediatric locations and off-plan PNEU surveillance in any inpatient location, including neonatal.)",
+    "denominatorDef": "Total number of ventilator-days, summed by counting the number of patients on mechanical ventilation in the location once each day at the same time each day during the surveillance month.",
+    "unit": "per 1000 ventilator-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 ventilator-days",
+    "benchmarkNote": "No single fixed target; aim toward 0. Historical NHSN pooled-mean VAP rates ~1-2 per 1000 ventilator-days depending on unit type",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 6: Pneumonia (Ventilator-associated [VAP] and non-ventilator-associated [PNEU]) Event",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/6pscvapcurrent.pdf"
+  },
+  "ventilator-associated event (vae)": {
+    "canonicalName": "Ventilator-Associated Event (VAE) Rate",
+    "formula": "rate1000",
+    "numLabel": "VAE events (VAC/IVAC/PVAP)",
+    "denLabel": "Ventilator-days",
+    "numeratorDef": "Number of Ventilator-Associated Events meeting the NHSN VAE algorithm tiers — Ventilator-Associated Condition (VAC), Infection-related Ventilator-Associated Complication (IVAC), and Possible VAP (PVAP) — identified in adult patients (>=18 years) mechanically ventilated for >2 calendar days, triggered by a sustained increase (>=2 calendar days) in daily minimum FiO2 (increase >=0.20) or PEEP (increase >=3 cmH2O) after a baseline period of >=2 days of stability or improvement. Each event counted once; rates may be reported by tier.",
+    "denominatorDef": "Total number of ventilator-days, summed by counting the number of patients on mechanical ventilation in the location once each day at the same time each day during the surveillance month (eligible adult inpatient locations); only the monthly total is entered into NHSN.",
+    "unit": "per 1000 ventilator-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 ventilator-days",
+    "benchmarkNote": "SIR < 1.0 vs NHSN baseline (observed/predicted; SIR not computed when predicted <1.0); aim toward 0. Pooled VAC/IVAC raw rates vary widely (~3-17 per 1000 ventilator-days) by setting.",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 10: Ventilator-Associated Event (VAE) Protocol",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/10-vae_final.pdf"
+  },
+  "infection rate": {
+    "canonicalName": "Healthcare-Associated Infection (HAI) Rate",
+    "formula": "rate1000",
+    "numLabel": "HAI events",
+    "denLabel": "Patient-days (or device-days)",
+    "numeratorDef": "Number of healthcare-associated infections meeting the applicable NHSN site-specific surveillance definition during the surveillance period, where the date of event occurs on or after the 3rd calendar day of admission to an inpatient location (day of admission = calendar day 1), i.e., not present or incubating on admission. For device-associated infections use the corresponding device-day denominator; for overall HAI surveillance use patient-days.",
+    "denominatorDef": "Total patient-days for overall HAI rates (sum of the daily census over the surveillance month), or the relevant device-days for device-associated infection rates, counted once per patient per day at a consistent time each day.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 5,
+    "benchmark": "≤ 5 per 1000 patient-days",
+    "benchmarkNote": "Lower is better; no universal fixed target. NHSN's authoritative benchmark is the Standardized Infection Ratio (SIR = observed/expected vs. risk-adjusted national baseline, target < 1.0), not a fixed rate. Overall HAI incidence is indicatively ~2-5 per 1000 patient-days and should trend downward facility-wide.",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 2 (Identifying HAIs in NHSN / Present on Admission vs HAI); WHO Guidelines on Core Components of IPC Programmes",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/2psc_identifyinghais_nhsncurrent.pdf"
+  },
+  "patient fall": {
+    "canonicalName": "Patient Falls (Total Fall Rate)",
+    "formula": "rate1000",
+    "numLabel": "Number of patient falls",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Total number of patient falls (with or without injury, whether or not assisted by a staff member) occurring on the eligible reporting unit during the calendar month. A fall = an unplanned descent to the floor (or extension of the floor, e.g., trash can or other equipment) with or without injury. Includes assisted falls and falls in which the patient was found on the floor. Count each fall event; a patient who falls more than once is counted each time.",
+    "denominatorDef": "Total patient-days for the eligible reporting unit during the same calendar month. Patient-days = sum of the daily inpatient census (typically counted at a consistent time each day, e.g., midnight) over the reporting period. Multiply the falls/patient-day ratio by 1000.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 3.3,
+    "benchmark": "≤ 3.3 per 1000 patient-days",
+    "benchmarkNote": "<= 3.3 falls per 1000 patient-days (NDNQI national median; lower is better)",
+    "goalDirection": "lower_is_better",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI), a Press Ganey solution (measure copyrighted by the American Nurses Association); NQF/CBE #0141 Patient Fall Rate, a nursing-sensitive indicator (now maintained under the Partnership for Quality Measurement / Battelle CBE framework)",
+    "referenceUrl": "https://p4qm.org/measures/0141"
+  },
+  "hospital-acquired pressure ulcer (hapu)": {
+    "canonicalName": "Hospital-Acquired Pressure Injury (HAPI) Prevalence",
+    "formula": "pct",
+    "numLabel": "Patients with a hospital-acquired Stage 2+ pressure injury",
+    "denLabel": "Patients surveyed",
+    "numeratorDef": "Number of patients on the unit/facility, on the survey day, who have one or more hospital-acquired (nosocomial) pressure injuries of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of injuries.",
+    "denominatorDef": "Total number of eligible patients present and assessed (via skin/pressure-injury assessment) on the unit during the one-day prevalence survey. Multiply numerator/denominator by 100.",
+    "unit": "% (percent of patients surveyed)",
+    "benchmarkValue": 3.6,
+    "benchmark": "≤ 3.6%",
+    "benchmarkNote": "<= ~3.6% hospital-acquired prevalence (NDNQI 2010 national reference; lower is better; aspirational target 0). Note: more recent NDNQI/IPUP national acute-care HAPI prevalence is lower, ~2.5-3.0%.",
+    "goalDirection": "lower_is_better",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Survey; NQF #0201 Pressure Ulcer Prevalence, Hospital-Acquired (steward: The Joint Commission); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
+  },
+  "bed sore (pressure injury)": {
+    "canonicalName": "Hospital-Acquired Pressure Injury (HAPI) Prevalence",
+    "formula": "pct",
+    "numLabel": "Patients with a hospital-acquired Stage 2+ pressure injury",
+    "denLabel": "Patients surveyed",
+    "numeratorDef": "Number of patients on the unit/facility, on the survey day, who have one or more hospital-acquired (nosocomial) pressure injuries of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of injuries.",
+    "denominatorDef": "Total number of eligible patients present and assessed (via skin/pressure-injury assessment) on the unit during the one-day prevalence survey. Multiply numerator/denominator by 100.",
+    "unit": "% (percent of patients surveyed)",
+    "benchmarkValue": 3.6,
+    "benchmark": "≤ 3.6%",
+    "benchmarkNote": "<= ~3.6% hospital-acquired prevalence (NDNQI 2010 national reference; lower is better; aspirational target 0). Note: more recent NDNQI/IPUP national acute-care HAPI prevalence is lower, ~2.5-3.0%.",
+    "goalDirection": "lower_is_better",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Survey; NQF #0201 Pressure Ulcer Prevalence, Hospital-Acquired (steward: The Joint Commission); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
+  },
+  "surgical site infection (ssi)": {
+    "canonicalName": "Surgical Site Infection (SSI) Rate",
+    "formula": "pct",
+    "numLabel": "Number of SSIs",
+    "denLabel": "Number of operative procedures",
+    "numeratorDef": "Count of surgical site infections (superficial incisional, deep incisional, or organ/space) detected through routine surveillance within the applicable NHSN surveillance period for the procedure category (a 30- or 90-day period determined by the NHSN operative procedure CATEGORY and the tissue level/depth of the SSI event, per the 2013+ definitions — note this is no longer based on implant presence). Include SSIs identified during admission, on readmission, and via post-discharge surveillance. Each procedure-related SSI is counted once per NHSN protocol.",
+    "denominatorDef": "Total number of NHSN operative procedures of that category performed during the same period (each trip to the OR meeting the NHSN procedure-code definition counts as one procedure), applying standard NHSN exclusion criteria. SSI rate = (SSIs / procedures) x 100. NHSN also risk-adjusts via the Standardized Infection Ratio (SIR = observed/predicted SSIs), with target SIR < 1.0.",
+    "unit": "%",
+    "benchmarkValue": 2,
+    "benchmark": "≤ 2%",
+    "benchmarkNote": "<= 2% per 100 procedures (procedure-dependent; NHSN risk-adjusted target SIR < 1.0)",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component — Surgical Site Infection (SSI) Event protocol; WHO Global Guidelines for the Prevention of SSI",
+    "referenceUrl": "https://www.cdc.gov/nhsn/psc/ssi/index.html"
+  },
+  "puncture site hematoma": {
+    "canonicalName": "Puncture Site Hematoma Rate",
+    "formula": "pct",
+    "numLabel": "Number of puncture-site hematomas",
+    "denLabel": "Number of vascular access procedures",
+    "numeratorDef": "Count of clinically significant access-site hematomas occurring after a percutaneous vascular access procedure (e.g., cardiac catheterization/PCI), within 72 hours of the procedure (or by discharge if earlier), per NCDR CathPCI access-site complication definitions. A reportable/clinically significant hematoma is one associated with a hemoglobin drop >=3 g/dL, requiring blood transfusion, or requiring surgical or percutaneous intervention.",
+    "denominatorDef": "Total number of percutaneous vascular access procedures performed in the same period. Rate = (puncture-site hematomas / access procedures) x 100.",
+    "unit": "%",
+    "benchmarkValue": 2,
+    "benchmark": "≤ 2%",
+    "benchmarkNote": "<= 2% of access procedures (route-dependent: transradial ~1-2%; transfemoral typically 2-12%)",
+    "goalDirection": "lower_is_better",
+    "reference": "ACC NCDR CathPCI Registry — access-site / vascular (hematoma) complication definitions; SCAI quality-improvement guidance on access-site bleeding (transradial best-practices consensus & femoral access-site bleeding QI)",
+    "referenceUrl": "https://www.ncdr.com/WebNCDR/docs/default-source/ncdr-general-documents/cathpci-registry-2014-sample-report.pdf?sfvrsn=2"
+  },
+  "post-pci complication": {
+    "canonicalName": "Post-PCI Complication Rate",
+    "formula": "pct",
+    "numLabel": "Number of PCI procedures with a complication",
+    "denLabel": "Number of PCI procedures",
+    "numeratorDef": "Count of PCI procedures with any in-hospital post-procedure complication as defined by the NCDR CathPCI Registry — including access-site/vascular complications (hematoma, pseudoaneurysm, AV fistula, retroperitoneal bleed, dissection/occlusion requiring treatment), major bleeding (per NCDR bleeding definition: bleeding within 72h, hemorrhagic stroke, cardiac tamponade, post-PCI transfusion when preprocedure Hgb >8 g/dL, or absolute Hgb drop >=3 g/dL when preprocedure Hgb <=16 g/dL), periprocedural MI, stroke/TIA, emergency CABG, new dialysis/acute kidney injury (AKIN stage 1+ or new dialysis), cardiac tamponade, or death — occurring from procedure start until discharge.",
+    "denominatorDef": "Total number of PCI procedures performed in the same period. Rate = (PCIs with complication / total PCIs) x 100. NOTE: this unadjusted composite is a local quality-tracking metric, NOT an official NCDR surveillance measure. NCDR formally reports complications as separate RISK-ADJUSTED / risk-standardized outcome measures (in-hospital risk-adjusted mortality, risk-adjusted major bleeding, risk-adjusted AKI), because raw rates are confounded by patient risk mix.",
+    "unit": "%",
+    "benchmarkValue": 5,
+    "benchmark": "≤ 5%",
+    "benchmarkNote": "<= 5% of PCI procedures (generic composite target; not an official NCDR threshold). Real-world overall periprocedural complication ~2-3.5%; component targets lower (major bleeding ~1-2%). Prefer NCDR risk-adjusted, NQF-endorsed component measures where available.",
+    "goalDirection": "lower_is_better",
+    "reference": "American College of Cardiology NCDR CathPCI Registry — outcome/performance measure definitions (risk-adjusted mortality, bleeding, AKI; mortality & bleeding NQF-endorsed)",
+    "referenceUrl": "https://www.ncdr.com/WebNCDR/docs/default-source/ncdr-general-documents/cathpci-registry-2014-sample-report.pdf?sfvrsn=2"
+  },
+  "post-procedure complication": {
+    "canonicalName": "Post-Procedure Complication Rate",
+    "formula": "pct",
+    "numLabel": "Number of procedures with a complication",
+    "denLabel": "Number of procedures performed",
+    "numeratorDef": "Count of procedures with any post-procedure complication (e.g., bleeding/hematoma, infection, perforation, vascular injury, adverse event requiring intervention) identified from the time of procedure through the defined follow-up/discharge window (commonly up to 30 days for invasive/operative procedures), per the relevant procedure-specific surveillance definition.",
+    "denominatorDef": "Total number of procedures of that type performed during the same period. Rate = (procedures with complication / total procedures) x 100.",
+    "unit": "%",
+    "benchmarkValue": 5,
+    "benchmark": "≤ 5%",
+    "benchmarkNote": "<= 5% of procedures (placeholder; strongly procedure-dependent)",
+    "goalDirection": "lower_is_better",
+    "reference": "AHRQ Quality Indicators / Patient Safety Indicators (postoperative complication rates) and NABH quality indicators; refine with procedure-specific registries (e.g., ACC NCDR for cardiac procedures)",
+    "referenceUrl": "https://qualityindicators.ahrq.gov/measures/psi_resources"
+  },
+  "phlebitis": {
+    "canonicalName": "Phlebitis rate (peripheral IV)",
+    "formula": "pct",
+    "numLabel": "Phlebitis events",
+    "denLabel": "Peripheral IV catheters",
+    "numeratorDef": "Number of peripheral intravenous (PIV) catheters that developed phlebitis (typically Visual Infusion Phlebitis [VIP] score >=2, i.e. pain plus erythema and/or induration/swelling along the vein) during the surveillance period. Count each affected catheter once.",
+    "denominatorDef": "Total number of peripheral IV catheters in place / inserted during the same surveillance period.",
+    "unit": "%",
+    "benchmarkValue": 5,
+    "benchmark": "≤ 5%",
+    "benchmarkNote": "<= 5% of peripheral IV catheters",
+    "goalDirection": "lower_is_better",
+    "reference": "Infusion Nurses Society (INS), Infusion Therapy Standards of Practice (8th ed., 2021), Journal of Infusion Nursing 44(1S):S1-S224 - Phlebitis standard",
+    "referenceUrl": "https://www.ins1.org/wp-content/uploads/2021/07/JIN-D-21-00031_SOP-Update-Hi-resWithout_Folio-7.13.21.pdf"
+  },
+  "deep vein thrombosis (dvt)": {
+    "canonicalName": "Deep vein thrombosis / VTE rate",
+    "formula": "rate1000",
+    "numLabel": "DVT/VTE cases",
+    "denLabel": "Surgical discharges",
+    "numeratorDef": "Number of surgical discharges with a secondary (not present-on-admission) ICD-10-CM diagnosis of PROXIMAL deep vein thrombosis or pulmonary embolism arising perioperatively (hospital-acquired VTE). Per AHRQ PSI-12, only proximal DVT/PE qualify; isolated distal/calf DVT is excluded. Excludes cases with a principal diagnosis of PE/proximal DVT, POA PE/proximal DVT, vena cava interruption or pulmonary thrombectomy on/before the first OR procedure day, ECMO, acute brain/spinal injury POA, and obstetric discharges.",
+    "denominatorDef": "Surgical discharges for patients age >=18 with any-listed ICD-10-PCS operating-room procedure code and a surgical MS-DRG (PSI-12 denominator). For general HA-VTE monitoring the denominator may be broadened to all eligible admissions, but the AHRQ-standard denominator is surgical discharges.",
+    "unit": "per 1000 surgical discharges",
+    "benchmarkValue": 4,
+    "benchmark": "≤ 4 per 1000 surgical discharges",
+    "benchmarkNote": "Lower is better; track against the AHRQ risk-adjusted PSI-12 national reference (observed rates roughly 3-5 per 1000 surgical discharges); no fixed zero target",
+    "goalDirection": "lower_is_better",
+    "reference": "AHRQ Quality Indicators, Patient Safety Indicator 12 (PSI-12): Perioperative Pulmonary Embolism or Deep Vein Thrombosis Rate (NQF #0450; titled 'Postoperative...' in older ICD-9 versions)",
+    "referenceUrl": "https://qualityindicators.ahrq.gov/Downloads/Modules/PSI/V2025/TechSpecs/PSI_12_Perioperative_Pulmonary_Embolism_or_Deep_Vein_Thrombosis_Rate.pdf"
+  },
+  "accidental de-lining of catheter": {
+    "canonicalName": "Accidental / unplanned catheter removal rate",
+    "formula": "rate1000",
+    "numLabel": "Accidental catheter removals/dislodgements",
+    "denLabel": "Catheter-days",
+    "numeratorDef": "Number of unplanned/accidental removals or dislodgements of an indwelling catheter (e.g. central venous catheter, PICC, arterial line, peripheral line) during the surveillance period - i.e. any removal not clinically ordered, including patient self-removal, accidental dislodgement, or migration requiring re-siting. Count each event once.",
+    "denominatorDef": "Total catheter-days = sum, over each day of the surveillance period, of the number of indwelling catheters in place that day across all patients (device-days).",
+    "unit": "per 1000 catheter-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 catheter-days",
+    "benchmarkNote": "Lower is better; aspirational goal <= ~1 per 1000 catheter-days. Reported literature varies widely by device type and setting: central venous catheters ~2 per 1000 catheter-days (de la Torre/Lorente, Crit Care 2004, reported as 0.20/100 catheter-days), unplanned CVC removal ~5 per 1000 CVC-days in a multicenter ICU cohort, and ~11-16 per 1000 catheter-days for arterial lines and PICU central/PICC lines.",
+    "goalDirection": "lower_is_better",
+    "reference": "de la Torre / Lorente et al., 'Accidental catheter removal in critically ill patients: a prospective and observational study,' Critical Care 2004 (incidence density per catheter-days); INS Infusion Therapy Standards of Practice 2024 (device securement / dislodgement prevention)",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC522842/"
+  },
+  "accidental removal of catheter": {
+    "canonicalName": "Accidental / unplanned catheter removal rate",
+    "formula": "rate1000",
+    "numLabel": "Accidental catheter removals/dislodgements",
+    "denLabel": "Catheter-days",
+    "numeratorDef": "Number of unplanned/accidental removals or dislodgements of an indwelling catheter (e.g. central venous catheter, PICC, arterial line, peripheral line) during the surveillance period - i.e. any removal not clinically ordered, including patient self-removal, accidental dislodgement, or migration requiring re-siting. Count each event once.",
+    "denominatorDef": "Total catheter-days = sum, over each day of the surveillance period, of the number of indwelling catheters in place that day across all patients (device-days).",
+    "unit": "per 1000 catheter-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 catheter-days",
+    "benchmarkNote": "Lower is better; aspirational goal <= ~1 per 1000 catheter-days. Reported literature varies widely by device type and setting: central venous catheters ~2 per 1000 catheter-days (de la Torre/Lorente, Crit Care 2004, reported as 0.20/100 catheter-days), unplanned CVC removal ~5 per 1000 CVC-days in a multicenter ICU cohort, and ~11-16 per 1000 catheter-days for arterial lines and PICU central/PICC lines.",
+    "goalDirection": "lower_is_better",
+    "reference": "de la Torre / Lorente et al., 'Accidental catheter removal in critically ill patients: a prospective and observational study,' Critical Care 2004 (incidence density per catheter-days); INS Infusion Therapy Standards of Practice 2024 (device securement / dislodgement prevention)",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC522842/"
+  },
+  "accidental catheter dislodgement": {
+    "canonicalName": "Accidental / unplanned catheter removal rate",
+    "formula": "rate1000",
+    "numLabel": "Accidental catheter removals/dislodgements",
+    "denLabel": "Catheter-days",
+    "numeratorDef": "Number of unplanned/accidental removals or dislodgements of an indwelling catheter (e.g. central venous catheter, PICC, arterial line, peripheral line) during the surveillance period - i.e. any removal not clinically ordered, including patient self-removal, accidental dislodgement, or migration requiring re-siting. Count each event once.",
+    "denominatorDef": "Total catheter-days = sum, over each day of the surveillance period, of the number of indwelling catheters in place that day across all patients (device-days).",
+    "unit": "per 1000 catheter-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 catheter-days",
+    "benchmarkNote": "Lower is better; aspirational goal <= ~1 per 1000 catheter-days. Reported literature varies widely by device type and setting: central venous catheters ~2 per 1000 catheter-days (de la Torre/Lorente, Crit Care 2004, reported as 0.20/100 catheter-days), unplanned CVC removal ~5 per 1000 CVC-days in a multicenter ICU cohort, and ~11-16 per 1000 catheter-days for arterial lines and PICU central/PICC lines.",
+    "goalDirection": "lower_is_better",
+    "reference": "de la Torre / Lorente et al., 'Accidental catheter removal in critically ill patients: a prospective and observational study,' Critical Care 2004 (incidence density per catheter-days); INS Infusion Therapy Standards of Practice 2024 (device securement / dislodgement prevention)",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC522842/"
+  },
+  "accidental removal of ett tube": {
+    "canonicalName": "Unplanned (accidental) extubation rate",
+    "formula": "rate100",
+    "numLabel": "Unplanned extubations",
+    "denLabel": "Ventilator-days",
+    "numeratorDef": "Number of unplanned/accidental extubations - any removal of the endotracheal (ETT) tube not deliberately performed by the care team, including patient self-extubation and accidental dislodgement during care/transport. Count each event once.",
+    "denominatorDef": "Total ventilator-days = sum across the surveillance period of the number of patients with an ETT on mechanical ventilation each day. Multiply the ratio by 100 (rate expressed per 100 ventilator-days).",
+    "unit": "per 100 ventilator-days",
+    "benchmarkValue": 0.95,
+    "benchmark": "≤ 0.95 per 100 ventilator-days",
+    "benchmarkNote": "<= 0.95 unplanned extubations per 100 ventilator-days (Solutions for Patient Safety national goal); reported literature rates typically ~0.9-1.06 per 100 ventilator-days",
+    "goalDirection": "lower_is_better",
+    "reference": "Solutions for Patient Safety (SPS) unplanned-extubation bundle benchmark goal (<=0.95 per 100 ventilator-days, introduced May 2018); per-100-ventilator-day surveillance convention per published ICU/NICU/PICU UE literature (e.g., Respir Care editorial, PMC10753604, defining UE per 100 days of mechanical ventilation)",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10753604/"
+  },
+  "hand hygiene compliance - overall": {
+    "canonicalName": "Hand Hygiene Compliance - Overall",
+    "formula": "pct",
+    "numLabel": "Hand hygiene actions performed",
+    "denLabel": "Hand hygiene opportunities observed",
+    "numeratorDef": "Number of observed hand hygiene actions performed (rubbing hands with alcohol-based handrub OR washing with soap and water) when an opportunity occurs, counted across ALL healthcare worker categories via direct observation using the WHO 'My 5 Moments for Hand Hygiene' method.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed across ALL healthcare worker categories. An opportunity is defined by one or more of the WHO 5 Moments (before touching a patient; before clean/aseptic procedure; after body fluid exposure risk; after touching a patient; after touching patient surroundings). Several indications arising simultaneously count as a single opportunity.",
+    "unit": "%",
+    "benchmarkValue": 80,
+    "benchmark": "≥ 80%",
+    "benchmarkNote": ">= 80% compliance",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), 'My 5 Moments for Hand Hygiene' and WHO Hand Hygiene Technical Reference Manual; benchmark reflects a commonly used operational target (The Joint Commission no longer mandates a fixed numeric compliance percentage).",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  "hand hygiene compliance - doctors": {
+    "canonicalName": "Hand Hygiene Compliance - Doctors",
+    "formula": "pct",
+    "numLabel": "Hand hygiene actions performed by doctors",
+    "denLabel": "Hand hygiene opportunities observed for doctors",
+    "numeratorDef": "Number of observed hand hygiene actions performed (alcohol-based handrub OR soap-and-water handwash) by DOCTORS / medical staff when an opportunity occurs, via WHO 'My 5 Moments' direct observation.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed for DOCTORS / medical staff, where an opportunity is any of the WHO 5 Moments (before patient contact; before aseptic task; after body fluid exposure risk; after patient contact; after contact with patient surroundings). Simultaneous indications = one opportunity.",
+    "unit": "%",
+    "benchmarkValue": 80,
+    "benchmark": "≥ 80%",
+    "benchmarkNote": ">= 80% compliance (institutional/program target; not a WHO- or Joint Commission-mandated threshold)",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), 'My 5 Moments for Hand Hygiene' and WHO Hand Hygiene Technical Reference Manual (compliance = actions/opportunities x 100; stratification by professional category recommended)",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  "hand hygiene compliance - nurses": {
+    "canonicalName": "Hand Hygiene Compliance - Nurses",
+    "formula": "pct",
+    "numLabel": "Hand hygiene actions performed by nurses",
+    "denLabel": "Hand hygiene opportunities observed for nurses",
+    "numeratorDef": "Number of observed hand hygiene actions performed (alcohol-based handrub OR soap-and-water handwash) by NURSES / nursing staff when an opportunity occurs, via WHO 'My 5 Moments' direct observation.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed for NURSES / nursing staff, where an opportunity is any of the WHO 5 Moments (before patient contact; before aseptic task; after body fluid exposure risk; after patient contact; after contact with patient surroundings). Simultaneous/overlapping indications during a single care sequence count as ONE opportunity.",
+    "unit": "%",
+    "benchmarkValue": 80,
+    "benchmark": "≥ 80%",
+    "benchmarkNote": ">= 80% compliance",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), 'Hand hygiene as a performance indicator' / 'My 5 Moments for Hand Hygiene' (defines the actions/opportunities formula). Note: the >=80% target is a commonly used institutional/operational benchmark, NOT an official numeric standard of WHO or The Joint Commission.",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  "hand hygiene compliance - others": {
+    "canonicalName": "Hand Hygiene Compliance - Others",
+    "formula": "pct",
+    "numLabel": "Hand hygiene actions performed by other staff",
+    "denLabel": "Hand hygiene opportunities observed for other staff",
+    "numeratorDef": "Number of observed hand hygiene actions performed (alcohol-based handrub OR soap-and-water handwash) by healthcare workers in the WHO 'Other health-care worker' professional category (therapists e.g. physiotherapists/occupational/speech therapists; technicians e.g. radiology/laboratory/cardiology; dieticians, dentists, social workers, students, and lay persons providing care) when an opportunity occurs, via WHO 'My 5 Moments' direct observation.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed for healthcare workers in the WHO 'Other health-care worker' professional category, where an opportunity is any of the WHO 5 Moments (before patient contact; before aseptic task; after body fluid exposure risk; after patient contact; after contact with patient surroundings). Simultaneous indications count as one opportunity.",
+    "unit": "%",
+    "benchmarkValue": 80,
+    "benchmark": "≥ 80%",
+    "benchmarkNote": ">= 80% compliance",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), Part III Ch.1 'Hand hygiene as a performance indicator' and 'My 5 Moments for Hand Hygiene'; benchmark per The Joint Commission NPSG.07.01.01 hand hygiene standard",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  "icu re-admission within 48 hours": {
+    "canonicalName": "ICU Readmission Rate within 48 Hours",
+    "formula": "pct",
+    "numLabel": "ICU readmissions within 48h",
+    "denLabel": "ICU discharges/transfers",
+    "numeratorDef": "Number of patients readmitted to (returned to) the ICU within 48 hours of being discharged or transferred out of the ICU to a lower level of care (ward/step-down) during the reporting period. Count each unplanned return; planned/scheduled returns (e.g., staged post-operative ICU admissions) are typically excluded. A patient is counted once per qualifying readmission event.",
+    "denominatorDef": "Total number of patients discharged or transferred alive from the ICU to a lower level of care (ward/step-down) during the reporting period (the population at risk of returning). ICU deaths and patients discharged directly home or to another facility (not at risk of ICU return) are excluded from the at-risk denominator.",
+    "unit": "%",
+    "benchmarkValue": 4,
+    "benchmark": "≤ 4%",
+    "benchmarkNote": "<= 4% of ICU discharges (soft target; no single hard accreditation threshold). The 48h subset typically runs ~2-2.5%; all-cause/longer-window readmission ~6-7%. Reported rates vary widely (~1.7% up to ~15% when unexpected death is bundled in) by case-mix and discharge policy.",
+    "goalDirection": "lower_is_better",
+    "reference": "Society of Critical Care Medicine (SCCM) Quality Indicators Committee (48h ICU readmission listed as a performance indicator); Woldhek AL et al., 'Readmission of ICU patients: A quality indicator?', J Crit Care 2017;38:328-334",
+    "referenceUrl": "https://pubmed.ncbi.nlm.nih.gov/27939901/"
+  },
+  "re-admission within 48 hours (icu)": {
+    "canonicalName": "ICU Readmission Rate within 48 Hours",
+    "formula": "pct",
+    "numLabel": "ICU readmissions within 48h",
+    "denLabel": "ICU discharges/transfers",
+    "numeratorDef": "Number of patients readmitted to (returned to) the ICU within 48 hours of being discharged or transferred out of the ICU to a lower level of care (ward/step-down) during the reporting period. Count each unplanned return; planned/scheduled returns (e.g., staged post-operative ICU admissions) are typically excluded. A patient is counted once per qualifying readmission event.",
+    "denominatorDef": "Total number of patients discharged or transferred alive from the ICU to a lower level of care (ward/step-down) during the reporting period (the population at risk of returning). ICU deaths and patients discharged directly home or to another facility (not at risk of ICU return) are excluded from the at-risk denominator.",
+    "unit": "%",
+    "benchmarkValue": 4,
+    "benchmark": "≤ 4%",
+    "benchmarkNote": "<= 4% of ICU discharges (soft target; no single hard accreditation threshold). The 48h subset typically runs ~2-2.5%; all-cause/longer-window readmission ~6-7%. Reported rates vary widely (~1.7% up to ~15% when unexpected death is bundled in) by case-mix and discharge policy.",
+    "goalDirection": "lower_is_better",
+    "reference": "Society of Critical Care Medicine (SCCM) Quality Indicators Committee (48h ICU readmission listed as a performance indicator); Woldhek AL et al., 'Readmission of ICU patients: A quality indicator?', J Crit Care 2017;38:328-334",
+    "referenceUrl": "https://pubmed.ncbi.nlm.nih.gov/27939901/"
+  },
+  "return to icu": {
+    "canonicalName": "ICU Readmission Rate within 48 Hours",
+    "formula": "pct",
+    "numLabel": "ICU readmissions within 48h",
+    "denLabel": "ICU discharges/transfers",
+    "numeratorDef": "Number of patients readmitted to (returned to) the ICU within 48 hours of being discharged or transferred out of the ICU to a lower level of care (ward/step-down) during the reporting period. Count each unplanned return; planned/scheduled returns (e.g., staged post-operative ICU admissions) are typically excluded. A patient is counted once per qualifying readmission event.",
+    "denominatorDef": "Total number of patients discharged or transferred alive from the ICU to a lower level of care (ward/step-down) during the reporting period (the population at risk of returning). ICU deaths and patients discharged directly home or to another facility (not at risk of ICU return) are excluded from the at-risk denominator.",
+    "unit": "%",
+    "benchmarkValue": 4,
+    "benchmark": "≤ 4%",
+    "benchmarkNote": "<= 4% of ICU discharges (soft target; no single hard accreditation threshold). The 48h subset typically runs ~2-2.5%; all-cause/longer-window readmission ~6-7%. Reported rates vary widely (~1.7% up to ~15% when unexpected death is bundled in) by case-mix and discharge policy.",
+    "goalDirection": "lower_is_better",
+    "reference": "Society of Critical Care Medicine (SCCM) Quality Indicators Committee (48h ICU readmission listed as a performance indicator); Woldhek AL et al., 'Readmission of ICU patients: A quality indicator?', J Crit Care 2017;38:328-334",
+    "referenceUrl": "https://pubmed.ncbi.nlm.nih.gov/27939901/"
+  },
+  "re-intubation within 48 hours": {
+    "canonicalName": "Re-intubation Rate within 48 Hours (Extubation Failure)",
+    "formula": "pct",
+    "numLabel": "Re-intubations within 48h",
+    "denLabel": "Planned extubations",
+    "numeratorDef": "Number of patients requiring reintubation (or return to invasive mechanical ventilation via any invasive airway) within 48 hours of a planned extubation during the reporting period. This is 'extubation failure.' Reintubation following unplanned/accidental (self-)extubation, or reintubation for a new, unrelated surgical procedure, is typically excluded.",
+    "denominatorDef": "Total number of planned (elective) extubations of mechanically ventilated patients performed during the reporting period. Each planned extubation event counts as one denominator unit.",
+    "unit": "%",
+    "benchmarkValue": 10,
+    "benchmark": "≤ 10%",
+    "benchmarkNote": "Acceptable/target extubation-failure rate ~5-10% of planned extubations (wider reasonable band 5-15%); commonly benchmarked at <=10%",
+    "goalDirection": "lower_is_better",
+    "reference": "Epstein SK. 'What is the optimal rate of failed extubation?' Critical Care 2012;16(1):111. Also supported by ATS/CHEST ventilator liberation guidance and standard critical-care weaning literature.",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3396264/"
+  },
+  "door-to-balloon compliance rate (<=90 min)": {
+    "canonicalName": "Door-to-Balloon Time <=90 min Compliance",
+    "formula": "pct",
+    "numLabel": "STEMI patients with primary PCI within 90 min",
+    "denLabel": "STEMI patients receiving primary PCI",
+    "numeratorDef": "Number of AMI/STEMI (ST-elevation or new LBBB on ECG closest to arrival) patients whose interval from hospital arrival (door) to first device deployment / balloon inflation during primary PCI is <= 90 minutes. Count each qualifying patient once.",
+    "denominatorDef": "Number of AMI patients with ST-segment elevation or LBBB on the ECG closest to arrival who receive primary PCI as the reperfusion strategy during the hospital stay (CMS CMS53v7 / AMI-8a initial population: patients >=18 yr with STEMI undergoing primary PCI). Exclude transfers-in, fibrinolytic patients, and documented contraindication/delay reasons per measure spec.",
+    "unit": "%",
+    "benchmarkValue": 90,
+    "benchmark": "≥ 90%",
+    "benchmarkNote": ">= 90% of primary-PCI STEMI patients treated within 90 minutes (each individual case target door-to-balloon <= 90 min; ACC/AHA Class I). Original ACC D2B Alliance population goal was >=75%; high performers reach ~85-90%+.",
+    "goalDirection": "higher_is_better",
+    "reference": "CMS/Joint Commission measure CMS53v7 / AMI-8a 'Primary PCI Received Within 90 Minutes of Hospital Arrival' (NQF #0163); ACC/AHA STEMI guideline & performance measures",
+    "referenceUrl": "https://ecqi.healthit.gov/ecqm/eh/2019/cms053v7"
+  },
+  "cardiac arrest events": {
+    "canonicalName": "Cardiac Arrest (Code Blue) Events",
+    "formula": "count",
+    "numLabel": "Number of cardiac arrest (code blue) events",
+    "denLabel": "",
+    "numeratorDef": "Count of in-hospital cardiac arrest events (pulselessness requiring chest compressions and/or defibrillation, i.e. a resuscitation/code-blue activation) occurring during the reporting period, per AHA Get With The Guidelines-Resuscitation event definition. Excludes patients with an existing do-not-resuscitate order who did not receive CPR. Tally each qualifying arrest event.",
+    "denominatorDef": "",
+    "unit": "count",
+    "benchmarkValue": 0,
+    "benchmark": "0 — track & RCA every event",
+    "benchmarkNote": "No fixed external benchmark; tracked as an absolute event count and trended internally (lower is better). For context, published IHCA incidence is often normalized to roughly 1-10 per 1000 admissions, but the registry sets no fixed threshold.",
+    "goalDirection": "lower_is_better",
+    "reference": "American Heart Association Get With The Guidelines-Resuscitation (in-hospital cardiac arrest registry; cardiac arrest defined as pulselessness requiring chest compression and/or defibrillation)",
+    "referenceUrl": "https://www.heart.org/en/professional/quality-improvement/get-with-the-guidelines/get-with-the-guidelines-resuscitation"
+  },
+  "cardiac arrest survival rate": {
+    "canonicalName": "Cardiac Arrest Survival to Discharge Rate",
+    "formula": "pct",
+    "numLabel": "Cardiac arrest patients surviving to hospital discharge",
+    "denLabel": "Patients with an in-hospital cardiac arrest with attempted resuscitation",
+    "numeratorDef": "Number of in-hospital cardiac arrest patients who survived to hospital discharge (alive at discharge) following resuscitation. Count each patient once per index arrest.",
+    "denominatorDef": "Number of patients who had an in-hospital cardiac arrest (pulseless event requiring chest compressions and/or defibrillation) with an attempted resuscitation during the reporting period (GWTG-Resuscitation index-event population; excludes patients with pre-existing do-not-resuscitate orders).",
+    "unit": "%",
+    "benchmarkValue": 25,
+    "benchmark": "≥ 25%",
+    "benchmarkNote": "Higher is better; AHA GWTG-R contemporary adult IHCA survival-to-discharge ~24% (benchmark ~25%)",
+    "goalDirection": "higher_is_better",
+    "reference": "American Heart Association Get With The Guidelines-Resuscitation; AHA Heart Disease & Stroke Statistics / 2025 ECC Guidelines",
+    "referenceUrl": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001372"
+  },
+  "dialysis adequacy (urr)": {
+    "canonicalName": "Dialysis Adequacy (URR)",
+    "formula": "pct",
+    "numLabel": "Pre-BUN minus post-BUN",
+    "denLabel": "Pre-dialysis BUN",
+    "numeratorDef": "(Pre-dialysis BUN minus post-dialysis BUN) for the treatment session; equivalently, count of HD patients meeting the adequacy target when reporting facility compliance",
+    "denominatorDef": "Pre-dialysis BUN drawn immediately before the session (post-BUN drawn per the slow-flow/stop-pump technique); for facility reporting, total HD patients with a measured URR in the period",
+    "unit": "%",
+    "benchmarkValue": 65,
+    "benchmark": "≥ 65%",
+    "benchmarkNote": ">= 65% minimum (target > 70%); equivalent to spKt/V minimum 1.2, target 1.4 for thrice-weekly HD",
+    "goalDirection": "higher_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guideline for Hemodialysis Adequacy: 2015 Update",
+    "referenceUrl": "https://www.ajkd.org/article/S0272-6386(15)01019-7/fulltext"
+  },
+  "hypotension rate": {
+    "canonicalName": "Intradialytic Hypotension Rate",
+    "formula": "pct",
+    "numLabel": "HD sessions with intradialytic hypotension",
+    "denLabel": "Total HD sessions",
+    "numeratorDef": "Number of hemodialysis sessions during which intradialytic hypotension occurred, defined per KDOQI as a decrease in systolic BP >= 20 mmHg (or a fall in mean arterial pressure >= 10 mmHg) associated with symptoms (e.g., cramps, nausea, dizziness, fainting) and requiring nursing intervention (e.g., stopping ultrafiltration and/or saline infusion)",
+    "denominatorDef": "Total number of hemodialysis sessions delivered in the reporting period",
+    "unit": "%",
+    "benchmarkValue": 20,
+    "benchmark": "≤ 20%",
+    "benchmarkNote": "<= 20% of sessions (KDOQI background prevalence ~20-30%, about 25%; lower is better)",
+    "goalDirection": "lower_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guidelines for Cardiovascular Disease in Dialysis Patients - Intradialytic Hypotension",
+    "referenceUrl": "https://kidneyfoundation.cachefly.net/professionals/KDOQI/guidelines_cvd/intradialytic.htm"
+  },
+  "vascular access complication rate": {
+    "canonicalName": "Vascular Access Thrombosis Rate (AV Fistula/Graft)",
+    "formula": "rate1000",
+    "numLabel": "Access thrombosis events",
+    "denLabel": "Access-days at risk",
+    "numeratorDef": "Number of thrombosis events occurring in functioning AV fistulae/grafts during the period. (KDOQI benchmarks are defined for thrombosis specifically; a broader composite that also counts stenosis requiring intervention or access infection may be reported separately but is not directly comparable to the per-access-year thrombosis benchmark.)",
+    "denominatorDef": "Cumulative access-days at risk (sum of days each functioning AV access is in use during the period). The native KDOQI metric is events per access-year (= access-days / 365); divide access-days by 365 to compare with the per-access-year benchmark.",
+    "unit": "per 1000 access-days at risk",
+    "benchmarkValue": 0.5,
+    "benchmark": "≤ 0.5 per 1000 access-days at risk",
+    "benchmarkNote": "<= 0.5 thrombosis events per access-year (~1.37 per 1000 access-days). AV grafts: baseline 0.5-0.8/graft-year, target 0.2-0.4/graft-year with surveillance; AV fistulae lower (~0.1-0.5/year).",
+    "goalDirection": "lower_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guideline for Vascular Access: 2019 Update (Am J Kidney Dis. 2020;75(4)(suppl 2):S1-S164)",
+    "referenceUrl": "https://www.ajkd.org/article/S0272-6386(19)31137-0/fulltext"
+  },
+  "vascular access thrombosis rate": {
+    "canonicalName": "Vascular Access Thrombosis Rate (AV Fistula/Graft)",
+    "formula": "rate1000",
+    "numLabel": "Access thrombosis events",
+    "denLabel": "Access-days at risk",
+    "numeratorDef": "Number of thrombosis events occurring in functioning AV fistulae/grafts during the period. (KDOQI benchmarks are defined for thrombosis specifically; a broader composite that also counts stenosis requiring intervention or access infection may be reported separately but is not directly comparable to the per-access-year thrombosis benchmark.)",
+    "denominatorDef": "Cumulative access-days at risk (sum of days each functioning AV access is in use during the period). The native KDOQI metric is events per access-year (= access-days / 365); divide access-days by 365 to compare with the per-access-year benchmark.",
+    "unit": "per 1000 access-days at risk",
+    "benchmarkValue": 0.5,
+    "benchmark": "≤ 0.5 per 1000 access-days at risk",
+    "benchmarkNote": "<= 0.5 thrombosis events per access-year (~1.37 per 1000 access-days). AV grafts: baseline 0.5-0.8/graft-year, target 0.2-0.4/graft-year with surveillance; AV fistulae lower (~0.1-0.5/year).",
+    "goalDirection": "lower_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guideline for Vascular Access: 2019 Update (Am J Kidney Dis. 2020;75(4)(suppl 2):S1-S164)",
+    "referenceUrl": "https://www.ajkd.org/article/S0272-6386(19)31137-0/fulltext"
+  },
+  "water quality compliance": {
+    "canonicalName": "Dialysis Water Quality Compliance",
+    "formula": "pct",
+    "numLabel": "Water/dialysate samples within AAMI/ISO limits",
+    "denLabel": "Total water/dialysate samples tested",
+    "numeratorDef": "Number of dialysis water and dialysate microbiological/endotoxin samples meeting applicable ANSI/AAMI/ISO 23500 limits. For standard dialysis WATER: total viable count (TVC) < 100 CFU/mL (action level 50 CFU/mL) and endotoxin < 0.25 EU/mL (action level 0.125 EU/mL). For standard dialysate (dialysis fluid): TVC < 100 CFU/mL and endotoxin < 0.5 EU/mL (action levels 50 CFU/mL and 0.25 EU/mL). For ultrapure dialysate: TVC < 0.1 CFU/mL and endotoxin < 0.03 EU/mL. Cultures performed on low-nutrient media (e.g., TGEA/R2A) at 17-23 C for >=168 h; do not use nutrient-rich media.",
+    "denominatorDef": "Total number of scheduled water/dialysate quality samples tested in the period (microbiological cultures and endotoxin/LAL assays at required sampling points)",
+    "unit": "%",
+    "benchmarkValue": 100,
+    "benchmark": "≥ 100%",
+    "benchmarkNote": "100% of samples within ANSI/AAMI/ISO 23500 limits (water: TVC < 100 CFU/mL, endotoxin < 0.25 EU/mL; dialysate: TVC < 100 CFU/mL, endotoxin < 0.5 EU/mL)",
+    "goalDirection": "higher_is_better",
+    "reference": "ANSI/AAMI/ISO 23500 series (incl. ISO 13959 / ISO 23500-3 water for haemodialysis; ISO 23500-5 dialysis fluid) - Preparation and quality management of fluids for haemodialysis and related therapies; CMS ESRD Conditions for Coverage; CDC dialysis water quality recommendations",
+    "referenceUrl": "https://www.cdc.gov/dialysis-safety/hcp/recommendations-resources/water-use-in-dialysis.html"
+  },
+  "partograph compliance": {
+    "canonicalName": "Partograph / Labour Care Guide Compliance",
+    "formula": "pct",
+    "numLabel": "Eligible labours with partograph correctly used/completed",
+    "denLabel": "Eligible women in active labour",
+    "numeratorDef": "Number of eligible women in active labour for whom the partograph (or WHO Labour Care Guide) was correctly commenced and completed per protocol — i.e. cervical dilatation, fetal heart rate, contractions, descent, maternal vitals and the alert/action line plotted at the required intervals. Determined by retrospective chart audit against a defined completeness checklist.",
+    "denominatorDef": "Total number of eligible women in active labour (vaginal-birth pathway) audited during the period for whom a partograph/Labour Care Guide should have been used. Exclude pre-labour caesarean and other women in whom partograph monitoring is not indicated.",
+    "unit": "%",
+    "benchmarkValue": 100,
+    "benchmark": "≥ 100%",
+    "benchmarkNote": "Target 100% (full compliance); commonly set >=90% as an interim quality threshold",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO recommendations: intrapartum care for a positive childbirth experience (2018, ISBN 9789241550215) and WHO Labour Care Guide: User's Manual (2020, ISBN 9789240017566); NABH accreditation standards (Nursing Excellence / Nursing Quality Indicators) as general accreditation context",
+    "referenceUrl": "https://www.who.int/publications/i/item/9789240017566"
+  },
+  "fetal heart rate monitoring compliance": {
+    "canonicalName": "Intrapartum Fetal Heart Rate Monitoring Compliance",
+    "formula": "pct",
+    "numLabel": "Labours with FHR monitored & documented per protocol",
+    "denLabel": "Labours requiring intrapartum FHR monitoring",
+    "numeratorDef": "Number of monitored labours in which intrapartum fetal heart rate was assessed and documented at the protocol-required frequency and method (e.g. intermittent auscultation immediately after a palpated contraction for >=1 minute, at least every 15 minutes in established first stage and at least every 5 minutes in second stage for low-risk women, or continuous CTG when antenatal/intrapartum risk factors are present). Counted by chart/partogram audit as fully compliant only when all required FHR entries are present at the required interval and method. State whether scoring per labour or per assessment opportunity and keep it consistent.",
+    "denominatorDef": "Total number of labours audited that required intrapartum fetal heart rate monitoring during the period (eligible labours). If scoring at the observation level, the denominator is instead the total number of required FHR-assessment opportunities; choose one level and apply it consistently across the numerator and denominator.",
+    "unit": "%",
+    "benchmarkValue": 100,
+    "benchmark": "≥ 100%",
+    "benchmarkNote": "Target 100% (full compliance); >=90% commonly used as an interim audit threshold",
+    "goalDirection": "higher_is_better",
+    "reference": "NICE NG229 Fetal monitoring in labour (2022); FIGO consensus guidelines on intrapartum fetal monitoring (2015); ACOG Clinical Practice Guideline No. 10: Intrapartum Fetal Heart Rate Monitoring: Interpretation and Management (Oct 2025), which replaces the retired Practice Bulletins No. 106 (2009) and No. 116 (2010)",
+    "referenceUrl": "https://www.nice.org.uk/guidance/ng229/chapter/Recommendations"
+  },
+  "needle stick injury (nsi)": {
+    "canonicalName": "Needle Stick / Sharps Injury Rate",
+    "formula": "rate100",
+    "numLabel": "Number of needlestick/sharps injuries",
+    "denLabel": "Full-time equivalent (FTE) staff",
+    "numeratorDef": "Count every reported percutaneous (needlestick or sharps) injury sustained by healthcare personnel during the surveillance period, regardless of whether a bloodborne pathogen exposure resulted. Each distinct injury event = 1.",
+    "denominatorDef": "Number of full-time-equivalent (FTE) healthcare personnel at risk during the same period. 1 FTE = 2,080 paid hours/year (~2,000 productive hours by some conventions); part-time staff hours are summed and divided to yield FTEs. Rate = (injuries / FTE) x 100.",
+    "unit": "per 100 FTE per year",
+    "benchmarkValue": 2,
+    "benchmark": "≤ 2 per 100 FTE per year",
+    "benchmarkNote": "<= 2.0 injuries per 100 FTE per year (US national EXPO-S.T.O.P./EPINet benchmark; rate has held near 1.9-2.0 since 2021); aspirational target 0. Note: nurse-specific rates run higher (~4-5 per 100 FTE).",
+    "goalDirection": "lower_is_better",
+    "reference": "AOHP EXPO-S.T.O.P. national survey (Grimmond/Good); International Safety Center EPINet (Exposure Prevention Information Network); OSHA Bloodborne Pathogens Standard 29 CFR 1910.1030. (CDC NaSH is a related but discontinued legacy system that reported chiefly per 100 occupied beds, not the per-100-FTE benchmark.)",
+    "referenceUrl": "https://internationalsafetycenter.org/exposure-data-network-epinet/"
+  },
+  "needle stick injury": {
+    "canonicalName": "Needle Stick / Sharps Injury Rate",
+    "formula": "rate100",
+    "numLabel": "Number of needlestick/sharps injuries",
+    "denLabel": "Full-time equivalent (FTE) staff",
+    "numeratorDef": "Count every reported percutaneous (needlestick or sharps) injury sustained by healthcare personnel during the surveillance period, regardless of whether a bloodborne pathogen exposure resulted. Each distinct injury event = 1.",
+    "denominatorDef": "Number of full-time-equivalent (FTE) healthcare personnel at risk during the same period. 1 FTE = 2,080 paid hours/year (~2,000 productive hours by some conventions); part-time staff hours are summed and divided to yield FTEs. Rate = (injuries / FTE) x 100.",
+    "unit": "per 100 FTE per year",
+    "benchmarkValue": 2,
+    "benchmark": "≤ 2 per 100 FTE per year",
+    "benchmarkNote": "<= 2.0 injuries per 100 FTE per year (US national EXPO-S.T.O.P./EPINet benchmark; rate has held near 1.9-2.0 since 2021); aspirational target 0. Note: nurse-specific rates run higher (~4-5 per 100 FTE).",
+    "goalDirection": "lower_is_better",
+    "reference": "AOHP EXPO-S.T.O.P. national survey (Grimmond/Good); International Safety Center EPINet (Exposure Prevention Information Network); OSHA Bloodborne Pathogens Standard 29 CFR 1910.1030. (CDC NaSH is a related but discontinued legacy system that reported chiefly per 100 occupied beds, not the per-100-FTE benchmark.)",
+    "referenceUrl": "https://internationalsafetycenter.org/exposure-data-network-epinet/"
+  },
+  "medication error": {
+    "canonicalName": "Medication Error Rate",
+    "formula": "rate1000",
+    "numLabel": "Number of medication errors",
+    "denLabel": "Patient-days (or doses dispensed/administered)",
+    "numeratorDef": "Count of medication errors per the NCC-MERP definition: any preventable event that may cause or lead to inappropriate medication use or patient harm while the medication is in the control of the health care professional, patient, or consumer. Includes errors at the prescribing, transcribing/order-entry, dispensing, and administration stages, and may be categorized A-I using the NCC-MERP Index for Categorizing Medication Errors by severity (A = circumstances/events with capacity to cause error; B-D = error occurred, no harm; E-I = error with harm ranging from temporary harm requiring intervention to patient death).",
+    "denominatorDef": "Inpatient patient-days during the period (total occupied bed-days, summed length of stay). Rate = (number of medication errors / patient-days) x 1000. A conventional alternative denominator is per 1,000 doses dispensed/administered (or opportunities for error in direct-observation studies), which is more appropriate for analyzing a specific medication-use process stage.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 0,
+    "benchmark": "≤ 0 per 1000 patient-days",
+    "benchmarkNote": "No acceptable rate (NCC-MERP: 'there is no acceptable incidence rate for medication errors'); operational target is 0 / continual reduction toward 0",
+    "goalDirection": "lower_is_better",
+    "reference": "NCC-MERP Statement on Medication Error Rates; NCC-MERP Index for Categorizing Medication Errors (2001, rev. 2022)",
+    "referenceUrl": "https://www.nccmerp.org/statement-medication-error-rates"
+  },
+  "mandatory training compliance": {
+    "canonicalName": "Mandatory Training Compliance",
+    "formula": "pct",
+    "numLabel": "Staff who completed required mandatory training",
+    "denLabel": "Staff required to complete the training",
+    "numeratorDef": "Number of staff who completed all assigned mandatory/statutory training (e.g., infection control, biomedical waste management, fire & emergency, patient safety, BLS) within the required cycle/timeframe.",
+    "denominatorDef": "Total number of staff who were due/required to complete that mandatory training during the surveillance period.",
+    "unit": "%",
+    "benchmarkValue": 100,
+    "benchmark": "≥ 100%",
+    "benchmarkNote": "100% (target); high performers >= 90-95%",
+    "goalDirection": "higher_is_better",
+    "reference": "NABH Accreditation Standards for Hospitals - Human Resource Management (HRM) chapter (HRM.3 induction training, HRM.4 ongoing professional training & development, HRM.5 job-specific training, HRM.6 safety & quality training)",
+    "referenceUrl": "https://nabh.co/hospitals/"
+  },
+  "bls certification rate": {
+    "canonicalName": "BLS Certification Rate",
+    "formula": "pct",
+    "numLabel": "Clinical staff with current/valid BLS certification",
+    "denLabel": "Clinical staff required to hold BLS certification",
+    "numeratorDef": "Number of clinical (and other policy-designated) staff holding a current, non-expired Basic Life Support (BLS) certification (typically AHA BLS for Healthcare Providers, valid 2 years) at the measurement point.",
+    "denominatorDef": "Total number of staff for whom BLS certification is mandated by role or hospital policy at the measurement point. Rate = (certified / required) x 100.",
+    "unit": "%",
+    "benchmarkValue": 100,
+    "benchmark": "≥ 100%",
+    "benchmarkNote": "100% of required clinical staff with valid BLS certification",
+    "goalDirection": "higher_is_better",
+    "reference": "American Heart Association (AHA) BLS Provider standards; NABH HRM (Human Resource Management) staff competency/credentialing requirements",
+    "referenceUrl": "https://cpr.heart.org/en/cpr-courses-and-kits/healthcare-professional/basic-life-support-bls-training"
+  },
+  "induction completion within 30 days": {
+    "canonicalName": "Induction Completion Within 30 Days",
+    "formula": "pct",
+    "numLabel": "New employees who completed induction within 30 days of joining",
+    "denLabel": "New employees who joined in the period",
+    "numeratorDef": "Number of new employees who completed their mandatory induction/orientation training within 30 days (one month) of their date of joining.",
+    "denominatorDef": "Total number of new employees who joined during the surveillance period. Compliance % = (completed induction within 30 days / total new joiners) x 100.",
+    "unit": "%",
+    "benchmarkValue": 100,
+    "benchmark": "≥ 100%",
+    "benchmarkNote": "100% of new hires inducted within 30 days",
+    "goalDirection": "higher_is_better",
+    "reference": "NABH Accreditation Standards (Hospitals), Human Resource Management (HRM) - Standard HRM.3: staff are provided induction training at the time of joining; objective element requires induction within one month of joining (CORE)",
+    "referenceUrl": "https://nabh.co/hospitals/"
+  },
+  "patient volume": {
+    "canonicalName": "Patient Volume",
+    "formula": "direct",
+    "numLabel": "Number of patients",
+    "denLabel": "Period",
+    "numeratorDef": "Count of patients seen/treated/admitted during the reporting period (e.g., OPD visits, IP admissions, ED visits, or total patient encounters depending on the unit). A raw workload/census/throughput figure, not a quality rate.",
+    "denominatorDef": "None - this is a direct count reported per period (day/month/quarter/year). Patient volume commonly serves as the denominator base (e.g., patient-days, admissions, encounters) for other rate-based indicators rather than having its own denominator.",
+    "unit": "count",
+    "benchmarkValue": 0,
+    "benchmark": "0 — track & RCA every event",
+    "benchmarkNote": "Not applicable - operational/workload volume metric monitored for trend and capacity planning; no authoritative clinical benchmark",
+    "goalDirection": "higher_is_better",
+    "reference": "Operational hospital statistics / NABH Hospital Accreditation Programme workload & utilization indicators (no external clinical surveillance standard)",
+    "referenceUrl": "https://nabh.co/programmes/hospitals-accreditation-programme-hco/"
+  },
+  "door-to-balloon compliance (<=90 min)": {
+    "canonicalName": "Door-to-Balloon Time <=90 min Compliance",
+    "formula": "pct",
+    "numLabel": "STEMI patients with primary PCI within 90 min",
+    "denLabel": "STEMI patients receiving primary PCI",
+    "numeratorDef": "Number of AMI/STEMI (ST-elevation or new LBBB on ECG closest to arrival) patients whose interval from hospital arrival (door) to first device deployment / balloon inflation during primary PCI is <= 90 minutes. Count each qualifying patient once.",
+    "denominatorDef": "Number of AMI patients with ST-segment elevation or LBBB on the ECG closest to arrival who receive primary PCI as the reperfusion strategy during the hospital stay (CMS CMS53v7 / AMI-8a initial population: patients >=18 yr with STEMI undergoing primary PCI). Exclude transfers-in, fibrinolytic patients, and documented contraindication/delay reasons per measure spec.",
+    "unit": "%",
+    "benchmarkValue": 90,
+    "benchmark": "≥ 90%",
+    "benchmarkNote": ">= 90% of primary-PCI STEMI patients treated within 90 minutes (each individual case target door-to-balloon <= 90 min; ACC/AHA Class I). Original ACC D2B Alliance population goal was >=75%; high performers reach ~85-90%+.",
+    "goalDirection": "higher_is_better",
+    "reference": "CMS/Joint Commission measure CMS53v7 / AMI-8a 'Primary PCI Received Within 90 Minutes of Hospital Arrival' (NQF #0163); ACC/AHA STEMI guideline & performance measures",
+    "referenceUrl": "https://ecqi.healthit.gov/ecqm/eh/2019/cms053v7"
+  },
+  "hand hygiene compliance": {
+    "canonicalName": "Hand Hygiene Compliance - Overall",
+    "formula": "pct",
+    "numLabel": "Hand hygiene actions performed",
+    "denLabel": "Hand hygiene opportunities observed",
+    "numeratorDef": "Number of observed hand hygiene actions performed (rubbing hands with alcohol-based handrub OR washing with soap and water) when an opportunity occurs, counted across ALL healthcare worker categories via direct observation using the WHO 'My 5 Moments for Hand Hygiene' method.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed across ALL healthcare worker categories. An opportunity is defined by one or more of the WHO 5 Moments (before touching a patient; before clean/aseptic procedure; after body fluid exposure risk; after touching a patient; after touching patient surroundings). Several indications arising simultaneously count as a single opportunity.",
+    "unit": "%",
+    "benchmarkValue": 80,
+    "benchmark": "≥ 80%",
+    "benchmarkNote": ">= 80% compliance",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), 'My 5 Moments for Hand Hygiene' and WHO Hand Hygiene Technical Reference Manual; benchmark reflects a commonly used operational target (The Joint Commission no longer mandates a fixed numeric compliance percentage).",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  "hand hygiene compliance (hospital)": {
+    "canonicalName": "Hand Hygiene Compliance - Overall",
+    "formula": "pct",
+    "numLabel": "Hand hygiene actions performed",
+    "denLabel": "Hand hygiene opportunities observed",
+    "numeratorDef": "Number of observed hand hygiene actions performed (rubbing hands with alcohol-based handrub OR washing with soap and water) when an opportunity occurs, counted across ALL healthcare worker categories via direct observation using the WHO 'My 5 Moments for Hand Hygiene' method.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed across ALL healthcare worker categories. An opportunity is defined by one or more of the WHO 5 Moments (before touching a patient; before clean/aseptic procedure; after body fluid exposure risk; after touching a patient; after touching patient surroundings). Several indications arising simultaneously count as a single opportunity.",
+    "unit": "%",
+    "benchmarkValue": 80,
+    "benchmark": "≥ 80%",
+    "benchmarkNote": ">= 80% compliance",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), 'My 5 Moments for Hand Hygiene' and WHO Hand Hygiene Technical Reference Manual; benchmark reflects a commonly used operational target (The Joint Commission no longer mandates a fixed numeric compliance percentage).",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  "intradialytic hypotension": {
+    "canonicalName": "Intradialytic Hypotension Rate",
+    "formula": "pct",
+    "numLabel": "HD sessions with intradialytic hypotension",
+    "denLabel": "Total HD sessions",
+    "numeratorDef": "Number of hemodialysis sessions during which intradialytic hypotension occurred, defined per KDOQI as a decrease in systolic BP >= 20 mmHg (or a fall in mean arterial pressure >= 10 mmHg) associated with symptoms (e.g., cramps, nausea, dizziness, fainting) and requiring nursing intervention (e.g., stopping ultrafiltration and/or saline infusion)",
+    "denominatorDef": "Total number of hemodialysis sessions delivered in the reporting period",
+    "unit": "%",
+    "benchmarkValue": 20,
+    "benchmark": "≤ 20%",
+    "benchmarkNote": "<= 20% of sessions (KDOQI background prevalence ~20-30%, about 25%; lower is better)",
+    "goalDirection": "lower_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guidelines for Cardiovascular Disease in Dialysis Patients - Intradialytic Hypotension",
+    "referenceUrl": "https://kidneyfoundation.cachefly.net/professionals/KDOQI/guidelines_cvd/intradialytic.htm"
+  },
+  "re-intubation within 48 hours (icu)": {
+    "canonicalName": "Re-intubation Rate within 48 Hours (Extubation Failure)",
+    "formula": "pct",
+    "numLabel": "Re-intubations within 48h",
+    "denLabel": "Planned extubations",
+    "numeratorDef": "Number of patients requiring reintubation (or return to invasive mechanical ventilation via any invasive airway) within 48 hours of a planned extubation during the reporting period. This is 'extubation failure.' Reintubation following unplanned/accidental (self-)extubation, or reintubation for a new, unrelated surgical procedure, is typically excluded.",
+    "denominatorDef": "Total number of planned (elective) extubations of mechanically ventilated patients performed during the reporting period. Each planned extubation event counts as one denominator unit.",
+    "unit": "%",
+    "benchmarkValue": 10,
+    "benchmark": "≤ 10%",
+    "benchmarkNote": "Acceptable/target extubation-failure rate ~5-10% of planned extubations (wider reasonable band 5-15%); commonly benchmarked at <=10%",
+    "goalDirection": "lower_is_better",
+    "reference": "Epstein SK. 'What is the optimal rate of failed extubation?' Critical Care 2012;16(1):111. Also supported by ATS/CHEST ventilator liberation guidance and standard critical-care weaning literature.",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3396264/"
+  },
+  "vascular access complication": {
+    "canonicalName": "Vascular Access Thrombosis Rate (AV Fistula/Graft)",
+    "formula": "rate1000",
+    "numLabel": "Access thrombosis events",
+    "denLabel": "Access-days at risk",
+    "numeratorDef": "Number of thrombosis events occurring in functioning AV fistulae/grafts during the period. (KDOQI benchmarks are defined for thrombosis specifically; a broader composite that also counts stenosis requiring intervention or access infection may be reported separately but is not directly comparable to the per-access-year thrombosis benchmark.)",
+    "denominatorDef": "Cumulative access-days at risk (sum of days each functioning AV access is in use during the period). The native KDOQI metric is events per access-year (= access-days / 365); divide access-days by 365 to compare with the per-access-year benchmark.",
+    "unit": "per 1000 access-days at risk",
+    "benchmarkValue": 0.5,
+    "benchmark": "≤ 0.5 per 1000 access-days at risk",
+    "benchmarkNote": "<= 0.5 thrombosis events per access-year (~1.37 per 1000 access-days). AV grafts: baseline 0.5-0.8/graft-year, target 0.2-0.4/graft-year with surveillance; AV fistulae lower (~0.1-0.5/year).",
+    "goalDirection": "lower_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guideline for Vascular Access: 2019 Update (Am J Kidney Dis. 2020;75(4)(suppl 2):S1-S164)",
+    "referenceUrl": "https://www.ajkd.org/article/S0272-6386(19)31137-0/fulltext"
+  }
+};
+window.QI_CORRECTIONS_BY_DEFID = {
+  "cauti": {
+    "canonicalName": "Catheter-Associated Urinary Tract Infection (CAUTI) Rate",
+    "formula": "rate1000",
+    "numLabel": "CAUTIs",
+    "denLabel": "Urinary catheter-days",
+    "numeratorDef": "Number of CAUTI events meeting the NHSN UTI surveillance definition (symptomatic UTI/SUTI) in patients who had an indwelling urinary catheter in place for >2 consecutive days (day of catheter placement = Day 1) in an inpatient location on the date of event, with the catheter in place on that date or removed the day before. Count each qualifying event once.",
+    "denominatorDef": "Total number of indwelling urinary catheter-days, obtained by counting, once each day at the same time each day during the surveillance month, the number of patients in the location with one or more indwelling urinary catheters, and summing these daily counts over the month (electronic counts allowed if validated to within 5% of manual counts).",
+    "unit": "per 1000 catheter-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 catheter-days",
+    "benchmarkNote": "NHSN primary benchmark is the SIR < 1.0 vs the NHSN baseline (fewer infections observed than predicted); pooled-mean CAUTI rate is roughly 1.0 per 1000 catheter-days but varies widely by unit type and is not an official fixed threshold",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 7: Urinary Tract Infection (CAUTI) Events; CDC NHSN SIR Guide (A Guide to the SIR)",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/7psccauticurrent.pdf"
+  },
+  "clabsi": {
+    "canonicalName": "Central Line-Associated Bloodstream Infection (CLABSI) Rate",
+    "formula": "rate1000",
+    "numLabel": "CLABSIs",
+    "denLabel": "Central line-days",
+    "numeratorDef": "Number of laboratory-confirmed bloodstream infections (LCBI) meeting the NHSN CLABSI definition: a primary LCBI not secondary to an infection at another site, in a patient with an eligible central line in place for >2 consecutive calendar days (following first access in an inpatient location) on the date of event, with the line present on that date or removed the day before.",
+    "denominatorDef": "Total number of central line-days, summed by counting the number of patients with one or more central lines in the location once each day at the same time each day during the surveillance month.",
+    "unit": "per 1000 central line-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 central line-days",
+    "benchmarkNote": "SIR < 1.0 vs NHSN baseline; pooled-mean CLABSI rate ~1.0 per 1000 central line-days (varies by unit type)",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 4: Bloodstream Infection Event (CLABSI); CDC NHSN SIR Guide",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/4psc_clabscurrent.pdf"
+  },
+  "vap": {
+    "canonicalName": "Ventilator-Associated Pneumonia (VAP) Rate",
+    "formula": "rate1000",
+    "numLabel": "VAP events",
+    "denLabel": "Ventilator-days",
+    "numeratorDef": "Number of pneumonia events meeting the NHSN PNEU/VAP surveillance criteria in a patient who was on mechanical ventilation with the ventilator in place on the date of event or the day before. (Note: the NHSN PNEU/VAP definition has NO minimum ventilation-duration requirement; the '>2 consecutive ventilator-days' rule belongs to the separate VAE algorithm, not to VAP/PNEU. For adult and pediatric inpatient locations NHSN replaced in-plan VAP surveillance with the VAE algorithm in January 2013 [PedVAE for pediatric locations]; the PNEU/VAP protocol remains available for in-plan PedVAP surveillance in pediatric locations and off-plan PNEU surveillance in any inpatient location, including neonatal.)",
+    "denominatorDef": "Total number of ventilator-days, summed by counting the number of patients on mechanical ventilation in the location once each day at the same time each day during the surveillance month.",
+    "unit": "per 1000 ventilator-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 ventilator-days",
+    "benchmarkNote": "No single fixed target; aim toward 0. Historical NHSN pooled-mean VAP rates ~1-2 per 1000 ventilator-days depending on unit type",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 6: Pneumonia (Ventilator-associated [VAP] and non-ventilator-associated [PNEU]) Event",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/6pscvapcurrent.pdf"
+  },
+  "vae": {
+    "canonicalName": "Ventilator-Associated Event (VAE) Rate",
+    "formula": "rate1000",
+    "numLabel": "VAE events (VAC/IVAC/PVAP)",
+    "denLabel": "Ventilator-days",
+    "numeratorDef": "Number of Ventilator-Associated Events meeting the NHSN VAE algorithm tiers — Ventilator-Associated Condition (VAC), Infection-related Ventilator-Associated Complication (IVAC), and Possible VAP (PVAP) — identified in adult patients (>=18 years) mechanically ventilated for >2 calendar days, triggered by a sustained increase (>=2 calendar days) in daily minimum FiO2 (increase >=0.20) or PEEP (increase >=3 cmH2O) after a baseline period of >=2 days of stability or improvement. Each event counted once; rates may be reported by tier.",
+    "denominatorDef": "Total number of ventilator-days, summed by counting the number of patients on mechanical ventilation in the location once each day at the same time each day during the surveillance month (eligible adult inpatient locations); only the monthly total is entered into NHSN.",
+    "unit": "per 1000 ventilator-days",
+    "benchmarkValue": 1,
+    "benchmark": "≤ 1 per 1000 ventilator-days",
+    "benchmarkNote": "SIR < 1.0 vs NHSN baseline (observed/predicted; SIR not computed when predicted <1.0); aim toward 0. Pooled VAC/IVAC raw rates vary widely (~3-17 per 1000 ventilator-days) by setting.",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 10: Ventilator-Associated Event (VAE) Protocol",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/10-vae_final.pdf"
+  },
+  "ssirate": {
+    "canonicalName": "Surgical Site Infection (SSI) Rate",
+    "formula": "pct",
+    "numLabel": "Number of SSIs",
+    "denLabel": "Number of operative procedures",
+    "numeratorDef": "Count of surgical site infections (superficial incisional, deep incisional, or organ/space) detected through routine surveillance within the applicable NHSN surveillance period for the procedure category (a 30- or 90-day period determined by the NHSN operative procedure CATEGORY and the tissue level/depth of the SSI event, per the 2013+ definitions — note this is no longer based on implant presence). Include SSIs identified during admission, on readmission, and via post-discharge surveillance. Each procedure-related SSI is counted once per NHSN protocol.",
+    "denominatorDef": "Total number of NHSN operative procedures of that category performed during the same period (each trip to the OR meeting the NHSN procedure-code definition counts as one procedure), applying standard NHSN exclusion criteria. SSI rate = (SSIs / procedures) x 100. NHSN also risk-adjusts via the Standardized Infection Ratio (SIR = observed/predicted SSIs), with target SIR < 1.0.",
+    "unit": "%",
+    "benchmarkValue": 2,
+    "benchmark": "≤ 2%",
+    "benchmarkNote": "<= 2% per 100 procedures (procedure-dependent; NHSN risk-adjusted target SIR < 1.0)",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component — Surgical Site Infection (SSI) Event protocol; WHO Global Guidelines for the Prevention of SSI",
+    "referenceUrl": "https://www.cdc.gov/nhsn/psc/ssi/index.html"
+  },
+  "hai": {
+    "canonicalName": "Healthcare-Associated Infection (HAI) Rate",
+    "formula": "rate1000",
+    "numLabel": "HAI events",
+    "denLabel": "Patient-days (or device-days)",
+    "numeratorDef": "Number of healthcare-associated infections meeting the applicable NHSN site-specific surveillance definition during the surveillance period, where the date of event occurs on or after the 3rd calendar day of admission to an inpatient location (day of admission = calendar day 1), i.e., not present or incubating on admission. For device-associated infections use the corresponding device-day denominator; for overall HAI surveillance use patient-days.",
+    "denominatorDef": "Total patient-days for overall HAI rates (sum of the daily census over the surveillance month), or the relevant device-days for device-associated infection rates, counted once per patient per day at a consistent time each day.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 5,
+    "benchmark": "≤ 5 per 1000 patient-days",
+    "benchmarkNote": "Lower is better; no universal fixed target. NHSN's authoritative benchmark is the Standardized Infection Ratio (SIR = observed/expected vs. risk-adjusted national baseline, target < 1.0), not a fixed rate. Overall HAI incidence is indicatively ~2-5 per 1000 patient-days and should trend downward facility-wide.",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 2 (Identifying HAIs in NHSN / Present on Admission vs HAI); WHO Guidelines on Core Components of IPC Programmes",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/2psc_identifyinghais_nhsncurrent.pdf"
+  },
+  "fall": {
+    "canonicalName": "Patient Falls (Total Fall Rate)",
+    "formula": "rate1000",
+    "numLabel": "Number of patient falls",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Total number of patient falls (with or without injury, whether or not assisted by a staff member) occurring on the eligible reporting unit during the calendar month. A fall = an unplanned descent to the floor (or extension of the floor, e.g., trash can or other equipment) with or without injury. Includes assisted falls and falls in which the patient was found on the floor. Count each fall event; a patient who falls more than once is counted each time.",
+    "denominatorDef": "Total patient-days for the eligible reporting unit during the same calendar month. Patient-days = sum of the daily inpatient census (typically counted at a consistent time each day, e.g., midnight) over the reporting period. Multiply the falls/patient-day ratio by 1000.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 3.3,
+    "benchmark": "≤ 3.3 per 1000 patient-days",
+    "benchmarkNote": "<= 3.3 falls per 1000 patient-days (NDNQI national median; lower is better)",
+    "goalDirection": "lower_is_better",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI), a Press Ganey solution (measure copyrighted by the American Nurses Association); NQF/CBE #0141 Patient Fall Rate, a nursing-sensitive indicator (now maintained under the Partnership for Quality Measurement / Battelle CBE framework)",
+    "referenceUrl": "https://p4qm.org/measures/0141"
+  },
+  "hapu": {
+    "canonicalName": "Hospital-Acquired Pressure Injury (HAPI) Prevalence",
+    "formula": "pct",
+    "numLabel": "Patients with a hospital-acquired Stage 2+ pressure injury",
+    "denLabel": "Patients surveyed",
+    "numeratorDef": "Number of patients on the unit/facility, on the survey day, who have one or more hospital-acquired (nosocomial) pressure injuries of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of injuries.",
+    "denominatorDef": "Total number of eligible patients present and assessed (via skin/pressure-injury assessment) on the unit during the one-day prevalence survey. Multiply numerator/denominator by 100.",
+    "unit": "% (percent of patients surveyed)",
+    "benchmarkValue": 3.6,
+    "benchmark": "≤ 3.6%",
+    "benchmarkNote": "<= ~3.6% hospital-acquired prevalence (NDNQI 2010 national reference; lower is better; aspirational target 0). Note: more recent NDNQI/IPUP national acute-care HAPI prevalence is lower, ~2.5-3.0%.",
+    "goalDirection": "lower_is_better",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Survey; NQF #0201 Pressure Ulcer Prevalence, Hospital-Acquired (steward: The Joint Commission); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
+  },
+  "phlebitis": {
+    "canonicalName": "Phlebitis rate (peripheral IV)",
+    "formula": "pct",
+    "numLabel": "Phlebitis events",
+    "denLabel": "Peripheral IV catheters",
+    "numeratorDef": "Number of peripheral intravenous (PIV) catheters that developed phlebitis (typically Visual Infusion Phlebitis [VIP] score >=2, i.e. pain plus erythema and/or induration/swelling along the vein) during the surveillance period. Count each affected catheter once.",
+    "denominatorDef": "Total number of peripheral IV catheters in place / inserted during the same surveillance period.",
+    "unit": "%",
+    "benchmarkValue": 5,
+    "benchmark": "≤ 5%",
+    "benchmarkNote": "<= 5% of peripheral IV catheters",
+    "goalDirection": "lower_is_better",
+    "reference": "Infusion Nurses Society (INS), Infusion Therapy Standards of Practice (8th ed., 2021), Journal of Infusion Nursing 44(1S):S1-S224 - Phlebitis standard",
+    "referenceUrl": "https://www.ins1.org/wp-content/uploads/2021/07/JIN-D-21-00031_SOP-Update-Hi-resWithout_Folio-7.13.21.pdf"
+  },
+  "mederror": {
+    "canonicalName": "Medication Error Rate",
+    "formula": "rate1000",
+    "numLabel": "Number of medication errors",
+    "denLabel": "Patient-days (or doses dispensed/administered)",
+    "numeratorDef": "Count of medication errors per the NCC-MERP definition: any preventable event that may cause or lead to inappropriate medication use or patient harm while the medication is in the control of the health care professional, patient, or consumer. Includes errors at the prescribing, transcribing/order-entry, dispensing, and administration stages, and may be categorized A-I using the NCC-MERP Index for Categorizing Medication Errors by severity (A = circumstances/events with capacity to cause error; B-D = error occurred, no harm; E-I = error with harm ranging from temporary harm requiring intervention to patient death).",
+    "denominatorDef": "Inpatient patient-days during the period (total occupied bed-days, summed length of stay). Rate = (number of medication errors / patient-days) x 1000. A conventional alternative denominator is per 1,000 doses dispensed/administered (or opportunities for error in direct-observation studies), which is more appropriate for analyzing a specific medication-use process stage.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 0,
+    "benchmark": "≤ 0 per 1000 patient-days",
+    "benchmarkNote": "No acceptable rate (NCC-MERP: 'there is no acceptable incidence rate for medication errors'); operational target is 0 / continual reduction toward 0",
+    "goalDirection": "lower_is_better",
+    "reference": "NCC-MERP Statement on Medication Error Rates; NCC-MERP Index for Categorizing Medication Errors (2001, rev. 2022)",
+    "referenceUrl": "https://www.nccmerp.org/statement-medication-error-rates"
+  },
+  "nsi": {
+    "canonicalName": "Needle Stick / Sharps Injury Rate",
+    "formula": "rate100",
+    "numLabel": "Number of needlestick/sharps injuries",
+    "denLabel": "Full-time equivalent (FTE) staff",
+    "numeratorDef": "Count every reported percutaneous (needlestick or sharps) injury sustained by healthcare personnel during the surveillance period, regardless of whether a bloodborne pathogen exposure resulted. Each distinct injury event = 1.",
+    "denominatorDef": "Number of full-time-equivalent (FTE) healthcare personnel at risk during the same period. 1 FTE = 2,080 paid hours/year (~2,000 productive hours by some conventions); part-time staff hours are summed and divided to yield FTEs. Rate = (injuries / FTE) x 100.",
+    "unit": "per 100 FTE per year",
+    "benchmarkValue": 2,
+    "benchmark": "≤ 2 per 100 FTE per year",
+    "benchmarkNote": "<= 2.0 injuries per 100 FTE per year (US national EXPO-S.T.O.P./EPINet benchmark; rate has held near 1.9-2.0 since 2021); aspirational target 0. Note: nurse-specific rates run higher (~4-5 per 100 FTE).",
+    "goalDirection": "lower_is_better",
+    "reference": "AOHP EXPO-S.T.O.P. national survey (Grimmond/Good); International Safety Center EPINet (Exposure Prevention Information Network); OSHA Bloodborne Pathogens Standard 29 CFR 1910.1030. (CDC NaSH is a related but discontinued legacy system that reported chiefly per 100 occupied beds, not the per-100-FTE benchmark.)",
+    "referenceUrl": "https://internationalsafetycenter.org/exposure-data-network-epinet/"
+  },
+  "reintubation": {
+    "canonicalName": "Re-intubation Rate within 48 Hours (Extubation Failure)",
+    "formula": "pct",
+    "numLabel": "Re-intubations within 48h",
+    "denLabel": "Planned extubations",
+    "numeratorDef": "Number of patients requiring reintubation (or return to invasive mechanical ventilation via any invasive airway) within 48 hours of a planned extubation during the reporting period. This is 'extubation failure.' Reintubation following unplanned/accidental (self-)extubation, or reintubation for a new, unrelated surgical procedure, is typically excluded.",
+    "denominatorDef": "Total number of planned (elective) extubations of mechanically ventilated patients performed during the reporting period. Each planned extubation event counts as one denominator unit.",
+    "unit": "%",
+    "benchmarkValue": 10,
+    "benchmark": "≤ 10%",
+    "benchmarkNote": "Acceptable/target extubation-failure rate ~5-10% of planned extubations (wider reasonable band 5-15%); commonly benchmarked at <=10%",
+    "goalDirection": "lower_is_better",
+    "reference": "Epstein SK. 'What is the optimal rate of failed extubation?' Critical Care 2012;16(1):111. Also supported by ATS/CHEST ventilator liberation guidance and standard critical-care weaning literature.",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3396264/"
+  },
+  "readmission": {
+    "canonicalName": "ICU Readmission Rate within 48 Hours",
+    "formula": "pct",
+    "numLabel": "ICU readmissions within 48h",
+    "denLabel": "ICU discharges/transfers",
+    "numeratorDef": "Number of patients readmitted to (returned to) the ICU within 48 hours of being discharged or transferred out of the ICU to a lower level of care (ward/step-down) during the reporting period. Count each unplanned return; planned/scheduled returns (e.g., staged post-operative ICU admissions) are typically excluded. A patient is counted once per qualifying readmission event.",
+    "denominatorDef": "Total number of patients discharged or transferred alive from the ICU to a lower level of care (ward/step-down) during the reporting period (the population at risk of returning). ICU deaths and patients discharged directly home or to another facility (not at risk of ICU return) are excluded from the at-risk denominator.",
+    "unit": "%",
+    "benchmarkValue": 4,
+    "benchmark": "≤ 4%",
+    "benchmarkNote": "<= 4% of ICU discharges (soft target; no single hard accreditation threshold). The 48h subset typically runs ~2-2.5%; all-cause/longer-window readmission ~6-7%. Reported rates vary widely (~1.7% up to ~15% when unexpected death is bundled in) by case-mix and discharge policy.",
+    "goalDirection": "lower_is_better",
+    "reference": "Society of Critical Care Medicine (SCCM) Quality Indicators Committee (48h ICU readmission listed as a performance indicator); Woldhek AL et al., 'Readmission of ICU patients: A quality indicator?', J Crit Care 2017;38:328-334",
+    "referenceUrl": "https://pubmed.ncbi.nlm.nih.gov/27939901/"
+  },
+  "handhygiene": {
+    "canonicalName": "Hand Hygiene Compliance - Overall",
+    "formula": "pct",
+    "numLabel": "Hand hygiene actions performed",
+    "denLabel": "Hand hygiene opportunities observed",
+    "numeratorDef": "Number of observed hand hygiene actions performed (rubbing hands with alcohol-based handrub OR washing with soap and water) when an opportunity occurs, counted across ALL healthcare worker categories via direct observation using the WHO 'My 5 Moments for Hand Hygiene' method.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed across ALL healthcare worker categories. An opportunity is defined by one or more of the WHO 5 Moments (before touching a patient; before clean/aseptic procedure; after body fluid exposure risk; after touching a patient; after touching patient surroundings). Several indications arising simultaneously count as a single opportunity.",
+    "unit": "%",
+    "benchmarkValue": 80,
+    "benchmark": "≥ 80%",
+    "benchmarkNote": ">= 80% compliance",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), 'My 5 Moments for Hand Hygiene' and WHO Hand Hygiene Technical Reference Manual; benchmark reflects a commonly used operational target (The Joint Commission no longer mandates a fixed numeric compliance percentage).",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  "d2b": {
+    "canonicalName": "Door-to-Balloon Time <=90 min Compliance",
+    "formula": "pct",
+    "numLabel": "STEMI patients with primary PCI within 90 min",
+    "denLabel": "STEMI patients receiving primary PCI",
+    "numeratorDef": "Number of AMI/STEMI (ST-elevation or new LBBB on ECG closest to arrival) patients whose interval from hospital arrival (door) to first device deployment / balloon inflation during primary PCI is <= 90 minutes. Count each qualifying patient once.",
+    "denominatorDef": "Number of AMI patients with ST-segment elevation or LBBB on the ECG closest to arrival who receive primary PCI as the reperfusion strategy during the hospital stay (CMS CMS53v7 / AMI-8a initial population: patients >=18 yr with STEMI undergoing primary PCI). Exclude transfers-in, fibrinolytic patients, and documented contraindication/delay reasons per measure spec.",
+    "unit": "%",
+    "benchmarkValue": 90,
+    "benchmark": "≥ 90%",
+    "benchmarkNote": ">= 90% of primary-PCI STEMI patients treated within 90 minutes (each individual case target door-to-balloon <= 90 min; ACC/AHA Class I). Original ACC D2B Alliance population goal was >=75%; high performers reach ~85-90%+.",
+    "goalDirection": "higher_is_better",
+    "reference": "CMS/Joint Commission measure CMS53v7 / AMI-8a 'Primary PCI Received Within 90 Minutes of Hospital Arrival' (NQF #0163); ACC/AHA STEMI guideline & performance measures",
+    "referenceUrl": "https://ecqi.healthit.gov/ecqm/eh/2019/cms053v7"
+  },
+  "dialysisadequacy": {
+    "canonicalName": "Dialysis Adequacy (URR)",
+    "formula": "pct",
+    "numLabel": "Pre-BUN minus post-BUN",
+    "denLabel": "Pre-dialysis BUN",
+    "numeratorDef": "(Pre-dialysis BUN minus post-dialysis BUN) for the treatment session; equivalently, count of HD patients meeting the adequacy target when reporting facility compliance",
+    "denominatorDef": "Pre-dialysis BUN drawn immediately before the session (post-BUN drawn per the slow-flow/stop-pump technique); for facility reporting, total HD patients with a measured URR in the period",
+    "unit": "%",
+    "benchmarkValue": 65,
+    "benchmark": "≥ 65%",
+    "benchmarkNote": ">= 65% minimum (target > 70%); equivalent to spKt/V minimum 1.2, target 1.4 for thrice-weekly HD",
+    "goalDirection": "higher_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guideline for Hemodialysis Adequacy: 2015 Update",
+    "referenceUrl": "https://www.ajkd.org/article/S0272-6386(15)01019-7/fulltext"
+  },
+  "idh": {
+    "canonicalName": "Intradialytic Hypotension Rate",
+    "formula": "pct",
+    "numLabel": "HD sessions with intradialytic hypotension",
+    "denLabel": "Total HD sessions",
+    "numeratorDef": "Number of hemodialysis sessions during which intradialytic hypotension occurred, defined per KDOQI as a decrease in systolic BP >= 20 mmHg (or a fall in mean arterial pressure >= 10 mmHg) associated with symptoms (e.g., cramps, nausea, dizziness, fainting) and requiring nursing intervention (e.g., stopping ultrafiltration and/or saline infusion)",
+    "denominatorDef": "Total number of hemodialysis sessions delivered in the reporting period",
+    "unit": "%",
+    "benchmarkValue": 20,
+    "benchmark": "≤ 20%",
+    "benchmarkNote": "<= 20% of sessions (KDOQI background prevalence ~20-30%, about 25%; lower is better)",
+    "goalDirection": "lower_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guidelines for Cardiovascular Disease in Dialysis Patients - Intradialytic Hypotension",
+    "referenceUrl": "https://kidneyfoundation.cachefly.net/professionals/KDOQI/guidelines_cvd/intradialytic.htm"
+  },
+  "fhr": {
+    "canonicalName": "Intrapartum Fetal Heart Rate Monitoring Compliance",
+    "formula": "pct",
+    "numLabel": "Labours with FHR monitored & documented per protocol",
+    "denLabel": "Labours requiring intrapartum FHR monitoring",
+    "numeratorDef": "Number of monitored labours in which intrapartum fetal heart rate was assessed and documented at the protocol-required frequency and method (e.g. intermittent auscultation immediately after a palpated contraction for >=1 minute, at least every 15 minutes in established first stage and at least every 5 minutes in second stage for low-risk women, or continuous CTG when antenatal/intrapartum risk factors are present). Counted by chart/partogram audit as fully compliant only when all required FHR entries are present at the required interval and method. State whether scoring per labour or per assessment opportunity and keep it consistent.",
+    "denominatorDef": "Total number of labours audited that required intrapartum fetal heart rate monitoring during the period (eligible labours). If scoring at the observation level, the denominator is instead the total number of required FHR-assessment opportunities; choose one level and apply it consistently across the numerator and denominator.",
+    "unit": "%",
+    "benchmarkValue": 100,
+    "benchmark": "≥ 100%",
+    "benchmarkNote": "Target 100% (full compliance); >=90% commonly used as an interim audit threshold",
+    "goalDirection": "higher_is_better",
+    "reference": "NICE NG229 Fetal monitoring in labour (2022); FIGO consensus guidelines on intrapartum fetal monitoring (2015); ACOG Clinical Practice Guideline No. 10: Intrapartum Fetal Heart Rate Monitoring: Interpretation and Management (Oct 2025), which replaces the retired Practice Bulletins No. 106 (2009) and No. 116 (2010)",
+    "referenceUrl": "https://www.nice.org.uk/guidance/ng229/chapter/Recommendations"
+  },
+  "bls": {
+    "canonicalName": "BLS Certification Rate",
+    "formula": "pct",
+    "numLabel": "Clinical staff with current/valid BLS certification",
+    "denLabel": "Clinical staff required to hold BLS certification",
+    "numeratorDef": "Number of clinical (and other policy-designated) staff holding a current, non-expired Basic Life Support (BLS) certification (typically AHA BLS for Healthcare Providers, valid 2 years) at the measurement point.",
+    "denominatorDef": "Total number of staff for whom BLS certification is mandated by role or hospital policy at the measurement point. Rate = (certified / required) x 100.",
+    "unit": "%",
+    "benchmarkValue": 100,
+    "benchmark": "≥ 100%",
+    "benchmarkNote": "100% of required clinical staff with valid BLS certification",
+    "goalDirection": "higher_is_better",
+    "reference": "American Heart Association (AHA) BLS Provider standards; NABH HRM (Human Resource Management) staff competency/credentialing requirements",
+    "referenceUrl": "https://cpr.heart.org/en/cpr-courses-and-kits/healthcare-professional/basic-life-support-bls-training"
+  },
+  "codeblue": {
+    "canonicalName": "Cardiac Arrest (Code Blue) Events",
+    "formula": "count",
+    "numLabel": "Number of cardiac arrest (code blue) events",
+    "denLabel": "",
+    "numeratorDef": "Count of in-hospital cardiac arrest events (pulselessness requiring chest compressions and/or defibrillation, i.e. a resuscitation/code-blue activation) occurring during the reporting period, per AHA Get With The Guidelines-Resuscitation event definition. Excludes patients with an existing do-not-resuscitate order who did not receive CPR. Tally each qualifying arrest event.",
+    "denominatorDef": "",
+    "unit": "count",
+    "benchmarkValue": 0,
+    "benchmark": "0 — track & RCA every event",
+    "benchmarkNote": "No fixed external benchmark; tracked as an absolute event count and trended internally (lower is better). For context, published IHCA incidence is often normalized to roughly 1-10 per 1000 admissions, but the registry sets no fixed threshold.",
+    "goalDirection": "lower_is_better",
+    "reference": "American Heart Association Get With The Guidelines-Resuscitation (in-hospital cardiac arrest registry; cardiac arrest defined as pulselessness requiring chest compression and/or defibrillation)",
+    "referenceUrl": "https://www.heart.org/en/professional/quality-improvement/get-with-the-guidelines/get-with-the-guidelines-resuscitation"
+  },
+  "rosc": {
+    "canonicalName": "Cardiac Arrest Survival to Discharge Rate",
+    "formula": "pct",
+    "numLabel": "Cardiac arrest patients surviving to hospital discharge",
+    "denLabel": "Patients with an in-hospital cardiac arrest with attempted resuscitation",
+    "numeratorDef": "Number of in-hospital cardiac arrest patients who survived to hospital discharge (alive at discharge) following resuscitation. Count each patient once per index arrest.",
+    "denominatorDef": "Number of patients who had an in-hospital cardiac arrest (pulseless event requiring chest compressions and/or defibrillation) with an attempted resuscitation during the reporting period (GWTG-Resuscitation index-event population; excludes patients with pre-existing do-not-resuscitate orders).",
+    "unit": "%",
+    "benchmarkValue": 25,
+    "benchmark": "≥ 25%",
+    "benchmarkNote": "Higher is better; AHA GWTG-R contemporary adult IHCA survival-to-discharge ~24% (benchmark ~25%)",
+    "goalDirection": "higher_is_better",
+    "reference": "American Heart Association Get With The Guidelines-Resuscitation; AHA Heart Disease & Stroke Statistics / 2025 ECC Guidelines",
+    "referenceUrl": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001372"
+  }
+};
+
+;
+/* ===== quality-store.js ===== */
+/* UNICO — Quality Indicators editable overlay store.
+   Merges the read-only QUALITY_SEED with user edits saved in localStorage so the
+   entire Quality module (dashboard, department detail, entry, CAPA, exports) reads
+   ONE connected, editable dataset.
+
+   The merged objects keep the exact shape of QUALITY_SEED entries, so existing
+   readers work unchanged once pointed at qualityData()/useQualityStore().
+
+   Persistence: localStorage 'unico_quality_v2' (auto-mirrored to disk by preload).
+   (v2: reset for the NQI monthly dataset; any stale v1 overlay is ignored.) */
+(function () {
+  const KEY = 'unico_quality_v2';
+  const QS = ['Q1', 'Q2', 'Q3', 'Q4'];
+
+  // Canonical quarter <-> month mapping — the NQI report's 12-month fiscal year
+  // Jun-2025 … May-2026, three months per quarter (matches quality.jsx QMONTHS).
+  const QUARTER_MONTHS = {
+    Q1: ['Jun-25', 'Jul-25', 'Aug-25'],
+    Q2: ['Sep-25', 'Oct-25', 'Nov-25'],
+    Q3: ['Dec-25', 'Jan-26', 'Feb-26'],
+    Q4: ['Mar-26', 'Apr-26', 'May-26'],
+  };
+  const MONTH_QUARTER = {};
+  Object.keys(QUARTER_MONTHS).forEach(q => QUARTER_MONTHS[q].forEach(m => { MONTH_QUARTER[m] = q; }));
+
+  function isPct(ind) {
+    const t = ((ind && ind.valueType) || '').toString().toLowerCase();
+    return t.indexOf('%') >= 0 || t.startsWith('per');
+  }
+
+  // Roll a quarter up from its months when monthly data is present; else undefined
+  // (meaning: use the directly-entered quarter value).
+  function rollupQuarter(ind, q) {
+    const months = (ind && ind.months) || {};
+    const ms = QUARTER_MONTHS[q] || [];
+    const vals = ms.map(m => months[m]).filter(v => v != null && v !== '');
+    if (!vals.length) return undefined;
+    const nums = vals.map(Number);
+    if (isPct(ind)) return Math.round((nums.reduce((s, x) => s + x, 0) / nums.length) * 100) / 100;
+    return nums.reduce((s, x) => s + x, 0);
+  }
+
+  function loadOverlay() {
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY));
+      return (s && typeof s === 'object' && s.depts) ? s : { depts: {} };
+    } catch (e) { return { depts: {} }; }
+  }
+  function saveOverlay(o) { try { localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { } }
+
+  // Formula-based value: count = numerator; rate1000/rate100/pct = num/den × mult.
+  function qiFormulaCompute(formula, num, den) {
+    const n = Number(num) || 0, d = Number(den) || 0;
+    if (formula === 'count') return n;
+    if (!d) return 0;
+    if (formula === 'rate1000') return Math.round((n / d) * 1000 * 100) / 100;
+    return Math.round((n / d) * 100 * 100) / 100; // rate100 / pct
+  }
+
+  // Object-valued indicator fields that deep-merge (rather than replace) on patch.
+  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen'];
+
+  // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
+  // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are
+  // never touched, so entered data is preserved.
+  const CORRECT_FIELDS = ['formula', 'numLabel', 'denLabel', 'numeratorDef', 'denominatorDef', 'unit', 'benchmark', 'benchmarkValue', 'benchmarkNote', 'goalDirection', 'reference', 'referenceUrl'];
+  function correctedBase(seedInd) {
+    try {
+      const C = (typeof window !== 'undefined') && window.QI_CORRECTIONS;
+      if (!C) return seedInd;
+      const corr = C[String((seedInd && seedInd.name) || '').trim().toLowerCase().replace(/\s+/g, ' ')];
+      if (!corr) return seedInd;
+      const base = Object.assign({}, seedInd);
+      CORRECT_FIELDS.forEach(k => { if (corr[k] !== undefined && corr[k] !== null && corr[k] !== '') base[k] = corr[k]; });
+      // Keep the legacy `valueType` in sync with the corrected formula (several UI
+      // surfaces still derive the %/measure from it), and drop any stale cached
+      // `formulaText` so downstream screens recompute it from the corrected labels.
+      if (corr.formula) base.valueType = corr.formula === 'pct' ? '%' : (corr.formula === 'count' ? 'Count' : 'Rate');
+      delete base.formulaText;
+      return base;
+    } catch (e) { return seedInd; }
+  }
+
+  function mergeIndicator(seedInd, patch) {
+    // Apply the authoritative correction to the BASE so an explicit user edit (patch)
+    // still wins, but every uncorrected indicator gets the right formula/reference.
+    const corrected = correctedBase(seedInd);
+    const ind = Object.assign({}, corrected, patch || {});
+    if (patch) NESTED.forEach(k => { if (patch[k]) ind[k] = Object.assign({}, corrected[k] || {}, patch[k]); });
+
+    const f = ind.formula;
+    if (f && f !== 'direct') {
+      // Formula indicators: compute each quarter from monthly num/den (aggregate
+      // rates by SUMMING numerators & denominators) or from the direct quarter num/den.
+      const q2 = Object.assign({}, ind.quarters || {});
+      QS.forEach(q => {
+        const ms = QUARTER_MONTHS[q] || [];
+        const haveMonths = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '');
+        let num, den;
+        if (haveMonths) {
+          num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+          den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+        } else {
+          const n = (ind.qNum || {})[q];
+          if (n == null || n === '') return; // no data this quarter → leave as-is (null)
+          num = n; den = (ind.qDen || {})[q];
+        }
+        q2[q] = qiFormulaCompute(f, num, den);
+      });
+      ind.quarters = q2;
+    } else if (ind.months && Object.keys(ind.months).length) {
+      // Direct value: roll the quarter up from months (sum for Count, avg for %).
+      const q2 = Object.assign({}, ind.quarters || {});
+      QS.forEach(q => { const r = rollupQuarter(ind, q); if (r !== undefined) q2[q] = r; });
+      ind.quarters = q2;
+    }
+    return ind;
+  }
+
+  function mergeDept(seedDept, ov) {
+    if (!ov) return seedDept;
+    const removed = new Set(ov.indRemoved || []);
+    const patches = ov.indPatches || {};
+    const inds = (seedDept.indicators || [])
+      .filter(i => !removed.has(i.id))
+      .map(i => mergeIndicator(i, patches[i.id]));
+    (ov.indAdded || []).forEach(a => { if (!removed.has(a.id)) inds.push(mergeIndicator(a, patches[a.id])); });
+    const dept = Object.assign({}, seedDept, { indicators: inds });
+    if (ov.executive) dept.executive = Object.assign({}, seedDept.executive || {}, ov.executive);
+    if (ov.meta) dept.meta = Object.assign({}, seedDept.meta || {}, ov.meta);
+    return dept;
+  }
+
+  // Merged, read-anywhere snapshot (reads localStorage fresh each call).
+  function qualityData() {
+    const ov = loadOverlay();
+    return (window.QUALITY_SEED || []).map(d => mergeDept(d, ov.depts[d.key]));
+  }
+
+  // React hook for screens that EDIT quality data.
+  function useQualityStore() {
+    const [overlay, setOverlay] = React.useState(loadOverlay);
+    React.useEffect(() => { saveOverlay(overlay); }, [overlay]);
+    const merged = React.useMemo(
+      () => (window.QUALITY_SEED || []).map(d => mergeDept(d, overlay.depts[d.key])),
+      [overlay]
+    );
+
+    const patchDept = (key, fn) => setOverlay(o => {
+      const depts = Object.assign({}, o.depts);
+      depts[key] = fn(depts[key] ? Object.assign({}, depts[key]) : {});
+      return Object.assign({}, o, { depts });
+    });
+
+    // Persistent master catalogue of admin-defined indicators (survives even
+    // before any department reports them). Lives alongside `depts` in the same
+    // overlay blob, so it mirrors to disk/MongoDB through the very same bridge.
+    const catalog = overlay.catalog || [];
+    const catNorm = (s) => (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
+
+    return {
+      depts: merged,
+      catalog,
+      get: (key) => merged.find(d => d.key === key),
+      isEdited: (key) => !!overlay.depts[key],
+
+      // master catalogue: add (de-duped by name) / remove a standalone indicator def
+      addCatalogIndicator: (def) => setOverlay(o => {
+        const nn = catNorm(def && def.name);
+        if (!nn) return o;
+        const list = o.catalog || [];
+        if (list.some(c => catNorm(c.name) === nn)) return o; // already defined
+        return Object.assign({}, o, { catalog: [...list, def] });
+      }),
+      removeCatalogIndicator: (name) => setOverlay(o => {
+        const nn = catNorm(name);
+        const list = o.catalog || [];
+        return Object.assign({}, o, { catalog: list.filter(c => catNorm(c.name) !== nn) });
+      }),
+
+      patchIndicator: (deptKey, indId, patch) => patchDept(deptKey, cur => {
+        const all = Object.assign({}, cur.indPatches || {});
+        const prev = all[indId] || {};
+        const next = Object.assign({}, prev, patch);
+        NESTED.forEach(k => { if (patch[k]) next[k] = Object.assign({}, prev[k] || {}, patch[k]); });
+        all[indId] = next;
+        return Object.assign({}, cur, { indPatches: all });
+      }),
+
+      addIndicator: (deptKey, ind) => patchDept(deptKey, cur => ({
+        ...cur, indAdded: [...(cur.indAdded || []), ind],
+      })),
+
+      removeIndicator: (deptKey, indId) => patchDept(deptKey, cur => {
+        const added = cur.indAdded || [];
+        if (added.some(a => a.id === indId)) {
+          const patches = Object.assign({}, cur.indPatches || {}); delete patches[indId];
+          return Object.assign({}, cur, { indAdded: added.filter(a => a.id !== indId), indPatches: patches });
+        }
+        return Object.assign({}, cur, { indRemoved: [...(cur.indRemoved || []), indId] });
+      }),
+
+      setExecutive: (deptKey, patch) => patchDept(deptKey, cur => ({
+        ...cur, executive: Object.assign({}, cur.executive || {}, patch),
+      })),
+      setMeta: (deptKey, patch) => patchDept(deptKey, cur => ({
+        ...cur, meta: Object.assign({}, cur.meta || {}, patch),
+      })),
+
+      resetDept: (deptKey) => setOverlay(o => {
+        const depts = Object.assign({}, o.depts); delete depts[deptKey];
+        return Object.assign({}, o, { depts });
+      }),
+    };
+  }
+
+  // helpers used across the Quality screens
+  function qualitySlug(s) {
+    return 'ind-' + String(s || 'indicator').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) + '-' + Math.random().toString(36).slice(2, 6);
+  }
+
+  window.qualityData = qualityData;
+  window.useQualityStore = useQualityStore;
+  window.qiFormulaCompute = qiFormulaCompute;
+  window.QUALITY_QUARTER_MONTHS = QUARTER_MONTHS;
+  window.QUALITY_MONTH_QUARTER = MONTH_QUARTER;
+  window.qualityIsPct = isPct;
+  window.qualitySlug = qualitySlug;
+})();
+
+;
+/* ===== charts.jsx ===== */
+(function(){
+const {
+  useState,
+  useEffect,
+  useRef,
+  useMemo
+} = React;
+const PALETTE = ['#0b66d0', '#0f9b8e', '#e08a1e', '#6a52d4', '#d23a52', '#2bb3a3', '#8a93a3', '#4f8df7', '#1f9d57', '#c2486f'];
+const fmt = n => n == null ? '–' : (Math.round(n * 100) / 100).toLocaleString();
+function useMounted(delay = 30) {
+  const [m, setM] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setM(true), delay);
+    return () => clearTimeout(t);
+  }, []);
+  return m;
+}
+function useTip() {
+  const [tip, setTip] = useState(null);
+  const node = tip ? React.createElement("div", {
+    style: {
+      position: 'fixed',
+      left: tip.x,
+      top: tip.y,
+      transform: 'translate(-50%,-115%)',
+      background: '#0d1b2e',
+      color: '#fff',
+      padding: '7px 10px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      pointerEvents: 'none',
+      zIndex: 9999,
+      boxShadow: '0 8px 24px rgba(0,0,0,.3)',
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      marginBottom: tip.rows ? 3 : 0
+    }
+  }, tip.title), (tip.rows || []).map((r, i) => React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      opacity: .95
+    }
+  }, r.color && React.createElement("i", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: 2,
+      background: r.color,
+      display: 'inline-block'
+    }
+  }), React.createElement("span", {
+    style: {
+      color: '#aebccd'
+    }
+  }, r.label), React.createElement("b", {
+    className: "num",
+    style: {
+      marginLeft: 'auto',
+      paddingLeft: 10,
+      fontFamily: 'IBM Plex Mono'
+    }
+  }, r.value))), tip.single != null && React.createElement("div", {
+    className: "num",
+    style: {
+      fontFamily: 'IBM Plex Mono',
+      fontSize: 15,
+      fontWeight: 600
+    }
+  }, tip.single)) : null;
+  return [node, setTip];
+}
+const BAR_COLORS = ['#0090ca', '#159fbf', '#2bb3a3', '#46b87e', '#7cc35a', '#f0a93b', '#ef8049', '#e85c69', '#b65cc6', '#6a6fd4'];
+function BarChart({
+  data,
+  x,
+  y,
+  height = 240,
+  color = '#0b66d0',
+  label,
+  accent,
+  flat = false
+}) {
+  const mounted = useMounted();
+  const m = flat || mounted;
+  const [tip, setTip] = useTip();
+  const wrap = useRef(null);
+  const max = Math.max(1, ...data.map(d => d[y] || 0));
+  const id = 'bg' + (label || y).replace(/\W/g, '');
+  return React.createElement("div", {
+    ref: wrap,
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("svg", {
+    viewBox: `0 0 ${data.length * 54} ${height}`,
+    height: height,
+    preserveAspectRatio: "none",
+    style: {
+      overflow: 'visible',
+      width: '100%',
+      maxWidth: data.length * 74,
+      margin: '0 auto',
+      display: 'block'
+    }
+  }, React.createElement("defs", null, BAR_COLORS.map((c, ci) => React.createElement("linearGradient", {
+    key: ci,
+    id: id + '_' + ci,
+    x1: "0",
+    y1: "0",
+    x2: "0",
+    y2: "1"
+  }, React.createElement("stop", {
+    offset: "0%",
+    stopColor: c
+  }), React.createElement("stop", {
+    offset: "100%",
+    stopColor: c,
+    stopOpacity: "0.58"
+  })))), [0, .25, .5, .75, 1].map((g, i) => React.createElement("line", {
+    key: i,
+    x1: "0",
+    x2: data.length * 54,
+    y1: height - 20 - g * (height - 44),
+    y2: height - 20 - g * (height - 44),
+    stroke: "#eef1f5",
+    strokeWidth: "1"
+  })), data.map((d, i) => {
+    const v = d[y] || 0;
+    const bh = m ? v / max * (height - 44) : 0;
+    const bx = i * 54 + 14,
+      bw = 26,
+      by = height - 20 - bh;
+    return React.createElement("g", {
+      key: i,
+      onMouseMove: e => setTip({
+        x: e.clientX,
+        y: e.clientY,
+        title: d[x],
+        single: fmt(v)
+      }),
+      onMouseLeave: () => setTip(null),
+      style: {
+        cursor: 'pointer'
+      }
+    }, React.createElement("rect", {
+      x: i * 54 + 4,
+      y: "0",
+      width: "46",
+      height: height - 20,
+      fill: "transparent"
+    }), React.createElement("rect", {
+      x: bx,
+      y: by,
+      width: bw,
+      height: bh,
+      rx: "4",
+      fill: flat ? BAR_COLORS[i % BAR_COLORS.length] : `url(#${id}_${i % BAR_COLORS.length})`,
+      style: flat ? undefined : {
+        transition: 'y .7s cubic-bezier(.2,.8,.25,1), height .7s cubic-bezier(.2,.8,.25,1)'
+      }
+    }), m && v > 0 && React.createElement("text", {
+      x: bx + bw / 2,
+      y: by - 6,
+      textAnchor: "middle",
+      fontSize: "10.5",
+      fontFamily: "IBM Plex Mono",
+      fontWeight: "600",
+      fill: BAR_COLORS[i % BAR_COLORS.length]
+    }, v), React.createElement("text", {
+      x: bx + bw / 2,
+      y: height - 6,
+      textAnchor: "middle",
+      fontSize: "9.5",
+      fill: "#9aa6b4"
+    }, String(d[x]).replace(/ \d{4}| 20\d\d/, '').slice(0, 6)));
+  })), tip);
+}
+function GroupedBar({
+  data,
+  x,
+  series,
+  height = 260
+}) {
+  const m = useMounted();
+  const [tip, setTip] = useTip();
+  const max = Math.max(1, ...data.flatMap(d => series.map(s => d[s.id] || 0)));
+  const groupW = Math.max(48, series.length * 16 + 18);
+  const bw = Math.min(15, (groupW - 14) / series.length - 3);
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("svg", {
+    viewBox: `0 0 ${data.length * groupW} ${height}`,
+    height: height,
+    preserveAspectRatio: "none",
+    style: {
+      overflow: 'visible',
+      width: '100%',
+      maxWidth: data.length * Math.max(70, groupW),
+      margin: '0 auto',
+      display: 'block'
+    }
+  }, [0, .25, .5, .75, 1].map((g, i) => React.createElement("line", {
+    key: i,
+    x1: "0",
+    x2: data.length * groupW,
+    y1: height - 20 - g * (height - 44),
+    y2: height - 20 - g * (height - 44),
+    stroke: "#eef1f5"
+  })), data.map((d, gi) => React.createElement("g", {
+    key: gi,
+    onMouseMove: e => setTip({
+      x: e.clientX,
+      y: e.clientY,
+      title: d[x],
+      rows: series.map(s => ({
+        label: s.label,
+        value: fmt(d[s.id] || 0),
+        color: s.color
+      }))
+    }),
+    onMouseLeave: () => setTip(null),
+    style: {
+      cursor: 'pointer'
+    }
+  }, React.createElement("rect", {
+    x: gi * groupW,
+    y: "0",
+    width: groupW,
+    height: height - 20,
+    fill: "transparent"
+  }), series.map((s, si) => {
+    const v = d[s.id] || 0,
+      h = m ? v / max * (height - 44) : 0;
+    const bx = gi * groupW + 9 + si * (bw + 3),
+      by = height - 20 - h;
+    return React.createElement("rect", {
+      key: si,
+      x: bx,
+      y: by,
+      width: bw,
+      height: h,
+      rx: "3",
+      fill: s.color,
+      style: {
+        transition: `y .6s ${si * 60}ms cubic-bezier(.2,.8,.25,1), height .6s ${si * 60}ms cubic-bezier(.2,.8,.25,1)`
+      }
+    });
+  }), React.createElement("text", {
+    x: gi * groupW + groupW / 2,
+    y: height - 6,
+    textAnchor: "middle",
+    fontSize: "9.5",
+    fill: "#9aa6b4"
+  }, String(d[x]).replace(/ \d{4}| 20\d\d/, '').slice(0, 6))))), tip);
+}
+function StackedBar({
+  data,
+  x,
+  series,
+  height = 260
+}) {
+  const m = useMounted();
+  const [tip, setTip] = useTip();
+  const totals = data.map(d => series.reduce((s, k) => s + (d[k.id] || 0), 0));
+  const max = Math.max(1, ...totals);
+  const step = Math.max(40, Math.min(70, 600 / data.length));
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("svg", {
+    viewBox: `0 0 ${data.length * step} ${height}`,
+    height: height,
+    preserveAspectRatio: "none",
+    style: {
+      overflow: 'visible',
+      width: '100%',
+      maxWidth: data.length * Math.max(64, step),
+      margin: '0 auto',
+      display: 'block'
+    }
+  }, [0, .25, .5, .75, 1].map((g, i) => React.createElement("line", {
+    key: i,
+    x1: "0",
+    x2: data.length * step,
+    y1: height - 20 - g * (height - 44),
+    y2: height - 20 - g * (height - 44),
+    stroke: "#eef1f5"
+  })), data.map((d, gi) => {
+    let acc = 0;
+    const bx = gi * step + (step - 24) / 2,
+      bw = 24;
+    return React.createElement("g", {
+      key: gi,
+      onMouseMove: e => setTip({
+        x: e.clientX,
+        y: e.clientY,
+        title: d[x],
+        rows: [...series.map(s => ({
+          label: s.label,
+          value: fmt(d[s.id] || 0),
+          color: s.color
+        })), {
+          label: 'Total',
+          value: fmt(totals[gi])
+        }]
+      }),
+      onMouseLeave: () => setTip(null),
+      style: {
+        cursor: 'pointer'
+      }
+    }, React.createElement("rect", {
+      x: gi * step,
+      y: "0",
+      width: step,
+      height: height - 20,
+      fill: "transparent"
+    }), series.map((s, si) => {
+      const v = d[s.id] || 0;
+      const h = m ? v / max * (height - 44) : 0;
+      const by = height - 20 - acc - h;
+      acc += h;
+      return React.createElement("rect", {
+        key: si,
+        x: bx,
+        y: by,
+        width: bw,
+        height: Math.max(0, h),
+        fill: s.color,
+        rx: si === series.length - 1 ? 3 : 0,
+        style: {
+          transition: `all .6s ${si * 50}ms cubic-bezier(.2,.8,.25,1)`
+        }
+      });
+    }), React.createElement("text", {
+      x: gi * step + step / 2,
+      y: height - 6,
+      textAnchor: "middle",
+      fontSize: "9.5",
+      fill: "#9aa6b4"
+    }, String(d[x]).replace(/ \d{4}| 20\d\d/, '').slice(0, 6)));
+  })), tip);
+}
+function HBar({
+  rows,
+  height
+}) {
+  const m = useMounted();
+  const max = Math.max(1, ...rows.map(r => r.value));
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, rows.map((r, i) => React.createElement("div", {
+    key: i,
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '112px 1fr 46px',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#3c4858',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, r.label), React.createElement("div", {
+    style: {
+      height: 16,
+      background: '#eef1f5',
+      borderRadius: 5,
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      height: '100%',
+      width: m ? `${r.value / max * 100}%` : '0%',
+      background: `linear-gradient(90deg,${r.color || '#0b66d0'},${r.color2 || r.color || '#2a82e0'})`,
+      borderRadius: 5,
+      transition: `width .8s ${i * 55}ms cubic-bezier(.2,.8,.25,1)`
+    }
+  })), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      textAlign: 'right',
+      color: '#16202e'
+    }
+  }, fmt(r.value)))));
+}
+function LineChart({
+  data,
+  x,
+  y,
+  height = 240,
+  color = '#0b66d0',
+  area = true,
+  flat = false
+}) {
+  const mounted = useMounted();
+  const m = flat || mounted;
+  const [tip, setTip] = useTip();
+  const [hi, setHi] = useState(-1);
+  const W = Math.max(360, data.length * 60),
+    H = height,
+    pad = 26;
+  const max = Math.max(1, ...data.map(d => d[y] || 0)),
+    min = 0;
+  const px = i => pad + (data.length <= 1 ? W / 2 : i / (data.length - 1) * (W - pad * 2));
+  const py = v => H - 22 - (v - min) / (max - min) * (H - 44);
+  const pts = data.map((d, i) => [px(i), py(d[y] || 0)]);
+  const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const areaPath = path + ` L ${pts[pts.length - 1][0]} ${H - 22} L ${pts[0][0]} ${H - 22} Z`;
+  const id = 'ln' + y;
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("svg", {
+    viewBox: `0 0 ${W} ${H}`,
+    height: H,
+    preserveAspectRatio: "none",
+    style: {
+      overflow: 'visible',
+      width: '100%',
+      maxWidth: Math.max(140, data.length * 80),
+      margin: '0 auto',
+      display: 'block'
+    },
+    onMouseLeave: () => {
+      setTip(null);
+      setHi(-1);
+    }
+  }, React.createElement("defs", null, React.createElement("linearGradient", {
+    id: id,
+    x1: "0",
+    y1: "0",
+    x2: "0",
+    y2: "1"
+  }, React.createElement("stop", {
+    offset: "0%",
+    stopColor: color,
+    stopOpacity: "0.28"
+  }), React.createElement("stop", {
+    offset: "100%",
+    stopColor: color,
+    stopOpacity: "0"
+  }))), [0, .25, .5, .75, 1].map((g, i) => React.createElement("line", {
+    key: i,
+    x1: pad,
+    x2: W - pad,
+    y1: 22 + g * (H - 44),
+    y2: 22 + g * (H - 44),
+    stroke: "#eef1f5"
+  })), area && React.createElement("path", {
+    d: areaPath,
+    fill: flat ? color : `url(#${id})`,
+    fillOpacity: flat ? 0.12 : 1,
+    style: flat ? undefined : {
+      opacity: m ? 1 : 0,
+      transition: 'opacity .9s .3s'
+    }
+  }), React.createElement("path", {
+    d: path,
+    fill: "none",
+    stroke: color,
+    strokeWidth: "2.5",
+    strokeLinejoin: "round",
+    strokeLinecap: "round",
+    style: {
+      strokeDasharray: 1400,
+      strokeDashoffset: m ? 0 : 1400,
+      transition: 'stroke-dashoffset 1.1s cubic-bezier(.4,0,.2,1)'
+    }
+  }), pts.map((p, i) => React.createElement("g", {
+    key: i
+  }, React.createElement("rect", {
+    x: px(i) - W / data.length / 2,
+    y: "0",
+    width: W / data.length,
+    height: H,
+    fill: "transparent",
+    onMouseMove: e => {
+      setHi(i);
+      setTip({
+        x: e.clientX,
+        y: e.clientY,
+        title: data[i][x],
+        single: fmt(data[i][y] || 0)
+      });
+    }
+  }), React.createElement("circle", {
+    cx: p[0],
+    cy: p[1],
+    r: hi === i ? 5 : 3.2,
+    fill: "#fff",
+    stroke: color,
+    strokeWidth: "2.5",
+    style: {
+      opacity: m ? 1 : 0,
+      transition: 'opacity .4s ' + (0.5 + i * 0.05) + 's, r .15s'
+    }
+  }))), hi >= 0 && React.createElement("line", {
+    x1: px(hi),
+    x2: px(hi),
+    y1: "14",
+    y2: H - 22,
+    stroke: color,
+    strokeWidth: "1",
+    strokeDasharray: "3 3",
+    opacity: ".5"
+  })), tip);
+}
+function donutArc(cx, cy, rO, rI, a0, a1) {
+  if (a1 - a0 >= Math.PI * 2 - 1e-4) a1 = a0 + Math.PI * 2 - 1e-4;
+  const P = (r, a) => `${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`;
+  const large = a1 - a0 > Math.PI ? 1 : 0;
+  return `M ${P(rO, a0)} A ${rO} ${rO} 0 ${large} 1 ${P(rO, a1)} L ${P(rI, a1)} A ${rI} ${rI} 0 ${large} 0 ${P(rI, a0)} Z`;
+}
+function Donut({
+  data,
+  size = 180,
+  thickness = 30,
+  centerLabel,
+  centerValue,
+  flat = false
+}) {
+  const mounted = useMounted();
+  const m = flat || mounted;
+  const [tip, setTip] = useTip();
+  const [hi, setHi] = useState(-1);
+  const total = data.reduce((s, d) => s + d.value, 0) || 1;
+  const r = (size - thickness) / 2,
+    cx = size / 2,
+    cy = size / 2,
+    C = 2 * Math.PI * r;
+  const rO = size / 2,
+    rI = size / 2 - thickness;
+  let off = 0,
+    ang = -Math.PI / 2;
+  return React.createElement("div", {
+    style: {
+      position: 'relative',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 18
+    }
+  }, flat ? React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: `0 0 ${size} ${size}`
+  }, data.map((d, i) => {
+    const frac = d.value / total;
+    const a0 = ang,
+      a1 = ang + frac * 2 * Math.PI;
+    ang = a1;
+    return React.createElement("path", {
+      key: i,
+      d: donutArc(cx, cy, rO, rI, a0, a1),
+      fill: d.color || PALETTE[i % PALETTE.length],
+      onMouseMove: e => {
+        setHi(i);
+        setTip({
+          x: e.clientX,
+          y: e.clientY,
+          title: d.label,
+          single: fmt(d.value) + ` (${Math.round(frac * 100)}%)`
+        });
+      },
+      onMouseLeave: () => {
+        setHi(-1);
+        setTip(null);
+      },
+      style: {
+        cursor: 'pointer'
+      }
+    });
+  })) : React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: `0 0 ${size} ${size}`,
+    style: {
+      transform: 'rotate(-90deg)'
+    }
+  }, data.map((d, i) => {
+    const frac = d.value / total;
+    const len = frac * C;
+    const dash = `${m ? len : 0} ${C}`;
+    const el = React.createElement("circle", {
+      key: i,
+      cx: cx,
+      cy: cy,
+      r: r,
+      fill: "none",
+      stroke: d.color || PALETTE[i % PALETTE.length],
+      strokeWidth: hi === i ? thickness + 5 : thickness,
+      strokeDasharray: dash,
+      strokeDashoffset: -off,
+      strokeLinecap: "butt",
+      onMouseMove: e => {
+        setHi(i);
+        setTip({
+          x: e.clientX,
+          y: e.clientY,
+          title: d.label,
+          single: fmt(d.value) + ` (${Math.round(frac * 100)}%)`
+        });
+      },
+      onMouseLeave: () => {
+        setHi(-1);
+        setTip(null);
+      },
+      style: {
+        transition: `stroke-dasharray .9s ${i * 80}ms cubic-bezier(.3,.8,.3,1), stroke-width .15s`,
+        cursor: 'pointer'
+      }
+    });
+    off += len;
+    return el;
+  })), centerValue != null && React.createElement("div", {
+    style: {
+      position: 'absolute',
+      left: size / 2,
+      top: size / 2,
+      transform: 'translate(-50%,-50%)',
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 24,
+      fontWeight: 600,
+      color: '#16202e',
+      lineHeight: 1
+    }
+  }, centerValue), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: '#6c7a8c',
+      textTransform: 'uppercase',
+      letterSpacing: .4
+    }
+  }, centerLabel)), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6
+    }
+  }, data.map((d, i) => React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 12,
+      opacity: hi < 0 || hi === i ? 1 : .45,
+      transition: 'opacity .15s'
+    },
+    onMouseEnter: () => setHi(i),
+    onMouseLeave: () => setHi(-1)
+  }, React.createElement("i", {
+    style: {
+      width: 9,
+      height: 9,
+      borderRadius: 3,
+      background: d.color || PALETTE[i % PALETTE.length],
+      display: 'inline-block'
+    }
+  }), React.createElement("span", {
+    style: {
+      color: '#3c4858',
+      fontWeight: 500
+    }
+  }, d.label), React.createElement("b", {
+    className: "num",
+    style: {
+      marginLeft: 'auto',
+      paddingLeft: 14,
+      color: '#16202e'
+    }
+  }, fmt(d.value))))), tip);
+}
+function Spark({
+  values,
+  color = '#0b66d0',
+  w = 110,
+  h = 34,
+  fill = true
+}) {
+  const m = useMounted();
+  const max = Math.max(1, ...values),
+    min = Math.min(...values, 0);
+  const px = i => i / (values.length - 1 || 1) * w;
+  const py = v => h - 3 - (v - min) / (max - min || 1) * (h - 6);
+  const path = values.map((v, i) => (i ? 'L' : 'M') + px(i).toFixed(1) + ' ' + py(v).toFixed(1)).join(' ');
+  return React.createElement("svg", {
+    width: w,
+    height: h,
+    viewBox: `0 0 ${w} ${h}`,
+    style: {
+      display: 'block'
+    }
+  }, fill && React.createElement("path", {
+    d: path + ` L ${w} ${h} L 0 ${h} Z`,
+    fill: color,
+    opacity: ".12"
+  }), React.createElement("path", {
+    d: path,
+    fill: "none",
+    stroke: color,
+    strokeWidth: "2",
+    strokeLinejoin: "round",
+    strokeLinecap: "round",
+    style: {
+      strokeDasharray: 300,
+      strokeDashoffset: m ? 0 : 300,
+      transition: 'stroke-dashoffset .9s'
+    }
+  }), React.createElement("circle", {
+    cx: px(values.length - 1),
+    cy: py(values[values.length - 1]),
+    r: "2.6",
+    fill: color
+  }));
+}
+Object.assign(window, {
+  BarChart,
+  GroupedBar,
+  StackedBar,
+  HBar,
+  LineChart,
+  Donut,
+  Spark,
+  PALETTE,
+  fmt,
+  useTip,
+  useMounted
+});
+})();
+;
+/* ===== charts3d.jsx ===== */
+(function(){
+function Bar3D({
+  data,
+  x,
+  y,
+  height = 300,
+  color = '#0b66d0',
+  multi = true,
+  flat = false
+}) {
+  const m = useMounted(60);
+  const [tip, setTip] = useTip();
+  const [hi, setHi] = React.useState(-1);
+  const max = Math.max(1, ...data.map(d => d[y] || 0));
+  const dx = 13,
+    dy = -9,
+    step = Math.max(46, Math.min(78, 640 / data.length));
+  const W = data.length * step + dx + 10,
+    baseY = height - 26,
+    bw = Math.min(30, step - 22);
+  const lighten = (h, p) => {
+    const n = parseInt(h.slice(1), 16);
+    let r = (n >> 16) + p,
+      g = (n >> 8 & 255) + p,
+      b = (n & 255) + p;
+    r = Math.max(0, Math.min(255, r));
+    g = Math.max(0, Math.min(255, g));
+    b = Math.max(0, Math.min(255, b));
+    return '#' + (r << 16 | g << 8 | b).toString(16).padStart(6, '0');
+  };
+  const PAL = ['#0090ca', '#159fbf', '#2bb3a3', '#46b87e', '#7cc35a', '#f0a93b', '#ef8049', '#e85c69', '#b65cc6', '#6a6fd4'];
+  const colAt = i => multi ? PAL[i % PAL.length] : color;
+  const id = 'b3' + color.replace('#', '');
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("svg", {
+    viewBox: `0 0 ${W} ${height}`,
+    width: "100%",
+    height: height,
+    preserveAspectRatio: "xMidYMid meet",
+    style: {
+      overflow: 'visible'
+    }
+  }, React.createElement("defs", null, PAL.map((c, ci) => React.createElement("linearGradient", {
+    key: ci,
+    id: id + '_' + ci,
+    x1: "0",
+    y1: "0",
+    x2: "0",
+    y2: "1"
+  }, React.createElement("stop", {
+    offset: "0%",
+    stopColor: lighten(c, 28)
+  }), React.createElement("stop", {
+    offset: "100%",
+    stopColor: lighten(c, -12)
+  }))), React.createElement("filter", {
+    id: id + 'sh',
+    x: "-30%",
+    y: "-30%",
+    width: "160%",
+    height: "160%"
+  }, React.createElement("feDropShadow", {
+    dx: "0",
+    dy: "5",
+    stdDeviation: "5",
+    floodColor: "#1b2b3f",
+    floodOpacity: "0.22"
+  }))), [0, .25, .5, .75, 1].map((g, i) => {
+    const gy = baseY - g * (height - 58);
+    return React.createElement("g", {
+      key: i
+    }, React.createElement("line", {
+      x1: "0",
+      y1: gy,
+      x2: data.length * step,
+      y2: gy,
+      stroke: "#e9edf3"
+    }), React.createElement("line", {
+      x1: data.length * step,
+      y1: gy,
+      x2: data.length * step + dx,
+      y2: gy + dy,
+      stroke: "#eef1f5"
+    }));
+  }), data.map((d, i) => {
+    const v = d[y] || 0,
+      bh = v / max * (height - 58);
+    const bx = i * step + 12,
+      by = baseY - bh,
+      on = hi === i;
+    const pts = {
+      top: `${bx},${by} ${bx + dx},${by + dy} ${bx + bw + dx},${by + dy} ${bx + bw},${by}`,
+      side: `${bx + bw},${by} ${bx + bw + dx},${by + dy} ${bx + bw + dx},${baseY + dy} ${bx + bw},${baseY}`
+    };
+    return React.createElement("g", {
+      key: i,
+      filter: flat ? undefined : `url(#${id}sh)`,
+      onMouseMove: e => {
+        setHi(i);
+        setTip({
+          x: e.clientX,
+          y: e.clientY,
+          title: d[x],
+          single: fmt(v)
+        });
+      },
+      onMouseLeave: () => {
+        setHi(-1);
+        setTip(null);
+      },
+      style: {
+        cursor: 'pointer'
+      }
+    }, React.createElement("g", {
+      style: {
+        transformOrigin: `${bx + bw / 2}px ${baseY}px`,
+        transform: `scaleY(${m || flat ? 1 : 0.001})`,
+        transition: flat ? 'none' : `transform .8s ${i * 55}ms cubic-bezier(.2,.85,.3,1)`,
+        opacity: hi < 0 || on ? 1 : .82
+      }
+    }, React.createElement("polygon", {
+      points: pts.side,
+      fill: lighten(colAt(i), -44)
+    }), React.createElement("polygon", {
+      points: pts.top,
+      fill: lighten(colAt(i), 46)
+    }), React.createElement("rect", {
+      x: bx,
+      y: by,
+      width: bw,
+      height: bh,
+      fill: flat ? colAt(i) : `url(#${id}_${i % PAL.length})`,
+      stroke: lighten(colAt(i), -18),
+      strokeWidth: "0.5"
+    })), (m || flat) && v > 0 && React.createElement("text", {
+      x: bx + bw / 2 + dx / 2,
+      y: by + dy - 6,
+      textAnchor: "middle",
+      fontSize: "11",
+      fontFamily: "IBM Plex Mono",
+      fontWeight: "600",
+      fill: "#16202e"
+    }, v), React.createElement("text", {
+      x: bx + bw / 2,
+      y: height - 6,
+      textAnchor: "middle",
+      fontSize: "9.5",
+      fill: "#9aa6b4"
+    }, String(d[x]).replace(/ \d{4}| 20\d\d/, '').slice(0, 6)));
+  })), tip);
+}
+function LiveMonitor({
+  title = 'Live Patient Activity',
+  seed = 40,
+  unit = 'patients/hr',
+  color = '#3ddc97'
+}) {
+  const N = 18;
+  const rnd = b => Math.max(2, Math.round(b + (Math.random() - 0.45) * b * 0.7));
+  const [bars, setBars] = React.useState(() => Array.from({
+    length: N
+  }, () => rnd(seed)));
+  const [pulse, setPulse] = React.useState(true);
+  React.useEffect(() => {
+    const t = setInterval(() => {
+      setBars(b => [...b.slice(1), rnd(seed)]);
+      setPulse(p => !p);
+    }, 1100);
+    return () => clearInterval(t);
+  }, [seed]);
+  const max = Math.max(...bars, 1);
+  const cur = bars[bars.length - 1];
+  const avg = Math.round(bars.reduce((a, c) => a + c, 0) / bars.length);
+  return React.createElement("div", {
+    className: "card live-card",
+    style: {
+      padding: 0,
+      overflow: 'hidden',
+      background: 'linear-gradient(160deg,#0d1b2e,#15243a)',
+      border: '1px solid #24344e'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '14px 16px',
+      borderBottom: '1px solid rgba(255,255,255,.07)'
+    }
+  }, React.createElement("span", {
+    className: "live-dot"
+  }), React.createElement("div", {
+    style: {
+      color: '#fff',
+      fontSize: 13.5,
+      fontWeight: 700
+    }
+  }, title), React.createElement("span", {
+    style: {
+      fontSize: 10,
+      letterSpacing: 1,
+      color: '#3ddc97',
+      border: '1px solid #1f6e54',
+      borderRadius: 5,
+      padding: '2px 7px',
+      fontWeight: 700
+    }
+  }, "\u25CF LIVE"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("div", {
+    style: {
+      textAlign: 'right'
+    }
+  }, React.createElement("div", {
+    className: "num",
+    style: {
+      color: '#fff',
+      fontSize: 22,
+      fontWeight: 600,
+      lineHeight: 1
+    }
+  }, cur), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: '#7e8da0'
+    }
+  }, unit))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 5,
+      height: 128,
+      padding: '16px 16px 14px'
+    }
+  }, bars.map((v, i) => {
+    const last = i === bars.length - 1;
+    return React.createElement("div", {
+      key: i,
+      style: {
+        flex: 1,
+        height: `${v / max * 100}%`,
+        minHeight: 3,
+        borderRadius: '4px 4px 2px 2px',
+        background: last ? `linear-gradient(180deg,${color},#1f9d6b)` : 'linear-gradient(180deg,rgba(61,220,151,.55),rgba(61,220,151,.12))',
+        boxShadow: last ? `0 0 16px ${color}aa` : 'none',
+        transition: 'height .9s cubic-bezier(.3,.8,.3,1), background .3s'
+      }
+    });
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 18,
+      padding: '0 16px 14px',
+      color: '#9fb0c4',
+      fontSize: 11
+    }
+  }, React.createElement("span", null, "Avg ", React.createElement("b", {
+    className: "num",
+    style: {
+      color: '#fff'
+    }
+  }, avg)), React.createElement("span", null, "Peak ", React.createElement("b", {
+    className: "num",
+    style: {
+      color: '#fff'
+    }
+  }, Math.max(...bars))), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      color: '#6f8198'
+    }
+  }, "updated live \xB7 1s")));
+}
+function Gauge({
+  value,
+  max,
+  label,
+  color = '#0b66d0',
+  size = 150
+}) {
+  const m = useMounted(80);
+  const r = (size - 26) / 2,
+    cx = size / 2,
+    cy = size / 2,
+    C = Math.PI * r;
+  const frac = Math.min(1, value / (max || 1));
+  return React.createElement("div", {
+    style: {
+      position: 'relative',
+      textAlign: 'center'
+    }
+  }, React.createElement("svg", {
+    width: size,
+    height: size * 0.66,
+    viewBox: `0 0 ${size} ${size * 0.66}`
+  }, React.createElement("path", {
+    d: `M13 ${cy} A ${r} ${r} 0 0 1 ${size - 13} ${cy}`,
+    fill: "none",
+    stroke: "#e8edf3",
+    strokeWidth: "13",
+    strokeLinecap: "round"
+  }), React.createElement("path", {
+    d: `M13 ${cy} A ${r} ${r} 0 0 1 ${size - 13} ${cy}`,
+    fill: "none",
+    stroke: color,
+    strokeWidth: "13",
+    strokeLinecap: "round",
+    strokeDasharray: C,
+    strokeDashoffset: m ? C * (1 - frac) : C,
+    style: {
+      transition: 'stroke-dashoffset 1.1s cubic-bezier(.3,.8,.3,1)'
+    }
+  })), React.createElement("div", {
+    style: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: '42%',
+      transform: 'translateY(-50%)'
+    }
+  }, React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 22,
+      fontWeight: 600,
+      color: 'var(--ink)',
+      lineHeight: 1
+    }
+  }, fmt(value)), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginTop: 2
+    }
+  }, label)));
+}
+Object.assign(window, {
+  Bar3D,
+  LiveMonitor,
+  Gauge
+});
+})();
+;
+/* ===== charts-extra.jsx ===== */
+(function(){
+function ComboChart({
+  data,
+  x,
+  barKey,
+  lineKey,
+  height = 250,
+  barColor = '#0090ca',
+  lineColor = '#e08a1e',
+  barLabel,
+  lineLabel,
+  flat = false
+}) {
+  const mounted = useMounted();
+  const m = flat || mounted;
+  const [tip, setTip] = useTip();
+  const [hi, setHi] = React.useState(-1);
+  data = data || [];
+  const isPct = String(lineKey).toLowerCase().includes('pct') || String(lineKey).toLowerCase().includes('percent') || String(lineKey).toLowerCase().includes('rate');
+  const padL = 42,
+    padR = 46,
+    padT = 22,
+    padB = 24;
+  const step = Math.max(46, Math.min(82, 560 / Math.max(1, data.length)));
+  const W = Math.max(320, data.length * step + padL + padR),
+    H = height;
+  const plotW = W - padL - padR,
+    plotH = H - padT - padB;
+  const barMax = Math.max(1, ...data.map(d => +d[barKey] || 0));
+  const lineVals = data.map(d => +d[lineKey] || 0);
+  const lineMax = Math.max(isPct ? 100 : 1, ...lineVals);
+  const lineMin = 0;
+  const cx = i => padL + (data.length <= 1 ? plotW / 2 : (i + 0.5) * (plotW / data.length));
+  const lpy = v => padT + plotH - (v - lineMin) / (lineMax - lineMin || 1) * plotH;
+  const baseY = padT + plotH;
+  const id = 'cmb' + String(barKey).replace(/\W/g, '');
+  const pts = data.map((d, i) => [cx(i), lpy(+d[lineKey] || 0)]);
+  const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const fmtLine = v => isPct ? Math.round(v * 10) / 10 + '%' : fmt(v);
+  const ticks = [0, .25, .5, .75, 1];
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 18,
+      justifyContent: 'center',
+      marginBottom: 6,
+      fontSize: 11.5,
+      color: '#3c4858'
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 11,
+      height: 11,
+      borderRadius: 3,
+      background: barColor,
+      display: 'inline-block'
+    }
+  }), barLabel || barKey), React.createElement("span", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 14,
+      height: 3,
+      borderRadius: 2,
+      background: lineColor,
+      display: 'inline-block'
+    }
+  }), lineLabel || lineKey)), React.createElement("svg", {
+    viewBox: `0 0 ${W} ${H}`,
+    height: H,
+    preserveAspectRatio: "none",
+    style: {
+      overflow: 'visible',
+      width: '100%',
+      maxWidth: Math.max(260, data.length * step + padL + padR),
+      margin: '0 auto',
+      display: 'block'
+    },
+    onMouseLeave: () => {
+      setTip(null);
+      setHi(-1);
+    }
+  }, !flat && React.createElement("defs", null, React.createElement("linearGradient", {
+    id: id,
+    x1: "0",
+    y1: "0",
+    x2: "0",
+    y2: "1"
+  }, React.createElement("stop", {
+    offset: "0%",
+    stopColor: barColor
+  }), React.createElement("stop", {
+    offset: "100%",
+    stopColor: barColor,
+    stopOpacity: "0.58"
+  }))), ticks.map((g, i) => React.createElement("line", {
+    key: i,
+    x1: padL,
+    x2: W - padR,
+    y1: baseY - g * plotH,
+    y2: baseY - g * plotH,
+    stroke: "#eef1f5",
+    strokeWidth: "1"
+  })), ticks.map((g, i) => React.createElement("text", {
+    key: 'l' + i,
+    x: padL - 6,
+    y: baseY - g * plotH + 3,
+    textAnchor: "end",
+    fontSize: "9",
+    fontFamily: "IBM Plex Mono",
+    fill: "#9aa6b4"
+  }, fmt(Math.round(barMax * g)))), ticks.map((g, i) => React.createElement("text", {
+    key: 'r' + i,
+    x: W - padR + 6,
+    y: baseY - g * plotH + 3,
+    textAnchor: "start",
+    fontSize: "9",
+    fontFamily: "IBM Plex Mono",
+    fill: lineColor
+  }, isPct ? Math.round(lineMax * g) + '%' : fmt(Math.round(lineMax * g)))), data.map((d, i) => {
+    const v = +d[barKey] || 0;
+    const bh = m ? v / barMax * plotH : 0;
+    const bw = Math.min(28, plotW / data.length * 0.5);
+    const bx = cx(i) - bw / 2,
+      by = baseY - bh;
+    return React.createElement("g", {
+      key: i,
+      onMouseMove: e => {
+        setHi(i);
+        setTip({
+          x: e.clientX,
+          y: e.clientY,
+          title: String(d[x]),
+          rows: [{
+            label: barLabel || barKey,
+            value: fmt(v),
+            color: barColor
+          }, {
+            label: lineLabel || lineKey,
+            value: fmtLine(+d[lineKey] || 0),
+            color: lineColor
+          }]
+        });
+      },
+      onMouseLeave: () => {
+        setTip(null);
+        setHi(-1);
+      },
+      style: {
+        cursor: 'pointer'
+      }
+    }, React.createElement("rect", {
+      x: cx(i) - plotW / data.length / 2,
+      y: padT,
+      width: plotW / data.length,
+      height: plotH,
+      fill: "transparent"
+    }), React.createElement("rect", {
+      x: bx,
+      y: by,
+      width: bw,
+      height: Math.max(0, bh),
+      rx: "4",
+      fill: flat ? barColor : `url(#${id})`,
+      style: flat ? undefined : {
+        transition: 'y .7s cubic-bezier(.2,.8,.25,1), height .7s cubic-bezier(.2,.8,.25,1)'
+      }
+    }), m && v > 0 && React.createElement("text", {
+      x: cx(i),
+      y: by - 5,
+      textAnchor: "middle",
+      fontSize: "9.5",
+      fontFamily: "IBM Plex Mono",
+      fontWeight: "600",
+      fill: barColor
+    }, fmt(v)));
+  }), React.createElement("path", {
+    d: path,
+    fill: "none",
+    stroke: lineColor,
+    strokeWidth: "2.5",
+    strokeLinejoin: "round",
+    strokeLinecap: "round",
+    style: flat ? undefined : {
+      strokeDasharray: 1600,
+      strokeDashoffset: m ? 0 : 1600,
+      transition: 'stroke-dashoffset 1.1s cubic-bezier(.4,0,.2,1)'
+    }
+  }), pts.map((p, i) => React.createElement("circle", {
+    key: i,
+    cx: p[0],
+    cy: p[1],
+    r: hi === i ? 5 : 3.4,
+    fill: "#fff",
+    stroke: lineColor,
+    strokeWidth: "2.5",
+    style: flat ? undefined : {
+      opacity: m ? 1 : 0,
+      transition: 'opacity .4s ' + (0.5 + i * 0.05) + 's, r .15s'
+    }
+  })), data.map((d, i) => React.createElement("text", {
+    key: 'x' + i,
+    x: cx(i),
+    y: H - 6,
+    textAnchor: "middle",
+    fontSize: "9.5",
+    fill: "#9aa6b4"
+  }, String(d[x]).replace(/ \d{4}| 20\d\d/, '').slice(0, 6)))), tip);
+}
+function HBarChart({
+  data,
+  x,
+  y,
+  height,
+  flat = false
+}) {
+  const mounted = useMounted();
+  const m = flat || mounted;
+  data = data || [];
+  const max = Math.max(1, ...data.map(d => +d[y] || 0));
+  const maxH = height || data.length * 30 + 8;
+  const tall = data.length * 30 + 8 > maxH;
+  return React.createElement("div", {
+    style: {
+      maxHeight: maxH,
+      overflowY: tall ? 'auto' : 'visible',
+      overflowX: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 9,
+      padding: '2px 0'
+    }
+  }, data.map((d, i) => {
+    const v = +d[y] || 0;
+    const c = PALETTE[i % PALETTE.length];
+    return React.createElement("div", {
+      key: i,
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '120px 1fr 54px',
+        alignItems: 'center',
+        gap: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#3c4858',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      },
+      title: String(d[x])
+    }, String(d[x])), React.createElement("div", {
+      style: {
+        height: 15,
+        background: '#eef1f5',
+        borderRadius: 5,
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        height: '100%',
+        width: m ? `${v / max * 100}%` : '0%',
+        background: flat ? c : `linear-gradient(90deg,${c},${c}cc)`,
+        borderRadius: 5,
+        transition: flat ? undefined : `width .8s ${i * 45}ms cubic-bezier(.2,.8,.25,1)`
+      }
+    })), React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 12.5,
+        fontWeight: 600,
+        textAlign: 'right',
+        color: '#16202e',
+        fontFamily: 'IBM Plex Mono'
+      }
+    }, fmt(v)));
+  })));
+}
+function StackedPctBar({
+  data,
+  x,
+  series,
+  height = 260,
+  flat = false
+}) {
+  const mounted = useMounted();
+  const m = flat || mounted;
+  const [tip, setTip] = useTip();
+  data = data || [];
+  series = series || [];
+  const padT = 16,
+    padB = 24;
+  const plotH = height - padT - padB;
+  const totals = data.map(d => series.reduce((s, k) => s + (+d[k.id] || 0), 0));
+  const step = Math.max(40, Math.min(74, 560 / Math.max(1, data.length)));
+  const W = Math.max(280, data.length * step),
+    H = height;
+  const baseY = padT + plotH;
+  const ticks = [0, .25, .5, .75, 1];
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 14,
+      flexWrap: 'wrap',
+      justifyContent: 'center',
+      marginBottom: 6,
+      fontSize: 11.5,
+      color: '#3c4858'
+    }
+  }, series.map((s, i) => React.createElement("span", {
+    key: i,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 11,
+      height: 11,
+      borderRadius: 3,
+      background: s.color || PALETTE[i % PALETTE.length],
+      display: 'inline-block'
+    }
+  }), s.label || s.id))), React.createElement("svg", {
+    viewBox: `0 0 ${W} ${H}`,
+    height: H,
+    preserveAspectRatio: "none",
+    style: {
+      overflow: 'visible',
+      width: '100%',
+      maxWidth: Math.max(260, data.length * Math.max(64, step)),
+      margin: '0 auto',
+      display: 'block'
+    }
+  }, ticks.map((g, i) => React.createElement("g", {
+    key: i
+  }, React.createElement("line", {
+    x1: "0",
+    x2: W,
+    y1: baseY - g * plotH,
+    y2: baseY - g * plotH,
+    stroke: "#eef1f5",
+    strokeWidth: "1"
+  }), React.createElement("text", {
+    x: 2,
+    y: baseY - g * plotH - 2,
+    fontSize: "9",
+    fontFamily: "IBM Plex Mono",
+    fill: "#9aa6b4"
+  }, Math.round(g * 100), "%"))), data.map((d, gi) => {
+    const tot = totals[gi] || 0;
+    const bw = Math.min(26, step * 0.5);
+    const bx = gi * step + (step - bw) / 2;
+    let acc = 0;
+    return React.createElement("g", {
+      key: gi,
+      onMouseMove: e => setTip({
+        x: e.clientX,
+        y: e.clientY,
+        title: String(d[x]),
+        rows: series.map((s, si) => {
+          const v = +d[s.id] || 0;
+          const pc = tot ? v / tot * 100 : 0;
+          return {
+            label: s.label || s.id,
+            value: fmt(v) + ` (${Math.round(pc)}%)`,
+            color: s.color || PALETTE[si % PALETTE.length]
+          };
+        })
+      }),
+      onMouseLeave: () => setTip(null),
+      style: {
+        cursor: 'pointer'
+      }
+    }, React.createElement("rect", {
+      x: gi * step,
+      y: padT,
+      width: step,
+      height: plotH,
+      fill: "transparent"
+    }), series.map((s, si) => {
+      const v = +d[s.id] || 0;
+      const frac = tot ? v / tot : 0;
+      const h = m ? frac * plotH : 0;
+      const by = baseY - acc - h;
+      acc += h;
+      return React.createElement("rect", {
+        key: si,
+        x: bx,
+        y: by,
+        width: bw,
+        height: Math.max(0, h),
+        fill: s.color || PALETTE[si % PALETTE.length],
+        rx: si === series.length - 1 ? 3 : 0,
+        style: flat ? undefined : {
+          transition: `all .6s ${si * 50}ms cubic-bezier(.2,.8,.25,1)`
+        }
+      });
+    }), React.createElement("text", {
+      x: gi * step + step / 2,
+      y: H - 6,
+      textAnchor: "middle",
+      fontSize: "9.5",
+      fill: "#9aa6b4"
+    }, String(d[x]).replace(/ \d{4}| 20\d\d/, '').slice(0, 6)));
+  })), tip);
+}
+function AreaTargetChart({
+  data,
+  x,
+  y,
+  target = null,
+  height = 240,
+  color = '#0090ca',
+  flat = false
+}) {
+  const mounted = useMounted();
+  const m = flat || mounted;
+  const [tip, setTip] = useTip();
+  const [hi, setHi] = React.useState(-1);
+  data = data || [];
+  const pad = 30,
+    padB = 24,
+    padT = 18;
+  const W = Math.max(320, data.length * 60),
+    H = height;
+  const plotH = H - padT - padB;
+  const vals = data.map(d => +d[y] || 0);
+  const max = Math.max(1, ...vals, target != null ? target : 0);
+  const min = 0;
+  const px = i => pad + (data.length <= 1 ? (W - pad * 2) / 2 : i / (data.length - 1) * (W - pad * 2));
+  const py = v => padT + plotH - (v - min) / (max - min || 1) * plotH;
+  const baseY = padT + plotH;
+  const pts = data.map((d, i) => [px(i), py(+d[y] || 0)]);
+  const path = pts.length ? pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ') : '';
+  const areaPath = pts.length ? path + ` L ${pts[pts.length - 1][0]} ${baseY} L ${pts[0][0]} ${baseY} Z` : '';
+  const id = 'area' + String(y).replace(/\W/g, '');
+  const ticks = [0, .25, .5, .75, 1];
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("svg", {
+    viewBox: `0 0 ${W} ${H}`,
+    height: H,
+    preserveAspectRatio: "none",
+    style: {
+      overflow: 'visible',
+      width: '100%',
+      maxWidth: Math.max(160, data.length * 80),
+      margin: '0 auto',
+      display: 'block'
+    },
+    onMouseLeave: () => {
+      setTip(null);
+      setHi(-1);
+    }
+  }, !flat && React.createElement("defs", null, React.createElement("linearGradient", {
+    id: id,
+    x1: "0",
+    y1: "0",
+    x2: "0",
+    y2: "1"
+  }, React.createElement("stop", {
+    offset: "0%",
+    stopColor: color,
+    stopOpacity: "0.28"
+  }), React.createElement("stop", {
+    offset: "100%",
+    stopColor: color,
+    stopOpacity: "0"
+  }))), ticks.map((g, i) => React.createElement("g", {
+    key: i
+  }, React.createElement("line", {
+    x1: pad,
+    x2: W - pad,
+    y1: padT + g * plotH,
+    y2: padT + g * plotH,
+    stroke: "#eef1f5",
+    strokeWidth: "1"
+  }), React.createElement("text", {
+    x: pad - 6,
+    y: padT + g * plotH + 3,
+    textAnchor: "end",
+    fontSize: "9",
+    fontFamily: "IBM Plex Mono",
+    fill: "#9aa6b4"
+  }, fmt(Math.round(max * (1 - g)))))), areaPath && React.createElement("path", {
+    d: areaPath,
+    fill: flat ? color : `url(#${id})`,
+    fillOpacity: flat ? 0.12 : 1,
+    style: flat ? undefined : {
+      opacity: m ? 1 : 0,
+      transition: 'opacity .9s .3s'
+    }
+  }), path && React.createElement("path", {
+    d: path,
+    fill: "none",
+    stroke: color,
+    strokeWidth: "2.5",
+    strokeLinejoin: "round",
+    strokeLinecap: "round",
+    style: flat ? undefined : {
+      strokeDasharray: 1600,
+      strokeDashoffset: m ? 0 : 1600,
+      transition: 'stroke-dashoffset 1.1s cubic-bezier(.4,0,.2,1)'
+    }
+  }), target != null && React.createElement("g", null, React.createElement("line", {
+    x1: pad,
+    x2: W - pad,
+    y1: py(target),
+    y2: py(target),
+    stroke: "#d23a52",
+    strokeWidth: "1.5",
+    strokeDasharray: "5 4"
+  }), React.createElement("text", {
+    x: W - pad,
+    y: py(target) - 4,
+    textAnchor: "end",
+    fontSize: "10",
+    fontFamily: "IBM Plex Mono",
+    fontWeight: "600",
+    fill: "#d23a52"
+  }, "target ", fmt(target))), pts.map((p, i) => React.createElement("g", {
+    key: i
+  }, React.createElement("rect", {
+    x: px(i) - W / Math.max(1, data.length) / 2,
+    y: padT,
+    width: W / Math.max(1, data.length),
+    height: plotH,
+    fill: "transparent",
+    onMouseMove: e => {
+      setHi(i);
+      setTip({
+        x: e.clientX,
+        y: e.clientY,
+        title: String(data[i][x]),
+        single: fmt(+data[i][y] || 0)
+      });
+    }
+  }), React.createElement("circle", {
+    cx: p[0],
+    cy: p[1],
+    r: hi === i ? 5 : 3.2,
+    fill: "#fff",
+    stroke: color,
+    strokeWidth: "2.5",
+    style: flat ? undefined : {
+      opacity: m ? 1 : 0,
+      transition: 'opacity .4s ' + (0.5 + i * 0.05) + 's, r .15s'
+    }
+  }))), hi >= 0 && React.createElement("line", {
+    x1: px(hi),
+    x2: px(hi),
+    y1: padT,
+    y2: baseY,
+    stroke: color,
+    strokeWidth: "1",
+    strokeDasharray: "3 3",
+    opacity: ".5"
+  }), data.map((d, i) => React.createElement("text", {
+    key: 'x' + i,
+    x: px(i),
+    y: H - 6,
+    textAnchor: "middle",
+    fontSize: "9.5",
+    fill: "#9aa6b4"
+  }, String(d[x]).replace(/ \d{4}| 20\d\d/, '').slice(0, 6)))), tip);
+}
+Object.assign(window, {
+  ComboChart,
+  HBarChart,
+  StackedPctBar,
+  AreaTargetChart
+});
+})();
+;
+/* ===== ui.jsx ===== */
+(function(){
+const I = {
+  grid: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z',
+  pulse: 'M3 12h4l2 6 4-14 2 8h6',
+  layers: 'M12 2 2 7l10 5 10-5zM2 12l10 5 10-5M2 17l10 5 10-5',
+  input: 'M4 4h16v16H4zM4 9h16M9 4v16',
+  doc: 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7',
+  gear: 'M12 8a4 4 0 100 8 4 4 0 000-8zM2 12h2M20 12h2M12 2v2M12 20v2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5',
+  bell: 'M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0',
+  search: 'M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12',
+  chevR: 'M9 6l6 6-6 6',
+  download: 'M12 3v12m0 0l4-4m-4 4l-4-4M4 19h16',
+  filter: 'M3 5h18l-7 8v6l-4-2v-4z',
+  plus: 'M12 5v14M5 12h14',
+  check: 'M4 12l5 5L20 6',
+  heart: 'M12 21s-8-5-10-10a5 5 0 019-3 5 5 0 019 3c-2 5-10 10-10 10z',
+  bed: 'M3 7v10M3 12h12a4 4 0 014 4v1M3 17h18M7 9h4a2 2 0 010 4H3',
+  activity: 'M3 12h4l2 6 4-14 2 8h6',
+  steth: 'M6 3v5a4 4 0 008 0V3M19 14a3 3 0 11-6 0v-1M16 18v2',
+  cal: 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4',
+  syringe: 'M18 2l4 4M16 4l4 4-9 9H7v-4zM2 22l5-5',
+  user: 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0',
+  trend: 'M3 17l6-6 4 4 8-8M21 7v5h-5',
+  x: 'M6 6l12 12M18 6L6 18',
+  edit: 'M4 20h4l11-11-4-4L4 16zM14 5l4 4',
+  print: 'M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z',
+  arrowR: 'M5 12h14M13 6l6 6-6 6'
+};
+function Ic({
+  d,
+  s = 18,
+  sw = 1.9,
+  c = 'currentColor',
+  fill = 'none',
+  style
+}) {
+  return React.createElement("svg", {
+    width: s,
+    height: s,
+    viewBox: "0 0 24 24",
+    fill: fill,
+    stroke: c,
+    strokeWidth: sw,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    style: style,
+    className: "ico"
+  }, d.split('M').filter(Boolean).map((seg, i) => React.createElement("path", {
+    key: i,
+    d: 'M' + seg
+  })));
+}
+const DEPT_ICON = {
+  er: I.pulse,
+  opd: I.user,
+  nicu: I.heart,
+  endoscopy: I.activity,
+  ot: I.syringe,
+  sicu: I.bed,
+  dialysis: I.activity,
+  lvl10: I.bed,
+  lvl9: I.bed,
+  ldr: I.heart,
+  micu: I.pulse,
+  ccu: I.heart,
+  cathlab: I.activity,
+  ctvs: I.syringe,
+  homecare: I.user
+};
+const UNICO_MODULES = [{
+  id: 'stats',
+  label: 'Statistics',
+  short: 'Statistics',
+  icon: I.grid,
+  home: 'dashboard'
+}, {
+  id: 'datacol',
+  label: 'Data Collection',
+  short: 'Data',
+  icon: I.input,
+  home: 'dcReview'
+}, {
+  id: 'staff',
+  label: 'Staff Management',
+  short: 'Staff',
+  icon: I.steth,
+  home: 'nurseHome'
+}, {
+  id: 'quality',
+  label: 'Quality Indicators',
+  short: 'Quality',
+  icon: I.heart,
+  home: 'quality'
+}, {
+  id: 'users',
+  label: 'User Management',
+  short: 'Users',
+  icon: I.user,
+  home: 'users'
+}];
+const UNICO_MODULE_VIEWS = {
+  stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'input', 'reports', 'settings'],
+  datacol: ['dcPatient', 'dcQuality', 'dcResponsibles', 'dcShare', 'dcFields', 'dcReview'],
+  staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffProfile', 'staffForm'],
+  quality: ['quality'],
+  users: ['users']
+};
+function unicoModuleOf(view) {
+  for (let i = 0; i < UNICO_MODULES.length; i++) {
+    const m = UNICO_MODULES[i];
+    if ((UNICO_MODULE_VIEWS[m.id] || []).indexOf(view) >= 0) return m.id;
+  }
+  return 'stats';
+}
+function unicoSidebarGroups(moduleId) {
+  if (moduleId === 'datacol') return [{
+    sec: 'Data Collection',
+    items: [{
+      id: 'dcPatient',
+      label: 'Patient Statistics',
+      icon: I.input
+    }, {
+      id: 'dcQuality',
+      label: 'Quality Data',
+      icon: I.activity
+    }, {
+      id: 'dcResponsibles',
+      label: 'Responsible Persons',
+      icon: I.user
+    }, {
+      id: 'dcShare',
+      label: 'Share Links',
+      icon: I.arrowR
+    }, {
+      id: 'dcFields',
+      label: 'Form Fields',
+      icon: I.filter
+    }, {
+      id: 'dcReview',
+      label: 'Review & History',
+      icon: I.doc
+    }]
+  }];
+  if (moduleId === 'staff') return [{
+    sec: 'Nurse Management',
+    items: [{
+      id: 'nurseHome',
+      label: 'Dashboard',
+      icon: I.grid
+    }, {
+      id: 'nurses',
+      label: 'Directory',
+      icon: I.layers
+    }, {
+      id: 'nurseCompliance',
+      label: 'Compliance',
+      icon: I.heart
+    }]
+  }, {
+    sec: 'PCA Management',
+    items: [{
+      id: 'pcaHome',
+      label: 'Dashboard',
+      icon: I.grid
+    }, {
+      id: 'pca',
+      label: 'Directory',
+      icon: I.layers
+    }, {
+      id: 'pcaCompliance',
+      label: 'Compliance',
+      icon: I.heart
+    }]
+  }];
+  if (moduleId === 'quality') return [{
+    sec: 'Quality Indicators',
+    items: [{
+      id: 'quality',
+      label: 'Open Quality Console',
+      icon: I.grid,
+      match: ['quality']
+    }]
+  }];
+  if (moduleId === 'users') return [{
+    sec: 'User Management',
+    items: [{
+      id: 'users',
+      label: 'All Users & Roles',
+      icon: I.user
+    }]
+  }];
+  return [{
+    sec: 'Overview',
+    items: [{
+      id: 'dashboard',
+      label: 'Dashboard',
+      icon: I.grid
+    }, {
+      id: 'departments',
+      label: 'Departments',
+      icon: I.layers
+    }, {
+      id: 'compare',
+      label: 'Compare',
+      icon: I.trend
+    }, {
+      id: 'manage',
+      label: 'Manage Depts',
+      icon: I.edit
+    }, {
+      id: 'input',
+      label: 'Data Entry',
+      icon: I.input
+    }, {
+      id: 'reports',
+      label: 'Reports',
+      icon: I.doc
+    }, {
+      id: 'settings',
+      label: 'Settings',
+      icon: I.gear
+    }]
+  }];
+}
+function ModuleSwitch({
+  route,
+  setRoute
+}) {
+  const cur = unicoModuleOf(route.view);
+  return React.createElement("div", {
+    className: "seg modswitch",
+    style: {
+      flexShrink: 0,
+      marginRight: 10
+    },
+    title: "Switch workspace"
+  }, UNICO_MODULES.map(m => React.createElement("button", {
+    key: m.id,
+    className: cur === m.id ? 'on' : '',
+    title: m.label,
+    onClick: () => {
+      if (cur !== m.id) setRoute({
+        view: m.home
+      });
+    },
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement(Ic, {
+    d: m.icon,
+    s: 15
+  }), React.createElement("span", {
+    className: "modswitch-lbl"
+  }, m.short))));
+}
+function unicoPeriodMonths(allMonths, period) {
+  if (!period || period.mode === 'all') return null;
+  if (period.mode === 'latest') return allMonths.slice(-1);
+  if (period.mode === 'last3') return allMonths.slice(-3);
+  if (period.mode === 'last6') return allMonths.slice(-6);
+  if (period.mode === 'q1') {
+    const q = ['Jan-26', 'Feb-26', 'Mar-26'].filter(m => allMonths.includes(m));
+    return q.length ? q : null;
+  }
+  if (period.mode === 'custom') {
+    const fi = allMonths.indexOf(period.from),
+      ti = allMonths.indexOf(period.to);
+    if (fi < 0 || ti < 0) return null;
+    const a = Math.min(fi, ti),
+      b = Math.max(fi, ti);
+    return allMonths.slice(a, b + 1);
+  }
+  return null;
+}
+window.unicoPeriodMonths = unicoPeriodMonths;
+function Sidebar({
+  route,
+  setRoute,
+  collapsed,
+  depts
+}) {
+  const activeMod = unicoModuleOf(route.view);
+  const groups = unicoSidebarGroups(activeMod);
+  const curMod = UNICO_MODULES.find(m => m.id === activeMod) || UNICO_MODULES[0];
+  const isOn = it => it.match ? it.match.indexOf(route.view) >= 0 : route.view === it.id;
+  return React.createElement("aside", {
+    className: "sb"
+  }, React.createElement("div", {
+    className: "sb-brand"
+  }, React.createElement("img", {
+    className: "sb-logo-img sb-logo-full",
+    src: "unico/logo.svg",
+    alt: "UNICO Healthcare"
+  }), React.createElement("img", {
+    className: "sb-logo-mark",
+    src: "unico/logo-mark.svg",
+    alt: "UNICO"
+  })), React.createElement("div", {
+    className: "sb-scroll"
+  }, React.createElement("div", {
+    className: "sb-sec",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      color: 'var(--blue)'
+    }
+  }, React.createElement(Ic, {
+    d: curMod.icon,
+    s: 14
+  }), React.createElement("span", {
+    style: {
+      fontWeight: 800,
+      letterSpacing: .3
+    }
+  }, curMod.label)), groups.map((g, gi) => React.createElement(React.Fragment, {
+    key: gi
+  }, React.createElement("div", {
+    className: "sb-sec"
+  }, g.sec), g.items.map(n => React.createElement("div", {
+    key: n.id,
+    className: 'sb-item' + (isOn(n) ? ' active' : ''),
+    onClick: () => setRoute({
+      view: n.id
+    })
+  }, React.createElement(Ic, {
+    d: n.icon,
+    s: 18
+  }), React.createElement("span", {
+    className: "lbl"
+  }, n.label))))), activeMod === 'stats' && React.createElement(React.Fragment, null, React.createElement("div", {
+    className: "sb-sec",
+    style: {
+      display: 'flex',
+      alignItems: 'center'
+    }
+  }, "Departments", React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    onClick: () => setRoute({
+      view: 'manage'
+    }),
+    title: "Add / manage",
+    style: {
+      cursor: 'pointer',
+      color: '#7e8da0',
+      display: 'grid',
+      placeItems: 'center',
+      padding: '0 2px'
+    }
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 15
+  }))), depts.map(d => React.createElement("div", {
+    key: d.id,
+    className: 'sb-item' + (route.view === 'departments' && route.dept === d.id ? ' active' : ''),
+    onClick: () => setRoute({
+      view: 'departments',
+      dept: d.id
+    }),
+    title: d.name
+  }, React.createElement(Ic, {
+    d: DEPT_ICON[d.id] || I.activity,
+    s: 17
+  }), React.createElement("span", {
+    className: "lbl"
+  }, d.short), React.createElement("span", {
+    className: "badge num"
+  }, d.total))))), React.createElement("div", {
+    className: "sb-foot"
+  }, (() => {
+    const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    const name = u && u.name || 'Nasif Ahammed Niloy';
+    const role = u ? u.role === 'collector' ? 'Data Collector' : u.role : 'Administrator';
+    const initials = String(name).split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'U';
+    return React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "avatar"
+    }, initials), React.createElement("div", {
+      className: "who",
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        color: '#fff',
+        fontSize: 12.5,
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, name), React.createElement("div", {
+      style: {
+        color: '#83909f',
+        fontSize: 10.5,
+        whiteSpace: 'nowrap'
+      }
+    }, role)), React.createElement("a", {
+      href: "/logout",
+      title: "Sign out",
+      style: {
+        marginLeft: 'auto',
+        display: 'grid',
+        placeItems: 'center',
+        width: 32,
+        height: 32,
+        borderRadius: 8,
+        color: '#cfe0f0',
+        background: 'rgba(255,255,255,.08)',
+        textDecoration: 'none',
+        flexShrink: 0
+      }
+    }, React.createElement("svg", {
+      width: "16",
+      height: "16",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: "M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"
+    }), React.createElement("path", {
+      d: "M16 17l5-5-5-5"
+    }), React.createElement("path", {
+      d: "M21 12H9"
+    }))));
+  })()));
+}
+const NMONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const NMONS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function nextMonthKey(mk) {
+  const [m, y] = mk.split('-');
+  let i = NMONS.indexOf(m) + 1,
+    yy = +y;
+  if (i > 11) {
+    i = 0;
+    yy++;
+  }
+  return NMONS[i] + '-' + String(yy).padStart(2, '0');
+}
+function mnum(mk) {
+  const [m, y] = mk.split('-');
+  return (2000 + +y) * 12 + NMONS.indexOf(m);
+}
+function monthFull(mk) {
+  const [m, y] = mk.split('-');
+  return NMONS_FULL[NMONS.indexOf(m)] + ' 20' + y;
+}
+function PeriodPill({
+  period,
+  setPeriod,
+  depts = []
+}) {
+  const [open, setOpen] = React.useState(false);
+  const MO = window.UNICO.MONTH_ORDER;
+  const allMonths = [...new Set(depts.flatMap(d => d.months || []))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b));
+  const fmtKey = k => String(k || '').replace('-', ' ');
+  const active = unicoPeriodMonths(allMonths, period) || allMonths;
+  const label = active.length ? `${fmtKey(active[0])} – ${fmtKey(active[active.length - 1])}` : 'No data';
+  const presets = [['all', 'All time'], ['last3', 'Last 3 months'], ['last6', 'Last 6 months'], ['q1', 'Q1 2026'], ['latest', 'Latest month']];
+  const cur = period && period.mode || 'all';
+  const pick = mode => {
+    setPeriod({
+      mode
+    });
+    setOpen(false);
+  };
+  const first = allMonths[0],
+    last = allMonths[allMonths.length - 1];
+  const cFrom = period && period.mode === 'custom' && period.from || first;
+  const cTo = period && period.mode === 'custom' && period.to || last;
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("button", {
+    className: "tb-pill",
+    onClick: () => setOpen(o => !o),
+    title: "Filter dashboard period",
+    style: {
+      cursor: 'pointer',
+      border: '1px solid ' + (cur !== 'all' ? 'var(--blue-100)' : 'var(--line)'),
+      background: cur !== 'all' ? 'var(--blue-50)' : 'var(--panel-2)'
+    }
+  }, React.createElement(Ic, {
+    d: I.cal,
+    s: 14,
+    c: "#0b66d0"
+  }), React.createElement("span", {
+    className: "num"
+  }, label), React.createElement(Ic, {
+    d: I.chevR,
+    s: 12,
+    style: {
+      transform: 'rotate(90deg)',
+      opacity: .55
+    }
+  })), open && React.createElement("div", {
+    onMouseLeave: () => setOpen(false),
+    style: {
+      position: 'absolute',
+      right: 0,
+      top: '118%',
+      zIndex: 200,
+      width: 236,
+      background: '#fff',
+      border: '1px solid var(--line)',
+      borderRadius: 11,
+      boxShadow: 'var(--shadow-pop)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '10px 13px',
+      borderBottom: '1px solid var(--line-2)',
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--ink-2)',
+      textTransform: 'uppercase',
+      letterSpacing: .4
+    }
+  }, "Reporting period"), React.createElement("div", {
+    style: {
+      padding: 6
+    }
+  }, presets.map(([m, l]) => React.createElement("div", {
+    key: m,
+    onClick: () => pick(m),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      padding: '8px 10px',
+      borderRadius: 7,
+      cursor: 'pointer',
+      fontSize: 12.5,
+      fontWeight: 600,
+      background: cur === m ? 'var(--blue-50)' : 'transparent',
+      color: cur === m ? 'var(--blue-700)' : 'var(--ink-2)'
+    },
+    onMouseEnter: e => {
+      if (cur !== m) e.currentTarget.style.background = 'var(--panel-2)';
+    },
+    onMouseLeave: e => {
+      if (cur !== m) e.currentTarget.style.background = 'transparent';
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 14,
+      display: 'inline-flex'
+    }
+  }, cur === m && React.createElement(Ic, {
+    d: I.check,
+    s: 13,
+    c: "var(--blue)"
+  })), l))), React.createElement("div", {
+    style: {
+      borderTop: '1px solid var(--line-2)',
+      padding: '10px 12px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      color: cur === 'custom' ? 'var(--blue-700)' : 'var(--muted)',
+      marginBottom: 6
+    }
+  }, "Custom range"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement("select", {
+    value: cFrom,
+    onChange: e => setPeriod({
+      mode: 'custom',
+      from: e.target.value,
+      to: cTo
+    }),
+    style: {
+      flex: 1,
+      minWidth: 0,
+      padding: '6px 7px',
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      fontSize: 11.5,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, allMonths.map(m => React.createElement("option", {
+    key: m,
+    value: m
+  }, fmtKey(m)))), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "to"), React.createElement("select", {
+    value: cTo,
+    onChange: e => setPeriod({
+      mode: 'custom',
+      from: cFrom,
+      to: e.target.value
+    }),
+    style: {
+      flex: 1,
+      minWidth: 0,
+      padding: '6px 7px',
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      fontSize: 11.5,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, allMonths.map(m => React.createElement("option", {
+    key: m,
+    value: m
+  }, fmtKey(m))))))));
+}
+function TopBar({
+  route,
+  setRoute,
+  onBurger,
+  crumbs,
+  actions,
+  depts = [],
+  onFill,
+  period,
+  setPeriod
+}) {
+  const [notifOpen, setNotifOpen] = React.useState(false);
+  const reporting = depts.filter(d => d.months && d.months.length && d.latest && d.latest.month);
+  const nexts = reporting.map(d => nextMonthKey(d.latest.month));
+  const currentKey = nexts.length ? nexts.reduce((a, b) => mnum(b) < mnum(a) ? b : a) : null;
+  const missing = currentKey ? reporting.filter(d => !d.months.includes(currentKey)) : [];
+  return React.createElement("div", {
+    className: "topbar"
+  }, React.createElement("button", {
+    className: "tb-burger",
+    onClick: onBurger,
+    title: "Toggle menu"
+  }, React.createElement(Ic, {
+    d: I.grid,
+    s: 16
+  })), React.createElement(ModuleSwitch, {
+    route: route,
+    setRoute: setRoute
+  }), React.createElement("div", {
+    className: "crumb"
+  }, crumbs.map((c, i) => React.createElement(React.Fragment, {
+    key: i
+  }, i > 0 && React.createElement(Ic, {
+    d: I.chevR,
+    s: 13,
+    c: "#b6c0cc"
+  }), i === crumbs.length - 1 ? route.view === 'departments' && depts && depts.length ? React.createElement("select", {
+    value: route.dept || depts[0].id,
+    onChange: e => setRoute({
+      view: 'departments',
+      dept: e.target.value
+    }),
+    title: "Switch department",
+    style: {
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      padding: '3px 8px',
+      fontSize: 14,
+      fontWeight: 600,
+      color: 'var(--ink)',
+      fontFamily: 'inherit',
+      background: 'var(--panel-2)',
+      cursor: 'pointer',
+      maxWidth: 240
+    }
+  }, depts.map(d => React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name))) : React.createElement("b", null, c) : React.createElement("span", {
+    style: {
+      cursor: 'pointer'
+    }
+  }, c)))), React.createElement("div", {
+    className: "tb-search",
+    onClick: () => window.dispatchEvent(new Event('unico:open-search')),
+    style: {
+      cursor: 'pointer'
+    },
+    title: "Search (Ctrl+K)"
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 15
+  }), React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 12.5,
+      color: 'var(--faint)',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden'
+    }
+  }, "Search departments, staff, quality\u2026"), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: 'var(--faint)',
+      border: '1px solid var(--line)',
+      borderRadius: 5,
+      padding: '1px 6px',
+      background: 'var(--panel)'
+    }
+  }, "Ctrl K")), React.createElement("div", {
+    className: "tb-right"
+  }, actions, route.view === 'dashboard' && setPeriod && React.createElement(PeriodPill, {
+    period: period,
+    setPeriod: setPeriod,
+    depts: depts
+  }), React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("button", {
+    className: "tb-icon",
+    onClick: () => setNotifOpen(o => !o),
+    title: "Reminders"
+  }, React.createElement(Ic, {
+    d: I.bell,
+    s: 17
+  }), missing.length > 0 && React.createElement("span", {
+    className: "tb-dot"
+  })), notifOpen && React.createElement("div", {
+    onMouseLeave: () => setNotifOpen(false),
+    style: {
+      position: 'absolute',
+      right: 0,
+      top: '118%',
+      zIndex: 200,
+      width: 320,
+      background: '#fff',
+      border: '1px solid var(--line)',
+      borderRadius: 11,
+      boxShadow: 'var(--shadow-pop)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '13px 15px',
+      borderBottom: '1px solid var(--line-2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, React.createElement(Ic, {
+    d: I.bell,
+    s: 16,
+    c: "var(--blue)"
+  }), React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700
+    }
+  }, "Reminders"), React.createElement("span", {
+    className: "spacer"
+  }), missing.length > 0 && React.createElement("span", {
+    className: "chip neg"
+  }, missing.length)), currentKey && React.createElement("div", {
+    style: {
+      padding: '10px 15px',
+      background: 'var(--blue-50)',
+      borderBottom: '1px solid var(--line-2)',
+      fontSize: 11.5,
+      color: 'var(--ink-2)'
+    }
+  }, "Running month \xB7 ", React.createElement("b", null, monthFull(currentKey))), React.createElement("div", {
+    style: {
+      maxHeight: 300,
+      overflowY: 'auto'
+    }
+  }, missing.length === 0 ? React.createElement("div", {
+    style: {
+      padding: '26px 16px',
+      textAlign: 'center',
+      color: 'var(--pos)',
+      fontSize: 12.5
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 24,
+    c: "#1f9d57"
+  }), React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, "All departments up to date.")) : missing.map(d => React.createElement("div", {
+    key: d.id,
+    onClick: () => {
+      onFill && onFill(d.id);
+      setNotifOpen(false);
+    },
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '10px 15px',
+      borderBottom: '1px solid var(--line-2)',
+      cursor: 'pointer'
+    },
+    onMouseEnter: e => e.currentTarget.style.background = 'var(--panel-2)',
+    onMouseLeave: e => e.currentTarget.style.background = '#fff'
+  }, React.createElement("div", {
+    style: {
+      width: 30,
+      height: 30,
+      borderRadius: 8,
+      background: 'var(--neg-bg)',
+      color: 'var(--neg)',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: DEPT_ICON[d.id] || I.activity,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: 'var(--ink)',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, d.name), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, monthFull(currentKey), " not entered")), React.createElement(Ic, {
+    d: I.input,
+    s: 15,
+    c: "var(--blue)"
+  })))), missing.length > 0 && React.createElement("div", {
+    style: {
+      padding: '10px 12px',
+      borderTop: '1px solid var(--line-2)'
+    }
+  }, React.createElement("button", {
+    className: "btn pri sm",
+    style: {
+      width: '100%',
+      justifyContent: 'center'
+    },
+    onClick: () => {
+      onFill && onFill(missing[0].id);
+      setNotifOpen(false);
+    }
+  }, React.createElement(Ic, {
+    d: I.input,
+    s: 14
+  }), "Enter ", monthFull(currentKey), " data")))), React.createElement("button", {
+    className: "tb-icon",
+    title: "Print",
+    onClick: () => window.print()
+  }, React.createElement(Ic, {
+    d: I.print,
+    s: 17
+  })), window.unicoLock && window.unicoLock.isEnabled() && React.createElement("button", {
+    className: "tb-icon",
+    title: "Lock now",
+    onClick: () => window.dispatchEvent(new Event('unico:lock'))
+  }, React.createElement("svg", {
+    width: "17",
+    height: "17",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("rect", {
+    x: "4",
+    y: "11",
+    width: "16",
+    height: "10",
+    rx: "2"
+  }), React.createElement("path", {
+    d: "M8 11V7a4 4 0 018 0v4"
+  }), React.createElement("circle", {
+    cx: "12",
+    cy: "16",
+    r: "1.1"
+  })))));
+}
+function Delta({
+  v
+}) {
+  const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'flat';
+  const sym = v > 0 ? '▲' : v < 0 ? '▼' : '—';
+  return React.createElement("span", {
+    className: 'chip ' + cls
+  }, sym, " ", Math.abs(v), "%");
+}
+function SectionTitle({
+  icon,
+  title,
+  sub,
+  right
+}) {
+  return React.createElement("div", {
+    className: "sec-head",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 11,
+      margin: '4px 0 12px'
+    }
+  }, icon && React.createElement("div", {
+    style: {
+      width: 30,
+      height: 30,
+      borderRadius: 8,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Ic, {
+    d: icon,
+    s: 17
+  })), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, title), sub && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, sub)), React.createElement("div", {
+    className: "spacer"
+  }), right);
+}
+Object.assign(window, {
+  Ic,
+  I,
+  DEPT_ICON,
+  Sidebar,
+  TopBar,
+  Delta,
+  SectionTitle,
+  ModuleSwitch,
+  unicoModuleOf
+});
+})();
+;
+/* ===== feedback.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect,
+    useRef,
+    useCallback
+  } = React;
+  const PATH_INFO = 'M12 2a10 10 0 100 20 10 10 0 000-20M12 11v5M12 7.5v.01';
+  const PATH_WARN = 'M12 3l9.5 16.5H2.5zM12 10v4M12 17.5v.01';
+  const TYPES = {
+    success: {
+      fg: 'var(--green)',
+      bg: '#e7f6ed',
+      bd: '#bfe6cf',
+      d: window.I && window.I.check || 'M4 12l5 5L20 6'
+    },
+    error: {
+      fg: 'var(--rose)',
+      bg: 'var(--neg-bg)',
+      bd: '#f1c6cd',
+      d: window.I && window.I.x || 'M6 6l12 12M18 6L6 18'
+    },
+    info: {
+      fg: 'var(--blue)',
+      bg: 'var(--blue-50)',
+      bd: 'var(--blue-100)',
+      d: PATH_INFO
+    },
+    warn: {
+      fg: 'var(--amber)',
+      bg: '#fbf0dd',
+      bd: '#f0d8a8',
+      d: PATH_WARN
+    }
+  };
+  const DEFAULT_DURATION = 3200;
+  function Icon({
+    d,
+    s = 18,
+    c = 'currentColor',
+    sw = 2
+  }) {
+    if (typeof window.Ic === 'function') return React.createElement(window.Ic, {
+      d,
+      s,
+      c,
+      sw
+    });
+    return React.createElement("svg", {
+      width: s,
+      height: s,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: c,
+      strokeWidth: sw,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      className: "ico"
+    }, d.split('M').filter(Boolean).map((seg, i) => React.createElement("path", {
+      key: i,
+      d: 'M' + seg
+    })));
+  }
+  let toastSeq = 0;
+  const toastListeners = new Set();
+  let toastState = [];
+  function emitToasts() {
+    toastListeners.forEach(fn => {
+      try {
+        fn(toastState);
+      } catch (e) {}
+    });
+  }
+  function addToast(message, type, opts) {
+    opts = opts || {};
+    const t = type && TYPES[type] ? type : 'success';
+    const id = ++toastSeq;
+    const duration = typeof opts.duration === 'number' ? opts.duration : DEFAULT_DURATION;
+    toastState = toastState.concat([{
+      id,
+      message: String(message == null ? '' : message),
+      type: t,
+      duration
+    }]);
+    emitToasts();
+    return id;
+  }
+  function removeToast(id) {
+    const before = toastState.length;
+    toastState = toastState.filter(x => x.id !== id);
+    if (toastState.length !== before) emitToasts();
+  }
+  function ToastItem({
+    t,
+    onClose
+  }) {
+    const cfg = TYPES[t.type] || TYPES.success;
+    const [leaving, setLeaving] = useState(false);
+    const timerRef = useRef(null);
+    const dismiss = useCallback(() => {
+      if (leaving) return;
+      setLeaving(true);
+      window.setTimeout(() => onClose(t.id), 200);
+    }, [leaving, onClose, t.id]);
+    useEffect(() => {
+      if (t.duration > 0) {
+        timerRef.current = window.setTimeout(dismiss, t.duration);
+        return () => window.clearTimeout(timerRef.current);
+      }
+    }, [t.duration, dismiss]);
+    return React.createElement("div", {
+      className: 'uni-toast' + (leaving ? ' leaving' : ''),
+      role: "status",
+      style: {
+        '--tfg': cfg.fg,
+        '--tbg': cfg.bg,
+        '--tbd': cfg.bd
+      },
+      onClick: dismiss,
+      title: "Dismiss"
+    }, React.createElement("span", {
+      className: "uni-toast-ic"
+    }, React.createElement(Icon, {
+      d: cfg.d,
+      s: 16,
+      c: cfg.fg,
+      sw: 2.4
+    })), React.createElement("span", {
+      className: "uni-toast-msg"
+    }, t.message), React.createElement("span", {
+      className: "uni-toast-x"
+    }, React.createElement(Icon, {
+      d: window.I && window.I.x || 'M6 6l12 12M18 6L6 18',
+      s: 13,
+      c: "var(--faint)",
+      sw: 2.2
+    })));
+  }
+  function ToastHost() {
+    const [items, setItems] = useState(toastState);
+    useEffect(() => {
+      const fn = next => setItems(next);
+      toastListeners.add(fn);
+      fn(toastState);
+      return () => {
+        toastListeners.delete(fn);
+      };
+    }, []);
+    return React.createElement("div", {
+      className: "uni-toast-stack"
+    }, items.map(t => React.createElement(ToastItem, {
+      key: t.id,
+      t: t,
+      onClose: removeToast
+    })));
+  }
+  let confirmSeq = 0;
+  const confirmListeners = new Set();
+  let confirmQueue = [];
+  function emitConfirms() {
+    confirmListeners.forEach(fn => {
+      try {
+        fn(confirmQueue);
+      } catch (e) {}
+    });
+  }
+  function pushConfirm(opts) {
+    return new Promise(resolve => {
+      const id = ++confirmSeq;
+      confirmQueue = confirmQueue.concat([{
+        id,
+        opts: opts || {},
+        resolve
+      }]);
+      emitConfirms();
+    });
+  }
+  function settleConfirm(id, value) {
+    const entry = confirmQueue.find(c => c.id === id);
+    confirmQueue = confirmQueue.filter(c => c.id !== id);
+    emitConfirms();
+    if (entry) {
+      try {
+        entry.resolve(value);
+      } catch (e) {}
+    }
+  }
+  function ConfirmDialog({
+    entry
+  }) {
+    const o = entry.opts || {};
+    const danger = !!o.danger;
+    const confirmLabel = o.confirmLabel || 'Confirm';
+    const cancelLabel = o.cancelLabel || 'Cancel';
+    const title = o.title || 'Are you sure?';
+    const message = o.message || '';
+    const btnRef = useRef(null);
+    const cancel = useCallback(() => settleConfirm(entry.id, false), [entry.id]);
+    const ok = useCallback(() => settleConfirm(entry.id, true), [entry.id]);
+    useEffect(() => {
+      const onKey = e => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          cancel();
+        } else if (e.key === 'Enter') {
+          e.stopPropagation();
+          ok();
+        }
+      };
+      window.addEventListener('keydown', onKey, true);
+      if (btnRef.current) {
+        try {
+          btnRef.current.focus();
+        } catch (e) {}
+      }
+      return () => window.removeEventListener('keydown', onKey, true);
+    }, [cancel, ok]);
+    const icPath = danger ? window.I && window.I.x || 'M6 6l12 12M18 6L6 18' : window.I && window.I.bell || PATH_INFO;
+    return React.createElement("div", {
+      className: "modal-bg",
+      onMouseDown: e => {
+        if (e.target === e.currentTarget) cancel();
+      }
+    }, React.createElement("div", {
+      className: "modal",
+      style: {
+        width: 'min(420px,92vw)'
+      }
+    }, React.createElement("div", {
+      style: {
+        padding: '22px 22px 18px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 12,
+        alignItems: 'flex-start'
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 38,
+        height: 38,
+        borderRadius: 10,
+        flexShrink: 0,
+        display: 'grid',
+        placeItems: 'center',
+        background: danger ? 'var(--neg-bg)' : 'var(--blue-50)',
+        color: danger ? 'var(--rose)' : 'var(--blue)'
+      }
+    }, React.createElement(Icon, {
+      d: icPath,
+      s: 20,
+      sw: 2.4,
+      c: danger ? 'var(--rose)' : 'var(--blue)'
+    })), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 15.5,
+        fontWeight: 700,
+        color: 'var(--ink)'
+      }
+    }, title), message ? React.createElement("div", {
+      style: {
+        fontSize: 13,
+        color: 'var(--muted)',
+        marginTop: 4,
+        lineHeight: 1.5
+      }
+    }, message) : null)), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        marginTop: 20
+      }
+    }, React.createElement("span", {
+      className: "spacer",
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "btn",
+      onClick: cancel
+    }, cancelLabel), React.createElement("button", {
+      ref: btnRef,
+      className: "btn pri",
+      style: danger ? {
+        background: 'var(--rose)',
+        borderColor: 'var(--rose)',
+        boxShadow: 'none'
+      } : undefined,
+      onClick: ok
+    }, confirmLabel)))));
+  }
+  function ConfirmHost() {
+    const [queue, setQueue] = useState(confirmQueue);
+    useEffect(() => {
+      const fn = next => setQueue(next);
+      confirmListeners.add(fn);
+      fn(confirmQueue);
+      return () => {
+        confirmListeners.delete(fn);
+      };
+    }, []);
+    if (!queue.length) return null;
+    const entry = queue[queue.length - 1];
+    return React.createElement(ConfirmDialog, {
+      key: entry.id,
+      entry: entry
+    });
+  }
+  function mount() {
+    if (!document.body) {
+      window.addEventListener('DOMContentLoaded', mount, {
+        once: true
+      });
+      return;
+    }
+    if (window.__uniFeedbackMounted) return;
+    window.__uniFeedbackMounted = true;
+    const toastEl = document.createElement('div');
+    toastEl.id = 'uni-toast-root';
+    document.body.appendChild(toastEl);
+    ReactDOM.createRoot(toastEl).render(React.createElement(ToastHost, null));
+    const confirmEl = document.createElement('div');
+    confirmEl.id = 'uni-confirm-root';
+    document.body.appendChild(confirmEl);
+    ReactDOM.createRoot(confirmEl).render(React.createElement(ConfirmHost, null));
+  }
+  mount();
+  const api = {
+    toast: function (message, type, opts) {
+      return addToast(message, type, opts);
+    },
+    confirm: function (opts) {
+      return pushConfirm(opts);
+    },
+    dismiss: function (id) {
+      removeToast(id);
+    }
+  };
+  window.UI = Object.assign({}, window.UI, api);
+  window.toast = window.UI.toast;
+})();
+})();
+;
+/* ===== dashboard.jsx ===== */
+(function(){
+function KpiCard({
+  label,
+  value,
+  delta,
+  foot,
+  icon,
+  tone = '#0b66d0',
+  spark,
+  sparkColor
+}) {
+  return React.createElement("div", {
+    className: "card kpi anim-pop"
+  }, React.createElement("div", {
+    className: "top"
+  }, React.createElement("div", {
+    className: "ic",
+    style: {
+      background: tone + '1a',
+      color: tone
+    }
+  }, React.createElement(Ic, {
+    d: icon,
+    s: 20
+  })), React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("div", {
+    className: "lbl"
+  }, label)), spark && React.createElement(Spark, {
+    values: spark,
+    color: sparkColor || tone,
+    w: 84,
+    h: 30
+  })), React.createElement("div", {
+    className: "val"
+  }, value), React.createElement("div", {
+    className: "row2"
+  }, delta != null && React.createElement(Delta, {
+    v: delta
+  }), React.createElement("span", {
+    className: "foot"
+  }, foot)));
+}
+function DeptMiniCard({
+  d,
+  onOpen
+}) {
+  const vals = d.series.map(r => r[d.primary] || 0);
+  const tone = PALETTE[(d.id.charCodeAt(0) + d.id.length) % PALETTE.length];
+  return React.createElement("div", {
+    className: "card anim-pop",
+    style: {
+      padding: 14,
+      cursor: 'pointer',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 9
+    },
+    onClick: onOpen,
+    onMouseEnter: e => e.currentTarget.style.boxShadow = 'var(--shadow-md)',
+    onMouseLeave: e => e.currentTarget.style.boxShadow = 'var(--shadow)'
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 30,
+      height: 30,
+      borderRadius: 8,
+      background: tone + '18',
+      color: tone,
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Ic, {
+    d: DEPT_ICON[d.id] || I.activity,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      whiteSpace: 'nowrap'
+    }
+  }, d.short), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      maxWidth: 118
+    }
+  }, d.name)), React.createElement("div", {
+    className: "spacer"
+  }), React.createElement(Delta, {
+    v: d.delta
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      justifyContent: 'space-between'
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 23,
+      fontWeight: 600,
+      color: 'var(--ink)',
+      lineHeight: 1
+    }
+  }, fmt(d.latest[d.primary] || 0)), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: 'var(--faint)',
+      textTransform: 'uppercase',
+      letterSpacing: .3,
+      marginTop: 3
+    }
+  }, d.primaryLabel, " \xB7 ", d.latest.month)), React.createElement(Spark, {
+    values: vals,
+    color: tone,
+    w: 96,
+    h: 36
+  })));
+}
+function ReportingCompliance({
+  depts,
+  onFill
+}) {
+  const MO = window.UNICO.MONTH_ORDER,
+    MF = window.UNICO.MONTHS_FULL;
+  const allM = [...new Set(depts.flatMap(d => d.months))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b));
+  const yearOf = m => String(m || '').split('-')[1] || '';
+  const yLabel = y => y && y.length === 2 ? '20' + y : y || '';
+  const years = [...new Set(allM.map(yearOf))].filter(Boolean).sort();
+  const [year, setYear] = React.useState(() => years[years.length - 1] || '');
+  const curYear = years.indexOf(year) >= 0 ? year : years[years.length - 1] || '';
+  const monthsOfYear = allM.filter(m => yearOf(m) === curYear);
+  const recent = monthsOfYear.length ? monthsOfYear : allM.slice(-5);
+  let reported = 0,
+    missing = 0;
+  const rows = depts.map(d => {
+    const first = d.months[0];
+    const cells = recent.map(m => {
+      if (!first || MO.indexOf(m) < MO.indexOf(first)) return {
+        m,
+        st: 'na'
+      };
+      if (d.months.includes(m)) {
+        reported++;
+        return {
+          m,
+          st: 'ok'
+        };
+      }
+      missing++;
+      return {
+        m,
+        st: 'miss'
+      };
+    });
+    return {
+      d,
+      cells,
+      miss: cells.filter(c => c.st === 'miss').length
+    };
+  }).sort((a, b) => b.miss - a.miss);
+  const pct = reported + missing ? Math.round(reported * 100 / (reported + missing)) : 100;
+  const pending = rows.filter(r => r.miss > 0);
+  return React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Reporting Compliance"), React.createElement("span", {
+    className: "sub"
+  }, curYear ? yLabel(curYear) : 'running months', " \xB7 missing department stats"), React.createElement("span", {
+    className: "spacer"
+  }), years.length > 1 && React.createElement("div", {
+    className: "seg",
+    style: {
+      marginRight: 8
+    },
+    title: "Switch reporting year"
+  }, years.map(y => React.createElement("button", {
+    key: y,
+    className: curYear === y ? 'on' : '',
+    onClick: () => setYear(y)
+  }, yLabel(y)))), React.createElement("span", {
+    className: "chip ",
+    style: {
+      background: pct >= 90 ? 'var(--pos-bg)' : pct >= 70 ? '#fdf3e3' : 'var(--neg-bg)',
+      color: pct >= 90 ? 'var(--pos)' : pct >= 70 ? 'var(--amber)' : 'var(--neg)'
+    }
+  }, pct, "% complete"), React.createElement("span", {
+    className: "tag num",
+    style: {
+      marginLeft: 8
+    }
+  }, missing, " pending")), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    className: "tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Department"), recent.map(m => React.createElement("th", {
+    key: m,
+    style: {
+      textAlign: 'center'
+    }
+  }, m)), React.createElement("th", {
+    style: {
+      textAlign: 'center'
+    }
+  }, "Gaps"))), React.createElement("tbody", null, rows.map(({
+    d,
+    cells,
+    miss
+  }) => React.createElement("tr", {
+    key: d.id
+  }, React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      cursor: 'pointer'
+    },
+    onClick: () => onFill && onFill(d.id)
+  }, React.createElement("b", {
+    style: {
+      color: 'var(--ink)'
+    }
+  }, d.short), " ", React.createElement("span", {
+    style: {
+      color: 'var(--faint)',
+      fontWeight: 400,
+      fontFamily: "'IBM Plex Sans'"
+    }
+  }, d.name)), cells.map((c, i) => React.createElement("td", {
+    key: i,
+    style: {
+      textAlign: 'center'
+    }
+  }, c.st === 'ok' && React.createElement("span", {
+    style: {
+      color: 'var(--pos)',
+      fontWeight: 700
+    }
+  }, "\u2713"), c.st === 'na' && React.createElement("span", {
+    style: {
+      color: '#cbd3dd'
+    }
+  }, "\u2013"), c.st === 'miss' && React.createElement("span", {
+    title: `Fill ${d.short} · ${c.m}`,
+    onClick: () => onFill && onFill(d.id),
+    style: {
+      cursor: 'pointer',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: 22,
+      height: 22,
+      borderRadius: 6,
+      background: 'var(--neg-bg)',
+      color: 'var(--neg)',
+      fontWeight: 700,
+      fontSize: 11
+    }
+  }, "!"))), React.createElement("td", {
+    style: {
+      textAlign: 'center'
+    }
+  }, miss > 0 ? React.createElement("span", {
+    className: "chip neg"
+  }, miss) : React.createElement("span", {
+    className: "chip pos"
+  }, "0"))))))), pending.length > 0 && React.createElement("div", {
+    style: {
+      padding: '12px 16px',
+      borderTop: '1px solid var(--line-2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Fill missing months:"), pending.slice(0, 8).map(({
+    d,
+    miss
+  }) => React.createElement("button", {
+    key: d.id,
+    className: "btn sm",
+    onClick: () => onFill && onFill(d.id)
+  }, React.createElement(Ic, {
+    d: I.input,
+    s: 13
+  }), d.short, " ", React.createElement("span", {
+    style: {
+      color: 'var(--rose)',
+      marginLeft: 2
+    }
+  }, "(", miss, ")")))));
+}
+function deptForPeriod(d, monthSet) {
+  const idxs = [];
+  for (let i = 0; i < d.months.length; i++) if (monthSet.has(d.months[i])) idxs.push(i);
+  if (!idxs.length) return d;
+  const months = idxs.map(i => d.months[i]);
+  const data = idxs.map(i => d.data[i]);
+  const series = data.map((row, i) => ({
+    month: months[i],
+    full: window.UNICO.MONTHS_FULL[months[i]] || months[i],
+    ...row
+  }));
+  const total = series.reduce((s, r) => s + (r[d.primary] || 0), 0);
+  const latest = series[series.length - 1];
+  const prev = series.length > 1 ? series[series.length - 2] : null;
+  const cur = latest[d.primary] || 0,
+    pv = prev ? prev[d.primary] || 0 : 0;
+  const delta = pv === 0 ? cur > 0 ? 100 : 0 : Math.round((cur - pv) / pv * 100);
+  const peak = Math.max(...series.map(r => r[d.primary] || 0));
+  const avg = Math.round(total / series.length);
+  return {
+    ...d,
+    months,
+    data,
+    series,
+    total,
+    latest,
+    prev,
+    delta,
+    peak,
+    avg
+  };
+}
+function Dashboard({
+  layout,
+  depts: rawDepts,
+  period,
+  openDept,
+  onFill,
+  setRoute
+}) {
+  const MO = window.UNICO.MONTH_ORDER,
+    MF = window.UNICO.MONTHS_FULL;
+  const allMonths = React.useMemo(() => [...new Set(rawDepts.flatMap(d => d.months || []))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b)), [rawDepts]);
+  const months = window.unicoPeriodMonths(allMonths, period || {
+    mode: 'all'
+  });
+  const monthsKey = months ? months.join(',') : 'all';
+  const depts = React.useMemo(() => {
+    if (!months) return rawDepts;
+    const set = new Set(months);
+    return rawDepts.map(d => deptForPeriod(d, set));
+  }, [rawDepts, monthsKey]);
+  const activeMonths = months || allMonths;
+  const fmtKey = k => String(k || '').replace('-', ' ');
+  const mShort = k => String(k || '').split('-')[0];
+  const rangeShort = activeMonths.length ? `${fmtKey(activeMonths[0])}–${fmtKey(activeMonths[activeMonths.length - 1])}` : '—';
+  const rangeFull = activeMonths.length ? `${MF[activeMonths[0]] || activeMonths[0]} – ${MF[activeMonths[activeMonths.length - 1]] || activeMonths[activeMonths.length - 1]}` : '—';
+  const D = Object.fromEntries(depts.map(d => [d.id, d]));
+  const er = D.er,
+    opd = D.opd,
+    ot = D.ot,
+    cath = D.cathlab;
+  const icus = ['micu', 'sicu', 'ccu', 'nicu'].map(id => D[id]);
+  const icuTotal = icus.reduce((s, d) => s + d.total, 0);
+  const procTotal = ['endoscopy', 'ot', 'cathlab', 'dialysis', 'ctvs'].reduce((s, id) => s + (D[id]?.total || 0), 0);
+  const kpis = React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: 'repeat(auto-fit,minmax(208px,1fr))'
+    }
+  }, React.createElement(KpiCard, {
+    label: `ED Patients · ${mShort(er.latest.month)}`,
+    value: fmt(er.latest.total),
+    delta: er.delta,
+    icon: I.pulse,
+    tone: "#d23a52",
+    foot: er.prev ? `vs ${mShort(er.prev.month)}` : 'latest month',
+    spark: er.series.map(r => r.total),
+    sparkColor: "#d23a52"
+  }), React.createElement(KpiCard, {
+    label: `OPD Footfall · ${mShort(opd.latest.month)}`,
+    value: fmt(opd.latest.opd),
+    delta: opd.delta,
+    icon: I.user,
+    tone: "#0b66d0",
+    foot: `${fmt(opd.total)} over ${rangeShort}`,
+    spark: opd.series.map(r => r.opd)
+  }), React.createElement(KpiCard, {
+    label: "Procedures",
+    value: fmt(procTotal),
+    icon: I.activity,
+    tone: "#0f9b8e",
+    foot: "OT \xB7 Cath \xB7 Endo \xB7 Dialysis",
+    spark: ot.series.map(r => r.ot),
+    sparkColor: "#0f9b8e"
+  }), React.createElement(KpiCard, {
+    label: "Critical Care Vol.",
+    value: fmt(icuTotal),
+    icon: I.heart,
+    tone: "#6a52d4",
+    foot: "MICU \xB7 SICU \xB7 CCU \xB7 NICU",
+    spark: D.micu.series.map(r => r.adm),
+    sparkColor: "#6a52d4"
+  }));
+  const qualityKpis = function () {
+    if (!window.qualityData) return null;
+    const QQ = ['Q1', 'Q2', 'Q3', 'Q4'];
+    const qs = (ind, q) => {
+      const v = ind.quarters ? ind.quarters[q] : null;
+      if (v == null || v === '') return 'na';
+      const b = ind.benchmarkValue;
+      if (b == null || b === '') return 'ok';
+      return ind.goalDirection === 'higher_is_better' ? v >= b ? 'ok' : 'breach' : v <= b ? 'ok' : 'breach';
+    };
+    const qd = window.qualityData().filter(d => d.indicators && d.indicators.length);
+    let okC = 0,
+      brC = 0;
+    qd.forEach(d => d.indicators.forEach(ind => QQ.forEach(q => {
+      const s = qs(ind, q);
+      if (s === 'ok') okC++;else if (s === 'breach') brC++;
+    })));
+    const zero = okC + brC ? Math.round(okC * 100 / (okC + brC)) : 100;
+    let capaMap = {};
+    try {
+      capaMap = JSON.parse(localStorage.getItem('unico_capa_v1')) || {};
+    } catch (e) {}
+    if (Array.isArray(capaMap)) capaMap = {};
+    let open = 0;
+    qd.forEach(d => d.indicators.forEach(ind => {
+      if (QQ.some(q => qs(ind, q) === 'breach') && capaMap[d.key + '/' + ind.id] !== 'Closed') open++;
+    }));
+    return {
+      depts: qd.length,
+      zero: zero,
+      breach: brC,
+      capaOpen: open
+    };
+  }();
+  const qCard = (label, val, foot, color, route) => React.createElement("div", {
+    className: "card anim-pop",
+    onClick: () => setRoute && setRoute(route),
+    style: {
+      padding: '15px 18px',
+      borderLeft: '4px solid ' + color,
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 104,
+      cursor: setRoute ? 'pointer' : 'default'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink-2)'
+    }
+  }, label), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 30,
+      fontWeight: 700,
+      color: color,
+      margin: '8px 0 5px',
+      lineHeight: 1
+    }
+  }, val), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginTop: 'auto'
+    }
+  }, foot));
+  const qualityStrip = qualityKpis ? React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 10
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.heart,
+    title: "Quality & Safety",
+    sub: `hospital-wide quality indicators · ${qualityKpis.depts} departments · click to open`
+  }), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))'
+    }
+  }, qCard('Zero-Defect Rate', qualityKpis.zero + '%', 'on-benchmark indicator-quarters', qualityKpis.zero >= 90 ? '#1f9d57' : qualityKpis.zero >= 70 ? '#e08a1e' : '#d23a52', {
+    view: 'quality'
+  }), qCard('Open Breaches', fmt(qualityKpis.breach), 'indicator-quarters off benchmark', qualityKpis.breach > 0 ? '#d23a52' : '#1f9d57', {
+    view: 'quality',
+    qview: 'incidents'
+  }), qCard('Open Action Plans', fmt(qualityKpis.capaOpen), 'breaches not yet closed', qualityKpis.capaOpen > 0 ? '#0090ca' : '#1f9d57', {
+    view: 'quality',
+    qview: 'actionplans'
+  }))) : null;
+  if (layout === 'operational') {
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 16
+      }
+    }, kpis, React.createElement(SectionTitle, {
+      icon: I.layers,
+      title: "All Departments",
+      sub: "Latest month at a glance \u2014 click any card to drill in"
+    }), React.createElement("div", {
+      className: "grid",
+      style: {
+        gridTemplateColumns: 'repeat(auto-fill,minmax(232px,1fr))'
+      }
+    }, depts.map(d => React.createElement(DeptMiniCard, {
+      key: d.id,
+      d: d,
+      onOpen: () => openDept(d.id)
+    }))));
+  }
+  if (layout === 'analytics') {
+    const erSeries = [{
+      id: 'reg',
+      label: 'ER Reg',
+      color: '#0b66d0'
+    }, {
+      id: 'adm',
+      label: 'Admission',
+      color: '#0f9b8e'
+    }, {
+      id: 'total',
+      label: 'Total ED',
+      color: '#e08a1e'
+    }];
+    const dia = D.dialysis;
+    const diaSeries = [{
+      id: 'conv',
+      label: 'Conventional',
+      color: '#0b66d0'
+    }, {
+      id: 'modi',
+      label: 'Modi-SLED',
+      color: '#0f9b8e'
+    }, {
+      id: 'sled',
+      label: 'SLED',
+      color: '#e08a1e'
+    }];
+    const cathMix = D.cathlab.cols.filter(c => c.id !== 'total').map((c, i) => ({
+      label: c.label,
+      value: D.cathlab.series.reduce((s, r) => s + (r[c.id] || 0), 0),
+      color: PALETTE[i]
+    }));
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 16
+      }
+    }, kpis, React.createElement("div", {
+      className: "grid",
+      style: {
+        gridTemplateColumns: '1.4fr 1fr'
+      }
+    }, React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Emergency Department \u2014 Registrations vs Admissions"), React.createElement("span", {
+      className: "spacer"
+    }), React.createElement("span", {
+      className: "tag"
+    }, "Grouped")), React.createElement("div", {
+      className: "card-b"
+    }, React.createElement(GroupedBar, {
+      data: er.series,
+      x: "month",
+      series: erSeries,
+      height: 250
+    }))), React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Cath Lab \u2014 Procedure Mix"), React.createElement("span", {
+      className: "spacer"
+    }), React.createElement("span", {
+      className: "tag"
+    }, "Donut")), React.createElement("div", {
+      className: "card-b",
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        minHeight: 250
+      }
+    }, React.createElement(Donut, {
+      data: cathMix,
+      centerValue: D.cathlab.total,
+      centerLabel: "Total"
+    })))), React.createElement("div", {
+      className: "grid",
+      style: {
+        gridTemplateColumns: '1fr 1.4fr'
+      }
+    }, React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Dialysis \u2014 Modality Stack"), React.createElement("span", {
+      className: "spacer"
+    }), React.createElement("span", {
+      className: "tag"
+    }, "Stacked")), React.createElement("div", {
+      className: "card-b"
+    }, React.createElement(StackedBar, {
+      data: dia.series,
+      x: "month",
+      series: diaSeries,
+      height: 240
+    }))), React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "OPD Footfall \u2014 ", activeMonths.length, "-Month Trend"), React.createElement("span", {
+      className: "spacer"
+    }), React.createElement("span", {
+      className: "tag"
+    }, "Area line")), React.createElement("div", {
+      className: "card-b"
+    }, React.createElement(LineChart, {
+      data: opd.series,
+      x: "full",
+      y: "opd",
+      height: 240,
+      color: "#0b66d0"
+    })))));
+  }
+  const ranking = depts.map(d => ({
+    label: d.short,
+    value: d.latest[d.primary] || 0,
+    color: PALETTE[d.id.charCodeAt(0) % PALETTE.length]
+  })).sort((a, b) => b.value - a.value).slice(0, 8);
+  const groupMix = window.UNICO.GROUPS.map((g, i) => ({
+    label: g,
+    value: depts.filter(d => d.group === g).reduce((s, d) => s + d.total, 0),
+    color: PALETTE[i]
+  })).filter(x => x.value > 0);
+  const erConv = er && er.latest && er.latest.conv != null ? er.latest.conv : 0;
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, kpis, qualityStrip, React.createElement("div", {
+    className: "card feature"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Operational Pulse"), React.createElement("span", {
+    className: "sub"
+  }, "current month indicators"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "tag"
+  }, "snapshot")), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(3,1fr)',
+      gap: 8,
+      placeItems: 'center'
+    }
+  }, React.createElement(Gauge, {
+    value: Math.round(erConv),
+    max: 100,
+    label: "ED \u2192 IPD %",
+    color: "#0090ca",
+    size: 150
+  }), React.createElement(Gauge, {
+    value: icuTotal,
+    max: Math.max(60, icuTotal),
+    label: "Critical care",
+    color: "#6a52d4",
+    size: 150
+  }), React.createElement(Gauge, {
+    value: ot.latest.ot || 0,
+    max: Math.max(40, ot.peak),
+    label: "OT / month",
+    color: "#3ab5a7",
+    size: 150
+  }))), React.createElement(ReportingCompliance, {
+    depts: depts,
+    onFill: onFill
+  }), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '1.55fr 1fr'
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "OPD Footfall \u2014 Hospital-wide Trend"), React.createElement("span", {
+    className: "sub"
+  }, rangeFull), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "tag",
+    style: {
+      background: 'var(--pos-bg)',
+      color: 'var(--pos)'
+    }
+  }, "\u25B2 ", opd.delta, "% MoM")), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement(LineChart, {
+    data: opd.series,
+    x: "full",
+    y: "opd",
+    height: 258,
+    color: "#0b66d0"
+  }))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Volume by Service Line"), React.createElement("span", {
+    className: "spacer"
+  })), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Donut, {
+    data: groupMix,
+    size: 186,
+    centerValue: fmt(groupMix.reduce((s, d) => s + d.value, 0)),
+    centerLabel: "All cases"
+  })))), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '1fr 1.55fr'
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Top Departments"), React.createElement("span", {
+    className: "sub"
+  }, "latest month")), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement(HBar, {
+    rows: ranking
+  }))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Emergency Department \u2014 Monthly Throughput"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "tag"
+  }, "3D \xB7 Total ED")), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement(Bar3D, {
+    data: er.series,
+    x: "month",
+    y: "total",
+    height: 272,
+    color: "#d23a52"
+  })))));
+}
+window.Dashboard = Dashboard;
+})();
+;
+/* ===== department.jsx ===== */
+(function(){
+function DeptDetail({
+  dept,
+  openDept,
+  depts,
+  setRoute
+}) {
+  const d = dept;
+  const [chart, setChart] = React.useState('bar');
+  const editData = () => {
+    if (setRoute) setRoute({
+      view: 'input',
+      dept: d.id
+    });
+  };
+  const exportCSV = () => {
+    const cols = d.cols;
+    const esc = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+    const lines = [['Month', ...cols.map(c => c.label)].map(esc).join(',')];
+    d.series.forEach(r => lines.push([r.full || r.month, ...cols.map(c => r[c.id] == null ? '' : r[c.id])].map(esc).join(',')));
+    try {
+      const blob = new Blob([lines.join('\n')], {
+        type: 'text/csv;charset=utf-8'
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${d.short}-data.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      window.UI && window.UI.toast(`Exported ${d.short} data (CSV)`, 'success');
+    } catch (e) {
+      window.UI && window.UI.toast('Export failed', 'error');
+    }
+  };
+  const tone = PALETTE[d.id.charCodeAt(0) % PALETTE.length];
+  const multi = d.cols.length > 1;
+  const breakdownCols = d.cols.filter(c => c.id !== d.primary && !c.pct);
+  const mixSeries = breakdownCols.slice(0, 6).map((c, i) => ({
+    id: c.id,
+    label: c.label,
+    color: PALETTE[i]
+  }));
+  const [rangeMode, setRangeMode] = React.useState('all');
+  const [fromM, setFromM] = React.useState(d.months[0]);
+  const [toM, setToM] = React.useState(d.months[d.months.length - 1]);
+  let vs = d.series;
+  if (rangeMode === 'l3') vs = d.series.slice(-3);else if (rangeMode === 'l6') vs = d.series.slice(-6);else if (rangeMode === 'latest') vs = d.series.slice(-1);else if (rangeMode === 'custom') {
+    const fi = d.months.indexOf(fromM),
+      ti = d.months.indexOf(toM);
+    const a = Math.min(fi, ti),
+      b = Math.max(fi, ti);
+    vs = d.series.slice(a, b + 1);
+  }
+  if (!vs.length) vs = d.series.slice(-1);
+  const vTotal = vs.reduce((s, r) => s + (r[d.primary] || 0), 0);
+  const vLatest = vs[vs.length - 1] || {};
+  const vPrev = vs.length > 1 ? vs[vs.length - 2] : null;
+  const vDelta = vPrev ? (() => {
+    const c = vLatest[d.primary] || 0,
+      p = vPrev[d.primary] || 0;
+    return p === 0 ? c > 0 ? 100 : 0 : Math.round((c - p) / p * 100);
+  })() : d.delta;
+  const vPeak = vs.length ? Math.max(...vs.map(r => r[d.primary] || 0)) : 0;
+  const vAvg = vs.length ? Math.round(vTotal / vs.length) : 0;
+  const mixDonut = breakdownCols.map((c, i) => ({
+    label: c.label,
+    value: vs.reduce((s, r) => s + (r[c.id] || 0), 0),
+    color: PALETTE[i % PALETTE.length]
+  })).filter(x => x.value > 0);
+  const rangeLabel = rangeMode === 'all' ? `all ${d.series.length} months` : rangeMode === 'latest' ? 'latest month' : rangeMode === 'l3' ? 'last 3 months' : rangeMode === 'l6' ? 'last 6 months' : `${vs[0]?.month || ''} → ${vs[vs.length - 1]?.month || ''}`;
+  const selSty = {
+    padding: '6px 9px',
+    border: '1px solid var(--line)',
+    borderRadius: 6,
+    fontSize: 12,
+    fontFamily: 'var(--mono)',
+    background: '#fff'
+  };
+  const stat = (label, val, sub, chip) => React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '13px 15px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("div", {
+    className: "lbl",
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      fontWeight: 600
+    }
+  }, label), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 8
+    }
+  }, React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 24,
+      fontWeight: 600,
+      color: 'var(--ink)'
+    }
+  }, val), chip), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--faint)'
+    }
+  }, sub));
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '16px 18px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 46,
+      height: 46,
+      borderRadius: 12,
+      background: tone + '18',
+      color: tone,
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Ic, {
+    d: DEPT_ICON[d.id] || I.activity,
+    s: 24
+  })), React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9
+    }
+  }, React.createElement("h2", {
+    style: {
+      margin: 0,
+      fontSize: 19,
+      fontWeight: 700
+    }
+  }, d.name), React.createElement("span", {
+    className: "tag"
+  }, d.group)), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--muted)',
+      marginTop: 2
+    }
+  }, d.desc)), React.createElement("div", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: editData,
+    title: `Enter data for ${d.name}`
+  }, React.createElement(Ic, {
+    d: I.input,
+    s: 15
+  }), "Quick Entry"), React.createElement("div", {
+    className: "tag",
+    style: {
+      background: 'var(--pos-bg)',
+      color: 'var(--pos)'
+    }
+  }, "Last active \xB7 ", d.latest.month || '—'), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setRoute && setRoute({
+      view: 'gallery',
+      dept: d.id
+    }),
+    title: "All charts + export"
+  }, React.createElement(Ic, {
+    d: I.grid,
+    s: 15
+  }), "All Charts"), React.createElement("button", {
+    className: "btn sm",
+    onClick: exportCSV
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 15
+  }), "Export"), React.createElement("button", {
+    className: "btn sm",
+    onClick: editData
+  }, React.createElement(Ic, {
+    d: I.edit,
+    s: 15
+  }), "Edit Data")), React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '10px 14px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--ink-2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement(Ic, {
+    d: I.cal,
+    s: 15,
+    c: "var(--blue)"
+  }), "View"), React.createElement("div", {
+    className: "seg"
+  }, [['all', 'Monthly'], ['l3', 'Last 3M'], ['l6', 'Last 6M'], ['latest', 'Latest'], ['custom', 'Custom']].map(([id, l]) => React.createElement("button", {
+    key: id,
+    className: rangeMode === id ? 'on' : '',
+    onClick: () => setRangeMode(id)
+  }, l))), rangeMode === 'custom' && React.createElement(React.Fragment, null, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "From"), React.createElement("select", {
+    style: selSty,
+    value: fromM,
+    onChange: e => setFromM(e.target.value)
+  }, d.months.map(m => React.createElement("option", {
+    key: m,
+    value: m
+  }, m))), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "To"), React.createElement("select", {
+    style: selSty,
+    value: toM,
+    onChange: e => setToM(e.target.value)
+  }, d.months.map(m => React.createElement("option", {
+    key: m,
+    value: m
+  }, m)))), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--faint)'
+    }
+  }, "Showing ", rangeLabel, " \xB7 ", vs.length, " point", vs.length > 1 ? 's' : '')), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: 'repeat(4,1fr)'
+    }
+  }, stat(`${d.primaryLabel} · ${vLatest.month || ''}`, fmt(vLatest[d.primary] || 0), 'latest in range', React.createElement(Delta, {
+    v: vDelta
+  })), stat('Range Total', fmt(vTotal), `${vs.length} month${vs.length > 1 ? 's' : ''} · ${rangeLabel}`), stat('Peak Month', fmt(vPeak), vs.find(r => (r[d.primary] || 0) === vPeak)?.full || ''), stat('Monthly Average', fmt(vAvg), 'mean across range')), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, d.primaryLabel, " \u2014 Monthly Trend"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("div", {
+    className: "seg",
+    style: {
+      flexWrap: 'wrap'
+    }
+  }, ['bar', '3d', 'line', 'area', 'combo', 'horizontal', multi && 'grouped', multi && 'stacked', multi && 'pct', mixDonut.length > 1 && 'donut'].filter(Boolean).map(t => React.createElement("button", {
+    key: t,
+    className: chart === t ? 'on' : '',
+    onClick: () => setChart(t)
+  }, t === '3d' ? '3D' : t === 'combo' ? 'Bar+Line' : t === 'pct' ? '100%' : t === 'horizontal' ? 'Horiz' : t[0].toUpperCase() + t.slice(1))))), React.createElement("div", {
+    className: "card-b"
+  }, chart === 'bar' && React.createElement(BarChart, {
+    data: vs,
+    x: "month",
+    y: d.primary,
+    height: 280,
+    color: tone
+  }), chart === '3d' && React.createElement(Bar3D, {
+    data: vs,
+    x: "month",
+    y: d.primary,
+    height: 300,
+    color: tone
+  }), chart === 'line' && React.createElement(LineChart, {
+    data: vs,
+    x: "full",
+    y: d.primary,
+    height: 280,
+    color: tone
+  }), chart === 'area' && typeof window.AreaTargetChart === 'function' && React.createElement(AreaTargetChart, {
+    data: vs,
+    x: "full",
+    y: d.primary,
+    target: vAvg,
+    height: 280,
+    color: tone
+  }), chart === 'combo' && typeof window.ComboChart === 'function' && (() => {
+    const pc = d.cols.find(c => c.pct);
+    const lk = pc ? pc.id : (mixSeries[0] || {}).id || d.primary;
+    return React.createElement(ComboChart, {
+      data: vs,
+      x: "month",
+      barKey: d.primary,
+      lineKey: lk,
+      barColor: tone,
+      lineColor: "#e08a1e",
+      barLabel: d.primaryLabel || 'Value',
+      lineLabel: (d.cols.find(c => c.id === lk) || {}).label || 'Trend',
+      height: 300
+    });
+  })(), chart === 'horizontal' && typeof window.HBarChart === 'function' && React.createElement(HBarChart, {
+    data: vs.map(r => ({
+      label: r.full,
+      val: r[d.primary] || 0
+    })),
+    x: "label",
+    y: "val",
+    height: Math.max(180, vs.length * 32)
+  }), chart === 'grouped' && React.createElement(GroupedBar, {
+    data: vs,
+    x: "month",
+    series: mixSeries,
+    height: 290
+  }), chart === 'stacked' && React.createElement(StackedBar, {
+    data: vs,
+    x: "month",
+    series: mixSeries,
+    height: 290
+  }), chart === 'pct' && typeof window.StackedPctBar === 'function' && React.createElement(StackedPctBar, {
+    data: vs,
+    x: "month",
+    series: mixSeries,
+    height: 290
+  }), chart === 'donut' && React.createElement("div", {
+    style: {
+      display: 'grid',
+      placeItems: 'center',
+      minHeight: 280
+    }
+  }, React.createElement(Donut, {
+    data: mixDonut,
+    size: 200,
+    centerValue: fmt(mixDonut.reduce((s, x) => s + x.value, 0)),
+    centerLabel: "Total"
+  })))), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: multi ? '1fr 1.7fr' : '1fr'
+    }
+  }, multi && mixDonut.length > 1 && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Composition"), React.createElement("span", {
+    className: "sub"
+  }, "period total")), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Donut, {
+    data: mixDonut,
+    size: 172
+  }))), React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Monthly Data Table"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn sm"
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 14
+  }), "CSV")), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    className: "tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Month"), d.cols.map(c => React.createElement("th", {
+    key: c.id
+  }, c.label)))), React.createElement("tbody", null, vs.map((r, i) => React.createElement("tr", {
+    key: i
+  }, React.createElement("td", null, r.full), d.cols.map(c => React.createElement("td", {
+    key: c.id
+  }, r[c.id] == null ? '–' : c.pct ? r[c.id] + '%' : fmt(r[c.id]))))), React.createElement("tr", {
+    className: "tot"
+  }, React.createElement("td", null, "TOTAL"), d.cols.map(c => React.createElement("td", {
+    key: c.id
+  }, c.pct ? '—' : fmt(vs.reduce((s, r) => s + (r[c.id] || 0), 0)))))))))), React.createElement("div", null, React.createElement(SectionTitle, {
+    icon: I.layers,
+    title: "Jump to another department"
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, depts.filter(x => x.id !== d.id).map(x => React.createElement("button", {
+    key: x.id,
+    className: "btn sm",
+    onClick: () => openDept(x.id)
+  }, React.createElement(Ic, {
+    d: DEPT_ICON[x.id] || I.activity,
+    s: 14
+  }), x.short)))));
+}
+window.DeptDetail = DeptDetail;
+})();
+;
+/* ===== comparison.jsx ===== */
+(function(){
+function DeptCompare({
+  depts,
+  openDept
+}) {
+  const {
+    useState,
+    useMemo
+  } = React;
+  const MAX = 6;
+  const [sel, setSel] = useState(() => depts.slice(0, 3).map(d => d.id));
+  const toggle = id => setSel(s => {
+    if (s.includes(id)) return s.filter(x => x !== id);
+    if (s.length >= MAX) return s;
+    return [...s, id];
+  });
+  const selDepts = useMemo(() => sel.map(id => depts.find(d => d.id === id)).filter(Boolean), [sel, depts]);
+  const metricOptions = useMemo(() => {
+    const count = {},
+      labelOf = {};
+    selDepts.forEach(d => {
+      (d.cols || []).forEach(c => {
+        if (c.pct) return;
+        count[c.id] = (count[c.id] || 0) + 1;
+        if (!labelOf[c.id]) labelOf[c.id] = c.label;
+      });
+    });
+    const opts = [{
+      id: '__primary__',
+      label: 'Primary metric (per dept)'
+    }];
+    Object.keys(count).forEach(id => {
+      if (count[id] >= 2 && id !== '__primary__') opts.push({
+        id,
+        label: labelOf[id]
+      });
+    });
+    return opts;
+  }, [selDepts]);
+  const [metric, setMetric] = useState('__primary__');
+  React.useEffect(() => {
+    if (!metricOptions.some(o => o.id === metric)) setMetric('__primary__');
+  }, [metricOptions]);
+  const keyFor = d => {
+    if (metric === '__primary__') return d.primary;
+    return (d.cols || []).some(c => c.id === metric && !c.pct) ? metric : d.primary;
+  };
+  const metricLabel = metric === '__primary__' ? 'Primary metric' : metricOptions.find(o => o.id === metric)?.label || metric;
+  const [rangeMode, setRangeMode] = useState('all');
+  const RANGE = [['all', 'All'], ['l6', 'Last 6M'], ['l3', 'Last 3M'], ['latest', 'Latest']];
+  const sliceN = rangeMode === 'l3' ? 3 : rangeMode === 'l6' ? 6 : rangeMode === 'latest' ? 1 : 0;
+  const inRange = d => {
+    const s = d.series || [];
+    if (!s.length) return [];
+    if (rangeMode === 'all') return s;
+    return s.slice(-sliceN);
+  };
+  const stats = useMemo(() => selDepts.map(d => {
+    const k = keyFor(d);
+    const vs = inRange(d);
+    const vals = vs.map(r => r[k] || 0);
+    const total = vals.reduce((a, b) => a + b, 0);
+    const latestRow = vs[vs.length - 1] || {};
+    const prevRow = vs.length > 1 ? vs[vs.length - 2] : null;
+    const latest = latestRow[k] || 0;
+    const prev = prevRow ? prevRow[k] || 0 : null;
+    const delta = prev == null ? 0 : prev === 0 ? latest > 0 ? 100 : 0 : Math.round((latest - prev) / prev * 100);
+    const peak = vals.length ? Math.max(...vals) : 0;
+    const avg = vals.length ? Math.round(total / vals.length) : 0;
+    const tone = PALETTE[Math.abs(d.id.charCodeAt(0) + d.id.length) % PALETTE.length];
+    return {
+      d,
+      k,
+      vs,
+      total,
+      latest,
+      latestMonth: latestRow.month || '—',
+      delta,
+      hasPrev: prev != null,
+      peak,
+      avg,
+      count: vals.length,
+      tone,
+      empty: !vs.length
+    };
+  }), [selDepts, metric, rangeMode]);
+  const chartData = useMemo(() => {
+    const monthSet = [];
+    stats.forEach(st => st.vs.forEach(r => {
+      if (!monthSet.includes(r.month)) monthSet.push(r.month);
+    }));
+    const order = window.UNICO && window.UNICO.MONTH_ORDER;
+    monthSet.sort((a, b) => order ? order.indexOf(a) - order.indexOf(b) : 0);
+    return monthSet.map(m => {
+      const row = {
+        month: m
+      };
+      stats.forEach(st => {
+        const hit = st.vs.find(r => r.month === m);
+        row[st.d.id] = hit ? hit[st.k] || 0 : 0;
+      });
+      return row;
+    });
+  }, [stats]);
+  const chartSeries = stats.map(st => ({
+    id: st.d.id,
+    label: st.d.short,
+    color: st.tone
+  }));
+  const tooFew = selDepts.length < 2;
+  const rangeNote = rangeMode === 'all' ? 'all reported months' : rangeMode === 'latest' ? 'latest month' : rangeMode === 'l3' ? 'last 3 months' : 'last 6 months';
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.layers,
+    title: "Compare Departments",
+    sub: `Side-by-side comparison of patient-flow metrics · ${metricLabel} · ${rangeNote}`
+  }), React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '14px 16px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 13
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 9
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--ink-2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement(Ic, {
+    d: I.layers,
+    s: 15,
+    c: "var(--blue)"
+  }), "Departments"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--faint)'
+    }
+  }, sel.length, "/", MAX, " selected \xB7 pick 2\u2013", MAX), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setSel(depts.slice(0, 3).map(d => d.id))
+  }, "Reset")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, depts.map(d => {
+    const on = sel.includes(d.id);
+    const idx = sel.indexOf(d.id);
+    const tone = on ? PALETTE[Math.abs(d.id.charCodeAt(0) + d.id.length) % PALETTE.length] : null;
+    const disabled = !on && sel.length >= MAX;
+    return React.createElement("button", {
+      key: d.id,
+      onClick: () => toggle(d.id),
+      disabled: disabled,
+      title: disabled ? `Max ${MAX} departments` : d.name,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        padding: '6px 11px',
+        borderRadius: 8,
+        border: '1px solid ' + (on ? tone : 'var(--line)'),
+        background: on ? tone + '14' : '#fff',
+        color: on ? tone : 'var(--ink-2)',
+        fontSize: 12,
+        fontWeight: 600,
+        opacity: disabled ? .45 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        transition: '.15s'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 16,
+        height: 16,
+        borderRadius: 4,
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0,
+        border: '1.5px solid ' + (on ? tone : 'var(--line)'),
+        background: on ? tone : '#fff',
+        color: '#fff'
+      }
+    }, on && React.createElement(Ic, {
+      d: I.check,
+      s: 11,
+      c: "#fff",
+      sw: 2.6
+    })), React.createElement(Ic, {
+      d: DEPT_ICON[d.id] || I.activity,
+      s: 15
+    }), d.short);
+  }))), React.createElement("div", {
+    style: {
+      height: 1,
+      background: 'var(--line-2)'
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--ink-2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement(Ic, {
+    d: I.trend,
+    s: 15,
+    c: "var(--blue)"
+  }), "Metric"), React.createElement("div", {
+    className: "seg"
+  }, metricOptions.map(o => React.createElement("button", {
+    key: o.id,
+    className: metric === o.id ? 'on' : '',
+    onClick: () => setMetric(o.id)
+  }, o.label))), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--ink-2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement(Ic, {
+    d: I.cal,
+    s: 15,
+    c: "var(--blue)"
+  }), "Range"), React.createElement("div", {
+    className: "seg"
+  }, RANGE.map(([id, l]) => React.createElement("button", {
+    key: id,
+    className: rangeMode === id ? 'on' : '',
+    onClick: () => setRangeMode(id)
+  }, l))))), tooFew ? React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '48px 20px',
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 56,
+      height: 56,
+      borderRadius: 15,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      display: 'grid',
+      placeItems: 'center',
+      margin: '0 auto 14px'
+    }
+  }, React.createElement(Ic, {
+    d: I.layers,
+    s: 28
+  })), React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 700
+    }
+  }, "Pick at least 2 departments"), React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--muted)',
+      marginTop: 6
+    }
+  }, "Select two or more departments above to compare them side by side.")) : React.createElement(React.Fragment, null, React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: `repeat(${Math.min(stats.length, 3)},1fr)`
+    }
+  }, stats.map(st => {
+    const dcls = st.delta > 0 ? 'pos' : st.delta < 0 ? 'neg' : 'flat';
+    const dcol = st.delta > 0 ? 'var(--pos)' : st.delta < 0 ? 'var(--rose)' : 'var(--slate)';
+    const dsym = st.delta > 0 ? '▲' : st.delta < 0 ? '▼' : '—';
+    return React.createElement("div", {
+      key: st.d.id,
+      className: "card",
+      onClick: () => openDept(st.d.id),
+      title: `Open ${st.d.name}`,
+      style: {
+        padding: '14px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        cursor: 'pointer',
+        borderTop: '3px solid ' + st.tone
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 32,
+        height: 32,
+        borderRadius: 9,
+        background: st.tone + '1c',
+        color: st.tone,
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, React.createElement(Ic, {
+      d: DEPT_ICON[st.d.id] || I.activity,
+      s: 17
+    })), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: 'var(--ink)',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, st.d.short), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, st.d.name)), React.createElement("span", {
+      className: "spacer"
+    }), React.createElement(Ic, {
+      d: I.arrowR,
+      s: 15,
+      c: "var(--faint)"
+    })), st.empty ? React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--faint)',
+        padding: '8px 0'
+      }
+    }, "No data in range") : React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 8
+      }
+    }, React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 26,
+        fontWeight: 600,
+        color: 'var(--ink)',
+        lineHeight: 1
+      }
+    }, fmt(st.latest)), React.createElement("span", {
+      className: 'chip ' + dcls
+    }, dsym, " ", Math.abs(st.delta), "%")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 14,
+        fontSize: 11,
+        color: 'var(--faint)'
+      }
+    }, React.createElement("span", null, "Latest \xB7 ", st.latestMonth), React.createElement("span", {
+      className: "spacer"
+    }), React.createElement("span", null, "Avg ", React.createElement("b", {
+      className: "num",
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }, fmt(st.avg))))));
+  })), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, metricLabel, " \u2014 Monthly Comparison"), React.createElement("span", {
+    className: "sub"
+  }, rangeNote), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      flexWrap: 'wrap',
+      justifyContent: 'flex-end'
+    }
+  }, chartSeries.map(s => React.createElement("span", {
+    key: s.id,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 11.5,
+      color: 'var(--ink-2)',
+      fontWeight: 600
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 10,
+      height: 10,
+      borderRadius: 3,
+      background: s.color,
+      display: 'inline-block'
+    }
+  }), s.label)))), React.createElement("div", {
+    className: "card-b"
+  }, chartData.length === 0 ? React.createElement("div", {
+    style: {
+      display: 'grid',
+      placeItems: 'center',
+      minHeight: 200,
+      color: 'var(--faint)',
+      fontSize: 13
+    }
+  }, "No data available for the selected range.") : React.createElement(GroupedBar, {
+    data: chartData,
+    x: "month",
+    series: chartSeries,
+    height: 300
+  }))), React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Comparison Table"), React.createElement("span", {
+    className: "sub"
+  }, metricLabel, " \xB7 ", rangeNote, " \xB7 click a row to open")), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    className: "tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Department"), React.createElement("th", null, "Metric"), React.createElement("th", null, "Latest"), React.createElement("th", null, "Average"), React.createElement("th", null, "Peak"), React.createElement("th", null, "\u0394 vs prev"), React.createElement("th", null, "Total"))), React.createElement("tbody", null, stats.map(st => {
+    const dcls = st.delta > 0 ? 'pos' : st.delta < 0 ? 'neg' : 'flat';
+    const dsym = st.delta > 0 ? '▲' : st.delta < 0 ? '▼' : '—';
+    const colLabel = (st.d.cols || []).find(c => c.id === st.k)?.label || st.k;
+    return React.createElement("tr", {
+      key: st.d.id,
+      style: {
+        cursor: 'pointer'
+      },
+      onClick: () => openDept(st.d.id)
+    }, React.createElement("td", null, React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, React.createElement("i", {
+      style: {
+        width: 9,
+        height: 9,
+        borderRadius: 3,
+        background: st.tone,
+        display: 'inline-block'
+      }
+    }), st.d.name)), React.createElement("td", {
+      style: {
+        fontFamily: "'IBM Plex Sans'",
+        color: 'var(--muted)'
+      }
+    }, colLabel), React.createElement("td", null, st.empty ? '–' : fmt(st.latest)), React.createElement("td", null, st.empty ? '–' : fmt(st.avg)), React.createElement("td", null, st.empty ? '–' : fmt(st.peak)), React.createElement("td", null, st.empty ? '–' : React.createElement("span", {
+      className: 'chip ' + dcls
+    }, dsym, " ", Math.abs(st.delta), "%")), React.createElement("td", null, st.empty ? '–' : fmt(st.total)));
+  })))))));
+}
+window.DeptCompare = DeptCompare;
+})();
+;
+/* ===== manage.jsx ===== */
+(function(){
+function slug(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'col';
+}
+function DeptModal({
+  initial,
+  onClose,
+  onSave,
+  groups
+}) {
+  const editing = !!initial;
+  const [name, setName] = React.useState(initial?.name || '');
+  const [short, setShort] = React.useState(initial?.short || '');
+  const [group, setGroup] = React.useState(initial?.group || groups[0]);
+  const [desc, setDesc] = React.useState(initial?.desc || '');
+  const [cols, setCols] = React.useState(() => initial?.cols?.map(c => ({
+    label: c.label,
+    pct: !!c.pct
+  })) || [{
+    label: 'Patients',
+    pct: false
+  }]);
+  const [err, setErr] = React.useState('');
+  const addCol = () => setCols(c => [...c, {
+    label: '',
+    pct: false
+  }]);
+  const setCol = (i, patch) => setCols(c => c.map((x, j) => j === i ? {
+    ...x,
+    ...patch
+  } : x));
+  const rmCol = i => setCols(c => c.filter((_, j) => j !== i));
+  const save = () => {
+    if (!name.trim()) {
+      setErr('Department name is required');
+      return;
+    }
+    const clean = cols.filter(c => c.label.trim());
+    if (!clean.length) {
+      setErr('Add at least one metric column');
+      return;
+    }
+    const ids = [];
+    const finalCols = clean.map(c => {
+      let id = slug(c.label);
+      let b = id,
+        k = 1;
+      while (ids.includes(id)) {
+        id = b + '_' + ++k;
+      }
+      ids.push(id);
+      return {
+        id,
+        label: c.label.trim(),
+        pct: c.pct
+      };
+    });
+    const def = {
+      id: initial?.id || 'cust_' + Date.now().toString(36),
+      name: name.trim(),
+      short: short.trim() || name.trim().slice(0, 5),
+      group: group.trim() || 'Custom',
+      desc: desc.trim() || 'Custom department added in-app.',
+      cols: finalCols,
+      primary: finalCols[0].id,
+      primaryLabel: finalCols[0].label,
+      months: initial?.months || [],
+      data: initial?.data || []
+    };
+    onSave(def, editing);
+  };
+  return React.createElement("div", {
+    className: "modal-bg",
+    onMouseDown: e => {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, React.createElement("div", {
+    className: "modal"
+  }, React.createElement("div", {
+    className: "modal-h"
+  }, React.createElement("div", {
+    style: {
+      width: 30,
+      height: 30,
+      borderRadius: 8,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Ic, {
+    d: editing ? I.edit : I.plus,
+    s: 17
+  })), React.createElement("h3", null, editing ? 'Edit Department' : 'New Department'), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "icon-btn",
+    onClick: onClose
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 16
+  }))), React.createElement("div", {
+    style: {
+      padding: 20,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '2fr 1fr',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Department name"), React.createElement("input", {
+    value: name,
+    onChange: e => setName(e.target.value),
+    placeholder: "e.g. Physiotherapy",
+    autoFocus: true
+  })), React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Code / short"), React.createElement("input", {
+    value: short,
+    onChange: e => setShort(e.target.value),
+    placeholder: "e.g. PHYSIO",
+    maxLength: 8
+  }))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Service line"), React.createElement("input", {
+    list: "grp-list",
+    value: group,
+    onChange: e => setGroup(e.target.value),
+    placeholder: "Service line"
+  }), React.createElement("datalist", {
+    id: "grp-list"
+  }, groups.map(g => React.createElement("option", {
+    key: g,
+    value: g
+  })))), React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Short description"), React.createElement("input", {
+    value: desc,
+    onChange: e => setDesc(e.target.value),
+    placeholder: "What this department tracks"
+  }))), React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      marginBottom: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "Custom metrics"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginLeft: 8
+    }
+  }, "first metric is the headline figure"), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: addCol
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "Add metric")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, cols.map((c, i) => React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 22,
+      height: 22,
+      borderRadius: 6,
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: 11,
+      fontWeight: 700,
+      background: i === 0 ? 'var(--blue)' : 'var(--panel-2)',
+      color: i === 0 ? '#fff' : 'var(--muted)',
+      flexShrink: 0
+    }
+  }, i + 1), React.createElement("input", {
+    value: c.label,
+    onChange: e => setCol(i, {
+      label: e.target.value
+    }),
+    placeholder: i === 0 ? 'Primary metric (e.g. Total Patients)' : 'Metric name',
+    style: {
+      flex: 1,
+      padding: '8px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      outline: 'none'
+    }
+  }), React.createElement("label", {
+    className: "col-chip",
+    style: {
+      cursor: 'pointer'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: c.pct,
+    onChange: e => setCol(i, {
+      pct: e.target.checked
+    }),
+    style: {
+      margin: 0
+    }
+  }), "%"), React.createElement("button", {
+    className: "icon-btn danger",
+    onClick: () => rmCol(i),
+    disabled: cols.length <= 1,
+    style: {
+      opacity: cols.length <= 1 ? .4 : 1
+    }
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 14
+  })))))), err && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--rose)',
+      fontWeight: 600
+    }
+  }, err), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      borderTop: '1px solid var(--line-2)',
+      paddingTop: 14
+    }
+  }, React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn",
+    onClick: onClose
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri",
+    onClick: save
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 16,
+    sw: 2.4
+  }), editing ? 'Save changes' : 'Create department')))));
+}
+function ConfirmModal({
+  title,
+  body,
+  danger,
+  onClose,
+  onConfirm
+}) {
+  return React.createElement("div", {
+    className: "modal-bg",
+    onMouseDown: e => {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, React.createElement("div", {
+    className: "modal",
+    style: {
+      width: 'min(420px,92vw)'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '22px 22px 18px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'flex-start'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 38,
+      height: 38,
+      borderRadius: 10,
+      background: 'var(--neg-bg)',
+      color: 'var(--rose)',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 20,
+    sw: 2.4
+  })), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 15.5,
+      fontWeight: 700
+    }
+  }, title), React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--muted)',
+      marginTop: 4
+    }
+  }, body))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      marginTop: 20
+    }
+  }, React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn",
+    onClick: onClose
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri",
+    style: {
+      background: 'var(--rose)',
+      borderColor: 'var(--rose)',
+      boxShadow: 'none'
+    },
+    onClick: onConfirm
+  }, "Delete")))));
+}
+function ManageDepts({
+  depts,
+  store,
+  setRoute
+}) {
+  const [modal, setModal] = React.useState(null);
+  const [confirm, setConfirm] = React.useState(null);
+  const groups = window.UNICO.GROUPS;
+  const customCount = depts.filter(d => d.custom).length;
+  const onSave = (def, editing) => {
+    if (editing) store.updateDept(def.id, {
+      name: def.name,
+      short: def.short,
+      group: def.group,
+      desc: def.desc,
+      cols: def.cols,
+      primary: def.primary,
+      primaryLabel: def.primaryLabel
+    });else store.addDept(def);
+    setModal(null);
+  };
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.edit,
+    title: "Manage Departments",
+    sub: `${depts.length} active · ${customCount} custom — add, rename, delete and define custom metrics`,
+    right: React.createElement("button", {
+      className: "btn pri",
+      onClick: () => setModal({
+        type: 'add'
+      })
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 16
+    }), "Add Department")
+  }), React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 10
+    }
+  }, depts.map(d => {
+    const tone = PALETTE[d.id.charCodeAt(0) % PALETTE.length];
+    return React.createElement("div", {
+      key: d.id,
+      className: "dept-row"
+    }, React.createElement("div", {
+      style: {
+        width: 38,
+        height: 38,
+        borderRadius: 10,
+        background: tone + '18',
+        color: tone,
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, React.createElement(Ic, {
+      d: DEPT_ICON[d.id] || I.activity,
+      s: 19
+    })), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        minWidth: 0
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 14,
+        fontWeight: 700,
+        color: 'var(--ink)',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, d.name), React.createElement("span", {
+      className: "tag"
+    }, d.short), d.custom && React.createElement("span", {
+      className: "tag",
+      style: {
+        background: 'var(--pos-bg)',
+        color: 'var(--pos)'
+      }
+    }, "Custom")), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginTop: 2
+      }
+    }, d.group, " \xB7 ", d.cols.length, " metric", d.cols.length > 1 ? 's' : '', " \xB7 ", d.series.length, " month", d.series.length !== 1 ? 's' : '', " of data")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap',
+        maxWidth: 280,
+        justifyContent: 'flex-end'
+      }
+    }, d.cols.slice(0, 4).map(c => React.createElement("span", {
+      key: c.id,
+      className: "col-chip"
+    }, c.label)), d.cols.length > 4 && React.createElement("span", {
+      className: "col-chip"
+    }, "+", d.cols.length - 4)), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexShrink: 0
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      title: "Enter data",
+      onClick: () => setRoute({
+        view: 'input',
+        dept: d.id
+      })
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 14
+    }), "Data"), React.createElement("button", {
+      className: "icon-btn",
+      title: "Rename / edit",
+      onClick: () => setModal({
+        type: 'edit',
+        dept: d
+      })
+    }, React.createElement(Ic, {
+      d: I.edit,
+      s: 15
+    })), React.createElement("button", {
+      className: "icon-btn danger",
+      title: "Delete",
+      onClick: () => setConfirm(d)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 15
+    }))));
+  })), React.createElement("div", {
+    className: "card feature",
+    style: {
+      padding: '16px 18px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 38,
+      height: 38,
+      borderRadius: 10,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 20
+  })), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700
+    }
+  }, "Add a new department with custom metrics"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Define your own fields \u2014 e.g. Physiotherapy, Blood Bank, Pharmacy \u2014 then capture data in the Data Entry module.")), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn pri",
+    onClick: () => setModal({
+      type: 'add'
+    })
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 16
+  }), "New Department")), modal && React.createElement(DeptModal, {
+    initial: modal.type === 'edit' ? modal.dept : null,
+    groups: groups,
+    onClose: () => setModal(null),
+    onSave: onSave
+  }), confirm && React.createElement(ConfirmModal, {
+    title: `Delete ${confirm.name}?`,
+    danger: true,
+    body: confirm.custom ? 'This custom department and its entered data will be permanently removed.' : 'This built-in department will be hidden from the platform. You can re-add it by resetting in Settings.',
+    onClose: () => setConfirm(null),
+    onConfirm: () => {
+      store.deleteDept(confirm.id);
+      setConfirm(null);
+    }
+  }));
+}
+window.ManageDepts = ManageDepts;
+})();
+;
+/* ===== staff.jsx ===== */
+(function(){
+const VACC_TONE = {
+  "Completed": "pos",
+  "Vaccinated": "pos",
+  "3 dose": "pos",
+  "2 dose": "warn",
+  "1 dose": "warn",
+  "Not Completed": "neg",
+  "Unknown": "flat"
+};
+function vaccColor(s) {
+  const t = VACC_TONE[s] || "flat";
+  return t === 'pos' ? '#1f9d57' : t === 'warn' ? '#e08a1e' : t === 'neg' ? '#d23a52' : '#8a93a3';
+}
+function VaccBadge({
+  status
+}) {
+  const c = vaccColor(status);
+  return React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      fontSize: 11,
+      fontWeight: 600,
+      padding: '2px 9px',
+      borderRadius: 20,
+      color: c,
+      background: c + '1c'
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 6,
+      height: 6,
+      borderRadius: '50%',
+      background: c
+    }
+  }), status || 'Unknown');
+}
+function Avatar({
+  name,
+  size = 34,
+  fontSize
+}) {
+  const parts = (name || '?').split(' ');
+  const ini = (parts[0][0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '');
+  let h = 0;
+  for (const ch of name || '') h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return React.createElement("div", {
+    style: {
+      width: size,
+      height: size,
+      borderRadius: '50%',
+      flexShrink: 0,
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: fontSize || size * 0.4,
+      fontWeight: 700,
+      color: '#fff',
+      background: `linear-gradient(135deg,hsl(${h} 60% 52%),hsl(${(h + 40) % 360} 62% 42%))`
+    }
+  }, ini.toUpperCase());
+}
+function RoleBadge({
+  role
+}) {
+  const pca = role === 'PCA';
+  const c = pca ? '#6a52d4' : '#0090ca';
+  return React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      fontSize: 10.5,
+      fontWeight: 700,
+      padding: '2px 8px',
+      borderRadius: 5,
+      color: c,
+      background: c + '16',
+      letterSpacing: .3
+    }
+  }, role || 'Nurse');
+}
+const STAFF_EXPORT_COLS = [['Emp ID', 'emp_id'], ['Name', 'name'], ['Role', 'role'], ['Designation', 'designation'], ['Department', 'current_department'], ['Qualification', 'qualification'], ['DOJ', 'doj'], ['Experience', 'total_experience_text'], ['Special Training', 'special_training'], ['Hep-B Vaccination', 'hepatitis_b_vaccination'], ['Phone', 'phone'], ['Remarks', 'remarks']];
+function esc(v) {
+  return ((v == null ? '' : v) + '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function downloadBlob(content, filename, mime) {
+  const blob = new Blob([content], {
+    type: mime
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 600);
+}
+function staffTableHTML(rows) {
+  const th = STAFF_EXPORT_COLS.map(c => `<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:6px 8px;font-family:Calibri,Arial,sans-serif;text-align:left;font-size:11pt">${c[0]}</th>`).join('');
+  const trs = rows.map((e, i) => `<tr style="background:${i % 2 ? '#eef6fb' : '#ffffff'}">${STAFF_EXPORT_COLS.map(c => `<td style="border:1px solid #b9c6d2;padding:5px 8px;font-family:Calibri,Arial,sans-serif;font-size:10.5pt">${esc(e[c[1]])}</td>`).join('')}</tr>`).join('');
+  return `<table border="1" style="border-collapse:collapse"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+}
+function exportStaff(rows, role, fmt) {
+  const date = new Date().toISOString().slice(0, 10);
+  const title = `UNICO Hospitals — ${role} Roster`;
+  const base = `UNICO-${role}-roster-${date}`;
+  if (fmt === 'csv') {
+    const head = STAFF_EXPORT_COLS.map(c => `"${c[0]}"`).join(',');
+    const body = rows.map(e => STAFF_EXPORT_COLS.map(c => `"${((e[c[1]] == null ? '' : e[c[1]]) + '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    downloadBlob('\uFEFF' + head + '\r\n' + body, base + '.csv', 'text/csv;charset=utf-8');
+  } else if (fmt === 'excel') {
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>${role}</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body><h3 style="font-family:Calibri">${title} — ${rows.length} ${role}(s)</h3>${staffTableHTML(rows)}</body></html>`;
+    downloadBlob(html, base + '.xls', 'application/vnd.ms-excel');
+  } else if (fmt === 'word') {
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${title}</title><style>@page{size:A4 landscape;margin:1.2cm}</style></head><body><h2 style="font-family:Calibri;color:#0072a3;margin-bottom:2px">${title}</h2><p style="font-family:Calibri;color:#555;margin-top:0">Generated ${date} · ${rows.length} ${role}(s)</p>${staffTableHTML(rows)}</body></html>`;
+    downloadBlob(html, base + '.doc', 'application/msword');
+  } else if (fmt === 'pdf') {
+    const root = document.getElementById('pdf-root');
+    const native = window.unicoNative;
+    if (!root || !native || typeof native.exportPDF !== 'function') {
+      try {
+        document.body.classList.add('pdf-export-mode');
+        window.print();
+      } catch (e) {} finally {
+        setTimeout(() => document.body.classList.remove('pdf-export-mode'), 500);
+      }
+      return;
+    }
+    root.innerHTML = `<div class="pdf-page" style="padding:10mm 11mm;font-family:'IBM Plex Sans',Arial,sans-serif;color:#16202e"><h2 style="color:#0072a3;margin:0 0 2px;font-size:18px">${title}</h2><div style="color:#8a93a3;font-size:10.5px;margin-bottom:10px">Generated ${date} · ${rows.length} ${role}(s) · Confidential</div>${staffTableHTML(rows)}</div>`;
+    document.body.classList.add('pdf-export-mode');
+    Promise.resolve(native.exportPDF({
+      pageSize: 'A4',
+      landscape: true,
+      defaultName: base
+    })).catch(() => {}).then(() => {
+      root.innerHTML = '';
+      document.body.classList.remove('pdf-export-mode');
+    });
+  }
+}
+function ExportMenu({
+  rows,
+  role
+}) {
+  const [open, setOpen] = React.useState(false);
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setOpen(o => !o)
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 14
+  }), "Export \u25BE"), open && React.createElement("div", {
+    onMouseLeave: () => setOpen(false),
+    style: {
+      position: 'absolute',
+      right: 0,
+      top: '112%',
+      zIndex: 60,
+      background: '#fff',
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      boxShadow: 'var(--shadow-pop)',
+      minWidth: 172,
+      overflow: 'hidden',
+      padding: 4
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: 'var(--faint)',
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      padding: '6px 9px 3px',
+      fontWeight: 700
+    }
+  }, "Export ", rows.length, " ", role, "(s)"), [['pdf', 'PDF document (.pdf)', I.doc], ['excel', 'Microsoft Excel (.xls)', I.grid], ['word', 'Microsoft Word (.doc)', I.doc], ['csv', 'CSV (.csv)', I.doc]].map(([f, l, ic]) => React.createElement("div", {
+    key: f,
+    onClick: () => {
+      exportStaff(rows, role, f);
+      setOpen(false);
+    },
+    style: {
+      padding: '8px 10px',
+      fontSize: 12.5,
+      cursor: 'pointer',
+      display: 'flex',
+      gap: 9,
+      alignItems: 'center',
+      borderRadius: 6,
+      color: 'var(--ink-2)',
+      fontWeight: 500
+    },
+    onMouseEnter: e => e.currentTarget.style.background = 'var(--blue-50)',
+    onMouseLeave: e => e.currentTarget.style.background = 'transparent'
+  }, React.createElement(Ic, {
+    d: ic,
+    s: 15,
+    c: "var(--blue)"
+  }), l))));
+}
+function WorkforceDashboard({
+  store,
+  setRoute,
+  role = 'Nurse'
+}) {
+  const S = window.STAFF;
+  const list = store.staff.filter(e => (e.role || 'Nurse') === role);
+  const [welcome, setWelcome] = React.useState(true);
+  const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
+  const listView = role === 'PCA' ? 'pca' : 'nurses';
+  const compView = role === 'PCA' ? 'pcaCompliance' : 'nurseCompliance';
+  const homeView = role === 'PCA' ? 'pcaHome' : 'nurseHome';
+  const k = S.kpis(list);
+  const byDept = S.countBy(list, 'current_department').slice(0, 13).map(([label, value]) => ({
+    label,
+    value,
+    color: '#0090ca',
+    color2: '#27a8db'
+  }));
+  const desigAll = S.countBy(list, 'designation');
+  const desigTop = desigAll.slice(0, 6),
+    desigOther = desigAll.slice(6).reduce((s, d) => s + d[1], 0);
+  const desigDonut = [...desigTop.map(([label, value], i) => ({
+    label,
+    value,
+    color: PALETTE[i % PALETTE.length]
+  })), ...(desigOther ? [{
+    label: 'Other',
+    value: desigOther,
+    color: '#c2486f'
+  }] : [])];
+  const vacc = S.vaccinationBreakdown(list).map(([label, value]) => ({
+    label,
+    value,
+    color: vaccColor(label)
+  }));
+  const exp = S.experienceBuckets(list).map(([label, value]) => ({
+    label,
+    value
+  }));
+  const recent = S.recentJoiners(list, 6);
+  const annv = S.anniversaries(list, 60);
+  const comp = S.compliance(list);
+  const compIssues = comp.missing_vaccination.length + comp.missing_training.length + comp.missing_phone.length;
+  const Kpi = ({
+    label,
+    val,
+    foot,
+    color
+  }) => React.createElement("div", {
+    className: "card anim-pop",
+    style: {
+      padding: '17px 20px',
+      borderLeft: `4px solid ${color}`,
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 128
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink-2)'
+    }
+  }, label), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 38,
+      fontWeight: 700,
+      color,
+      margin: '12px 0 8px',
+      lineHeight: 1
+    }
+  }, val), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginTop: 'auto'
+    }
+  }, foot));
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: role === 'PCA' ? I.bed : I.steth,
+    title: `${role === 'PCA' ? 'PCA' : 'Nurse'} Dashboard`,
+    sub: `Live overview of the ${role} roster`,
+    right: React.createElement(React.Fragment, null, React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setRoute({
+        view: listView
+      })
+    }, React.createElement(Ic, {
+      d: I.layers,
+      s: 15
+    }), "Directory"), React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setRoute({
+        view: compView
+      })
+    }, React.createElement(Ic, {
+      d: I.heart,
+      s: 15
+    }), "Compliance"), React.createElement("button", {
+      className: "btn pri sm",
+      style: {
+        background: tone,
+        borderColor: tone
+      },
+      onClick: () => setRoute({
+        view: homeView
+      })
+    }, React.createElement(Ic, {
+      d: I.activity,
+      s: 15
+    }), "Refresh"))
+  }), welcome && React.createElement("div", {
+    className: "card",
+    style: {
+      background: 'var(--blue-50)',
+      border: '1px solid var(--blue-100)',
+      padding: '14px 16px',
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      color: 'var(--blue)',
+      marginTop: 1
+    }
+  }, React.createElement(Ic, {
+    d: I.heart,
+    s: 20
+  })), React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, role, " Management"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--ink-2)',
+      marginTop: 2
+    }
+  }, "Manage the ", role, " roster, filter with the quick chips, export to Excel/Word, and use ", React.createElement("b", null, "Compliance"), " to close gaps.")), React.createElement("button", {
+    className: "icon-btn",
+    onClick: () => setWelcome(false)
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 15
+  }))), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))'
+    }
+  }, React.createElement(Kpi, {
+    label: `Total ${role === 'PCA' ? 'PCAs' : 'Nurses'}`,
+    val: fmt(k.total_staff),
+    foot: `active ${role} on roster`,
+    color: tone
+  }), React.createElement(Kpi, {
+    label: "Departments",
+    val: fmt(k.departments),
+    foot: "distinct units staffed",
+    color: "#6a52d4"
+  }), React.createElement(Kpi, {
+    label: "Vaccinated",
+    val: k.vaccinated_pct + '%',
+    foot: "Hep-B completed / vaccinated",
+    color: "#1f9d57"
+  }), React.createElement(Kpi, {
+    label: "Compliance Issues",
+    val: fmt(compIssues),
+    foot: `${comp.missing_vaccination.length} vacc · ${comp.missing_training.length} training · click for details`,
+    color: "#d23a52"
+  })), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '1.25fr 1fr'
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Employees per Department"), React.createElement("span", {
+    className: "sub"
+  }, "top units by headcount"), React.createElement("span", {
+    className: "spacer"
+  })), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement(HBar, {
+    rows: byDept
+  }))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Designation Breakdown"), React.createElement("span", {
+    className: "sub"
+  }, "role mix across the workforce"), React.createElement("span", {
+    className: "spacer"
+  })), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Donut, {
+    data: desigDonut,
+    size: 188,
+    centerValue: fmt(k.total_staff),
+    centerLabel: "staff"
+  })))), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '1fr 1.25fr'
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Hep-B Vaccination"), React.createElement("span", {
+    className: "spacer"
+  })), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Donut, {
+    data: vacc,
+    size: 172,
+    centerValue: k.vaccinated_pct + '%',
+    centerLabel: "compliant"
+  }))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Experience Distribution"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "tag"
+  }, "3D")), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement(Bar3D, {
+    data: exp,
+    x: "label",
+    y: "value",
+    height: 240,
+    color: "#0090ca"
+  })))), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '1fr 1fr'
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Recent Joiners"), React.createElement("span", {
+    className: "spacer"
+  })), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2
+    }
+  }, recent.map(e => React.createElement("div", {
+    key: e.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 11,
+      padding: '8px 4px',
+      borderBottom: '1px solid var(--line-2)',
+      cursor: 'pointer'
+    },
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    })
+  }, React.createElement(Avatar, {
+    name: e.name,
+    size: 32
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, e.name), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, e.designation, " \xB7 ", e.current_department)), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, e.doj))))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Upcoming Anniversaries"), React.createElement("span", {
+    className: "sub"
+  }, "next 60 days"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "tag num"
+  }, annv.length)), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2
+    }
+  }, annv.length === 0 && React.createElement("div", {
+    style: {
+      color: 'var(--faint)',
+      fontSize: 12.5,
+      padding: '14px 4px'
+    }
+  }, "No anniversaries in the window."), annv.slice(0, 6).map(({
+    e,
+    annv,
+    years
+  }) => React.createElement("div", {
+    key: e.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 11,
+      padding: '8px 4px',
+      borderBottom: '1px solid var(--line-2)',
+      cursor: 'pointer'
+    },
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    })
+  }, React.createElement(Avatar, {
+    name: e.name,
+    size: 32
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, e.name), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, e.current_department)), React.createElement("span", {
+    className: "tag",
+    style: {
+      background: 'var(--blue-50)',
+      color: 'var(--blue-700)'
+    }
+  }, years, " yr", years > 1 ? 's' : ''), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      width: 54,
+      textAlign: 'right'
+    }
+  }, annv.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric'
+  }))))))), React.createElement("div", {
+    className: "card feature",
+    style: {
+      padding: '14px 18px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700
+    }
+  }, "Compliance gaps"), [['Missing vaccination', comp.missing_vaccination.length, '#d23a52'], ['No training recorded', comp.missing_training.length, '#e08a1e'], ['No phone on file', comp.missing_phone.length, '#6a52d4']].map(([l, n, c]) => React.createElement("div", {
+    key: l,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, React.createElement("span", {
+    className: "num",
+    style: {
+      fontSize: 20,
+      fontWeight: 700,
+      color: c
+    }
+  }, n), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, l))), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: () => setRoute({
+      view: compView
+    })
+  }, "Review compliance", React.createElement(Ic, {
+    d: I.arrowR,
+    s: 15
+  }))));
+}
+function StaffDirectory({
+  store,
+  setRoute,
+  initialFilter
+}) {
+  const [q, setQ] = React.useState('');
+  const [role, setRole] = React.useState(initialFilter?.role || '');
+  const [dept, setDept] = React.useState(initialFilter?.dept || '');
+  const [desig, setDesig] = React.useState('');
+  const [vacc, setVacc] = React.useState(initialFilter?.vacc || '');
+  const list = store.staff.filter(e => e.is_active);
+  const filtered = list.filter(e => {
+    if (q && !`${e.name} ${e.emp_id} ${e.phone || ''}`.toLowerCase().includes(q.toLowerCase())) return false;
+    if (role && (e.role || 'Nurse') !== role) return false;
+    if (dept && e.current_department !== dept) return false;
+    if (desig && e.designation !== desig) return false;
+    if (vacc === '__ok' && !window.STAFF.VACC_OK.includes(e.hepatitis_b_vaccination)) return false;
+    if (vacc === '__gap' && !["Not Completed", "Unknown", "1 dose", "2 dose"].includes(e.hepatitis_b_vaccination)) return false;
+    if (vacc && !vacc.startsWith('__') && e.hepatitis_b_vaccination !== vacc) return false;
+    return true;
+  });
+  const sel = {
+    padding: '8px 11px',
+    border: '1px solid var(--line)',
+    borderRadius: 7,
+    fontSize: 12.5,
+    fontFamily: 'inherit',
+    background: '#fff'
+  };
+  const nurses = list.filter(e => (e.role || 'Nurse') === 'Nurse').length,
+    pcas = list.filter(e => e.role === 'PCA').length;
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.layers,
+    title: "Staff Directory",
+    sub: `${filtered.length} shown · ${nurses} nurses · ${pcas} PCA`,
+    right: React.createElement("button", {
+      className: "btn pri sm",
+      onClick: () => setRoute({
+        view: 'staffForm'
+      })
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 15
+    }), "Add Staff")
+  }), React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '12px 14px',
+      display: 'flex',
+      gap: 10,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      padding: '7px 11px',
+      width: 240,
+      flexShrink: 0,
+      color: 'var(--faint)'
+    }
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 15
+  }), React.createElement("input", {
+    placeholder: "Search name, ID, phone\u2026",
+    value: q,
+    onChange: e => setQ(e.target.value),
+    style: {
+      border: 0,
+      background: 'transparent',
+      outline: 'none',
+      fontFamily: 'inherit',
+      fontSize: 12.5,
+      color: 'var(--ink)',
+      width: '100%'
+    }
+  })), React.createElement("div", {
+    className: "seg"
+  }, [['', 'All'], ['Nurse', 'Nurses'], ['PCA', 'PCA']].map(([v, l]) => React.createElement("button", {
+    key: v,
+    className: role === v ? 'on' : '',
+    onClick: () => setRole(v)
+  }, l))), React.createElement("select", {
+    style: sel,
+    value: dept,
+    onChange: e => setDept(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "All departments"), window.STAFF.DEPARTMENTS.map(d => React.createElement("option", {
+    key: d
+  }, d))), React.createElement("select", {
+    style: sel,
+    value: desig,
+    onChange: e => setDesig(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "All designations"), [...window.STAFF.DESIGNATIONS, ...window.STAFF.PCA_DESIGNATIONS].map(d => React.createElement("option", {
+    key: d
+  }, d))), React.createElement("select", {
+    style: sel,
+    value: vacc,
+    onChange: e => setVacc(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "Any vaccination"), React.createElement("option", {
+    value: "__ok"
+  }, "\u2713 Compliant"), React.createElement("option", {
+    value: "__gap"
+  }, "\u26A0 Has gap"), window.STAFF.VACCINATION_STATES.map(d => React.createElement("option", {
+    key: d
+  }, d))), (q || role || dept || desig || vacc) && React.createElement("button", {
+    className: "btn sm",
+    onClick: () => {
+      setQ('');
+      setRole('');
+      setDept('');
+      setDesig('');
+      setVacc('');
+    }
+  }, "Clear"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement(ExportMenu, {
+    rows: list,
+    role: role
+  })), React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    className: "tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Staff"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Role"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Emp ID"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Designation"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Department"), React.createElement("th", null, "Experience"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Vaccination"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Phone"), React.createElement("th", null))), React.createElement("tbody", null, filtered.map(e => React.createElement("tr", {
+    key: e.id,
+    style: {
+      cursor: 'pointer'
+    },
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    })
+  }, React.createElement("td", {
+    style: {
+      textAlign: 'left'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement(Avatar, {
+    name: e.name,
+    size: 30
+  }), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      color: 'var(--ink)'
+    }
+  }, e.name), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--faint)',
+      fontFamily: "'IBM Plex Sans'"
+    }
+  }, e.qualification || '—')))), React.createElement("td", {
+    style: {
+      textAlign: 'left'
+    }
+  }, React.createElement(RoleBadge, {
+    role: e.role
+  })), React.createElement("td", {
+    style: {
+      textAlign: 'left'
+    }
+  }, e.emp_id), React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      fontFamily: "'IBM Plex Sans'"
+    }
+  }, e.designation || '—'), React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      fontFamily: "'IBM Plex Sans'"
+    }
+  }, e.current_department || '—'), React.createElement("td", null, e.total_experience_text || '—'), React.createElement("td", {
+    style: {
+      textAlign: 'left'
+    }
+  }, React.createElement(VaccBadge, {
+    status: e.hepatitis_b_vaccination
+  })), React.createElement("td", {
+    style: {
+      textAlign: 'left'
+    }
+  }, e.phone || React.createElement("span", {
+    style: {
+      color: 'var(--rose)'
+    }
+  }, "missing")), React.createElement("td", null, React.createElement(Ic, {
+    d: I.chevR,
+    s: 15,
+    c: "#b6c0cc"
+  })))))), filtered.length === 0 && React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: '34px',
+      fontSize: 13
+    }
+  }, "No staff match these filters."))));
+}
+function StaffCompliance({
+  store,
+  setRoute,
+  role = 'Nurse'
+}) {
+  const comp = window.STAFF.compliance(store.staff.filter(e => (e.role || 'Nurse') === role));
+  const card = (title, icon, tone, rows, emptyMsg, filter) => React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("div", {
+    style: {
+      width: 28,
+      height: 28,
+      borderRadius: 7,
+      background: tone + '1a',
+      color: tone,
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Ic, {
+    d: icon,
+    s: 16
+  })), React.createElement("h3", null, title), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "num",
+    style: {
+      fontSize: 20,
+      fontWeight: 700,
+      color: tone
+    }
+  }, rows.length)), React.createElement("div", {
+    style: {
+      maxHeight: 300,
+      overflowY: 'auto'
+    }
+  }, rows.length === 0 ? React.createElement("div", {
+    style: {
+      padding: '24px',
+      textAlign: 'center',
+      color: 'var(--pos)',
+      fontSize: 13
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 26,
+    c: "#1f9d57"
+  }), React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, emptyMsg)) : rows.map(e => React.createElement("div", {
+    key: e.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '9px 14px',
+      borderBottom: '1px solid var(--line-2)',
+      cursor: 'pointer'
+    },
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    })
+  }, React.createElement(Avatar, {
+    name: e.name,
+    size: 30
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, e.name), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, e.designation, " \xB7 ", e.current_department)), React.createElement("button", {
+    className: "btn sm",
+    onClick: ev => {
+      ev.stopPropagation();
+      setRoute({
+        view: 'staffForm',
+        emp: e.id
+      });
+    }
+  }, "Fix")))));
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.heart,
+    title: `${role === 'PCA' ? 'PCA' : 'Nurse'} Compliance`,
+    sub: `${role} records that need attention — click to open the profile or fix`
+  }), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))'
+    }
+  }, card('Missing Hep-B Vaccination', I.heart, '#d23a52', comp.missing_vaccination, 'All staff vaccinated', 'vacc'), card('No Special Training', I.activity, '#e08a1e', comp.missing_training, 'All staff have training', 'training'), card('No Phone on File', I.user, '#6a52d4', comp.missing_phone, 'All staff have phone numbers', 'phone')));
+}
+function ManageStaff({
+  store,
+  setRoute,
+  role
+}) {
+  const S = window.STAFF;
+  const [q, setQ] = React.useState('');
+  const [chip, setChip] = React.useState('all');
+  const [dept, setDept] = React.useState('');
+  const [desig, setDesig] = React.useState('');
+  const [vacc, setVacc] = React.useState('');
+  const [qual, setQual] = React.useState('');
+  const [expB, setExpB] = React.useState('');
+  const [training, setTraining] = React.useState('');
+  const [sortBy, setSortBy] = React.useState('name');
+  const [showInactive, setShowInactive] = React.useState(false);
+  const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
+  const all = store.staff.filter(e => (e.role || 'Nurse') === role);
+  const active = all.filter(e => e.is_active);
+  const base = all.filter(e => showInactive || e.is_active);
+  const now = Date.now();
+  const matchChip = e => {
+    const d = e.current_department || '';
+    switch (chip) {
+      case 'fav':
+        return !!e.fav;
+      case 'missing':
+        return !S.VACC_OK.includes(e.hepatitis_b_vaccination);
+      case 'icu':
+        return /\b(icu|ccu|nicu|micu|sicu)\b/i.test(d) || /ct\s*icu/i.test(d);
+      case 'emergency':
+        return /emerg|\ber\b/i.test(d);
+      case 'otcath':
+        return /\bot\b|cath|theatre/i.test(d);
+      case 'newhire':
+        return e.doj && now - new Date(e.doj) < 220 * 86400000;
+      default:
+        return true;
+    }
+  };
+  const filtered = base.filter(e => {
+    if (!matchChip(e)) return false;
+    if (q && !`${e.name} ${e.emp_id} ${e.phone || ''}`.toLowerCase().includes(q.toLowerCase())) return false;
+    if (dept && e.current_department !== dept) return false;
+    if (desig && e.designation !== desig) return false;
+    if (vacc === '__ok' && !S.VACC_OK.includes(e.hepatitis_b_vaccination)) return false;
+    if (vacc === '__gap' && !["Not Completed", "Unknown", "1 dose", "2 dose"].includes(e.hepatitis_b_vaccination)) return false;
+    if (vacc && !vacc.startsWith('__') && e.hepatitis_b_vaccination !== vacc) return false;
+    if (qual && e.qualification !== qual) return false;
+    if (training === 'has' && !(e.special_training && e.special_training.trim())) return false;
+    if (training === 'none' && e.special_training && e.special_training.trim()) return false;
+    if (expB) {
+      const y = e.total_experience_years;
+      if (y == null) return false;
+      if (expB === '<1' && !(y < 1)) return false;
+      if (expB === '1-3' && !(y >= 1 && y < 3)) return false;
+      if (expB === '3-5' && !(y >= 3 && y < 5)) return false;
+      if (expB === '5-10' && !(y >= 5 && y < 10)) return false;
+      if (expB === '10+' && !(y >= 10)) return false;
+    }
+    return true;
+  });
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'exp') return (b.total_experience_years || 0) - (a.total_experience_years || 0);
+    if (sortBy === 'doj') return (b.doj || '').localeCompare(a.doj || '');
+    if (sortBy === 'dept') return (a.current_department || '').localeCompare(b.current_department || '') || (a.name || '').localeCompare(b.name || '');
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  const deptOpts = S.uniqueVals(all, 'current_department');
+  const desigOpts = S.uniqueVals(all, 'designation');
+  const qualOpts = S.uniqueVals(all, 'qualification');
+  const sel = {
+    padding: '9px 11px',
+    border: '1px solid var(--line)',
+    borderRadius: 8,
+    fontSize: 12.5,
+    fontFamily: 'inherit',
+    background: '#fff'
+  };
+  const chips = [['all', 'All'], ['fav', '★ Favorites'], ['missing', '⚠ Missing vaccination'], ['icu', 'ICU staff'], ['emergency', 'Emergency / ER'], ['otcath', 'OT / Cath Lab'], ['newhire', 'New hire']];
+  const anyFilter = q || dept || desig || vacc || qual || expB || training || chip !== 'all';
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      flexShrink: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 800,
+      color: 'var(--ink)',
+      letterSpacing: '-.3px',
+      whiteSpace: 'nowrap'
+    }
+  }, role === 'PCA' ? 'PCA' : 'Nurse', " Employees"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Dedicated ", role, " roster", all.length > active.length ? ` · ${all.length - active.length} inactive hidden` : '')), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setShowInactive(v => !v)
+  }, showInactive ? 'Hide inactive' : 'Show inactive'), React.createElement("button", {
+    className: "btn pri sm",
+    style: {
+      background: tone,
+      borderColor: tone
+    },
+    onClick: () => setRoute({
+      view: 'staffForm',
+      role
+    })
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 15
+  }), "Add ", role), React.createElement("span", {
+    className: "num",
+    style: {
+      fontSize: 12.5,
+      color: 'var(--muted)',
+      fontWeight: 600
+    }
+  }, active.length, " employee(s)")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, chips.map(([id, label]) => React.createElement("button", {
+    key: id,
+    onClick: () => setChip(id),
+    style: {
+      padding: '7px 14px',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      cursor: 'pointer',
+      border: '1px solid ' + (chip === id ? tone : 'var(--line)'),
+      background: chip === id ? tone : 'var(--panel-2)',
+      color: chip === id ? '#fff' : 'var(--ink-2)'
+    }
+  }, label))), React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '12px 14px',
+      display: 'flex',
+      gap: 10,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      background: '#fff',
+      border: '1px solid var(--line)',
+      borderRadius: 8,
+      padding: '8px 11px',
+      flex: 1,
+      minWidth: 200,
+      color: 'var(--faint)'
+    }
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 15
+  }), React.createElement("input", {
+    placeholder: "Search name / Emp ID / Phone",
+    value: q,
+    onChange: e => setQ(e.target.value),
+    style: {
+      border: 0,
+      background: 'transparent',
+      outline: 'none',
+      fontFamily: 'inherit',
+      fontSize: 13,
+      color: 'var(--ink)',
+      width: '100%'
+    }
+  })), React.createElement("select", {
+    style: sel,
+    value: dept,
+    onChange: e => setDept(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "All Departments"), deptOpts.map(d => React.createElement("option", {
+    key: d
+  }, d))), React.createElement("select", {
+    style: sel,
+    value: desig,
+    onChange: e => setDesig(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "All Designations"), desigOpts.map(d => React.createElement("option", {
+    key: d
+  }, d))), React.createElement("select", {
+    style: sel,
+    value: vacc,
+    onChange: e => setVacc(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "All Vaccination"), React.createElement("option", {
+    value: "__ok"
+  }, "\u2713 Compliant"), React.createElement("option", {
+    value: "__gap"
+  }, "\u26A0 Has gap"), [...new Set(all.map(e => e.hepatitis_b_vaccination).filter(Boolean))].map(d => React.createElement("option", {
+    key: d
+  }, d))), qualOpts.length > 0 && React.createElement("select", {
+    style: sel,
+    value: qual,
+    onChange: e => setQual(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "All Qualifications"), qualOpts.map(d => React.createElement("option", {
+    key: d
+  }, d))), React.createElement("select", {
+    style: sel,
+    value: expB,
+    onChange: e => setExpB(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "All Experience"), ['<1', '1-3', '3-5', '5-10', '10+'].map(x => React.createElement("option", {
+    key: x,
+    value: x
+  }, x, " yrs"))), React.createElement("select", {
+    style: sel,
+    value: training,
+    onChange: e => setTraining(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "Any Training"), React.createElement("option", {
+    value: "has"
+  }, "Has training"), React.createElement("option", {
+    value: "none"
+  }, "No training")), React.createElement("select", {
+    style: sel,
+    value: sortBy,
+    onChange: e => setSortBy(e.target.value)
+  }, React.createElement("option", {
+    value: "name"
+  }, "Sort: Name"), React.createElement("option", {
+    value: "exp"
+  }, "Sort: Experience"), React.createElement("option", {
+    value: "doj"
+  }, "Sort: Newest hire"), React.createElement("option", {
+    value: "dept"
+  }, "Sort: Department")), React.createElement("button", {
+    className: "btn pri sm",
+    style: {
+      opacity: anyFilter ? 1 : .5
+    },
+    onClick: () => {
+      setQ('');
+      setDept('');
+      setDesig('');
+      setVacc('');
+      setQual('');
+      setExpB('');
+      setTraining('');
+      setChip('all');
+    }
+  }, "Clear filters"), React.createElement(ExportMenu, {
+    rows: sorted,
+    role: role
+  })), React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    className: "tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      textAlign: 'center',
+      width: 34
+    }
+  }, "\u2605"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Emp ID"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Name"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Designation"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Department"), React.createElement("th", null, "Experience"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Vaccination"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Phone"), React.createElement("th", {
+    style: {
+      textAlign: 'right'
+    }
+  }, "Manage"))), React.createElement("tbody", null, sorted.map(e => React.createElement("tr", {
+    key: e.id,
+    style: {
+      opacity: e.is_active ? 1 : .55
+    }
+  }, React.createElement("td", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("span", {
+    onClick: ev => {
+      ev.stopPropagation();
+      store.toggleFav(e.id);
+    },
+    style: {
+      cursor: 'pointer',
+      fontSize: 16,
+      color: e.fav ? '#e0a81e' : '#c4ccd6'
+    }
+  }, e.fav ? '★' : '☆')), React.createElement("td", {
+    style: {
+      textAlign: 'left'
+    }
+  }, e.emp_id), React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      cursor: 'pointer'
+    },
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    })
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement(Avatar, {
+    name: e.name,
+    size: 28
+  }), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      color: 'var(--ink)'
+    }
+  }, e.name), e.qualification && React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--faint)',
+      fontFamily: "'IBM Plex Sans'"
+    }
+  }, e.qualification)))), React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      fontFamily: "'IBM Plex Sans'"
+    }
+  }, e.designation || '—'), React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      fontFamily: "'IBM Plex Sans'"
+    }
+  }, e.current_department || '—'), React.createElement("td", null, e.total_experience_text || '—'), React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      fontFamily: "'IBM Plex Sans'"
+    }
+  }, React.createElement("span", {
+    style: {
+      color: vaccColor(e.hepatitis_b_vaccination),
+      fontWeight: 600
+    }
+  }, e.hepatitis_b_vaccination || 'Unknown')), React.createElement("td", {
+    style: {
+      textAlign: 'left'
+    }
+  }, e.phone || React.createElement("span", {
+    style: {
+      color: 'var(--rose)'
+    }
+  }, "\u2014")), React.createElement("td", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("button", {
+    className: "icon-btn",
+    title: "Edit",
+    onClick: () => setRoute({
+      view: 'staffForm',
+      emp: e.id
+    })
+  }, React.createElement(Ic, {
+    d: I.edit,
+    s: 14
+  })), e.is_active ? React.createElement("button", {
+    className: "icon-btn danger",
+    title: "Deactivate",
+    onClick: () => store.remove(e.id)
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 14
+  })) : React.createElement("button", {
+    className: "icon-btn",
+    title: "Restore",
+    onClick: () => store.restore(e.id),
+    style: {
+      color: 'var(--pos)'
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 14
+  })), React.createElement("button", {
+    className: "icon-btn",
+    title: "Delete permanently",
+    onClick: async () => {
+      const ok = await window.UI.confirm({
+        title: `Permanently delete ${e.name}?`,
+        message: 'This removes the record entirely and cannot be undone. (Use Deactivate to keep the record.)',
+        danger: true,
+        confirmLabel: 'Delete permanently'
+      });
+      if (ok) {
+        store.destroy(e.id);
+        window.UI.toast('Staff record deleted', 'success');
+      }
+    },
+    style: {
+      color: '#d23a52',
+      background: '#d23a521a',
+      border: '1px solid #d23a5240'
+    }
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 14,
+    sw: 2.6
+  })))))))), sorted.length === 0 && React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: '34px',
+      fontSize: 13
+    }
+  }, "No ", role, " match these filters."))));
+}
+Object.assign(window, {
+  Avatar,
+  VaccBadge,
+  RoleBadge,
+  vaccColor,
+  WorkforceDashboard,
+  StaffDirectory,
+  StaffCompliance,
+  ManageStaff
+});
+})();
+;
+/* ===== staff-profile.jsx ===== */
+(function(){
+function yearsFromDOJ(doj) {
+  if (!doj) return '';
+  const d = new Date(doj);
+  if (isNaN(d)) return '';
+  const days = (Date.now() - d.getTime()) / 86400000;
+  if (days < 0) return '';
+  const y = days / 365.25;
+  return y < 1 ? `${Math.max(1, Math.round(days / 30.44))} months` : `${y.toFixed(1)} yrs`;
+}
+function unicoTenure(doj) {
+  if (!doj) return null;
+  const d = new Date(doj);
+  if (isNaN(d)) return null;
+  const now = new Date();
+  if (d > now) return null;
+  let months = (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+  if (now.getDate() < d.getDate()) months--;
+  if (months < 0) months = 0;
+  const years = Math.floor(months / 12),
+    mo = months % 12;
+  const text = years > 0 ? mo > 0 ? `${years} yr${years > 1 ? 's' : ''} ${mo} mo` : `${years} yr${years > 1 ? 's' : ''}` : `${mo} mo`;
+  return {
+    months,
+    years,
+    mo,
+    decimalYears: Math.round(months / 12 * 10) / 10,
+    text
+  };
+}
+function StaffProfile({
+  store,
+  empId,
+  setRoute
+}) {
+  const e = store.get(empId);
+  const [note, setNote] = React.useState('');
+  if (!e) return React.createElement("div", {
+    style: {
+      padding: 40
+    }
+  }, "Staff not found. ", React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setRoute({
+      view: 'nurses'
+    })
+  }, "Back to roster"));
+  const tenure = unicoTenure(e.doj);
+  const backView = e.role === 'PCA' ? 'pca' : 'nurses';
+  const field = (l, v, mono) => React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 3
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      fontWeight: 600
+    }
+  }, l), React.createElement("span", {
+    style: {
+      fontSize: 13.5,
+      color: 'var(--ink)',
+      fontWeight: 500,
+      fontFamily: mono ? 'IBM Plex Mono' : 'inherit'
+    }
+  }, v || React.createElement("span", {
+    style: {
+      color: 'var(--faint)'
+    }
+  }, "\u2014")));
+  const sec = (title, kids) => React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, title)), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: '16px 22px'
+    }
+  }, kids));
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setRoute({
+      view: backView
+    })
+  }, React.createElement(Ic, {
+    d: I.chevR,
+    s: 14,
+    style: {
+      transform: 'rotate(180deg)'
+    }
+  }), e.role === 'PCA' ? 'PCA' : 'Nurses'), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn sm"
+  }, React.createElement(Ic, {
+    d: I.print,
+    s: 15
+  }), "Print ID Card"), React.createElement("button", {
+    className: "btn sm",
+    title: "Delete permanently",
+    style: {
+      color: '#d23a52',
+      borderColor: '#f1c6cd'
+    },
+    onClick: async () => {
+      const ok = await window.UI.confirm({
+        title: `Permanently delete ${e.name}?`,
+        message: 'This removes the record entirely and cannot be undone. (Use Deactivate to keep the record.)',
+        danger: true,
+        confirmLabel: 'Delete permanently'
+      });
+      if (ok) {
+        store.destroy(empId);
+        window.UI.toast('Staff record deleted', 'success');
+        setRoute({
+          view: backView
+        });
+      }
+    }
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 15,
+    sw: 2.4
+  }), "Delete record"), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: () => setRoute({
+      view: 'staffForm',
+      emp: e.id
+    })
+  }, React.createElement(Ic, {
+    d: I.edit,
+    s: 15
+  }), "Edit")), React.createElement("div", {
+    className: "card feature",
+    style: {
+      padding: '20px 22px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 18
+    }
+  }, React.createElement(Avatar, {
+    name: e.name,
+    size: 72,
+    fontSize: 26
+  }), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("h2", {
+    style: {
+      margin: 0,
+      fontSize: 23,
+      fontWeight: 700
+    }
+  }, e.name), React.createElement(RoleBadge, {
+    role: e.role
+  }), React.createElement("span", {
+    className: "tag"
+  }, e.emp_id), !e.is_active && React.createElement("span", {
+    className: "chip neg"
+  }, "Inactive")), React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      color: 'var(--muted)',
+      marginTop: 3
+    }
+  }, e.designation || '—', " \xB7 ", e.current_department || '—')), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 22,
+      fontWeight: 600,
+      color: 'var(--blue)'
+    }
+  }, e.total_experience_text || '—'), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "total experience")), React.createElement("div", {
+    style: {
+      width: 1,
+      height: 42,
+      background: 'var(--line)'
+    }
+  }), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    },
+    title: e.doj ? `Joined ${e.doj}` : 'No joining date on file'
+  }, React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 22,
+      fontWeight: 600,
+      color: '#1f9d57'
+    }
+  }, tenure ? tenure.text : '—'), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "UNICO experience")), React.createElement("div", {
+    style: {
+      width: 1,
+      height: 42,
+      background: 'var(--line)'
+    }
+  }), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement(VaccBadge, {
+    status: e.hepatitis_b_vaccination
+  }), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginTop: 5
+    }
+  }, "Hep-B status"))), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '1fr 1fr'
+    }
+  }, sec('Personal', React.createElement(React.Fragment, null, field('Employee ID', e.emp_id, true), field('Phone', e.phone, true), field('Qualification', e.qualification), field('Status', e.is_active ? 'Active' : 'Inactive'))), sec('Job', React.createElement(React.Fragment, null, field('Designation', e.designation), field('Department', e.current_department), field('Date of Joining', e.doj, true), field('Total Experience', e.total_experience_text)))), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '1fr 1fr'
+    }
+  }, sec('Experience', React.createElement(React.Fragment, null, field('UNICO Experience', tenure ? `${tenure.text}  ·  since ${e.doj}` : '', true), field('Total (years)', e.total_experience_years != null ? Math.round(e.total_experience_years * 10) / 10 + ' yrs' : '', true), field('Previous Experience', e.previous_experience))), sec('Compliance', React.createElement(React.Fragment, null, field('Special Training', e.special_training), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 3
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      fontWeight: 600
+    }
+  }, "Hep-B Vaccination"), React.createElement("div", null, React.createElement(VaccBadge, {
+    status: e.hepatitis_b_vaccination
+  }))), field('Remarks', e.remarks)))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Notes"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "tag num"
+  }, (e.notes || []).length)), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, React.createElement("input", {
+    value: note,
+    onChange: ev => setNote(ev.target.value),
+    onKeyDown: ev => {
+      if (ev.key === 'Enter' && note.trim()) {
+        store.addNote(e.id, note.trim());
+        setNote('');
+      }
+    },
+    placeholder: "Add a note (Enter to save)\u2026",
+    style: {
+      flex: 1,
+      padding: '9px 12px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      outline: 'none'
+    }
+  }), React.createElement("button", {
+    className: "btn pri",
+    onClick: () => {
+      if (note.trim()) {
+        store.addNote(e.id, note.trim());
+        setNote('');
+      }
+    }
+  }, "Add note")), (e.notes || []).length === 0 && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--faint)'
+    }
+  }, "No notes yet."), (e.notes || []).slice().reverse().map(n => React.createElement("div", {
+    key: n.id,
+    style: {
+      background: 'var(--panel-2)',
+      borderRadius: 9,
+      padding: '10px 13px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 3
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)'
+    }
+  }, n.author, " \xB7 ", new Date(n.ts).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "icon-btn danger",
+    style: {
+      width: 24,
+      height: 24
+    },
+    onClick: () => store.delNote(e.id, n.id)
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 13
+  }))), React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--ink)'
+    }
+  }, n.text))))));
+}
+function StaffForm({
+  store,
+  empId,
+  setRoute,
+  role
+}) {
+  const editing = !!empId;
+  const existing = editing ? store.get(empId) : null;
+  const [f, setF] = React.useState(() => existing ? {
+    ...existing
+  } : {
+    role: role || 'Nurse',
+    emp_id: '',
+    name: '',
+    phone: '',
+    qualification: '',
+    designation: '',
+    current_department: '',
+    doj: '',
+    total_experience_text: '',
+    previous_experience: '',
+    special_training: '',
+    hepatitis_b_vaccination: '',
+    remarks: ''
+  });
+  const [err, setErr] = React.useState('');
+  const set = (k, v) => setF(s => ({
+    ...s,
+    [k]: v
+  }));
+  const S = window.STAFF;
+  const inp = (k, ph, type = 'text') => React.createElement("input", {
+    value: f[k] || '',
+    onChange: e => set(k, e.target.value),
+    placeholder: ph,
+    type: type,
+    style: {
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 13,
+      fontFamily: k === 'phone' || k === 'doj' || k === 'emp_id' ? 'IBM Plex Mono' : 'inherit',
+      outline: 'none',
+      width: '100%'
+    }
+  });
+  const cmb = (k, opts) => React.createElement("select", {
+    value: f[k] || '',
+    onChange: e => set(k, e.target.value),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      background: '#fff',
+      width: '100%'
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, "\u2014"), opts.map(o => React.createElement("option", {
+    key: o
+  }, o)));
+  const field = (label, node, extra) => React.createElement("div", {
+    className: "field"
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center'
+    }
+  }, React.createElement("label", null, label), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), extra), node);
+  const linkBtn = (t, fn) => React.createElement("button", {
+    onClick: fn,
+    style: {
+      border: 0,
+      background: 'none',
+      color: 'var(--blue)',
+      fontSize: 11,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, t);
+  const save = () => {
+    if (!f.name || !f.name.trim()) {
+      setErr('Name is required');
+      return;
+    }
+    if (f.doj && isNaN(new Date(f.doj))) {
+      setErr('Date of Joining must be YYYY-MM-DD');
+      return;
+    }
+    const data = {
+      ...f,
+      role: f.role || 'Nurse',
+      total_experience_years: f.doj && !isNaN(new Date(f.doj)) ? Math.round((Date.now() - new Date(f.doj)) / 86400000 / 365.25 * 10) / 10 : existing ? existing.total_experience_years : null
+    };
+    if (editing) store.update(empId, data);else store.create(data);
+    const roleView = (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses';
+    setRoute(editing ? {
+      view: 'staffProfile',
+      emp: empId
+    } : {
+      view: roleView
+    });
+  };
+  const sec = (title, kids) => React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      borderBottom: '1px solid var(--line-2)',
+      paddingBottom: 7
+    }
+  }, title), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 14
+    }
+  }, kids));
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: editing ? I.edit : I.plus,
+    title: editing ? 'Edit Staff' : `Add New ${f.role || 'Nurse'}`,
+    sub: editing ? 'Update fields and save' : 'Fill in the form and save'
+  }), React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '12px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "Role"), React.createElement("div", {
+    className: "seg"
+  }, S.ROLES.map(r => React.createElement("button", {
+    key: r,
+    className: (f.role || 'Nurse') === r ? 'on' : '',
+    onClick: () => set('role', r)
+  }, r))), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "Sets the designation & qualification options for this ", f.role || 'Nurse', ".")), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '230px 1fr',
+      alignItems: 'start'
+    }
+  }, React.createElement("div", {
+    className: "card",
+    style: {
+      padding: 18,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12,
+      alignItems: 'center'
+    }
+  }, React.createElement(Avatar, {
+    name: f.name || '?',
+    size: 140,
+    fontSize: 50
+  }), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)',
+      textAlign: 'center'
+    }
+  }, "Avatar is generated from initials."), editing && React.createElement("button", {
+    className: "btn sm",
+    style: {
+      width: '100%',
+      justifyContent: 'center',
+      color: 'var(--rose)',
+      borderColor: '#f1c6cd'
+    },
+    onClick: () => {
+      if (confirm('Mark this employee as inactive?')) {
+        store.remove(empId);
+        setRoute({
+          view: (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
+        });
+      }
+    }
+  }, "Mark inactive")), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 20
+    }
+  }, sec('Personal', React.createElement(React.Fragment, null, field('Emp ID', inp('emp_id', 'UNC-0000'), !editing && linkBtn('auto', () => set('emp_id', store.nextEmpId()))), field('Name *', inp('name', 'Full name')), field('Phone', inp('phone', '01XXXXXXXXX')), field('Qualification', cmb('qualification', S.qualificationsFor(f.role))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', cmb('designation', S.designationsFor(f.role))), field('Current Department', cmb('current_department', S.DEPARTMENTS)), field('Date of Joining', inp('doj', 'YYYY-MM-DD')), field('Total Experience', inp('total_experience_text', 'e.g. 4.5 yrs'), linkBtn('from DOJ', () => {
+    const r = yearsFromDOJ(f.doj);
+    if (r) set('total_experience_text', r);else setErr('Enter a valid DOJ first');
+  })))), sec('Experience & Compliance', React.createElement(React.Fragment, null, field('Previous Experience', inp('previous_experience', 'Prior facilities / roles')), field('Special Training', inp('special_training', 'e.g. BLS, ACLS')), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), field('Remarks', inp('remarks', 'Any notes')))), err && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--rose)',
+      fontWeight: 600
+    }
+  }, err), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      borderTop: '1px solid var(--line-2)',
+      paddingTop: 14
+    }
+  }, React.createElement("button", {
+    className: "btn pri",
+    onClick: save
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 16,
+    sw: 2.4
+  }), editing ? 'Save changes' : 'Create staff'), React.createElement("button", {
+    className: "btn",
+    onClick: () => setRoute(editing ? {
+      view: 'staffProfile',
+      emp: empId
+    } : {
+      view: (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
+    })
+  }, "Cancel"))))));
+}
+Object.assign(window, {
+  StaffProfile,
+  StaffForm
+});
+})();
+;
+/* ===== input.jsx ===== */
+(function(){
+function Toast({
+  msg,
+  onDone
+}) {
+  React.useEffect(() => {
+    const t = setTimeout(onDone, 2600);
+    return () => clearTimeout(t);
+  }, []);
+  return React.createElement("div", {
+    style: {
+      position: 'fixed',
+      bottom: 24,
+      right: 24,
+      zIndex: 9999,
+      background: '#0d1b2e',
+      color: '#fff',
+      padding: '12px 16px',
+      borderRadius: 10,
+      boxShadow: 'var(--shadow-pop)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    },
+    className: "anim-pop"
+  }, React.createElement("div", {
+    style: {
+      width: 24,
+      height: 24,
+      borderRadius: '50%',
+      background: 'var(--green)',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 15,
+    c: "#fff",
+    sw: 2.6
+  })), React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600
+    }
+  }, msg));
+}
+function NumField({
+  col,
+  value,
+  onChange,
+  err,
+  autoFocus
+}) {
+  return React.createElement("label", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: 'var(--ink-2)',
+      display: 'flex',
+      gap: 6
+    }
+  }, col.label, col.pct && React.createElement("span", {
+    style: {
+      color: 'var(--faint)',
+      fontWeight: 500
+    }
+  }, "(%)")), React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("input", {
+    type: "number",
+    min: "0",
+    step: col.pct ? '0.01' : '1',
+    value: value,
+    autoFocus: autoFocus,
+    onChange: e => onChange(e.target.value),
+    style: {
+      width: '100%',
+      padding: '9px 11px',
+      border: '1px solid ' + (err ? 'var(--rose)' : 'var(--line)'),
+      borderRadius: 7,
+      fontFamily: 'IBM Plex Mono',
+      fontSize: 14,
+      background: err ? 'var(--neg-bg)' : '#fff',
+      outline: 'none'
+    },
+    onFocus: e => e.target.style.borderColor = 'var(--blue)',
+    onBlur: e => e.target.style.borderColor = err ? 'var(--rose)' : 'var(--line)'
+  }), col.pct && React.createElement("span", {
+    style: {
+      position: 'absolute',
+      right: 11,
+      top: 10,
+      color: 'var(--faint)',
+      fontSize: 13
+    }
+  }, "%")), err && React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--rose)'
+    }
+  }, err));
+}
+function DataEntry({
+  depts,
+  addEntry,
+  entries,
+  initialDept,
+  updateDept,
+  deleteMonth,
+  undo,
+  canUndo
+}) {
+  const [mode, setMode] = React.useState('form');
+  const [deptId, setDeptId] = React.useState(initialDept && depts.some(d => d.id === initialDept) ? initialDept : depts[0].id);
+  const [month, setMonth] = React.useState(() => {
+    const MO = window.UNICO.MONTH_ORDER;
+    const initId = initialDept && depts.some(d => d.id === initialDept) ? initialDept : depts[0].id;
+    const dep = depts.find(x => x.id === initId) || depts[0];
+    const last = (dep.months || [])[(dep.months || []).length - 1];
+    const i = last ? MO.indexOf(last) : -1;
+    return i >= 0 && MO[i + 1] || last || MO[0];
+  });
+  const [vals, setVals] = React.useState({});
+  const [errs, setErrs] = React.useState({});
+  const [step, setStep] = React.useState(0);
+  const [toast, setToast] = React.useState(null);
+  const [fldOpen, setFldOpen] = React.useState(false);
+  const [fName, setFName] = React.useState('');
+  const [fPct, setFPct] = React.useState(false);
+  const d = depts.find(x => x.id === deptId) || depts[0];
+  const MO = window.UNICO.MONTH_ORDER;
+  const nextNew = dep => {
+    const last = (dep.months || [])[(dep.months || []).length - 1];
+    const i = last ? MO.indexOf(last) : -1;
+    return i >= 0 && MO[i + 1] || last || MO[0];
+  };
+  const addField = () => {
+    const name = fName.trim();
+    if (!name) {
+      window.UI && window.UI.toast('Enter a field name', 'error');
+      return;
+    }
+    if (!updateDept) {
+      window.UI && window.UI.toast('Custom fields unavailable here', 'error');
+      return;
+    }
+    let base = ('c_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')).slice(0, 26);
+    if (base === 'c_' || base === 'c') base = 'c_field';
+    const existing = new Set(d.cols.map(c => c.id));
+    let id = base,
+      n = 2;
+    while (existing.has(id)) {
+      id = base + '_' + n++;
+    }
+    updateDept(d.id, {
+      cols: [...d.cols.map(c => ({
+        ...c
+      })), {
+        id,
+        label: name,
+        pct: !!fPct
+      }]
+    });
+    window.UI && window.UI.toast(`Field "${name}" added to ${d.short}`, 'success');
+    setFName('');
+    setFPct(false);
+    setFldOpen(false);
+  };
+  const removeField = col => {
+    if (!updateDept) return;
+    window.UI.confirm({
+      title: `Remove the "${col.label}" field?`,
+      message: `Drops this metric from ${d.short}. Existing values for it are discarded.`,
+      danger: true,
+      confirmLabel: 'Remove field'
+    }).then(ok => {
+      if (!ok) return;
+      updateDept(d.id, {
+        cols: d.cols.filter(c => c.id !== col.id).map(c => ({
+          ...c
+        }))
+      });
+      window.UI.toast('Field removed', 'success');
+    });
+  };
+  const monthOpts = (() => {
+    const all = d.months || [];
+    const fi = Math.max(0, MO.indexOf(all[0] || MO[0]));
+    const li = MO.indexOf(all[all.length - 1] || MO[0]);
+    let opts = MO.slice(fi, Math.min(MO.length, (li < 0 ? fi : li) + 37));
+    if (month && !opts.includes(month)) opts = opts.concat(month);
+    return opts;
+  })();
+  const isExisting = (d.months || []).includes(month);
+  const MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const MYEARS = Array.from({
+    length: 22
+  }, (_, i) => 2024 + i);
+  const parseKey = k => {
+    const p = String(k || '').split('-');
+    return {
+      mi: Math.max(0, MONS.indexOf(p[0])),
+      yr: 2000 + (parseInt(p[1], 10) || 26)
+    };
+  };
+  const [monthPickOpen, setMonthPickOpen] = React.useState(false);
+  const [pm, setPm] = React.useState(() => parseKey(month).mi);
+  const [py, setPy] = React.useState(() => parseKey(month).yr);
+  const openMonthPicker = () => {
+    const p = parseKey(month);
+    setPm(p.mi);
+    setPy(p.yr);
+    setMonthPickOpen(true);
+  };
+  const useCustomMonth = () => {
+    const key = MONS[pm] + '-' + String(py).slice(-2);
+    setMonth(key);
+    setMonthPickOpen(false);
+    window.UI && window.UI.toast('Reporting month set to ' + (window.UNICO.MONTHS_FULL[key] || key), 'success');
+  };
+  const [gridEdits, setGridEdits] = React.useState({});
+  const gridCell = (mo, col, cur) => gridEdits[mo] && gridEdits[mo][col] !== undefined ? gridEdits[mo][col] : cur == null ? '' : cur;
+  const setGridCell = (mo, col, v) => setGridEdits(s => ({
+    ...s,
+    [mo]: {
+      ...(s[mo] || {}),
+      [col]: v
+    }
+  }));
+  const updateMonthRow = r => {
+    const row = {};
+    d.cols.forEach(c => {
+      row[c.id] = Number(gridCell(r.month, c.id, r[c.id]) || 0);
+    });
+    addEntry({
+      dept: d.id,
+      deptName: d.short,
+      month: r.month,
+      full: r.full || window.UNICO.MONTHS_FULL[r.month] || r.month,
+      row,
+      ts: Date.now()
+    });
+    setToast(`Updated ${d.short} · ${r.full || r.month}`);
+    setGridEdits(s => {
+      const n = {
+        ...s
+      };
+      delete n[r.month];
+      return n;
+    });
+  };
+  const delMonthRow = r => {
+    if (!deleteMonth) {
+      window.UI && window.UI.toast('Delete unavailable', 'error');
+      return;
+    }
+    window.UI.confirm({
+      title: `Delete ${r.full || r.month}?`,
+      message: `Removes ${d.short}'s data for this month. You can Undo afterwards.`,
+      danger: true,
+      confirmLabel: 'Delete'
+    }).then(ok => {
+      if (ok) {
+        deleteMonth(d.id, r.month);
+        window.UI.toast('Month deleted', 'success');
+      }
+    });
+  };
+  const doUndo = () => {
+    if (undo) {
+      undo();
+      window.UI && window.UI.toast('Reverted last change', 'success');
+    }
+  };
+  React.useEffect(() => {
+    setVals({});
+    setErrs({});
+    setStep(0);
+    setMonth(nextNew(d));
+    setMonthPickOpen(false);
+    setGridEdits({});
+  }, [deptId]);
+  const set = (id, v) => setVals(s => ({
+    ...s,
+    [id]: v
+  }));
+  const validate = cols => {
+    const e = {};
+    cols.forEach(c => {
+      const raw = vals[c.id];
+      if (raw === undefined || raw === '') {
+        if (!c.pct) e[c.id] = 'Required';
+      } else if (Number(raw) < 0) e[c.id] = 'Must be ≥ 0';else if (!c.pct && !Number.isInteger(Number(raw))) e[c.id] = 'Whole number';
+    });
+    const totalCol = cols.find(c => c.id === 'total');
+    if (totalCol && vals.total !== undefined) {
+      const comp = cols.filter(c => c.id !== 'total' && !c.pct && ['cag', 'pci', 'ppm', 'tpm', 'dsa', 'endo', 'colon', 'polyp', 'histo', 'bronch', 'pluro', 'cabg', 'valve', 'other'].includes(c.id));
+      if (comp.length) {
+        const sum = comp.reduce((s, c) => s + Number(vals[c.id] || 0), 0);
+        if (Number(vals.total) !== sum) e.total = `≠ component sum (${sum})`;
+      }
+    }
+    return e;
+  };
+  const submit = async () => {
+    const e = validate(d.cols);
+    setErrs(e);
+    const hard = Object.keys(e).filter(k => e[k] !== 'Required');
+    if (hard.length) {
+      return false;
+    }
+    const missing = d.cols.filter(c => e[c.id] === 'Required');
+    if (missing.length) {
+      const names = missing.map(c => c.label).join(', ');
+      const ok = window.UI && window.UI.confirm ? await window.UI.confirm({
+        title: `Save with ${missing.length} field${missing.length > 1 ? 's' : ''} missing?`,
+        message: `No value entered for: ${names}. These will be saved as blank (—) and won't be counted in charts or totals — you can fill them in later.`,
+        confirmLabel: 'Save anyway',
+        cancelLabel: 'Keep editing'
+      }) : window.confirm(`Save with missing data (${names})?`);
+      if (!ok) return false;
+    }
+    const row = {};
+    d.cols.forEach(c => {
+      const raw = vals[c.id];
+      row[c.id] = raw === undefined || raw === '' ? null : Number(raw);
+    });
+    addEntry({
+      dept: d.id,
+      deptName: d.short,
+      month,
+      full: window.UNICO.MONTHS_FULL[month] || month,
+      row,
+      ts: Date.now()
+    });
+    setToast(`Saved ${d.short} · ${month}`);
+    setVals({});
+    setErrs({});
+    setStep(0);
+    return true;
+  };
+  const tabBtn = (id, label, icon) => React.createElement("button", {
+    onClick: () => setMode(id),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '10px 16px',
+      border: '0',
+      borderBottom: '2.5px solid ' + (mode === id ? 'var(--blue)' : 'transparent'),
+      background: 'transparent',
+      color: mode === id ? 'var(--blue)' : 'var(--muted)',
+      fontWeight: 600,
+      fontSize: 13
+    }
+  }, React.createElement(Ic, {
+    d: icon,
+    s: 16
+  }), label);
+  const selector = React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      flexWrap: 'wrap',
+      alignItems: 'flex-end'
+    }
+  }, React.createElement("label", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      minWidth: 240
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: 'var(--ink-2)'
+    }
+  }, "Department"), React.createElement("select", {
+    value: deptId,
+    onChange: e => setDeptId(e.target.value),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, depts.map(x => React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.name, " (", x.short, ")")))), React.createElement("label", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      minWidth: 170
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: 'var(--ink-2)'
+    }
+  }, "Reporting Month"), React.createElement("select", {
+    value: month,
+    onChange: e => setMonth(e.target.value),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, monthOpts.map(m => React.createElement("option", {
+    key: m,
+    value: m
+  }, window.UNICO.MONTHS_FULL[m] || m))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    className: "tag",
+    style: {
+      fontSize: 10,
+      background: isExisting ? '#fbeed0' : 'var(--pos-bg)',
+      color: isExisting ? 'var(--amber)' : 'var(--pos)'
+    }
+  }, isExisting ? 'Editing existing' : 'New month'), React.createElement("button", {
+    type: "button",
+    onClick: openMonthPicker,
+    title: "Enter data for any month / year",
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 3,
+      border: 0,
+      background: 'none',
+      color: 'var(--blue)',
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: 'pointer',
+      padding: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 12,
+    sw: 2.6
+  }), "New month")), monthPickOpen && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      padding: '7px 8px',
+      marginTop: 2
+    }
+  }, React.createElement("select", {
+    value: pm,
+    onChange: e => setPm(+e.target.value),
+    style: {
+      padding: '5px 7px',
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, MONS.map((mn, i) => React.createElement("option", {
+    key: mn,
+    value: i
+  }, mn))), React.createElement("select", {
+    value: py,
+    onChange: e => setPy(+e.target.value),
+    style: {
+      padding: '5px 7px',
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, MYEARS.map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, y))), React.createElement("button", {
+    className: "btn sm pri",
+    type: "button",
+    onClick: useCustomMonth
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 13
+  }), "Use"), React.createElement("button", {
+    className: "btn sm",
+    type: "button",
+    onClick: () => setMonthPickOpen(false)
+  }, "Cancel"))));
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.input,
+    title: "Data Entry",
+    sub: "Capture monthly department statistics \u2014 saved entries flow straight into dashboards"
+  }), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      borderBottom: '1px solid var(--line)',
+      padding: '0 8px',
+      alignItems: 'center'
+    }
+  }, tabBtn('form', 'Quick Form', I.edit), tabBtn('grid', 'Grid Entry', I.grid), tabBtn('wizard', 'Guided Wizard', I.steth), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), canUndo && React.createElement("button", {
+    className: "btn sm",
+    style: {
+      marginRight: 6
+    },
+    onClick: doUndo,
+    title: "Undo the last data change"
+  }, React.createElement(Ic, {
+    d: I.chevR,
+    s: 13,
+    style: {
+      transform: 'rotate(180deg)'
+    }
+  }), "Undo")), mode === 'form' && React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 18
+    }
+  }, selector, React.createElement("div", {
+    style: {
+      height: 1,
+      background: 'var(--line-2)'
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))',
+      gap: 14
+    }
+  }, d.cols.map(c => React.createElement(NumField, {
+    key: c.id,
+    col: c,
+    value: vals[c.id] ?? '',
+    err: errs[c.id],
+    onChange: v => set(c.id, v)
+  }))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, !fldOpen ? React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setFldOpen(true),
+    style: {
+      borderStyle: 'dashed'
+    }
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "Add custom field") : React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line)',
+      borderRadius: 8,
+      padding: '10px 12px'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: 'var(--ink-2)'
+    }
+  }, "New field for ", d.short, ":"), React.createElement("input", {
+    autoFocus: true,
+    placeholder: "e.g. Ventilator days",
+    value: fName,
+    onChange: e => setFName(e.target.value),
+    onKeyDown: e => {
+      if (e.key === 'Enter') addField();
+    },
+    style: {
+      padding: '7px 10px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontFamily: 'inherit',
+      fontSize: 13,
+      minWidth: 190,
+      outline: 'none'
+    }
+  }), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5,
+      fontSize: 12,
+      color: 'var(--ink-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: fPct,
+    onChange: e => setFPct(e.target.checked)
+  }), "%"), React.createElement("button", {
+    className: "btn sm pri",
+    onClick: addField
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 14
+  }), "Add"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => {
+      setFldOpen(false);
+      setFName('');
+      setFPct(false);
+    }
+  }, "Cancel")), d.cols.filter(c => String(c.id).startsWith('c_')).map(c => React.createElement("span", {
+    key: c.id,
+    className: "col-chip",
+    style: {
+      gap: 5
+    }
+  }, c.label, React.createElement("button", {
+    className: "icon-btn",
+    style: {
+      width: 18,
+      height: 18,
+      border: 0,
+      background: 'transparent',
+      color: 'var(--rose)'
+    },
+    title: "Remove field",
+    onClick: () => removeField(c)
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 12
+  }))))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("button", {
+    className: "btn pri",
+    onClick: submit
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 16,
+    sw: 2.4
+  }), "Save Entry"), React.createElement("button", {
+    className: "btn",
+    onClick: () => {
+      setVals({});
+      setErrs({});
+    }
+  }, "Clear"), Object.keys(errs).length > 0 && (() => {
+    const hard = Object.keys(errs).filter(k => errs[k] !== 'Required').length;
+    const miss = Object.keys(errs).length - hard;
+    return hard ? React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--rose)',
+        fontWeight: 600
+      }
+    }, "Fix ", hard, " field", hard > 1 ? 's' : '', " before saving") : React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--amber)',
+        fontWeight: 600
+      }
+    }, miss, " field", miss > 1 ? 's' : '', " empty \u2014 you'll be asked to confirm");
+  })(), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--faint)'
+    }
+  }, "Auto-validates totals & non-negative counts"))), mode === 'grid' && React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, selector, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Spreadsheet entry \u2014 existing months are ", React.createElement("b", null, "editable"), "; change a value then click ", React.createElement("b", null, "Update"), ", or ", React.createElement("b", null, "Delete"), " a month. The highlighted row adds the next new month."), React.createElement("div", {
+    style: {
+      overflowX: 'auto',
+      border: '1px solid var(--line)',
+      borderRadius: 9
+    }
+  }, React.createElement("table", {
+    className: "tbl",
+    style: {
+      minWidth: 620
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Month"), d.cols.map(c => React.createElement("th", {
+    key: c.id
+  }, c.label)), React.createElement("th", {
+    style: {
+      textAlign: 'right'
+    }
+  }, "Actions"))), React.createElement("tbody", null, d.series.slice(-8).map(r => {
+    const dirty = !!gridEdits[r.month];
+    return React.createElement("tr", {
+      key: r.month,
+      style: dirty ? {
+        background: '#fff8ec'
+      } : null
+    }, React.createElement("td", {
+      style: {
+        fontWeight: 600,
+        whiteSpace: 'nowrap'
+      }
+    }, r.full || r.month), d.cols.map(c => React.createElement("td", {
+      key: c.id,
+      style: {
+        padding: 4
+      }
+    }, React.createElement("input", {
+      type: "number",
+      min: "0",
+      value: gridCell(r.month, c.id, r[c.id]),
+      onChange: e => setGridCell(r.month, c.id, e.target.value),
+      style: {
+        width: '100%',
+        minWidth: 60,
+        padding: '6px 6px',
+        border: '1px solid ' + (dirty ? 'var(--amber)' : 'var(--line)'),
+        borderRadius: 5,
+        fontFamily: 'IBM Plex Mono',
+        fontSize: 13,
+        textAlign: 'right',
+        outline: 'none',
+        background: '#fff'
+      }
+    }))), React.createElement("td", {
+      style: {
+        padding: 4,
+        whiteSpace: 'nowrap',
+        textAlign: 'right'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      disabled: !dirty,
+      onClick: () => updateMonthRow(r),
+      style: {
+        opacity: dirty ? 1 : .45
+      }
+    }, "Update"), React.createElement("button", {
+      className: "icon-btn",
+      title: "Delete this month",
+      style: {
+        marginLeft: 5,
+        color: 'var(--rose)',
+        borderColor: '#f1c6cd'
+      },
+      onClick: () => delMonthRow(r)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 13
+    }))));
+  }), !isExisting && React.createElement("tr", {
+    style: {
+      background: 'var(--blue-50)'
+    }
+  }, React.createElement("td", {
+    style: {
+      fontWeight: 700,
+      color: 'var(--blue)',
+      whiteSpace: 'nowrap'
+    }
+  }, window.UNICO.MONTHS_FULL[month] || month), d.cols.map(c => React.createElement("td", {
+    key: c.id,
+    style: {
+      padding: 4
+    }
+  }, React.createElement("input", {
+    type: "number",
+    min: "0",
+    value: vals[c.id] ?? '',
+    onChange: e => set(c.id, e.target.value),
+    style: {
+      width: '100%',
+      minWidth: 60,
+      padding: '6px 6px',
+      border: '1px solid ' + (errs[c.id] ? 'var(--rose)' : 'var(--line)'),
+      borderRadius: 5,
+      fontFamily: 'IBM Plex Mono',
+      fontSize: 13,
+      textAlign: 'right',
+      outline: 'none',
+      background: errs[c.id] ? 'var(--neg-bg)' : '#fff'
+    }
+  }))), React.createElement("td", {
+    style: {
+      padding: 4,
+      textAlign: 'right',
+      color: 'var(--blue)',
+      fontSize: 11,
+      fontWeight: 600
+    }
+  }, "new"))))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10
+    }
+  }, React.createElement("button", {
+    className: "btn pri",
+    onClick: submit,
+    disabled: isExisting,
+    style: {
+      opacity: isExisting ? .5 : 1
+    },
+    title: isExisting ? 'This month already exists — edit it in the row above' : ''
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 16,
+    sw: 2.4
+  }), "Commit New Row"), React.createElement("button", {
+    className: "btn",
+    onClick: () => setVals({})
+  }, "Reset Row"))), mode === 'wizard' && (() => {
+    const steps = ['Select', 'Core metrics', 'Detail metrics', 'Review'];
+    const primaryCols = d.cols.filter(c => c.id === d.primary || ['adm', 'reg', 'total'].includes(c.id)).slice(0, 3);
+    const otherCols = d.cols.filter(c => !primaryCols.includes(c));
+    const next = () => {
+      if (step === 1) {
+        const e = validate(primaryCols);
+        setErrs(e);
+        if (Object.keys(e).length) return;
+      }
+      if (step === 2) {
+        const e = validate(otherCols);
+        setErrs(e);
+        if (Object.keys(e).length) return;
+      }
+      setStep(s => Math.min(3, s + 1));
+    };
+    return React.createElement("div", {
+      className: "card-b",
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 18
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0
+      }
+    }, steps.map((s, i) => React.createElement(React.Fragment, {
+      key: i
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 26,
+        height: 26,
+        borderRadius: '50%',
+        display: 'grid',
+        placeItems: 'center',
+        fontSize: 12,
+        fontWeight: 700,
+        background: i < step ? 'var(--green)' : i === step ? 'var(--blue)' : '#e8edf3',
+        color: i <= step ? '#fff' : 'var(--muted)'
+      }
+    }, i < step ? React.createElement(Ic, {
+      d: I.check,
+      s: 14,
+      c: "#fff",
+      sw: 3
+    }) : i + 1), React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: i === step ? 'var(--ink)' : 'var(--muted)'
+      }
+    }, s)), i < steps.length - 1 && React.createElement("div", {
+      style: {
+        flex: 1,
+        height: 2,
+        background: i < step ? 'var(--green)' : '#e8edf3',
+        margin: '0 12px'
+      }
+    })))), React.createElement("div", {
+      style: {
+        height: 1,
+        background: 'var(--line-2)'
+      }
+    }), step === 0 && React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16
+      }
+    }, selector, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--muted)',
+        background: 'var(--blue-50)',
+        padding: '11px 14px',
+        borderRadius: 8
+      }
+    }, "You're entering data for ", React.createElement("b", {
+      style: {
+        color: 'var(--ink)'
+      }
+    }, d.name), " \u2014 ", window.UNICO.MONTHS_FULL[month] || month, ". This wizard captures ", d.cols.length, " metric", d.cols.length > 1 ? 's' : '', " in ", primaryCols.length < d.cols.length ? 'two' : 'one', " stage", primaryCols.length < d.cols.length ? 's' : '', " with validation at each step.")), step === 1 && React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))',
+        gap: 14
+      }
+    }, primaryCols.map((c, i) => React.createElement(NumField, {
+      key: c.id,
+      col: c,
+      value: vals[c.id] ?? '',
+      err: errs[c.id],
+      autoFocus: i === 0,
+      onChange: v => set(c.id, v)
+    }))), step === 2 && (otherCols.length ? React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))',
+        gap: 14
+      }
+    }, otherCols.map((c, i) => React.createElement(NumField, {
+      key: c.id,
+      col: c,
+      value: vals[c.id] ?? '',
+      err: errs[c.id],
+      autoFocus: i === 0,
+      onChange: v => set(c.id, v)
+    }))) : React.createElement("div", {
+      style: {
+        fontSize: 13,
+        color: 'var(--muted)'
+      }
+    }, "No additional metrics for this department.")), step === 3 && React.createElement("div", {
+      className: "card",
+      style: {
+        padding: 0,
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Review \u2014 ", d.name, " \xB7 ", window.UNICO.MONTHS_FULL[month] || month)), React.createElement("table", {
+      className: "tbl"
+    }, React.createElement("tbody", null, d.cols.map(c => React.createElement("tr", {
+      key: c.id
+    }, React.createElement("td", null, c.label), React.createElement("td", {
+      style: {
+        fontSize: 14,
+        fontWeight: 600,
+        color: 'var(--ink)'
+      }
+    }, vals[c.id] ?? '0', c.pct ? '%' : '')))))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10
+      }
+    }, step > 0 && React.createElement("button", {
+      className: "btn",
+      onClick: () => setStep(s => s - 1)
+    }, "Back"), React.createElement("span", {
+      className: "spacer"
+    }), step < 3 ? React.createElement("button", {
+      className: "btn pri",
+      onClick: next
+    }, "Continue", React.createElement(Ic, {
+      d: I.arrowR,
+      s: 15
+    })) : React.createElement("button", {
+      className: "btn pri",
+      onClick: submit
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 16,
+      sw: 2.4
+    }), "Confirm & Save")));
+  })()), React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Recent Submissions"), React.createElement("span", {
+    className: "sub"
+  }, "this session"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "tag num"
+  }, entries.length, " saved")), entries.length === 0 ? React.createElement("div", {
+    className: "card-b",
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: '30px'
+    }
+  }, React.createElement(Ic, {
+    d: I.doc,
+    s: 30,
+    c: "#c4ccd6"
+  }), React.createElement("div", {
+    style: {
+      marginTop: 8,
+      fontSize: 13
+    }
+  }, "No entries yet \u2014 saved rows will appear here.")) : React.createElement("table", {
+    className: "tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Department"), React.createElement("th", null, "Month"), React.createElement("th", null, "Primary metric"), React.createElement("th", null, "Fields"), React.createElement("th", null, "Saved"))), React.createElement("tbody", null, entries.slice().reverse().map((e, i) => {
+    const dd = depts.find(x => x.id === e.dept);
+    return React.createElement("tr", {
+      key: i
+    }, React.createElement("td", null, e.deptName), React.createElement("td", null, e.full), React.createElement("td", null, fmt(e.row[dd.primary] || 0)), React.createElement("td", null, Object.keys(e.row).length), React.createElement("td", {
+      style: {
+        color: 'var(--green)'
+      }
+    }, "\u2713 ", new Date(e.ts).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
+    })));
+  })))), toast && React.createElement(Toast, {
+    msg: toast,
+    onDone: () => setToast(null)
+  }));
+}
+window.DataEntry = DataEntry;
+})();
+;
+/* ===== reports.jsx ===== */
+(function(){
+const PAGE_SIZES = {
+  A4: [700, 1.414],
+  A3: [815, 1.414],
+  Letter: [700, 1.294]
+};
+const CHART_STYLE_LABEL = {
+  bar3d: '3D Bars',
+  bar: 'Bar',
+  line: 'Line',
+  area: 'Area + Target',
+  combo: 'Bar + Line',
+  grouped: 'Grouped',
+  stacked: 'Stacked',
+  pct: '100% Stacked',
+  horizontal: 'Horizontal',
+  donut: 'Composition'
+};
+const REPORT_STYLES = [['bar3d', '3D'], ['bar', 'Bar'], ['line', 'Line'], ['area', 'Area'], ['combo', 'Bar+Line'], ['grouped', 'Grouped'], ['stacked', 'Stacked'], ['pct', '100%'], ['horizontal', 'Horizontal'], ['donut', 'Donut']];
+function reportSeries(d) {
+  return d.cols.filter(c => c.id !== d.primary && !c.pct).slice(0, 6).map((c, i) => ({
+    id: c.id,
+    label: c.label,
+    color: PALETTE[i % PALETTE.length]
+  }));
+}
+function reportChartEl(d, style, tone, fs, donutData) {
+  const has = n => typeof window[n] === 'function';
+  if (style === 'bar') return React.createElement(BarChart, {
+    data: fs,
+    x: "month",
+    y: d.primary,
+    height: 195,
+    color: tone,
+    flat: true
+  });
+  if (style === 'line') return React.createElement(LineChart, {
+    data: fs,
+    x: "full",
+    y: d.primary,
+    height: 195,
+    color: tone,
+    flat: true
+  });
+  if (style === 'area' && has('AreaTargetChart')) {
+    const avg = fs.length ? Math.round(fs.reduce((s, r) => s + (r[d.primary] || 0), 0) / fs.length) : 0;
+    return React.createElement(AreaTargetChart, {
+      data: fs,
+      x: "full",
+      y: d.primary,
+      target: avg,
+      height: 200,
+      color: tone,
+      flat: true
+    });
+  }
+  if (style === 'combo' && has('ComboChart')) {
+    const pctCol = d.cols.find(c => c.pct);
+    const lineKey = pctCol ? pctCol.id : (d.cols.find(c => c.id !== d.primary && !c.pct) || {}).id || d.primary;
+    return React.createElement(ComboChart, {
+      data: fs,
+      x: "month",
+      barKey: d.primary,
+      lineKey: lineKey,
+      barColor: tone,
+      lineColor: "#e08a1e",
+      barLabel: (d.cols.find(c => c.id === d.primary) || {}).label || 'Value',
+      lineLabel: (d.cols.find(c => c.id === lineKey) || {}).label || 'Trend',
+      height: 210,
+      flat: true
+    });
+  }
+  if (style === 'grouped') {
+    const sr = reportSeries(d);
+    return sr.length ? React.createElement(GroupedBar, {
+      data: fs,
+      x: "month",
+      series: sr,
+      height: 210
+    }) : React.createElement(BarChart, {
+      data: fs,
+      x: "month",
+      y: d.primary,
+      height: 195,
+      color: tone,
+      flat: true
+    });
+  }
+  if (style === 'stacked') {
+    const sr = reportSeries(d);
+    return sr.length ? React.createElement(StackedBar, {
+      data: fs,
+      x: "month",
+      series: sr,
+      height: 210
+    }) : React.createElement(BarChart, {
+      data: fs,
+      x: "month",
+      y: d.primary,
+      height: 195,
+      color: tone,
+      flat: true
+    });
+  }
+  if (style === 'pct' && has('StackedPctBar')) {
+    const sr = reportSeries(d);
+    return sr.length ? React.createElement(StackedPctBar, {
+      data: fs,
+      x: "month",
+      series: sr,
+      height: 210,
+      flat: true
+    }) : React.createElement(BarChart, {
+      data: fs,
+      x: "month",
+      y: d.primary,
+      height: 195,
+      color: tone,
+      flat: true
+    });
+  }
+  if (style === 'horizontal' && has('HBarChart')) return React.createElement(HBarChart, {
+    data: fs.map(r => ({
+      label: r.full,
+      val: r[d.primary] || 0
+    })),
+    x: "label",
+    y: "val",
+    height: Math.max(150, fs.length * 30),
+    flat: true
+  });
+  if (style === 'donut') return donutData.length > 1 ? React.createElement("div", {
+    style: {
+      display: 'grid',
+      placeItems: 'center',
+      minHeight: 205
+    }
+  }, React.createElement(Donut, {
+    data: donutData,
+    size: 188,
+    centerValue: fmt(donutData.reduce((s, x) => s + x.value, 0)),
+    centerLabel: "Total",
+    flat: true
+  })) : React.createElement(Bar3D, {
+    data: fs,
+    x: "month",
+    y: d.primary,
+    height: 205,
+    color: tone,
+    flat: true
+  });
+  return React.createElement(Bar3D, {
+    data: fs,
+    x: "month",
+    y: d.primary,
+    height: 205,
+    color: tone,
+    flat: true
+  });
+}
+function Reports({
+  depts
+}) {
+  const MO = window.UNICO.MONTH_ORDER,
+    MF = window.UNICO.MONTHS_FULL;
+  const [sel, setSel] = React.useState(depts.slice(0, 4).map(d => d.id));
+  const [type, setType] = React.useState('summary');
+  const [period, setPeriod] = React.useState({
+    mode: 'all'
+  });
+  const [chartStyles, setChartStyles] = React.useState(['bar3d']);
+  const toggleStyle = s => setChartStyles(a => a.includes(s) ? a.length > 1 ? a.filter(x => x !== s) : a : [...a, s]);
+  const [hdrTitle, setHdrTitle] = React.useState('Patient Flow Census');
+  const [hdrSub, setHdrSub] = React.useState('');
+  const [hospitalName, setHospitalName] = React.useState('UNICO HOSPITALS PLC');
+  const [showLogo, setShowLogo] = React.useState(true);
+  const [confidential, setConfidential] = React.useState(true);
+  const [footerNote, setFooterNote] = React.useState('');
+  const [pageSize, setPageSize] = React.useState('A4');
+  const [orient, setOrient] = React.useState('portrait');
+  const [pageIdx, setPageIdx] = React.useState(0);
+  const toggle = id => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  const chosen = depts.filter(d => sel.includes(d.id));
+  const allMonths = [...new Set(depts.flatMap(d => d.months))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b));
+  const pMonths = (() => {
+    if (period.mode === 'q1') return ['Jan-26', 'Feb-26', 'Mar-26'];
+    if (period.mode === 'apr') return ['Apr-26'];
+    if (period.mode === 'last6') return allMonths.slice(-6);
+    if (period.mode === 'custom') {
+      const fi = allMonths.indexOf(period.from || allMonths[0]),
+        ti = allMonths.indexOf(period.to || allMonths[allMonths.length - 1]);
+      const a = Math.min(fi, ti),
+        b = Math.max(fi, ti);
+      return allMonths.slice(a, b + 1);
+    }
+    return allMonths;
+  })();
+  const pSet = new Set(pMonths);
+  const rangeLabel = pMonths.length ? `${MF[pMonths[0]] || pMonths[0]} – ${MF[pMonths[pMonths.length - 1]] || pMonths[pMonths.length - 1]}` : '—';
+  const fseriesOf = d => {
+    const f = d.series.filter(r => pSet.has(r.month));
+    return f.length ? f : d.series;
+  };
+  const statOf = (d, fs) => {
+    const total = fs.reduce((s, r) => s + (r[d.primary] || 0), 0);
+    const latest = fs[fs.length - 1] || {};
+    const peak = fs.length ? Math.max(...fs.map(r => r[d.primary] || 0)) : 0;
+    const avg = fs.length ? Math.round(total / fs.length) : 0;
+    return {
+      total,
+      latest,
+      peak,
+      avg
+    };
+  };
+  const [base, ratio] = PAGE_SIZES[pageSize];
+  const portrait = orient === 'portrait';
+  const pageW = portrait ? base : Math.round(base * ratio);
+  const pageMinH = portrait ? Math.round(base * ratio) : base;
+  const pages = type === 'compare' ? 1 : Math.max(1, chosen.length);
+  const pi = Math.min(pageIdx, pages - 1);
+  const pageDept = chosen[pi] || depts[0];
+  const sel2 = {
+    padding: '9px 11px',
+    border: '1px solid var(--line)',
+    borderRadius: 7,
+    fontSize: 13,
+    fontFamily: 'inherit',
+    background: '#fff'
+  };
+  const fieldLabel = t => React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: 'var(--ink-2)',
+      marginBottom: 7
+    }
+  }, t);
+  const Header = () => React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      borderBottom: '2px solid var(--blue)',
+      paddingBottom: 14
+    }
+  }, showLogo && React.createElement("img", {
+    src: "unico/logo.svg",
+    alt: "UNICO Healthcare",
+    style: {
+      height: 38
+    }
+  }), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, hdrTitle || 'Report'), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      letterSpacing: .4,
+      textTransform: 'uppercase',
+      marginTop: 2
+    }
+  }, hdrSub ? hdrSub + ' · ' : '', rangeLabel)), React.createElement("div", {
+    className: "spacer"
+  }), React.createElement("div", {
+    style: {
+      textAlign: 'right',
+      fontSize: 10,
+      color: 'var(--faint)'
+    }
+  }, "Generated", React.createElement("br", null), React.createElement("b", {
+    className: "num",
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, "05/18/2026")));
+  const Footer = ({
+    n,
+    total
+  }) => React.createElement("div", {
+    className: "pdf-foot",
+    style: {
+      marginTop: 20,
+      borderTop: '1px solid var(--line)',
+      paddingTop: 8,
+      fontSize: 9.5,
+      color: 'var(--faint)',
+      display: 'flex',
+      flex: '0 0 auto'
+    }
+  }, React.createElement("span", null, hospitalName), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", null, "Page ", n, " of ", total), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", null, footerNote ? footerNote + ' · ' : '', confidential ? 'Confidential · ' : '', pageSize, " ", orient));
+  function DeptPage({
+    d,
+    n,
+    total
+  }) {
+    const tone = PALETTE[d.id.charCodeAt(0) % PALETTE.length];
+    const fs = fseriesOf(d);
+    const st = statOf(d, fs);
+    const breakdown = d.cols.filter(c => c.id !== d.primary && !c.pct);
+    const donutData = breakdown.map((c, i) => ({
+      label: c.label,
+      value: fs.reduce((s, r) => s + (r[c.id] || 0), 0),
+      color: PALETTE[i % PALETTE.length]
+    })).filter(x => x.value > 0);
+    const detailed = type === 'detail';
+    const ncol = (detailed ? d.cols.length : 5) + 1;
+    const tblFont = detailed ? ncol > 10 ? 8 : ncol > 8 ? 8.5 : ncol > 6 ? 9.5 : 10.5 : 11;
+    return React.createElement("div", null, React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 12
+      }
+    }, React.createElement(Ic, {
+      d: DEPT_ICON[d.id] || I.activity,
+      s: 18,
+      c: tone
+    }), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 15
+      }
+    }, d.name), React.createElement("span", {
+      className: "tag"
+    }, d.group), React.createElement("span", {
+      className: "spacer"
+    }), React.createElement(Delta, {
+      v: d.delta
+    })), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4,1fr)',
+        gap: 10,
+        marginBottom: 16
+      }
+    }, [['Latest', fmt(st.latest[d.primary] || 0)], ['Total', fmt(st.total)], ['Peak', fmt(st.peak)], ['Avg', fmt(st.avg)]].map(([l, v], i) => React.createElement("div", {
+      key: i,
+      style: {
+        background: 'var(--panel-2)',
+        borderRadius: 7,
+        padding: '9px 11px',
+        borderLeft: '3px solid ' + tone
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .3
+      }
+    }, l), React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 18,
+        fontWeight: 600
+      }
+    }, v)))), chartStyles.map((cs, ci) => React.createElement("div", {
+      key: ci,
+      style: {
+        margin: '4px 0 8px'
+      }
+    }, chartStyles.length > 1 && React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        margin: '8px 0 2px'
+      }
+    }, CHART_STYLE_LABEL[cs] || cs), reportChartEl(d, cs, tone, fs, donutData))), donutData.length > 1 && !chartStyles.includes('donut') && React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        background: 'var(--panel-2)',
+        borderRadius: 9,
+        padding: '10px 14px',
+        marginTop: 6
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .3,
+        fontWeight: 600,
+        width: 78
+      }
+    }, "Composition"), React.createElement(Donut, {
+      data: donutData,
+      size: 104,
+      thickness: 20,
+      flat: true
+    })), React.createElement("table", {
+      className: detailed ? 'tbl rpt' : 'tbl',
+      style: {
+        marginTop: 14,
+        fontSize: tblFont
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Month"), d.cols.slice(0, detailed ? d.cols.length : 5).map(c => React.createElement("th", {
+      key: c.id
+    }, c.label)))), React.createElement("tbody", null, fs.map((r, i) => React.createElement("tr", {
+      key: i
+    }, React.createElement("td", null, detailed ? r.month : r.full), d.cols.slice(0, detailed ? d.cols.length : 5).map(c => React.createElement("td", {
+      key: c.id
+    }, r[c.id] == null ? '–' : c.pct ? r[c.id] + '%' : fmt(r[c.id]))))), detailed && React.createElement("tr", {
+      className: "tot"
+    }, React.createElement("td", null, "TOTAL"), d.cols.slice(0, d.cols.length).map(c => React.createElement("td", {
+      key: c.id
+    }, c.pct ? '—' : fmt(fs.reduce((s, r) => s + (r[c.id] || 0), 0)))))))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function ComparePage() {
+    const rows = chosen.map(d => {
+      const fs = fseriesOf(d);
+      const st = statOf(d, fs);
+      return {
+        d,
+        st
+      };
+    });
+    const hbar = rows.map(({
+      d,
+      st
+    }) => ({
+      label: d.short,
+      value: st.total,
+      color: PALETTE[d.id.charCodeAt(0) % PALETTE.length]
+    })).sort((a, b) => b.value - a.value);
+    return React.createElement("div", null, React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 15,
+        marginBottom: 12
+      }
+    }, "Cross-department comparison \xB7 ", chosen.length, " departments"), React.createElement("div", {
+      style: {
+        marginBottom: 16
+      }
+    }, React.createElement(HBar, {
+      rows: hbar
+    })), React.createElement("table", {
+      className: "tbl",
+      style: {
+        fontSize: 11.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Department"), React.createElement("th", null, "Service line"), React.createElement("th", null, "Latest"), React.createElement("th", null, "Total"), React.createElement("th", null, "Peak"), React.createElement("th", null, "Avg"), React.createElement("th", null, "Trend"))), React.createElement("tbody", null, rows.map(({
+      d,
+      st
+    }) => React.createElement("tr", {
+      key: d.id
+    }, React.createElement("td", null, d.name), React.createElement("td", {
+      style: {
+        fontFamily: "'IBM Plex Sans'"
+      }
+    }, d.group), React.createElement("td", null, fmt(st.latest[d.primary] || 0)), React.createElement("td", null, fmt(st.total)), React.createElement("td", null, fmt(st.peak)), React.createElement("td", null, fmt(st.avg)), React.createElement("td", {
+      style: {
+        textAlign: 'right'
+      }
+    }, React.createElement(Delta, {
+      v: d.delta
+    }))))))), React.createElement(Footer, {
+      n: 1,
+      total: 1
+    }));
+  }
+  const [exporting, setExporting] = React.useState(false);
+  const [note, setNote] = React.useState(null);
+  const doPrint = () => {
+    try {
+      document.body.classList.add('pdf-export-mode');
+      window.print();
+    } catch (e) {} finally {
+      setTimeout(() => document.body.classList.remove('pdf-export-mode'), 500);
+    }
+  };
+  const doExport = async () => {
+    const native = window.unicoNative;
+    if (!native || typeof native.exportPDF !== 'function') {
+      setNote({
+        ok: false,
+        text: 'PDF export is only available in the desktop app.'
+      });
+      return;
+    }
+    if (chosen.length === 0) {
+      setNote({
+        ok: false,
+        text: 'Select at least one department first.'
+      });
+      return;
+    }
+    setExporting(true);
+    setNote(null);
+    document.body.classList.add('pdf-export-mode');
+    try {
+      const res = await native.exportPDF({
+        pageSize,
+        landscape: orient === 'landscape',
+        defaultName: `UNICO-${type}-report`
+      });
+      if (res && res.ok) setNote({
+        ok: true,
+        text: 'PDF' + (res.path ? ' saved · ' + res.path : ' ready — save it from the print dialog')
+      });else if (res && res.canceled) {} else setNote({
+        ok: false,
+        text: res && res.error || 'Export failed.'
+      });
+    } catch (e) {
+      setNote({
+        ok: false,
+        text: String(e && e.message ? e.message : e)
+      });
+    } finally {
+      document.body.classList.remove('pdf-export-mode');
+      setExporting(false);
+    }
+  };
+  const pdfRoot = typeof document !== 'undefined' ? document.getElementById('pdf-root') : null;
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.doc,
+    title: "Report Builder",
+    sub: "Compose and export board-ready statistical reports",
+    right: React.createElement(React.Fragment, null, React.createElement("button", {
+      className: "btn sm",
+      onClick: doPrint
+    }, React.createElement(Ic, {
+      d: I.print,
+      s: 15
+    }), "Print"), React.createElement("button", {
+      className: "btn pri sm",
+      onClick: doExport,
+      disabled: exporting || chosen.length === 0
+    }, React.createElement(Ic, {
+      d: I.download,
+      s: 15
+    }), exporting ? 'Exporting…' : 'Export PDF'))
+  }), note && React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '10px 14px',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: note.ok ? 'var(--pos)' : 'var(--rose)',
+      background: note.ok ? 'var(--pos-bg)' : 'var(--neg-bg)',
+      border: '1px solid ' + (note.ok ? '#bfe6cd' : '#f1c6cd')
+    }
+  }, React.createElement(Ic, {
+    d: note.ok ? I.check : I.x,
+    s: 15
+  }), React.createElement("span", {
+    style: {
+      wordBreak: 'break-all'
+    }
+  }, note.text), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "icon-btn",
+    style: {
+      width: 24,
+      height: 24,
+      border: 0,
+      background: 'transparent'
+    },
+    onClick: () => setNote(null)
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 13
+  }))), pdfRoot && ReactDOM.createPortal(React.createElement("div", {
+    className: "pdf-doc" + (orient === 'portrait' ? ' portrait' : '')
+  }, chosen.length > 0 && (type === 'compare' ? React.createElement("section", {
+    className: "pdf-page"
+  }, React.createElement(ComparePage, null)) : chosen.map((d, i) => React.createElement("section", {
+    className: "pdf-page",
+    key: d.id
+  }, React.createElement(DeptPage, {
+    d: d,
+    n: i + 1,
+    total: pages
+  }))))), pdfRoot), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '320px 1fr',
+      alignItems: 'start'
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Configuration")), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, React.createElement("div", null, fieldLabel('Report type'), React.createElement("div", {
+    className: "seg",
+    style: {
+      width: '100%'
+    }
+  }, [['summary', 'Summary'], ['detail', 'Detailed'], ['compare', 'Comparison']].map(([id, l]) => React.createElement("button", {
+    key: id,
+    className: type === id ? 'on' : '',
+    style: {
+      flex: 1
+    },
+    onClick: () => {
+      setType(id);
+      setPageIdx(0);
+    }
+  }, l))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginTop: 6
+    }
+  }, type === 'summary' ? 'KPIs + chart, one page per department.' : type === 'detail' ? 'Full data table & composition per department.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
+    value: period.mode,
+    onChange: e => setPeriod({
+      mode: e.target.value,
+      from: allMonths[0],
+      to: allMonths[allMonths.length - 1]
+    }),
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }, React.createElement("option", {
+    value: "all"
+  }, "Full period (", allMonths[0], " \u2013 ", allMonths[allMonths.length - 1], ")"), React.createElement("option", {
+    value: "q1"
+  }, "Q1 2026 (Jan\u2013Mar)"), React.createElement("option", {
+    value: "apr"
+  }, "April 2026 only"), React.createElement("option", {
+    value: "last6"
+  }, "Last 6 months"), React.createElement("option", {
+    value: "custom"
+  }, "Custom range\u2026")), period.mode === 'custom' && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 8,
+      alignItems: 'center'
+    }
+  }, React.createElement("select", {
+    value: period.from,
+    onChange: e => setPeriod(p => ({
+      ...p,
+      from: e.target.value
+    })),
+    style: {
+      ...sel2,
+      flex: 1
+    }
+  }, allMonths.map(m => React.createElement("option", {
+    key: m,
+    value: m
+  }, m))), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "to"), React.createElement("select", {
+    value: period.to,
+    onChange: e => setPeriod(p => ({
+      ...p,
+      to: e.target.value
+    })),
+    style: {
+      ...sel2,
+      flex: 1
+    }
+  }, allMonths.map(m => React.createElement("option", {
+    key: m,
+    value: m
+  }, m))))), React.createElement("div", null, fieldLabel('Chart styles — pick one or more (each renders per department)'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, REPORT_STYLES.map(([id, l]) => {
+    const on = chartStyles.includes(id);
+    return React.createElement("button", {
+      key: id,
+      onClick: () => toggleStyle(id),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '5px 10px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 600,
+        cursor: 'pointer',
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue-50)' : '#fff',
+        color: on ? 'var(--blue-700)' : 'var(--muted)'
+      }
+    }, on && React.createElement(Ic, {
+      d: I.check,
+      s: 11,
+      sw: 3
+    }), l);
+  }))), React.createElement("div", null, fieldLabel('Header & footer editor'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, React.createElement("input", {
+    value: hdrTitle,
+    onChange: e => setHdrTitle(e.target.value),
+    placeholder: "Report title (header)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: hdrSub,
+    onChange: e => setHdrSub(e.target.value),
+    placeholder: "Subtitle (optional)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: hospitalName,
+    onChange: e => setHospitalName(e.target.value),
+    placeholder: "Footer \u2014 hospital / org name",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: footerNote,
+    onChange: e => setFooterNote(e.target.value),
+    placeholder: "Footer note (optional)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 16
+    }
+  }, React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: 'var(--ink-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: showLogo,
+    onChange: e => setShowLogo(e.target.checked)
+  }), "Show logo"), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: 'var(--ink-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: confidential,
+    onChange: e => setConfidential(e.target.checked)
+  }), "Confidential mark")))), React.createElement("div", null, fieldLabel('Page setup'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, React.createElement("select", {
+    value: pageSize,
+    onChange: e => setPageSize(e.target.value),
+    style: {
+      ...sel2,
+      flex: 1
+    }
+  }, React.createElement("option", null, "A4"), React.createElement("option", null, "A3"), React.createElement("option", null, "Letter")), React.createElement("div", {
+    className: "seg"
+  }, [['portrait', 'Portrait'], ['landscape', 'Landscape']].map(([id, l]) => React.createElement("button", {
+    key: id,
+    className: orient === id ? 'on' : '',
+    onClick: () => setOrient(id)
+  }, l))))), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: 'var(--ink-2)',
+      marginBottom: 7,
+      display: 'flex'
+    }
+  }, "Departments", React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    onClick: () => setSel(sel.length === depts.length ? [] : depts.map(d => d.id)),
+    style: {
+      border: 0,
+      background: 'none',
+      color: 'var(--blue)',
+      fontSize: 11,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, sel.length === depts.length ? 'Clear all' : 'Select all')), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, depts.map(d => React.createElement("button", {
+    key: d.id,
+    onClick: () => toggle(d.id),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5,
+      padding: '5px 10px',
+      borderRadius: 20,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer',
+      border: '1px solid ' + (sel.includes(d.id) ? 'var(--blue)' : 'var(--line)'),
+      background: sel.includes(d.id) ? 'var(--blue-50)' : '#fff',
+      color: sel.includes(d.id) ? 'var(--blue-700)' : 'var(--muted)'
+    }
+  }, sel.includes(d.id) && React.createElement(Ic, {
+    d: I.check,
+    s: 12,
+    sw: 3
+  }), d.short)))), React.createElement("div", {
+    style: {
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line)',
+      borderRadius: 8,
+      padding: '11px 13px',
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, React.createElement("b", {
+    style: {
+      color: 'var(--ink)'
+    }
+  }, chosen.length), " departments \xB7 ", React.createElement("b", {
+    style: {
+      color: 'var(--ink)'
+    }
+  }, type), " \xB7 ", pageSize, " ", orient, " \xB7 ", pMonths.length, " month", pMonths.length !== 1 ? 's' : ''))), React.createElement("div", {
+    className: "card",
+    style: {
+      padding: 0,
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      background: 'var(--panel-2)'
+    }
+  }, React.createElement("h3", null, "Live Preview"), React.createElement("span", {
+    className: "sub"
+  }, pageSize, " \xB7 ", orient), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement("button", {
+    className: "icon-btn",
+    style: {
+      width: 28,
+      height: 28
+    },
+    disabled: pi <= 0,
+    onClick: () => setPageIdx(p => Math.max(0, p - 1))
+  }, React.createElement(Ic, {
+    d: I.chevR,
+    s: 15,
+    style: {
+      transform: 'rotate(180deg)'
+    }
+  })), React.createElement("span", {
+    className: "tag num"
+  }, "Page ", pi + 1, " of ", pages), React.createElement("button", {
+    className: "icon-btn",
+    style: {
+      width: 28,
+      height: 28
+    },
+    disabled: pi >= pages - 1,
+    onClick: () => setPageIdx(p => Math.min(pages - 1, p + 1))
+  }, React.createElement(Ic, {
+    d: I.chevR,
+    s: 15
+  })))), React.createElement("div", {
+    style: {
+      padding: 26,
+      background: '#eef1f5',
+      overflowX: 'auto'
+    }
+  }, React.createElement("div", {
+    style: {
+      background: '#fff',
+      borderRadius: 4,
+      boxShadow: '0 4px 18px rgba(0,0,0,.12)',
+      padding: '28px 30px',
+      width: pageW,
+      minHeight: pageMinH,
+      margin: '0 auto',
+      transition: 'width .25s'
+    }
+  }, chosen.length === 0 ? React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: '60px 0'
+    }
+  }, "Select at least one department.") : type === 'compare' ? React.createElement(ComparePage, null) : React.createElement(DeptPage, {
+    d: pageDept,
+    n: pi + 1,
+    total: pages
+  }))))));
+}
+const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
+const USER_MODS = [['stats', 'Hospital Statistics'], ['entry', 'Data Entry'], ['reports', 'Reports'], ['nurse', 'Nurse Management'], ['pca', 'PCA Management'], ['depts', 'Manage Departments'], ['settings', 'Settings']];
+const USER_ROLES = ['Administrator', 'Manager', 'Department Head', 'Data Entry', 'Read-only'];
+const ROLE_PERMS = {
+  'Administrator': {
+    stats: 'edit',
+    entry: 'edit',
+    reports: 'edit',
+    nurse: 'edit',
+    pca: 'edit',
+    depts: 'edit',
+    settings: 'edit'
+  },
+  'Manager': {
+    stats: 'edit',
+    entry: 'edit',
+    reports: 'edit',
+    nurse: 'edit',
+    pca: 'edit',
+    depts: 'edit',
+    settings: 'view'
+  },
+  'Department Head': {
+    stats: 'view',
+    entry: 'edit',
+    reports: 'view',
+    nurse: 'edit',
+    pca: 'edit',
+    depts: 'none',
+    settings: 'none'
+  },
+  'Data Entry': {
+    stats: 'view',
+    entry: 'edit',
+    reports: 'view',
+    nurse: 'none',
+    pca: 'none',
+    depts: 'none',
+    settings: 'none'
+  },
+  'Read-only': {
+    stats: 'view',
+    entry: 'none',
+    reports: 'view',
+    nurse: 'view',
+    pca: 'view',
+    depts: 'none',
+    settings: 'none'
+  }
+};
+const inits = n => (n || '?').split(' ').map(x => x[0]).slice(0, 2).join('').toUpperCase();
+const permSummary = p => {
+  const vals = USER_MODS.map(m => p[m[0]] || 'none');
+  const ed = vals.filter(v => v === 'edit').length;
+  if (ed === USER_MODS.length) return 'Full access';
+  if (vals.every(v => v === 'view' || v === 'none') && vals.some(v => v === 'view')) return 'Read-only';
+  return `${ed} edit · ${vals.filter(v => v === 'view').length} view`;
+};
+function useUserStore() {
+  const KEY = 'unico_users_v1';
+  const seed = () => [{
+    id: 1,
+    name: 'Nasif Ahammed Niloy',
+    email: 'nasif.niloy@unicohospitals.com',
+    role: 'Administrator',
+    status: 'active',
+    color: '#0090ca',
+    lastActive: Date.now(),
+    perms: {
+      ...ROLE_PERMS['Administrator']
+    }
+  }];
+  const [users, setUsers] = React.useState(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY));
+      return Array.isArray(s) && s.length ? s : seed();
+    } catch (e) {
+      return seed();
+    }
+  });
+  React.useEffect(() => {
+    localStorage.setItem(KEY, JSON.stringify(users));
+  }, [users]);
+  return {
+    users,
+    add: u => setUsers(s => [...s, {
+      id: Math.max(0, ...s.map(x => x.id)) + 1,
+      status: 'active',
+      color: UCOLORS[s.length % UCOLORS.length],
+      lastActive: null,
+      ...u
+    }]),
+    update: (id, p) => setUsers(s => s.map(x => x.id === id ? {
+      ...x,
+      ...p
+    } : x)),
+    remove: id => setUsers(s => s.filter(x => x.id !== id)),
+    toggle: id => setUsers(s => s.map(x => x.id === id ? {
+      ...x,
+      status: x.status === 'active' ? 'inactive' : 'active'
+    } : x))
+  };
+}
+function UserModal({
+  initial,
+  onClose,
+  onSave
+}) {
+  const editing = !!initial;
+  const [name, setName] = React.useState(initial?.name || '');
+  const [email, setEmail] = React.useState(initial?.email || '');
+  const [role, setRole] = React.useState(initial?.role || 'Data Entry');
+  const [status, setStatus] = React.useState(initial?.status || 'active');
+  const [perms, setPerms] = React.useState(() => initial ? {
+    ...initial.perms
+  } : {
+    ...ROLE_PERMS['Data Entry']
+  });
+  const [err, setErr] = React.useState('');
+  const pickRole = r => {
+    setRole(r);
+    setPerms({
+      ...ROLE_PERMS[r]
+    });
+  };
+  const save = () => {
+    if (!name.trim()) {
+      setErr('Name is required');
+      return;
+    }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
+      setErr('Enter a valid email');
+      return;
+    }
+    onSave({
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      role,
+      status,
+      perms
+    }, editing);
+  };
+  return React.createElement("div", {
+    className: "modal-bg",
+    onMouseDown: e => {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, React.createElement("div", {
+    className: "modal"
+  }, React.createElement("div", {
+    className: "modal-h"
+  }, React.createElement("div", {
+    style: {
+      width: 30,
+      height: 30,
+      borderRadius: 8,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Ic, {
+    d: editing ? I.edit : I.plus,
+    s: 17
+  })), React.createElement("h3", null, editing ? 'Manage User' : 'Invite User'), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "icon-btn",
+    onClick: onClose
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 16
+  }))), React.createElement("div", {
+    style: {
+      padding: 20,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Full name"), React.createElement("input", {
+    value: name,
+    onChange: e => setName(e.target.value),
+    placeholder: "e.g. Nasif Ahammed Niloy",
+    autoFocus: true
+  })), React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Email"), React.createElement("input", {
+    value: email,
+    onChange: e => setEmail(e.target.value),
+    placeholder: "name@unicohospitals.com"
+  }))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Role"), React.createElement("select", {
+    value: role,
+    onChange: e => pickRole(e.target.value)
+  }, USER_ROLES.map(r => React.createElement("option", {
+    key: r
+  }, r)))), React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Status"), React.createElement("select", {
+    value: status,
+    onChange: e => setStatus(e.target.value)
+  }, React.createElement("option", {
+    value: "active"
+  }, "Active"), React.createElement("option", {
+    value: "inactive"
+  }, "Inactive")))), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 8
+    }
+  }, "Module permissions ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 picking a role sets defaults; fine-tune below")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 7
+    }
+  }, USER_MODS.map(([id, label]) => React.createElement("div", {
+    key: id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 12.5,
+      color: 'var(--ink-2)'
+    }
+  }, label), React.createElement("div", {
+    className: "seg"
+  }, [['none', 'None'], ['view', 'View'], ['edit', 'Edit']].map(([v, l]) => React.createElement("button", {
+    key: v,
+    className: (perms[id] || 'none') === v ? 'on' : '',
+    onClick: () => setPerms(p => ({
+      ...p,
+      [id]: v
+    }))
+  }, l))))))), err && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--rose)',
+      fontWeight: 600
+    }
+  }, err), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      borderTop: '1px solid var(--line-2)',
+      paddingTop: 14
+    }
+  }, React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn",
+    onClick: onClose
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri",
+    onClick: save
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 16,
+    sw: 2.4
+  }), editing ? 'Save changes' : 'Send invite')))));
+}
+function UserManagement() {
+  const us = useUserStore();
+  const [q, setQ] = React.useState('');
+  const [modal, setModal] = React.useState(null);
+  const [confirm, setConfirm] = React.useState(null);
+  const admins = us.users.filter(u => u.role === 'Administrator' && u.status === 'active').length;
+  const filtered = us.users.filter(u => !q || `${u.name} ${u.email} ${u.role}`.toLowerCase().includes(q.toLowerCase()));
+  const onSave = (data, editing) => {
+    if (editing) us.update(modal.user.id, data);else us.add(data);
+    setModal(null);
+  };
+  const ago = ts => {
+    if (!ts) return 'never';
+    const m = Math.floor((Date.now() - ts) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ago';
+    return Math.floor(h / 24) + 'd ago';
+  };
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: 14
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700
+    }
+  }, "Users & Roles"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, us.users.length, " user", us.users.length !== 1 ? 's' : '', " \xB7 ", admins, " administrator", admins !== 1 ? 's' : '')), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      padding: '6px 10px',
+      width: 190,
+      color: 'var(--faint)'
+    }
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 14
+  }), React.createElement("input", {
+    placeholder: "Search users\u2026",
+    value: q,
+    onChange: e => setQ(e.target.value),
+    style: {
+      border: 0,
+      background: 'transparent',
+      outline: 'none',
+      fontFamily: 'inherit',
+      fontSize: 12.5,
+      color: 'var(--ink)',
+      width: '100%'
+    }
+  })), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: () => setModal({
+      user: null
+    })
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "Invite user")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, filtered.map(u => React.createElement("div", {
+    key: u.id,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      padding: '11px 13px',
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      opacity: u.status === 'active' ? 1 : .6,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    className: "avatar",
+    style: {
+      background: u.color,
+      width: 38,
+      height: 38
+    }
+  }, inits(u.name)), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: '1 1 180px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700
+    }
+  }, u.name), u.id === 1 && React.createElement("span", {
+    className: "tag",
+    style: {
+      background: 'var(--pos-bg)',
+      color: 'var(--pos)'
+    }
+  }, "You")), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, u.email, " \xB7 ", u.role)), React.createElement("div", {
+    style: {
+      textAlign: 'right',
+      fontSize: 11,
+      color: 'var(--faint)'
+    }
+  }, "last active", React.createElement("br", null), React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, ago(u.lastActive))), React.createElement("span", {
+    className: "tag",
+    style: {
+      minWidth: 74,
+      justifyContent: 'center'
+    }
+  }, permSummary(u.perms)), u.status === 'active' ? React.createElement("span", {
+    className: "chip pos"
+  }, "\u25CF Active") : React.createElement("span", {
+    className: "chip flat"
+  }, "\u25CB Inactive"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setModal({
+      user: u
+    })
+  }, "Manage"), React.createElement("button", {
+    className: "icon-btn",
+    title: u.status === 'active' ? 'Deactivate' : 'Activate',
+    onClick: () => us.toggle(u.id),
+    disabled: u.id === 1
+  }, React.createElement(Ic, {
+    d: u.status === 'active' ? I.x : I.check,
+    s: 14
+  })), React.createElement("button", {
+    className: "icon-btn danger",
+    title: "Remove",
+    onClick: () => setConfirm(u),
+    disabled: u.id === 1 || u.role === 'Administrator' && admins <= 1
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 14
+  })))), filtered.length === 0 && React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: '24px',
+      fontSize: 13
+    }
+  }, "No users match.")), modal && React.createElement(UserModal, {
+    initial: modal.user,
+    onClose: () => setModal(null),
+    onSave: onSave
+  }), confirm && React.createElement("div", {
+    className: "modal-bg",
+    onMouseDown: e => {
+      if (e.target === e.currentTarget) setConfirm(null);
+    }
+  }, React.createElement("div", {
+    className: "modal",
+    style: {
+      width: 'min(400px,92vw)'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '22px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 15.5,
+      fontWeight: 700
+    }
+  }, "Remove ", confirm.name, "?"), React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--muted)',
+      marginTop: 4
+    }
+  }, "This revokes their access to the platform."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      marginTop: 18
+    }
+  }, React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn",
+    onClick: () => setConfirm(null)
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri",
+    style: {
+      background: 'var(--rose)',
+      borderColor: 'var(--rose)'
+    },
+    onClick: () => {
+      us.remove(confirm.id);
+      setConfirm(null);
+    }
+  }, "Remove"))))));
+}
+function Settings({
+  depts,
+  store
+}) {
+  const [tab, setTab] = React.useState('general');
+  const [dbFile, setDbFile] = React.useState('');
+  const native = window.unicoNative;
+  React.useEffect(() => {
+    if (native && native.dbPath) {
+      native.dbPath().then(setDbFile).catch(() => {});
+    }
+  }, []);
+  const doBackup = async () => {
+    if (!native) {
+      window.UI && window.UI.toast('Backups need the desktop app', 'warn');
+      return;
+    }
+    try {
+      if (window.unicoFlushNow) await window.unicoFlushNow();
+      const data = window.unicoSnapshotAll ? window.unicoSnapshotAll() : undefined;
+      const res = await native.backup(data);
+      if (res && res.ok) window.UI.toast('Backup saved to ' + (res.path || 'file') + ' ✓', 'success');else if (!(res && res.canceled)) window.UI.toast('Backup failed: ' + (res && res.error || 'unknown'), 'error');
+    } catch (e) {
+      window.UI.toast('Backup failed', 'error');
+    }
+  };
+  const doRestore = async () => {
+    if (!native) {
+      window.UI && window.UI.toast('Restore needs the desktop app', 'warn');
+      return;
+    }
+    const ok = await window.UI.confirm({
+      title: 'Restore from backup?',
+      message: 'This replaces ALL current data — entries, staff, quality, users and settings — with the chosen backup file, then reloads the app.',
+      danger: true,
+      confirmLabel: 'Choose file & restore'
+    });
+    if (!ok) return;
+    try {
+      const res = await native.restore();
+      if (res && res.canceled) return;
+      if (res && res.ok && res.data) {
+        try {
+          localStorage.clear();
+        } catch (e) {}
+        Object.keys(res.data).forEach(k => {
+          try {
+            localStorage.setItem(k, res.data[k]);
+          } catch (e) {}
+        });
+        window.UI.toast('Data restored ✓ — reloading…', 'success');
+        setTimeout(() => location.reload(), 800);
+      } else window.UI.toast('Restore failed: ' + (res && res.error || 'invalid file'), 'error');
+    } catch (e) {
+      window.UI.toast('Restore failed', 'error');
+    }
+  };
+  const doClear = async () => {
+    if (!store) return;
+    const ok = await window.UI.confirm({
+      title: 'Clear entered data?',
+      message: 'Removes all manually entered monthly entries. Seeded data is kept.',
+      danger: true,
+      confirmLabel: 'Clear entries'
+    });
+    if (ok) {
+      store.clearEntries();
+      window.UI.toast('Entries cleared', 'success');
+    }
+  };
+  const doReset = async () => {
+    if (!store) return;
+    const ok = await window.UI.confirm({
+      title: 'Reset all customizations?',
+      message: 'Removes added / renamed / deleted departments and all entered data. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Reset everything'
+    });
+    if (ok) {
+      store.reset();
+      window.UI.toast('All customizations reset', 'success');
+    }
+  };
+  const lock = window.unicoLock;
+  const [lockOn, setLockOn] = React.useState(() => !!(lock && lock.isEnabled()));
+  const [pinMode, setPinMode] = React.useState(false);
+  const [pin1, setPin1] = React.useState('');
+  const [pin2, setPin2] = React.useState('');
+  const savePin = () => {
+    if (pin1.length < 4) {
+      window.UI.toast('PIN must be at least 4 digits', 'error');
+      return;
+    }
+    if (pin1 !== pin2) {
+      window.UI.toast('PINs do not match', 'error');
+      return;
+    }
+    lock.setPin(pin1);
+    setLockOn(true);
+    setPinMode(false);
+    setPin1('');
+    setPin2('');
+    window.UI.toast('App lock enabled ✓', 'success');
+  };
+  const disableLock = async () => {
+    const ok = await window.UI.confirm({
+      title: 'Disable app lock?',
+      message: 'The app will no longer require a PIN to open.',
+      danger: true,
+      confirmLabel: 'Disable'
+    });
+    if (ok) {
+      lock.disable();
+      setLockOn(false);
+      window.UI.toast('App lock disabled', 'success');
+    }
+  };
+  const row = (label, control) => React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      padding: '13px 0',
+      borderBottom: '1px solid var(--line-2)'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      color: 'var(--ink)'
+    }
+  }, label.t), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, label.s)), control);
+  const Toggle = ({
+    on = true
+  }) => {
+    const [v, setV] = React.useState(on);
+    return React.createElement("button", {
+      onClick: () => setV(!v),
+      style: {
+        width: 42,
+        height: 24,
+        borderRadius: 20,
+        border: 0,
+        background: v ? 'var(--blue)' : '#cdd6e2',
+        position: 'relative',
+        transition: '.2s',
+        cursor: 'pointer'
+      }
+    }, React.createElement("span", {
+      style: {
+        position: 'absolute',
+        top: 3,
+        left: v ? 21 : 3,
+        width: 18,
+        height: 18,
+        borderRadius: '50%',
+        background: '#fff',
+        transition: '.2s',
+        boxShadow: '0 1px 3px rgba(0,0,0,.3)'
+      }
+    }));
+  };
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.gear,
+    title: "Settings",
+    sub: "Configure the statistics platform"
+  }), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: '200px 1fr',
+      alignItems: 'start'
+    }
+  }, React.createElement("div", {
+    className: "card",
+    style: {
+      padding: 6
+    }
+  }, [['general', 'General', I.gear], ['departments', 'Departments', I.layers], ['users', 'Users & Roles', I.user], ['data', 'Data & Export', I.doc]].map(([id, l, ic]) => React.createElement("div", {
+    key: id,
+    onClick: () => setTab(id),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '10px 12px',
+      borderRadius: 7,
+      cursor: 'pointer',
+      fontSize: 13,
+      fontWeight: 600,
+      background: tab === id ? 'var(--blue-50)' : 'transparent',
+      color: tab === id ? 'var(--blue-700)' : 'var(--ink-2)'
+    }
+  }, React.createElement(Ic, {
+    d: ic,
+    s: 16
+  }), l))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b"
+  }, tab === 'general' && React.createElement("div", null, row({
+    t: 'Hospital name',
+    s: 'Shown across the platform and on exports'
+  }, React.createElement("input", {
+    defaultValue: "UNICO Hospitals PLC",
+    style: {
+      padding: '8px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontFamily: 'inherit',
+      fontSize: 13,
+      width: 230
+    }
+  })), row({
+    t: 'Default reporting period',
+    s: 'Initial range when opening dashboards'
+  }, React.createElement("select", {
+    style: {
+      padding: '8px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontFamily: 'inherit',
+      fontSize: 13
+    }
+  }, React.createElement("option", null, "Last 9 months"), React.createElement("option", null, "Year to date"), React.createElement("option", null, "All time"))), row({
+    t: 'Week starts on',
+    s: 'Calendar & trend grouping'
+  }, React.createElement("select", {
+    style: {
+      padding: '8px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontFamily: 'inherit',
+      fontSize: 13
+    }
+  }, React.createElement("option", null, "Sunday"), React.createElement("option", null, "Monday"))), row({
+    t: 'Auto-validate totals',
+    s: 'Block entries where components don’t sum to total'
+  }, React.createElement(Toggle, {
+    on: true
+  })), row({
+    t: 'Confidential watermark',
+    s: 'Stamp exported reports'
+  }, React.createElement(Toggle, {
+    on: true
+  })), lock && React.createElement("div", {
+    style: {
+      padding: '13px 0'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      color: 'var(--ink)'
+    }
+  }, "App lock (PIN)"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "Require a PIN each time the app opens", lockOn ? ' · currently ON' : '')), lockOn ? React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, React.createElement("button", {
+    className: "btn sm",
+    onClick: () => {
+      setPinMode(true);
+      setPin1('');
+      setPin2('');
+    }
+  }, "Change PIN"), React.createElement("button", {
+    className: "btn sm",
+    style: {
+      color: 'var(--rose)',
+      borderColor: '#f1c6cd'
+    },
+    onClick: disableLock
+  }, "Disable")) : !pinMode && React.createElement("button", {
+    className: "btn sm pri",
+    onClick: () => {
+      setPinMode(true);
+      setPin1('');
+      setPin2('');
+    }
+  }, "Enable lock")), pinMode && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("input", {
+    type: "password",
+    inputMode: "numeric",
+    placeholder: "New PIN (4+)",
+    value: pin1,
+    onChange: e => setPin1(e.target.value.replace(/\D/g, '')),
+    style: {
+      padding: '7px 10px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontFamily: 'inherit',
+      fontSize: 13,
+      width: 130
+    }
+  }), React.createElement("input", {
+    type: "password",
+    inputMode: "numeric",
+    placeholder: "Confirm PIN",
+    value: pin2,
+    onChange: e => setPin2(e.target.value.replace(/\D/g, '')),
+    onKeyDown: e => {
+      if (e.key === 'Enter') savePin();
+    },
+    style: {
+      padding: '7px 10px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontFamily: 'inherit',
+      fontSize: 13,
+      width: 130
+    }
+  }), React.createElement("button", {
+    className: "btn sm pri",
+    onClick: savePin
+  }, "Save PIN"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => {
+      setPinMode(false);
+      setPin1('');
+      setPin2('');
+    }
+  }, "Cancel")))), tab === 'departments' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      marginBottom: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--muted)'
+    }
+  }, depts.length, " departments configured"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn sm pri"
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "Add department")), React.createElement("table", {
+    className: "tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Department"), React.createElement("th", null, "Code"), React.createElement("th", null, "Service line"), React.createElement("th", null, "Metrics"), React.createElement("th", null, "Status"))), React.createElement("tbody", null, depts.map(d => React.createElement("tr", {
+    key: d.id
+  }, React.createElement("td", null, d.name), React.createElement("td", null, d.short), React.createElement("td", {
+    style: {
+      fontFamily: 'IBM Plex Sans'
+    }
+  }, d.group), React.createElement("td", null, d.cols.length), React.createElement("td", null, React.createElement("span", {
+    className: "chip pos"
+  }, "\u25CF Active"))))))), tab === 'users' && React.createElement(UserManagement, null), tab === 'data' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 2
+    }
+  }, "Backup & restore"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginBottom: 10
+    }
+  }, "All data is stored in a local database on this PC. Back it up to a file you can keep safe or move to another PC."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    className: "btn pri",
+    onClick: doBackup
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 15
+  }), "Back up all data\u2026"), React.createElement("button", {
+    className: "btn",
+    onClick: doRestore
+  }, React.createElement(Ic, {
+    d: I.upload || I.layers,
+    s: 15
+  }), "Restore from backup\u2026")), dbFile && React.createElement("div", {
+    className: "col-chip",
+    style: {
+      marginTop: 12,
+      maxWidth: '100%',
+      wordBreak: 'break-all'
+    },
+    title: dbFile
+  }, React.createElement(Ic, {
+    d: I.doc,
+    s: 13
+  }), "Database: ", dbFile), React.createElement("div", {
+    style: {
+      height: 1,
+      background: 'var(--line-2)',
+      margin: '16px 0'
+    }
+  }), row({
+    t: 'Export format',
+    s: 'Default download type for reports'
+  }, React.createElement("select", {
+    style: {
+      padding: '8px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontFamily: 'inherit',
+      fontSize: 13
+    }
+  }, React.createElement("option", null, "PDF"), React.createElement("option", null, "Excel (.xlsx)"), React.createElement("option", null, "CSV"))), row({
+    t: 'Round percentages',
+    s: 'Display IPD conversion to 2 decimals'
+  }, React.createElement(Toggle, {
+    on: true
+  })), React.createElement("div", {
+    style: {
+      marginTop: 14,
+      display: 'flex',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    style: {
+      color: 'var(--rose)',
+      borderColor: '#f1c6cd'
+    },
+    onClick: doClear
+  }, "Clear session entries"), React.createElement("button", {
+    className: "btn",
+    style: {
+      color: 'var(--rose)',
+      borderColor: '#f1c6cd'
+    },
+    onClick: doReset
+  }, "Reset all customizations")))))));
+}
+window.Reports = Reports;
+window.Settings = Settings;
+})();
+;
+/* ===== quality-console.jsx ===== */
+(function(){
+var HQI_STANDARDS = [{
+  "code": "A1",
+  "sec": "A",
+  "name": "Hand Hygiene Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": ">90%",
+  "bv": 90,
+  "expr": "(Hand-hygiene actions performed ÷ Opportunities observed) × 100",
+  "ref": "WHO 2009 — Hand Hygiene Guidelines",
+  "num": "Hand-hygiene actions performed",
+  "den": "Opportunities observed"
+}, {
+  "code": "A2",
+  "sec": "A",
+  "name": "CAUTI Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 cath-days",
+  "bench": "<1",
+  "bv": 1,
+  "expr": "(Catheter-associated UTIs ÷ Urinary catheter-days) × 1,000",
+  "ref": "CDC/NHSN 2024 — UTI Event",
+  "num": "CAUTI cases",
+  "den": "Urinary catheter-days"
+}, {
+  "code": "A3",
+  "sec": "A",
+  "name": "CLABSI Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 line-days",
+  "bench": "<1",
+  "bv": 1,
+  "expr": "(Central line-associated BSIs ÷ Central-line days) × 1,000",
+  "ref": "CDC/NHSN 2024 — BSI Event",
+  "num": "CLABSI cases",
+  "den": "Central-line days"
+}, {
+  "code": "A4",
+  "sec": "A",
+  "name": "VAP / VAE Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 vent-days",
+  "bench": "<1",
+  "bv": 1,
+  "expr": "(Ventilator-associated events ÷ Ventilator-days) × 1,000",
+  "ref": "CDC/NHSN 2024 — VAE Module",
+  "num": "VAP / VAE events",
+  "den": "Ventilator-days"
+}, {
+  "code": "A5",
+  "sec": "A",
+  "name": "Surgical Site Infection (SSI) Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<1–2%",
+  "bv": 2,
+  "expr": "(SSIs within 30/90 days ÷ Surgical procedures) × 100",
+  "ref": "CDC/NHSN 2024; WHO 2018 SSI Guidelines",
+  "num": "SSI cases",
+  "den": "Surgical procedures"
+}, {
+  "code": "A6",
+  "sec": "A",
+  "name": "Phlebitis Rate (IV Site)",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "≤5%",
+  "bv": 5,
+  "expr": "(IV sites with phlebitis VIP ≥2 ÷ Peripheral IV sites in use) × 100",
+  "ref": "INS 2021; Jackson VIP Score",
+  "num": "IV sites with phlebitis (VIP ≥2)",
+  "den": "Peripheral IV sites in use"
+}, {
+  "code": "A7",
+  "sec": "A",
+  "name": "MRSA / MDRO Infection Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 pt-days",
+  "bench": "Minimize / track",
+  "bv": null,
+  "expr": "(HA MRSA/MDRO infections ÷ Patient-days) × 1,000",
+  "ref": "CDC/NHSN 2024 MDRO; WHO 2022 AMR",
+  "num": "HA MRSA/MDRO infections",
+  "den": "Patient-days"
+}, {
+  "code": "A8",
+  "sec": "A",
+  "name": "Overall HAI Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<5%",
+  "bv": 5,
+  "expr": "(All healthcare-associated infections ÷ Patient-days) × 100",
+  "ref": "WHO 2022 IPC Report; Allegranzi 2011",
+  "num": "All HAIs",
+  "den": "Patient-days"
+}, {
+  "code": "A9",
+  "sec": "A",
+  "name": "Blood Culture Contamination Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<3%",
+  "bv": 3,
+  "expr": "(Culture sets with skin-flora contaminants ÷ Total culture sets) × 100",
+  "ref": "CLSI 2022 M47-A2",
+  "num": "Contaminated culture sets",
+  "den": "Blood culture sets collected"
+}, {
+  "code": "A10",
+  "sec": "A",
+  "name": "Surgical Antibiotic Prophylaxis Timing",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Prophylaxis ≤60 min before incision ÷ Eligible surgical patients) × 100",
+  "ref": "SCIP Inf-1; Bratzler 2013",
+  "num": "Patients with timely prophylaxis",
+  "den": "Eligible surgical patients"
+}, {
+  "code": "A11",
+  "sec": "A",
+  "name": "CSSD Sterilization (BI) Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Cycles with passing biological indicator ÷ Total sterilization cycles) × 100",
+  "ref": "AAMI/ANSI ST79:2017; ISO 11138-3",
+  "num": "Cycles passing BI",
+  "den": "Sterilization cycles run"
+}, {
+  "code": "A12",
+  "sec": "A",
+  "name": "Biomedical Waste Segregation Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Compliant waste-audit observations ÷ Total audit observations) × 100",
+  "ref": "WHO 2014 Safe Waste Mgmt",
+  "num": "Compliant audit observations",
+  "den": "Waste audit observations"
+}, {
+  "code": "A13",
+  "sec": "A",
+  "name": "Needle Stick / Sharps Injury",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of reported needlestick & sharps injuries",
+  "ref": "OSHA 29 CFR 1910.1030; WHO 2018",
+  "num": "Needlestick / sharps injuries",
+  "den": ""
+}, {
+  "code": "A14",
+  "sec": "A",
+  "name": "Isolation / Transmission-Precaution Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Patients in correct isolation ÷ Patients requiring isolation) × 100",
+  "ref": "CDC/HICPAC 2007 (rev 2023)",
+  "num": "Correct isolations",
+  "den": "Patients requiring isolation"
+}, {
+  "code": "B1",
+  "sec": "B",
+  "name": "Medication Error",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of medication errors (all categories)",
+  "ref": "ISMP 2023; NQF 2011",
+  "num": "Medication errors",
+  "den": ""
+}, {
+  "code": "B2",
+  "sec": "B",
+  "name": "Adverse Drug Reaction (ADR) Rate",
+  "ft": "count",
+  "dir": "",
+  "unit": "count",
+  "bench": "Track",
+  "bv": null,
+  "expr": "Total count of confirmed ADRs (by severity)",
+  "ref": "WHO 2002 Pharmacovigilance; ICH E2A",
+  "num": "Confirmed ADRs",
+  "den": ""
+}, {
+  "code": "B3",
+  "sec": "B",
+  "name": "Medication Reconciliation Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Reconciliation at admit AND discharge ÷ Admissions & discharges) × 100",
+  "ref": "JCI 2021 IPSG.3; ISMP 2011",
+  "num": "Completed reconciliations",
+  "den": "Admissions & discharges"
+}, {
+  "code": "B4",
+  "sec": "B",
+  "name": "High-Alert Medication Double-Check",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(High-alert doses with independent double-check ÷ High-alert doses) × 100",
+  "ref": "ISMP 2023; JCI 2021 MMU.5",
+  "num": "Doses double-checked",
+  "den": "High-alert doses administered"
+}, {
+  "code": "B5",
+  "sec": "B",
+  "name": "Verbal / Telephone Order Read-Back",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Orders with documented read-back ÷ Verbal/telephone orders) × 100",
+  "ref": "JCI 2021 IPSG.2; TJC NPSG 02.01.01",
+  "num": "Orders with read-back",
+  "den": "Verbal/telephone orders"
+}, {
+  "code": "B6",
+  "sec": "B",
+  "name": "LASA Drug Storage / Labeling Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(LASA drugs stored & labelled correctly ÷ LASA drugs audited) × 100",
+  "ref": "ISMP 2023; WHO 2019",
+  "num": "LASA drugs compliant",
+  "den": "LASA drugs audited"
+}, {
+  "code": "B7",
+  "sec": "B",
+  "name": "Controlled Drug Count Accuracy",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Shift counts with zero discrepancy ÷ Controlled-drug counts) × 100",
+  "ref": "DEA 21 CFR 1304; Pharmacy Policy",
+  "num": "Counts with zero discrepancy",
+  "den": "Controlled-drug shift counts"
+}, {
+  "code": "B8",
+  "sec": "B",
+  "name": "STAT Medication Administration Timeliness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(STAT orders within TAT ÷ Total STAT orders) × 100",
+  "ref": "ISMP 2011; TJC MM.04.01.01",
+  "num": "STAT orders within TAT",
+  "den": "STAT medication orders"
+}, {
+  "code": "C1",
+  "sec": "C",
+  "name": "Patient Identification (2-Identifier)",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Interactions with verified 2-identifier check ÷ Interactions audited) × 100",
+  "ref": "JCI 2021 IPSG.1; TJC NPSG 01.01.01",
+  "num": "Verified 2-identifier checks",
+  "den": "Care interactions audited"
+}, {
+  "code": "C2",
+  "sec": "C",
+  "name": "Patient Fall Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 pt-days",
+  "bench": "≤3.3",
+  "bv": 3.3,
+  "expr": "(Patient falls assisted + unassisted ÷ Patient-days) × 1,000",
+  "ref": "NDNQI 2023; Morse 2009",
+  "num": "Patient falls",
+  "den": "Patient-days"
+}, {
+  "code": "C3",
+  "sec": "C",
+  "name": "Falls with Injury",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of falls resulting in any injury",
+  "ref": "NDNQI 2023; AHRQ 2013",
+  "num": "Falls with injury",
+  "den": ""
+}, {
+  "code": "C4",
+  "sec": "C",
+  "name": "Hospital-Acquired Pressure Ulcer (HAPU) Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 pt-days",
+  "bench": "<0.75",
+  "bv": 0.75,
+  "expr": "(New stage 2–4/unstageable pressure injuries >72 h ÷ Patient-days) × 1,000",
+  "ref": "NPUAP/EPUAP/PPPIA 2019; NDNQI 2023",
+  "num": "New pressure injuries (stage 2–4)",
+  "den": "Patient-days"
+}, {
+  "code": "C5",
+  "sec": "C",
+  "name": "VTE / DVT Prophylaxis Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Eligible inpatients on VTE prophylaxis by day 2 ÷ Eligible inpatients) × 100",
+  "ref": "ACCP 2012; JCI 2021 IPSG.6",
+  "num": "Patients on prophylaxis",
+  "den": "Eligible adult inpatients"
+}, {
+  "code": "C6",
+  "sec": "C",
+  "name": "Hospital-Acquired DVT",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of new DVT events ≥48 h after admission",
+  "ref": "ACCP 2012; Goldhaber 2011",
+  "num": "New DVT events ≥48 h",
+  "den": ""
+}, {
+  "code": "C7",
+  "sec": "C",
+  "name": "Wrong-Site / -Patient / -Procedure Events",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of wrong-site/-patient/-procedure (sentinel) events",
+  "ref": "TJC Universal Protocol; JCI 2021 IPSG.4",
+  "num": "Wrong-site/-patient/-procedure events",
+  "den": ""
+}, {
+  "code": "C8",
+  "sec": "C",
+  "name": "Surgical Safety Checklist Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Procedures with all 3 checklist phases ÷ Surgical procedures) × 100",
+  "ref": "WHO 2009 SSC; Haynes 2009",
+  "num": "Procedures with full checklist",
+  "den": "Surgical procedures"
+}, {
+  "code": "C9",
+  "sec": "C",
+  "name": "Restraint Use Appropriateness / Monitoring",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Restraints with order + justification + monitoring ÷ Restrained patients) × 100",
+  "ref": "TJC RC.02.01.01; CMS 42 CFR 482.13(e)",
+  "num": "Appropriate restraints",
+  "den": "Restrained patients"
+}, {
+  "code": "C10",
+  "sec": "C",
+  "name": "Pain Assessment & Reassessment",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Pain assessed + reassessed ÷ Patients requiring assessment) × 100",
+  "ref": "JCI 2021 COP; TJC PC.01.02.07",
+  "num": "Pain assessed + reassessed",
+  "den": "Patients requiring assessment"
+}, {
+  "code": "C11",
+  "sec": "C",
+  "name": "Critical Value Reporting Timeliness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Critical values reported within TAT ÷ Critical values generated) × 100",
+  "ref": "TJC NPSG 02.03.01; CLIA",
+  "num": "Critical values within TAT",
+  "den": "Critical values generated"
+}, {
+  "code": "C12",
+  "sec": "C",
+  "name": "Patient Handover (SBAR) Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Handovers using SBAR ÷ Handovers audited) × 100",
+  "ref": "JCI 2021 IPSG.2.2; WHO 2007",
+  "num": "SBAR handovers",
+  "den": "Handovers audited"
+}, {
+  "code": "D1",
+  "sec": "D",
+  "name": "Gross Hospital Mortality Rate",
+  "ft": "pct",
+  "dir": "",
+  "unit": "%",
+  "bench": "Track / benchmark",
+  "bv": null,
+  "expr": "(Inpatient deaths ÷ Discharges incl. deaths) × 100",
+  "ref": "AHRQ 2020 IQI; CMS IQR",
+  "num": "Inpatient deaths",
+  "den": "Discharges incl. deaths"
+}, {
+  "code": "D2",
+  "sec": "D",
+  "name": "ICU Mortality Rate",
+  "ft": "pct",
+  "dir": "",
+  "unit": "%",
+  "bench": "Track (APACHE/SOFA)",
+  "bv": null,
+  "expr": "(ICU deaths ÷ ICU admissions) × 100",
+  "ref": "SCCM 2020; Knaus 1985 APACHE II",
+  "num": "ICU deaths",
+  "den": "ICU admissions"
+}, {
+  "code": "D3",
+  "sec": "D",
+  "name": "ICU Re-admission within 48 h",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<5%",
+  "bv": 5,
+  "expr": "(ICU readmits ≤48 h ÷ Planned ICU step-downs) × 100",
+  "ref": "SCCM 2020; Rosenberg 2001",
+  "num": "ICU readmits ≤48 h",
+  "den": "Planned ICU discharges"
+}, {
+  "code": "D4",
+  "sec": "D",
+  "name": "Re-admission within 30 Days",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Track / minimize",
+  "bv": null,
+  "expr": "(30-day readmissions ÷ Discharges excl. deaths/planned) × 100",
+  "ref": "CMS HRRP; Jencks 2009",
+  "num": "30-day readmissions",
+  "den": "Eligible discharges"
+}, {
+  "code": "D5",
+  "sec": "D",
+  "name": "Re-intubation within 48 h",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<10%",
+  "bv": 10,
+  "expr": "(Re-intubations ≤48 h ÷ Planned extubations) × 100",
+  "ref": "Epstein 1998; SCCM 2020",
+  "num": "Re-intubations ≤48 h",
+  "den": "Planned extubations"
+}, {
+  "code": "D6",
+  "sec": "D",
+  "name": "Return to ICU",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0 / minimize",
+  "bv": 0,
+  "expr": "Count of ward→ICU transfers  (or ÷ ICU discharges to ward × 100)",
+  "ref": "SCCM 2020; Rosenberg 2001",
+  "num": "Ward patients returned to ICU",
+  "den": ""
+}, {
+  "code": "D7",
+  "sec": "D",
+  "name": "Unplanned Return to OT",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(Unplanned OT returns ÷ Surgical procedures) × 100",
+  "ref": "ACS NSQIP 2022; Clavien-Dindo",
+  "num": "Unplanned OT returns",
+  "den": "Surgical procedures"
+}, {
+  "code": "D8",
+  "sec": "D",
+  "name": "Accidental Removal of ETT (Unplanned Extubation)",
+  "ft": "rate100",
+  "dir": "low",
+  "unit": "per 100 vent-days",
+  "bench": "<1",
+  "bv": 1,
+  "expr": "(Unplanned extubations ÷ Ventilator-days) × 100",
+  "ref": "Girard 2008; SCCM 2020",
+  "num": "Unplanned extubations",
+  "den": "Ventilator-days"
+}, {
+  "code": "D9",
+  "sec": "D",
+  "name": "LAMA / DAMA Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(AMA/LAMA discharges ÷ Total discharges) × 100",
+  "ref": "WHO 2014; Alfandre 2009",
+  "num": "AMA / LAMA discharges",
+  "den": "Hospital discharges"
+}, {
+  "code": "D10",
+  "sec": "D",
+  "name": "Cardiac Arrest (Code Blue) Events",
+  "ft": "count",
+  "dir": "",
+  "unit": "count",
+  "bench": "Track",
+  "bv": null,
+  "expr": "Total count of in-hospital cardiac arrest (Code Blue) events",
+  "ref": "AHA 2020 ACLS; Utstein Style",
+  "num": "IHCA (Code Blue) events",
+  "den": ""
+}, {
+  "code": "D11",
+  "sec": "D",
+  "name": "Cardiac Arrest Survival (ROSC)",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥25%",
+  "bv": 25,
+  "expr": "(IHCA with sustained ROSC ≥20 min ÷ IHCA events) × 100",
+  "ref": "AHA 2020 ACLS; ILCOR 2020",
+  "num": "IHCA with sustained ROSC",
+  "den": "In-hospital cardiac arrest events"
+}, {
+  "code": "E1",
+  "sec": "E",
+  "name": "Informed Consent Completeness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Procedures with complete signed consent ÷ Procedures needing consent) × 100",
+  "ref": "JCI 2021 PFR.5; TJC RI.01.03.01",
+  "num": "Complete signed consents",
+  "den": "Procedures requiring consent"
+}, {
+  "code": "E2",
+  "sec": "E",
+  "name": "Initial Nursing Assessment within 24 h",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Nursing assessment ≤24 h ÷ Inpatient admissions) × 100",
+  "ref": "JCI 2021 AOP.1; TJC PC.01.02.01",
+  "num": "Assessments ≤24 h",
+  "den": "Inpatient admissions"
+}, {
+  "code": "E3",
+  "sec": "E",
+  "name": "Nursing Care Plan Documentation",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Care plans ≤24–48 h ÷ Admitted patients) × 100",
+  "ref": "JCI 2021 AOP.1; NANDA 2021",
+  "num": "Documented care plans",
+  "den": "Admitted patients"
+}, {
+  "code": "E4",
+  "sec": "E",
+  "name": "Discharge Summary Timeliness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Discharge summaries within TAT ÷ Discharges) × 100",
+  "ref": "JCI 2021 ACC.3; TJC RC.02.04.01",
+  "num": "Summaries within TAT",
+  "den": "Patient discharges"
+}, {
+  "code": "E5",
+  "sec": "E",
+  "name": "Allergy Documentation Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Allergy/NKDA documented ÷ Admissions) × 100",
+  "ref": "JCI 2021 IPSG.3; TJC NPSG 03.06.01",
+  "num": "Allergy/NKDA documented",
+  "den": "Patient admissions"
+}, {
+  "code": "E6",
+  "sec": "E",
+  "name": "Medication Chart Completeness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Complete medication charts ÷ Charts audited) × 100",
+  "ref": "JCI 2021 MMU; TJC MM.04.01.01",
+  "num": "Complete medication charts",
+  "den": "Medication charts audited"
+}, {
+  "code": "E7",
+  "sec": "E",
+  "name": "Patient / Family Education Documentation",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Documented education sessions ÷ Eligible patients) × 100",
+  "ref": "JCI 2021 PFE.2; TJC PC.02.03.01",
+  "num": "Documented education sessions",
+  "den": "Eligible patients"
+}, {
+  "code": "F1",
+  "sec": "F",
+  "name": "Partograph Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Completed partographs ÷ Labours monitored) × 100",
+  "ref": "WHO 2014; FIGO 2018",
+  "num": "Completed partographs",
+  "den": "Labours monitored"
+}, {
+  "code": "F2",
+  "sec": "F",
+  "name": "Fetal Heart Rate (FHR) Monitoring",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Appropriate FHR monitoring ÷ Deliveries) × 100",
+  "ref": "ACOG #106 2021; FIGO 2015",
+  "num": "Appropriate FHR monitoring",
+  "den": "Deliveries"
+}, {
+  "code": "F3",
+  "sec": "F",
+  "name": "Caesarean-Section Rate",
+  "ft": "pct",
+  "dir": "",
+  "unit": "%",
+  "bench": "WHO optimal 10–15%",
+  "bv": null,
+  "expr": "(Caesarean deliveries ÷ Total deliveries) × 100",
+  "ref": "WHO 2015; Robson Classification",
+  "num": "Caesarean deliveries",
+  "den": "Total deliveries"
+}, {
+  "code": "F4",
+  "sec": "F",
+  "name": "Postpartum Haemorrhage (PPH) Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(Deliveries with PPH ÷ Total deliveries) × 100",
+  "ref": "WHO 2012; ACOG 183 2017",
+  "num": "Deliveries with PPH",
+  "den": "Total deliveries"
+}, {
+  "code": "F5",
+  "sec": "F",
+  "name": "Birth Asphyxia Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 live births",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(5-min APGAR <7 / needing PPV ÷ Live births) × 1,000",
+  "ref": "WHO 2012; AAP/AHA NRP 2015",
+  "num": "Asphyxiated live births",
+  "den": "Live births"
+}, {
+  "code": "F6",
+  "sec": "F",
+  "name": "Neonatal Mortality Rate",
+  "ft": "rate1000",
+  "dir": "",
+  "unit": "per 1000 live births",
+  "bench": "Track (national)",
+  "bv": null,
+  "expr": "(Neonatal deaths ≤28 days ÷ Live births) × 1,000",
+  "ref": "WHO 2023; UNICEF 2023",
+  "num": "Neonatal deaths ≤28 days",
+  "den": "Live births"
+}, {
+  "code": "F7",
+  "sec": "F",
+  "name": "Breastfeeding Initiation within 1 h",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Breastfeeding ≤1 h ÷ Live births) × 100",
+  "ref": "WHO/UNICEF 2018 BFHI",
+  "num": "Breastfeeding ≤1 h",
+  "den": "Live births"
+}, {
+  "code": "F8",
+  "sec": "F",
+  "name": "NICU CLABSI Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 line-days",
+  "bench": "<1",
+  "bv": 1,
+  "expr": "(NICU CLABSI events ÷ NICU central-line days) × 1,000",
+  "ref": "CDC/NHSN 2024; Polin 2012",
+  "num": "NICU CLABSI events",
+  "den": "NICU central-line days"
+}, {
+  "code": "F9",
+  "sec": "F",
+  "name": "Kangaroo Mother Care (KMC) Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Eligible neonates receiving KMC ÷ Eligible neonates) × 100",
+  "ref": "WHO 2022; Conde-Agudelo 2016",
+  "num": "Neonates receiving KMC",
+  "den": "Eligible preterm/LBW neonates"
+}, {
+  "code": "G1",
+  "sec": "G",
+  "name": "Door-to-Balloon Time ≤90 min",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(STEMI PCI with D2B ≤90 min ÷ STEMI primary-PCI patients) × 100",
+  "ref": "ACC/AHA 2013; TJC AMI-8a",
+  "num": "STEMI PCI D2B ≤90 min",
+  "den": "STEMI primary-PCI patients"
+}, {
+  "code": "G2",
+  "sec": "G",
+  "name": "Post-PCI Complication",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of major post-PCI adverse events (24–48 h)",
+  "ref": "ACC/AHA 2021; NCDR CathPCI",
+  "num": "Major post-PCI adverse events",
+  "den": ""
+}, {
+  "code": "G3",
+  "sec": "G",
+  "name": "Puncture Site Hematoma",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of access-site hematomas >5 cm after catheterization",
+  "ref": "ACC/AHA 2012; NCDR CathPCI",
+  "num": "Access-site hematomas >5 cm",
+  "den": ""
+}, {
+  "code": "G4",
+  "sec": "G",
+  "name": "Door-to-ECG ≤10 min",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(ACS with ECG ≤10 min ÷ ACS presentations) × 100",
+  "ref": "ACC/AHA 2014; TJC AMI-1",
+  "num": "ACS with ECG ≤10 min",
+  "den": "ACS / chest-pain presentations"
+}, {
+  "code": "G5",
+  "sec": "G",
+  "name": "STEMI Door-to-Needle (Fibrinolysis)",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(STEMI fibrinolysis ≤30 min ÷ Eligible STEMI patients) × 100",
+  "ref": "ACC/AHA 2013; TJC AMI-7a",
+  "num": "Fibrinolysis ≤30 min",
+  "den": "Eligible STEMI patients"
+}, {
+  "code": "G6",
+  "sec": "G",
+  "name": "Heart Failure 30-Day Readmission",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(HF readmissions ≤30 days ÷ HF discharges) × 100",
+  "ref": "CMS HRRP (HF-30); AHRQ 2020",
+  "num": "HF 30-day readmissions",
+  "den": "Heart-failure discharges"
+}, {
+  "code": "H1",
+  "sec": "H",
+  "name": "Dialysis Adequacy — URR",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥65%",
+  "bv": 65,
+  "expr": "(Patients with URR ≥65% ÷ Patients dialyzed) × 100 · URR=[(pre-BUN−post-BUN)÷pre-BUN]×100",
+  "ref": "KDOQI 2015; Tattersall 1996",
+  "num": "Patients with URR ≥65%",
+  "den": "Patients dialyzed"
+}, {
+  "code": "H2",
+  "sec": "H",
+  "name": "Kt/V Achievement",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90% achieve Kt/V ≥1.2",
+  "bv": 90,
+  "expr": "(Patients Kt/V ≥1.2 ÷ Patients dialyzed) × 100 · Kt/V via Daugirdas 2nd-gen",
+  "ref": "KDOQI 2015; Daugirdas 1993",
+  "num": "Patients with Kt/V ≥1.2",
+  "den": "Patients dialyzed"
+}, {
+  "code": "H3",
+  "sec": "H",
+  "name": "Water Quality Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Water/dialysate tests meeting AAMI/ISO ÷ Tests performed) × 100",
+  "ref": "AAMI/ANSI 23500:2019; ISO 23500",
+  "num": "Tests meeting AAMI/ISO",
+  "den": "Water quality tests performed"
+}, {
+  "code": "H4",
+  "sec": "H",
+  "name": "Intradialytic Hypotension",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0 / minimize",
+  "bv": 0,
+  "expr": "Count of sessions with symptomatic hypotension (SBP drop ≥20 / <90 mmHg)",
+  "ref": "KDOQI 2015; Flythe 2015",
+  "num": "Sessions with symptomatic hypotension",
+  "den": ""
+}, {
+  "code": "H5",
+  "sec": "H",
+  "name": "Vascular Access Complication",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of vascular access complications",
+  "ref": "KDOQI 2006; KDIGO 2019",
+  "num": "Vascular access complications",
+  "den": ""
+}, {
+  "code": "H6",
+  "sec": "H",
+  "name": "Accidental De-lining of Catheter",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of accidental catheter disconnection events during dialysis",
+  "ref": "KDOQI 2006; Dialysis Nursing Policy",
+  "num": "Accidental de-lining events",
+  "den": ""
+}, {
+  "code": "H7",
+  "sec": "H",
+  "name": "Dialysis Access Infection Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 access-days",
+  "bench": "0",
+  "bv": 0,
+  "expr": "(Dialysis access infections ÷ Access-days) × 1,000",
+  "ref": "CDC/NHSN 2024 Dialysis Event; KDOQI 2006",
+  "num": "Dialysis access infections",
+  "den": "Access-days"
+}, {
+  "code": "H8",
+  "sec": "H",
+  "name": "Missed / Shortened Dialysis Sessions",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(Missed or shortened >10% sessions ÷ Scheduled sessions) × 100",
+  "ref": "KDOQI 2015; Saran 2003",
+  "num": "Missed / shortened sessions",
+  "den": "Scheduled dialysis sessions"
+}, {
+  "code": "I1",
+  "sec": "I",
+  "name": "On-Time First-Case Start",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(First cases starting on time ÷ First cases scheduled) × 100",
+  "ref": "AORN 2022; NHS England 2021",
+  "num": "First cases on time",
+  "den": "First cases scheduled"
+}, {
+  "code": "I2",
+  "sec": "I",
+  "name": "Elective Case Cancellation Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<5%",
+  "bv": 5,
+  "expr": "(Elective cases cancelled same-day ÷ Elective cases scheduled) × 100",
+  "ref": "AORN 2022; RCS standards",
+  "num": "Same-day cancellations",
+  "den": "Elective cases scheduled"
+}, {
+  "code": "I3",
+  "sec": "I",
+  "name": "Instrument / Sponge Count Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Cases with documented counts at all timepoints ÷ Surgical procedures) × 100",
+  "ref": "AORN 2022; WHO 2009",
+  "num": "Cases with documented counts",
+  "den": "Surgical procedures"
+}, {
+  "code": "I4",
+  "sec": "I",
+  "name": "Specimen Labeling Error Rate",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of surgical specimen labeling errors",
+  "ref": "CAP 2021; TJC NPSG 01.01.01",
+  "num": "Specimen labeling errors",
+  "den": ""
+}, {
+  "code": "I5",
+  "sec": "I",
+  "name": "Anaesthesia-Related Complication Rate",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of anaesthesia-related adverse events",
+  "ref": "ASA 2019; APSF; Merry 2010",
+  "num": "Anaesthesia adverse events",
+  "den": ""
+}, {
+  "code": "I6",
+  "sec": "I",
+  "name": "PACU Recovery Delay Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(PACU stays beyond threshold ÷ PACU admissions) × 100",
+  "ref": "ASPAN 2021; Aldrete 1995",
+  "num": "Delayed PACU discharges",
+  "den": "PACU admissions"
+}, {
+  "code": "J1",
+  "sec": "J",
+  "name": "Post-Procedure Complication",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Count of post-endoscopy complications within 30 days",
+  "ref": "ASGE 2015; BSG 2019",
+  "num": "Post-endoscopy complications",
+  "den": ""
+}, {
+  "code": "J2",
+  "sec": "J",
+  "name": "Endoscope Reprocessing Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Endoscopes reprocessed per HLD protocol ÷ Endoscopes reprocessed) × 100",
+  "ref": "SGNA 2022; ESGE/ESGENA 2018",
+  "num": "Endoscopes per HLD protocol",
+  "den": "Endoscopes reprocessed"
+}, {
+  "code": "J3",
+  "sec": "J",
+  "name": "Perforation Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize (<0.1%)",
+  "bv": 0.1,
+  "expr": "(Iatrogenic perforations ÷ Endoscopic procedures) × 100",
+  "ref": "ASGE 2015; Pohl 2012",
+  "num": "Iatrogenic perforations",
+  "den": "Endoscopic procedures"
+}, {
+  "code": "J4",
+  "sec": "J",
+  "name": "Post-Polypectomy Bleeding",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Count of significant post-polypectomy bleeds within 30 days",
+  "ref": "ASGE 2015; ESGE 2022",
+  "num": "Post-polypectomy bleeds",
+  "den": ""
+}, {
+  "code": "K1",
+  "sec": "K",
+  "name": "Triage-to-Consult / Door-to-Doctor Time",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90% per category",
+  "bv": 90,
+  "expr": "(Patients seen within triage TAT ÷ ED presentations by category) × 100",
+  "ref": "ACEP 2019 ESI; CTAS 2020",
+  "num": "Patients seen within TAT",
+  "den": "ED presentations"
+}, {
+  "code": "K2",
+  "sec": "K",
+  "name": "Left Without Being Seen (LWBS) Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<2%",
+  "bv": 2,
+  "expr": "(Patients who left without being seen ÷ ED registrations) × 100",
+  "ref": "ACEP 2019; Hobbs 2000",
+  "num": "Left without being seen",
+  "den": "ED registrations"
+}, {
+  "code": "K3",
+  "sec": "K",
+  "name": "ED Re-attendance within 72 h",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<5%",
+  "bv": 5,
+  "expr": "(ED re-attendances ≤72 h ÷ ED discharges) × 100",
+  "ref": "ACEP 2019; NHS England",
+  "num": "ED re-attendances ≤72 h",
+  "den": "ED discharges"
+}, {
+  "code": "K4",
+  "sec": "K",
+  "name": "Door-to-Needle for Stroke Thrombolysis",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥80%",
+  "bv": 80,
+  "expr": "(Stroke tPA ≤60 min ÷ Eligible stroke patients) × 100",
+  "ref": "AHA/ASA 2019; ESO 2021",
+  "num": "Stroke tPA ≤60 min",
+  "den": "Eligible ischemic-stroke patients"
+}, {
+  "code": "L1",
+  "sec": "L",
+  "name": "Mandatory Training Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Staff completing mandatory training ÷ Staff required) × 100",
+  "ref": "JCI 2021 SQE.3; TJC HR.01.05.01",
+  "num": "Staff completing training",
+  "den": "Staff required to train"
+}, {
+  "code": "L2",
+  "sec": "L",
+  "name": "BLS / ACLS Certification Rate",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Staff with valid BLS/ACLS ÷ Staff required) × 100",
+  "ref": "AHA 2020 BLS/ACLS; JCI 2021 SQE",
+  "num": "Staff with valid certification",
+  "den": "Staff required to certify"
+}, {
+  "code": "L3",
+  "sec": "L",
+  "name": "Induction Completion within 30 Days",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(New staff induction ≤30 days ÷ New staff) × 100",
+  "ref": "JCI 2021 SQE.7; TJC HR.01.04.01",
+  "num": "Inductions ≤30 days",
+  "den": "New employees"
+}, {
+  "code": "L4",
+  "sec": "L",
+  "name": "Accidental Catheter Dislodgement",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of accidental catheter dislodgements",
+  "ref": "JCI 2021 QPS; NDNQI 2023",
+  "num": "Accidental dislodgements",
+  "den": ""
+}, {
+  "code": "L5",
+  "sec": "L",
+  "name": "Accidental Removal of Catheter",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of accidental (unplanned) catheter removals",
+  "ref": "JCI 2021 QPS; NDNQI 2023",
+  "num": "Accidental catheter removals",
+  "den": ""
+}, {
+  "code": "M1",
+  "sec": "M",
+  "name": "Patient Satisfaction Score",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥85%",
+  "bv": 85,
+  "expr": "(Patients rating care 'Very Good/Excellent' ÷ Patients surveyed) × 100",
+  "ref": "HCAHPS 2024; Press Ganey 2023",
+  "num": "Top-box ratings",
+  "den": "Patients surveyed"
+}, {
+  "code": "M2",
+  "sec": "M",
+  "name": "Complaint Resolution within TAT",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Complaints resolved within TAT ÷ Complaints received) × 100",
+  "ref": "JCI 2021 PFR.3; TJC RI.01.07.01",
+  "num": "Complaints resolved within TAT",
+  "den": "Complaints received"
+}];
+var HQI_SECN = {
+  "A": "Infection Prevention & Control",
+  "B": "Medication Safety",
+  "C": "Patient Safety (IPSG)",
+  "D": "Clinical Outcomes & Mortality",
+  "E": "Documentation & Process",
+  "F": "Maternal & Neonatal",
+  "G": "Cardiac / Cath Lab / CCU",
+  "H": "Dialysis",
+  "I": "Surgery / OT / Anaesthesia",
+  "J": "Endoscopy",
+  "K": "Emergency",
+  "L": "Staff / Device Safety / Training",
+  "M": "Patient Experience"
+};
+const {
+  useState,
+  useEffect,
+  useMemo,
+  useRef
+} = React;
+const P = {
+  blue: '#0090ca',
+  blue700: '#0072a3',
+  teal: '#3ab5a7',
+  violet: '#6a52d4',
+  green: '#1f9d57',
+  rose: '#d23a52',
+  amber: '#e08a1e',
+  ink: '#16202e',
+  ink2: '#3c4858',
+  muted: '#6c7a8c',
+  faint: '#9aa6b4',
+  line: '#dde3ec',
+  line2: '#e8edf3',
+  panel2: '#f7f9fc',
+  navy: '#0d1b2e'
+};
+const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
+const MONTHS = [['Jun-25', 'Jun 2025', 'Q1'], ['Jul-25', 'Jul 2025', 'Q1'], ['Aug-25', 'Aug 2025', 'Q1'], ['Sep-25', 'Sep 2025', 'Q2'], ['Oct-25', 'Oct 2025', 'Q2'], ['Nov-25', 'Nov 2025', 'Q2'], ['Dec-25', 'Dec 2025', 'Q3'], ['Jan-26', 'Jan 2026', 'Q3'], ['Feb-26', 'Feb 2026', 'Q3'], ['Mar-26', 'Mar 2026', 'Q4'], ['Apr-26', 'Apr 2026', 'Q4'], ['May-26', 'May 2026', 'Q4']];
+const QORDER = ['Q1', 'Q2', 'Q3', 'Q4'];
+const QL = [['Q1', 'Jun–Aug 25'], ['Q2', 'Sep–Nov 25'], ['Q3', 'Dec–Feb 26'], ['Q4', 'Mar–May 26']];
+const STATUS_CELL = {
+  ok: ['#e7f6ed', '#1f9d57', '✓'],
+  breach: ['#fbe9ec', '#d23a52', '!'],
+  na: ['#eef1f5', '#9aa6b4', '·']
+};
+function qiCompute(f, n, d) {
+  if (n == null || n === '') return null;
+  n = Number(n);
+  if (f === 'count' || f === 'direct') return n;
+  if (d == null || d === '' || Number(d) === 0) return null;
+  d = Number(d);
+  if (f === 'rate1000') return Math.round(n / d * 1000 * 100) / 100;
+  return Math.round(n / d * 100 * 100) / 100;
+}
+function monthRaw(ind, mk) {
+  const f = ind && ind.formula || (ind && ind.valueType === '%' ? 'pct' : 'direct');
+  if (f === 'direct') {
+    const v = ind.months && ind.months[mk];
+    return v == null || v === '' ? null : Number(v);
+  }
+  const n = ind.mNum && ind.mNum[mk];
+  if (n == null || n === '') {
+    const v = ind.months && ind.months[mk];
+    return v == null || v === '' ? null : Number(v);
+  }
+  const d = f !== 'count' ? ind.mDen && ind.mDen[mk] : null;
+  return qiCompute(f, n, d);
+}
+function qStatus(ind, v) {
+  if (v == null || v === '') return 'na';
+  const b = ind.benchmarkValue;
+  if (b == null || b === '') return 'ok';
+  return ind.goalDirection === 'higher_is_better' ? v >= b ? 'ok' : 'breach' : v <= b ? 'ok' : 'breach';
+}
+function monthStatus(ind, mk) {
+  return qStatus(ind, monthRaw(ind, mk));
+}
+function qtrRaw(ind, Q) {
+  const v = ind.quarters ? ind.quarters[Q] : null;
+  return v == null || v === '' ? null : Number(v);
+}
+function qtrStatus(ind, Q) {
+  return qStatus(ind, ind.quarters ? ind.quarters[Q] : null);
+}
+function isPctInd(ind) {
+  const t = (ind && ind.valueType || '').toString().toLowerCase();
+  return t.indexOf('%') >= 0 || t.startsWith('per') || ind.formula === 'pct';
+}
+function deptStat(d) {
+  let ok = 0,
+    breach = 0,
+    na = 0;
+  (d.indicators || []).forEach(ind => MONTHS.forEach(m => {
+    const s = monthStatus(ind, m[0]);
+    if (s === 'ok') ok++;else if (s === 'breach') breach++;else na++;
+  }));
+  return {
+    ok,
+    breach,
+    na,
+    rate: ok + breach ? Math.round(ok * 100 / (ok + breach)) : 100
+  };
+}
+function hasData(ind) {
+  return MONTHS.some(m => monthRaw(ind, m[0]) != null) || QORDER.some(q => qtrRaw(ind, q) != null);
+}
+function countBreaches(ind) {
+  let n = 0;
+  MONTHS.forEach(m => {
+    if (monthStatus(ind, m[0]) === 'breach') n++;
+  });
+  return n;
+}
+function fmtVal(ind, v) {
+  if (v == null || v === '') return '—';
+  const num = Math.round(Number(v) * 100) / 100;
+  return isPctInd(ind) ? num + '%' : num.toLocaleString();
+}
+function measureOf(f) {
+  if (f === 'pct') return {
+    name: 'Percentage',
+    color: P.teal,
+    letter: '%'
+  };
+  if (f === 'rate1000' || f === 'rate100') return {
+    name: 'Rate',
+    color: P.violet,
+    letter: 'R'
+  };
+  return {
+    name: 'Count',
+    color: P.blue,
+    letter: 'C'
+  };
+}
+function benchExpr(ind) {
+  const v = ind.benchmarkValue;
+  if (v == null || v === '') return ind.benchmark || 'No benchmark';
+  const sym = ind.goalDirection === 'higher_is_better' ? '≥' : '≤';
+  const pct = ind.formula === 'pct' ? '%' : '';
+  const unit = ind.unit && !pct && ind.unit !== 'count' ? ' ' + ind.unit : '';
+  return sym + ' ' + v + pct + unit;
+}
+function formulaText(ind) {
+  const f = ind.formula;
+  const num = ind.numLabel || ind.name || 'numerator';
+  const den = ind.denLabel || 'denominator';
+  if (f === 'direct') return (ind.name || 'Value') + ' = entered value';
+  if (f === 'count') return 'value = ' + num;
+  return '(' + num + ' ÷ ' + den + ') ' + (f === 'rate1000' ? '× 1000' : '× 100');
+}
+function statusColorFor(s) {
+  return {
+    Excellent: P.green,
+    'Very Good': P.teal,
+    Good: P.blue,
+    Satisfactory: P.teal,
+    Fair: P.amber,
+    Average: P.amber,
+    'Needs Improvement': P.rose,
+    Poor: P.rose,
+    '': P.muted
+  }[s] || P.blue;
+}
+function catOf(n) {
+  n = (n || '').toLowerCase();
+  if (/cauti|clabsi|vap|vae|ssi|infection|sepsis/.test(n)) return 'Healthcare-Associated Infection';
+  if (/hand hygiene|water quality/.test(n)) return 'Infection Prevention';
+  if (/needle stick|nsi/.test(n)) return 'Staff Safety';
+  if (/training|competency/.test(n)) return 'Staff Competency';
+  if (/volume/.test(n)) return 'Activity / Volume';
+  if (/survival|adequacy|partograph|door-to-balloon/.test(n)) return 'Clinical Outcomes';
+  if (/fall|medication|bed sore|hapu|pressure|dvt|phlebitis|hematoma|complication|hypotension|de-lining|de-linining|vascular|return/.test(n)) return 'Patient Safety';
+  return 'Clinical Outcomes';
+}
+function stdMatch(name) {
+  const n = (name || '').toLowerCase();
+  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of catheter/, 'L5']];
+  for (const [re, code] of T) {
+    if (re.test(n)) return code;
+  }
+  return null;
+}
+function norm(s) {
+  return (s || '').toLowerCase().replace(/\s*\(.*?\)\s*/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function guideOf(code) {
+  try {
+    return typeof window !== 'undefined' && window.HQI_GUIDE && window.HQI_GUIDE[code] || null;
+  } catch (e) {
+    return null;
+  }
+}
+function blankIndicator(name) {
+  return {
+    id: window.qualitySlug ? window.qualitySlug(name) : 'ind-' + norm(name).replace(/ /g, '-'),
+    name,
+    formula: 'count',
+    valueType: 'Count',
+    goalDirection: 'lower_is_better',
+    benchmark: '0 (zero defect)',
+    benchmarkValue: 0,
+    unit: 'count',
+    numLabel: name,
+    denLabel: '',
+    numeratorDef: '',
+    denominatorDef: '',
+    category: catOf(name),
+    frequency: 'Monthly',
+    reference: '',
+    months: {},
+    mNum: {},
+    mDen: {},
+    quarters: {}
+  };
+}
+function QCDashboard({
+  depts
+}) {
+  const d = useMemo(() => {
+    let ok = 0,
+      br = 0,
+      na = 0;
+    const uniq = new Set();
+    let totalInd = 0;
+    depts.forEach(dep => {
+      const s = deptStat(dep);
+      ok += s.ok;
+      br += s.breach;
+      na += s.na;
+      (dep.indicators || []).forEach(ind => {
+        uniq.add(norm(ind.name));
+        totalInd++;
+      });
+    });
+    const totalCells = ok + br + na || 1;
+    const dashKpis = [{
+      label: 'Departments',
+      val: String(depts.length),
+      foot: 'reporting quality KPIs',
+      color: P.blue
+    }, {
+      label: 'Indicators',
+      val: String(uniq.size),
+      foot: totalInd + ' across departments',
+      color: P.violet
+    }, {
+      label: 'Zero-Defect Rate',
+      val: (ok + br ? Math.round(ok * 100 / (ok + br)) : 100) + '%',
+      foot: ok + ' on benchmark · ' + br + ' breaches',
+      color: P.green
+    }, {
+      label: 'Breaches',
+      val: String(br),
+      foot: 'indicator-months off benchmark',
+      color: br > 0 ? P.rose : P.green
+    }];
+    const mix = [{
+      label: 'On benchmark',
+      v: ok,
+      color: P.green
+    }, {
+      label: 'Breach',
+      v: br,
+      color: P.rose
+    }, {
+      label: 'Not reported',
+      v: na,
+      color: '#c4ccd6'
+    }].map(x => Object.assign(x, {
+      pct: Math.round(x.v * 100 / totalCells)
+    }));
+    let maxB = 1;
+    const bbm = MONTHS.map(m => {
+      let b = 0;
+      depts.forEach(dep => (dep.indicators || []).forEach(ind => {
+        if (monthStatus(ind, m[0]) === 'breach') b++;
+      }));
+      if (b > maxB) maxB = b;
+      return {
+        label: m[1].split(' ')[0],
+        val: b
+      };
+    });
+    const breachByMonth = bbm.map(x => Object.assign(x, {
+      h: Math.round(x.val / maxB * 100)
+    }));
+    const heatRows = depts.map(dep => {
+      const inds = dep.indicators || [];
+      const cells = QORDER.map(Q => {
+        let b = 0,
+          rep = 0;
+        inds.forEach(ind => {
+          const s = qtrStatus(ind, Q);
+          if (s === 'breach') b++;else if (s !== 'na') rep++;
+        });
+        const bg = b + rep === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : '#e7f6ed';
+        const fg = b + rep === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : '#1f9d57';
+        return {
+          sym: b + rep === 0 ? '–' : b > 0 ? String(b) : '✓',
+          bg,
+          fg
+        };
+      });
+      const st = deptStat(dep);
+      let status = dep.status;
+      if (!status) {
+        const brRate = st.ok + st.breach ? st.breach / (st.ok + st.breach) : 0;
+        status = brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Excellent';
+      }
+      const sc = statusColorFor(status);
+      return {
+        name: dep.name,
+        count: inds.length,
+        cells,
+        rate: st.rate + '%',
+        status,
+        statusColor: sc,
+        statusBg: sc + '1c'
+      };
+    });
+    return {
+      dashKpis,
+      mix,
+      breachByMonth,
+      heatRows
+    };
+  }, [depts]);
+  const thBase = {
+    padding: '9px 8px',
+    fontSize: '10.5px',
+    color: '#6c7a8c',
+    fontWeight: 700,
+    borderBottom: '1px solid #dde3ec',
+    background: '#f7f9fc'
+  };
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '13px',
+      marginBottom: '16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: '40px',
+      height: '40px',
+      borderRadius: '11px',
+      background: '#eef8fc',
+      color: '#0090ca',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"
+  }))), React.createElement("div", null, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: '21px',
+      fontWeight: 700,
+      color: '#16202e',
+      letterSpacing: '-.3px'
+    }
+  }, "Quality Dashboard"), React.createElement("div", {
+    style: {
+      fontSize: '12.5px',
+      color: '#6c7a8c',
+      marginTop: '2px'
+    }
+  }, "Hospital-wide quality & patient-safety performance \xB7 FY 2025\u201326 (monthly)"))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))',
+      gap: '13px',
+      marginBottom: '16px'
+    }
+  }, d.dashKpis.map(k => React.createElement("div", {
+    key: k.label,
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderLeft: '4px solid ' + k.color,
+      borderRadius: '11px',
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      padding: '14px 17px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '11.5px',
+      fontWeight: 700,
+      color: '#3c4858',
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, k.label), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: '27px',
+      fontWeight: 600,
+      color: k.color,
+      lineHeight: 1,
+      margin: '8px 0 5px',
+      letterSpacing: '-.5px'
+    }
+  }, k.val), React.createElement("div", {
+    style: {
+      fontSize: '11px',
+      color: '#9aa6b4'
+    }
+  }, k.foot)))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: '16px',
+      marginBottom: '16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: '12px',
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      padding: '15px 17px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '13px',
+      fontWeight: 700,
+      color: '#16202e',
+      marginBottom: '13px'
+    }
+  }, "Compliance Mix"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      height: '22px',
+      borderRadius: '7px',
+      overflow: 'hidden',
+      marginBottom: '12px'
+    }
+  }, d.mix.map(m => React.createElement("div", {
+    key: m.label,
+    title: m.label,
+    style: {
+      width: m.pct + '%',
+      background: m.color
+    }
+  }))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: '16px',
+      flexWrap: 'wrap'
+    }
+  }, d.mix.map(m => React.createElement("div", {
+    key: m.label,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '7px',
+      fontSize: '12px',
+      color: '#3c4858'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: '10px',
+      height: '10px',
+      borderRadius: '3px',
+      background: m.color
+    }
+  }), m.label, " ", React.createElement("b", {
+    style: {
+      fontFamily: MONO
+    }
+  }, m.pct, "%"))))), React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: '12px',
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      padding: '15px 17px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '13px',
+      fontWeight: 700,
+      color: '#16202e',
+      marginBottom: '13px'
+    }
+  }, "Breaches by Month"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: '5px',
+      height: '110px'
+    }
+  }, d.breachByMonth.map((b, i) => React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: '5px',
+      height: '100%',
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("div", {
+    title: String(b.val),
+    style: {
+      width: '100%',
+      background: 'linear-gradient(180deg,#e8607a,#d23a52)',
+      borderRadius: '3px 3px 0 0',
+      height: b.h + '%',
+      minHeight: '2px'
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: '8.5px',
+      color: '#9aa6b4'
+    }
+  }, b.label)))))), React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: '12px',
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '13px 16px',
+      borderBottom: '1px solid #e8edf3'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '13.5px',
+      fontWeight: 700,
+      color: '#16202e'
+    }
+  }, "Department \xD7 Quarter Heatmap"), React.createElement("div", {
+    style: {
+      fontSize: '11.5px',
+      color: '#6c7a8c'
+    }
+  }, "breaches per quarter \u2014 green clean \xB7 red breach \xB7 grey not reported")), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: '12.5px',
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'left',
+      padding: '9px 16px',
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Department"), React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'center'
+    }
+  }, "Q1"), React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'center'
+    }
+  }, "Q2"), React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'center'
+    }
+  }, "Q3"), React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'center'
+    }
+  }, "Q4"), React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'center',
+      padding: '9px 12px'
+    }
+  }, "Status"), React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'right',
+      padding: '9px 16px'
+    }
+  }, "Rate"))), React.createElement("tbody", null, d.heatRows.map((r, ri) => React.createElement("tr", {
+    key: ri,
+    style: {
+      borderBottom: '1px solid #eef1f5'
+    }
+  }, React.createElement("td", {
+    style: {
+      padding: '8px 16px',
+      textAlign: 'left'
+    }
+  }, React.createElement("b", {
+    style: {
+      color: '#16202e'
+    }
+  }, r.name), " ", React.createElement("span", {
+    style: {
+      color: '#9aa6b4',
+      fontSize: '11px'
+    }
+  }, "\xB7 ", r.count)), r.cells.map((c, ci) => React.createElement("td", {
+    key: ci,
+    style: {
+      textAlign: 'center',
+      padding: '6px 8px'
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      minWidth: '28px',
+      height: '24px',
+      borderRadius: '6px',
+      background: c.bg,
+      color: c.fg,
+      fontWeight: 700,
+      fontSize: '11.5px',
+      fontFamily: MONO
+    }
+  }, c.sym))), React.createElement("td", {
+    style: {
+      textAlign: 'center',
+      padding: '8px 12px'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: '10.5px',
+      fontWeight: 600,
+      color: r.statusColor,
+      background: r.statusBg,
+      padding: '2px 9px',
+      borderRadius: '20px',
+      whiteSpace: 'nowrap'
+    }
+  }, r.status)), React.createElement("td", {
+    style: {
+      textAlign: 'right',
+      padding: '8px 16px',
+      fontFamily: MONO,
+      fontWeight: 600,
+      color: '#16202e'
+    }
+  }, r.rate))))))));
+}
+function QCScorecard({
+  depts
+}) {
+  const rows = useMemo(() => {
+    return (depts || []).map(d => {
+      const st = deptStat(d);
+      const inds = d.indicators || [];
+      const withData = inds.filter(i => hasData(i)).length;
+      const breaches = inds.reduce((a, i) => a + countBreaches(i), 0);
+      const rep = st.ok + st.breach;
+      const brRate = rep ? st.breach / rep : 0;
+      const status = d.status || (st.breach === 0 ? 'Excellent' : brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Very Good');
+      const sc = statusColorFor(status);
+      return {
+        key: d.key,
+        name: d.name,
+        total: inds.length,
+        withData,
+        breaches,
+        breachColor: breaches > 0 ? P.rose : P.ink2,
+        rate: st.rate,
+        status,
+        statusColor: sc,
+        statusBg: sc + '1c',
+        barColor: st.rate >= 95 ? P.green : st.rate >= 85 ? P.teal : st.rate >= 70 ? P.amber : P.rose
+      };
+    }).sort((a, b) => b.rate - a.rate);
+  }, [depts]);
+  const th = {
+    padding: '10px 12px',
+    fontSize: '10.5px',
+    textTransform: 'uppercase',
+    letterSpacing: '.3px',
+    color: P.muted,
+    fontWeight: 700,
+    borderBottom: '1px solid ' + P.line,
+    background: P.panel2
+  };
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '13px',
+      marginBottom: '16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: '40px',
+      height: '40px',
+      borderRadius: '11px',
+      background: '#efeaff',
+      color: P.violet,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M12 2 2 7l10 5 10-5zM2 12l10 5 10-5M2 17l10 5 10-5"
+  }))), React.createElement("div", null, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: '21px',
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Department Scorecard"), React.createElement("div", {
+    style: {
+      fontSize: '12.5px',
+      color: P.muted,
+      marginTop: '2px'
+    }
+  }, "Zero-defect performance by department, ranked best to worst"))), React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: '12px',
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: '12.5px',
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'left',
+      padding: '10px 16px'
+    }
+  }, "Department"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'right'
+    }
+  }, "Indicators"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'right'
+    }
+  }, "With data"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'right'
+    }
+  }, "Breaches"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'left',
+      width: '200px'
+    }
+  }, "Zero-defect rate"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'center',
+      padding: '10px 16px'
+    }
+  }, "Status"))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
+    key: r.key,
+    style: {
+      borderBottom: '1px solid ' + P.line2
+    }
+  }, React.createElement("td", {
+    style: {
+      padding: '10px 16px',
+      textAlign: 'left',
+      fontWeight: 600,
+      color: P.ink
+    }
+  }, r.name), React.createElement("td", {
+    style: {
+      padding: '10px 12px',
+      textAlign: 'right',
+      fontFamily: MONO,
+      color: P.ink2
+    }
+  }, r.total), React.createElement("td", {
+    style: {
+      padding: '10px 12px',
+      textAlign: 'right',
+      fontFamily: MONO,
+      color: P.ink2
+    }
+  }, r.withData), React.createElement("td", {
+    style: {
+      padding: '10px 12px',
+      textAlign: 'right',
+      fontFamily: MONO,
+      fontWeight: 600,
+      color: r.breachColor
+    }
+  }, r.breaches), React.createElement("td", {
+    style: {
+      padding: '10px 12px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      height: '8px',
+      background: P.line2,
+      borderRadius: '5px',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      height: '100%',
+      width: r.rate + '%',
+      background: r.barColor,
+      borderRadius: '5px'
+    }
+  })), React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontWeight: 600,
+      color: P.ink,
+      fontSize: '11.5px',
+      width: '38px',
+      textAlign: 'right'
+    }
+  }, r.rate, "%"))), React.createElement("td", {
+    style: {
+      padding: '10px 16px',
+      textAlign: 'center'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: '10.5px',
+      fontWeight: 600,
+      color: r.statusColor,
+      background: r.statusBg,
+      padding: '2px 9px',
+      borderRadius: '20px',
+      whiteSpace: 'nowrap'
+    }
+  }, r.status)))))))));
+}
+function QCTrends({
+  depts
+}) {
+  const [dept, setDept] = useState(depts[0] && depts[0].key);
+  const [indId, setIndId] = useState('');
+  const td = useMemo(() => depts.find(x => x.key === dept) || depts[0], [depts, dept]);
+  const tInds = td && td.indicators || [];
+  let tIndId = indId;
+  if (!tInds.some(i => i.id === tIndId)) tIndId = tInds[0] && tInds[0].id;
+  const tInd = tInds.find(i => i.id === tIndId);
+  const model = useMemo(() => {
+    if (!tInd) return null;
+    const vals = MONTHS.map(m => {
+      const v = monthRaw(tInd, m[0]);
+      return {
+        label: m[1].split(' ')[0],
+        year: m[1].split(' ')[1],
+        v,
+        s: monthStatus(tInd, m[0])
+      };
+    });
+    const nums = vals.map(x => x.v).filter(v => v != null);
+    const maxV = Math.max(tInd.benchmarkValue != null ? tInd.benchmarkValue : 0, ...(nums.length ? nums : [1]), 1);
+    const bars = vals.map(x => ({
+      label: x.label,
+      year: x.year,
+      disp: x.v == null ? '—' : fmtVal(tInd, x.v),
+      h: x.v == null ? 0 : Math.max(2, Math.round(x.v / maxV * 100)),
+      color: x.s === 'breach' ? P.rose : x.s === 'ok' ? P.green : '#c4ccd6'
+    }));
+    const avg = nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length * 100) / 100 : '—';
+    return {
+      name: tInd.name,
+      unit: tInd.unit,
+      formula: formulaText(tInd),
+      bench: benchExpr(tInd),
+      avg: avg === '—' ? '—' : fmtVal(tInd, avg),
+      breaches: vals.filter(x => x.s === 'breach').length,
+      reported: nums.length,
+      bars
+    };
+  }, [tInd]);
+  const selStyle = {
+    padding: '8px 11px',
+    border: '1px solid ' + P.line,
+    borderRadius: 8,
+    fontSize: 12.5,
+    fontWeight: 600,
+    background: '#fff',
+    color: P.ink,
+    outline: 'none'
+  };
+  const statLabel = {
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: '.4px',
+    color: P.faint,
+    fontWeight: 700
+  };
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      marginBottom: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#e7f6ed',
+      color: P.green,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M3 17l6-6 4 4 8-8M21 7v5h-5"
+  }))), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Trends"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "12-month trend for a single indicator, against its benchmark")), React.createElement("select", {
+    value: dept || '',
+    onChange: e => {
+      setDept(e.target.value);
+      setIndId('');
+    },
+    style: selStyle
+  }, depts.map(d => React.createElement("option", {
+    key: d.key,
+    value: d.key
+  }, d.name))), React.createElement("select", {
+    value: tIndId || '',
+    onChange: e => setIndId(e.target.value),
+    style: {
+      ...selStyle,
+      fontWeight: 400,
+      maxWidth: 280
+    }
+  }, tInds.map(i => React.createElement("option", {
+    key: i.id,
+    value: i.id
+  }, i.name)))), model && React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      padding: '18px 20px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginBottom: 4
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 16,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, model.name), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: P.faint
+    }
+  }, model.unit)), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 12,
+      color: P.blue700,
+      marginBottom: 16
+    }
+  }, "\u0192 ", model.formula), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 22,
+      flexWrap: 'wrap',
+      marginBottom: 18
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: statLabel
+  }, "Benchmark"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 15,
+      fontWeight: 700,
+      color: P.blue700
+    }
+  }, model.bench)), React.createElement("div", null, React.createElement("div", {
+    style: statLabel
+  }, "Avg"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 15,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, model.avg)), React.createElement("div", null, React.createElement("div", {
+    style: statLabel
+  }, "Breaches"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 15,
+      fontWeight: 700,
+      color: P.rose
+    }
+  }, model.breaches)), React.createElement("div", null, React.createElement("div", {
+    style: statLabel
+  }, "Months reported"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 15,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, model.reported))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 6,
+      height: 200,
+      borderBottom: '1px solid ' + P.line2,
+      paddingBottom: 0
+    }
+  }, model.bars.map((b, i) => React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: 6,
+      height: '100%',
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 9,
+      fontFamily: MONO,
+      color: P.muted
+    }
+  }, b.disp), React.createElement("div", {
+    title: b.disp,
+    style: {
+      width: '100%',
+      maxWidth: 34,
+      background: b.color,
+      borderRadius: '4px 4px 0 0',
+      height: b.h + '%',
+      minHeight: 2
+    }
+  })))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginTop: 7
+    }
+  }, model.bars.map((b, i) => React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      textAlign: 'center',
+      fontSize: 9,
+      color: P.faint
+    }
+  }, b.label)))));
+}
+function QCReports({
+  depts
+}) {
+  const [dept, setDept] = useState(depts[0] && depts[0].key);
+  const rd = useMemo(() => depts.find(d => d.key === dept) || depts[0] || null, [depts, dept]);
+  const st = useMemo(() => rd ? deptStat(rd) : {
+    ok: 0,
+    breach: 0,
+    na: 0,
+    rate: 100
+  }, [rd]);
+  const inds = rd && rd.indicators || [];
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      marginBottom: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#eef8fc',
+      color: '#0090ca',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7"
+  }))), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Monthly Quality Report"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "Full month-wise indicator report \xB7 FY 2025\u201326")), React.createElement("select", {
+    value: dept || '',
+    onChange: e => setDept(e.target.value),
+    style: {
+      padding: '8px 11px',
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      background: '#fff',
+      color: P.ink,
+      outline: 'none'
+    }
+  }, depts.map(o => React.createElement("option", {
+    key: o.key,
+    value: o.key
+  }, o.name)))), React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '14px 18px',
+      borderBottom: '1px solid ' + P.line2,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      flexWrap: 'wrap',
+      background: 'linear-gradient(150deg,#ffffff,#f5fafd)'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, "UNICO Hospitals \u2014 ", rd ? rd.name : ''), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted
+    }
+  }, "Quality Indicator Report \xB7 FY 2025\u201326 \xB7 Jun 2025 \u2013 May 2026")), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 18,
+      fontWeight: 700,
+      color: P.green
+    }
+  }, st.rate, "%"), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px'
+    }
+  }, "zero-defect")), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 18,
+      fontWeight: 700,
+      color: P.rose
+    }
+  }, st.breach), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px'
+    }
+  }, "breaches"))), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: 11,
+      width: '100%',
+      minWidth: 920
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      background: P.panel2
+    }
+  }, React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.2px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid ' + P.line,
+      position: 'sticky',
+      left: 0,
+      background: P.panel2,
+      minWidth: 190
+    }
+  }, "Indicator"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 8px',
+      fontSize: 9.5,
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid ' + P.line,
+      background: P.panel2,
+      width: 96
+    }
+  }, "Benchmark"), MONTHS.map(m => React.createElement("th", {
+    key: m[0],
+    style: {
+      textAlign: 'center',
+      padding: '8px 4px',
+      fontSize: 9,
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid ' + P.line,
+      background: P.panel2
+    }
+  }, m[1].split(' ')[0])))), React.createElement("tbody", null, inds.map(ind => React.createElement("tr", {
+    key: ind.id,
+    style: {
+      borderBottom: '1px solid ' + P.line2
+    }
+  }, React.createElement("td", {
+    style: {
+      padding: '7px 10px',
+      textAlign: 'left',
+      fontWeight: 600,
+      color: P.ink,
+      position: 'sticky',
+      left: 0,
+      background: '#fff'
+    }
+  }, ind.name, " ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400
+    }
+  }, ind.goalDirection === 'higher_is_better' ? '↑' : '↓')), React.createElement("td", {
+    style: {
+      padding: '7px 8px',
+      textAlign: 'left',
+      fontFamily: MONO,
+      fontSize: 10,
+      color: P.ink2
+    }
+  }, benchExpr(ind)), MONTHS.map(m => {
+    const v = monthRaw(ind, m[0]);
+    const s = monthStatus(ind, m[0]);
+    const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
+    const bg = s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : '#f4f6f9';
+    const disp = s === 'na' ? '·' : fmtVal(ind, v);
+    return React.createElement("td", {
+      key: m[0],
+      style: {
+        textAlign: 'center',
+        padding: '4px 3px'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-block',
+        minWidth: 30,
+        padding: '3px 4px',
+        borderRadius: 5,
+        background: bg,
+        color: col,
+        fontFamily: MONO,
+        fontWeight: 600,
+        fontSize: 10
+      }
+    }, disp));
+  }))))))));
+}
+function QCIncidents({
+  depts
+}) {
+  const [dept, setDept] = useState('all');
+  const list = useMemo(() => {
+    const out = [];
+    (depts || []).forEach(d => {
+      if (dept !== 'all' && d.key !== dept) return;
+      (d.indicators || []).forEach(ind => {
+        MONTHS.forEach(m => {
+          if (monthStatus(ind, m[0]) === 'breach') {
+            out.push({
+              dept: d.name,
+              deptKey: d.key,
+              ind: ind.name,
+              cat: ind.category,
+              month: m[1],
+              value: fmtVal(ind, monthRaw(ind, m[0])),
+              bench: benchExpr(ind)
+            });
+          }
+        });
+      });
+    });
+    return out;
+  }, [depts, dept]);
+  const rows = list.slice(0, 150);
+  const empty = list.length === 0;
+  const options = [{
+    key: 'all',
+    label: 'All departments'
+  }].concat((depts || []).map(d => ({
+    key: d.key,
+    label: d.name
+  })));
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      marginBottom: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#fbe9ec',
+      color: P.rose,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M3 12h4l2 6 4-14 2 8h6"
+  }))), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Incident Reports"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, React.createElement("b", {
+    style: {
+      color: P.rose
+    }
+  }, list.length), " benchmark breaches flagged this year \u2014 each needs review")), React.createElement("select", {
+    value: dept,
+    onChange: e => setDept(e.target.value),
+    style: {
+      padding: '8px 11px',
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      background: '#fff',
+      color: P.ink,
+      outline: 'none'
+    }
+  }, options.map(o => React.createElement("option", {
+    key: o.key,
+    value: o.key
+  }, o.label)))), empty && React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      padding: 50,
+      textAlign: 'center',
+      color: P.green,
+      fontWeight: 600
+    }
+  }, "\u2713 No breaches in scope \u2014 all reported indicators on benchmark."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 9
+    }
+  }, rows.map((x, i) => React.createElement("div", {
+    key: x.deptKey + '|' + x.ind + '|' + x.month + '|' + i,
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderLeft: '3px solid ' + P.rose,
+      borderRadius: 10,
+      boxShadow: '0 1px 2px rgba(20,32,46,.05)',
+      padding: '12px 15px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: 9,
+      background: '#fbe9ec',
+      color: P.rose,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "17",
+    height: "17",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"
+  }))), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      color: P.ink
+    }
+  }, x.ind), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, x.dept, " \xB7 ", x.cat)), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Month"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, x.month)), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Value"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 13,
+      fontWeight: 700,
+      color: P.rose
+    }
+  }, x.value)), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Benchmark"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 12,
+      fontWeight: 600,
+      color: P.blue700
+    }
+  }, x.bench)), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: P.rose,
+      background: '#fbe9ec',
+      padding: '3px 10px',
+      borderRadius: 20
+    }
+  }, "Breach")))));
+}
+function QCActionPlans({
+  depts
+}) {
+  const [capa, setCapa] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('unico_capa_v1')) || {};
+    } catch (e) {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('unico_capa_v1', JSON.stringify(capa));
+    } catch (e) {}
+  }, [capa]);
+  const plans = useMemo(() => {
+    const out = [];
+    (depts || []).forEach(d => (d.indicators || []).forEach(ind => {
+      let lastQ = null;
+      QORDER.forEach(Q => {
+        if (qtrRaw(ind, Q) != null) lastQ = Q;
+      });
+      const lastBreach = lastQ != null && qtrStatus(ind, lastQ) === 'breach';
+      const nBreach = countBreaches(ind);
+      if (!(lastBreach || nBreach >= 3)) return;
+      const key = d.key + '/' + ind.id;
+      out.push({
+        key,
+        dept: d.name,
+        ind: ind.name,
+        cat: ind.category || catOf(ind.name),
+        breaches: nBreach,
+        bench: benchExpr(ind),
+        status: capa[key] || 'Open'
+      });
+    }));
+    return out;
+  }, [depts, capa]);
+  const cycle = (key, status) => {
+    const order = ['Open', 'In Progress', 'Closed'];
+    const next = order[(order.indexOf(status) + 1) % 3];
+    setCapa(c => Object.assign({}, c, {
+      [key]: next
+    }));
+  };
+  const capaOpen = plans.filter(p => p.status === 'Open').length;
+  const capaProgress = plans.filter(p => p.status === 'In Progress').length;
+  const capaClosed = plans.filter(p => p.status === 'Closed').length;
+  const kpi = (label, value, color) => React.createElement("div", {
+    key: label,
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderLeft: '4px solid ' + color,
+      borderRadius: 11,
+      padding: '13px 16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: P.ink2,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, label), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 25,
+      fontWeight: 600,
+      color: color,
+      marginTop: 6
+    }
+  }, value));
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      marginBottom: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#e7f6ed',
+      color: P.green,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M4 12l5 5L20 6"
+  }))), React.createElement("div", null, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Action Plans (CAPA)"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "Corrective & preventive actions for breached indicators \u2014 click status to advance"))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))',
+      gap: 13,
+      marginBottom: 16
+    }
+  }, kpi('Total plans', plans.length, P.violet), kpi('Open', capaOpen, P.rose), kpi('In progress', capaProgress, P.amber), kpi('Closed', capaClosed, P.green)), plans.length === 0 && React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      padding: 50,
+      textAlign: 'center',
+      color: P.green,
+      fontWeight: 600
+    }
+  }, "\u2713 No open action plans \u2014 no indicators in breach."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 9
+    }
+  }, plans.map(p => {
+    const statusColor = p.status === 'Closed' ? P.green : p.status === 'In Progress' ? P.amber : P.rose;
+    const statusBg = statusColor + '1c';
+    return React.createElement("div", {
+      key: p.key,
+      style: {
+        background: '#fff',
+        border: '1px solid ' + P.line,
+        borderRadius: 10,
+        boxShadow: '0 1px 2px rgba(20,32,46,.05)',
+        padding: '12px 15px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, p.ind), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: P.faint
+      }
+    }, p.dept, " \xB7 ", p.cat)), React.createElement("div", {
+      style: {
+        textAlign: 'center'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.faint,
+        textTransform: 'uppercase',
+        letterSpacing: '.3px'
+      }
+    }, "Breaches"), React.createElement("div", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 14,
+        fontWeight: 700,
+        color: P.rose
+      }
+    }, p.breaches)), React.createElement("div", {
+      style: {
+        textAlign: 'center'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.faint,
+        textTransform: 'uppercase',
+        letterSpacing: '.3px'
+      }
+    }, "Benchmark"), React.createElement("div", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 12,
+        fontWeight: 600,
+        color: P.blue700
+      }
+    }, p.bench)), React.createElement("button", {
+      onClick: () => cycle(p.key, p.status),
+      title: "Click to advance status",
+      style: {
+        border: '1px solid ' + statusColor,
+        background: statusBg,
+        color: statusColor,
+        padding: '6px 13px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap'
+      }
+    }, p.status));
+  })));
+}
+function QCAdmin({
+  Q,
+  q,
+  onQ,
+  initialDept
+}) {
+  const depts = (Q.depts || []).filter(d => (d.indicators || []).length);
+  const [view, setView] = useState('manage');
+  const [tab, setTab] = useState('identity');
+  const [sel, setSel] = useState(() => initialDept ? {
+    deptKey: initialDept,
+    id: null
+  } : {
+    deptKey: null,
+    id: null
+  });
+  const [scope, setScope] = useState('all');
+  const [mf, setMf] = useState('all');
+  const [sf, setSf] = useState('all');
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copyT, setCopyT] = useState({});
+  const [expand, setExpand] = useState('');
+  const CATS = ['Healthcare-Associated Infection', 'Infection Prevention', 'Patient Safety', 'Clinical Outcomes', 'Staff Safety', 'Staff Competency', 'Activity / Volume', 'Medication Safety'];
+  const FREQ = ['Monthly', 'Quarterly', 'Annually', 'Bi-annually'];
+  const FORMULAS = [['direct', 'Direct value — enter the number as-is'], ['count', 'Count — a running tally (numerator only)'], ['rate1000', 'Rate per 1000 — numerator ÷ denominator × 1000'], ['rate100', 'Rate per 100 — numerator ÷ denominator × 100'], ['pct', 'Percentage — numerator ÷ denominator × 100']];
+  const DIRS = [['lower_is_better', '↓ Lower is better'], ['higher_is_better', '↑ Higher is better']];
+  const FORMULA_HINT = {
+    direct: 'The value is entered directly each month; no numerator/denominator needed.',
+    count: 'A simple count (e.g. number of events). Only the numerator is captured.',
+    rate1000: 'A rate expressed per 1000 denominator-units (e.g. per 1000 device-days).',
+    rate100: 'A rate expressed per 100 denominator-units.',
+    pct: 'A percentage of the denominator (numerator ÷ denominator × 100).'
+  };
+  const findInd = (dk, id) => {
+    const d = (Q.depts || []).find(x => x.key === dk);
+    return d ? (d.indicators || []).find(x => x.id === id) : null;
+  };
+  let totalInd = 0,
+    withData = 0,
+    totalBreach = 0;
+  const uniq = new Set();
+  depts.forEach(d => {
+    (d.indicators || []).forEach(i => {
+      totalInd++;
+      uniq.add(norm(i.name));
+      if (hasData(i)) withData++;
+      totalBreach += countBreaches(i);
+    });
+  });
+  const nameDepts = {};
+  depts.forEach(d => (d.indicators || []).forEach(i => {
+    const k = norm(i.name);
+    (nameDepts[k] = nameDepts[k] || new Set()).add(d.key);
+  }));
+  const deptStatus = d => {
+    const r = deptStat(d).rate;
+    return r >= 95 ? 'Excellent' : r >= 85 ? 'Very Good' : r >= 70 ? 'Good' : r >= 55 ? 'Fair' : r >= 40 ? 'Needs Improvement' : 'Poor';
+  };
+  const onNew = () => {
+    const dk = (scope !== 'all' ? scope : depts[0] && depts[0].key) || Q.depts[0] && Q.depts[0].key;
+    if (!dk) return;
+    const blank = blankIndicator('New Indicator');
+    Q.addIndicator(dk, blank);
+    setSel({
+      deptKey: dk,
+      id: blank.id
+    });
+    setView('manage');
+    setTab('identity');
+    setCopyOpen(false);
+    setCopyT({});
+  };
+  const ql = (q || '').trim().toLowerCase();
+  const matchInd = i => {
+    if (mf !== 'all' && measureOf(i.formula).name !== mf) return false;
+    if (sf === 'data' && !hasData(i)) return false;
+    if (sf === 'breach' && countBreaches(i) === 0) return false;
+    if (!ql) return true;
+    return (i.name || '').toLowerCase().includes(ql) || (i.category || '').toLowerCase().includes(ql) || (i.reference || '').toLowerCase().includes(ql) || (i.unit || '').toLowerCase().includes(ql);
+  };
+  const scopeDepts = scope === 'all' ? depts : depts.filter(d => d.key === scope);
+  const heatOf = ind => QORDER.map(Qn => {
+    const s = qtrStatus(ind, Qn);
+    const [bg, fg, sym] = STATUS_CELL[s];
+    const v = qtrRaw(ind, Qn);
+    return {
+      bg,
+      fg,
+      sym,
+      title: Qn + ': ' + (v == null ? 'not reported' : v) + (s === 'breach' ? ' · breach' : s === 'ok' ? ' · on benchmark' : '')
+    };
+  });
+  let shownCount = 0;
+  const groups = [];
+  scopeDepts.forEach(d => {
+    const items = (d.indicators || []).filter(matchInd).map(i => {
+      const meas = measureOf(i.formula);
+      const hd = hasData(i);
+      const br = countBreaches(i);
+      const shareN = (nameDepts[norm(i.name)] || new Set()).size;
+      const on = sel.deptKey === d.key && sel.id === i.id;
+      shownCount++;
+      return {
+        id: i.id,
+        name: i.name,
+        sub: (i.unit || meas.name) + ' · ' + (i.category || '—'),
+        measure: meas.name,
+        measureLetter: meas.letter,
+        measureColor: meas.color,
+        measureBg: meas.color + '1c',
+        dotColor: br > 0 ? P.rose : hd ? P.blue : '#cdd6e2',
+        dotTitle: br > 0 ? br + ' breach' : hd ? 'has data' : 'no data yet',
+        hasBreach: br > 0,
+        breachCount: br,
+        isShared: shareN >= 2,
+        sharedCount: shareN,
+        heat: heatOf(i),
+        bg: on ? '#eef8fc' : '#fff',
+        bar: on ? P.blue : 'transparent',
+        onClick: () => {
+          setSel({
+            deptKey: d.key,
+            id: i.id
+          });
+          setCopyOpen(false);
+          setCopyT({});
+        }
+      };
+    });
+    if (items.length === 0 && scope === 'all') return;
+    const st = deptStatus(d);
+    groups.push({
+      deptKey: d.key,
+      deptName: d.name,
+      count: items.length,
+      statusColor: statusColorFor(st),
+      statusBg: statusColorFor(st) + '1c',
+      statusLabel: st,
+      items
+    });
+  });
+  const chip = (active, label, onClick) => ({
+    label,
+    onClick,
+    bg: active ? P.blue : '#fff',
+    color: active ? '#fff' : P.ink2,
+    border: active ? P.blue : '#dde3ec'
+  });
+  const measureChips = [chip(mf === 'all', 'All', () => setMf('all')), chip(mf === 'Count', 'Count', () => setMf('Count')), chip(mf === 'Rate', 'Rate', () => setMf('Rate')), chip(mf === 'Percentage', '%', () => setMf('Percentage'))];
+  const statusChips = [chip(sf === 'all', 'All', () => setSf('all')), chip(sf === 'data', 'Has data', () => setSf('data')), chip(sf === 'breach', 'Breaches', () => setSf('breach'))];
+  const scopeOptions = [{
+    key: 'all',
+    label: 'All departments'
+  }].concat(depts.map(d => ({
+    key: d.key,
+    label: d.name + ' · ' + (d.indicators || []).length
+  })));
+  const selInd = sel.deptKey && sel.id ? findInd(sel.deptKey, sel.id) : null;
+  const selDept = selInd ? (Q.depts || []).find(d => d.key === sel.deptKey) : null;
+  const patch = obj => {
+    if (sel.deptKey && sel.id) Q.patchIndicator(sel.deptKey, sel.id, obj);
+  };
+  const patchField = f => e => patch({
+    [f]: e.target.value
+  });
+  const patchMonthVal = idx => e => {
+    const v = e.target.value;
+    patch({
+      months: {
+        [MONTHS[idx][0]]: v === '' ? null : Number(v)
+      }
+    });
+  };
+  const patchMonthNum = idx => e => {
+    const v = e.target.value;
+    patch({
+      mNum: {
+        [MONTHS[idx][0]]: v === '' ? null : Number(v)
+      }
+    });
+  };
+  const patchMonthDen = idx => e => {
+    const v = e.target.value;
+    patch({
+      mDen: {
+        [MONTHS[idx][0]]: v === '' ? null : Number(v)
+      }
+    });
+  };
+  const patchMonthRemark = idx => e => patch({
+    monthRemarks: {
+      [MONTHS[idx][0]]: e.target.value
+    }
+  });
+  const onClone = () => {
+    if (!selInd) return;
+    const copy = Object.assign({}, selInd, {
+      id: window.qualitySlug(selInd.name + ' copy'),
+      name: selInd.name + ' (copy)'
+    });
+    Q.addIndicator(sel.deptKey, copy);
+    setSel({
+      deptKey: sel.deptKey,
+      id: copy.id
+    });
+  };
+  const onDelete = () => {
+    if (!selInd) return;
+    Q.removeIndicator(sel.deptKey, sel.id);
+    setSel({
+      deptKey: null,
+      id: null
+    });
+    setCopyOpen(false);
+    setCopyT({});
+  };
+  const onMove = e => {
+    const nd = e.target.value;
+    if (!selInd || nd === sel.deptKey) return;
+    const moved = Object.assign({}, selInd);
+    Q.addIndicator(nd, moved);
+    Q.removeIndicator(sel.deptKey, sel.id);
+    setSel({
+      deptKey: nd,
+      id: moved.id
+    });
+  };
+  const onDoCopy = () => {
+    if (!selInd) return;
+    Object.keys(copyT).forEach(dk => {
+      if (copyT[dk]) {
+        const c = Object.assign({}, selInd, {
+          id: window.qualitySlug(selInd.name)
+        });
+        Q.addIndicator(dk, c);
+      }
+    });
+    setCopyOpen(false);
+    setCopyT({});
+  };
+  const meas = selInd ? measureOf(selInd.formula) : null;
+  const dirHigh = selInd && selInd.goalDirection === 'higher_is_better';
+  const benchSet = selInd && selInd.benchmarkValue != null && selInd.benchmarkValue !== '';
+  const needsNum = selInd && selInd.formula !== 'direct';
+  const needsDen = selInd && (selInd.formula === 'rate1000' || selInd.formula === 'rate100' || selInd.formula === 'pct');
+  const assignCols = depts.map(d => ({
+    key: d.key,
+    short: (d.name || '').replace(/Ward|Department/g, '').trim().slice(0, 8),
+    name: d.name
+  }));
+  const byName = {};
+  depts.forEach(d => (d.indicators || []).forEach(i => {
+    const k = norm(i.name);
+    if (!byName[k]) byName[k] = {
+      key: k,
+      name: i.name,
+      formula: i.formula,
+      tmpl: i,
+      set: new Set()
+    };
+    byName[k].set.add(d.key);
+  }));
+  const assignNames = Object.values(byName).sort((a, b) => b.set.size - a.set.size || a.name.localeCompare(b.name));
+  const toggleAssign = (rec, dk) => {
+    if (rec.set.has(dk)) {
+      const d = (Q.depts || []).find(x => x.key === dk);
+      const inst = d && (d.indicators || []).find(x => norm(x.name) === rec.key);
+      if (inst) Q.removeIndicator(dk, inst.id);
+    } else {
+      const c = Object.assign({}, rec.tmpl, {
+        id: window.qualitySlug(rec.tmpl.name)
+      });
+      Q.addIndicator(dk, c);
+    }
+  };
+  const STD = typeof HQI_STANDARDS !== 'undefined' && HQI_STANDARDS || [];
+  const useCount = {};
+  depts.forEach(d => (d.indicators || []).forEach(i => {
+    const c = stdMatch(i.name);
+    if (c) {
+      (useCount[c] = useCount[c] || new Set()).add(d.key);
+    }
+  }));
+  const ql2 = (q || '').trim().toLowerCase();
+  const catGroups = {};
+  STD.forEach(s => {
+    if (ql2 && !((s.name || '').toLowerCase().includes(ql2) || (s.expr || '').toLowerCase().includes(ql2) || (s.ref || '').toLowerCase().includes(ql2) || (s.code || '').toLowerCase() === ql2)) return;
+    (catGroups[s.sec] = catGroups[s.sec] || []).push(s);
+  });
+  const measTypeC = f => ({
+    pct: '%',
+    rate1000: 'Rate',
+    rate100: 'Rate',
+    count: 'Count',
+    direct: 'Count'
+  })[f] || 'Count';
+  const measColC = f => f === 'pct' ? P.teal : f === 'rate1000' || f === 'rate100' ? P.violet : P.blue;
+  const libSections = Object.keys(catGroups).sort().map(sec => ({
+    sec,
+    name: typeof HQI_SECN !== 'undefined' && HQI_SECN[sec] || sec,
+    count: catGroups[sec].length,
+    rows: catGroups[sec]
+  }));
+  const subnav = [{
+    id: 'manage',
+    label: 'Manage Indicators',
+    count: totalInd,
+    d: 'M4 20h4l11-11-4-4L4 16zM14 5l4 4'
+  }, {
+    id: 'assign',
+    label: 'Assign by Department',
+    count: depts.length,
+    d: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'
+  }, {
+    id: 'catalog',
+    label: 'Formula Library',
+    count: STD.length,
+    d: 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7'
+  }];
+  const kpis = [{
+    label: 'Departments',
+    val: String(depts.length),
+    foot: 'reporting quality KPIs',
+    color: P.blue
+  }, {
+    label: 'Indicators',
+    val: String(uniq.size),
+    foot: uniq.size + ' unique · ' + totalInd + ' across departments',
+    color: P.violet
+  }, {
+    label: 'With data',
+    val: String(withData),
+    foot: 'hold ≥ 1 saved value',
+    color: P.green
+  }, {
+    label: 'Breaches',
+    val: String(totalBreach),
+    foot: 'indicator-months off benchmark',
+    color: totalBreach > 0 ? P.rose : P.green
+  }];
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 14,
+      flexWrap: 'wrap',
+      marginBottom: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#eef8fc',
+      color: '#0090ca',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M4 20h4l11-11-4-4L4 16zM14 5l4 4"
+  }))), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Indicator Administration"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "Define, organise & assign every quality indicator across the hospital. Changes flow to the Dashboard, Scorecard, Reports & CAPA.")), React.createElement("button", {
+    onClick: onNew,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 7,
+      border: '1px solid #0090ca',
+      background: '#0090ca',
+      color: '#fff',
+      padding: '9px 15px',
+      borderRadius: 8,
+      fontSize: 13,
+      fontWeight: 600,
+      boxShadow: '0 1px 3px rgba(0,144,202,.4)',
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "16",
+    height: "16",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.1",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M12 5v14M5 12h14"
+  })), "New indicator")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 4,
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: 11,
+      padding: 5,
+      marginBottom: 16,
+      width: 'max-content',
+      maxWidth: '100%',
+      boxShadow: '0 1px 2px rgba(20,32,46,.05)'
+    }
+  }, subnav.map(t => {
+    const active = view === t.id;
+    return React.createElement("button", {
+      key: t.id,
+      onClick: () => setView(t.id),
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        border: 0,
+        padding: '8px 16px',
+        borderRadius: 8,
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: 'pointer',
+        color: active ? P.blue : P.muted,
+        background: active ? '#fff' : 'transparent',
+        boxShadow: active ? '0 1px 3px rgba(20,32,46,.12)' : 'none'
+      }
+    }, React.createElement("svg", {
+      width: "16",
+      height: "16",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: t.d
+    })), React.createElement("span", null, t.label), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 11,
+        opacity: .7
+      }
+    }, t.count));
+  })), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))',
+      gap: 13,
+      marginBottom: 18
+    }
+  }, kpis.map(k => React.createElement("div", {
+    key: k.label,
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderLeft: '4px solid ' + k.color,
+      borderRadius: 11,
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      padding: '14px 17px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: P.ink2,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, k.label), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 27,
+      fontWeight: 600,
+      color: k.color,
+      lineHeight: 1,
+      margin: '8px 0 5px',
+      letterSpacing: '-.5px'
+    }
+  }, k.val), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, k.foot)))), view === 'manage' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: 11,
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      padding: '13px 15px',
+      marginBottom: 14,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 11
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("select", {
+    value: scope,
+    onChange: e => setScope(e.target.value),
+    style: {
+      padding: '8px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      background: '#fff',
+      color: P.ink,
+      minWidth: 210,
+      outline: 'none'
+    }
+  }, scopeOptions.map(o => React.createElement("option", {
+    key: o.key,
+    value: o.key
+  }, o.label))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      background: '#f7f9fc',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      padding: '8px 12px',
+      flex: 1,
+      minWidth: 200,
+      color: P.faint
+    }
+  }, React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12"
+  })), React.createElement("input", {
+    placeholder: "Filter this list by name, category or reference\u2026",
+    value: q || '',
+    onInput: e => onQ(e.target.value),
+    onChange: e => onQ(e.target.value),
+    style: {
+      border: 0,
+      background: 'transparent',
+      outline: 'none',
+      fontSize: 12.5,
+      color: P.ink,
+      width: '100%'
+    }
+  })), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.faint,
+      fontFamily: MONO,
+      whiteSpace: 'nowrap'
+    }
+  }, shownCount, " shown")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 18,
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      borderTop: '1px solid #e8edf3',
+      paddingTop: 11
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      marginRight: 1
+    }
+  }, "Measure"), measureChips.map(c => React.createElement("button", {
+    key: c.label,
+    onClick: c.onClick,
+    style: {
+      border: '1px solid ' + c.border,
+      background: c.bg,
+      color: c.color,
+      padding: '4px 11px',
+      borderRadius: 20,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, c.label))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      marginRight: 1
+    }
+  }, "Status"), statusChips.map(c => React.createElement("button", {
+    key: c.label,
+    onClick: c.onClick,
+    style: {
+      border: '1px solid ' + c.border,
+      background: c.bg,
+      color: c.color,
+      padding: '4px 11px',
+      borderRadius: 20,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, c.label))))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '392px 1fr',
+      gap: 16,
+      alignItems: 'start'
+    }
+  }, React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: 12,
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
+      maxHeight: 'calc(100vh - 320px)'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '11px 14px',
+      borderBottom: '1px solid #e8edf3',
+      flexShrink: 0
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, "Indicators"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.faint,
+      fontFamily: MONO
+    }
+  }, shownCount), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 11,
+      fontSize: 10,
+      color: P.faint
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: '#0090ca',
+      display: 'inline-block'
+    }
+  }), "data"), React.createElement("span", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: 2,
+      background: '#d23a52',
+      display: 'inline-block'
+    }
+  }), "breach"))), React.createElement("div", {
+    style: {
+      overflowY: 'auto',
+      flex: 1
+    }
+  }, groups.map(g => React.createElement("div", {
+    key: g.deptKey
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '7px 14px',
+      background: '#f7f9fc',
+      borderBottom: '1px solid #e8edf3',
+      borderTop: '1px solid #e8edf3',
+      position: 'sticky',
+      top: 0,
+      zIndex: 2
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      background: g.statusColor,
+      flexShrink: 0
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, g.deptName), React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      fontFamily: MONO
+    }
+  }, g.count), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: g.statusColor,
+      background: g.statusBg,
+      padding: '1px 7px',
+      borderRadius: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, g.statusLabel)), g.items.map(it => React.createElement("div", {
+    key: it.id,
+    onClick: it.onClick,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '9px 14px',
+      cursor: 'pointer',
+      borderBottom: '1px solid #eef1f5',
+      borderLeft: '3px solid ' + it.bar,
+      background: it.bg
+    }
+  }, React.createElement("span", {
+    title: it.dotTitle,
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: it.dotColor,
+      flexShrink: 0
+    }
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: P.ink,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, it.name), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, it.sub)), it.isShared && React.createElement("span", {
+    title: 'reported by ' + it.sharedCount + ' departments',
+    style: {
+      flexShrink: 0,
+      fontSize: 9.5,
+      fontWeight: 600,
+      color: '#6a52d4',
+      background: '#efeaff',
+      padding: '1px 6px',
+      borderRadius: 6,
+      whiteSpace: 'nowrap'
+    }
+  }, "\u2197", it.sharedCount), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 2,
+      flexShrink: 0
+    }
+  }, it.heat.map((c, ci) => React.createElement("span", {
+    key: ci,
+    title: c.title,
+    style: {
+      width: 17,
+      height: 16,
+      borderRadius: 3,
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: 9,
+      fontWeight: 700,
+      background: c.bg,
+      color: c.fg
+    }
+  }, c.sym))), React.createElement("span", {
+    title: it.measure,
+    style: {
+      flexShrink: 0,
+      width: 19,
+      height: 19,
+      borderRadius: 6,
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: 10,
+      fontWeight: 700,
+      background: it.measureBg,
+      color: it.measureColor
+    }
+  }, it.measureLetter), it.hasBreach && React.createElement("span", {
+    title: it.breachCount + ' month breach(es)',
+    style: {
+      flexShrink: 0,
+      fontSize: 10,
+      fontWeight: 700,
+      color: '#d23a52',
+      background: '#fbe9ec',
+      padding: '1px 6px',
+      borderRadius: 10,
+      fontFamily: MONO
+    }
+  }, it.breachCount, "!"))))), shownCount === 0 && React.createElement("div", {
+    style: {
+      padding: '40px 20px',
+      textAlign: 'center',
+      color: P.faint,
+      fontSize: 12.5
+    }
+  }, "No indicators match your filters."))), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, !selInd && React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: 12,
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      padding: '60px 30px',
+      textAlign: 'center',
+      color: P.faint
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: P.muted
+    }
+  }, "Select an indicator to edit"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      marginTop: 5
+    }
+  }, "Pick one from the list, or create a new indicator.")), selInd && React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: 12,
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '15px 18px',
+      borderBottom: '1px solid #e8edf3',
+      background: 'linear-gradient(150deg,#ffffff,#f5fafd)'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      flexWrap: 'wrap',
+      marginBottom: 11
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      color: P.muted
+    }
+  }, selDept ? selDept.name : ''), React.createElement("span", {
+    style: {
+      color: '#cdd6e2'
+    }
+  }, "\xB7"), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: meas.color,
+      background: meas.color + '1c',
+      padding: '2px 9px',
+      borderRadius: 20
+    }
+  }, meas.name), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: dirHigh ? P.blue : P.green,
+      background: (dirHigh ? P.blue : P.green) + '1c',
+      padding: '2px 9px',
+      borderRadius: 20
+    }
+  }, dirHigh ? '↑ higher is better' : '↓ lower is better'), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: benchSet ? P.blue700 : P.rose,
+      background: benchSet ? '#eef8fc' : '#fbe9ec',
+      padding: '2px 9px',
+      borderRadius: 20
+    }
+  }, benchExpr(selInd)), hasData(selInd) && React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: '#0072a3',
+      background: '#eef8fc',
+      padding: '2px 9px',
+      borderRadius: 20
+    }
+  }, "\u25CF has data"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    onClick: onClone,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.ink2,
+      padding: '5px 10px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M12 5v14M5 12h14"
+  })), "Clone"), React.createElement("button", {
+    onClick: () => setCopyOpen(!copyOpen),
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.ink2,
+      padding: '5px 10px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M12 2 2 7l10 5 10-5zM2 12l10 5 10-5"
+  })), "Copy to\u2026"), React.createElement("button", {
+    onClick: onDelete,
+    title: "Delete indicator",
+    style: {
+      width: 30,
+      height: 30,
+      borderRadius: 7,
+      border: '1px solid #f1c6cd',
+      background: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      color: '#d23a52',
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M6 6l12 12M18 6L6 18"
+  })))), React.createElement("input", {
+    value: selInd.name || '',
+    onInput: patchField('name'),
+    onChange: patchField('name'),
+    placeholder: "Indicator name",
+    style: {
+      width: '100%',
+      border: '1px solid transparent',
+      background: 'transparent',
+      fontFamily: 'inherit',
+      fontSize: 19,
+      fontWeight: 700,
+      color: P.ink,
+      padding: '3px 6px',
+      marginLeft: -6,
+      borderRadius: 7,
+      outline: 'none'
+    }
+  }), React.createElement("div", {
+    style: {
+      marginTop: 9,
+      background: '#eef8fc',
+      border: '1px solid #dceffa',
+      borderRadius: 8,
+      padding: '8px 12px',
+      fontFamily: MONO,
+      fontSize: 12.5,
+      color: '#0072a3'
+    }
+  }, "\u0192\xA0 ", formulaText(selInd)), copyOpen && React.createElement("div", {
+    style: {
+      marginTop: 11,
+      border: '1px solid #dceffa',
+      borderRadius: 9,
+      background: '#eef8fc',
+      padding: '11px 13px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      marginBottom: 8,
+      color: P.ink
+    }
+  }, "Copy this indicator (with its values) to:"), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))',
+      gap: 6
+    }
+  }, depts.filter(d => d.key !== sel.deptKey).map(d => React.createElement("label", {
+    key: d.key,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      fontSize: 12,
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: 7,
+      padding: '6px 9px',
+      cursor: 'pointer'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!copyT[d.key],
+    onChange: () => setCopyT(t => Object.assign({}, t, {
+      [d.key]: !t[d.key]
+    }))
+  }), React.createElement("span", {
+    style: {
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, d.name)))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 9
+    }
+  }, React.createElement("button", {
+    onClick: onDoCopy,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      border: '1px solid #0090ca',
+      background: '#0090ca',
+      color: '#fff',
+      padding: '6px 12px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, "Copy"), React.createElement("button", {
+    onClick: () => setCopyOpen(false),
+    style: {
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.ink2,
+      padding: '6px 12px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, "Cancel")))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 2,
+      padding: '0 14px',
+      borderBottom: '1px solid #e8edf3',
+      background: '#fff',
+      overflowX: 'auto'
+    }
+  }, [['identity', 'Identity'], ['measure', 'Measurement'], ['target', 'Target & Benchmark'], ['values', 'Monthly Values'], ['place', 'Placement']].map(([id, label]) => {
+    const on = tab === id;
+    return React.createElement("button", {
+      key: id,
+      onClick: () => setTab(id),
+      style: {
+        border: 0,
+        background: 'transparent',
+        padding: '12px 14px 11px',
+        fontSize: 12.5,
+        fontWeight: 600,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        color: on ? P.blue700 : P.muted,
+        borderBottom: '2.5px solid ' + (on ? P.blue : 'transparent')
+      }
+    }, label);
+  })), React.createElement("div", {
+    style: {
+      padding: 18
+    }
+  }, tab === 'identity' && React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Indicator name"), React.createElement("input", {
+    value: selInd.name || '',
+    onInput: patchField('name'),
+    onChange: patchField('name'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Clinical category"), React.createElement("select", {
+    value: selInd.category || '',
+    onChange: patchField('category'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, (CATS.indexOf(selInd.category) < 0 && selInd.category ? [selInd.category].concat(CATS) : CATS).map(o => React.createElement("option", {
+    key: o,
+    value: o
+  }, o)))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Reporting frequency"), React.createElement("select", {
+    value: selInd.frequency || 'Monthly',
+    onChange: patchField('frequency'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, FREQ.map(o => React.createElement("option", {
+    key: o,
+    value: o
+  }, o)))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Reference / standard ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "WHO \xB7 CDC NHSN \xB7 NABH")), React.createElement("input", {
+    value: selInd.reference || '',
+    onInput: patchField('reference'),
+    onChange: patchField('reference'),
+    placeholder: "e.g. CDC NHSN CAUTI definition",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Overall remark ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "shown on the report")), React.createElement("textarea", {
+    value: selInd.remarks || '',
+    onInput: patchField('remarks'),
+    onChange: patchField('remarks'),
+    placeholder: "optional summary note for this indicator",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 12.5,
+      background: '#fff',
+      outline: 'none',
+      minHeight: 60,
+      resize: 'vertical',
+      lineHeight: 1.5
+    }
+  }))), tab === 'measure' && React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "How is this measured?"), React.createElement("select", {
+    value: selInd.formula || 'count',
+    onChange: patchField('formula'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, FORMULAS.map(([v, l]) => React.createElement("option", {
+    key: v,
+    value: v
+  }, l)))), React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1',
+      background: '#eef8fc',
+      border: '1px solid #dceffa',
+      borderRadius: 8,
+      padding: '11px 13px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      fontWeight: 700,
+      marginBottom: 4
+    }
+  }, "Formula used to calculate the value"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 13.5,
+      color: '#0072a3',
+      fontWeight: 700,
+      wordBreak: 'break-word'
+    }
+  }, "\u0192\xA0 ", formulaText(selInd)), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: P.muted,
+      marginTop: 5
+    }
+  }, FORMULA_HINT[selInd.formula] || '')), needsNum && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Numerator label"), React.createElement("input", {
+    value: selInd.numLabel || '',
+    onInput: patchField('numLabel'),
+    onChange: patchField('numLabel'),
+    placeholder: "e.g. CAUTI cases",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), needsDen && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Denominator label"), React.createElement("input", {
+    value: selInd.denLabel || '',
+    onInput: patchField('denLabel'),
+    onChange: patchField('denLabel'),
+    placeholder: "e.g. Catheter days",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Unit ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "display label")), React.createElement("input", {
+    value: selInd.unit || '',
+    onInput: patchField('unit'),
+    onChange: patchField('unit'),
+    placeholder: "per 1000 cath-days \xB7 % \xB7 count",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), needsNum && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Numerator definition ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "what counts")), React.createElement("textarea", {
+    value: selInd.numeratorDef || '',
+    onInput: patchField('numeratorDef'),
+    onChange: patchField('numeratorDef'),
+    placeholder: "Precise definition of the numerator",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 12.5,
+      background: '#fff',
+      outline: 'none',
+      minHeight: 54,
+      resize: 'vertical',
+      lineHeight: 1.5
+    }
+  })), needsDen && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Denominator definition ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "what counts")), React.createElement("textarea", {
+    value: selInd.denominatorDef || '',
+    onInput: patchField('denominatorDef'),
+    onChange: patchField('denominatorDef'),
+    placeholder: "Precise definition of the denominator",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 12.5,
+      background: '#fff',
+      outline: 'none',
+      minHeight: 54,
+      resize: 'vertical',
+      lineHeight: 1.5
+    }
+  }))), tab === 'target' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      background: '#f7f9fc',
+      border: '1px solid #e8edf3',
+      borderRadius: 9,
+      padding: '10px 13px',
+      marginBottom: 14
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      fontWeight: 700
+    }
+  }, "Benchmark"), React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: benchSet ? P.blue700 : P.rose,
+      background: benchSet ? '#eef8fc' : '#fbe9ec',
+      padding: '3px 11px',
+      borderRadius: 20
+    }
+  }, benchExpr(selInd)), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted
+    }
+  }, dirHigh ? 'values at or above this are on benchmark' : 'values at or below this are on benchmark')), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Goal direction ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "which way is good?")), React.createElement("select", {
+    value: selInd.goalDirection || 'lower_is_better',
+    onChange: patchField('goalDirection'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, DIRS.map(([v, l]) => React.createElement("option", {
+    key: v,
+    value: v
+  }, l)))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Benchmark value ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "drives status")), React.createElement("input", {
+    type: "number",
+    value: selInd.benchmarkValue == null ? '' : selInd.benchmarkValue,
+    onInput: e => patch({
+      benchmarkValue: e.target.value === '' ? null : Number(e.target.value)
+    }),
+    onChange: e => patch({
+      benchmarkValue: e.target.value === '' ? null : Number(e.target.value)
+    }),
+    placeholder: "e.g. 0 or 90",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      fontFamily: MONO,
+      background: '#fff',
+      outline: 'none',
+      textAlign: 'right'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Benchmark description ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "free text shown on reports")), React.createElement("input", {
+    value: selInd.benchmark || '',
+    onInput: patchField('benchmark'),
+    onChange: patchField('benchmark'),
+    placeholder: "e.g. 0 (zero defect) \xB7 \u2265 90% of moments",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })))), tab === 'values' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted,
+      marginBottom: 11
+    }
+  }, needsDen ? 'Enter ' + (selInd.numLabel || 'numerator') + ' ÷ ' + (selInd.denLabel || 'denominator') + ' for each month — the value computes from the formula and rolls up into quarters automatically.' : 'Enter each month’s value (Jun 2025 – May 2026). Leave a month blank to mark it not reported; quarters roll up automatically.'), React.createElement("div", {
+    style: {
+      overflowX: 'auto',
+      border: '1px solid #e8edf3',
+      borderRadius: 9
+    }
+  }, React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 12.5
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      background: '#f7f9fc'
+    }
+  }, React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3'
+    }
+  }, "Month"), needsDen && React.createElement("th", {
+    style: {
+      textAlign: 'right',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3',
+      width: 96
+    }
+  }, selInd.numLabel || 'Numerator'), needsDen && React.createElement("th", {
+    style: {
+      textAlign: 'right',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3',
+      width: 96
+    }
+  }, selInd.denLabel || 'Denominator'), React.createElement("th", {
+    style: {
+      textAlign: 'right',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3',
+      width: 90
+    }
+  }, "Value"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3',
+      width: 120
+    }
+  }, "Status"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3'
+    }
+  }, "Remark"))), React.createElement("tbody", null, MONTHS.map(([key, label, Qn], idx) => {
+    const v = monthRaw(selInd, key);
+    const s = qStatus(selInd, v);
+    const smap = {
+      ok: ['#e7f6ed', '#1f9d57', 'On benchmark'],
+      breach: ['#fbe9ec', '#d23a52', 'Breach'],
+      na: ['#eef1f5', '#9aa6b4', 'Not reported']
+    };
+    const [sbg, sfg, slab] = smap[s];
+    const qFirst = idx % 3 === 0;
+    const disp = v == null ? '—' : selInd.formula === 'pct' ? v + '%' : v;
+    const numV = selInd.mNum && selInd.mNum[key] != null ? selInd.mNum[key] : '';
+    const denV = selInd.mDen && selInd.mDen[key] != null ? selInd.mDen[key] : '';
+    const directV = selInd.months && selInd.months[key] != null ? selInd.months[key] : '';
+    const rem = selInd.monthRemarks && selInd.monthRemarks[key] != null ? selInd.monthRemarks[key] : '';
+    return React.createElement("tr", {
+      key: key,
+      style: {
+        borderBottom: '1px solid #eef1f5',
+        background: qFirst ? '#fbfcfe' : '#fff'
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '7px 12px',
+        textAlign: 'left'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, label), " ", React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 9.5,
+        color: P.faint,
+        background: '#eef1f5',
+        padding: '1px 5px',
+        borderRadius: 5,
+        marginLeft: 5
+      }
+    }, Qn)), needsDen && React.createElement("td", {
+      style: {
+        padding: '5px 8px'
+      }
+    }, React.createElement("input", {
+      type: "number",
+      value: numV,
+      onInput: patchMonthNum(idx),
+      onChange: patchMonthNum(idx),
+      placeholder: "\u2014",
+      style: {
+        width: '100%',
+        padding: '6px 8px',
+        border: '1px solid #dde3ec',
+        borderRadius: 6,
+        fontFamily: MONO,
+        fontSize: 12.5,
+        textAlign: 'right',
+        background: '#fff',
+        outline: 'none'
+      }
+    })), needsDen && React.createElement("td", {
+      style: {
+        padding: '5px 8px'
+      }
+    }, React.createElement("input", {
+      type: "number",
+      value: denV,
+      onInput: patchMonthDen(idx),
+      onChange: patchMonthDen(idx),
+      placeholder: "\u2014",
+      style: {
+        width: '100%',
+        padding: '6px 8px',
+        border: '1px solid #dde3ec',
+        borderRadius: 6,
+        fontFamily: MONO,
+        fontSize: 12.5,
+        textAlign: 'right',
+        background: '#fff',
+        outline: 'none'
+      }
+    })), React.createElement("td", {
+      style: {
+        padding: '5px 8px'
+      }
+    }, needsDen ? React.createElement("span", {
+      title: "Computed from the formula",
+      style: {
+        display: 'block',
+        textAlign: 'right',
+        fontFamily: MONO,
+        fontWeight: 700,
+        fontSize: 12.5,
+        color: '#0072a3',
+        padding: '6px 4px'
+      }
+    }, disp) : React.createElement("input", {
+      type: "number",
+      value: directV,
+      onInput: patchMonthVal(idx),
+      onChange: patchMonthVal(idx),
+      placeholder: "\u2014",
+      style: {
+        width: '100%',
+        padding: '6px 8px',
+        border: '1px solid #dde3ec',
+        borderRadius: 6,
+        fontFamily: MONO,
+        fontSize: 12.5,
+        textAlign: 'right',
+        background: '#fff',
+        outline: 'none'
+      }
+    })), React.createElement("td", {
+      style: {
+        padding: '7px 12px',
+        textAlign: 'left'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        fontSize: 11,
+        fontWeight: 600,
+        padding: '2px 9px',
+        borderRadius: 20,
+        background: sbg,
+        color: sfg
+      }
+    }, slab)), React.createElement("td", {
+      style: {
+        padding: '5px 8px'
+      }
+    }, React.createElement("input", {
+      value: rem,
+      onInput: patchMonthRemark(idx),
+      onChange: patchMonthRemark(idx),
+      placeholder: "optional note",
+      style: {
+        width: '100%',
+        padding: '6px 9px',
+        border: '1px solid #dde3ec',
+        borderRadius: 6,
+        fontSize: 12,
+        background: '#fff',
+        outline: 'none'
+      }
+    })));
+  })))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginTop: 11,
+      padding: '9px 13px',
+      background: '#f7f9fc',
+      border: '1px solid #e8edf3',
+      borderRadius: 9
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px'
+    }
+  }, "Quarter rollup"), QORDER.map(Qn => {
+    const v = qtrRaw(selInd, Qn);
+    const s = qStatus(selInd, v);
+    const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
+    return React.createElement("span", {
+      key: Qn,
+      style: {
+        fontFamily: MONO,
+        fontSize: 12,
+        color: P.muted
+      }
+    }, Qn, " ", React.createElement("b", {
+      style: {
+        color: col
+      }
+    }, v == null ? '—' : selInd.formula === 'pct' ? v + '%' : v));
+  }), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: P.faint
+    }
+  }, "\xB7 auto-summed from months \xB7 feeds the Quarterly Report"))), tab === 'place' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      maxWidth: 280,
+      marginBottom: 18
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Department ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "move this indicator")), React.createElement("select", {
+    value: sel.deptKey,
+    onChange: onMove,
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, depts.map(d => React.createElement("option", {
+    key: d.key,
+    value: d.key
+  }, d.name)))), React.createElement("div", {
+    style: {
+      borderTop: '1px solid #e8edf3',
+      paddingTop: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#d23a52',
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      marginBottom: 9
+    }
+  }, "Danger zone"), React.createElement("button", {
+    onClick: onDelete,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid #f1c6cd',
+      background: '#fff',
+      color: '#d23a52',
+      padding: '8px 13px',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M6 6l12 12M18 6L6 18"
+  })), "Delete indicator")))))))), view === 'assign' && React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: 12,
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '13px 16px',
+      borderBottom: '1px solid #e8edf3'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, "Assign by Department"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted
+    }
+  }, "Which department reports which standard indicator. Tick a cell to assign it.")), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: 12,
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '10px 14px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #dde3ec',
+      background: '#f7f9fc',
+      position: 'sticky',
+      left: 0,
+      zIndex: 3,
+      minWidth: 230
+    }
+  }, "Indicator"), assignCols.map(c => React.createElement("th", {
+    key: c.key,
+    title: c.name,
+    style: {
+      padding: '10px 6px',
+      fontSize: 10,
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #dde3ec',
+      background: '#f7f9fc',
+      textAlign: 'center',
+      whiteSpace: 'nowrap'
+    }
+  }, c.short)))), React.createElement("tbody", null, assignNames.map(rec => {
+    const rmeas = measureOf(rec.formula);
+    return React.createElement("tr", {
+      key: rec.key,
+      style: {
+        borderBottom: '1px solid #eef1f5'
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '8px 14px',
+        textAlign: 'left',
+        position: 'sticky',
+        left: 0,
+        background: '#fff',
+        zIndex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: rmeas.color,
+        flexShrink: 0
+      }
+    }), React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, rec.name))), assignCols.map(c => {
+      const on = rec.set.has(c.key);
+      return React.createElement("td", {
+        key: c.key,
+        style: {
+          textAlign: 'center',
+          padding: '6px 4px'
+        }
+      }, React.createElement("span", {
+        onClick: () => toggleAssign(rec, c.key),
+        title: (on ? 'Assigned to ' : 'Not assigned · ') + c.name,
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          width: 22,
+          height: 22,
+          borderRadius: 6,
+          cursor: 'pointer',
+          background: on ? '#e7f6ed' : '#f7f9fc',
+          color: on ? '#1f9d57' : '#cdd6e2',
+          fontSize: 12,
+          fontWeight: 700
+        }
+      }, on ? '✓' : ''));
+    }));
+  }))))), view === 'catalog' && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      background: '#0d1b2e',
+      color: '#fff',
+      borderRadius: 12,
+      padding: '16px 20px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 42,
+      height: 42,
+      borderRadius: 11,
+      background: 'rgba(39,168,219,.2)',
+      color: '#7fd0f0',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.8",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7"
+  }))), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 700
+    }
+  }, "Hospital Quality Indicator Framework"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#9fb0c4',
+      marginTop: 2
+    }
+  }, "Standardised measurement formulas, benchmarks & evidence-based references \xB7 13 domains \xB7 aligned to WHO \xB7 JCI \xB7 CDC/NHSN \xB7 KDOQI \xB7 ACC/AHA")), React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 26,
+      fontWeight: 700,
+      color: '#7fd0f0',
+      lineHeight: 1
+    }
+  }, STD.length), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#9fb0c4',
+      textTransform: 'uppercase',
+      letterSpacing: '.4px'
+    }
+  }, "indicators"))), libSections.map(g => React.createElement("div", {
+    key: g.sec,
+    style: {
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: 12,
+      boxShadow: '0 1px 2px rgba(20,32,46,.06)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '11px 16px',
+      borderBottom: '1px solid #e8edf3',
+      background: '#f7f9fc'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 26,
+      height: 26,
+      borderRadius: 7,
+      background: '#0090ca',
+      color: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      fontWeight: 700,
+      fontSize: 12,
+      flexShrink: 0
+    }
+  }, g.sec), React.createElement("span", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, g.name), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.faint,
+      fontFamily: MONO
+    }
+  }, g.count)), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: 12,
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      background: '#fbfcfe'
+    }
+  }, React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px 8px 16px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 42
+    }
+  }, "#"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 220
+    }
+  }, "Indicator"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5'
+    }
+  }, "Formula / Calculation"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 118
+    }
+  }, "Unit"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 96
+    }
+  }, "Benchmark"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 88
+    }
+  }, "Status"))), React.createElement("tbody", null, g.rows.map(s => {
+    const used = useCount[s.code] ? useCount[s.code].size : 0;
+    const gd = guideOf(s.code) || {};
+    const expanded = expand === s.code;
+    const mColor = measColC(s.ft);
+    return [React.createElement("tr", {
+      key: s.code,
+      onClick: () => setExpand(expand === s.code ? '' : s.code),
+      style: {
+        borderBottom: '1px solid #f1f3f6',
+        verticalAlign: 'top',
+        cursor: 'pointer'
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '9px 10px 9px 16px',
+        fontFamily: MONO,
+        fontSize: 11,
+        color: P.faint,
+        fontWeight: 600
+      }
+    }, React.createElement("span", {
+      style: {
+        color: '#cdd6e2',
+        marginRight: 3
+      }
+    }, expanded ? '▾' : '▸'), s.code), React.createElement("td", {
+      style: {
+        padding: '9px 10px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: mColor,
+        flexShrink: 0
+      }
+    }), React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, s.name)), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: P.faint,
+        marginTop: 2
+      }
+    }, s.ref)), React.createElement("td", {
+      style: {
+        padding: '9px 10px',
+        color: P.ink2,
+        fontSize: 11.5,
+        lineHeight: 1.45
+      }
+    }, s.expr), React.createElement("td", {
+      style: {
+        padding: '9px 10px'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 600,
+        color: mColor,
+        background: mColor + '1c',
+        padding: '2px 8px',
+        borderRadius: 6,
+        whiteSpace: 'nowrap'
+      }
+    }, s.unit || '—')), React.createElement("td", {
+      style: {
+        padding: '9px 10px',
+        fontFamily: MONO,
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, s.bench), React.createElement("td", {
+      style: {
+        padding: '9px 10px'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 600,
+        color: used > 0 ? P.green : P.faint,
+        background: used > 0 ? '#e7f6ed' : '#f1f3f6',
+        padding: '2px 8px',
+        borderRadius: 20,
+        whiteSpace: 'nowrap'
+      }
+    }, used > 0 ? 'in use · ' + used + ' dept' + (used > 1 ? 's' : '') : 'not in use'))), expanded && React.createElement("tr", {
+      key: s.code + '-x',
+      style: {
+        borderBottom: '1px solid #e8edf3',
+        background: '#fbfcfe'
+      }
+    }, React.createElement("td", null), React.createElement("td", {
+      colSpan: "5",
+      style: {
+        padding: '4px 16px 16px 10px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 12
+      }
+    }, React.createElement("div", {
+      style: {
+        background: '#fff',
+        border: '1px solid #e8edf3',
+        borderRadius: 9,
+        padding: '11px 13px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#0090ca',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 4
+      }
+    }, "Numerator \u2014 what to count"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, gd.numDef || s.num || '—')), React.createElement("div", {
+      style: {
+        background: '#fff',
+        border: '1px solid #e8edf3',
+        borderRadius: 9,
+        padding: '11px 13px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#6a52d4',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 4
+      }
+    }, "Denominator \u2014 what to count"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, gd.denDef || s.den || '—')), React.createElement("div", {
+      style: {
+        background: '#eef8fc',
+        border: '1px solid #dceffa',
+        borderRadius: 9,
+        padding: '11px 13px',
+        gridColumn: '1 / -1'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#0072a3',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 4
+      }
+    }, "\uD83D\uDD22 Worked example"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#0072a3',
+        lineHeight: 1.55,
+        fontFamily: MONO
+      }
+    }, gd.example || '—')), React.createElement("div", {
+      style: {
+        background: '#fff',
+        border: '1px solid #e8edf3',
+        borderRadius: 9,
+        padding: '11px 13px',
+        gridColumn: '1 / -1'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#1f9d57',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 4
+      }
+    }, "\uD83D\uDCA1 Interpretation & action"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, gd.interpretation || '—')), React.createElement("div", {
+      style: {
+        gridColumn: '1 / -1',
+        display: 'flex',
+        gap: 16,
+        flexWrap: 'wrap',
+        fontSize: 10.5,
+        color: P.faint
+      }
+    }, React.createElement("span", null, React.createElement("b", {
+      style: {
+        color: P.muted
+      }
+    }, "Multiplier:"), " ", gd.multiplier || '—'), React.createElement("span", null, React.createElement("b", {
+      style: {
+        color: P.muted
+      }
+    }, "Source:"), " ", gd.source || '—'), React.createElement("span", null, React.createElement("b", {
+      style: {
+        color: P.muted
+      }
+    }, "Reference:"), " ", gd.reference || s.ref || '—')))))];
+  }))))))));
+}
+function QCDataEntry() {
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      marginBottom: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#eef8fc',
+      color: P.blue,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M4 4h16v16H4zM4 9h16M9 4v16"
+  }))), React.createElement("div", null, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Quality Data Entry"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "Log the month's incidents \u2014 the count / rate is calculated automatically"))), typeof DataQualityForm !== 'undefined' ? React.createElement(DataQualityForm, null) : React.createElement("div", {
+    style: {
+      padding: 40,
+      textAlign: 'center',
+      color: P.muted
+    }
+  }, "Data entry form unavailable."));
+}
+const QC_ICONS = {
+  dashboard: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
+  scorecard: 'M4 4h16v16H4zM4 9h16M4 14h16M9 4v16',
+  trends: 'M3 17l6-6 4 4 8-8',
+  reports: 'M6 2h9l5 5v15H6zM14 2v6h6',
+  incidents: 'M12 2l10 18H2zM12 9v5M12 17v.5',
+  admin: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z',
+  dataentry: 'M4 4h16v16H4zM4 9h16M9 4v16',
+  actionplans: 'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11'
+};
+function QualityConsole({
+  onExit,
+  initialView,
+  initialDept
+}) {
+  const Q = window.useQualityStore();
+  const depts = (Q.depts || []).filter(d => d.indicators && d.indicators.length);
+  const [module, setModule] = useState(initialView || 'dashboard');
+  const [gq, setGq] = useState('');
+  const crumbTitle = {
+    dashboard: 'Dashboard',
+    scorecard: 'Scorecard',
+    trends: 'Trends',
+    reports: 'Reports',
+    incidents: 'Incident Reports',
+    admin: 'Indicator Administration',
+    dataentry: 'Quality Data Entry',
+    actionplans: 'Action Plans'
+  }[module] || 'Dashboard';
+  const navGroups = [{
+    sec: 'Monitor',
+    items: [{
+      id: 'dashboard',
+      label: 'Dashboard'
+    }, {
+      id: 'scorecard',
+      label: 'Scorecard'
+    }, {
+      id: 'trends',
+      label: 'Trends'
+    }]
+  }, {
+    sec: 'Reporting',
+    items: [{
+      id: 'reports',
+      label: 'Reports'
+    }, {
+      id: 'incidents',
+      label: 'Incident Reports'
+    }]
+  }, {
+    sec: 'Administration',
+    items: [{
+      id: 'admin',
+      label: 'Indicator Administration'
+    }, {
+      id: 'dataentry',
+      label: 'Quality Data Entry'
+    }, {
+      id: 'actionplans',
+      label: 'Action Plans'
+    }]
+  }];
+  return React.createElement("div", {
+    style: {
+      height: '100vh',
+      display: 'grid',
+      gridTemplateColumns: '236px 1fr',
+      overflow: 'hidden',
+      fontFamily: "'IBM Plex Sans',system-ui,sans-serif",
+      background: '#eef1f5',
+      color: P.ink
+    }
+  }, React.createElement("aside", {
+    className: "qsb",
+    style: {
+      background: P.navy,
+      color: '#c7d2e0',
+      display: 'flex',
+      flexDirection: 'column',
+      minWidth: 0,
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    onClick: () => onExit && onExit(),
+    title: "Back to UNICO",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '0 16px',
+      height: 56,
+      borderBottom: '1px solid rgba(255,255,255,.07)',
+      flexShrink: 0,
+      cursor: 'pointer'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 32,
+      height: 32,
+      borderRadius: 9,
+      background: 'linear-gradient(135deg,#27a8db,#0072a3)',
+      display: 'grid',
+      placeItems: 'center',
+      color: '#fff',
+      fontWeight: 700,
+      fontSize: 15,
+      boxShadow: '0 2px 9px rgba(0,144,202,.5)'
+    }
+  }, "U"), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      color: '#fff',
+      fontSize: 14,
+      letterSpacing: '.2px',
+      whiteSpace: 'nowrap'
+    }
+  }, "UNICO"), React.createElement("div", {
+    style: {
+      fontWeight: 500,
+      color: '#83909f',
+      fontSize: 9.5,
+      letterSpacing: '.7px',
+      textTransform: 'uppercase'
+    }
+  }, "Hospital Analytics"))), React.createElement("div", {
+    style: {
+      flex: 1,
+      overflowY: 'auto',
+      padding: '10px 0'
+    }
+  }, navGroups.map(g => React.createElement("div", {
+    key: g.sec
+  }, React.createElement("div", {
+    style: {
+      padding: '13px 16px 5px',
+      fontSize: 10,
+      letterSpacing: '.8px',
+      textTransform: 'uppercase',
+      color: '#6b7a90',
+      fontWeight: 600
+    }
+  }, g.sec), g.items.map(n => {
+    const active = module === n.id;
+    return React.createElement("div", {
+      key: n.id,
+      onClick: () => setModule(n.id),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        padding: '8px 16px',
+        cursor: 'pointer',
+        borderLeft: '3px solid ' + (active ? '#27a8db' : 'transparent'),
+        whiteSpace: 'nowrap',
+        fontSize: 13,
+        fontWeight: 500,
+        color: active ? '#fff' : '#c7d2e0',
+        background: active ? 'linear-gradient(90deg,rgba(11,102,208,.24),transparent)' : 'transparent'
+      }
+    }, React.createElement("svg", {
+      width: "17",
+      height: "17",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      style: {
+        flexShrink: 0,
+        opacity: .92
+      }
+    }, React.createElement("path", {
+      d: QC_ICONS[n.id]
+    })), React.createElement("span", null, n.label));
+  })))), React.createElement("div", {
+    style: {
+      padding: '11px 14px',
+      borderTop: '1px solid rgba(255,255,255,.07)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      flexShrink: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 32,
+      height: 32,
+      borderRadius: 9,
+      background: 'linear-gradient(135deg,#3ab5a7,#0090ca)',
+      color: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      fontWeight: 700,
+      fontSize: 12
+    }
+  }, "QM"), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#e6edf5',
+      whiteSpace: 'nowrap'
+    }
+  }, "Quality Manager"), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: '#83909f'
+    }
+  }, "Admin \xB7 full access")))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      minWidth: 0,
+      height: '100vh',
+      overflow: 'hidden'
+    }
+  }, React.createElement("header", {
+    style: {
+      height: 56,
+      background: '#fff',
+      borderBottom: '1px solid ' + P.line,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      padding: '0 18px',
+      flexShrink: 0,
+      zIndex: 5
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 32,
+      height: 32,
+      border: '1px solid ' + P.line,
+      background: P.panel2,
+      borderRadius: 7,
+      display: 'grid',
+      placeItems: 'center',
+      color: P.ink2
+    }
+  }, React.createElement("svg", {
+    width: "16",
+    height: "16",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M3 6h18M3 12h18M3 18h18"
+  }))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      color: P.muted,
+      fontSize: 12,
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement("span", null, "Quality Indicators"), React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2"
+  }, React.createElement("path", {
+    d: "M9 6l6 6-6 6"
+  })), React.createElement("b", {
+    style: {
+      color: P.ink,
+      fontWeight: 600,
+      fontSize: 14
+    }
+  }, crumbTitle)), React.createElement("div", {
+    style: {
+      marginLeft: 8,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      background: P.panel2,
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      padding: '7px 11px',
+      width: 300,
+      color: P.faint
+    }
+  }, React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12"
+  })), React.createElement("input", {
+    placeholder: "Search indicators, departments, references\u2026",
+    value: gq,
+    onInput: e => setGq(e.target.value),
+    onChange: e => setGq(e.target.value),
+    style: {
+      border: 0,
+      background: 'transparent',
+      outline: 'none',
+      fontSize: 12.5,
+      color: P.ink,
+      width: '100%'
+    }
+  })), React.createElement("div", {
+    style: {
+      marginLeft: 'auto',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      background: P.panel2,
+      border: '1px solid ' + P.line,
+      borderRadius: 20,
+      padding: '5px 12px',
+      fontSize: 12,
+      color: P.ink2,
+      fontWeight: 500,
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: '#3ddc97',
+      boxShadow: '0 0 0 3px rgba(61,220,151,.18)'
+    }
+  }), "FY 2025\u201326"), React.createElement("div", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: 9,
+      background: 'linear-gradient(135deg,#3ab5a7,#0090ca)',
+      color: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      fontWeight: 700,
+      fontSize: 13
+    }
+  }, "QM"))), React.createElement("div", {
+    style: {
+      flex: 1,
+      overflowY: 'auto',
+      padding: '20px 26px 64px'
+    }
+  }, module === 'dashboard' && React.createElement(QCDashboard, {
+    depts: depts
+  }), module === 'scorecard' && React.createElement(QCScorecard, {
+    depts: depts
+  }), module === 'trends' && React.createElement(QCTrends, {
+    depts: depts
+  }), module === 'reports' && React.createElement(QCReports, {
+    depts: depts
+  }), module === 'incidents' && React.createElement(QCIncidents, {
+    depts: depts
+  }), module === 'actionplans' && React.createElement(QCActionPlans, {
+    depts: depts
+  }), module === 'dataentry' && React.createElement(QCDataEntry, null), module === 'admin' && React.createElement(QCAdmin, {
+    Q: Q,
+    q: gq,
+    onQ: setGq,
+    initialDept: initialDept
+  }))));
+}
+window.QualityConsole = QualityConsole;
+})();
+;
+/* ===== charts-gallery.jsx ===== */
+(function(){
+function chartToPNG(svgEl, filename) {
+  const toast = (m, t) => {
+    try {
+      window.UI && window.UI.toast && window.UI.toast(m, t);
+    } catch (e) {}
+  };
+  if (!svgEl) {
+    toast('Nothing to export', 'error');
+    return;
+  }
+  try {
+    const clone = svgEl.cloneNode(true);
+    const rect = svgEl.getBoundingClientRect();
+    const vb = (svgEl.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
+    let w = Math.round(rect.width || (vb.length === 4 ? vb[2] : 300));
+    let h = Math.round(rect.height || (vb.length === 4 ? vb[3] : 200));
+    if (!w || !isFinite(w)) w = 600;
+    if (!h || !isFinite(h)) h = 360;
+    clone.setAttribute('width', w);
+    clone.setAttribute('height', h);
+    if (vb.length !== 4) clone.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    const svgStr = new XMLSerializer().serializeToString(clone);
+    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr);
+    const dpr = Math.max(2, Math.round(window.devicePixelRatio || 1) + 1);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(w * dpr));
+        canvas.height = Math.max(1, Math.round(h * dpr));
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const png = canvas.toDataURL('image/png');
+        const a = document.createElement('a');
+        a.href = png;
+        a.download = (filename || 'chart') + '.png';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        toast('Chart saved · ' + a.download, 'success');
+      } catch (e) {
+        toast('PNG export failed', 'error');
+      }
+    };
+    img.onerror = () => {
+      toast('PNG export failed (could not render chart)', 'error');
+    };
+    img.src = url;
+  } catch (e) {
+    toast('PNG export failed', 'error');
+  }
+}
+function ChartsGallery({
+  dept,
+  setRoute
+}) {
+  const d = dept;
+  const tone = PALETTE[d.id.charCodeAt(0) % PALETTE.length];
+  const series = d && d.series || [];
+  const breakdownCols = d.cols.filter(c => c.id !== d.primary && !c.pct);
+  const pctCols = d.cols.filter(c => c.pct);
+  const numericCols = d.cols.filter(c => !c.pct);
+  const secondMetric = numericCols.find(c => c.id !== d.primary);
+  const lineCol = pctCols[0] || secondMetric || null;
+  const mixSeries = breakdownCols.slice(0, 6).map((c, i) => ({
+    id: c.id,
+    label: c.label,
+    color: PALETTE[i % PALETTE.length]
+  }));
+  const hasBreakdown = mixSeries.length > 1;
+  const donutData = breakdownCols.map((c, i) => ({
+    label: c.label,
+    value: series.reduce((s, r) => s + (r[c.id] || 0), 0),
+    color: PALETTE[i % PALETTE.length]
+  })).filter(x => x.value > 0);
+  const hasDonut = donutData.length > 1;
+  const primTotal = series.reduce((s, r) => s + (r[d.primary] || 0), 0);
+  const primAvg = series.length ? Math.round(primTotal / series.length) : 0;
+  const hbarData = series.map(r => ({
+    label: r.month,
+    value: r[d.primary] || 0
+  }));
+  const charts = [];
+  charts.push({
+    id: 'trend',
+    title: 'Monthly Trend',
+    sub: 'bar',
+    render: flat => React.createElement(BarChart, {
+      data: series,
+      x: "month",
+      y: d.primary,
+      height: 260,
+      color: tone,
+      flat: flat
+    })
+  });
+  if (typeof window.Bar3D === 'function') charts.push({
+    id: 'iso',
+    title: '3D Trend',
+    sub: 'isometric bars',
+    render: flat => React.createElement(Bar3D, {
+      data: series,
+      x: "month",
+      y: d.primary,
+      height: 280,
+      color: tone,
+      flat: flat
+    })
+  });
+  charts.push({
+    id: 'line',
+    title: 'Line',
+    sub: 'trend line',
+    render: flat => React.createElement(LineChart, {
+      data: series,
+      x: "full",
+      y: d.primary,
+      height: 260,
+      color: tone,
+      flat: flat
+    })
+  });
+  if (typeof window.AreaTargetChart === 'function') charts.push({
+    id: 'area',
+    title: 'Area vs Target',
+    sub: `target = avg ${fmt(primAvg)}`,
+    render: flat => React.createElement(AreaTargetChart, {
+      data: series,
+      x: "full",
+      y: d.primary,
+      target: primAvg,
+      height: 260,
+      color: tone,
+      flat: flat
+    })
+  });
+  if (typeof window.ComboChart === 'function' && lineCol) charts.push({
+    id: 'combo',
+    title: 'Bar + Line Combo',
+    sub: `${d.primaryLabel} vs ${lineCol.label}`,
+    render: flat => React.createElement(ComboChart, {
+      data: series,
+      x: "month",
+      barKey: d.primary,
+      lineKey: lineCol.id,
+      barColor: tone,
+      lineColor: PALETTE[3],
+      barLabel: d.primaryLabel,
+      lineLabel: lineCol.label,
+      height: 260,
+      flat: flat
+    })
+  });
+  if (hasBreakdown) charts.push({
+    id: 'grouped',
+    title: 'Grouped',
+    sub: 'breakdown clusters',
+    render: flat => React.createElement(GroupedBar, {
+      data: series,
+      x: "month",
+      series: mixSeries,
+      height: 270,
+      flat: flat
+    })
+  });
+  if (hasBreakdown) charts.push({
+    id: 'stacked',
+    title: 'Stacked',
+    sub: 'cumulative breakdown',
+    render: flat => React.createElement(StackedBar, {
+      data: series,
+      x: "month",
+      series: mixSeries,
+      height: 270,
+      flat: flat
+    })
+  });
+  if (hasBreakdown && typeof window.StackedPctBar === 'function') charts.push({
+    id: 'stackpct',
+    title: '100% Stacked',
+    sub: 'composition share',
+    render: flat => React.createElement(StackedPctBar, {
+      data: series,
+      x: "month",
+      series: mixSeries,
+      height: 270,
+      flat: flat
+    })
+  });
+  if (typeof window.HBarChart === 'function') charts.push({
+    id: 'hbar',
+    title: 'Horizontal',
+    sub: `${d.primaryLabel} by month`,
+    render: flat => React.createElement(HBarChart, {
+      data: hbarData,
+      x: "label",
+      y: "value",
+      height: Math.max(220, hbarData.length * 26),
+      flat: flat
+    })
+  });
+  if (hasDonut) charts.push({
+    id: 'donut',
+    title: 'Composition',
+    sub: 'breakdown totals',
+    render: flat => React.createElement("div", {
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        minHeight: 260
+      }
+    }, React.createElement(Donut, {
+      data: donutData,
+      size: 200,
+      centerValue: fmt(donutData.reduce((s, x) => s + x.value, 0)),
+      centerLabel: "Total",
+      flat: flat
+    }))
+  });
+  const svgRefs = React.useRef({});
+  const grabSvg = id => node => {
+    if (node) svgRefs.current[id] = node.querySelector('svg');
+  };
+  const downloadPNG = c => {
+    const svg = svgRefs.current[c.id];
+    chartToPNG(svg, `UNICO-${d.short}-${c.id}`);
+  };
+  const [exporting, setExporting] = React.useState(false);
+  const [pdfCharts, setPdfCharts] = React.useState(null);
+  const exportAllPDF = () => {
+    const native = window.unicoNative;
+    const toast = (m, t) => {
+      try {
+        window.UI && window.UI.toast && window.UI.toast(m, t);
+      } catch (e) {}
+    };
+    setExporting(true);
+    setPdfCharts(charts);
+    document.body.classList.add('pdf-export-mode');
+    setTimeout(async () => {
+      try {
+        if (native && typeof native.exportPDF === 'function') {
+          const res = await native.exportPDF({
+            pageSize: 'A4',
+            landscape: true,
+            defaultName: `UNICO-${d.short}-charts`
+          });
+          if (res && res.ok) toast('Charts PDF' + (res.path ? ' saved · ' + res.path : ' ready — save it from the print dialog'), 'success');else if (res && res.canceled) {} else toast(res && res.error || 'PDF export failed', 'error');
+        } else {
+          window.print();
+          toast('Use the print dialog to save as PDF', 'info');
+        }
+      } catch (e) {
+        toast('PDF export failed', 'error');
+      } finally {
+        document.body.classList.remove('pdf-export-mode');
+        setExporting(false);
+        setPdfCharts(null);
+      }
+    }, 120);
+  };
+  const pdfRoot = typeof document !== 'undefined' ? document.getElementById('pdf-root') : null;
+  const pages = [];
+  if (pdfCharts) {
+    for (let i = 0; i < pdfCharts.length; i += 2) pages.push(pdfCharts.slice(i, i + 2));
+  }
+  const PdfHeader = () => React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      borderBottom: '2px solid var(--blue)',
+      paddingBottom: 14
+    }
+  }, React.createElement(Ic, {
+    d: DEPT_ICON[d.id] || I.activity,
+    s: 22,
+    c: tone
+  }), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, d.name), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      marginTop: 2
+    }
+  }, "Charts")), React.createElement("div", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "tag"
+  }, d.group));
+  const PdfFooter = ({
+    n,
+    total
+  }) => React.createElement("div", {
+    className: "pdf-foot",
+    style: {
+      marginTop: 20,
+      borderTop: '1px solid var(--line)',
+      paddingTop: 8,
+      fontSize: 9.5,
+      color: 'var(--faint)',
+      display: 'flex',
+      flex: '0 0 auto'
+    }
+  }, React.createElement("span", null, "UNICO HOSPITALS PLC"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", null, d.name, " \u2014 Charts"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", null, "Page ", n, " of ", total));
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.trend,
+    title: `${d.name} — Charts Gallery`,
+    sub: `${charts.length} visualizations · ${series.length} month${series.length !== 1 ? 's' : ''}`,
+    right: React.createElement(React.Fragment, null, setRoute && React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setRoute({
+        view: 'departments',
+        dept: d.id
+      })
+    }, React.createElement(Ic, {
+      d: I.chevR,
+      s: 15,
+      style: {
+        transform: 'rotate(180deg)'
+      }
+    }), "Back"), React.createElement("button", {
+      className: "btn pri sm",
+      onClick: exportAllPDF,
+      disabled: exporting
+    }, React.createElement(Ic, {
+      d: I.download,
+      s: 15
+    }), exporting ? 'Exporting…' : 'Export all to PDF'))
+  }), pdfRoot && pdfCharts && ReactDOM.createPortal(React.createElement("div", {
+    className: "pdf-doc"
+  }, pages.map((grp, pi) => React.createElement("section", {
+    className: "pdf-page",
+    key: pi
+  }, React.createElement("div", null, React.createElement(PdfHeader, null), React.createElement("div", {
+    style: {
+      marginTop: 18,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 18
+    }
+  }, grp.map(c => React.createElement("div", {
+    key: c.id
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      marginBottom: 6,
+      color: tone
+    }
+  }, c.title, React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginLeft: 8
+    }
+  }, c.sub)), c.render(true)))), React.createElement(PdfFooter, {
+    n: pi + 1,
+    total: pages.length
+  }))))), pdfRoot), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: 'repeat(2,minmax(0,1fr))',
+      gap: 16
+    }
+  }, charts.map(c => React.createElement("div", {
+    className: "card",
+    key: c.id,
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, c.title), c.sub && React.createElement("span", {
+    className: "sub"
+  }, c.sub), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => downloadPNG(c),
+    title: "Download this chart as PNG"
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 14
+  }), "PNG")), React.createElement("div", {
+    className: "card-b",
+    ref: grabSvg(c.id),
+    style: {
+      overflowX: 'auto'
+    }
+  }, c.render(false)))), charts.length === 0 && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: '40px 0'
+    }
+  }, "No chartable data for this department."))));
+}
+window.ChartsGallery = ChartsGallery;
+})();
+;
+/* ===== login.jsx ===== */
+(function(){
+const {
+  useState,
+  useRef,
+  useEffect
+} = React;
+const UNICO_LOCK_KEY = 'unico_lock_v1';
+function unicoPinHash(pin) {
+  let h = 0x811c9dc5;
+  const s = 'unico:' + String(pin == null ? '' : pin);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
+  }
+  return (h >>> 0).toString(16);
+}
+function unicoLockRead() {
+  try {
+    const raw = localStorage.getItem(UNICO_LOCK_KEY);
+    if (!raw) return {
+      enabled: false,
+      hash: ''
+    };
+    const o = JSON.parse(raw);
+    return {
+      enabled: !!(o && o.enabled),
+      hash: o && typeof o.hash === 'string' ? o.hash : ''
+    };
+  } catch (e) {
+    return {
+      enabled: false,
+      hash: ''
+    };
+  }
+}
+function unicoLockWrite(state) {
+  try {
+    localStorage.setItem(UNICO_LOCK_KEY, JSON.stringify({
+      enabled: !!state.enabled,
+      hash: state.hash || ''
+    }));
+  } catch (e) {}
+}
+const unicoLock = {
+  isEnabled() {
+    const s = unicoLockRead();
+    return !!(s.enabled && s.hash);
+  },
+  hasPin() {
+    return !!unicoLockRead().hash;
+  },
+  verify(pin) {
+    const s = unicoLockRead();
+    if (!s.hash) return false;
+    return unicoPinHash(pin) === s.hash;
+  },
+  setPin(pin) {
+    unicoLockWrite({
+      enabled: true,
+      hash: unicoPinHash(pin)
+    });
+  },
+  disable() {
+    const s = unicoLockRead();
+    unicoLockWrite({
+      enabled: false,
+      hash: s.hash
+    });
+  }
+};
+function LockGlyph({
+  s = 24,
+  c = 'currentColor',
+  sw = 1.9,
+  open = false
+}) {
+  return React.createElement("svg", {
+    width: s,
+    height: s,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: c,
+    strokeWidth: sw,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    "aria-hidden": "true"
+  }, React.createElement("rect", {
+    x: "4",
+    y: "11",
+    width: "16",
+    height: "10",
+    rx: "2"
+  }), open ? React.createElement("path", {
+    d: "M8 11V7a4 4 0 017.9-1"
+  }) : React.createElement("path", {
+    d: "M8 11V7a4 4 0 018 0v4"
+  }), React.createElement("circle", {
+    cx: "12",
+    cy: "16",
+    r: "1.1"
+  }));
+}
+function LockScreen({
+  onUnlock
+}) {
+  const setup = !unicoLock.hasPin();
+  const [pin, setPin] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [err, setErr] = useState('');
+  const [shake, setShake] = useState(false);
+  const pinRef = useRef(null);
+  useEffect(() => {
+    if (pinRef.current) pinRef.current.focus();
+  }, []);
+  const fail = msg => {
+    setErr(msg);
+    setShake(false);
+    requestAnimationFrame(() => requestAnimationFrame(() => setShake(true)));
+  };
+  const onlyDigits = v => v.replace(/[^0-9]/g, '').slice(0, 12);
+  const submit = e => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (setup) {
+      if (pin.length < 4) {
+        fail('PIN must be at least 4 digits.');
+        return;
+      }
+      if (pin !== confirm) {
+        fail('PINs do not match.');
+        return;
+      }
+      unicoLock.setPin(pin);
+      onUnlock && onUnlock();
+      return;
+    }
+    if (unicoLock.verify(pin)) {
+      onUnlock && onUnlock();
+    } else {
+      setPin('');
+      fail('Incorrect PIN. Please try again.');
+      if (pinRef.current) pinRef.current.focus();
+    }
+  };
+  return React.createElement("div", {
+    style: S.gate
+  }, React.createElement("div", {
+    style: S.bgGlow
+  }), React.createElement("form", {
+    style: {
+      ...S.card,
+      ...(shake ? S.shake : null)
+    },
+    onSubmit: submit,
+    className: "anim-pop"
+  }, React.createElement("div", {
+    style: S.logoWrap
+  }, React.createElement("img", {
+    src: "unico/logo.svg",
+    alt: "UNICO Healthcare",
+    style: S.logo
+  })), React.createElement("div", {
+    style: S.badge
+  }, React.createElement(LockGlyph, {
+    s: 22,
+    c: "#fff",
+    open: false
+  })), React.createElement("h1", {
+    style: S.title
+  }, setup ? 'Secure this workstation' : 'Workstation locked'), React.createElement("p", {
+    style: S.sub
+  }, setup ? 'Create a numeric PIN to protect access to the UNICO statistics suite on this device.' : 'Enter your PIN to continue. Statistics, staff and quality data remain protected.'), React.createElement("div", {
+    style: S.fieldGrp
+  }, React.createElement("label", {
+    style: S.label
+  }, setup ? 'New PIN' : 'PIN'), React.createElement("input", {
+    ref: pinRef,
+    type: "password",
+    inputMode: "numeric",
+    autoComplete: "off",
+    placeholder: "\u2022\u2022\u2022\u2022",
+    value: pin,
+    onChange: e => {
+      setPin(onlyDigits(e.target.value));
+      if (err) setErr('');
+    },
+    style: S.input
+  })), setup && React.createElement("div", {
+    style: S.fieldGrp
+  }, React.createElement("label", {
+    style: S.label
+  }, "Confirm PIN"), React.createElement("input", {
+    type: "password",
+    inputMode: "numeric",
+    autoComplete: "off",
+    placeholder: "\u2022\u2022\u2022\u2022",
+    value: confirm,
+    onChange: e => {
+      setConfirm(onlyDigits(e.target.value));
+      if (err) setErr('');
+    },
+    style: S.input
+  })), err ? React.createElement("div", {
+    style: S.err
+  }, React.createElement(LockGlyph, {
+    s: 14,
+    c: "#ffb4be",
+    open: true
+  }), " ", err) : React.createElement("div", {
+    style: S.errPlaceholder
+  }), React.createElement("button", {
+    type: "submit",
+    className: "btn pri",
+    style: S.action
+  }, React.createElement(LockGlyph, {
+    s: 16,
+    c: "#fff",
+    open: true
+  }), setup ? 'Set PIN & continue' : 'Unlock'), React.createElement("div", {
+    style: S.foot
+  }, React.createElement("div", {
+    style: S.dot
+  }), React.createElement("span", null, "Nasif Ahammed Niloy \xB7 Administrator"))), React.createElement("div", {
+    style: S.legal
+  }, "UNICO Healthcare \xB7 Offline statistics suite \xB7 Single-user device lock"), React.createElement("style", null, `@keyframes unicoShake{
+        10%,90%{transform:translateX(-1px)} 20%,80%{transform:translateX(2px)}
+        30%,50%,70%{transform:translateX(-5px)} 40%,60%{transform:translateX(5px)}
+      }`));
+}
+const S = {
+  gate: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 3000,
+    background: '#0d1b2e',
+    backgroundImage: 'radial-gradient(1100px 700px at 18% -10%, rgba(39,168,219,.16), transparent 60%), radial-gradient(900px 600px at 110% 120%, rgba(58,181,167,.14), transparent 55%)',
+    display: 'grid',
+    placeItems: 'center',
+    padding: 24,
+    overflow: 'auto'
+  },
+  bgGlow: {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none',
+    background: 'linear-gradient(180deg, rgba(13,27,46,0) 40%, rgba(13,27,46,.55) 100%)'
+  },
+  card: {
+    position: 'relative',
+    width: 'min(380px,94vw)',
+    background: '#ffffff',
+    border: '1px solid #e3e9f1',
+    borderRadius: 18,
+    padding: '30px 30px 22px',
+    boxShadow: '0 24px 60px rgba(5,12,24,.55), 0 2px 0 rgba(255,255,255,.04) inset',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    textAlign: 'center'
+  },
+  shake: {
+    animation: 'unicoShake .5s cubic-bezier(.36,.07,.19,.97) both'
+  },
+  logoWrap: {
+    marginBottom: 18
+  },
+  logo: {
+    height: 38,
+    width: 'auto',
+    display: 'block'
+  },
+  badge: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    display: 'grid',
+    placeItems: 'center',
+    background: 'linear-gradient(135deg,#27a8db,#0072a3)',
+    color: '#fff',
+    boxShadow: '0 8px 20px rgba(0,144,202,.45)',
+    marginBottom: 14
+  },
+  title: {
+    margin: '0 0 6px',
+    fontSize: 18,
+    fontWeight: 700,
+    color: '#16202e',
+    letterSpacing: '.1px'
+  },
+  sub: {
+    margin: '0 0 18px',
+    fontSize: 12.5,
+    lineHeight: 1.5,
+    color: '#6c7a8c',
+    maxWidth: 300
+  },
+  fieldGrp: {
+    width: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 5,
+    marginBottom: 11,
+    textAlign: 'left'
+  },
+  label: {
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: '#3c4858'
+  },
+  input: {
+    width: '100%',
+    padding: '11px 13px',
+    border: '1px solid #dde3ec',
+    borderRadius: 9,
+    fontFamily: 'inherit',
+    fontSize: 18,
+    letterSpacing: '.35em',
+    textAlign: 'center',
+    background: '#f7f9fc',
+    color: '#16202e',
+    outline: 'none',
+    boxSizing: 'border-box'
+  },
+  err: {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 20,
+    margin: '2px 0 10px',
+    fontSize: 12,
+    fontWeight: 600,
+    color: '#ffd2d8',
+    background: 'rgba(210,58,82,.16)',
+    border: '1px solid rgba(210,58,82,.35)',
+    borderRadius: 8,
+    padding: '7px 10px',
+    boxSizing: 'border-box'
+  },
+  errPlaceholder: {
+    minHeight: 20,
+    margin: '2px 0 10px'
+  },
+  action: {
+    width: '100%',
+    justifyContent: 'center',
+    padding: '11px 13px',
+    fontSize: 13.5
+  },
+  foot: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 16,
+    fontSize: 11.5,
+    color: '#9aa6b4'
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    background: '#3ddc97',
+    boxShadow: '0 0 0 3px rgba(61,220,151,.18)'
+  },
+  legal: {
+    position: 'absolute',
+    bottom: 18,
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    fontSize: 10.5,
+    letterSpacing: '.4px',
+    color: '#5b6b80'
+  }
+};
+window.unicoLock = unicoLock;
+window.LockScreen = LockScreen;
+})();
+;
+/* ===== auth-login.jsx ===== */
+(function(){
+(function () {
+  const API_KEY = 'unico_api_base',
+    TOK_KEY = 'unico_session_token',
+    USER_KEY = 'unico_session_user';
+  const read = k => {
+    try {
+      return localStorage.getItem(k) || '';
+    } catch (e) {
+      return '';
+    }
+  };
+  const write = (k, v) => {
+    try {
+      v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v);
+    } catch (e) {}
+  };
+  const trimBase = u => (u || '').trim().replace(/\/+$/, '');
+  const DATA_EXCLUDE = ['unico_api_base', 'unico_session_token', 'unico_session_user', 'unico_lock_v1'];
+  function appSnapshot() {
+    const o = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf('unico') === 0 && DATA_EXCLUDE.indexOf(k) < 0) o[k] = localStorage.getItem(k);
+      }
+    } catch (e) {}
+    return o;
+  }
+  const unicoSession = {
+    serverUrl() {
+      return trimBase(read(API_KEY)) || trimBase(typeof window !== 'undefined' && window.UNICO_DEFAULT_API || '');
+    },
+    setServerUrl(u) {
+      write(API_KEY, trimBase(u));
+    },
+    configured() {
+      return !!trimBase(typeof window !== 'undefined' && window.UNICO_DEFAULT_API || '');
+    },
+    token() {
+      return read(TOK_KEY);
+    },
+    user() {
+      try {
+        return JSON.parse(read(USER_KEY) || 'null');
+      } catch (e) {
+        return null;
+      }
+    },
+    isAuthed() {
+      return !!unicoSession.token();
+    },
+    async login(username, password) {
+      const base = unicoSession.serverUrl();
+      if (!base) return {
+        ok: false,
+        error: 'No server URL is configured.'
+      };
+      let r;
+      try {
+        r = await fetch(base + '/api/login', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            username,
+            password
+          })
+        });
+      } catch (e) {
+        return {
+          ok: false,
+          error: 'Cannot reach the server. Check the URL and your connection.'
+        };
+      }
+      let data;
+      try {
+        data = await r.json();
+      } catch (e) {
+        data = {};
+      }
+      if (!r.ok || !data.ok) return {
+        ok: false,
+        error: data.error || 'Login failed (' + r.status + ').'
+      };
+      write(TOK_KEY, data.token);
+      write(USER_KEY, JSON.stringify(data.user || {}));
+      return {
+        ok: true,
+        user: data.user
+      };
+    },
+    async verify() {
+      const base = unicoSession.serverUrl(),
+        tok = unicoSession.token();
+      if (!base || !tok) return false;
+      try {
+        const r = await fetch(base + '/api/me', {
+          headers: {
+            authorization: 'Bearer ' + tok
+          }
+        });
+        if (r.status === 401) return false;
+        const d = await r.json();
+        return !!(r.ok && d.ok);
+      } catch (e) {
+        return null;
+      }
+    },
+    async pullData() {
+      const base = unicoSession.serverUrl(),
+        tok = unicoSession.token();
+      if (!base || !tok) return {
+        ok: false
+      };
+      try {
+        const r = await fetch(base + '/api/data', {
+          headers: {
+            authorization: 'Bearer ' + tok
+          }
+        });
+        const d = await r.json();
+        if (r.ok && d.ok && d.data && typeof d.data === 'object') {
+          let n = 0;
+          Object.keys(d.data).forEach(k => {
+            if (DATA_EXCLUDE.indexOf(k) < 0) {
+              try {
+                localStorage.setItem(k, d.data[k]);
+                n++;
+              } catch (e) {}
+            }
+          });
+          return {
+            ok: true,
+            count: n,
+            updatedAt: d.updatedAt
+          };
+        }
+        return {
+          ok: true,
+          count: 0
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          error: String(e)
+        };
+      }
+    },
+    async pushData() {
+      const base = unicoSession.serverUrl(),
+        tok = unicoSession.token();
+      if (!base || !tok) return {
+        ok: false
+      };
+      try {
+        const r = await fetch(base + '/api/data', {
+          method: 'PUT',
+          headers: {
+            'content-type': 'application/json',
+            authorization: 'Bearer ' + tok
+          },
+          body: JSON.stringify({
+            data: appSnapshot()
+          })
+        });
+        const d = await r.json();
+        return {
+          ok: !!(r.ok && d.ok),
+          updatedAt: d.updatedAt
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          error: String(e)
+        };
+      }
+    },
+    logout() {
+      write(TOK_KEY, null);
+      write(USER_KEY, null);
+      try {
+        window.dispatchEvent(new Event('unico:logout'));
+      } catch (e) {}
+    }
+  };
+  window.unicoSession = unicoSession;
+  function CloudLogin({
+    onLogin
+  }) {
+    const [u, setU] = React.useState('');
+    const [p, setP] = React.useState('');
+    const [busy, setBusy] = React.useState(false);
+    const [err, setErr] = React.useState('');
+    const [cfgOpen, setCfgOpen] = React.useState(!unicoSession.serverUrl());
+    const [srv, setSrv] = React.useState(unicoSession.serverUrl() || 'http://localhost:4000');
+    const uRef = React.useRef(null);
+    React.useEffect(() => {
+      if (uRef.current) uRef.current.focus();
+    }, []);
+    const submit = async e => {
+      if (e && e.preventDefault) e.preventDefault();
+      unicoSession.setServerUrl(srv);
+      if (!srv.trim()) {
+        setErr('Enter the server address first.');
+        setCfgOpen(true);
+        return;
+      }
+      if (!u.trim() || !p) {
+        setErr('Enter your username and password.');
+        return;
+      }
+      setBusy(true);
+      setErr('');
+      const res = await unicoSession.login(u.trim(), p);
+      if (!res.ok) {
+        setBusy(false);
+        setErr(res.error || 'Login failed.');
+        return;
+      }
+      const pulled = await unicoSession.pullData();
+      if (!pulled || !pulled.count) {
+        await unicoSession.pushData();
+      }
+      try {
+        window.location.reload();
+      } catch (e) {
+        setBusy(false);
+        onLogin && onLogin(res.user);
+      }
+    };
+    return React.createElement("div", {
+      style: S.gate
+    }, React.createElement("div", {
+      style: S.bgGlow
+    }), React.createElement("form", {
+      style: S.card,
+      onSubmit: submit,
+      className: "anim-pop"
+    }, React.createElement("div", {
+      style: {
+        marginBottom: 16
+      }
+    }, React.createElement("img", {
+      src: "unico/logo.svg",
+      alt: "UNICO Healthcare",
+      style: {
+        height: 38
+      }
+    })), React.createElement("div", {
+      style: S.badge
+    }, React.createElement("svg", {
+      width: "22",
+      height: "22",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "#fff",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: "M12 12a4 4 0 100-8 4 4 0 000 8z"
+    }), React.createElement("path", {
+      d: "M4 21a8 8 0 0116 0"
+    }))), React.createElement("h1", {
+      style: S.title
+    }, "Sign in"), React.createElement("p", {
+      style: S.sub
+    }, "Log in to the UNICO Statistics Suite with your account."), React.createElement("div", {
+      style: S.grp
+    }, React.createElement("label", {
+      style: S.label
+    }, "Username"), React.createElement("input", {
+      ref: uRef,
+      value: u,
+      autoComplete: "username",
+      onChange: e => {
+        setU(e.target.value);
+        if (err) setErr('');
+      },
+      style: S.input,
+      placeholder: "your username"
+    })), React.createElement("div", {
+      style: S.grp
+    }, React.createElement("label", {
+      style: S.label
+    }, "Password"), React.createElement("input", {
+      type: "password",
+      value: p,
+      autoComplete: "current-password",
+      onChange: e => {
+        setP(e.target.value);
+        if (err) setErr('');
+      },
+      style: S.input,
+      placeholder: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+    })), err ? React.createElement("div", {
+      style: S.err
+    }, err) : React.createElement("div", {
+      style: {
+        minHeight: 18,
+        margin: '2px 0 8px'
+      }
+    }), React.createElement("button", {
+      type: "submit",
+      className: "btn pri",
+      style: S.action,
+      disabled: busy
+    }, busy ? 'Signing in…' : 'Sign in'), React.createElement("button", {
+      type: "button",
+      onClick: () => setCfgOpen(o => !o),
+      style: S.cfgToggle
+    }, cfgOpen ? 'Hide server settings' : 'Server settings'), cfgOpen && React.createElement("div", {
+      style: S.cfgBox
+    }, React.createElement("label", {
+      style: {
+        ...S.label,
+        color: '#9aa6b4'
+      }
+    }, "Auth server address"), React.createElement("input", {
+      value: srv,
+      onChange: e => setSrv(e.target.value),
+      style: {
+        ...S.input,
+        fontSize: 13,
+        letterSpacing: 0,
+        textAlign: 'left'
+      },
+      placeholder: "https://your-server.example.com"
+    }), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: '#7e8da0',
+        marginTop: 6,
+        lineHeight: 1.5
+      }
+    }, "Where your UNICO auth server is running. Set once per device. The database connection lives on that server \u2014 never in this app."))), React.createElement("div", {
+      style: S.legal
+    }, "UNICO Healthcare \xB7 Statistics Suite \xB7 Secure account sign-in"));
+  }
+  window.CloudLogin = CloudLogin;
+  const S = {
+    gate: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 3000,
+      background: '#0d1b2e',
+      backgroundImage: 'radial-gradient(1100px 700px at 18% -10%, rgba(39,168,219,.16), transparent 60%), radial-gradient(900px 600px at 110% 120%, rgba(58,181,167,.14), transparent 55%)',
+      display: 'grid',
+      placeItems: 'center',
+      padding: 24,
+      overflow: 'auto'
+    },
+    bgGlow: {
+      position: 'absolute',
+      inset: 0,
+      pointerEvents: 'none',
+      background: 'linear-gradient(180deg, rgba(13,27,46,0) 40%, rgba(13,27,46,.55) 100%)'
+    },
+    card: {
+      position: 'relative',
+      width: 'min(380px,94vw)',
+      background: '#fff',
+      border: '1px solid #e3e9f1',
+      borderRadius: 18,
+      padding: '30px 30px 22px',
+      boxShadow: '0 24px 60px rgba(5,12,24,.55)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      textAlign: 'center'
+    },
+    badge: {
+      width: 52,
+      height: 52,
+      borderRadius: 14,
+      display: 'grid',
+      placeItems: 'center',
+      background: 'linear-gradient(135deg,#27a8db,#0072a3)',
+      boxShadow: '0 8px 20px rgba(0,144,202,.45)',
+      marginBottom: 14
+    },
+    title: {
+      margin: '0 0 6px',
+      fontSize: 18,
+      fontWeight: 700,
+      color: '#16202e'
+    },
+    sub: {
+      margin: '0 0 18px',
+      fontSize: 12.5,
+      lineHeight: 1.5,
+      color: '#6c7a8c',
+      maxWidth: 300
+    },
+    grp: {
+      width: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      marginBottom: 11,
+      textAlign: 'left'
+    },
+    label: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: '#3c4858'
+    },
+    input: {
+      width: '100%',
+      padding: '11px 13px',
+      border: '1px solid #dde3ec',
+      borderRadius: 9,
+      fontFamily: 'inherit',
+      fontSize: 14,
+      background: '#f7f9fc',
+      color: '#16202e',
+      outline: 'none',
+      boxSizing: 'border-box'
+    },
+    err: {
+      width: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      minHeight: 18,
+      margin: '2px 0 8px',
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#b4232f',
+      background: 'rgba(210,58,82,.10)',
+      border: '1px solid rgba(210,58,82,.3)',
+      borderRadius: 8,
+      padding: '7px 10px',
+      boxSizing: 'border-box'
+    },
+    action: {
+      width: '100%',
+      justifyContent: 'center',
+      padding: '11px 13px',
+      fontSize: 13.5
+    },
+    cfgToggle: {
+      marginTop: 12,
+      background: 'none',
+      border: 0,
+      color: '#0072a3',
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    },
+    cfgBox: {
+      width: '100%',
+      marginTop: 8,
+      background: '#f3f6fa',
+      border: '1px solid #e3e9f1',
+      borderRadius: 10,
+      padding: '11px 12px',
+      textAlign: 'left'
+    },
+    legal: {
+      position: 'absolute',
+      bottom: 18,
+      left: 0,
+      right: 0,
+      textAlign: 'center',
+      fontSize: 10.5,
+      letterSpacing: '.4px',
+      color: '#5b6b80'
+    }
+  };
+  (function autoSync() {
+    if (!(unicoSession.configured() && unicoSession.isAuthed())) return;
+    let last = '';
+    try {
+      last = JSON.stringify(appSnapshot());
+    } catch (e) {}
+    setInterval(() => {
+      try {
+        const snap = JSON.stringify(appSnapshot());
+        if (snap !== last) {
+          last = snap;
+          unicoSession.pushData();
+        }
+      } catch (e) {}
+    }, 15000);
+  })();
+})();
+})();
+;
+/* ===== search.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect,
+    useRef,
+    useMemo
+  } = React;
+  const AV_COLORS = [['#3ab5a7', '#0090ca'], ['#6a52d4', '#27a8db'], ['#e08a1e', '#d23a52'], ['#0090ca', '#0072a3'], ['#1f9d57', '#3ab5a7'], ['#d23a52', '#6a52d4']];
+  function initials(name) {
+    const p = (name || '').trim().split(/\s+/);
+    return ((p[0]?.[0] || '') + (p[1]?.[0] || p[0]?.[1] || '')).toUpperCase() || '?';
+  }
+  function avColor(seed) {
+    let h = 0;
+    const s = String(seed);
+    for (let i = 0; i < s.length; i++) h = h * 31 + s.charCodeAt(i) >>> 0;
+    return AV_COLORS[h % AV_COLORS.length];
+  }
+  function matches(q, ...fields) {
+    if (!q) return true;
+    const t = q.toLowerCase();
+    return fields.some(f => f && String(f).toLowerCase().includes(t));
+  }
+  const PAGES = [{
+    id: 'pg-dashboard',
+    label: 'Dashboard',
+    hint: 'Overview',
+    route: {
+      view: 'dashboard'
+    }
+  }, {
+    id: 'pg-compare',
+    label: 'Compare',
+    hint: 'Department compare',
+    route: {
+      view: 'compare'
+    }
+  }, {
+    id: 'pg-input',
+    label: 'Data Entry',
+    hint: 'Enter statistics',
+    route: {
+      view: 'input'
+    }
+  }, {
+    id: 'pg-reports',
+    label: 'Reports',
+    hint: 'Export & print',
+    route: {
+      view: 'reports'
+    }
+  }, {
+    id: 'pg-quality',
+    label: 'Quality',
+    hint: 'Quality indicators',
+    route: {
+      view: 'quality'
+    }
+  }, {
+    id: 'pg-nurses',
+    label: 'Nurse Directory',
+    hint: 'Nursing staff',
+    route: {
+      view: 'nurses'
+    }
+  }, {
+    id: 'pg-pca',
+    label: 'PCA Directory',
+    hint: 'Patient care assistants',
+    route: {
+      view: 'pca'
+    }
+  }, {
+    id: 'pg-settings',
+    label: 'Settings',
+    hint: 'Configuration',
+    route: {
+      view: 'settings'
+    }
+  }];
+  function GlobalSearch({
+    setRoute,
+    depts
+  }) {
+    const staffStore = window.useStaffStore ? window.useStaffStore() : {
+      staff: []
+    };
+    const allStaff = staffStore && staffStore.staff || [];
+    const [open, setOpen] = useState(false);
+    const [q, setQ] = useState('');
+    const [sel, setSel] = useState(0);
+    const inputRef = useRef(null);
+    const listRef = useRef(null);
+    useEffect(() => {
+      function onKey(e) {
+        const k = (e.key || '').toLowerCase();
+        if ((e.ctrlKey || e.metaKey) && k === 'k') {
+          e.preventDefault();
+          setOpen(o => !o);
+        } else if (k === 'escape') {
+          setOpen(false);
+        }
+      }
+      function onOpen() {
+        setOpen(true);
+      }
+      window.addEventListener('keydown', onKey);
+      window.addEventListener('unico:open-search', onOpen);
+      return () => {
+        window.removeEventListener('keydown', onKey);
+        window.removeEventListener('unico:open-search', onOpen);
+      };
+    }, []);
+    useEffect(() => {
+      if (open) {
+        setQ('');
+        setSel(0);
+        const id = setTimeout(() => inputRef.current && inputRef.current.focus(), 20);
+        return () => clearTimeout(id);
+      }
+    }, [open]);
+    const groups = useMemo(() => {
+      const qd = depts || [];
+      const qual = (window.QUALITY_SEED || []).filter(d => d.indicators && d.indicators.length);
+      const CAP = 6;
+      const pages = PAGES.filter(p => matches(q, p.label, p.hint));
+      const dList = qd.filter(d => matches(q, d.name, d.short, d.group)).slice(0, CAP);
+      const sList = allStaff.filter(e => e.is_active !== false && matches(q, e.name, e.role, e.current_department, e.designation, e.emp_id)).slice(0, CAP);
+      const qList = qual.filter(d => matches(q, d.name, d.key, d.overallStatus)).slice(0, CAP);
+      const out = [];
+      if (pages.length) out.push({
+        key: 'pages',
+        title: q ? 'Pages & Actions' : 'Quick actions',
+        total: pages.length,
+        items: pages.map(p => ({
+          id: p.id,
+          kind: 'page',
+          label: p.label,
+          sub: p.hint,
+          icon: I.grid,
+          route: p.route
+        }))
+      });
+      if (dList.length) out.push({
+        key: 'depts',
+        title: 'Departments',
+        total: qd.filter(d => matches(q, d.name, d.short, d.group)).length,
+        items: dList.map(d => ({
+          id: 'd-' + d.id,
+          kind: 'dept',
+          label: d.name,
+          sub: (d.short || '') + (d.group ? ' · ' + d.group : ''),
+          icon: window.DEPT_ICON && window.DEPT_ICON[d.id] || I.layers,
+          route: {
+            view: 'departments',
+            dept: d.id
+          }
+        }))
+      });
+      if (sList.length) out.push({
+        key: 'staff',
+        title: 'Staff',
+        total: allStaff.filter(e => e.is_active !== false && matches(q, e.name, e.role, e.current_department, e.designation, e.emp_id)).length,
+        items: sList.map(e => ({
+          id: 's-' + e.id,
+          kind: 'staff',
+          label: e.name,
+          sub: [e.role, e.designation, e.current_department].filter(Boolean).join(' · '),
+          avatar: e.name,
+          route: {
+            view: 'staffProfile',
+            emp: e.id
+          }
+        }))
+      });
+      if (qList.length) out.push({
+        key: 'quality',
+        title: 'Quality departments',
+        total: qual.filter(d => matches(q, d.name, d.key, d.overallStatus)).length,
+        items: qList.map(d => ({
+          id: 'q-' + d.key,
+          kind: 'quality',
+          label: d.name,
+          sub: (d.overallStatus ? d.overallStatus + ' · ' : '') + (d.indicators.length + ' indicators'),
+          icon: I.heart,
+          route: {
+            view: 'quality',
+            qview: 'reports',
+            dept: d.key
+          }
+        }))
+      });
+      return out;
+    }, [q, depts, allStaff]);
+    const flat = useMemo(() => {
+      const f = [];
+      groups.forEach(g => g.items.forEach(it => f.push(it)));
+      return f;
+    }, [groups]);
+    useEffect(() => {
+      if (sel > flat.length - 1) setSel(Math.max(0, flat.length - 1));
+    }, [flat.length, sel]);
+    function activate(item) {
+      if (!item) return;
+      setOpen(false);
+      setRoute(item.route);
+    }
+    function onListKey(e) {
+      const k = (e.key || '').toLowerCase();
+      if (k === 'arrowdown') {
+        e.preventDefault();
+        setSel(s => Math.min(flat.length - 1, s + 1));
+      } else if (k === 'arrowup') {
+        e.preventDefault();
+        setSel(s => Math.max(0, s - 1));
+      } else if (k === 'enter') {
+        e.preventDefault();
+        activate(flat[sel]);
+      }
+    }
+    useEffect(() => {
+      if (!open || !listRef.current) return;
+      const node = listRef.current.querySelector('[data-idx="' + sel + '"]');
+      if (node && node.scrollIntoView) node.scrollIntoView({
+        block: 'nearest'
+      });
+    }, [sel, open]);
+    if (!open) return null;
+    let idx = -1;
+    return React.createElement("div", {
+      className: "gs-backdrop",
+      onMouseDown: e => {
+        if (e.target === e.currentTarget) setOpen(false);
+      }
+    }, React.createElement("div", {
+      className: "gs-palette",
+      role: "dialog",
+      "aria-label": "Global search",
+      onKeyDown: onListKey
+    }, React.createElement("div", {
+      className: "gs-input"
+    }, React.createElement(Ic, {
+      d: I.search,
+      s: 18,
+      c: "var(--muted)"
+    }), React.createElement("input", {
+      ref: inputRef,
+      value: q,
+      onChange: e => {
+        setQ(e.target.value);
+        setSel(0);
+      },
+      placeholder: "Search departments, staff, quality\u2026",
+      spellCheck: false
+    }), React.createElement("span", {
+      className: "gs-kbd"
+    }, "Esc")), React.createElement("div", {
+      className: "gs-results",
+      ref: listRef
+    }, flat.length === 0 ? React.createElement("div", {
+      className: "gs-empty"
+    }, "No matches for \u201C", q, "\u201D.") : groups.map(g => React.createElement("div", {
+      key: g.key,
+      className: "gs-group"
+    }, React.createElement("div", {
+      className: "gs-group-h"
+    }, React.createElement("span", null, g.title), React.createElement("span", {
+      className: "gs-count num"
+    }, g.total)), g.items.map(it => {
+      idx++;
+      const i = idx;
+      const active = i === sel;
+      const col = it.avatar ? avColor(it.avatar) : null;
+      return React.createElement("div", {
+        key: it.id,
+        "data-idx": i,
+        className: 'gs-row' + (active ? ' active' : ''),
+        onMouseEnter: () => setSel(i),
+        onMouseDown: e => {
+          e.preventDefault();
+          activate(it);
+        }
+      }, it.avatar ? React.createElement("div", {
+        className: "avatar gs-av",
+        style: {
+          background: `linear-gradient(135deg,${col[0]},${col[1]})`
+        }
+      }, initials(it.avatar)) : React.createElement("div", {
+        className: "gs-ic"
+      }, React.createElement(Ic, {
+        d: it.icon || I.arrowR,
+        s: 17
+      })), React.createElement("div", {
+        className: "gs-text"
+      }, React.createElement("div", {
+        className: "gs-label"
+      }, it.label), it.sub && React.createElement("div", {
+        className: "gs-sub"
+      }, it.sub)), active && React.createElement("span", {
+        className: "gs-enter"
+      }, React.createElement(Ic, {
+        d: I.arrowR,
+        s: 14,
+        c: "var(--blue)"
+      })));
+    })))), React.createElement("div", {
+      className: "gs-foot"
+    }, React.createElement("span", {
+      className: "gs-tip"
+    }, React.createElement("span", {
+      className: "gs-kbd"
+    }, "\u2191"), React.createElement("span", {
+      className: "gs-kbd"
+    }, "\u2193"), " navigate \xB7 ", React.createElement("span", {
+      className: "gs-kbd"
+    }, "\u21B5"), " open"), React.createElement("span", {
+      className: "gs-tip"
+    }, q ? `${flat.length} result${flat.length === 1 ? '' : 's'}` : 'Type to search · Esc to close'))));
+  }
+  window.GlobalSearch = GlobalSearch;
+})();
+})();
+;
+/* ===== data-collection.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect,
+    useMemo
+  } = React;
+  const Ic = window.Ic,
+    I = window.I,
+    SectionTitle = window.SectionTitle;
+  const toast = (m, t) => {
+    try {
+      window.UI && window.UI.toast && window.UI.toast(m, t);
+    } catch (e) {}
+  };
+  const dcApi = {
+    get: url => fetch(url, {
+      headers: {
+        accept: 'application/json'
+      }
+    }).then(r => r.json()),
+    post: (url, body) => fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(body || {})
+    }).then(r => r.json()),
+    patch: (url, body) => fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(body || {})
+    }).then(r => r.json()),
+    del: url => fetch(url, {
+      method: 'DELETE'
+    }).then(r => r.json())
+  };
+  const MO = () => window.UNICO && window.UNICO.MONTH_ORDER || [];
+  const monthLabel = k => window.UNICO && window.UNICO.MONTHS_FULL && window.UNICO.MONTHS_FULL[k] || k;
+  function defaultMonthFor(dept) {
+    const order = MO();
+    if (dept && dept.months && dept.months.length) {
+      const last = dept.months[dept.months.length - 1];
+      const i = order.indexOf(last);
+      if (i >= 0 && i + 1 < order.length) return order[i + 1];
+      return last;
+    }
+    return order[Math.min(order.length - 1, 24)] || '';
+  }
+  function staffNames() {
+    const s = window.STAFF_SEED || window.__UNICO_STAFF__ || [];
+    return s.filter(e => e && e.name).map(e => ({
+      name: e.name,
+      title: e.designation || e.role || ''
+    }));
+  }
+  function Card(props) {
+    return React.createElement("div", {
+      style: {
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 12,
+        padding: 18,
+        boxShadow: 'var(--shadow-sm)',
+        ...(props.style || {})
+      }
+    }, props.children);
+  }
+  function Field({
+    label,
+    hint,
+    children
+  }) {
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5,
+        marginBottom: 13
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: 'var(--ink-2)'
+      }
+    }, label), children, hint && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, hint));
+  }
+  const inputStyle = {
+    width: '100%',
+    padding: '9px 11px',
+    border: '1px solid var(--line)',
+    borderRadius: 8,
+    fontFamily: 'inherit',
+    fontSize: 13.5,
+    background: '#fff',
+    color: 'var(--ink)',
+    outline: 'none'
+  };
+  function Banner({
+    ok,
+    children,
+    onClose
+  }) {
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '11px 14px',
+        borderRadius: 9,
+        fontSize: 12.5,
+        fontWeight: 600,
+        marginBottom: 14,
+        color: ok ? 'var(--pos)' : 'var(--rose)',
+        background: ok ? 'var(--pos-bg)' : 'var(--neg-bg)',
+        border: '1px solid ' + (ok ? '#bfe6cd' : '#f1c6cd')
+      }
+    }, React.createElement(Ic, {
+      d: ok ? I.check : I.x,
+      s: 16
+    }), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }, children), onClose && React.createElement("button", {
+      className: "icon-btn",
+      style: {
+        border: 0,
+        background: 'transparent',
+        cursor: 'pointer'
+      },
+      onClick: onClose
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 13
+    })));
+  }
+  function ResponsiblePicker({
+    value,
+    onChange,
+    suggestions
+  }) {
+    const list = [...new Set([...(suggestions || []).map(s => s.name), ...staffNames().map(s => s.name)])];
+    return React.createElement("div", null, React.createElement("input", {
+      list: "dc-resp-list",
+      style: inputStyle,
+      placeholder: "Type a name, or pick from staff\u2026",
+      value: value || '',
+      onChange: e => onChange(e.target.value)
+    }), React.createElement("datalist", {
+      id: "dc-resp-list"
+    }, list.map(n => React.createElement("option", {
+      key: n,
+      value: n
+    }))));
+  }
+  function DataResponsibles({
+    depts
+  }) {
+    const [list, setList] = useState(null);
+    const [editing, setEditing] = useState(null);
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
+      key: d.key,
+      name: d.name
+    })), []);
+    const load = () => dcApi.get('/api/responsibles').then(r => setList(r.ok ? r.responsibles : [])).catch(() => setList([]));
+    useEffect(() => {
+      load();
+    }, []);
+    const blank = () => ({
+      name: '',
+      title: '',
+      phone: '',
+      staffId: null,
+      empId: '',
+      password: '',
+      departments: [],
+      qualityAreas: [],
+      active: true
+    });
+    const save = () => {
+      if (!editing.name.trim()) {
+        toast('Name is required', 'error');
+        return;
+      }
+      dcApi.post('/api/responsibles', editing).then(r => {
+        if (r.ok) {
+          toast('Responsible person saved', 'success');
+          setEditing(null);
+          load();
+        } else toast(r.error || 'Could not save', 'error');
+      });
+    };
+    const remove = id => {
+      const go = () => dcApi.del('/api/responsibles/' + encodeURIComponent(id)).then(() => load());
+      if (window.UI && window.UI.confirm) window.UI.confirm('Remove this responsible person?').then(ok => ok && go());else if (window.confirm('Remove this responsible person?')) go();
+    };
+    const toggle = (key, arr, val) => setEditing(e => {
+      const has = e[key].includes(val);
+      return {
+        ...e,
+        [key]: has ? e[key].filter(x => x !== val) : [...e[key], val]
+      };
+    });
+    const deptName = id => {
+      const d = (depts || []).find(x => x.id === id);
+      return d ? d.short : id;
+    };
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 14
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.user,
+      title: "Responsible Persons",
+      sub: "Who gives the data \u2014 assign each person to the departments / quality areas they own (e.g. Rabbi Miah \u2192 Cathlab).",
+      right: !editing && React.createElement("button", {
+        className: "btn pri sm",
+        onClick: () => setEditing(blank())
+      }, React.createElement(Ic, {
+        d: I.plus,
+        s: 15
+      }), "Add person")
+    }), editing && React.createElement(Card, null, React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 14,
+        marginBottom: 14
+      }
+    }, editing.id ? 'Edit responsible person' : 'New responsible person'), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 14
+      }
+    }, React.createElement(Field, {
+      label: "Name",
+      hint: "Type a new name or pick an existing staff member."
+    }, React.createElement("input", {
+      list: "dc-staff-list",
+      style: inputStyle,
+      value: editing.name,
+      placeholder: "e.g. Rabbi Miah",
+      onChange: e => {
+        const name = e.target.value;
+        const st = staffNames().find(s => s.name === name);
+        setEditing(ed => ({
+          ...ed,
+          name,
+          title: st && !ed.title ? st.title : ed.title
+        }));
+      }
+    }), React.createElement("datalist", {
+      id: "dc-staff-list"
+    }, staffNames().map((s, i) => React.createElement("option", {
+      key: i,
+      value: s.name
+    })))), React.createElement(Field, {
+      label: "Title / role"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: editing.title,
+      onChange: e => setEditing({
+        ...editing,
+        title: e.target.value
+      }),
+      placeholder: "e.g. Charge Nurse"
+    })), React.createElement(Field, {
+      label: "Phone (optional)"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: editing.phone,
+      onChange: e => setEditing({
+        ...editing,
+        phone: e.target.value
+      }),
+      placeholder: "01XXXXXXXXX"
+    })), React.createElement("div", null)), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 14,
+        padding: '12px 14px',
+        background: 'var(--panel-2)',
+        border: '1px dashed var(--line)',
+        borderRadius: 9,
+        marginBottom: 13
+      }
+    }, React.createElement(Field, {
+      label: "Emp ID (login username)",
+      hint: "Set an emp ID + password to give this person a login that shows only their assigned data."
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: editing.empId || '',
+      onChange: e => setEditing({
+        ...editing,
+        empId: e.target.value
+      }),
+      placeholder: "e.g. rabbi.miah"
+    })), React.createElement(Field, {
+      label: editing.hasLogin ? 'New password (blank = keep current)' : 'Password'
+    }, React.createElement("input", {
+      type: "password",
+      style: inputStyle,
+      value: editing.password || '',
+      onChange: e => setEditing({
+        ...editing,
+        password: e.target.value
+      }),
+      placeholder: editing.hasLogin ? '••••••' : 'min 4 characters'
+    }))), React.createElement(Field, {
+      label: "Assigned departments (patient statistics)"
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 7
+      }
+    }, (depts || []).map(d => {
+      const on = editing.departments.includes(d.id);
+      return React.createElement("span", {
+        key: d.id,
+        onClick: () => toggle('departments', 'departments', d.id) || toggle('departments', null, d.id),
+        style: {
+          cursor: 'pointer',
+          userSelect: 'none',
+          padding: '5px 10px',
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 600,
+          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+          background: on ? 'var(--blue-50)' : '#fff',
+          color: on ? 'var(--blue-700)' : 'var(--ink-2)'
+        },
+        onClickCapture: e => {
+          e.stopPropagation();
+          setEditing(ed => ({
+            ...ed,
+            departments: ed.departments.includes(d.id) ? ed.departments.filter(x => x !== d.id) : [...ed.departments, d.id]
+          }));
+        }
+      }, d.short);
+    }))), React.createElement(Field, {
+      label: "Assigned quality areas (optional)"
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 7
+      }
+    }, areas.map(a => {
+      const on = editing.qualityAreas.includes(a.key);
+      return React.createElement("span", {
+        key: a.key,
+        onClick: () => setEditing(ed => ({
+          ...ed,
+          qualityAreas: ed.qualityAreas.includes(a.key) ? ed.qualityAreas.filter(x => x !== a.key) : [...ed.qualityAreas, a.key]
+        })),
+        style: {
+          cursor: 'pointer',
+          userSelect: 'none',
+          padding: '5px 10px',
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 600,
+          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+          background: on ? 'var(--blue-50)' : '#fff',
+          color: on ? 'var(--blue-700)' : 'var(--ink-2)'
+        }
+      }, a.name);
+    }))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        marginTop: 6
+      }
+    }, React.createElement("button", {
+      className: "btn pri",
+      onClick: save
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 15
+    }), "Save"), React.createElement("button", {
+      className: "btn",
+      onClick: () => setEditing(null)
+    }, "Cancel"))), React.createElement(Card, {
+      style: {
+        padding: 0,
+        overflow: 'hidden'
+      }
+    }, list === null ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026") : list.length === 0 ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)',
+        textAlign: 'center'
+      }
+    }, "No responsible persons yet. Click \u201CAdd person\u201D.") : React.createElement("table", {
+      className: "tbl",
+      style: {
+        width: '100%'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Name"), React.createElement("th", null, "Title"), React.createElement("th", null, "Login"), React.createElement("th", null, "Departments"), React.createElement("th", null, "Quality areas"), React.createElement("th", null))), React.createElement("tbody", null, list.map(r => React.createElement("tr", {
+      key: r.id
+    }, React.createElement("td", {
+      style: {
+        fontWeight: 600
+      }
+    }, r.name), React.createElement("td", null, r.title || '—'), React.createElement("td", null, r.empId ? React.createElement("span", {
+      style: {
+        fontFamily: 'var(--mono)',
+        fontSize: 11.5,
+        color: 'var(--blue-700)'
+      },
+      title: "Has a login account"
+    }, "\uD83D\uDD11 ", r.empId) : React.createElement("span", {
+      style: {
+        color: 'var(--muted)'
+      }
+    }, "\u2014")), React.createElement("td", null, (r.departments || []).map(deptName).join(', ') || '—'), React.createElement("td", null, (r.qualityAreas || []).join(', ') || '—'), React.createElement("td", {
+      style: {
+        textAlign: 'right',
+        whiteSpace: 'nowrap'
+      }
+    }, React.createElement("button", {
+      className: "icon-btn",
+      title: "Edit",
+      onClick: () => setEditing({
+        ...blank(),
+        ...r
+      })
+    }, React.createElement(Ic, {
+      d: I.edit,
+      s: 14
+    })), React.createElement("button", {
+      className: "icon-btn",
+      title: "Remove",
+      style: {
+        color: 'var(--rose)'
+      },
+      onClick: () => remove(r.id)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 14
+    })))))))));
+  }
+  function DeptFieldManager({
+    dept,
+    onChange
+  }) {
+    const [label, setLabel] = useState('');
+    const [pct, setPct] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const custom = (dept && dept.cols || []).filter(c => c.custom);
+    const add = () => {
+      if (!label.trim()) {
+        toast('Enter a field name', 'error');
+        return;
+      }
+      setBusy(true);
+      dcApi.post('/api/departments/' + encodeURIComponent(dept.id) + '/fields', {
+        label,
+        pct
+      }).then(r => {
+        setBusy(false);
+        if (r.ok) {
+          setLabel('');
+          setPct(false);
+          toast('Custom field added', 'success');
+          onChange && onChange();
+        } else toast(r.error || 'Could not add field', 'error');
+      }).catch(() => {
+        setBusy(false);
+        toast('Could not add field', 'error');
+      });
+    };
+    const remove = id => dcApi.del('/api/departments/' + encodeURIComponent(dept.id) + '/fields/' + encodeURIComponent(id)).then(r => {
+      if (r.ok) {
+        toast('Field removed', 'info');
+        onChange && onChange();
+      } else toast(r.error || 'Could not remove', 'error');
+    }).catch(() => {});
+    return React.createElement("div", null, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--ink-2)',
+        marginBottom: 8,
+        textTransform: 'uppercase',
+        letterSpacing: .3
+      }
+    }, "Admin \xB7 custom fields for ", dept && (dept.short || dept.name) || ''), custom.length > 0 && React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginBottom: 8
+      }
+    }, custom.map(c => React.createElement("span", {
+      key: c.id,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        fontSize: 12,
+        fontWeight: 600,
+        background: '#fff',
+        border: '1px solid var(--line)',
+        borderRadius: 999,
+        padding: '4px 5px 4px 11px'
+      }
+    }, c.label, c.pct ? ' (%)' : '', React.createElement("button", {
+      className: "icon-btn",
+      title: "Remove field",
+      style: {
+        width: 22,
+        height: 22,
+        border: 0,
+        background: 'transparent',
+        color: 'var(--rose)'
+      },
+      onClick: () => remove(c.id)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 12
+    }))))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("input", {
+      style: {
+        ...inputStyle,
+        flex: 1,
+        minWidth: 160
+      },
+      value: label,
+      onChange: e => setLabel(e.target.value),
+      placeholder: "New field name (e.g. Re-admissions)"
+    }), React.createElement("label", {
+      style: {
+        fontSize: 12,
+        color: 'var(--ink-2)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        whiteSpace: 'nowrap'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: pct,
+      onChange: e => setPct(e.target.checked)
+    }), "%"), React.createElement("button", {
+      className: "btn sm",
+      disabled: busy,
+      onClick: add
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 13
+    }), "Add field")));
+  }
+  function DataPatientForm({
+    depts,
+    prefill
+  }) {
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    const lockResp = !!(me && me.role === 'collector');
+    const isAdmin = !lockResp;
+    const [depList, setDepList] = useState(() => (window.UNICO && window.UNICO.DEPARTMENTS || depts || []).map(d => ({
+      ...d
+    })));
+    const all = depList;
+    const refreshDepts = () => dcApi.get('/api/departments').then(r => {
+      if (r.ok) setDepList(r.departments.map(d => ({
+        ...d
+      })));
+    }).catch(() => {});
+    const [deptId, setDeptId] = useState(prefill && prefill.dept || all[0] && all[0].id || '');
+    const dept = useMemo(() => all.find(d => d.id === deptId) || all[0], [deptId, depList]);
+    const [month, setMonth] = useState(prefill && prefill.month || '');
+    const [values, setValues] = useState({});
+    const [responsible, setResponsible] = useState(lockResp ? me.name || '' : prefill && prefill.responsible || '');
+    const [note, setNote] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [done, setDone] = useState(null);
+    const [resps, setResps] = useState([]);
+    const [subs, setSubs] = useState([]);
+    useEffect(() => {
+      dcApi.get('/api/responsibles').then(r => setResps(r.ok ? r.responsibles : [])).catch(() => {});
+    }, []);
+    useEffect(() => {
+      dcApi.get('/api/submissions?limit=300').then(r => setSubs(r.ok ? r.submissions : [])).catch(() => {});
+    }, [done]);
+    useEffect(() => {
+      if (!dept) return;
+      setMonth(m => m || defaultMonthFor(dept));
+      setValues({});
+      if (!(prefill && prefill.responsible)) {
+        const assigned = resps.filter(r => (r.departments || []).includes(dept.id));
+        if (assigned.length) setResponsible(assigned[0].name);
+      }
+    }, [deptId, resps.length]);
+    const assigned = resps.filter(r => dept && (r.departments || []).includes(dept.id));
+    const order = MO();
+    const monthOpts = order.slice(Math.max(0, order.indexOf('Jan-25')), order.length);
+    const monthStatus = useMemo(() => {
+      const map = {};
+      (subs || []).forEach(s => {
+        if (s.type === 'patient' && s.department === deptId && s.month && !map[s.month]) map[s.month] = s.status;
+      });
+      return map;
+    }, [subs, deptId]);
+    const reported = new Set(dept && dept.months || []);
+    const monthTag = m => {
+      const st = monthStatus[m];
+      if (st === 'approved') return ' · ✓ approved';
+      if (st === 'pending') return ' · ⏳ pending';
+      if (st === 'rejected') return ' · ✗ rejected';
+      return reported.has(m) ? ' · ✓ reported' : '';
+    };
+    const lockedMonth = lockResp && (monthStatus[month] === 'pending' || monthStatus[month] === 'approved' || reported.has(month));
+    const cols = dept && dept.cols || [];
+    const last = dept && dept.data && dept.data.length ? dept.data[dept.data.length - 1] : {};
+    const submit = () => {
+      if (!dept) return;
+      if (!month) {
+        toast('Pick a month', 'error');
+        return;
+      }
+      if (lockedMonth) {
+        toast('This month is already submitted/recorded — only an administrator can change it.', 'error');
+        return;
+      }
+      const matched = resps.find(r => r.name === responsible);
+      setBusy(true);
+      setDone(null);
+      dcApi.post('/api/submissions/patient', {
+        department: dept.id,
+        month,
+        values,
+        responsible: lockResp ? {
+          name: me.name
+        } : matched ? {
+          id: matched.id,
+          name: matched.name
+        } : responsible ? {
+          name: responsible
+        } : null,
+        note
+      }).then(r => {
+        setBusy(false);
+        if (r.ok) {
+          setDone({
+            month,
+            dept: dept.name
+          });
+          setValues({});
+          setNote('');
+          toast('Submitted for review', 'success');
+        } else toast(r.error || 'Submission failed', 'error');
+      }).catch(e => {
+        setBusy(false);
+        toast('Submission failed', 'error');
+      });
+    };
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 14,
+        maxWidth: 760
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.input,
+      title: "Submit Patient Statistics",
+      sub: "Fill in a department's monthly numbers \u2014 saved straight to the database and logged."
+    }), done && React.createElement(Banner, {
+      ok: true,
+      onClose: () => setDone(null)
+    }, "Submitted \u2713 \u2014 ", done.dept, " \xB7 ", monthLabel(done.month), " sent for admin review. It appears on the dashboard once approved in Review & History."), React.createElement(Card, null, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 14
+      }
+    }, React.createElement(Field, {
+      label: "Department"
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: deptId,
+      onChange: e => setDeptId(e.target.value)
+    }, all.map(d => React.createElement("option", {
+      key: d.id,
+      value: d.id
+    }, d.name)))), React.createElement(Field, {
+      label: "Reporting month"
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: month,
+      onChange: e => setMonth(e.target.value)
+    }, !month && React.createElement("option", {
+      value: ""
+    }, "Select\u2026"), monthOpts.map(m => React.createElement("option", {
+      key: m,
+      value: m
+    }, monthLabel(m) + monthTag(m)))))), lockResp ? React.createElement(Field, {
+      label: "Responsible person"
+    }, React.createElement("input", {
+      style: {
+        ...inputStyle,
+        background: 'var(--panel-2)',
+        color: 'var(--ink-2)'
+      },
+      value: me.name,
+      readOnly: true
+    })) : React.createElement(Field, {
+      label: "Responsible person (who is giving this data)",
+      hint: assigned.length ? 'Assigned: ' + assigned.map(a => a.name).join(', ') : 'Pick from staff or type a new name. Manage assignments in Responsible Persons.'
+    }, React.createElement(ResponsiblePicker, {
+      value: responsible,
+      onChange: setResponsible,
+      suggestions: assigned
+    })), React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: 'var(--ink-2)',
+        margin: '8px 0 8px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", null, dept ? dept.name : '', " metrics \u2014 ", monthLabel(month)), month && monthStatus[month] && React.createElement("span", {
+      className: "chip",
+      style: {
+        fontWeight: 700,
+        background: monthStatus[month] === 'approved' ? 'var(--pos-bg)' : monthStatus[month] === 'rejected' ? 'var(--neg-bg)' : '#fff4e0',
+        color: monthStatus[month] === 'approved' ? 'var(--pos)' : monthStatus[month] === 'rejected' ? 'var(--rose)' : '#9a6b00'
+      }
+    }, "Already submitted \xB7 ", monthStatus[month]), month && !monthStatus[month] && reported.has(month) && React.createElement("span", {
+      className: "chip",
+      style: {
+        background: 'var(--blue-50)',
+        color: 'var(--blue-700)',
+        fontWeight: 700
+      }
+    }, "Already reported \xB7 in records")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill,minmax(170px,1fr))',
+        gap: 12
+      }
+    }, cols.map(c => React.createElement(Field, {
+      key: c.id,
+      label: c.label + (c.pct ? ' (%)' : '')
+    }, React.createElement("input", {
+      type: "number",
+      step: "any",
+      style: inputStyle,
+      value: values[c.id] == null ? '' : values[c.id],
+      placeholder: last[c.id] != null ? 'last: ' + last[c.id] : '0',
+      onChange: e => setValues(v => ({
+        ...v,
+        [c.id]: e.target.value
+      }))
+    })))), isAdmin && dept && React.createElement("div", {
+      style: {
+        border: '1px dashed var(--line)',
+        borderRadius: 9,
+        padding: '10px 12px',
+        margin: '2px 0 12px',
+        background: 'var(--panel-2)'
+      }
+    }, React.createElement(DeptFieldManager, {
+      dept: dept,
+      onChange: refreshDepts
+    })), React.createElement(Field, {
+      label: "Note (optional)"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: note,
+      onChange: e => setNote(e.target.value),
+      placeholder: "Any comment about this submission"
+    })), lockedMonth && React.createElement(Banner, null, dept ? dept.name : '', " \xB7 ", monthLabel(month), " is already ", monthStatus[month] || 'on record', " \u2014 submission is locked for data collectors. Ask an administrator to make changes."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        marginTop: 4
+      }
+    }, React.createElement("button", {
+      className: "btn pri",
+      disabled: busy || lockedMonth,
+      onClick: submit
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 15
+    }), busy ? 'Submitting…' : lockedMonth ? 'Locked — already recorded' : 'Submit'), React.createElement("button", {
+      className: "btn",
+      disabled: busy,
+      onClick: () => {
+        setValues({});
+        setNote('');
+        setDone(null);
+      }
+    }, "Clear"))));
+  }
+  function DataQualityForm({
+    prefill
+  }) {
+    const areas = useMemo(() => window.qualityData ? window.qualityData() : [], []);
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    const lockResp = !!(me && me.role === 'collector');
+    const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
+    const monthOpts = fyMonths && fyMonths.length ? fyMonths : (() => {
+      const o = MO();
+      const i = o.indexOf('Jun-25');
+      return i >= 0 ? o.slice(i, i + 12) : o.slice(0, 12);
+    })();
+    const defMonth = monthOpts[monthOpts.length - 1] || '';
+    const [areaKey, setAreaKey] = useState(prefill && prefill.area || areas[0] && areas[0].key || '');
+    const area = useMemo(() => areas.find(a => a.key === areaKey) || areas[0], [areaKey]);
+    const [indId, setIndId] = useState('');
+    const [newInd, setNewInd] = useState({
+      name: '',
+      formula: 'count',
+      numLabel: '',
+      denLabel: '',
+      unit: ''
+    });
+    const [month, setMonth] = useState(defMonth);
+    const [den, setDen] = useState('');
+    const [incidents, setIncidents] = useState([]);
+    const [remark, setRemark] = useState('');
+    const [responsible, setResponsible] = useState(lockResp ? me.name || '' : prefill && prefill.responsible || '');
+    const [busy, setBusy] = useState(false);
+    const [done, setDone] = useState(null);
+    const [resps, setResps] = useState([]);
+    useEffect(() => {
+      if (!lockResp) dcApi.get('/api/responsibles').then(r => setResps(r.ok ? r.responsibles : [])).catch(() => {});
+    }, []);
+    useEffect(() => {
+      setIndId('');
+    }, [areaKey]);
+    const inds = area && area.indicators || [];
+    const assigned = resps.filter(r => (r.qualityAreas || []).includes(areaKey));
+    const isNew = indId === '__new__';
+    const curInd = inds.find(i => i.id === indId);
+    const def = isNew ? newInd : curInd || {};
+    const benchmarkQ = curInd && curInd.benchmark || def.benchmark || '';
+    const unitRaw = def.unit || '';
+    const declared = def.formula;
+    const rateProbe = (benchmarkQ + ' ' + unitRaw).toLowerCase();
+    const per1000 = /per\s*1[.,\s]?0{3}\b|\/\s*1[.,\s]?0{3}\b/.test(rateProbe);
+    const per100 = !per1000 && /per\s*100\b/.test(rateProbe);
+    const pctText = !per1000 && !per100 && (/%/.test(rateProbe) || /\bpercent/.test(rateProbe));
+    const formula = declared === 'rate1000' || declared === 'rate100' || declared === 'pct' || declared === 'count' ? declared : per1000 ? 'rate1000' : per100 ? 'rate100' : pctText ? 'pct' : declared || 'count';
+    const isRate = formula === 'rate1000' || formula === 'rate100' || formula === 'pct';
+    const mult = formula === 'rate1000' ? 1000 : formula === 'rate100' || formula === 'pct' ? 100 : 1000;
+    const vt = def.valueType || (formula === 'pct' ? '%' : isRate ? 'Rate' : 'Count');
+    const denMatch = rateProbe.match(/per\s*1[.,\s]?0{2,3}\s+([a-z][a-z\- ]{1,28})/) || rateProbe.match(/per\s*100\s+([a-z][a-z\- ]{1,28})/);
+    const denGuess = denMatch ? denMatch[1].trim().replace(/\b\w/g, c => c.toUpperCase()) : '';
+    const numLabel = def.numLabel || (isRate ? 'Cases (incidents)' : 'Numerator');
+    const denLabel = def.denLabel || denGuess || 'Denominator';
+    const numDef = def.numeratorDef || '';
+    const denDef = def.denominatorDef || (isRate ? 'Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.' : '');
+    const indNameQ = def.name || newInd.name || 'Result';
+    const incCount = incidents.length;
+    const denNum = Number(den);
+    const denEntered = den !== '' && denNum > 0;
+    const computeAsRate = isRate || denEntered;
+    const rateUnit = unitRaw && /per|%/.test(unitRaw) ? unitRaw : formula === 'pct' ? '%' : 'per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '');
+    const unitQ = computeAsRate ? rateUnit : unitRaw || 'count';
+    const formulaTextQ = computeAsRate ? indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult + '   ·   ' + numLabel + ' = number of incidents this month' : indNameQ + ' = number of incidents this month';
+    useEffect(() => {
+      if (!curInd) {
+        setIncidents([]);
+        setDen('');
+        return;
+      }
+      const ev = curInd.incidents && curInd.incidents[month];
+      setIncidents(Array.isArray(ev) ? ev.map(x => ({
+        uhid: x.uhid || '',
+        patientName: x.patientName || '',
+        age: x.age || '',
+        gender: x.gender || '',
+        diagnosis: x.diagnosis || '',
+        admissionDate: x.admissionDate || '',
+        procedureDate: x.procedureDate || '',
+        details: x.details || '',
+        finding: x.finding || '',
+        corrective: x.corrective || '',
+        preventive: x.preventive || '',
+        remark: x.remark || ''
+      })) : []);
+      setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
+    }, [indId, month]);
+    const result = computeAsRate ? denNum > 0 ? Math.round(incCount / denNum * mult * 100) / 100 : 0 : incCount;
+    const addIncident = () => setIncidents(arr => [...arr, {
+      uhid: '',
+      patientName: '',
+      age: '',
+      gender: '',
+      diagnosis: '',
+      admissionDate: '',
+      procedureDate: '',
+      details: '',
+      finding: '',
+      corrective: '',
+      preventive: '',
+      remark: ''
+    }]);
+    const setInc = (i, k, v) => setIncidents(arr => arr.map((x, j) => j === i ? {
+      ...x,
+      [k]: v
+    } : x));
+    const delInc = i => setIncidents(arr => arr.filter((_, j) => j !== i));
+    const qExists = !!(curInd && (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
+    const qLocked = lockResp && !isNew && qExists;
+    const submit = () => {
+      if (!area) {
+        toast('Select an area', 'error');
+        return;
+      }
+      if (!indId) {
+        toast('Select an indicator', 'error');
+        return;
+      }
+      if (isNew && !newInd.name.trim()) {
+        toast('Enter the new indicator name', 'error');
+        return;
+      }
+      if (!month) {
+        toast('Pick a month', 'error');
+        return;
+      }
+      if (qLocked) {
+        toast('This month already has data — only an administrator can change it.', 'error');
+        return;
+      }
+      if (isRate && (den === '' || Number(den) <= 0)) {
+        toast('Enter ' + denLabel + ' (denominator)', 'error');
+        return;
+      }
+      const matched = resps.find(r => r.name === responsible);
+      setBusy(true);
+      setDone(null);
+      dcApi.post('/api/submissions/quality', {
+        area: area.key,
+        month,
+        indicatorId: isNew ? '' : indId,
+        indicatorName: isNew ? newInd.name : curInd && curInd.name,
+        valueType: computeAsRate ? formula === 'pct' ? '%' : 'Rate' : 'Count',
+        entryMode: computeAsRate ? 'rate' : 'count',
+        mult,
+        formula: computeAsRate ? isRate ? formula : 'rate1000' : 'count',
+        numLabel: computeAsRate ? numLabel : undefined,
+        denLabel: computeAsRate ? denLabel : undefined,
+        unit: unitQ,
+        value: computeAsRate ? undefined : incCount,
+        num: computeAsRate ? incCount : undefined,
+        den: computeAsRate ? den : undefined,
+        incidents,
+        remark,
+        responsible: lockResp ? {
+          name: me.name
+        } : matched ? {
+          id: matched.id,
+          name: matched.name
+        } : responsible ? {
+          name: responsible
+        } : null
+      }).then(r => {
+        setBusy(false);
+        if (r.ok) {
+          setDone({
+            area: area.name,
+            month
+          });
+          setIncidents([]);
+          setDen('');
+          setRemark('');
+          if (isNew) {
+            setIndId('');
+            setNewInd({
+              name: '',
+              formula: 'count',
+              numLabel: '',
+              denLabel: '',
+              unit: ''
+            });
+          }
+          toast('Saved monthly value', 'success');
+        } else toast(r.error || 'Submission failed', 'error');
+      }).catch(() => {
+        setBusy(false);
+        toast('Submission failed', 'error');
+      });
+    };
+    const showEntry = indId && !isNew || isNew && newInd.name;
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 14,
+        maxWidth: 760
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.activity,
+      title: "Submit Quality Data",
+      sub: "Log the month's incidents \u2014 the count / rate is calculated automatically."
+    }), done && React.createElement(Banner, {
+      ok: true,
+      onClose: () => setDone(null)
+    }, "Saved \u2713 \u2014 ", done.area, " \xB7 ", monthLabel(done.month), " sent for admin review."), React.createElement(Card, null, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 14
+      }
+    }, React.createElement(Field, {
+      label: "Quality area / unit"
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: areaKey,
+      onChange: e => setAreaKey(e.target.value)
+    }, areas.map(a => React.createElement("option", {
+      key: a.key,
+      value: a.key
+    }, a.name)))), React.createElement(Field, {
+      label: "Reporting month"
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: month,
+      onChange: e => setMonth(e.target.value)
+    }, monthOpts.map(m => React.createElement("option", {
+      key: m,
+      value: m
+    }, monthLabel(m)))))), React.createElement(Field, {
+      label: "Indicator"
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: indId,
+      onChange: e => setIndId(e.target.value)
+    }, React.createElement("option", {
+      value: ""
+    }, "Select\u2026"), inds.map(i => React.createElement("option", {
+      key: i.id,
+      value: i.id
+    }, i.name)), React.createElement("option", {
+      value: "__new__"
+    }, "\u2795 Add a new indicator\u2026"))), isNew && React.createElement("div", {
+      style: {
+        border: '1px dashed var(--line)',
+        borderRadius: 9,
+        padding: '12px 14px',
+        marginBottom: 13
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '2fr 1fr',
+        gap: 14
+      }
+    }, React.createElement(Field, {
+      label: "New indicator name"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: newInd.name,
+      onChange: e => setNewInd({
+        ...newInd,
+        name: e.target.value
+      }),
+      placeholder: "e.g. CAUTI Rate"
+    })), React.createElement(Field, {
+      label: "Calculation"
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: newInd.formula,
+      onChange: e => setNewInd({
+        ...newInd,
+        formula: e.target.value
+      })
+    }, React.createElement("option", {
+      value: "count"
+    }, "Count (incidents)"), React.createElement("option", {
+      value: "pct"
+    }, "Percentage (%)"), React.createElement("option", {
+      value: "rate1000"
+    }, "Rate per 1000")))), newInd.formula !== 'count' && React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr 1fr',
+        gap: 14
+      }
+    }, React.createElement(Field, {
+      label: "Numerator label"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: newInd.numLabel,
+      onChange: e => setNewInd({
+        ...newInd,
+        numLabel: e.target.value
+      }),
+      placeholder: "e.g. CAUTI cases"
+    })), React.createElement(Field, {
+      label: "Denominator label"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: newInd.denLabel,
+      onChange: e => setNewInd({
+        ...newInd,
+        denLabel: e.target.value
+      }),
+      placeholder: "e.g. catheter days"
+    })), React.createElement(Field, {
+      label: "Unit (optional)"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: newInd.unit,
+      onChange: e => setNewInd({
+        ...newInd,
+        unit: e.target.value
+      }),
+      placeholder: "e.g. per 1000 cath-days"
+    })))), showEntry && React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        background: 'var(--blue-50)',
+        border: '1px solid var(--blue-100,#cfe6f7)',
+        borderRadius: 9,
+        padding: '10px 13px',
+        marginBottom: 13,
+        fontSize: 12,
+        color: 'var(--blue-700)'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontFamily: 'var(--mono)'
+      }
+    }, React.createElement("b", {
+      style: {
+        fontStyle: 'italic',
+        marginRight: 6
+      }
+    }, "\u0192"), formulaTextQ), (isRate || numDef) && React.createElement("div", {
+      style: {
+        marginTop: 7,
+        paddingTop: 7,
+        borderTop: '1px solid var(--blue-100,#cfe6f7)',
+        color: 'var(--ink-2)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3
+      }
+    }, numDef && React.createElement("div", null, React.createElement("b", null, numLabel, ":"), " ", numDef), isRate && React.createElement("div", null, React.createElement("b", null, "How to count ", denLabel, " (denominator):"), " ", denDef))), React.createElement(Field, {
+      label: React.createElement("span", null, denLabel, " ", React.createElement("span", {
+        style: {
+          color: 'var(--muted)',
+          fontWeight: 400
+        }
+      }, isRate ? '(denominator — required)' : '(denominator — optional, for a rate)')),
+      hint: isRate ? denDef : 'Leave blank to record a plain count. Enter the base for ' + monthLabel(month) + ' (e.g. total procedures / discharges / patient-days) to compute a rate per ' + mult + '.'
+    }, React.createElement("input", {
+      type: "number",
+      step: "any",
+      style: inputStyle,
+      value: den,
+      onChange: e => setDen(e.target.value),
+      placeholder: isRate ? 'Total ' + denLabel.toLowerCase() + ' this month' : 'Optional — total base (blank = count)'
+    })), React.createElement("div", {
+      style: {
+        border: '1px solid var(--line)',
+        borderRadius: 9,
+        padding: '12px 14px',
+        marginBottom: 13
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: incidents.length ? 10 : 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink-2)'
+      }
+    }, "Incidents in ", monthLabel(month)), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '2px 9px',
+        borderRadius: 999,
+        background: incCount ? 'var(--neg-bg)' : 'var(--pos-bg)',
+        color: incCount ? 'var(--rose)' : 'var(--pos)'
+      }
+    }, incCount), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "btn sm",
+      onClick: addIncident
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 13
+    }), "Add incident")), incidents.length === 0 && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, "No incidents \u2014 the ", isRate ? 'numerator' : 'count', " stays 0. Click \u201CAdd incident\u201D for each event that occurred."), incidents.map((inc, i) => React.createElement("div", {
+      key: i,
+      style: {
+        border: '1px solid var(--line)',
+        borderRadius: 8,
+        padding: '10px 12px',
+        marginBottom: 8,
+        background: 'var(--panel-2)'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 8
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 12
+      }
+    }, "Incident #", i + 1), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "icon-btn",
+      title: "Remove",
+      style: {
+        width: 24,
+        height: 24,
+        border: 0,
+        background: 'transparent',
+        color: 'var(--rose)'
+      },
+      onClick: () => delInc(i)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 13
+    }))), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4
+      }
+    }, "Patient & admission details"), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3, 1fr)',
+        gap: 8
+      }
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: inc.uhid,
+      onChange: e => setInc(i, 'uhid', e.target.value),
+      placeholder: "UHID / Reg. no"
+    }), React.createElement("input", {
+      style: {
+        ...inputStyle,
+        gridColumn: 'span 2'
+      },
+      value: inc.patientName,
+      onChange: e => setInc(i, 'patientName', e.target.value),
+      placeholder: "Patient name"
+    }), React.createElement("input", {
+      style: inputStyle,
+      type: "number",
+      min: "0",
+      value: inc.age,
+      onChange: e => setInc(i, 'age', e.target.value),
+      placeholder: "Age"
+    }), React.createElement("select", {
+      style: inputStyle,
+      value: inc.gender,
+      onChange: e => setInc(i, 'gender', e.target.value)
+    }, React.createElement("option", {
+      value: ""
+    }, "Gender\u2026"), React.createElement("option", null, "Male"), React.createElement("option", null, "Female"), React.createElement("option", null, "Other")), React.createElement("input", {
+      style: inputStyle,
+      value: inc.diagnosis,
+      onChange: e => setInc(i, 'diagnosis', e.target.value),
+      placeholder: "Diagnosis"
+    }), React.createElement("label", {
+      style: {
+        fontSize: 10,
+        color: 'var(--muted)'
+      }
+    }, "Date of admission", React.createElement("input", {
+      style: inputStyle,
+      type: "date",
+      value: inc.admissionDate,
+      onChange: e => setInc(i, 'admissionDate', e.target.value)
+    })), React.createElement("label", {
+      style: {
+        fontSize: 10,
+        color: 'var(--muted)'
+      }
+    }, "Date of procedure ", React.createElement("span", {
+      style: {
+        color: 'var(--faint)'
+      }
+    }, "(if any)"), React.createElement("input", {
+      style: inputStyle,
+      type: "date",
+      value: inc.procedureDate,
+      onChange: e => setInc(i, 'procedureDate', e.target.value)
+    }))), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginTop: 2
+      }
+    }, "Incident, cause & CAPA"), React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 42
+      },
+      value: inc.details,
+      onChange: e => setInc(i, 'details', e.target.value),
+      placeholder: "Incident details \u2014 what happened"
+    }), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr 1fr',
+        gap: 8
+      }
+    }, React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 38
+      },
+      value: inc.finding,
+      onChange: e => setInc(i, 'finding', e.target.value),
+      placeholder: "Finding / observation"
+    }), React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 38
+      },
+      value: inc.corrective,
+      onChange: e => setInc(i, 'corrective', e.target.value),
+      placeholder: "Corrective action"
+    }), React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 38
+      },
+      value: inc.preventive,
+      onChange: e => setInc(i, 'preventive', e.target.value),
+      placeholder: "Preventive action"
+    })), React.createElement("input", {
+      style: inputStyle,
+      value: inc.remark,
+      onChange: e => setInc(i, 'remark', e.target.value),
+      placeholder: "Special remarks (optional)"
+    }))))), React.createElement("div", {
+      style: {
+        border: '1px solid var(--line)',
+        borderRadius: 9,
+        padding: '13px 16px',
+        marginBottom: 4,
+        background: 'var(--panel-2)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4
+      }
+    }, "Computed value"), React.createElement("span", {
+      className: "num",
+      style: {
+        fontSize: 22,
+        fontWeight: 800,
+        color: 'var(--blue-700)'
+      }
+    }, result), unitQ ? React.createElement("span", {
+      style: {
+        fontFamily: 'var(--mono)',
+        fontSize: 12,
+        color: 'var(--ink-2)'
+      }
+    }, unitQ) : null, React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, computeAsRate ? numLabel + ' = ' + incCount + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '') : incCount + ' incident(s)', benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''))), lockResp ? React.createElement(Field, {
+      label: "Responsible person"
+    }, React.createElement("input", {
+      style: {
+        ...inputStyle,
+        background: 'var(--panel-2)',
+        color: 'var(--ink-2)'
+      },
+      value: me.name,
+      readOnly: true
+    })) : React.createElement(Field, {
+      label: "Responsible person",
+      hint: assigned.length ? 'Assigned: ' + assigned.map(a => a.name).join(', ') : 'Pick from staff or type a new name.'
+    }, React.createElement(ResponsiblePicker, {
+      value: responsible,
+      onChange: setResponsible,
+      suggestions: assigned
+    })), React.createElement(Field, {
+      label: "Remark (optional)"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: remark,
+      onChange: e => setRemark(e.target.value),
+      placeholder: "Any note for this month"
+    })), qLocked && React.createElement(Banner, null, curInd && curInd.name || 'This indicator', " already has data for ", monthLabel(month), " \u2014 submission is locked for data collectors. Ask an administrator to change it."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        marginTop: 4
+      }
+    }, React.createElement("button", {
+      className: "btn pri",
+      disabled: busy || qLocked,
+      onClick: submit
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 15
+    }), busy ? 'Saving…' : qLocked ? 'Locked — already recorded' : 'Save monthly value'), React.createElement("button", {
+      className: "btn",
+      disabled: busy,
+      onClick: () => {
+        setIncidents([]);
+        setDen('');
+        setRemark('');
+        setDone(null);
+      }
+    }, "Clear"))));
+  }
+  function StatCard({
+    label,
+    value,
+    color
+  }) {
+    return React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 110,
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 10,
+        padding: '12px 14px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 22,
+        fontWeight: 800,
+        color: color || 'var(--ink)'
+      },
+      className: "num"
+    }, value), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: .3
+      }
+    }, label));
+  }
+  function valuesSummary(s) {
+    if (s.type === 'quality') return (s.indicatorName || '') + ' · ' + monthLabel(s.month) + (s.value != null ? ' = ' + s.value : '') + (s.remark ? ' (' + s.remark + ')' : '');
+    const v = s.values || {};
+    const parts = Object.keys(v).map(k => k + ':' + v[k]);
+    return monthLabel(s.month) + ' — ' + (parts.length ? parts.join(', ') : '(no values)');
+  }
+  function SubmissionDetail({
+    s,
+    canEdit,
+    onClose,
+    onSaved
+  }) {
+    const editable = canEdit && s.status === 'pending';
+    const dept = s.type === 'patient' ? (window.UNICO && window.UNICO.DEPARTMENTS || []).find(d => d.id === s.department) : null;
+    const cols = dept && dept.cols || (s.values ? Object.keys(s.values).map(id => ({
+      id,
+      label: id
+    })) : []);
+    const pctOf = {};
+    (dept && dept.cols || []).forEach(c => {
+      pctOf[c.id] = !!c.pct;
+    });
+    const [vals, setVals] = useState(() => Object.assign({}, s.values || {}));
+    const [qval, setQval] = useState(s.value == null ? '' : s.value);
+    const [remark, setRemark] = useState(s.remark || '');
+    const [note, setNote] = useState(s.note || '');
+    const [busy, setBusy] = useState(false);
+    const when = ts => {
+      try {
+        return ts ? new Date(ts).toLocaleString() : '—';
+      } catch (e) {
+        return '—';
+      }
+    };
+    const Meta = ({
+      label,
+      value
+    }) => React.createElement("div", null, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, label), React.createElement("div", {
+      style: {
+        fontWeight: 600,
+        color: 'var(--ink)'
+      }
+    }, value));
+    const save = () => {
+      setBusy(true);
+      const body = {
+        note
+      };
+      if (s.type === 'patient') body.values = vals;else {
+        body.value = qval;
+        body.remark = remark;
+      }
+      dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), body).then(r => {
+        setBusy(false);
+        if (r.ok) {
+          toast('Submission updated', 'success');
+          onSaved && onSaved(r.submission);
+        } else toast(r.error || 'Could not save', 'error');
+      }).catch(() => {
+        setBusy(false);
+        toast('Could not save', 'error');
+      });
+    };
+    return React.createElement("div", {
+      onMouseDown: onClose,
+      style: {
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(16,32,46,.42)',
+        zIndex: 400,
+        display: 'grid',
+        placeItems: 'center',
+        padding: 20
+      }
+    }, React.createElement("div", {
+      onMouseDown: e => e.stopPropagation(),
+      style: {
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 12,
+        width: 580,
+        maxWidth: '100%',
+        maxHeight: '90vh',
+        overflow: 'auto',
+        boxShadow: 'var(--shadow-pop)'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '14px 16px',
+        borderBottom: '1px solid var(--line-2)'
+      }
+    }, React.createElement(Ic, {
+      d: I.doc,
+      s: 16
+    }), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 14
+      }
+    }, "Submission \xB7 ", s.type === 'quality' ? s.areaName : s.departmentName), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "icon-btn",
+      style: {
+        width: 28,
+        height: 28
+      },
+      onClick: onClose
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 14
+    }))), React.createElement("div", {
+      style: {
+        padding: '14px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 13
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 10,
+        fontSize: 12.5
+      }
+    }, React.createElement(Meta, {
+      label: "Type",
+      value: s.type === 'quality' ? 'Quality' : 'Patient'
+    }), React.createElement(Meta, {
+      label: "Reporting month",
+      value: monthLabel(s.month)
+    }), React.createElement(Meta, {
+      label: "Responsible",
+      value: s.responsible && s.responsible.name || '—'
+    }), React.createElement(Meta, {
+      label: "Submitted by",
+      value: s.submittedBy || '—'
+    }), React.createElement(Meta, {
+      label: "Submitted at",
+      value: when(s.submittedAt)
+    }), React.createElement(Meta, {
+      label: "Status",
+      value: s.status
+    }), s.reviewedBy && React.createElement(Meta, {
+      label: "Reviewed by",
+      value: s.reviewedBy + (s.reviewedAt ? ' · ' + when(s.reviewedAt) : '')
+    }), s.editedBy && React.createElement(Meta, {
+      label: "Last edited by",
+      value: s.editedBy + (s.editedAt ? ' · ' + when(s.editedAt) : '')
+    }), s.rejectReason && React.createElement(Meta, {
+      label: "Reject reason",
+      value: s.rejectReason
+    })), React.createElement("div", null, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--ink-2)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 8
+      }
+    }, "Submitted data"), s.type === 'patient' ? React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 10
+      }
+    }, cols.length === 0 && React.createElement("div", {
+      style: {
+        color: 'var(--muted)',
+        fontSize: 12.5
+      }
+    }, "(no values)"), cols.map(c => React.createElement("div", {
+      key: c.id,
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, c.label, pctOf[c.id] ? ' (%)' : ''), editable ? React.createElement("input", {
+      type: "number",
+      step: "any",
+      style: inputStyle,
+      value: vals[c.id] == null ? '' : vals[c.id],
+      onChange: e => setVals(v => Object.assign({}, v, {
+        [c.id]: e.target.value
+      }))
+    }) : React.createElement("div", {
+      className: "num",
+      style: {
+        fontWeight: 700,
+        fontSize: 15
+      }
+    }, vals[c.id] == null ? '—' : vals[c.id])))) : React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, s.indicatorName || 'Value'), editable ? React.createElement("input", {
+      type: "number",
+      step: "any",
+      style: inputStyle,
+      value: qval,
+      onChange: e => setQval(e.target.value)
+    }) : React.createElement("div", {
+      className: "num",
+      style: {
+        fontWeight: 700,
+        fontSize: 15
+      }
+    }, s.value == null ? '—' : s.value)), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "Remark"), editable ? React.createElement("input", {
+      style: inputStyle,
+      value: remark,
+      onChange: e => setRemark(e.target.value)
+    }) : React.createElement("div", null, s.remark || '—')))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "Note"), editable ? React.createElement("input", {
+      style: inputStyle,
+      value: note,
+      onChange: e => setNote(e.target.value),
+      placeholder: "optional"
+    }) : React.createElement("div", null, s.note || '—')), editable && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "Edits are allowed while the submission is pending. Approve it from the table to apply the values to live data."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        justifyContent: 'flex-end'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: onClose
+    }, "Close"), editable && React.createElement("button", {
+      className: "btn pri sm",
+      onClick: save,
+      disabled: busy
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 14
+    }), busy ? 'Saving…' : 'Save changes')))));
+  }
+  function DataReview() {
+    const [rows, setRows] = useState(null);
+    const [stats, setStats] = useState(null);
+    const [filter, setFilter] = useState('pending');
+    const [busy, setBusy] = useState('');
+    const [detail, setDetail] = useState(null);
+    const when = ts => {
+      try {
+        return new Date(ts).toLocaleString();
+      } catch (e) {
+        return '';
+      }
+    };
+    const load = () => {
+      dcApi.get('/api/submissions?status=' + filter + '&limit=300').then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+      dcApi.get('/api/submissions/stats').then(r => setStats(r.ok ? r.stats : null)).catch(() => {});
+    };
+    useEffect(() => {
+      setRows(null);
+      load();
+    }, [filter]);
+    const act = (id, kind) => {
+      let reason = '';
+      if (kind === 'reject') {
+        reason = window.prompt && window.prompt('Reason for rejecting (optional):') || '';
+      }
+      setBusy(id);
+      dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? {
+        reason
+      } : {}).then(r => {
+        setBusy('');
+        if (r.ok) {
+          toast(kind === 'approve' ? 'Approved — applied to live data' : 'Submission rejected', kind === 'approve' ? 'success' : 'info');
+          load();
+        } else toast(r.error || 'Action failed', 'error');
+      }).catch(() => {
+        setBusy('');
+        toast('Action failed', 'error');
+      });
+    };
+    const statusChip = st => {
+      const map = {
+        pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'],
+        approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'],
+        rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)']
+      };
+      const m = map[st] || ['—', 'var(--panel-2)', 'var(--muted)'];
+      return React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '3px 9px',
+          borderRadius: 999,
+          background: m[1],
+          color: m[2]
+        }
+      }, m[0]);
+    };
+    const tabs = [['pending', 'Pending'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']];
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 14
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.doc,
+      title: "Review & History",
+      sub: "Every submission with time, data and status. Submissions stay pending until an admin approves \u2014 approval applies them to the live dashboard.",
+      right: React.createElement("button", {
+        className: "btn sm",
+        onClick: load
+      }, React.createElement(Ic, {
+        d: I.trend,
+        s: 14
+      }), "Refresh")
+    }), stats && React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement(StatCard, {
+      label: "Total",
+      value: stats.total
+    }), React.createElement(StatCard, {
+      label: "Pending",
+      value: stats.pending,
+      color: stats.pending ? '#b8860b' : 'var(--ink)'
+    }), React.createElement(StatCard, {
+      label: "Approved",
+      value: stats.approved,
+      color: "var(--pos)"
+    }), React.createElement(StatCard, {
+      label: "Rejected",
+      value: stats.rejected,
+      color: "var(--rose)"
+    }), React.createElement(StatCard, {
+      label: "Patient",
+      value: stats.patient,
+      color: "var(--blue)"
+    }), React.createElement(StatCard, {
+      label: "Quality",
+      value: stats.quality,
+      color: "var(--blue)"
+    })), React.createElement("div", {
+      className: "seg",
+      style: {
+        alignSelf: 'flex-start'
+      }
+    }, tabs.map(([id, l]) => React.createElement("button", {
+      key: id,
+      className: filter === id ? 'on' : '',
+      onClick: () => setFilter(id)
+    }, l, id === 'pending' && stats && stats.pending ? ' (' + stats.pending + ')' : ''))), React.createElement(Card, {
+      style: {
+        padding: 0,
+        overflow: 'hidden'
+      }
+    }, rows === null ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026") : rows.length === 0 ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)',
+        textAlign: 'center'
+      }
+    }, "No ", filter === 'all' ? '' : filter, " submissions.") : React.createElement("table", {
+      className: "tbl",
+      style: {
+        width: '100%'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "When"), React.createElement("th", null, "Type"), React.createElement("th", null, "Target"), React.createElement("th", null, "Data"), React.createElement("th", null, "Responsible"), React.createElement("th", null, "By"), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, rows.map(s => React.createElement("tr", {
+      key: s.id
+    }, React.createElement("td", {
+      style: {
+        whiteSpace: 'nowrap'
+      },
+      className: "num"
+    }, when(s.submittedAt)), React.createElement("td", null, React.createElement("span", {
+      className: "chip",
+      style: {
+        background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)'
+      }
+    }, s.type === 'quality' ? 'Quality' : 'Patient')), React.createElement("td", {
+      style: {
+        fontWeight: 600,
+        whiteSpace: 'nowrap'
+      }
+    }, s.type === 'quality' ? s.areaName : s.departmentName), React.createElement("td", {
+      style: {
+        fontSize: 12,
+        color: 'var(--ink-2)',
+        maxWidth: 320
+      }
+    }, valuesSummary(s)), React.createElement("td", {
+      style: {
+        whiteSpace: 'nowrap'
+      }
+    }, s.responsible && s.responsible.name || '—'), React.createElement("td", {
+      style: {
+        whiteSpace: 'nowrap'
+      }
+    }, s.submittedBy || '—'), React.createElement("td", null, statusChip(s.status)), React.createElement("td", {
+      style: {
+        textAlign: 'right',
+        whiteSpace: 'nowrap'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setDetail(s),
+      style: {
+        marginRight: 5
+      }
+    }, React.createElement(Ic, {
+      d: I.search,
+      s: 13
+    }), "View"), s.status === 'pending' && React.createElement(React.Fragment, null, React.createElement("button", {
+      className: "btn sm pri",
+      disabled: busy === s.id,
+      onClick: () => act(s.id, 'approve'),
+      style: {
+        marginRight: 5
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 13
+    }), "Approve"), React.createElement("button", {
+      className: "btn sm",
+      disabled: busy === s.id,
+      onClick: () => act(s.id, 'reject')
+    }, "Reject")), s.status !== 'pending' && s.reviewedBy && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, s.reviewedBy))))))), detail && React.createElement(SubmissionDetail, {
+      s: detail,
+      canEdit: true,
+      onClose: () => setDetail(null),
+      onSaved: () => {
+        setDetail(null);
+        load();
+      }
+    }));
+  }
+  function DataShareLinks({
+    depts
+  }) {
+    const all = window.UNICO && window.UNICO.DEPARTMENTS || depts || [];
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
+      key: d.key,
+      name: d.name
+    })), []);
+    const [links, setLinks] = useState(null);
+    const [resps, setResps] = useState([]);
+    const [form, setForm] = useState({
+      type: 'patient',
+      department: all[0] && all[0].id || '',
+      area: areas[0] && areas[0].key || '',
+      responsible: '',
+      label: ''
+    });
+    const load = () => dcApi.get('/api/shortlinks').then(r => setLinks(r.ok ? r.links : [])).catch(() => setLinks([]));
+    useEffect(() => {
+      load();
+      dcApi.get('/api/responsibles').then(r => setResps(r.ok ? r.responsibles : [])).catch(() => {});
+    }, []);
+    const origin = typeof window !== 'undefined' && window.location && window.location.origin || '';
+    const fullUrl = code => origin + '/s/' + code;
+    const create = () => {
+      const matched = resps.find(r => r.name === form.responsible);
+      const body = {
+        type: form.type,
+        label: form.label,
+        responsible: matched ? {
+          id: matched.id,
+          name: matched.name
+        } : form.responsible ? {
+          name: form.responsible
+        } : null
+      };
+      if (form.type === 'patient') body.department = form.department;else body.area = form.area;
+      dcApi.post('/api/shortlinks', body).then(r => {
+        if (r.ok) {
+          toast('Share link created', 'success');
+          setForm({
+            ...form,
+            label: ''
+          });
+          load();
+        } else toast(r.error || 'Could not create', 'error');
+      });
+    };
+    const copy = code => {
+      try {
+        navigator.clipboard.writeText(fullUrl(code));
+        toast('Link copied to clipboard', 'success');
+      } catch (e) {
+        window.prompt('Copy this link:', fullUrl(code));
+      }
+    };
+    const remove = code => {
+      const go = () => dcApi.del('/api/shortlinks/' + encodeURIComponent(code)).then(load);
+      if (window.UI && window.UI.confirm) window.UI.confirm('Delete this share link?').then(ok => ok && go());else if (window.confirm('Delete this share link?')) go();
+    };
+    const assigned = form.type === 'patient' ? resps.filter(r => (r.departments || []).includes(form.department)) : resps.filter(r => (r.qualityAreas || []).includes(form.area));
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 14
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.arrowR,
+      title: "Share Links",
+      sub: "Create a short link to a single form and share it (e.g. with Rabbi Miah for Cathlab). Anyone with the link can submit \u2014 no login \u2014 and it lands in Review & History."
+    }), React.createElement(Card, null, React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 14,
+        marginBottom: 12
+      }
+    }, "New share link"), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 14
+      }
+    }, React.createElement(Field, {
+      label: "Form type"
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: form.type,
+      onChange: e => setForm({
+        ...form,
+        type: e.target.value
+      })
+    }, React.createElement("option", {
+      value: "patient"
+    }, "Patient Statistics"), React.createElement("option", {
+      value: "quality"
+    }, "Quality Data"))), form.type === 'patient' ? React.createElement(Field, {
+      label: "Department"
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: form.department,
+      onChange: e => setForm({
+        ...form,
+        department: e.target.value
+      })
+    }, all.map(d => React.createElement("option", {
+      key: d.id,
+      value: d.id
+    }, d.name)))) : React.createElement(Field, {
+      label: "Quality area"
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: form.area,
+      onChange: e => setForm({
+        ...form,
+        area: e.target.value
+      })
+    }, areas.map(a => React.createElement("option", {
+      key: a.key,
+      value: a.key
+    }, a.name))))), React.createElement(Field, {
+      label: "Responsible person (who will fill this in)",
+      hint: assigned.length ? 'Assigned: ' + assigned.map(a => a.name).join(', ') : 'Pick from staff or type a name.'
+    }, React.createElement(ResponsiblePicker, {
+      value: form.responsible,
+      onChange: v => setForm({
+        ...form,
+        responsible: v
+      }),
+      suggestions: assigned
+    })), React.createElement(Field, {
+      label: "Label (optional)"
+    }, React.createElement("input", {
+      style: inputStyle,
+      value: form.label,
+      onChange: e => setForm({
+        ...form,
+        label: e.target.value
+      }),
+      placeholder: "e.g. Cathlab monthly stats \u2014 Rabbi Miah"
+    })), React.createElement("button", {
+      className: "btn pri",
+      onClick: create
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 15
+    }), "Create link")), React.createElement(Card, {
+      style: {
+        padding: 0,
+        overflow: 'hidden'
+      }
+    }, links === null ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026") : links.length === 0 ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)',
+        textAlign: 'center'
+      }
+    }, "No share links yet.") : React.createElement("table", {
+      className: "tbl",
+      style: {
+        width: '100%'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Link"), React.createElement("th", null, "Type"), React.createElement("th", null, "Target"), React.createElement("th", null, "Responsible"), React.createElement("th", null, "Hits"), React.createElement("th", null))), React.createElement("tbody", null, links.map(l => React.createElement("tr", {
+      key: l.code
+    }, React.createElement("td", null, React.createElement("a", {
+      href: fullUrl(l.code),
+      target: "_blank",
+      rel: "noreferrer",
+      style: {
+        color: 'var(--blue)',
+        fontFamily: 'var(--mono)',
+        fontSize: 12
+      }
+    }, "/s/", l.code)), React.createElement("td", null, l.type === 'quality' ? 'Quality' : 'Patient'), React.createElement("td", {
+      style: {
+        fontWeight: 600
+      }
+    }, l.type === 'quality' ? l.area : (all.find(d => d.id === l.department) || {}).name || l.department), React.createElement("td", null, l.responsible && l.responsible.name || '—'), React.createElement("td", {
+      className: "num"
+    }, l.hits || 0), React.createElement("td", {
+      style: {
+        textAlign: 'right',
+        whiteSpace: 'nowrap'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: () => copy(l.code),
+      style: {
+        marginRight: 5
+      }
+    }, React.createElement(Ic, {
+      d: I.download,
+      s: 13
+    }), "Copy"), React.createElement("button", {
+      className: "icon-btn",
+      title: "Delete",
+      style: {
+        color: 'var(--rose)'
+      },
+      onClick: () => remove(l.code)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 14
+    })))))))));
+  }
+  function reportedRecords() {
+    const out = [];
+    const liveDepts = window.UNICO && window.UNICO.DEPARTMENTS || [];
+    liveDepts.forEach(d => (d.series || []).forEach(r => {
+      const values = {};
+      Object.keys(r).forEach(k => {
+        if (k !== 'month' && k !== 'full') values[k] = r[k];
+      });
+      out.push({
+        id: 'rec-p-' + d.id + '-' + r.month,
+        type: 'patient',
+        department: d.id,
+        departmentName: d.name,
+        month: r.month,
+        values,
+        status: 'reported',
+        submittedAt: null
+      });
+    }));
+    const liveAreas = window.qualityData ? window.qualityData() : [];
+    liveAreas.forEach(a => (a.indicators || []).forEach(ind => ['Q1', 'Q2', 'Q3', 'Q4'].forEach(q => {
+      const v = ind.quarters && ind.quarters[q];
+      if (v == null || v === '') return;
+      out.push({
+        id: 'rec-q-' + a.key + '-' + ind.id + '-' + q,
+        type: 'quality',
+        area: a.key,
+        areaName: a.name,
+        indicatorId: ind.id,
+        indicatorName: ind.name,
+        quarter: q,
+        value: v,
+        remark: ind.quarterRemarks && ind.quarterRemarks[q] || '',
+        status: 'reported',
+        submittedAt: null
+      });
+    })));
+    return out;
+  }
+  function CollectorHistory() {
+    const [rows, setRows] = useState(null);
+    const [detail, setDetail] = useState(null);
+    const [view, setView] = useState('patient');
+    const load = () => dcApi.get('/api/submissions?limit=300').then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+    useEffect(() => {
+      load();
+    }, []);
+    const when = ts => {
+      try {
+        return ts ? new Date(ts).toLocaleString() : '—';
+      } catch (e) {
+        return '—';
+      }
+    };
+    const statusChip = st => {
+      const m = {
+        pending: ['Pending', '#fff4e0', '#9a6b00'],
+        approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'],
+        rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)'],
+        reported: ['On record', 'var(--blue-50)', 'var(--blue-700)']
+      }[st] || ['—', '#eef1f5', '#789'];
+      return React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '3px 9px',
+          borderRadius: 999,
+          background: m[1],
+          color: m[2]
+        }
+      }, m[0]);
+    };
+    const keyOf = s => s.type === 'quality' ? 'q|' + s.area + '|' + (s.indicatorId || s.indicatorName) + '|' + s.quarter : 'p|' + s.department + '|' + s.month;
+    const subs = rows || [];
+    const subKeys = new Set(subs.map(keyOf));
+    const merged = subs.concat(reportedRecords().filter(r => !subKeys.has(keyOf(r)))).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
+    const patientRows = merged.filter(s => s.type !== 'quality');
+    const qualityRows = merged.filter(s => s.type === 'quality');
+    const avail = [];
+    if (patientRows.length) avail.push('patient');
+    if (qualityRows.length) avail.push('quality');
+    const active = avail.indexOf(view) >= 0 ? view : avail[0] || 'patient';
+    const isQ = active === 'quality';
+    const shown = isQ ? qualityRows : patientRows;
+    return React.createElement(React.Fragment, null, React.createElement(Card, {
+      style: {
+        padding: 0,
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '12px 16px',
+        borderBottom: '1px solid var(--line-2)',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontWeight: 700
+      }
+    }, "My data \u2014 submissions & what's on record"), merged.length > 0 && React.createElement("div", {
+      className: "seg"
+    }, avail.indexOf('patient') >= 0 && React.createElement("button", {
+      className: active === 'patient' ? 'on' : '',
+      onClick: () => setView('patient')
+    }, React.createElement(Ic, {
+      d: I.input,
+      s: 13
+    }), "Patient Statistics (", patientRows.length, ")"), avail.indexOf('quality') >= 0 && React.createElement("button", {
+      className: active === 'quality' ? 'on' : '',
+      onClick: () => setView('quality')
+    }, React.createElement(Ic, {
+      d: I.activity,
+      s: 13
+    }), "Quality Data (", qualityRows.length, ")")), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "btn sm",
+      onClick: load
+    }, React.createElement(Ic, {
+      d: I.trend,
+      s: 13
+    }), "Refresh")), rows === null ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026") : merged.length === 0 ? React.createElement("div", {
+      style: {
+        padding: 28,
+        color: 'var(--muted)',
+        textAlign: 'center'
+      }
+    }, "No data yet for your assigned departments.") : React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, React.createElement("table", {
+      className: "tbl",
+      style: {
+        width: '100%'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Submitted on"), isQ ? React.createElement(React.Fragment, null, React.createElement("th", null, "Area"), React.createElement("th", null, "Indicator"), React.createElement("th", null, "Quarter")) : React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "Month")), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, shown.map(s => React.createElement("tr", {
+      key: s.id
+    }, React.createElement("td", {
+      className: "num",
+      style: {
+        whiteSpace: 'nowrap'
+      }
+    }, when(s.submittedAt)), isQ ? React.createElement(React.Fragment, null, React.createElement("td", {
+      style: {
+        fontWeight: 600
+      }
+    }, s.areaName), React.createElement("td", null, s.indicatorName), React.createElement("td", null, s.quarter)) : React.createElement(React.Fragment, null, React.createElement("td", {
+      style: {
+        fontWeight: 600
+      }
+    }, s.departmentName), React.createElement("td", null, monthLabel(s.month))), React.createElement("td", null, statusChip(s.status)), React.createElement("td", {
+      style: {
+        textAlign: 'right'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setDetail(s)
+    }, React.createElement(Ic, {
+      d: I.search,
+      s: 13
+    }), "View")))))))), detail && React.createElement(SubmissionDetail, {
+      s: detail,
+      canEdit: false,
+      onClose: () => setDetail(null)
+    }));
+  }
+  function CollectorPortal() {
+    const user = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
+    const depts = window.UNICO && window.UNICO.DEPARTMENTS || [];
+    const areas = window.qualityData ? window.qualityData() : [];
+    const hasPatient = depts.length > 0;
+    const hasQuality = areas.length > 0;
+    const tabs = [];
+    if (hasPatient) tabs.push(['patient', 'Patient Statistics', I.input]);
+    if (hasQuality) tabs.push(['quality', 'Quality Data', I.activity]);
+    tabs.push(['history', 'My Submissions', I.doc]);
+    const [tab, setTab] = useState(tabs[0][0]);
+    const tabBtn = (id, label, icon) => React.createElement("button", {
+      key: id,
+      onClick: () => setTab(id),
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        padding: '9px 15px',
+        borderRadius: 9,
+        cursor: 'pointer',
+        border: '1px solid ' + (tab === id ? 'var(--blue)' : 'var(--line)'),
+        background: tab === id ? 'var(--blue)' : '#fff',
+        color: tab === id ? '#fff' : 'var(--ink-2)',
+        fontWeight: 600,
+        fontSize: 13,
+        fontFamily: 'inherit'
+      }
+    }, React.createElement(Ic, {
+      d: icon,
+      s: 15
+    }), label);
+    return React.createElement("div", {
+      style: {
+        height: '100vh',
+        overflowY: 'auto',
+        background: '#eef2f7'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '0 16px',
+        height: 58,
+        background: '#0d1b2e',
+        color: '#fff',
+        position: 'sticky',
+        top: 0,
+        zIndex: 10
+      }
+    }, React.createElement("img", {
+      src: "unico/logo.svg",
+      alt: "UNICO",
+      style: {
+        height: 24
+      }
+    }), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 14.5
+      }
+    }, "Data Collection"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("div", {
+      style: {
+        textAlign: 'right',
+        lineHeight: 1.2,
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        maxWidth: '40vw'
+      }
+    }, user.name || 'Collector'), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: '#83909f'
+      }
+    }, "Data Collector")), React.createElement("a", {
+      href: "/logout",
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#cfe0f0',
+        textDecoration: 'none',
+        border: '1px solid rgba(255,255,255,.22)',
+        borderRadius: 8,
+        padding: '7px 12px',
+        whiteSpace: 'nowrap'
+      }
+    }, "Sign out")), React.createElement("div", {
+      style: {
+        maxWidth: 860,
+        margin: '0 auto',
+        padding: '18px 14px 70px'
+      }
+    }, React.createElement("div", {
+      style: {
+        marginBottom: 14,
+        fontSize: 13,
+        color: 'var(--muted)'
+      }
+    }, "Welcome, ", React.createElement("b", {
+      style: {
+        color: 'var(--ink)'
+      }
+    }, user.name), ". Submit your assigned data below \u2014 every submission goes to the administrator for review.", !hasPatient && !hasQuality && React.createElement("span", {
+      style: {
+        color: 'var(--rose)',
+        fontWeight: 600
+      }
+    }, " No departments assigned yet \u2014 please contact your administrator.")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap',
+        marginBottom: 18
+      }
+    }, tabs.map(t => tabBtn(t[0], t[1], t[2]))), tab === 'patient' && hasPatient && React.createElement(DataPatientForm, {
+      depts: depts,
+      prefill: {
+        responsible: user.name
+      }
+    }), tab === 'quality' && hasQuality && React.createElement(DataQualityForm, {
+      prefill: {
+        responsible: user.name
+      }
+    }), tab === 'history' && React.createElement(CollectorHistory, null)));
+  }
+  Object.assign(window, {
+    DataResponsibles,
+    DataPatientForm,
+    DataQualityForm,
+    DataReview,
+    DataShareLinks,
+    CollectorPortal
+  });
+})();
+})();
+;
+/* ===== user-admin.jsx ===== */
+(function(){
+const UA_ROLES = ['Administrator', 'collector', 'User'];
+const UA_ROLE_LABEL = {
+  Administrator: 'Administrator',
+  collector: 'Data Collector',
+  User: 'User'
+};
+const UA_ROLE_TONE = {
+  Administrator: ['#6a52d4', 'rgba(106,82,212,.12)'],
+  collector: ['#0090ca', 'var(--blue-50)'],
+  User: ['#5b6b80', '#eef1f5']
+};
+function uaRoleTone(r) {
+  return UA_ROLE_TONE[r] || UA_ROLE_TONE.User;
+}
+function uaApi(method, path, body) {
+  return fetch(path, {
+    method,
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    credentials: 'same-origin',
+    body: body ? JSON.stringify(body) : undefined
+  }).then(async r => {
+    let j = null;
+    try {
+      j = await r.json();
+    } catch (e) {}
+    if (!r.ok || !j || j.ok === false) {
+      const msg = j && j.error || (r.status === 401 ? 'Sign in as an administrator to manage users.' : r.status === 403 ? 'Administrator access required.' : 'Request failed (' + r.status + ').');
+      throw new Error(msg);
+    }
+    return j;
+  });
+}
+function uaToast(msg, kind) {
+  try {
+    if (window.UI && window.UI.toast) window.UI.toast(msg, kind || 'success');
+  } catch (e) {}
+}
+function UAUserForm({
+  user,
+  roles,
+  onClose,
+  onSaved
+}) {
+  const {
+    useState
+  } = React;
+  const editing = !!user;
+  const [username, setUsername] = useState(user ? user.username : '');
+  const [name, setName] = useState(user ? user.name || '' : '');
+  const [role, setRole] = useState(user ? user.role || 'User' : 'User');
+  const [active, setActive] = useState(user ? user.active !== false : true);
+  const [password, setPassword] = useState('');
+  const [departments, setDepartments] = useState(user && user.departments ? user.departments.join(', ') : '');
+  const [qualityAreas, setQualityAreas] = useState(user && user.qualityAreas ? user.qualityAreas.join(', ') : '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const txt = {
+    padding: '9px 11px',
+    border: '1px solid var(--line)',
+    borderRadius: 8,
+    fontSize: 13,
+    fontFamily: 'inherit',
+    width: '100%',
+    outline: 'none',
+    background: '#fff'
+  };
+  const list = s => s.split(',').map(x => x.trim()).filter(Boolean);
+  const submit = async () => {
+    setErr('');
+    if (!editing && !String(username).trim()) return setErr('Username is required.');
+    if (!editing && password.length < 6) return setErr('Password must be at least 6 characters.');
+    setBusy(true);
+    try {
+      const scope = role === 'collector' ? {
+        departments: list(departments),
+        qualityAreas: list(qualityAreas)
+      } : {
+        departments: [],
+        qualityAreas: []
+      };
+      if (editing) {
+        await uaApi('PATCH', '/api/users/' + encodeURIComponent(user.username), {
+          name,
+          role,
+          active,
+          ...scope
+        });
+      } else {
+        await uaApi('POST', '/api/users', {
+          username: String(username).trim().toLowerCase(),
+          name,
+          role,
+          active,
+          password,
+          ...scope
+        });
+      }
+      uaToast(editing ? 'User updated' : 'User created');
+      onSaved();
+    } catch (e) {
+      setErr(e.message || 'Could not save.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return React.createElement("div", {
+    onMouseDown: onClose,
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(16,32,46,.42)',
+      zIndex: 400,
+      display: 'grid',
+      placeItems: 'center',
+      padding: 20
+    }
+  }, React.createElement("div", {
+    onMouseDown: e => e.stopPropagation(),
+    className: "card",
+    style: {
+      width: 460,
+      maxWidth: '100%',
+      maxHeight: '90vh',
+      overflow: 'auto'
+    }
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, editing ? 'Edit user' : 'Add user'), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "icon-btn",
+    style: {
+      width: 28,
+      height: 28
+    },
+    onClick: onClose
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 14
+  }))), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Username"), React.createElement("input", {
+    style: {
+      ...txt,
+      opacity: editing ? 0.6 : 1
+    },
+    value: username,
+    disabled: editing,
+    onChange: e => setUsername(e.target.value),
+    placeholder: "e.g. j.smith"
+  })), React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Full name"), React.createElement("input", {
+    style: txt,
+    value: name,
+    onChange: e => setName(e.target.value),
+    placeholder: "Display name"
+  })), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr auto',
+      gap: 12,
+      alignItems: 'end'
+    }
+  }, React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Role"), React.createElement("select", {
+    style: txt,
+    value: role,
+    onChange: e => setRole(e.target.value)
+  }, (roles && roles.length ? roles : UA_ROLES).map(r => React.createElement("option", {
+    key: r,
+    value: r
+  }, UA_ROLE_LABEL[r] || r)))), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      fontSize: 13,
+      color: 'var(--ink-2)',
+      cursor: 'pointer',
+      paddingBottom: 9
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: active,
+    onChange: e => setActive(e.target.checked)
+  }), "Active")), role === 'collector' && React.createElement(React.Fragment, null, React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Departments (comma-separated)"), React.createElement("input", {
+    style: txt,
+    value: departments,
+    onChange: e => setDepartments(e.target.value),
+    placeholder: "e.g. MICU, CCU"
+  })), React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Quality areas (comma-separated)"), React.createElement("input", {
+    style: txt,
+    value: qualityAreas,
+    onChange: e => setQualityAreas(e.target.value),
+    placeholder: "e.g. Infection Control"
+  }))), !editing && React.createElement("div", {
+    className: "field"
+  }, React.createElement("label", null, "Password"), React.createElement("input", {
+    style: txt,
+    type: "password",
+    value: password,
+    onChange: e => setPassword(e.target.value),
+    placeholder: "At least 6 characters"
+  })), err && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#b32339',
+      background: 'var(--neg-bg)',
+      borderRadius: 7,
+      padding: '8px 10px'
+    }
+  }, err), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("button", {
+    className: "btn sm",
+    onClick: onClose
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: submit,
+    disabled: busy
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 14
+  }), busy ? 'Saving…' : editing ? 'Save changes' : 'Create user')))));
+}
+function UAPasswordForm({
+  user,
+  onClose,
+  onSaved
+}) {
+  const {
+    useState
+  } = React;
+  const [pw, setPw] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const txt = {
+    padding: '9px 11px',
+    border: '1px solid var(--line)',
+    borderRadius: 8,
+    fontSize: 13,
+    fontFamily: 'inherit',
+    width: '100%',
+    outline: 'none',
+    background: '#fff'
+  };
+  const submit = async () => {
+    if (pw.length < 6) return setErr('Password must be at least 6 characters.');
+    setBusy(true);
+    setErr('');
+    try {
+      await uaApi('POST', '/api/users/' + encodeURIComponent(user.username) + '/password', {
+        password: pw
+      });
+      uaToast('Password reset');
+      onSaved();
+    } catch (e) {
+      setErr(e.message || 'Could not reset.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return React.createElement("div", {
+    onMouseDown: onClose,
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(16,32,46,.42)',
+      zIndex: 400,
+      display: 'grid',
+      placeItems: 'center',
+      padding: 20
+    }
+  }, React.createElement("div", {
+    onMouseDown: e => e.stopPropagation(),
+    className: "card",
+    style: {
+      width: 380,
+      maxWidth: '100%'
+    }
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Reset password"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "icon-btn",
+    style: {
+      width: 28,
+      height: 28
+    },
+    onClick: onClose
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 14
+  }))), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--muted)'
+    }
+  }, "New password for ", React.createElement("b", {
+    style: {
+      color: 'var(--ink)'
+    }
+  }, user.name || user.username), " (@", user.username, ")."), React.createElement("input", {
+    style: txt,
+    type: "password",
+    value: pw,
+    onChange: e => setPw(e.target.value),
+    placeholder: "At least 6 characters"
+  }), err && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#b32339',
+      background: 'var(--neg-bg)',
+      borderRadius: 7,
+      padding: '8px 10px'
+    }
+  }, err), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("button", {
+    className: "btn sm",
+    onClick: onClose
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: submit,
+    disabled: busy
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 14
+  }), busy ? 'Saving…' : 'Reset password')))));
+}
+function UserAdmin() {
+  const {
+    useState,
+    useEffect
+  } = React;
+  const [users, setUsers] = useState(null);
+  const [roles, setRoles] = useState(UA_ROLES);
+  const [err, setErr] = useState('');
+  const [q, setQ] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [form, setForm] = useState(null);
+  const [pwUser, setPwUser] = useState(null);
+  const load = () => {
+    setErr('');
+    uaApi('GET', '/api/users').then(j => {
+      setUsers(j.users || []);
+      if (j.roles && j.roles.length) setRoles(j.roles);
+    }).catch(e => {
+      setUsers([]);
+      setErr(e.message || 'Could not load users.');
+    });
+  };
+  useEffect(load, []);
+  const setActive = async (u, active) => {
+    try {
+      await uaApi('PATCH', '/api/users/' + encodeURIComponent(u.username), {
+        active
+      });
+      uaToast(active ? 'Activated' : 'Deactivated');
+      load();
+    } catch (e) {
+      uaToast(e.message || 'Failed', 'error');
+    }
+  };
+  const del = async u => {
+    let ok = true;
+    try {
+      ok = await window.UI.confirm({
+        title: 'Delete user?',
+        message: `Permanently removes "${u.name || u.username}" (@${u.username}).`,
+        danger: true,
+        confirmLabel: 'Delete'
+      });
+    } catch (e) {
+      ok = window.confirm('Delete ' + u.username + '?');
+    }
+    if (!ok) return;
+    try {
+      await uaApi('DELETE', '/api/users/' + encodeURIComponent(u.username));
+      uaToast('User deleted');
+      load();
+    } catch (e) {
+      uaToast(e.message || 'Failed', 'error');
+    }
+  };
+  const all = users || [];
+  const counts = {
+    total: all.length,
+    admin: all.filter(u => u.role === 'Administrator').length,
+    collector: all.filter(u => u.role === 'collector').length,
+    active: all.filter(u => u.active !== false).length
+  };
+  const ql = q.trim().toLowerCase();
+  const shown = all.filter(u => (roleFilter === 'all' || u.role === roleFilter) && (!ql || (u.username || '').toLowerCase().includes(ql) || (u.name || '').toLowerCase().includes(ql)));
+  const sel = {
+    padding: '8px 10px',
+    border: '1px solid var(--line)',
+    borderRadius: 8,
+    fontSize: 12.5,
+    fontFamily: 'inherit',
+    background: '#fff',
+    color: 'var(--ink)'
+  };
+  const Kpi = ({
+    label,
+    val,
+    color
+  }) => React.createElement("div", {
+    className: "card anim-pop",
+    style: {
+      padding: '15px 18px',
+      borderLeft: `4px solid ${color}`,
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 92
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink-2)'
+    }
+  }, label), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 28,
+      fontWeight: 700,
+      color,
+      margin: '6px 0 0',
+      lineHeight: 1
+    }
+  }, val));
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.user,
+    title: "User Management",
+    sub: "All accounts, roles & access across the UNICO suite",
+    right: React.createElement(React.Fragment, null, React.createElement("button", {
+      className: "btn sm",
+      onClick: load
+    }, React.createElement(Ic, {
+      d: I.search,
+      s: 14
+    }), "Refresh"), React.createElement("button", {
+      className: "btn pri sm",
+      onClick: () => setForm({
+        user: null
+      })
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 14
+    }), "Add user"))
+  }), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))'
+    }
+  }, React.createElement(Kpi, {
+    label: "Total users",
+    val: counts.total,
+    color: "#0090ca"
+  }), React.createElement(Kpi, {
+    label: "Administrators",
+    val: counts.admin,
+    color: "#6a52d4"
+  }), React.createElement(Kpi, {
+    label: "Data collectors",
+    val: counts.collector,
+    color: "#3ab5a7"
+  }), React.createElement(Kpi, {
+    label: "Active",
+    val: counts.active,
+    color: "#1f9d57"
+  })), err && React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '12px 16px',
+      borderLeft: '4px solid #d23a52',
+      fontSize: 12.5,
+      color: '#b32339'
+    }
+  }, err, " ", String(err).toLowerCase().includes('administrator') ? '' : '· Is the server running with a database connection?'), React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, React.createElement("h3", null, "Accounts"), React.createElement("span", {
+    className: "sub"
+  }, shown.length, " of ", all.length, " shown"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("div", {
+    className: "tb-search",
+    style: {
+      width: 220,
+      margin: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 14
+  }), React.createElement("input", {
+    value: q,
+    onChange: e => setQ(e.target.value),
+    placeholder: "Search name or username\u2026"
+  })), React.createElement("select", {
+    style: sel,
+    value: roleFilter,
+    onChange: e => setRoleFilter(e.target.value)
+  }, React.createElement("option", {
+    value: "all"
+  }, "All roles"), roles.map(r => React.createElement("option", {
+    key: r,
+    value: r
+  }, UA_ROLE_LABEL[r] || r)))), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    className: "tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Name"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Username"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Role"), React.createElement("th", {
+    style: {
+      textAlign: 'center'
+    }
+  }, "Status"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Scope"), React.createElement("th", {
+    style: {
+      textAlign: 'right'
+    }
+  }, "Actions"))), React.createElement("tbody", null, users === null && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 6,
+    style: {
+      textAlign: 'center',
+      color: 'var(--muted)',
+      padding: 24
+    }
+  }, "Loading\u2026")), users !== null && shown.length === 0 && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 6,
+    style: {
+      textAlign: 'center',
+      color: 'var(--muted)',
+      padding: 24
+    }
+  }, "No users", ql || roleFilter !== 'all' ? ' match the filter' : ' found', ".")), shown.map(u => {
+    const [fg, bg] = uaRoleTone(u.role);
+    const active = u.active !== false;
+    const scope = [].concat(u.departments || []).concat(u.qualityAreas || []);
+    return React.createElement("tr", {
+      key: u.username
+    }, React.createElement("td", {
+      style: {
+        textAlign: 'left'
+      }
+    }, React.createElement("b", {
+      style: {
+        color: 'var(--ink)'
+      }
+    }, u.name || u.username)), React.createElement("td", {
+      style: {
+        textAlign: 'left',
+        fontFamily: 'var(--mono)',
+        fontSize: 12
+      }
+    }, "@", u.username), React.createElement("td", {
+      style: {
+        textAlign: 'left'
+      }
+    }, React.createElement("span", {
+      className: "chip",
+      style: {
+        background: bg,
+        color: fg,
+        fontWeight: 700
+      }
+    }, UA_ROLE_LABEL[u.role] || u.role)), React.createElement("td", {
+      style: {
+        textAlign: 'center'
+      }
+    }, React.createElement("span", {
+      className: "chip",
+      style: {
+        background: active ? 'var(--pos-bg)' : '#eef1f5',
+        color: active ? 'var(--pos)' : '#9aa6b4'
+      }
+    }, active ? 'Active' : 'Inactive')), React.createElement("td", {
+      style: {
+        textAlign: 'left',
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        maxWidth: 240
+      }
+    }, scope.length ? scope.join(', ') : '—'), React.createElement("td", {
+      style: {
+        textAlign: 'right',
+        whiteSpace: 'nowrap'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      title: "Edit",
+      onClick: () => setForm({
+        user: u
+      })
+    }, React.createElement(Ic, {
+      d: I.edit,
+      s: 13
+    })), ' ', React.createElement("button", {
+      className: "btn sm",
+      title: "Reset password",
+      onClick: () => setPwUser(u)
+    }, React.createElement(Ic, {
+      d: I.gear,
+      s: 13
+    })), ' ', React.createElement("button", {
+      className: "btn sm",
+      title: active ? 'Deactivate' : 'Activate',
+      onClick: () => setActive(u, !active)
+    }, React.createElement(Ic, {
+      d: active ? I.x : I.check,
+      s: 13
+    })), ' ', React.createElement("button", {
+      className: "icon-btn danger",
+      style: {
+        width: 28,
+        height: 28,
+        display: 'inline-grid'
+      },
+      title: "Delete",
+      onClick: () => del(u)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 14
+    }))));
+  }))))), form && React.createElement(UAUserForm, {
+    user: form.user,
+    roles: roles,
+    onClose: () => setForm(null),
+    onSaved: () => {
+      setForm(null);
+      load();
+    }
+  }), pwUser && React.createElement(UAPasswordForm, {
+    user: pwUser,
+    onClose: () => setPwUser(null),
+    onSaved: () => setPwUser(null)
+  }));
+}
+window.UserAdmin = UserAdmin;
+})();
+;
+/* ===== data-fields.jsx ===== */
+(function(){
+function DataFields({
+  setRoute
+}) {
+  const {
+    useState,
+    useMemo
+  } = React;
+  const depts = window.UNICO && window.UNICO.DEPARTMENTS || [];
+  const areas = useMemo(() => (window.qualityData ? window.qualityData() : window.QUALITY_SEED || []).filter(d => d.indicators && d.indicators.length), []);
+  const [tab, setTab] = useState('patient');
+  const [deptId, setDeptId] = useState(depts[0] && depts[0].id || '');
+  const [areaKey, setAreaKey] = useState(areas[0] && areas[0].key || '');
+  const dept = depts.find(d => d.id === deptId) || depts[0];
+  const area = areas.find(a => a.key === areaKey) || areas[0];
+  const sel = {
+    padding: '8px 11px',
+    border: '1px solid var(--line)',
+    borderRadius: 8,
+    fontSize: 13,
+    fontFamily: 'inherit',
+    background: '#fff',
+    color: 'var(--ink)',
+    minWidth: 220
+  };
+  const chip = (txt, tone) => React.createElement("span", {
+    className: "chip",
+    style: {
+      background: (tone || '#0090ca') + '1c',
+      color: tone || '#0090ca',
+      fontWeight: 700
+    }
+  }, txt);
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.input,
+    title: "Form Fields",
+    sub: "What collectors fill in on each form \u2014 preview the fields and edit them in the right place"
+  }), React.createElement("div", {
+    className: "seg",
+    style: {
+      alignSelf: 'flex-start'
+    }
+  }, React.createElement("button", {
+    className: tab === 'patient' ? 'on' : '',
+    onClick: () => setTab('patient')
+  }, "Patient Statistics"), React.createElement("button", {
+    className: tab === 'quality' ? 'on' : '',
+    onClick: () => setTab('quality')
+  }, "Quality Data")), tab === 'patient' ? React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, React.createElement("h3", null, "Patient Statistics fields"), React.createElement("span", {
+    className: "sub"
+  }, "a department's metric columns"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("select", {
+    style: sel,
+    value: deptId,
+    onChange: e => setDeptId(e.target.value)
+  }, depts.map(d => React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name))), React.createElement("button", {
+    className: "btn pri sm",
+    title: "Add / rename / remove metric columns",
+    onClick: () => setRoute({
+      view: 'manage'
+    })
+  }, React.createElement(Ic, {
+    d: I.edit,
+    s: 14
+  }), "Edit fields")), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginBottom: 12
+    }
+  }, "These metric columns are the fields on the Patient Statistics form for ", React.createElement("b", {
+    style: {
+      color: 'var(--ink)'
+    }
+  }, dept ? dept.name : '—'), ". They are shared app-wide with the dashboard and reports \u2014 edit them in ", React.createElement("b", null, "Statistics \u203A Manage Departments"), "."), !dept || !(dept.cols || []).length ? React.createElement("div", {
+    style: {
+      color: 'var(--muted)'
+    }
+  }, "No fields defined.") : React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))',
+      gap: 10
+    }
+  }, dept.cols.map((c, i) => React.createElement("div", {
+    key: c.id,
+    style: {
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      padding: '10px 12px',
+      background: 'var(--panel-2)'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, c.label), React.createElement("div", {
+    style: {
+      marginTop: 6,
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, c.pct ? chip('%', '#6a52d4') : chip('Count', '#0090ca'), i === 0 && chip('Headline', '#1f9d57'))))))) : React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, React.createElement("h3", null, "Quality Data fields"), React.createElement("span", {
+    className: "sub"
+  }, "a quality area's indicators"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("select", {
+    style: sel,
+    value: areaKey,
+    onChange: e => setAreaKey(e.target.value)
+  }, areas.map(a => React.createElement("option", {
+    key: a.key,
+    value: a.key
+  }, a.name))), React.createElement("button", {
+    className: "btn pri sm",
+    title: "Add custom / from library, set benchmark",
+    onClick: () => setRoute({
+      view: 'quality',
+      qview: 'admin',
+      dept: area && area.key
+    })
+  }, React.createElement(Ic, {
+    d: I.edit,
+    s: 14
+  }), "Manage indicators")), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginBottom: 12
+    }
+  }, "These indicators are the fields on the Quality Data form for ", React.createElement("b", {
+    style: {
+      color: 'var(--ink)'
+    }
+  }, area ? area.name : '—'), ". Add, rename or set benchmarks in ", React.createElement("b", null, "Quality \u203A Manage Indicators"), "."), !area || !(area.indicators || []).length ? React.createElement("div", {
+    style: {
+      color: 'var(--muted)'
+    }
+  }, "No indicators defined.") : React.createElement("table", {
+    className: "tbl",
+    style: {
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Indicator"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Type"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Benchmark"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Goal"))), React.createElement("tbody", null, area.indicators.map(ind => React.createElement("tr", {
+    key: ind.id
+  }, React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      fontWeight: 600
+    }
+  }, ind.name), React.createElement("td", {
+    style: {
+      textAlign: 'left'
+    }
+  }, ind.valueType || 'Count'), React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      fontSize: 12
+    }
+  }, ind.benchmark || '—'), React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      fontSize: 12
+    }
+  }, ind.goalDirection === 'higher_is_better' ? '↑ higher' : '↓ lower'))))))));
+}
+window.DataFields = DataFields;
+})();
+;
+/* ===== app.jsx ===== */
+(function(){
+const {
+  useState,
+  useEffect,
+  useMemo
+} = React;
+function App() {
+  const store = window.useDeptStore();
+  const staff = window.useStaffStore();
+  const depts = store.depts;
+  const [route, setRoute] = useState(() => typeof window !== 'undefined' && window.__UNICO_INITIAL_ROUTE__ || {
+    view: 'dashboard'
+  });
+  const [collapsed, setCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 820);
+  const [layout, setLayout] = useState('executive');
+  const [period, setPeriod] = useState({
+    mode: 'all'
+  });
+  const [locked, setLocked] = useState(() => !!(window.unicoLock && window.unicoLock.isEnabled()));
+  useEffect(() => {
+    const h = () => {
+      if (window.unicoLock && window.unicoLock.isEnabled()) setLocked(true);
+    };
+    window.addEventListener('unico:lock', h);
+    return () => window.removeEventListener('unico:lock', h);
+  }, []);
+  const [authed, setAuthed] = useState(() => !(window.unicoSession && window.unicoSession.configured()) || window.unicoSession.isAuthed());
+  useEffect(() => {
+    if (!(window.unicoSession && window.unicoSession.configured() && window.unicoSession.isAuthed())) return;
+    let live = true;
+    window.unicoSession.verify().then(ok => {
+      if (live && ok === false) {
+        window.unicoSession.logout();
+        setAuthed(false);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  useEffect(() => {
+    const h = () => setAuthed(false);
+    window.addEventListener('unico:logout', h);
+    return () => window.removeEventListener('unico:logout', h);
+  }, []);
+  const openDept = id => setRoute({
+    view: 'departments',
+    dept: id
+  });
+  const safeDepts = depts.length ? depts : [];
+  const curDept = route.view === 'departments' ? depts.find(d => d.id === (route.dept || depts[0]?.id)) || depts[0] : null;
+  let crumbs = ['UNICO'],
+    body = null,
+    actions = null;
+  if (route.view === 'dashboard') {
+    crumbs = ['UNICO', 'Dashboard'];
+    body = React.createElement(Dashboard, {
+      layout: layout,
+      depts: depts,
+      period: period,
+      openDept: openDept,
+      onFill: id => setRoute({
+        view: 'input',
+        dept: id
+      }),
+      setRoute: setRoute
+    });
+    actions = React.createElement("div", {
+      className: "seg",
+      style: {
+        marginRight: 4
+      }
+    }, [['executive', 'Executive'], ['operational', 'Operational'], ['analytics', 'Analytics']].map(([id, l]) => React.createElement("button", {
+      key: id,
+      className: layout === id ? 'on' : '',
+      onClick: () => setLayout(id)
+    }, l)));
+  } else if (route.view === 'departments') {
+    if (!curDept) {
+      body = React.createElement(EmptyState, {
+        setRoute: setRoute
+      });
+      crumbs = ['UNICO', 'Departments'];
+    } else {
+      crumbs = ['UNICO', 'Departments', curDept.name];
+      body = React.createElement(DeptDetail, {
+        dept: curDept,
+        openDept: openDept,
+        depts: depts,
+        setRoute: setRoute
+      });
+    }
+  } else if (route.view === 'compare') {
+    crumbs = ['UNICO', 'Compare'];
+    body = React.createElement(DeptCompare, {
+      depts: depts,
+      openDept: openDept
+    });
+  } else if (route.view === 'gallery') {
+    const gd = depts.find(x => x.id === route.dept) || depts[0];
+    crumbs = ['UNICO', 'Departments', gd ? gd.name : '', ' Charts'];
+    body = React.createElement(ChartsGallery, {
+      dept: gd,
+      setRoute: setRoute
+    });
+  } else if (route.view === 'manage') {
+    crumbs = ['UNICO', 'Manage Departments'];
+    body = React.createElement(ManageDepts, {
+      depts: depts,
+      store: store,
+      setRoute: setRoute
+    });
+  } else if (route.view === 'input') {
+    crumbs = ['UNICO', 'Data Entry'];
+    body = React.createElement(DataEntry, {
+      depts: depts,
+      addEntry: store.addEntry,
+      entries: store.entries,
+      initialDept: route.dept,
+      updateDept: store.updateDept,
+      deleteDept: store.deleteDept,
+      deleteMonth: store.deleteMonth,
+      undo: store.undo,
+      canUndo: store.canUndo
+    });
+  } else if (route.view === 'reports') {
+    crumbs = ['UNICO', 'Reports'];
+    body = React.createElement(Reports, {
+      depts: depts
+    });
+  } else if (route.view === 'settings') {
+    crumbs = ['UNICO', 'Settings'];
+    body = React.createElement(Settings, {
+      depts: depts,
+      store: store
+    });
+  } else if (route.view === 'dcPatient') {
+    crumbs = ['UNICO', 'Data Collection', 'Patient Statistics'];
+    body = React.createElement(DataPatientForm, {
+      depts: depts,
+      prefill: {
+        dept: route.dept,
+        responsible: route.responsible,
+        month: route.month
+      }
+    });
+  } else if (route.view === 'dcQuality') {
+    crumbs = ['UNICO', 'Data Collection', 'Quality Data'];
+    body = React.createElement(DataQualityForm, {
+      prefill: {
+        area: route.area,
+        responsible: route.responsible
+      }
+    });
+  } else if (route.view === 'dcResponsibles') {
+    crumbs = ['UNICO', 'Data Collection', 'Responsible Persons'];
+    body = React.createElement(DataResponsibles, {
+      depts: depts
+    });
+  } else if (route.view === 'dcReview') {
+    crumbs = ['UNICO', 'Data Collection', 'Review & History'];
+    body = React.createElement(DataReview, null);
+  } else if (route.view === 'dcShare') {
+    crumbs = ['UNICO', 'Data Collection', 'Share Links'];
+    body = React.createElement(DataShareLinks, {
+      depts: depts
+    });
+  } else if (route.view === 'dcFields') {
+    crumbs = ['UNICO', 'Data Collection', 'Form Fields'];
+    body = React.createElement(DataFields, {
+      setRoute: setRoute
+    });
+  } else if (route.view === 'users') {
+    crumbs = ['UNICO', 'User Management'];
+    body = React.createElement(UserAdmin, {
+      setRoute: setRoute
+    });
+  } else if (route.view === 'nurseHome') {
+    crumbs = ['UNICO', 'Nurse Management', 'Dashboard'];
+    body = React.createElement(WorkforceDashboard, {
+      store: staff,
+      setRoute: setRoute,
+      role: "Nurse"
+    });
+  } else if (route.view === 'pcaHome') {
+    crumbs = ['UNICO', 'PCA Management', 'Dashboard'];
+    body = React.createElement(WorkforceDashboard, {
+      store: staff,
+      setRoute: setRoute,
+      role: "PCA"
+    });
+  } else if (route.view === 'nurses') {
+    crumbs = ['UNICO', 'Nurse Management', 'Directory'];
+    body = React.createElement(ManageStaff, {
+      store: staff,
+      setRoute: setRoute,
+      role: "Nurse"
+    });
+  } else if (route.view === 'pca') {
+    crumbs = ['UNICO', 'PCA Management', 'Directory'];
+    body = React.createElement(ManageStaff, {
+      store: staff,
+      setRoute: setRoute,
+      role: "PCA"
+    });
+  } else if (route.view === 'nurseCompliance') {
+    crumbs = ['UNICO', 'Nurse Management', 'Compliance'];
+    body = React.createElement(StaffCompliance, {
+      store: staff,
+      setRoute: setRoute,
+      role: "Nurse"
+    });
+  } else if (route.view === 'pcaCompliance') {
+    crumbs = ['UNICO', 'PCA Management', 'Compliance'];
+    body = React.createElement(StaffCompliance, {
+      store: staff,
+      setRoute: setRoute,
+      role: "PCA"
+    });
+  } else if (route.view === 'staffProfile') {
+    const emp = staff.get(route.emp);
+    crumbs = ['UNICO', 'Staff', emp ? emp.name : 'Profile'];
+    body = React.createElement(StaffProfile, {
+      store: staff,
+      empId: route.emp,
+      setRoute: setRoute
+    });
+  } else if (route.view === 'staffForm') {
+    crumbs = ['UNICO', 'Staff', route.emp ? 'Edit Staff' : `Add ${route.role || 'Staff'}`];
+    body = React.createElement(StaffForm, {
+      store: staff,
+      empId: route.emp,
+      setRoute: setRoute,
+      role: route.role
+    });
+  }
+  if (window.unicoSession && window.unicoSession.configured() && !authed) {
+    return React.createElement(CloudLogin, {
+      onLogin: () => setAuthed(true)
+    });
+  }
+  if (locked) {
+    return React.createElement(LockScreen, {
+      onUnlock: () => setLocked(false)
+    });
+  }
+  if (typeof window !== 'undefined' && window.__UNICO_USER__ && window.__UNICO_USER__.role === 'collector' && typeof CollectorPortal !== 'undefined') {
+    return React.createElement(CollectorPortal, null);
+  }
+  if (route.view && route.view.indexOf('quality') === 0 && typeof QualityConsole !== 'undefined') {
+    const QV_MAP = {
+      quality: 'dashboard',
+      qualityScore: 'scorecard',
+      qualityTrend: 'trends',
+      qualityReport: 'reports',
+      qualityReportQ: 'reports',
+      qualityIncidents: 'incidents',
+      qualityDataEntry: 'dataentry',
+      qualityManage: 'admin',
+      qualityCatalog: 'admin',
+      qualityAssign: 'admin',
+      qualityCapa: 'actionplans',
+      qualityDept: 'dashboard',
+      qualityEdit: 'admin',
+      qualityEntry: 'dataentry',
+      qualityHub: 'dashboard'
+    };
+    return React.createElement(QualityConsole, {
+      initialView: route.qview || QV_MAP[route.view] || 'dashboard',
+      initialDept: route.dept,
+      onExit: () => setRoute({
+        view: 'dashboard'
+      })
+    });
+  }
+  return React.createElement("div", {
+    className: 'app' + (collapsed ? ' collapsed' : '')
+  }, React.createElement(GlobalSearch, {
+    setRoute: setRoute,
+    depts: depts
+  }), React.createElement(Sidebar, {
+    route: route,
+    setRoute: setRoute,
+    collapsed: collapsed,
+    depts: depts
+  }), React.createElement("div", {
+    className: "main"
+  }, React.createElement(TopBar, {
+    route: route,
+    setRoute: setRoute,
+    onBurger: () => setCollapsed(c => !c),
+    crumbs: crumbs,
+    actions: actions,
+    depts: depts,
+    onFill: id => setRoute({
+      view: 'input',
+      dept: id
+    }),
+    period: period,
+    setPeriod: setPeriod
+  }), React.createElement("div", {
+    className: "content",
+    key: route.view + (route.dept || '') + (route.emp || '') + layout
+  }, body)));
+}
+function EmptyState({
+  setRoute
+}) {
+  return React.createElement("div", {
+    style: {
+      display: 'grid',
+      placeItems: 'center',
+      height: '60vh',
+      textAlign: 'center'
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      width: 60,
+      height: 60,
+      borderRadius: 16,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      display: 'grid',
+      placeItems: 'center',
+      margin: '0 auto 14px'
+    }
+  }, React.createElement(Ic, {
+    d: I.layers,
+    s: 30
+  })), React.createElement("div", {
+    style: {
+      fontSize: 17,
+      fontWeight: 700
+    }
+  }, "No departments yet"), React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--muted)',
+      margin: '6px 0 16px'
+    }
+  }, "Add a department to start tracking statistics."), React.createElement("button", {
+    className: "btn pri",
+    onClick: () => setRoute({
+      view: 'manage'
+    })
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 16
+  }), "Add Department")));
+}
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App, null));
+})();
