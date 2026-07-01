@@ -167,18 +167,21 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
   // Hospital-wide Quality & Safety KPIs (reads the merged quality data + CAPA store).
   const qualityKpis=(function(){
     if(!window.qualityData) return null;
-    const QQ=['Q1','Q2','Q3','Q4'];
-    // Quarter status, inline (self-contained — the Quality module now lives in the console).
-    const qs=(ind,q)=>{ const v=ind.quarters?ind.quarters[q]:null; if(v==null||v==='')return 'na'; const b=ind.benchmarkValue; if(b==null||b==='')return 'ok'; return ind.goalDirection==='higher_is_better'?(v>=b?'ok':'breach'):(v<=b?'ok':'breach'); };
+    // Monthly is the source of truth (matches the Quality console exactly). Aggregate
+    // over the 12 FY months, not quarters, so this strip and the console never disagree.
+    const MONTHS = window.QUALITY_QUARTER_MONTHS ? ['Q1','Q2','Q3','Q4'].reduce((a,q)=>a.concat(window.QUALITY_QUARTER_MONTHS[q]||[]),[]) : [];
+    const qiC = window.qiFormulaCompute || ((f,n,d)=>Number(n)||0);
+    const monthRaw=(ind,mk)=>{ const f=(ind&&ind.formula)||((ind&&ind.valueType==='%')?'pct':'direct'); if(f==='direct'){const v=ind.months&&ind.months[mk];return (v==null||v==='')?null:Number(v);} const n=ind.mNum&&ind.mNum[mk]; if(n==null||n===''){const v=ind.months&&ind.months[mk];return (v==null||v==='')?null:Number(v);} const d=(f!=='count')?(ind.mDen&&ind.mDen[mk]):null; return qiC(f,n,d); };
+    const mStatus=(ind,mk)=>{ const v=monthRaw(ind,mk); if(v==null)return 'na'; const b=ind.benchmarkValue; if(b==null||b==='')return 'ok'; return ind.goalDirection==='higher_is_better'?(v>=b?'ok':'breach'):(v<=b?'ok':'breach'); };
     const qd=window.qualityData().filter(d=>d.indicators&&d.indicators.length);
     let okC=0,brC=0;
-    qd.forEach(d=>d.indicators.forEach(ind=>QQ.forEach(q=>{ const s=qs(ind,q); if(s==='ok')okC++; else if(s==='breach')brC++; })));
+    qd.forEach(d=>d.indicators.forEach(ind=>MONTHS.forEach(mk=>{ const s=mStatus(ind,mk); if(s==='ok')okC++; else if(s==='breach')brC++; })));
     const zero=okC+brC?Math.round(okC*100/(okC+brC)):100;
     // Action Plans (CAPA): the console stores a status map {'<deptKey>/<indId>':'Open'|'In Progress'|'Closed'}.
     let capaMap={}; try{ capaMap=JSON.parse(localStorage.getItem('unico_capa_v1'))||{}; }catch(e){}
     if(Array.isArray(capaMap)) capaMap={}; // ignore any stale legacy array format
     let open=0;
-    qd.forEach(d=>d.indicators.forEach(ind=>{ if(QQ.some(q=>qs(ind,q)==='breach') && capaMap[d.key+'/'+ind.id]!=='Closed') open++; }));
+    qd.forEach(d=>d.indicators.forEach(ind=>{ if(MONTHS.some(mk=>mStatus(ind,mk)==='breach') && capaMap[d.key+'/'+ind.id]!=='Closed') open++; }));
     return {depts:qd.length, zero:zero, breach:brC, capaOpen:open};
   })();
   const qCard=(label,val,foot,color,route)=>(
@@ -192,8 +195,8 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
     <div className="grid" style={{gap:10}}>
       <SectionTitle icon={I.heart} title="Quality & Safety" sub={`hospital-wide quality indicators · ${qualityKpis.depts} departments · click to open`}/>
       <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))'}}>
-        {qCard('Zero-Defect Rate', qualityKpis.zero+'%', 'on-benchmark indicator-quarters', qualityKpis.zero>=90?'#1f9d57':qualityKpis.zero>=70?'#e08a1e':'#d23a52', {view:'quality'})}
-        {qCard('Open Breaches', fmt(qualityKpis.breach), 'indicator-quarters off benchmark', qualityKpis.breach>0?'#d23a52':'#1f9d57', {view:'quality',qview:'incidents'})}
+        {qCard('Zero-Defect Rate', qualityKpis.zero+'%', 'on-benchmark indicator-months', qualityKpis.zero>=90?'#1f9d57':qualityKpis.zero>=70?'#e08a1e':'#d23a52', {view:'quality'})}
+        {qCard('Open Breaches', fmt(qualityKpis.breach), 'indicator-months off benchmark', qualityKpis.breach>0?'#d23a52':'#1f9d57', {view:'quality',qview:'incidents'})}
         {qCard('Open Action Plans', fmt(qualityKpis.capaOpen), 'breaches not yet closed', qualityKpis.capaOpen>0?'#0090ca':'#1f9d57', {view:'quality',qview:'actionplans'})}
       </div>
     </div>

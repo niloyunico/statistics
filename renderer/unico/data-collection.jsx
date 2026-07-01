@@ -502,7 +502,6 @@
             <select style={inputStyle} value={indId} onChange={(e) => setIndId(e.target.value)}>
               <option value="">Select…</option>
               {inds.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-              <option value="__new__">➕ Add a new indicator…</option>
             </select>
           </Field>
           {isNew && (

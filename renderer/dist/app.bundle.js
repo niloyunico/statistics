@@ -5123,10 +5123,25 @@ function Dashboard({
   }));
   const qualityKpis = function () {
     if (!window.qualityData) return null;
-    const QQ = ['Q1', 'Q2', 'Q3', 'Q4'];
-    const qs = (ind, q) => {
-      const v = ind.quarters ? ind.quarters[q] : null;
-      if (v == null || v === '') return 'na';
+    const MONTHS = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [];
+    const qiC = window.qiFormulaCompute || ((f, n, d) => Number(n) || 0);
+    const monthRaw = (ind, mk) => {
+      const f = ind && ind.formula || (ind && ind.valueType === '%' ? 'pct' : 'direct');
+      if (f === 'direct') {
+        const v = ind.months && ind.months[mk];
+        return v == null || v === '' ? null : Number(v);
+      }
+      const n = ind.mNum && ind.mNum[mk];
+      if (n == null || n === '') {
+        const v = ind.months && ind.months[mk];
+        return v == null || v === '' ? null : Number(v);
+      }
+      const d = f !== 'count' ? ind.mDen && ind.mDen[mk] : null;
+      return qiC(f, n, d);
+    };
+    const mStatus = (ind, mk) => {
+      const v = monthRaw(ind, mk);
+      if (v == null) return 'na';
       const b = ind.benchmarkValue;
       if (b == null || b === '') return 'ok';
       return ind.goalDirection === 'higher_is_better' ? v >= b ? 'ok' : 'breach' : v <= b ? 'ok' : 'breach';
@@ -5134,8 +5149,8 @@ function Dashboard({
     const qd = window.qualityData().filter(d => d.indicators && d.indicators.length);
     let okC = 0,
       brC = 0;
-    qd.forEach(d => d.indicators.forEach(ind => QQ.forEach(q => {
-      const s = qs(ind, q);
+    qd.forEach(d => d.indicators.forEach(ind => MONTHS.forEach(mk => {
+      const s = mStatus(ind, mk);
       if (s === 'ok') okC++;else if (s === 'breach') brC++;
     })));
     const zero = okC + brC ? Math.round(okC * 100 / (okC + brC)) : 100;
@@ -5146,7 +5161,7 @@ function Dashboard({
     if (Array.isArray(capaMap)) capaMap = {};
     let open = 0;
     qd.forEach(d => d.indicators.forEach(ind => {
-      if (QQ.some(q => qs(ind, q) === 'breach') && capaMap[d.key + '/' + ind.id] !== 'Closed') open++;
+      if (MONTHS.some(mk => mStatus(ind, mk) === 'breach') && capaMap[d.key + '/' + ind.id] !== 'Closed') open++;
     }));
     return {
       depts: qd.length,
@@ -5202,9 +5217,9 @@ function Dashboard({
     style: {
       gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))'
     }
-  }, qCard('Zero-Defect Rate', qualityKpis.zero + '%', 'on-benchmark indicator-quarters', qualityKpis.zero >= 90 ? '#1f9d57' : qualityKpis.zero >= 70 ? '#e08a1e' : '#d23a52', {
+  }, qCard('Zero-Defect Rate', qualityKpis.zero + '%', 'on-benchmark indicator-months', qualityKpis.zero >= 90 ? '#1f9d57' : qualityKpis.zero >= 70 ? '#e08a1e' : '#d23a52', {
     view: 'quality'
-  }), qCard('Open Breaches', fmt(qualityKpis.breach), 'indicator-quarters off benchmark', qualityKpis.breach > 0 ? '#d23a52' : '#1f9d57', {
+  }), qCard('Open Breaches', fmt(qualityKpis.breach), 'indicator-months off benchmark', qualityKpis.breach > 0 ? '#d23a52' : '#1f9d57', {
     view: 'quality',
     qview: 'incidents'
   }), qCard('Open Action Plans', fmt(qualityKpis.capaOpen), 'breaches not yet closed', qualityKpis.capaOpen > 0 ? '#0090ca' : '#1f9d57', {
@@ -21178,9 +21193,7 @@ window.LockScreen = LockScreen;
     }, "Select\u2026"), inds.map(i => React.createElement("option", {
       key: i.id,
       value: i.id
-    }, i.name)), React.createElement("option", {
-      value: "__new__"
-    }, "\u2795 Add a new indicator\u2026"))), isNew && React.createElement("div", {
+    }, i.name)))), isNew && React.createElement("div", {
       style: {
         border: '1px dashed var(--line)',
         borderRadius: 9,
