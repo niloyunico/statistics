@@ -905,6 +905,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
     else { const k='cus:'+norm(i.name); if(!rowsByKey[k]) rowsByKey[k]={ key:k, code:null, name:i.name, formula:i.formula, tmpl:i, set:new Set() }; rowsByKey[k].set.add(d.key); }
   }));
   const assignNames = Object.values(rowsByKey).sort((a,b)=> b.set.size-a.set.size || a.name.localeCompare(b.name));
+  const assignCount = {}; assignCols.forEach(c=>{ assignCount[c.key] = assignNames.reduce((n,r)=> n + (r.set.has(c.key)?1:0), 0); });
   const toggleAssign = (rec,dk)=>{
     if(rec.set.has(dk)){
       const d=(Q.depts||[]).find(x=>x.key===dk);
@@ -1223,7 +1224,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
           <table style={{borderCollapse:'collapse',fontSize:12,width:'100%'}}>
             <thead><tr>
               <th style={{textAlign:'left',padding:'10px 14px',fontSize:10.5,textTransform:'uppercase',letterSpacing:'.3px',color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#eef2f7',position:'sticky',left:0,top:0,zIndex:5,minWidth:230}}>Indicator</th>
-              {assignCols.map(c=><th key={c.key} title={c.name} style={{padding:'10px 6px',fontSize:10,color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#eef2f7',textAlign:'center',whiteSpace:'nowrap',position:'sticky',top:0,zIndex:4}}>{c.short}</th>)}
+              {assignCols.map(c=><th key={c.key} title={c.name+' - '+assignCount[c.key]+' assigned'} style={{padding:'10px 6px',fontSize:10,color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#eef2f7',textAlign:'center',whiteSpace:'nowrap',position:'sticky',top:0,zIndex:4}}><div>{c.short}</div><div style={{fontFamily:MONO,fontSize:9.5,fontWeight:700,color:P.blue,marginTop:2}}>{assignCount[c.key]}</div></th>)}
             </tr></thead>
             <tbody>
               {assignNames.map(rec=>{ const rmeas=measureOf(rec.formula); return (

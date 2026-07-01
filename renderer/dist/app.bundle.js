@@ -15591,6 +15591,10 @@ function QCAdmin({
     }
   }));
   const assignNames = Object.values(rowsByKey).sort((a, b) => b.set.size - a.set.size || a.name.localeCompare(b.name));
+  const assignCount = {};
+  assignCols.forEach(c => {
+    assignCount[c.key] = assignNames.reduce((n, r) => n + (r.set.has(c.key) ? 1 : 0), 0);
+  });
   const toggleAssign = (rec, dk) => {
     if (rec.set.has(dk)) {
       const d = (Q.depts || []).find(x => x.key === dk);
@@ -17451,7 +17455,7 @@ function QCAdmin({
     }
   }, "Indicator"), assignCols.map(c => React.createElement("th", {
     key: c.key,
-    title: c.name,
+    title: c.name + ' - ' + assignCount[c.key] + ' assigned',
     style: {
       padding: '10px 6px',
       fontSize: 10,
@@ -17465,7 +17469,15 @@ function QCAdmin({
       top: 0,
       zIndex: 4
     }
-  }, c.short)))), React.createElement("tbody", null, assignNames.map(rec => {
+  }, React.createElement("div", null, c.short), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.blue,
+      marginTop: 2
+    }
+  }, assignCount[c.key]))))), React.createElement("tbody", null, assignNames.map(rec => {
     const rmeas = measureOf(rec.formula);
     return React.createElement("tr", {
       key: rec.key,
