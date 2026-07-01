@@ -58,7 +58,9 @@
   }
 
   // Object-valued indicator fields that deep-merge (rather than replace) on patch.
-  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen'];
+  // incidents/capa are month-keyed too, so editing one month's incident report from
+  // the admin drill-down preserves every other month's.
+  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa'];
 
   // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
   // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are

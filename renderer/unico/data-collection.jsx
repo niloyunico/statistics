@@ -371,7 +371,14 @@
     const [newInd, setNewInd] = useState({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' });
     const [month, setMonth] = useState(defMonth);
     const [den, setDen] = useState('');
-    const [incidents, setIncidents] = useState([]);
+    // Numerator entry: either broken down BY STAFF GROUP (Nurse / Doctor / Other —
+    // PCA & other departments) which add up to the total, or typed DIRECTLY. The old
+    // per-incident logging module is intentionally gone for this collector form.
+    const [numMode, setNumMode] = useState('group'); // 'group' | 'direct'
+    const [groups, setGroups] = useState({ nurse: '', doctor: '', other: '' });
+    const [directNum, setDirectNum] = useState('');
+    // Optional observation + corrective / preventive action (CAPA) for the month.
+    const [capa, setCapa] = useState({ finding: '', corrective: '', preventive: '' });
     const [remark, setRemark] = useState('');
     const [responsible, setResponsible] = useState(lockResp ? (me.name || '') : ((prefill && prefill.responsible) || ''));
     const [busy, setBusy] = useState(false);
@@ -412,7 +419,8 @@
     const numDef = def.numeratorDef || '';
     const denDef = def.denominatorDef || (isRate ? ('Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.') : '');
     const indNameQ = (def.name || newInd.name) || 'Result';
-    const incCount = incidents.length;
+    const groupSum = (Number(groups.nurse) || 0) + (Number(groups.doctor) || 0) + (Number(groups.other) || 0);
+    const numerator = numMode === 'group' ? groupSum : (Number(directNum) || 0);
     // Every indicator can take a denominator: rate indicators REQUIRE it; counts may
     // OPTIONALLY add one to compute a rate (per 1000) instead of a plain count.
     const denNum = Number(den);
@@ -421,29 +429,36 @@
     const rateUnit = (unitRaw && /per|%/.test(unitRaw)) ? unitRaw : (formula === 'pct' ? '%' : ('per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '')));
     const unitQ = computeAsRate ? rateUnit : (unitRaw || 'count');
     const formulaTextQ = computeAsRate
-      ? (indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult + '   ·   ' + numLabel + ' = number of incidents this month')
-      : (indNameQ + ' = number of incidents this month');
+      ? (indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult)
+      : (indNameQ + ' = ' + numLabel);
     // Standardised measurement guide (formula / worked example / interpretation / reference)
     // for the selected indicator, from the Hospital Quality Indicator Framework.
     const guide = hqiGuideFor(indNameQ);
 
-    // Prefill the incident list (and denominator) from existing data on month/indicator change.
+    // Prefill the numerator (group breakdown or direct) + denominator from existing
+    // data on month / indicator change.
     useEffect(() => {
-      if (!curInd) { setIncidents([]); setDen(''); return; }
-      const ev = curInd.incidents && curInd.incidents[month];
-      setIncidents(Array.isArray(ev) ? ev.map((x) => ({
-        uhid: x.uhid || '', patientName: x.patientName || '', age: x.age || '', gender: x.gender || '',
-        diagnosis: x.diagnosis || '', admissionDate: x.admissionDate || '', procedureDate: x.procedureDate || '',
-        details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '',
-      })) : []);
+      if (!curInd) { setGroups({ nurse: '', doctor: '', other: '' }); setDirectNum(''); setNumMode('group'); setDen(''); return; }
+      const g = curInd.mGroups && curInd.mGroups[month];
+      // existing total numerator: rate → mNum[month]; count → months[month]
+      const rawNum = (curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '') ? curInd.mNum[month]
+        : (!isRate && curInd.months && curInd.months[month] != null && curInd.months[month] !== '') ? curInd.months[month]
+        : null;
+      if (g && typeof g === 'object') {
+        setGroups({ nurse: g.nurse != null ? String(g.nurse) : '', doctor: g.doctor != null ? String(g.doctor) : '', other: g.other != null ? String(g.other) : '' });
+        setDirectNum(''); setNumMode('group');
+      } else if (rawNum != null) {
+        setDirectNum(String(rawNum)); setGroups({ nurse: '', doctor: '', other: '' }); setNumMode('direct');
+      } else {
+        setGroups({ nurse: '', doctor: '', other: '' }); setDirectNum(''); setNumMode('group');
+      }
       setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
-    }, [indId, month]);
+      const cp = curInd.capa && curInd.capa[month];
+      setCapa(cp && typeof cp === 'object' ? { finding: cp.finding || '', corrective: cp.corrective || '', preventive: cp.preventive || '' } : { finding: '', corrective: '', preventive: '' });
+    }, [indId, month]); // eslint-disable-line
 
-    // The number of incidents drives the count / numerator automatically (0 if none).
-    const result = computeAsRate ? (denNum > 0 ? Math.round((incCount / denNum) * mult * 100) / 100 : 0) : incCount;
-    const addIncident = () => setIncidents((arr) => [...arr, { uhid: '', patientName: '', age: '', gender: '', diagnosis: '', admissionDate: '', procedureDate: '', details: '', finding: '', corrective: '', preventive: '', remark: '' }]);
-    const setInc = (i, k, v) => setIncidents((arr) => arr.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
-    const delInc = (i) => setIncidents((arr) => arr.filter((_, j) => j !== i));
+    // The numerator (by group or direct) drives the count / rate.
+    const result = computeAsRate ? (denNum > 0 ? Math.round((numerator / denNum) * mult * 100) / 100 : 0) : numerator;
 
     // A data collector cannot overwrite a month that already has recorded data; only
     // an administrator may change it (a fresh "Add a new indicator" is always allowed).
@@ -470,12 +485,14 @@
         valueType: computeAsRate ? (formula === 'pct' ? '%' : 'Rate') : 'Count', entryMode: computeAsRate ? 'rate' : 'count', mult,
         formula: computeAsRate ? (isRate ? formula : 'rate1000') : 'count',
         numLabel: computeAsRate ? numLabel : undefined, denLabel: computeAsRate ? denLabel : undefined, unit: unitQ,
-        value: computeAsRate ? undefined : incCount, num: computeAsRate ? incCount : undefined, den: computeAsRate ? den : undefined,
-        incidents, remark,
+        value: computeAsRate ? undefined : numerator, num: computeAsRate ? numerator : undefined, den: computeAsRate ? den : undefined,
+        groups: numMode === 'group' ? { nurse: Number(groups.nurse) || 0, doctor: Number(groups.doctor) || 0, other: Number(groups.other) || 0 } : undefined,
+        capa: (capa.finding || capa.corrective || capa.preventive) ? { finding: capa.finding, corrective: capa.corrective, preventive: capa.preventive } : undefined,
+        remark,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ area: area.name, month }); setIncidents([]); setDen(''); setRemark(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
+        if (r.ok) { setDone({ area: area.name, month }); setGroups({ nurse: '', doctor: '', other: '' }); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -483,7 +500,7 @@
     const showEntry = (indId && !isNew) || (isNew && newInd.name);
     return (
       <div className="grid" style={{ gap: 14, maxWidth: 760 }}>
-        <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Log the month's incidents — the count / rate is calculated automatically." />
+        <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Enter the month's value — by staff group (Nurse / Doctor / Other) or directly — the count / rate is calculated automatically." />
         {done && <Banner ok onClose={() => setDone(null)}>Saved ✓ — {done.area} · {monthLabel(done.month)} sent for admin review.</Banner>}
         <Card>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -510,7 +527,7 @@
                 <Field label="New indicator name"><input style={inputStyle} value={newInd.name} onChange={(e) => setNewInd({ ...newInd, name: e.target.value })} placeholder="e.g. CAUTI Rate" /></Field>
                 <Field label="Calculation">
                   <select style={inputStyle} value={newInd.formula} onChange={(e) => setNewInd({ ...newInd, formula: e.target.value })}>
-                    <option value="count">Count (incidents)</option>
+                    <option value="count">Count</option>
                     <option value="pct">Percentage (%)</option>
                     <option value="rate1000">Rate per 1000</option>
                   </select>
@@ -570,51 +587,48 @@
                 <input type="number" step="any" style={inputStyle} value={den} onChange={(e) => setDen(e.target.value)} placeholder={isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)'} />
               </Field>
               <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginBottom: 13 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: incidents.length ? 10 : 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>Incidents in {monthLabel(month)}</div>
-                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: incCount ? 'var(--neg-bg)' : 'var(--pos-bg)', color: incCount ? 'var(--rose)' : 'var(--pos)' }}>{incCount}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{numLabel}{isRate ? ' (numerator)' : ''}</div>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{numerator}</span>
                   <span style={{ flex: 1 }} />
-                  <button className="btn sm" onClick={addIncident}><Ic d={I.plus} s={13} />Add incident</button>
-                </div>
-                {incidents.length === 0 && <div style={{ fontSize: 12, color: 'var(--muted)' }}>No incidents — the {isRate ? 'numerator' : 'count'} stays 0. Click “Add incident” for each event that occurred.</div>}
-                {incidents.map((inc, i) => (
-                  <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--panel-2)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                      <b style={{ fontSize: 12 }}>Incident #{i + 1}</b><span style={{ flex: 1 }} />
-                      <button className="icon-btn" title="Remove" style={{ width: 24, height: 24, border: 0, background: 'transparent', color: 'var(--rose)' }} onClick={() => delInc(i)}><Ic d={I.x} s={13} /></button>
-                    </div>
-                    <div style={{ display: 'grid', gap: 8 }}>
-                      {/* Patient & admission details (per-incident report fields) */}
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4 }}>Patient &amp; admission details</div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-                        <input style={inputStyle} value={inc.uhid} onChange={(e) => setInc(i, 'uhid', e.target.value)} placeholder="UHID / Reg. no" />
-                        <input style={{ ...inputStyle, gridColumn: 'span 2' }} value={inc.patientName} onChange={(e) => setInc(i, 'patientName', e.target.value)} placeholder="Patient name" />
-                        <input style={inputStyle} type="number" min="0" value={inc.age} onChange={(e) => setInc(i, 'age', e.target.value)} placeholder="Age" />
-                        <select style={inputStyle} value={inc.gender} onChange={(e) => setInc(i, 'gender', e.target.value)}>
-                          <option value="">Gender…</option><option>Male</option><option>Female</option><option>Other</option>
-                        </select>
-                        <input style={inputStyle} value={inc.diagnosis} onChange={(e) => setInc(i, 'diagnosis', e.target.value)} placeholder="Diagnosis" />
-                        <label style={{ fontSize: 10, color: 'var(--muted)' }}>Date of admission<input style={inputStyle} type="date" value={inc.admissionDate} onChange={(e) => setInc(i, 'admissionDate', e.target.value)} /></label>
-                        <label style={{ fontSize: 10, color: 'var(--muted)' }}>Date of procedure <span style={{ color: 'var(--faint)' }}>(if any)</span><input style={inputStyle} type="date" value={inc.procedureDate} onChange={(e) => setInc(i, 'procedureDate', e.target.value)} /></label>
-                      </div>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4, marginTop: 2 }}>Incident, cause &amp; CAPA</div>
-                      <textarea style={{ ...inputStyle, minHeight: 42 }} value={inc.details} onChange={(e) => setInc(i, 'details', e.target.value)} placeholder="Incident details — what happened" />
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                        <textarea style={{ ...inputStyle, minHeight: 38 }} value={inc.finding} onChange={(e) => setInc(i, 'finding', e.target.value)} placeholder="Finding / observation" />
-                        <textarea style={{ ...inputStyle, minHeight: 38 }} value={inc.corrective} onChange={(e) => setInc(i, 'corrective', e.target.value)} placeholder="Corrective action" />
-                        <textarea style={{ ...inputStyle, minHeight: 38 }} value={inc.preventive} onChange={(e) => setInc(i, 'preventive', e.target.value)} placeholder="Preventive action" />
-                      </div>
-                      <input style={inputStyle} value={inc.remark} onChange={(e) => setInc(i, 'remark', e.target.value)} placeholder="Special remarks (optional)" />
-                    </div>
+                  <div className="seg">
+                    <button className={numMode === 'group' ? 'on' : ''} onClick={() => setNumMode('group')}>By group</button>
+                    <button className={numMode === 'direct' ? 'on' : ''} onClick={() => setNumMode('direct')}>Direct value</button>
                   </div>
-                ))}
+                </div>
+                {numMode === 'group' ? (
+                  <>
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>
+                      Enter the {(numLabel || 'value').toLowerCase()} for each staff group — they add up to the total {isRate ? 'numerator' : 'value'}.
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                      <Field label="Nurse"><input type="number" min="0" step="any" style={inputStyle} value={groups.nurse} onChange={(e) => setGroups((g) => ({ ...g, nurse: e.target.value }))} placeholder="0" /></Field>
+                      <Field label="Doctor"><input type="number" min="0" step="any" style={inputStyle} value={groups.doctor} onChange={(e) => setGroups((g) => ({ ...g, doctor: e.target.value }))} placeholder="0" /></Field>
+                      <Field label={<span>Other <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(PCA / other dept.)</span></span>}><input type="number" min="0" step="any" style={inputStyle} value={groups.other} onChange={(e) => setGroups((g) => ({ ...g, other: e.target.value }))} placeholder="0" /></Field>
+                    </div>
+                  </>
+                ) : (
+                  <Field label={<span>{numLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(enter the number directly)</span></span>} hint={numDef || undefined}>
+                    <input type="number" min="0" step="any" style={inputStyle} value={directNum} onChange={(e) => setDirectNum(e.target.value)} placeholder={isRate ? ('Total ' + (numLabel || 'numerator').toLowerCase() + ' this month') : 'Total this month'} />
+                  </Field>
+                )}
               </div>
               <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '13px 16px', marginBottom: 4, background: 'var(--panel-2)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4 }}>Computed value</div>
                 <span className="num" style={{ fontSize: 22, fontWeight: 800, color: 'var(--blue-700)' }}>{result}</span>
                 {unitQ ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)' }}>{unitQ}</span> : null}
                 <span style={{ flex: 1 }} />
-                <span style={{ fontSize: 11, color: 'var(--muted)' }}>{computeAsRate ? (numLabel + ' = ' + incCount + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '')) : (incCount + ' incident(s)')}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</span>
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>{computeAsRate ? (numLabel + ' = ' + numerator + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '')) : (numLabel + ' = ' + numerator)}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</span>
+              </div>
+              <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginTop: 13 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 8 }}>Observation &amp; action <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 11 }}>(optional)</span></div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <Field label="Observation / finding"><textarea style={{ ...inputStyle, minHeight: 42 }} value={capa.finding} onChange={(e) => setCapa((c) => ({ ...c, finding: e.target.value }))} placeholder="What was observed this month" /></Field>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <Field label="Corrective action"><textarea style={{ ...inputStyle, minHeight: 42 }} value={capa.corrective} onChange={(e) => setCapa((c) => ({ ...c, corrective: e.target.value }))} placeholder="Action taken to correct" /></Field>
+                    <Field label="Preventive action"><textarea style={{ ...inputStyle, minHeight: 42 }} value={capa.preventive} onChange={(e) => setCapa((c) => ({ ...c, preventive: e.target.value }))} placeholder="Action to prevent recurrence" /></Field>
+                  </div>
+                </div>
               </div>
             </>
           )}
@@ -627,7 +641,7 @@
           {qLocked && <Banner>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)} — submission is locked for data collectors. Ask an administrator to change it.</Banner>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <button className="btn pri" disabled={busy || qLocked} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qLocked ? 'Locked — already recorded' : 'Save monthly value')}</button>
-            <button className="btn" disabled={busy} onClick={() => { setIncidents([]); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
+            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', other: '' }); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
           </div>
         </Card>
       </div>

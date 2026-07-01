@@ -208,6 +208,10 @@ async function buildQualitySpec(payload) {
     : null;
   return {
     type: 'quality', area, areaName: doc.name || area, indicatorId: indId, indicatorName: indName, capa, incidents,
+    // Optional numerator breakdown by staff group (Nurse / Doctor / Other).
+    groups: (payload && payload.groups && typeof payload.groups === 'object')
+      ? { nurse: Number(payload.groups.nurse) || 0, doctor: Number(payload.groups.doctor) || 0, other: Number(payload.groups.other) || 0 }
+      : null,
     isNewIndicator: isNew, valueType: (payload && payload.valueType) || (found && found.valueType) || 'Count',
     benchmark: (payload && payload.benchmark) || (found && found.benchmark) || '',
     goalDirection: (payload && payload.goalDirection) || (found && found.goalDirection) || 'lower_is_better',
@@ -252,6 +256,7 @@ async function applyQuality(spec) {
   if (spec.denLabel) ind.denLabel = spec.denLabel;
   if (spec.unit) ind.unit = spec.unit;
   if (Array.isArray(spec.incidents)) ind.incidents = Object.assign({}, ind.incidents || {}, { [spec.month]: spec.incidents });
+  if (spec.groups) ind.mGroups = Object.assign({}, ind.mGroups || {}, { [spec.month]: spec.groups });
   // Monthly storage (no quarters). For rate/%, keep numerator/denominator per month.
   if (spec.entryMode === 'rate') {
     ind.mNum = Object.assign({}, ind.mNum || {}, { [spec.month]: spec.num });

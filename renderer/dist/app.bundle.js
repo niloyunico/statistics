@@ -13480,6 +13480,60 @@ const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
 const MONTHS = [['Jun-25', 'Jun 2025', 'Q1'], ['Jul-25', 'Jul 2025', 'Q1'], ['Aug-25', 'Aug 2025', 'Q1'], ['Sep-25', 'Sep 2025', 'Q2'], ['Oct-25', 'Oct 2025', 'Q2'], ['Nov-25', 'Nov 2025', 'Q2'], ['Dec-25', 'Dec 2025', 'Q3'], ['Jan-26', 'Jan 2026', 'Q3'], ['Feb-26', 'Feb 2026', 'Q3'], ['Mar-26', 'Mar 2026', 'Q4'], ['Apr-26', 'Apr 2026', 'Q4'], ['May-26', 'May 2026', 'Q4']];
 const QORDER = ['Q1', 'Q2', 'Q3', 'Q4'];
 const QL = [['Q1', 'Jun–Aug 25'], ['Q2', 'Sep–Nov 25'], ['Q3', 'Dec–Feb 26'], ['Q4', 'Mar–May 26']];
+const FY_MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fyMonthsFor(startYear) {
+  const order = [5, 6, 7, 8, 9, 10, 11, 0, 1, 2, 3, 4];
+  return order.map(mi => {
+    const cal = mi >= 5 ? startYear : startYear + 1;
+    const yy = String(cal % 100).padStart(2, '0');
+    return [FY_MONS[mi] + '-' + yy, FY_MONS[mi] + ' ' + cal, FY_MONS[mi]];
+  });
+}
+function fyOfKey(key) {
+  const p = String(key || '').split('-');
+  const mi = FY_MONS.indexOf(p[0]);
+  const yy = parseInt(p[1], 10);
+  if (mi < 0 || isNaN(yy)) return null;
+  return mi >= 5 ? 2000 + yy : 2000 + yy - 1;
+}
+function currentFy() {
+  const d = new Date();
+  return d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1;
+}
+function dataFySet(depts) {
+  const set = new Set();
+  (depts || []).forEach(dep => (dep.indicators || []).forEach(ind => {
+    const scan = obj => {
+      if (obj) Object.keys(obj).forEach(k => {
+        if (obj[k] != null && obj[k] !== '') {
+          const fy = fyOfKey(k);
+          if (fy != null) set.add(fy);
+        }
+      });
+    };
+    scan(ind.months);
+    scan(ind.mNum);
+  }));
+  return set;
+}
+function fyOptions(depts) {
+  const set = dataFySet(depts);
+  set.add(currentFy());
+  const arr = [...set];
+  if (!arr.length) arr.push(2025);
+  const lo = Math.min(...arr),
+    hi = Math.max(...arr);
+  const out = [];
+  for (let y = lo; y <= hi; y++) out.push(y);
+  return out;
+}
+function defaultFy(depts) {
+  const s = dataFySet(depts);
+  return s.size ? Math.max(...s) : currentFy();
+}
+function fyLabelOf(startYear) {
+  return 'FY ' + startYear + '–' + String((startYear + 1) % 100).padStart(2, '0');
+}
 const STATUS_CELL = {
   ok: ['#e7f6ed', '#1f9d57', '✓'],
   breach: ['#fbe9ec', '#d23a52', '!'],
@@ -13528,11 +13582,12 @@ function isPctInd(ind) {
   const t = (ind && ind.valueType || '').toString().toLowerCase();
   return t.indexOf('%') >= 0 || t.startsWith('per') || ind.formula === 'pct';
 }
-function deptStat(d) {
+function deptStat(d, months) {
+  months = months || MONTHS;
   let ok = 0,
     breach = 0,
     na = 0;
-  (d.indicators || []).forEach(ind => MONTHS.forEach(m => {
+  (d.indicators || []).forEach(ind => months.forEach(m => {
     const s = monthStatus(ind, m[0]);
     if (s === 'ok') ok++;else if (s === 'breach') breach++;else na++;
   }));
@@ -13574,6 +13629,27 @@ function measureOf(f) {
     color: P.blue,
     letter: 'C'
   };
+}
+function isEventIndicator(ind) {
+  if (!ind) return false;
+  if (ind.formula === 'count' || ind.formula === 'rate100') return true;
+  const bv = ind.benchmarkValue;
+  if ((bv === 0 || bv === '0') && ind.goalDirection !== 'higher_is_better') return true;
+  if (/zero.?defect/i.test(String(ind.benchmark || ''))) return true;
+  if (ind.incidents && Object.keys(ind.incidents).length) return true;
+  const n = (ind.name || '').toLowerCase();
+  if (/extubation|removal of ett|accidental removal|dislodge|self-?extubat|needle ?stick|sharps|wrong-?site|wrong-?patient|wrong-?procedure|specimen labeling|medication error|fall|de-?lining/.test(n)) return true;
+  return false;
+}
+function rateUnitWord(ind) {
+  if (!ind) return 'units';
+  if (ind.unit && ind.unit !== 'count' && ind.unit !== '%') return ind.unit;
+  if (ind.formula === 'pct') return 'points';
+  return 'units';
+}
+function qtrLabelOf(Q) {
+  const row = QL.find(r => r[0] === Q);
+  return row ? Q + ' · ' + row[1] : Q;
 }
 function benchExpr(ind) {
   const v = ind.benchmarkValue;
@@ -13617,7 +13693,7 @@ function catOf(n) {
 }
 function stdMatch(name) {
   const n = (name || '').toLowerCase();
-  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of catheter/, 'L5']];
+  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of ett|unplanned extubation|extubation/, 'D8'], [/accidental removal of catheter/, 'L5']];
   for (const [re, code] of T) {
     if (re.test(n)) return code;
   }
@@ -13659,6 +13735,21 @@ function blankIndicator(name) {
 function QCDashboard({
   depts
 }) {
+  const fyOpts = useMemo(() => fyOptions(depts), [depts]);
+  const [fyStart, setFyStart] = useState(() => defaultFy(depts));
+  const curPos = fyOpts.indexOf(fyStart);
+  const safeFy = curPos >= 0 ? fyStart : fyOpts.length ? fyOpts[fyOpts.length - 1] : currentFy();
+  const fyMonths = useMemo(() => fyMonthsFor(safeFy), [safeFy]);
+  const pos = fyOpts.indexOf(safeFy);
+  const canPrev = pos > 0;
+  const canNext = pos >= 0 && pos < fyOpts.length - 1;
+  const goPrev = () => {
+    if (canPrev) setFyStart(fyOpts[pos - 1]);
+  };
+  const goNext = () => {
+    if (canNext) setFyStart(fyOpts[pos + 1]);
+  };
+  const [cellSel, setCellSel] = useState(null);
   const d = useMemo(() => {
     let ok = 0,
       br = 0,
@@ -13666,7 +13757,7 @@ function QCDashboard({
     const uniq = new Set();
     let totalInd = 0;
     depts.forEach(dep => {
-      const s = deptStat(dep);
+      const s = deptStat(dep, fyMonths);
       ok += s.ok;
       br += s.breach;
       na += s.na;
@@ -13713,14 +13804,14 @@ function QCDashboard({
       pct: Math.round(x.v * 100 / totalCells)
     }));
     let maxB = 1;
-    const bbm = MONTHS.map(m => {
+    const bbm = fyMonths.map(m => {
       let b = 0;
       depts.forEach(dep => (dep.indicators || []).forEach(ind => {
         if (monthStatus(ind, m[0]) === 'breach') b++;
       }));
       if (b > maxB) maxB = b;
       return {
-        label: m[1].split(' ')[0],
+        label: m[2],
         val: b
       };
     });
@@ -13729,11 +13820,11 @@ function QCDashboard({
     }));
     const heatRows = depts.map(dep => {
       const inds = dep.indicators || [];
-      const cells = QORDER.map(Q => {
+      const cells = fyMonths.map(m => {
         let b = 0,
           rep = 0;
         inds.forEach(ind => {
-          const s = qtrStatus(ind, Q);
+          const s = monthStatus(ind, m[0]);
           if (s === 'breach') b++;else if (s !== 'na') rep++;
         });
         const bg = b + rep === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : '#e7f6ed';
@@ -13741,10 +13832,14 @@ function QCDashboard({
         return {
           sym: b + rep === 0 ? '–' : b > 0 ? String(b) : '✓',
           bg,
-          fg
+          fg,
+          mk: m[0],
+          mlabel: m[1],
+          breach: b,
+          has: b + rep > 0
         };
       });
-      const st = deptStat(dep);
+      const st = deptStat(dep, fyMonths);
       let status = dep.status;
       if (!status) {
         const brRate = st.ok + st.breach ? st.breach / (st.ok + st.breach) : 0;
@@ -13752,6 +13847,7 @@ function QCDashboard({
       }
       const sc = statusColorFor(status);
       return {
+        dep,
         name: dep.name,
         count: inds.length,
         cells,
@@ -13761,13 +13857,15 @@ function QCDashboard({
         statusBg: sc + '1c'
       };
     });
+    const monthCols = fyMonths.map(m => m[2]);
     return {
       dashKpis,
       mix,
       breachByMonth,
-      heatRows
+      heatRows,
+      monthCols
     };
-  }, [depts]);
+  }, [depts, fyMonths]);
   const thBase = {
     padding: '9px 8px',
     fontSize: '10.5px',
@@ -13819,7 +13917,58 @@ function QCDashboard({
       color: '#6c7a8c',
       marginTop: '2px'
     }
-  }, "Hospital-wide quality & patient-safety performance \xB7 FY 2025\u201326 (monthly)"))), React.createElement("div", {
+  }, "Hospital-wide quality & patient-safety performance \xB7 monthly view")), React.createElement("div", {
+    style: {
+      marginLeft: 'auto',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '2px',
+      background: '#f1f6fb',
+      border: '1px solid #dde3ec',
+      borderRadius: '10px',
+      padding: '3px',
+      flexShrink: 0
+    }
+  }, React.createElement("button", {
+    onClick: goPrev,
+    disabled: !canPrev,
+    title: "Previous fiscal year",
+    style: {
+      border: 0,
+      background: 'transparent',
+      cursor: canPrev ? 'pointer' : 'default',
+      color: canPrev ? '#0090ca' : '#c4ccd6',
+      fontSize: '17px',
+      lineHeight: 1,
+      padding: '3px 10px',
+      borderRadius: '7px',
+      fontWeight: 700
+    }
+  }, "\u2039"), React.createElement("span", {
+    style: {
+      fontSize: '12.5px',
+      fontWeight: 700,
+      color: '#16202e',
+      minWidth: '96px',
+      textAlign: 'center',
+      fontFamily: MONO
+    }
+  }, fyLabelOf(safeFy)), React.createElement("button", {
+    onClick: goNext,
+    disabled: !canNext,
+    title: "Next fiscal year",
+    style: {
+      border: 0,
+      background: 'transparent',
+      cursor: canNext ? 'pointer' : 'default',
+      color: canNext ? '#0090ca' : '#c4ccd6',
+      fontSize: '17px',
+      lineHeight: 1,
+      padding: '3px 10px',
+      borderRadius: '7px',
+      fontWeight: 700
+    }
+  }, "\u203A"))), React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))',
@@ -13988,12 +14137,18 @@ function QCDashboard({
       fontWeight: 700,
       color: '#16202e'
     }
-  }, "Department \xD7 Quarter Heatmap"), React.createElement("div", {
+  }, "Department \xD7 Month Heatmap ", React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      color: '#9aa6b4',
+      fontSize: '11.5px'
+    }
+  }, "\xB7 ", fyLabelOf(safeFy))), React.createElement("div", {
     style: {
       fontSize: '11.5px',
       color: '#6c7a8c'
     }
-  }, "breaches per quarter \u2014 green clean \xB7 red breach \xB7 grey not reported")), React.createElement("div", {
+  }, "breaches per month \u2014 green clean \xB7 red breach \xB7 grey not reported")), React.createElement("div", {
     style: {
       overflowX: 'auto'
     }
@@ -14011,27 +14166,14 @@ function QCDashboard({
       textTransform: 'uppercase',
       letterSpacing: '.3px'
     }
-  }, "Department"), React.createElement("th", {
+  }, "Department"), d.monthCols.map((mc, i) => React.createElement("th", {
+    key: i,
     style: {
       ...thBase,
-      textAlign: 'center'
+      textAlign: 'center',
+      padding: '9px 5px'
     }
-  }, "Q1"), React.createElement("th", {
-    style: {
-      ...thBase,
-      textAlign: 'center'
-    }
-  }, "Q2"), React.createElement("th", {
-    style: {
-      ...thBase,
-      textAlign: 'center'
-    }
-  }, "Q3"), React.createElement("th", {
-    style: {
-      ...thBase,
-      textAlign: 'center'
-    }
-  }, "Q4"), React.createElement("th", {
+  }, mc)), React.createElement("th", {
     style: {
       ...thBase,
       textAlign: 'center',
@@ -14066,20 +14208,28 @@ function QCDashboard({
     key: ci,
     style: {
       textAlign: 'center',
-      padding: '6px 8px'
+      padding: '6px 4px'
     }
   }, React.createElement("span", {
+    onClick: c.has ? () => setCellSel({
+      dep: r.dep,
+      mk: c.mk,
+      mlabel: c.mlabel
+    }) : undefined,
+    title: c.has ? r.name + ' · ' + c.mlabel + (c.breach ? ' — ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + ' · click to view' : undefined,
     style: {
       display: 'inline-grid',
       placeItems: 'center',
-      minWidth: '28px',
+      minWidth: '24px',
       height: '24px',
       borderRadius: '6px',
       background: c.bg,
       color: c.fg,
       fontWeight: 700,
-      fontSize: '11.5px',
-      fontFamily: MONO
+      fontSize: '11px',
+      fontFamily: MONO,
+      cursor: c.has ? 'pointer' : 'default',
+      boxShadow: c.has && c.breach ? '0 0 0 1px #eeb9c2' : 'none'
     }
   }, c.sym))), React.createElement("td", {
     style: {
@@ -14104,7 +14254,248 @@ function QCDashboard({
       fontWeight: 600,
       color: '#16202e'
     }
-  }, r.rate))))))));
+  }, r.rate))))))), cellSel && React.createElement(QCCellDetail, {
+    dep: cellSel.dep,
+    mk: cellSel.mk,
+    mlabel: cellSel.mlabel,
+    onClose: () => setCellSel(null)
+  }));
+}
+function QCCellDetail({
+  dep,
+  mk,
+  mlabel,
+  onClose
+}) {
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const rows = (dep.indicators || []).map(ind => {
+    const incsRaw = ind.incidents && Array.isArray(ind.incidents[mk]) ? ind.incidents[mk] : [];
+    const incs = incsRaw.filter(x => x && (x.details || x.finding || x.corrective || x.preventive || x.patientName || x.uhid || x.diagnosis || x.remark));
+    return {
+      ind,
+      v: monthRaw(ind, mk),
+      s: monthStatus(ind, mk),
+      incs,
+      capa: ind.capa && ind.capa[mk] ? ind.capa[mk] : null,
+      remark: ind.monthRemarks && ind.monthRemarks[mk] || ''
+    };
+  }).filter(r => r.s !== 'na');
+  rows.sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
+  const breaches = rows.filter(r => r.s === 'breach').length;
+  const field = (label, val) => val ? React.createElement("div", {
+    style: {
+      marginBottom: 7
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, label), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.ink,
+      whiteSpace: 'pre-wrap'
+    }
+  }, val)) : null;
+  const incidentCard = (x, i) => React.createElement("div", {
+    key: i,
+    style: {
+      border: '1px solid #f1c6cd',
+      background: '#fff',
+      borderRadius: 9,
+      padding: '11px 13px',
+      marginTop: 9
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: P.rose,
+      marginBottom: 8,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Incident ", i + 1), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      columnGap: 16
+    }
+  }, field('UHID', x.uhid), field('Patient', x.patientName), field('Age / Sex', [x.age, x.gender].filter(Boolean).join(' / ')), field('Diagnosis', x.diagnosis), field('Admission', x.admissionDate), field('Procedure date', x.procedureDate)), field('Incident details', x.details), field('Finding / root cause', x.finding), field('Corrective action', x.corrective), field('Preventive action', x.preventive), field('Remark', x.remark));
+  return React.createElement("div", {
+    onClick: onClose,
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(13,27,46,.55)',
+      zIndex: 6000,
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'center',
+      padding: '38px 16px',
+      overflowY: 'auto'
+    }
+  }, React.createElement("div", {
+    onClick: e => e.stopPropagation(),
+    style: {
+      background: '#fff',
+      width: 'min(760px,100%)',
+      borderRadius: 14,
+      boxShadow: '0 24px 60px rgba(5,12,24,.4)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '15px 20px',
+      borderBottom: '1px solid #e8edf3',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 16.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, dep.name, " ", React.createElement("span", {
+    style: {
+      color: P.muted,
+      fontWeight: 600,
+      fontSize: 13
+    }
+  }, "\xB7 ", mlabel)), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, rows.length, " indicator", rows.length !== 1 ? 's' : '', " reported \xB7 ", React.createElement("b", {
+    style: {
+      color: breaches ? P.rose : P.green
+    }
+  }, breaches, " breach", breaches !== 1 ? 'es' : ''))), React.createElement("button", {
+    onClick: onClose,
+    title: "Close (Esc)",
+    style: {
+      marginLeft: 'auto',
+      width: 32,
+      height: 32,
+      borderRadius: 8,
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.muted,
+      cursor: 'pointer',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement("svg", {
+    width: "16",
+    height: "16",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M6 6l12 12M18 6L6 18"
+  })))), React.createElement("div", {
+    style: {
+      padding: '14px 20px 20px',
+      maxHeight: '72vh',
+      overflowY: 'auto'
+    }
+  }, rows.length === 0 && React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: P.muted,
+      padding: '24px 0',
+      textAlign: 'center'
+    }
+  }, "No indicators were reported for this month."), rows.map((r, ri) => {
+    const isBr = r.s === 'breach';
+    const col = isBr ? P.rose : P.green;
+    const hasDetail = r.incs.length > 0 || r.capa;
+    return React.createElement("div", {
+      key: ri,
+      style: {
+        border: '1px solid ' + (isBr ? '#f1c6cd' : '#dde3ec'),
+        borderLeft: '4px solid ' + col,
+        borderRadius: 10,
+        padding: '12px 15px',
+        marginBottom: 11,
+        background: isBr ? '#fef6f7' : '#fff'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 700,
+        color: P.ink
+      }
+    }, r.ind.name), React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: col,
+        background: col + '1c',
+        padding: '2px 9px',
+        borderRadius: 20,
+        textTransform: 'uppercase',
+        letterSpacing: '.3px'
+      }
+    }, isBr ? 'Breach' : 'On benchmark'), React.createElement("div", {
+      style: {
+        marginLeft: 'auto',
+        fontFamily: MONO,
+        fontSize: 14,
+        fontWeight: 700,
+        color: col
+      }
+    }, fmtVal(r.ind, r.v)), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.muted
+      }
+    }, "vs ", benchExpr(r.ind))), r.remark && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: P.ink2,
+        marginTop: 7,
+        fontStyle: 'italic'
+      }
+    }, "\u201C", r.remark, "\u201D"), r.incs.map((x, i) => incidentCard(x, i)), r.incs.length === 0 && r.capa && incidentCard({
+      details: r.capa.incidentDetails,
+      finding: r.capa.finding,
+      corrective: r.capa.corrective,
+      preventive: r.capa.preventive
+    }, 0), isBr && !hasDetail && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.muted,
+        marginTop: 8,
+        padding: '8px 10px',
+        background: '#f7f9fc',
+        borderRadius: 7
+      }
+    }, "No incident report was logged for this breach. Add details in Quality Data Entry."));
+  }))));
 }
 function QCScorecard({
   depts
@@ -14581,18 +14972,293 @@ function QCTrends({
     }
   }, b.label)))));
 }
+function qcEsc(s) {
+  return ((s == null ? '' : s) + '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function qcDownload(content, filename, mime) {
+  try {
+    const blob = new Blob([content], {
+      type: mime
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try {
+        document.body.removeChild(a);
+      } catch (e) {}
+      URL.revokeObjectURL(url);
+    }, 600);
+  } catch (e) {}
+}
+function qcIncidentsOf(d) {
+  const out = [];
+  (d.indicators || []).forEach(ind => {
+    const incs = ind.incidents || {};
+    MONTHS.forEach(m => {
+      const arr = incs[m[0]];
+      if (Array.isArray(arr)) arr.forEach(x => {
+        if (x && (x.details || x.finding || x.corrective || x.preventive || x.patientName || x.uhid)) out.push({
+          ind: ind.name,
+          month: m[1],
+          x: x
+        });
+      });
+    });
+  });
+  return out;
+}
+function qcReportHTML(depts) {
+  const date = new Date().toISOString().slice(0, 10);
+  let body = '<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Quality Indicator Report</h1>' + '<div style="font-family:Calibri;color:#555;margin-bottom:12px">FY 2025-26 · Jun 2025 - May 2026 · generated ' + date + ' · Confidential</div>';
+  depts.forEach(d => {
+    const st = deptStat(d);
+    body += '<h2 style="font-family:Calibri;color:#16202e;margin:16px 0 3px">' + qcEsc(d.name) + '</h2>' + '<div style="font-family:Calibri;color:#555;margin-bottom:6px">Zero-defect: <b>' + st.rate + '%</b> · Breaches: <b style="color:#d23a52">' + st.breach + '</b> · Indicators: ' + (d.indicators || []).length + '</div>';
+    const th = ['Indicator', 'Benchmark'].concat(MONTHS.map(m => m[1].split(' ')[0])).map(h => '<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">' + h + '</th>').join('');
+    const trs = (d.indicators || []).map((ind, i) => {
+      const cells = [qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m => {
+        const s = monthStatus(ind, m[0]);
+        const disp = s === 'na' ? '—' : fmtVal(ind, monthRaw(ind, m[0]));
+        const col = s === 'breach' ? '#d23a52' : s === 'ok' ? '#1f9d57' : '#9aa6b4';
+        return '<span style="color:' + col + ';font-weight:600">' + qcEsc(disp) + '</span>';
+      }));
+      return '<tr style="background:' + (i % 2 ? '#eef6fb' : '#fff') + '">' + cells.map((c, ci) => '<td style="border:1px solid #b9c6d2;padding:4px 7px;font-family:Calibri;font-size:10pt;' + (ci > 1 ? 'text-align:center' : '') + '">' + c + '</td>').join('') + '</tr>';
+    }).join('');
+    body += '<table border="1" style="border-collapse:collapse"><thead><tr>' + th + '</tr></thead><tbody>' + trs + '</tbody></table>';
+    const inc = qcIncidentsOf(d);
+    if (inc.length) {
+      body += '<h3 style="font-family:Calibri;color:#b32339;margin:12px 0 3px">Incident details (' + inc.length + ')</h3>';
+      const ith = ['Indicator', 'Month', 'UHID', 'Patient', 'Age/Sex', 'Incident details', 'Finding', 'Corrective action', 'Preventive action'].map(h => '<th style="background:#d23a52;color:#fff;border:1px solid #a02a3c;padding:5px 7px;font-family:Calibri;font-size:9.5pt;text-align:left">' + h + '</th>').join('');
+      const itrs = inc.map((r, i) => {
+        const x = r.x;
+        const cols = [r.ind, r.month, x.uhid || '', x.patientName || '', (x.age || '') + (x.gender ? ' / ' + x.gender : ''), x.details || '', x.finding || '', x.corrective || '', x.preventive || ''];
+        return '<tr style="background:' + (i % 2 ? '#fbeef0' : '#fff') + '">' + cols.map(c => '<td style="border:1px solid #e0b6bf;padding:4px 7px;font-family:Calibri;font-size:9pt;vertical-align:top">' + qcEsc(c) + '</td>').join('') + '</tr>';
+      }).join('');
+      body += '<table border="1" style="border-collapse:collapse;margin-top:2px"><thead><tr>' + ith + '</tr></thead><tbody>' + itrs + '</tbody></table>';
+    }
+  });
+  return body;
+}
+function qcExport(depts, fmt) {
+  const date = new Date().toISOString().slice(0, 10);
+  const base = 'UNICO-Quality-Report-' + date;
+  if (fmt === 'csv') {
+    const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(MONTHS.map(m => m[1]))];
+    depts.forEach(d => (d.indicators || []).forEach(ind => {
+      rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(MONTHS.map(m => {
+        const s = monthStatus(ind, m[0]);
+        return s === 'na' ? '' : fmtVal(ind, monthRaw(ind, m[0]));
+      })));
+    }));
+    rows.push([]);
+    rows.push(['INCIDENT DETAILS']);
+    rows.push(['Department', 'Indicator', 'Month', 'UHID', 'Patient', 'Age', 'Sex', 'Diagnosis', 'Details', 'Finding', 'Corrective', 'Preventive']);
+    depts.forEach(d => qcIncidentsOf(d).forEach(r => {
+      const x = r.x;
+      rows.push([d.name, r.ind, r.month, x.uhid || '', x.patientName || '', x.age || '', x.gender || '', x.diagnosis || '', x.details || '', x.finding || '', x.corrective || '', x.preventive || '']);
+    }));
+    qcDownload('﻿' + rows.map(r => r.map(c => '"' + ((c == null ? '' : c) + '').replace(/"/g, '""') + '"').join(',')).join('\r\n'), base + '.csv', 'text/csv;charset=utf-8');
+    return;
+  }
+  const html = '<html xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><style>@page{size:A4 landscape;margin:1cm}</style></head><body>' + qcReportHTML(depts) + '</body></html>';
+  if (fmt === 'excel') return qcDownload(html, base + '.xls', 'application/vnd.ms-excel');
+  if (fmt === 'word') return qcDownload(html, base + '.doc', 'application/msword');
+  if (fmt === 'pdf') {
+    const root = typeof document !== 'undefined' ? document.getElementById('pdf-root') : null;
+    const native = window.unicoNative;
+    if (!root) {
+      try {
+        window.print();
+      } catch (e) {}
+      return;
+    }
+    root.innerHTML = '<div class="pdf-page" style="padding:9mm 10mm;font-family:Calibri,Arial">' + qcReportHTML(depts) + '</div>';
+    document.body.classList.add('pdf-export-mode');
+    const done = () => {
+      root.innerHTML = '';
+      document.body.classList.remove('pdf-export-mode');
+    };
+    if (native && typeof native.exportPDF === 'function') {
+      Promise.resolve(native.exportPDF({
+        pageSize: 'A4',
+        landscape: true,
+        defaultName: base
+      })).catch(() => {}).then(done);
+    } else {
+      try {
+        window.print();
+      } catch (e) {}
+      setTimeout(done, 700);
+    }
+  }
+}
+function QCDonut({
+  rate,
+  size = 118
+}) {
+  const r = size / 2 - 11,
+    c = 2 * Math.PI * r,
+    on = Math.max(0, Math.min(100, rate));
+  const col = on >= 90 ? P.green : on >= 70 ? P.amber : P.rose;
+  return React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: '0 0 ' + size + ' ' + size
+  }, React.createElement("circle", {
+    cx: size / 2,
+    cy: size / 2,
+    r: r,
+    fill: "none",
+    stroke: P.line2,
+    strokeWidth: "12"
+  }), React.createElement("circle", {
+    cx: size / 2,
+    cy: size / 2,
+    r: r,
+    fill: "none",
+    stroke: col,
+    strokeWidth: "12",
+    strokeLinecap: "round",
+    strokeDasharray: c * on / 100 + ' ' + c,
+    transform: 'rotate(-90 ' + size / 2 + ' ' + size / 2 + ')'
+  }), React.createElement("text", {
+    x: "50%",
+    y: "47%",
+    textAnchor: "middle",
+    fontFamily: MONO,
+    fontSize: "19",
+    fontWeight: "700",
+    fill: P.ink
+  }, on, "%"), React.createElement("text", {
+    x: "50%",
+    y: "61%",
+    textAnchor: "middle",
+    fontSize: "8.5",
+    fill: P.faint
+  }, "on benchmark"));
+}
+function QCMonthBars({
+  inds
+}) {
+  const data = MONTHS.map(m => ({
+    label: m[1].split(' ')[0],
+    v: inds.reduce((n, ind) => n + (monthStatus(ind, m[0]) === 'breach' ? 1 : 0), 0)
+  }));
+  const max = Math.max(1, ...data.map(d => d.v));
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 5,
+      height: 118
+    }
+  }, data.map((d, i) => React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: 4,
+      height: '100%',
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 8.5,
+      fontFamily: MONO,
+      color: d.v ? P.rose : P.faint
+    }
+  }, d.v || ''), React.createElement("div", {
+    title: d.label + ': ' + d.v,
+    style: {
+      width: '100%',
+      maxWidth: 22,
+      background: d.v ? P.rose : P.line2,
+      borderRadius: '3px 3px 0 0',
+      height: d.v / max * 100 + '%',
+      minHeight: 3
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 8,
+      color: P.faint
+    }
+  }, d.label))));
+}
+function QCSpark({
+  ind,
+  w = 92,
+  h = 24
+}) {
+  const vals = MONTHS.map(m => monthRaw(ind, m[0]));
+  const nums = vals.filter(v => v != null);
+  if (!nums.length) return React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontSize: 10,
+      fontFamily: MONO
+    }
+  }, "\u2014");
+  const mn = Math.min(...nums),
+    mx = Math.max(...nums),
+    rng = mx - mn || 1;
+  const pts = vals.map((v, i) => ({
+    x: i / (MONTHS.length - 1) * w,
+    y: v == null ? null : h - 2 - (v - mn) / rng * (h - 4)
+  }));
+  const path = pts.filter(p => p.y != null).map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
+  const breach = MONTHS.some(m => monthStatus(ind, m[0]) === 'breach');
+  const col = breach ? P.rose : P.green;
+  return React.createElement("svg", {
+    width: w,
+    height: h
+  }, React.createElement("path", {
+    d: path,
+    fill: "none",
+    stroke: col,
+    strokeWidth: "1.5"
+  }), pts.map((p, i) => p.y != null && React.createElement("circle", {
+    key: i,
+    cx: p.x,
+    cy: p.y,
+    r: "1.5",
+    fill: col
+  })));
+}
 function QCReports({
   depts
 }) {
-  const [dept, setDept] = useState(depts[0] && depts[0].key);
-  const rd = useMemo(() => depts.find(d => d.key === dept) || depts[0] || null, [depts, dept]);
-  const st = useMemo(() => rd ? deptStat(rd) : {
-    ok: 0,
-    breach: 0,
-    na: 0,
-    rate: 100
-  }, [rd]);
-  const inds = rd && rd.indicators || [];
+  const [dept, setDept] = useState('all');
+  const rd = useMemo(() => dept === 'all' ? null : depts.find(d => d.key === dept) || null, [depts, dept]);
+  const inds = useMemo(() => rd ? rd.indicators || [] : (depts || []).flatMap(d => d.indicators || []), [depts, rd]);
+  const st = useMemo(() => {
+    let ok = 0,
+      breach = 0;
+    (depts || []).forEach(d => {
+      if (rd && d.key !== rd.key) return;
+      const s = deptStat(d);
+      ok += s.ok;
+      breach += s.breach;
+    });
+    return {
+      breach,
+      rate: ok + breach ? Math.round(ok * 100 / (ok + breach)) : 100
+    };
+  }, [depts, rd]);
+  const scopeName = rd ? rd.name : 'All departments';
+  const incCount = useMemo(() => (depts || []).reduce((n, d) => rd && d.key !== rd.key ? n : n + qcIncidentsOf(d).length, 0), [depts, rd]);
+  const rows = rd ? (rd.indicators || []).map(ind => ({
+    d: rd,
+    ind
+  })) : (depts || []).flatMap(d => (d.indicators || []).map(ind => ({
+    d,
+    ind
+  })));
+  const EXP = [['pdf', 'PDF'], ['excel', 'Excel'], ['word', 'Word'], ['csv', 'CSV']];
   return React.createElement("div", null, React.createElement("div", {
     style: {
       display: 'flex',
@@ -14642,8 +15308,8 @@ function QCReports({
       color: P.muted,
       marginTop: 2
     }
-  }, "Full month-wise indicator report \xB7 FY 2025\u201326")), React.createElement("select", {
-    value: dept || '',
+  }, "Charts, month-wise values & incident details \xB7 FY 2025\u201326")), React.createElement("select", {
+    value: dept,
     onChange: e => setDept(e.target.value),
     style: {
       padding: '8px 11px',
@@ -14655,10 +15321,122 @@ function QCReports({
       color: P.ink,
       outline: 'none'
     }
-  }, depts.map(o => React.createElement("option", {
+  }, React.createElement("option", {
+    value: "all"
+  }, "All departments"), depts.map(o => React.createElement("option", {
     key: o.key,
     value: o.key
   }, o.name)))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginBottom: 14,
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 10,
+      padding: '10px 13px'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: P.ink2
+    }
+  }, "Export full report (all departments + incident details):"), EXP.map(([f, l]) => React.createElement("button", {
+    key: f,
+    onClick: () => qcExport(depts, f),
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '6px 12px',
+      border: '1px solid ' + P.line,
+      borderRadius: 7,
+      background: '#fff',
+      color: P.ink2,
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M12 3v12m0 0l4-4m-4 4l-4-4M4 19h16"
+  })), l)), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted
+    }
+  }, depts.length, " departments \xB7 ", incCount, " incident", incCount !== 1 ? 's' : '', " in scope")), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '220px 1fr',
+      gap: 14,
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      padding: '14px 16px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      alignSelf: 'flex-start'
+    }
+  }, "Compliance"), React.createElement(QCDonut, {
+    rate: st.rate
+  }), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.muted
+    }
+  }, React.createElement("b", {
+    style: {
+      color: P.rose
+    }
+  }, st.breach), " breach-cells \xB7 ", inds.length, " indicators")), React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      padding: '14px 16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      marginBottom: 10
+    }
+  }, "Breaches by month \u2014 ", scopeName), React.createElement(QCMonthBars, {
+    inds: inds
+  }))), React.createElement("div", {
     style: {
       background: '#fff',
       border: '1px solid ' + P.line,
@@ -14687,7 +15465,7 @@ function QCReports({
       fontWeight: 700,
       color: P.ink
     }
-  }, "UNICO Hospitals \u2014 ", rd ? rd.name : ''), React.createElement("div", {
+  }, "UNICO Hospitals \u2014 ", scopeName), React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: P.muted
@@ -14737,13 +15515,23 @@ function QCReports({
       borderCollapse: 'collapse',
       fontSize: 11,
       width: '100%',
-      minWidth: 920
+      minWidth: 1040
     }
   }, React.createElement("thead", null, React.createElement("tr", {
     style: {
       background: P.panel2
     }
-  }, React.createElement("th", {
+  }, rd ? null : React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 8px',
+      fontSize: 9.5,
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid ' + P.line,
+      background: P.panel2
+    }
+  }, "Dept"), React.createElement("th", {
     style: {
       textAlign: 'left',
       padding: '8px 10px',
@@ -14753,10 +15541,8 @@ function QCReports({
       color: P.muted,
       fontWeight: 700,
       borderBottom: '1px solid ' + P.line,
-      position: 'sticky',
-      left: 0,
       background: P.panel2,
-      minWidth: 190
+      minWidth: 180
     }
   }, "Indicator"), React.createElement("th", {
     style: {
@@ -14767,7 +15553,7 @@ function QCReports({
       fontWeight: 700,
       borderBottom: '1px solid ' + P.line,
       background: P.panel2,
-      width: 96
+      width: 92
     }
   }, "Benchmark"), MONTHS.map(m => React.createElement("th", {
     key: m[0],
@@ -14780,20 +15566,38 @@ function QCReports({
       borderBottom: '1px solid ' + P.line,
       background: P.panel2
     }
-  }, m[1].split(' ')[0])))), React.createElement("tbody", null, inds.map(ind => React.createElement("tr", {
-    key: ind.id,
+  }, m[1].split(' ')[0])), React.createElement("th", {
+    style: {
+      textAlign: 'center',
+      padding: '8px 6px',
+      fontSize: 9,
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid ' + P.line,
+      background: P.panel2
+    }
+  }, "Trend"))), React.createElement("tbody", null, rows.map(({
+    d,
+    ind
+  }) => React.createElement("tr", {
+    key: d.key + '/' + ind.id,
     style: {
       borderBottom: '1px solid ' + P.line2
     }
-  }, React.createElement("td", {
+  }, rd ? null : React.createElement("td", {
+    style: {
+      padding: '6px 8px',
+      textAlign: 'left',
+      fontSize: 10,
+      color: P.muted,
+      whiteSpace: 'nowrap'
+    }
+  }, d.name), React.createElement("td", {
     style: {
       padding: '7px 10px',
       textAlign: 'left',
       fontWeight: 600,
-      color: P.ink,
-      position: 'sticky',
-      left: 0,
-      background: '#fff'
+      color: P.ink
     }
   }, ind.name, " ", React.createElement("span", {
     style: {
@@ -14833,30 +15637,64 @@ function QCReports({
         fontSize: 10
       }
     }, disp));
-  }))))))));
+  }), React.createElement("td", {
+    style: {
+      textAlign: 'center',
+      padding: '4px 6px'
+    }
+  }, React.createElement(QCSpark, {
+    ind: ind
+  })))))))));
 }
 function QCIncidents({
   depts
 }) {
   const [dept, setDept] = useState('all');
+  const [sel, setSel] = useState(null);
   const list = useMemo(() => {
     const out = [];
     (depts || []).forEach(d => {
       if (dept !== 'all' && d.key !== dept) return;
       (d.indicators || []).forEach(ind => {
-        MONTHS.forEach(m => {
-          if (monthStatus(ind, m[0]) === 'breach') {
-            out.push({
-              dept: d.name,
-              deptKey: d.key,
-              ind: ind.name,
-              cat: ind.category,
-              month: m[1],
-              value: fmtVal(ind, monthRaw(ind, m[0])),
-              bench: benchExpr(ind)
-            });
-          }
-        });
+        const hasMonthly = MONTHS.some(m => monthRaw(ind, m[0]) != null);
+        if (hasMonthly) {
+          MONTHS.forEach(m => {
+            if (monthStatus(ind, m[0]) === 'breach') {
+              out.push({
+                dept: d.name,
+                deptKey: d.key,
+                ind: ind.name,
+                cat: ind.category,
+                period: 'month',
+                month: m[1],
+                value: fmtVal(ind, monthRaw(ind, m[0])),
+                bench: benchExpr(ind),
+                indObj: ind,
+                monthKey: m[0],
+                deptObj: d
+              });
+            }
+          });
+        } else {
+          QORDER.forEach(q => {
+            if (qtrStatus(ind, q) === 'breach') {
+              out.push({
+                dept: d.name,
+                deptKey: d.key,
+                ind: ind.name,
+                cat: ind.category,
+                period: 'quarter',
+                month: qtrLabelOf(q),
+                value: fmtVal(ind, qtrRaw(ind, q)),
+                bench: benchExpr(ind),
+                indObj: ind,
+                quarter: q,
+                monthKey: q,
+                deptObj: d
+              });
+            }
+          });
+        }
       });
     });
     return out;
@@ -14870,6 +15708,12 @@ function QCIncidents({
     key: d.key,
     label: d.name
   })));
+  if (sel) {
+    return React.createElement(IncidentReport, {
+      rec: sel,
+      onBack: () => setSel(null)
+    });
+  }
   return React.createElement("div", null, React.createElement("div", {
     style: {
       display: 'flex',
@@ -14957,7 +15801,17 @@ function QCIncidents({
     }
   }, rows.map((x, i) => React.createElement("div", {
     key: x.deptKey + '|' + x.ind + '|' + x.month + '|' + i,
+    onClick: () => setSel(x),
+    onMouseEnter: e => {
+      e.currentTarget.style.boxShadow = '0 3px 10px rgba(20,32,46,.12)';
+      e.currentTarget.style.borderColor = P.rose;
+    },
+    onMouseLeave: e => {
+      e.currentTarget.style.boxShadow = '0 1px 2px rgba(20,32,46,.05)';
+      e.currentTarget.style.borderColor = P.line;
+    },
     style: {
+      cursor: 'pointer',
       background: '#fff',
       border: '1px solid ' + P.line,
       borderLeft: '3px solid ' + P.rose,
@@ -14967,7 +15821,8 @@ function QCIncidents({
       display: 'flex',
       alignItems: 'center',
       gap: 14,
-      flexWrap: 'wrap'
+      flexWrap: 'wrap',
+      transition: 'box-shadow .12s,border-color .12s'
     }
   }, React.createElement("div", {
     style: {
@@ -15068,7 +15923,395 @@ function QCIncidents({
       padding: '3px 10px',
       borderRadius: 20
     }
-  }, "Breach")))));
+  }, "Breach"), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.blue,
+      whiteSpace: 'nowrap'
+    }
+  }, "View report \u203A")))));
+}
+function IncidentReport({
+  rec,
+  onBack
+}) {
+  const ind = rec.indObj;
+  const gd = guideOf(stdMatch(rec.ind)) || {};
+  const meas = measureOf(ind.formula);
+  const isQtr = rec.period === 'quarter';
+  const periodWord = isQtr ? 'quarter' : 'month';
+  const remark = isQtr ? ind.quarterRemarks && ind.quarterRemarks[rec.quarter] || '' : ind.monthRemarks && ind.monthRemarks[rec.monthKey] || '';
+  const card = {
+    background: '#fff',
+    border: '1px solid ' + P.line,
+    borderRadius: 12,
+    boxShadow: '0 1px 2px rgba(20,32,46,.05)',
+    padding: '16px 18px'
+  };
+  const lbl = {
+    fontSize: 10,
+    fontWeight: 700,
+    color: P.muted,
+    textTransform: 'uppercase',
+    letterSpacing: '.4px',
+    marginBottom: 4
+  };
+  const secTitle = {
+    fontSize: 14,
+    fontWeight: 700,
+    color: P.ink,
+    margin: '0 0 12px',
+    letterSpacing: '-.2px'
+  };
+  const defRow = (label, value, mono) => React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: lbl
+  }, label), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.ink2,
+      lineHeight: 1.5,
+      fontFamily: mono ? MONO : 'inherit',
+      wordBreak: 'break-word'
+    }
+  }, value));
+  const trend = isQtr ? QORDER.map(q => {
+    const raw = qtrRaw(ind, q);
+    return {
+      key: q,
+      short: q,
+      val: fmtVal(ind, raw),
+      status: qtrStatus(ind, q),
+      here: q === rec.quarter
+    };
+  }) : MONTHS.map(m => {
+    const raw = monthRaw(ind, m[0]);
+    return {
+      key: m[0],
+      short: m[1].split(' ')[0],
+      val: fmtVal(ind, raw),
+      status: monthStatus(ind, m[0]),
+      here: m[0] === rec.monthKey
+    };
+  });
+  const cellBg = s => s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : '#eef1f5';
+  const cellFg = s => s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
+  let totalBreach = 0;
+  trend.forEach(t => {
+    if (t.status === 'breach') totalBreach++;
+  });
+  let consecutive = 0;
+  const hereIdx = trend.findIndex(t => t.here);
+  for (let j = hereIdx < 0 ? trend.length - 1 : hereIdx; j >= 0; j--) {
+    if (trend[j].status === 'breach') consecutive++;else break;
+  }
+  const isEvent = isEventIndicator(ind);
+  const rawNow = Number(isQtr ? qtrRaw(ind, rec.quarter) : monthRaw(ind, rec.monthKey));
+  const benchNum = Number(ind.benchmarkValue);
+  const hasGap = !isEvent && isFinite(rawNow) && ind.benchmarkValue != null && ind.benchmarkValue !== '' && isFinite(benchNum);
+  const gap = hasGap ? Math.round((rawNow - benchNum) * 100) / 100 : null;
+  const unitWord = rateUnitWord(ind);
+  const higher = ind.goalDirection === 'higher_is_better';
+  const gapDir = gap == null ? '' : gap < 0 ? 'below' : gap > 0 ? 'above' : 'at';
+  const incidents = ind.incidents && ind.incidents[isQtr ? rec.quarter : rec.monthKey] || [];
+  const remarkShownInSection = isEvent && incidents.length === 0 && remark || !isEvent && remark;
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: Object.assign({}, card, {
+      borderTop: '3px solid ' + P.rose
+    })
+  }, React.createElement("button", {
+    onClick: onBack,
+    style: {
+      background: 'none',
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      padding: '6px 12px',
+      fontSize: 12,
+      fontWeight: 600,
+      color: P.ink2,
+      cursor: 'pointer',
+      marginBottom: 12
+    }
+  }, "\u2190 Back to incidents"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 19,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, rec.ind), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 4
+    }
+  }, rec.dept, " \xB7 ", rec.cat, " \xB7 ", meas.name), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.faint,
+      marginTop: 2
+    }
+  }, "Reporting ", periodWord, " \u2014 ", rec.month)), React.createElement("div", {
+    style: {
+      textAlign: 'right'
+    }
+  }, React.createElement("div", {
+    style: lbl
+  }, "Recorded value"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 30,
+      fontWeight: 700,
+      color: P.rose,
+      lineHeight: 1.1
+    }
+  }, rec.value), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.ink2,
+      marginTop: 4
+    }
+  }, "Benchmark ", React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontWeight: 600,
+      color: P.blue700
+    }
+  }, rec.bench)), React.createElement("span", {
+    style: {
+      display: 'inline-block',
+      marginTop: 6,
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: P.rose,
+      background: '#fbe9ec',
+      padding: '3px 10px',
+      borderRadius: 20
+    }
+  }, "Breach")))), React.createElement("div", {
+    style: card
+  }, React.createElement("h3", {
+    style: secTitle
+  }, "Indicator definition"), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))',
+      gap: 14
+    }
+  }, defRow('Formula', formulaText(ind), true), defRow('Benchmark', benchExpr(ind), true), defRow('Goal', higher ? 'Higher is better' : 'Lower is better'), defRow('Numerator', ind.numLabel || gd.numDef || '—'), defRow('Denominator', ind.denLabel || gd.denDef || '—'), defRow('Reference', ind.reference || gd.reference || '—')), gd.example && React.createElement("div", {
+    style: {
+      background: '#eef8fc',
+      border: '1px solid #dceffa',
+      borderRadius: 9,
+      padding: '11px 13px',
+      marginTop: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.blue700,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      marginBottom: 4
+    }
+  }, "Worked example"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.blue700,
+      lineHeight: 1.55,
+      fontFamily: MONO
+    }
+  }, gd.example))), React.createElement("div", {
+    style: card
+  }, React.createElement("h3", {
+    style: secTitle
+  }, isQtr ? '4-quarter trend' : '12-month trend', " \u2014 ", rec.dept), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(' + (isQtr ? 4 : 12) + ',1fr)',
+      gap: 6
+    }
+  }, trend.map(t => React.createElement("div", {
+    key: t.key,
+    style: {
+      textAlign: 'center',
+      padding: '7px 3px',
+      borderRadius: 7,
+      background: cellBg(t.status),
+      border: t.here ? '2px solid ' + P.rose : '1px solid transparent',
+      boxShadow: t.here ? '0 0 0 2px rgba(210,58,82,.15)' : 'none'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, t.short), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: cellFg(t.status),
+      marginTop: 3
+    }
+  }, t.status === 'na' ? '·' : t.val)))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint,
+      marginTop: 10
+    }
+  }, "Highlighted cell = the breached ", periodWord, " under review. ", totalBreach, " breach", totalBreach === 1 ? '' : 'es', " across the fiscal year.")), isEvent ? React.createElement("div", {
+    style: card
+  }, React.createElement("h3", {
+    style: secTitle
+  }, "Incident register \u2014 ", rec.month), incidents.length ? React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, incidents.map((inc, ii) => {
+    const patient = [['UHID', inc.uhid], ['Patient name', inc.patientName], ['Age · Gender', [inc.age, inc.gender].filter(Boolean).join(' · ')], ['Diagnosis', inc.diagnosis], ['Date of admission', inc.admissionDate], ['Date of procedure', inc.procedureDate]].filter(r => r[1] != null && r[1] !== '');
+    const capa = [['Incident details', inc.details], ['Finding / observation', inc.finding], ['Corrective action', inc.corrective], ['Preventive action', inc.preventive], ['Remark', inc.remark]].filter(r => r[1] != null && r[1] !== '');
+    return React.createElement("div", {
+      key: inc.id || inc.uhid || ii,
+      style: {
+        border: '1px solid ' + P.line,
+        borderLeft: '3px solid ' + P.rose,
+        borderRadius: 10,
+        padding: '13px 15px',
+        background: P.panel2
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: P.rose,
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 9
+      }
+    }, "Incident ", ii + 1), patient.length > 0 && React.createElement("div", {
+      style: {
+        marginBottom: capa.length ? 12 : 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: P.blue700,
+        marginBottom: 7
+      }
+    }, "Patient"), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+        gap: 10
+      }
+    }, patient.map(r => React.createElement("div", {
+      key: r[0]
+    }, defRow(r[0], r[1]))))), capa.length > 0 && React.createElement("div", null, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: P.violet,
+        marginBottom: 7
+      }
+    }, "Investigation & CAPA"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 9
+      }
+    }, capa.map(r => React.createElement("div", {
+      key: r[0]
+    }, defRow(r[0], r[1]))))), patient.length === 0 && capa.length === 0 && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: P.faint,
+        fontStyle: 'italic'
+      }
+    }, "No detail fields were logged for this incident."));
+  })) : React.createElement("div", null, React.createElement("div", {
+    style: {
+      background: '#fff7e6',
+      border: '1px solid #f0dcae',
+      borderRadius: 9,
+      padding: '12px 14px',
+      fontSize: 12.5,
+      color: P.ink2,
+      lineHeight: 1.55
+    }
+  }, React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: P.amber
+    }
+  }, "\u24D8 "), rec.value, " recorded this ", periodWord, ", but no per-incident detail was logged via Data Collection."), remark && React.createElement("div", {
+    style: {
+      marginTop: 12
+    }
+  }, defRow(isQtr ? 'Quarter remark' : 'Month remark', remark)))) : React.createElement("div", {
+    style: card
+  }, React.createElement("h3", {
+    style: secTitle
+  }, "Compliance analysis"), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+      gap: 14
+    }
+  }, defRow(isQtr ? 'This quarter' : 'This month', rec.value, true), defRow('Benchmark', rec.bench, true), defRow('Gap', gap == null ? '—' : (gap > 0 ? '+' : '') + gap + ' ' + unitWord, true), defRow('Consecutive breach ' + periodWord + 's', String(consecutive), true)), gap != null && React.createElement("div", {
+    style: {
+      background: P.panel2,
+      border: '1px solid ' + P.line,
+      borderRadius: 9,
+      padding: '12px 14px',
+      marginTop: 14,
+      fontSize: 12.5,
+      color: P.ink2,
+      lineHeight: 1.55
+    }
+  }, rec.value, " is ", Math.abs(gap), " ", unitWord, " ", gapDir, " the ", rec.bench, " target", gapDir === 'below' && higher ? ' — direction of concern for this indicator.' : gapDir === 'above' && !higher ? ' — direction of concern for this indicator.' : '.', ' ', "This ", periodWord, " is part of ", consecutive, " consecutive breach ", periodWord, consecutive === 1 ? '' : 's', " (", totalBreach, " in the fiscal year)."), remark && React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, defRow(isQtr ? 'Quarter remark' : 'Month remark', remark))), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted,
+      padding: '0 4px 8px'
+    }
+  }, "Corrective actions are tracked in Action Plans.", remark && !remarkShownInSection ? React.createElement("span", null, " \xB7 ", isQtr ? 'Quarter' : 'Month', " remark: ", remark) : null));
 }
 function QCActionPlans({
   depts
@@ -21063,7 +22306,18 @@ window.LockScreen = LockScreen;
     });
     const [month, setMonth] = useState(defMonth);
     const [den, setDen] = useState('');
-    const [incidents, setIncidents] = useState([]);
+    const [numMode, setNumMode] = useState('group');
+    const [groups, setGroups] = useState({
+      nurse: '',
+      doctor: '',
+      other: ''
+    });
+    const [directNum, setDirectNum] = useState('');
+    const [capa, setCapa] = useState({
+      finding: '',
+      corrective: '',
+      preventive: ''
+    });
     const [remark, setRemark] = useState('');
     const [responsible, setResponsible] = useState(lockResp ? me.name || '' : prefill && prefill.responsible || '');
     const [busy, setBusy] = useState(false);
@@ -21099,57 +22353,67 @@ window.LockScreen = LockScreen;
     const numDef = def.numeratorDef || '';
     const denDef = def.denominatorDef || (isRate ? 'Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.' : '');
     const indNameQ = def.name || newInd.name || 'Result';
-    const incCount = incidents.length;
+    const groupSum = (Number(groups.nurse) || 0) + (Number(groups.doctor) || 0) + (Number(groups.other) || 0);
+    const numerator = numMode === 'group' ? groupSum : Number(directNum) || 0;
     const denNum = Number(den);
     const denEntered = den !== '' && denNum > 0;
     const computeAsRate = isRate || denEntered;
     const rateUnit = unitRaw && /per|%/.test(unitRaw) ? unitRaw : formula === 'pct' ? '%' : 'per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '');
     const unitQ = computeAsRate ? rateUnit : unitRaw || 'count';
-    const formulaTextQ = computeAsRate ? indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult + '   ·   ' + numLabel + ' = number of incidents this month' : indNameQ + ' = number of incidents this month';
+    const formulaTextQ = computeAsRate ? indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult : indNameQ + ' = ' + numLabel;
     const guide = hqiGuideFor(indNameQ);
     useEffect(() => {
       if (!curInd) {
-        setIncidents([]);
+        setGroups({
+          nurse: '',
+          doctor: '',
+          other: ''
+        });
+        setDirectNum('');
+        setNumMode('group');
         setDen('');
         return;
       }
-      const ev = curInd.incidents && curInd.incidents[month];
-      setIncidents(Array.isArray(ev) ? ev.map(x => ({
-        uhid: x.uhid || '',
-        patientName: x.patientName || '',
-        age: x.age || '',
-        gender: x.gender || '',
-        diagnosis: x.diagnosis || '',
-        admissionDate: x.admissionDate || '',
-        procedureDate: x.procedureDate || '',
-        details: x.details || '',
-        finding: x.finding || '',
-        corrective: x.corrective || '',
-        preventive: x.preventive || '',
-        remark: x.remark || ''
-      })) : []);
+      const g = curInd.mGroups && curInd.mGroups[month];
+      const rawNum = curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' ? curInd.mNum[month] : !isRate && curInd.months && curInd.months[month] != null && curInd.months[month] !== '' ? curInd.months[month] : null;
+      if (g && typeof g === 'object') {
+        setGroups({
+          nurse: g.nurse != null ? String(g.nurse) : '',
+          doctor: g.doctor != null ? String(g.doctor) : '',
+          other: g.other != null ? String(g.other) : ''
+        });
+        setDirectNum('');
+        setNumMode('group');
+      } else if (rawNum != null) {
+        setDirectNum(String(rawNum));
+        setGroups({
+          nurse: '',
+          doctor: '',
+          other: ''
+        });
+        setNumMode('direct');
+      } else {
+        setGroups({
+          nurse: '',
+          doctor: '',
+          other: ''
+        });
+        setDirectNum('');
+        setNumMode('group');
+      }
       setDen(curInd.mDen && curInd.mDen[month] != null ? String(curInd.mDen[month]) : '');
+      const cp = curInd.capa && curInd.capa[month];
+      setCapa(cp && typeof cp === 'object' ? {
+        finding: cp.finding || '',
+        corrective: cp.corrective || '',
+        preventive: cp.preventive || ''
+      } : {
+        finding: '',
+        corrective: '',
+        preventive: ''
+      });
     }, [indId, month]);
-    const result = computeAsRate ? denNum > 0 ? Math.round(incCount / denNum * mult * 100) / 100 : 0 : incCount;
-    const addIncident = () => setIncidents(arr => [...arr, {
-      uhid: '',
-      patientName: '',
-      age: '',
-      gender: '',
-      diagnosis: '',
-      admissionDate: '',
-      procedureDate: '',
-      details: '',
-      finding: '',
-      corrective: '',
-      preventive: '',
-      remark: ''
-    }]);
-    const setInc = (i, k, v) => setIncidents(arr => arr.map((x, j) => j === i ? {
-      ...x,
-      [k]: v
-    } : x));
-    const delInc = i => setIncidents(arr => arr.filter((_, j) => j !== i));
+    const result = computeAsRate ? denNum > 0 ? Math.round(numerator / denNum * mult * 100) / 100 : 0 : numerator;
     const qExists = !!(curInd && (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
     const qLocked = lockResp && !isNew && qExists;
     const submit = () => {
@@ -21192,10 +22456,19 @@ window.LockScreen = LockScreen;
         numLabel: computeAsRate ? numLabel : undefined,
         denLabel: computeAsRate ? denLabel : undefined,
         unit: unitQ,
-        value: computeAsRate ? undefined : incCount,
-        num: computeAsRate ? incCount : undefined,
+        value: computeAsRate ? undefined : numerator,
+        num: computeAsRate ? numerator : undefined,
         den: computeAsRate ? den : undefined,
-        incidents,
+        groups: numMode === 'group' ? {
+          nurse: Number(groups.nurse) || 0,
+          doctor: Number(groups.doctor) || 0,
+          other: Number(groups.other) || 0
+        } : undefined,
+        capa: capa.finding || capa.corrective || capa.preventive ? {
+          finding: capa.finding,
+          corrective: capa.corrective,
+          preventive: capa.preventive
+        } : undefined,
         remark,
         responsible: lockResp ? {
           name: me.name
@@ -21212,7 +22485,17 @@ window.LockScreen = LockScreen;
             area: area.name,
             month
           });
-          setIncidents([]);
+          setGroups({
+            nurse: '',
+            doctor: '',
+            other: ''
+          });
+          setDirectNum('');
+          setCapa({
+            finding: '',
+            corrective: '',
+            preventive: ''
+          });
           setDen('');
           setRemark('');
           if (isNew) {
@@ -21242,7 +22525,7 @@ window.LockScreen = LockScreen;
     }, React.createElement(SectionTitle, {
       icon: I.activity,
       title: "Submit Quality Data",
-      sub: "Log the month's incidents \u2014 the count / rate is calculated automatically."
+      sub: "Enter the month's value \u2014 by staff group (Nurse / Doctor / Other) or directly \u2014 the count / rate is calculated automatically."
     }), done && React.createElement(Banner, {
       ok: true,
       onClose: () => setDone(null)
@@ -21315,7 +22598,7 @@ window.LockScreen = LockScreen;
       })
     }, React.createElement("option", {
       value: "count"
-    }, "Count (incidents)"), React.createElement("option", {
+    }, "Count"), React.createElement("option", {
       value: "pct"
     }, "Percentage (%)"), React.createElement("option", {
       value: "rate1000"
@@ -21583,7 +22866,8 @@ window.LockScreen = LockScreen;
         display: 'flex',
         alignItems: 'center',
         gap: 8,
-        marginBottom: incidents.length ? 10 : 0
+        marginBottom: 10,
+        flexWrap: 'wrap'
       }
     }, React.createElement("div", {
       style: {
@@ -21591,195 +22875,100 @@ window.LockScreen = LockScreen;
         fontWeight: 700,
         color: 'var(--ink-2)'
       }
-    }, "Incidents in ", monthLabel(month)), React.createElement("span", {
+    }, numLabel, isRate ? ' (numerator)' : ''), React.createElement("span", {
       style: {
         fontSize: 11,
         fontWeight: 700,
         padding: '2px 9px',
         borderRadius: 999,
-        background: incCount ? 'var(--neg-bg)' : 'var(--pos-bg)',
-        color: incCount ? 'var(--rose)' : 'var(--pos)'
+        background: 'var(--blue-50)',
+        color: 'var(--blue-700)'
       }
-    }, incCount), React.createElement("span", {
+    }, numerator), React.createElement("span", {
       style: {
         flex: 1
       }
-    }), React.createElement("button", {
-      className: "btn sm",
-      onClick: addIncident
-    }, React.createElement(Ic, {
-      d: I.plus,
-      s: 13
-    }), "Add incident")), incidents.length === 0 && React.createElement("div", {
+    }), React.createElement("div", {
+      className: "seg"
+    }, React.createElement("button", {
+      className: numMode === 'group' ? 'on' : '',
+      onClick: () => setNumMode('group')
+    }, "By group"), React.createElement("button", {
+      className: numMode === 'direct' ? 'on' : '',
+      onClick: () => setNumMode('direct')
+    }, "Direct value"))), numMode === 'group' ? React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
-        fontSize: 12,
-        color: 'var(--muted)'
-      }
-    }, "No incidents \u2014 the ", isRate ? 'numerator' : 'count', " stays 0. Click \u201CAdd incident\u201D for each event that occurred."), incidents.map((inc, i) => React.createElement("div", {
-      key: i,
-      style: {
-        border: '1px solid var(--line)',
-        borderRadius: 8,
-        padding: '10px 12px',
-        marginBottom: 8,
-        background: 'var(--panel-2)'
-      }
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
+        fontSize: 11.5,
+        color: 'var(--muted)',
         marginBottom: 8
       }
-    }, React.createElement("b", {
-      style: {
-        fontSize: 12
-      }
-    }, "Incident #", i + 1), React.createElement("span", {
-      style: {
-        flex: 1
-      }
-    }), React.createElement("button", {
-      className: "icon-btn",
-      title: "Remove",
-      style: {
-        width: 24,
-        height: 24,
-        border: 0,
-        background: 'transparent',
-        color: 'var(--rose)'
-      },
-      onClick: () => delInc(i)
-    }, React.createElement(Ic, {
-      d: I.x,
-      s: 13
-    }))), React.createElement("div", {
-      style: {
-        display: 'grid',
-        gap: 8
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 10.5,
-        fontWeight: 700,
-        color: 'var(--muted)',
-        textTransform: 'uppercase',
-        letterSpacing: .4
-      }
-    }, "Patient & admission details"), React.createElement("div", {
+    }, "Enter the ", (numLabel || 'value').toLowerCase(), " for each staff group \u2014 they add up to the total ", isRate ? 'numerator' : 'value', "."), React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: 'repeat(3, 1fr)',
         gap: 8
       }
+    }, React.createElement(Field, {
+      label: "Nurse"
     }, React.createElement("input", {
-      style: inputStyle,
-      value: inc.uhid,
-      onChange: e => setInc(i, 'uhid', e.target.value),
-      placeholder: "UHID / Reg. no"
-    }), React.createElement("input", {
-      style: {
-        ...inputStyle,
-        gridColumn: 'span 2'
-      },
-      value: inc.patientName,
-      onChange: e => setInc(i, 'patientName', e.target.value),
-      placeholder: "Patient name"
-    }), React.createElement("input", {
-      style: inputStyle,
       type: "number",
       min: "0",
-      value: inc.age,
-      onChange: e => setInc(i, 'age', e.target.value),
-      placeholder: "Age"
-    }), React.createElement("select", {
+      step: "any",
       style: inputStyle,
-      value: inc.gender,
-      onChange: e => setInc(i, 'gender', e.target.value)
-    }, React.createElement("option", {
-      value: ""
-    }, "Gender\u2026"), React.createElement("option", null, "Male"), React.createElement("option", null, "Female"), React.createElement("option", null, "Other")), React.createElement("input", {
+      value: groups.nurse,
+      onChange: e => setGroups(g => ({
+        ...g,
+        nurse: e.target.value
+      })),
+      placeholder: "0"
+    })), React.createElement(Field, {
+      label: "Doctor"
+    }, React.createElement("input", {
+      type: "number",
+      min: "0",
+      step: "any",
       style: inputStyle,
-      value: inc.diagnosis,
-      onChange: e => setInc(i, 'diagnosis', e.target.value),
-      placeholder: "Diagnosis"
-    }), React.createElement("label", {
-      style: {
-        fontSize: 10,
-        color: 'var(--muted)'
-      }
-    }, "Date of admission", React.createElement("input", {
+      value: groups.doctor,
+      onChange: e => setGroups(g => ({
+        ...g,
+        doctor: e.target.value
+      })),
+      placeholder: "0"
+    })), React.createElement(Field, {
+      label: React.createElement("span", null, "Other ", React.createElement("span", {
+        style: {
+          color: 'var(--muted)',
+          fontWeight: 400
+        }
+      }, "(PCA / other dept.)"))
+    }, React.createElement("input", {
+      type: "number",
+      min: "0",
+      step: "any",
       style: inputStyle,
-      type: "date",
-      value: inc.admissionDate,
-      onChange: e => setInc(i, 'admissionDate', e.target.value)
-    })), React.createElement("label", {
-      style: {
-        fontSize: 10,
-        color: 'var(--muted)'
-      }
-    }, "Date of procedure ", React.createElement("span", {
-      style: {
-        color: 'var(--faint)'
-      }
-    }, "(if any)"), React.createElement("input", {
+      value: groups.other,
+      onChange: e => setGroups(g => ({
+        ...g,
+        other: e.target.value
+      })),
+      placeholder: "0"
+    })))) : React.createElement(Field, {
+      label: React.createElement("span", null, numLabel, " ", React.createElement("span", {
+        style: {
+          color: 'var(--muted)',
+          fontWeight: 400
+        }
+      }, "(enter the number directly)")),
+      hint: numDef || undefined
+    }, React.createElement("input", {
+      type: "number",
+      min: "0",
+      step: "any",
       style: inputStyle,
-      type: "date",
-      value: inc.procedureDate,
-      onChange: e => setInc(i, 'procedureDate', e.target.value)
+      value: directNum,
+      onChange: e => setDirectNum(e.target.value),
+      placeholder: isRate ? 'Total ' + (numLabel || 'numerator').toLowerCase() + ' this month' : 'Total this month'
     }))), React.createElement("div", {
-      style: {
-        fontSize: 10.5,
-        fontWeight: 700,
-        color: 'var(--muted)',
-        textTransform: 'uppercase',
-        letterSpacing: .4,
-        marginTop: 2
-      }
-    }, "Incident, cause & CAPA"), React.createElement("textarea", {
-      style: {
-        ...inputStyle,
-        minHeight: 42
-      },
-      value: inc.details,
-      onChange: e => setInc(i, 'details', e.target.value),
-      placeholder: "Incident details \u2014 what happened"
-    }), React.createElement("div", {
-      style: {
-        display: 'grid',
-        gridTemplateColumns: '1fr 1fr 1fr',
-        gap: 8
-      }
-    }, React.createElement("textarea", {
-      style: {
-        ...inputStyle,
-        minHeight: 38
-      },
-      value: inc.finding,
-      onChange: e => setInc(i, 'finding', e.target.value),
-      placeholder: "Finding / observation"
-    }), React.createElement("textarea", {
-      style: {
-        ...inputStyle,
-        minHeight: 38
-      },
-      value: inc.corrective,
-      onChange: e => setInc(i, 'corrective', e.target.value),
-      placeholder: "Corrective action"
-    }), React.createElement("textarea", {
-      style: {
-        ...inputStyle,
-        minHeight: 38
-      },
-      value: inc.preventive,
-      onChange: e => setInc(i, 'preventive', e.target.value),
-      placeholder: "Preventive action"
-    })), React.createElement("input", {
-      style: inputStyle,
-      value: inc.remark,
-      onChange: e => setInc(i, 'remark', e.target.value),
-      placeholder: "Special remarks (optional)"
-    }))))), React.createElement("div", {
       style: {
         border: '1px solid var(--line)',
         borderRadius: 9,
@@ -21821,7 +23010,77 @@ window.LockScreen = LockScreen;
         fontSize: 11,
         color: 'var(--muted)'
       }
-    }, computeAsRate ? numLabel + ' = ' + incCount + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '') : incCount + ' incident(s)', benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''))), lockResp ? React.createElement(Field, {
+    }, computeAsRate ? numLabel + ' = ' + numerator + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '') : numLabel + ' = ' + numerator, benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : '')), React.createElement("div", {
+      style: {
+        border: '1px solid var(--line)',
+        borderRadius: 9,
+        padding: '12px 14px',
+        marginTop: 13
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink-2)',
+        marginBottom: 8
+      }
+    }, "Observation & action ", React.createElement("span", {
+      style: {
+        fontWeight: 400,
+        color: 'var(--muted)',
+        fontSize: 11
+      }
+    }, "(optional)")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 8
+      }
+    }, React.createElement(Field, {
+      label: "Observation / finding"
+    }, React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 42
+      },
+      value: capa.finding,
+      onChange: e => setCapa(c => ({
+        ...c,
+        finding: e.target.value
+      })),
+      placeholder: "What was observed this month"
+    })), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 8
+      }
+    }, React.createElement(Field, {
+      label: "Corrective action"
+    }, React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 42
+      },
+      value: capa.corrective,
+      onChange: e => setCapa(c => ({
+        ...c,
+        corrective: e.target.value
+      })),
+      placeholder: "Action taken to correct"
+    })), React.createElement(Field, {
+      label: "Preventive action"
+    }, React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 42
+      },
+      value: capa.preventive,
+      onChange: e => setCapa(c => ({
+        ...c,
+        preventive: e.target.value
+      })),
+      placeholder: "Action to prevent recurrence"
+    })))))), lockResp ? React.createElement(Field, {
       label: "Responsible person"
     }, React.createElement("input", {
       style: {
@@ -21862,7 +23121,17 @@ window.LockScreen = LockScreen;
       className: "btn",
       disabled: busy,
       onClick: () => {
-        setIncidents([]);
+        setGroups({
+          nurse: '',
+          doctor: '',
+          other: ''
+        });
+        setDirectNum('');
+        setCapa({
+          finding: '',
+          corrective: '',
+          preventive: ''
+        });
         setDen('');
         setRemark('');
         setDone(null);

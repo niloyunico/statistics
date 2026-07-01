@@ -40,6 +40,56 @@ const MONTHS = [
 const QORDER = ['Q1','Q2','Q3','Q4'];
 const QL = [['Q1','Jun–Aug 25'],['Q2','Sep–Nov 25'],['Q3','Dec–Feb 26'],['Q4','Mar–May 26']];
 
+/* ---- fiscal-year helpers (Jun–May) for the dashboard's month + year switcher ---- */
+const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+/* The 12 months of the fiscal year that STARTS in Jun of `startYear`, as
+   [storeKey 'Mon-YY', 'Mon YYYY', 'Mon'] — the same [key,label,…] shape MONTHS uses,
+   so deptStat / monthStatus work unchanged. */
+function fyMonthsFor(startYear){
+  const order = [5,6,7,8,9,10,11,0,1,2,3,4]; // Jun..Dec then Jan..May (0-based month idx)
+  return order.map(mi => {
+    const cal = mi >= 5 ? startYear : startYear + 1;
+    const yy = String(cal % 100).padStart(2, '0');
+    return [ FY_MONS[mi] + '-' + yy, FY_MONS[mi] + ' ' + cal, FY_MONS[mi] ];
+  });
+}
+/* Fiscal-year START for a 'Mon-YY' key (Jun–Dec → that year; Jan–May → year-1). */
+function fyOfKey(key){
+  const p = String(key || '').split('-'); const mi = FY_MONS.indexOf(p[0]);
+  const yy = parseInt(p[1], 10);
+  if(mi < 0 || isNaN(yy)) return null;
+  return mi >= 5 ? (2000 + yy) : (2000 + yy - 1);
+}
+/* Current fiscal year from the browser clock. */
+function currentFy(){ const d = new Date(); return d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1; }
+/* Set of fiscal-year starts that have any actual recorded value in the data. */
+function dataFySet(depts){
+  const set = new Set();
+  (depts || []).forEach(dep => (dep.indicators || []).forEach(ind => {
+    const scan = (obj) => { if(obj) Object.keys(obj).forEach(k => { if(obj[k] != null && obj[k] !== ''){ const fy = fyOfKey(k); if(fy != null) set.add(fy); } }); };
+    scan(ind.months); scan(ind.mNum);
+  }));
+  return set;
+}
+/* Contiguous list of selectable fiscal years — spans every year that has data and
+   the current year, so you can page back through history and forward to a fresh year. */
+function fyOptions(depts){
+  const set = dataFySet(depts); set.add(currentFy());
+  const arr = [...set]; if(!arr.length) arr.push(2025);
+  const lo = Math.min(...arr), hi = Math.max(...arr);
+  const out = []; for(let y = lo; y <= hi; y++) out.push(y);
+  return out;
+}
+/* Default year to open on: the most recent year that actually has data. */
+function defaultFy(depts){ const s = dataFySet(depts); return s.size ? Math.max(...s) : currentFy(); }
+function fyLabelOf(startYear){ return 'FY ' + startYear + '–' + String((startYear + 1) % 100).padStart(2, '0'); }
+
+/* Edit rights: the signed-in Administrator (REQUIRE_AUTH mode) or the single-user
+   local PC build (no __UNICO_USER__ injected). Collectors never reach this console. */
+function qcCanEdit(){
+  try { const u = window.__UNICO_USER__; return !u || u.role === 'Administrator'; } catch (e) { return true; }
+}
+
 const STATUS_CELL = {
   ok:['#e7f6ed','#1f9d57','✓'],
   breach:['#fbe9ec','#d23a52','!'],
@@ -85,10 +135,13 @@ function isPctInd(ind){
   return t.indexOf('%')>=0 || t.startsWith('per') || ind.formula==='pct';
 }
 
-/* aggregate ok/breach/na across 12 months × indicators for a department */
-function deptStat(d){
+/* aggregate ok/breach/na across a set of months × indicators for a department.
+   `months` defaults to the built-in FY 2025–26 so other callers are unaffected;
+   the dashboard passes the switcher-selected fiscal year's months. */
+function deptStat(d, months){
+  months = months || MONTHS;
   let ok=0, breach=0, na=0;
-  (d.indicators||[]).forEach(ind => MONTHS.forEach(m => {
+  (d.indicators||[]).forEach(ind => months.forEach(m => {
     const s = monthStatus(ind, m[0]);
     if(s==='ok') ok++; else if(s==='breach') breach++; else na++;
   }));
@@ -114,6 +167,36 @@ function measureOf(f){
   if(f==='rate1000'||f==='rate100') return { name:'Rate', color:P.violet, letter:'R' };
   return { name:'Count', color:P.blue, letter:'C' };
 }
+
+/* Is this indicator EVENT/incident-oriented (so the incident register + per-patient
+   CAPA layout applies) rather than a continuous compliance rate? True for counts, for
+   per-100 event rates (rate100, e.g. unplanned-extubation), for zero-defect benchmarks,
+   for indicators that actually carry a per-incident incidents[] payload, and for names
+   that clearly denote discrete adverse events. Deciding on this rather than purely on
+   formula==='count' means a low-frequency rate like NICU ETT still gets the register. */
+function isEventIndicator(ind){
+  if(!ind) return false;
+  if(ind.formula==='count' || ind.formula==='rate100') return true;
+  const bv = ind.benchmarkValue;
+  if((bv===0 || bv==='0') && ind.goalDirection!=='higher_is_better') return true;
+  if(/zero.?defect/i.test(String(ind.benchmark||''))) return true;
+  if(ind.incidents && Object.keys(ind.incidents).length) return true;
+  const n = (ind.name||'').toLowerCase();
+  if(/extubation|removal of ett|accidental removal|dislodge|self-?extubat|needle ?stick|sharps|wrong-?site|wrong-?patient|wrong-?procedure|specimen labeling|medication error|fall|de-?lining/.test(n)) return true;
+  return false;
+}
+
+/* Unit word for the compliance-gap sentence. Only a true percentage indicator
+   (formula==='pct' with a % unit) reads in 'points'; rate indicators read in their
+   own unit (e.g. 'per 100 vent-days') so a ventilator-day rate is not mislabelled. */
+function rateUnitWord(ind){
+  if(!ind) return 'units';
+  if(ind.unit && ind.unit!=='count' && ind.unit!=='%') return ind.unit;
+  if(ind.formula==='pct') return 'points';
+  return 'units';
+}
+
+function qtrLabelOf(Q){ const row = QL.find(r=>r[0]===Q); return row ? (Q+' · '+row[1]) : Q; }
 
 function benchExpr(ind){
   const v = ind.benchmarkValue;
@@ -166,7 +249,8 @@ function stdMatch(name){
     [/partograph/,'F1'], [/door-to-balloon/,'G1'], [/post-pci/,'G2'], [/puncture site hematoma/,'G3'],
     [/dialysis adequacy|\burr\b/,'H1'], [/water quality/,'H3'], [/hypotension/,'H4'],
     [/vascular access complication/,'H5'], [/de-lining/,'H6'], [/infection rate/,'H7'],
-    [/post-procedure complication/,'J1'], [/training compliance/,'L1'], [/accidental removal of catheter/,'L5'],
+    [/post-procedure complication/,'J1'], [/training compliance/,'L1'],
+    [/accidental removal of ett|unplanned extubation|extubation/,'D8'], [/accidental removal of catheter/,'L5'],
   ];
   for(const [re,code] of T){ if(re.test(n)) return code; }
   return null;
@@ -197,13 +281,30 @@ function blankIndicator(name){
 }
 
 /* ===== part: mod-dashboard.jsx ===== */
-function QCDashboard({ depts }) {
+function QCDashboard({ depts, Q }) {
+  // Fiscal-year switcher: the whole dashboard (KPIs, mix, breaches-by-month and the
+  // heatmap) reflects the selected fiscal year. Defaults to the latest year with data.
+  const fyOpts = useMemo(() => fyOptions(depts), [depts]);
+  const [fyStart, setFyStart] = useState(() => defaultFy(depts));
+  const curPos = fyOpts.indexOf(fyStart);
+  const safeFy = curPos >= 0 ? fyStart : (fyOpts.length ? fyOpts[fyOpts.length - 1] : currentFy());
+  const fyMonths = useMemo(() => fyMonthsFor(safeFy), [safeFy]);
+
+  const pos = fyOpts.indexOf(safeFy);
+  const canPrev = pos > 0;
+  const canNext = pos >= 0 && pos < fyOpts.length - 1;
+  const goPrev = () => { if (canPrev) setFyStart(fyOpts[pos - 1]); };
+  const goNext = () => { if (canNext) setFyStart(fyOpts[pos + 1]); };
+
+  // Heatmap cell drill-down: which department × month is being viewed (null = closed).
+  const [cellSel, setCellSel] = useState(null);
+
   const d = useMemo(() => {
     let ok = 0, br = 0, na = 0;
     const uniq = new Set();
     let totalInd = 0;
     depts.forEach(dep => {
-      const s = deptStat(dep);
+      const s = deptStat(dep, fyMonths);
       ok += s.ok; br += s.breach; na += s.na;
       (dep.indicators || []).forEach(ind => { uniq.add(norm(ind.name)); totalInd++; });
     });
@@ -223,38 +324,42 @@ function QCDashboard({ depts }) {
     ].map(x => Object.assign(x, { pct: Math.round(x.v * 100 / totalCells) }));
 
     let maxB = 1;
-    const bbm = MONTHS.map(m => {
+    const bbm = fyMonths.map(m => {
       let b = 0;
       depts.forEach(dep => (dep.indicators || []).forEach(ind => { if (monthStatus(ind, m[0]) === 'breach') b++; }));
       if (b > maxB) maxB = b;
-      return { label: m[1].split(' ')[0], val: b };
+      return { label: m[2], val: b };
     });
     const breachByMonth = bbm.map(x => Object.assign(x, { h: Math.round(x.val / maxB * 100) }));
 
     const heatRows = depts.map(dep => {
       const inds = dep.indicators || [];
-      const cells = QORDER.map(Q => {
+      // One cell per month of the selected fiscal year (was one per quarter). Uses the
+      // real monthly values, so cells now populate instead of showing all "–".
+      const cells = fyMonths.map(m => {
         let b = 0, rep = 0;
         inds.forEach(ind => {
-          const s = qtrStatus(ind, Q);
+          const s = monthStatus(ind, m[0]);
           if (s === 'breach') b++; else if (s !== 'na') rep++;
         });
         const bg = (b + rep) === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : '#e7f6ed';
         const fg = (b + rep) === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : '#1f9d57';
-        return { sym: (b + rep) === 0 ? '–' : b > 0 ? String(b) : '✓', bg, fg };
+        // mk/mlabel + has let the cell open a full dept×month incident drill-down.
+        return { sym: (b + rep) === 0 ? '–' : b > 0 ? String(b) : '✓', bg, fg, mk: m[0], mlabel: m[1], breach: b, has: (b + rep) > 0 };
       });
-      const st = deptStat(dep);
+      const st = deptStat(dep, fyMonths);
       let status = dep.status;
       if (!status) {
         const brRate = (st.ok + st.breach) ? st.breach / (st.ok + st.breach) : 0;
         status = brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Excellent';
       }
       const sc = statusColorFor(status);
-      return { name: dep.name, count: inds.length, cells, rate: st.rate + '%', status, statusColor: sc, statusBg: sc + '1c' };
+      return { dep, name: dep.name, count: inds.length, cells, rate: st.rate + '%', status, statusColor: sc, statusBg: sc + '1c' };
     });
 
-    return { dashKpis, mix, breachByMonth, heatRows };
-  }, [depts]);
+    const monthCols = fyMonths.map(m => m[2]);
+    return { dashKpis, mix, breachByMonth, heatRows, monthCols };
+  }, [depts, fyMonths]);
 
   const thBase = { padding: '9px 8px', fontSize: '10.5px', color: '#6c7a8c', fontWeight: 700, borderBottom: '1px solid #dde3ec', background: '#f7f9fc' };
 
@@ -266,7 +371,13 @@ function QCDashboard({ depts }) {
         </div>
         <div>
           <h1 style={{ margin: 0, fontSize: '21px', fontWeight: 700, color: '#16202e', letterSpacing: '-.3px' }}>Quality Dashboard</h1>
-          <div style={{ fontSize: '12.5px', color: '#6c7a8c', marginTop: '2px' }}>Hospital-wide quality &amp; patient-safety performance · FY 2025–26 (monthly)</div>
+          <div style={{ fontSize: '12.5px', color: '#6c7a8c', marginTop: '2px' }}>Hospital-wide quality &amp; patient-safety performance · monthly view</div>
+        </div>
+        {/* Fiscal-year switcher — drives every panel on this dashboard. */}
+        <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '2px', background: '#f1f6fb', border: '1px solid #dde3ec', borderRadius: '10px', padding: '3px', flexShrink: 0 }}>
+          <button onClick={goPrev} disabled={!canPrev} title="Previous fiscal year" style={{ border: 0, background: 'transparent', cursor: canPrev ? 'pointer' : 'default', color: canPrev ? '#0090ca' : '#c4ccd6', fontSize: '17px', lineHeight: 1, padding: '3px 10px', borderRadius: '7px', fontWeight: 700 }}>‹</button>
+          <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#16202e', minWidth: '96px', textAlign: 'center', fontFamily: MONO }}>{fyLabelOf(safeFy)}</span>
+          <button onClick={goNext} disabled={!canNext} title="Next fiscal year" style={{ border: 0, background: 'transparent', cursor: canNext ? 'pointer' : 'default', color: canNext ? '#0090ca' : '#c4ccd6', fontSize: '17px', lineHeight: 1, padding: '3px 10px', borderRadius: '7px', fontWeight: 700 }}>›</button>
         </div>
       </div>
 
@@ -313,18 +424,17 @@ function QCDashboard({ depts }) {
 
       <div style={{ background: '#fff', border: '1px solid #dde3ec', borderRadius: '12px', boxShadow: '0 1px 2px rgba(20,32,46,.06)', overflow: 'hidden' }}>
         <div style={{ padding: '13px 16px', borderBottom: '1px solid #e8edf3' }}>
-          <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#16202e' }}>Department × Quarter Heatmap</div>
-          <div style={{ fontSize: '11.5px', color: '#6c7a8c' }}>breaches per quarter — green clean · red breach · grey not reported</div>
+          <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#16202e' }}>Department × Month Heatmap <span style={{ fontWeight: 600, color: '#9aa6b4', fontSize: '11.5px' }}>· {fyLabelOf(safeFy)}</span></div>
+          <div style={{ fontSize: '11.5px', color: '#6c7a8c' }}>breaches per month — green clean · red breach · grey not reported</div>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ borderCollapse: 'collapse', fontSize: '12.5px', width: '100%' }}>
             <thead>
               <tr>
                 <th style={{ ...thBase, textAlign: 'left', padding: '9px 16px', textTransform: 'uppercase', letterSpacing: '.3px' }}>Department</th>
-                <th style={{ ...thBase, textAlign: 'center' }}>Q1</th>
-                <th style={{ ...thBase, textAlign: 'center' }}>Q2</th>
-                <th style={{ ...thBase, textAlign: 'center' }}>Q3</th>
-                <th style={{ ...thBase, textAlign: 'center' }}>Q4</th>
+                {d.monthCols.map((mc, i) => (
+                  <th key={i} style={{ ...thBase, textAlign: 'center', padding: '9px 5px' }}>{mc}</th>
+                ))}
                 <th style={{ ...thBase, textAlign: 'center', padding: '9px 12px' }}>Status</th>
                 <th style={{ ...thBase, textAlign: 'right', padding: '9px 16px' }}>Rate</th>
               </tr>
@@ -336,8 +446,12 @@ function QCDashboard({ depts }) {
                     <b style={{ color: '#16202e' }}>{r.name}</b> <span style={{ color: '#9aa6b4', fontSize: '11px' }}>· {r.count}</span>
                   </td>
                   {r.cells.map((c, ci) => (
-                    <td key={ci} style={{ textAlign: 'center', padding: '6px 8px' }}>
-                      <span style={{ display: 'inline-grid', placeItems: 'center', minWidth: '28px', height: '24px', borderRadius: '6px', background: c.bg, color: c.fg, fontWeight: 700, fontSize: '11.5px', fontFamily: MONO }}>{c.sym}</span>
+                    <td key={ci} style={{ textAlign: 'center', padding: '6px 4px' }}>
+                      <span
+                        onClick={c.has ? () => setCellSel({ depKey: r.dep.key, mk: c.mk, mlabel: c.mlabel }) : undefined}
+                        title={c.has ? (r.name + ' · ' + c.mlabel + (c.breach ? ' — ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + ' · click to view') : undefined}
+                        style={{ display: 'inline-grid', placeItems: 'center', minWidth: '24px', height: '24px', borderRadius: '6px', background: c.bg, color: c.fg, fontWeight: 700, fontSize: '11px', fontFamily: MONO, cursor: c.has ? 'pointer' : 'default', boxShadow: c.has && c.breach ? '0 0 0 1px #eeb9c2' : 'none' }}
+                      >{c.sym}</span>
                     </td>
                   ))}
                   <td style={{ textAlign: 'center', padding: '8px 12px' }}>
@@ -348,6 +462,100 @@ function QCDashboard({ depts }) {
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {cellSel && (() => {
+        const cd = depts.find(d => d.key === cellSel.depKey);
+        return cd ? <QCCellDetail dep={cd} mk={cellSel.mk} mlabel={cellSel.mlabel} Q={Q} onClose={() => setCellSel(null)} /> : null;
+      })()}
+    </div>
+  );
+}
+
+/* Full incident-report drill-down for one department × month — opened by clicking a
+   heatmap cell. Lists every indicator reported that month (breaches first) with its
+   value vs benchmark, plus the FULL detail of every logged incident / CAPA. */
+function QCCellDetail({ dep, mk, mlabel, onClose }){
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const rows = (dep.indicators || []).map(ind => {
+    const incsRaw = (ind.incidents && Array.isArray(ind.incidents[mk])) ? ind.incidents[mk] : [];
+    const incs = incsRaw.filter(x => x && (x.details || x.finding || x.corrective || x.preventive || x.patientName || x.uhid || x.diagnosis || x.remark));
+    return {
+      ind, v: monthRaw(ind, mk), s: monthStatus(ind, mk), incs,
+      capa: (ind.capa && ind.capa[mk]) ? ind.capa[mk] : null,
+      remark: (ind.monthRemarks && ind.monthRemarks[mk]) || ''
+    };
+  }).filter(r => r.s !== 'na');
+  rows.sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
+  const breaches = rows.filter(r => r.s === 'breach').length;
+
+  const field = (label, val) => val ? (
+    <div style={{ marginBottom: 7 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: P.muted, textTransform: 'uppercase', letterSpacing: '.3px' }}>{label}</div>
+      <div style={{ fontSize: 12.5, color: P.ink, whiteSpace: 'pre-wrap' }}>{val}</div>
+    </div>
+  ) : null;
+
+  const incidentCard = (x, i) => (
+    <div key={i} style={{ border: '1px solid #f1c6cd', background: '#fff', borderRadius: 9, padding: '11px 13px', marginTop: 9 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: P.rose, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px' }}>Incident {i + 1}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 16 }}>
+        {field('UHID', x.uhid)}
+        {field('Patient', x.patientName)}
+        {field('Age / Sex', [x.age, x.gender].filter(Boolean).join(' / '))}
+        {field('Diagnosis', x.diagnosis)}
+        {field('Admission', x.admissionDate)}
+        {field('Procedure date', x.procedureDate)}
+      </div>
+      {field('Incident details', x.details)}
+      {field('Finding / root cause', x.finding)}
+      {field('Corrective action', x.corrective)}
+      {field('Preventive action', x.preventive)}
+      {field('Remark', x.remark)}
+    </div>
+  );
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(13,27,46,.55)', zIndex: 6000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '38px 16px', overflowY: 'auto' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', width: 'min(760px,100%)', borderRadius: 14, boxShadow: '0 24px 60px rgba(5,12,24,.4)', overflow: 'hidden' }}>
+        <div style={{ padding: '15px 20px', borderBottom: '1px solid #e8edf3', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 16.5, fontWeight: 700, color: P.ink }}>{dep.name} <span style={{ color: P.muted, fontWeight: 600, fontSize: 13 }}>· {mlabel}</span></div>
+            <div style={{ fontSize: 12, color: P.muted, marginTop: 2 }}>
+              {rows.length} indicator{rows.length !== 1 ? 's' : ''} reported · <b style={{ color: breaches ? P.rose : P.green }}>{breaches} breach{breaches !== 1 ? 'es' : ''}</b>
+            </div>
+          </div>
+          <button onClick={onClose} title="Close (Esc)" style={{ marginLeft: 'auto', width: 32, height: 32, borderRadius: 8, border: '1px solid #dde3ec', background: '#fff', color: P.muted, cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+          </button>
+        </div>
+        <div style={{ padding: '14px 20px 20px', maxHeight: '72vh', overflowY: 'auto' }}>
+          {rows.length === 0 && <div style={{ fontSize: 13, color: P.muted, padding: '24px 0', textAlign: 'center' }}>No indicators were reported for this month.</div>}
+          {rows.map((r, ri) => {
+            const isBr = r.s === 'breach';
+            const col = isBr ? P.rose : P.green;
+            const hasDetail = r.incs.length > 0 || r.capa;
+            return (
+              <div key={ri} style={{ border: '1px solid ' + (isBr ? '#f1c6cd' : '#dde3ec'), borderLeft: '4px solid ' + col, borderRadius: 10, padding: '12px 15px', marginBottom: 11, background: isBr ? '#fef6f7' : '#fff' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: P.ink }}>{r.ind.name}</div>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: col, background: col + '1c', padding: '2px 9px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: '.3px' }}>{isBr ? 'Breach' : 'On benchmark'}</span>
+                  <div style={{ marginLeft: 'auto', fontFamily: MONO, fontSize: 14, fontWeight: 700, color: col }}>{fmtVal(r.ind, r.v)}</div>
+                  <div style={{ fontSize: 11.5, color: P.muted }}>vs {benchExpr(r.ind)}</div>
+                </div>
+                {r.remark && <div style={{ fontSize: 12, color: P.ink2, marginTop: 7, fontStyle: 'italic' }}>“{r.remark}”</div>}
+                {r.incs.map((x, i) => incidentCard(x, i))}
+                {r.incs.length === 0 && r.capa && incidentCard({ details: r.capa.incidentDetails, finding: r.capa.finding, corrective: r.capa.corrective, preventive: r.capa.preventive }, 0)}
+                {isBr && !hasDetail && <div style={{ fontSize: 11.5, color: P.muted, marginTop: 8, padding: '8px 10px', background: '#f7f9fc', borderRadius: 7 }}>No incident report was logged for this breach. Add details in Quality Data Entry.</div>}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -529,11 +737,107 @@ function QCTrends({depts}) {
 }
 
 /* ===== part: mod-reports.jsx ===== */
+/* ---- export helpers (self-contained; incident details included) ---- */
+function qcEsc(s){ return ((s==null?'':s)+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function qcDownload(content, filename, mime){
+  try{ const blob=new Blob([content],{type:mime}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click();
+    setTimeout(()=>{ try{document.body.removeChild(a);}catch(e){} URL.revokeObjectURL(url); },600);
+  }catch(e){}
+}
+// Every logged incident (with its full detail fields) for a department.
+function qcIncidentsOf(d){
+  const out=[];
+  (d.indicators||[]).forEach(ind=>{ const incs=ind.incidents||{}; MONTHS.forEach(m=>{ const arr=incs[m[0]];
+    if(Array.isArray(arr)) arr.forEach(x=>{ if(x && (x.details||x.finding||x.corrective||x.preventive||x.patientName||x.uhid)) out.push({ind:ind.name, month:m[1], x:x}); }); }); });
+  return out;
+}
+// Full multi-department report HTML (tables + incident details).
+function qcReportHTML(depts){
+  const date=new Date().toISOString().slice(0,10);
+  let body='<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Quality Indicator Report</h1>'
+    +'<div style="font-family:Calibri;color:#555;margin-bottom:12px">FY 2025-26 · Jun 2025 - May 2026 · generated '+date+' · Confidential</div>';
+  depts.forEach(d=>{
+    const st=deptStat(d);
+    body+='<h2 style="font-family:Calibri;color:#16202e;margin:16px 0 3px">'+qcEsc(d.name)+'</h2>'
+      +'<div style="font-family:Calibri;color:#555;margin-bottom:6px">Zero-defect: <b>'+st.rate+'%</b> · Breaches: <b style="color:#d23a52">'+st.breach+'</b> · Indicators: '+((d.indicators||[]).length)+'</div>';
+    const th=['Indicator','Benchmark'].concat(MONTHS.map(m=>m[1].split(' ')[0])).map(h=>'<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">'+h+'</th>').join('');
+    const trs=(d.indicators||[]).map((ind,i)=>{
+      const cells=[qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m=>{ const s=monthStatus(ind,m[0]); const disp=s==='na'?'—':fmtVal(ind,monthRaw(ind,m[0])); const col=s==='breach'?'#d23a52':s==='ok'?'#1f9d57':'#9aa6b4'; return '<span style="color:'+col+';font-weight:600">'+qcEsc(disp)+'</span>'; }));
+      return '<tr style="background:'+(i%2?'#eef6fb':'#fff')+'">'+cells.map((c,ci)=>'<td style="border:1px solid #b9c6d2;padding:4px 7px;font-family:Calibri;font-size:10pt;'+(ci>1?'text-align:center':'')+'">'+c+'</td>').join('')+'</tr>';
+    }).join('');
+    body+='<table border="1" style="border-collapse:collapse"><thead><tr>'+th+'</tr></thead><tbody>'+trs+'</tbody></table>';
+    const inc=qcIncidentsOf(d);
+    if(inc.length){
+      body+='<h3 style="font-family:Calibri;color:#b32339;margin:12px 0 3px">Incident details ('+inc.length+')</h3>';
+      const ith=['Indicator','Month','UHID','Patient','Age/Sex','Incident details','Finding','Corrective action','Preventive action'].map(h=>'<th style="background:#d23a52;color:#fff;border:1px solid #a02a3c;padding:5px 7px;font-family:Calibri;font-size:9.5pt;text-align:left">'+h+'</th>').join('');
+      const itrs=inc.map((r,i)=>{ const x=r.x; const cols=[r.ind, r.month, x.uhid||'', x.patientName||'', ((x.age||'')+(x.gender?(' / '+x.gender):'')), x.details||'', x.finding||'', x.corrective||'', x.preventive||'']; return '<tr style="background:'+(i%2?'#fbeef0':'#fff')+'">'+cols.map(c=>'<td style="border:1px solid #e0b6bf;padding:4px 7px;font-family:Calibri;font-size:9pt;vertical-align:top">'+qcEsc(c)+'</td>').join('')+'</tr>'; }).join('');
+      body+='<table border="1" style="border-collapse:collapse;margin-top:2px"><thead><tr>'+ith+'</tr></thead><tbody>'+itrs+'</tbody></table>';
+    }
+  });
+  return body;
+}
+function qcExport(depts, fmt){
+  const date=new Date().toISOString().slice(0,10); const base='UNICO-Quality-Report-'+date;
+  if(fmt==='csv'){
+    const rows=[['Department','Indicator','Benchmark','Goal'].concat(MONTHS.map(m=>m[1]))];
+    depts.forEach(d=>(d.indicators||[]).forEach(ind=>{ rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection==='higher_is_better'?'higher is better':'lower is better'].concat(MONTHS.map(m=>{ const s=monthStatus(ind,m[0]); return s==='na'?'':fmtVal(ind,monthRaw(ind,m[0])); }))); }));
+    rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
+    depts.forEach(d=>qcIncidentsOf(d).forEach(r=>{ const x=r.x; rows.push([d.name, r.ind, r.month, x.uhid||'', x.patientName||'', x.age||'', x.gender||'', x.diagnosis||'', x.details||'', x.finding||'', x.corrective||'', x.preventive||'']); }));
+    qcDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), base+'.csv','text/csv;charset=utf-8'); return;
+  }
+  const html='<html xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><style>@page{size:A4 landscape;margin:1cm}</style></head><body>'+qcReportHTML(depts)+'</body></html>';
+  if(fmt==='excel') return qcDownload(html, base+'.xls','application/vnd.ms-excel');
+  if(fmt==='word') return qcDownload(html, base+'.doc','application/msword');
+  if(fmt==='pdf'){
+    const root=typeof document!=='undefined'?document.getElementById('pdf-root'):null; const native=window.unicoNative;
+    if(!root){ try{window.print();}catch(e){} return; }
+    root.innerHTML='<div class="pdf-page" style="padding:9mm 10mm;font-family:Calibri,Arial">'+qcReportHTML(depts)+'</div>';
+    document.body.classList.add('pdf-export-mode');
+    const done=()=>{ root.innerHTML=''; document.body.classList.remove('pdf-export-mode'); };
+    if(native&&typeof native.exportPDF==='function'){ Promise.resolve(native.exportPDF({pageSize:'A4',landscape:true,defaultName:base})).catch(()=>{}).then(done); }
+    else { try{window.print();}catch(e){} setTimeout(done,700); }
+  }
+}
+/* ---- inline charts (self-contained SVG, console palette) ---- */
+function QCDonut({rate,size=118}){
+  const r=size/2-11, c=2*Math.PI*r, on=Math.max(0,Math.min(100,rate)); const col=on>=90?P.green:on>=70?P.amber:P.rose;
+  return (<svg width={size} height={size} viewBox={'0 0 '+size+' '+size}>
+    <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={P.line2} strokeWidth="12"/>
+    <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={col} strokeWidth="12" strokeLinecap="round" strokeDasharray={(c*on/100)+' '+c} transform={'rotate(-90 '+(size/2)+' '+(size/2)+')'}/>
+    <text x="50%" y="47%" textAnchor="middle" fontFamily={MONO} fontSize="19" fontWeight="700" fill={P.ink}>{on}%</text>
+    <text x="50%" y="61%" textAnchor="middle" fontSize="8.5" fill={P.faint}>on benchmark</text>
+  </svg>);
+}
+function QCMonthBars({inds}){
+  const data=MONTHS.map(m=>({label:m[1].split(' ')[0], v: inds.reduce((n,ind)=> n+(monthStatus(ind,m[0])==='breach'?1:0),0)}));
+  const max=Math.max(1,...data.map(d=>d.v));
+  return (<div style={{display:'flex',alignItems:'flex-end',gap:5,height:118}}>
+    {data.map((d,i)=>(<div key={i} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4,height:'100%',justifyContent:'flex-end'}}>
+      <span style={{fontSize:8.5,fontFamily:MONO,color:d.v?P.rose:P.faint}}>{d.v||''}</span>
+      <div title={d.label+': '+d.v} style={{width:'100%',maxWidth:22,background:d.v?P.rose:P.line2,borderRadius:'3px 3px 0 0',height:(d.v/max*100)+'%',minHeight:3}}/>
+      <span style={{fontSize:8,color:P.faint}}>{d.label}</span>
+    </div>))}
+  </div>);
+}
+function QCSpark({ind,w=92,h=24}){
+  const vals=MONTHS.map(m=>monthRaw(ind,m[0])); const nums=vals.filter(v=>v!=null);
+  if(!nums.length) return <span style={{color:P.faint,fontSize:10,fontFamily:MONO}}>—</span>;
+  const mn=Math.min(...nums), mx=Math.max(...nums), rng=(mx-mn)||1;
+  const pts=vals.map((v,i)=>({x:(i/(MONTHS.length-1))*w, y: v==null?null:(h-2-((v-mn)/rng)*(h-4))}));
+  const path=pts.filter(p=>p.y!=null).map((p,i)=>(i?'L':'M')+p.x.toFixed(1)+' '+p.y.toFixed(1)).join(' ');
+  const breach=MONTHS.some(m=>monthStatus(ind,m[0])==='breach'); const col=breach?P.rose:P.green;
+  return (<svg width={w} height={h}><path d={path} fill="none" stroke={col} strokeWidth="1.5"/>{pts.map((p,i)=>p.y!=null&&<circle key={i} cx={p.x} cy={p.y} r="1.5" fill={col}/>)}</svg>);
+}
 function QCReports({depts}){
-  const [dept,setDept]=useState(depts[0]&&depts[0].key);
-  const rd = useMemo(()=> depts.find(d=>d.key===dept) || depts[0] || null, [depts,dept]);
-  const st = useMemo(()=> rd ? deptStat(rd) : {ok:0,breach:0,na:0,rate:100}, [rd]);
-  const inds = (rd && rd.indicators) || [];
+  const [dept,setDept]=useState('all');
+  const rd = useMemo(()=> dept==='all'? null : (depts.find(d=>d.key===dept)||null), [depts,dept]);
+  const inds = useMemo(()=> rd ? (rd.indicators||[]) : (depts||[]).flatMap(d=>d.indicators||[]), [depts,rd]);
+  const st = useMemo(()=>{ let ok=0,breach=0; (depts||[]).forEach(d=>{ if(rd&&d.key!==rd.key) return; const s=deptStat(d); ok+=s.ok; breach+=s.breach; }); return {breach, rate:(ok+breach)?Math.round(ok*100/(ok+breach)):100}; }, [depts,rd]);
+  const scopeName = rd? rd.name : 'All departments';
+  const incCount = useMemo(()=> (depts||[]).reduce((n,d)=> (rd&&d.key!==rd.key)?n:(n+qcIncidentsOf(d).length),0), [depts,rd]);
+  const rows = rd? (rd.indicators||[]).map(ind=>({d:rd,ind})) : (depts||[]).flatMap(d=>(d.indicators||[]).map(ind=>({d,ind})));
+  const EXP=[['pdf','PDF'],['excel','Excel'],['word','Word'],['csv','CSV']];
   return (
     <div>
       <div style={{display:'flex',alignItems:'center',gap:13,marginBottom:16,flexWrap:'wrap'}}>
@@ -542,16 +846,41 @@ function QCReports({depts}){
         </div>
         <div style={{flex:1,minWidth:0}}>
           <h1 style={{margin:0,fontSize:21,fontWeight:700,color:P.ink,letterSpacing:'-.3px'}}>Monthly Quality Report</h1>
-          <div style={{fontSize:12.5,color:P.muted,marginTop:2}}>Full month-wise indicator report · FY 2025–26</div>
+          <div style={{fontSize:12.5,color:P.muted,marginTop:2}}>Charts, month-wise values &amp; incident details · FY 2025–26</div>
         </div>
-        <select value={dept||''} onChange={e=>setDept(e.target.value)} style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,fontWeight:600,background:'#fff',color:P.ink,outline:'none'}}>
+        <select value={dept} onChange={e=>setDept(e.target.value)} style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,fontWeight:600,background:'#fff',color:P.ink,outline:'none'}}>
+          <option value="all">All departments</option>
           {depts.map(o=> <option key={o.key} value={o.key}>{o.name}</option>)}
         </select>
       </div>
+
+      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:14,background:'#fff',border:'1px solid '+P.line,borderRadius:10,padding:'10px 13px'}}>
+        <span style={{fontSize:12,fontWeight:700,color:P.ink2}}>Export full report (all departments + incident details):</span>
+        {EXP.map(([f,l])=>(
+          <button key={f} onClick={()=>qcExport(depts,f)} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 12px',border:'1px solid '+P.line,borderRadius:7,background:'#fff',color:P.ink2,fontSize:12,fontWeight:600,cursor:'pointer'}}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m0 0l4-4m-4 4l-4-4M4 19h16"/></svg>{l}
+          </button>
+        ))}
+        <span style={{flex:1}}/>
+        <span style={{fontSize:11,color:P.muted}}>{depts.length} departments · {incCount} incident{incCount!==1?'s':''} in scope</span>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'220px 1fr',gap:14,marginBottom:14}}>
+        <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,padding:'14px 16px',display:'flex',flexDirection:'column',alignItems:'center',gap:6}}>
+          <div style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'.4px',alignSelf:'flex-start'}}>Compliance</div>
+          <QCDonut rate={st.rate}/>
+          <div style={{fontSize:11,color:P.muted}}><b style={{color:P.rose}}>{st.breach}</b> breach-cells · {inds.length} indicators</div>
+        </div>
+        <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,padding:'14px 16px'}}>
+          <div style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'.4px',marginBottom:10}}>Breaches by month — {scopeName}</div>
+          <QCMonthBars inds={inds}/>
+        </div>
+      </div>
+
       <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
         <div style={{padding:'14px 18px',borderBottom:'1px solid '+P.line2,display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',background:'linear-gradient(150deg,#ffffff,#f5fafd)'}}>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:15,fontWeight:700,color:P.ink}}>UNICO Hospitals — {rd?rd.name:''}</div>
+            <div style={{fontSize:15,fontWeight:700,color:P.ink}}>UNICO Hospitals — {scopeName}</div>
             <div style={{fontSize:11.5,color:P.muted}}>Quality Indicator Report · FY 2025–26 · Jun 2025 – May 2026</div>
           </div>
           <div style={{textAlign:'center'}}>
@@ -564,18 +893,21 @@ function QCReports({depts}){
           </div>
         </div>
         <div style={{overflowX:'auto'}}>
-          <table style={{borderCollapse:'collapse',fontSize:11,width:'100%',minWidth:920}}>
+          <table style={{borderCollapse:'collapse',fontSize:11,width:'100%',minWidth:1040}}>
             <thead>
               <tr style={{background:P.panel2}}>
-                <th style={{textAlign:'left',padding:'8px 10px',fontSize:10,textTransform:'uppercase',letterSpacing:'.2px',color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,position:'sticky',left:0,background:P.panel2,minWidth:190}}>Indicator</th>
-                <th style={{textAlign:'left',padding:'8px 8px',fontSize:9.5,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2,width:96}}>Benchmark</th>
+                {rd?null:<th style={{textAlign:'left',padding:'8px 8px',fontSize:9.5,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2}}>Dept</th>}
+                <th style={{textAlign:'left',padding:'8px 10px',fontSize:10,textTransform:'uppercase',letterSpacing:'.2px',color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2,minWidth:180}}>Indicator</th>
+                <th style={{textAlign:'left',padding:'8px 8px',fontSize:9.5,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2,width:92}}>Benchmark</th>
                 {MONTHS.map(m=> <th key={m[0]} style={{textAlign:'center',padding:'8px 4px',fontSize:9,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2}}>{m[1].split(' ')[0]}</th>)}
+                <th style={{textAlign:'center',padding:'8px 6px',fontSize:9,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2}}>Trend</th>
               </tr>
             </thead>
             <tbody>
-              {inds.map(ind=>(
-                <tr key={ind.id} style={{borderBottom:'1px solid '+P.line2}}>
-                  <td style={{padding:'7px 10px',textAlign:'left',fontWeight:600,color:P.ink,position:'sticky',left:0,background:'#fff'}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
+              {rows.map(({d,ind})=>(
+                <tr key={d.key+'/'+ind.id} style={{borderBottom:'1px solid '+P.line2}}>
+                  {rd?null:<td style={{padding:'6px 8px',textAlign:'left',fontSize:10,color:P.muted,whiteSpace:'nowrap'}}>{d.name}</td>}
+                  <td style={{padding:'7px 10px',textAlign:'left',fontWeight:600,color:P.ink}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
                   <td style={{padding:'7px 8px',textAlign:'left',fontFamily:MONO,fontSize:10,color:P.ink2}}>{benchExpr(ind)}</td>
                   {MONTHS.map(m=>{
                     const v=monthRaw(ind,m[0]); const s=monthStatus(ind,m[0]);
@@ -588,6 +920,7 @@ function QCReports({depts}){
                       </td>
                     );
                   })}
+                  <td style={{textAlign:'center',padding:'4px 6px'}}><QCSpark ind={ind}/></td>
                 </tr>
               ))}
             </tbody>
@@ -601,25 +934,56 @@ function QCReports({depts}){
 /* ===== part: mod-incidents.jsx ===== */
 function QCIncidents({depts}){
   const [dept,setDept]=useState('all');
+  const [sel,setSel]=useState(null);
 
   const list=useMemo(()=>{
     const out=[];
     (depts||[]).forEach(d=>{
       if(dept!=='all' && d.key!==dept) return;
       (d.indicators||[]).forEach(ind=>{
-        MONTHS.forEach(m=>{
-          if(monthStatus(ind,m[0])==='breach'){
-            out.push({
-              dept:d.name,
-              deptKey:d.key,
-              ind:ind.name,
-              cat:ind.category,
-              month:m[1],
-              value:fmtVal(ind,monthRaw(ind,m[0])),
-              bench:benchExpr(ind)
-            });
-          }
-        });
+        // Prefer monthly breaches when the indicator has any monthly data.
+        const hasMonthly = MONTHS.some(m=>monthRaw(ind,m[0])!=null);
+        if(hasMonthly){
+          MONTHS.forEach(m=>{
+            if(monthStatus(ind,m[0])==='breach'){
+              out.push({
+                dept:d.name,
+                deptKey:d.key,
+                ind:ind.name,
+                cat:ind.category,
+                period:'month',
+                month:m[1],
+                value:fmtVal(ind,monthRaw(ind,m[0])),
+                bench:benchExpr(ind),
+                indObj:ind,
+                monthKey:m[0],
+                deptObj:d
+              });
+            }
+          });
+        } else {
+          // Fallback: the shipped data stores values per QUARTER with no monthly
+          // breakdown, so surface quarter-level breaches instead — otherwise seeded
+          // breaches (e.g. NICU ETT Q2 = 8.3) would never appear.
+          QORDER.forEach(q=>{
+            if(qtrStatus(ind,q)==='breach'){
+              out.push({
+                dept:d.name,
+                deptKey:d.key,
+                ind:ind.name,
+                cat:ind.category,
+                period:'quarter',
+                month:qtrLabelOf(q),
+                value:fmtVal(ind,qtrRaw(ind,q)),
+                bench:benchExpr(ind),
+                indObj:ind,
+                quarter:q,
+                monthKey:q,
+                deptObj:d
+              });
+            }
+          });
+        }
       });
     });
     return out;
@@ -628,6 +992,10 @@ function QCIncidents({depts}){
   const rows=list.slice(0,150);
   const empty=list.length===0;
   const options=[{key:'all',label:'All departments'}].concat((depts||[]).map(d=>({key:d.key,label:d.name})));
+
+  if(sel){
+    return <IncidentReport rec={sel} onBack={()=>setSel(null)}/>;
+  }
 
   return (
     <div>
@@ -650,7 +1018,7 @@ function QCIncidents({depts}){
 
       <div style={{display:'flex',flexDirection:'column',gap:9}}>
         {rows.map((x,i)=>(
-          <div key={x.deptKey+'|'+x.ind+'|'+x.month+'|'+i} style={{background:'#fff',border:'1px solid '+P.line,borderLeft:'3px solid '+P.rose,borderRadius:10,boxShadow:'0 1px 2px rgba(20,32,46,.05)',padding:'12px 15px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+          <div key={x.deptKey+'|'+x.ind+'|'+x.month+'|'+i} onClick={()=>setSel(x)} onMouseEnter={e=>{e.currentTarget.style.boxShadow='0 3px 10px rgba(20,32,46,.12)';e.currentTarget.style.borderColor=P.rose;}} onMouseLeave={e=>{e.currentTarget.style.boxShadow='0 1px 2px rgba(20,32,46,.05)';e.currentTarget.style.borderColor=P.line;}} style={{cursor:'pointer',background:'#fff',border:'1px solid '+P.line,borderLeft:'3px solid '+P.rose,borderRadius:10,boxShadow:'0 1px 2px rgba(20,32,46,.05)',padding:'12px 15px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',transition:'box-shadow .12s,border-color .12s'}}>
             <div style={{width:34,height:34,borderRadius:9,background:'#fbe9ec',color:P.rose,display:'grid',placeItems:'center',flexShrink:0}}>
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>
             </div>
@@ -671,9 +1039,211 @@ function QCIncidents({depts}){
               <div style={{fontFamily:MONO,fontSize:12,fontWeight:600,color:P.blue700}}>{x.bench}</div>
             </div>
             <span style={{fontSize:10.5,fontWeight:600,color:P.rose,background:'#fbe9ec',padding:'3px 10px',borderRadius:20}}>Breach</span>
+            <span style={{fontSize:11.5,fontWeight:600,color:P.blue,whiteSpace:'nowrap'}}>View report ›</span>
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/* ---- Detailed, printable-looking incident report ("page") for a single breach.
+   Layout adapts to the indicator TYPE: event indicators (Count) get an incident
+   register with per-patient CAPA cards; percentage/rate indicators get a
+   compliance-gap analysis. Reuses the file's shared helpers/globals only. ---- */
+function IncidentReport({rec,onBack}){
+  const ind = rec.indObj;
+  const gd = guideOf(stdMatch(rec.ind)) || {};
+  const meas = measureOf(ind.formula);
+  // A rec may be month-keyed (rec.period==='month') or quarter-keyed (rec.period==='quarter'),
+  // the latter when the data has no monthly breakdown. `periodWord` labels the copy.
+  const isQtr = rec.period==='quarter';
+  const periodWord = isQtr ? 'quarter' : 'month';
+  const remark = isQtr
+    ? ((ind.quarterRemarks && ind.quarterRemarks[rec.quarter]) || '')
+    : ((ind.monthRemarks && ind.monthRemarks[rec.monthKey]) || '');
+
+  const card = {background:'#fff',border:'1px solid '+P.line,borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.05)',padding:'16px 18px'};
+  const lbl = {fontSize:10,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'.4px',marginBottom:4};
+  const secTitle = {fontSize:14,fontWeight:700,color:P.ink,margin:'0 0 12px',letterSpacing:'-.2px'};
+
+  const defRow = (label,value,mono)=>(
+    <div style={{display:'flex',flexDirection:'column',gap:2,minWidth:0}}>
+      <div style={lbl}>{label}</div>
+      <div style={{fontSize:12.5,color:P.ink2,lineHeight:1.5,fontFamily:mono?MONO:'inherit',wordBreak:'break-word'}}>{value}</div>
+    </div>
+  );
+
+  // Trend cells — 12 months normally, or 4 quarters when the rec is quarter-keyed
+  // (quarter-only data has no monthly series to plot).
+  const trend = isQtr
+    ? QORDER.map(q=>{
+        const raw = qtrRaw(ind,q);
+        return { key:q, short:q, val:fmtVal(ind,raw), status:qtrStatus(ind,q), here:q===rec.quarter };
+      })
+    : MONTHS.map(m=>{
+        const raw = monthRaw(ind,m[0]);
+        return { key:m[0], short:m[1].split(' ')[0], val:fmtVal(ind,raw), status:monthStatus(ind,m[0]), here:m[0]===rec.monthKey };
+      });
+  const cellBg = s => s==='breach' ? '#fbe9ec' : s==='ok' ? '#e7f6ed' : '#eef1f5';
+  const cellFg = s => s==='breach' ? P.rose : s==='ok' ? P.green : P.faint;
+
+  // breach-period statistics (total + trailing consecutive up to & incl. this period)
+  let totalBreach = 0;
+  trend.forEach(t=>{ if(t.status==='breach') totalBreach++; });
+  let consecutive = 0;
+  const hereIdx = trend.findIndex(t=>t.here);
+  for(let j=(hereIdx<0?trend.length-1:hereIdx); j>=0; j--){ if(trend[j].status==='breach') consecutive++; else break; }
+
+  const isEvent = isEventIndicator(ind);
+
+  // compliance-analysis numbers (for pct / rate indicators)
+  const rawNow = Number(isQtr ? qtrRaw(ind,rec.quarter) : monthRaw(ind,rec.monthKey));
+  const benchNum = Number(ind.benchmarkValue);
+  const hasGap = !isEvent && isFinite(rawNow) && ind.benchmarkValue!=null && ind.benchmarkValue!=='' && isFinite(benchNum);
+  const gap = hasGap ? (Math.round((rawNow-benchNum)*100)/100) : null;
+  const unitWord = rateUnitWord(ind);
+  const higher = ind.goalDirection==='higher_is_better';
+  const gapDir = gap==null ? '' : (gap<0 ? 'below' : gap>0 ? 'above' : 'at');
+
+  const incidents = (ind.incidents && ind.incidents[isQtr ? rec.quarter : rec.monthKey]) || [];
+  const remarkShownInSection = (isEvent && incidents.length===0 && remark) || (!isEvent && remark);
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:14}}>
+
+      {/* HEADER card */}
+      <div style={Object.assign({},card,{borderTop:'3px solid '+P.rose})}>
+        <button onClick={onBack} style={{background:'none',border:'1px solid '+P.line,borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:600,color:P.ink2,cursor:'pointer',marginBottom:12}}>← Back to incidents</button>
+        <div style={{display:'flex',alignItems:'flex-start',gap:16,flexWrap:'wrap'}}>
+          <div style={{flex:1,minWidth:220}}>
+            <div style={{fontSize:19,fontWeight:700,color:P.ink,letterSpacing:'-.3px'}}>{rec.ind}</div>
+            <div style={{fontSize:12.5,color:P.muted,marginTop:4}}>{rec.dept} · {rec.cat} · {meas.name}</div>
+            <div style={{fontSize:11.5,color:P.faint,marginTop:2}}>Reporting {periodWord} — {rec.month}</div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={lbl}>Recorded value</div>
+            <div style={{fontFamily:MONO,fontSize:30,fontWeight:700,color:P.rose,lineHeight:1.1}}>{rec.value}</div>
+            <div style={{fontSize:11.5,color:P.ink2,marginTop:4}}>Benchmark <span style={{fontFamily:MONO,fontWeight:600,color:P.blue700}}>{rec.bench}</span></div>
+            <span style={{display:'inline-block',marginTop:6,fontSize:10.5,fontWeight:700,color:P.rose,background:'#fbe9ec',padding:'3px 10px',borderRadius:20}}>Breach</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Indicator definition */}
+      <div style={card}>
+        <h3 style={secTitle}>Indicator definition</h3>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:14}}>
+          {defRow('Formula',formulaText(ind),true)}
+          {defRow('Benchmark',benchExpr(ind),true)}
+          {defRow('Goal',higher?'Higher is better':'Lower is better')}
+          {defRow('Numerator',ind.numLabel||gd.numDef||'—')}
+          {defRow('Denominator',ind.denLabel||gd.denDef||'—')}
+          {defRow('Reference',ind.reference||gd.reference||'—')}
+        </div>
+        {gd.example && (
+          <div style={{background:'#eef8fc',border:'1px solid #dceffa',borderRadius:9,padding:'11px 13px',marginTop:14}}>
+            <div style={{fontSize:9.5,fontWeight:700,color:P.blue700,textTransform:'uppercase',letterSpacing:'.4px',marginBottom:4}}>Worked example</div>
+            <div style={{fontSize:11.5,color:P.blue700,lineHeight:1.55,fontFamily:MONO}}>{gd.example}</div>
+          </div>
+        )}
+      </div>
+
+      {/* trend — 12 months, or 4 quarters when the data is quarter-keyed */}
+      <div style={card}>
+        <h3 style={secTitle}>{isQtr?'4-quarter trend':'12-month trend'} — {rec.dept}</h3>
+        <div style={{display:'grid',gridTemplateColumns:'repeat('+(isQtr?4:12)+',1fr)',gap:6}}>
+          {trend.map(t=>(
+            <div key={t.key} style={{textAlign:'center',padding:'7px 3px',borderRadius:7,background:cellBg(t.status),border:t.here?('2px solid '+P.rose):'1px solid transparent',boxShadow:t.here?'0 0 0 2px rgba(210,58,82,.15)':'none'}}>
+              <div style={{fontSize:9.5,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'.3px'}}>{t.short}</div>
+              <div style={{fontFamily:MONO,fontSize:11.5,fontWeight:700,color:cellFg(t.status),marginTop:3}}>{t.status==='na'?'·':t.val}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:11,color:P.faint,marginTop:10}}>Highlighted cell = the breached {periodWord} under review. {totalBreach} breach{totalBreach===1?'':'es'} across the fiscal year.</div>
+      </div>
+
+      {/* TAILORED SECTION — different report system per indicator type */}
+      {isEvent ? (
+        <div style={card}>
+          <h3 style={secTitle}>Incident register — {rec.month}</h3>
+          {incidents.length ? (
+            <div style={{display:'flex',flexDirection:'column',gap:12}}>
+              {incidents.map((inc,ii)=>{
+                const patient = [
+                  ['UHID',inc.uhid],['Patient name',inc.patientName],
+                  ['Age · Gender',[inc.age,inc.gender].filter(Boolean).join(' · ')],
+                  ['Diagnosis',inc.diagnosis],['Date of admission',inc.admissionDate],['Date of procedure',inc.procedureDate]
+                ].filter(r=>r[1]!=null && r[1]!=='');
+                const capa = [
+                  ['Incident details',inc.details],['Finding / observation',inc.finding],
+                  ['Corrective action',inc.corrective],['Preventive action',inc.preventive],['Remark',inc.remark]
+                ].filter(r=>r[1]!=null && r[1]!=='');
+                return (
+                  <div key={inc.id||inc.uhid||ii} style={{border:'1px solid '+P.line,borderLeft:'3px solid '+P.rose,borderRadius:10,padding:'13px 15px',background:P.panel2}}>
+                    <div style={{fontSize:11,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:'.4px',marginBottom:9}}>Incident {ii+1}</div>
+                    {patient.length>0 && (
+                      <div style={{marginBottom:capa.length?12:0}}>
+                        <div style={{fontSize:10.5,fontWeight:700,color:P.blue700,marginBottom:7}}>Patient</div>
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10}}>
+                          {patient.map(r=>(<div key={r[0]}>{defRow(r[0],r[1])}</div>))}
+                        </div>
+                      </div>
+                    )}
+                    {capa.length>0 && (
+                      <div>
+                        <div style={{fontSize:10.5,fontWeight:700,color:P.violet,marginBottom:7}}>Investigation &amp; CAPA</div>
+                        <div style={{display:'flex',flexDirection:'column',gap:9}}>
+                          {capa.map(r=>(<div key={r[0]}>{defRow(r[0],r[1])}</div>))}
+                        </div>
+                      </div>
+                    )}
+                    {patient.length===0 && capa.length===0 && (
+                      <div style={{fontSize:12,color:P.faint,fontStyle:'italic'}}>No detail fields were logged for this incident.</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div>
+              <div style={{background:'#fff7e6',border:'1px solid #f0dcae',borderRadius:9,padding:'12px 14px',fontSize:12.5,color:P.ink2,lineHeight:1.55}}>
+                <span style={{fontWeight:700,color:P.amber}}>ⓘ </span>{rec.value} recorded this {periodWord}, but no per-incident detail was logged via Data Collection.
+              </div>
+              {remark && (
+                <div style={{marginTop:12}}>{defRow(isQtr?'Quarter remark':'Month remark',remark)}</div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={card}>
+          <h3 style={secTitle}>Compliance analysis</h3>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:14}}>
+            {defRow(isQtr?'This quarter':'This month',rec.value,true)}
+            {defRow('Benchmark',rec.bench,true)}
+            {defRow('Gap',gap==null?'—':((gap>0?'+':'')+gap+' '+unitWord),true)}
+            {defRow('Consecutive breach '+periodWord+'s',String(consecutive),true)}
+          </div>
+          {gap!=null && (
+            <div style={{background:P.panel2,border:'1px solid '+P.line,borderRadius:9,padding:'12px 14px',marginTop:14,fontSize:12.5,color:P.ink2,lineHeight:1.55}}>
+              {rec.value} is {Math.abs(gap)} {unitWord} {gapDir} the {rec.bench} target
+              {gapDir==='below'&&higher ? ' — direction of concern for this indicator.' : gapDir==='above'&&!higher ? ' — direction of concern for this indicator.' : '.'}
+              {' '}This {periodWord} is part of {consecutive} consecutive breach {periodWord}{consecutive===1?'':'s'} ({totalBreach} in the fiscal year).
+            </div>
+          )}
+          {remark && (
+            <div style={{marginTop:14}}>{defRow(isQtr?'Quarter remark':'Month remark',remark)}</div>
+          )}
+        </div>
+      )}
+
+      {/* FOOTER */}
+      <div style={{fontSize:11.5,color:P.muted,padding:'0 4px 8px'}}>
+        Corrective actions are tracked in Action Plans.
+        {remark && !remarkShownInSection ? <span> · {isQtr?'Quarter':'Month'} remark: {remark}</span> : null}
+      </div>
+
     </div>
   );
 }
@@ -1360,7 +1930,7 @@ function QualityView({ view, initialDept, setRoute }){
   const v = view || 'dashboard';
   return (
     <div style={{ fontFamily:"'IBM Plex Sans',system-ui,sans-serif", color:P.ink }}>
-      {v==='dashboard'   && <QCDashboard depts={depts}/>}
+      {v==='dashboard'   && <QCDashboard depts={depts} Q={Q}/>}
       {v==='scorecard'   && <QCScorecard depts={depts}/>}
       {v==='trends'      && <QCTrends depts={depts}/>}
       {v==='reports'     && <QCReports depts={depts}/>}
@@ -1518,7 +2088,7 @@ function QualityConsole({ onExit, initialView, initialDept, setRoute }){
 
         {/* content */}
         <div style={{flex:1,overflowY:'auto',padding:'20px 26px 64px'}}>
-          {module==='dashboard'   && <QCDashboard depts={depts}/>}
+          {module==='dashboard'   && <QCDashboard depts={depts} Q={Q}/>}
           {module==='scorecard'   && <QCScorecard depts={depts}/>}
           {module==='trends'      && <QCTrends depts={depts}/>}
           {module==='reports'     && <QCReports depts={depts}/>}
