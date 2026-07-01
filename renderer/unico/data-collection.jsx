@@ -1145,13 +1145,105 @@
     );
   }
 
+  /* ============================ Hand Hygiene Compliance report (A4) ============================
+     A dedicated WHO-style report for Hand Hygiene Compliance: monthly compliance trend vs the
+     ≥90% benchmark, staff-group breakdown (Nurse/Doctor/PCA/Other) and department breakdown for
+     the latest reported month, plus a monthly table & WHO interpretation. Reads the same
+     window.qualityData() the forms write (mNum/mDen, mGroups/mGroupsDen, mDeptBreakdown). */
+  function HHReportDoc() {
+    const areas = (typeof window.qualityData === 'function' ? window.qualityData() : []);
+    const HH = [];
+    areas.forEach((a) => (a.indicators || []).forEach((ind) => { if (/hand\s*hygiene/i.test(ind.name || '')) HH.push({ area: a, ind }); }));
+    const QM = window.QUALITY_QUARTER_MONTHS || { Q1: ['Jun-25', 'Jul-25', 'Aug-25'], Q2: ['Sep-25', 'Oct-25', 'Nov-25'], Q3: ['Dec-25', 'Jan-26', 'Feb-26'], Q4: ['Mar-26', 'Apr-26', 'May-26'] };
+    const months = ['Q1', 'Q2', 'Q3', 'Q4'].reduce((x, q) => x.concat(QM[q] || []), []);
+    const mComp = (ind, m) => { const n = ind.mNum && ind.mNum[m], d = ind.mDen && ind.mDen[m]; if (n != null && n !== '' && d != null && d !== '' && Number(d) > 0) return Math.round((Number(n) / Number(d)) * 10000) / 100; const v = ind.months && ind.months[m]; return (v != null && v !== '') ? Number(v) : null; };
+    let primary = null;
+    HH.forEach((h) => { if (!primary && /overall|hospital/i.test((h.area.name || '') + ' ' + (h.ind.name || ''))) primary = h.ind; });
+    if (!primary && HH.length) primary = HH[0].ind;
+    const hospital = 'UNICO Hospitals';
+    let date = ''; try { date = new Date().toISOString().slice(0, 10); } catch (e) { }
+    const bench = (primary && primary.benchmarkValue != null && primary.benchmarkValue !== '') ? Number(primary.benchmarkValue) : 90;
+    const whoStatus = (pct) => pct == null ? { label: '—', color: '#8a93a3' } : pct >= 90 ? { label: 'Compliant', color: '#1f9d57' } : pct >= 75 ? { label: 'Needs improvement', color: '#e08a1e' } : { label: 'Unacceptable', color: '#d23a52' };
+    const shortM = (m) => (monthLabel(m) || m).replace(' 20', ' ');
+    const series = primary ? months.map((m) => ({ m, label: shortM(m), value: mComp(primary, m) })).filter((r) => r.value != null) : [];
+    const latest = series.length ? series[series.length - 1] : null;
+    const avg = series.length ? Math.round(series.reduce((s, r) => s + r.value, 0) / series.length * 10) / 10 : null;
+    const latestM = latest ? latest.m : months[months.length - 1];
+    const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
+    const gN = primary && primary.mGroups && primary.mGroups[latestM];
+    const gD = primary && primary.mGroupsDen && primary.mGroupsDen[latestM];
+    const groupChart = (gN && gD) ? GROUP_KEYS.map(([k, lbl]) => { const n = Number(gN[k]) || 0, d = Number(gD[k]) || 0; return { label: lbl, value: d > 0 ? Math.round(n / d * 10000) / 100 : 0, n, d }; }).filter((x) => x.d > 0) : [];
+    const dep = primary && primary.mDeptBreakdown && primary.mDeptBreakdown[latestM];
+    const deptChart = Array.isArray(dep) ? dep.map((row) => { let n = 0, d = 0; Object.keys(row.g || {}).forEach((k) => { n += Number(row.g[k].n) || 0; d += Number(row.g[k].d) || 0; }); return { label: (row.dept || '—').slice(0, 16), value: d > 0 ? Math.round(n / d * 10000) / 100 : 0, n, d }; }).filter((x) => x.d > 0) : [];
+    const th = { textAlign: 'left', fontSize: 10, textTransform: 'uppercase', letterSpacing: .4, color: '#5b6672', padding: '6px 8px', borderBottom: '2px solid #d7dee7' };
+    const td = { fontSize: 11, padding: '5px 8px', borderBottom: '1px solid #eef1f5', color: '#1f2a37' };
+    const KPI = ({ label, value, color, foot }) => (<div style={{ border: '1px solid #e2e8f0', borderLeft: '4px solid ' + (color || '#0090ca'), borderRadius: 8, padding: '10px 13px' }}><div style={{ fontSize: 10.5, fontWeight: 700, color: '#5b6672', textTransform: 'uppercase', letterSpacing: .3 }}>{label}</div><div style={{ fontSize: 24, fontWeight: 800, color: color || '#0f2c4d', lineHeight: 1.1 }}>{value}</div>{foot ? <div style={{ fontSize: 10, color: '#8a93a3' }}>{foot}</div> : null}</div>);
+    const Foot = () => <div className="pdf-foot" style={{ marginTop: 12, color: '#9aa6b4', fontSize: 9, borderTop: '1px solid #e4e9f0', paddingTop: 6 }}>{hospital} · Hand Hygiene Compliance · Confidential · Generated {date} · WHO benchmark ≥ {bench}%</div>;
+    if (!primary) return <div className="pdf-doc"><section className="pdf-page" style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", padding: 20 }}><h2 style={{ color: '#0072a3' }}>Hand Hygiene Compliance Report</h2><p>No Hand Hygiene Compliance indicator found in the quality data. Record it first in Quality Data.</p></section></div>;
+    const lst = latest ? latest.value : null; const st = whoStatus(lst);
+    return (
+      <div className="pdf-doc">
+        <section className="pdf-page" style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", color: '#16202e' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', borderBottom: '2px solid #0090ca', paddingBottom: 8, marginBottom: 14 }}>
+            <div><div style={{ fontSize: 20, fontWeight: 800, color: '#0072a3' }}>{hospital}</div><div style={{ fontSize: 13, fontWeight: 600 }}>Hand Hygiene Compliance Report</div></div>
+            <div style={{ textAlign: 'right', fontSize: 10.5, color: '#8a93a3' }}>Generated {date}<br />WHO 5 Moments · benchmark ≥ {bench}%</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
+            <KPI label={'Latest (' + (latest ? latest.label : '—') + ')'} value={lst != null ? lst + '%' : '—'} color={st.color} foot={st.label} />
+            <KPI label="Average" value={avg != null ? avg + '%' : '—'} color="#0090ca" foot={series.length + ' months reported'} />
+            <KPI label="Benchmark" value={'≥ ' + bench + '%'} color="#6a52d4" foot="WHO compliant target" />
+            <KPI label="Months on target" value={series.filter((r) => r.value >= bench).length + '/' + series.length} color="#1f9d57" />
+          </div>
+          <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Monthly compliance trend (%)</div>
+            {series.length && typeof LineChart === 'function' ? <LineChart data={series} x="label" y="value" height={200} color="#1f9d57" flat /> : (typeof BarChart === 'function' ? <BarChart data={series} x="label" y="value" height={200} color="#1f9d57" flat /> : null)}
+            <div style={{ fontSize: 10, color: '#8a93a3', marginTop: 4 }}>Monthly compliance %. WHO compliant target ≥ {bench}%.</div>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th}>Month</th><th style={{ ...th, textAlign: 'right' }}>Compliant</th><th style={{ ...th, textAlign: 'right' }}>Opportunities</th><th style={{ ...th, textAlign: 'right' }}>Compliance</th><th style={th}>Status</th></tr></thead>
+            <tbody>{series.map((r) => { const n = primary.mNum && primary.mNum[r.m], d = primary.mDen && primary.mDen[r.m]; const s = whoStatus(r.value); return (
+              <tr key={r.m}><td style={{ ...td, fontWeight: 600 }}>{monthLabel(r.m)}</td><td style={{ ...td, textAlign: 'right' }}>{n != null ? n : '—'}</td><td style={{ ...td, textAlign: 'right' }}>{d != null ? d : '—'}</td><td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{r.value}%</td><td style={td}><span style={{ fontSize: 10, fontWeight: 700, color: s.color }}>{s.label}</span></td></tr>
+            ); })}
+            {series.length === 0 && <tr><td colSpan={5} style={{ ...td, textAlign: 'center', color: '#8a93a3' }}>No hand hygiene data recorded yet.</td></tr>}</tbody>
+          </table>
+          <Foot />
+        </section>
+        {(groupChart.length || deptChart.length) ? (
+          <section className="pdf-page" style={{ fontFamily: "'IBM Plex Sans',Arial,sans-serif", color: '#16202e' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', borderBottom: '2px solid #0090ca', paddingBottom: 6, marginBottom: 12 }}>
+              <div><div style={{ fontSize: 16, fontWeight: 800, color: '#0072a3' }}>Breakdown — {latest ? latest.label : monthLabel(latestM)}</div><div style={{ fontSize: 11, color: '#5b6672' }}>Hand hygiene compliance by staff group &amp; department</div></div>
+              <div style={{ textAlign: 'right', fontSize: 10, color: '#8a93a3' }}>{hospital} · {date}</div>
+            </div>
+            {groupChart.length ? (
+              <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>By staff group (compliance %)</div>
+                {typeof BarChart === 'function' ? <BarChart data={groupChart} x="label" y="value" height={175} color="#0090ca" flat /> : null}
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}><thead><tr><th style={th}>Group</th><th style={{ ...th, textAlign: 'right' }}>Compliant</th><th style={{ ...th, textAlign: 'right' }}>Opportunities</th><th style={{ ...th, textAlign: 'right' }}>Compliance</th></tr></thead><tbody>{groupChart.map((g) => <tr key={g.label}><td style={{ ...td, fontWeight: 600 }}>{g.label}</td><td style={{ ...td, textAlign: 'right' }}>{g.n}</td><td style={{ ...td, textAlign: 'right' }}>{g.d}</td><td style={{ ...td, textAlign: 'right', fontWeight: 700, color: whoStatus(g.value).color }}>{g.value}%</td></tr>)}</tbody></table>
+              </div>
+            ) : null}
+            {deptChart.length ? (
+              <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>By department (compliance %)</div>
+                {typeof BarChart === 'function' ? <BarChart data={deptChart} x="label" y="value" height={190} color="#6a52d4" flat /> : null}
+              </div>
+            ) : null}
+            <div style={{ marginTop: 12, background: '#eef8fc', border: '1px solid #cfe6f7', borderRadius: 9, padding: '10px 13px', fontSize: 11, color: '#0072a3' }}>
+              <b>Interpretation (WHO):</b> ≥ {bench}% compliant · 75–89% needs improvement (re-audit within 2 weeks) · &lt; 75% unacceptable (escalate). Reference: WHO (2009), Guidelines on Hand Hygiene in Health Care.
+            </div>
+            <Foot />
+          </section>
+        ) : null}
+      </div>
+    );
+  }
+
   function DataReview() {
     const [rows, setRows] = useState(null);
-    const [reportOn, setReportOn] = useState(false);
+    const [report, setReport] = useState(null); // null | 'quality' | 'hh'
     useEffect(() => { const cleanup = () => { try { document.body.classList.remove('pdf-export-mode'); } catch (e) { } }; window.addEventListener('afterprint', cleanup); return () => window.removeEventListener('afterprint', cleanup); }, []);
-    const printReport = () => {
+    const printReport = (kind) => {
       const go = () => { try { document.body.classList.add('pdf-export-mode'); window.print(); } catch (e) { } };
-      if (reportOn) go(); else { setReportOn(true); setTimeout(go, 220); }
+      if (report === kind) go(); else { setReport(kind); setTimeout(go, 240); }
     };
     const [stats, setStats] = useState(null);
     const [filter, setFilter] = useState('pending');
@@ -1186,7 +1278,8 @@
       <div className="grid" style={{ gap: 14 }}>
         <SectionTitle icon={I.doc} title="Review & History" sub="Every submission with time, data and status. Submissions stay pending until an admin approves — approval applies them to the live dashboard."
           right={<>
-            <button className="btn sm pri" onClick={printReport} title="Generate a print-ready A4 quality report with graphs"><Ic d={I.download} s={14} />Quality Report (PDF)</button>
+            <button className="btn sm pri" onClick={() => printReport('hh')} title="Hand Hygiene Compliance report (WHO) — trend, staff-group & department breakdown" style={{ background: '#3ab5a7', borderColor: '#3ab5a7' }}><Ic d={I.download} s={14} />Hand Hygiene Report</button>
+            <button className="btn sm pri" onClick={() => printReport('quality')} title="Generate a print-ready A4 quality report with graphs"><Ic d={I.download} s={14} />Quality Report (PDF)</button>
             <button className="btn sm" onClick={load}><Ic d={I.trend} s={14} />Refresh</button>
           </>} />
 
@@ -1234,7 +1327,7 @@
               </table>}
         </Card>
         {detail && <SubmissionDetail s={detail} canEdit={true} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}
-        {reportOn && typeof document !== 'undefined' && document.getElementById('pdf-root') && ReactDOM.createPortal(<QualityReportDoc />, document.getElementById('pdf-root'))}
+        {report && typeof document !== 'undefined' && document.getElementById('pdf-root') && ReactDOM.createPortal(report === 'hh' ? <HHReportDoc /> : <QualityReportDoc />, document.getElementById('pdf-root'))}
       </div>
     );
   }

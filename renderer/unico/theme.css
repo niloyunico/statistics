@@ -311,6 +311,22 @@ table.tbl tr.tot td{font-weight:700;color:var(--ink);background:var(--panel-2);b
   .pdf-page .qc-rpt-tbl thead{ display:table-header-group; }
 }
 
+/* ---------- QC Report Builder — extended sections: watermark overlay ---------- */
+/* Diagonal, print-safe watermark. The parent page wrapper is position:relative;
+   this fills it, sits behind the content (z-index:0 with content implicitly above),
+   ignores pointer events, and prints via -webkit-print-color-adjust so the tint
+   survives Chromium's PDF/print path. */
+.qc-watermark{
+  position:absolute; inset:0; z-index:0; pointer-events:none;
+  display:flex; align-items:center; justify-content:center;
+  font-family:'Inter',system-ui,sans-serif; font-weight:800; letter-spacing:.12em;
+  font-size:76px; color:rgba(210,58,82,.08); text-transform:uppercase;
+  transform:rotate(-32deg); white-space:nowrap; overflow:hidden;
+  -webkit-print-color-adjust:exact; print-color-adjust:exact;
+}
+/* Keep report content painting above the watermark (siblings after it in the DOM). */
+.qc-watermark ~ *{ position:relative; z-index:1; }
+
 /* ---------- global toast feedback (feedback.jsx) ---------- */
 #uni-toast-root{position:fixed;inset:0;z-index:2000;pointer-events:none}
 .uni-toast-stack{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:9px;align-items:flex-end;max-width:min(380px,92vw);z-index:2000}
