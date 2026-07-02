@@ -31,6 +31,9 @@
   // A wide list of month keys (several fiscal years each way) so the reporting-month
   // dropdown isn't limited to the current FY — any month / year is selectable.
   const dcWideMonths = () => { const out = []; for (let yy = 24; yy <= 32; yy++) { MONS_ABBR.forEach((m) => out.push(m + '-' + String(yy).padStart(2, '0'))); } return out; }; // 2024 → 2032 (covers 2030+)
+  // Default reporting month = the PREVIOUS completed calendar month (monthly reporting is
+  // retrospective — e.g. in July you report June). Computed from the clock, never hardcoded.
+  const dcDefaultMonth = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return MONS_ABBR[d.getMonth()] + '-' + String(d.getFullYear() % 100).padStart(2, '0'); };
   function defaultMonthFor(dept) {
     const order = MO();
     if (dept && dept.months && dept.months.length) {
@@ -466,7 +469,7 @@
     // sync with the dashboard/quarters; default to the latest FY month.
     const fyMonths = (window.QUALITY_QUARTER_MONTHS) ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
     const monthOpts = dcWideMonths();
-    const defMonth = ((fyMonths && fyMonths.length) ? fyMonths[fyMonths.length - 1] : 'May-26') || monthOpts[monthOpts.length - 1] || '';
+    const defMonth = dcDefaultMonth() || ((fyMonths && fyMonths.length) ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
     // Default to the first area that actually HAS indicators (so a collector never
     // lands on an empty area), falling back to the first area.
     const [areaKey, setAreaKey] = useState((prefill && prefill.area) || ((areas.find((a) => a.indicators && a.indicators.length) || areas[0] || {}).key) || '');
@@ -1584,7 +1587,7 @@
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), []);
     const fyMonths = (window.QUALITY_QUARTER_MONTHS) ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [];
     const monthOpts = dcWideMonths();
-    const [month, setMonth] = useState((fyMonths.length ? fyMonths[fyMonths.length - 1] : 'May-26') || '');
+    const [month, setMonth] = useState(dcDefaultMonth() || (fyMonths.length ? fyMonths[fyMonths.length - 1] : '') || '');
     const [subs, setSubs] = useState(null);
     useEffect(() => { dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
     const hasData = (ind, m) => { const f = (o) => o && o[m] != null && o[m] !== ''; return f(ind.mNum) || f(ind.mDen) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0); };

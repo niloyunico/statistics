@@ -23,6 +23,13 @@
   const MONTH_QUARTER = {};
   Object.keys(QUARTER_MONTHS).forEach(q => QUARTER_MONTHS[q].forEach(m => { MONTH_QUARTER[m] = q; }));
 
+  // Fiscal-year (Jun–May) helpers so quarters can be rolled up PER YEAR, not just for the
+  // hardcoded 2025-26 above. A month's quarter depends only on its month name, so any year works.
+  const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return mi>=5 ? (2000+yy) : (2000+yy-1); }
+  function fyQuarterMonths(startYear){ const order=[5,6,7,8,9,10,11,0,1,2,3,4]; const k=order.map(mi=>{ const cal=mi>=5?startYear:startYear+1; return FY_MONS[mi]+'-'+String(cal%100).padStart(2,'0'); }); return { Q1:k.slice(0,3), Q2:k.slice(3,6), Q3:k.slice(6,9), Q4:k.slice(9,12) }; }
+  function fysInInd(ind){ const set=new Set(); ['months','mNum','mDen'].forEach(f=>{ const o=ind && ind[f]; if(o) Object.keys(o).forEach(k=>{ if(o[k]!=null&&o[k]!==''){ const fy=fyOfKeyS(k); if(fy!=null) set.add(fy); } }); }); return [...set]; }
+
   function isPct(ind) {
     const t = ((ind && ind.valueType) || '').toString().toLowerCase();
     return t.indexOf('%') >= 0 || t.startsWith('per');
@@ -38,6 +45,31 @@
     const nums = vals.map(Number);
     if (isPct(ind)) return Math.round((nums.reduce((s, x) => s + x, 0) / nums.length) * 100) / 100;
     return nums.reduce((s, x) => s + x, 0);
+  }
+
+  // Compute {Q1..Q4} for an explicit quarter->months map, from MONTHLY data only. Used to build
+  // per-fiscal-year quarter rollups. Mirrors the formula/direct logic in mergeIndicator.
+  function computeQuartersFor(ind, QM) {
+    const f = ind.formula; const out = {};
+    if (f && f !== 'direct') {
+      const needDen = f !== 'count';
+      Object.keys(QM).forEach(q => {
+        const ms = QM[q] || [];
+        const have = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
+        if (!have) return;
+        const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+        const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+        out[q] = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
+      });
+    } else {
+      const months = ind.months || {};
+      Object.keys(QM).forEach(q => {
+        const vals = (QM[q] || []).map(m => months[m]).filter(v => v != null && v !== '').map(Number);
+        if (!vals.length) return;
+        out[q] = isPct(ind) ? Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100 : vals.reduce((s, x) => s + x, 0);
+      });
+    }
+    return out;
   }
 
   function loadOverlay() {
@@ -126,6 +158,10 @@
       QS.forEach(q => { const r = rollupQuarter(ind, q); if (r !== undefined) q2[q] = r; });
       ind.quarters = q2;
     }
+    // Additive: quarters keyed PER FISCAL YEAR, computed from that year's monthly data. FY-aware
+    // readers use these; the flat ind.quarters above stays as-is for legacy/no-FY readers.
+    const fys = fysInInd(ind);
+    if (fys.length) { const byFy = {}; fys.forEach(fy => { byFy[fy] = computeQuartersFor(ind, fyQuarterMonths(fy)); }); ind.quartersByFy = byFy; }
     return ind;
   }
 

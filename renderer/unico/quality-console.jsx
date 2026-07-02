@@ -156,8 +156,11 @@ function qStatus(ind, v){
 
 function monthStatus(ind, mk){ return qStatus(ind, monthRaw(ind, mk)); }
 
-function qtrRaw(ind, Q){ const v = ind.quarters ? ind.quarters[Q] : null; return (v==null||v==='') ? null : Number(v); }
-function qtrStatus(ind, Q){ return qStatus(ind, ind.quarters ? ind.quarters[Q] : null); }
+// Optional `fy` (fiscal-year start) reads that year's rollup from ind.quartersByFy; when a
+// year has no rollup (e.g. legacy quarter-only data) it falls back to the flat ind.quarters.
+function qtrSrc(ind, fy){ return (fy!=null && ind && ind.quartersByFy && ind.quartersByFy[fy]) ? ind.quartersByFy[fy] : ((ind && ind.quarters) || {}); }
+function qtrRaw(ind, Q, fy){ const v = qtrSrc(ind, fy)[Q]; return (v==null||v==='') ? null : Number(v); }
+function qtrStatus(ind, Q, fy){ return qStatus(ind, qtrSrc(ind, fy)[Q]); }
 
 function isPctInd(ind){
   const t = ((ind && ind.valueType) || '').toString().toLowerCase();
@@ -1070,7 +1073,7 @@ function qcTone(d){ const k=(d&&d.key)||''; return QC_PAL[(k.charCodeAt(0)||0)%Q
 /* One value per month over the given axis, month fallback -> quarter (seed is quarter-only). */
 function qcMonthVals(ind, months){
   months = months || MONTHS;
-  return months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); return v; });
+  return months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); return v; });
 }
 /* Rows shaped for the window.* charts: {mon, mfull, q, val, has, bench}. */
 function qcChartRows(ind, months){
@@ -1155,7 +1158,7 @@ function qcDeptKpis(d, months){
 }
 /* Indicator-level KPI cards (Detailed page) — LATEST / TOTAL|AVG / PEAK|WORST / BREACHES. */
 function qcIndKpis(ind, months){
-  const vals=months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); return v; });
+  const vals=months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); return v; });
   const nn=vals.filter(v=>v!=null);
   let lastIdx=-1; for(let i=vals.length-1;i>=0;i--){ if(vals[i]!=null){ lastIdx=i; break; } }
   const latest = lastIdx<0?null:vals[lastIdx];
@@ -1185,7 +1188,7 @@ function qcAnnualCell(ind, months){
   const rate = ['pct','rate100','rate1000','avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
   let anyRep=false, anyBreach=false, sum=0, num=0, den=0, valSum=0, nRep=0;
   (months||MONTHS).forEach(m=>{
-    let v = monthRaw(ind, m[0]); if(v==null) v = qtrRaw(ind, m[2]);
+    let v = monthRaw(ind, m[0]); if(v==null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
     if(v==null || v==='') return;
     anyRep=true; if(qStatus(ind, v)==='breach') anyBreach=true;
     if(rate){ nRep++; valSum += Number(v)||0;
@@ -1214,7 +1217,7 @@ function QCHeatGrid({d, months}){
           : inds.map(ind=>(
           <tr key={ind.id}>
             <td style={{padding:'3px 8px',textAlign:'left',fontWeight:600,color:P.ink,fontSize:9.5}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
-            {months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); const s=qStatus(ind,v); const c=qcHeatColors(s);
+            {months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); const s=qStatus(ind,v); const c=qcHeatColors(s);
               return <td key={m[0]} style={{padding:'3px 2px',textAlign:'center'}}><span title={ind.name+' · '+m[1]+' · '+(s==='na'?'not reported':s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:22,height:24,borderRadius:5,background:c.bg,color:c.col,fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{s==='na'?'·':fmtVal(ind,v)}</span></td>;
             })}
           </tr>
@@ -1322,7 +1325,7 @@ function qcBenchRows(chosen, months){
   const out=[];
   chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{
     const bv=ind.benchmarkValue; if(bv==null||bv==='') return;
-    let latest=null; for(let i=months.length-1;i>=0;i--){ let v=monthRaw(ind,months[i][0]); if(v==null) v=qtrRaw(ind,months[i][2]); if(v!=null){ latest=v; break; } }
+    let latest=null; for(let i=months.length-1;i>=0;i--){ let v=monthRaw(ind,months[i][0]); if(v==null) v=qtrRaw(ind,months[i][2],fyOfKey(months[i][0])); if(v!=null){ latest=v; break; } }
     if(latest==null) return;
     out.push({dept:d.name, ind, name:ind.name, bench:Number(bv), actual:latest, status:qStatus(ind,latest)});
   }));
@@ -1726,7 +1729,7 @@ function QCReportBuilder({depts}){
 
   /* month-wise table cell */
   const MonthCell=({ind,m})=>{
-    let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]);
+    let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0]));
     const s=qStatus(ind,v);
     const col=s==='breach'?P.rose:s==='ok'?P.green:P.faint;
     const bg =s==='breach'?'#fbe9ec':s==='ok'?'#e7f6ed':'#f4f6f9';
@@ -1956,7 +1959,7 @@ function QCReportBuilder({depts}){
                 : names.map(name=>{
                 let tot=0, any=false;
                 const cells=chosen.map(d=>{ const ind=findInd(d,name); if(!ind) return {none:true};
-                  let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); const s=qStatus(ind,v);
+                  let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); const s=qStatus(ind,v);
                   if(v!=null){ any=true; if(!isPctInd(ind)) tot+=Number(v)||0; }
                   return {ind,v,s}; });
                 return (
@@ -2094,8 +2097,8 @@ function QCReportBuilder({depts}){
     const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ const set=new Set(pMonths.map(m=>m[1])); if(set.has(r.month)) incs.push({dept:d.name, ind:r.ind, month:r.month, x:r.x}); }));
     // CAPA rows: replicate the Action Plans eligibility (last-quarter breach OR ≥3 breaches).
     const plans=[]; chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{
-      let lastQ=null; QORDER.forEach(Q=>{ if(qtrRaw(ind,Q)!=null) lastQ=Q; });
-      const lastBreach=lastQ!=null && qtrStatus(ind,lastQ)==='breach'; const nB=countBreaches(ind);
+      let lastQ=null; QORDER.forEach(Q=>{ if(qtrRaw(ind,Q,fy)!=null) lastQ=Q; });
+      const lastBreach=lastQ!=null && qtrStatus(ind,lastQ,fy)==='breach'; const nB=countBreaches(ind, MONTHS);
       if(!(lastBreach||nB>=3)) return;
       plans.push({dept:d.name, ind:ind.name, breaches:nB, status:capa[d.key+'/'+ind.id]||'Open'}); }));
     const stCol=s=>s==='Closed'?P.green:s==='In Progress'?P.amber:P.rose;
@@ -2413,7 +2416,7 @@ function QCReportBuilder({depts}){
       const rows=[['Department','Indicator','Benchmark','Goal'].concat(pMonths.map(m=>m[1]))];
       scope.forEach(d=>(d.indicators||[]).forEach(ind=>rows.push(
         [d.name,ind.name,benchExpr(ind),ind.goalDirection==='higher_is_better'?'higher is better':'lower is better']
-        .concat(pMonths.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2]); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
+        .concat(pMonths.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
       rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
       scope.forEach(d=>qcIncidentsOf(d).forEach(r=>{ const x=r.x; rows.push([d.name,r.ind,r.month,x.uhid||'',x.patientName||'',x.age||'',x.gender||'',x.diagnosis||'',x.details||'',x.finding||'',x.corrective||'',x.preventive||'']); }));
       return qcDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), baseName+'.csv','text/csv;charset=utf-8');
@@ -2775,7 +2778,7 @@ function QCIncidents({depts}){
           // breakdown, so surface quarter-level breaches instead — otherwise seeded
           // breaches (e.g. NICU ETT Q2 = 8.3) would never appear.
           QORDER.forEach(q=>{
-            if(qtrStatus(ind,q)==='breach'){
+            if(qtrStatus(ind,q,fy)==='breach'){
               out.push({
                 dept:d.name,
                 deptKey:d.key,
@@ -2783,7 +2786,7 @@ function QCIncidents({depts}){
                 cat:ind.category,
                 period:'quarter',
                 month:qtrLabelOf(q),
-                value:fmtVal(ind,qtrRaw(ind,q)),
+                value:fmtVal(ind,qtrRaw(ind,q,fy)),
                 bench:benchExpr(ind),
                 indObj:ind,
                 quarter:q,
@@ -3072,7 +3075,7 @@ function QCActionPlans({depts}){
       // has no monthly data (legacy quarter-only), fall back to its last reported quarter.
       let lastBreach=false, sawMonthly=false;
       for(let i=MONTHS.length-1;i>=0;i--){ const st=monthStatus(ind,MONTHS[i][0]); if(st!=='na'){ sawMonthly=true; lastBreach=(st==='breach'); break; } }
-      if(!sawMonthly){ let lastQ=null; QORDER.forEach(Q=>{ if(qtrRaw(ind,Q)!=null) lastQ=Q; }); lastBreach = lastQ!=null && qtrStatus(ind,lastQ)==='breach'; }
+      if(!sawMonthly){ let lastQ=null; QORDER.forEach(Q=>{ if(qtrRaw(ind,Q,fy)!=null) lastQ=Q; }); lastBreach = lastQ!=null && qtrStatus(ind,lastQ,fy)==='breach'; }
       const nBreach = countBreaches(ind, MONTHS);
       if(!(lastBreach || nBreach>=3)) return; // only current / persistent breaches get a plan
       const key=d.key+'/'+ind.id;
@@ -3224,7 +3227,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
   };
   const scopeDepts = scope==='all' ? depts : depts.filter(d=>d.key===scope);
 
-  const heatOf = (ind)=> QORDER.map(Qn=>{ const s=qtrStatus(ind,Qn); const [bg,fg,sym]=STATUS_CELL[s]; const v=qtrRaw(ind,Qn); return { bg,fg,sym, title: Qn+': '+(v==null?'not reported':v)+(s==='breach'?' · breach':s==='ok'?' · on benchmark':'') }; });
+  const heatOf = (ind)=> QORDER.map(Qn=>{ const s=qtrStatus(ind,Qn,entryFy); const [bg,fg,sym]=STATUS_CELL[s]; const v=qtrRaw(ind,Qn,entryFy); return { bg,fg,sym, title: Qn+': '+(v==null?'not reported':v)+(s==='breach'?' · breach':s==='ok'?' · on benchmark':'') }; });
 
   let shownCount=0; const groups=[];
   scopeDepts.forEach(d=>{
@@ -3610,7 +3613,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
                   </div>
                   <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:11,padding:'9px 13px',background:'#f7f9fc',border:'1px solid #e8edf3',borderRadius:9}}>
                     <span style={{fontSize:10,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'.4px'}}>Quarter rollup</span>
-                    {QORDER.map(Qn=>{ const v=qtrRaw(selInd,Qn); const s=qStatus(selInd,v); const col=s==='breach'?P.rose:s==='ok'?P.green:P.faint; return (
+                    {QORDER.map(Qn=>{ const v=qtrRaw(selInd,Qn,entryFy); const s=qStatus(selInd,v); const col=s==='breach'?P.rose:s==='ok'?P.green:P.faint; return (
                       <span key={Qn} style={{fontFamily:MONO,fontSize:12,color:P.muted}}>{Qn} <b style={{color:col}}>{v==null?'—':(selInd.formula==='pct'?v+'%':v)}</b></span>
                     ); })}
                     <span style={{fontSize:10.5,color:P.faint}}>· auto-summed from months · feeds the Quarterly Report</span>

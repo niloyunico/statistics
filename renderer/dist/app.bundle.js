@@ -1572,6 +1572,13 @@ window.QI_CORRECTIONS_BY_DEFID = {
   const MONTH_QUARTER = {};
   Object.keys(QUARTER_MONTHS).forEach(q => QUARTER_MONTHS[q].forEach(m => { MONTH_QUARTER[m] = q; }));
 
+  // Fiscal-year (Jun–May) helpers so quarters can be rolled up PER YEAR, not just for the
+  // hardcoded 2025-26 above. A month's quarter depends only on its month name, so any year works.
+  const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return mi>=5 ? (2000+yy) : (2000+yy-1); }
+  function fyQuarterMonths(startYear){ const order=[5,6,7,8,9,10,11,0,1,2,3,4]; const k=order.map(mi=>{ const cal=mi>=5?startYear:startYear+1; return FY_MONS[mi]+'-'+String(cal%100).padStart(2,'0'); }); return { Q1:k.slice(0,3), Q2:k.slice(3,6), Q3:k.slice(6,9), Q4:k.slice(9,12) }; }
+  function fysInInd(ind){ const set=new Set(); ['months','mNum','mDen'].forEach(f=>{ const o=ind && ind[f]; if(o) Object.keys(o).forEach(k=>{ if(o[k]!=null&&o[k]!==''){ const fy=fyOfKeyS(k); if(fy!=null) set.add(fy); } }); }); return [...set]; }
+
   function isPct(ind) {
     const t = ((ind && ind.valueType) || '').toString().toLowerCase();
     return t.indexOf('%') >= 0 || t.startsWith('per');
@@ -1587,6 +1594,31 @@ window.QI_CORRECTIONS_BY_DEFID = {
     const nums = vals.map(Number);
     if (isPct(ind)) return Math.round((nums.reduce((s, x) => s + x, 0) / nums.length) * 100) / 100;
     return nums.reduce((s, x) => s + x, 0);
+  }
+
+  // Compute {Q1..Q4} for an explicit quarter->months map, from MONTHLY data only. Used to build
+  // per-fiscal-year quarter rollups. Mirrors the formula/direct logic in mergeIndicator.
+  function computeQuartersFor(ind, QM) {
+    const f = ind.formula; const out = {};
+    if (f && f !== 'direct') {
+      const needDen = f !== 'count';
+      Object.keys(QM).forEach(q => {
+        const ms = QM[q] || [];
+        const have = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
+        if (!have) return;
+        const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+        const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+        out[q] = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
+      });
+    } else {
+      const months = ind.months || {};
+      Object.keys(QM).forEach(q => {
+        const vals = (QM[q] || []).map(m => months[m]).filter(v => v != null && v !== '').map(Number);
+        if (!vals.length) return;
+        out[q] = isPct(ind) ? Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100 : vals.reduce((s, x) => s + x, 0);
+      });
+    }
+    return out;
   }
 
   function loadOverlay() {
@@ -1675,6 +1707,10 @@ window.QI_CORRECTIONS_BY_DEFID = {
       QS.forEach(q => { const r = rollupQuarter(ind, q); if (r !== undefined) q2[q] = r; });
       ind.quarters = q2;
     }
+    // Additive: quarters keyed PER FISCAL YEAR, computed from that year's monthly data. FY-aware
+    // readers use these; the flat ind.quarters above stays as-is for legacy/no-FY readers.
+    const fys = fysInInd(ind);
+    if (fys.length) { const byFy = {}; fys.forEach(fy => { byFy[fy] = computeQuartersFor(ind, fyQuarterMonths(fy)); }); ind.quartersByFy = byFy; }
     return ind;
   }
 
@@ -14503,12 +14539,15 @@ function qStatus(ind, v) {
 function monthStatus(ind, mk) {
   return qStatus(ind, monthRaw(ind, mk));
 }
-function qtrRaw(ind, Q) {
-  const v = ind.quarters ? ind.quarters[Q] : null;
+function qtrSrc(ind, fy) {
+  return fy != null && ind && ind.quartersByFy && ind.quartersByFy[fy] ? ind.quartersByFy[fy] : ind && ind.quarters || {};
+}
+function qtrRaw(ind, Q, fy) {
+  const v = qtrSrc(ind, fy)[Q];
   return v == null || v === '' ? null : Number(v);
 }
-function qtrStatus(ind, Q) {
-  return qStatus(ind, ind.quarters ? ind.quarters[Q] : null);
+function qtrStatus(ind, Q, fy) {
+  return qStatus(ind, qtrSrc(ind, fy)[Q]);
 }
 function isPctInd(ind) {
   const t = (ind && ind.valueType || '').toString().toLowerCase();
@@ -16870,7 +16909,7 @@ function qcMonthVals(ind, months) {
   months = months || MONTHS;
   return months.map(m => {
     let v = monthRaw(ind, m[0]);
-    if (v == null) v = qtrRaw(ind, m[2]);
+    if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
     return v;
   });
 }
@@ -17116,7 +17155,7 @@ function qcDeptKpis(d, months) {
 function qcIndKpis(ind, months) {
   const vals = months.map(m => {
     let v = monthRaw(ind, m[0]);
-    if (v == null) v = qtrRaw(ind, m[2]);
+    if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
     return v;
   });
   const nn = vals.filter(v => v != null);
@@ -17169,7 +17208,7 @@ function qcAnnualCell(ind, months) {
     nRep = 0;
   (months || MONTHS).forEach(m => {
     let v = monthRaw(ind, m[0]);
-    if (v == null) v = qtrRaw(ind, m[2]);
+    if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
     if (v == null || v === '') return;
     anyRep = true;
     if (qStatus(ind, v) === 'breach') anyBreach = true;
@@ -17273,7 +17312,7 @@ function QCHeatGrid({
     }
   }, ind.goalDirection === 'higher_is_better' ? '↑' : '↓')), months.map(m => {
     let v = monthRaw(ind, m[0]);
-    if (v == null) v = qtrRaw(ind, m[2]);
+    if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
     const s = qStatus(ind, v);
     const c = qcHeatColors(s);
     return React.createElement("td", {
@@ -17485,7 +17524,7 @@ function qcBenchRows(chosen, months) {
     let latest = null;
     for (let i = months.length - 1; i >= 0; i--) {
       let v = monthRaw(ind, months[i][0]);
-      if (v == null) v = qtrRaw(ind, months[i][2]);
+      if (v == null) v = qtrRaw(ind, months[i][2], fyOfKey(months[i][0]));
       if (v != null) {
         latest = v;
         break;
@@ -18626,7 +18665,7 @@ function QCReportBuilder({
     m
   }) => {
     let v = monthRaw(ind, m[0]);
-    if (v == null) v = qtrRaw(ind, m[2]);
+    if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
     const s = qStatus(ind, v);
     const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
     const bg = s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : '#f4f6f9';
@@ -19369,7 +19408,7 @@ function QCReportBuilder({
           none: true
         };
         let v = monthRaw(ind, m[0]);
-        if (v == null) v = qtrRaw(ind, m[2]);
+        if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
         const s = qStatus(ind, v);
         if (v != null) {
           any = true;
@@ -19810,10 +19849,10 @@ function QCReportBuilder({
     chosen.forEach(d => (d.indicators || []).forEach(ind => {
       let lastQ = null;
       QORDER.forEach(Q => {
-        if (qtrRaw(ind, Q) != null) lastQ = Q;
+        if (qtrRaw(ind, Q, fy) != null) lastQ = Q;
       });
-      const lastBreach = lastQ != null && qtrStatus(ind, lastQ) === 'breach';
-      const nB = countBreaches(ind);
+      const lastBreach = lastQ != null && qtrStatus(ind, lastQ, fy) === 'breach';
+      const nB = countBreaches(ind, MONTHS);
       if (!(lastBreach || nB >= 3)) return;
       plans.push({
         dept: d.name,
@@ -20722,7 +20761,7 @@ function QCReportBuilder({
       const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(pMonths.map(m => m[1]))];
       scope.forEach(d => (d.indicators || []).forEach(ind => rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(pMonths.map(m => {
         let v = monthRaw(ind, m[0]);
-        if (v == null) v = qtrRaw(ind, m[2]);
+        if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
         return qStatus(ind, v) === 'na' ? '' : fmtVal(ind, v);
       })))));
       rows.push([]);
@@ -21779,7 +21818,7 @@ function QCIncidents({
           });
         } else {
           QORDER.forEach(q => {
-            if (qtrStatus(ind, q) === 'breach') {
+            if (qtrStatus(ind, q, fy) === 'breach') {
               out.push({
                 dept: d.name,
                 deptKey: d.key,
@@ -21787,7 +21826,7 @@ function QCIncidents({
                 cat: ind.category,
                 period: 'quarter',
                 month: qtrLabelOf(q),
-                value: fmtVal(ind, qtrRaw(ind, q)),
+                value: fmtVal(ind, qtrRaw(ind, q, fy)),
                 bench: benchExpr(ind),
                 indObj: ind,
                 quarter: q,
@@ -22452,9 +22491,9 @@ function QCActionPlans({
       if (!sawMonthly) {
         let lastQ = null;
         QORDER.forEach(Q => {
-          if (qtrRaw(ind, Q) != null) lastQ = Q;
+          if (qtrRaw(ind, Q, fy) != null) lastQ = Q;
         });
-        lastBreach = lastQ != null && qtrStatus(ind, lastQ) === 'breach';
+        lastBreach = lastQ != null && qtrStatus(ind, lastQ, fy) === 'breach';
       }
       const nBreach = countBreaches(ind, MONTHS);
       if (!(lastBreach || nBreach >= 3)) return;
@@ -22753,9 +22792,9 @@ function QCAdmin({
   };
   const scopeDepts = scope === 'all' ? depts : depts.filter(d => d.key === scope);
   const heatOf = ind => QORDER.map(Qn => {
-    const s = qtrStatus(ind, Qn);
+    const s = qtrStatus(ind, Qn, entryFy);
     const [bg, fg, sym] = STATUS_CELL[s];
-    const v = qtrRaw(ind, Qn);
+    const v = qtrRaw(ind, Qn, entryFy);
     return {
       bg,
       fg,
@@ -24730,7 +24769,7 @@ function QCAdmin({
       letterSpacing: '.4px'
     }
   }, "Quarter rollup"), QORDER.map(Qn => {
-    const v = qtrRaw(selInd, Qn);
+    const v = qtrRaw(selInd, Qn, entryFy);
     const s = qStatus(selInd, v);
     const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
     return React.createElement("span", {
@@ -28054,6 +28093,12 @@ window.LockScreen = LockScreen;
     }
     return out;
   };
+  const dcDefaultMonth = () => {
+    const d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() - 1);
+    return MONS_ABBR[d.getMonth()] + '-' + String(d.getFullYear() % 100).padStart(2, '0');
+  };
   function defaultMonthFor(dept) {
     const order = MO();
     if (dept && dept.months && dept.months.length) {
@@ -29042,7 +29087,7 @@ window.LockScreen = LockScreen;
     const lockResp = !!(me && me.role === 'collector');
     const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
     const monthOpts = dcWideMonths();
-    const defMonth = (fyMonths && fyMonths.length ? fyMonths[fyMonths.length - 1] : 'May-26') || monthOpts[monthOpts.length - 1] || '';
+    const defMonth = dcDefaultMonth() || (fyMonths && fyMonths.length ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
     const [areaKey, setAreaKey] = useState(prefill && prefill.area || (areas.find(a => a.indicators && a.indicators.length) || areas[0] || {}).key || '');
     const area = useMemo(() => areas.find(a => a.key === areaKey) || areas[0], [areas, areaKey]);
     const [indId, setIndId] = useState(prefill && prefill.indicatorId || '');
@@ -32365,7 +32410,7 @@ window.LockScreen = LockScreen;
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length), []);
     const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [];
     const monthOpts = dcWideMonths();
-    const [month, setMonth] = useState((fyMonths.length ? fyMonths[fyMonths.length - 1] : 'May-26') || '');
+    const [month, setMonth] = useState(dcDefaultMonth() || (fyMonths.length ? fyMonths[fyMonths.length - 1] : '') || '');
     const [subs, setSubs] = useState(null);
     useEffect(() => {
       dcApi.get('/api/submissions?limit=500').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
