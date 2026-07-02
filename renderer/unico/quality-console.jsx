@@ -164,7 +164,8 @@ function isPctInd(ind){
    `months` defaults to the built-in FY 2025–26 so other callers are unaffected;
    the dashboard passes the switcher-selected fiscal year's months. */
 function deptStat(d, months){
-  months = months || MONTHS;
+  if(!Array.isArray(months)) months = MONTHS; // guards .filter/.map callers passing the index
+
   let ok=0, breach=0, na=0;
   (d.indicators||[]).forEach(ind => months.forEach(m => {
     const s = monthStatus(ind, m[0]);
@@ -174,12 +175,14 @@ function deptStat(d, months){
 }
 
 function hasData(ind, months){
-  months = months || MONTHS;
+  if(!Array.isArray(months)) months = MONTHS; // guards .filter/.map callers passing the index
+
   return months.some(m => monthRaw(ind, m[0])!=null) || QORDER.some(q => qtrRaw(ind, q)!=null);
 }
 
 function countBreaches(ind, months){
-  months = months || MONTHS;
+  if(!Array.isArray(months)) months = MONTHS; // guards .filter/.map callers passing the index
+
   let n=0; months.forEach(m => { if(monthStatus(ind, m[0])==='breach') n++; }); return n;
 }
 
@@ -1077,7 +1080,7 @@ function qcChartRows(ind, months){
 }
 /* Representative indicator for a department: worst-performing with data, else first with data, else [0]. */
 function qcLeadIndicator(d){
-  const withData=(d.indicators||[]).filter(hasData);
+  const withData=(d.indicators||[]).filter(i=>hasData(i));
   if(!withData.length) return (d.indicators||[])[0]||null;
   return withData.slice().sort((a,b)=>countBreaches(b)-countBreaches(a))[0];
 }
@@ -1089,13 +1092,13 @@ function qcDeptStatus(d, months){
 }
 /* Up-to-6 indicators with data, shaped as chart series ({id,key,label,color}). */
 function qcIndSeries(d){
-  return (d.indicators||[]).filter(hasData).slice(0,6)
+  return (d.indicators||[]).filter(i=>hasData(i)).slice(0,6)
     .map((ind,i)=>({id:'i'+i, key:'i'+i, label:ind.name, color:QC_PAL[i%QC_PAL.length]}));
 }
 /* One row per month, one column per (up-to-6) indicator — for grouped/stacked/pct charts. */
 function qcDeptCompareRows(d, months){
   months = months || MONTHS;
-  const inds=(d.indicators||[]).filter(hasData).slice(0,6);
+  const inds=(d.indicators||[]).filter(i=>hasData(i)).slice(0,6);
   return months.map((m,mi)=>{ const row={mon:m[1].split(' ')[0]};
     inds.forEach((ind,i)=>{ row['i'+i]=qcMonthVals(ind, months)[mi]||0; }); return row; });
 }
@@ -1471,7 +1474,7 @@ function QCBenchmarkCompare({chosen, months}){
 
 /* -------- Indicator trend lines (sparkline grid) -------- */
 function QCIndTrend({d, months}){
-  const inds=(d.indicators||[]).filter(hasData).slice(0,12);
+  const inds=(d.indicators||[]).filter(i=>hasData(i)).slice(0,12);
   if(!inds.length) return null;
   return (
     <div style={{marginTop:14,pageBreakInside:'avoid'}}>
@@ -1642,7 +1645,7 @@ function QCReportBuilder({depts}){
     if(reportType==='compare') base = chosen.length ? [{kind:'compare'}] : [];
     else if(reportType==='detail')
       base = chosen.flatMap(d=>{
-        const inds=(d.indicators||[]).filter(hasData);
+        const inds=(d.indicators||[]).filter(i=>hasData(i));
         const list=inds.length?inds:(d.indicators||[]);
         return (list.length?list:[null]).map(ind=>({kind:'detail', dept:d, ind}));
       });

@@ -151,4 +151,30 @@ function EmptyState({setRoute}){
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+/* Last-resort error boundary: without it, ANY uncaught render error unmounts the
+   whole React tree and the user is left staring at a blank gray page with no clue
+   (that was the "report generation blank" bug). Show what broke + a reload. */
+class AppErrorBoundary extends React.Component{
+  constructor(p){ super(p); this.state={err:null}; }
+  static getDerivedStateFromError(err){ return {err}; }
+  render(){
+    if(!this.state.err) return this.props.children;
+    const msg = String((this.state.err && this.state.err.message) || this.state.err);
+    return (
+      <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'#eef2f7',fontFamily:'"IBM Plex Sans",system-ui,sans-serif',padding:24}}>
+        <div style={{maxWidth:460,background:'#fff',border:'1px solid #e3e9f1',borderRadius:16,padding:'26px 28px',textAlign:'center',boxShadow:'0 18px 50px rgba(5,12,24,.14)'}}>
+          <div style={{fontSize:34,marginBottom:8}}>⚠️</div>
+          <div style={{fontSize:16,fontWeight:700,color:'#16202e',marginBottom:6}}>Something went wrong in this view</div>
+          <div style={{fontSize:12.5,color:'#6c7a8c',lineHeight:1.5,marginBottom:6}}>Your data is safe — this is a display error. Reload to continue.</div>
+          <div style={{fontSize:11,color:'#9aa6b4',fontFamily:'"IBM Plex Mono",monospace',background:'#f7f9fc',border:'1px solid #eef2f7',borderRadius:8,padding:'7px 10px',margin:'0 0 14px',wordBreak:'break-word'}}>{msg}</div>
+          <button onClick={()=>{ try{ location.hash=''; }catch(e){} location.reload(); }}
+            style={{border:0,borderRadius:9,padding:'10px 22px',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700,color:'#fff',background:'linear-gradient(135deg,#27a8db,#0072a3)'}}>
+            Reload the app
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<AppErrorBoundary><App/></AppErrorBoundary>);

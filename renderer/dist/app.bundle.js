@@ -14549,7 +14549,7 @@ function isPctInd(ind) {
   return t.indexOf('%') >= 0 || t.startsWith('per') || ind.formula === 'pct';
 }
 function deptStat(d, months) {
-  months = months || MONTHS;
+  if (!Array.isArray(months)) months = MONTHS;
   let ok = 0,
     breach = 0,
     na = 0;
@@ -14565,11 +14565,11 @@ function deptStat(d, months) {
   };
 }
 function hasData(ind, months) {
-  months = months || MONTHS;
+  if (!Array.isArray(months)) months = MONTHS;
   return months.some(m => monthRaw(ind, m[0]) != null) || QORDER.some(q => qtrRaw(ind, q) != null);
 }
 function countBreaches(ind, months) {
-  months = months || MONTHS;
+  if (!Array.isArray(months)) months = MONTHS;
   let n = 0;
   months.forEach(m => {
     if (monthStatus(ind, m[0]) === 'breach') n++;
@@ -16925,7 +16925,7 @@ function qcChartRows(ind, months) {
   });
 }
 function qcLeadIndicator(d) {
-  const withData = (d.indicators || []).filter(hasData);
+  const withData = (d.indicators || []).filter(i => hasData(i));
   if (!withData.length) return (d.indicators || [])[0] || null;
   return withData.slice().sort((a, b) => countBreaches(b) - countBreaches(a))[0];
 }
@@ -16940,7 +16940,7 @@ function qcDeptStatus(d, months) {
   };
 }
 function qcIndSeries(d) {
-  return (d.indicators || []).filter(hasData).slice(0, 6).map((ind, i) => ({
+  return (d.indicators || []).filter(i => hasData(i)).slice(0, 6).map((ind, i) => ({
     id: 'i' + i,
     key: 'i' + i,
     label: ind.name,
@@ -16949,7 +16949,7 @@ function qcIndSeries(d) {
 }
 function qcDeptCompareRows(d, months) {
   months = months || MONTHS;
-  const inds = (d.indicators || []).filter(hasData).slice(0, 6);
+  const inds = (d.indicators || []).filter(i => hasData(i)).slice(0, 6);
   return months.map((m, mi) => {
     const row = {
       mon: m[1].split(' ')[0]
@@ -18006,7 +18006,7 @@ function QCIndTrend({
   d,
   months
 }) {
-  const inds = (d.indicators || []).filter(hasData).slice(0, 12);
+  const inds = (d.indicators || []).filter(i => hasData(i)).slice(0, 12);
   if (!inds.length) return null;
   return React.createElement("div", {
     style: {
@@ -18385,7 +18385,7 @@ function QCReportBuilder({
     if (reportType === 'compare') base = chosen.length ? [{
       kind: 'compare'
     }] : [];else if (reportType === 'detail') base = chosen.flatMap(d => {
-      const inds = (d.indicators || []).filter(hasData);
+      const inds = (d.indicators || []).filter(i => hasData(i));
       const list = inds.length ? inds : d.indicators || [];
       return (list.length ? list : [null]).map(ind => ({
         kind: 'detail',
@@ -34281,5 +34281,91 @@ function EmptyState({
     s: 16
   }), "Add Department")));
 }
-ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App, null));
+class AppErrorBoundary extends React.Component {
+  constructor(p) {
+    super(p);
+    this.state = {
+      err: null
+    };
+  }
+  static getDerivedStateFromError(err) {
+    return {
+      err
+    };
+  }
+  render() {
+    if (!this.state.err) return this.props.children;
+    const msg = String(this.state.err && this.state.err.message || this.state.err);
+    return React.createElement("div", {
+      style: {
+        minHeight: '100vh',
+        display: 'grid',
+        placeItems: 'center',
+        background: '#eef2f7',
+        fontFamily: '"IBM Plex Sans",system-ui,sans-serif',
+        padding: 24
+      }
+    }, React.createElement("div", {
+      style: {
+        maxWidth: 460,
+        background: '#fff',
+        border: '1px solid #e3e9f1',
+        borderRadius: 16,
+        padding: '26px 28px',
+        textAlign: 'center',
+        boxShadow: '0 18px 50px rgba(5,12,24,.14)'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 34,
+        marginBottom: 8
+      }
+    }, "\u26A0\uFE0F"), React.createElement("div", {
+      style: {
+        fontSize: 16,
+        fontWeight: 700,
+        color: '#16202e',
+        marginBottom: 6
+      }
+    }, "Something went wrong in this view"), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: '#6c7a8c',
+        lineHeight: 1.5,
+        marginBottom: 6
+      }
+    }, "Your data is safe \u2014 this is a display error. Reload to continue."), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#9aa6b4',
+        fontFamily: '"IBM Plex Mono",monospace',
+        background: '#f7f9fc',
+        border: '1px solid #eef2f7',
+        borderRadius: 8,
+        padding: '7px 10px',
+        margin: '0 0 14px',
+        wordBreak: 'break-word'
+      }
+    }, msg), React.createElement("button", {
+      onClick: () => {
+        try {
+          location.hash = '';
+        } catch (e) {}
+        location.reload();
+      },
+      style: {
+        border: 0,
+        borderRadius: 9,
+        padding: '10px 22px',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        fontSize: 13,
+        fontWeight: 700,
+        color: '#fff',
+        background: 'linear-gradient(135deg,#27a8db,#0072a3)'
+      }
+    }, "Reload the app")));
+  }
+}
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(AppErrorBoundary, null, React.createElement(App, null)));
 })();
