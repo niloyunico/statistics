@@ -333,17 +333,23 @@ async function applyQuality(spec) {
   if (spec.deptBreakdown) ind.mDeptBreakdown = Object.assign({}, ind.mDeptBreakdown || {}, { [spec.month]: spec.deptBreakdown });
   // Monthly storage (no quarters). For rate/%, keep numerator/denominator per month.
   if (spec.entryMode === 'rate') {
-    let num = spec.num, den = Number(spec.den) || 0;
+    let num = spec.num;
     const mlt = Number(spec.mult) || 100;
-    const computed = den > 0 ? Math.round((Number(spec.num) / den) * mlt * 100) / 100 : 0;
-    // If an admin corrected the computed value while the submission was pending
-    // (a value-only edit), back-solve the numerator from the edited value so the
-    // quarter rollup — which reads mNum/mDen, not months — reflects the correction.
+    // A submission with no real denominator (e.g. a collector logging NSI cases against the
+    // ADMIN-owned staff headcount) must NOT overwrite the stored denominator. Fall back to the
+    // month's own mDen, else the last non-empty mDen, so the rate still computes.
+    const submittedDen = (spec.den != null && spec.den !== '' && Number(spec.den) > 0) ? Number(spec.den) : null;
+    const monthDen = (ind.mDen && ind.mDen[spec.month] != null && ind.mDen[spec.month] !== '') ? Number(ind.mDen[spec.month]) : null;
+    const carryDen = ind.mDen ? Object.keys(ind.mDen).map(k => ind.mDen[k]).filter(v => v != null && v !== '').map(Number).filter(v => v > 0).pop() : null;
+    const den = submittedDen != null ? submittedDen : (monthDen != null ? monthDen : (carryDen != null ? carryDen : 0));
+    const computed = den > 0 ? Math.round((Number(num) / den) * mlt * 100) / 100 : 0;
+    // Admin value-only correction while pending: back-solve the numerator from the edited value.
     if (spec.value != null && spec.value !== '' && den > 0 && Number(spec.value) !== computed) {
       num = Math.round((Number(spec.value) / mlt) * den * 100) / 100;
     }
     ind.mNum = Object.assign({}, ind.mNum || {}, { [spec.month]: num });
-    ind.mDen = Object.assign({}, ind.mDen || {}, { [spec.month]: den });
+    if (submittedDen != null) ind.mDen = Object.assign({}, ind.mDen || {}, { [spec.month]: submittedDen });
+    spec.value = computed; // store the correctly computed monthly value (not a false 0)
   }
   ind.months = Object.assign({}, ind.months || {}, { [spec.month]: spec.value });
   if (spec.remark) ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [spec.month]: spec.remark });
