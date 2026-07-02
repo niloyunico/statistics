@@ -17321,16 +17321,20 @@ function QCIncidentBlock({
 }
 function qcBaselineMonths(pMonths, mode) {
   if (!pMonths.length) return [];
-  const idx = pMonths.map(m => MONTHS.findIndex(x => x[0] === m[0])).filter(i => i >= 0);
+  const fy = fyOfKey(pMonths[0][0]);
+  if (fy == null) return [];
+  const axis = fyMonthsFor(fy);
+  const keys = axis.map(r => r[0]);
+  const idx = pMonths.map(m => keys.indexOf(m[0])).filter(i => i >= 0);
   if (!idx.length) return [];
   const lo = Math.min(...idx),
     n = pMonths.length;
+  const tag = r => [r[0], r[1], ''];
   if (mode === 'yoy') {
-    const from = Math.max(0, lo - 12);
-    return MONTHS.slice(from, Math.min(MONTHS.length, from + n));
+    return fyMonthsFor(fy - 1).slice(lo, lo + n).map(tag);
   }
   const from = Math.max(0, lo - n);
-  return from < lo ? MONTHS.slice(from, lo) : [];
+  return from < lo ? axis.slice(from, lo).map(tag) : [];
 }
 function qcTrendArrow(delta, higherBetter) {
   if (delta == null || Math.abs(delta) < 1e-9) return {
@@ -18030,6 +18034,7 @@ function QCReportBuilder({
   const [exporting, setExporting] = useState(false);
   const [note, setNote] = useState(null);
   const [pendingExport, setPendingExport] = useState(null);
+  const [fy, setFy] = useState(() => defaultFy(depts));
   const [sections, setSections] = useState({
     execSummary: true,
     kpis: true,
@@ -18208,6 +18213,18 @@ function QCReportBuilder({
   })));
   const indQnorm = indQ.trim().toLowerCase();
   const indShown = indQnorm ? indItems.filter(it => (it.i.name || '').toLowerCase().includes(indQnorm) || (it.d.name || '').toLowerCase().includes(indQnorm)) : indItems;
+  const QTAG = ['Q1', 'Q1', 'Q1', 'Q2', 'Q2', 'Q2', 'Q3', 'Q3', 'Q3', 'Q4', 'Q4', 'Q4'];
+  const MONTHS = fyMonthsFor(fy).map((r, i) => [r[0], r[1], QTAG[i]]);
+  const spanLabel = (i, j) => {
+    const a = MONTHS[i][1].split(' '),
+      b = MONTHS[j][1].split(' ');
+    return a[0] + '–' + b[0] + ' ' + b[1].slice(2);
+  };
+  const qSpan = Q => {
+    const first = QTAG.indexOf(Q),
+      last = QTAG.lastIndexOf(Q);
+    return first < 0 ? Q : spanLabel(first, last);
+  };
   const pMonths = (() => {
     const q = Q => MONTHS.filter(m => m[2] === Q);
     if (period.mode === 'q1') return q('Q1');
@@ -18229,7 +18246,7 @@ function QCReportBuilder({
     }
     return MONTHS;
   })();
-  const rangeLabel = pMonths.length ? pMonths[0][1] + ' – ' + pMonths[pMonths.length - 1][1] : 'FY 2025–26';
+  const rangeLabel = pMonths.length ? pMonths[0][1] + ' – ' + pMonths[pMonths.length - 1][1] : fyLabelOf(fy);
   const baseMonths = qcBaselineMonths(pMonths, compareBaseline);
   const baselineLabel = compareBaseline === 'yoy' ? 'same period last year' : baseMonths.length ? baseMonths[0][1].split(' ')[0] + '–' + baseMonths[baseMonths.length - 1][1] : 'prior period';
   const [base, ratio] = QC_PAGE_SIZES[pageSize];
@@ -20128,6 +20145,14 @@ function QCReportBuilder({
         ind
       });
     }));
+    if (!hh.length) {
+      (depts || []).forEach(d => (d.indicators || []).forEach(ind => {
+        if (isHH(ind)) hh.push({
+          d,
+          ind
+        });
+      }));
+    }
     if (!hh.length) return React.createElement("div", {
       className: "qc-rpage",
       style: {
@@ -20154,7 +20179,7 @@ function QCReportBuilder({
         maxWidth: 460,
         margin: '0 auto'
       }
-    }, "None of the selected departments reports a Hand Hygiene Compliance indicator. Select a department that reports hand hygiene (or record it in Quality Data), then regenerate.")), React.createElement(Footer, {
+    }, "No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) records for ", fyLabelOf(fy), ". Record hand hygiene in Quality Data \u2014 or switch the fiscal year above \u2014 then regenerate.")), React.createElement(Footer, {
       n: n,
       total: total
     }));
@@ -20278,7 +20303,7 @@ function QCReportBuilder({
         flat: true
       }) : null : React.createElement("div", {
         style: {
-          height: 120,
+          padding: '22px 0',
           display: 'grid',
           placeItems: 'center',
           color: P.faint,
@@ -21167,7 +21192,29 @@ function QCReportBuilder({
       color: P.muted,
       marginTop: 6
     }
-  }, reportType === 'summary' ? 'KPI cards + chart per department, one page each.' : reportType === 'detail' ? 'Every indicator × month with benchmark & RAG, per department.' : reportType === 'heatmap' ? 'Year-wise indicator × DEPARTMENT matrix (all departments on one page, like the NQI sheet), colour-coded by status, with the year’s occurred-incident details.' : reportType === 'monthly' ? 'Month-wise, ALL-department matrix (indicator × department) — one page per month, with that month’s occurred-incident details (like the NQI monthly sheet).' : reportType === 'handhygiene' ? 'WHO-style Hand Hygiene Compliance report — monthly compliance trend vs the ≥ benchmark, staff-group (Nurse / Doctor / PCA / Other) and by-department breakdown. Uses the selected departments’ hand-hygiene indicators.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
+  }, reportType === 'summary' ? 'KPI cards + chart per department, one page each.' : reportType === 'detail' ? 'Every indicator × month with benchmark & RAG, per department.' : reportType === 'heatmap' ? 'Year-wise indicator × DEPARTMENT matrix (all departments on one page, like the NQI sheet), colour-coded by status, with the year’s occurred-incident details.' : reportType === 'monthly' ? 'Month-wise, ALL-department matrix (indicator × department) — one page per month, with that month’s occurred-incident details (like the NQI monthly sheet).' : reportType === 'handhygiene' ? 'WHO-style Hand Hygiene Compliance report — monthly compliance trend vs the ≥ benchmark, staff-group (Nurse / Doctor / PCA / Other) and by-department breakdown. Uses the selected departments’ hand-hygiene indicators.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Fiscal year'), React.createElement("select", {
+    value: fy,
+    onChange: e => {
+      setFy(Number(e.target.value));
+      setPeriod({
+        mode: 'all'
+      });
+      setPageIdx(0);
+    },
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }, fyOptions(depts).map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, fyLabelOf(y), y === currentFy() ? ' · current' : ''))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      marginTop: 6
+    }
+  }, "Reporting year runs Jun\u2013May. Switch it to view a different year; every page below follows this selection.")), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
     value: period.mode,
     onChange: e => setPeriod({
       mode: e.target.value,
@@ -21180,19 +21227,19 @@ function QCReportBuilder({
     }
   }, React.createElement("option", {
     value: "all"
-  }, "Full FY (Jun 2025 \u2013 May 2026)"), React.createElement("option", {
+  }, "Full ", fyLabelOf(fy), " (", MONTHS[0][1], " \u2013 ", MONTHS[11][1], ")"), React.createElement("option", {
     value: "q1"
-  }, "Q1 \xB7 Jun\u2013Aug 25"), React.createElement("option", {
+  }, "Q1 \xB7 ", qSpan('Q1')), React.createElement("option", {
     value: "q2"
-  }, "Q2 \xB7 Sep\u2013Nov 25"), React.createElement("option", {
+  }, "Q2 \xB7 ", qSpan('Q2')), React.createElement("option", {
     value: "q3"
-  }, "Q3 \xB7 Dec\u2013Feb 26"), React.createElement("option", {
+  }, "Q3 \xB7 ", qSpan('Q3')), React.createElement("option", {
     value: "q4"
-  }, "Q4 \xB7 Mar\u2013May 26"), React.createElement("option", {
+  }, "Q4 \xB7 ", qSpan('Q4')), React.createElement("option", {
     value: "h1"
-  }, "First half (Jun\u2013Nov 25)"), React.createElement("option", {
+  }, "First half (", spanLabel(0, 5), ")"), React.createElement("option", {
     value: "h2"
-  }, "Second half (Dec\u2013May 26)"), React.createElement("option", {
+  }, "Second half (", spanLabel(6, 11), ")"), React.createElement("option", {
     value: "last3"
   }, "Last 3 months"), React.createElement("option", {
     value: "custom"
@@ -21717,9 +21764,9 @@ function QCReportBuilder({
       boxShadow: '0 4px 18px rgba(0,0,0,.12)',
       padding: '28px 30px',
       width: pageW,
-      height: pageMinH,
+      minHeight: pageMinH,
       boxSizing: 'border-box',
-      overflow: 'hidden',
+      overflow: 'visible',
       margin: '0 auto',
       transition: 'width .25s'
     }

@@ -1222,18 +1222,20 @@ function QCIncidentBlock({d, months}){
    yields a comparison). Returns a months[] slice (subset of MONTHS) or []. */
 function qcBaselineMonths(pMonths, mode){
   if(!pMonths.length) return [];
-  const idx=pMonths.map(m=>MONTHS.findIndex(x=>x[0]===m[0])).filter(i=>i>=0);
+  // FY-agnostic: derive the axis from the report period's own keys (not the module MONTHS),
+  // so the baseline tracks whatever fiscal year the Report Builder is currently showing.
+  const fy=fyOfKey(pMonths[0][0]); if(fy==null) return [];
+  const axis=fyMonthsFor(fy); const keys=axis.map(r=>r[0]);
+  const idx=pMonths.map(m=>keys.indexOf(m[0])).filter(i=>i>=0);
   if(!idx.length) return [];
   const lo=Math.min(...idx), n=pMonths.length;
+  const tag=r=>[r[0],r[1],''];
   if(mode==='yoy'){
-    // one FY earlier — no data exists for it on this axis, so fall back to the
-    // span 12 positions earlier clamped into range (degrades to 'prev' when the
-    // period sits at the FY start). Keeps a defined, non-crashing baseline.
-    const from=Math.max(0, lo-12);
-    return MONTHS.slice(from, Math.min(MONTHS.length, from+n));
+    // exactly one fiscal year earlier, same positions within the year
+    return fyMonthsFor(fy-1).slice(lo, lo+n).map(tag);
   }
   const from=Math.max(0, lo-n);
-  return from<lo ? MONTHS.slice(from, lo) : [];
+  return from<lo ? axis.slice(from, lo).map(tag) : [];
 }
 /* Trend arrow glyph + colour for a delta, respecting goal direction.
    higherBetter=true → up is good (green). Returns {glyph,color,txt}. */
@@ -1480,6 +1482,9 @@ function QCReportBuilder({depts}){
   const [exporting,setExporting]   = useState(false);
   const [note,setNote]             = useState(null);
   const [pendingExport,setPendingExport] = useState(null); // one-click report: {fmt} to run after a render tick
+  // Dynamic fiscal year (Jun–May). Opens on the most recent year that HAS data, so freshly
+  // entered current-year data (e.g. Jun 2026) shows immediately; the FY picker below pages back.
+  const [fy,setFy]                 = useState(()=>defaultFy(depts));
 
   /* ---- section toggles + templates (advanced-extensions foundation) ---- */
   const [sections,setSections]=useState({
@@ -1537,7 +1542,17 @@ function QCReportBuilder({depts}){
   const indQnorm = indQ.trim().toLowerCase();
   const indShown = indQnorm ? indItems.filter(it=>(it.i.name||'').toLowerCase().includes(indQnorm)||(it.d.name||'').toLowerCase().includes(indQnorm)) : indItems;
 
-  /* period -> months (fixed 12-entry FY axis, filtered) */
+  /* Fiscal-year axis for THIS report — shadows the module-level MONTHS so every period
+     computation, label and picker below (pMonths, rangeLabel, the reporting-period selects)
+     tracks the selected FY. fyMonthsFor() returns [key,label,'Mon']; we re-tag the 3rd
+     element with Q1..Q4 so the m[2]===Q quarter filter keeps working unchanged. */
+  const QTAG=['Q1','Q1','Q1','Q2','Q2','Q2','Q3','Q3','Q3','Q4','Q4','Q4'];
+  const MONTHS = fyMonthsFor(fy).map((r,i)=>[r[0],r[1],QTAG[i]]);
+  // short spans for the period-picker option labels, e.g. 'Jun–Aug 25', 'Dec–May 26'
+  const spanLabel=(i,j)=>{ const a=MONTHS[i][1].split(' '), b=MONTHS[j][1].split(' '); return a[0]+'–'+b[0]+' '+b[1].slice(2); };
+  const qSpan=Q=>{ const first=QTAG.indexOf(Q), last=QTAG.lastIndexOf(Q); return first<0?Q:spanLabel(first,last); };
+
+  /* period -> months (12-entry FY axis, filtered) */
   const pMonths=(()=>{
     const q=Q=>MONTHS.filter(m=>m[2]===Q);
     if(period.mode==='q1')    return q('Q1');
@@ -1551,7 +1566,7 @@ function QCReportBuilder({depts}){
       if(a>=0&&b>=0){ const lo=Math.min(a,b),hi=Math.max(a,b); return MONTHS.slice(lo,hi+1); } return MONTHS; }
     return MONTHS;
   })();
-  const rangeLabel = pMonths.length ? (pMonths[0][1]+' – '+pMonths[pMonths.length-1][1]) : 'FY 2025–26';
+  const rangeLabel = pMonths.length ? (pMonths[0][1]+' – '+pMonths[pMonths.length-1][1]) : fyLabelOf(fy);
 
   /* baseline window for the period-comparison section (prev span / one year prior) */
   const baseMonths = qcBaselineMonths(pMonths, compareBaseline);
@@ -2148,13 +2163,17 @@ function QCReportBuilder({depts}){
     // count/rate1000 indicator's monthRaw() is not a percentage and must not be averaged in.
     const isHH=ind=>/hand\s*hygiene/i.test((ind&&ind.name)||'') && (ind.formula==='pct'||ind.formula==='direct'||isPctInd(ind));
     const hh=[]; chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ if(isHH(ind)) hh.push({d,ind}); }));
+    // Hospital-wide fallback: if none of the SELECTED departments reports hand hygiene, search
+    // every department so the hospital-wide 'Overall Hospital' HH record is surfaced regardless
+    // of which departments the user picked (the primary-picker below then prefers it).
+    if(!hh.length){ (depts||[]).forEach(d=>(d.indicators||[]).forEach(ind=>{ if(isHH(ind)) hh.push({d,ind}); })); }
     if(!hh.length) return (
       <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:60,textAlign:'center'}}>
           <div style={{fontSize:16,fontWeight:700,color:P.ink,marginBottom:8}}>Hand Hygiene Compliance</div>
-          <div style={{fontSize:12,color:P.muted,maxWidth:460,margin:'0 auto'}}>None of the selected departments reports a Hand Hygiene Compliance indicator. Select a department that reports hand hygiene (or record it in Quality Data), then regenerate.</div>
+          <div style={{fontSize:12,color:P.muted,maxWidth:460,margin:'0 auto'}}>No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) records for {fyLabelOf(fy)}. Record hand hygiene in Quality Data — or switch the fiscal year above — then regenerate.</div>
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -2206,7 +2225,7 @@ function QCReportBuilder({depts}){
         ? (typeof window.AreaTargetChart==='function'
             ? window.AreaTargetChart({data:chartRows, x:'mon', y:'val', target:bench, height:205, color:tone, flat:true})
             : (typeof window.LineChart==='function' ? window.LineChart({data:chartRows, x:'mon', y:'val', height:205, color:tone, area:true, flat:true}) : null))
-        : <div style={{height:120,display:'grid',placeItems:'center',color:P.faint,fontSize:12}}>No hand-hygiene data in this period</div>;
+        : <div style={{padding:'22px 0',display:'grid',placeItems:'center',color:P.faint,fontSize:12}}>No hand-hygiene data in this period</div>;
       return (
         <div className="qc-rpage" style={{position:'relative'}}>
           {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
@@ -2512,15 +2531,22 @@ function QCReportBuilder({depts}){
               </div>
             </div>
             <div>
+              {fieldLabel('Fiscal year')}
+              <select value={fy} onChange={e=>{setFy(Number(e.target.value));setPeriod({mode:'all'});setPageIdx(0);}} style={{...sel2,width:'100%'}}>
+                {fyOptions(depts).map(y=><option key={y} value={y}>{fyLabelOf(y)}{y===currentFy()?' · current':''}</option>)}
+              </select>
+              <div style={{fontSize:11,color:P.muted,marginTop:6}}>Reporting year runs Jun–May. Switch it to view a different year; every page below follows this selection.</div>
+            </div>
+            <div>
               {fieldLabel('Reporting period')}
               <select value={period.mode} onChange={e=>setPeriod({mode:e.target.value,from:MONTHS[0][0],to:MONTHS[11][0]})} style={{...sel2,width:'100%'}}>
-                <option value="all">Full FY (Jun 2025 – May 2026)</option>
-                <option value="q1">Q1 · Jun–Aug 25</option>
-                <option value="q2">Q2 · Sep–Nov 25</option>
-                <option value="q3">Q3 · Dec–Feb 26</option>
-                <option value="q4">Q4 · Mar–May 26</option>
-                <option value="h1">First half (Jun–Nov 25)</option>
-                <option value="h2">Second half (Dec–May 26)</option>
+                <option value="all">Full {fyLabelOf(fy)} ({MONTHS[0][1]} – {MONTHS[11][1]})</option>
+                <option value="q1">Q1 · {qSpan('Q1')}</option>
+                <option value="q2">Q2 · {qSpan('Q2')}</option>
+                <option value="q3">Q3 · {qSpan('Q3')}</option>
+                <option value="q4">Q4 · {qSpan('Q4')}</option>
+                <option value="h1">First half ({spanLabel(0,5)})</option>
+                <option value="h2">Second half ({spanLabel(6,11)})</option>
                 <option value="last3">Last 3 months</option>
                 <option value="custom">Custom range…</option>
               </select>
@@ -2674,7 +2700,7 @@ function QCReportBuilder({depts}){
             </div>
           </div>
           <div style={{padding:26,background:'#eef1f5',overflowX:'auto'}}>
-            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,height:pageMinH,boxSizing:'border-box',overflow:'hidden',margin:'0 auto',transition:'width .25s'}}>
+            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,boxSizing:'border-box',overflow:'visible',margin:'0 auto',transition:'width .25s'}}>
               {chosen.length===0?<div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>{indMode==='custom'?'Tick at least one indicator (Custom mode), or switch Indicators back to All.':'Select at least one department.'}</div>
                 : !cur ? <div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Nothing to preview.</div>
                 : cur.kind==='cover' ? <CoverPage n={pi+1} total={pageCount}/>
