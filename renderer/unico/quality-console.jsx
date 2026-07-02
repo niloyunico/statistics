@@ -1186,24 +1186,41 @@ function QCHeatLegend(){
   return <div style={{display:'flex',gap:16,flexWrap:'wrap',margin:'2px 0 8px'}}>{item('#e7f6ed','on benchmark')}{item(P.rose,'breach')}{item('#f1f4f8','not reported')}</div>;
 }
 // Auto-included occurred-incident details for a department (filtered to the period).
+/* Full occurred-incident detail card — renders the COMPLETE incident record (every field
+   captured in Incident Reports: identifiers + dates + narrative) so NO detail is dropped
+   anywhere the report lists incidents. Pure/prop-driven: r = {ind, dept, month, x}. */
+function QCIncidentCard({r, showDept, showMonth=true}){
+  const x=r.x||{};
+  const meta=[x.patientName, x.uhid&&('UHID '+x.uhid), [x.age,x.gender].filter(Boolean).join('/'),
+              x.admissionDate&&('Adm '+x.admissionDate), x.procedureDate&&('Proc '+x.procedureDate),
+              x.victimId&&('Victim ID '+x.victimId)].filter(Boolean).join(' · ');
+  const line=(lbl,v)=> (v!=null&&v!=='')? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5,marginTop:2}}><b style={{color:P.ink}}>{lbl}:</b> {v}</div> : null;
+  return (
+    <div style={{border:'1px solid #f1c6cd',borderRadius:8,padding:'9px 11px',marginBottom:8,background:'#fffafb',pageBreakInside:'avoid'}}>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'baseline',marginBottom:meta?4:2}}>
+        <b style={{fontSize:11.5,color:P.ink}}>{r.ind}</b>
+        {showDept&&r.dept&&<span style={{fontSize:10,color:P.blue,fontWeight:600}}>{r.dept}</span>}
+        {showMonth&&r.month&&<span style={{fontSize:10,color:P.rose,fontWeight:600}}>{r.month}</span>}
+      </div>
+      {meta&&<div style={{fontSize:10,color:P.muted,marginBottom:4}}>{meta}</div>}
+      {line('Diagnosis', x.diagnosis)}
+      {line('Incident details', x.details)}
+      {line('Finding / root cause', x.finding)}
+      {line('Corrective action', x.corrective)}
+      {line('Preventive action', x.preventive)}
+      {line('Remark', x.remark)}
+    </div>
+  );
+}
+
 function QCIncidentBlock({d, months}){
   const set = months ? new Set(months.map(m=>m[1])) : null;
   const inc = qcIncidentsOf(d).filter(r=> !set || set.has(r.month));
   if(!inc.length) return null;
-  const line=(lbl,v)=> v? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5}}><b style={{color:P.ink}}>{lbl}:</b> {v}</div> : null;
   return (
     <div style={{marginTop:14}}>
       <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Occurred incident details ({inc.length}) — auto-included</div>
-      {inc.map((r,i)=>{ const x=r.x; const meta=[x.patientName, x.uhid&&('UHID '+x.uhid), [x.age,x.gender].filter(Boolean).join('/'), x.admissionDate&&('adm '+x.admissionDate)].filter(Boolean).join(' · ');
-        return (
-        <div key={i} style={{border:'1px solid #f1c6cd',borderRadius:8,padding:'9px 11px',marginBottom:8,background:'#fffafb',pageBreakInside:'avoid'}}>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'baseline',marginBottom:meta?4:2}}>
-            <b style={{fontSize:11.5,color:P.ink}}>{r.ind}</b><span style={{fontSize:10,color:P.rose,fontWeight:600}}>{r.month}</span>
-          </div>
-          {meta&&<div style={{fontSize:10,color:P.muted,marginBottom:4}}>{meta}</div>}
-          {line('Diagnosis', x.diagnosis)}{line('Incident', x.details)}{line('Finding', x.finding)}{line('Corrective', x.corrective)}{line('Preventive', x.preventive)}{line('Remark', x.remark)}
-        </div>
-      ); })}
+      {inc.map((r,i)=><QCIncidentCard key={i} r={r}/>)}
     </div>
   );
 }
@@ -1715,23 +1732,7 @@ function QCReportBuilder({depts}){
         {incs.length>0&&(
           <div style={{marginTop:12}}>
             <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:5}}>Incident details ({incs.length})</div>
-            <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',fontSize:9.5}}>
-              <thead><tr style={{background:'#fbeef0'}}>
-                {['Month','UHID','Patient','Age/Sex','Details','Finding','Corrective','Preventive'].map(h=>
-                  <th key={h} style={{textAlign:'left',padding:'5px 6px',fontSize:9,color:P.rose,fontWeight:700,borderBottom:'1px solid #e0b6bf'}}>{h}</th>)}
-              </tr></thead>
-              <tbody>{incs.map((r,i)=>{ const x=r.x; return (
-                <tr key={i} style={{borderBottom:'1px solid '+P.line2,verticalAlign:'top'}}>
-                  <td style={{padding:'4px 6px'}}>{r.month}</td>
-                  <td style={{padding:'4px 6px',fontFamily:MONO}}>{x.uhid||''}</td>
-                  <td style={{padding:'4px 6px'}}>{x.patientName||''}</td>
-                  <td style={{padding:'4px 6px'}}>{(x.age||'')+(x.gender?(' / '+x.gender):'')}</td>
-                  <td style={{padding:'4px 6px'}}>{x.details||''}</td>
-                  <td style={{padding:'4px 6px'}}>{x.finding||''}</td>
-                  <td style={{padding:'4px 6px'}}>{x.corrective||''}</td>
-                  <td style={{padding:'4px 6px'}}>{x.preventive||''}</td>
-                </tr>); })}</tbody>
-            </table>
+            {incs.map((r,i)=><QCIncidentCard key={i} r={r}/>)}
           </div>
         )}
       </div>
@@ -1866,16 +1867,7 @@ function QCReportBuilder({depts}){
           {incs.length>0 && (
             <div style={{marginTop:14}}>
               <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Occurred incident details · {rangeLabel} ({incs.length})</div>
-              {incs.map((r,i)=>{ const x=r.x; const meta=[x.patientName, x.uhid&&('UHID '+x.uhid), [x.age,x.gender].filter(Boolean).join('/'), x.admissionDate&&('adm '+x.admissionDate)].filter(Boolean).join(' · ');
-                return (
-                <div key={i} style={{border:'1px solid #f1c6cd',borderRadius:8,padding:'9px 11px',marginBottom:8,background:'#fffafb',pageBreakInside:'avoid'}}>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'baseline',marginBottom:meta?4:2}}>
-                    <b style={{fontSize:11.5,color:P.ink}}>{r.ind}</b><span style={{fontSize:10,color:P.blue,fontWeight:600}}>{r.dept}</span><span style={{fontSize:9.5,color:P.muted}}>{r.month}</span>
-                  </div>
-                  {meta&&<div style={{fontSize:10,color:P.muted,marginBottom:4}}>{meta}</div>}
-                  {line('Diagnosis',x.diagnosis)}{line('Incident',x.details)}{line('Finding',x.finding)}{line('Corrective',x.corrective)}{line('Preventive',x.preventive)}{line('Remark',x.remark)}
-                </div>);
-              })}
+              {incs.map((r,i)=><QCIncidentCard key={i} r={r} showDept/>)}
             </div>
           )}
           {lead&&sections.signatures&&<QCSignatureBlock sig={sig} orgName={orgName}/>}
@@ -1940,16 +1932,7 @@ function QCReportBuilder({depts}){
           {incs.length>0 && (
             <div style={{marginTop:14}}>
               <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Occurred incident details in {m[1]} ({incs.length})</div>
-              {incs.map((r,i)=>{ const x=r.x; const meta=[x.patientName, x.uhid&&('UHID '+x.uhid), [x.age,x.gender].filter(Boolean).join('/'), x.admissionDate&&('adm '+x.admissionDate)].filter(Boolean).join(' · ');
-                return (
-                <div key={i} style={{border:'1px solid #f1c6cd',borderRadius:8,padding:'9px 11px',marginBottom:8,background:'#fffafb',pageBreakInside:'avoid'}}>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'baseline',marginBottom:meta?4:2}}>
-                    <b style={{fontSize:11.5,color:P.ink}}>{r.ind}</b><span style={{fontSize:10,color:P.blue,fontWeight:600}}>{r.dept}</span>
-                  </div>
-                  {meta&&<div style={{fontSize:10,color:P.muted,marginBottom:4}}>{meta}</div>}
-                  {line('Diagnosis',x.diagnosis)}{line('Incident',x.details)}{line('Finding',x.finding)}{line('Corrective',x.corrective)}{line('Preventive',x.preventive)}{line('Remark',x.remark)}
-                </div>);
-              })}
+              {incs.map((r,i)=><QCIncidentCard key={i} r={r} showDept showMonth={false}/>)}
             </div>
           )}
           {lead&&sections.signatures&&<QCSignatureBlock sig={sig} orgName={orgName}/>}
@@ -2103,15 +2086,7 @@ function QCReportBuilder({depts}){
           <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Occurred incident details ({incs.length})</div>
           {incs.length===0
             ? <div style={{fontSize:11,color:P.muted}}>No logged incidents in the reporting period.</div>
-            : incs.map((r,i)=>{ const x=r.x; const meta=[x.patientName, x.uhid&&('UHID '+x.uhid), [x.age,x.gender].filter(Boolean).join('/'), x.admissionDate&&('adm '+x.admissionDate)].filter(Boolean).join(' · ');
-              return (
-              <div key={i} style={{border:'1px solid #f1c6cd',borderRadius:8,padding:'9px 11px',marginBottom:8,background:'#fffafb',pageBreakInside:'avoid'}}>
-                <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'baseline',marginBottom:meta?4:2}}>
-                  <b style={{fontSize:11.5,color:P.ink}}>{r.ind}</b><span style={{fontSize:10,color:P.blue,fontWeight:600}}>{r.dept}</span><span style={{fontSize:9.5,color:P.muted}}>{r.month}</span>
-                </div>
-                {meta&&<div style={{fontSize:10,color:P.muted,marginBottom:4}}>{meta}</div>}
-                {line('Diagnosis',x.diagnosis)}{line('Incident',x.details)}{line('Finding',x.finding)}{line('Corrective',x.corrective)}{line('Preventive',x.preventive)}{line('Remark',x.remark)}
-              </div>); })}
+            : incs.map((r,i)=><QCIncidentCard key={i} r={r} showDept/>)}
         </div>
         <Footer n={n} total={total}/>
       </div>

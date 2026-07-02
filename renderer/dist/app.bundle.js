@@ -17247,6 +17247,67 @@ function QCHeatLegend() {
     }
   }, item('#e7f6ed', 'on benchmark'), item(P.rose, 'breach'), item('#f1f4f8', 'not reported'));
 }
+function QCIncidentCard({
+  r,
+  showDept,
+  showMonth = true
+}) {
+  const x = r.x || {};
+  const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.admissionDate && 'Adm ' + x.admissionDate, x.procedureDate && 'Proc ' + x.procedureDate, x.victimId && 'Victim ID ' + x.victimId].filter(Boolean).join(' · ');
+  const line = (lbl, v) => v != null && v !== '' ? React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.ink2,
+      lineHeight: 1.5,
+      marginTop: 2
+    }
+  }, React.createElement("b", {
+    style: {
+      color: P.ink
+    }
+  }, lbl, ":"), " ", v) : null;
+  return React.createElement("div", {
+    style: {
+      border: '1px solid #f1c6cd',
+      borderRadius: 8,
+      padding: '9px 11px',
+      marginBottom: 8,
+      background: '#fffafb',
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      alignItems: 'baseline',
+      marginBottom: meta ? 4 : 2
+    }
+  }, React.createElement("b", {
+    style: {
+      fontSize: 11.5,
+      color: P.ink
+    }
+  }, r.ind), showDept && r.dept && React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: P.blue,
+      fontWeight: 600
+    }
+  }, r.dept), showMonth && r.month && React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: P.rose,
+      fontWeight: 600
+    }
+  }, r.month)), meta && React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.muted,
+      marginBottom: 4
+    }
+  }, meta), line('Diagnosis', x.diagnosis), line('Incident details', x.details), line('Finding / root cause', x.finding), line('Corrective action', x.corrective), line('Preventive action', x.preventive), line('Remark', x.remark));
+}
 function QCIncidentBlock({
   d,
   months
@@ -17254,17 +17315,6 @@ function QCIncidentBlock({
   const set = months ? new Set(months.map(m => m[1])) : null;
   const inc = qcIncidentsOf(d).filter(r => !set || set.has(r.month));
   if (!inc.length) return null;
-  const line = (lbl, v) => v ? React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: P.ink2,
-      lineHeight: 1.5
-    }
-  }, React.createElement("b", {
-    style: {
-      color: P.ink
-    }
-  }, lbl, ":"), " ", v) : null;
   return React.createElement("div", {
     style: {
       marginTop: 14
@@ -17278,46 +17328,10 @@ function QCIncidentBlock({
       letterSpacing: .4,
       marginBottom: 6
     }
-  }, "Occurred incident details (", inc.length, ") \u2014 auto-included"), inc.map((r, i) => {
-    const x = r.x;
-    const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.admissionDate && 'adm ' + x.admissionDate].filter(Boolean).join(' · ');
-    return React.createElement("div", {
-      key: i,
-      style: {
-        border: '1px solid #f1c6cd',
-        borderRadius: 8,
-        padding: '9px 11px',
-        marginBottom: 8,
-        background: '#fffafb',
-        pageBreakInside: 'avoid'
-      }
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 8,
-        flexWrap: 'wrap',
-        alignItems: 'baseline',
-        marginBottom: meta ? 4 : 2
-      }
-    }, React.createElement("b", {
-      style: {
-        fontSize: 11.5,
-        color: P.ink
-      }
-    }, r.ind), React.createElement("span", {
-      style: {
-        fontSize: 10,
-        color: P.rose,
-        fontWeight: 600
-      }
-    }, r.month)), meta && React.createElement("div", {
-      style: {
-        fontSize: 10,
-        color: P.muted,
-        marginBottom: 4
-      }
-    }, meta), line('Diagnosis', x.diagnosis), line('Incident', x.details), line('Finding', x.finding), line('Corrective', x.corrective), line('Preventive', x.preventive), line('Remark', x.remark));
-  }));
+  }, "Occurred incident details (", inc.length, ") \u2014 auto-included"), inc.map((r, i) => React.createElement(QCIncidentCard, {
+    key: i,
+    r: r
+  })));
 }
 function qcBaselineMonths(pMonths, mode) {
   if (!pMonths.length) return [];
@@ -18731,70 +18745,10 @@ function QCReportBuilder({
         letterSpacing: .4,
         marginBottom: 5
       }
-    }, "Incident details (", incs.length, ")"), React.createElement("table", {
-      className: "qc-rpt-tbl",
-      style: {
-        borderCollapse: 'collapse',
-        width: '100%',
-        fontSize: 9.5
-      }
-    }, React.createElement("thead", null, React.createElement("tr", {
-      style: {
-        background: '#fbeef0'
-      }
-    }, ['Month', 'UHID', 'Patient', 'Age/Sex', 'Details', 'Finding', 'Corrective', 'Preventive'].map(h => React.createElement("th", {
-      key: h,
-      style: {
-        textAlign: 'left',
-        padding: '5px 6px',
-        fontSize: 9,
-        color: P.rose,
-        fontWeight: 700,
-        borderBottom: '1px solid #e0b6bf'
-      }
-    }, h)))), React.createElement("tbody", null, incs.map((r, i) => {
-      const x = r.x;
-      return React.createElement("tr", {
-        key: i,
-        style: {
-          borderBottom: '1px solid ' + P.line2,
-          verticalAlign: 'top'
-        }
-      }, React.createElement("td", {
-        style: {
-          padding: '4px 6px'
-        }
-      }, r.month), React.createElement("td", {
-        style: {
-          padding: '4px 6px',
-          fontFamily: MONO
-        }
-      }, x.uhid || ''), React.createElement("td", {
-        style: {
-          padding: '4px 6px'
-        }
-      }, x.patientName || ''), React.createElement("td", {
-        style: {
-          padding: '4px 6px'
-        }
-      }, (x.age || '') + (x.gender ? ' / ' + x.gender : '')), React.createElement("td", {
-        style: {
-          padding: '4px 6px'
-        }
-      }, x.details || ''), React.createElement("td", {
-        style: {
-          padding: '4px 6px'
-        }
-      }, x.finding || ''), React.createElement("td", {
-        style: {
-          padding: '4px 6px'
-        }
-      }, x.corrective || ''), React.createElement("td", {
-        style: {
-          padding: '4px 6px'
-        }
-      }, x.preventive || ''));
-    })))));
+    }, "Incident details (", incs.length, ")"), incs.map((r, i) => React.createElement(QCIncidentCard, {
+      key: i,
+      r: r
+    }))));
   };
   function DeptPage({
     page,
@@ -19182,51 +19136,11 @@ function QCReportBuilder({
         letterSpacing: .4,
         marginBottom: 6
       }
-    }, "Occurred incident details \xB7 ", rangeLabel, " (", incs.length, ")"), incs.map((r, i) => {
-      const x = r.x;
-      const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.admissionDate && 'adm ' + x.admissionDate].filter(Boolean).join(' · ');
-      return React.createElement("div", {
-        key: i,
-        style: {
-          border: '1px solid #f1c6cd',
-          borderRadius: 8,
-          padding: '9px 11px',
-          marginBottom: 8,
-          background: '#fffafb',
-          pageBreakInside: 'avoid'
-        }
-      }, React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'wrap',
-          alignItems: 'baseline',
-          marginBottom: meta ? 4 : 2
-        }
-      }, React.createElement("b", {
-        style: {
-          fontSize: 11.5,
-          color: P.ink
-        }
-      }, r.ind), React.createElement("span", {
-        style: {
-          fontSize: 10,
-          color: P.blue,
-          fontWeight: 600
-        }
-      }, r.dept), React.createElement("span", {
-        style: {
-          fontSize: 9.5,
-          color: P.muted
-        }
-      }, r.month)), meta && React.createElement("div", {
-        style: {
-          fontSize: 10,
-          color: P.muted,
-          marginBottom: 4
-        }
-      }, meta), line('Diagnosis', x.diagnosis), line('Incident', x.details), line('Finding', x.finding), line('Corrective', x.corrective), line('Preventive', x.preventive), line('Remark', x.remark));
-    })), lead && sections.signatures && React.createElement(QCSignatureBlock, {
+    }, "Occurred incident details \xB7 ", rangeLabel, " (", incs.length, ")"), incs.map((r, i) => React.createElement(QCIncidentCard, {
+      key: i,
+      r: r,
+      showDept: true
+    }))), lead && sections.signatures && React.createElement(QCSignatureBlock, {
       sig: sig,
       orgName: orgName
     })), React.createElement(Footer, {
@@ -19447,46 +19361,12 @@ function QCReportBuilder({
         letterSpacing: .4,
         marginBottom: 6
       }
-    }, "Occurred incident details in ", m[1], " (", incs.length, ")"), incs.map((r, i) => {
-      const x = r.x;
-      const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.admissionDate && 'adm ' + x.admissionDate].filter(Boolean).join(' · ');
-      return React.createElement("div", {
-        key: i,
-        style: {
-          border: '1px solid #f1c6cd',
-          borderRadius: 8,
-          padding: '9px 11px',
-          marginBottom: 8,
-          background: '#fffafb',
-          pageBreakInside: 'avoid'
-        }
-      }, React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'wrap',
-          alignItems: 'baseline',
-          marginBottom: meta ? 4 : 2
-        }
-      }, React.createElement("b", {
-        style: {
-          fontSize: 11.5,
-          color: P.ink
-        }
-      }, r.ind), React.createElement("span", {
-        style: {
-          fontSize: 10,
-          color: P.blue,
-          fontWeight: 600
-        }
-      }, r.dept)), meta && React.createElement("div", {
-        style: {
-          fontSize: 10,
-          color: P.muted,
-          marginBottom: 4
-        }
-      }, meta), line('Diagnosis', x.diagnosis), line('Incident', x.details), line('Finding', x.finding), line('Corrective', x.corrective), line('Preventive', x.preventive), line('Remark', x.remark));
-    })), lead && sections.signatures && React.createElement(QCSignatureBlock, {
+    }, "Occurred incident details in ", m[1], " (", incs.length, ")"), incs.map((r, i) => React.createElement(QCIncidentCard, {
+      key: i,
+      r: r,
+      showDept: true,
+      showMonth: false
+    }))), lead && sections.signatures && React.createElement(QCSignatureBlock, {
       sig: sig,
       orgName: orgName
     })), React.createElement(Footer, {
@@ -19980,51 +19860,11 @@ function QCReportBuilder({
         fontSize: 11,
         color: P.muted
       }
-    }, "No logged incidents in the reporting period.") : incs.map((r, i) => {
-      const x = r.x;
-      const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.admissionDate && 'adm ' + x.admissionDate].filter(Boolean).join(' · ');
-      return React.createElement("div", {
-        key: i,
-        style: {
-          border: '1px solid #f1c6cd',
-          borderRadius: 8,
-          padding: '9px 11px',
-          marginBottom: 8,
-          background: '#fffafb',
-          pageBreakInside: 'avoid'
-        }
-      }, React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'wrap',
-          alignItems: 'baseline',
-          marginBottom: meta ? 4 : 2
-        }
-      }, React.createElement("b", {
-        style: {
-          fontSize: 11.5,
-          color: P.ink
-        }
-      }, r.ind), React.createElement("span", {
-        style: {
-          fontSize: 10,
-          color: P.blue,
-          fontWeight: 600
-        }
-      }, r.dept), React.createElement("span", {
-        style: {
-          fontSize: 9.5,
-          color: P.muted
-        }
-      }, r.month)), meta && React.createElement("div", {
-        style: {
-          fontSize: 10,
-          color: P.muted,
-          marginBottom: 4
-        }
-      }, meta), line('Diagnosis', x.diagnosis), line('Incident', x.details), line('Finding', x.finding), line('Corrective', x.corrective), line('Preventive', x.preventive), line('Remark', x.remark));
-    })), React.createElement(Footer, {
+    }, "No logged incidents in the reporting period.") : incs.map((r, i) => React.createElement(QCIncidentCard, {
+      key: i,
+      r: r,
+      showDept: true
+    }))), React.createElement(Footer, {
       n: n,
       total: total
     }));
