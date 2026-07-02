@@ -16766,6 +16766,66 @@ const QC_PAGE_SIZES = {
   A3: [815, 1.414],
   Letter: [700, 1.294]
 };
+function QCPagedPreview({
+  pageW,
+  pageMinH,
+  children
+}) {
+  const ref = React.useRef(null);
+  const [h, setH] = React.useState(0);
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const nh = el.scrollHeight;
+    if (nh && Math.abs(nh - h) > 2) setH(nh);
+  });
+  const usableH = Math.max(240, pageMinH - 56);
+  const n = Math.min(40, Math.max(1, Math.ceil((h || 1) / usableH)));
+  const frame = {
+    background: '#fff',
+    borderRadius: 4,
+    boxShadow: '0 4px 18px rgba(0,0,0,.12)',
+    width: pageW,
+    height: pageMinH,
+    boxSizing: 'border-box',
+    padding: '28px 30px',
+    margin: '0 auto 18px',
+    overflow: 'hidden',
+    position: 'relative'
+  };
+  return React.createElement("div", null, React.createElement("div", {
+    ref: ref,
+    "aria-hidden": "true",
+    style: {
+      position: 'absolute',
+      left: -99999,
+      top: 0,
+      visibility: 'hidden',
+      pointerEvents: 'none',
+      width: pageW,
+      boxSizing: 'border-box',
+      padding: '0 30px'
+    }
+  }, children), Array.from({
+    length: n
+  }).map((_, k) => React.createElement("div", {
+    key: k,
+    style: frame
+  }, React.createElement("div", {
+    style: {
+      transform: 'translateY(' + -k * usableH + 'px)'
+    }
+  }, children), n > 1 && React.createElement("div", {
+    style: {
+      position: 'absolute',
+      right: 9,
+      bottom: 5,
+      fontSize: 9,
+      color: '#aeb7c2',
+      fontFamily: MONO
+    }
+  }, k + 1 + ' / ' + n))));
+}
 const QC_CHART_STYLE_LABEL = {
   bar3d: '3D Bars',
   bar: 'Bar',
@@ -21738,7 +21798,7 @@ function QCReportBuilder({
       background: '#eef1f5',
       overflowX: 'auto'
     }
-  }, React.createElement("div", {
+  }, chosen.length === 0 || !cur ? React.createElement("div", {
     style: {
       background: '#fff',
       borderRadius: 4,
@@ -21747,24 +21807,19 @@ function QCReportBuilder({
       width: pageW,
       minHeight: pageMinH,
       boxSizing: 'border-box',
-      display: 'flex',
-      flexDirection: 'column',
-      margin: '0 auto',
-      transition: 'width .25s'
+      margin: '0 auto'
     }
-  }, chosen.length === 0 ? React.createElement("div", {
+  }, React.createElement("div", {
     style: {
       textAlign: 'center',
       color: P.faint,
       padding: '60px 0'
     }
-  }, indMode === 'custom' ? 'Tick at least one indicator (Custom mode), or switch Indicators back to All.' : 'Select at least one department.') : !cur ? React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      color: P.faint,
-      padding: '60px 0'
-    }
-  }, "Nothing to preview.") : cur.kind === 'cover' ? React.createElement(CoverPage, {
+  }, chosen.length === 0 ? indMode === 'custom' ? 'Tick at least one indicator (Custom mode), or switch Indicators back to All.' : 'Select at least one department.' : 'Nothing to preview.')) : React.createElement(QCPagedPreview, {
+    key: pi + '|' + reportType + '|' + pageSize + '|' + orient + '|' + chosen.length + '|' + pMonths.length + '|' + indSel.size,
+    pageW: pageW,
+    pageMinH: pageMinH
+  }, cur.kind === 'cover' ? React.createElement(CoverPage, {
     n: pi + 1,
     total: pageCount
   }) : cur.kind === 'toc' ? React.createElement(TocPage, {

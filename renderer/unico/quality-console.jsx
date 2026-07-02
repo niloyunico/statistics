@@ -1028,6 +1028,29 @@ function QCSpark({ind,months,w=92,h=24}){
    consumed via window.* (bare names do NOT resolve across build-renderer bundling).
    ============================================================================ */
 const QC_PAGE_SIZES={A4:[700,1.414],A3:[815,1.414],Letter:[700,1.294]};
+/* Paginated preview: render the report page once (hidden) to MEASURE its height, then tile it
+   into N fixed A4 sheets. Each sheet clips to A4 and shows one usable-page slice via translateY,
+   so tall departments break across real A4 pages on screen (matches the sliced PDF export). */
+function QCPagedPreview({pageW, pageMinH, children}){
+  const ref=React.useRef(null);
+  const [h,setH]=React.useState(0);
+  React.useLayoutEffect(()=>{ const el=ref.current; if(!el) return; const nh=el.scrollHeight; if(nh && Math.abs(nh-h)>2) setH(nh); });
+  const usableH=Math.max(240, pageMinH-56);            // A4 minus top+bottom padding (28+28)
+  const n=Math.min(40, Math.max(1, Math.ceil((h||1)/usableH)));
+  const frame={background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',width:pageW,height:pageMinH,boxSizing:'border-box',padding:'28px 30px',margin:'0 auto 18px',overflow:'hidden',position:'relative'};
+  return (
+    <div>
+      {/* hidden measurer at the same content width as a sheet */}
+      <div ref={ref} aria-hidden="true" style={{position:'absolute',left:-99999,top:0,visibility:'hidden',pointerEvents:'none',width:pageW,boxSizing:'border-box',padding:'0 30px'}}>{children}</div>
+      {Array.from({length:n}).map((_,k)=>(
+        <div key={k} style={frame}>
+          <div style={{transform:'translateY('+(-k*usableH)+'px)'}}>{children}</div>
+          {n>1&&<div style={{position:'absolute',right:9,bottom:5,fontSize:9,color:'#aeb7c2',fontFamily:MONO}}>{(k+1)+' / '+n}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
 const QC_CHART_STYLE_LABEL={bar3d:'3D Bars',bar:'Bar',line:'Line',area:'Area + Benchmark',combo:'Bar + Line',grouped:'Grouped',stacked:'Stacked',pct:'100% Stacked',horizontal:'Horizontal',donut:'Composition'};
 const QC_REPORT_STYLES=[['bar3d','3D'],['bar','Bar'],['line','Line'],['area','Area'],['combo','Bar+Line'],['grouped','Grouped'],['stacked','Stacked'],['pct','100%'],['horizontal','Horizontal'],['donut','Donut']];
 
@@ -2723,19 +2746,21 @@ function QCReportBuilder({depts}){
             </div>
           </div>
           <div style={{padding:26,background:'#eef1f5',overflowX:'auto'}}>
-            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,boxSizing:'border-box',display:'flex',flexDirection:'column',margin:'0 auto',transition:'width .25s'}}>
-              {chosen.length===0?<div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>{indMode==='custom'?'Tick at least one indicator (Custom mode), or switch Indicators back to All.':'Select at least one department.'}</div>
-                : !cur ? <div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Nothing to preview.</div>
-                : cur.kind==='cover' ? <CoverPage n={pi+1} total={pageCount}/>
-                : cur.kind==='toc' ? <TocPage page={cur} n={pi+1} total={pageCount}/>
-                : cur.kind==='appendix' ? <AppendixPage n={pi+1} total={pageCount}/>
-                : cur.kind==='refs' ? <RefsPage n={pi+1} total={pageCount}/>
-                : cur.kind==='compare' ? <ComparePage n={pi+1} total={pageCount}/>
-                : cur.kind==='heatmap' ? <HeatmapPage page={cur} n={pi+1} total={pageCount} lead={pi===leadIdx}/>
-                : cur.kind==='monthly' ? <MonthlyPage page={cur} n={pi+1} total={pageCount} lead={pi===leadIdx}/>
-                : cur.kind==='hh' ? <HHPage page={cur} n={pi+1} total={pageCount} lead={pi===leadIdx}/>
-                : <DeptPage page={cur} n={pi+1} total={pageCount} lead={pi===leadIdx}/>}
-            </div>
+            {(chosen.length===0 || !cur)
+              ? <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,boxSizing:'border-box',margin:'0 auto'}}>
+                  <div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>{chosen.length===0?(indMode==='custom'?'Tick at least one indicator (Custom mode), or switch Indicators back to All.':'Select at least one department.'):'Nothing to preview.'}</div>
+                </div>
+              : <QCPagedPreview key={pi+'|'+reportType+'|'+pageSize+'|'+orient+'|'+chosen.length+'|'+pMonths.length+'|'+indSel.size} pageW={pageW} pageMinH={pageMinH}>
+                  {cur.kind==='cover' ? <CoverPage n={pi+1} total={pageCount}/>
+                    : cur.kind==='toc' ? <TocPage page={cur} n={pi+1} total={pageCount}/>
+                    : cur.kind==='appendix' ? <AppendixPage n={pi+1} total={pageCount}/>
+                    : cur.kind==='refs' ? <RefsPage n={pi+1} total={pageCount}/>
+                    : cur.kind==='compare' ? <ComparePage n={pi+1} total={pageCount}/>
+                    : cur.kind==='heatmap' ? <HeatmapPage page={cur} n={pi+1} total={pageCount} lead={pi===leadIdx}/>
+                    : cur.kind==='monthly' ? <MonthlyPage page={cur} n={pi+1} total={pageCount} lead={pi===leadIdx}/>
+                    : cur.kind==='hh' ? <HHPage page={cur} n={pi+1} total={pageCount} lead={pi===leadIdx}/>
+                    : <DeptPage page={cur} n={pi+1} total={pageCount} lead={pi===leadIdx}/>}
+                </QCPagedPreview>}
           </div>
         </div>
       </div>
