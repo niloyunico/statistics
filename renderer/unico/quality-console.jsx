@@ -2446,6 +2446,7 @@ function QCReportBuilder({depts}){
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:16}}>
+      <style>{'.qc-rpage{display:flex;flex-direction:column;flex:1 0 auto}.qc-rpage .pdf-foot{margin-top:auto}@media print{.qc-rpage{display:block}.qc-rpage .pdf-foot{margin-top:12px}}body.qc-pdfcap #pdf-root{display:block !important;position:fixed;left:-11000px;top:0;z-index:-1}'}</style>
       {/* title bar + toolbar */}
       <div style={{display:'flex',alignItems:'center',gap:13,flexWrap:'wrap'}}>
         <div style={{width:40,height:40,borderRadius:11,background:'#eef8fc',color:'#0090ca',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c="#0090ca"/></div>
@@ -2722,7 +2723,7 @@ function QCReportBuilder({depts}){
             </div>
           </div>
           <div style={{padding:26,background:'#eef1f5',overflowX:'auto'}}>
-            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,boxSizing:'border-box',overflow:'visible',margin:'0 auto',transition:'width .25s'}}>
+            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,boxSizing:'border-box',display:'flex',flexDirection:'column',margin:'0 auto',transition:'width .25s'}}>
               {chosen.length===0?<div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>{indMode==='custom'?'Tick at least one indicator (Custom mode), or switch Indicators back to All.':'Select at least one department.'}</div>
                 : !cur ? <div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Nothing to preview.</div>
                 : cur.kind==='cover' ? <CoverPage n={pi+1} total={pageCount}/>

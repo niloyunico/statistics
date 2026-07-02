@@ -331,7 +331,7 @@ function Reports({depts}){
     </div>
   );
   const Footer=({n,total})=>(
-    <div className="pdf-foot" style={{marginTop:20,borderTop:'1px solid var(--line)',paddingTop:8,fontSize:9.5,color:'var(--faint)',display:'flex',flex:'0 0 auto'}}>
+    <div className="pdf-foot" style={{borderTop:'1px solid var(--line)',paddingTop:8,fontSize:9.5,color:'var(--faint)',display:'flex',flex:'0 0 auto'}}>
       <span>{hospitalName}</span><span className="spacer"/><span>Page {n} of {total}</span><span className="spacer"/><span>{footerNote?footerNote+' · ':''}{confidential?'Confidential · ':''}{pageSize} {orient}</span>
     </div>
   );
@@ -345,7 +345,7 @@ function Reports({depts}){
     const ncol=(detailed?d.cols.length:5)+1;
     const tblFont=detailed?(ncol>10?8:ncol>8?8.5:ncol>6?9.5:10.5):11;
     return (
-      <div>
+      <div className="qc-rpage">
         <Header/>
         <div style={{marginTop:18}}>
           <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
@@ -391,7 +391,7 @@ function Reports({depts}){
     const rows=chosen.map(d=>{const fs=fseriesOf(d);const st=statOf(d,fs);return {d,st};});
     const hbar=rows.map(({d,st})=>({label:d.short,value:st.total,color:PALETTE[(d.id.charCodeAt(0))%PALETTE.length]})).sort((a,b)=>b.value-a.value);
     return (
-      <div>
+      <div className="qc-rpage">
         <Header/>
         <div style={{marginTop:18}}>
           <div style={{fontWeight:700,fontSize:15,marginBottom:12}}>Cross-department comparison · {chosen.length} departments</div>
@@ -459,6 +459,7 @@ function Reports({depts}){
 
   return (
     <div className="grid" style={{gap:16}}>
+      <style>{'.qc-rpage{display:flex;flex-direction:column;flex:1 0 auto}.qc-rpage .pdf-foot{margin-top:auto}@media print{.qc-rpage{display:block}.qc-rpage .pdf-foot{margin-top:12px}}'}</style>
       <SectionTitle icon={I.doc} title="Report Builder" sub="Compose and export board-ready statistical reports"
         right={<div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           {modeSeg}
@@ -582,7 +583,7 @@ function Reports({depts}){
             </div>
           </div>
           <div style={{padding:26,background:'#eef1f5',overflowX:'auto'}}>
-            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,margin:'0 auto',transition:'width .25s'}}>
+            <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,boxSizing:'border-box',display:'flex',flexDirection:'column',margin:'0 auto',transition:'width .25s'}}>
               {chosen.length===0?<div style={{textAlign:'center',color:'var(--faint)',padding:'60px 0'}}>Select at least one department.</div>
                 : type==='compare'?<ComparePage/>:<DeptPage d={pageDept} n={pi+1} total={pages}/>}
             </div>

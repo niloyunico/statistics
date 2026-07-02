@@ -11373,7 +11373,6 @@ function Reports({
   }) => React.createElement("div", {
     className: "pdf-foot",
     style: {
-      marginTop: 20,
       borderTop: '1px solid var(--line)',
       paddingTop: 8,
       fontSize: 9.5,
@@ -11403,7 +11402,9 @@ function Reports({
     const detailed = type === 'detail';
     const ncol = (detailed ? d.cols.length : 5) + 1;
     const tblFont = detailed ? ncol > 10 ? 8 : ncol > 8 ? 8.5 : ncol > 6 ? 9.5 : 10.5 : 11;
-    return React.createElement("div", null, React.createElement(Header, null), React.createElement("div", {
+    return React.createElement("div", {
+      className: "qc-rpage"
+    }, React.createElement(Header, null), React.createElement("div", {
       style: {
         marginTop: 18
       }
@@ -11533,7 +11534,9 @@ function Reports({
       value: st.total,
       color: PALETTE[d.id.charCodeAt(0) % PALETTE.length]
     })).sort((a, b) => b.value - a.value);
-    return React.createElement("div", null, React.createElement(Header, null), React.createElement("div", {
+    return React.createElement("div", {
+      className: "qc-rpage"
+    }, React.createElement(Header, null), React.createElement("div", {
       style: {
         marginTop: 18
       }
@@ -11675,7 +11678,7 @@ function Reports({
     style: {
       gap: 16
     }
-  }, React.createElement(SectionTitle, {
+  }, React.createElement("style", null, '.qc-rpage{display:flex;flex-direction:column;flex:1 0 auto}.qc-rpage .pdf-foot{margin-top:auto}@media print{.qc-rpage{display:block}.qc-rpage .pdf-foot{margin-top:12px}}'), React.createElement(SectionTitle, {
     icon: I.doc,
     title: "Report Builder",
     sub: "Compose and export board-ready statistical reports",
@@ -12084,6 +12087,9 @@ function Reports({
       padding: '28px 30px',
       width: pageW,
       minHeight: pageMinH,
+      boxSizing: 'border-box',
+      display: 'flex',
+      flexDirection: 'column',
       margin: '0 auto',
       transition: 'width .25s'
     }
@@ -20832,7 +20838,7 @@ function QCReportBuilder({
       flexDirection: 'column',
       gap: 16
     }
-  }, React.createElement("div", {
+  }, React.createElement("style", null, '.qc-rpage{display:flex;flex-direction:column;flex:1 0 auto}.qc-rpage .pdf-foot{margin-top:auto}@media print{.qc-rpage{display:block}.qc-rpage .pdf-foot{margin-top:12px}}body.qc-pdfcap #pdf-root{display:block !important;position:fixed;left:-11000px;top:0;z-index:-1}'), React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -21741,7 +21747,8 @@ function QCReportBuilder({
       width: pageW,
       minHeight: pageMinH,
       boxSizing: 'border-box',
-      overflow: 'visible',
+      display: 'flex',
+      flexDirection: 'column',
       margin: '0 auto',
       transition: 'width .25s'
     }
