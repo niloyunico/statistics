@@ -557,6 +557,23 @@ window.QI_CORRECTIONS = {
     "reference": "NICE NG229 Fetal monitoring in labour (2022); FIGO consensus guidelines on intrapartum fetal monitoring (2015); ACOG Clinical Practice Guideline No. 10: Intrapartum Fetal Heart Rate Monitoring: Interpretation and Management (Oct 2025), which replaces the retired Practice Bulletins No. 106 (2009) and No. 116 (2010)",
     "referenceUrl": "https://www.nice.org.uk/guidance/ng229/chapter/Recommendations"
   },
+  "needle stick / sharps injury": {
+    "canonicalName": "Needle Stick / Sharps Injury Rate",
+    "formula": "rate100",
+    "numLabel": "Number of NSI cases",
+    "denLabel": "Total healthcare workers",
+    "denAdminOnly": true,
+    "victimField": true,
+    "numeratorDef": "Count every reported needlestick / sharps (NSI) injury sustained by a healthcare worker during the month; log each case with its injured staff member (victim). Data collectors enter only the NSI cases (one per incident) — they do NOT enter the denominator.",
+    "denominatorDef": "Total number of healthcare workers at risk (the hospital's staff headcount). This is a fixed figure set by the ADMINISTRATOR (not by data collectors). Rate = (NSI cases / total healthcare workers) x 100.",
+    "unit": "per 100 healthcare workers",
+    "benchmarkValue": 2,
+    "benchmark": "≤ 2 per 100 FTE per year",
+    "benchmarkNote": "<= 2.0 injuries per 100 FTE per year (US national EXPO-S.T.O.P./EPINet benchmark; rate has held near 1.9-2.0 since 2021); aspirational target 0. Note: nurse-specific rates run higher (~4-5 per 100 FTE).",
+    "goalDirection": "lower_is_better",
+    "reference": "AOHP EXPO-S.T.O.P. national survey (Grimmond/Good); International Safety Center EPINet (Exposure Prevention Information Network); OSHA Bloodborne Pathogens Standard 29 CFR 1910.1030.",
+    "referenceUrl": "https://internationalsafetycenter.org/exposure-data-network-epinet/"
+  },
   "needle stick injury (nsi)": {
     "canonicalName": "Needle Stick / Sharps Injury Rate",
     "formula": "rate100",

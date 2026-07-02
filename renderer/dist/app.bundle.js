@@ -1005,6 +1005,23 @@ window.QI_CORRECTIONS = {
     "reference": "NICE NG229 Fetal monitoring in labour (2022); FIGO consensus guidelines on intrapartum fetal monitoring (2015); ACOG Clinical Practice Guideline No. 10: Intrapartum Fetal Heart Rate Monitoring: Interpretation and Management (Oct 2025), which replaces the retired Practice Bulletins No. 106 (2009) and No. 116 (2010)",
     "referenceUrl": "https://www.nice.org.uk/guidance/ng229/chapter/Recommendations"
   },
+  "needle stick / sharps injury": {
+    "canonicalName": "Needle Stick / Sharps Injury Rate",
+    "formula": "rate100",
+    "numLabel": "Number of NSI cases",
+    "denLabel": "Total healthcare workers",
+    "denAdminOnly": true,
+    "victimField": true,
+    "numeratorDef": "Count every reported needlestick / sharps (NSI) injury sustained by a healthcare worker during the month; log each case with its injured staff member (victim). Data collectors enter only the NSI cases (one per incident) — they do NOT enter the denominator.",
+    "denominatorDef": "Total number of healthcare workers at risk (the hospital's staff headcount). This is a fixed figure set by the ADMINISTRATOR (not by data collectors). Rate = (NSI cases / total healthcare workers) x 100.",
+    "unit": "per 100 healthcare workers",
+    "benchmarkValue": 2,
+    "benchmark": "≤ 2 per 100 FTE per year",
+    "benchmarkNote": "<= 2.0 injuries per 100 FTE per year (US national EXPO-S.T.O.P./EPINet benchmark; rate has held near 1.9-2.0 since 2021); aspirational target 0. Note: nurse-specific rates run higher (~4-5 per 100 FTE).",
+    "goalDirection": "lower_is_better",
+    "reference": "AOHP EXPO-S.T.O.P. national survey (Grimmond/Good); International Safety Center EPINet (Exposure Prevention Information Network); OSHA Bloodborne Pathogens Standard 29 CFR 1910.1030.",
+    "referenceUrl": "https://internationalsafetycenter.org/exposure-data-network-epinet/"
+  },
   "needle stick injury (nsi)": {
     "canonicalName": "Needle Stick / Sharps Injury Rate",
     "formula": "rate100",
@@ -9459,13 +9476,28 @@ function NumField({
   value,
   onChange,
   err,
-  autoFocus
+  autoFocus,
+  draggable,
+  dragging,
+  dragOver,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
+  onDrop
 }) {
   return React.createElement("label", {
+    onDragOver: onDragOver,
+    onDrop: onDrop,
     style: {
       display: 'flex',
       flexDirection: 'column',
-      gap: 5
+      gap: 5,
+      position: 'relative',
+      opacity: dragging ? 0.45 : 1,
+      outline: dragOver ? '2px dashed var(--blue)' : 'none',
+      outlineOffset: dragOver ? 2 : 0,
+      borderRadius: 8,
+      transition: 'opacity .12s'
     }
   }, React.createElement("span", {
     style: {
@@ -9473,9 +9505,29 @@ function NumField({
       fontWeight: 600,
       color: 'var(--ink-2)',
       display: 'flex',
+      alignItems: 'center',
       gap: 6
     }
-  }, col.label, col.pct && React.createElement("span", {
+  }, draggable && React.createElement("span", {
+    draggable: true,
+    onDragStart: onDragStart,
+    onDragEnd: onDragEnd,
+    title: "Drag to reorder",
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      cursor: 'grab',
+      color: 'var(--faint)',
+      marginLeft: -2,
+      touchAction: 'none'
+    },
+    onMouseDown: e => e.currentTarget.style.cursor = 'grabbing',
+    onMouseUp: e => e.currentTarget.style.cursor = 'grab'
+  }, React.createElement(Ic, {
+    d: I.grip,
+    s: 13,
+    sw: 2.4
+  })), col.label, col.pct && React.createElement("span", {
     style: {
       color: 'var(--faint)',
       fontWeight: 500
@@ -9546,6 +9598,19 @@ function DataEntry({
   const [fName, setFName] = React.useState('');
   const [fPct, setFPct] = React.useState(false);
   const d = depts.find(x => x.id === deptId) || depts[0];
+  const [dragIdx, setDragIdx] = React.useState(null);
+  const [dragOverIdx, setDragOverIdx] = React.useState(null);
+  const reorderCols = (from, to) => {
+    if (from == null || to == null || from === to || !updateDept) return;
+    const next = d.cols.map(c => ({
+      ...c
+    }));
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    updateDept(d.id, {
+      cols: next
+    });
+  };
   const MO = window.UNICO.MONTH_ORDER;
   const nextNew = dep => {
     const last = (dep.months || [])[(dep.months || []).length - 1];
@@ -9975,12 +10040,43 @@ function DataEntry({
       gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))',
       gap: 14
     }
-  }, d.cols.map(c => React.createElement(NumField, {
+  }, d.cols.map((c, i) => React.createElement(NumField, {
     key: c.id,
     col: c,
     value: vals[c.id] ?? '',
     err: errs[c.id],
-    onChange: v => set(c.id, v)
+    onChange: v => set(c.id, v),
+    draggable: d.cols.length > 1,
+    dragging: dragIdx === i,
+    dragOver: dragOverIdx === i && dragIdx !== null && dragIdx !== i,
+    onDragStart: e => {
+      setDragIdx(i);
+      setDragOverIdx(i);
+      e.dataTransfer.effectAllowed = 'move';
+      try {
+        e.dataTransfer.setData('text/plain', String(i));
+      } catch (_) {}
+    },
+    onDragOver: e => {
+      if (dragIdx !== null) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (dragOverIdx !== i) setDragOverIdx(i);
+      }
+    },
+    onDrop: e => {
+      e.preventDefault();
+      const from = dragIdx;
+      if (from !== null && from !== i) {
+        reorderCols(from, i);
+      }
+      setDragIdx(null);
+      setDragOverIdx(null);
+    },
+    onDragEnd: () => {
+      setDragIdx(null);
+      setDragOverIdx(null);
+    }
   }))), React.createElement("div", {
     style: {
       display: 'flex',
@@ -33641,17 +33737,51 @@ function UAUserForm({
         }
       }, React.createElement("div", {
         style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 6
+        }
+      }, React.createElement("span", {
+        style: {
           fontSize: 11.5,
           fontWeight: 700,
-          color: 'var(--ink-2)',
-          marginBottom: 6
+          color: 'var(--ink-2)'
         }
       }, aName, " ", React.createElement("span", {
         style: {
           fontWeight: 500,
           color: 'var(--muted)'
         }
-      }, "\xB7 ", sel.length ? sel.length + ' selected' : 'all')), React.createElement("div", {
+      }, "\xB7 ", sel.length ? sel.length + ' of ' + inds.length + ' selected' : 'all ' + inds.length)), React.createElement("span", {
+        style: {
+          flex: 1
+        }
+      }), React.createElement("button", {
+        type: "button",
+        onClick: () => setSel(inds.map(x => x.id)),
+        style: {
+          border: 0,
+          background: 'none',
+          color: 'var(--blue)',
+          fontSize: 11,
+          fontWeight: 700,
+          cursor: 'pointer',
+          padding: 0
+        }
+      }, "Select all"), React.createElement("button", {
+        type: "button",
+        onClick: () => setSel([]),
+        style: {
+          border: 0,
+          background: 'none',
+          color: 'var(--muted)',
+          fontSize: 11,
+          fontWeight: 700,
+          cursor: 'pointer',
+          padding: 0
+        }
+      }, "Clear (= all)")), React.createElement("div", {
         style: {
           display: 'flex',
           flexWrap: 'wrap',

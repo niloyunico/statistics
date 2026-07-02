@@ -10,10 +10,16 @@ function Toast({msg,onDone}){
   );
 }
 
-function NumField({col,value,onChange,err,autoFocus}){
+function NumField({col,value,onChange,err,autoFocus,draggable,dragging,dragOver,onDragStart,onDragOver,onDragEnd,onDrop}){
   return (
-    <label style={{display:'flex',flexDirection:'column',gap:5}}>
-      <span style={{fontSize:11.5,fontWeight:600,color:'var(--ink-2)',display:'flex',gap:6}}>
+    <label onDragOver={onDragOver} onDrop={onDrop}
+      style={{display:'flex',flexDirection:'column',gap:5,position:'relative',opacity:dragging?0.45:1,
+        outline:dragOver?'2px dashed var(--blue)':'none',outlineOffset:dragOver?2:0,borderRadius:8,transition:'opacity .12s'}}>
+      <span style={{fontSize:11.5,fontWeight:600,color:'var(--ink-2)',display:'flex',alignItems:'center',gap:6}}>
+        {draggable&&<span draggable onDragStart={onDragStart} onDragEnd={onDragEnd} title="Drag to reorder"
+          style={{display:'inline-flex',alignItems:'center',cursor:'grab',color:'var(--faint)',marginLeft:-2,touchAction:'none'}}
+          onMouseDown={e=>e.currentTarget.style.cursor='grabbing'} onMouseUp={e=>e.currentTarget.style.cursor='grab'}>
+          <Ic d={I.grip} s={13} sw={2.4}/></span>}
         {col.label}{col.pct&&<span style={{color:'var(--faint)',fontWeight:500}}>(%)</span>}
       </span>
       <div style={{position:'relative'}}>
@@ -48,6 +54,16 @@ function DataEntry({depts, addEntry, entries, initialDept, updateDept, deleteMon
   const [fldOpen,setFldOpen]=React.useState(false);
   const [fName,setFName]=React.useState(''); const [fPct,setFPct]=React.useState(false);
   const d=depts.find(x=>x.id===deptId)||depts[0];
+  const [dragIdx,setDragIdx]=React.useState(null);
+  const [dragOverIdx,setDragOverIdx]=React.useState(null);
+  // Reorder metric columns via drag-and-drop; persists the new order to the overlay so it shows everywhere.
+  const reorderCols=(from,to)=>{
+    if(from==null||to==null||from===to||!updateDept) return;
+    const next=d.cols.map(c=>({...c}));
+    const [moved]=next.splice(from,1);
+    next.splice(to,0,moved);
+    updateDept(d.id,{cols:next});
+  };
   const MO=window.UNICO.MONTH_ORDER;
   // Next un-entered month for a department (so new entries don't overwrite the last one).
   const nextNew=(dep)=>{ const last=(dep.months||[])[(dep.months||[]).length-1]; const i=last?MO.indexOf(last):-1; return (i>=0&&MO[i+1])||last||MO[0]; };
@@ -217,7 +233,16 @@ function DataEntry({depts, addEntry, entries, initialDept, updateDept, deleteMon
             {selector}
             <div style={{height:1,background:'var(--line-2)'}}/>
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:14}}>
-              {d.cols.map(c=><NumField key={c.id} col={c} value={vals[c.id]??''} err={errs[c.id]} onChange={v=>set(c.id,v)}/>)}
+              {d.cols.map((c,i)=>(
+                <NumField key={c.id} col={c} value={vals[c.id]??''} err={errs[c.id]} onChange={v=>set(c.id,v)}
+                  draggable={d.cols.length>1}
+                  dragging={dragIdx===i}
+                  dragOver={dragOverIdx===i&&dragIdx!==null&&dragIdx!==i}
+                  onDragStart={e=>{setDragIdx(i);setDragOverIdx(i);e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',String(i));}catch(_){}}}
+                  onDragOver={e=>{if(dragIdx!==null){e.preventDefault();e.dataTransfer.dropEffect='move';if(dragOverIdx!==i)setDragOverIdx(i);}}}
+                  onDrop={e=>{e.preventDefault();const from=dragIdx;if(from!==null&&from!==i){reorderCols(from,i);}setDragIdx(null);setDragOverIdx(null);}}
+                  onDragEnd={()=>{setDragIdx(null);setDragOverIdx(null);}}/>
+              ))}
             </div>
             <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
               {!fldOpen
