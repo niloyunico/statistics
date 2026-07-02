@@ -47,7 +47,17 @@ Vercel → Project → **Settings → Environment Variables → Import .env**, t
   secrets.
 
 ## 5. Notes
-- All requests (page, assets, `/api/*`, `/login`) flow through the single Express
+- Pages and APIs (`/`, `/collect`, `/api/*`, `/login`) flow through the Express
   function; `/` injects the live DB snapshot into `index.html` per request.
+- Static assets (`/dist`, `/vendor`, `/unico`) are served straight from Vercel's
+  CDN edge (`@vercel/static` builds in `vercel.json`) — they never invoke the
+  function.
+- `"regions": ["bom1"]` pins the function to Mumbai, next to the Atlas cluster.
+  If the cluster ever moves regions, update this to the closest Vercel region —
+  a cross-continent function↔DB gap adds seconds to every page load.
+- The deploy-log line "WARNING! Due to `builds` existing in your configuration
+  file, the Build and Development Settings defined in your Project Settings will
+  not apply" is EXPECTED and harmless: it just means `vercel.json` (not the
+  dashboard UI) controls the build — which is exactly what we want.
 - The data already lives in Atlas, so the cold-start auto-seed is intentionally
   skipped on Vercel.

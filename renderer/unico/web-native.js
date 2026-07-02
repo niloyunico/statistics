@@ -14,6 +14,26 @@
   if (window.unicoNative) return; // real desktop bridge present
   var API = ''; // same-origin; the server serves both the page and /api/*
 
+  // When the login session expires (12h JWT) every mirror PUT starts failing with
+  // 401 — silently, so the user keeps editing while nothing is saved. Show a
+  // one-time, unmissable banner that sends them back through /login.
+  var sessionWarned = false;
+  function warnSessionExpired() {
+    if (sessionWarned) return;
+    sessionWarned = true;
+    try {
+      var b = document.createElement('div');
+      b.setAttribute('role', 'alert');
+      b.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:99999;'
+        + 'max-width:min(560px,92vw);font:600 13px/1.45 "IBM Plex Sans",system-ui,"Segoe UI",sans-serif;'
+        + 'color:#fff;background:#b4232f;border-radius:12px;padding:12px 16px;'
+        + 'box-shadow:0 10px 30px rgba(5,12,24,.4);text-align:center';
+      b.innerHTML = 'Your session has expired &mdash; recent changes are <u>not being saved</u>. '
+        + '<a href="/login" style="color:#fff;font-weight:700">Sign in again</a> to continue.';
+      document.body.appendChild(b);
+    } catch (e) { /* banner is best-effort */ }
+  }
+
   // Persist the full localStorage key->value map to MongoDB (debounced by caller).
   function persist(data) {
     return fetch(API + '/api/data', {
@@ -21,6 +41,7 @@
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ data: data || {} }),
     }).then(function (r) {
+      if (r.status === 401) { warnSessionExpired(); return { ok: false, error: 'Session expired' }; }
       return r.json().catch(function () { return { ok: r.ok }; });
     }).catch(function (e) {
       return { ok: false, error: String(e) };

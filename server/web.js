@@ -19,7 +19,10 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 // Many home/ISP routers can't resolve mongodb+srv:// SRV records; force public DNS.
-try { require('dns').setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']); } catch (e) { /* ignore */ }
+// Skip on Vercel/AWS: the platform resolver is faster and always SRV-capable.
+if (!process.env.VERCEL) {
+  try { require('dns').setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']); } catch (e) { /* ignore */ }
+}
 
 const express = require('express');
 const fs = require('fs');
@@ -114,15 +117,16 @@ async function serveIndex(req, res) {
   try { html = fs.readFileSync(INDEX_FILE, 'utf8'); }
   catch (e) { return res.status(500).type('text').send('renderer/index.html not found'); }
 
-  // Fetch all four datasets CONCURRENTLY — one wall-clock round-trip instead of four
+  // Fetch all five queries CONCURRENTLY — one wall-clock round-trip instead of
   // serial ones, so the shell starts streaming sooner. Each query falls back
   // independently (.catch), preserving the per-dataset failure tolerance the previous
   // sequential try/catches had: a slow/unreachable query blanks only its own data.
-  const [appRes, deptRes, staffRes, qualRes] = await Promise.all([
+  const [appRes, deptRes, staffRes, qualRes, scopeRes] = await Promise.all([
     getAppData().catch(() => null),           // DB unreachable -> empty snapshot
     getDepartments().catch(() => []),         // /api/departments reports the error
     getStaff().catch(() => []),
     getQuality().catch(() => []),
+    (req.user && req.user.sub) ? dataCollection.getUserScope(req.user.sub).catch(() => null) : null,
   ]);
   let snap = (appRes && appRes.data) || {};
   let depts = deptRes || [], staff = staffRes || [], quality = qualRes || [];
@@ -131,11 +135,11 @@ async function serveIndex(req, res) {
   // ONE canonical name everywhere. Reference data only — safe for every role.
   const deptMap = deptmap.fromArrays(deptRes || [], qualRes || []);
 
-  // Resolve the signed-in user's scope. A "collector" gets a DATA-LIMITED view:
-  // only their assigned departments + quality areas are injected (no staff / shared
-  // app-state blob), so the SAME app shows each user only their own data.
-  let scopeUser = null;
-  try { if (req.user && req.user.sub) scopeUser = await dataCollection.getUserScope(req.user.sub); } catch (e) {}
+  // Resolve the signed-in user's scope (fetched above, in parallel with the data).
+  // A "collector" gets a DATA-LIMITED view: only their assigned departments +
+  // quality areas are injected (no staff / shared app-state blob), so the SAME app
+  // shows each user only their own data.
+  let scopeUser = scopeRes || null;
   if (scopeUser && scopeUser.role === 'collector') {
     const da = scopeUser.departments || [], qa = scopeUser.qualityAreas || [];
     depts = depts.filter((d) => da.includes(d.id));
@@ -225,6 +229,7 @@ function loginPage(opts) {
     + '<meta charset="UTF-8"/>\n'
     + '<meta name="viewport" content="width=device-width, initial-scale=1.0"/>\n'
     + '<title>Sign in - UNICO Statistics Suite</title>\n'
+    + '<link rel="icon" type="image/svg+xml" href="/unico/logo-mark.svg"/>\n'
     + '<link rel="stylesheet" href="/vendor/fonts/ibm-plex.css"/>\n'
     + '<style>\n'
     + '*{box-sizing:border-box}\n'
@@ -308,6 +313,13 @@ app.post('/login', async function (req, res) {
 app.get('/logout', function (req, res) {
   session.clearSession(res);
   res.redirect(302, '/login');
+});
+
+// Some browsers/tools still request /favicon.ico blindly; point them at the logo
+// (both pages also declare it via <link rel="icon">) instead of 404ing.
+app.get('/favicon.ico', function (req, res) {
+  res.set('Cache-Control', 'public, max-age=604800');
+  res.redirect(302, '/unico/logo-mark.svg');
 });
 
 app.get('/', session.requirePage, serveIndex);

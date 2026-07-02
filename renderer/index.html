@@ -4,12 +4,39 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>UNICO Healthcare — Statistics Suite</title>
+<link rel="icon" type="image/svg+xml" href="unico/logo-mark.svg"/>
 <!-- Offline IBM Plex fonts (vendored locally, no internet) -->
 <link rel="stylesheet" href="vendor/fonts/ibm-plex.css"/>
 <link rel="stylesheet" href="unico/theme.css"/>
+<style>
+/* Boot splash — visible from the first byte of HTML until React mounts (its first
+   render replaces #root's children). Styled inline so it needs no other asset. */
+#boot-splash{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:14px;background:#eef2f7;z-index:9999;
+  font-family:"IBM Plex Sans",system-ui,"Segoe UI",sans-serif}
+#boot-splash img{height:40px;opacity:.92}
+#boot-splash .spin{width:26px;height:26px;border-radius:50%;
+  border:3px solid rgba(39,168,219,.25);border-top-color:#27a8db;
+  animation:unico-spin .8s linear infinite}
+#boot-splash .msg{font-size:12.5px;font-weight:600;color:#5b6b80;letter-spacing:.2px}
+@keyframes unico-spin{to{transform:rotate(360deg)}}
+</style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <div id="boot-splash">
+    <img src="unico/logo.svg" alt="UNICO Healthcare"/>
+    <div class="spin"></div>
+    <div class="msg" id="boot-splash-msg">Loading the Statistics Suite&hellip;</div>
+  </div>
+</div>
+<script>
+// If the app hasn't mounted after a while, tell the user instead of spinning forever.
+setTimeout(function(){
+  var m = document.getElementById('boot-splash-msg');
+  if (m) m.textContent = 'Still loading… a slow connection can take a moment. If nothing appears, refresh the page.';
+}, 15000);
+</script>
 <!-- Off-screen render target for PDF/print export (Reports). Only this node is
      shown under @media print; #root is hidden. See theme.css + reports.jsx. -->
 <div id="pdf-root"></div>

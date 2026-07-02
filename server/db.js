@@ -9,7 +9,10 @@ const bcrypt = require('bcryptjs');
 // Many ISP/home-router DNS resolvers can't perform the SRV lookups that
 // mongodb+srv:// needs (the classic "querySrv ECONNREFUSED" error). Force a
 // public DNS for the driver's SRV/TXT resolution so Atlas works anywhere.
-try { require('dns').setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']); } catch (e) { /* ignore */ }
+// Skip on Vercel/AWS: the platform resolver is faster and always SRV-capable.
+if (!process.env.VERCEL) {
+  try { require('dns').setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']); } catch (e) { /* ignore */ }
+}
 
 let _client = null, _users = null;
 let _memUsers = null, _memApp = { data: {}, updatedAt: 0 };
