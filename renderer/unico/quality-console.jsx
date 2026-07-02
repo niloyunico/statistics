@@ -1195,10 +1195,18 @@ function qcDeptKpis(d, months){
   const st=deptStat(d, months);
   const inds=(d.indicators||[]);
   const breaches=st.breach;
+  const reported=(st.ok+st.breach)>0;
   let latest='—', latestStatus='na';
   for(let i=months.length-1;i>=0;i--){ const m=months[i];
     const rep=inds.some(ind=>monthStatus(ind,m[0])!=='na');
     if(rep){ latest=m[1]; latestStatus=inds.some(ind=>monthStatus(ind,m[0])==='breach')?'breach':'ok'; break; } }
+  // A fully-unreported period must not read as a triumphant "100% · 0 breaches".
+  if(!reported) return [
+    ['Zero-Defect %', '—',                 P.faint, 'no data reported this period'],
+    ['Breaches',      '—',                 P.faint, 'no data reported this period'],
+    ['Indicators',    String(inds.length), P.violet, 'reporting quality KPIs'],
+    ['Latest',        '—',                 P.faint, 'no reported month in this period'],
+  ];
   return [
     ['Zero-Defect %', st.rate+'%',         st.rate>=90?P.green:st.rate>=70?P.amber:P.rose, st.ok+' on benchmark · '+breaches+' breaches'],
     ['Breaches',      String(breaches),    breaches>0?P.rose:P.green, 'indicator-months off benchmark'],
@@ -1682,8 +1690,12 @@ function QCReportBuilder({depts}){
   // Flip one toggle; a manual change means the config is no longer a named preset.
   const setSec=(k,v)=>{ setSections(s=>({...s,[k]:v})); setActiveTemplate('custom'); };
   // Apply a full preset (coercing the 1/0 shorthand to real booleans) + its report type.
+  // Templates cover the WHOLE selection: also lift a leftover Custom indicator filter —
+  // a hidden 6-indicator narrowing made "Board Report" show 3 departments after the
+  // user had selected all 18 (indSel stays intact for switching back to Custom).
   const applyTemplate=(id)=>{ const t=QC_TEMPLATES[id]; if(!t) return;
     setSections(s=>{ const o={...s}; Object.keys(t.sec).forEach(k=>o[k]=!!t.sec[k]); return o; });
+    setIndMode('all');
     setReportType(t.type); setPageIdx(0); setActiveTemplate(id); };
   // ---- saved report formats: capture/restore EVERY control incl. indicator selection ----
   const snapshot=()=>({fy,reportType,period,chartStyles,hdrTitle,hdrSub,orgName,showLogo,confidential,footerNote,pageSize,orient,selectedDepts,sections,compareBaseline,sig,indMode,indSel:[...indSel]});
@@ -1910,7 +1922,10 @@ function QCReportBuilder({depts}){
     // Never dereference an undefined department — degrade to null instead of crashing.
     if(!page || !page.dept) return null;
     const d=page.dept; const tone=qcTone(d);
-    const {status,color}=qcDeptStatus(d, pMonths);
+    const {status,color,st}=qcDeptStatus(d, pMonths);
+    // A dept with nothing reported must show "No data", not an earned-looking "Excellent".
+    const reported=(st.ok+st.breach)>0;
+    const chipStatus=reported?status:'No data', chipColor=reported?color:P.faint;
     const detailed=page.kind==='detail';
     const chartInd=detailed?page.ind:qcLeadIndicator(d, pMonths);
     const leadInd=qcLeadIndicator(d, pMonths);
@@ -1934,20 +1949,26 @@ function QCReportBuilder({depts}){
             <div style={{fontWeight:700,fontSize:15,color:P.ink}}>{d.name}{detailed&&page.ind?(' · '+page.ind.name):''}</div>
             <span className="tag">{secLabel}</span>
             <span style={{flex:1}}/>
-            <span style={{background:color+'1c',color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11.5}}>{status}</span>
+            <span style={{background:chipColor+'1c',color:chipColor,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11.5}}>{chipStatus}</span>
           </div>
           {sections.kpis&&<KpiCards cards={cards} tone={tone}/>}
           {/* Render the selected chart(s) whenever the lead indicator has ANY reported month
-              (zero-defect data still charts — flat bars against the benchmark). Only fall
-              back to a status heatmap when there is no reported data at all. */}
+              (zero-defect data still charts — flat bars against the benchmark). When nothing
+              is chartable, do NOT render the status-heatmap fallback if the month table is on
+              — two near-identical dot grids on one page read as a duplicated table. Instead
+              say where the data actually lives (other reporting years). */}
           {sections.chart&&(() => {
             const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r=>r.has);
-            if(!chartable) return (
-              <div style={{margin:'4px 0 8px'}}>
-                <div style={uSub}>Status heatmap · {chartInd?'no values to chart':'no data'}</div>
-                <QCHeatLegend/><QCHeatGrid d={d} months={pMonths}/>
-              </div>
-            );
+            if(!chartable){
+              const otherYears=[...dataFySet([d])].filter(y=>y!==fy).sort((a,b)=>b-a);
+              return (
+                <div style={{margin:'4px 0 8px'}}>
+                  <div style={uSub}>{chartInd?'No reported values to chart for '+rangeLabel:'No data'}</div>
+                  {!reported&&otherYears.length>0&&<div style={{fontSize:11,color:'#9a6b00',fontWeight:600,background:'#fdf7ea',border:'1px solid #f3ddb5',borderRadius:7,padding:'6px 10px',margin:'4px 0 6px'}}>This department has recorded data in {otherYears.map(fyLabelOf).join(', ')} — switch the reporting year above to include it.</div>}
+                  {!sections.table&&<><QCHeatLegend/><QCHeatGrid d={d} months={pMonths}/></>}
+                </div>
+              );
+            }
             return chartStyles.map((cs)=>(
               <div key={cs} style={{margin:'4px 0 8px'}}>
                 {chartStyles.length>1&&<div style={uSub}>{QC_CHART_STYLE_LABEL[cs]||cs}</div>}
@@ -2202,7 +2223,10 @@ function QCReportBuilder({depts}){
   /* ---- structural pages (cover / TOC / appendix / refs) — toggle-driven ---- */
   function CoverPage({n,total}){
     const agg=qcAggStat(chosen, pMonths);
-    const tone=agg.rate>=90?P.green:agg.rate>=70?P.amber:P.rose;
+    const tone=!agg.reported?P.faint:agg.rate>=90?P.green:agg.rate>=70?P.amber:P.rose;
+    // When the Custom indicator filter narrows the report, SAY so on the cover —
+    // "3 departments" after selecting all 18 looked like a broken, non-dynamic page.
+    const narrowed=indMode==='custom'&&chosenRaw.length!==chosen.length;
     return (
       <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
@@ -2213,13 +2237,15 @@ function QCReportBuilder({depts}){
           {hdrSub&&<div style={{fontSize:14,color:P.muted}}>{hdrSub}</div>}
           <div style={{fontSize:14,color:P.ink2,marginTop:10,fontWeight:600}}>{rangeLabel}</div>
           <div style={{display:'flex',gap:26,marginTop:34}}>
-            {[['Departments',String(agg.depts),P.blue],['Indicators',String(agg.inds),P.violet],['Zero-defect',agg.rate+'%',tone],['Breaches',String(agg.breach),agg.breach?P.rose:P.green]].map(c=>(
+            {[['Departments',String(agg.depts),P.blue],['Indicators',String(agg.inds),P.violet],['Zero-defect',agg.reported?agg.rate+'%':'—',tone],['Breaches',agg.reported?String(agg.breach):'—',!agg.reported?P.faint:agg.breach?P.rose:P.green]].map(c=>(
               <div key={c[0]} style={{textAlign:'center'}}>
                 <div style={{fontFamily:MONO,fontSize:26,fontWeight:700,color:c[2]}}>{c[1]}</div>
                 <div style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:.4,marginTop:2}}>{c[0]}</div>
               </div>
             ))}
           </div>
+          {!agg.reported&&<div style={{marginTop:14,fontSize:11,color:P.faint}}>No data was reported for this period.</div>}
+          {narrowed&&<div style={{marginTop:14,fontSize:10.5,color:P.amber,fontWeight:600,border:'1px solid #f3ddb5',background:'#fdf7ea',borderRadius:6,padding:'5px 12px'}}>Custom indicator selection active — {chosen.length} of {chosenRaw.length} selected departments included. Switch Indicators to “All” for the full report.</div>}
           {confidential&&<div style={{marginTop:34,fontSize:10.5,color:P.rose,fontWeight:700,textTransform:'uppercase',letterSpacing:1,border:'1px solid #f1c6cd',borderRadius:6,padding:'6px 14px'}}>Confidential — for authorised recipients only</div>}
           <div style={{fontSize:10,color:P.faint,marginTop:20}}>Generated {new Date().toLocaleDateString()}</div>
         </div>
@@ -2644,7 +2670,7 @@ function QCReportBuilder({depts}){
   // just scheduled, so the one-click "Generate NQI Report" button silently did NOTHING.
   React.useEffect(()=>{ if(!pendingExport) return; const f=pendingExport;
     const t=setTimeout(()=>{ setPendingExport(null); if(f==='pdf'){ doExportPDF(); } else { qcExportBuilder(f); } }, 90); return ()=>clearTimeout(t); },[pendingExport]);
-  const generateFullReport=(fmt,tpl)=>{ setSelectedDepts(allKeys); setPeriod({mode:'all'}); applyTemplate(tpl||'board'); setPendingExport(fmt||'pdf'); };
+  const generateFullReport=(fmt,tpl)=>{ setSelectedDepts(allKeys); setIndMode('all'); setPeriod({mode:'all'}); applyTemplate(tpl||'board'); setPendingExport(fmt||'pdf'); };
 
   const pdfRoot = typeof document!=='undefined' ? document.getElementById('pdf-root') : null;
   const chevStyle={width:28,height:28,borderRadius:7,border:'1px solid '+P.line,background:'#fff',display:'grid',placeItems:'center',color:P.muted,cursor:'pointer'};

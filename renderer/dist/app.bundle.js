@@ -17325,6 +17325,7 @@ function qcDeptKpis(d, months) {
   const st = deptStat(d, months);
   const inds = d.indicators || [];
   const breaches = st.breach;
+  const reported = st.ok + st.breach > 0;
   let latest = '—',
     latestStatus = 'na';
   for (let i = months.length - 1; i >= 0; i--) {
@@ -17336,6 +17337,7 @@ function qcDeptKpis(d, months) {
       break;
     }
   }
+  if (!reported) return [['Zero-Defect %', '—', P.faint, 'no data reported this period'], ['Breaches', '—', P.faint, 'no data reported this period'], ['Indicators', String(inds.length), P.violet, 'reporting quality KPIs'], ['Latest', '—', P.faint, 'no reported month in this period']];
   return [['Zero-Defect %', st.rate + '%', st.rate >= 90 ? P.green : st.rate >= 70 ? P.amber : P.rose, st.ok + ' on benchmark · ' + breaches + ' breaches'], ['Breaches', String(breaches), breaches > 0 ? P.rose : P.green, 'indicator-months off benchmark'], ['Indicators', String(inds.length), P.violet, 'reporting quality KPIs'], ['Latest', latest.split(' ')[0] + ' ' + (latestStatus === 'breach' ? '✕' : latestStatus === 'ok' ? '✓' : '·'), statusColorFor(latestStatus === 'breach' ? 'Needs Improvement' : latestStatus === 'ok' ? 'Excellent' : ''), 'most recent reported month']];
 }
 function qcIndKpis(ind, months) {
@@ -18494,6 +18496,7 @@ function QCReportBuilder({
       Object.keys(t.sec).forEach(k => o[k] = !!t.sec[k]);
       return o;
     });
+    setIndMode('all');
     setReportType(t.type);
     setPageIdx(0);
     setActiveTemplate(id);
@@ -19152,8 +19155,12 @@ function QCReportBuilder({
     const tone = qcTone(d);
     const {
       status,
-      color
+      color,
+      st
     } = qcDeptStatus(d, pMonths);
+    const reported = st.ok + st.breach > 0;
+    const chipStatus = reported ? status : 'No data',
+      chipColor = reported ? color : P.faint;
     const detailed = page.kind === 'detail';
     const chartInd = detailed ? page.ind : qcLeadIndicator(d, pMonths);
     const leadInd = qcLeadIndicator(d, pMonths);
@@ -19224,28 +19231,42 @@ function QCReportBuilder({
       }
     }), React.createElement("span", {
       style: {
-        background: color + '1c',
-        color,
+        background: chipColor + '1c',
+        color: chipColor,
         padding: '3px 10px',
         borderRadius: 20,
         fontWeight: 700,
         fontSize: 11.5
       }
-    }, status)), sections.kpis && React.createElement(KpiCards, {
+    }, chipStatus)), sections.kpis && React.createElement(KpiCards, {
       cards: cards,
       tone: tone
     }), sections.chart && (() => {
       const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r => r.has);
-      if (!chartable) return React.createElement("div", {
-        style: {
-          margin: '4px 0 8px'
-        }
-      }, React.createElement("div", {
-        style: uSub
-      }, "Status heatmap \xB7 ", chartInd ? 'no values to chart' : 'no data'), React.createElement(QCHeatLegend, null), React.createElement(QCHeatGrid, {
-        d: d,
-        months: pMonths
-      }));
+      if (!chartable) {
+        const otherYears = [...dataFySet([d])].filter(y => y !== fy).sort((a, b) => b - a);
+        return React.createElement("div", {
+          style: {
+            margin: '4px 0 8px'
+          }
+        }, React.createElement("div", {
+          style: uSub
+        }, chartInd ? 'No reported values to chart for ' + rangeLabel : 'No data'), !reported && otherYears.length > 0 && React.createElement("div", {
+          style: {
+            fontSize: 11,
+            color: '#9a6b00',
+            fontWeight: 600,
+            background: '#fdf7ea',
+            border: '1px solid #f3ddb5',
+            borderRadius: 7,
+            padding: '6px 10px',
+            margin: '4px 0 6px'
+          }
+        }, "This department has recorded data in ", otherYears.map(fyLabelOf).join(', '), " \u2014 switch the reporting year above to include it."), !sections.table && React.createElement(React.Fragment, null, React.createElement(QCHeatLegend, null), React.createElement(QCHeatGrid, {
+          d: d,
+          months: pMonths
+        })));
+      }
       return chartStyles.map(cs => React.createElement("div", {
         key: cs,
         style: {
@@ -20045,7 +20066,8 @@ function QCReportBuilder({
     total
   }) {
     const agg = qcAggStat(chosen, pMonths);
-    const tone = agg.rate >= 90 ? P.green : agg.rate >= 70 ? P.amber : P.rose;
+    const tone = !agg.reported ? P.faint : agg.rate >= 90 ? P.green : agg.rate >= 70 ? P.amber : P.rose;
+    const narrowed = indMode === 'custom' && chosenRaw.length !== chosen.length;
     return React.createElement("div", {
       className: "qc-rpage",
       style: {
@@ -20103,7 +20125,7 @@ function QCReportBuilder({
         gap: 26,
         marginTop: 34
       }
-    }, [['Departments', String(agg.depts), P.blue], ['Indicators', String(agg.inds), P.violet], ['Zero-defect', agg.rate + '%', tone], ['Breaches', String(agg.breach), agg.breach ? P.rose : P.green]].map(c => React.createElement("div", {
+    }, [['Departments', String(agg.depts), P.blue], ['Indicators', String(agg.inds), P.violet], ['Zero-defect', agg.reported ? agg.rate + '%' : '—', tone], ['Breaches', agg.reported ? String(agg.breach) : '—', !agg.reported ? P.faint : agg.breach ? P.rose : P.green]].map(c => React.createElement("div", {
       key: c[0],
       style: {
         textAlign: 'center'
@@ -20123,7 +20145,24 @@ function QCReportBuilder({
         letterSpacing: .4,
         marginTop: 2
       }
-    }, c[0])))), confidential && React.createElement("div", {
+    }, c[0])))), !agg.reported && React.createElement("div", {
+      style: {
+        marginTop: 14,
+        fontSize: 11,
+        color: P.faint
+      }
+    }, "No data was reported for this period."), narrowed && React.createElement("div", {
+      style: {
+        marginTop: 14,
+        fontSize: 10.5,
+        color: P.amber,
+        fontWeight: 600,
+        border: '1px solid #f3ddb5',
+        background: '#fdf7ea',
+        borderRadius: 6,
+        padding: '5px 12px'
+      }
+    }, "Custom indicator selection active \u2014 ", chosen.length, " of ", chosenRaw.length, " selected departments included. Switch Indicators to \u201CAll\u201D for the full report."), confidential && React.createElement("div", {
       style: {
         marginTop: 34,
         fontSize: 10.5,
@@ -21232,6 +21271,7 @@ function QCReportBuilder({
   }, [pendingExport]);
   const generateFullReport = (fmt, tpl) => {
     setSelectedDepts(allKeys);
+    setIndMode('all');
     setPeriod({
       mode: 'all'
     });
