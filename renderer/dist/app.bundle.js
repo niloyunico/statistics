@@ -14404,11 +14404,58 @@ function fyOptions(depts) {
   return out;
 }
 function defaultFy(depts) {
-  const s = dataFySet(depts);
-  return s.size ? Math.max(...s) : currentFy();
+  const counts = {};
+  (depts || []).forEach(dep => (dep.indicators || []).forEach(ind => {
+    const scan = obj => {
+      if (obj) Object.keys(obj).forEach(k => {
+        if (obj[k] != null && obj[k] !== '') {
+          const fy = fyOfKey(k);
+          if (fy != null) counts[fy] = (counts[fy] || 0) + 1;
+        }
+      });
+    };
+    scan(ind.months);
+    scan(ind.mNum);
+  }));
+  const yrs = Object.keys(counts).map(Number);
+  if (!yrs.length) return currentFy();
+  return yrs.sort((a, b) => counts[b] - counts[a] || b - a)[0];
 }
 function fyLabelOf(startYear) {
   return 'FY ' + startYear + '–' + String((startYear + 1) % 100).padStart(2, '0');
+}
+const QTAG_FY = ['Q1', 'Q1', 'Q1', 'Q2', 'Q2', 'Q2', 'Q3', 'Q3', 'Q3', 'Q4', 'Q4', 'Q4'];
+function fyAxis(startYear) {
+  return fyMonthsFor(startYear).map((r, i) => [r[0], r[1], QTAG_FY[i]]);
+}
+function qcMonthLabel(key) {
+  const p = String(key || '').split('-');
+  return p[1] ? p[0] + ' 20' + p[1] : String(key || '');
+}
+function QCFyPicker({
+  fy,
+  setFy,
+  depts,
+  style
+}) {
+  return React.createElement("select", {
+    value: fy,
+    onChange: e => setFy(Number(e.target.value)),
+    style: Object.assign({
+      padding: '7px 10px',
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      background: '#fff',
+      color: P.ink,
+      outline: 'none',
+      cursor: 'pointer'
+    }, style || {})
+  }, fyOptions(depts).map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, fyLabelOf(y), y === currentFy() ? ' · current' : '')));
 }
 function qcCanEdit() {
   try {
@@ -14483,12 +14530,14 @@ function deptStat(d, months) {
     rate: ok + breach ? Math.round(ok * 100 / (ok + breach)) : 100
   };
 }
-function hasData(ind) {
-  return MONTHS.some(m => monthRaw(ind, m[0]) != null) || QORDER.some(q => qtrRaw(ind, q) != null);
+function hasData(ind, months) {
+  months = months || MONTHS;
+  return months.some(m => monthRaw(ind, m[0]) != null) || QORDER.some(q => qtrRaw(ind, q) != null);
 }
-function countBreaches(ind) {
+function countBreaches(ind, months) {
+  months = months || MONTHS;
   let n = 0;
-  MONTHS.forEach(m => {
+  months.forEach(m => {
     if (monthStatus(ind, m[0]) === 'breach') n++;
   });
   return n;
@@ -15919,12 +15968,14 @@ function QCIndEdit({
 function QCScorecard({
   depts
 }) {
+  const [fy, setFy] = useState(() => defaultFy(depts));
+  const MONTHS = fyAxis(fy);
   const rows = useMemo(() => {
     return (depts || []).map(d => {
-      const st = deptStat(d);
+      const st = deptStat(d, MONTHS);
       const inds = d.indicators || [];
-      const withData = inds.filter(i => hasData(i)).length;
-      const breaches = inds.reduce((a, i) => a + countBreaches(i), 0);
+      const withData = inds.filter(i => hasData(i, MONTHS)).length;
+      const breaches = inds.reduce((a, i) => a + countBreaches(i, MONTHS), 0);
       const rep = st.ok + st.breach;
       const brRate = rep ? st.breach / rep : 0;
       const status = d.status || (st.breach === 0 ? 'Excellent' : brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Very Good');
@@ -15943,7 +15994,7 @@ function QCScorecard({
         barColor: st.rate >= 95 ? P.green : st.rate >= 85 ? P.teal : st.rate >= 70 ? P.amber : P.rose
       };
     }).sort((a, b) => b.rate - a.rate);
-  }, [depts]);
+  }, [depts, fy]);
   const th = {
     padding: '10px 12px',
     fontSize: '10.5px',
@@ -15997,7 +16048,15 @@ function QCScorecard({
       color: P.muted,
       marginTop: '2px'
     }
-  }, "Zero-defect performance by department, ranked best to worst"))), React.createElement("div", {
+  }, "Zero-defect performance by department \xB7 ", fyLabelOf(fy))), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement(QCFyPicker, {
+    fy: fy,
+    setFy: setFy,
+    depts: depts
+  })), React.createElement("div", {
     style: {
       background: '#fff',
       border: '1px solid ' + P.line,
@@ -16138,6 +16197,8 @@ function QCTrends({
 }) {
   const [dept, setDept] = useState(depts[0] && depts[0].key);
   const [indId, setIndId] = useState('');
+  const [fy, setFy] = useState(() => defaultFy(depts));
+  const MONTHS = fyAxis(fy);
   const td = useMemo(() => depts.find(x => x.key === dept) || depts[0], [depts, dept]);
   const tInds = td && td.indicators || [];
   let tIndId = indId;
@@ -16174,7 +16235,7 @@ function QCTrends({
       reported: nums.length,
       bars
     };
-  }, [tInd]);
+  }, [tInd, fy]);
   const selStyle = {
     padding: '8px 11px',
     border: '1px solid ' + P.line,
@@ -16241,7 +16302,14 @@ function QCTrends({
       color: P.muted,
       marginTop: 2
     }
-  }, "12-month trend for a single indicator, against its benchmark")), React.createElement("select", {
+  }, "12-month trend for a single indicator, against its benchmark \xB7 ", fyLabelOf(fy))), React.createElement(QCFyPicker, {
+    fy: fy,
+    setFy: setFy,
+    depts: depts,
+    style: {
+      padding: '8px 11px'
+    }
+  }), React.createElement("select", {
     value: dept || '',
     onChange: e => {
       setDept(e.target.value);
@@ -16417,12 +16485,12 @@ function qcIncidentsOf(d) {
   const out = [];
   (d.indicators || []).forEach(ind => {
     const incs = ind.incidents || {};
-    MONTHS.forEach(m => {
-      const arr = incs[m[0]];
+    Object.keys(incs).forEach(mk => {
+      const arr = incs[mk];
       if (Array.isArray(arr)) arr.forEach(x => {
         if (x && (x.details || x.finding || x.corrective || x.preventive || x.patientName || x.uhid)) out.push({
           ind: ind.name,
-          month: m[1],
+          month: qcMonthLabel(mk),
           x: x
         });
       });
@@ -16432,7 +16500,9 @@ function qcIncidentsOf(d) {
 }
 function qcReportHTML(depts) {
   const date = new Date().toISOString().slice(0, 10);
-  let body = '<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Quality Indicator Report</h1>' + '<div style="font-family:Calibri;color:#555;margin-bottom:12px">FY 2025-26 · Jun 2025 - May 2026 · generated ' + date + ' · Confidential</div>';
+  const fy = defaultFy(depts),
+    MONTHS = fyAxis(fy);
+  let body = '<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Quality Indicator Report</h1>' + '<div style="font-family:Calibri;color:#555;margin-bottom:12px">' + fyLabelOf(fy) + ' · ' + MONTHS[0][1] + ' - ' + MONTHS[11][1] + ' · generated ' + date + ' · Confidential</div>';
   depts.forEach(d => {
     const st = deptStat(d);
     body += '<h2 style="font-family:Calibri;color:#16202e;margin:16px 0 3px">' + qcEsc(d.name) + '</h2>' + '<div style="font-family:Calibri;color:#555;margin-bottom:6px">Zero-defect: <b>' + st.rate + '%</b> · Breaches: <b style="color:#d23a52">' + st.breach + '</b> · Indicators: ' + (d.indicators || []).length + '</div>';
@@ -16464,6 +16534,7 @@ function qcReportHTML(depts) {
 function qcExport(depts, fmt) {
   const date = new Date().toISOString().slice(0, 10);
   const base = 'UNICO-Quality-Report-' + date;
+  const MONTHS = fyAxis(defaultFy(depts));
   if (fmt === 'csv') {
     const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(MONTHS.map(m => m[1]))];
     depts.forEach(d => (d.indicators || []).forEach(ind => {
@@ -16610,10 +16681,12 @@ function QCMonthBars({
 }
 function QCSpark({
   ind,
+  months,
   w = 92,
   h = 24
 }) {
-  const vals = MONTHS.map(m => monthRaw(ind, m[0]));
+  months = months || MONTHS;
+  const vals = months.map(m => monthRaw(ind, m[0]));
   const nums = vals.filter(v => v != null);
   if (!nums.length) return React.createElement("span", {
     style: {
@@ -16626,11 +16699,11 @@ function QCSpark({
     mx = Math.max(...nums),
     rng = mx - mn || 1;
   const pts = vals.map((v, i) => ({
-    x: i / (MONTHS.length - 1) * w,
+    x: i / (months.length - 1) * w,
     y: v == null ? null : h - 2 - (v - mn) / rng * (h - 4)
   }));
   const path = pts.filter(p => p.y != null).map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
-  const breach = MONTHS.some(m => monthStatus(ind, m[0]) === 'breach');
+  const breach = months.some(m => monthStatus(ind, m[0]) === 'breach');
   const col = breach ? P.rose : P.green;
   return React.createElement("svg", {
     width: w,
@@ -18684,6 +18757,7 @@ function QCReportBuilder({
       }
     }, React.createElement(QCSpark, {
       ind: ind,
+      months: MONTHS,
       w: 52,
       h: 20
     }))))));
@@ -21677,6 +21751,8 @@ function QCIncidents({
 }) {
   const [dept, setDept] = useState('all');
   const [sel, setSel] = useState(null);
+  const [fy, setFy] = useState(() => defaultFy(depts));
+  const MONTHS = fyAxis(fy);
   const list = useMemo(() => {
     const out = [];
     (depts || []).forEach(d => {
@@ -21724,7 +21800,7 @@ function QCIncidents({
       });
     });
     return out;
-  }, [depts, dept]);
+  }, [depts, dept, fy]);
   const rows = list.slice(0, 150);
   const empty = list.length === 0;
   const options = [{
@@ -21793,7 +21869,11 @@ function QCIncidents({
     style: {
       color: P.rose
     }
-  }, list.length), " benchmark breaches flagged this year \u2014 each needs review")), React.createElement("select", {
+  }, list.length), " benchmark breaches flagged in ", fyLabelOf(fy), " \u2014 each needs review")), React.createElement(QCFyPicker, {
+    fy: fy,
+    setFy: setFy,
+    depts: depts
+  }), React.createElement("select", {
     value: dept,
     onChange: e => setDept(e.target.value),
     style: {
@@ -22017,7 +22097,7 @@ function IncidentReport({
       status: qtrStatus(ind, q),
       here: q === rec.quarter
     };
-  }) : MONTHS.map(m => {
+  }) : fyAxis(fyOfKey(rec.monthKey) != null ? fyOfKey(rec.monthKey) : currentFy()).map(m => {
     const raw = monthRaw(ind, m[0]);
     return {
       key: m[0],
@@ -22354,15 +22434,29 @@ function QCActionPlans({
       localStorage.setItem('unico_capa_v1', JSON.stringify(capa));
     } catch (e) {}
   }, [capa]);
+  const [fy, setFy] = useState(() => defaultFy(depts));
+  const MONTHS = fyAxis(fy);
   const plans = useMemo(() => {
     const out = [];
     (depts || []).forEach(d => (d.indicators || []).forEach(ind => {
-      let lastQ = null;
-      QORDER.forEach(Q => {
-        if (qtrRaw(ind, Q) != null) lastQ = Q;
-      });
-      const lastBreach = lastQ != null && qtrStatus(ind, lastQ) === 'breach';
-      const nBreach = countBreaches(ind);
+      let lastBreach = false,
+        sawMonthly = false;
+      for (let i = MONTHS.length - 1; i >= 0; i--) {
+        const st = monthStatus(ind, MONTHS[i][0]);
+        if (st !== 'na') {
+          sawMonthly = true;
+          lastBreach = st === 'breach';
+          break;
+        }
+      }
+      if (!sawMonthly) {
+        let lastQ = null;
+        QORDER.forEach(Q => {
+          if (qtrRaw(ind, Q) != null) lastQ = Q;
+        });
+        lastBreach = lastQ != null && qtrStatus(ind, lastQ) === 'breach';
+      }
+      const nBreach = countBreaches(ind, MONTHS);
       if (!(lastBreach || nBreach >= 3)) return;
       const key = d.key + '/' + ind.id;
       out.push({
@@ -22376,7 +22470,7 @@ function QCActionPlans({
       });
     }));
     return out;
-  }, [depts, capa]);
+  }, [depts, capa, fy]);
   const cycle = (key, status) => {
     const order = ['Open', 'In Progress', 'Closed'];
     const next = order[(order.indexOf(status) + 1) % 3];
@@ -22456,7 +22550,15 @@ function QCActionPlans({
       color: P.muted,
       marginTop: 2
     }
-  }, "Corrective & preventive actions for breached indicators \u2014 click status to advance"))), React.createElement("div", {
+  }, "Corrective & preventive actions for breached indicators \xB7 ", fyLabelOf(fy), " \u2014 click status to advance")), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement(QCFyPicker, {
+    fy: fy,
+    setFy: setFy,
+    depts: depts
+  })), React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))',
@@ -22588,6 +22690,8 @@ function QCAdmin({
   const [copyOpen, setCopyOpen] = useState(false);
   const [copyT, setCopyT] = useState({});
   const [expand, setExpand] = useState('');
+  const [entryFy, setEntryFy] = useState(() => defaultFy(allDepts));
+  const MONTHS = fyAxis(entryFy);
   const CATS = ['Healthcare-Associated Infection', 'Infection Prevention', 'Patient Safety', 'Clinical Outcomes', 'Staff Safety', 'Staff Competency', 'Activity / Volume', 'Medication Safety'];
   const FREQ = ['Monthly', 'Quarterly', 'Annually', 'Bi-annually'];
   const FORMULAS = [['direct', 'Direct value — enter the number as-is'], ['count', 'Count — a running tally (numerator only)'], ['avg', 'Average (mean) — numerator ÷ denominator (e.g. avg length of stay)'], ['rate1000', 'Rate per 1000 — numerator ÷ denominator × 1000'], ['rate100', 'Rate per 100 — numerator ÷ denominator × 100'], ['pct', 'Percentage — numerator ÷ denominator × 100']];
@@ -24339,11 +24443,36 @@ function QCAdmin({
     }
   })))), tab === 'values' && React.createElement("div", null, React.createElement("div", {
     style: {
-      fontSize: 11.5,
-      color: P.muted,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
       marginBottom: 11
     }
-  }, needsDen ? 'Enter ' + (selInd.numLabel || 'numerator') + ' ÷ ' + (selInd.denLabel || 'denominator') + ' for each month — the value computes from the formula and rolls up into quarters automatically.' : 'Enter each month’s value (Jun 2025 – May 2026). Leave a month blank to mark it not reported; quarters roll up automatically.'), React.createElement("div", {
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted,
+      flex: 1,
+      minWidth: 220
+    }
+  }, needsDen ? 'Enter ' + (selInd.numLabel || 'numerator') + ' ÷ ' + (selInd.denLabel || 'denominator') + ' for each month — the value computes from the formula and rolls up into quarters automatically.' : 'Enter each month’s value (' + MONTHS[0][1] + ' – ' + MONTHS[11][1] + '). Leave a month blank to mark it not reported; quarters roll up automatically.'), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      fontWeight: 600,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Reporting year"), React.createElement(QCFyPicker, {
+    fy: entryFy,
+    setFy: setEntryFy,
+    depts: allDepts,
+    style: {
+      padding: '6px 9px',
+      fontSize: 12
+    }
+  })), React.createElement("div", {
     style: {
       overflowX: 'auto',
       border: '1px solid #e8edf3',
@@ -25839,7 +25968,7 @@ function QualityConsole({
       background: '#3ddc97',
       boxShadow: '0 0 0 3px rgba(61,220,151,.18)'
     }
-  }), "FY 2025\u201326"), React.createElement("div", {
+  }), fyLabelOf(defaultFy(depts))), React.createElement("div", {
     style: {
       width: 34,
       height: 34,
