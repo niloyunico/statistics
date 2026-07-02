@@ -1983,32 +1983,35 @@ function QCReportBuilder({depts}){
           {lead&&sections.benchmarkCompare&&<QCBenchmarkCompare chosen={chosen} months={pMonths}/>}
           <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:10}}>
             <span style={{width:30,height:30,borderRadius:8,background:P.blue+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={P.blue}/></span>
-            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>{m[1]} · All-department status</div>
+            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>Nursing Quality Indicators · {m[1]}</div>
             <span style={{flex:1}}/><span className="tag">{chosen.length} dept · {names.length} indicators</span>
           </div>
           <QCHeatLegend/>
           <div style={{overflowX:'auto'}}>
             <table style={{borderCollapse:'collapse',width:'100%',maxWidth:'100%',tableLayout:'fixed',fontSize:9.5}}>
               <thead><tr>
-                <th style={{...thl,width:140}}>Quality Indicator</th>
-                {chosen.map(d=><th key={d.key} style={{...thc,minWidth:44}}>{d.name}</th>)}
-                <th style={{...thc,width:40,color:P.ink2}}>Total</th>
+                <th style={{...thl,width:118}}>Quality Indicator</th>
+                <th style={{...thc,width:42,color:P.ink2}}>Total Incidence</th>
+                <th style={{...thl,width:66,textTransform:'none'}}>Benchmark</th>
+                {chosen.map(d=><th key={d.key} style={{...thc,minWidth:40}}>{d.name}</th>)}
               </tr></thead>
               <tbody>{names.length===0
-                ? <tr><td colSpan={chosen.length+2} style={{padding:14,textAlign:'center',color:P.faint}}>No indicators for the selected departments.</td></tr>
+                ? <tr><td colSpan={chosen.length+3} style={{padding:14,textAlign:'center',color:P.faint}}>No indicators for the selected departments.</td></tr>
                 : names.map(name=>{
-                let tot=0, any=false;
+                let tot=0, any=false, bench='';
                 const cells=chosen.map(d=>{ const ind=findInd(d,name); if(!ind) return {none:true};
+                  if(!bench) bench=benchExpr(ind);
                   let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); const s=qStatus(ind,v);
                   if(v!=null){ any=true; if(!isPctInd(ind)) tot+=Number(v)||0; }
                   return {ind,v,s}; });
                 return (
                   <tr key={name} style={{borderBottom:'1px solid '+P.line2}}>
                     <td style={{padding:'5px 8px',textAlign:'left',fontWeight:600,color:P.ink,wordBreak:'break-word'}}>{name}</td>
+                    <td style={{textAlign:'center',fontFamily:MONO,fontWeight:700,color:tot>0?P.rose:P.ink2}}>{any?tot:'—'}</td>
+                    <td style={{padding:'4px 8px',color:P.ink2,fontSize:9}}>{bench||'—'}</td>
                     {cells.map((c,i)=> c.none
                       ? <td key={i} style={{textAlign:'center',color:P.faint,fontSize:9}}>—</td>
                       : <td key={i} style={{textAlign:'center',padding:'3px 2px'}}><span title={name+' · '+chosen[i].name+' · '+(c.s==='na'?'not reported':c.s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:34,height:22,borderRadius:5,...qcHeatColors(c.s),fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{c.s==='na'?'·':fmtVal(c.ind,c.v)}</span></td>)}
-                    <td style={{textAlign:'center',fontFamily:MONO,fontWeight:700,color:tot>0?P.rose:P.ink2}}>{any?tot:'—'}</td>
                   </tr>
                 );
               })}</tbody>

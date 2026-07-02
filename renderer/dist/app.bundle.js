@@ -19454,7 +19454,7 @@ function QCReportBuilder({
         fontSize: 15,
         color: P.ink
       }
-    }, m[1], " \xB7 All-department status"), React.createElement("span", {
+    }, "Nursing Quality Indicators \xB7 ", m[1]), React.createElement("span", {
       style: {
         flex: 1
       }
@@ -19475,22 +19475,28 @@ function QCReportBuilder({
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
       style: {
         ...thl,
-        width: 140
+        width: 118
       }
-    }, "Quality Indicator"), chosen.map(d => React.createElement("th", {
+    }, "Quality Indicator"), React.createElement("th", {
+      style: {
+        ...thc,
+        width: 42,
+        color: P.ink2
+      }
+    }, "Total Incidence"), React.createElement("th", {
+      style: {
+        ...thl,
+        width: 66,
+        textTransform: 'none'
+      }
+    }, "Benchmark"), chosen.map(d => React.createElement("th", {
       key: d.key,
       style: {
         ...thc,
-        minWidth: 44
+        minWidth: 40
       }
-    }, d.name)), React.createElement("th", {
-      style: {
-        ...thc,
-        width: 40,
-        color: P.ink2
-      }
-    }, "Total"))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
-      colSpan: chosen.length + 2,
+    }, d.name)))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+      colSpan: chosen.length + 3,
       style: {
         padding: 14,
         textAlign: 'center',
@@ -19498,12 +19504,14 @@ function QCReportBuilder({
       }
     }, "No indicators for the selected departments.")) : names.map(name => {
       let tot = 0,
-        any = false;
+        any = false,
+        bench = '';
       const cells = chosen.map(d => {
         const ind = findInd(d, name);
         if (!ind) return {
           none: true
         };
+        if (!bench) bench = benchExpr(ind);
         let v = monthRaw(ind, m[0]);
         if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
         const s = qStatus(ind, v);
@@ -19530,7 +19538,20 @@ function QCReportBuilder({
           color: P.ink,
           wordBreak: 'break-word'
         }
-      }, name), cells.map((c, i) => c.none ? React.createElement("td", {
+      }, name), React.createElement("td", {
+        style: {
+          textAlign: 'center',
+          fontFamily: MONO,
+          fontWeight: 700,
+          color: tot > 0 ? P.rose : P.ink2
+        }
+      }, any ? tot : '—'), React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          color: P.ink2,
+          fontSize: 9
+        }
+      }, bench || '—'), cells.map((c, i) => c.none ? React.createElement("td", {
         key: i,
         style: {
           textAlign: 'center',
@@ -19556,14 +19577,7 @@ function QCReportBuilder({
           fontWeight: 700,
           fontSize: 9.5
         }
-      }, c.s === 'na' ? '·' : fmtVal(c.ind, c.v)))), React.createElement("td", {
-        style: {
-          textAlign: 'center',
-          fontFamily: MONO,
-          fontWeight: 700,
-          color: tot > 0 ? P.rose : P.ink2
-        }
-      }, any ? tot : '—'));
+      }, c.s === 'na' ? '·' : fmtVal(c.ind, c.v)))));
     })))), incs.length > 0 && React.createElement("div", {
       style: {
         marginTop: 14
