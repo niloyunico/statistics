@@ -1575,8 +1575,8 @@ window.QI_CORRECTIONS_BY_DEFID = {
   // Fiscal-year (Jun–May) helpers so quarters can be rolled up PER YEAR, not just for the
   // hardcoded 2025-26 above. A month's quarter depends only on its month name, so any year works.
   const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return mi>=5 ? (2000+yy) : (2000+yy-1); }
-  function fyQuarterMonths(startYear){ const order=[5,6,7,8,9,10,11,0,1,2,3,4]; const k=order.map(mi=>{ const cal=mi>=5?startYear:startYear+1; return FY_MONS[mi]+'-'+String(cal%100).padStart(2,'0'); }); return { Q1:k.slice(0,3), Q2:k.slice(3,6), Q3:k.slice(6,9), Q4:k.slice(9,12) }; }
+  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return 2000+yy; }
+  function fyQuarterMonths(startYear){ const yy=String(startYear%100).padStart(2,'0'); const k=FY_MONS.map(mn=>mn+'-'+yy); return { Q1:k.slice(0,3), Q2:k.slice(3,6), Q3:k.slice(6,9), Q4:k.slice(9,12) }; }
   function fysInInd(ind){ const set=new Set(); ['months','mNum','mDen'].forEach(f=>{ const o=ind && ind[f]; if(o) Object.keys(o).forEach(k=>{ if(o[k]!=null&&o[k]!==''){ const fy=fyOfKeyS(k); if(fy!=null) set.add(fy); } }); }); return [...set]; }
 
   function isPct(ind) {
@@ -14389,28 +14389,22 @@ const P = {
   navy: '#0d1b2e'
 };
 const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
-const MONTHS = [['Jun-25', 'Jun 2025', 'Q1'], ['Jul-25', 'Jul 2025', 'Q1'], ['Aug-25', 'Aug 2025', 'Q1'], ['Sep-25', 'Sep 2025', 'Q2'], ['Oct-25', 'Oct 2025', 'Q2'], ['Nov-25', 'Nov 2025', 'Q2'], ['Dec-25', 'Dec 2025', 'Q3'], ['Jan-26', 'Jan 2026', 'Q3'], ['Feb-26', 'Feb 2026', 'Q3'], ['Mar-26', 'Mar 2026', 'Q4'], ['Apr-26', 'Apr 2026', 'Q4'], ['May-26', 'May 2026', 'Q4']];
 const QORDER = ['Q1', 'Q2', 'Q3', 'Q4'];
-const QL = [['Q1', 'Jun–Aug 25'], ['Q2', 'Sep–Nov 25'], ['Q3', 'Dec–Feb 26'], ['Q4', 'Mar–May 26']];
+const QL = [['Q1', 'Jan–Mar'], ['Q2', 'Apr–Jun'], ['Q3', 'Jul–Sep'], ['Q4', 'Oct–Dec']];
 const FY_MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function fyMonthsFor(startYear) {
-  const order = [5, 6, 7, 8, 9, 10, 11, 0, 1, 2, 3, 4];
-  return order.map(mi => {
-    const cal = mi >= 5 ? startYear : startYear + 1;
-    const yy = String(cal % 100).padStart(2, '0');
-    return [FY_MONS[mi] + '-' + yy, FY_MONS[mi] + ' ' + cal, FY_MONS[mi]];
-  });
+  const yy = String(startYear % 100).padStart(2, '0');
+  return FY_MONS.map(mn => [mn + '-' + yy, mn + ' ' + startYear, mn]);
 }
 function fyOfKey(key) {
   const p = String(key || '').split('-');
   const mi = FY_MONS.indexOf(p[0]);
   const yy = parseInt(p[1], 10);
   if (mi < 0 || isNaN(yy)) return null;
-  return mi >= 5 ? 2000 + yy : 2000 + yy - 1;
+  return 2000 + yy;
 }
 function currentFy() {
-  const d = new Date();
-  return d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1;
+  return new Date().getFullYear();
 }
 function dataFySet(depts) {
   const set = new Set();
@@ -14432,7 +14426,7 @@ function fyOptions(depts) {
   const set = dataFySet(depts);
   set.add(currentFy());
   const arr = [...set];
-  if (!arr.length) arr.push(2025);
+  if (!arr.length) arr.push(currentFy());
   const lo = Math.min(...arr),
     hi = Math.max(...arr);
   const out = [];
@@ -14458,12 +14452,13 @@ function defaultFy(depts) {
   return yrs.sort((a, b) => counts[b] - counts[a] || b - a)[0];
 }
 function fyLabelOf(startYear) {
-  return 'FY ' + startYear + '–' + String((startYear + 1) % 100).padStart(2, '0');
+  return 'Year ' + startYear;
 }
 const QTAG_FY = ['Q1', 'Q1', 'Q1', 'Q2', 'Q2', 'Q2', 'Q3', 'Q3', 'Q3', 'Q4', 'Q4', 'Q4'];
 function fyAxis(startYear) {
   return fyMonthsFor(startYear).map((r, i) => [r[0], r[1], QTAG_FY[i]]);
 }
+const MONTHS = fyAxis(currentFy());
 function qcMonthLabel(key) {
   const p = String(key || '').split('-');
   return p[1] ? p[0] + ' 20' + p[1] : String(key || '');
@@ -18430,12 +18425,9 @@ function QCReportBuilder({
       dept: d
     }));
     if (!base.length) return base;
-    const pre = [];
-    if (sections.cover) pre.push({
+    const cover = [];
+    if (sections.cover) cover.push({
       kind: 'cover'
-    });
-    if (sections.toc) pre.push({
-      kind: 'toc'
     });
     const extra = [];
     if (sections.incidentAppendix) extra.push({
@@ -18444,7 +18436,23 @@ function QCReportBuilder({
     if (sections.standardsRefs) extra.push({
       kind: 'refs'
     });
-    return [...pre, ...base, ...extra];
+    const content = [...base, ...extra];
+    let toc = [];
+    if (sections.toc) {
+      const TOC_PER = 30;
+      let nToc = 1;
+      for (let k = 0; k < 4; k++) {
+        nToc = Math.max(1, Math.ceil((cover.length + nToc + content.length) / TOC_PER));
+      }
+      toc = Array.from({
+        length: nToc
+      }, (_, i) => ({
+        kind: 'toc',
+        tocPart: i,
+        tocPer: TOC_PER
+      }));
+    }
+    return [...cover, ...toc, ...content];
   }, [chosen, reportType, selectedDepts, pMonths, sections, indMode, indSel]);
   const pageCount = Math.max(1, pages.length);
   const pi = Math.min(pageIdx, pageCount - 1);
@@ -19771,9 +19779,13 @@ function QCReportBuilder({
     return (pg.dept ? pg.dept.name : 'Department') + ' · summary';
   };
   function TocPage({
+    page,
     n,
     total
   }) {
+    const per = page && page.tocPer || 30;
+    const start = (page && page.tocPart || 0) * per;
+    const slice = pages.slice(start, start + per);
     return React.createElement("div", {
       className: "qc-rpage",
       style: {
@@ -19793,39 +19805,42 @@ function QCReportBuilder({
         color: P.ink,
         marginBottom: 14
       }
-    }, "Table of Contents"), React.createElement("div", {
+    }, "Table of Contents", start ? ' (continued)' : ''), React.createElement("div", {
       style: {
         display: 'flex',
         flexDirection: 'column'
       }
-    }, pages.map((pg, i) => React.createElement("div", {
-      key: i,
-      style: {
-        display: 'flex',
-        alignItems: 'baseline',
-        gap: 8,
-        padding: '5px 0',
-        borderBottom: '1px dotted ' + P.line2
-      }
-    }, React.createElement("span", {
-      style: {
-        fontSize: 11.5,
-        color: P.ink2,
-        fontWeight: pg.kind === 'cover' || pg.kind === 'toc' ? 700 : 500
-      }
-    }, pageTitle(pg)), React.createElement("span", {
-      style: {
-        flex: 1,
-        borderBottom: '1px dotted ' + P.line,
-        margin: '0 4px 3px'
-      }
-    }), React.createElement("span", {
-      style: {
-        fontFamily: MONO,
-        fontSize: 11,
-        color: P.muted
-      }
-    }, i + 1))))), React.createElement(Footer, {
+    }, slice.map((pg, j) => {
+      const idx = start + j;
+      return React.createElement("div", {
+        key: idx,
+        style: {
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 8,
+          padding: '5px 0',
+          borderBottom: '1px dotted ' + P.line2
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 11.5,
+          color: P.ink2,
+          fontWeight: pg.kind === 'cover' || pg.kind === 'toc' ? 700 : 500
+        }
+      }, pageTitle(pg)), React.createElement("span", {
+        style: {
+          flex: 1,
+          borderBottom: '1px dotted ' + P.line,
+          margin: '0 4px 3px'
+        }
+      }), React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 11,
+          color: P.muted
+        }
+      }, idx + 1));
+    }))), React.createElement(Footer, {
       n: n,
       total: total
     }));
@@ -20972,6 +20987,7 @@ function QCReportBuilder({
     n: i + 1,
     total: pages.length
   }) : pg.kind === 'toc' ? React.createElement(TocPage, {
+    page: pg,
     n: i + 1,
     total: pages.length
   }) : pg.kind === 'appendix' ? React.createElement(AppendixPage, {
@@ -21745,6 +21761,7 @@ function QCReportBuilder({
     n: pi + 1,
     total: pageCount
   }) : cur.kind === 'toc' ? React.createElement(TocPage, {
+    page: cur,
     n: pi + 1,
     total: pageCount
   }) : cur.kind === 'appendix' ? React.createElement(AppendixPage, {

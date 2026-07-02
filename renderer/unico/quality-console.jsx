@@ -29,39 +29,29 @@ const P = {
 
 const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
 
-/* [storeKey, 'Mon YYYY', quarter] — fiscal year Jun-2025 … May-2026 */
-const MONTHS = [
-  ['Jun-25','Jun 2025','Q1'],['Jul-25','Jul 2025','Q1'],['Aug-25','Aug 2025','Q1'],
-  ['Sep-25','Sep 2025','Q2'],['Oct-25','Oct 2025','Q2'],['Nov-25','Nov 2025','Q2'],
-  ['Dec-25','Dec 2025','Q3'],['Jan-26','Jan 2026','Q3'],['Feb-26','Feb 2026','Q3'],
-  ['Mar-26','Mar 2026','Q4'],['Apr-26','Apr 2026','Q4'],['May-26','May 2026','Q4']
-];
+/* The module-level default month axis (the current calendar year, Jan–Dec) is defined just
+   below once fyAxis() exists. Views compute their own axis via fyAxis(selectedYear). */
 
 const QORDER = ['Q1','Q2','Q3','Q4'];
-const QL = [['Q1','Jun–Aug 25'],['Q2','Sep–Nov 25'],['Q3','Dec–Feb 26'],['Q4','Mar–May 26']];
+const QL = [['Q1','Jan–Mar'],['Q2','Apr–Jun'],['Q3','Jul–Sep'],['Q4','Oct–Dec']];
 
-/* ---- fiscal-year helpers (Jun–May) for the dashboard's month + year switcher ---- */
+/* ---- reporting-year helpers (calendar year, Jan–Dec) for the month + year switcher ---- */
 const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-/* The 12 months of the fiscal year that STARTS in Jun of `startYear`, as
-   [storeKey 'Mon-YY', 'Mon YYYY', 'Mon'] — the same [key,label,…] shape MONTHS uses,
-   so deptStat / monthStatus work unchanged. */
+/* The 12 months of the calendar year `startYear`, as [storeKey 'Mon-YY', 'Mon YYYY', 'Mon'] —
+   the same [key,label,…] shape MONTHS uses, so deptStat / monthStatus work unchanged. */
 function fyMonthsFor(startYear){
-  const order = [5,6,7,8,9,10,11,0,1,2,3,4]; // Jun..Dec then Jan..May (0-based month idx)
-  return order.map(mi => {
-    const cal = mi >= 5 ? startYear : startYear + 1;
-    const yy = String(cal % 100).padStart(2, '0');
-    return [ FY_MONS[mi] + '-' + yy, FY_MONS[mi] + ' ' + cal, FY_MONS[mi] ];
-  });
+  const yy = String(startYear % 100).padStart(2, '0');
+  return FY_MONS.map(mn => [ mn + '-' + yy, mn + ' ' + startYear, mn ]);
 }
-/* Fiscal-year START for a 'Mon-YY' key (Jun–Dec → that year; Jan–May → year-1). */
+/* Calendar year for a 'Mon-YY' key. */
 function fyOfKey(key){
   const p = String(key || '').split('-'); const mi = FY_MONS.indexOf(p[0]);
   const yy = parseInt(p[1], 10);
   if(mi < 0 || isNaN(yy)) return null;
-  return mi >= 5 ? (2000 + yy) : (2000 + yy - 1);
+  return 2000 + yy;
 }
-/* Current fiscal year from the browser clock. */
-function currentFy(){ const d = new Date(); return d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1; }
+/* Current calendar year from the browser clock. */
+function currentFy(){ return new Date().getFullYear(); }
 /* Set of fiscal-year starts that have any actual recorded value in the data. */
 function dataFySet(depts){
   const set = new Set();
@@ -75,7 +65,7 @@ function dataFySet(depts){
    the current year, so you can page back through history and forward to a fresh year. */
 function fyOptions(depts){
   const set = dataFySet(depts); set.add(currentFy());
-  const arr = [...set]; if(!arr.length) arr.push(2025);
+  const arr = [...set]; if(!arr.length) arr.push(currentFy());
   const lo = Math.min(...arr), hi = Math.max(...arr);
   const out = []; for(let y = lo; y <= hi; y++) out.push(y);
   return out;
@@ -93,12 +83,15 @@ function defaultFy(depts){
   if(!yrs.length) return currentFy();
   return yrs.sort((a,b) => (counts[b]-counts[a]) || (b-a))[0];
 }
-function fyLabelOf(startYear){ return 'FY ' + startYear + '–' + String((startYear + 1) % 100).padStart(2, '0'); }
-/* The quarter-tagged 12-month axis for a fiscal year — same [key,'Mon YYYY',Q] shape as the
-   module MONTHS, so any view can `const MONTHS = fyAxis(fy)` to become fiscal-year-aware with
-   no other change (the local const lexically shadows the module one). */
+function fyLabelOf(startYear){ return 'Year ' + startYear; }
+/* The quarter-tagged 12-month axis for a reporting year — same [key,'Mon YYYY',Q] shape as the
+   module MONTHS, so any view can `const MONTHS = fyAxis(fy)` to become year-aware with no other
+   change (the local const lexically shadows the module one). */
 const QTAG_FY = ['Q1','Q1','Q1','Q2','Q2','Q2','Q3','Q3','Q3','Q4','Q4','Q4'];
 function fyAxis(startYear){ return fyMonthsFor(startYear).map((r,i)=>[r[0],r[1],QTAG_FY[i]]); }
+/* Default axis = the current calendar year; a safe fallback for helpers called without an
+   explicit months array. Every view overrides it with its selected year. */
+const MONTHS = fyAxis(currentFy());
 /* 'Mon-YY' storeKey -> 'Mon YYYY' display label (year-agnostic). */
 function qcMonthLabel(key){ const p=String(key||'').split('-'); return p[1] ? (p[0]+' 20'+p[1]) : String(key||''); }
 /* Small reusable fiscal-year <select>. `depts` drives the selectable range (years with data
@@ -1671,9 +1664,14 @@ function QCReportBuilder({depts}){
     else if(reportType==='monthly') base = chosen.length ? pMonths.map(m=>({kind:'monthly', month:m})) : [];
     else base = chosen.map(d=>({kind:'summary', dept:d}));
     if(!base.length) return base; // nothing selected — no structural pages either
-    const pre=[]; if(sections.cover) pre.push({kind:'cover'}); if(sections.toc) pre.push({kind:'toc'});
+    const cover=[]; if(sections.cover) cover.push({kind:'cover'});
     const extra=[]; if(sections.incidentAppendix) extra.push({kind:'appendix'}); if(sections.standardsRefs) extra.push({kind:'refs'});
-    return [...pre, ...base, ...extra];
+    const content=[...base, ...extra];
+    // Table of Contents — PAGINATED so a long index (Detailed = one page per indicator) never
+    // overflows a single sheet; each TOC page lists a slice of the whole document.
+    let toc=[];
+    if(sections.toc){ const TOC_PER=30; let nToc=1; for(let k=0;k<4;k++){ nToc=Math.max(1,Math.ceil((cover.length+nToc+content.length)/TOC_PER)); } toc=Array.from({length:nToc},(_,i)=>({kind:'toc',tocPart:i,tocPer:TOC_PER})); }
+    return [...cover, ...toc, ...content];
   },[chosen,reportType,selectedDepts,pMonths,sections,indMode,indSel]);
   const pageCount=Math.max(1,pages.length);
   const pi=Math.min(pageIdx,pageCount-1);
@@ -2070,21 +2068,22 @@ function QCReportBuilder({depts}){
     if(pg.kind==='detail')  return (pg.dept?pg.dept.name:'')+(pg.ind?(' · '+pg.ind.name):'');
     return (pg.dept?pg.dept.name:'Department')+' · summary';
   };
-  function TocPage({n,total}){
+  function TocPage({page,n,total}){
+    const per=(page&&page.tocPer)||30; const start=((page&&page.tocPart)||0)*per; const slice=pages.slice(start,start+per);
     return (
       <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:18}}>
-          <div className="qc-band" style={{fontWeight:700,fontSize:16,color:P.ink,marginBottom:14}}>Table of Contents</div>
+          <div className="qc-band" style={{fontWeight:700,fontSize:16,color:P.ink,marginBottom:14}}>Table of Contents{start?' (continued)':''}</div>
           <div style={{display:'flex',flexDirection:'column'}}>
-            {pages.map((pg,i)=>(
-              <div key={i} style={{display:'flex',alignItems:'baseline',gap:8,padding:'5px 0',borderBottom:'1px dotted '+P.line2}}>
+            {slice.map((pg,j)=>{ const idx=start+j; return (
+              <div key={idx} style={{display:'flex',alignItems:'baseline',gap:8,padding:'5px 0',borderBottom:'1px dotted '+P.line2}}>
                 <span style={{fontSize:11.5,color:P.ink2,fontWeight:pg.kind==='cover'||pg.kind==='toc'?700:500}}>{pageTitle(pg)}</span>
                 <span style={{flex:1,borderBottom:'1px dotted '+P.line,margin:'0 4px 3px'}}/>
-                <span style={{fontFamily:MONO,fontSize:11,color:P.muted}}>{i+1}</span>
+                <span style={{fontFamily:MONO,fontSize:11,color:P.muted}}>{idx+1}</span>
               </div>
-            ))}
+            ); })}
           </div>
         </div>
         <Footer n={n} total={total}/>
@@ -2491,7 +2490,7 @@ function QCReportBuilder({depts}){
               {pg.kind==='cover'
                 ? <CoverPage n={i+1} total={pages.length}/>
                 : pg.kind==='toc'
-                ? <TocPage n={i+1} total={pages.length}/>
+                ? <TocPage page={pg} n={i+1} total={pages.length}/>
                 : pg.kind==='appendix'
                 ? <AppendixPage n={i+1} total={pages.length}/>
                 : pg.kind==='refs'
@@ -2724,7 +2723,7 @@ function QCReportBuilder({depts}){
               {chosen.length===0?<div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>{indMode==='custom'?'Tick at least one indicator (Custom mode), or switch Indicators back to All.':'Select at least one department.'}</div>
                 : !cur ? <div style={{textAlign:'center',color:P.faint,padding:'60px 0'}}>Nothing to preview.</div>
                 : cur.kind==='cover' ? <CoverPage n={pi+1} total={pageCount}/>
-                : cur.kind==='toc' ? <TocPage n={pi+1} total={pageCount}/>
+                : cur.kind==='toc' ? <TocPage page={cur} n={pi+1} total={pageCount}/>
                 : cur.kind==='appendix' ? <AppendixPage n={pi+1} total={pageCount}/>
                 : cur.kind==='refs' ? <RefsPage n={pi+1} total={pageCount}/>
                 : cur.kind==='compare' ? <ComparePage n={pi+1} total={pageCount}/>

@@ -26,8 +26,8 @@
   // Fiscal-year (Jun–May) helpers so quarters can be rolled up PER YEAR, not just for the
   // hardcoded 2025-26 above. A month's quarter depends only on its month name, so any year works.
   const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return mi>=5 ? (2000+yy) : (2000+yy-1); }
-  function fyQuarterMonths(startYear){ const order=[5,6,7,8,9,10,11,0,1,2,3,4]; const k=order.map(mi=>{ const cal=mi>=5?startYear:startYear+1; return FY_MONS[mi]+'-'+String(cal%100).padStart(2,'0'); }); return { Q1:k.slice(0,3), Q2:k.slice(3,6), Q3:k.slice(6,9), Q4:k.slice(9,12) }; }
+  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return 2000+yy; }
+  function fyQuarterMonths(startYear){ const yy=String(startYear%100).padStart(2,'0'); const k=FY_MONS.map(mn=>mn+'-'+yy); return { Q1:k.slice(0,3), Q2:k.slice(3,6), Q3:k.slice(6,9), Q4:k.slice(9,12) }; }
   function fysInInd(ind){ const set=new Set(); ['months','mNum','mDen'].forEach(f=>{ const o=ind && ind[f]; if(o) Object.keys(o).forEach(k=>{ if(o[k]!=null&&o[k]!==''){ const fy=fyOfKeyS(k); if(fy!=null) set.add(fy); } }); }); return [...set]; }
 
   function isPct(ind) {
