@@ -1033,18 +1033,34 @@ const QC_PAGE_SIZES={A4:[700,1.414],A3:[815,1.414],Letter:[700,1.294]};
    so tall departments break across real A4 pages on screen (matches the sliced PDF export). */
 function QCPagedPreview({pageW, pageMinH, children}){
   const ref=React.useRef(null);
-  const [h,setH]=React.useState(0);
-  React.useLayoutEffect(()=>{ const el=ref.current; if(!el) return; const nh=el.scrollHeight; if(nh && Math.abs(nh-h)>2) setH(nh); });
+  const [starts,setStarts]=React.useState([0]);
   const usableH=Math.max(240, pageMinH-56);            // A4 minus top+bottom padding (28+28)
-  const n=Math.min(40, Math.max(1, Math.ceil((h||1)/usableH)));
+  React.useLayoutEffect(()=>{
+    const root=ref.current; if(!root) return;
+    const H=root.scrollHeight, rootTop=root.getBoundingClientRect().top;
+    // Atomic blocks that must never be split across a page: charts, tables, and anything
+    // marked page-break-inside:avoid (incident cards, KPI/definition/CAPA blocks, etc.).
+    const atoms=[]; const push=el=>{ const r=el.getBoundingClientRect(); const t=r.top-rootTop, b=r.bottom-rootTop; if(r.height>4 && r.height<=usableH) atoms.push([t,b]); };
+    root.querySelectorAll('svg,table').forEach(push);
+    root.querySelectorAll('*').forEach(el=>{ const s=el.getAttribute('style'); if(s && s.indexOf('break-inside')>=0) push(el); });
+    const st=[0]; let s=0, guard=0;
+    while(s+usableH < H-2 && guard++<80){
+      let brk=s+usableH;                                  // default: fill the page
+      atoms.forEach(([t,b])=>{ if(t>s+8 && brk>t && brk<b) brk=Math.min(brk,t); }); // pull break up to a block top
+      if(brk<=s+8) brk=s+usableH;                         // block taller than a page -> hard cut
+      st.push(brk); s=brk;
+    }
+    if(st.length!==starts.length || st.some((v,i)=>Math.abs(v-(starts[i]||0))>2)) setStarts(st);
+  });
   const frame={background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',width:pageW,height:pageMinH,boxSizing:'border-box',padding:'28px 30px',margin:'0 auto 18px',overflow:'hidden',position:'relative'};
+  const n=starts.length;
   return (
     <div>
       {/* hidden measurer at the same content width as a sheet */}
       <div ref={ref} aria-hidden="true" style={{position:'absolute',left:-99999,top:0,visibility:'hidden',pointerEvents:'none',width:pageW,boxSizing:'border-box',padding:'0 30px'}}>{children}</div>
-      {Array.from({length:n}).map((_,k)=>(
+      {starts.map((s0,k)=>(
         <div key={k} style={frame}>
-          <div style={{transform:'translateY('+(-k*usableH)+'px)'}}>{children}</div>
+          <div style={{transform:'translateY('+(-s0)+'px)'}}>{children}</div>
           {n>1&&<div style={{position:'absolute',right:9,bottom:5,fontSize:9,color:'#aeb7c2',fontFamily:MONO}}>{(k+1)+' / '+n}</div>}
         </div>
       ))}

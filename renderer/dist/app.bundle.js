@@ -16772,15 +16772,39 @@ function QCPagedPreview({
   children
 }) {
   const ref = React.useRef(null);
-  const [h, setH] = React.useState(0);
-  React.useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const nh = el.scrollHeight;
-    if (nh && Math.abs(nh - h) > 2) setH(nh);
-  });
+  const [starts, setStarts] = React.useState([0]);
   const usableH = Math.max(240, pageMinH - 56);
-  const n = Math.min(40, Math.max(1, Math.ceil((h || 1) / usableH)));
+  React.useLayoutEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const H = root.scrollHeight,
+      rootTop = root.getBoundingClientRect().top;
+    const atoms = [];
+    const push = el => {
+      const r = el.getBoundingClientRect();
+      const t = r.top - rootTop,
+        b = r.bottom - rootTop;
+      if (r.height > 4 && r.height <= usableH) atoms.push([t, b]);
+    };
+    root.querySelectorAll('svg,table').forEach(push);
+    root.querySelectorAll('*').forEach(el => {
+      const s = el.getAttribute('style');
+      if (s && s.indexOf('break-inside') >= 0) push(el);
+    });
+    const st = [0];
+    let s = 0,
+      guard = 0;
+    while (s + usableH < H - 2 && guard++ < 80) {
+      let brk = s + usableH;
+      atoms.forEach(([t, b]) => {
+        if (t > s + 8 && brk > t && brk < b) brk = Math.min(brk, t);
+      });
+      if (brk <= s + 8) brk = s + usableH;
+      st.push(brk);
+      s = brk;
+    }
+    if (st.length !== starts.length || st.some((v, i) => Math.abs(v - (starts[i] || 0)) > 2)) setStarts(st);
+  });
   const frame = {
     background: '#fff',
     borderRadius: 4,
@@ -16793,6 +16817,7 @@ function QCPagedPreview({
     overflow: 'hidden',
     position: 'relative'
   };
+  const n = starts.length;
   return React.createElement("div", null, React.createElement("div", {
     ref: ref,
     "aria-hidden": "true",
@@ -16806,14 +16831,12 @@ function QCPagedPreview({
       boxSizing: 'border-box',
       padding: '0 30px'
     }
-  }, children), Array.from({
-    length: n
-  }).map((_, k) => React.createElement("div", {
+  }, children), starts.map((s0, k) => React.createElement("div", {
     key: k,
     style: frame
   }, React.createElement("div", {
     style: {
-      transform: 'translateY(' + -k * usableH + 'px)'
+      transform: 'translateY(' + -s0 + 'px)'
     }
   }, children), n > 1 && React.createElement("div", {
     style: {
