@@ -28027,7 +28027,7 @@ window.LockScreen = LockScreen;
   };
   const dcWideMonths = () => {
     const out = [];
-    for (let yy = 24; yy <= 28; yy++) {
+    for (let yy = 24; yy <= 32; yy++) {
       MONS_ABBR.forEach(m => out.push(m + '-' + String(yy).padStart(2, '0')));
     }
     return out;
@@ -30690,11 +30690,7 @@ window.LockScreen = LockScreen;
     const [target, setTarget] = useState(s.type === 'patient' ? s.department || '' : s.area || '');
     const [incidents, setIncidents] = useState(() => s.type === 'quality' && Array.isArray(s.incidents) ? s.incidents.map(x => Object.assign({}, x)) : []);
     const monthOpts = function () {
-      const base = s.type === 'quality' ? window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [] : typeof MO === 'function' ? function () {
-        const o = MO();
-        const i = o.indexOf('Jan-25');
-        return i >= 0 ? o.slice(i) : o.slice(-24);
-      }() : [];
+      const base = dcWideMonths();
       return s.month && base.indexOf(s.month) < 0 ? [s.month].concat(base) : base.length ? base : [s.month];
     }();
     const areaOpts = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
