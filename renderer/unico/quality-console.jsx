@@ -1041,7 +1041,7 @@ function QCPagedPreview({pageW, pageMinH, children}){
     // Atomic blocks that must never be split across a page: charts, tables, and anything
     // marked page-break-inside:avoid (incident cards, KPI/definition/CAPA blocks, etc.).
     const atoms=[]; const push=el=>{ const r=el.getBoundingClientRect(); const t=r.top-rootTop, b=r.bottom-rootTop; if(r.height>4 && r.height<=usableH) atoms.push([t,b]); };
-    root.querySelectorAll('svg,table').forEach(push);
+    root.querySelectorAll('svg,table,tr').forEach(push);
     root.querySelectorAll('*').forEach(el=>{ const s=el.getAttribute('style'); if(s && s.indexOf('break-inside')>=0) push(el); });
     const st=[0]; let s=0, guard=0;
     while(s+usableH < H-2 && guard++<80){

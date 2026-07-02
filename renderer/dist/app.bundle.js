@@ -1040,18 +1040,18 @@ window.QI_CORRECTIONS = {
     "referenceUrl": "https://internationalsafetycenter.org/exposure-data-network-epinet/"
   },
   "medication error": {
-    "canonicalName": "Medication Error Rate",
-    "formula": "rate1000",
-    "numLabel": "Number of medication errors",
-    "denLabel": "Patient-days (or doses dispensed/administered)",
-    "numeratorDef": "Count of medication errors per the NCC-MERP definition: any preventable event that may cause or lead to inappropriate medication use or patient harm while the medication is in the control of the health care professional, patient, or consumer. Includes errors at the prescribing, transcribing/order-entry, dispensing, and administration stages, and may be categorized A-I using the NCC-MERP Index for Categorizing Medication Errors by severity (A = circumstances/events with capacity to cause error; B-D = error occurred, no harm; E-I = error with harm ranging from temporary harm requiring intervention to patient death).",
-    "denominatorDef": "Inpatient patient-days during the period (total occupied bed-days, summed length of stay). Rate = (number of medication errors / patient-days) x 1000. A conventional alternative denominator is per 1,000 doses dispensed/administered (or opportunities for error in direct-observation studies), which is more appropriate for analyzing a specific medication-use process stage.",
-    "unit": "per 1000 patient-days",
+    "canonicalName": "Medication Administration Error Rate",
+    "formula": "pct",
+    "numLabel": "Number of medication administration errors",
+    "denLabel": "Total doses administered (opportunities for error)",
+    "numeratorDef": "Number of medication administration errors: doses given incorrectly at the administration stage per the NCC-MERP definition (wrong drug, wrong dose, wrong route, wrong time/rate, wrong patient, wrong preparation/technique, or an omitted / unauthorised dose), detected by direct observation or incident report.",
+    "denominatorDef": "Total Opportunities for Error (TOE) = total doses administered during the period (doses given plus doses omitted). Rate = (number of medication administration errors / total doses administered) x 100.",
+    "unit": "%",
     "benchmarkValue": 0,
-    "benchmark": "≤ 0 per 1000 patient-days",
-    "benchmarkNote": "No acceptable rate (NCC-MERP: 'there is no acceptable incidence rate for medication errors'); operational target is 0 / continual reduction toward 0",
+    "benchmark": "0% (zero-error target)",
+    "benchmarkNote": "NCC-MERP: there is no acceptable incidence rate for medication errors; operational target is 0% with continual reduction toward zero. Some programmes benchmark against a < 5% threshold using the direct-observation method (Barker KN et al.).",
     "goalDirection": "lower_is_better",
-    "reference": "NCC-MERP Statement on Medication Error Rates; NCC-MERP Index for Categorizing Medication Errors (2001, rev. 2022)",
+    "reference": "NCC-MERP Index for Categorizing Medication Errors (2001, rev. 2022); Barker KN et al. — medication administration error direct-observation method",
     "referenceUrl": "https://www.nccmerp.org/statement-medication-error-rates"
   },
   "mandatory training compliance": {
@@ -1362,18 +1362,18 @@ window.QI_CORRECTIONS_BY_DEFID = {
     "referenceUrl": "https://www.ins1.org/wp-content/uploads/2021/07/JIN-D-21-00031_SOP-Update-Hi-resWithout_Folio-7.13.21.pdf"
   },
   "mederror": {
-    "canonicalName": "Medication Error Rate",
-    "formula": "rate1000",
-    "numLabel": "Number of medication errors",
-    "denLabel": "Patient-days (or doses dispensed/administered)",
-    "numeratorDef": "Count of medication errors per the NCC-MERP definition: any preventable event that may cause or lead to inappropriate medication use or patient harm while the medication is in the control of the health care professional, patient, or consumer. Includes errors at the prescribing, transcribing/order-entry, dispensing, and administration stages, and may be categorized A-I using the NCC-MERP Index for Categorizing Medication Errors by severity (A = circumstances/events with capacity to cause error; B-D = error occurred, no harm; E-I = error with harm ranging from temporary harm requiring intervention to patient death).",
-    "denominatorDef": "Inpatient patient-days during the period (total occupied bed-days, summed length of stay). Rate = (number of medication errors / patient-days) x 1000. A conventional alternative denominator is per 1,000 doses dispensed/administered (or opportunities for error in direct-observation studies), which is more appropriate for analyzing a specific medication-use process stage.",
-    "unit": "per 1000 patient-days",
+    "canonicalName": "Medication Administration Error Rate",
+    "formula": "pct",
+    "numLabel": "Number of medication administration errors",
+    "denLabel": "Total doses administered (opportunities for error)",
+    "numeratorDef": "Number of medication administration errors: doses given incorrectly at the administration stage per the NCC-MERP definition (wrong drug, wrong dose, wrong route, wrong time/rate, wrong patient, wrong preparation/technique, or an omitted / unauthorised dose), detected by direct observation or incident report.",
+    "denominatorDef": "Total Opportunities for Error (TOE) = total doses administered during the period (doses given plus doses omitted). Rate = (number of medication administration errors / total doses administered) x 100.",
+    "unit": "%",
     "benchmarkValue": 0,
-    "benchmark": "≤ 0 per 1000 patient-days",
-    "benchmarkNote": "No acceptable rate (NCC-MERP: 'there is no acceptable incidence rate for medication errors'); operational target is 0 / continual reduction toward 0",
+    "benchmark": "0% (zero-error target)",
+    "benchmarkNote": "NCC-MERP: there is no acceptable incidence rate for medication errors; operational target is 0% with continual reduction toward zero. Some programmes benchmark against a < 5% threshold using the direct-observation method (Barker KN et al.).",
     "goalDirection": "lower_is_better",
-    "reference": "NCC-MERP Statement on Medication Error Rates; NCC-MERP Index for Categorizing Medication Errors (2001, rev. 2022)",
+    "reference": "NCC-MERP Index for Categorizing Medication Errors (2001, rev. 2022); Barker KN et al. — medication administration error direct-observation method",
     "referenceUrl": "https://www.nccmerp.org/statement-medication-error-rates"
   },
   "nsi": {
@@ -16786,7 +16786,7 @@ function QCPagedPreview({
         b = r.bottom - rootTop;
       if (r.height > 4 && r.height <= usableH) atoms.push([t, b]);
     };
-    root.querySelectorAll('svg,table').forEach(push);
+    root.querySelectorAll('svg,table,tr').forEach(push);
     root.querySelectorAll('*').forEach(el => {
       const s = el.getAttribute('style');
       if (s && s.indexOf('break-inside') >= 0) push(el);
