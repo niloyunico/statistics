@@ -30699,7 +30699,12 @@ window.LockScreen = LockScreen;
     onClose,
     onSaved
   }) {
-    const editable = canEdit && s.status === 'pending';
+    const meUser = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
+    const iOwn = [meUser.name, meUser.username].filter(Boolean).some(n => n === s.submittedBy || s.responsible && s.responsible.name === n);
+    const canRequestEdit = !fullEdit && iOwn && s.status !== 'pending' && !s.isCorrection;
+    const [correcting, setCorrecting] = useState(false);
+    const [correctReason, setCorrectReason] = useState('');
+    const editable = canEdit && (fullEdit || s.status === 'pending') || correcting;
     const dept = s.type === 'patient' ? dcAllDepts().find(d => d.id === s.department) : null;
     const cols = dept && dept.cols || (s.values ? Object.keys(s.values).map(id => ({
       id,
@@ -30846,6 +30851,65 @@ window.LockScreen = LockScreen;
       }).catch(() => {
         setBusy(false);
         toast('Could not save', 'error');
+      });
+    };
+    const submitCorrection = () => {
+      if (!correctReason.trim()) {
+        toast('Please add a reason for the edit request.', 'error');
+        return;
+      }
+      setBusy(true);
+      const common = {
+        month,
+        note,
+        isCorrection: true,
+        correctionReason: correctReason.trim()
+      };
+      let url, body;
+      if (s.type === 'patient') {
+        url = '/api/submissions/patient';
+        body = Object.assign({
+          department: s.department,
+          values: vals,
+          responsible: s.responsible || null
+        }, common);
+      } else {
+        url = '/api/submissions/quality';
+        body = Object.assign({
+          area: s.area,
+          indicatorId: s.indicatorId || '',
+          indicatorName: s.indicatorName,
+          valueType: s.valueType,
+          entryMode: s.entryMode,
+          mult: s.mult,
+          formula: s.formula,
+          numLabel: s.numLabel,
+          denLabel: s.denLabel,
+          unit: s.unit,
+          value: isRate ? undefined : qval === '' ? undefined : Number(qval),
+          num: isRate ? Number(effNum) : undefined,
+          den: isRate ? Number(effDen) : undefined,
+          groups: hasGrp ? GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {}) : undefined,
+          groupsDen: hasGrp && isRate ? GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {}) : undefined,
+          deptBreakdown: hasDeptBreak ? deptBreak.map(r => ({
+            dept: r.dept || '',
+            g: GROUPS.reduce((o, [k]) => (o[k] = {
+              n: Number(r.g[k].n) || 0,
+              d: Number(r.g[k].d) || 0
+            }, o), {})
+          })) : undefined,
+          incidents: incidents.length ? incidents : undefined
+        }, common);
+      }
+      dcApi.post(url, body).then(r => {
+        setBusy(false);
+        if (r.ok) {
+          toast('Edit request sent for review', 'success');
+          onSaved && onSaved();
+        } else toast(r.error || 'Could not send edit request', 'error');
+      }).catch(() => {
+        setBusy(false);
+        toast('Could not send edit request', 'error');
       });
     };
     return React.createElement("div", {
@@ -31467,12 +31531,34 @@ window.LockScreen = LockScreen;
       value: note,
       onChange: e => setNote(e.target.value),
       placeholder: "optional"
-    }) : React.createElement("div", null, s.note || '—')), editable && React.createElement("div", {
+    }) : React.createElement("div", null, s.note || '—')), correcting && React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "Reason for the edit request"), React.createElement("input", {
+      style: inputStyle,
+      value: correctReason,
+      onChange: e => setCorrectReason(e.target.value),
+      placeholder: "e.g. wrong value entered \u2014 should be Y not X",
+      autoFocus: true
+    }), React.createElement("div", {
       style: {
         fontSize: 11,
         color: 'var(--muted)'
       }
-    }, "Edits are allowed while the submission is pending. ", fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'), React.createElement("div", {
+    }, "Your edit request goes to an administrator for review \u2014 the recorded value won\u2019t change until it\u2019s approved.")), editable && !correcting && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, s.status === 'approved' ? 'This submission is approved — saving re-applies your changes to the live dashboard immediately.' : s.status === 'rejected' ? 'This submission was rejected — saving updates the record; approve it to re-apply to live data.' : fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -31487,7 +31573,20 @@ window.LockScreen = LockScreen;
     }, React.createElement("button", {
       className: "btn sm",
       onClick: onClose
-    }, "Close"), editable && React.createElement("button", {
+    }, "Close"), canRequestEdit && !correcting && React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setCorrecting(true)
+    }, React.createElement(Ic, {
+      d: I.edit,
+      s: 14
+    }), "Request an edit"), correcting && React.createElement("button", {
+      className: "btn pri sm",
+      onClick: submitCorrection,
+      disabled: busy
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 14
+    }), busy ? 'Sending…' : 'Submit edit request'), editable && !correcting && React.createElement("button", {
       className: "btn pri sm",
       onClick: save,
       disabled: busy

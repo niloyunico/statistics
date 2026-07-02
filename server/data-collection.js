@@ -808,10 +808,11 @@ function mount(app, opts) {
     try {
       const s = await getSubmissionById(req.params.id);
       if (!s) return res.status(404).json({ ok: false, error: 'Submission not found.' });
-      if (s.status !== 'pending') return res.status(400).json({ ok: false, error: 'Only pending submissions can be edited.' });
-      // Admins edit anything; a collector may edit only their OWN pending submission (values
-      // only — not re-assigning it to a different department/area/month).
+      // Admins edit anything AT ANY TIME (incl. approved — the change re-applies to live data
+      // below); a collector may edit only their OWN still-pending submission (values only, no
+      // re-assign to a different department/area/month).
       const isAdmin = !(req.user && req.user.role && req.user.role !== 'Administrator');
+      if (s.status !== 'pending' && !isAdmin) return res.status(400).json({ ok: false, error: 'Only pending submissions can be edited.' });
       if (!isAdmin) {
         const scope = await getUserScope(req.user.sub);
         const mine = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
@@ -847,7 +848,16 @@ function mount(app, opts) {
           patch.incidents = b.incidents.map((x) => { const o = {}; IF.forEach((k) => { if (x && x[k] != null && x[k] !== '') o[k] = String(x[k]); }); return o; }).filter((o) => Object.keys(o).length);
         }
       }
-      res.json({ ok: true, submission: await setSubmissionStatus(req.params.id, patch) });
+      const updated = await setSubmissionStatus(req.params.id, patch);
+      // An APPROVED submission was already written to the canonical (live) collections at approve
+      // time; an admin editing it later must RE-APPLY so the dashboard reflects the correction.
+      if (updated && updated.status === 'approved') {
+        try {
+          if (updated.type === 'patient') await applyPatient(updated);
+          else if (updated.type === 'quality') await applyQuality(updated);
+        } catch (e) { return res.status(400).json({ ok: false, error: 'Saved, but re-applying to live data failed: ' + String(e.message || e) }); }
+      }
+      res.json({ ok: true, submission: updated });
     } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
 
