@@ -136,7 +136,7 @@ function unicoPeriodMonths(allMonths, period){
   if(period.mode==='latest') return allMonths.slice(-1);
   if(period.mode==='last3')  return allMonths.slice(-3);
   if(period.mode==='last6')  return allMonths.slice(-6);
-  if(period.mode==='q1'){ const q=['Jan-26','Feb-26','Mar-26'].filter(m=>allMonths.includes(m)); return q.length?q:null; }
+  if(period.mode==='q1'){ const yy=allMonths.length?String(allMonths[allMonths.length-1]).split('-')[1]:''; const q=['Jan-'+yy,'Feb-'+yy,'Mar-'+yy].filter(m=>allMonths.includes(m)); return q.length?q:null; }
   if(period.mode==='custom'){
     const fi=allMonths.indexOf(period.from), ti=allMonths.indexOf(period.to);
     if(fi<0||ti<0) return null;
@@ -225,7 +225,8 @@ function PeriodPill({period, setPeriod, depts=[]}){
   const fmtKey=k=>String(k||'').replace('-',' ');
   const active=unicoPeriodMonths(allMonths, period)||allMonths;
   const label=active.length?`${fmtKey(active[0])} – ${fmtKey(active[active.length-1])}`:'No data';
-  const presets=[['all','All time'],['last3','Last 3 months'],['last6','Last 6 months'],['q1','Q1 2026'],['latest','Latest month']];
+  const q1yr = allMonths.length?('20'+String(allMonths[allMonths.length-1]).split('-')[1]):'';
+  const presets=[['all','All time'],['last3','Last 3 months'],['last6','Last 6 months'],['q1','Q1'+(q1yr?' '+q1yr:'')],['latest','Latest month']];
   const cur=period&&period.mode||'all';
   const pick=mode=>{ setPeriod({mode}); setOpen(false); };
   const first=allMonths[0], last=allMonths[allMonths.length-1];

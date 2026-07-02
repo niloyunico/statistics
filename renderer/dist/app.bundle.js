@@ -3828,7 +3828,8 @@ function unicoPeriodMonths(allMonths, period) {
   if (period.mode === 'last3') return allMonths.slice(-3);
   if (period.mode === 'last6') return allMonths.slice(-6);
   if (period.mode === 'q1') {
-    const q = ['Jan-26', 'Feb-26', 'Mar-26'].filter(m => allMonths.includes(m));
+    const yy = allMonths.length ? String(allMonths[allMonths.length - 1]).split('-')[1] : '';
+    const q = ['Jan-' + yy, 'Feb-' + yy, 'Mar-' + yy].filter(m => allMonths.includes(m));
     return q.length ? q : null;
   }
   if (period.mode === 'custom') {
@@ -4032,7 +4033,8 @@ function PeriodPill({
   const fmtKey = k => String(k || '').replace('-', ' ');
   const active = unicoPeriodMonths(allMonths, period) || allMonths;
   const label = active.length ? `${fmtKey(active[0])} – ${fmtKey(active[active.length - 1])}` : 'No data';
-  const presets = [['all', 'All time'], ['last3', 'Last 3 months'], ['last6', 'Last 6 months'], ['q1', 'Q1 2026'], ['latest', 'Latest month']];
+  const q1yr = allMonths.length ? '20' + String(allMonths[allMonths.length - 1]).split('-')[1] : '';
+  const presets = [['all', 'All time'], ['last3', 'Last 3 months'], ['last6', 'Last 6 months'], ['q1', 'Q1' + (q1yr ? ' ' + q1yr : '')], ['latest', 'Latest month']];
   const cur = period && period.mode || 'all';
   const pick = mode => {
     setPeriod({
@@ -10644,7 +10646,9 @@ function msPrimaryCol(d) {
 }
 function msReportHTML(depts) {
   const date = new Date().toISOString().slice(0, 10);
-  let body = '<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Monthly Statistics Report</h1>' + '<div style="font-family:Calibri;color:#555;margin-bottom:12px">FY 2025-26 · generated ' + date + ' · Confidential</div>';
+  const yrs = [...new Set((depts || []).flatMap(d => d.months || []).map(m => String(m).split('-')[1]).filter(Boolean))].sort();
+  const fy = yrs.length ? 'FY 20' + yrs[0] + '–' + yrs[yrs.length - 1] : 'FY';
+  let body = '<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Monthly Statistics Report</h1>' + '<div style="font-family:Calibri;color:#555;margin-bottom:12px">' + fy + ' · generated ' + date + ' · Confidential</div>';
   depts.forEach(d => {
     const pc = msPrimaryCol(d),
       tot = d.series.reduce((s, r) => s + (r[d.primary] || 0), 0),
@@ -10897,6 +10901,7 @@ function MonthlyStatsReport({
   };
   const firstLabel = AX.length ? MF[AX[0]] || AX[0] : '—';
   const lastLabel = AX.length ? MF[AX[AX.length - 1]] || AX[AX.length - 1] : '—';
+  const fyLabel = AX.length ? 'FY 20' + String(AX[0]).split('-')[1] + '–' + String(AX[AX.length - 1]).split('-')[1] : 'FY —';
   return React.createElement("div", null, React.createElement("div", {
     style: {
       display: 'flex',
@@ -11052,7 +11057,7 @@ function MonthlyStatsReport({
       fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, "Monthly Statistics Report \xB7 FY 2025\u201326 \xB7 ", firstLabel, " \u2013 ", lastLabel)), React.createElement("div", {
+  }, "Monthly Statistics Report \xB7 ", fyLabel, " \xB7 ", firstLabel, " \u2013 ", lastLabel)), React.createElement("div", {
     style: {
       textAlign: 'center'
     }
@@ -11229,9 +11234,10 @@ function Reports({
   const toggle = id => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   const chosen = depts.filter(d => sel.includes(d.id));
   const allMonths = [...new Set(depts.flatMap(d => d.months))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b));
+  const lyy = allMonths.length ? String(allMonths[allMonths.length - 1]).split('-')[1] : String(new Date().getFullYear() % 100);
   const pMonths = (() => {
-    if (period.mode === 'q1') return ['Jan-26', 'Feb-26', 'Mar-26'];
-    if (period.mode === 'apr') return ['Apr-26'];
+    if (period.mode === 'q1') return ['Jan-' + lyy, 'Feb-' + lyy, 'Mar-' + lyy];
+    if (period.mode === 'apr') return ['Apr-' + lyy];
     if (period.mode === 'last6') return allMonths.slice(-6);
     if (period.mode === 'custom') {
       const fi = allMonths.indexOf(period.from || allMonths[0]),
@@ -11324,7 +11330,7 @@ function Reports({
     style: {
       color: 'var(--ink-2)'
     }
-  }, "05/18/2026")));
+  }, new Date().toLocaleDateString('en-US'))));
   const Footer = ({
     n,
     total
@@ -11759,9 +11765,9 @@ function Reports({
     value: "all"
   }, "Full period (", allMonths[0], " \u2013 ", allMonths[allMonths.length - 1], ")"), React.createElement("option", {
     value: "q1"
-  }, "Q1 2026 (Jan\u2013Mar)"), React.createElement("option", {
+  }, "Q1 20", lyy, " (Jan\u2013Mar)"), React.createElement("option", {
     value: "apr"
-  }, "April 2026 only"), React.createElement("option", {
+  }, "April 20", lyy, " only"), React.createElement("option", {
     value: "last6"
   }, "Last 6 months"), React.createElement("option", {
     value: "custom"

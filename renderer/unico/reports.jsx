@@ -54,8 +54,11 @@ function msPrimaryCol(d){ return (d.cols||[]).find(c=>c.id===d.primary) || (d.co
 // table over that dept's OWN d.months axis. No incident section (§5.3).
 function msReportHTML(depts){
   const date=new Date().toISOString().slice(0,10);
+  // FY label from the real data years, not a hardcoded string.
+  const yrs=[...new Set((depts||[]).flatMap(d=>d.months||[]).map(m=>String(m).split('-')[1]).filter(Boolean))].sort();
+  const fy=yrs.length?('FY 20'+yrs[0]+'–'+yrs[yrs.length-1]):'FY';
   let body='<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Monthly Statistics Report</h1>'
-    +'<div style="font-family:Calibri;color:#555;margin-bottom:12px">FY 2025-26 · generated '+date+' · Confidential</div>';
+    +'<div style="font-family:Calibri;color:#555;margin-bottom:12px">'+fy+' · generated '+date+' · Confidential</div>';
   depts.forEach(d=>{
     const pc=msPrimaryCol(d), tot=d.series.reduce((s,r)=>s+(r[d.primary]||0),0), peak=d.series.length?Math.max(...d.series.map(r=>r[d.primary]||0)):0;
     body+='<h2 style="font-family:Calibri;color:#16202e;margin:16px 0 3px">'+msEsc(d.name)+'</h2>'
@@ -167,6 +170,8 @@ function MonthlyStatsReport({depts}){
 
   const firstLabel = AX.length?(MF[AX[0]]||AX[0]):'—';
   const lastLabel = AX.length?(MF[AX[AX.length-1]]||AX[AX.length-1]):'—';
+  // FY label derived from the actual data range (never hardcoded).
+  const fyLabel = AX.length?('FY 20'+String(AX[0]).split('-')[1]+'–'+String(AX[AX.length-1]).split('-')[1]):'FY —';
 
   return (
     <div>
@@ -216,7 +221,7 @@ function MonthlyStatsReport({depts}){
         <div style={{padding:'14px 18px',borderBottom:'1px solid var(--line-2)',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',background:'linear-gradient(150deg,#ffffff,#f5fafd)'}}>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:15,fontWeight:700,color:'var(--ink)'}}>UNICO Hospitals — {scopeName}</div>
-            <div style={{fontSize:11.5,color:'var(--muted)'}}>Monthly Statistics Report · FY 2025–26 · {firstLabel} – {lastLabel}</div>
+            <div style={{fontSize:11.5,color:'var(--muted)'}}>Monthly Statistics Report · {fyLabel} · {firstLabel} – {lastLabel}</div>
           </div>
           {/* DIVERGENCE: no zero-defect/breaches — statistics has no benchmarks (§4.4/§7.1) */}
           <div style={{textAlign:'center'}}>
@@ -289,9 +294,11 @@ function Reports({depts}){
   const chosen=depts.filter(d=>sel.includes(d.id));
 
   const allMonths=[...new Set(depts.flatMap(d=>d.months))].sort((a,b)=>MO.indexOf(a)-MO.indexOf(b));
+  // Latest calendar year present in the data — drives the Q1/April presets dynamically.
+  const lyy = allMonths.length ? String(allMonths[allMonths.length-1]).split('-')[1] : String(new Date().getFullYear()%100);
   const pMonths=(()=>{
-    if(period.mode==='q1') return ['Jan-26','Feb-26','Mar-26'];
-    if(period.mode==='apr') return ['Apr-26'];
+    if(period.mode==='q1') return ['Jan-'+lyy,'Feb-'+lyy,'Mar-'+lyy];
+    if(period.mode==='apr') return ['Apr-'+lyy];
     if(period.mode==='last6') return allMonths.slice(-6);
     if(period.mode==='custom'){const fi=allMonths.indexOf(period.from||allMonths[0]),ti=allMonths.indexOf(period.to||allMonths[allMonths.length-1]);const a=Math.min(fi,ti),b=Math.max(fi,ti);return allMonths.slice(a,b+1);}
     return allMonths;
@@ -320,7 +327,7 @@ function Reports({depts}){
         <div style={{fontSize:14,fontWeight:700,color:'var(--ink)'}}>{hdrTitle||'Report'}</div>
         <div style={{fontSize:10.5,color:'var(--muted)',letterSpacing:.4,textTransform:'uppercase',marginTop:2}}>{hdrSub?hdrSub+' · ':''}{rangeLabel}</div>
       </div>
-      <div className="spacer"/><div style={{textAlign:'right',fontSize:10,color:'var(--faint)'}}>Generated<br/><b className="num" style={{color:'var(--ink-2)'}}>05/18/2026</b></div>
+      <div className="spacer"/><div style={{textAlign:'right',fontSize:10,color:'var(--faint)'}}>Generated<br/><b className="num" style={{color:'var(--ink-2)'}}>{new Date().toLocaleDateString('en-US')}</b></div>
     </div>
   );
   const Footer=({n,total})=>(
@@ -494,8 +501,8 @@ function Reports({depts}){
               {fieldLabel('Reporting period')}
               <select value={period.mode} onChange={e=>setPeriod({mode:e.target.value,from:allMonths[0],to:allMonths[allMonths.length-1]})} style={{...sel2,width:'100%'}}>
                 <option value="all">Full period ({allMonths[0]} – {allMonths[allMonths.length-1]})</option>
-                <option value="q1">Q1 2026 (Jan–Mar)</option>
-                <option value="apr">April 2026 only</option>
+                <option value="q1">Q1 20{lyy} (Jan–Mar)</option>
+                <option value="apr">April 20{lyy} only</option>
                 <option value="last6">Last 6 months</option>
                 <option value="custom">Custom range…</option>
               </select>
