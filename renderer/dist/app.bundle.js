@@ -16792,7 +16792,7 @@ function QCPagedPreview({
         b = r.bottom - rootTop;
       if (r.height > 4 && r.height <= usableH) atoms.push([t, b]);
     };
-    root.querySelectorAll('svg,table,tr').forEach(push);
+    root.querySelectorAll('svg,table,tr,.pdf-foot,.qc-band').forEach(push);
     root.querySelectorAll('*').forEach(el => {
       const s = el.getAttribute('style');
       if (s && s.indexOf('break-inside') >= 0) push(el);
@@ -21209,7 +21209,7 @@ function QCReportBuilder({
   }, React.createElement("button", {
     onClick: () => generateFullReport('pdf', 'board'),
     disabled: exporting,
-    title: "One click: all departments + full fiscal year + Board template -> complete report",
+    title: "One click: all departments + full reporting year + Board template -> complete report",
     style: {
       ...expBtn,
       background: P.green,
@@ -21248,7 +21248,12 @@ function QCReportBuilder({
     }
   }), React.createElement("button", {
     onClick: doPrint,
-    style: expBtn
+    disabled: chosen.length === 0,
+    style: {
+      ...expBtn,
+      opacity: chosen.length === 0 ? .6 : 1,
+      cursor: chosen.length === 0 ? 'default' : 'pointer'
+    }
   }, React.createElement("svg", {
     width: "14",
     height: "14",
@@ -21308,7 +21313,7 @@ function QCReportBuilder({
     }
   }, "\u2715")), pdfRoot && chosen.length > 0 && ReactDOM.createPortal(React.createElement("div", {
     className: "pdf-doc" + (portrait ? ' portrait' : '')
-  }, React.createElement("style", null, '@media print{body.pdf-export-mode .pdf-doc .pdf-page{page:qc-rpt-sheet}@page qc-rpt-sheet{size:' + pageSize + (portrait ? ' portrait' : ' landscape') + ';margin:6mm}}'), pages.map((pg, i) => React.createElement("section", {
+  }, React.createElement("style", null, '@media print{body.pdf-export-mode .pdf-doc .pdf-page,body.pdf-export-mode .pdf-doc.portrait .pdf-page{page:qc-rpt-sheet}@page qc-rpt-sheet{size:' + pageSize + (portrait ? ' portrait' : ' landscape') + ';margin:6mm}}'), pages.map((pg, i) => React.createElement("section", {
     className: "pdf-page",
     key: i
   }, pg.kind === 'cover' ? React.createElement(CoverPage, {
@@ -21495,7 +21500,7 @@ function QCReportBuilder({
       color: P.muted,
       marginTop: 6
     }
-  }, reportType === 'summary' ? 'KPI cards + chart per department, one page each.' : reportType === 'detail' ? 'Every indicator × month with benchmark & RAG, per department.' : reportType === 'heatmap' ? 'Year-wise indicator × DEPARTMENT matrix (all departments on one page, like the NQI sheet), colour-coded by status, with the year’s occurred-incident details.' : reportType === 'monthly' ? 'Month-wise, ALL-department matrix (indicator × department) — one page per month, with that month’s occurred-incident details (like the NQI monthly sheet).' : reportType === 'handhygiene' ? 'WHO-style Hand Hygiene Compliance report — monthly compliance trend vs the ≥ benchmark, staff-group (Nurse / Doctor / PCA / Other) and by-department breakdown. Uses the selected departments’ hand-hygiene indicators.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Fiscal year'), React.createElement("select", {
+  }, reportType === 'summary' ? 'KPI cards + chart per department, one page each.' : reportType === 'detail' ? 'Every indicator × month with benchmark & RAG, per department.' : reportType === 'heatmap' ? 'Year-wise indicator × DEPARTMENT matrix (all departments on one page, like the NQI sheet), colour-coded by status, with the year’s occurred-incident details.' : reportType === 'monthly' ? 'Month-wise, ALL-department matrix (indicator × department) — one page per month, with that month’s occurred-incident details (like the NQI monthly sheet).' : reportType === 'handhygiene' ? 'WHO-style Hand Hygiene Compliance report — monthly compliance trend vs the ≥ benchmark, staff-group (Nurse / Doctor / PCA / Other) and by-department breakdown. Uses the selected departments’ hand-hygiene indicators.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting year'), React.createElement("select", {
     value: fy,
     onChange: e => {
       setFy(Number(e.target.value));
@@ -21517,7 +21522,7 @@ function QCReportBuilder({
       color: P.muted,
       marginTop: 6
     }
-  }, "Reporting year runs Jun\u2013May. Switch it to view a different year; every page below follows this selection.")), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
+  }, "Reporting year runs Jan\u2013Dec. Switch it to view a different year; every page below follows this selection.")), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
     value: period.mode,
     onChange: e => setPeriod({
       mode: e.target.value,

@@ -1052,7 +1052,9 @@ function QCPagedPreview({pageW, pageMinH, children}){
     // Atomic blocks that must never be split across a page: charts, tables, and anything
     // marked page-break-inside:avoid (incident cards, KPI/definition/CAPA blocks, etc.).
     const atoms=[]; const push=el=>{ const r=el.getBoundingClientRect(); const t=r.top-rootTop, b=r.bottom-rootTop; if(r.height>4 && r.height<=usableH) atoms.push([t,b]); };
-    root.querySelectorAll('svg,table,tr').forEach(push);
+    // .pdf-foot + .qc-band included: the footer band ('Page n of N') and section headers
+    // are small plain divs the old scan didn't protect, so a break could land mid-footer.
+    root.querySelectorAll('svg,table,tr,.pdf-foot,.qc-band').forEach(push);
     root.querySelectorAll('*').forEach(el=>{ const s=el.getAttribute('style'); if(s && s.indexOf('break-inside')>=0) push(el); });
     const st=[0]; let s=0, guard=0;
     while(s+usableH < H-2 && guard++<80){
@@ -2659,7 +2661,7 @@ function QCReportBuilder({depts}){
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
           {/* ONE-CLICK: all departments + full fiscal year + a board-ready template, exported in one go. */}
-          <button onClick={()=>generateFullReport('pdf','board')} disabled={exporting} title="One click: all departments + full fiscal year + Board template -> complete report"
+          <button onClick={()=>generateFullReport('pdf','board')} disabled={exporting} title="One click: all departments + full reporting year + Board template -> complete report"
             style={{...expBtn,background:P.green,borderColor:P.green,color:'#fff',fontWeight:700,opacity:exporting?.6:1}}><DownIc/>{exporting?'Generating…':'Generate NQI Report'}</button>
           <select value={activeTemplate} onChange={e=>{ const v=e.target.value; if(v==='custom'){ setActiveTemplate('custom'); } else { applyTemplate(v); } }} title="Report template preset"
             style={{...expBtn,paddingRight:22,cursor:'pointer'}}>
@@ -2667,7 +2669,7 @@ function QCReportBuilder({depts}){
             {Object.keys(QC_TEMPLATES).map(k=><option key={k} value={k}>{QC_TEMPLATES[k].label}</option>)}
           </select>
           <span style={{width:1,height:22,background:P.line,margin:'0 2px'}}/>
-          <button onClick={doPrint} style={expBtn}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z"/></svg>Print</button>
+          <button onClick={doPrint} disabled={chosen.length===0} style={{...expBtn,opacity:chosen.length===0?.6:1,cursor:chosen.length===0?'default':'pointer'}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z"/></svg>Print</button>
           <button onClick={()=>doExportPDF()} disabled={exporting||chosen.length===0} style={{...expBtn,background:P.blue,borderColor:P.blue,color:'#fff',opacity:(exporting||chosen.length===0)?.6:1}}><DownIc/>{exporting?'Exporting…':'Export PDF'}</button>
           {[['excel','Excel'],['word','Word'],['csv','CSV']].map(([f,l])=>
             <button key={f} onClick={()=>qcExportBuilder(f)} disabled={chosen.length===0} style={{...expBtn,opacity:chosen.length===0?.6:1,cursor:chosen.length===0?'default':'pointer'}}><DownIc/>{l}</button>)}
@@ -2691,7 +2693,10 @@ function QCReportBuilder({depts}){
               defines A4 @page rules (rpt-land/rpt-port); this dynamic override makes
               window.print()/PDF respect the chosen A4/A3/Letter + orientation so the
               printed sheet matches the on-screen preview and the Office export. */}
-          <style>{'@media print{body.pdf-export-mode .pdf-doc .pdf-page{page:qc-rpt-sheet}@page qc-rpt-sheet{size:'+pageSize+(portrait?' portrait':' landscape')+';margin:6mm}}'}</style>
+          {/* the .pdf-doc.portrait selector variant must be included too: theme.css's
+              'body.pdf-export-mode .pdf-doc.portrait .pdf-page' rule (hardcoded A4) has
+              higher specificity and silently overrode A3/Letter PORTRAIT page setups */}
+          <style>{'@media print{body.pdf-export-mode .pdf-doc .pdf-page,body.pdf-export-mode .pdf-doc.portrait .pdf-page{page:qc-rpt-sheet}@page qc-rpt-sheet{size:'+pageSize+(portrait?' portrait':' landscape')+';margin:6mm}}'}</style>
           {pages.map((pg,i)=>(
             <section className="pdf-page" key={i}>
               {pg.kind==='cover'
@@ -2757,11 +2762,11 @@ function QCReportBuilder({depts}){
               </div>
             </div>
             <div>
-              {fieldLabel('Fiscal year')}
+              {fieldLabel('Reporting year')}
               <select value={fy} onChange={e=>{setFy(Number(e.target.value));setPeriod({mode:'all'});setPageIdx(0);}} style={{...sel2,width:'100%'}}>
                 {fyOptions(depts).map(y=><option key={y} value={y}>{fyLabelOf(y)}{y===currentFy()?' · current':''}</option>)}
               </select>
-              <div style={{fontSize:11,color:P.muted,marginTop:6}}>Reporting year runs Jun–May. Switch it to view a different year; every page below follows this selection.</div>
+              <div style={{fontSize:11,color:P.muted,marginTop:6}}>Reporting year runs Jan–Dec. Switch it to view a different year; every page below follows this selection.</div>
             </div>
             <div>
               {fieldLabel('Reporting period')}
