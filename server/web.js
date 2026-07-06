@@ -112,6 +112,22 @@ function scopeDeptOverlay(raw, deptIds) {
   } catch (e) { return null; }
 }
 
+// The patient-statistics departments a collector can access = their explicit department
+// list UNION the departments their quality areas map BACK to (an area and a department are
+// two sides of ONE assignment) UNION every department when hospital-wide. Departments only
+// ever derived quality areas, never the reverse — so a person assigned purely via quality
+// (or hospital-wide) was left with an empty `departments` and saw NO patient-statistics
+// departments at all. Returns a Set of canonical department ids.
+function effectiveDeptIds(scope, deptMap) {
+  const out = new Set(scope && Array.isArray(scope.departments) ? scope.departments : []);
+  const qk = (deptMap && deptMap.qkToId) || {};
+  (scope && scope.qualityAreas || []).forEach((k) => { const id = qk[k]; if (id && id !== deptmap.HOSPITAL) out.add(id); });
+  if (scope && scope.allQualityAreas && deptMap && Array.isArray(deptMap.patientDepts)) {
+    deptMap.patientDepts.forEach((id) => out.add(id));
+  }
+  return out;
+}
+
 async function serveIndex(req, res) {
   let html;
   try { html = fs.readFileSync(INDEX_FILE, 'utf8'); }
@@ -141,8 +157,12 @@ async function serveIndex(req, res) {
   // shows each user only their own data.
   let scopeUser = scopeRes || null;
   if (scopeUser && scopeUser.role === 'collector') {
-    const da = scopeUser.departments || [], qa = scopeUser.qualityAreas || [];
-    depts = depts.filter((d) => da.includes(d.id));
+    const qa = scopeUser.qualityAreas || [];
+    // departments the collector can report = explicit list ∪ areas-mapped-back-to-depts
+    // ∪ all (hospital-wide), so a quality-only / hospital-wide person still gets depts.
+    const daSet = effectiveDeptIds(scopeUser, deptMap);
+    const da = [...daSet];
+    depts = depts.filter((d) => daSet.has(d.id));
     // Area scoping (qa) is preserved exactly; when qualityIndicators[area] is a
     // non-empty array, additionally narrow that area's indicators to those ids.
     // Empty/absent entry => keep ALL indicators (BACKWARD-COMPAT). The area object is
@@ -269,7 +289,7 @@ function loginPage(opts) {
     + err + '\n'
     + nextField
     + '<div class="grp"><label for="u">' + (collect ? 'Emp ID' : 'Username') + '</label>'
-    + '<input id="u" name="username" value="' + username + '" autocomplete="username" placeholder="' + (collect ? 'e.g. rabbi.miah' : 'Your username') + '" autofocus/></div>\n'
+    + '<input id="u" name="username" value="' + username + '" autocomplete="username" placeholder="' + (collect ? 'Emp ID' : 'Your username') + '" autofocus/></div>\n'
     + '<div class="grp"><label for="p">Password</label>'
     + '<input id="p" name="password" type="password" autocomplete="current-password" placeholder="Enter your password"/></div>\n'
     + '<button class="btn" type="submit">Sign in</button>\n'
@@ -362,8 +382,9 @@ app.get('/api/departments', session.requireApi, async (req, res) => {
     const scope = await collectorScope(req);
     const out = { ok: true };
     if (scope) {
-      const da = scope.departments || [];
-      depts = depts.filter((d) => da.includes(d.id));
+      const daSet = effectiveDeptIds(scope, await deptmap.get());
+      const da = [...daSet];
+      depts = depts.filter((d) => daSet.has(d.id));
       // re-scoped config overlay so an open collector portal picks up admin edits
       // (custom columns / renames) on live refresh, not only at page load
       try { const dov = scopeDeptOverlay((await getAppData()).data['unico_store_v3'], da); if (dov) out.overlay = { unico_store_v3: JSON.stringify(dov) }; } catch (e) { }

@@ -644,7 +644,7 @@
     [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'],
     [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'],
     [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'],
-    [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of catheter/, 'L5'],
+    [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/surgical safety/, 'C8'], [/accidental removal of catheter/, 'L5'],
   ];
   function hqiGuideFor(name) {
     try {
@@ -1213,6 +1213,15 @@
     const parts = Object.keys(v).map((k) => k + ':' + v[k]);
     return monthLabel(s.month) + ' — ' + (parts.length ? parts.join(', ') : '(no values)');
   }
+  // Table-cell version of valuesSummary with the key facts HIGHLIGHTED for fast
+  // scanning: the reporting month gets an amber chip, the submitted value is bold.
+  const dcMonthChip = (m) => <span style={{ background: '#fff4e0', color: '#9a6b00', fontWeight: 700, padding: '1px 7px', borderRadius: 6, whiteSpace: 'nowrap' }}>{monthLabel(m)}</span>;
+  function valuesSummaryEl(s) {
+    if (s.type === 'quality') return <>{(s.indicatorName || '') + ' · '}{dcMonthChip(s.month)}{s.value != null && <> = <b style={{ color: 'var(--ink)' }}>{s.value}</b></>}{s.remark ? ' (' + s.remark + ')' : ''}</>;
+    const v = s.values || {};
+    const parts = Object.keys(v).map((k) => k + ':' + v[k]);
+    return <>{dcMonthChip(s.month)}{' — ' + (parts.length ? parts.join(', ') : '(no values)')}</>;
+  }
   // Full submission viewer. Admins can correct a PENDING submission's values
   // (PATCH /api/submissions/:id) before approving; collectors see it read-only.
   function SubmissionDetail({ s, canEdit, fullEdit = true, onClose, onSaved }) {
@@ -1586,11 +1595,16 @@
       <tr key={s.id} onClick={() => setDetail(s)} title="Open to view / edit" style={{ background: grouped ? rowFill(s) : undefined, cursor: 'pointer' }}>
         <td onClick={(e) => e.stopPropagation()}>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
         <td style={{ whiteSpace: 'nowrap' }} className="num">{when(s.submittedAt)}</td>
-        <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)' }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
+        <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)', color: s.type === 'quality' ? 'var(--blue-700,#0b6aa2)' : 'var(--pos)', fontWeight: 700 }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
         <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px' }}>⚠ {dupCount[dupKey(s)]}×</span>}{s.isCorrection && <span title={s.correctionReason || 'Correction / edit request'} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#7c4dd6', background: 'rgba(124,77,214,.12)', borderRadius: 999, padding: '1px 7px' }}>✎ correction</span>}</td>
-        <td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 320 }}>{valuesSummary(s)}</td>
-        <td style={{ whiteSpace: 'nowrap' }}>{(s.responsible && s.responsible.name) || '—'}</td>
-        <td style={{ whiteSpace: 'nowrap' }}>{s.submittedBy || '—'}</td>
+        <td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 320 }}>{valuesSummaryEl(s)}</td>
+        {/* ONE person column: responsible and submitter are almost always the same
+            name — show it once (bold, eye-catching), with "by …" only when they differ. */}
+        <td style={{ whiteSpace: 'nowrap' }}>
+          <b style={{ color: 'var(--ink)' }}>{(s.responsible && s.responsible.name) || s.submittedBy || '—'}</b>
+          {s.submittedBy && s.responsible && s.responsible.name && s.submittedBy !== s.responsible.name &&
+            <div style={{ fontSize: 11, color: 'var(--muted)' }}>by {s.submittedBy}</div>}
+        </td>
         <td>{statusChip(s.status)}</td>
         <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
           <button className="btn sm" onClick={() => setDetail(s)} style={{ marginRight: 5 }}><Ic d={I.search} s={13} />View</button>
@@ -1659,12 +1673,12 @@
           {rows === null ? <div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div>
             : rows.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No {filter === 'all' ? '' : filter} submissions.</div>
               : <table className="tbl" style={{ width: '100%' }}>
-                <thead><tr><th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={(e) => { if (e.target.checked) { const m = {}; pendingRows.forEach((s) => { m[s.id] = true; }); setSel(m); } else setSel({}); }} /></th><th>When</th><th>Type</th><th>Target</th><th>Data</th><th>Responsible</th><th>By</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={(e) => { if (e.target.checked) { const m = {}; pendingRows.forEach((s) => { m[s.id] = true; }); setSel(m); } else setSel({}); }} /></th><th>When</th><th>Type</th><th>Target</th><th>Data</th><th>Responsible / By</th><th>Status</th><th></th></tr></thead>
                 <tbody>
                   {grouped
                     ? groupNames.map((g) => (
                       <React.Fragment key={g}>
-                        <tr><td colSpan={9} style={{ background: 'var(--panel-2)', fontWeight: 700, color: 'var(--ink)', padding: '7px 12px', borderTop: '1px solid var(--line-2)' }}>{g} <span style={{ fontWeight: 500, color: 'var(--muted)', fontSize: 12 }}>· {groups[g].length} submission{groups[g].length > 1 ? 's' : ''}</span></td></tr>
+                        <tr><td colSpan={8} style={{ background: 'var(--panel-2)', fontWeight: 700, color: 'var(--ink)', padding: '7px 12px', borderTop: '1px solid var(--line-2)' }}>{g} <span style={{ fontWeight: 500, color: 'var(--muted)', fontSize: 12 }}>· {groups[g].length} submission{groups[g].length > 1 ? 's' : ''}</span></td></tr>
                         {groups[g].map(submissionRow)}
                       </React.Fragment>
                     ))

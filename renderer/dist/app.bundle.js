@@ -13969,7 +13969,7 @@ var HQI_STANDARDS = [{
 }, {
   "code": "A2",
   "sec": "A",
-  "name": "CAUTI Rate",
+  "name": "Catheter-Associated UTI (CAUTI)",
   "ft": "rate1000",
   "dir": "low",
   "unit": "per 1000 cath-days",
@@ -13982,7 +13982,7 @@ var HQI_STANDARDS = [{
 }, {
   "code": "A3",
   "sec": "A",
-  "name": "CLABSI Rate",
+  "name": "Central Line-Associated Bloodstream Infection (CLABSI)",
   "ft": "rate1000",
   "dir": "low",
   "unit": "per 1000 line-days",
@@ -14307,7 +14307,7 @@ var HQI_STANDARDS = [{
 }, {
   "code": "C6",
   "sec": "C",
-  "name": "Hospital-Acquired DVT",
+  "name": "Deep Vein Thrombosis (DVT)",
   "ft": "count",
   "dir": "low",
   "unit": "count",
@@ -14720,19 +14720,6 @@ var HQI_STANDARDS = [{
   "ref": "WHO/UNICEF 2018 BFHI",
   "num": "Breastfeeding ≤1 h",
   "den": "Live births"
-}, {
-  "code": "F8",
-  "sec": "F",
-  "name": "NICU CLABSI Rate",
-  "ft": "rate1000",
-  "dir": "low",
-  "unit": "per 1000 line-days",
-  "bench": "<1",
-  "bv": 1,
-  "expr": "(NICU CLABSI events ÷ NICU central-line days) × 1,000",
-  "ref": "CDC/NHSN 2024; Polin 2012",
-  "num": "NICU CLABSI events",
-  "den": "NICU central-line days"
 }, {
   "code": "F9",
   "sec": "F",
@@ -15529,7 +15516,7 @@ function catOf(n) {
 }
 function stdMatch(name) {
   const n = (name || '').toLowerCase();
-  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication (administration )?error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of ett|unplanned extubation|extubation/, 'D8'], [/accidental removal of catheter/, 'L5'], [/catheter dislodgement|dislodgement/, 'L4']];
+  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication (administration )?error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/surgical safety/, 'C8'], [/accidental removal of ett|unplanned extubation|extubation/, 'D8'], [/accidental removal of catheter/, 'L5'], [/catheter dislodgement|dislodgement/, 'L4']];
   for (const [re, code] of T) {
     if (re.test(n)) return code;
   }
@@ -15670,7 +15657,7 @@ function QCDashboard({
         const partial = sub > 0 && sub < total;
         const bg = sub === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : partial ? '#fdf3e3' : '#e7f6ed';
         const fg = sub === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : partial ? '#b26a0f' : '#1f9d57';
-        const sym = sub === 0 ? '–' : b > 0 ? String(b) : partial ? sub + '/' + total : '✓';
+        const sym = sub === 0 ? '–' : b > 0 ? sub + '/' + total + ' ✕' + b : partial ? sub + '/' + total : '✓';
         return {
           sym,
           bg,
@@ -24586,7 +24573,9 @@ function QCAdmin({
     const code = stdMatch(i.name);
     const rk = code && rowsByKey['std:' + code] ? 'std:' + code : stdByName[norm(i.name)];
     if (rk) {
-      rowsByKey[rk].set.add(d.key);
+      const row = rowsByKey[rk];
+      row.set.add(d.key);
+      (row.used || (row.used = {}))[i.name] = (row.used[i.name] || 0) + 1;
     } else {
       const k = 'cus:' + norm(i.name);
       if (!rowsByKey[k]) rowsByKey[k] = {
@@ -24600,6 +24589,17 @@ function QCAdmin({
       rowsByKey[k].set.add(d.key);
     }
   }));
+  Object.values(rowsByKey).forEach(r => {
+    if (r.used) {
+      const best = Object.keys(r.used).sort((a, b) => r.used[b] - r.used[a])[0];
+      if (best) {
+        r.name = best;
+        if (r.tmpl) r.tmpl = Object.assign({}, r.tmpl, {
+          name: best
+        });
+      }
+    }
+  });
   const assignNames = Object.values(rowsByKey).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   const assignCount = {};
   assignCols.forEach(c => {
@@ -31286,7 +31286,7 @@ window.LockScreen = LockScreen;
       }
     }, "Clear"))));
   }
-  const HQI_MATCH = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication (administration )?error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of catheter/, 'L5']];
+  const HQI_MATCH = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication (administration )?error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/surgical safety/, 'C8'], [/accidental removal of catheter/, 'L5']];
   function hqiGuideFor(name) {
     try {
       const G = typeof window !== 'undefined' && window.HQI_GUIDE || null;
@@ -32932,6 +32932,26 @@ window.LockScreen = LockScreen;
     const parts = Object.keys(v).map(k => k + ':' + v[k]);
     return monthLabel(s.month) + ' — ' + (parts.length ? parts.join(', ') : '(no values)');
   }
+  const dcMonthChip = m => React.createElement("span", {
+    style: {
+      background: '#fff4e0',
+      color: '#9a6b00',
+      fontWeight: 700,
+      padding: '1px 7px',
+      borderRadius: 6,
+      whiteSpace: 'nowrap'
+    }
+  }, monthLabel(m));
+  function valuesSummaryEl(s) {
+    if (s.type === 'quality') return React.createElement(React.Fragment, null, (s.indicatorName || '') + ' · ', dcMonthChip(s.month), s.value != null && React.createElement(React.Fragment, null, " = ", React.createElement("b", {
+      style: {
+        color: 'var(--ink)'
+      }
+    }, s.value)), s.remark ? ' (' + s.remark + ')' : '');
+    const v = s.values || {};
+    const parts = Object.keys(v).map(k => k + ':' + v[k]);
+    return React.createElement(React.Fragment, null, dcMonthChip(s.month), ' — ' + (parts.length ? parts.join(', ') : '(no values)'));
+  }
   function SubmissionDetail({
     s,
     canEdit,
@@ -34027,7 +34047,9 @@ window.LockScreen = LockScreen;
     }, when(s.submittedAt)), React.createElement("td", null, React.createElement("span", {
       className: "chip",
       style: {
-        background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)'
+        background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)',
+        color: s.type === 'quality' ? 'var(--blue-700,#0b6aa2)' : 'var(--pos)',
+        fontWeight: 700
       }
     }, s.type === 'quality' ? 'Quality' : 'Patient')), React.createElement("td", {
       style: {
@@ -34062,15 +34084,20 @@ window.LockScreen = LockScreen;
         color: 'var(--ink-2)',
         maxWidth: 320
       }
-    }, valuesSummary(s)), React.createElement("td", {
+    }, valuesSummaryEl(s)), React.createElement("td", {
       style: {
         whiteSpace: 'nowrap'
       }
-    }, s.responsible && s.responsible.name || '—'), React.createElement("td", {
+    }, React.createElement("b", {
       style: {
-        whiteSpace: 'nowrap'
+        color: 'var(--ink)'
       }
-    }, s.submittedBy || '—'), React.createElement("td", null, statusChip(s.status)), React.createElement("td", {
+    }, s.responsible && s.responsible.name || s.submittedBy || '—'), s.submittedBy && s.responsible && s.responsible.name && s.submittedBy !== s.responsible.name && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "by ", s.submittedBy)), React.createElement("td", null, statusChip(s.status)), React.createElement("td", {
       onClick: e => e.stopPropagation(),
       style: {
         textAlign: 'right',
@@ -34308,10 +34335,10 @@ window.LockScreen = LockScreen;
           setSel(m);
         } else setSel({});
       }
-    })), React.createElement("th", null, "When"), React.createElement("th", null, "Type"), React.createElement("th", null, "Target"), React.createElement("th", null, "Data"), React.createElement("th", null, "Responsible"), React.createElement("th", null, "By"), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, grouped ? groupNames.map(g => React.createElement(React.Fragment, {
+    })), React.createElement("th", null, "When"), React.createElement("th", null, "Type"), React.createElement("th", null, "Target"), React.createElement("th", null, "Data"), React.createElement("th", null, "Responsible / By"), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, grouped ? groupNames.map(g => React.createElement(React.Fragment, {
       key: g
     }, React.createElement("tr", null, React.createElement("td", {
-      colSpan: 9,
+      colSpan: 8,
       style: {
         background: 'var(--panel-2)',
         fontWeight: 700,
