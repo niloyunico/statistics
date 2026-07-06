@@ -45,7 +45,13 @@
       // An entry with no actual values must not create a new month — an accidental
       // empty save would otherwise add an all-blank row that poisons "latest".
       const hasValue=Object.values(e.row||{}).some(v=>v!==null&&v!==''&&v!==undefined);
-      if(idx>=0) d.data[idx]={...d.data[idx],...e.row};
+      if(idx>=0){
+        // Merge only REAL values into an existing month: an all-blank "save anyway"
+        // entry used to spread nulls OVER the server's approved data, blanking the
+        // whole row on screen while the values sat safely in the DB (Endoscopy Jun-26).
+        const patch={}; Object.keys(e.row||{}).forEach(k=>{ const v=(e.row||{})[k]; if(v!==null&&v!==''&&v!==undefined) patch[k]=v; });
+        d.data[idx]={...d.data[idx],...patch};
+      }
       else if(hasValue) { d.months.push(e.month); d.data.push({...e.row}); }
     });
     // Chronological order AFTER all merging: an overlay entry for an out-of-order month

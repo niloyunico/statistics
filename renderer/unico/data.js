@@ -94,6 +94,9 @@ window.UNICO.refreshDepartments = function () {
     .then(r => r.json())
     .then(j => {
       if (!j || !j.ok || !Array.isArray(j.departments)) return false;
+      // Collector sessions also receive their re-scoped config overlay — keep the
+      // local copy current so admin column/rename edits apply on live refresh.
+      try { if (j.overlay && typeof j.overlay['unico_store_v3'] === 'string') localStorage.setItem('unico_store_v3', j.overlay['unico_store_v3']); } catch (e) { }
       const fresh = j.departments.map(d => ({ ...d }));
       fresh.forEach(decorateDept);
       DEPARTMENTS.length = 0; fresh.forEach(d => DEPARTMENTS.push(d));

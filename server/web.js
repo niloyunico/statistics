@@ -334,18 +334,71 @@ app.get('/collect', function (req, res) {
   return serveIndex(req, res);
 });
 
-// Read the DB-backed datasets as JSON — for external tools or a future client-side
-// fetch. The renderer itself uses the injected globals.
+// Read the DB-backed datasets as JSON — used by the live refetch (approval / tab
+// refocus) and external tools. MUST apply the SAME collector scoping as the "/"
+// snapshot: the unscoped lists leaked every department/indicator (incl. unassigned
+// ones and their recorded values) back into collector portals on refresh.
+async function collectorScope(req) {
+  try {
+    if (!(req.user && req.user.sub)) return null;
+    const s = await dataCollection.getUserScope(req.user.sub);
+    return (s && s.role === 'collector') ? s : null;
+  } catch (e) { return null; }
+}
+// Area + per-indicator narrowing — same rules as serveIndex's snapshot scoping.
+function scopeQualityList(quality, scope) {
+  const qa = scope.qualityAreas || [];
+  const qi = (scope.qualityIndicators && typeof scope.qualityIndicators === 'object') ? scope.qualityIndicators : {};
+  return (quality || []).filter((q) => qa.includes(q.key)).map((q) => {
+    const allow = qi[q.key];
+    if (!Array.isArray(allow) || !allow.length) return q; // empty/absent => all indicators
+    const allowSet = new Set(allow.map(String));
+    return Object.assign({}, q, { indicators: (q.indicators || []).filter((i) => allowSet.has(String(i.id))) });
+  });
+}
 app.get('/api/departments', session.requireApi, async (req, res) => {
-  try { res.json({ ok: true, departments: await getDepartments() }); }
+  try {
+    let depts = await getDepartments();
+    const scope = await collectorScope(req);
+    const out = { ok: true };
+    if (scope) {
+      const da = scope.departments || [];
+      depts = depts.filter((d) => da.includes(d.id));
+      // re-scoped config overlay so an open collector portal picks up admin edits
+      // (custom columns / renames) on live refresh, not only at page load
+      try { const dov = scopeDeptOverlay((await getAppData()).data['unico_store_v3'], da); if (dov) out.overlay = { unico_store_v3: JSON.stringify(dov) }; } catch (e) { }
+    }
+    out.departments = depts;
+    res.json(out);
+  }
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load departments.' }); }
 });
 app.get('/api/staff', session.requireApi, async (req, res) => {
-  try { res.json({ ok: true, staff: await getStaff() }); }
+  try {
+    // collectors never receive staff records (parity with the "/" snapshot)
+    const scope = await collectorScope(req);
+    res.json({ ok: true, staff: scope ? [] : await getStaff() });
+  }
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load staff.' }); }
 });
 app.get('/api/quality', session.requireApi, async (req, res) => {
-  try { res.json({ ok: true, quality: await getQuality() }); }
+  try {
+    let quality = await getQuality();
+    const scope = await collectorScope(req);
+    const out = { ok: true };
+    if (scope) {
+      quality = scopeQualityList(quality, scope);
+      // re-scoped definition overlay (incl. indicator assign/unassign = indRemoved)
+      // so an open collector portal reflects admin changes on live refresh
+      try {
+        const qi = (scope.qualityIndicators && typeof scope.qualityIndicators === 'object') ? scope.qualityIndicators : {};
+        const qov = scopeQualityOverlay((await getAppData()).data['unico_quality_v2'], scope.qualityAreas || [], qi);
+        if (qov && qov['unico_quality_v2']) out.overlay = { unico_quality_v2: qov['unico_quality_v2'] };
+      } catch (e) { }
+    }
+    out.quality = quality;
+    res.json(out);
+  }
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load quality indicators.' }); }
 });
 

@@ -67,6 +67,9 @@ app.get('/api/me', (req, res) => {
 const requireAuth = session.requireApi;
 
 app.get('/api/data', requireAuth, async (req, res) => {
+  // Collectors never receive the shared app-state blob (it holds every department's
+  // overlay incl. recorded values) — they get a scoped snapshot injected at "/".
+  if (req.user && req.user.role === 'collector') return res.json({ ok: true, data: {}, updatedAt: 0 });
   try { const d = await getAppData(); res.json({ ok: true, data: d.data, updatedAt: d.updatedAt }); }
   catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }
 });

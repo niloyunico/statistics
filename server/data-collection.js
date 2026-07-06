@@ -12,7 +12,7 @@
  * Collections: `responsibles`, `submissions`. Self-contained via db.getDbHandle();
  * the actively edited web.js only calls mount() once.
  */
-const { getDbHandle, getUsers } = require('./db');
+const { getDbHandle, getUsers, getAppData } = require('./db');
 const auth = require('./auth');
 const session = require('./session');
 const deptmap = require('./deptmap');
@@ -224,13 +224,26 @@ async function buildQualitySpec(payload) {
   let indId = payload && payload.indicatorId ? String(payload.indicatorId) : '';
   let indName = '';
   let isNew = false;
-  const found = indId ? indicators.find((i) => i.id === indId) : null;
+  // "Patient Fall Rate" / "Patient Fall" / "Needle Stick Injury (NSI)" all name the SAME
+  // indicator. Match an existing one by NORMALIZED name before minting a new id, or every
+  // free-typed submission spawns a duplicate indicator on the area doc (fragmenting the
+  // dashboard and hiding the applied data from the canonical indicator's history).
+  const normIndName = (s) => String(s || '').toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')            // drop "(NSI)"-style abbreviations
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(rate|rates|ratio)\b/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  let found = indId ? indicators.find((i) => i.id === indId) : null;
   if (found) { indName = found.name; }
   else {
     const name = String((payload && payload.indicatorName) || '').trim();
     if (!name) throw new Error('Select an existing indicator or provide a new indicator name.');
-    isNew = true; indName = name;
-    indId = 'ind-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) + '-' + Math.floor(1000 + Math.random() * 9000);
+    found = indicators.find((i) => normIndName(i.name) === normIndName(name)) || null;
+    if (found) { indId = found.id; indName = found.name; }
+    else {
+      isNew = true; indName = name;
+      indId = 'ind-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) + '-' + Math.floor(1000 + Math.random() * 9000);
+    }
   }
   // Single-month entry; the SYSTEM computes the result (the collector never pre-computes):
   //   count  -> the entered value;  rate/% -> numerator / denominator * multiplier
@@ -241,7 +254,9 @@ async function buildQualitySpec(payload) {
   if (entryMode === 'rate') {
     num = Number(payload && payload.num) || 0;
     den = Number(payload && payload.den) || 0;
-    value = den > 0 ? Math.round((num / den) * mult * 100) / 100 : 0;
+    // No denominator: 0 events is a true 0, but events WITHOUT a denominator have no
+    // computable rate — storing 0 would show a real incident as "on benchmark".
+    value = den > 0 ? Math.round((num / den) * mult * 100) / 100 : (num > 0 ? null : 0);
   } else {
     const rawVal = payload && payload.value;
     value = (rawVal === '' || rawVal == null) ? 0 : (Number(rawVal) || 0);
@@ -306,7 +321,33 @@ async function applyPatient(spec) {
   if (idx >= 0) data[idx] = Object.assign({}, data[idx], spec.values);
   else { months.push(spec.month); data.push(Object.assign({}, spec.values)); }
   const zipped = months.map((m, i) => ({ m, r: data[i], rank: monthRank(m) })).sort((a, b) => a.rank - b.rank);
-  await c.updateOne({ _id: spec.department }, { $set: { months: zipped.map((z) => z.m), data: zipped.map((z) => z.r) } });
+  // Auto-register any submitted metric the column catalog doesn't know. Custom fields
+  // are defined in the CLIENT overlay (unico_store_v3 renames[dept].cols), which drifts
+  // per-browser — a value applied without a canonical column silently disappears from
+  // every table/report/export (Endoscopy Jun-26 c_evl bug class). Labels come from the
+  // overlay definition when one exists, else are prettified from the key.
+  const cols = Array.isArray(dept.cols) ? dept.cols.slice() : [];
+  const known = new Set(cols.map((co) => co.id));
+  const unknown = Object.keys(spec.values || {}).filter((k) => !known.has(k));
+  if (unknown.length) {
+    let ovCols = [];
+    try {
+      const snap = await getAppData();
+      let ov = snap && snap.data && snap.data.unico_store_v3;
+      if (typeof ov === 'string') ov = JSON.parse(ov);
+      ovCols = (((ov && ov.renames) || {})[spec.department] || {}).cols || [];
+    } catch (e) { /* overlay unavailable -> prettified labels */ }
+    const pretty = (k) => String(k).replace(/^c_/, '').replace(/_/g, ' ').trim().replace(/\b\w/g, (ch) => ch.toUpperCase()) || k;
+    unknown.forEach((k) => {
+      const oc = ovCols.find((co) => co && co.id === k);
+      const nc = { id: k, label: (oc && oc.label) || pretty(k), custom: true };
+      if (oc && oc.pct) nc.pct = true;
+      cols.push(nc);
+    });
+  }
+  const set = { months: zipped.map((z) => z.m), data: zipped.map((z) => z.r) };
+  if (unknown.length) set.cols = cols;
+  await c.updateOne({ _id: spec.department }, { $set: set });
 }
 
 async function applyQuality(spec) {
@@ -342,7 +383,8 @@ async function applyQuality(spec) {
     const monthDen = (ind.mDen && ind.mDen[spec.month] != null && ind.mDen[spec.month] !== '') ? Number(ind.mDen[spec.month]) : null;
     const carryDen = ind.mDen ? Object.keys(ind.mDen).map(k => ind.mDen[k]).filter(v => v != null && v !== '').map(Number).filter(v => v > 0).pop() : null;
     const den = submittedDen != null ? submittedDen : (monthDen != null ? monthDen : (carryDen != null ? carryDen : 0));
-    const computed = den > 0 ? Math.round((Number(num) / den) * mlt * 100) / 100 : 0;
+    // den 0 with events logged -> rate is UNKNOWN (null), never a false on-benchmark 0.
+    const computed = den > 0 ? Math.round((Number(num) / den) * mlt * 100) / 100 : (Number(num) > 0 ? null : 0);
     // Admin value-only correction while pending: back-solve the numerator from the edited value.
     if (spec.value != null && spec.value !== '' && den > 0 && Number(spec.value) !== computed) {
       num = Math.round((Number(spec.value) / mlt) * den * 100) / 100;

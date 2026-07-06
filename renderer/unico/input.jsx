@@ -78,6 +78,9 @@ function DataEntry({depts, addEntry, entries, initialDept, updateDept, deleteMon
     if(base==='c_'||base==='c') base='c_field';
     const existing=new Set(d.cols.map(c=>c.id)); let id=base,n=2; while(existing.has(id)){ id=base+'_'+(n++); }
     updateDept(d.id,{cols:[...d.cols.map(c=>({...c})),{id,label:name,pct:!!fPct}]});
+    // ALSO register the column on the canonical dept doc (web server) — the overlay is
+    // per-browser and can drift; values without a canonical column vanish from reports.
+    try{ fetch('/api/departments/'+encodeURIComponent(d.id)+'/fields',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({id,label:name,pct:!!fPct})}).catch(()=>{}); }catch(e){}
     window.UI&&window.UI.toast(`Field "${name}" added to ${d.short}`,'success');
     setFName(''); setFPct(false); setFldOpen(false);
   };
@@ -86,6 +89,8 @@ function DataEntry({depts, addEntry, entries, initialDept, updateDept, deleteMon
     window.UI.confirm({title:`Remove the "${col.label}" field?`,message:`Drops this metric from ${d.short}. Existing values for it are discarded.`,danger:true,confirmLabel:'Remove field'}).then(ok=>{
       if(!ok) return;
       updateDept(d.id,{cols:d.cols.filter(c=>c.id!==col.id).map(c=>({...c}))});
+      // mirror the removal on the canonical dept doc (server ignores non-custom cols)
+      try{ fetch('/api/departments/'+encodeURIComponent(d.id)+'/fields/'+encodeURIComponent(col.id),{method:'DELETE',credentials:'same-origin'}).catch(()=>{}); }catch(e){}
       window.UI.toast('Field removed','success');
     });
   };
@@ -168,6 +173,9 @@ function DataEntry({depts, addEntry, entries, initialDept, updateDept, deleteMon
     }
     const row={};
     d.cols.forEach(c=>{ const raw=vals[c.id]; row[c.id]=(raw===undefined||raw==='')?null:Number(raw); });
+    // A fully-empty save must not create an entry at all — it contributes nothing and
+    // (before the store guard) an all-null entry blanked the month's approved data.
+    if(!Object.values(row).some(v=>v!==null)){ window.UI&&window.UI.toast('Nothing to save — every field is empty','error'); return false; }
     addEntry({dept:d.id,deptName:d.short,month,full:window.UNICO.MONTHS_FULL[month]||month,row,ts:Date.now()});
     setToast(`Saved ${d.short} · ${month}`);
     setVals({});setErrs({});setStep(0);

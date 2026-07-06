@@ -320,6 +320,7 @@ function Reports({depts}){
   const [sig,setSig]=React.useState(()=> window.unicoSig?window.unicoSig.load():{prepared:'',reviewed:'',approved:''});
   React.useEffect(()=>{ if(window.unicoSig) window.unicoSig.save(sig); },[sig]);
   const [showSig,setShowSig]=React.useState(true);
+  const [showCover,setShowCover]=React.useState(true); // title cover sheet before the content pages
   const toggle=id=>setSel(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
   const chosen=depts.filter(d=>sel.includes(d.id));
 
@@ -343,9 +344,14 @@ function Reports({depts}){
   const pageW=portrait?base:Math.round(base*ratio);
   const pageMinH=portrait?Math.round(base*ratio):base;
 
-  const pages = (type==='compare'||type==='board') ? 1 : Math.max(1,chosen.length);
+  // Page list = optional cover sheet + the content pages; page numbers are ABSOLUTE
+  // (cover = page 1) so the printed footer, pager and sig-on-last-page all agree.
+  const coverOn = showCover && chosen.length>0;
+  const basePages = (type==='compare'||type==='board') ? 1 : Math.max(1,chosen.length);
+  const pages = basePages + (coverOn?1:0);
   const pi=Math.min(pageIdx,pages-1);
-  const pageDept = chosen[pi] || depts[0];
+  const contentIdx = coverOn ? pi-1 : pi;            // -1 = the cover sheet itself
+  const pageDept = chosen[Math.max(0,contentIdx)] || depts[0];
 
   const sel2={padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',background:'#fff'};
   const fieldLabel=t=><div style={{fontSize:11.5,fontWeight:600,color:'var(--ink-2)',marginBottom:7}}>{t}</div>;
@@ -382,6 +388,38 @@ function Reports({depts}){
       </div>
     </div>
   );
+
+  /* Cover sheet — org name, report title, period + headline stats over the SELECTED
+     departments and period (same aggregates BoardPage uses), confidential mark. */
+  function CoverPage({n,total}){
+    const rows=chosen.map(d=>{const fs=fseriesOf(d);const st=statOf(d,fs);return {d,st,fs};});
+    const totAll=rows.reduce((s,r)=>s+r.st.total,0);
+    const mTot={}; rows.forEach(({d,fs})=>fs.forEach(r=>{ mTot[r.month]=(mTot[r.month]||0)+(r[d.primary]||0); }));
+    const peakM=Object.keys(mTot).sort((a,b)=>mTot[b]-mTot[a])[0];
+    const typeLabel={summary:'Department Summary Report',detail:'Detailed Statistical Report',compare:'Cross-Department Comparison',board:'Executive Board Report'}[type]||'Statistical Report';
+    return (
+      <div className="qc-rpage">
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',textAlign:'center',padding:'60px 20px 30px',flex:'1 0 auto'}}>
+          {showLogo&&<img src="unico/logo.svg" alt="UNICO Healthcare" style={{height:66,marginBottom:26}}/>}
+          <div style={{fontSize:13,fontWeight:700,color:'var(--blue)',textTransform:'uppercase',letterSpacing:1.5}}>{hospitalName}</div>
+          <h1 style={{fontSize:32,fontWeight:700,color:'var(--ink)',margin:'14px 0 6px',letterSpacing:'-.5px'}}>{hdrTitle||'Patient Statistics Report'}</h1>
+          <div style={{fontSize:13,color:'var(--muted)'}}>{hdrSub?hdrSub+' · ':''}{typeLabel}</div>
+          <div style={{fontSize:14,color:'var(--ink-2)',marginTop:10,fontWeight:600}}>{rangeLabel}</div>
+          <div style={{display:'flex',gap:26,marginTop:34,flexWrap:'wrap',justifyContent:'center'}}>
+            {[['Departments',String(chosen.length),PALETTE[0]],['Total patients',fmt(totAll),PALETTE[1]],['Peak month',peakM?peakM.split('-')[0]+' 20'+peakM.split('-')[1]:'—',PALETTE[2]],['Months covered',String(pMonths.length),PALETTE[3]]].map(c=>(
+              <div key={c[0]} style={{textAlign:'center'}}>
+                <div className="num" style={{fontSize:26,fontWeight:700,color:c[2]}}>{c[1]}</div>
+                <div style={{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,marginTop:2}}>{c[0]}</div>
+              </div>
+            ))}
+          </div>
+          {confidential&&<div style={{marginTop:34,fontSize:10.5,color:'var(--rose)',fontWeight:700,textTransform:'uppercase',letterSpacing:1,border:'1px solid #f1c6cd',borderRadius:6,padding:'6px 14px'}}>Confidential — for authorised recipients only</div>}
+          <div style={{fontSize:10,color:'var(--faint)',marginTop:20}}>Generated {new Date().toLocaleDateString('en-US')}</div>
+        </div>
+        <Footer n={n} total={total}/>
+      </div>
+    );
+  }
 
   function DeptPage({d, n, total}){
     const tone=PALETTE[(d.id.charCodeAt(0))%PALETTE.length];
@@ -435,7 +473,7 @@ function Reports({depts}){
     );
   }
 
-  function ComparePage(){
+  function ComparePage({n=1,total=1}){
     const rows=chosen.map(d=>{const fs=fseriesOf(d);const st=statOf(d,fs);return {d,st};});
     const hbar=rows.map(({d,st})=>({label:d.short,value:st.total,color:PALETTE[(d.id.charCodeAt(0))%PALETTE.length]})).sort((a,b)=>b.value-a.value);
     return (
@@ -454,7 +492,7 @@ function Reports({depts}){
           </table>
           {showSig&&<SigBlock/>}
         </div>
-        <Footer n={1} total={1}/>
+        <Footer n={n} total={total}/>
       </div>
     );
   }
@@ -462,7 +500,7 @@ function Reports({depts}){
   /* Board Report — hospital-level executive page: headline KPIs, department ranking,
      aggregate monthly trend and share-of-volume table, closed by the authorisation
      sign-off. One page, board-meeting ready. */
-  function BoardPage(){
+  function BoardPage({n=1,total=1}){
     const rows=chosen.map(d=>{const fs=fseriesOf(d);const st=statOf(d,fs);return {d,st,fs};});
     const totAll=rows.reduce((s,r)=>s+r.st.total,0);
     const top=rows.slice().sort((a,b)=>b.st.total-a.st.total)[0];
@@ -512,7 +550,7 @@ function Reports({depts}){
           </table>
           {showSig&&<SigBlock/>}
         </div>
-        <Footer n={1} total={1}/>
+        <Footer n={n} total={total}/>
       </div>
     );
   }
@@ -583,11 +621,12 @@ function Reports({depts}){
       )}
       {pdfRoot && ReactDOM.createPortal(
         <div className={"pdf-doc"+(orient==='portrait'?' portrait':'')}>
+          {coverOn && <section className="pdf-page"><CoverPage n={1} total={pages}/></section>}
           {chosen.length>0 && (type==='compare'
-            ? <section className="pdf-page"><ComparePage/></section>
+            ? <section className="pdf-page"><ComparePage n={coverOn?2:1} total={pages}/></section>
             : type==='board'
-            ? <section className="pdf-page"><BoardPage/></section>
-            : chosen.map((d,i)=><section className="pdf-page" key={d.id}><DeptPage d={d} n={i+1} total={pages}/></section>))}
+            ? <section className="pdf-page"><BoardPage n={coverOn?2:1} total={pages}/></section>
+            : chosen.map((d,i)=><section className="pdf-page" key={d.id}><DeptPage d={d} n={i+1+(coverOn?1:0)} total={pages}/></section>))}
         </div>,
         pdfRoot
       )}
@@ -643,9 +682,10 @@ function Reports({depts}){
                 <input value={hdrSub} onChange={e=>setHdrSub(e.target.value)} placeholder="Subtitle (optional)" style={{...sel2,width:'100%'}}/>
                 <input value={hospitalName} onChange={e=>setHospitalName(e.target.value)} placeholder="Footer — hospital / org name" style={{...sel2,width:'100%'}}/>
                 <input value={footerNote} onChange={e=>setFooterNote(e.target.value)} placeholder="Footer note (optional)" style={{...sel2,width:'100%'}}/>
-                <div style={{display:'flex',gap:16}}>
+                <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
                   <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-2)'}}><input type="checkbox" checked={showLogo} onChange={e=>setShowLogo(e.target.checked)}/>Show logo</label>
                   <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-2)'}}><input type="checkbox" checked={confidential} onChange={e=>setConfidential(e.target.checked)}/>Confidential mark</label>
+                  <label title="A title sheet (org name, report title, period, headline stats) as page 1" style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-2)'}}><input type="checkbox" checked={showCover} onChange={e=>{setShowCover(e.target.checked);setPageIdx(0);}}/>Cover page</label>
                 </div>
               </div>
             </div>
@@ -705,7 +745,10 @@ function Reports({depts}){
           <div style={{padding:26,background:'#eef1f5',overflowX:'auto'}}>
             <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,boxSizing:'border-box',display:'flex',flexDirection:'column',margin:'0 auto',transition:'width .25s'}}>
               {chosen.length===0?<div style={{textAlign:'center',color:'var(--faint)',padding:'60px 0'}}>Select at least one department.</div>
-                : type==='compare'?<ComparePage/>:type==='board'?<BoardPage/>:<DeptPage d={pageDept} n={pi+1} total={pages}/>}
+                : coverOn&&pi===0?<CoverPage n={1} total={pages}/>
+                : type==='compare'?<ComparePage n={pi+1} total={pages}/>
+                : type==='board'?<BoardPage n={pi+1} total={pages}/>
+                : <DeptPage d={pageDept} n={pi+1} total={pages}/>}
             </div>
           </div>
         </div>

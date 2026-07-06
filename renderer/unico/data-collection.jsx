@@ -28,6 +28,14 @@
     try { window.UNICO && window.UNICO.refreshDepartments && window.UNICO.refreshDepartments(); } catch (e) { }
     try { window.refreshQualitySeed && window.refreshQualitySeed(); } catch (e) { }
   };
+  // Views below cache qualityData()/dept lists in useMemo — include this rev in the
+  // deps so they re-read after a live refetch ('unico:data-refreshed': approval in
+  // another view, tab refocus, indicator assign/unassign in the Quality console).
+  const useDcDataRev = () => {
+    const [rev, setRev] = useState(0);
+    useEffect(() => { const h = () => setRev((r) => r + 1); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
+    return rev;
+  };
   const MO = () => (window.UNICO && window.UNICO.MONTH_ORDER) || [];
   const MONS_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const MONS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -279,8 +287,9 @@
     const [list, setList] = useState(null);
     const [editing, setEditing] = useState(null); // the record being added/edited
     const [view, setView] = useState('people');   // 'people' | 'access' (indicator access matrix)
-    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), []);
-    const areaInds = useMemo(() => { const m = {}; (window.qualityData ? window.qualityData() : []).forEach((d) => { m[d.key] = (d.indicators || []).map((i) => ({ id: i.id, name: i.name })); }); return m; }, []);
+    const dataRev = useDcDataRev();
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), [dataRev]);
+    const areaInds = useMemo(() => { const m = {}; (window.qualityData ? window.qualityData() : []).forEach((d) => { m[d.key] = (d.indicators || []).map((i) => ({ id: i.id, name: i.name })); }); return m; }, [dataRev]);
     const load = () => dcApi.get('/api/responsibles').then((r) => setList(r.ok ? r.responsibles : [])).catch(() => setList([]));
     useEffect(() => { load(); }, []);
     // Everyone (except the person being edited) who can report indicator `indId` of area `ak` —
@@ -654,7 +663,8 @@
   }
 
   function DataQualityForm({ prefill }) {
-    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), []);
+    const dataRev = useDcDataRev();
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
     const lockResp = !!(me && me.role === 'collector');
     // Months = the quality FY (Jun-25…May-26), read from the store so it stays in
@@ -881,7 +891,13 @@
       if (isNew && !newInd.name.trim()) { toast('Enter the new indicator name', 'error'); return; }
       if (!month) { toast('Pick a month', 'error'); return; }
       if (qCorrection && !qReason.trim()) { toast('Please add a reason for the correction.', 'error'); return; }
-      if (isRate && !denLockedForCollector && !(denNum > 0)) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ''), 'error'); return; }
+      if (isRate && !denLockedForCollector && !(denNum > 0)) {
+        // Zero-exposure month (e.g. "no surgical discharges"): 0 events over an EXPLICIT 0
+        // denominator is a legitimate report — only refuse when events exist without a base,
+        // or the denominator was left blank (a deliberate 0 must be typed).
+        const explicitZero = !(Number(numerator) > 0) && String(den == null ? '' : den).trim() !== '' && Number(den) === 0;
+        if (!explicitZero) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error'); return; }
+      }
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/quality', {
@@ -1251,7 +1267,8 @@
       const base = dcWideMonths();
       return (s.month && base.indexOf(s.month) < 0) ? [s.month].concat(base) : (base.length ? base : [s.month]);
     })();
-    const areaOpts = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), []);
+    const areaOptsRev = useDcDataRev();
+    const areaOpts = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), [areaOptsRev]);
     const deptOpts = React.useMemo(() => dcAllDepts(), []);
     const setInc = (i, k, v) => setIncidents((a) => a.map((x, j) => (j === i ? Object.assign({}, x, { [k]: v }) : x)));
     const INC_FIELDS = [['uhid', 'UHID'], ['patientName', 'Patient name'], ['diagnosis', 'Diagnosis'], ['details', 'What happened'], ['finding', 'Root cause / finding'], ['corrective', 'Corrective action'], ['preventive', 'Preventive action']];
@@ -1664,7 +1681,8 @@
   /* ============================ Share Links ============================ */
   function DataShareLinks({ depts }) {
     const all = (depts && depts.length) ? depts : dcAllDepts();
-    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), []);
+    const dataRev = useDcDataRev();
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), [dataRev]);
     const [links, setLinks] = useState(null);
     const [resps, setResps] = useState([]);
     const [form, setForm] = useState({ type: 'patient', department: (all[0] && all[0].id) || '', area: (areas[0] && areas[0].key) || '', responsible: '', label: '' });
@@ -1829,7 +1847,8 @@
   /* Submission-status board: which of the collector's assigned quality indicators are
      Recorded / Pending / Not-submitted for a chosen month. Responsive (auto-fit cards). */
   function CollectorStatus({ onFill }) {
-    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), []);
+    const dataRev = useDcDataRev();
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
     const fyMonths = (window.QUALITY_QUARTER_MONTHS) ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [];
     const monthOpts = dcWideMonths();
     const [month, setMonth] = useState(dcDefaultMonth() || (fyMonths.length ? fyMonths[fyMonths.length - 1] : '') || '');

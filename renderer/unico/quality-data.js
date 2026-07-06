@@ -14,6 +14,9 @@ window.refreshQualitySeed = function () {
     .then(function (j) {
       if (!j || !j.ok || !Array.isArray(j.quality)) return false;
       window.QUALITY_SEED = j.quality;
+      // Collector sessions also receive their re-scoped definition overlay (indicator
+      // assign/unassign etc.) — keep the local copy current so admin edits apply live.
+      try { if (j.overlay && typeof j.overlay['unico_quality_v2'] === 'string') localStorage.setItem('unico_quality_v2', j.overlay['unico_quality_v2']); } catch (e) { }
       // Same contract as refreshDepartments: notify mounted stores so open quality
       // views rebuild from the fresh seed without needing a remount/reload.
       try { window.dispatchEvent(new CustomEvent('unico:data-refreshed', { detail: { source: 'quality' } })); } catch (e) { }

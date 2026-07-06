@@ -181,6 +181,9 @@ window.UNICO.refreshDepartments = function () {
     .then(r => r.json())
     .then(j => {
       if (!j || !j.ok || !Array.isArray(j.departments)) return false;
+      // Collector sessions also receive their re-scoped config overlay — keep the
+      // local copy current so admin column/rename edits apply on live refresh.
+      try { if (j.overlay && typeof j.overlay['unico_store_v3'] === 'string') localStorage.setItem('unico_store_v3', j.overlay['unico_store_v3']); } catch (e) { }
       const fresh = j.departments.map(d => ({ ...d }));
       fresh.forEach(decorateDept);
       DEPARTMENTS.length = 0; fresh.forEach(d => DEPARTMENTS.push(d));
@@ -249,7 +252,13 @@ window.UNICO.refreshDepartments = function () {
       // An entry with no actual values must not create a new month — an accidental
       // empty save would otherwise add an all-blank row that poisons "latest".
       const hasValue=Object.values(e.row||{}).some(v=>v!==null&&v!==''&&v!==undefined);
-      if(idx>=0) d.data[idx]={...d.data[idx],...e.row};
+      if(idx>=0){
+        // Merge only REAL values into an existing month: an all-blank "save anyway"
+        // entry used to spread nulls OVER the server's approved data, blanking the
+        // whole row on screen while the values sat safely in the DB (Endoscopy Jun-26).
+        const patch={}; Object.keys(e.row||{}).forEach(k=>{ const v=(e.row||{})[k]; if(v!==null&&v!==''&&v!==undefined) patch[k]=v; });
+        d.data[idx]={...d.data[idx],...patch};
+      }
       else if(hasValue) { d.months.push(e.month); d.data.push({...e.row}); }
     });
     // Chronological order AFTER all merging: an overlay entry for an out-of-order month
@@ -515,6 +524,9 @@ window.refreshQualitySeed = function () {
     .then(function (j) {
       if (!j || !j.ok || !Array.isArray(j.quality)) return false;
       window.QUALITY_SEED = j.quality;
+      // Collector sessions also receive their re-scoped definition overlay (indicator
+      // assign/unassign etc.) — keep the local copy current so admin edits apply live.
+      try { if (j.overlay && typeof j.overlay['unico_quality_v2'] === 'string') localStorage.setItem('unico_quality_v2', j.overlay['unico_quality_v2']); } catch (e) { }
       // Same contract as refreshDepartments: notify mounted stores so open quality
       // views rebuild from the fresh seed without needing a remount/reload.
       try { window.dispatchEvent(new CustomEvent('unico:data-refreshed', { detail: { source: 'quality' } })); } catch (e) { }
@@ -9816,6 +9828,20 @@ function DataEntry({
         pct: !!fPct
       }]
     });
+    try {
+      fetch('/api/departments/' + encodeURIComponent(d.id) + '/fields', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          id,
+          label: name,
+          pct: !!fPct
+        })
+      }).catch(() => {});
+    } catch (e) {}
     window.UI && window.UI.toast(`Field "${name}" added to ${d.short}`, 'success');
     setFName('');
     setFPct(false);
@@ -9835,6 +9861,12 @@ function DataEntry({
           ...c
         }))
       });
+      try {
+        fetch('/api/departments/' + encodeURIComponent(d.id) + '/fields/' + encodeURIComponent(col.id), {
+          method: 'DELETE',
+          credentials: 'same-origin'
+        }).catch(() => {});
+      } catch (e) {}
       window.UI.toast('Field removed', 'success');
     });
   };
@@ -9984,6 +10016,10 @@ function DataEntry({
       const raw = vals[c.id];
       row[c.id] = raw === undefined || raw === '' ? null : Number(raw);
     });
+    if (!Object.values(row).some(v => v !== null)) {
+      window.UI && window.UI.toast('Nothing to save — every field is empty', 'error');
+      return false;
+    }
     addEntry({
       dept: d.id,
       deptName: d.short,
@@ -11605,6 +11641,7 @@ function Reports({
     if (window.unicoSig) window.unicoSig.save(sig);
   }, [sig]);
   const [showSig, setShowSig] = React.useState(true);
+  const [showCover, setShowCover] = React.useState(true);
   const toggle = id => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   const chosen = depts.filter(d => sel.includes(d.id));
   const allMonths = [...new Set(depts.flatMap(d => d.months))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b));
@@ -11644,9 +11681,12 @@ function Reports({
   const portrait = orient === 'portrait';
   const pageW = portrait ? base : Math.round(base * ratio);
   const pageMinH = portrait ? Math.round(base * ratio) : base;
-  const pages = type === 'compare' || type === 'board' ? 1 : Math.max(1, chosen.length);
+  const coverOn = showCover && chosen.length > 0;
+  const basePages = type === 'compare' || type === 'board' ? 1 : Math.max(1, chosen.length);
+  const pages = basePages + (coverOn ? 1 : 0);
   const pi = Math.min(pageIdx, pages - 1);
-  const pageDept = chosen[pi] || depts[0];
+  const contentIdx = coverOn ? pi - 1 : pi;
+  const pageDept = chosen[Math.max(0, contentIdx)] || depts[0];
   const sel2 = {
     padding: '9px 11px',
     border: '1px solid var(--line)',
@@ -11774,6 +11814,132 @@ function Reports({
       marginTop: 1
     }
   }, "Signature & date")))));
+  function CoverPage({
+    n,
+    total
+  }) {
+    const rows = chosen.map(d => {
+      const fs = fseriesOf(d);
+      const st = statOf(d, fs);
+      return {
+        d,
+        st,
+        fs
+      };
+    });
+    const totAll = rows.reduce((s, r) => s + r.st.total, 0);
+    const mTot = {};
+    rows.forEach(({
+      d,
+      fs
+    }) => fs.forEach(r => {
+      mTot[r.month] = (mTot[r.month] || 0) + (r[d.primary] || 0);
+    }));
+    const peakM = Object.keys(mTot).sort((a, b) => mTot[b] - mTot[a])[0];
+    const typeLabel = {
+      summary: 'Department Summary Report',
+      detail: 'Detailed Statistical Report',
+      compare: 'Cross-Department Comparison',
+      board: 'Executive Board Report'
+    }[type] || 'Statistical Report';
+    return React.createElement("div", {
+      className: "qc-rpage"
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        textAlign: 'center',
+        padding: '60px 20px 30px',
+        flex: '1 0 auto'
+      }
+    }, showLogo && React.createElement("img", {
+      src: "unico/logo.svg",
+      alt: "UNICO Healthcare",
+      style: {
+        height: 66,
+        marginBottom: 26
+      }
+    }), React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: 'var(--blue)',
+        textTransform: 'uppercase',
+        letterSpacing: 1.5
+      }
+    }, hospitalName), React.createElement("h1", {
+      style: {
+        fontSize: 32,
+        fontWeight: 700,
+        color: 'var(--ink)',
+        margin: '14px 0 6px',
+        letterSpacing: '-.5px'
+      }
+    }, hdrTitle || 'Patient Statistics Report'), React.createElement("div", {
+      style: {
+        fontSize: 13,
+        color: 'var(--muted)'
+      }
+    }, hdrSub ? hdrSub + ' · ' : '', typeLabel), React.createElement("div", {
+      style: {
+        fontSize: 14,
+        color: 'var(--ink-2)',
+        marginTop: 10,
+        fontWeight: 600
+      }
+    }, rangeLabel), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 26,
+        marginTop: 34,
+        flexWrap: 'wrap',
+        justifyContent: 'center'
+      }
+    }, [['Departments', String(chosen.length), PALETTE[0]], ['Total patients', fmt(totAll), PALETTE[1]], ['Peak month', peakM ? peakM.split('-')[0] + ' 20' + peakM.split('-')[1] : '—', PALETTE[2]], ['Months covered', String(pMonths.length), PALETTE[3]]].map(c => React.createElement("div", {
+      key: c[0],
+      style: {
+        textAlign: 'center'
+      }
+    }, React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 26,
+        fontWeight: 700,
+        color: c[2]
+      }
+    }, c[1]), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginTop: 2
+      }
+    }, c[0])))), confidential && React.createElement("div", {
+      style: {
+        marginTop: 34,
+        fontSize: 10.5,
+        color: 'var(--rose)',
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+        border: '1px solid #f1c6cd',
+        borderRadius: 6,
+        padding: '6px 14px'
+      }
+    }, "Confidential \u2014 for authorised recipients only"), React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: 'var(--faint)',
+        marginTop: 20
+      }
+    }, "Generated ", new Date().toLocaleDateString('en-US'))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
   function DeptPage({
     d,
     n,
@@ -11906,7 +12072,10 @@ function Reports({
       total: total
     }));
   }
-  function ComparePage() {
+  function ComparePage({
+    n = 1,
+    total = 1
+  }) {
     const rows = chosen.map(d => {
       const fs = fseriesOf(d);
       const st = statOf(d, fs);
@@ -11962,11 +12131,14 @@ function Reports({
     }, React.createElement(Delta, {
       v: d.delta
     })))))), showSig && React.createElement(SigBlock, null)), React.createElement(Footer, {
-      n: 1,
-      total: 1
+      n: n,
+      total: total
     }));
   }
-  function BoardPage() {
+  function BoardPage({
+    n = 1,
+    total = 1
+  }) {
     const rows = chosen.map(d => {
       const fs = fseriesOf(d);
       const st = statOf(d, fs);
@@ -12111,8 +12283,8 @@ function Reports({
     }, React.createElement(Delta, {
       v: d.delta
     })))))), showSig && React.createElement(SigBlock, null)), React.createElement(Footer, {
-      n: 1,
-      total: 1
+      n: n,
+      total: total
     }));
   }
   const [exporting, setExporting] = React.useState(false);
@@ -12280,16 +12452,27 @@ function Reports({
     s: 13
   }))), pdfRoot && ReactDOM.createPortal(React.createElement("div", {
     className: "pdf-doc" + (orient === 'portrait' ? ' portrait' : '')
-  }, chosen.length > 0 && (type === 'compare' ? React.createElement("section", {
+  }, coverOn && React.createElement("section", {
     className: "pdf-page"
-  }, React.createElement(ComparePage, null)) : type === 'board' ? React.createElement("section", {
+  }, React.createElement(CoverPage, {
+    n: 1,
+    total: pages
+  })), chosen.length > 0 && (type === 'compare' ? React.createElement("section", {
     className: "pdf-page"
-  }, React.createElement(BoardPage, null)) : chosen.map((d, i) => React.createElement("section", {
+  }, React.createElement(ComparePage, {
+    n: coverOn ? 2 : 1,
+    total: pages
+  })) : type === 'board' ? React.createElement("section", {
+    className: "pdf-page"
+  }, React.createElement(BoardPage, {
+    n: coverOn ? 2 : 1,
+    total: pages
+  })) : chosen.map((d, i) => React.createElement("section", {
     className: "pdf-page",
     key: d.id
   }, React.createElement(DeptPage, {
     d: d,
-    n: i + 1,
+    n: i + 1 + (coverOn ? 1 : 0),
     total: pages
   }))))), pdfRoot), React.createElement("div", {
     className: "grid",
@@ -12458,7 +12641,8 @@ function Reports({
   }), React.createElement("div", {
     style: {
       display: 'flex',
-      gap: 16
+      gap: 16,
+      flexWrap: 'wrap'
     }
   }, React.createElement("label", {
     style: {
@@ -12484,7 +12668,23 @@ function Reports({
     type: "checkbox",
     checked: confidential,
     onChange: e => setConfidential(e.target.checked)
-  }), "Confidential mark")))), React.createElement("div", null, fieldLabel('Signatures — saved automatically, shared with every report'), React.createElement("div", {
+  }), "Confidential mark"), React.createElement("label", {
+    title: "A title sheet (org name, report title, period, headline stats) as page 1",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: 'var(--ink-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: showCover,
+    onChange: e => {
+      setShowCover(e.target.checked);
+      setPageIdx(0);
+    }
+  }), "Cover page")))), React.createElement("div", null, fieldLabel('Signatures — saved automatically, shared with every report'), React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -12690,7 +12890,16 @@ function Reports({
       color: 'var(--faint)',
       padding: '60px 0'
     }
-  }, "Select at least one department.") : type === 'compare' ? React.createElement(ComparePage, null) : type === 'board' ? React.createElement(BoardPage, null) : React.createElement(DeptPage, {
+  }, "Select at least one department.") : coverOn && pi === 0 ? React.createElement(CoverPage, {
+    n: 1,
+    total: pages
+  }) : type === 'compare' ? React.createElement(ComparePage, {
+    n: pi + 1,
+    total: pages
+  }) : type === 'board' ? React.createElement(BoardPage, {
+    n: pi + 1,
+    total: pages
+  }) : React.createElement(DeptPage, {
     d: pageDept,
     n: pi + 1,
     total: pages
@@ -23039,10 +23248,13 @@ function QCIncidents({
     (depts || []).forEach(d => {
       if (dept !== 'all' && d.key !== dept) return;
       (d.indicators || []).forEach(ind => {
-        const hasMonthly = MONTHS.some(m => monthRaw(ind, m[0]) != null);
+        const monthIncs = mk => ind.incidents && Array.isArray(ind.incidents[mk]) ? ind.incidents[mk].filter(x => x && Object.values(x).some(v => v)) : [];
+        const hasMonthly = MONTHS.some(m => monthRaw(ind, m[0]) != null || monthIncs(m[0]).length);
         if (hasMonthly) {
           MONTHS.forEach(m => {
-            if (monthStatus(ind, m[0]) === 'breach') {
+            const breach = monthStatus(ind, m[0]) === 'breach';
+            const incs = monthIncs(m[0]);
+            if (breach || incs.length) {
               out.push({
                 dept: d.name,
                 deptKey: d.key,
@@ -23052,6 +23264,8 @@ function QCIncidents({
                 month: m[1],
                 value: fmtVal(ind, monthRaw(ind, m[0])),
                 bench: benchExpr(ind),
+                breach: breach,
+                incCount: incs.length,
                 indObj: ind,
                 monthKey: m[0],
                 deptObj: d
@@ -23070,6 +23284,8 @@ function QCIncidents({
                 month: qtrLabelOf(q),
                 value: fmtVal(ind, qtrRaw(ind, q, fy)),
                 bench: benchExpr(ind),
+                breach: true,
+                incCount: 0,
                 indObj: ind,
                 quarter: q,
                 monthKey: q,
@@ -23151,7 +23367,7 @@ function QCIncidents({
     style: {
       color: P.rose
     }
-  }, list.length), " benchmark breaches flagged in ", fyLabelOf(fy), " \u2014 each needs review")), React.createElement(QCFyPicker, {
+  }, list.length), " benchmark breaches & logged incidents in ", fyLabelOf(fy), " \u2014 each needs review")), React.createElement(QCFyPicker, {
     fy: fy,
     setFy: setFy,
     depts: depts
@@ -23181,7 +23397,7 @@ function QCIncidents({
       color: P.green,
       fontWeight: 600
     }
-  }, "\u2713 No breaches in scope \u2014 all reported indicators on benchmark."), React.createElement("div", {
+  }, "\u2713 No breaches or logged incidents in scope \u2014 all reported indicators on benchmark."), React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -23202,7 +23418,7 @@ function QCIncidents({
       cursor: 'pointer',
       background: '#fff',
       border: '1px solid ' + P.line,
-      borderLeft: '3px solid ' + P.rose,
+      borderLeft: '3px solid ' + (x.breach ? P.rose : '#e0a300'),
       borderRadius: 10,
       boxShadow: '0 1px 2px rgba(20,32,46,.05)',
       padding: '12px 15px',
@@ -23282,7 +23498,7 @@ function QCIncidents({
       fontFamily: MONO,
       fontSize: 13,
       fontWeight: 700,
-      color: P.rose
+      color: x.breach ? P.rose : P.ink2
     }
   }, x.value)), React.createElement("div", {
     style: {
@@ -23302,7 +23518,7 @@ function QCIncidents({
       fontWeight: 600,
       color: P.blue700
     }
-  }, x.bench)), React.createElement("span", {
+  }, x.bench)), x.breach ? React.createElement("span", {
     style: {
       fontSize: 10.5,
       fontWeight: 600,
@@ -23311,7 +23527,16 @@ function QCIncidents({
       padding: '3px 10px',
       borderRadius: 20
     }
-  }, "Breach"), React.createElement("span", {
+  }, "Breach", x.incCount ? ' · ' + x.incCount + ' incident' + (x.incCount > 1 ? 's' : '') : '') : React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: '#9a6b00',
+      background: '#fff4e0',
+      padding: '3px 10px',
+      borderRadius: 20
+    }
+  }, x.incCount + ' incident' + (x.incCount > 1 ? 's' : '') + ' logged'), React.createElement("span", {
     style: {
       fontSize: 11.5,
       fontWeight: 600,
@@ -26414,13 +26639,14 @@ function QCAdmin({
       color: P.muted,
       whiteSpace: 'nowrap'
     }
-  }, assignRows.length, " of ", assignNames.length)), React.createElement("div", {
+  }, assignRows.length, " of ", assignNames.length)), React.createElement("style", null, '.qc-asgn .qa-x{position:relative}' + '.qc-asgn .qa-x:hover::after{content:"";position:absolute;left:0;right:0;top:-6000px;bottom:-6000px;background:rgba(0,144,202,.08);pointer-events:none}' + '.qc-asgn tbody tr:hover td{background:#f0f8fd}' + '.qc-asgn tbody tr:hover td.qa-name{background:#e8f4fb !important;box-shadow:inset 3px 0 0 #0090ca}'), React.createElement("div", {
     style: {
       overflowX: 'auto',
       overflowY: 'auto',
       maxHeight: 'calc(100vh - 250px)'
     }
   }, React.createElement("table", {
+    className: "qc-asgn",
     style: {
       borderCollapse: 'collapse',
       fontSize: 12,
@@ -26445,7 +26671,8 @@ function QCAdmin({
     }
   }, "Indicator"), assignCols.map(c => React.createElement("th", {
     key: c.key,
-    title: c.name + ' - ' + assignCount[c.key] + ' assigned',
+    className: "qa-x",
+    title: c.name + ' — ' + assignCount[c.key] + ' indicator' + (assignCount[c.key] !== 1 ? 's' : '') + ' assigned',
     style: {
       padding: '10px 6px',
       fontSize: 10,
@@ -26469,12 +26696,15 @@ function QCAdmin({
     }
   }, assignCount[c.key]))))), React.createElement("tbody", null, assignRows.map(rec => {
     const rmeas = measureOf(rec.formula);
+    const inDepts = assignCols.filter(c => rec.set.has(c.key)).map(c => c.name);
     return React.createElement("tr", {
       key: rec.key,
       style: {
         borderBottom: '1px solid #eef1f5'
       }
     }, React.createElement("td", {
+      className: "qa-name",
+      title: inDepts.length ? 'Assigned to ' + inDepts.length + ' department' + (inDepts.length !== 1 ? 's' : '') + ': ' + inDepts.join(', ') : 'Not assigned to any department yet',
       style: {
         padding: '8px 14px',
         textAlign: 'left',
@@ -26500,19 +26730,42 @@ function QCAdmin({
     }), React.createElement("span", {
       style: {
         fontWeight: 600,
-        color: P.ink
+        color: P.ink,
+        flex: 1,
+        minWidth: 0
       }
-    }, rec.name))), assignCols.map(c => {
+    }, rec.name), inDepts.length > 0 ? React.createElement("span", {
+      style: {
+        flexShrink: 0,
+        fontFamily: MONO,
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.blue700,
+        background: '#eef8fc',
+        border: '1px solid #cfe6f4',
+        borderRadius: 999,
+        padding: '1px 7px'
+      },
+      title: 'Assigned to: ' + inDepts.join(', ')
+    }, inDepts.length) : React.createElement("span", {
+      style: {
+        flexShrink: 0,
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#c2ccd8'
+      }
+    }, "\u2014"))), assignCols.map(c => {
       const on = rec.set.has(c.key);
       return React.createElement("td", {
         key: c.key,
+        className: "qa-x",
         style: {
           textAlign: 'center',
           padding: '6px 4px'
         }
       }, React.createElement("span", {
         onClick: () => toggleAssign(rec, c.key),
-        title: (on ? 'Assigned to ' : 'Not assigned · ') + c.name,
+        title: rec.name + ' × ' + c.name + ' — ' + (on ? 'assigned · click to unassign' : 'not assigned · click to assign'),
         style: {
           display: 'inline-grid',
           placeItems: 'center',
@@ -26523,7 +26776,8 @@ function QCAdmin({
           background: on ? '#e7f6ed' : '#f7f9fc',
           color: on ? '#1f9d57' : '#cdd6e2',
           fontSize: 12,
-          fontWeight: 700
+          fontWeight: 700,
+          boxShadow: on ? '0 0 0 1px #bfe6cd' : 'none'
         }
       }, on ? '✓' : ''));
     }));
@@ -29587,6 +29841,15 @@ window.LockScreen = LockScreen;
       window.refreshQualitySeed && window.refreshQualitySeed();
     } catch (e) {}
   };
+  const useDcDataRev = () => {
+    const [rev, setRev] = useState(0);
+    useEffect(() => {
+      const h = () => setRev(r => r + 1);
+      window.addEventListener('unico:data-refreshed', h);
+      return () => window.removeEventListener('unico:data-refreshed', h);
+    }, []);
+    return rev;
+  };
   const MO = () => window.UNICO && window.UNICO.MONTH_ORDER || [];
   const MONS_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const MONS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -30122,10 +30385,11 @@ window.LockScreen = LockScreen;
     const [list, setList] = useState(null);
     const [editing, setEditing] = useState(null);
     const [view, setView] = useState('people');
+    const dataRev = useDcDataRev();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
       key: d.key,
       name: d.name
-    })), []);
+    })), [dataRev]);
     const areaInds = useMemo(() => {
       const m = {};
       (window.qualityData ? window.qualityData() : []).forEach(d => {
@@ -30135,7 +30399,7 @@ window.LockScreen = LockScreen;
         }));
       });
       return m;
-    }, []);
+    }, [dataRev]);
     const load = () => dcApi.get('/api/responsibles').then(r => setList(r.ok ? r.responsibles : [])).catch(() => setList([]));
     useEffect(() => {
       load();
@@ -31015,7 +31279,8 @@ window.LockScreen = LockScreen;
   function DataQualityForm({
     prefill
   }) {
-    const areas = useMemo(() => window.qualityData ? window.qualityData() : [], []);
+    const dataRev = useDcDataRev();
+    const areas = useMemo(() => window.qualityData ? window.qualityData() : [], [dataRev]);
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     const lockResp = !!(me && me.role === 'collector');
     const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
@@ -31360,8 +31625,11 @@ window.LockScreen = LockScreen;
         return;
       }
       if (isRate && !denLockedForCollector && !(denNum > 0)) {
-        toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ''), 'error');
-        return;
+        const explicitZero = !(Number(numerator) > 0) && String(den == null ? '' : den).trim() !== '' && Number(den) === 0;
+        if (!explicitZero) {
+          toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error');
+          return;
+        }
       }
       const matched = resps.find(r => r.name === responsible);
       setBusy(true);
@@ -32708,10 +32976,11 @@ window.LockScreen = LockScreen;
       const base = dcWideMonths();
       return s.month && base.indexOf(s.month) < 0 ? [s.month].concat(base) : base.length ? base : [s.month];
     }();
+    const areaOptsRev = useDcDataRev();
     const areaOpts = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
       key: d.key,
       name: d.name
-    })), []);
+    })), [areaOptsRev]);
     const deptOpts = React.useMemo(() => dcAllDepts(), []);
     const setInc = (i, k, v) => setIncidents(a => a.map((x, j) => j === i ? Object.assign({}, x, {
       [k]: v
@@ -34029,10 +34298,11 @@ window.LockScreen = LockScreen;
     depts
   }) {
     const all = depts && depts.length ? depts : dcAllDepts();
+    const dataRev = useDcDataRev();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
       key: d.key,
       name: d.name
-    })), []);
+    })), [dataRev]);
     const [links, setLinks] = useState(null);
     const [resps, setResps] = useState([]);
     const [form, setForm] = useState({
@@ -34451,7 +34721,8 @@ window.LockScreen = LockScreen;
   function CollectorStatus({
     onFill
   }) {
-    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length), []);
+    const dataRev = useDcDataRev();
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length), [dataRev]);
     const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : [];
     const monthOpts = dcWideMonths();
     const [month, setMonth] = useState(dcDefaultMonth() || (fyMonths.length ? fyMonths[fyMonths.length - 1] : '') || '');

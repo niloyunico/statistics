@@ -3181,11 +3181,16 @@ function QCIncidents({depts,Q}){
     (depts||[]).forEach(d=>{
       if(dept!=='all' && d.key!==dept) return;
       (d.indicators||[]).forEach(ind=>{
-        // Prefer monthly breaches when the indicator has any monthly data.
-        const hasMonthly = MONTHS.some(m=>monthRaw(ind,m[0])!=null);
+        // A month is listed when it BREACHES the benchmark OR has a logged incident
+        // report — an approved incident on an on-benchmark reading (e.g. one fall at
+        // 2.6 vs ≤ 3.3, or an NSI with no computable rate) must still appear here.
+        const monthIncs = mk => (ind.incidents&&Array.isArray(ind.incidents[mk]))?ind.incidents[mk].filter(x=>x&&Object.values(x).some(v=>v)):[];
+        const hasMonthly = MONTHS.some(m=>monthRaw(ind,m[0])!=null || monthIncs(m[0]).length);
         if(hasMonthly){
           MONTHS.forEach(m=>{
-            if(monthStatus(ind,m[0])==='breach'){
+            const breach = monthStatus(ind,m[0])==='breach';
+            const incs = monthIncs(m[0]);
+            if(breach || incs.length){
               out.push({
                 dept:d.name,
                 deptKey:d.key,
@@ -3195,6 +3200,8 @@ function QCIncidents({depts,Q}){
                 month:m[1],
                 value:fmtVal(ind,monthRaw(ind,m[0])),
                 bench:benchExpr(ind),
+                breach:breach,
+                incCount:incs.length,
                 indObj:ind,
                 monthKey:m[0],
                 deptObj:d
@@ -3216,6 +3223,8 @@ function QCIncidents({depts,Q}){
                 month:qtrLabelOf(q),
                 value:fmtVal(ind,qtrRaw(ind,q,fy)),
                 bench:benchExpr(ind),
+                breach:true,
+                incCount:0,
                 indObj:ind,
                 quarter:q,
                 monthKey:q,
@@ -3245,7 +3254,7 @@ function QCIncidents({depts,Q}){
         </div>
         <div style={{flex:1,minWidth:0}}>
           <h1 style={{margin:0,fontSize:21,fontWeight:700,color:P.ink,letterSpacing:'-.3px'}}>Incident Reports</h1>
-          <div style={{fontSize:12.5,color:P.muted,marginTop:2}}><b style={{color:P.rose}}>{list.length}</b> benchmark breaches flagged in {fyLabelOf(fy)} — each needs review</div>
+          <div style={{fontSize:12.5,color:P.muted,marginTop:2}}><b style={{color:P.rose}}>{list.length}</b> benchmark breaches &amp; logged incidents in {fyLabelOf(fy)} — each needs review</div>
         </div>
         <QCFyPicker fy={fy} setFy={setFy} depts={depts}/>
         <select value={dept} onChange={e=>setDept(e.target.value)} style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,fontWeight:600,background:'#fff',color:P.ink,outline:'none'}}>
@@ -3254,12 +3263,12 @@ function QCIncidents({depts,Q}){
       </div>
 
       {empty && (
-        <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,padding:50,textAlign:'center',color:P.green,fontWeight:600}}>✓ No breaches in scope — all reported indicators on benchmark.</div>
+        <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,padding:50,textAlign:'center',color:P.green,fontWeight:600}}>✓ No breaches or logged incidents in scope — all reported indicators on benchmark.</div>
       )}
 
       <div style={{display:'flex',flexDirection:'column',gap:9}}>
         {rows.map((x,i)=>(
-          <div key={x.deptKey+'|'+x.ind+'|'+x.month+'|'+i} onClick={()=>setSel(x)} onMouseEnter={e=>{e.currentTarget.style.boxShadow='0 3px 10px rgba(20,32,46,.12)';e.currentTarget.style.borderColor=P.rose;}} onMouseLeave={e=>{e.currentTarget.style.boxShadow='0 1px 2px rgba(20,32,46,.05)';e.currentTarget.style.borderColor=P.line;}} style={{cursor:'pointer',background:'#fff',border:'1px solid '+P.line,borderLeft:'3px solid '+P.rose,borderRadius:10,boxShadow:'0 1px 2px rgba(20,32,46,.05)',padding:'12px 15px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',transition:'box-shadow .12s,border-color .12s'}}>
+          <div key={x.deptKey+'|'+x.ind+'|'+x.month+'|'+i} onClick={()=>setSel(x)} onMouseEnter={e=>{e.currentTarget.style.boxShadow='0 3px 10px rgba(20,32,46,.12)';e.currentTarget.style.borderColor=P.rose;}} onMouseLeave={e=>{e.currentTarget.style.boxShadow='0 1px 2px rgba(20,32,46,.05)';e.currentTarget.style.borderColor=P.line;}} style={{cursor:'pointer',background:'#fff',border:'1px solid '+P.line,borderLeft:'3px solid '+(x.breach?P.rose:'#e0a300'),borderRadius:10,boxShadow:'0 1px 2px rgba(20,32,46,.05)',padding:'12px 15px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',transition:'box-shadow .12s,border-color .12s'}}>
             <div style={{width:34,height:34,borderRadius:9,background:'#fbe9ec',color:P.rose,display:'grid',placeItems:'center',flexShrink:0}}>
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>
             </div>
@@ -3273,13 +3282,15 @@ function QCIncidents({depts,Q}){
             </div>
             <div style={{textAlign:'center'}}>
               <div style={{fontSize:10,color:P.faint,textTransform:'uppercase',letterSpacing:'.3px'}}>Value</div>
-              <div style={{fontFamily:MONO,fontSize:13,fontWeight:700,color:P.rose}}>{x.value}</div>
+              <div style={{fontFamily:MONO,fontSize:13,fontWeight:700,color:x.breach?P.rose:P.ink2}}>{x.value}</div>
             </div>
             <div style={{textAlign:'center'}}>
               <div style={{fontSize:10,color:P.faint,textTransform:'uppercase',letterSpacing:'.3px'}}>Benchmark</div>
               <div style={{fontFamily:MONO,fontSize:12,fontWeight:600,color:P.blue700}}>{x.bench}</div>
             </div>
-            <span style={{fontSize:10.5,fontWeight:600,color:P.rose,background:'#fbe9ec',padding:'3px 10px',borderRadius:20}}>Breach</span>
+            {x.breach
+              ? <span style={{fontSize:10.5,fontWeight:600,color:P.rose,background:'#fbe9ec',padding:'3px 10px',borderRadius:20}}>Breach{x.incCount?(' · '+x.incCount+' incident'+(x.incCount>1?'s':'')):''}</span>
+              : <span style={{fontSize:10.5,fontWeight:600,color:'#9a6b00',background:'#fff4e0',padding:'3px 10px',borderRadius:20}}>{x.incCount+' incident'+(x.incCount>1?'s':'')+' logged'}</span>}
             <span style={{fontSize:11.5,fontWeight:600,color:P.blue,whiteSpace:'nowrap'}}>View report ›</span>
           </div>
         ))}
@@ -4159,18 +4170,37 @@ function QCAdmin({Q,q,onQ,initialDept}){
           <input value={assignQ} onChange={e=>setAssignQ(e.target.value)} placeholder="Search indicator..." style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,background:'#fff',outline:'none',minWidth:230}}/>
           {_aq && <span style={{fontSize:11.5,color:P.muted,whiteSpace:'nowrap'}}>{assignRows.length} of {assignNames.length}</span>}
         </div>
+        {/* Crosshair hover: the hovered ROW tints (incl. the sticky name cell) and the
+            hovered COLUMN is shaded by a tall ::after overlay clipped by the scroll box —
+            so it is always obvious WHICH indicator × WHICH department a cell belongs to.
+            (!important beats the sticky cell's inline #fff background.) */}
+        <style>{'.qc-asgn .qa-x{position:relative}'
+          +'.qc-asgn .qa-x:hover::after{content:"";position:absolute;left:0;right:0;top:-6000px;bottom:-6000px;background:rgba(0,144,202,.08);pointer-events:none}'
+          +'.qc-asgn tbody tr:hover td{background:#f0f8fd}'
+          +'.qc-asgn tbody tr:hover td.qa-name{background:#e8f4fb !important;box-shadow:inset 3px 0 0 #0090ca}'}</style>
         <div style={{overflowX:'auto',overflowY:'auto',maxHeight:'calc(100vh - 250px)'}}>
-          <table style={{borderCollapse:'collapse',fontSize:12,width:'100%'}}>
+          <table className="qc-asgn" style={{borderCollapse:'collapse',fontSize:12,width:'100%'}}>
             <thead><tr>
               <th style={{textAlign:'left',padding:'10px 14px',fontSize:10.5,textTransform:'uppercase',letterSpacing:'.3px',color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#eef2f7',position:'sticky',left:0,top:0,zIndex:5,minWidth:230}}>Indicator</th>
-              {assignCols.map(c=><th key={c.key} title={c.name+' - '+assignCount[c.key]+' assigned'} style={{padding:'10px 6px',fontSize:10,color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#eef2f7',textAlign:'center',whiteSpace:'nowrap',position:'sticky',top:0,zIndex:4}}><div>{c.short}</div><div style={{fontFamily:MONO,fontSize:9.5,fontWeight:700,color:P.blue,marginTop:2}}>{assignCount[c.key]}</div></th>)}
+              {assignCols.map(c=><th key={c.key} className="qa-x" title={c.name+' — '+assignCount[c.key]+' indicator'+(assignCount[c.key]!==1?'s':'')+' assigned'} style={{padding:'10px 6px',fontSize:10,color:P.muted,fontWeight:700,borderBottom:'1px solid #dde3ec',background:'#eef2f7',textAlign:'center',whiteSpace:'nowrap',position:'sticky',top:0,zIndex:4}}><div>{c.short}</div><div style={{fontFamily:MONO,fontSize:9.5,fontWeight:700,color:P.blue,marginTop:2}}>{assignCount[c.key]}</div></th>)}
             </tr></thead>
             <tbody>
-              {assignRows.map(rec=>{ const rmeas=measureOf(rec.formula); return (
+              {assignRows.map(rec=>{ const rmeas=measureOf(rec.formula);
+                const inDepts=assignCols.filter(c=>rec.set.has(c.key)).map(c=>c.name);
+                return (
               <tr key={rec.key} style={{borderBottom:'1px solid #eef1f5'}}>
-                <td style={{padding:'8px 14px',textAlign:'left',position:'sticky',left:0,background:'#fff',zIndex:1}}><div style={{display:'flex',alignItems:'center',gap:8}}><span style={{width:7,height:7,borderRadius:'50%',background:rmeas.color,flexShrink:0}}></span><span style={{fontWeight:600,color:P.ink}}>{rec.name}</span></div></td>
+                <td className="qa-name" title={inDepts.length?('Assigned to '+inDepts.length+' department'+(inDepts.length!==1?'s':'')+': '+inDepts.join(', ')):'Not assigned to any department yet'}
+                  style={{padding:'8px 14px',textAlign:'left',position:'sticky',left:0,background:'#fff',zIndex:1}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{width:7,height:7,borderRadius:'50%',background:rmeas.color,flexShrink:0}}></span>
+                    <span style={{fontWeight:600,color:P.ink,flex:1,minWidth:0}}>{rec.name}</span>
+                    {inDepts.length>0
+                      ? <span style={{flexShrink:0,fontFamily:MONO,fontSize:9.5,fontWeight:700,color:P.blue700,background:'#eef8fc',border:'1px solid #cfe6f4',borderRadius:999,padding:'1px 7px'}} title={'Assigned to: '+inDepts.join(', ')}>{inDepts.length}</span>
+                      : <span style={{flexShrink:0,fontSize:9.5,fontWeight:700,color:'#c2ccd8'}}>—</span>}
+                  </div>
+                </td>
                 {assignCols.map(c=>{ const on=rec.set.has(c.key); return (
-                  <td key={c.key} style={{textAlign:'center',padding:'6px 4px'}}><span onClick={()=>toggleAssign(rec,c.key)} title={(on?'Assigned to ':'Not assigned · ')+c.name} style={{display:'inline-grid',placeItems:'center',width:22,height:22,borderRadius:6,cursor:'pointer',background:on?'#e7f6ed':'#f7f9fc',color:on?'#1f9d57':'#cdd6e2',fontSize:12,fontWeight:700}}>{on?'✓':''}</span></td>
+                  <td key={c.key} className="qa-x" style={{textAlign:'center',padding:'6px 4px'}}><span onClick={()=>toggleAssign(rec,c.key)} title={rec.name+' × '+c.name+' — '+(on?'assigned · click to unassign':'not assigned · click to assign')} style={{display:'inline-grid',placeItems:'center',width:22,height:22,borderRadius:6,cursor:'pointer',background:on?'#e7f6ed':'#f7f9fc',color:on?'#1f9d57':'#cdd6e2',fontSize:12,fontWeight:700,boxShadow:on?'0 0 0 1px #bfe6cd':'none'}}>{on?'✓':''}</span></td>
                 ); })}
               </tr>
               ); })}
