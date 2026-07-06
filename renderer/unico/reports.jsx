@@ -597,17 +597,119 @@ function Reports({depts}){
   const doPrint=()=>{ try{ document.body.classList.add('pdf-export-mode'); window.print(); }catch(e){} finally{ setTimeout(()=>document.body.classList.remove('pdf-export-mode'),500); } };
   const doExport=async()=>{
     const native=window.unicoNative;
-    if(!native||typeof native.exportPDF!=='function'){ setNote({ok:false,text:'PDF export is only available in the desktop app.'}); return; }
     if(chosen.length===0){ setNote({ok:false,text:'Select at least one department first.'}); return; }
-    setExporting(true); setNote(null);
-    document.body.classList.add('pdf-export-mode'); // print only the report (#pdf-root)
-    try{
-      const res=await native.exportPDF({pageSize, landscape:orient==='landscape', defaultName:`UNICO-${type}-report`});
-      if(res&&res.ok) setNote({ok:true,text:'PDF'+(res.path?' saved · '+res.path:' ready — save it from the print dialog')});
-      else if(res&&res.canceled){ /* user dismissed the save dialog — stay quiet */ }
-      else setNote({ok:false,text:(res&&res.error)||'Export failed.'});
-    }catch(e){ setNote({ok:false,text:String(e&&e.message?e.message:e)}); }
-    finally{ document.body.classList.remove('pdf-export-mode'); setExporting(false); }
+    // Desktop app: superior native Chromium printToPDF (vector).
+    if(native&&typeof native.exportPDF==='function'&&!native.isWeb){
+      setExporting(true); setNote(null);
+      document.body.classList.add('pdf-export-mode'); // print only the report (#pdf-root)
+      try{
+        const res=await native.exportPDF({pageSize, landscape:orient==='landscape', defaultName:`UNICO-${type}-report`});
+        if(res&&res.ok) setNote({ok:true,text:'PDF'+(res.path?' saved · '+res.path:' ready — save it from the print dialog')});
+        else if(res&&res.canceled){ /* user dismissed the save dialog — stay quiet */ }
+        else setNote({ok:false,text:(res&&res.error)||'Export failed.'});
+      }catch(e){ setNote({ok:false,text:String(e&&e.message?e.message:e)}); }
+      finally{ document.body.classList.remove('pdf-export-mode'); setExporting(false); }
+      return;
+    }
+    // Web: TRUE one-click download — rasterize every report page (html2canvas) into a
+    // jsPDF, with the SAME content-aware slicing the Quality console exporter uses
+    // (guard cuts between rows/charts + blank-raster-row snapping + pinned footer).
+    // This used to bail with "PDF export is only available in the desktop app."
+    const H=window.html2canvas, J=window.jspdf&&window.jspdf.jsPDF;
+    if(H&&J){
+      setExporting(true); setNote(null);
+      const stage=document.getElementById('pdf-root'); let els=[], prev=[];
+      try{
+        if(!stage) throw new Error('render target missing');
+        document.body.classList.add('qc-pdfcap');
+        els=Array.prototype.slice.call(stage.querySelectorAll('.pdf-page'));
+        if(!els.length) throw new Error('nothing to export');
+        prev=els.map(el=>el.getAttribute('style')||'');
+        els.forEach(el=>{ el.style.width=pageW+'px'; el.style.boxSizing='border-box'; el.style.padding='28px 30px'; el.style.background='#fff'; el.style.margin='0'; el.style.height='auto'; el.style.overflow='visible'; });
+        try{ if(document.fonts&&document.fonts.ready) await document.fonts.ready; }catch(e){}
+        await new Promise(r=>setTimeout(r,80));
+        const fmt=pageSize==='A3'?'a3':pageSize==='Letter'?'letter':'a4', ori=orient==='landscape'?'l':'p';
+        const doc=new J({orientation:ori,unit:'pt',format:fmt,compress:true});
+        const pw=doc.internal.pageSize.getWidth(), ph=doc.internal.pageSize.getHeight();
+        let firstPage=true;
+        for(let i=0;i<els.length;i++){
+          const el=els[i];
+          if(el.scrollHeight<=pageMinH){ el.style.height=pageMinH+'px'; el.style.overflow='hidden'; }
+          const elRect=el.getBoundingClientRect();
+          const guardsCss=[];
+          el.querySelectorAll('tr,svg,.pdf-foot,[style*="break-inside"]').forEach(a=>{
+            const r=a.getBoundingClientRect();
+            if(r.height>0) guardsCss.push([r.top-elRect.top, r.bottom-elRect.top]);
+          });
+          const fEl=el.querySelector('.pdf-foot'); let fCss=null;
+          if(fEl){ const fr=fEl.getBoundingClientRect(); if(fr.height>0) fCss=[fr.top-elRect.top, fr.bottom-elRect.top]; }
+          const canvas=await H(el,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false});
+          el.style.height='auto'; el.style.overflow='visible';
+          const cW=canvas.width, cH=canvas.height, pxPerPt=cW/pw, pageHpx=Math.round(ph*pxPerPt);
+          const k=elRect.height>0?(cH/elRect.height):2;
+          const guards=guardsCss.map(g=>[g[0]*k, g[1]*k]).filter(g=>(g[1]-g[0])<pageHpx*0.9);
+          const fPx=fCss?[fCss[0]*k, fCss[1]*k]:null;
+          const pickEnd=(y0,budget)=>{
+            if(cH-y0<=budget) return cH;
+            let cut=y0+budget;
+            for(let pass=0; pass<8; pass++){
+              let moved=false;
+              for(const g of guards){
+                if(g[0]<cut-1 && g[1]>cut+1){ const c2=Math.floor(g[0]); if(c2>y0+budget*0.35){ cut=c2; moved=true; } }
+              }
+              if(!moved) break;
+            }
+            return Math.max(cut, y0+Math.round(budget*0.35));
+          };
+          const crop=(top,h)=>{ const tmp=document.createElement('canvas'); tmp.width=cW; tmp.height=h; tmp.getContext('2d').drawImage(canvas,0,top,cW,h,0,0,cW,h); return tmp.toDataURL('image/jpeg',0.94); };
+          const snapCtx=canvas.getContext('2d',{willReadFrequently:true});
+          const rowBlank=(yy)=>{ if(yy<=0||yy>=cH) return false; const d2=snapCtx.getImageData(0,yy,cW,1).data;
+            for(let j=0;j<d2.length;j+=4){ if(d2[j]<252||d2[j+1]<252||d2[j+2]<252) return false; } return true; };
+          const snapCut=(cut,y0)=>{
+            if(rowBlank(cut)) return cut;
+            const up=Math.min(90, cut-(y0+24));
+            for(let dY=1; dY<=90; dY++){
+              if(dY<=up && rowBlank(cut-dY)) return cut-dY;
+              if(dY<=8 && cut+dY<cH-1 && rowBlank(cut+dY)) return cut+dY;
+            }
+            return cut;
+          };
+          const padPx=Math.round(28*k), padPt=padPx/pxPerPt;
+          if(cH<=pageHpx+4){
+            if(!firstPage) doc.addPage(fmt,ori); firstPage=false;
+            doc.addImage(canvas.toDataURL('image/jpeg',0.94),'JPEG',0,0,pw,Math.min(ph,cH/pxPerPt),undefined,'FAST');
+          } else {
+            let y=0;
+            do{
+              const first=y===0, top=first?0:padPt, budget=pageHpx-(first?1:2)*padPx;
+              let end=pickEnd(y,budget); if(end<cH) end=snapCut(end,y);
+              const sliceH=end-y;
+              if(!firstPage) doc.addPage(fmt,ori); firstPage=false;
+              if(cH-end<=2 && sliceH<budget-4 && fPx && fPx[0]>=y-2 && fPx[0]<end){
+                const fTop=Math.max(y,snapCut(Math.floor(fPx[0]),y)), contentH=fTop-y, footH=end-fTop;
+                if(contentH>2) doc.addImage(crop(y,contentH),'JPEG',0,top,pw,contentH/pxPerPt,undefined,'FAST');
+                if(footH>2) doc.addImage(crop(fTop,footH),'JPEG',0,ph-footH/pxPerPt,pw,footH/pxPerPt,undefined,'FAST');
+              } else {
+                doc.addImage(crop(y,sliceH),'JPEG',0,top,pw,sliceH/pxPerPt,undefined,'FAST');
+              }
+              y=end;
+            } while(cH-y>2);
+          }
+        }
+        els.forEach((el,i)=>el.setAttribute('style',prev[i])); els=[];
+        document.body.classList.remove('qc-pdfcap');
+        doc.save('UNICO-statistics-'+type+'-'+new Date().toISOString().slice(0,10)+'.pdf');
+        setNote({ok:true,text:'PDF downloaded ('+(ori==='l'?'landscape':'portrait')+').'});
+      }catch(e){
+        try{ els.forEach((el,i)=>el.setAttribute('style',prev[i])); }catch(_){}
+        document.body.classList.remove('qc-pdfcap');
+        setNote({ok:false,text:'Direct PDF failed ('+String(e&&e.message||e)+'); opening Print instead.'});
+        try{ document.body.classList.add('pdf-export-mode'); window.print(); setTimeout(()=>document.body.classList.remove('pdf-export-mode'),600); }catch(_){}
+      }finally{ setExporting(false); }
+      return;
+    }
+    // Last resort: browser print dialog (choose "Save as PDF").
+    doPrint();
   };
   const pdfRoot = typeof document!=='undefined' ? document.getElementById('pdf-root') : null;
 
