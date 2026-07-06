@@ -20,17 +20,10 @@ function rr(u) { const url = new URL(u); let rel = decodeURIComponent(url.pathna
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const errors = [];
 
-// Minimal but realistic department fixture (6-col + 1-col) injected as the
-// server-provided global BEFORE the deferred bundle runs.
-const FIX = [
-  { id: 'er', name: 'Emergency Medicine', short: 'ER', group: 'Critical & Emergency', desc: 'ER flow', primary: 'reg', primaryLabel: 'ER Reg Cases', order: 1,
-    cols: [{ id: 'reg', label: 'ER Reg Cases' }, { id: 'adm', label: 'Admission' }, { id: 'conv', label: 'Conversion' }, { id: 'lama', label: 'LAMA' }, { id: 'daycare', label: 'Day Care' }, { id: 'proc', label: 'Procedure' }],
-    months: ['Jan-26', 'Feb-26', 'Mar-26'],
-    data: [{ reg: 100, adm: 40, conv: 30, lama: 5, daycare: 20, proc: 10 }, { reg: 120, adm: 45, conv: 33, lama: 4, daycare: 25, proc: 12 }, { reg: 95, adm: 38, conv: 28, lama: 6, daycare: 18, proc: 9 }] },
-  { id: 'opd', name: 'Out-Patient Department', short: 'OPD', group: 'Ambulatory', desc: 'OPD visits', primary: 'opd', primaryLabel: 'OPD Patients', order: 2,
-    cols: [{ id: 'opd', label: 'OPD Patients' }],
-    months: ['Jan-26', 'Feb-26', 'Mar-26'], data: [{ opd: 2000 }, { opd: 2200 }, { opd: 2100 }] },
-];
+// PRODUCTION fixture: the REAL departments dumped from the live DB (run the dump
+// one-liner in the repo docs / see .fixture-depts.json) — this makes the headless run
+// byte-identical to what production renders, at the same page count.
+const FIX = JSON.parse(fs.readFileSync(path.join(__dirname, '.fixture-depts.json'), 'utf8'));
 const INJECT = '<script>window.__UNICO_DEPARTMENTS__=' + JSON.stringify(FIX) + ';window.__UNICO_QUALITY__=[];</script>';
 
 app.commandLine.appendSwitch('disable-gpu');
@@ -59,24 +52,29 @@ app.whenReady().then(async () => {
 
   const mount = await ev(`({hasApp:!!document.querySelector('.app'),depts:(window.UNICO&&window.UNICO.DEPARTMENTS||[]).length,h2c:typeof window.html2canvas,jspdf:!!(window.jspdf&&window.jspdf.jsPDF)})`);
 
-  // Navigate: workspace switcher "Reports" -> Report Builder
+  // Navigate: workspace switcher "Reports" -> Report Builder, then Select all depts
   await ev(`(function(){var b=[].slice.call(document.querySelectorAll('.modswitch button')).filter(function(x){return /Reports/.test(x.textContent);})[0]; if(b){b.click();return true;} return false;})()`);
   await sleep(1800);
+  await ev(`(function(){var b=[].slice.call(document.querySelectorAll('button,a,span')).filter(function(x){return /^Select all$/.test((x.textContent||'').trim());})[0]; if(b){b.click();return true;} return false;})()`);
+  await sleep(1500);
   const onReports = await ev(`(function(){var pages=document.querySelectorAll('#pdf-root .pdf-page').length; var btn=[].slice.call(document.querySelectorAll('button')).some(function(b){return /Export PDF/.test(b.textContent);}); return {pages:pages, exportBtn:btn};})()`);
 
-  // Click Export PDF and wait for the note / download
+  // Click Export PDF and wait for the note / download (production scale: allow 3 min)
+  const t0 = Date.now();
   await ev(`(function(){var b=[].slice.call(document.querySelectorAll('button')).filter(function(x){return /Export PDF/.test(x.textContent);})[0]; if(b){b.click();return true;} return false;})()`);
   let note = '';
-  for (let i = 0; i < 60; i++) { // up to 30 s
+  for (let i = 0; i < 360; i++) {
     await sleep(500);
     note = await ev(`(function(){var els=[].slice.call(document.querySelectorAll('.content div')).filter(function(d){return /PDF downloaded|Direct PDF failed|only available|Export failed/.test(d.textContent||'');}); return els.length?els[els.length-1].textContent.slice(0,160):'';})()`);
     if (note || dlState !== 'none') { if (dlState !== 'none' && !note) continue; if (note) break; }
   }
-  await sleep(1200); // let the download finish writing
+  const elapsed = Math.round((Date.now() - t0) / 100) / 10;
+  await sleep(1500); // let the download finish writing
   const pdfOk = fs.existsSync(outPdf) && fs.statSync(outPdf).size > 20000;
   const pdfKb = fs.existsSync(outPdf) ? Math.round(fs.statSync(outPdf).size / 1024) : 0;
+  console.log('ELAPSED ' + elapsed + 's for ' + onReports.pages + ' pages');
 
-  const pass = mount.hasApp && mount.depts === 2 && onReports.pages > 0 && onReports.exportBtn && /PDF downloaded/.test(note) && dlState === 'completed' && pdfOk && errors.length === 0;
+  const pass = mount.hasApp && mount.depts === FIX.length && onReports.pages > 10 && onReports.exportBtn && /PDF downloaded/.test(note) && dlState === 'completed' && pdfOk && errors.length === 0;
   console.log('MOUNT ' + JSON.stringify(mount));
   console.log('REPORTS ' + JSON.stringify(onReports));
   console.log('NOTE ' + JSON.stringify(note) + ' download=' + dlState + ' pdf=' + pdfKb + 'KB');

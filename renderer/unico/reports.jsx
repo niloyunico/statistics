@@ -631,8 +631,15 @@ function Reports({depts}){
         const fmt=pageSize==='A3'?'a3':pageSize==='Letter'?'letter':'a4', ori=orient==='landscape'?'l':'p';
         const doc=new J({orientation:ori,unit:'pt',format:fmt,compress:true});
         const pw=doc.internal.pageSize.getWidth(), ph=doc.internal.pageSize.getHeight();
+        // Big reports (a full 16-department run = 17+ pages) rasterize at 1.5x instead
+        // of 2x — ~45% fewer pixels per page, visually identical at A4 print size.
+        const capScale=els.length>8?1.5:2;
         let firstPage=true;
         for(let i=0;i<els.length;i++){
+          // Live progress — a 17-page export takes ~20-40s and a frozen "Exporting…"
+          // reads as a hang. Yield a frame so React actually paints the update.
+          setExporting('Page '+(i+1)+'/'+els.length+'…');
+          await new Promise(r=>setTimeout(r,30));
           const el=els[i];
           if(el.scrollHeight<=pageMinH){ el.style.height=pageMinH+'px'; el.style.overflow='hidden'; }
           const elRect=el.getBoundingClientRect();
@@ -643,10 +650,10 @@ function Reports({depts}){
           });
           const fEl=el.querySelector('.pdf-foot'); let fCss=null;
           if(fEl){ const fr=fEl.getBoundingClientRect(); if(fr.height>0) fCss=[fr.top-elRect.top, fr.bottom-elRect.top]; }
-          const canvas=await H(el,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false});
+          const canvas=await H(el,{scale:capScale,backgroundColor:'#ffffff',useCORS:true,logging:false});
           el.style.height='auto'; el.style.overflow='visible';
           const cW=canvas.width, cH=canvas.height, pxPerPt=cW/pw, pageHpx=Math.round(ph*pxPerPt);
-          const k=elRect.height>0?(cH/elRect.height):2;
+          const k=elRect.height>0?(cH/elRect.height):capScale;
           const guards=guardsCss.map(g=>[g[0]*k, g[1]*k]).filter(g=>(g[1]-g[0])<pageHpx*0.9);
           const fPx=fCss?[fCss[0]*k, fCss[1]*k]:null;
           const pickEnd=(y0,budget)=>{
@@ -748,7 +755,7 @@ function Reports({depts}){
         right={<div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           {modeSeg}
           <button className="btn sm" onClick={doPrint}><Ic d={I.print} s={15}/>Print</button>
-          <button className="btn pri sm" onClick={doExport} disabled={exporting||chosen.length===0}><Ic d={I.download} s={15}/>{exporting?'Exporting…':'Export PDF'}</button>
+          <button className="btn pri sm" onClick={doExport} disabled={!!exporting||chosen.length===0}><Ic d={I.download} s={15}/>{exporting?(typeof exporting==='string'?exporting:'Exporting…'):'Export PDF'}</button>
         </div>}/>
       {note&&(
         <div style={{display:'flex',alignItems:'center',gap:9,padding:'10px 14px',borderRadius:8,fontSize:12.5,fontWeight:600,

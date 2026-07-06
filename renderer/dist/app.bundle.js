@@ -12417,8 +12417,11 @@ function Reports({
         });
         const pw = doc.internal.pageSize.getWidth(),
           ph = doc.internal.pageSize.getHeight();
+        const capScale = els.length > 8 ? 1.5 : 2;
         let firstPage = true;
         for (let i = 0; i < els.length; i++) {
+          setExporting('Page ' + (i + 1) + '/' + els.length + '…');
+          await new Promise(r => setTimeout(r, 30));
           const el = els[i];
           if (el.scrollHeight <= pageMinH) {
             el.style.height = pageMinH + 'px';
@@ -12437,7 +12440,7 @@ function Reports({
             if (fr.height > 0) fCss = [fr.top - elRect.top, fr.bottom - elRect.top];
           }
           const canvas = await H(el, {
-            scale: 2,
+            scale: capScale,
             backgroundColor: '#ffffff',
             useCORS: true,
             logging: false
@@ -12448,7 +12451,7 @@ function Reports({
             cH = canvas.height,
             pxPerPt = cW / pw,
             pageHpx = Math.round(ph * pxPerPt);
-          const k = elRect.height > 0 ? cH / elRect.height : 2;
+          const k = elRect.height > 0 ? cH / elRect.height : capScale;
           const guards = guardsCss.map(g => [g[0] * k, g[1] * k]).filter(g => g[1] - g[0] < pageHpx * 0.9);
           const fPx = fCss ? [fCss[0] * k, fCss[1] * k] : null;
           const pickEnd = (y0, budget) => {
@@ -12624,11 +12627,11 @@ function Reports({
     }), "Print"), React.createElement("button", {
       className: "btn pri sm",
       onClick: doExport,
-      disabled: exporting || chosen.length === 0
+      disabled: !!exporting || chosen.length === 0
     }, React.createElement(Ic, {
       d: I.download,
       s: 15
-    }), exporting ? 'Exporting…' : 'Export PDF'))
+    }), exporting ? typeof exporting === 'string' ? exporting : 'Exporting…' : 'Export PDF'))
   }), note && React.createElement("div", {
     style: {
       display: 'flex',
