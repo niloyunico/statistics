@@ -4,6 +4,9 @@ dist/
 *.log
 .tmp/
 
+# generated migration backups (operational snapshots, not source)
+scripts/backups/
+
 # Secrets & local env — NEVER commit real values
 .env
 .env.*

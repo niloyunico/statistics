@@ -182,7 +182,11 @@
   function mergeDept(seedDept, ov) {
     let dept;
     if (!ov) {
-      dept = seedDept;
+      // No overlay for this department — STILL run each indicator through mergeIndicator:
+      // it applies the QI_CORRECTIONS definition fixes and computes quarter rollups. The
+      // old pass-through skipped both, so a never-edited department kept wrong formulas
+      // (e.g. NSI shown as a plain count with no admin denominator control).
+      dept = Object.assign({}, seedDept, { indicators: (seedDept.indicators || []).map(i => mergeIndicator(i)) });
     } else {
       const removed = new Set(ov.indRemoved || []);
       const patches = ov.indPatches || {};
@@ -201,19 +205,84 @@
     return dept;
   }
 
+  // ---- Hand-hygiene audit → each department's own HH indicator ----
+  // The WHO hand-hygiene audit is submitted ONCE (hospital-wide) with a per-department
+  // breakdown stored on the hospital indicator: mDeptBreakdown[month] =
+  // [{dept:'<display name>', g:{nurse:{n,d},doctor,pca,other}}]. The departments' own
+  // "Hand Hygiene Compliance" indicators stayed empty, so every dept row showed
+  // "not reported" even though the audit covered that department. This pass fills a
+  // department's HH indicator from its audit rows — only for months the department has
+  // not entered itself (its own entry always wins) — so dashboards, scorecards and
+  // reports read one connected dataset.
+  function applyHHDeptBreakdown(list) {
+    try {
+      const isHH = (ind) => /hand\s*hygiene/i.test((ind && ind.name) || '');
+      let src = null;
+      list.forEach((d) => (d.indicators || []).forEach((ind) => {
+        if (isHH(ind) && ind.mDeptBreakdown && Object.keys(ind.mDeptBreakdown).length) {
+          if (!src || /overall|hospital/i.test(d.name + ' ' + ind.name)) src = { dep: d, ind: ind };
+        }
+      }));
+      if (!src) return list;
+      const normN = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const bd = src.ind.mDeptBreakdown;
+      return list.map((d) => {
+        if (d === src.dep) return d;
+        const idx = (d.indicators || []).findIndex(isHH);
+        // A dept with audited rows but NO hand-hygiene indicator of its own (e.g. CT ICU)
+        // gets a synthetic one cloned from the hospital-wide source — otherwise its
+        // audited compliance renders as a blank '—' column in every heatmap/report.
+        // Once the dept records a real HH indicator, findIndex hits that one instead
+        // and the synthetic simply stops being created.
+        const hh = idx >= 0 ? d.indicators[idx] : {
+          id: 'ind-hh-from-audit', name: 'Hand Hygiene Compliance', formula: 'pct', unit: '%', valueType: '%',
+          numLabel: src.ind.numLabel || 'Compliant moments', denLabel: src.ind.denLabel || 'Observed moments',
+          benchmark: src.ind.benchmark || '≥ 90 %', benchmarkValue: (src.ind.benchmarkValue != null ? src.ind.benchmarkValue : 90),
+          goalDirection: 'higher_is_better', months: {}, mNum: {}, mDen: {},
+        };
+        let months = null, mNum = null, mDen = null;
+        Object.keys(bd).forEach((mk) => {
+          const rows = bd[mk]; if (!Array.isArray(rows)) return;
+          const row = rows.find((r) => r && normN(r.dept) === normN(d.name)); if (!row) return;
+          let n = 0, den = 0; const g = row.g || {};
+          ['nurse', 'doctor', 'pca', 'other'].forEach((k) => { const x = g[k] || {}; n += Number(x.n) || 0; den += Number(x.d) || 0; });
+          if (!(den > 0)) return; // this dept was not audited that month (0/0 row)
+          const own = (hh.mNum && hh.mNum[mk] != null && hh.mNum[mk] !== '') || (hh.months && hh.months[mk] != null && hh.months[mk] !== '');
+          if (own) return;
+          if (!months) { months = Object.assign({}, hh.months || {}); mNum = Object.assign({}, hh.mNum || {}); mDen = Object.assign({}, hh.mDen || {}); }
+          // fill BOTH shapes: months (formula 'direct' reads it) and mNum/mDen ('pct' reads those)
+          months[mk] = Math.round((n / den) * 10000) / 100;
+          mNum[mk] = n; mDen[mk] = den;
+        });
+        if (!months) return d;
+        const patched = Object.assign({}, hh, { months: months, mNum: mNum, mDen: mDen, hhFromAudit: true });
+        // refresh the per-year quarter rollups so quarter-based views see the filled months
+        const fys = fysInInd(patched);
+        if (fys.length) { const byFy = {}; fys.forEach((fy) => { byFy[fy] = computeQuartersFor(patched, fyQuarterMonths(fy)); }); patched.quartersByFy = byFy; }
+        const inds = (d.indicators || []).slice();
+        if (idx >= 0) inds[idx] = patched; else inds.push(patched);
+        return Object.assign({}, d, { indicators: inds });
+      });
+    } catch (e) { return list; }
+  }
+
   // Merged, read-anywhere snapshot (reads localStorage fresh each call).
   function qualityData() {
     const ov = loadOverlay();
-    return (window.QUALITY_SEED || []).map(d => mergeDept(d, ov.depts[d.key]));
+    return applyHHDeptBreakdown((window.QUALITY_SEED || []).map(d => mergeDept(d, ov.depts[d.key])));
   }
 
   // React hook for screens that EDIT quality data.
   function useQualityStore() {
     const [overlay, setOverlay] = React.useState(loadOverlay);
+    // window.QUALITY_SEED is swapped in place by refreshQualitySeed (approval / tab
+    // refocus); the memo only watches the overlay, so bump to rebuild from fresh seed.
+    const [rev, setRev] = React.useState(0);
+    React.useEffect(() => { const h = () => setRev(r => r + 1); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
     React.useEffect(() => { saveOverlay(overlay); }, [overlay]);
     const merged = React.useMemo(
-      () => (window.QUALITY_SEED || []).map(d => mergeDept(d, overlay.depts[d.key])),
-      [overlay]
+      () => applyHHDeptBreakdown((window.QUALITY_SEED || []).map(d => mergeDept(d, overlay.depts[d.key]))),
+      [overlay, rev]
     );
 
     const patchDept = (key, fn) => setOverlay(o => {

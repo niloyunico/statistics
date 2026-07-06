@@ -116,7 +116,7 @@ const DEPARTMENTS = (typeof window !== 'undefined' && Array.isArray(window.__UNI
 
 // Attach the derived fields the app expects (series/total/latest/prev/delta/peak),
 // guarded so a department with no rows can't throw.
-DEPARTMENTS.forEach(d => {
+function decorateDept(d) {
   d.months = Array.isArray(d.months) ? d.months : [];
   d.data   = Array.isArray(d.data) ? d.data : [];
   d.cols   = Array.isArray(d.cols) ? d.cols : [];
@@ -130,7 +130,8 @@ DEPARTMENTS.forEach(d => {
   const prev = d.prev ? (d.prev[d.primary] || 0) : 0;
   d.delta = prev === 0 ? (cur > 0 ? 100 : 0) : Math.round(((cur - prev) / prev) * 100);
   d.peak = Math.max(0, ...d.series.map(r => r[d.primary] || 0));
-});
+}
+DEPARTMENTS.forEach(decorateDept);
 
 const GROUPS = [...new Set(DEPARTMENTS.map(d => d.group))];
 
@@ -152,6 +153,52 @@ const HOSPITAL = {
 };
 
 window.UNICO = { DEPARTMENTS, GROUPS, MONTHS_FULL, MONTH_ORDER, HOSPITAL };
+
+// Report signatures (Prepared / Checked / Approved by) — typed once, saved, and shared
+// by EVERY report builder (Patient Statistics, Monthly Statistics, Quality console).
+window.unicoSig = {
+  KEY: 'unico_report_sig_v1',
+  blank() { return { prepared: '', reviewed: '', approved: '' }; },
+  load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(this.KEY));
+      return (s && typeof s === 'object')
+        ? { prepared: s.prepared || '', reviewed: s.reviewed || '', approved: s.approved || '' }
+        : this.blank();
+    } catch (e) { return this.blank(); }
+  },
+  save(sig) {
+    try { localStorage.setItem(this.KEY, JSON.stringify({ prepared: (sig && sig.prepared) || '', reviewed: (sig && sig.reviewed) || '', approved: (sig && sig.approved) || '' })); } catch (e) { }
+  },
+};
+
+// Live refetch: after an approved Data-Collection submission is APPLIED on the
+// server, the page-load snapshot above is stale. Swap the canonical department
+// data in place so every view that (re)mounts sees the fresh numbers without a
+// full page reload.
+window.UNICO.refreshDepartments = function () {
+  return fetch('/api/departments', { credentials: 'same-origin' })
+    .then(r => r.json())
+    .then(j => {
+      if (!j || !j.ok || !Array.isArray(j.departments)) return false;
+      const fresh = j.departments.map(d => ({ ...d }));
+      fresh.forEach(decorateDept);
+      DEPARTMENTS.length = 0; fresh.forEach(d => DEPARTMENTS.push(d));
+      GROUPS.length = 0; [...new Set(DEPARTMENTS.map(d => d.group))].forEach(g => GROUPS.push(g));
+      const find = id => DEPARTMENTS.find(d => d.id === id);
+      const er = find('er'), opd = find('opd'), ot = find('ot'), cath = find('cathlab');
+      HOSPITAL.kpis = {
+        erLatest: (er && er.latest && er.latest.total) || 0,
+        opdTotal: (opd && opd.total) || 0,
+        otTotal: (ot && ot.total) || 0,
+        cathTotal: (cath && cath.total) || 0,
+      };
+      // The dept store memoizes over its overlay only — tell every mounted store the
+      // canonical snapshot changed so open views rebuild without a remount/reload.
+      try { window.dispatchEvent(new CustomEvent('unico:data-refreshed', { detail: { source: 'departments' } })); } catch (e) { }
+      return true;
+    }).catch(() => false);
+};
 
 ;
 /* ===== store.js ===== */
@@ -179,7 +226,16 @@ window.UNICO = { DEPARTMENTS, GROUPS, MONTHS_FULL, MONTH_ORDER, HOSPITAL };
   function buildDepts(store){
     const base=window.UNICO.DEPARTMENTS.map(d=>({...d, custom:false, months:[...d.months], data:d.data.map(r=>({...r})), cols:d.cols.map(c=>({...c}))}));
     const custom=(store.custom||[]).map(d=>({...d, custom:true, months:[...(d.months||[])], data:(d.data||[]).map(r=>({...r})), cols:(d.cols||[]).map(c=>({...c}))}));
-    let list=[...base,...custom].filter(d=>!(store.deleted||[]).includes(d.id));
+    // A custom dept later promoted to a REAL dept (CT OT / CT ICU class) exists in BOTH
+    // lists under the same id. Never render two copies: the server copy is canonical;
+    // fold in any months/cols that still live only in the overlay copy.
+    const baseIds=new Set(base.map(d=>d.id));
+    custom.filter(d=>baseIds.has(d.id)).forEach(cd=>{
+      const bd=base.find(d=>d.id===cd.id);
+      (cd.months||[]).forEach((m,i)=>{ if(bd.months.indexOf(m)<0){ bd.months.push(m); bd.data.push({...((cd.data||[])[i]||{})}); } });
+      (cd.cols||[]).forEach(c=>{ if(!bd.cols.some(x=>x.id===c.id)) bd.cols.push({...c}); });
+    });
+    let list=[...base,...custom.filter(d=>!baseIds.has(d.id))].filter(d=>!(store.deleted||[]).includes(d.id));
     // renames / overrides
     list.forEach(d=>{ const r=(store.renames||{})[d.id]; if(r){ Object.assign(d,r); } });
     // explicitly-deleted months (a later entry for the same month re-adds it)
@@ -190,8 +246,19 @@ window.UNICO = { DEPARTMENTS, GROUPS, MONTHS_FULL, MONTH_ORDER, HOSPITAL };
     (store.entries||[]).forEach(e=>{
       const d=byId[e.dept]; if(!d) return;
       const idx=d.months.indexOf(e.month);
+      // An entry with no actual values must not create a new month — an accidental
+      // empty save would otherwise add an all-blank row that poisons "latest".
+      const hasValue=Object.values(e.row||{}).some(v=>v!==null&&v!==''&&v!==undefined);
       if(idx>=0) d.data[idx]={...d.data[idx],...e.row};
-      else { d.months.push(e.month); d.data.push({...e.row}); }
+      else if(hasValue) { d.months.push(e.month); d.data.push({...e.row}); }
+    });
+    // Chronological order AFTER all merging: an overlay entry for an out-of-order month
+    // (e.g. a correction) is pushed at the END above, which would otherwise become the
+    // false "latest" month everywhere (cards, deltas, charts, report ranges).
+    const MO=(window.UNICO&&window.UNICO.MONTH_ORDER)||[];
+    list.forEach(d=>{
+      const zip=d.months.map((m,i)=>({m,r:d.data[i],k:MO.indexOf(m)})).sort((a,b)=>(a.k<0?1e9:a.k)-(b.k<0?1e9:b.k));
+      d.months=zip.map(z=>z.m); d.data=zip.map(z=>z.r);
     });
     // Normalise partially-populated department docs so a missing short / group /
     // primaryLabel never renders blank (e.g. CT OT was added without a short code,
@@ -215,8 +282,13 @@ window.UNICO = { DEPARTMENTS, GROUPS, MONTHS_FULL, MONTH_ORDER, HOSPITAL };
     const [store,setStore]=React.useState(()=>load()||blank());
     const hist=React.useRef([]);
     const [canUndo,setCanUndo]=React.useState(false);
+    // The canonical snapshot (window.UNICO.DEPARTMENTS) is refetched IN PLACE after an
+    // approved submission or a tab refocus; the memo below only watches the overlay, so
+    // bump on the refresh event or open views keep rendering the page-load data forever.
+    const [rev,setRev]=React.useState(0);
+    React.useEffect(()=>{ const h=()=>setRev(r=>r+1); window.addEventListener('unico:data-refreshed',h); return ()=>window.removeEventListener('unico:data-refreshed',h); },[]);
     React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(store)); },[store]);
-    const depts=React.useMemo(()=>buildDepts(store),[store]);
+    const depts=React.useMemo(()=>buildDepts(store),[store,rev]);
 
     // Snapshot the current state before every change so it can be undone.
     const commit=(updater)=>{ hist.current=[...hist.current.slice(-49), store]; setCanUndo(true); setStore(typeof updater==='function'?updater(store):updater); };
@@ -434,13 +506,29 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
    npm --prefix server run seed-data -- quality --force */
 window.QUALITY_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_QUALITY__)) ? window.__UNICO_QUALITY__ : [];
 
+// Live refetch (same contract as window.UNICO.refreshDepartments): after an approved
+// quality submission is applied server-side, replace the stale page-load snapshot so
+// the Quality console shows the new reading when its view (re)mounts.
+window.refreshQualitySeed = function () {
+  return fetch('/api/quality', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (!j || !j.ok || !Array.isArray(j.quality)) return false;
+      window.QUALITY_SEED = j.quality;
+      // Same contract as refreshDepartments: notify mounted stores so open quality
+      // views rebuild from the fresh seed without needing a remount/reload.
+      try { window.dispatchEvent(new CustomEvent('unico:data-refreshed', { detail: { source: 'quality' } })); } catch (e) { }
+      return true;
+    }).catch(function () { return false; });
+};
+
 ;
 /* ===== quality-guide.js ===== */
 /* UNICO — Hospital Quality Indicator Framework reference (window.HQI_GUIDE).
    96 indicators across 13 domains (A–M). Imported from the Claude Design project
    "Quality indicators module organization". Powers the Quality Console Catalog view.
    Plain data — loaded as a head script before the renderer components. */
-window.HQI_GUIDE = {"A1":{"name":"Hand Hygiene Compliance","unit":"%","benchmark":">90%","formula":"(Actions PERFORMED ÷ Opportunities OBSERVED) × 100","numDef":"Count of hand hygiene actions (soap/water or alcohol hand-rub) performed during structured observation. Each cleansing act = 1 performed action.","denDef":"Count of hand hygiene OPPORTUNITIES observed (any WHO 5 Moment: before patient contact, before aseptic procedure, after body fluid exposure, after patient contact, after patient surroundings).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Month of March – 4 wards: Actions performed (numerator) = 1,350 Opportunities observed (denom) = 1,480 (1,350 ÷ 1,480) × 100 = 91.2% ✅ ABOVE target (>90%) — Compliant","interpretation":"≥90%: Compliant. 75–89%: Needs improvement; re-audit within 2 weeks. <75%: Unacceptable; escalate immediately.","reference":"WHO (2009). Guidelines on Hand Hygiene in Health Care"},"A2":{"name":"CAUTI Rate","unit":"per 1,000 cath-days","benchmark":"<1","formula":"(No. of CAUTIs ÷ Total urinary catheter-days) × 1,000","numDef":"CAUTIs meeting NHSN definition: catheter in place >2 days on event date AND ≥1 symptom PLUS positive urine culture (≥10⁵ CFU/mL, ≤2 organisms).","denDef":"SUM of daily midnight census of patients with indwelling urinary catheter in situ. Each patient with catheter on any given day = 1 catheter-day.","multiplier":"× 1,000 → expressed per 1,000 cath-days","source":"See data collection methods in hospital QI policy","example":"ICU – April: Sum of daily catheter census (30 days) = 420 cath-days CAUTI events confirmed = 1 (1 ÷ 420) × 1,000 = 2.38 ❌ ABOVE target (<1) — RCA required","interpretation":"<1: Compliant. >1: Audit bundle (daily necessity review, closed drainage, perineal hygiene, unobstructed flow). Each CAUTI event requires individual RCA.","reference":"CDC/NHSN (2024). CAUTI Event Surveillance Definition"},"A3":{"name":"CLABSI Rate","unit":"per 1,000 line-days","benchmark":"<1","formula":"(No. of CLABSIs ÷ Total central line-days) × 1,000","numDef":"Primary BSIs meeting NHSN CLABSI definition: central line in place >2 days on event date AND blood culture positive with recognised pathogen, no other infection source.","denDef":"SUM of daily midnight census of patients with any central line in situ (CVC, PICC, tunneled catheter). Each patient with a line per day = 1 line-day.","multiplier":"× 1,000 → expressed per 1,000 line-days","source":"See data collection methods in hospital QI policy","example":"ICU – Q2: Line-days: Apr=180, May=190, Jun=175 → Total=545 CLABSI events = 2 (2 ÷ 545) × 1,000 = 3.67 ❌ ABOVE target (<1) — Immediate bundle audit","interpretation":"<1: Compliant. >1: Review insertion technique, maximal sterile barrier, CHG skin prep, daily line necessity, hub decontamination.","reference":"CDC/NHSN (2024). CLABSI Event Surveillance Definition"},"A4":{"name":"VAP Rate","unit":"per 1,000 vent-days","benchmark":"<1","formula":"(No. of VAP events ÷ Total ventilator-days) × 1,000","numDef":"VAP events per NHSN VAE criteria: ventilated >2 days AND new infiltrate on CXR PLUS fever/leucocytosis PLUS purulent secretions PLUS positive lower respiratory culture.","denDef":"SUM of daily midnight census of patients on mechanical ventilation via ETT or tracheostomy (any mode). Each ventilated patient per day = 1 vent-day.","multiplier":"× 1,000 → expressed per 1,000 vent-days","source":"See data collection methods in hospital QI policy","example":"ICU – May (20-bed unit): 10 ventilated patients/day × 31 days = 310 vent-days VAP events = 2 (2 ÷ 310) × 1,000 = 6.45 ❌ ABOVE target (<1) — Audit VAP bundle immediately","interpretation":"<1: Compliant. >1: Audit VAP bundle: HOB 30–45°, oral CHG, daily sedation interruption, daily weaning assessment, subglottic suction.","reference":"CDC/NHSN (2024). VAP/VAE Surveillance Definition"},"A5":{"name":"Surgical Site Infection (SSI) Rate","unit":"%","benchmark":"<1–2%","formula":"(No. of SSIs ÷ Total procedures of same type) × 100","numDef":"SSIs within 30 days (or 90 days for implants) classified as Superficial Incisional, Deep Incisional, or Organ/Space per NHSN. Each distinct SSI counted once per procedure type.","denDef":"Total surgical procedures in the specific procedure category being measured. Report each procedure type separately (e.g., hip replacements, C-sections).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Orthopaedic – H1 (Jan–Jun): Total hip replacements = 120 SSIs within 90 days = 2 (2 ÷ 120) × 100 = 1.67% ❌ ABOVE 1% target — Review antibiotic timing, skin prep, sterile technique","interpretation":"<1%: Acceptable for clean procedures. 1–2%: Monitor. >2%: Formal RCA, theatre environmental cultures.","reference":"CDC/NHSN (2024). SSI Surveillance Definition; WHO (2018). Global Guidelines for Prevention of SSI"},"A6":{"name":"Phlebitis Rate (Peripheral IV Site)","unit":"%","benchmark":"≤5%","formula":"(No. of IV sites with phlebitis ÷ Total IV sites assessed) × 100","numDef":"Peripheral IV sites with VIP Score ≥2 (pain, erythema, swelling or induration) during audit. Each affected site = 1 event; a patient with 2 affected sites counts as 2.","denDef":"Total peripheral IV sites actively in use and assessed during the audit. Each site counted separately regardless of number per patient.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Ward 3 – Weekly audit: Active IV sites assessed = 42 Sites with VIP Score ≥2 = 4 (4 ÷ 42) × 100 = 9.5% ❌ ABOVE target (≤5%) — Review IV technique, rotation (max 72–96 h)","interpretation":"≤5%: Acceptable. 5–10%: Review insertion and maintenance. >10%: Immediate quality review; re-train staff.","reference":"INS (2021). Infusion Therapy Standards of Practice; Jackson A (1998). VIP Score"},"A7":{"name":"MRSA / MDRO Infection Rate","unit":"per 1,000 pt-days","benchmark":"Minimize/track","formula":"(No. of HA-MRSA/MDRO infections ÷ Total patient-days) × 1,000","numDef":"Confirmed healthcare-associated MRSA or MDRO infections occurring ≥48 h after admission. Includes MRSA, VRE, ESBL, CRE, and other MDROs per local policy.","denDef":"SUM of daily midnight inpatient census. Each patient present at midnight = 1 patient-day.","multiplier":"× 1,000 → expressed per 1,000 pt-days","source":"See data collection methods in hospital QI policy","example":"Hospital – June: Sum of daily midnight census (30 days) = 2,800 pt-days HA-MRSA infections confirmed = 3 (3 ÷ 2,800) × 1,000 = 1.07 per 1,000 pt-days ⚠️ Track vs prior months; any HA-MRSA requires transmission chain investigation","interpretation":"Monitor trend. Any HA-MRSA/MDRO: line-listing investigation. Rising rate: investigate source, review contact precautions, cohort nursing.","reference":"CDC/NHSN (2024). MDRO & CDI Prevention Module; WHO (2022). Global Action Plan on AMR"},"A8":{"name":"Overall Hospital-Acquired Infection (HAI) Rate","unit":"%","benchmark":"<5%","formula":"(Total No. of all HAIs ÷ Total patient-days) × 100","numDef":"Total confirmed HAIs across ALL categories (CAUTI, CLABSI, VAP, SSI, MRSA, C. diff, etc.) meeting standard surveillance definitions in the reporting period.","denDef":"SUM of daily midnight inpatient census over the same reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1 (~200-bed, ~85% occupancy, 90 days): Patient-days = 200 × 0.85 × 90 = 15,300 All HAIs across all categories = 45 (45 ÷ 15,300) × 100 = 0.29% ✅ BELOW 5% target — Continue prevention bundles","interpretation":"<5%: Target met. 5–10%: Review all HAI subtypes; identify dominant category and apply targeted bundle. >10%: Hospital-wide IPC audit.","reference":"WHO (2022). Global Report on IPC; Allegranzi B et al (2011). Lancet 377:228"},"A9":{"name":"Blood Culture Contamination Rate","unit":"%","benchmark":"<3%","formula":"(No. of contaminated blood culture sets ÷ Total blood culture sets collected) × 100","numDef":"Blood culture sets where a skin commensal (CoNS, Micrococcus, Bacillus, Corynebacterium, viridans strep) is in only 1 of 2 bottles with no clinical evidence of true bacteraemia — classified as contamination by the treating team.","denDef":"Total blood culture SETS collected (1 aerobic + 1 anaerobic bottle = 1 set from one venipuncture). Count sets, not individual bottles.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Month of July – Hospital-wide: Blood culture sets collected = 480 Sets classified as contaminated = 18 (18 ÷ 480) × 100 = 3.75% ❌ ABOVE target (<3%) — Review venipuncture technique; reinforce 2% CHG/70% alcohol skin prep","interpretation":"<3%: Acceptable. 3–5%: Phlebotomy retraining; ensure 30-sec drying time. >5%: Formal competency reassessment.","reference":"CLSI (2022). Principles and Procedures for Blood Cultures. CLSI M47-A2"},"A10":{"name":"Surgical Antibiotic Prophylaxis Timing Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients with antibiotic ≤60 min before incision ÷ Total eligible patients) × 100","numDef":"Patients who received prophylactic antibiotic within 60 min before skin incision (within 120 min for vancomycin/fluoroquinolones), documented in anaesthesia chart and verified against incision time.","denDef":"Total eligible surgical patients requiring antibiotic prophylaxis per protocol, excluding those already on therapeutic antibiotics covering the prophylaxis indication.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – August: Eligible procedures requiring prophylaxis = 95 Antibiotic given ≤60 min of incision = 88 (7 given >60 min before — too early; sub-therapeutic at incision) (88 ÷ 95) × 100 = 92.6% ❌ BELOW 100% — Embed antibiotic timing check in anaesthesia induction protocol","interpretation":"100%: Required. Both too early (>60 min) and too late (post-incision) = inadequate tissue levels = failure.","reference":"SCIP Inf-1; WHO (2018). Global Guidelines for Prevention of SSI; Bratzler DW et al (2013). Am J Health Syst Pharm"},"A11":{"name":"CSSD Sterilization (BI) Compliance","unit":"%","benchmark":"100%","formula":"(No. of cycles with PASSING biological indicator ÷ Total BI-tested cycles) × 100","numDef":"Sterilization cycles where the biological indicator (BI) spore test shows NO GROWTH (negative = kill achieved). BI: Geobacillus stearothermophilus spores for steam; Bacillus atrophaeus for ETO.","denDef":"Total sterilization cycles with a BI tested during the period (per protocol: every day of use for steam; every cycle for ETO).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"CSSD – September: BI-tested sterilization cycles = 62 POSITIVE BI (FAIL: spore growth) = 1 NEGATIVE BI (PASS: no growth) = 61 (61 ÷ 62) × 100 = 98.4% ❌ BELOW 100% — QUARANTINE failed-cycle load; steriliser out-of-service; recall if already distributed","interpretation":"100%: Mandatory. Any positive BI = steriliser failure. Quarantine full load, recall all items, remove steriliser from service pending re-qualification.","reference":"AAMI/ANSI ST79:2017; ISO 11138-3:2017"},"A12":{"name":"Biomedical Waste Segregation Compliance","unit":"%","benchmark":"100%","formula":"(No. of compliant audit observations ÷ Total audit observations) × 100","numDef":"Audit observations where waste was correctly colour-coded per protocol (e.g., yellow = infectious/pathological, red = anatomical, black = general, sharps container = sharps). ALL bin types correct = 1 compliant observation.","denDef":"Total waste audit observations conducted (each ward/area visit = 1 observation; or each container inspected = 1 observation — define and apply consistently).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital-wide audit – October: Ward/area observations = 80 Compliant (all bins correct) = 74 Non-compliant (sharps in yellow ×3, general in biohazard ×2, overfilled ×1) = 6 (74 ÷ 80) × 100 = 92.5% ❌ BELOW 100% — Re-educate; sharps in wrong bin = needlestick risk (incident report required)","interpretation":"100%: Required by law. Sharps in wrong container = needlestick risk; immediate incident report. Re-train non-compliant areas within 5 days; re-audit.","reference":"WHO (2014). Safe Management of Wastes from Health-Care Activities, 2nd ed."},"A13":{"name":"Needle Stick / Sharps Injury","unit":"Count","benchmark":"0","formula":"Total count of reported needlestick and sharps injuries per reporting period","numDef":"All reported incidents of accidental puncture/laceration by a used needle, lancet, scalpel, or other sharp medical device potentially contaminated with blood or body fluids. Each unique incident = 1 count.","denDef":"N/A — this is a count. Optional secondary rate: (count ÷ total FTE staff) × 100 = rate per 100 FTEs.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"H1 (January–June) Hospital-wide: Nurse recapping needle post-injection = 2 events Lab technician during blood tube work = 1 event Surgeon suture needle injury in OT = 1 event Total sharps injuries = 4 Target: 0 | All 4: post-exposure assessment within 2 h, source patient status, PEP if indicated, RCA","interpretation":"Target: 0 (zero tolerance). Every sharps injury = preventable sentinel event. Rising counts = audit sharps disposal compliance; consider needle-free devices.","reference":"OSHA Bloodborne Pathogens Standard 29 CFR 1910.1030; WHO (2018). Preventing Needlestick Injuries"},"A14":{"name":"Isolation / Transmission-Precaution Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients in correct isolation ÷ Total patients requiring isolation) × 100","numDef":"Patients requiring transmission-based precautions (Contact, Droplet, or Airborne) who are correctly placed AND maintained: appropriate room/cohort, correct PPE, proper signage posted, documented in nursing notes.","denDef":"Total patients identified as requiring transmission-based precautions during the audit period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Weekly audit – November: Patients requiring isolation precautions = 18 Correctly isolated with all requirements = 16 Non-compliant (PPE not worn ×1, wrong precaution type ×1) = 2 (16 ÷ 18) × 100 = 88.9% ❌ BELOW 100% — Immediate education; re-audit within 24 h","interpretation":"100%: Required. Incorrect isolation type (e.g. Droplet only for airborne pathogen) = serious transmission risk. Immediate correction required.","reference":"CDC/HICPAC (2007, updated 2023). Guideline for Isolation Precautions in Hospitals"},"B1":{"name":"Medication Error","unit":"Count","benchmark":"0","formula":"Total count of all reported medication errors per reporting period","numDef":"Reported errors in any phase: (1) Prescribing, (2) Transcription, (3) Dispensing, (4) Administration. Include near-misses (caught before reaching patient).","denDef":"N/A — count per period. Secondary metric: (errors ÷ total doses administered) × 1,000.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Month of February: Prescribing errors = 3 Dispensing errors = 2 Administration errors (reached patient) = 5 Near-misses (caught before patient) = 8 Total errors reaching patient = 10 | Near-misses = 8 Target: 0 | All events: categorise, RCA, trend analysis","interpretation":"Target: 0 errors reaching patients. Low reporting often means under-reporting, not absence of errors. High near-miss reporting = healthy safety culture.","reference":"ISMP (2023). Medication Error Reporting Program; NQF (2011). Safe Practices for Better Healthcare"},"B2":{"name":"Adverse Drug Reaction (ADR) Rate","unit":"Count (by severity)","benchmark":"Track","formula":"Total count of confirmed ADRs per period, stratified by severity","numDef":"Confirmed ADRs per WHO-UMC causality assessment. Severity: Mild (no intervention), Moderate (therapy change/hospitalisation), Severe (life-threatening/permanent damage), Fatal.","denDef":"N/A for count. For rate: (ADR count ÷ total admissions) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Q3 (July–September): Mild ADRs (rash, nausea) = 12 Moderate ADRs (therapy change) = 3 Severe ADRs (anaphylaxis → ICU) = 1 Fatal ADRs = 0 Total ADRs = 16 All 16: pharmacovigilance database. Severe ADR: RCA + regulatory notification + allergy record updated","interpretation":"Track over time. Focus action on severe/fatal ADRs. Update allergy record immediately after any confirmed ADR.","reference":"WHO (2002). The Importance of Pharmacovigilance; ICH E2A (1994). Clinical Safety Data Management"},"B3":{"name":"Medication Reconciliation Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients with completed reconciliation ÷ Total admissions or discharges) × 100","numDef":"Patients with complete medication reconciliation at BOTH admission (BPMH from ≥2 sources: patient/carer + pharmacy + GP) AND discharge (reconciled discharge list vs BPMH; all discrepancies resolved). Report admission and discharge rates separately.","denDef":"Total patient admissions (for admission rate) or total discharges (for discharge rate). Apply denominator consistently for each metric.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Month of March – Medical Ward (50 admissions): BPMH reconciliation completed (admission) = 46 Discharge reconciliation completed = 44 Admission: (46 ÷ 50) × 100 = 92% Discharge: (44 ÷ 50) × 100 = 88% Both ❌ BELOW 100% — Implement pharmacy-led BPMH service","interpretation":"100%: Required. Unreconciled discrepancies = leading cause of medication errors at care transitions.","reference":"JCI (2021). IPSG.3; ISMP (2011). Medication Reconciliation to Prevent Adverse Drug Events"},"B4":{"name":"High-Alert Medication Double-Check Compliance","unit":"%","benchmark":"100%","formula":"(No. of high-alert doses with documented double-check ÷ Total high-alert doses administered) × 100","numDef":"High-alert doses where an independent double-check was performed (two nurses independently verify: right drug, concentration, dose, rate, patient, route) AND both nurses' signatures appear on the MAR.","denDef":"Total high-alert medication doses administered. ISMP high-alert drugs: insulin, IV heparin, concentrated electrolytes (KCl), IV opioids, chemotherapy, anticoagulants, neuromuscular blockers, vasoactive drugs.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – Week 15–21 April: Total high-alert doses administered = 140 (Insulin ×60, IV heparin ×35, KCl ×20, IV opioids ×25) Doses with documented double-check = 133 (133 ÷ 140) × 100 = 95.0% ❌ BELOW 100% — Identify which drugs/shifts missed; double-check MANDATORY for all ISMP high-alert drugs","interpretation":"100%: Mandatory. Missed double-check = policy violation. Address barriers: staffing, time pressure. 'No one available to check' = escalate to supervisor.","reference":"ISMP (2023). High-Alert Medications in Acute Care Settings; JCI (2021). MMU.5"},"B5":{"name":"Verbal / Telephone Order Read-Back Compliance","unit":"%","benchmark":"100%","formula":"(No. of verbal/telephone orders with documented read-back ÷ Total verbal/telephone orders) × 100","numDef":"Orders where: (1) receiver read complete order back to prescriber, (2) prescriber verbally confirmed accuracy, (3) documented in medical record with receiver's signature, AND (4) prescriber countersigned within 24 hours.","denDef":"Total verbal and telephone orders received and documented during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – Month of May: Total verbal/telephone orders = 45 With complete read-back + countersign within 24 h = 38 (38 ÷ 45) × 100 = 84.4% ❌ BELOW 100% — Identify non-countersigning prescribers; raise at medical staff meeting","interpretation":"100%: Required. Verbal orders carry high error risk. Read-back must include: drug name spelled out, dose with units, route, frequency.","reference":"JCI (2021). IPSG.2; TJC NPSG 02.01.01"},"B6":{"name":"LASA Drug Storage / Labeling Compliance","unit":"%","benchmark":"100%","formula":"(No. of LASA drugs correctly stored and labeled ÷ Total LASA drugs audited) × 100","numDef":"LASA drug pairs/groups found on audit to be: physically separated, labeled with Tall Man lettering (e.g., hydrALAZINE vs. hydrOXYzine), with auxiliary warning stickers. ALL criteria met = 1 compliant entry.","denDef":"Total LASA drug items/storage locations audited. Each drug in each location counted separately (ward stock, IV room, dispensary).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital-wide audit – June: LASA drug storage locations audited = 65 Fully compliant = 58 Non-compliant (dopamine adj to dobutamine ×3, no Tall Man ×4) = 7 (58 ÷ 65) × 100 = 89.2% ❌ BELOW 100% — Separate adjacently-stored pairs; update bin labels","interpretation":"100%: Required. LASA mix-ups are a leading cause of serious medication errors. Physically separate AND label clearly with Tall Man lettering.","reference":"ISMP (2023). LASA Drug Name List; WHO (2019). Medication Without Harm Challenge"},"B7":{"name":"Controlled Drug Count Accuracy","unit":"%","benchmark":"100%","formula":"(No. of shift counts with zero discrepancy ÷ Total shift counts performed) × 100","numDef":"Controlled drug shift-end counts where physical count exactly matches: opening balance + additions – administrations – documented wastage, as recorded in the controlled drug register. Zero discrepancy = 1 passing count.","denDef":"Total controlled drug shift counts performed during the period (typically one count per shift per ward; 2–3 per day per location).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – July (3 shifts/day × 31 days = 93 counts): Total shift counts performed = 93 Counts with discrepancy = 2 Counts with zero discrepancy = 91 (91 ÷ 93) × 100 = 97.8% ❌ BELOW 100% — Both discrepancies: investigate; notify pharmacy and ward manager immediately","interpretation":"100%: Required. Any discrepancy: document, notify, investigate. Escalate to security if theft suspected. Never delay investigation.","reference":"DEA 21 CFR Part 1304; Local Narcotics & Pharmacy Regulations"},"B8":{"name":"STAT Medication Administration Timeliness","unit":"%","benchmark":"≥90%","formula":"(No. of STAT orders administered within TAT ÷ Total STAT orders) × 100","numDef":"STAT medication orders administered to the patient within the defined TAT from order time (commonly 30 min; varies by policy and drug type).","denDef":"Total STAT medication orders received during the reporting period (identified in MAR or pharmacy system by 'STAT' urgency designation).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – August: Total STAT orders received = 85 Administered within 30 minutes = 79 Delayed (>30 min) = 6 (79 ÷ 85) × 100 = 92.9% ✅ AT/ABOVE target (≥90%) — Compliant. Review 6 delays.","interpretation":"≥90%: Acceptable. <90%: Identify systemic causes: drug not stocked on ward, pharmacy supply delays, nurse:patient ratio.","reference":"ISMP (2011). Guidelines for Timely Medication Administration; TJC MM.04.01.01"},"C1":{"name":"Patient Identification (2-Identifier) Compliance","unit":"%","benchmark":"100%","formula":"(No. of care interactions with 2-identifier verification ÷ Total care interactions audited) × 100","numDef":"Care interactions (medication admin, blood transfusion, specimen collection, invasive procedure, surgery, imaging) where the healthcare worker verified TWO patient identifiers (full name + DOB + MRN — any two of three) BEFORE the care action.","denDef":"Total patient care interactions observed or audited during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Monthly audit – Medical & Surgical Wards: Care interactions observed (medication ×80, specimens ×50, IV bags ×40, blood admin ×30) = 200 Interactions with 2-identifier verification = 192 Without proper identification = 8 (192 ÷ 200) × 100 = 96% ❌ BELOW 100% — Review 8 failures; reinforce at daily safety huddle","interpretation":"100%: Mandatory. Blood transfusion without 2-ID = potential fatal wrong-blood event. Escalate persistent non-compliance to department head.","reference":"JCI (2021). IPSG.1; TJC NPSG 01.01.01"},"C2":{"name":"Patient Fall Rate","unit":"per 1,000 pt-days","benchmark":"≤3.3","formula":"(No. of patient falls ÷ Total patient-days) × 1,000","numDef":"Total patient falls during the period regardless of injury outcome. A fall = unplanned descent to floor or lower level, witnessed or not. Includes: found-on-floor, assisted falls, falls from bed/chair/commode.","denDef":"SUM of daily midnight inpatient census over the reporting period.","multiplier":"× 1,000 → expressed per 1,000 pt-days","source":"See data collection methods in hospital QI policy","example":"Medical Ward (30 beds) – Q3 (92 days): Average 26 patients/day × 92 days = 2,392 patient-days Patient falls reported = 7 (7 ÷ 2,392) × 1,000 = 2.93 per 1,000 pt-days ✅ BELOW target (≤3.3) — Compliant. Review all 7 falls individually.","interpretation":"≤3.3 per 1,000 pt-days: Acceptable. >3.3: Review fall risk assessment, care plan, hourly rounding, bed alarms, call bell accessibility, environment hazards.","reference":"NDNQI (2023). Nursing-Sensitive Quality Indicators; JCI (2021). QPS Standards"},"C3":{"name":"Falls with Injury","unit":"Count","benchmark":"0","formula":"Total count of falls resulting in any patient injury per reporting period","numDef":"Falls resulting in ANY degree of injury: Minor (bruise/abrasion), Moderate (suture/splint needed), Major (surgery/fracture/neurological deficit), or Fatal. Each injurious fall = 1 count.","denDef":"N/A — count per period. Optional: (injurious falls ÷ total falls) × 100 = injury rate per fall.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital-wide – Q2: Total falls = 18 No injury: 11 | Minor (bruising): 5 | Moderate (laceration/suture): 2 | Major (hip fracture): 1 Total injurious falls = 5 + 2 + 1 = 8 Target: 0 ❌ Hip fracture = serious adverse event requiring formal RCA and senior management escalation","interpretation":"Target: 0. Every injurious fall must be investigated. Major falls (fracture, surgery, death) = serious adverse event or sentinel event.","reference":"NDNQI (2023); AHRQ (2013). Preventing Falls in Hospitals Toolkit"},"C4":{"name":"Hospital-Acquired Pressure Ulcer (HAPU) Rate","unit":"per 1,000 pt-days","benchmark":"<0.75","formula":"(No. of new Stage 2–4 pressure injuries ÷ Total patient-days) × 1,000","numDef":"Patients developing a NEW pressure injury of Stage 2 (partial skin loss), Stage 3 (full skin loss), Stage 4 (full tissue loss), or Unstageable — appearing for the FIRST TIME >72 h after hospital admission. Injuries documented at admission are excluded.","denDef":"SUM of daily midnight inpatient census over the reporting period.","multiplier":"× 1,000 → expressed per 1,000 pt-days","source":"See data collection methods in hospital QI policy","example":"Medical Ward – Q2 (91 days, avg 28 patients/day): Total patient-days = 28 × 91 = 2,548 New hospital-acquired Stage 2+ injuries = 2 (2 ÷ 2,548) × 1,000 = 0.785 per 1,000 pt-days ❌ ABOVE target (<0.75) — Review: Was admission skin assessment done? Was repositioning schedule followed?","interpretation":"<0.75 per 1,000 pt-days: Acceptable. >0.75: Review bundle: Braden/Waterlow score, 2-hourly repositioning, pressure-relieving surfaces, moisture management, nutrition.","reference":"NPUAP/EPUAP/PPPIA (2019). Clinical Practice Guideline for Pressure Injury Prevention; NDNQI (2023)"},"C5":{"name":"VTE / DVT Prophylaxis Compliance","unit":"%","benchmark":"100%","formula":"(No. of eligible patients who received VTE prophylaxis ÷ Total eligible patients) × 100","numDef":"Eligible adult inpatients who received appropriate VTE prophylaxis (mechanical: TED stockings/pneumatic compression AND/OR pharmacological: LMWH/UFH per risk score) initiated by end of day 2 of admission.","denDef":"All admitted adults identified as eligible (moderate/high risk on Caprini or Padua score), EXCLUDING those with active bleeding, bleeding disorder, or other absolute contraindication.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – September: Eligible patients (moderate/high VTE risk) = 55 Received appropriate prophylaxis by day 2 = 52 (52 ÷ 55) × 100 = 94.5% ❌ BELOW 100% — Review 3 patients: documented contraindication? Missed order? Missing risk assessment?","interpretation":"100%: Target. Missing prophylaxis in eligible patients = preventable DVT/PE risk. Embed VTE risk assessment in admission workflow.","reference":"ACCP (2012). Antithrombotic Therapy Guidelines, 9th ed.; JCI (2021). IPSG.6"},"C6":{"name":"Hospital-Acquired DVT","unit":"Count","benchmark":"0","formula":"Total count of confirmed DVT events occurring ≥48 h after admission per reporting period","numDef":"Confirmed new DVT events (proximal or distal, upper or lower limb) diagnosed ≥48 h after hospital admission, confirmed by Doppler ultrasound or venography (hospital-acquired, not community-acquired).","denDef":"N/A — count per period. Optional rate: (count ÷ total eligible admissions) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1 (January–March): Hospital-acquired DVT events confirmed = 2 (Both in post-surgical patients without timely LMWH prophylaxis) Target: 0 ❌ Both cases: formal RCA; review VTE prophylaxis prescribing and administration compliance","interpretation":"Target: 0. Any hospital-acquired DVT = preventable adverse event. Confirm: Was prophylaxis prescribed AND administered? If so, was dosing correct (renal function, weight-based)?","reference":"ACCP (2012); JCI (2021). QPS Standards"},"C7":{"name":"Wrong-Site / -Patient / -Procedure Events","unit":"Count","benchmark":"0","formula":"Total count of wrong-site, wrong-patient, or wrong-procedure events per reporting period","numDef":"Events where a surgical or invasive procedure was performed on the wrong anatomical site, wrong patient, or wrong procedure was carried out — regardless of patient harm outcome. Include near-misses caught before procedure completion.","denDef":"N/A — count per period (sentinel event by definition).","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Reporting Period – Full Year: Wrong-site surgery events = 0 Wrong-patient events = 0 Wrong-procedure events = 0 ✅ Target: 0 — Maintained Continue: pre-op site marking, Time-Out compliance, checklist monitoring NOTE: Even ONE event = sentinel event requiring external review and system redesign","interpretation":"Target: 0 (absolute). Any event = mandatory sentinel event investigation, regulatory notification, system redesign. Prevention: permanent site marking, Time-Out with full team pause, consistent checklist use every case.","reference":"TJC Universal Protocol NPSG 01.03.01; JCI (2021). IPSG.4; WHO (2009). Surgical Safety Checklist"},"C8":{"name":"Surgical Safety Checklist Compliance","unit":"%","benchmark":"100%","formula":"(No. of procedures with all 3 checklist phases completed ÷ Total surgical procedures) × 100","numDef":"Surgical procedures where ALL THREE phases of the WHO Surgical Safety Checklist were FULLY completed and signed: Phase 1 – Sign In (before anaesthesia induction), Phase 2 – Time Out (before skin incision, full team pause), Phase 3 – Sign Out (before patient leaves OT).","denDef":"Total surgical and invasive procedures performed in the OT during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – October: Total surgical procedures = 148 All 3 phases fully documented = 141 Incomplete (Sign-Out missing ×5, Time-Out verbal only ×2) = 7 (141 ÷ 148) × 100 = 95.3% ❌ BELOW 100% — Identify non-compliant teams; reinforce at surgical staff meeting","interpretation":"100%: Mandatory. The Time-Out is the most critical phase — last chance to catch wrong-patient/site/side errors. An undone checklist = unacceptable safety gap.","reference":"WHO (2009). Surgical Safety Checklist; Haynes AB et al (2009). NEJM 360(5):491"},"C9":{"name":"Restraint Use Appropriateness / Monitoring","unit":"%","benchmark":"100%","formula":"(No. of restrained patients with full compliance ÷ Total restrained patients) × 100","numDef":"Restrained patients who have ALL documented: (1) Valid medical/nursing order with clinical justification, (2) Least restrictive restraint type, (3) Monitoring per protocol (skin/neuro checks every 15–120 min), (4) Regular reassessment of continued need, (5) Patient/family education documented.","denDef":"Total patients in restraints on the audit day or during the audit period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU & Medical Ward – November: Patients in restraints = 12 Fully compliant with all requirements = 10 Non-compliant (no 2-h skin check ×1, no order ×1) = 2 (10 ÷ 12) × 100 = 83.3% ❌ BELOW 100% — Patient without order: obtain order immediately; document as incident","interpretation":"100%: Required. Restraint without a valid order = potential abuse or unlawful detention. Poor monitoring = risk of pressure injuries, limb ischaemia, aspiration. Review alternatives before applying restraints.","reference":"TJC RC.02.01.01; CMS CoP 42 CFR 482.13(e); JCI (2021). PFR Standards"},"C10":{"name":"Pain Assessment & Reassessment Compliance","unit":"%","benchmark":"≥90%","formula":"(No. of patients with documented assessment AND reassessment ÷ Total patients requiring assessment) × 100","numDef":"Patients with: (1) Initial pain assessment documented at admission using a validated scale (NRS 0–10, VAS, FLACC for paediatrics, CPOT for non-verbal), AND (2) Reassessment documented at appropriate interval following any pain intervention (30–60 min after oral analgesic, 15–30 min after IV).","denDef":"Total patients for whom pain assessment is applicable during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – Week of 10–16 November: Patients requiring pain assessment = 64 With initial assessment + timely reassessment = 59 Missing reassessment post-analgesic = 5 (59 ÷ 64) × 100 = 92.2% ✅ AT/ABOVE target (≥90%) — Compliant. Review 5 missing reassessments for nurse education.","interpretation":"≥90%: Acceptable. <90%: Review documentation compliance. Pain scores must be recorded as the 5th vital sign. Reassessment confirms analgesic effectiveness.","reference":"JCI (2021). COP Standards; TJC PC.01.02.07; NRS/VAS/FLACC/CPOT validated scales"},"C11":{"name":"Critical Value Reporting Timeliness","unit":"%","benchmark":"100%","formula":"(No. of critical values communicated within TAT ÷ Total critical values generated) × 100","numDef":"Critical laboratory or radiology results communicated to the responsible treating clinician within the defined TAT from result verification (e.g., 30–60 min per policy), with documentation of: result, time communicated, clinician name, read-back confirmed.","denDef":"Total critical values (lab/radiology) generated during the period per the hospital critical value list (e.g., K+ >6.5, pH <7.2, Hb <6 g/dL, glucose <50 mg/dL, INR >6.0, platelets <20,000/µL).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Lab – December: Total critical values generated = 115 Communicated to clinician within 30 min = 110 Delayed (>30 min) = 5 (110 ÷ 115) × 100 = 95.7% ❌ BELOW 100% — Review 5 delayed cases: clinician unreachable? Escalation pathway followed?","interpretation":"100%: Required. A missed or delayed critical value can cause patient death (e.g., unrecognised hyperkalaemia → cardiac arrest). If clinician unreachable: escalate to next senior immediately. Document ALL attempts with timestamps.","reference":"TJC NPSG 02.03.01; CLIA 42 CFR 493.1291; CAP (2021). Commission on Laboratory Accreditation"},"C12":{"name":"Patient Handover (SBAR) Compliance","unit":"%","benchmark":"100%","formula":"(No. of handovers using SBAR format ÷ Total handovers observed/audited) × 100","numDef":"Patient handovers (shift-to-shift, ward-to-ICU, dept-to-dept) where the structured SBAR format was used: S (Situation — patient ID, diagnosis, bed), B (Background — relevant history, medications), A (Assessment — current status, vital signs, concerns), R (Recommendation — specific action required from receiving team).","denDef":"Total patient handovers observed or audited during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – January (3 shifts/day × 30 days = 90 handovers): Handovers audited = 90 Using complete SBAR structure = 79 Missing one or more SBAR components = 11 (79 ÷ 90) × 100 = 87.8% ❌ BELOW 100% — Most commonly missed: Recommendation component; reinforce at nursing education session","interpretation":"100%: Target. The 'Recommendation' component is critical — it defines what action is expected from the receiving team. Standardise with printed/electronic SBAR template.","reference":"JCI (2021). IPSG.2.2; WHO (2007). Communication During Patient Handovers. Patient Safety Solutions Vol 1 Sol 3"},"D1":{"name":"Gross Hospital Mortality Rate","unit":"%","benchmark":"Track locally","formula":"(No. of inpatient deaths ÷ Total discharges including deaths) × 100","numDef":"Total patients who died during the hospital stay (inpatient death), regardless of cause or length of stay. Includes deaths in all wards, ICU, ER, and OT.","denDef":"Total hospital discharges during the same period including ALL dispositions: discharged alive, transferred, AMA discharges, and deaths.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3: Total discharges (alive 4,150 + deaths 50) = 4,200 Inpatient deaths = 50 (50 ÷ 4,200) × 100 = 1.19% Action: Compare to prior quarter and national benchmark; categorise by ward/diagnosis; review unexpected deaths with M&M committee","interpretation":"Track and benchmark vs. national data for hospital type. Distinguish expected (palliative/end-stage) from unexpected deaths. Unexpected mortality requires peer review and potential RCA.","reference":"AHRQ (2020). Inpatient Quality Indicators; CMS Inpatient Quality Reporting Program"},"D2":{"name":"ICU Mortality Rate","unit":"%","benchmark":"Track (risk-adjusted)","formula":"(No. of ICU deaths ÷ Total ICU admissions) × 100","numDef":"Number of patients who die while admitted to the ICU during the reporting period.","denDef":"Total ICU admissions during the same period. Count each distinct ICU admission separately — a re-admitted patient counts as a new admission.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU (20 beds) – Month of February: ICU admissions = 45 | ICU deaths = 9 Crude mortality = (9 ÷ 45) × 100 = 20% Risk-adjusted: If APACHE II predicted mortality = 25%, SMR = Observed ÷ Expected = 9 ÷ (45×0.25) = 9÷11.25 = 0.80 SMR <1.0 = performing BETTER than predicted by illness severity ✅","interpretation":"Crude rate alone is insufficient — must be risk-adjusted (APACHE II/IV, SOFA score). SMR <1.0: better than predicted. SMR >1.0: investigate staffing, treatment delays, complications.","reference":"SCCM (2020). ICU Quality Metrics; Knaus WA et al (1985). APACHE II. Crit Care Med 13(10):818"},"D3":{"name":"ICU Re-admission within 48 h","unit":"%","benchmark":"<5%","formula":"(No. of patients re-admitted to ICU within 48 h ÷ Total ICU discharges to ward) × 100","numDef":"Patients re-admitted to the ICU within 48 hours of a planned transfer to the general ward (step-down). Excludes return for a NEW unrelated acute problem not related to the original ICU admission.","denDef":"Total planned ICU discharges (step-down transfers to ward) during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – Q2 (April–June): Total planned ICU step-downs to ward = 96 Re-admitted to ICU within 48 h = 4 (4 ÷ 96) × 100 = 4.2% ✅ BELOW target (<5%) — Compliant. Review all 4 cases for premature discharge factors.","interpretation":"<5%: Acceptable. >5%: Review ICU discharge criteria quality. High rate = premature step-down; review: was patient haemodynamically stable for ≥6 h? Were vasopressors fully weaned? Were NEWS2 scores reassuring?","reference":"SCCM (2020). ICU Quality Metrics; Rosenberg AL et al (2001). Crit Care Med 29(8):1547"},"D4":{"name":"Re-admission within 30 Days","unit":"%","benchmark":"Track/minimize","formula":"(No. of re-admissions within 30 days ÷ Total eligible discharges) × 100","numDef":"Patients re-admitted to hospital within 30 calendar days of prior discharge for any cause (all-cause) or related diagnosis (condition-specific). Count each re-admission episode separately.","denDef":"Total eligible patient discharges during the period. Exclude: planned readmissions for chemotherapy/dialysis, transfers, AMA discharges where return was anticipated.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – March: Total eligible discharges = 850 Re-admitted within 30 days = 68 Top reasons: HF exacerbation ×15, COPD ×12, wound complications ×8 (68 ÷ 850) × 100 = 8.0% Action: Implement targeted post-discharge interventions for top readmission diagnoses","interpretation":"Track against national benchmark. High rate = inadequate discharge planning or premature discharge. Key interventions: discharge education, medication reconciliation, 48 h post-discharge phone call, early outpatient follow-up within 7 days.","reference":"CMS Hospital Readmissions Reduction Program (HRRP); Jencks SF et al (2009). NEJM 360(14):1418"},"D5":{"name":"Re-intubation within 48 h","unit":"%","benchmark":"<10%","formula":"(No. of re-intubations within 48 h ÷ Total planned extubations) × 100","numDef":"Mechanically ventilated patients who require re-intubation within 48 hours of a planned, intentional extubation (following a successful spontaneous breathing trial) due to respiratory failure, airway compromise, or inability to protect the airway.","denDef":"Total planned extubations during the period (following successful SBT). Exclude unplanned/accidental extubations.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – Q1 (January–March): Total planned extubations = 52 Re-intubated within 48 h = 4 (4 ÷ 52) × 100 = 7.7% ✅ BELOW target (<10%) — Compliant. Review 4 re-intubated cases: Were SBT criteria met? Was RSBI checked? Was post-extubation NIV/HFNO used?","interpretation":"<10%: Acceptable. 10–20%: Review extubation criteria (SBT >30 min passed, RSBI <105, GCS adequate, manageable secretions, adequate cough). >20%: Protocol redesign.","reference":"Epstein SK & Ciubotaru RL (1998). Am J Respir Crit Care Med 158(2):266; SCCM (2020)"},"D6":{"name":"Return to ICU","unit":"Count / %","benchmark":"0 / minimize","formula":"(No. of returns to ICU ÷ Total ICU discharges to ward) × 100 OR total count","numDef":"Patients discharged from ICU to the general ward who required transfer back to ICU during the same hospitalisation, for clinical deterioration related to or arising from the original ICU admission.","denDef":"Total ICU discharges to the general ward during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – H1 (January–June): ICU discharges to ward = 220 Returns to ICU = 8 (8 ÷ 220) × 100 = 3.6% Action: Review: Were all 8 stepped down appropriately? Were NEWS2 scores monitored hourly post-transfer? Were vital signs stable for ≥12 h before step-down?","interpretation":"Target: 0 / minimize. Each return to ICU should trigger clinical review of step-down decision quality. Consider implementing a step-down/HDU intermediate level for borderline cases.","reference":"SCCM (2020). ICU Quality Metrics; Rosenberg AL et al (2001). Crit Care Med 29(8):1547"},"D7":{"name":"Unplanned Return to OT","unit":"%","benchmark":"Minimize","formula":"(No. of unplanned OT returns ÷ Total surgical procedures) × 100","numDef":"Patients requiring an unplanned, emergency return to the operating theatre during the same hospitalisation as index surgery, for a surgical complication (post-op haemorrhage, anastomotic leak, retained foreign body, wound dehiscence requiring re-exploration).","denDef":"Total surgical procedures performed during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgery Dept – Q3: Total surgical procedures = 1,050 Unplanned returns to OT (post-gastrectomy haem ×2, anastomotic leak ×2, wound dehiscence ×3) = 7 (7 ÷ 1,050) × 100 = 0.67% Action: Each case reviewed at Morbidity & Mortality meeting; identify technical vs patient factors","interpretation":"Minimize. Each case requires formal M&M review. Classify: Technical failure, Patient factors, or System factors. Trend upward = skills or resource review needed.","reference":"ACS NSQIP (2022). Surgical Quality Improvement Program; Clavien-Dindo Classification (2009)"},"D8":{"name":"Accidental Removal of ETT (Unplanned Extubation)","unit":"per 100 vent-days","benchmark":"<1","formula":"(No. of unplanned extubations ÷ Total ventilator-days) × 100","numDef":"Unplanned or accidental ETT or tracheostomy tube removals during the period. Includes: patient self-extubation, accidental extubation during turning/transport, equipment failure causing ETT displacement.","denDef":"SUM of daily midnight census of mechanically ventilated patients during the reporting period.","multiplier":"See formula above","source":"See data collection methods in hospital QI policy","example":"ICU – April: Total ventilator-days = 280 Unplanned extubations (both patient self-extubation overnight) = 2 (2 ÷ 280) × 100 = 0.71 per 100 vent-days ✅ BELOW target (<1) — Compliant. Review: Was sedation appropriate? Was ETT securement checked each shift?","interpretation":"<1 per 100 vent-days: Acceptable. >1: Review sedation (RASS target), ETT securement method (purpose-made holder vs tape), patient positioning during procedures, wrist restraint appropriateness.","reference":"Girard TD et al (2008). Lancet 371(9607):126; Damasceno MC et al (2013). Rev Bras Ter Intensiva"},"D9":{"name":"LAMA / DAMA Rate","unit":"%","benchmark":"Minimize","formula":"(No. of LAMA/DAMA discharges ÷ Total hospital discharges) × 100","numDef":"Patients who leave (or are discharged by legal guardian) Against Medical Advice before the treating physician has clinically cleared them. LAMA = patient self-discharges; DAMA = family/guardian takes patient against advice.","denDef":"Total hospital discharges during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – May: Total discharges = 1,100 LAMA/DAMA discharges (financial ×9, personal/family ×8, dissatisfied with care ×5) = 22 (22 ÷ 1,100) × 100 = 2.0% Action: Review reasons by category; address financial support, communication gaps, interpreter service availability","interpretation":"Minimize. High LAMA rates indicate: financial barriers, language barriers, care dissatisfaction. Each LAMA: document education, risk explanation, AMA form, social work referral where appropriate.","reference":"Alfandre DJ (2009). Mayo Clin Proc 84(3):255; WHO (2014). AMA Discharge"},"D10":{"name":"Cardiac Arrest (Code Blue) Events","unit":"Count","benchmark":"Track","formula":"Total count of in-hospital cardiac arrest (IHCA) events per reporting period","numDef":"Unresponsive patients with absent or agonal respirations and no palpable central pulse requiring CPR, occurring in the hospital setting. Each distinct arrest event = 1 count.","denDef":"N/A — count per period. Rate option: (events ÷ patient-days) × 1,000 for trend analysis.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – H2 (July–December): Total Code Blue events = 14 Location: ICU step-down ×3, Medical ward ×5, Surgical ward ×4, ED ×2 Shockable rhythm (VF/pVT) ×4, Non-shockable (PEA/Asystole) ×10 Action: Review all 14 for antecedent early warning signs (MEWS >5 in 6 h before arrest? MET call made?)","interpretation":"Track trend and location. Ward-based arrests may indicate missed early warning signs. Review: Were NEWS2/MEWS scores monitored? Were MET calls activated appropriately?","reference":"AHA (2020). ACLS Guidelines; Chan PS et al (2008). NEJM 359(1):11; Utstein Style Reporting"},"D11":{"name":"Cardiac Arrest Survival (ROSC)","unit":"%","benchmark":"≥25%","formula":"(No. of IHCA patients achieving sustained ROSC ÷ Total IHCA events) × 100","numDef":"In-hospital cardiac arrest patients who achieve sustained return of spontaneous circulation (ROSC) for ≥20 minutes following CPR. Document: time of arrest, rhythm, time to first defibrillation, time of ROSC, medications given.","denDef":"Total in-hospital cardiac arrest events during the period for which resuscitation was ATTEMPTED (exclude patients with valid DNR orders).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q4: Total IHCA events (resuscitation attempted) = 12 Patients achieving sustained ROSC ≥20 min = 4 (4 ÷ 12) × 100 = 33.3% ✅ ABOVE target (≥25%) — Compliant. Monitor: of 4 ROSC patients, how many survived to discharge with good neurological outcome?","interpretation":"≥25% ROSC: Acceptable. Track further: survival to discharge and neurological outcome (CPC 1–2 = good). Time to defibrillation for shockable rhythm (target <2 min) = most modifiable predictor of ROSC.","reference":"AHA (2020). ACLS Guidelines; ILCOR (2020); Nolan JP et al (2021). Resuscitation 161:1; Utstein Style"},"E1":{"name":"Informed Consent Completeness","unit":"%","benchmark":"100%","formula":"(No. of procedures with complete consent documentation ÷ Total procedures requiring consent) × 100","numDef":"Invasive procedures/surgeries with a consent form complete with ALL elements: (1) Procedure described in plain language, (2) Risks and benefits documented, (3) Alternatives listed, (4) Patient/guardian signature, (5) Witness signature, (6) Date and time, (7) Physician signature.","denDef":"Total procedures requiring informed consent during the period (surgery, invasive diagnostics, blood transfusion, experimental treatment).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT & Endoscopy – June: Procedures requiring consent = 165 Consent forms with all required elements = 158 Incomplete (missing patient sig ×3, missing witness ×2, risks not documented ×2) = 7 (158 ÷ 165) × 100 = 95.8% ❌ BELOW 100% — Each incomplete consent = patient rights violation; retrain consenting physicians","interpretation":"100%: Required. Any missing element = legal, ethical, and accreditation risk. NEVER proceed to elective procedure without complete consent.","reference":"JCI (2021). PFR.5; TJC RI.01.03.01; Beauchamp TL & Childress JF (2019). Principles of Biomedical Ethics, 8th ed."},"E2":{"name":"Initial Nursing Assessment within 24 h","unit":"%","benchmark":"100%","formula":"(No. of patients with completed nursing assessment within 24 h ÷ Total admissions) × 100","numDef":"Newly admitted patients with a documented initial nursing assessment completed within 24 hours of admission including: chief complaint, physical assessment, vital signs, pain score, fall risk (Morse/Braden), pressure ulcer risk (Braden), nutritional screen, psychosocial, allergy documentation.","denDef":"Total patient admissions during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – July: Total admissions = 95 Initial nursing assessments within 24 h = 91 (91 ÷ 95) × 100 = 95.8% ❌ BELOW 100% — 4 missing: review after-hours admission workload, staffing levels, documentation training","interpretation":"100%: Required. Early assessment identifies falls risk, pressure injury risk, nutrition needs, pain, and medication safety concerns. Late assessments delay care planning.","reference":"JCI (2021). AOP.1; TJC PC.01.02.01"},"E3":{"name":"Nursing Care Plan Documentation","unit":"%","benchmark":"100%","formula":"(No. of patients with documented care plan ÷ Total admitted patients) × 100","numDef":"Admitted patients with an individualized nursing care plan documented within 24–48 h of admission addressing: nursing diagnoses (NANDA), patient outcomes (NOC), planned interventions (NIC), and regular evaluation documentation.","denDef":"Total admitted patients during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – Q2: Total admitted patients = 310 Nursing care plans documented within 48 h = 298 (298 ÷ 310) × 100 = 96.1% ❌ BELOW 100% — 12 missing; focus on weekend admissions where care plans are often delayed","interpretation":"100%: Required. Care plans direct individualised care, prevent errors of omission, and support continuity across shifts. Assess QUALITY not just presence.","reference":"JCI (2021). AOP.1; NANDA International (2021). Nursing Diagnoses, 12th ed. Thieme"},"E4":{"name":"Discharge Summary Timeliness","unit":"%","benchmark":"≥90%","formula":"(No. of discharge summaries completed within TAT ÷ Total discharges) × 100","numDef":"Patient discharges where the discharge summary (final diagnosis, procedures, results, medications, follow-up, pending investigations) is completed within the defined TAT (e.g., 24 h for inpatients; 72 h for complex cases) and available in the medical record.","denDef":"Total patient discharges during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1: Total discharges = 3,200 Summaries completed within 24 h = 2,920 (2,920 ÷ 3,200) × 100 = 91.25% ✅ ABOVE target (≥90%) — Compliant. Identify which specialties have lowest compliance for targeted feedback.","interpretation":"≥90%: Acceptable. Delayed summaries disrupt continuity of care, affect GP management, delay insurance/coding. Incomplete summaries = leading cause of medication errors and preventable readmissions.","reference":"JCI (2021). ACC.3; TJC RC.02.04.01"},"E5":{"name":"Allergy Documentation Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients with allergy status documented ÷ Total admissions) × 100","numDef":"Patients admitted with allergy/adverse drug reaction status documented in the medical record at/within admission: either NKDA (No Known Drug Allergies) OR specific allergy with: drug name, type of reaction, severity.","denDef":"Total patient admissions during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – August: Total admissions = 680 Allergy status documented at admission = 665 Not documented = 15 (665 ÷ 680) × 100 = 97.8% ❌ BELOW 100% — 15 patients at risk: retrospectively document allergy status and add alert immediately","interpretation":"100%: Required. An undocumented allergy = risk every time a medication is prescribed or dispensed. 'NKDA' is also a critical and acceptable documentation.","reference":"JCI (2021). IPSG.3; TJC NPSG 03.06.01"},"E6":{"name":"Medication Chart Completeness","unit":"%","benchmark":"100%","formula":"(No. of complete medication charts ÷ Total charts audited) × 100","numDef":"Medication charts meeting ALL completeness criteria: (1) Patient name + MRN + DOB, (2) Generic drug name, (3) Dose in metric units, (4) Route of administration, (5) Frequency/schedule, (6) Start and stop dates, (7) Prescriber name, designation, and legible signature, (8) Allergy section completed.","denDef":"Total medication charts audited during the period (monthly random sample).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Monthly Audit – September: Medication charts audited = 120 Meeting all completeness criteria = 108 Non-compliant (missing dose ×4, unsigned ×5, no allergy section ×3) = 12 (108 ÷ 120) × 100 = 90% ❌ BELOW 100% — Unsigned orders cannot legally be dispensed; immediate corrective action required","interpretation":"100%: Required. Incomplete charts = leading source of prescribing and dispensing errors. Unsigned orders cannot be dispensed legally. Report to medical staff meeting; repeated non-compliance = individual coaching.","reference":"JCI (2021). MMU Standards; ISMP (2023); TJC MM.04.01.01"},"E7":{"name":"Patient / Family Education Documentation","unit":"%","benchmark":"≥90%","formula":"(No. of patients with documented education ÷ Total eligible patients) × 100","numDef":"Patients/families with documented education on their condition, medications, treatments, and discharge plan during hospital stay. Documentation must include: topics taught, teaching method, patient/family's demonstrated understanding (teach-back or return demonstration), and date.","denDef":"Total eligible patients (all admitted patients capable of receiving education or whose families are available).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – Q3: Eligible patients = 240 Documented education with all components = 215 (215 ÷ 240) × 100 = 89.6% ❌ BELOW 90% target — 25 without documentation; identify barrier: language, literacy, cognitive impairment; arrange interpreter or pictorial aids","interpretation":"≥90%: Acceptable. Effective education reduces readmissions, home medication errors, and complications. Use teach-back to verify understanding. Document in patient's preferred language.","reference":"JCI (2021). PFE.2; TJC PC.02.03.01"},"F1":{"name":"Partograph Compliance","unit":"%","benchmark":"100%","formula":"(No. of labours with completed partograph ÷ Total labours monitored) × 100","numDef":"Labours with a complete, contemporaneously completed partograph found in the clinical record. 'Complete' = ALL sections filled: FHR every 30 min, contractions every 30 min, cervical dilation plotted with alert and action lines, fetal descent, liquor, moulding, maternal vital signs every 4 h, urine output, oxytocin rate, medications.","denDef":"Total labouring women managed in the LDR unit during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"LDR – October: Total labouring patients = 85 Partographs fully completed = 78 Incomplete/missing (FHR not plotted ×4, alert/action lines absent ×3) = 7 (78 ÷ 85) × 100 = 91.8% ❌ BELOW 100% — Incomplete partograph = inability to detect prolonged labour or fetal distress; retrain midwives urgently","interpretation":"100%: Required. Failure to plot = inability to recognise when the action line is crossed (requiring augmentation or expedited delivery). Missing partograph = unsafe labour monitoring.","reference":"WHO (2014). Recommendations for Augmentation of Labour; FIGO (2018). Partograph Guidelines"},"F2":{"name":"Fetal Heart Rate (FHR) Monitoring Compliance","unit":"%","benchmark":"100%","formula":"(No. of deliveries with appropriate FHR monitoring ÷ Total deliveries) × 100","numDef":"Deliveries with appropriate FHR monitoring per risk stratification: LOW RISK: Intermittent auscultation every 15 min in active labour, every 5 min in second stage. HIGH RISK (pre-eclampsia, IUGR, meconium, augmented labour): Continuous CTG, interpreted using FIGO classification.","denDef":"Total deliveries (vaginal + caesarean) during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"LDR – Q4 (October–December): Total deliveries = 220 With appropriate monitoring per risk category = 210 Non-compliant (high-risk without CTG ×5, CTG not interpreted/documented ×5) = 10 (210 ÷ 220) × 100 = 95.5% ❌ BELOW 100% — 5 high-risk patients without CTG = serious safety gap; immediate corrective action","interpretation":"100%: Required. Inadequate FHR monitoring is a leading cause of intrapartum fetal hypoxia, birth asphyxia, and neonatal brain injury. All high-risk labours require continuous CTG interpreted at regular intervals.","reference":"ACOG Practice Bulletin #106 (2021). Intrapartum FHR Monitoring; FIGO (2015). Intrapartum Monitoring Guidelines"},"F3":{"name":"Caesarean-Section Rate","unit":"%","benchmark":"Track (WHO optimal: 10–15%)","formula":"(No. of caesarean deliveries ÷ Total deliveries) × 100","numDef":"Total deliveries by caesarean section (emergency + elective combined). For benchmarking: analyse separately using Robson 10-Group Classification to identify which patient populations are driving the CS rate.","denDef":"Total deliveries (live births + stillbirths delivered ≥20 weeks) via any route during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Obstetric Dept – H1: Total deliveries = 480 Caesarean sections (elective 90 + emergency 78) = 168 (168 ÷ 480) × 100 = 35.0% Robson analysis: Group 1 (nullipara, cephalic, term, spontaneous): CS rate 12% — investigate Group 5 (previous CS): CS rate 85% — consider VBAC programme","interpretation":"WHO optimal: 10–15% for population benefit. >25–30% suggests over-medicalisation. Use Robson Classification for targeted action — Group 5 and Group 2 are primary drivers in most settings.","reference":"WHO (2015). Statement on Caesarean Section Rates; Robson MS (2001). BJOG; Betrán AP et al (2016). PLoS ONE"},"F4":{"name":"Postpartum Haemorrhage (PPH) Rate","unit":"%","benchmark":"Minimize","formula":"(No. of deliveries with PPH ÷ Total deliveries) × 100","numDef":"Deliveries complicated by PPH: blood loss ≥500 mL within 24 h of vaginal delivery (primary PPH) OR ≥1,000 mL within 24 h of caesarean section. Severe PPH = ≥1,000 mL vaginal or ≥1,500 mL CS. Document: volume, cause (4 T's: Tone/Trauma/Tissue/Thrombin), treatments.","denDef":"Total deliveries during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"LDR – Q1: Total deliveries = 300 PPH events (≥500 mL vaginal or ≥1,000 mL CS) = 24 (Severe PPH ≥1,000 mL vaginal = 6) (24 ÷ 300) × 100 = 8.0% Action: Was AMTSL applied in ALL deliveries? Was oxytocin given within 1 min of birth?","interpretation":"Global average 5–10%. Rising rate: Audit active management of 3rd stage (AMTSL) compliance — single most effective prevention. Investigate severe PPH cases individually.","reference":"WHO (2012). Recommendations for Prevention and Treatment of PPH; ACOG Practice Bulletin 183 (2017)"},"F5":{"name":"Birth Asphyxia Rate","unit":"per 1,000 live births","benchmark":"Minimize","formula":"(No. of births with APGAR <7 at 5 min OR requiring resuscitation ÷ Total live births) × 1,000","numDef":"Live born neonates with 5-minute APGAR score <7 AND/OR who required positive-pressure ventilation, cardiac compressions, or medications (epinephrine) at birth. Document: gestational age, mode of delivery, APGAR at 1 and 5 min, interventions, cord gas.","denDef":"Total live births during the reporting period. Count each live birth separately.","multiplier":"× 1,000 → expressed per 1,000 live births","source":"See data collection methods in hospital QI policy","example":"Maternity Unit – November: Total live births = 120 Neonates with APGAR <7 at 5 min or requiring PPV = 6 (6 ÷ 120) × 1,000 = 50 per 1,000 live births Action: Review all 6: Were intrapartum risk factors present? Was FHR monitored? Was competent resuscitator present?","interpretation":"Minimize. Each case requiring PPV or greater needs NRP debrief. Identify modifiable factors: meconium management, delayed CS decision, inadequate FHR monitoring, under-trained birth attendants.","reference":"WHO (2012). Born Too Soon; AAP/AHA Neonatal Resuscitation Program (NRP), 7th ed. (2015)"},"F6":{"name":"Neonatal Mortality Rate","unit":"per 1,000 live births","benchmark":"Track (national)","formula":"(No. of neonatal deaths in first 28 days ÷ Total live births) × 1,000","numDef":"Deaths occurring in liveborn infants from birth up to (not including) 28 completed days of life. Includes: Early neonatal deaths (0–6 days) and Late neonatal deaths (7–27 days). Exclude stillbirths.","denDef":"Total live births during the same period. NOT total births — stillbirths are EXCLUDED from denominator.","multiplier":"× 1,000 → expressed per 1,000 live births","source":"See data collection methods in hospital QI policy","example":"Hospital – Calendar Year: Total live births = 1,800 Neonatal deaths (Early 0–6 days: 8 + Late 7–27 days: 3) = 11 (11 ÷ 1,800) × 1,000 = 6.1 per 1,000 live births All 11 deaths reviewed in Perinatal Mortality Review Committee","interpretation":"Track and compare with national/regional benchmark. Each neonatal death = formal Perinatal Mortality Review to identify preventable factors.","reference":"WHO (2023). Neonatal Mortality Fact Sheet; UNICEF (2023). State of the World's Children"},"F7":{"name":"Breastfeeding Initiation within 1 h","unit":"%","benchmark":"≥90%","formula":"(No. of neonates with breastfeeding within 1 h ÷ Total eligible live births) × 100","numDef":"Liveborn neonates where the first breastfeed (direct breastfeeding — infant placed to breast and latches) is initiated within ONE HOUR of birth, documented by midwife/nursing staff.","denDef":"Total live births minus exclusions. Exclude: neonates born severely compromised (APGAR <4 at 5 min), mothers with absolute contraindications to breastfeeding, surgical deliveries where mother is unconscious.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Maternity Unit – December: Total eligible live births = 115 (of 120; 5 excluded) Breastfeeding initiated within 1 h = 100 (100 ÷ 115) × 100 = 87% ❌ BELOW 90% — Were all mothers informed antenatally? Were staff trained in BFHI Step 4 (skin-to-skin)?","interpretation":"≥90%: Target. Early initiation within 1 h is the single most effective action to improve exclusive breastfeeding. Skin-to-skin contact (BFHI Step 4) is the primary intervention. Review unnecessary procedures delaying skin-to-skin contact.","reference":"WHO/UNICEF (2018). Baby-Friendly Hospital Initiative (BFHI) — 10 Steps; WHO (2017). Breastfeeding Guidelines"},"F8":{"name":"NICU CLABSI Rate","unit":"per 1,000 line-days","benchmark":"<1","formula":"(No. of CLABSI events in NICU ÷ Total NICU central line-days) × 1,000","numDef":"Primary BSIs meeting NHSN CLABSI criteria in NICU patients with central line >2 calendar days. Includes: umbilical arterial/venous catheters (UAC/UVC), PICC lines, and surgical central lines.","denDef":"SUM of daily midnight census of NICU patients with any central line in situ (UAC + UVC + PICC + surgical lines).","multiplier":"× 1,000 → expressed per 1,000 line-days","source":"See data collection methods in hospital QI policy","example":"NICU – January: Total NICU central line-days = 180 CLABSI events confirmed = 1 (1 ÷ 180) × 1,000 = 5.56 per 1,000 line-days ❌ WELL ABOVE target (<1) — Full NICU CLABSI bundle audit: maximal barrier precautions, CHG skin care (if GA-appropriate), daily line necessity review","interpretation":"<1 per 1,000 NICU line-days: Target. NICU patients are critically vulnerable — premature neonates have immature immune systems and fragile skin. Any NICU CLABSI = full RCA and immediate bundle audit.","reference":"CDC/NHSN (2024). NICU Component CLABSI Definitions; Polin RA et al (2012). Pediatrics 129(4):e1085"},"F9":{"name":"Kangaroo Mother Care (KMC) Compliance","unit":"%","benchmark":"≥90%","formula":"(No. of eligible neonates receiving KMC ÷ Total eligible neonates) × 100","numDef":"Eligible preterm (<37 weeks) or low-birth-weight (<2,000 g) neonates who receive KMC (prolonged skin-to-skin contact, prone between mother's breasts, neonate in diaper and hat only) for WHO-recommended minimum of 8 hours/day, documented in nursing records.","denDef":"Total eligible preterm/LBW neonates admitted to NICU or Postnatal Ward during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"NICU – Q2: Eligible preterm/LBW neonates = 45 Receiving KMC as per protocol = 39 (39 ÷ 45) × 100 = 86.7% ❌ BELOW 90% — Review 6 not receiving KMC: on ventilator? Mother absent? Staff not initiating? Document specific barrier for each case.","interpretation":"≥90%: Target. KMC reduces neonatal mortality by 36% and severe infection by 47% (Cochrane evidence). Barriers: maternal illness, staff not initiating, cultural factors. Promote KMC initiation within 24 h of birth for clinically stable neonates.","reference":"WHO (2022). Recommendations for Care of Preterm/LBW Infant; Conde-Agudelo A et al (2016). Cochrane Rev CD002771"},"G1":{"name":"Door-to-Balloon Time ≤90 min","unit":"%","benchmark":"≥90%","formula":"(No. of STEMI patients with D2B ≤90 min ÷ Total STEMI patients with primary PCI) × 100","numDef":"STEMI patients treated with primary PCI where the time from FIRST MEDICAL CONTACT or hospital arrival (Door) to FIRST BALLOON INFLATION in the infarct-related artery is ≤90 minutes.","denDef":"Total STEMI patients treated with primary PCI during the period. Exclude patients transferred from another hospital (D2B clock definition changes for transfers).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Cath Lab – Q3: Total STEMI patients treated with primary PCI = 22 Door-to-Balloon ≤90 min = 19 Exceeding 90 min (CCU delay ×1, cath lab not ready ×1, after-hours delay ×1) = 3 (19 ÷ 22) × 100 = 86.4% ❌ BELOW 90% — Streamline cath lab activation; review 24/7 primary PCI capability","interpretation":"≥90%: International target. Sub-process targets: ED-to-ECG <10 min; ECG-to-cath-lab-activation <10 min; cath-lab-door-to-balloon <30 min.","reference":"ACC/AHA (2013). STEMI Guideline. Circulation 127(4):529; O'Gara PT et al (2013). JACC 61(4):e78; TJC AMI-8a"},"G2":{"name":"Post-PCI Complication","unit":"Count","benchmark":"0","formula":"Total count of major post-PCI adverse events within 24–48 h per period","numDef":"Major adverse cardiovascular events (MACE) and procedural complications within 24–48 h of PCI: Death, Q-wave MI, Emergency CABG, Stroke/TIA, Contrast-induced nephropathy (creatinine rise ≥25% or ≥0.5 mg/dL within 48 h), Major bleeding (TIMI major), Target vessel occlusion/no-reflow.","denDef":"N/A — count per period. Rate: (events ÷ total PCI procedures) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Cath Lab – October: Total PCI procedures = 38 Contrast nephropathy (CrCl rise >25%) = 2 No-reflow requiring GP IIb/IIIa = 1 Major bleeding (femoral haematoma needing transfusion) = 1 Total complications = 4 | Rate = (4 ÷ 38) × 100 = 10.5% Each case: formal M&M review + NCDR registry entry","interpretation":"Target: 0 for serious events (death, stroke, emergency CABG). Contrast nephropathy: pre-hydration, minimise contrast volume. Bleeding: use radial access; weight-based anticoagulation.","reference":"ACC/AHA (2021). Guideline for Coronary Artery Revascularisation; Levine GN et al (2011). Circulation 124:e574; NCDR CathPCI"},"G3":{"name":"Puncture Site Hematoma","unit":"Count","benchmark":"0","formula":"Total count of vascular access site hematomas >5 cm post-cardiac catheterisation per period","numDef":"Patients developing a clinically significant vascular access site haematoma (>5 cm diameter, or requiring additional intervention, or causing haemodynamic compromise) within 24 hours of cardiac catheterisation via femoral or radial access.","denDef":"N/A — count per period. Rate: (count ÷ total catheterisations) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Cath Lab – Q4: Total cardiac catheterisations = 185 Access site haematomas >5 cm = 4 (femoral ×3, radial after compression failure ×1) Rate = (4 ÷ 185) × 100 = 2.2% Review: Manual compression time adequate? Was weight-based anticoagulation used? Was fluoroscopy-guided femoral puncture employed?","interpretation":"Target: 0 significant haematomas. Femoral access = higher risk than radial. Primary prevention: shift to radial access. Maintain adequate manual or mechanical compression post-procedure.","reference":"ACC/AHA (2012). Expert Consensus on Vascular Closure Devices; NCDR CathPCI Registry Definitions"},"G4":{"name":"Door-to-ECG ≤10 min","unit":"%","benchmark":"≥90%","formula":"(No. of ACS/chest pain patients with ECG within 10 min ÷ Total ACS/chest pain presentations) × 100","numDef":"Patients presenting with acute chest pain or other ACS symptoms who have a 12-lead ECG obtained within 10 minutes of ED arrival/first medical contact. Document: triage arrival timestamp + ECG acquisition timestamp on ECG printout.","denDef":"Total patients presenting to ED with acute chest pain or suspected ACS during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – November: Total ACS/chest pain presentations = 55 ECGs obtained within 10 min of arrival = 48 (48 ÷ 55) × 100 = 87.3% ❌ BELOW 90% — Train triage nurses to perform 12-lead ECG WITHOUT waiting for physician; embed in triage protocol for all chest pain","interpretation":"≥90%: Target. ECG within 10 min is the critical step to activate STEMI protocol BEFORE physician assessment. ECG machine must be immediately accessible in triage area.","reference":"ACC/AHA (2014). NSTEMI/UA Guideline; TJC AMI-1; O'Gara PT et al (2013). Circulation 127(4):529"},"G5":{"name":"STEMI Door-to-Needle Time (Fibrinolysis)","unit":"%","benchmark":"≥90%","formula":"(No. of STEMI patients with fibrinolysis within 30 min ÷ Total eligible STEMI patients) × 100","numDef":"STEMI patients treated with fibrinolytic therapy (alteplase, tenecteplase, or streptokinase) where the time from hospital arrival (Door) to initiation of IV fibrinolytic infusion (Needle) is ≤30 minutes.","denDef":"Total eligible STEMI patients treated with fibrinolysis (in settings where primary PCI is not available or not achievable within 120 min).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital (no on-site primary PCI) – Q2: Eligible STEMI patients given fibrinolysis = 18 Door-to-Needle ≤30 min (pharmacy delay ×2, consent delay ×1, physician delay ×1) = 14 (14 ÷ 18) × 100 = 77.8% ❌ BELOW 90% — Pre-mix fibrinolytic; pre-printed STEMI order set; streamline contraindication screening","interpretation":"≥90%: Target. Fibrinolysis is time-critical: maximum benefit when given within 30 min of arrival. Pre-prepare drug, pre-screen contraindications, pre-print order set.","reference":"ACC/AHA (2013). STEMI Guideline. Circulation 127(4):529; TJC AMI-7a"},"G6":{"name":"Heart Failure 30-Day Readmission","unit":"%","benchmark":"Minimize (<25%)","formula":"(No. of HF patients readmitted within 30 days ÷ Total HF discharges) × 100","numDef":"Heart failure patients readmitted to any hospital within 30 calendar days of index HF discharge for any cause (all-cause readmission) or cardiovascular cause (condition-specific).","denDef":"Total HF index discharges during the period (primary diagnosis coded as HF — ICD-10 I50.x). Exclude planned readmissions.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"CCU/Cardiology – H1: Total HF index discharges = 145 Readmitted within 30 days = 32 (HF exacerbation ×18, AKI ×5, pneumonia ×4, other ×5) (32 ÷ 145) × 100 = 22.1% Action: Root causes = medication non-adherence + delayed follow-up; implement structured discharge bundle","interpretation":"Minimize. CMS benchmark <25%. Key interventions: (1) 48 h post-discharge phone call, (2) follow-up within 7 days, (3) written fluid/salt restriction instructions, (4) daily weight monitoring with action plan, (5) medication reconciliation at discharge.","reference":"CMS Hospital Readmissions Reduction Program (HRRP) — HF Measure (HF-30); AHRQ (2020)"},"H1":{"name":"Dialysis Adequacy — URR","unit":"%","benchmark":"≥65%","formula":"URR (%) = [(Pre-BUN − Post-BUN) ÷ Pre-BUN] × 100","numDef":"Pre-dialysis BUN MINUS Post-dialysis BUN. Pre-BUN: drawn before session starts. Post-BUN: drawn at session end using slow-flow technique (reduce blood pump to 50 mL/min for 15 sec, then 0 for 15 sec, draw from arterial port). Both in mg/dL.","denDef":"Pre-dialysis BUN value alone serves as the denominator (it represents the starting level of uraemic waste).Population compliance rate = (patients achieving URR ≥65% ÷ total patients dialysed) × 100","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Patient A – Single HD session: Pre-dialysis BUN (numerator input) = 72 mg/dL Post-dialysis BUN = 22 mg/dL Step 1: Numerator = 72 − 22 = 50 Step 2: Denominator = 72 Step 3: URR = (50 ÷ 72) × 100 = 69.4% ✅ 69.4% — ABOVE target (≥65%) — Adequate dialysis Unit aggregate (30 patients): 27 achieve URR ≥65% → (27÷30)×100 = 90% compliance","interpretation":"≥65%: Adequate. <65%: Under-dialysis; review session duration, blood flow rate (QB), dialyser clearance (KoA), vascular access flow. Population target: ≥90% of patients achieving URR ≥65% per month.","reference":"KDOQI (2015). Hemodialysis Adequacy Update. Am J Kidney Dis 66(5):884; Tattersall JE et al (1996). NDT 11(6):1030"},"H2":{"name":"Kt/V Achievement","unit":"Ratio ≥1.2 target","benchmark":"≥90% achieve Kt/V ≥1.2","formula":"Kt/V = −ln(R − 0.008×t) + (4 − 3.5×R) × UF/W [Daugirdas 2nd generation formula]","numDef":"Formula inputs: R = Post-BUN ÷ Pre-BUN (as a decimal fraction) t = Dialysis session duration in HOURS UF = Total ultrafiltration volume removed in LITRES W = Post-dialysis patient body weight in KILOGRAMS","denDef":"N/A — Kt/V is a dimensionless ratio, not a simple fraction. It represents cleared blood volume (K×t) relative to urea distribution volume (V).Population compliance = (patients achieving Kt/V ≥1.2 ÷ total dialysed) × 100","multiplier":"N/A — result is a dimensionless ratio","source":"See data collection methods in hospital QI policy","example":"Patient B – Single HD session: Pre-BUN = 80, Post-BUN = 24 → R = 24÷80 = 0.30 Session duration t = 4 hours Ultrafiltration UF = 2.5 litres | Post-weight W = 70 kg Step 1: −ln(R − 0.008×t) = −ln(0.30 − 0.032) = −ln(0.268) = 1.316 Step 2: (4 − 3.5×R) × UF/W = (4 − 1.05) × (2.5÷70) = 2.95 × 0.0357 = 0.105 Step 3: Kt/V = 1.316 + 0.105 = 1.42 ✅ Kt/V 1.42 — ABOVE target (≥1.2) — Adequate dialysis dose","interpretation":"Kt/V ≥1.2 per session (3×/week HD): Adequate. 1.0–1.2: Borderline; review session time, blood flow, dialyser, access. <1.0: Under-dialysis; urgent review. Unit target: ≥90% of patients achieving Kt/V ≥1.2 per month.","reference":"KDOQI (2015). Hemodialysis Adequacy Update; Daugirdas JT (1993). JASN 4(5):819; KDIGO (2019)"},"H3":{"name":"Water Quality Compliance","unit":"%","benchmark":"100%","formula":"(No. of water tests meeting AAMI/ISO standards ÷ Total water tests performed) × 100","numDef":"Dialysis water and dialysate quality tests in which ALL measured parameters are within AAMI/ISO limits: Bacteria <100 CFU/mL (product water), Endotoxins <0.25 EU/mL, Chloramines <0.1 mg/L, and other chemical contaminants within RO specifications.","denDef":"Total water quality tests performed during the period (bacteriology: monthly; endotoxin: monthly; chemical/conductivity: as per RO maintenance schedule).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – Q3: Total water quality tests (bacteria, endotoxins, chemicals) = 18 Tests meeting all AAMI/ISO standards = 17 1 test FAILED (bacterial count 120 CFU/mL — above 100 CFU/mL limit) (17 ÷ 18) × 100 = 94.4% ❌ BELOW 100% — Immediately stop dialysis from this water source; disinfect system; retest before resuming","interpretation":"100%: Required. Contaminated water causes: bacteraemia, endotoxaemia, pyrogenic reactions, haemolysis, and death. Any failed test = stop dialysis, disinfect system, retest, and assess patient notification need.","reference":"AAMI/ANSI 23500:2019; ISO 23500-1 to 23500-5; KDIGO (2019). Haemodialysis Adequacy Guideline"},"H4":{"name":"Intradialytic Hypotension (IDH)","unit":"Count / rate per sessions","benchmark":"0 / minimize","formula":"Count of HD sessions with IDH events (OR IDH rate = events ÷ total sessions × 100)","numDef":"Haemodialysis sessions with symptomatic IDH: systolic BP drop ≥20 mmHg from pre-dialysis baseline AND symptomatic (cramps, nausea, dizziness, near-syncope) OR absolute SBP <90 mmHg. Document: BP nadir, time in session, intervention required.","denDef":"Total haemodialysis sessions run during the reporting period.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit (40 patients, 3×/week) – February: Total HD sessions = 40 × 3 × 4 weeks = 480 sessions Sessions with IDH events = 32 IDH rate = (32 ÷ 480) × 100 = 6.7% Review: Are dry weights accurate? Is UF rate >13 mL/kg/h? Are antihypertensives taken before dialysis?","interpretation":"Target: 0 / minimize. IDH occurs in 20–30% of HD sessions globally. Interventions: accurate dry weight, UF rate limits (≤10–13 mL/kg/h), cool dialysate temperature (35.5°C), dietary Na+ restriction, antihypertensive timing.","reference":"KDOQI (2015). HD Adequacy Update; Flythe JE et al (2015). CJASN 10(8):1538; KDIGO (2019)"},"H5":{"name":"Vascular Access Complication","unit":"Count","benchmark":"0","formula":"Total count of vascular access complications per reporting period","numDef":"Documented complications: (1) Thrombosis (clotting of AVF/AVG/catheter), (2) Stenosis (requiring intervention), (3) Access infection (local or systemic), (4) Aneurysm/pseudoaneurysm, (5) High recirculation (>15%), (6) Access failure/abandonment. Report each type separately.","denDef":"N/A — count per period. Rate: (complications ÷ access-patient-months) for trend analysis.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – Q1: Thrombosis events (AVF/graft) = 3 Catheter-related infections = 2 Stenosis (requiring angioplasty) = 2 Total vascular access complications = 7 Target: 0 | Each complication: Review — Was poor flow recorded in sessions before event? Was monthly physical exam done?","interpretation":"Target: 0. Rising access complications = inadequate surveillance. Implement monthly physical exam (thrill, bruit, arm swelling) and monthly recirculation/flow measurement. Low blood flow (<200 mL/min for ≥3 sessions) = refer for fistulogram.","reference":"KDOQI (2006). Clinical Practice Guidelines for Vascular Access. Am J Kidney Dis 48(Suppl 1):S176"},"H6":{"name":"Accidental De-lining of Catheter","unit":"Count","benchmark":"0","formula":"Total count of accidental catheter line disconnection events during active dialysis","numDef":"Incidents where the blood circuit (arterial or venous line) accidentally disconnects from the patient's vascular access catheter during an active dialysis session, resulting in blood loss, air embolism risk, or session interruption.","denDef":"N/A — count per period. Rate: (count ÷ total sessions) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – H1: Arterial line (patient movement ×2) = 2 events Venous line (unsecured Luer-lock ×1) = 1 event Total accidental de-linings = 3 Target: 0 All 3: incident report + blood loss estimation + RCA Action: Double-check Luer-lock tightness; tape and secure lines; educate patients on movement restriction during dialysis","interpretation":"Target: 0. Each de-lining = risk of significant blood loss and air embolism. Prevention: tight Luer-lock connections (double-checked), secure all lines with tape, use clamps, patient education on movement restriction during sessions.","reference":"KDOQI (2006). Vascular Access Guidelines; Hospital Dialysis Nursing Policy"},"H7":{"name":"Dialysis Access Infection Rate","unit":"Count / per 1,000 access-days","benchmark":"0","formula":"(No. of dialysis access infections ÷ Total access-days) × 1,000 OR total count","numDef":"Confirmed infections related to the dialysis vascular access: (1) CRBSI (positive blood cultures, no other source, concordant catheter tip culture), (2) AVF/graft bacteraemia, (3) Exit-site infection (erythema + induration + discharge at catheter exit site).","denDef":"For rate: Total access-days = SUM of daily census of patients with each access type in use. For count: N/A.","multiplier":"× 1,000 → expressed per 1,000 access-days","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – March: Total catheter access-days = 420 Confirmed catheter-related BSIs = 1 Rate = (1 ÷ 420) × 1,000 = 2.38 per 1,000 catheter-days ❌ Above benchmark — Review: Is 'Scrub the Hub' protocol followed? (70% alcohol, minimum 15-sec scrub before every access)","interpretation":"Target: 0. Infectious complications are the leading cause of hospitalisation and death in dialysis patients. Prioritise AVF creation over catheters. For catheters: strict aseptic hub care (70% alcohol, ≥15 sec scrub time) before every access.","reference":"CDC/NHSN (2024). Dialysis Event Surveillance Module; KDOQI (2006). Vascular Access Guidelines"},"H8":{"name":"Missed / Shortened Dialysis Sessions","unit":"%","benchmark":"Minimize (<5%)","formula":"(No. of missed or shortened sessions ÷ Total scheduled sessions) × 100","numDef":"Scheduled HD sessions that were: (A) Completely MISSED (patient did not attend or session cancelled), OR (B) SHORTENED by >10% of prescribed time without a documented clinical justification.","denDef":"Total scheduled haemodialysis sessions for all enrolled patients during the period (standard: 3 sessions/week per patient).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit (40 patients) – April: Total scheduled sessions = 40 × 3 × 4 = 480 sessions Missed sessions (patient non-attendance ×8, unit cancelled ×4) = 12 Shortened sessions (>10% below prescribed time) = 8 Total missed/shortened = 20 (20 ÷ 480) × 100 = 4.2% ✅ BELOW 5% target — Compliant. Contact missed patients; investigate cancelled sessions.","interpretation":"Minimize (<5%). Missed dialysis = direct reduction in Kt/V and URR → uraemia, hyperkalaemia, fluid overload. Investigate reasons: transport barriers, work conflicts, symptoms. Provide patient education on consequences.","reference":"KDOQI (2015). Hemodialysis Adequacy Update; Saran R et al (2003). NDT 18(5):1001"},"I1":{"name":"On-Time First-Case Start","unit":"%","benchmark":"≥90%","formula":"(No. of first cases starting on time ÷ Total first cases scheduled) × 100","numDef":"Scheduled first surgical cases of the operating day where the surgical incision (knife to skin) occurs AT OR BEFORE the scheduled incision time as recorded in the OT booking system.","denDef":"Total first cases scheduled during the reporting period (one first case per OT room per operating day).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – May: Total first cases scheduled = 80 Incision at/before scheduled time = 66 Late (patient not ready ×6, consent issue ×3, surgeon late ×3, equipment ×2) = 14 (66 ÷ 80) × 100 = 82.5% ❌ BELOW 90% — Address: pre-op call protocol, consent completion day before, patient transport 90 min before first case","interpretation":"≥90%: Target. Late first case = cascade delay for ALL subsequent cases in that OT room. Implement: pre-op checklist completed day before, anaesthesia assessment prior day, OT set-up team 60 min before.","reference":"AORN (2022). Perioperative Standards and Recommended Practices; NHS England (2021). Theatre Efficiency Standards"},"I2":{"name":"Elective Case Cancellation Rate","unit":"%","benchmark":"<5%","formula":"(No. of elective cases cancelled on day of surgery ÷ Total scheduled elective cases) × 100","numDef":"Elective (non-emergency) surgical procedures cancelled on the actual day of surgery after the patient has arrived in hospital or the OT area. Cancellations before day of surgery are excluded. Categorise by reason.","denDef":"Total elective surgical cases scheduled during the period (includes both cancelled and performed cases).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – Q2: Total scheduled elective cases = 620 Day-of-surgery cancellations = 28 Top reasons: Medically unfit on day ×10, Insufficient OT time ×7, Patient refused ×5, No ICU bed ×4, Equipment ×2 (28 ÷ 620) × 100 = 4.5% ✅ BELOW 5% target — Compliant. Target the 10 'unfit on day' cancellations by strengthening pre-assessment clinic.","interpretation":"<5%: Acceptable. >5%: Review preadmission assessment and OT scheduling. 'Medically unfit on day' = most preventable cause — strengthen pre-operative assessment clinic.","reference":"AORN (2022). Perioperative Standards; NHS England (2021). Elective Recovery Plan"},"I3":{"name":"Instrument / Sponge Count Compliance","unit":"%","benchmark":"100%","formula":"(No. of procedures with complete count at all required timepoints ÷ Total surgical procedures) × 100","numDef":"Surgical procedures where ALL three mandatory count timepoints are completed AND fully documented: (1) Opening count (before start), (2) Interim count (before wound closure begins), (3) Closing count (after wound closure, before patient leaves table). Both scrub nurse + circulating nurse must confirm and sign.","denDef":"Total surgical procedures performed during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT – June: Total surgical procedures = 240 All 3 count phases fully documented = 235 Non-compliant (closing count not signed ×3, interim count missing ×2) = 5 (235 ÷ 240) × 100 = 97.9% ❌ BELOW 100% — Any undocumented count = risk of retained surgical item (RSI) — a sentinel event","interpretation":"100%: Mandatory. Retained surgical items cause patient harm requiring reoperation and are a TJC Sentinel Event. X-ray must be taken before OT closure if count discrepancy. NEVER close the wound until all counts confirmed correct.","reference":"AORN (2022). Guideline for Prevention of Retained Surgical Items; WHO (2009). Surgical Safety Checklist"},"I4":{"name":"Specimen Labeling Error Rate","unit":"Count","benchmark":"0","formula":"Total count of surgical specimen labeling errors per reporting period","numDef":"Surgical specimen labeling errors: (1) Unlabeled specimens, (2) Mislabeled specimens (wrong patient name, wrong site/laterality, wrong specimen type), (3) Specimens lost in transit between OT and pathology, (4) Inappropriate fixative or container used. Each error = 1 event.","denDef":"N/A — count per period. Rate: (errors ÷ total specimens collected) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3: Total specimens sent to pathology = 580 Labeling errors (wrong patient name ×1, site not labeled ×1, unlabeled ×1) = 3 Rate = (3 ÷ 580) × 100 = 0.52% | Target: 0 ❌ All 3: patient ID re-verification, repeat biopsy if needed, incident report, corrective action","interpretation":"Target: 0. Mislabeled specimens can lead to wrong diagnosis, wrong patient treatment, and wrong surgical decisions. Label specimens in the presence of the specimen. Two-identifier labeling required: patient name + MRN.","reference":"CAP (2021). Laboratory Accreditation Standards; TJC NPSG 01.01.01"},"I5":{"name":"Anaesthesia-Related Complication Rate","unit":"Count","benchmark":"0","formula":"Total count of anaesthesia-related adverse events per reporting period","numDef":"Adverse events directly attributable to anaesthesia: (1) Anaphylaxis/allergic reaction, (2) Pulmonary aspiration of gastric contents, (3) Awareness under general anaesthesia (AUGA), (4) Anaesthesia-related cardiac arrest, (5) Severe laryngospasm/bronchospasm requiring unplanned intubation, (6) Accidental airway loss, (7) Anaesthetic overdose.","denDef":"N/A — count per period. Rate: (events ÷ total anaesthetic procedures) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Anaesthesia Dept – H1: Total anaesthetic procedures = 1,200 Anaesthesia-related adverse events: Anaphylaxis to rocuronium = 1 Post-extubation laryngospasm = 1 Total events = 2 | Rate = (2 ÷ 1,200) × 100 = 0.17% Both events: formal debrief + M&M committee review","interpretation":"Target: 0 for serious/life-threatening events. BIS monitoring reduces anaesthesia awareness. Pre-operative fasting prevents aspiration. All events: report to Anaesthesia Department quality committee.","reference":"ASA (2019). Standards for Basic Anesthetic Monitoring; APSF; Merry AF et al (2010). Anaesthesia 65(10):1021"},"I6":{"name":"PACU Recovery Delay Rate","unit":"%","benchmark":"Minimize","formula":"(No. of patients with non-clinical delayed PACU discharge ÷ Total PACU admissions) × 100","numDef":"Post-operative patients whose discharge from PACU is delayed beyond the institution-defined threshold (commonly >2 hours from PACU arrival) for NON-CLINICAL reasons. Exclude clinically justified delays: active haemorrhage, unstable vital signs, uncontrolled pain, persistent PONV.","denDef":"Total PACU admissions during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"PACU – July: Total PACU admissions = 155 Patients with non-clinical delay >2 h = 12 (No ward bed ×6, pain uncontrolled ×3, PONV persistent ×2, awaiting surgeon ×1) (12 ÷ 155) × 100 = 7.7% Clinical delays (pain/PONV): 5 = anaesthesia/nursing quality issue | Non-clinical (no bed): 6 = bed management/system issue","interpretation":"Minimize. PACU delays block OT flow and reduce throughput. Stratify by reason: clinical (acceptable) vs non-clinical (system failure). Address 'no ward bed' delays with proactive bed management during the surgical day.","reference":"ASPAN (2021). Evidence-Based PACU Practice Guideline; Aldrete JA (1995). Modified Aldrete Recovery Score"},"J1":{"name":"Post-Procedure Complication","unit":"Count","benchmark":"0","formula":"Total count of post-endoscopy complications per reporting period","numDef":"Clinically significant complications during or within 30 days of endoscopic procedure: (1) Perforation, (2) Significant bleeding (transfusion, hospitalisation, or intervention), (3) Post-polypectomy syndrome, (4) Aspiration pneumonia, (5) Bacteraemia/sepsis, (6) Cardiorespiratory event requiring unplanned intervention. Exclude minor self-resolving symptoms.","denDef":"N/A — count per period. Rate: (complications ÷ total endoscopy procedures) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – Q2: Total endoscopy procedures = 385 Polypectomy haemorrhage (endoscopic haemostasis) = 2 Aspiration during EGD (mild) = 1 Perforation = 0 Total significant complications = 3 | Rate = (3 ÷ 385) × 100 = 0.78% Each case: complication log + M&M review","interpretation":"Target: 0 for serious (perforation, death). Perforation = immediate senior GI/surgical review; consider endoscopic closure vs surgery. Each complication reviewed at department M&M meeting.","reference":"ASGE (2015). Quality Indicators for GI Endoscopic Procedures. Gastrointest Endosc 81(1):17; BSG (2019)"},"J2":{"name":"Endoscope Reprocessing Compliance","unit":"%","benchmark":"100%","formula":"(No. of endoscopes reprocessed per full protocol ÷ Total endoscopes reprocessed) × 100","numDef":"Endoscopes processed following ALL mandatory steps: (1) Point-of-use pre-cleaning immediately after procedure, (2) Leak testing, (3) Manual cleaning with enzymatic detergent (all channels brushed), (4) Rinse, (5) HLD in approved automated endoscope reprocessor (AER) with verified chemical concentration, (6) Rinse with purified water, (7) Alcohol flush, forced-air dry, and dry cabinet storage. ALL steps = 1 compliant cycle.","denDef":"Total endoscopes reprocessed during the reporting period (each reprocessing cycle = 1 count).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – August: Total endoscope reprocessing cycles = 140 Cycles with full protocol compliance = 136 Non-compliant (enzymatic soak time short ×2, AER chemical concentration not verified ×2) = 4 (136 ÷ 140) × 100 = 97.1% ❌ BELOW 100% — 4 potentially inadequately decontaminated scopes; assess patient notification; retrain reprocessing staff immediately","interpretation":"100%: Mandatory. Inadequate reprocessing has caused patient-to-patient transmission of hepatitis B, C, CROs, and Mycobacteria. Any deviation = potential exposure incident requiring traceability audit and patient notification assessment.","reference":"SGNA (2022). Standards for Infection Prevention; ESGE/ESGENA (2018). Endoscope Reprocessing Guideline; AORN (2022)"},"J3":{"name":"Perforation Rate","unit":"%","benchmark":"<0.1%","formula":"(No. of iatrogenic perforations ÷ Total endoscopic procedures) × 100","numDef":"Iatrogenic (procedure-caused) bowel, oesophageal, or gastric perforations occurring DURING or within 24 hours of an endoscopic procedure (diagnostic or therapeutic). Includes instrument-related, pneumatic dilatation-related, EMR/ESD-related perforations.","denDef":"Total endoscopic procedures during the period. Report rate by procedure type for meaningful benchmarking (diagnostic colonoscopy vs therapeutic EMR/ESD).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – H1: Total endoscopic procedures = 820 Confirmed iatrogenic perforations = 1 (sigmoid perforation during colonoscopy in diverticular disease patient) (1 ÷ 820) × 100 = 0.12% Target: <0.1% (borderline) — RCA: Was diverticulosis known? Was excess force used?","interpretation":"<0.1%: Target for diagnostic procedures. Higher for therapeutic EMR/ESD (up to 0.5%). Any perforation = surgical emergency. Recognise early (abdominal pain, tachycardia, free air). Early endoscopic closure reduces need for surgery.","reference":"ASGE (2015). Quality Indicators for GI Endoscopy; Pohl H et al (2012). Gastrointest Endosc 75(6):1218"},"J4":{"name":"Post-Polypectomy Bleeding","unit":"Count","benchmark":"0","formula":"Total count of significant post-polypectomy bleeding events per reporting period","numDef":"Clinically significant bleeding during or within 30 days of colonoscopic polypectomy requiring: blood transfusion (≥2 units pRBC), hospital admission, repeat endoscopy for haemostasis, interventional radiology, or surgery. Exclude minor oozing controlled immediately at polypectomy with no further consequences.","denDef":"N/A — count per period. Rate: (events ÷ total polypectomies) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – Q3: Total polypectomy procedures = 185 Significant post-polypectomy bleeding (antiplatelet therapy not stopped: aspirin ×2, clopidogrel ×1) = 3 Rate = (3 ÷ 185) × 100 = 1.6% | Target: 0 Action: Review antiplatelet bridging protocol; screen all patients for antiplatelet/anticoagulant use before scheduling","interpretation":"Target: 0 significant events. Risk factors: polyp >20 mm, right colon, hot snare, anticoagulant use, diabetes, renal failure. Prevention: cold snare for <10 mm, clip prophylaxis for large polyps, periprocedural anticoagulant management protocol.","reference":"ASGE (2015). Quality Indicators; ESGE (2022). Post-Polypectomy Bleeding Guideline"},"K1":{"name":"Triage-to-Consult (Door-to-Doctor) Time","unit":"% per triage category","benchmark":"≥90%","formula":"(No. of ED patients seen within TAT per triage category ÷ Total ED presentations) × 100","numDef":"ED patients assessed by a physician within the TAT for their triage priority: P1 (Resuscitation): ≤0 min (immediate); P2 (Emergent): ≤30 min; P3 (Urgent): ≤60 min; P4 (Less urgent): ≤120 min; P5 (Non-urgent): ≤240 min. Report each category separately.","denDef":"Total ED presentations during the period. Stratify by triage category for meaningful compliance reporting.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – September: Total registered patients = 1,400 P1 (seen ≤10 min): 45/50 = 90% ✅ P2 (seen ≤30 min): 180/210 = 85.7% ❌ P3 (seen ≤60 min): 680/820 = 82.9% ❌ Overall: (45+180+680)÷(50+210+820) × 100 = 905÷1,080 = 83.8% P2 = 85.7% — BELOW 90% — Review ED physician coverage during peak hours","interpretation":"≥90% within TAT per triage level: Acceptable. Low compliance = insufficient physician staffing, poor triage accuracy, or inadequate care flow. Implement: nurse-initiated treatment protocols, physician-in-triage during peak hours.","reference":"ACEP (2019). Emergency Severity Index (ESI); Canadian Triage and Acuity Scale (CTAS) 2020; WHO (2015). Emergency Care Guidelines"},"K2":{"name":"Left Without Being Seen (LWBS) Rate","unit":"%","benchmark":"<2%","formula":"(No. of registered patients leaving without physician assessment ÷ Total registered ED presentations) × 100","numDef":"Registered ED patients who left the department WITHOUT being assessed/examined by a physician, after completing triage registration. Includes patients who walked out while waiting or left against advice before physician contact.","denDef":"Total registered ED presentations during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – October: Total registered patients = 1,520 Patients who left without physician assessment = 24 (24 ÷ 1,520) × 100 = 1.58% ✅ BELOW 2% target — Compliant. Investigate LWBS reasons: long wait, perceived non-urgent condition, time of day pattern.","interpretation":"<2%: Acceptable. >2%: Excess wait time is the primary driver. Interventions: physician-in-triage, fast-track stream for low-acuity patients, better waiting room communication of expected wait times.","reference":"ACEP (2019). Emergency Department Guidelines; Hobbs D et al (2000). Ann Emerg Med 35(4):328"},"K3":{"name":"ED Re-attendance within 72 h","unit":"%","benchmark":"<5%","formula":"(No. of unplanned ED re-attendances within 72 h ÷ Total ED discharges) × 100","numDef":"Patients who return to the same ED within 72 hours of prior ED DISCHARGE for the SAME or RELATED complaint (unplanned). Exclude: planned return visits organised by ED physician, or entirely unrelated new complaints.","denDef":"Total ED discharges (patients sent home) during the reporting period. Exclude admitted patients.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – Q4: Total ED discharges (non-admitted) = 6,200 Unplanned re-attendances within 72 h for same complaint = 155 (155 ÷ 6,200) × 100 = 2.5% Top diagnoses at re-attendance: Abdominal pain 25%, Chest pain 18%, Head injury 15% Action: Review initial discharge decisions and discharge instructions for these diagnoses","interpretation":"Target: <5%. High re-attendance = premature discharge, inadequate discharge instructions, or under-treatment. Implement structured discharge instructions with safety-net advice ('when to return').","reference":"ACEP (2019); NHS England. Unplanned Re-attendance Standard"},"K4":{"name":"Door-to-Needle for Stroke Thrombolysis","unit":"%","benchmark":"≥80%","formula":"(No. of stroke patients receiving tPA within 60 min ÷ Total eligible strokes treated) × 100","numDef":"Eligible ischaemic stroke patients who received IV alteplase (tPA) within 60 minutes of hospital arrival (Door-to-Needle ≤60 min). Eligibility: ischaemic stroke confirmed on CT, onset <4.5 h, no contraindications, NIHSS documented.","denDef":"Total eligible ischaemic stroke patients treated with IV thrombolysis during the period (excludes intracerebral haemorrhage, contraindications, onset >4.5 h, patient/family refusal).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – H1: Eligible ischaemic stroke patients thrombolysed = 15 Door-to-Needle ≤60 min = 11 D2N >60 min (CT delay ×2, neurology delay ×1, consent ×1) = 4 (11 ÷ 15) × 100 = 73.3% ❌ BELOW 80% — Implement Code Stroke protocol; CT reserved for stroke activations; tPA pre-drawn in stroke bay","interpretation":"≥80%: Target (aim for DTN ≤45 min ideally). Every 15 min reduction in DTN prevents ~1 in 100 patients from serious disability. Implement: Code Stroke from triage, direct-to-CT, tPA bedside preparation, CT read within 10 min.","reference":"AHA/ASA (2019). Stroke Guidelines. Stroke 50(12):e344; Fonarow GC et al (2014). JAMA 311(14):1433; ESO (2021)"},"L1":{"name":"Mandatory Training Compliance","unit":"%","benchmark":"≥90%","formula":"(No. of staff with all mandatory training completed ÷ Total staff required) × 100","numDef":"Staff who have completed ALL required mandatory training modules by their due date. Mandatory modules typically include: Fire safety, Hand hygiene, Infection control, Manual handling, BLS, Information governance, Safeguarding, Medication safety. ALL modules complete = 1 compliant staff member.","denDef":"Total staff required to complete mandatory training during the period (all contracted staff per department, stratified by role where applicable).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Annual Report: Total staff required to complete mandatory training = 850 Staff with ALL modules completed = 790 (790 ÷ 850) × 100 = 92.9% ✅ ABOVE 90% target — Compliant. Identify 60 non-compliant staff for immediate follow-up.","interpretation":"≥90%: Acceptable. <90%: Immediate management escalation. Non-compliant clinical staff should not be deployed to patient care until training is complete (per hospital policy).","reference":"JCI (2021). SQE.3; TJC HR.01.05.01; Hospital Training & Competency Policy"},"L2":{"name":"BLS / ACLS Certification Rate","unit":"%","benchmark":"≥90%","formula":"(No. of staff with current valid certification ÷ Total staff required to hold certification) × 100","numDef":"Designated clinical staff who hold a CURRENT, VALID BLS/ACLS/PALS certification issued by an accredited provider (AHA, ERC, or equivalent) with expiry date not past at time of audit.","denDef":"Total staff in designated roles required to hold BLS/ACLS/PALS per hospital policy (clinical nursing — BLS; ICU/CCU/ED/OT nursing — ACLS; paediatric wards — PALS; all physicians — BLS/ACLS).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3 Audit: Total nursing staff requiring BLS = 450 | With valid BLS = 428 → BLS Rate = (428÷450)×100 = 95.1% ✅ Total staff requiring ACLS = 120 | With valid ACLS = 108 → ACLS Rate = (108÷120)×100 = 90.0% ✅ Both ≥90% — Compliant. Schedule renewal for 22 BLS-expired and 12 ACLS-expired staff.","interpretation":"≥90%: Acceptable. <90%: Identify expired staff by ward; prioritise ICU/ED/CCU for immediate renewal. Staff with expired certification in high-acuity areas must not work unsupervised until recertified.","reference":"AHA (2020). BLS/ACLS Provider Guidelines; JCI (2021). SQE Standards; Hospital Credentialing Policy"},"L3":{"name":"Induction Completion within 30 Days","unit":"%","benchmark":"100%","formula":"(No. of new staff completing induction within 30 days ÷ Total new staff) × 100","numDef":"Newly joined employees who completed the FULL structured induction/orientation program within 30 calendar days of their first day. Induction must include: hospital orientation, key policies, infection control, fire safety, patient safety, IT/EMR access, and role-specific competency sign-off.","denDef":"Total new employees who joined the hospital during the reporting period (all staff grades: permanent, contract, agency).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – November: New staff joined = 35 Completed full induction within 30 days = 32 Not completed (sick leave ×1, late IT access ×2) = 3 (32 ÷ 35) × 100 = 91.4% ❌ BELOW 100% — Ensure IT access granted on Day 1; clinical staff must complete induction BEFORE patient-facing duties begin","interpretation":"100%: Target. Incomplete induction = staff unaware of essential safety policies. Clinical staff without induction must not be deployed to patient care. Address IT access delays and scheduling conflicts proactively.","reference":"JCI (2021). SQE.7; TJC HR.01.04.01; Hospital HR Onboarding Policy"},"L4":{"name":"Accidental Catheter Dislodgement","unit":"Count","benchmark":"0","formula":"Total count of accidental catheter dislodgements per reporting period","numDef":"Accidental dislodgements (partial or complete displacement from intended position) of any indwelling catheter or tube during patient care: urinary catheter, nasogastric tube, IV/arterial line, chest drain, surgical drain, epidural catheter. Each event = 1 count.","denDef":"N/A — count per period. Rate: (dislodgements ÷ patient-days with device) × 1,000.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – December: Urinary catheter dislodgements (turning ×2, self-removal ×1) = 3 NG tube dislodgements (patient transfer ×2) = 2 IV cannula dislodgements (ambulation, poor securement ×4) = 4 Total accidental dislodgements = 9 | Target: 0 Each event: incident report + RCA + corrective action plan","interpretation":"Target: 0. Repeated dislodgements in same ward = systemic problem. Review: Are securing devices used? Are patients educated on catheter management? Are staff using correct handling technique during repositioning?","reference":"JCI (2021). QPS Standards; NDNQI (2023); Hospital Nursing Care Standards"},"L5":{"name":"Accidental Removal of Catheter","unit":"Count","benchmark":"0","formula":"Total count of accidental catheter removals per reporting period","numDef":"Accidental FULL removal of an indwelling catheter by: (1) Patient action (self-removal, especially confused/agitated patients), (2) Family/visitor action, (3) Staff error during care activities. Distinguished from dislodgement (L4) which is partial displacement.","denDef":"N/A — count per period. Rate: (removals ÷ patient-days with device) × 1,000.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1: Urinary catheter removals (by confused patients) = 6 CVC removed by family member = 1 NG tube removed by patient = 4 Total accidental catheter removals = 11 | Target: 0 CVC removed by family = serious; patient/family education was inadequate Actions: Agitation management review; daily device necessity; patient/family education; appropriate restraint discussion","interpretation":"Target: 0. Frequent self-removal by confused patients: Review sedation/analgesia appropriateness, device necessity, and patient/family education. CVC self-removal by family member = failure of patient/family education.","reference":"JCI (2021). QPS Standards; NDNQI (2023); Hospital Nursing Care & Device Management Policy"},"M1":{"name":"Patient Satisfaction Score","unit":"% or mean score","benchmark":"≥85%","formula":"Method 1 (Top-box): (No. rating ≥4/5 or 'Very Good/Excellent' ÷ Total surveyed) × 100Method 2 (Mean score): Sum of all scores ÷ Total respondents","numDef":"Method 1: Patients who rate overall hospital experience as 'Excellent' (5/5) or 'Very Good' (4/5).Method 2: Arithmetic sum of all individual overall satisfaction scores divided by number of responses.","denDef":"Method 1: Total completed satisfaction surveys received. Method 2: Total completed surveys.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – January: Surveys distributed = 200 | Surveys returned = 145 Method 1 (Top-box): Patients rating 4–5 out of 5 = 124 (124 ÷ 145) × 100 = 85.5% ✅ AT/ABOVE target (≥85%) Method 2 (Mean): Sum of all scores = 610 ÷ 145 = 4.21/5 Lowest-scoring domain: Staff responsiveness (3.8/5) — target for improvement","interpretation":"≥85%: Acceptable. <85%: Analyse by HCAHPS domain to identify specific improvement areas. Low nursing responsiveness: review call bell response time. Low cleanliness: audit housekeeping. Share monthly results with all clinical teams.","reference":"HCAHPS (2024). Hospital Consumer Assessment of Healthcare Providers; JCI (2021). PFR Standards; Press Ganey Associates (2023)"},"M2":{"name":"Complaint Resolution within TAT","unit":"%","benchmark":"≥90%","formula":"(No. of complaints resolved within TAT ÷ Total complaints received) × 100","numDef":"Formally logged patient/family complaints that were: (1) Acknowledged within 24 working hours, AND (2) Fully investigated with resolution response provided within the defined TAT (e.g., 5 working days for verbal, 30 working days for written/formal), AND (3) Outcome documented in the complaint management system.","denDef":"Total formal patient/family complaints received and registered during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3: Total formal complaints received = 35 Verbal complaints resolved within 5 days: 18/20 = 90% Written complaints resolved within 30 days: 13/15 = 86.7% Overall: (18+13)÷(20+15) = 31÷35 × 100 = 88.6% ❌ BELOW 90% — Identify 4 unresolved; escalate to Patient Relations manager; notify complainant of delay","interpretation":"≥90%: Acceptable. <90%: Review complaint caseload capacity and investigation process. Every complaint = patient safety learning opportunity. Categorise by type (clinical, communication, attitude, environment) and report to department heads.","reference":"JCI (2021). PFR.3 — Complaint and Grievance Management; TJC RI.01.07.01; Hospital Patient Relations Policy"}};
+window.HQI_GUIDE = {"A1":{"name":"Hand Hygiene Compliance","unit":"%","benchmark":">90%","formula":"(Actions PERFORMED ÷ Opportunities OBSERVED) × 100","numDef":"Count of hand hygiene actions (soap/water or alcohol hand-rub) performed during structured observation. Each cleansing act = 1 performed action.","denDef":"Count of hand hygiene OPPORTUNITIES observed (any WHO 5 Moment: before patient contact, before aseptic procedure, after body fluid exposure, after patient contact, after patient surroundings).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Month of March – 4 wards: Actions performed (numerator) = 1,350 Opportunities observed (denom) = 1,480 (1,350 ÷ 1,480) × 100 = 91.2% ✅ ABOVE target (>90%) — Compliant","interpretation":"≥90%: Compliant. 75–89%: Needs improvement; re-audit within 2 weeks. <75%: Unacceptable; escalate immediately.","reference":"WHO (2009). Guidelines on Hand Hygiene in Health Care"},"A2":{"name":"CAUTI Rate","unit":"per 1,000 cath-days","benchmark":"<1","formula":"(No. of CAUTIs ÷ Total urinary catheter-days) × 1,000","numDef":"CAUTIs meeting NHSN definition: catheter in place >2 days on event date AND ≥1 symptom PLUS positive urine culture (≥10⁵ CFU/mL, ≤2 organisms).","denDef":"SUM of daily midnight census of patients with indwelling urinary catheter in situ. Each patient with catheter on any given day = 1 catheter-day.","multiplier":"× 1,000 → expressed per 1,000 cath-days","source":"See data collection methods in hospital QI policy","example":"ICU – April: Sum of daily catheter census (30 days) = 420 cath-days CAUTI events confirmed = 1 (1 ÷ 420) × 1,000 = 2.38 ❌ ABOVE target (<1) — RCA required","interpretation":"<1: Compliant. >1: Audit bundle (daily necessity review, closed drainage, perineal hygiene, unobstructed flow). Each CAUTI event requires individual RCA.","reference":"CDC/NHSN (2024). CAUTI Event Surveillance Definition"},"A3":{"name":"CLABSI Rate","unit":"per 1,000 line-days","benchmark":"<1","formula":"(No. of CLABSIs ÷ Total central line-days) × 1,000","numDef":"Primary BSIs meeting NHSN CLABSI definition: central line in place >2 days on event date AND blood culture positive with recognised pathogen, no other infection source.","denDef":"SUM of daily midnight census of patients with any central line in situ (CVC, PICC, tunneled catheter). Each patient with a line per day = 1 line-day.","multiplier":"× 1,000 → expressed per 1,000 line-days","source":"See data collection methods in hospital QI policy","example":"ICU – Q2: Line-days: Apr=180, May=190, Jun=175 → Total=545 CLABSI events = 2 (2 ÷ 545) × 1,000 = 3.67 ❌ ABOVE target (<1) — Immediate bundle audit","interpretation":"<1: Compliant. >1: Review insertion technique, maximal sterile barrier, CHG skin prep, daily line necessity, hub decontamination.","reference":"CDC/NHSN (2024). CLABSI Event Surveillance Definition"},"A4":{"name":"VAP Rate","unit":"per 1,000 vent-days","benchmark":"<1","formula":"(No. of VAP events ÷ Total ventilator-days) × 1,000","numDef":"VAP events per NHSN VAE criteria: ventilated >2 days AND new infiltrate on CXR PLUS fever/leucocytosis PLUS purulent secretions PLUS positive lower respiratory culture.","denDef":"SUM of daily midnight census of patients on mechanical ventilation via ETT or tracheostomy (any mode). Each ventilated patient per day = 1 vent-day.","multiplier":"× 1,000 → expressed per 1,000 vent-days","source":"See data collection methods in hospital QI policy","example":"ICU – May (20-bed unit): 10 ventilated patients/day × 31 days = 310 vent-days VAP events = 2 (2 ÷ 310) × 1,000 = 6.45 ❌ ABOVE target (<1) — Audit VAP bundle immediately","interpretation":"<1: Compliant. >1: Audit VAP bundle: HOB 30–45°, oral CHG, daily sedation interruption, daily weaning assessment, subglottic suction.","reference":"CDC/NHSN (2024). VAP/VAE Surveillance Definition"},"A5":{"name":"Surgical Site Infection (SSI) Rate","unit":"%","benchmark":"<1–2%","formula":"(No. of SSIs ÷ Total procedures of same type) × 100","numDef":"SSIs within 30 days (or 90 days for implants) classified as Superficial Incisional, Deep Incisional, or Organ/Space per NHSN. Each distinct SSI counted once per procedure type.","denDef":"Total surgical procedures in the specific procedure category being measured. Report each procedure type separately (e.g., hip replacements, C-sections).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Orthopaedic – H1 (Jan–Jun): Total hip replacements = 120 SSIs within 90 days = 2 (2 ÷ 120) × 100 = 1.67% ❌ ABOVE 1% target — Review antibiotic timing, skin prep, sterile technique","interpretation":"<1%: Acceptable for clean procedures. 1–2%: Monitor. >2%: Formal RCA, theatre environmental cultures.","reference":"CDC/NHSN (2024). SSI Surveillance Definition; WHO (2018). Global Guidelines for Prevention of SSI"},"A6":{"name":"Phlebitis Rate (Peripheral IV Site)","unit":"%","benchmark":"≤5%","formula":"(No. of IV sites with phlebitis ÷ Total IV sites assessed) × 100","numDef":"Peripheral IV sites with VIP Score ≥2 (pain, erythema, swelling or induration) during audit. Each affected site = 1 event; a patient with 2 affected sites counts as 2.","denDef":"Total peripheral IV sites actively in use and assessed during the audit. Each site counted separately regardless of number per patient.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Ward 3 – Weekly audit: Active IV sites assessed = 42 Sites with VIP Score ≥2 = 4 (4 ÷ 42) × 100 = 9.5% ❌ ABOVE target (≤5%) — Review IV technique, rotation (max 72–96 h)","interpretation":"≤5%: Acceptable. 5–10%: Review insertion and maintenance. >10%: Immediate quality review; re-train staff.","reference":"INS (2021). Infusion Therapy Standards of Practice; Jackson A (1998). VIP Score"},"A7":{"name":"MRSA / MDRO Infection Rate","unit":"per 1,000 pt-days","benchmark":"Minimize/track","formula":"(No. of HA-MRSA/MDRO infections ÷ Total patient-days) × 1,000","numDef":"Confirmed healthcare-associated MRSA or MDRO infections occurring ≥48 h after admission. Includes MRSA, VRE, ESBL, CRE, and other MDROs per local policy.","denDef":"SUM of daily midnight inpatient census. Each patient present at midnight = 1 patient-day.","multiplier":"× 1,000 → expressed per 1,000 pt-days","source":"See data collection methods in hospital QI policy","example":"Hospital – June: Sum of daily midnight census (30 days) = 2,800 pt-days HA-MRSA infections confirmed = 3 (3 ÷ 2,800) × 1,000 = 1.07 per 1,000 pt-days ⚠️ Track vs prior months; any HA-MRSA requires transmission chain investigation","interpretation":"Monitor trend. Any HA-MRSA/MDRO: line-listing investigation. Rising rate: investigate source, review contact precautions, cohort nursing.","reference":"CDC/NHSN (2024). MDRO & CDI Prevention Module; WHO (2022). Global Action Plan on AMR"},"A8":{"name":"Overall Hospital-Acquired Infection (HAI) Rate","unit":"%","benchmark":"<5%","formula":"(Total No. of all HAIs ÷ Total patient-days) × 100","numDef":"Total confirmed HAIs across ALL categories (CAUTI, CLABSI, VAP, SSI, MRSA, C. diff, etc.) meeting standard surveillance definitions in the reporting period.","denDef":"SUM of daily midnight inpatient census over the same reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1 (~200-bed, ~85% occupancy, 90 days): Patient-days = 200 × 0.85 × 90 = 15,300 All HAIs across all categories = 45 (45 ÷ 15,300) × 100 = 0.29% ✅ BELOW 5% target — Continue prevention bundles","interpretation":"<5%: Target met. 5–10%: Review all HAI subtypes; identify dominant category and apply targeted bundle. >10%: Hospital-wide IPC audit.","reference":"WHO (2022). Global Report on IPC; Allegranzi B et al (2011). Lancet 377:228"},"A9":{"name":"Blood Culture Contamination Rate","unit":"%","benchmark":"<3%","formula":"(No. of contaminated blood culture sets ÷ Total blood culture sets collected) × 100","numDef":"Blood culture sets where a skin commensal (CoNS, Micrococcus, Bacillus, Corynebacterium, viridans strep) is in only 1 of 2 bottles with no clinical evidence of true bacteraemia — classified as contamination by the treating team.","denDef":"Total blood culture SETS collected (1 aerobic + 1 anaerobic bottle = 1 set from one venipuncture). Count sets, not individual bottles.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Month of July – Hospital-wide: Blood culture sets collected = 480 Sets classified as contaminated = 18 (18 ÷ 480) × 100 = 3.75% ❌ ABOVE target (<3%) — Review venipuncture technique; reinforce 2% CHG/70% alcohol skin prep","interpretation":"<3%: Acceptable. 3–5%: Phlebotomy retraining; ensure 30-sec drying time. >5%: Formal competency reassessment.","reference":"CLSI (2022). Principles and Procedures for Blood Cultures. CLSI M47-A2"},"A10":{"name":"Surgical Antibiotic Prophylaxis Timing Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients with antibiotic ≤60 min before incision ÷ Total eligible patients) × 100","numDef":"Patients who received prophylactic antibiotic within 60 min before skin incision (within 120 min for vancomycin/fluoroquinolones), documented in anaesthesia chart and verified against incision time.","denDef":"Total eligible surgical patients requiring antibiotic prophylaxis per protocol, excluding those already on therapeutic antibiotics covering the prophylaxis indication.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – August: Eligible procedures requiring prophylaxis = 95 Antibiotic given ≤60 min of incision = 88 (7 given >60 min before — too early; sub-therapeutic at incision) (88 ÷ 95) × 100 = 92.6% ❌ BELOW 100% — Embed antibiotic timing check in anaesthesia induction protocol","interpretation":"100%: Required. Both too early (>60 min) and too late (post-incision) = inadequate tissue levels = failure.","reference":"SCIP Inf-1; WHO (2018). Global Guidelines for Prevention of SSI; Bratzler DW et al (2013). Am J Health Syst Pharm"},"A11":{"name":"CSSD Sterilization (BI) Compliance","unit":"%","benchmark":"100%","formula":"(No. of cycles with PASSING biological indicator ÷ Total BI-tested cycles) × 100","numDef":"Sterilization cycles where the biological indicator (BI) spore test shows NO GROWTH (negative = kill achieved). BI: Geobacillus stearothermophilus spores for steam; Bacillus atrophaeus for ETO.","denDef":"Total sterilization cycles with a BI tested during the period (per protocol: every day of use for steam; every cycle for ETO).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"CSSD – September: BI-tested sterilization cycles = 62 POSITIVE BI (FAIL: spore growth) = 1 NEGATIVE BI (PASS: no growth) = 61 (61 ÷ 62) × 100 = 98.4% ❌ BELOW 100% — QUARANTINE failed-cycle load; steriliser out-of-service; recall if already distributed","interpretation":"100%: Mandatory. Any positive BI = steriliser failure. Quarantine full load, recall all items, remove steriliser from service pending re-qualification.","reference":"AAMI/ANSI ST79:2017; ISO 11138-3:2017"},"A12":{"name":"Biomedical Waste Segregation Compliance","unit":"%","benchmark":"100%","formula":"(No. of compliant audit observations ÷ Total audit observations) × 100","numDef":"Audit observations where waste was correctly colour-coded per protocol (e.g., yellow = infectious/pathological, red = anatomical, black = general, sharps container = sharps). ALL bin types correct = 1 compliant observation.","denDef":"Total waste audit observations conducted (each ward/area visit = 1 observation; or each container inspected = 1 observation — define and apply consistently).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital-wide audit – October: Ward/area observations = 80 Compliant (all bins correct) = 74 Non-compliant (sharps in yellow ×3, general in biohazard ×2, overfilled ×1) = 6 (74 ÷ 80) × 100 = 92.5% ❌ BELOW 100% — Re-educate; sharps in wrong bin = needlestick risk (incident report required)","interpretation":"100%: Required by law. Sharps in wrong container = needlestick risk; immediate incident report. Re-train non-compliant areas within 5 days; re-audit.","reference":"WHO (2014). Safe Management of Wastes from Health-Care Activities, 2nd ed."},"A13":{"name":"Needle Stick / Sharps Injury","unit":"Count","benchmark":"0","formula":"Total count of reported needlestick and sharps injuries per reporting period","numDef":"All reported incidents of accidental puncture/laceration by a used needle, lancet, scalpel, or other sharp medical device potentially contaminated with blood or body fluids. Each unique incident = 1 count.","denDef":"N/A — this is a count. Optional secondary rate: (count ÷ total FTE staff) × 100 = rate per 100 FTEs.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"H1 (January–June) Hospital-wide: Nurse recapping needle post-injection = 2 events Lab technician during blood tube work = 1 event Surgeon suture needle injury in OT = 1 event Total sharps injuries = 4 Target: 0 | All 4: post-exposure assessment within 2 h, source patient status, PEP if indicated, RCA","interpretation":"Target: 0 (zero tolerance). Every sharps injury = preventable sentinel event. Rising counts = audit sharps disposal compliance; consider needle-free devices.","reference":"OSHA Bloodborne Pathogens Standard 29 CFR 1910.1030; WHO (2018). Preventing Needlestick Injuries"},"A14":{"name":"Isolation / Transmission-Precaution Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients in correct isolation ÷ Total patients requiring isolation) × 100","numDef":"Patients requiring transmission-based precautions (Contact, Droplet, or Airborne) who are correctly placed AND maintained: appropriate room/cohort, correct PPE, proper signage posted, documented in nursing notes.","denDef":"Total patients identified as requiring transmission-based precautions during the audit period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Weekly audit – November: Patients requiring isolation precautions = 18 Correctly isolated with all requirements = 16 Non-compliant (PPE not worn ×1, wrong precaution type ×1) = 2 (16 ÷ 18) × 100 = 88.9% ❌ BELOW 100% — Immediate education; re-audit within 24 h","interpretation":"100%: Required. Incorrect isolation type (e.g. Droplet only for airborne pathogen) = serious transmission risk. Immediate correction required.","reference":"CDC/HICPAC (2007, updated 2023). Guideline for Isolation Precautions in Hospitals"},"B1":{"name":"Medication Administration Error","unit":"Count","benchmark":"0","formula":"Total count of all reported medication errors per reporting period","numDef":"Reported errors in any phase: (1) Prescribing, (2) Transcription, (3) Dispensing, (4) Administration. Include near-misses (caught before reaching patient).","denDef":"N/A — count per period. Secondary metric: (errors ÷ total doses administered) × 1,000.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Month of February: Prescribing errors = 3 Dispensing errors = 2 Administration errors (reached patient) = 5 Near-misses (caught before patient) = 8 Total errors reaching patient = 10 | Near-misses = 8 Target: 0 | All events: categorise, RCA, trend analysis","interpretation":"Target: 0 errors reaching patients. Low reporting often means under-reporting, not absence of errors. High near-miss reporting = healthy safety culture.","reference":"ISMP (2023). Medication Error Reporting Program; NQF (2011). Safe Practices for Better Healthcare"},"B2":{"name":"Adverse Drug Reaction (ADR) Rate","unit":"Count (by severity)","benchmark":"Track","formula":"Total count of confirmed ADRs per period, stratified by severity","numDef":"Confirmed ADRs per WHO-UMC causality assessment. Severity: Mild (no intervention), Moderate (therapy change/hospitalisation), Severe (life-threatening/permanent damage), Fatal.","denDef":"N/A for count. For rate: (ADR count ÷ total admissions) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Q3 (July–September): Mild ADRs (rash, nausea) = 12 Moderate ADRs (therapy change) = 3 Severe ADRs (anaphylaxis → ICU) = 1 Fatal ADRs = 0 Total ADRs = 16 All 16: pharmacovigilance database. Severe ADR: RCA + regulatory notification + allergy record updated","interpretation":"Track over time. Focus action on severe/fatal ADRs. Update allergy record immediately after any confirmed ADR.","reference":"WHO (2002). The Importance of Pharmacovigilance; ICH E2A (1994). Clinical Safety Data Management"},"B3":{"name":"Medication Reconciliation Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients with completed reconciliation ÷ Total admissions or discharges) × 100","numDef":"Patients with complete medication reconciliation at BOTH admission (BPMH from ≥2 sources: patient/carer + pharmacy + GP) AND discharge (reconciled discharge list vs BPMH; all discrepancies resolved). Report admission and discharge rates separately.","denDef":"Total patient admissions (for admission rate) or total discharges (for discharge rate). Apply denominator consistently for each metric.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Month of March – Medical Ward (50 admissions): BPMH reconciliation completed (admission) = 46 Discharge reconciliation completed = 44 Admission: (46 ÷ 50) × 100 = 92% Discharge: (44 ÷ 50) × 100 = 88% Both ❌ BELOW 100% — Implement pharmacy-led BPMH service","interpretation":"100%: Required. Unreconciled discrepancies = leading cause of medication errors at care transitions.","reference":"JCI (2021). IPSG.3; ISMP (2011). Medication Reconciliation to Prevent Adverse Drug Events"},"B4":{"name":"High-Alert Medication Double-Check Compliance","unit":"%","benchmark":"100%","formula":"(No. of high-alert doses with documented double-check ÷ Total high-alert doses administered) × 100","numDef":"High-alert doses where an independent double-check was performed (two nurses independently verify: right drug, concentration, dose, rate, patient, route) AND both nurses' signatures appear on the MAR.","denDef":"Total high-alert medication doses administered. ISMP high-alert drugs: insulin, IV heparin, concentrated electrolytes (KCl), IV opioids, chemotherapy, anticoagulants, neuromuscular blockers, vasoactive drugs.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – Week 15–21 April: Total high-alert doses administered = 140 (Insulin ×60, IV heparin ×35, KCl ×20, IV opioids ×25) Doses with documented double-check = 133 (133 ÷ 140) × 100 = 95.0% ❌ BELOW 100% — Identify which drugs/shifts missed; double-check MANDATORY for all ISMP high-alert drugs","interpretation":"100%: Mandatory. Missed double-check = policy violation. Address barriers: staffing, time pressure. 'No one available to check' = escalate to supervisor.","reference":"ISMP (2023). High-Alert Medications in Acute Care Settings; JCI (2021). MMU.5"},"B5":{"name":"Verbal / Telephone Order Read-Back Compliance","unit":"%","benchmark":"100%","formula":"(No. of verbal/telephone orders with documented read-back ÷ Total verbal/telephone orders) × 100","numDef":"Orders where: (1) receiver read complete order back to prescriber, (2) prescriber verbally confirmed accuracy, (3) documented in medical record with receiver's signature, AND (4) prescriber countersigned within 24 hours.","denDef":"Total verbal and telephone orders received and documented during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – Month of May: Total verbal/telephone orders = 45 With complete read-back + countersign within 24 h = 38 (38 ÷ 45) × 100 = 84.4% ❌ BELOW 100% — Identify non-countersigning prescribers; raise at medical staff meeting","interpretation":"100%: Required. Verbal orders carry high error risk. Read-back must include: drug name spelled out, dose with units, route, frequency.","reference":"JCI (2021). IPSG.2; TJC NPSG 02.01.01"},"B6":{"name":"LASA Drug Storage / Labeling Compliance","unit":"%","benchmark":"100%","formula":"(No. of LASA drugs correctly stored and labeled ÷ Total LASA drugs audited) × 100","numDef":"LASA drug pairs/groups found on audit to be: physically separated, labeled with Tall Man lettering (e.g., hydrALAZINE vs. hydrOXYzine), with auxiliary warning stickers. ALL criteria met = 1 compliant entry.","denDef":"Total LASA drug items/storage locations audited. Each drug in each location counted separately (ward stock, IV room, dispensary).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital-wide audit – June: LASA drug storage locations audited = 65 Fully compliant = 58 Non-compliant (dopamine adj to dobutamine ×3, no Tall Man ×4) = 7 (58 ÷ 65) × 100 = 89.2% ❌ BELOW 100% — Separate adjacently-stored pairs; update bin labels","interpretation":"100%: Required. LASA mix-ups are a leading cause of serious medication errors. Physically separate AND label clearly with Tall Man lettering.","reference":"ISMP (2023). LASA Drug Name List; WHO (2019). Medication Without Harm Challenge"},"B7":{"name":"Controlled Drug Count Accuracy","unit":"%","benchmark":"100%","formula":"(No. of shift counts with zero discrepancy ÷ Total shift counts performed) × 100","numDef":"Controlled drug shift-end counts where physical count exactly matches: opening balance + additions – administrations – documented wastage, as recorded in the controlled drug register. Zero discrepancy = 1 passing count.","denDef":"Total controlled drug shift counts performed during the period (typically one count per shift per ward; 2–3 per day per location).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – July (3 shifts/day × 31 days = 93 counts): Total shift counts performed = 93 Counts with discrepancy = 2 Counts with zero discrepancy = 91 (91 ÷ 93) × 100 = 97.8% ❌ BELOW 100% — Both discrepancies: investigate; notify pharmacy and ward manager immediately","interpretation":"100%: Required. Any discrepancy: document, notify, investigate. Escalate to security if theft suspected. Never delay investigation.","reference":"DEA 21 CFR Part 1304; Local Narcotics & Pharmacy Regulations"},"B8":{"name":"STAT Medication Administration Timeliness","unit":"%","benchmark":"≥90%","formula":"(No. of STAT orders administered within TAT ÷ Total STAT orders) × 100","numDef":"STAT medication orders administered to the patient within the defined TAT from order time (commonly 30 min; varies by policy and drug type).","denDef":"Total STAT medication orders received during the reporting period (identified in MAR or pharmacy system by 'STAT' urgency designation).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – August: Total STAT orders received = 85 Administered within 30 minutes = 79 Delayed (>30 min) = 6 (79 ÷ 85) × 100 = 92.9% ✅ AT/ABOVE target (≥90%) — Compliant. Review 6 delays.","interpretation":"≥90%: Acceptable. <90%: Identify systemic causes: drug not stocked on ward, pharmacy supply delays, nurse:patient ratio.","reference":"ISMP (2011). Guidelines for Timely Medication Administration; TJC MM.04.01.01"},"C1":{"name":"Patient Identification (2-Identifier) Compliance","unit":"%","benchmark":"100%","formula":"(No. of care interactions with 2-identifier verification ÷ Total care interactions audited) × 100","numDef":"Care interactions (medication admin, blood transfusion, specimen collection, invasive procedure, surgery, imaging) where the healthcare worker verified TWO patient identifiers (full name + DOB + MRN — any two of three) BEFORE the care action.","denDef":"Total patient care interactions observed or audited during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Monthly audit – Medical & Surgical Wards: Care interactions observed (medication ×80, specimens ×50, IV bags ×40, blood admin ×30) = 200 Interactions with 2-identifier verification = 192 Without proper identification = 8 (192 ÷ 200) × 100 = 96% ❌ BELOW 100% — Review 8 failures; reinforce at daily safety huddle","interpretation":"100%: Mandatory. Blood transfusion without 2-ID = potential fatal wrong-blood event. Escalate persistent non-compliance to department head.","reference":"JCI (2021). IPSG.1; TJC NPSG 01.01.01"},"C2":{"name":"Patient Fall Rate","unit":"per 1,000 pt-days","benchmark":"≤3.3","formula":"(No. of patient falls ÷ Total patient-days) × 1,000","numDef":"Total patient falls during the period regardless of injury outcome. A fall = unplanned descent to floor or lower level, witnessed or not. Includes: found-on-floor, assisted falls, falls from bed/chair/commode.","denDef":"SUM of daily midnight inpatient census over the reporting period.","multiplier":"× 1,000 → expressed per 1,000 pt-days","source":"See data collection methods in hospital QI policy","example":"Medical Ward (30 beds) – Q3 (92 days): Average 26 patients/day × 92 days = 2,392 patient-days Patient falls reported = 7 (7 ÷ 2,392) × 1,000 = 2.93 per 1,000 pt-days ✅ BELOW target (≤3.3) — Compliant. Review all 7 falls individually.","interpretation":"≤3.3 per 1,000 pt-days: Acceptable. >3.3: Review fall risk assessment, care plan, hourly rounding, bed alarms, call bell accessibility, environment hazards.","reference":"NDNQI (2023). Nursing-Sensitive Quality Indicators; JCI (2021). QPS Standards"},"C3":{"name":"Falls with Injury","unit":"Count","benchmark":"0","formula":"Total count of falls resulting in any patient injury per reporting period","numDef":"Falls resulting in ANY degree of injury: Minor (bruise/abrasion), Moderate (suture/splint needed), Major (surgery/fracture/neurological deficit), or Fatal. Each injurious fall = 1 count.","denDef":"N/A — count per period. Optional: (injurious falls ÷ total falls) × 100 = injury rate per fall.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital-wide – Q2: Total falls = 18 No injury: 11 | Minor (bruising): 5 | Moderate (laceration/suture): 2 | Major (hip fracture): 1 Total injurious falls = 5 + 2 + 1 = 8 Target: 0 ❌ Hip fracture = serious adverse event requiring formal RCA and senior management escalation","interpretation":"Target: 0. Every injurious fall must be investigated. Major falls (fracture, surgery, death) = serious adverse event or sentinel event.","reference":"NDNQI (2023); AHRQ (2013). Preventing Falls in Hospitals Toolkit"},"C4":{"name":"Hospital-Acquired Pressure Ulcer (HAPU) Rate","unit":"per 1,000 pt-days","benchmark":"<0.75","formula":"(No. of new Stage 2–4 pressure injuries ÷ Total patient-days) × 1,000","numDef":"Patients developing a NEW pressure injury of Stage 2 (partial skin loss), Stage 3 (full skin loss), Stage 4 (full tissue loss), or Unstageable — appearing for the FIRST TIME >72 h after hospital admission. Injuries documented at admission are excluded.","denDef":"SUM of daily midnight inpatient census over the reporting period.","multiplier":"× 1,000 → expressed per 1,000 pt-days","source":"See data collection methods in hospital QI policy","example":"Medical Ward – Q2 (91 days, avg 28 patients/day): Total patient-days = 28 × 91 = 2,548 New hospital-acquired Stage 2+ injuries = 2 (2 ÷ 2,548) × 1,000 = 0.785 per 1,000 pt-days ❌ ABOVE target (<0.75) — Review: Was admission skin assessment done? Was repositioning schedule followed?","interpretation":"<0.75 per 1,000 pt-days: Acceptable. >0.75: Review bundle: Braden/Waterlow score, 2-hourly repositioning, pressure-relieving surfaces, moisture management, nutrition.","reference":"NPUAP/EPUAP/PPPIA (2019). Clinical Practice Guideline for Pressure Injury Prevention; NDNQI (2023)"},"C5":{"name":"VTE / DVT Prophylaxis Compliance","unit":"%","benchmark":"100%","formula":"(No. of eligible patients who received VTE prophylaxis ÷ Total eligible patients) × 100","numDef":"Eligible adult inpatients who received appropriate VTE prophylaxis (mechanical: TED stockings/pneumatic compression AND/OR pharmacological: LMWH/UFH per risk score) initiated by end of day 2 of admission.","denDef":"All admitted adults identified as eligible (moderate/high risk on Caprini or Padua score), EXCLUDING those with active bleeding, bleeding disorder, or other absolute contraindication.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – September: Eligible patients (moderate/high VTE risk) = 55 Received appropriate prophylaxis by day 2 = 52 (52 ÷ 55) × 100 = 94.5% ❌ BELOW 100% — Review 3 patients: documented contraindication? Missed order? Missing risk assessment?","interpretation":"100%: Target. Missing prophylaxis in eligible patients = preventable DVT/PE risk. Embed VTE risk assessment in admission workflow.","reference":"ACCP (2012). Antithrombotic Therapy Guidelines, 9th ed.; JCI (2021). IPSG.6"},"C6":{"name":"Hospital-Acquired DVT","unit":"Count","benchmark":"0","formula":"Total count of confirmed DVT events occurring ≥48 h after admission per reporting period","numDef":"Confirmed new DVT events (proximal or distal, upper or lower limb) diagnosed ≥48 h after hospital admission, confirmed by Doppler ultrasound or venography (hospital-acquired, not community-acquired).","denDef":"N/A — count per period. Optional rate: (count ÷ total eligible admissions) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1 (January–March): Hospital-acquired DVT events confirmed = 2 (Both in post-surgical patients without timely LMWH prophylaxis) Target: 0 ❌ Both cases: formal RCA; review VTE prophylaxis prescribing and administration compliance","interpretation":"Target: 0. Any hospital-acquired DVT = preventable adverse event. Confirm: Was prophylaxis prescribed AND administered? If so, was dosing correct (renal function, weight-based)?","reference":"ACCP (2012); JCI (2021). QPS Standards"},"C7":{"name":"Wrong-Site / -Patient / -Procedure Events","unit":"Count","benchmark":"0","formula":"Total count of wrong-site, wrong-patient, or wrong-procedure events per reporting period","numDef":"Events where a surgical or invasive procedure was performed on the wrong anatomical site, wrong patient, or wrong procedure was carried out — regardless of patient harm outcome. Include near-misses caught before procedure completion.","denDef":"N/A — count per period (sentinel event by definition).","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Reporting Period – Full Year: Wrong-site surgery events = 0 Wrong-patient events = 0 Wrong-procedure events = 0 ✅ Target: 0 — Maintained Continue: pre-op site marking, Time-Out compliance, checklist monitoring NOTE: Even ONE event = sentinel event requiring external review and system redesign","interpretation":"Target: 0 (absolute). Any event = mandatory sentinel event investigation, regulatory notification, system redesign. Prevention: permanent site marking, Time-Out with full team pause, consistent checklist use every case.","reference":"TJC Universal Protocol NPSG 01.03.01; JCI (2021). IPSG.4; WHO (2009). Surgical Safety Checklist"},"C8":{"name":"Surgical Safety Checklist Compliance","unit":"%","benchmark":"100%","formula":"(No. of procedures with all 3 checklist phases completed ÷ Total surgical procedures) × 100","numDef":"Surgical procedures where ALL THREE phases of the WHO Surgical Safety Checklist were FULLY completed and signed: Phase 1 – Sign In (before anaesthesia induction), Phase 2 – Time Out (before skin incision, full team pause), Phase 3 – Sign Out (before patient leaves OT).","denDef":"Total surgical and invasive procedures performed in the OT during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – October: Total surgical procedures = 148 All 3 phases fully documented = 141 Incomplete (Sign-Out missing ×5, Time-Out verbal only ×2) = 7 (141 ÷ 148) × 100 = 95.3% ❌ BELOW 100% — Identify non-compliant teams; reinforce at surgical staff meeting","interpretation":"100%: Mandatory. The Time-Out is the most critical phase — last chance to catch wrong-patient/site/side errors. An undone checklist = unacceptable safety gap.","reference":"WHO (2009). Surgical Safety Checklist; Haynes AB et al (2009). NEJM 360(5):491"},"C9":{"name":"Restraint Use Appropriateness / Monitoring","unit":"%","benchmark":"100%","formula":"(No. of restrained patients with full compliance ÷ Total restrained patients) × 100","numDef":"Restrained patients who have ALL documented: (1) Valid medical/nursing order with clinical justification, (2) Least restrictive restraint type, (3) Monitoring per protocol (skin/neuro checks every 15–120 min), (4) Regular reassessment of continued need, (5) Patient/family education documented.","denDef":"Total patients in restraints on the audit day or during the audit period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU & Medical Ward – November: Patients in restraints = 12 Fully compliant with all requirements = 10 Non-compliant (no 2-h skin check ×1, no order ×1) = 2 (10 ÷ 12) × 100 = 83.3% ❌ BELOW 100% — Patient without order: obtain order immediately; document as incident","interpretation":"100%: Required. Restraint without a valid order = potential abuse or unlawful detention. Poor monitoring = risk of pressure injuries, limb ischaemia, aspiration. Review alternatives before applying restraints.","reference":"TJC RC.02.01.01; CMS CoP 42 CFR 482.13(e); JCI (2021). PFR Standards"},"C10":{"name":"Pain Assessment & Reassessment Compliance","unit":"%","benchmark":"≥90%","formula":"(No. of patients with documented assessment AND reassessment ÷ Total patients requiring assessment) × 100","numDef":"Patients with: (1) Initial pain assessment documented at admission using a validated scale (NRS 0–10, VAS, FLACC for paediatrics, CPOT for non-verbal), AND (2) Reassessment documented at appropriate interval following any pain intervention (30–60 min after oral analgesic, 15–30 min after IV).","denDef":"Total patients for whom pain assessment is applicable during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – Week of 10–16 November: Patients requiring pain assessment = 64 With initial assessment + timely reassessment = 59 Missing reassessment post-analgesic = 5 (59 ÷ 64) × 100 = 92.2% ✅ AT/ABOVE target (≥90%) — Compliant. Review 5 missing reassessments for nurse education.","interpretation":"≥90%: Acceptable. <90%: Review documentation compliance. Pain scores must be recorded as the 5th vital sign. Reassessment confirms analgesic effectiveness.","reference":"JCI (2021). COP Standards; TJC PC.01.02.07; NRS/VAS/FLACC/CPOT validated scales"},"C11":{"name":"Critical Value Reporting Timeliness","unit":"%","benchmark":"100%","formula":"(No. of critical values communicated within TAT ÷ Total critical values generated) × 100","numDef":"Critical laboratory or radiology results communicated to the responsible treating clinician within the defined TAT from result verification (e.g., 30–60 min per policy), with documentation of: result, time communicated, clinician name, read-back confirmed.","denDef":"Total critical values (lab/radiology) generated during the period per the hospital critical value list (e.g., K+ >6.5, pH <7.2, Hb <6 g/dL, glucose <50 mg/dL, INR >6.0, platelets <20,000/µL).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Lab – December: Total critical values generated = 115 Communicated to clinician within 30 min = 110 Delayed (>30 min) = 5 (110 ÷ 115) × 100 = 95.7% ❌ BELOW 100% — Review 5 delayed cases: clinician unreachable? Escalation pathway followed?","interpretation":"100%: Required. A missed or delayed critical value can cause patient death (e.g., unrecognised hyperkalaemia → cardiac arrest). If clinician unreachable: escalate to next senior immediately. Document ALL attempts with timestamps.","reference":"TJC NPSG 02.03.01; CLIA 42 CFR 493.1291; CAP (2021). Commission on Laboratory Accreditation"},"C12":{"name":"Patient Handover (SBAR) Compliance","unit":"%","benchmark":"100%","formula":"(No. of handovers using SBAR format ÷ Total handovers observed/audited) × 100","numDef":"Patient handovers (shift-to-shift, ward-to-ICU, dept-to-dept) where the structured SBAR format was used: S (Situation — patient ID, diagnosis, bed), B (Background — relevant history, medications), A (Assessment — current status, vital signs, concerns), R (Recommendation — specific action required from receiving team).","denDef":"Total patient handovers observed or audited during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – January (3 shifts/day × 30 days = 90 handovers): Handovers audited = 90 Using complete SBAR structure = 79 Missing one or more SBAR components = 11 (79 ÷ 90) × 100 = 87.8% ❌ BELOW 100% — Most commonly missed: Recommendation component; reinforce at nursing education session","interpretation":"100%: Target. The 'Recommendation' component is critical — it defines what action is expected from the receiving team. Standardise with printed/electronic SBAR template.","reference":"JCI (2021). IPSG.2.2; WHO (2007). Communication During Patient Handovers. Patient Safety Solutions Vol 1 Sol 3"},"D1":{"name":"Gross Hospital Mortality Rate","unit":"%","benchmark":"Track locally","formula":"(No. of inpatient deaths ÷ Total discharges including deaths) × 100","numDef":"Total patients who died during the hospital stay (inpatient death), regardless of cause or length of stay. Includes deaths in all wards, ICU, ER, and OT.","denDef":"Total hospital discharges during the same period including ALL dispositions: discharged alive, transferred, AMA discharges, and deaths.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3: Total discharges (alive 4,150 + deaths 50) = 4,200 Inpatient deaths = 50 (50 ÷ 4,200) × 100 = 1.19% Action: Compare to prior quarter and national benchmark; categorise by ward/diagnosis; review unexpected deaths with M&M committee","interpretation":"Track and benchmark vs. national data for hospital type. Distinguish expected (palliative/end-stage) from unexpected deaths. Unexpected mortality requires peer review and potential RCA.","reference":"AHRQ (2020). Inpatient Quality Indicators; CMS Inpatient Quality Reporting Program"},"D2":{"name":"ICU Mortality Rate","unit":"%","benchmark":"Track (risk-adjusted)","formula":"(No. of ICU deaths ÷ Total ICU admissions) × 100","numDef":"Number of patients who die while admitted to the ICU during the reporting period.","denDef":"Total ICU admissions during the same period. Count each distinct ICU admission separately — a re-admitted patient counts as a new admission.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU (20 beds) – Month of February: ICU admissions = 45 | ICU deaths = 9 Crude mortality = (9 ÷ 45) × 100 = 20% Risk-adjusted: If APACHE II predicted mortality = 25%, SMR = Observed ÷ Expected = 9 ÷ (45×0.25) = 9÷11.25 = 0.80 SMR <1.0 = performing BETTER than predicted by illness severity ✅","interpretation":"Crude rate alone is insufficient — must be risk-adjusted (APACHE II/IV, SOFA score). SMR <1.0: better than predicted. SMR >1.0: investigate staffing, treatment delays, complications.","reference":"SCCM (2020). ICU Quality Metrics; Knaus WA et al (1985). APACHE II. Crit Care Med 13(10):818"},"D3":{"name":"ICU Re-admission within 48 h","unit":"%","benchmark":"<5%","formula":"(No. of patients re-admitted to ICU within 48 h ÷ Total ICU discharges to ward) × 100","numDef":"Patients re-admitted to the ICU within 48 hours of a planned transfer to the general ward (step-down). Excludes return for a NEW unrelated acute problem not related to the original ICU admission.","denDef":"Total planned ICU discharges (step-down transfers to ward) during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – Q2 (April–June): Total planned ICU step-downs to ward = 96 Re-admitted to ICU within 48 h = 4 (4 ÷ 96) × 100 = 4.2% ✅ BELOW target (<5%) — Compliant. Review all 4 cases for premature discharge factors.","interpretation":"<5%: Acceptable. >5%: Review ICU discharge criteria quality. High rate = premature step-down; review: was patient haemodynamically stable for ≥6 h? Were vasopressors fully weaned? Were NEWS2 scores reassuring?","reference":"SCCM (2020). ICU Quality Metrics; Rosenberg AL et al (2001). Crit Care Med 29(8):1547"},"D4":{"name":"Re-admission within 30 Days","unit":"%","benchmark":"Track/minimize","formula":"(No. of re-admissions within 30 days ÷ Total eligible discharges) × 100","numDef":"Patients re-admitted to hospital within 30 calendar days of prior discharge for any cause (all-cause) or related diagnosis (condition-specific). Count each re-admission episode separately.","denDef":"Total eligible patient discharges during the period. Exclude: planned readmissions for chemotherapy/dialysis, transfers, AMA discharges where return was anticipated.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – March: Total eligible discharges = 850 Re-admitted within 30 days = 68 Top reasons: HF exacerbation ×15, COPD ×12, wound complications ×8 (68 ÷ 850) × 100 = 8.0% Action: Implement targeted post-discharge interventions for top readmission diagnoses","interpretation":"Track against national benchmark. High rate = inadequate discharge planning or premature discharge. Key interventions: discharge education, medication reconciliation, 48 h post-discharge phone call, early outpatient follow-up within 7 days.","reference":"CMS Hospital Readmissions Reduction Program (HRRP); Jencks SF et al (2009). NEJM 360(14):1418"},"D5":{"name":"Re-intubation within 48 h","unit":"%","benchmark":"<10%","formula":"(No. of re-intubations within 48 h ÷ Total planned extubations) × 100","numDef":"Mechanically ventilated patients who require re-intubation within 48 hours of a planned, intentional extubation (following a successful spontaneous breathing trial) due to respiratory failure, airway compromise, or inability to protect the airway.","denDef":"Total planned extubations during the period (following successful SBT). Exclude unplanned/accidental extubations.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – Q1 (January–March): Total planned extubations = 52 Re-intubated within 48 h = 4 (4 ÷ 52) × 100 = 7.7% ✅ BELOW target (<10%) — Compliant. Review 4 re-intubated cases: Were SBT criteria met? Was RSBI checked? Was post-extubation NIV/HFNO used?","interpretation":"<10%: Acceptable. 10–20%: Review extubation criteria (SBT >30 min passed, RSBI <105, GCS adequate, manageable secretions, adequate cough). >20%: Protocol redesign.","reference":"Epstein SK & Ciubotaru RL (1998). Am J Respir Crit Care Med 158(2):266; SCCM (2020)"},"D6":{"name":"Return to ICU","unit":"Count / %","benchmark":"0 / minimize","formula":"(No. of returns to ICU ÷ Total ICU discharges to ward) × 100 OR total count","numDef":"Patients discharged from ICU to the general ward who required transfer back to ICU during the same hospitalisation, for clinical deterioration related to or arising from the original ICU admission.","denDef":"Total ICU discharges to the general ward during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ICU – H1 (January–June): ICU discharges to ward = 220 Returns to ICU = 8 (8 ÷ 220) × 100 = 3.6% Action: Review: Were all 8 stepped down appropriately? Were NEWS2 scores monitored hourly post-transfer? Were vital signs stable for ≥12 h before step-down?","interpretation":"Target: 0 / minimize. Each return to ICU should trigger clinical review of step-down decision quality. Consider implementing a step-down/HDU intermediate level for borderline cases.","reference":"SCCM (2020). ICU Quality Metrics; Rosenberg AL et al (2001). Crit Care Med 29(8):1547"},"D7":{"name":"Unplanned Return to OT","unit":"%","benchmark":"Minimize","formula":"(No. of unplanned OT returns ÷ Total surgical procedures) × 100","numDef":"Patients requiring an unplanned, emergency return to the operating theatre during the same hospitalisation as index surgery, for a surgical complication (post-op haemorrhage, anastomotic leak, retained foreign body, wound dehiscence requiring re-exploration).","denDef":"Total surgical procedures performed during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgery Dept – Q3: Total surgical procedures = 1,050 Unplanned returns to OT (post-gastrectomy haem ×2, anastomotic leak ×2, wound dehiscence ×3) = 7 (7 ÷ 1,050) × 100 = 0.67% Action: Each case reviewed at Morbidity & Mortality meeting; identify technical vs patient factors","interpretation":"Minimize. Each case requires formal M&M review. Classify: Technical failure, Patient factors, or System factors. Trend upward = skills or resource review needed.","reference":"ACS NSQIP (2022). Surgical Quality Improvement Program; Clavien-Dindo Classification (2009)"},"D8":{"name":"Accidental Removal of ETT (Unplanned Extubation)","unit":"per 100 vent-days","benchmark":"<1","formula":"(No. of unplanned extubations ÷ Total ventilator-days) × 100","numDef":"Unplanned or accidental ETT or tracheostomy tube removals during the period. Includes: patient self-extubation, accidental extubation during turning/transport, equipment failure causing ETT displacement.","denDef":"SUM of daily midnight census of mechanically ventilated patients during the reporting period.","multiplier":"See formula above","source":"See data collection methods in hospital QI policy","example":"ICU – April: Total ventilator-days = 280 Unplanned extubations (both patient self-extubation overnight) = 2 (2 ÷ 280) × 100 = 0.71 per 100 vent-days ✅ BELOW target (<1) — Compliant. Review: Was sedation appropriate? Was ETT securement checked each shift?","interpretation":"<1 per 100 vent-days: Acceptable. >1: Review sedation (RASS target), ETT securement method (purpose-made holder vs tape), patient positioning during procedures, wrist restraint appropriateness.","reference":"Girard TD et al (2008). Lancet 371(9607):126; Damasceno MC et al (2013). Rev Bras Ter Intensiva"},"D9":{"name":"LAMA / DAMA Rate","unit":"%","benchmark":"Minimize","formula":"(No. of LAMA/DAMA discharges ÷ Total hospital discharges) × 100","numDef":"Patients who leave (or are discharged by legal guardian) Against Medical Advice before the treating physician has clinically cleared them. LAMA = patient self-discharges; DAMA = family/guardian takes patient against advice.","denDef":"Total hospital discharges during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – May: Total discharges = 1,100 LAMA/DAMA discharges (financial ×9, personal/family ×8, dissatisfied with care ×5) = 22 (22 ÷ 1,100) × 100 = 2.0% Action: Review reasons by category; address financial support, communication gaps, interpreter service availability","interpretation":"Minimize. High LAMA rates indicate: financial barriers, language barriers, care dissatisfaction. Each LAMA: document education, risk explanation, AMA form, social work referral where appropriate.","reference":"Alfandre DJ (2009). Mayo Clin Proc 84(3):255; WHO (2014). AMA Discharge"},"D10":{"name":"Cardiac Arrest (Code Blue) Events","unit":"Count","benchmark":"Track","formula":"Total count of in-hospital cardiac arrest (IHCA) events per reporting period","numDef":"Unresponsive patients with absent or agonal respirations and no palpable central pulse requiring CPR, occurring in the hospital setting. Each distinct arrest event = 1 count.","denDef":"N/A — count per period. Rate option: (events ÷ patient-days) × 1,000 for trend analysis.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – H2 (July–December): Total Code Blue events = 14 Location: ICU step-down ×3, Medical ward ×5, Surgical ward ×4, ED ×2 Shockable rhythm (VF/pVT) ×4, Non-shockable (PEA/Asystole) ×10 Action: Review all 14 for antecedent early warning signs (MEWS >5 in 6 h before arrest? MET call made?)","interpretation":"Track trend and location. Ward-based arrests may indicate missed early warning signs. Review: Were NEWS2/MEWS scores monitored? Were MET calls activated appropriately?","reference":"AHA (2020). ACLS Guidelines; Chan PS et al (2008). NEJM 359(1):11; Utstein Style Reporting"},"D11":{"name":"Cardiac Arrest Survival (ROSC)","unit":"%","benchmark":"≥25%","formula":"(No. of IHCA patients achieving sustained ROSC ÷ Total IHCA events) × 100","numDef":"In-hospital cardiac arrest patients who achieve sustained return of spontaneous circulation (ROSC) for ≥20 minutes following CPR. Document: time of arrest, rhythm, time to first defibrillation, time of ROSC, medications given.","denDef":"Total in-hospital cardiac arrest events during the period for which resuscitation was ATTEMPTED (exclude patients with valid DNR orders).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q4: Total IHCA events (resuscitation attempted) = 12 Patients achieving sustained ROSC ≥20 min = 4 (4 ÷ 12) × 100 = 33.3% ✅ ABOVE target (≥25%) — Compliant. Monitor: of 4 ROSC patients, how many survived to discharge with good neurological outcome?","interpretation":"≥25% ROSC: Acceptable. Track further: survival to discharge and neurological outcome (CPC 1–2 = good). Time to defibrillation for shockable rhythm (target <2 min) = most modifiable predictor of ROSC.","reference":"AHA (2020). ACLS Guidelines; ILCOR (2020); Nolan JP et al (2021). Resuscitation 161:1; Utstein Style"},"E1":{"name":"Informed Consent Completeness","unit":"%","benchmark":"100%","formula":"(No. of procedures with complete consent documentation ÷ Total procedures requiring consent) × 100","numDef":"Invasive procedures/surgeries with a consent form complete with ALL elements: (1) Procedure described in plain language, (2) Risks and benefits documented, (3) Alternatives listed, (4) Patient/guardian signature, (5) Witness signature, (6) Date and time, (7) Physician signature.","denDef":"Total procedures requiring informed consent during the period (surgery, invasive diagnostics, blood transfusion, experimental treatment).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT & Endoscopy – June: Procedures requiring consent = 165 Consent forms with all required elements = 158 Incomplete (missing patient sig ×3, missing witness ×2, risks not documented ×2) = 7 (158 ÷ 165) × 100 = 95.8% ❌ BELOW 100% — Each incomplete consent = patient rights violation; retrain consenting physicians","interpretation":"100%: Required. Any missing element = legal, ethical, and accreditation risk. NEVER proceed to elective procedure without complete consent.","reference":"JCI (2021). PFR.5; TJC RI.01.03.01; Beauchamp TL & Childress JF (2019). Principles of Biomedical Ethics, 8th ed."},"E2":{"name":"Initial Nursing Assessment within 24 h","unit":"%","benchmark":"100%","formula":"(No. of patients with completed nursing assessment within 24 h ÷ Total admissions) × 100","numDef":"Newly admitted patients with a documented initial nursing assessment completed within 24 hours of admission including: chief complaint, physical assessment, vital signs, pain score, fall risk (Morse/Braden), pressure ulcer risk (Braden), nutritional screen, psychosocial, allergy documentation.","denDef":"Total patient admissions during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – July: Total admissions = 95 Initial nursing assessments within 24 h = 91 (91 ÷ 95) × 100 = 95.8% ❌ BELOW 100% — 4 missing: review after-hours admission workload, staffing levels, documentation training","interpretation":"100%: Required. Early assessment identifies falls risk, pressure injury risk, nutrition needs, pain, and medication safety concerns. Late assessments delay care planning.","reference":"JCI (2021). AOP.1; TJC PC.01.02.01"},"E3":{"name":"Nursing Care Plan Documentation","unit":"%","benchmark":"100%","formula":"(No. of patients with documented care plan ÷ Total admitted patients) × 100","numDef":"Admitted patients with an individualized nursing care plan documented within 24–48 h of admission addressing: nursing diagnoses (NANDA), patient outcomes (NOC), planned interventions (NIC), and regular evaluation documentation.","denDef":"Total admitted patients during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Surgical Ward – Q2: Total admitted patients = 310 Nursing care plans documented within 48 h = 298 (298 ÷ 310) × 100 = 96.1% ❌ BELOW 100% — 12 missing; focus on weekend admissions where care plans are often delayed","interpretation":"100%: Required. Care plans direct individualised care, prevent errors of omission, and support continuity across shifts. Assess QUALITY not just presence.","reference":"JCI (2021). AOP.1; NANDA International (2021). Nursing Diagnoses, 12th ed. Thieme"},"E4":{"name":"Discharge Summary Timeliness","unit":"%","benchmark":"≥90%","formula":"(No. of discharge summaries completed within TAT ÷ Total discharges) × 100","numDef":"Patient discharges where the discharge summary (final diagnosis, procedures, results, medications, follow-up, pending investigations) is completed within the defined TAT (e.g., 24 h for inpatients; 72 h for complex cases) and available in the medical record.","denDef":"Total patient discharges during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1: Total discharges = 3,200 Summaries completed within 24 h = 2,920 (2,920 ÷ 3,200) × 100 = 91.25% ✅ ABOVE target (≥90%) — Compliant. Identify which specialties have lowest compliance for targeted feedback.","interpretation":"≥90%: Acceptable. Delayed summaries disrupt continuity of care, affect GP management, delay insurance/coding. Incomplete summaries = leading cause of medication errors and preventable readmissions.","reference":"JCI (2021). ACC.3; TJC RC.02.04.01"},"E5":{"name":"Allergy Documentation Compliance","unit":"%","benchmark":"100%","formula":"(No. of patients with allergy status documented ÷ Total admissions) × 100","numDef":"Patients admitted with allergy/adverse drug reaction status documented in the medical record at/within admission: either NKDA (No Known Drug Allergies) OR specific allergy with: drug name, type of reaction, severity.","denDef":"Total patient admissions during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – August: Total admissions = 680 Allergy status documented at admission = 665 Not documented = 15 (665 ÷ 680) × 100 = 97.8% ❌ BELOW 100% — 15 patients at risk: retrospectively document allergy status and add alert immediately","interpretation":"100%: Required. An undocumented allergy = risk every time a medication is prescribed or dispensed. 'NKDA' is also a critical and acceptable documentation.","reference":"JCI (2021). IPSG.3; TJC NPSG 03.06.01"},"E6":{"name":"Medication Chart Completeness","unit":"%","benchmark":"100%","formula":"(No. of complete medication charts ÷ Total charts audited) × 100","numDef":"Medication charts meeting ALL completeness criteria: (1) Patient name + MRN + DOB, (2) Generic drug name, (3) Dose in metric units, (4) Route of administration, (5) Frequency/schedule, (6) Start and stop dates, (7) Prescriber name, designation, and legible signature, (8) Allergy section completed.","denDef":"Total medication charts audited during the period (monthly random sample).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Monthly Audit – September: Medication charts audited = 120 Meeting all completeness criteria = 108 Non-compliant (missing dose ×4, unsigned ×5, no allergy section ×3) = 12 (108 ÷ 120) × 100 = 90% ❌ BELOW 100% — Unsigned orders cannot legally be dispensed; immediate corrective action required","interpretation":"100%: Required. Incomplete charts = leading source of prescribing and dispensing errors. Unsigned orders cannot be dispensed legally. Report to medical staff meeting; repeated non-compliance = individual coaching.","reference":"JCI (2021). MMU Standards; ISMP (2023); TJC MM.04.01.01"},"E7":{"name":"Patient / Family Education Documentation","unit":"%","benchmark":"≥90%","formula":"(No. of patients with documented education ÷ Total eligible patients) × 100","numDef":"Patients/families with documented education on their condition, medications, treatments, and discharge plan during hospital stay. Documentation must include: topics taught, teaching method, patient/family's demonstrated understanding (teach-back or return demonstration), and date.","denDef":"Total eligible patients (all admitted patients capable of receiving education or whose families are available).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Medical Ward – Q3: Eligible patients = 240 Documented education with all components = 215 (215 ÷ 240) × 100 = 89.6% ❌ BELOW 90% target — 25 without documentation; identify barrier: language, literacy, cognitive impairment; arrange interpreter or pictorial aids","interpretation":"≥90%: Acceptable. Effective education reduces readmissions, home medication errors, and complications. Use teach-back to verify understanding. Document in patient's preferred language.","reference":"JCI (2021). PFE.2; TJC PC.02.03.01"},"F1":{"name":"Partograph Compliance","unit":"%","benchmark":"100%","formula":"(No. of labours with completed partograph ÷ Total labours monitored) × 100","numDef":"Labours with a complete, contemporaneously completed partograph found in the clinical record. 'Complete' = ALL sections filled: FHR every 30 min, contractions every 30 min, cervical dilation plotted with alert and action lines, fetal descent, liquor, moulding, maternal vital signs every 4 h, urine output, oxytocin rate, medications.","denDef":"Total labouring women managed in the LDR unit during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"LDR – October: Total labouring patients = 85 Partographs fully completed = 78 Incomplete/missing (FHR not plotted ×4, alert/action lines absent ×3) = 7 (78 ÷ 85) × 100 = 91.8% ❌ BELOW 100% — Incomplete partograph = inability to detect prolonged labour or fetal distress; retrain midwives urgently","interpretation":"100%: Required. Failure to plot = inability to recognise when the action line is crossed (requiring augmentation or expedited delivery). Missing partograph = unsafe labour monitoring.","reference":"WHO (2014). Recommendations for Augmentation of Labour; FIGO (2018). Partograph Guidelines"},"F2":{"name":"Fetal Heart Rate (FHR) Monitoring Compliance","unit":"%","benchmark":"100%","formula":"(No. of deliveries with appropriate FHR monitoring ÷ Total deliveries) × 100","numDef":"Deliveries with appropriate FHR monitoring per risk stratification: LOW RISK: Intermittent auscultation every 15 min in active labour, every 5 min in second stage. HIGH RISK (pre-eclampsia, IUGR, meconium, augmented labour): Continuous CTG, interpreted using FIGO classification.","denDef":"Total deliveries (vaginal + caesarean) during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"LDR – Q4 (October–December): Total deliveries = 220 With appropriate monitoring per risk category = 210 Non-compliant (high-risk without CTG ×5, CTG not interpreted/documented ×5) = 10 (210 ÷ 220) × 100 = 95.5% ❌ BELOW 100% — 5 high-risk patients without CTG = serious safety gap; immediate corrective action","interpretation":"100%: Required. Inadequate FHR monitoring is a leading cause of intrapartum fetal hypoxia, birth asphyxia, and neonatal brain injury. All high-risk labours require continuous CTG interpreted at regular intervals.","reference":"ACOG Practice Bulletin #106 (2021). Intrapartum FHR Monitoring; FIGO (2015). Intrapartum Monitoring Guidelines"},"F3":{"name":"Caesarean-Section Rate","unit":"%","benchmark":"Track (WHO optimal: 10–15%)","formula":"(No. of caesarean deliveries ÷ Total deliveries) × 100","numDef":"Total deliveries by caesarean section (emergency + elective combined). For benchmarking: analyse separately using Robson 10-Group Classification to identify which patient populations are driving the CS rate.","denDef":"Total deliveries (live births + stillbirths delivered ≥20 weeks) via any route during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Obstetric Dept – H1: Total deliveries = 480 Caesarean sections (elective 90 + emergency 78) = 168 (168 ÷ 480) × 100 = 35.0% Robson analysis: Group 1 (nullipara, cephalic, term, spontaneous): CS rate 12% — investigate Group 5 (previous CS): CS rate 85% — consider VBAC programme","interpretation":"WHO optimal: 10–15% for population benefit. >25–30% suggests over-medicalisation. Use Robson Classification for targeted action — Group 5 and Group 2 are primary drivers in most settings.","reference":"WHO (2015). Statement on Caesarean Section Rates; Robson MS (2001). BJOG; Betrán AP et al (2016). PLoS ONE"},"F4":{"name":"Postpartum Haemorrhage (PPH) Rate","unit":"%","benchmark":"Minimize","formula":"(No. of deliveries with PPH ÷ Total deliveries) × 100","numDef":"Deliveries complicated by PPH: blood loss ≥500 mL within 24 h of vaginal delivery (primary PPH) OR ≥1,000 mL within 24 h of caesarean section. Severe PPH = ≥1,000 mL vaginal or ≥1,500 mL CS. Document: volume, cause (4 T's: Tone/Trauma/Tissue/Thrombin), treatments.","denDef":"Total deliveries during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"LDR – Q1: Total deliveries = 300 PPH events (≥500 mL vaginal or ≥1,000 mL CS) = 24 (Severe PPH ≥1,000 mL vaginal = 6) (24 ÷ 300) × 100 = 8.0% Action: Was AMTSL applied in ALL deliveries? Was oxytocin given within 1 min of birth?","interpretation":"Global average 5–10%. Rising rate: Audit active management of 3rd stage (AMTSL) compliance — single most effective prevention. Investigate severe PPH cases individually.","reference":"WHO (2012). Recommendations for Prevention and Treatment of PPH; ACOG Practice Bulletin 183 (2017)"},"F5":{"name":"Birth Asphyxia Rate","unit":"per 1,000 live births","benchmark":"Minimize","formula":"(No. of births with APGAR <7 at 5 min OR requiring resuscitation ÷ Total live births) × 1,000","numDef":"Live born neonates with 5-minute APGAR score <7 AND/OR who required positive-pressure ventilation, cardiac compressions, or medications (epinephrine) at birth. Document: gestational age, mode of delivery, APGAR at 1 and 5 min, interventions, cord gas.","denDef":"Total live births during the reporting period. Count each live birth separately.","multiplier":"× 1,000 → expressed per 1,000 live births","source":"See data collection methods in hospital QI policy","example":"Maternity Unit – November: Total live births = 120 Neonates with APGAR <7 at 5 min or requiring PPV = 6 (6 ÷ 120) × 1,000 = 50 per 1,000 live births Action: Review all 6: Were intrapartum risk factors present? Was FHR monitored? Was competent resuscitator present?","interpretation":"Minimize. Each case requiring PPV or greater needs NRP debrief. Identify modifiable factors: meconium management, delayed CS decision, inadequate FHR monitoring, under-trained birth attendants.","reference":"WHO (2012). Born Too Soon; AAP/AHA Neonatal Resuscitation Program (NRP), 7th ed. (2015)"},"F6":{"name":"Neonatal Mortality Rate","unit":"per 1,000 live births","benchmark":"Track (national)","formula":"(No. of neonatal deaths in first 28 days ÷ Total live births) × 1,000","numDef":"Deaths occurring in liveborn infants from birth up to (not including) 28 completed days of life. Includes: Early neonatal deaths (0–6 days) and Late neonatal deaths (7–27 days). Exclude stillbirths.","denDef":"Total live births during the same period. NOT total births — stillbirths are EXCLUDED from denominator.","multiplier":"× 1,000 → expressed per 1,000 live births","source":"See data collection methods in hospital QI policy","example":"Hospital – Calendar Year: Total live births = 1,800 Neonatal deaths (Early 0–6 days: 8 + Late 7–27 days: 3) = 11 (11 ÷ 1,800) × 1,000 = 6.1 per 1,000 live births All 11 deaths reviewed in Perinatal Mortality Review Committee","interpretation":"Track and compare with national/regional benchmark. Each neonatal death = formal Perinatal Mortality Review to identify preventable factors.","reference":"WHO (2023). Neonatal Mortality Fact Sheet; UNICEF (2023). State of the World's Children"},"F7":{"name":"Breastfeeding Initiation within 1 h","unit":"%","benchmark":"≥90%","formula":"(No. of neonates with breastfeeding within 1 h ÷ Total eligible live births) × 100","numDef":"Liveborn neonates where the first breastfeed (direct breastfeeding — infant placed to breast and latches) is initiated within ONE HOUR of birth, documented by midwife/nursing staff.","denDef":"Total live births minus exclusions. Exclude: neonates born severely compromised (APGAR <4 at 5 min), mothers with absolute contraindications to breastfeeding, surgical deliveries where mother is unconscious.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Maternity Unit – December: Total eligible live births = 115 (of 120; 5 excluded) Breastfeeding initiated within 1 h = 100 (100 ÷ 115) × 100 = 87% ❌ BELOW 90% — Were all mothers informed antenatally? Were staff trained in BFHI Step 4 (skin-to-skin)?","interpretation":"≥90%: Target. Early initiation within 1 h is the single most effective action to improve exclusive breastfeeding. Skin-to-skin contact (BFHI Step 4) is the primary intervention. Review unnecessary procedures delaying skin-to-skin contact.","reference":"WHO/UNICEF (2018). Baby-Friendly Hospital Initiative (BFHI) — 10 Steps; WHO (2017). Breastfeeding Guidelines"},"F8":{"name":"NICU CLABSI Rate","unit":"per 1,000 line-days","benchmark":"<1","formula":"(No. of CLABSI events in NICU ÷ Total NICU central line-days) × 1,000","numDef":"Primary BSIs meeting NHSN CLABSI criteria in NICU patients with central line >2 calendar days. Includes: umbilical arterial/venous catheters (UAC/UVC), PICC lines, and surgical central lines.","denDef":"SUM of daily midnight census of NICU patients with any central line in situ (UAC + UVC + PICC + surgical lines).","multiplier":"× 1,000 → expressed per 1,000 line-days","source":"See data collection methods in hospital QI policy","example":"NICU – January: Total NICU central line-days = 180 CLABSI events confirmed = 1 (1 ÷ 180) × 1,000 = 5.56 per 1,000 line-days ❌ WELL ABOVE target (<1) — Full NICU CLABSI bundle audit: maximal barrier precautions, CHG skin care (if GA-appropriate), daily line necessity review","interpretation":"<1 per 1,000 NICU line-days: Target. NICU patients are critically vulnerable — premature neonates have immature immune systems and fragile skin. Any NICU CLABSI = full RCA and immediate bundle audit.","reference":"CDC/NHSN (2024). NICU Component CLABSI Definitions; Polin RA et al (2012). Pediatrics 129(4):e1085"},"F9":{"name":"Kangaroo Mother Care (KMC) Compliance","unit":"%","benchmark":"≥90%","formula":"(No. of eligible neonates receiving KMC ÷ Total eligible neonates) × 100","numDef":"Eligible preterm (<37 weeks) or low-birth-weight (<2,000 g) neonates who receive KMC (prolonged skin-to-skin contact, prone between mother's breasts, neonate in diaper and hat only) for WHO-recommended minimum of 8 hours/day, documented in nursing records.","denDef":"Total eligible preterm/LBW neonates admitted to NICU or Postnatal Ward during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"NICU – Q2: Eligible preterm/LBW neonates = 45 Receiving KMC as per protocol = 39 (39 ÷ 45) × 100 = 86.7% ❌ BELOW 90% — Review 6 not receiving KMC: on ventilator? Mother absent? Staff not initiating? Document specific barrier for each case.","interpretation":"≥90%: Target. KMC reduces neonatal mortality by 36% and severe infection by 47% (Cochrane evidence). Barriers: maternal illness, staff not initiating, cultural factors. Promote KMC initiation within 24 h of birth for clinically stable neonates.","reference":"WHO (2022). Recommendations for Care of Preterm/LBW Infant; Conde-Agudelo A et al (2016). Cochrane Rev CD002771"},"G1":{"name":"Door-to-Balloon Time ≤90 min","unit":"%","benchmark":"≥90%","formula":"(No. of STEMI patients with D2B ≤90 min ÷ Total STEMI patients with primary PCI) × 100","numDef":"STEMI patients treated with primary PCI where the time from FIRST MEDICAL CONTACT or hospital arrival (Door) to FIRST BALLOON INFLATION in the infarct-related artery is ≤90 minutes.","denDef":"Total STEMI patients treated with primary PCI during the period. Exclude patients transferred from another hospital (D2B clock definition changes for transfers).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Cath Lab – Q3: Total STEMI patients treated with primary PCI = 22 Door-to-Balloon ≤90 min = 19 Exceeding 90 min (CCU delay ×1, cath lab not ready ×1, after-hours delay ×1) = 3 (19 ÷ 22) × 100 = 86.4% ❌ BELOW 90% — Streamline cath lab activation; review 24/7 primary PCI capability","interpretation":"≥90%: International target. Sub-process targets: ED-to-ECG <10 min; ECG-to-cath-lab-activation <10 min; cath-lab-door-to-balloon <30 min.","reference":"ACC/AHA (2013). STEMI Guideline. Circulation 127(4):529; O'Gara PT et al (2013). JACC 61(4):e78; TJC AMI-8a"},"G2":{"name":"Post-PCI Complication","unit":"Count","benchmark":"0","formula":"Total count of major post-PCI adverse events within 24–48 h per period","numDef":"Major adverse cardiovascular events (MACE) and procedural complications within 24–48 h of PCI: Death, Q-wave MI, Emergency CABG, Stroke/TIA, Contrast-induced nephropathy (creatinine rise ≥25% or ≥0.5 mg/dL within 48 h), Major bleeding (TIMI major), Target vessel occlusion/no-reflow.","denDef":"N/A — count per period. Rate: (events ÷ total PCI procedures) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Cath Lab – October: Total PCI procedures = 38 Contrast nephropathy (CrCl rise >25%) = 2 No-reflow requiring GP IIb/IIIa = 1 Major bleeding (femoral haematoma needing transfusion) = 1 Total complications = 4 | Rate = (4 ÷ 38) × 100 = 10.5% Each case: formal M&M review + NCDR registry entry","interpretation":"Target: 0 for serious events (death, stroke, emergency CABG). Contrast nephropathy: pre-hydration, minimise contrast volume. Bleeding: use radial access; weight-based anticoagulation.","reference":"ACC/AHA (2021). Guideline for Coronary Artery Revascularisation; Levine GN et al (2011). Circulation 124:e574; NCDR CathPCI"},"G3":{"name":"Puncture Site Hematoma","unit":"Count","benchmark":"0","formula":"Total count of vascular access site hematomas >5 cm post-cardiac catheterisation per period","numDef":"Patients developing a clinically significant vascular access site haematoma (>5 cm diameter, or requiring additional intervention, or causing haemodynamic compromise) within 24 hours of cardiac catheterisation via femoral or radial access.","denDef":"N/A — count per period. Rate: (count ÷ total catheterisations) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Cath Lab – Q4: Total cardiac catheterisations = 185 Access site haematomas >5 cm = 4 (femoral ×3, radial after compression failure ×1) Rate = (4 ÷ 185) × 100 = 2.2% Review: Manual compression time adequate? Was weight-based anticoagulation used? Was fluoroscopy-guided femoral puncture employed?","interpretation":"Target: 0 significant haematomas. Femoral access = higher risk than radial. Primary prevention: shift to radial access. Maintain adequate manual or mechanical compression post-procedure.","reference":"ACC/AHA (2012). Expert Consensus on Vascular Closure Devices; NCDR CathPCI Registry Definitions"},"G4":{"name":"Door-to-ECG ≤10 min","unit":"%","benchmark":"≥90%","formula":"(No. of ACS/chest pain patients with ECG within 10 min ÷ Total ACS/chest pain presentations) × 100","numDef":"Patients presenting with acute chest pain or other ACS symptoms who have a 12-lead ECG obtained within 10 minutes of ED arrival/first medical contact. Document: triage arrival timestamp + ECG acquisition timestamp on ECG printout.","denDef":"Total patients presenting to ED with acute chest pain or suspected ACS during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – November: Total ACS/chest pain presentations = 55 ECGs obtained within 10 min of arrival = 48 (48 ÷ 55) × 100 = 87.3% ❌ BELOW 90% — Train triage nurses to perform 12-lead ECG WITHOUT waiting for physician; embed in triage protocol for all chest pain","interpretation":"≥90%: Target. ECG within 10 min is the critical step to activate STEMI protocol BEFORE physician assessment. ECG machine must be immediately accessible in triage area.","reference":"ACC/AHA (2014). NSTEMI/UA Guideline; TJC AMI-1; O'Gara PT et al (2013). Circulation 127(4):529"},"G5":{"name":"STEMI Door-to-Needle Time (Fibrinolysis)","unit":"%","benchmark":"≥90%","formula":"(No. of STEMI patients with fibrinolysis within 30 min ÷ Total eligible STEMI patients) × 100","numDef":"STEMI patients treated with fibrinolytic therapy (alteplase, tenecteplase, or streptokinase) where the time from hospital arrival (Door) to initiation of IV fibrinolytic infusion (Needle) is ≤30 minutes.","denDef":"Total eligible STEMI patients treated with fibrinolysis (in settings where primary PCI is not available or not achievable within 120 min).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital (no on-site primary PCI) – Q2: Eligible STEMI patients given fibrinolysis = 18 Door-to-Needle ≤30 min (pharmacy delay ×2, consent delay ×1, physician delay ×1) = 14 (14 ÷ 18) × 100 = 77.8% ❌ BELOW 90% — Pre-mix fibrinolytic; pre-printed STEMI order set; streamline contraindication screening","interpretation":"≥90%: Target. Fibrinolysis is time-critical: maximum benefit when given within 30 min of arrival. Pre-prepare drug, pre-screen contraindications, pre-print order set.","reference":"ACC/AHA (2013). STEMI Guideline. Circulation 127(4):529; TJC AMI-7a"},"G6":{"name":"Heart Failure 30-Day Readmission","unit":"%","benchmark":"Minimize (<25%)","formula":"(No. of HF patients readmitted within 30 days ÷ Total HF discharges) × 100","numDef":"Heart failure patients readmitted to any hospital within 30 calendar days of index HF discharge for any cause (all-cause readmission) or cardiovascular cause (condition-specific).","denDef":"Total HF index discharges during the period (primary diagnosis coded as HF — ICD-10 I50.x). Exclude planned readmissions.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"CCU/Cardiology – H1: Total HF index discharges = 145 Readmitted within 30 days = 32 (HF exacerbation ×18, AKI ×5, pneumonia ×4, other ×5) (32 ÷ 145) × 100 = 22.1% Action: Root causes = medication non-adherence + delayed follow-up; implement structured discharge bundle","interpretation":"Minimize. CMS benchmark <25%. Key interventions: (1) 48 h post-discharge phone call, (2) follow-up within 7 days, (3) written fluid/salt restriction instructions, (4) daily weight monitoring with action plan, (5) medication reconciliation at discharge.","reference":"CMS Hospital Readmissions Reduction Program (HRRP) — HF Measure (HF-30); AHRQ (2020)"},"H1":{"name":"Dialysis Adequacy — URR","unit":"%","benchmark":"≥65%","formula":"URR (%) = [(Pre-BUN − Post-BUN) ÷ Pre-BUN] × 100","numDef":"Pre-dialysis BUN MINUS Post-dialysis BUN. Pre-BUN: drawn before session starts. Post-BUN: drawn at session end using slow-flow technique (reduce blood pump to 50 mL/min for 15 sec, then 0 for 15 sec, draw from arterial port). Both in mg/dL.","denDef":"Pre-dialysis BUN value alone serves as the denominator (it represents the starting level of uraemic waste).Population compliance rate = (patients achieving URR ≥65% ÷ total patients dialysed) × 100","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Patient A – Single HD session: Pre-dialysis BUN (numerator input) = 72 mg/dL Post-dialysis BUN = 22 mg/dL Step 1: Numerator = 72 − 22 = 50 Step 2: Denominator = 72 Step 3: URR = (50 ÷ 72) × 100 = 69.4% ✅ 69.4% — ABOVE target (≥65%) — Adequate dialysis Unit aggregate (30 patients): 27 achieve URR ≥65% → (27÷30)×100 = 90% compliance","interpretation":"≥65%: Adequate. <65%: Under-dialysis; review session duration, blood flow rate (QB), dialyser clearance (KoA), vascular access flow. Population target: ≥90% of patients achieving URR ≥65% per month.","reference":"KDOQI (2015). Hemodialysis Adequacy Update. Am J Kidney Dis 66(5):884; Tattersall JE et al (1996). NDT 11(6):1030"},"H2":{"name":"Kt/V Achievement","unit":"Ratio ≥1.2 target","benchmark":"≥90% achieve Kt/V ≥1.2","formula":"Kt/V = −ln(R − 0.008×t) + (4 − 3.5×R) × UF/W [Daugirdas 2nd generation formula]","numDef":"Formula inputs: R = Post-BUN ÷ Pre-BUN (as a decimal fraction) t = Dialysis session duration in HOURS UF = Total ultrafiltration volume removed in LITRES W = Post-dialysis patient body weight in KILOGRAMS","denDef":"N/A — Kt/V is a dimensionless ratio, not a simple fraction. It represents cleared blood volume (K×t) relative to urea distribution volume (V).Population compliance = (patients achieving Kt/V ≥1.2 ÷ total dialysed) × 100","multiplier":"N/A — result is a dimensionless ratio","source":"See data collection methods in hospital QI policy","example":"Patient B – Single HD session: Pre-BUN = 80, Post-BUN = 24 → R = 24÷80 = 0.30 Session duration t = 4 hours Ultrafiltration UF = 2.5 litres | Post-weight W = 70 kg Step 1: −ln(R − 0.008×t) = −ln(0.30 − 0.032) = −ln(0.268) = 1.316 Step 2: (4 − 3.5×R) × UF/W = (4 − 1.05) × (2.5÷70) = 2.95 × 0.0357 = 0.105 Step 3: Kt/V = 1.316 + 0.105 = 1.42 ✅ Kt/V 1.42 — ABOVE target (≥1.2) — Adequate dialysis dose","interpretation":"Kt/V ≥1.2 per session (3×/week HD): Adequate. 1.0–1.2: Borderline; review session time, blood flow, dialyser, access. <1.0: Under-dialysis; urgent review. Unit target: ≥90% of patients achieving Kt/V ≥1.2 per month.","reference":"KDOQI (2015). Hemodialysis Adequacy Update; Daugirdas JT (1993). JASN 4(5):819; KDIGO (2019)"},"H3":{"name":"Water Quality Compliance","unit":"%","benchmark":"100%","formula":"(No. of water tests meeting AAMI/ISO standards ÷ Total water tests performed) × 100","numDef":"Dialysis water and dialysate quality tests in which ALL measured parameters are within AAMI/ISO limits: Bacteria <100 CFU/mL (product water), Endotoxins <0.25 EU/mL, Chloramines <0.1 mg/L, and other chemical contaminants within RO specifications.","denDef":"Total water quality tests performed during the period (bacteriology: monthly; endotoxin: monthly; chemical/conductivity: as per RO maintenance schedule).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – Q3: Total water quality tests (bacteria, endotoxins, chemicals) = 18 Tests meeting all AAMI/ISO standards = 17 1 test FAILED (bacterial count 120 CFU/mL — above 100 CFU/mL limit) (17 ÷ 18) × 100 = 94.4% ❌ BELOW 100% — Immediately stop dialysis from this water source; disinfect system; retest before resuming","interpretation":"100%: Required. Contaminated water causes: bacteraemia, endotoxaemia, pyrogenic reactions, haemolysis, and death. Any failed test = stop dialysis, disinfect system, retest, and assess patient notification need.","reference":"AAMI/ANSI 23500:2019; ISO 23500-1 to 23500-5; KDIGO (2019). Haemodialysis Adequacy Guideline"},"H4":{"name":"Intradialytic Hypotension (IDH)","unit":"Count / rate per sessions","benchmark":"0 / minimize","formula":"Count of HD sessions with IDH events (OR IDH rate = events ÷ total sessions × 100)","numDef":"Haemodialysis sessions with symptomatic IDH: systolic BP drop ≥20 mmHg from pre-dialysis baseline AND symptomatic (cramps, nausea, dizziness, near-syncope) OR absolute SBP <90 mmHg. Document: BP nadir, time in session, intervention required.","denDef":"Total haemodialysis sessions run during the reporting period.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit (40 patients, 3×/week) – February: Total HD sessions = 40 × 3 × 4 weeks = 480 sessions Sessions with IDH events = 32 IDH rate = (32 ÷ 480) × 100 = 6.7% Review: Are dry weights accurate? Is UF rate >13 mL/kg/h? Are antihypertensives taken before dialysis?","interpretation":"Target: 0 / minimize. IDH occurs in 20–30% of HD sessions globally. Interventions: accurate dry weight, UF rate limits (≤10–13 mL/kg/h), cool dialysate temperature (35.5°C), dietary Na+ restriction, antihypertensive timing.","reference":"KDOQI (2015). HD Adequacy Update; Flythe JE et al (2015). CJASN 10(8):1538; KDIGO (2019)"},"H5":{"name":"Vascular Access Complication","unit":"Count","benchmark":"0","formula":"Total count of vascular access complications per reporting period","numDef":"Documented complications: (1) Thrombosis (clotting of AVF/AVG/catheter), (2) Stenosis (requiring intervention), (3) Access infection (local or systemic), (4) Aneurysm/pseudoaneurysm, (5) High recirculation (>15%), (6) Access failure/abandonment. Report each type separately.","denDef":"N/A — count per period. Rate: (complications ÷ access-patient-months) for trend analysis.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – Q1: Thrombosis events (AVF/graft) = 3 Catheter-related infections = 2 Stenosis (requiring angioplasty) = 2 Total vascular access complications = 7 Target: 0 | Each complication: Review — Was poor flow recorded in sessions before event? Was monthly physical exam done?","interpretation":"Target: 0. Rising access complications = inadequate surveillance. Implement monthly physical exam (thrill, bruit, arm swelling) and monthly recirculation/flow measurement. Low blood flow (<200 mL/min for ≥3 sessions) = refer for fistulogram.","reference":"KDOQI (2006). Clinical Practice Guidelines for Vascular Access. Am J Kidney Dis 48(Suppl 1):S176"},"H6":{"name":"Accidental De-lining of Catheter","unit":"Count","benchmark":"0","formula":"Total count of accidental catheter line disconnection events during active dialysis","numDef":"Incidents where the blood circuit (arterial or venous line) accidentally disconnects from the patient's vascular access catheter during an active dialysis session, resulting in blood loss, air embolism risk, or session interruption.","denDef":"N/A — count per period. Rate: (count ÷ total sessions) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – H1: Arterial line (patient movement ×2) = 2 events Venous line (unsecured Luer-lock ×1) = 1 event Total accidental de-linings = 3 Target: 0 All 3: incident report + blood loss estimation + RCA Action: Double-check Luer-lock tightness; tape and secure lines; educate patients on movement restriction during dialysis","interpretation":"Target: 0. Each de-lining = risk of significant blood loss and air embolism. Prevention: tight Luer-lock connections (double-checked), secure all lines with tape, use clamps, patient education on movement restriction during sessions.","reference":"KDOQI (2006). Vascular Access Guidelines; Hospital Dialysis Nursing Policy"},"H7":{"name":"Dialysis Access Infection Rate","unit":"Count / per 1,000 access-days","benchmark":"0","formula":"(No. of dialysis access infections ÷ Total access-days) × 1,000 OR total count","numDef":"Confirmed infections related to the dialysis vascular access: (1) CRBSI (positive blood cultures, no other source, concordant catheter tip culture), (2) AVF/graft bacteraemia, (3) Exit-site infection (erythema + induration + discharge at catheter exit site).","denDef":"For rate: Total access-days = SUM of daily census of patients with each access type in use. For count: N/A.","multiplier":"× 1,000 → expressed per 1,000 access-days","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit – March: Total catheter access-days = 420 Confirmed catheter-related BSIs = 1 Rate = (1 ÷ 420) × 1,000 = 2.38 per 1,000 catheter-days ❌ Above benchmark — Review: Is 'Scrub the Hub' protocol followed? (70% alcohol, minimum 15-sec scrub before every access)","interpretation":"Target: 0. Infectious complications are the leading cause of hospitalisation and death in dialysis patients. Prioritise AVF creation over catheters. For catheters: strict aseptic hub care (70% alcohol, ≥15 sec scrub time) before every access.","reference":"CDC/NHSN (2024). Dialysis Event Surveillance Module; KDOQI (2006). Vascular Access Guidelines"},"H8":{"name":"Missed / Shortened Dialysis Sessions","unit":"%","benchmark":"Minimize (<5%)","formula":"(No. of missed or shortened sessions ÷ Total scheduled sessions) × 100","numDef":"Scheduled HD sessions that were: (A) Completely MISSED (patient did not attend or session cancelled), OR (B) SHORTENED by >10% of prescribed time without a documented clinical justification.","denDef":"Total scheduled haemodialysis sessions for all enrolled patients during the period (standard: 3 sessions/week per patient).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Dialysis Unit (40 patients) – April: Total scheduled sessions = 40 × 3 × 4 = 480 sessions Missed sessions (patient non-attendance ×8, unit cancelled ×4) = 12 Shortened sessions (>10% below prescribed time) = 8 Total missed/shortened = 20 (20 ÷ 480) × 100 = 4.2% ✅ BELOW 5% target — Compliant. Contact missed patients; investigate cancelled sessions.","interpretation":"Minimize (<5%). Missed dialysis = direct reduction in Kt/V and URR → uraemia, hyperkalaemia, fluid overload. Investigate reasons: transport barriers, work conflicts, symptoms. Provide patient education on consequences.","reference":"KDOQI (2015). Hemodialysis Adequacy Update; Saran R et al (2003). NDT 18(5):1001"},"I1":{"name":"On-Time First-Case Start","unit":"%","benchmark":"≥90%","formula":"(No. of first cases starting on time ÷ Total first cases scheduled) × 100","numDef":"Scheduled first surgical cases of the operating day where the surgical incision (knife to skin) occurs AT OR BEFORE the scheduled incision time as recorded in the OT booking system.","denDef":"Total first cases scheduled during the reporting period (one first case per OT room per operating day).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – May: Total first cases scheduled = 80 Incision at/before scheduled time = 66 Late (patient not ready ×6, consent issue ×3, surgeon late ×3, equipment ×2) = 14 (66 ÷ 80) × 100 = 82.5% ❌ BELOW 90% — Address: pre-op call protocol, consent completion day before, patient transport 90 min before first case","interpretation":"≥90%: Target. Late first case = cascade delay for ALL subsequent cases in that OT room. Implement: pre-op checklist completed day before, anaesthesia assessment prior day, OT set-up team 60 min before.","reference":"AORN (2022). Perioperative Standards and Recommended Practices; NHS England (2021). Theatre Efficiency Standards"},"I2":{"name":"Elective Case Cancellation Rate","unit":"%","benchmark":"<5%","formula":"(No. of elective cases cancelled on day of surgery ÷ Total scheduled elective cases) × 100","numDef":"Elective (non-emergency) surgical procedures cancelled on the actual day of surgery after the patient has arrived in hospital or the OT area. Cancellations before day of surgery are excluded. Categorise by reason.","denDef":"Total elective surgical cases scheduled during the period (includes both cancelled and performed cases).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT Dept – Q2: Total scheduled elective cases = 620 Day-of-surgery cancellations = 28 Top reasons: Medically unfit on day ×10, Insufficient OT time ×7, Patient refused ×5, No ICU bed ×4, Equipment ×2 (28 ÷ 620) × 100 = 4.5% ✅ BELOW 5% target — Compliant. Target the 10 'unfit on day' cancellations by strengthening pre-assessment clinic.","interpretation":"<5%: Acceptable. >5%: Review preadmission assessment and OT scheduling. 'Medically unfit on day' = most preventable cause — strengthen pre-operative assessment clinic.","reference":"AORN (2022). Perioperative Standards; NHS England (2021). Elective Recovery Plan"},"I3":{"name":"Instrument / Sponge Count Compliance","unit":"%","benchmark":"100%","formula":"(No. of procedures with complete count at all required timepoints ÷ Total surgical procedures) × 100","numDef":"Surgical procedures where ALL three mandatory count timepoints are completed AND fully documented: (1) Opening count (before start), (2) Interim count (before wound closure begins), (3) Closing count (after wound closure, before patient leaves table). Both scrub nurse + circulating nurse must confirm and sign.","denDef":"Total surgical procedures performed during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"OT – June: Total surgical procedures = 240 All 3 count phases fully documented = 235 Non-compliant (closing count not signed ×3, interim count missing ×2) = 5 (235 ÷ 240) × 100 = 97.9% ❌ BELOW 100% — Any undocumented count = risk of retained surgical item (RSI) — a sentinel event","interpretation":"100%: Mandatory. Retained surgical items cause patient harm requiring reoperation and are a TJC Sentinel Event. X-ray must be taken before OT closure if count discrepancy. NEVER close the wound until all counts confirmed correct.","reference":"AORN (2022). Guideline for Prevention of Retained Surgical Items; WHO (2009). Surgical Safety Checklist"},"I4":{"name":"Specimen Labeling Error Rate","unit":"Count","benchmark":"0","formula":"Total count of surgical specimen labeling errors per reporting period","numDef":"Surgical specimen labeling errors: (1) Unlabeled specimens, (2) Mislabeled specimens (wrong patient name, wrong site/laterality, wrong specimen type), (3) Specimens lost in transit between OT and pathology, (4) Inappropriate fixative or container used. Each error = 1 event.","denDef":"N/A — count per period. Rate: (errors ÷ total specimens collected) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3: Total specimens sent to pathology = 580 Labeling errors (wrong patient name ×1, site not labeled ×1, unlabeled ×1) = 3 Rate = (3 ÷ 580) × 100 = 0.52% | Target: 0 ❌ All 3: patient ID re-verification, repeat biopsy if needed, incident report, corrective action","interpretation":"Target: 0. Mislabeled specimens can lead to wrong diagnosis, wrong patient treatment, and wrong surgical decisions. Label specimens in the presence of the specimen. Two-identifier labeling required: patient name + MRN.","reference":"CAP (2021). Laboratory Accreditation Standards; TJC NPSG 01.01.01"},"I5":{"name":"Anaesthesia-Related Complication Rate","unit":"Count","benchmark":"0","formula":"Total count of anaesthesia-related adverse events per reporting period","numDef":"Adverse events directly attributable to anaesthesia: (1) Anaphylaxis/allergic reaction, (2) Pulmonary aspiration of gastric contents, (3) Awareness under general anaesthesia (AUGA), (4) Anaesthesia-related cardiac arrest, (5) Severe laryngospasm/bronchospasm requiring unplanned intubation, (6) Accidental airway loss, (7) Anaesthetic overdose.","denDef":"N/A — count per period. Rate: (events ÷ total anaesthetic procedures) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Anaesthesia Dept – H1: Total anaesthetic procedures = 1,200 Anaesthesia-related adverse events: Anaphylaxis to rocuronium = 1 Post-extubation laryngospasm = 1 Total events = 2 | Rate = (2 ÷ 1,200) × 100 = 0.17% Both events: formal debrief + M&M committee review","interpretation":"Target: 0 for serious/life-threatening events. BIS monitoring reduces anaesthesia awareness. Pre-operative fasting prevents aspiration. All events: report to Anaesthesia Department quality committee.","reference":"ASA (2019). Standards for Basic Anesthetic Monitoring; APSF; Merry AF et al (2010). Anaesthesia 65(10):1021"},"I6":{"name":"PACU Recovery Delay Rate","unit":"%","benchmark":"Minimize","formula":"(No. of patients with non-clinical delayed PACU discharge ÷ Total PACU admissions) × 100","numDef":"Post-operative patients whose discharge from PACU is delayed beyond the institution-defined threshold (commonly >2 hours from PACU arrival) for NON-CLINICAL reasons. Exclude clinically justified delays: active haemorrhage, unstable vital signs, uncontrolled pain, persistent PONV.","denDef":"Total PACU admissions during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"PACU – July: Total PACU admissions = 155 Patients with non-clinical delay >2 h = 12 (No ward bed ×6, pain uncontrolled ×3, PONV persistent ×2, awaiting surgeon ×1) (12 ÷ 155) × 100 = 7.7% Clinical delays (pain/PONV): 5 = anaesthesia/nursing quality issue | Non-clinical (no bed): 6 = bed management/system issue","interpretation":"Minimize. PACU delays block OT flow and reduce throughput. Stratify by reason: clinical (acceptable) vs non-clinical (system failure). Address 'no ward bed' delays with proactive bed management during the surgical day.","reference":"ASPAN (2021). Evidence-Based PACU Practice Guideline; Aldrete JA (1995). Modified Aldrete Recovery Score"},"J1":{"name":"Post-Procedure Complication","unit":"Count","benchmark":"0","formula":"Total count of post-endoscopy complications per reporting period","numDef":"Clinically significant complications during or within 30 days of endoscopic procedure: (1) Perforation, (2) Significant bleeding (transfusion, hospitalisation, or intervention), (3) Post-polypectomy syndrome, (4) Aspiration pneumonia, (5) Bacteraemia/sepsis, (6) Cardiorespiratory event requiring unplanned intervention. Exclude minor self-resolving symptoms.","denDef":"N/A — count per period. Rate: (complications ÷ total endoscopy procedures) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – Q2: Total endoscopy procedures = 385 Polypectomy haemorrhage (endoscopic haemostasis) = 2 Aspiration during EGD (mild) = 1 Perforation = 0 Total significant complications = 3 | Rate = (3 ÷ 385) × 100 = 0.78% Each case: complication log + M&M review","interpretation":"Target: 0 for serious (perforation, death). Perforation = immediate senior GI/surgical review; consider endoscopic closure vs surgery. Each complication reviewed at department M&M meeting.","reference":"ASGE (2015). Quality Indicators for GI Endoscopic Procedures. Gastrointest Endosc 81(1):17; BSG (2019)"},"J2":{"name":"Endoscope Reprocessing Compliance","unit":"%","benchmark":"100%","formula":"(No. of endoscopes reprocessed per full protocol ÷ Total endoscopes reprocessed) × 100","numDef":"Endoscopes processed following ALL mandatory steps: (1) Point-of-use pre-cleaning immediately after procedure, (2) Leak testing, (3) Manual cleaning with enzymatic detergent (all channels brushed), (4) Rinse, (5) HLD in approved automated endoscope reprocessor (AER) with verified chemical concentration, (6) Rinse with purified water, (7) Alcohol flush, forced-air dry, and dry cabinet storage. ALL steps = 1 compliant cycle.","denDef":"Total endoscopes reprocessed during the reporting period (each reprocessing cycle = 1 count).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – August: Total endoscope reprocessing cycles = 140 Cycles with full protocol compliance = 136 Non-compliant (enzymatic soak time short ×2, AER chemical concentration not verified ×2) = 4 (136 ÷ 140) × 100 = 97.1% ❌ BELOW 100% — 4 potentially inadequately decontaminated scopes; assess patient notification; retrain reprocessing staff immediately","interpretation":"100%: Mandatory. Inadequate reprocessing has caused patient-to-patient transmission of hepatitis B, C, CROs, and Mycobacteria. Any deviation = potential exposure incident requiring traceability audit and patient notification assessment.","reference":"SGNA (2022). Standards for Infection Prevention; ESGE/ESGENA (2018). Endoscope Reprocessing Guideline; AORN (2022)"},"J3":{"name":"Perforation Rate","unit":"%","benchmark":"<0.1%","formula":"(No. of iatrogenic perforations ÷ Total endoscopic procedures) × 100","numDef":"Iatrogenic (procedure-caused) bowel, oesophageal, or gastric perforations occurring DURING or within 24 hours of an endoscopic procedure (diagnostic or therapeutic). Includes instrument-related, pneumatic dilatation-related, EMR/ESD-related perforations.","denDef":"Total endoscopic procedures during the period. Report rate by procedure type for meaningful benchmarking (diagnostic colonoscopy vs therapeutic EMR/ESD).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – H1: Total endoscopic procedures = 820 Confirmed iatrogenic perforations = 1 (sigmoid perforation during colonoscopy in diverticular disease patient) (1 ÷ 820) × 100 = 0.12% Target: <0.1% (borderline) — RCA: Was diverticulosis known? Was excess force used?","interpretation":"<0.1%: Target for diagnostic procedures. Higher for therapeutic EMR/ESD (up to 0.5%). Any perforation = surgical emergency. Recognise early (abdominal pain, tachycardia, free air). Early endoscopic closure reduces need for surgery.","reference":"ASGE (2015). Quality Indicators for GI Endoscopy; Pohl H et al (2012). Gastrointest Endosc 75(6):1218"},"J4":{"name":"Post-Polypectomy Bleeding","unit":"Count","benchmark":"0","formula":"Total count of significant post-polypectomy bleeding events per reporting period","numDef":"Clinically significant bleeding during or within 30 days of colonoscopic polypectomy requiring: blood transfusion (≥2 units pRBC), hospital admission, repeat endoscopy for haemostasis, interventional radiology, or surgery. Exclude minor oozing controlled immediately at polypectomy with no further consequences.","denDef":"N/A — count per period. Rate: (events ÷ total polypectomies) × 100.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Endoscopy Unit – Q3: Total polypectomy procedures = 185 Significant post-polypectomy bleeding (antiplatelet therapy not stopped: aspirin ×2, clopidogrel ×1) = 3 Rate = (3 ÷ 185) × 100 = 1.6% | Target: 0 Action: Review antiplatelet bridging protocol; screen all patients for antiplatelet/anticoagulant use before scheduling","interpretation":"Target: 0 significant events. Risk factors: polyp >20 mm, right colon, hot snare, anticoagulant use, diabetes, renal failure. Prevention: cold snare for <10 mm, clip prophylaxis for large polyps, periprocedural anticoagulant management protocol.","reference":"ASGE (2015). Quality Indicators; ESGE (2022). Post-Polypectomy Bleeding Guideline"},"K1":{"name":"Triage-to-Consult (Door-to-Doctor) Time","unit":"% per triage category","benchmark":"≥90%","formula":"(No. of ED patients seen within TAT per triage category ÷ Total ED presentations) × 100","numDef":"ED patients assessed by a physician within the TAT for their triage priority: P1 (Resuscitation): ≤0 min (immediate); P2 (Emergent): ≤30 min; P3 (Urgent): ≤60 min; P4 (Less urgent): ≤120 min; P5 (Non-urgent): ≤240 min. Report each category separately.","denDef":"Total ED presentations during the period. Stratify by triage category for meaningful compliance reporting.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – September: Total registered patients = 1,400 P1 (seen ≤10 min): 45/50 = 90% ✅ P2 (seen ≤30 min): 180/210 = 85.7% ❌ P3 (seen ≤60 min): 680/820 = 82.9% ❌ Overall: (45+180+680)÷(50+210+820) × 100 = 905÷1,080 = 83.8% P2 = 85.7% — BELOW 90% — Review ED physician coverage during peak hours","interpretation":"≥90% within TAT per triage level: Acceptable. Low compliance = insufficient physician staffing, poor triage accuracy, or inadequate care flow. Implement: nurse-initiated treatment protocols, physician-in-triage during peak hours.","reference":"ACEP (2019). Emergency Severity Index (ESI); Canadian Triage and Acuity Scale (CTAS) 2020; WHO (2015). Emergency Care Guidelines"},"K2":{"name":"Left Without Being Seen (LWBS) Rate","unit":"%","benchmark":"<2%","formula":"(No. of registered patients leaving without physician assessment ÷ Total registered ED presentations) × 100","numDef":"Registered ED patients who left the department WITHOUT being assessed/examined by a physician, after completing triage registration. Includes patients who walked out while waiting or left against advice before physician contact.","denDef":"Total registered ED presentations during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – October: Total registered patients = 1,520 Patients who left without physician assessment = 24 (24 ÷ 1,520) × 100 = 1.58% ✅ BELOW 2% target — Compliant. Investigate LWBS reasons: long wait, perceived non-urgent condition, time of day pattern.","interpretation":"<2%: Acceptable. >2%: Excess wait time is the primary driver. Interventions: physician-in-triage, fast-track stream for low-acuity patients, better waiting room communication of expected wait times.","reference":"ACEP (2019). Emergency Department Guidelines; Hobbs D et al (2000). Ann Emerg Med 35(4):328"},"K3":{"name":"ED Re-attendance within 72 h","unit":"%","benchmark":"<5%","formula":"(No. of unplanned ED re-attendances within 72 h ÷ Total ED discharges) × 100","numDef":"Patients who return to the same ED within 72 hours of prior ED DISCHARGE for the SAME or RELATED complaint (unplanned). Exclude: planned return visits organised by ED physician, or entirely unrelated new complaints.","denDef":"Total ED discharges (patients sent home) during the reporting period. Exclude admitted patients.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"ED – Q4: Total ED discharges (non-admitted) = 6,200 Unplanned re-attendances within 72 h for same complaint = 155 (155 ÷ 6,200) × 100 = 2.5% Top diagnoses at re-attendance: Abdominal pain 25%, Chest pain 18%, Head injury 15% Action: Review initial discharge decisions and discharge instructions for these diagnoses","interpretation":"Target: <5%. High re-attendance = premature discharge, inadequate discharge instructions, or under-treatment. Implement structured discharge instructions with safety-net advice ('when to return').","reference":"ACEP (2019); NHS England. Unplanned Re-attendance Standard"},"K4":{"name":"Door-to-Needle for Stroke Thrombolysis","unit":"%","benchmark":"≥80%","formula":"(No. of stroke patients receiving tPA within 60 min ÷ Total eligible strokes treated) × 100","numDef":"Eligible ischaemic stroke patients who received IV alteplase (tPA) within 60 minutes of hospital arrival (Door-to-Needle ≤60 min). Eligibility: ischaemic stroke confirmed on CT, onset <4.5 h, no contraindications, NIHSS documented.","denDef":"Total eligible ischaemic stroke patients treated with IV thrombolysis during the period (excludes intracerebral haemorrhage, contraindications, onset >4.5 h, patient/family refusal).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – H1: Eligible ischaemic stroke patients thrombolysed = 15 Door-to-Needle ≤60 min = 11 D2N >60 min (CT delay ×2, neurology delay ×1, consent ×1) = 4 (11 ÷ 15) × 100 = 73.3% ❌ BELOW 80% — Implement Code Stroke protocol; CT reserved for stroke activations; tPA pre-drawn in stroke bay","interpretation":"≥80%: Target (aim for DTN ≤45 min ideally). Every 15 min reduction in DTN prevents ~1 in 100 patients from serious disability. Implement: Code Stroke from triage, direct-to-CT, tPA bedside preparation, CT read within 10 min.","reference":"AHA/ASA (2019). Stroke Guidelines. Stroke 50(12):e344; Fonarow GC et al (2014). JAMA 311(14):1433; ESO (2021)"},"L1":{"name":"Mandatory Training Compliance","unit":"%","benchmark":"≥90%","formula":"(No. of staff with all mandatory training completed ÷ Total staff required) × 100","numDef":"Staff who have completed ALL required mandatory training modules by their due date. Mandatory modules typically include: Fire safety, Hand hygiene, Infection control, Manual handling, BLS, Information governance, Safeguarding, Medication safety. ALL modules complete = 1 compliant staff member.","denDef":"Total staff required to complete mandatory training during the period (all contracted staff per department, stratified by role where applicable).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Annual Report: Total staff required to complete mandatory training = 850 Staff with ALL modules completed = 790 (790 ÷ 850) × 100 = 92.9% ✅ ABOVE 90% target — Compliant. Identify 60 non-compliant staff for immediate follow-up.","interpretation":"≥90%: Acceptable. <90%: Immediate management escalation. Non-compliant clinical staff should not be deployed to patient care until training is complete (per hospital policy).","reference":"JCI (2021). SQE.3; TJC HR.01.05.01; Hospital Training & Competency Policy"},"L2":{"name":"BLS / ACLS Certification Rate","unit":"%","benchmark":"≥90%","formula":"(No. of staff with current valid certification ÷ Total staff required to hold certification) × 100","numDef":"Designated clinical staff who hold a CURRENT, VALID BLS/ACLS/PALS certification issued by an accredited provider (AHA, ERC, or equivalent) with expiry date not past at time of audit.","denDef":"Total staff in designated roles required to hold BLS/ACLS/PALS per hospital policy (clinical nursing — BLS; ICU/CCU/ED/OT nursing — ACLS; paediatric wards — PALS; all physicians — BLS/ACLS).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3 Audit: Total nursing staff requiring BLS = 450 | With valid BLS = 428 → BLS Rate = (428÷450)×100 = 95.1% ✅ Total staff requiring ACLS = 120 | With valid ACLS = 108 → ACLS Rate = (108÷120)×100 = 90.0% ✅ Both ≥90% — Compliant. Schedule renewal for 22 BLS-expired and 12 ACLS-expired staff.","interpretation":"≥90%: Acceptable. <90%: Identify expired staff by ward; prioritise ICU/ED/CCU for immediate renewal. Staff with expired certification in high-acuity areas must not work unsupervised until recertified.","reference":"AHA (2020). BLS/ACLS Provider Guidelines; JCI (2021). SQE Standards; Hospital Credentialing Policy"},"L3":{"name":"Induction Completion within 30 Days","unit":"%","benchmark":"100%","formula":"(No. of new staff completing induction within 30 days ÷ Total new staff) × 100","numDef":"Newly joined employees who completed the FULL structured induction/orientation program within 30 calendar days of their first day. Induction must include: hospital orientation, key policies, infection control, fire safety, patient safety, IT/EMR access, and role-specific competency sign-off.","denDef":"Total new employees who joined the hospital during the reporting period (all staff grades: permanent, contract, agency).","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – November: New staff joined = 35 Completed full induction within 30 days = 32 Not completed (sick leave ×1, late IT access ×2) = 3 (32 ÷ 35) × 100 = 91.4% ❌ BELOW 100% — Ensure IT access granted on Day 1; clinical staff must complete induction BEFORE patient-facing duties begin","interpretation":"100%: Target. Incomplete induction = staff unaware of essential safety policies. Clinical staff without induction must not be deployed to patient care. Address IT access delays and scheduling conflicts proactively.","reference":"JCI (2021). SQE.7; TJC HR.01.04.01; Hospital HR Onboarding Policy"},"L4":{"name":"Accidental Catheter Dislodgement","unit":"Count","benchmark":"0","formula":"Total count of accidental catheter dislodgements per reporting period","numDef":"Accidental dislodgements (partial or complete displacement from intended position) of any indwelling catheter or tube during patient care: urinary catheter, nasogastric tube, IV/arterial line, chest drain, surgical drain, epidural catheter. Each event = 1 count.","denDef":"N/A — count per period. Rate: (dislodgements ÷ patient-days with device) × 1,000.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – December: Urinary catheter dislodgements (turning ×2, self-removal ×1) = 3 NG tube dislodgements (patient transfer ×2) = 2 IV cannula dislodgements (ambulation, poor securement ×4) = 4 Total accidental dislodgements = 9 | Target: 0 Each event: incident report + RCA + corrective action plan","interpretation":"Target: 0. Repeated dislodgements in same ward = systemic problem. Review: Are securing devices used? Are patients educated on catheter management? Are staff using correct handling technique during repositioning?","reference":"JCI (2021). QPS Standards; NDNQI (2023); Hospital Nursing Care Standards"},"L5":{"name":"Accidental Removal of Catheter","unit":"Count","benchmark":"0","formula":"Total count of accidental catheter removals per reporting period","numDef":"Accidental FULL removal of an indwelling catheter by: (1) Patient action (self-removal, especially confused/agitated patients), (2) Family/visitor action, (3) Staff error during care activities. Distinguished from dislodgement (L4) which is partial displacement.","denDef":"N/A — count per period. Rate: (removals ÷ patient-days with device) × 1,000.","multiplier":"N/A — this is a count","source":"See data collection methods in hospital QI policy","example":"Hospital – Q1: Urinary catheter removals (by confused patients) = 6 CVC removed by family member = 1 NG tube removed by patient = 4 Total accidental catheter removals = 11 | Target: 0 CVC removed by family = serious; patient/family education was inadequate Actions: Agitation management review; daily device necessity; patient/family education; appropriate restraint discussion","interpretation":"Target: 0. Frequent self-removal by confused patients: Review sedation/analgesia appropriateness, device necessity, and patient/family education. CVC self-removal by family member = failure of patient/family education.","reference":"JCI (2021). QPS Standards; NDNQI (2023); Hospital Nursing Care & Device Management Policy"},"M1":{"name":"Patient Satisfaction Score","unit":"% or mean score","benchmark":"≥85%","formula":"Method 1 (Top-box): (No. rating ≥4/5 or 'Very Good/Excellent' ÷ Total surveyed) × 100Method 2 (Mean score): Sum of all scores ÷ Total respondents","numDef":"Method 1: Patients who rate overall hospital experience as 'Excellent' (5/5) or 'Very Good' (4/5).Method 2: Arithmetic sum of all individual overall satisfaction scores divided by number of responses.","denDef":"Method 1: Total completed satisfaction surveys received. Method 2: Total completed surveys.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – January: Surveys distributed = 200 | Surveys returned = 145 Method 1 (Top-box): Patients rating 4–5 out of 5 = 124 (124 ÷ 145) × 100 = 85.5% ✅ AT/ABOVE target (≥85%) Method 2 (Mean): Sum of all scores = 610 ÷ 145 = 4.21/5 Lowest-scoring domain: Staff responsiveness (3.8/5) — target for improvement","interpretation":"≥85%: Acceptable. <85%: Analyse by HCAHPS domain to identify specific improvement areas. Low nursing responsiveness: review call bell response time. Low cleanliness: audit housekeeping. Share monthly results with all clinical teams.","reference":"HCAHPS (2024). Hospital Consumer Assessment of Healthcare Providers; JCI (2021). PFR Standards; Press Ganey Associates (2023)"},"M2":{"name":"Complaint Resolution within TAT","unit":"%","benchmark":"≥90%","formula":"(No. of complaints resolved within TAT ÷ Total complaints received) × 100","numDef":"Formally logged patient/family complaints that were: (1) Acknowledged within 24 working hours, AND (2) Fully investigated with resolution response provided within the defined TAT (e.g., 5 working days for verbal, 30 working days for written/formal), AND (3) Outcome documented in the complaint management system.","denDef":"Total formal patient/family complaints received and registered during the reporting period.","multiplier":"× 100 → expressed as %","source":"See data collection methods in hospital QI policy","example":"Hospital – Q3: Total formal complaints received = 35 Verbal complaints resolved within 5 days: 18/20 = 90% Written complaints resolved within 30 days: 13/15 = 86.7% Overall: (18+13)÷(20+15) = 31÷35 × 100 = 88.6% ❌ BELOW 90% — Identify 4 unresolved; escalate to Patient Relations manager; notify complainant of delay","interpretation":"≥90%: Acceptable. <90%: Review complaint caseload capacity and investigation process. Every complaint = patient safety learning opportunity. Categorise by type (clinical, communication, attitude, environment) and report to department heads.","reference":"JCI (2021). PFR.3 — Complaint and Grievance Management; TJC RI.01.07.01; Hospital Patient Relations Policy"}};
 
 window.HQI_SECTIONS = {A:"Infection Prevention & Control",B:"Medication Safety",C:"Patient Safety (IPSG)",D:"Clinical Outcomes & Mortality",E:"Documentation & Process",F:"Maternal & Neonatal (LDR / NICU)",G:"Cardiac / Cath Lab / CCU",H:"Dialysis",I:"Surgery / OT / Anaesthesia",J:"Endoscopy",K:"Emergency",L:"Staff / Device Safety / Training",M:"Patient Experience"};
 
@@ -556,33 +644,33 @@ window.QI_CORRECTIONS = {
     "referenceUrl": "https://p4qm.org/measures/0141"
   },
   "hospital-acquired pressure ulcer (hapu)": {
-    "canonicalName": "Hospital-Acquired Pressure Injury (HAPI) Prevalence",
-    "formula": "pct",
-    "numLabel": "Patients with a hospital-acquired Stage 2+ pressure injury",
-    "denLabel": "Patients surveyed",
-    "numeratorDef": "Number of patients on the unit/facility, on the survey day, who have one or more hospital-acquired (nosocomial) pressure injuries of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of injuries.",
-    "denominatorDef": "Total number of eligible patients present and assessed (via skin/pressure-injury assessment) on the unit during the one-day prevalence survey. Multiply numerator/denominator by 100.",
-    "unit": "% (percent of patients surveyed)",
-    "benchmarkValue": 3.6,
-    "benchmark": "≤ 3.6%",
-    "benchmarkNote": "<= ~3.6% hospital-acquired prevalence (NDNQI 2010 national reference; lower is better; aspirational target 0). Note: more recent NDNQI/IPUP national acute-care HAPI prevalence is lower, ~2.5-3.0%.",
+    "canonicalName": "Hospital-Acquired Pressure Ulcer (HAPU) Incidence Rate",
+    "formula": "rate1000",
+    "numLabel": "Patients who developed ≥ 1 HAPU (Stage 2+)",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Number of patients who developed one or more NEW hospital-acquired (nosocomial) pressure ulcers of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging during the reporting period. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of ulcers.",
+    "denominatorDef": "Total number of patient-days for the same unit and period, obtained by summing the daily inpatient census over the month. Rate = (patients who developed ≥ 1 HAPU ÷ total patient-days) × 1,000.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 0.75,
+    "benchmark": "≤ 0.75 per 1000 patient-days",
+    "benchmarkNote": "HAPU incidence rate = (patients with ≥ 1 new hospital-acquired pressure ulcer ÷ patient-days) × 1,000 — the standard for ongoing internal clinical quality tracking. < 0.75 per 1000 patient-days is the commonly used NDNQI-derived benchmark (lower is better; aspirational target 0). Note: the one-day prevalence survey (~≤ 3.6% of patients surveyed, NDNQI) is a DIFFERENT metric — do not mix the two.",
     "goalDirection": "lower_is_better",
-    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Survey; NQF #0201 Pressure Ulcer Prevalence, Hospital-Acquired (steward: The Joint Commission); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Incidence; AHRQ Preventing Pressure Ulcers in Hospitals Toolkit (incidence & prevalence measurement); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
     "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
   },
   "bed sore (pressure injury)": {
-    "canonicalName": "Hospital-Acquired Pressure Injury (HAPI) Prevalence",
-    "formula": "pct",
-    "numLabel": "Patients with a hospital-acquired Stage 2+ pressure injury",
-    "denLabel": "Patients surveyed",
-    "numeratorDef": "Number of patients on the unit/facility, on the survey day, who have one or more hospital-acquired (nosocomial) pressure injuries of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of injuries.",
-    "denominatorDef": "Total number of eligible patients present and assessed (via skin/pressure-injury assessment) on the unit during the one-day prevalence survey. Multiply numerator/denominator by 100.",
-    "unit": "% (percent of patients surveyed)",
-    "benchmarkValue": 3.6,
-    "benchmark": "≤ 3.6%",
-    "benchmarkNote": "<= ~3.6% hospital-acquired prevalence (NDNQI 2010 national reference; lower is better; aspirational target 0). Note: more recent NDNQI/IPUP national acute-care HAPI prevalence is lower, ~2.5-3.0%.",
+    "canonicalName": "Hospital-Acquired Pressure Ulcer (HAPU) Incidence Rate",
+    "formula": "rate1000",
+    "numLabel": "Patients who developed ≥ 1 HAPU (Stage 2+)",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Number of patients who developed one or more NEW hospital-acquired (nosocomial) pressure ulcers of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging during the reporting period. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of ulcers.",
+    "denominatorDef": "Total number of patient-days for the same unit and period, obtained by summing the daily inpatient census over the month. Rate = (patients who developed ≥ 1 HAPU ÷ total patient-days) × 1,000.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 0.75,
+    "benchmark": "≤ 0.75 per 1000 patient-days",
+    "benchmarkNote": "HAPU incidence rate = (patients with ≥ 1 new hospital-acquired pressure ulcer ÷ patient-days) × 1,000 — the standard for ongoing internal clinical quality tracking. < 0.75 per 1000 patient-days is the commonly used NDNQI-derived benchmark (lower is better; aspirational target 0). Note: the one-day prevalence survey (~≤ 3.6% of patients surveyed, NDNQI) is a DIFFERENT metric — do not mix the two.",
     "goalDirection": "lower_is_better",
-    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Survey; NQF #0201 Pressure Ulcer Prevalence, Hospital-Acquired (steward: The Joint Commission); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Incidence; AHRQ Preventing Pressure Ulcers in Hospitals Toolkit (incidence & prevalence measurement); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
     "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
   },
   "surgical site infection (ssi)": {
@@ -1242,6 +1330,11 @@ window.QI_CORRECTIONS = {
 ['average length of stay (emergency department)', 'average length of stay - emergency department', 'average length of stay in the emergency department', 'average length of stay at emergency department', 'average length of stay (ed)', 'average ed length of stay', 'ed average length of stay', 'emergency department average length of stay', 'average length of stay emergency department', 'ed alos', 'alos (ed)'].forEach(function (k) {
   window.QI_CORRECTIONS[k] = window.QI_CORRECTIONS['average length of stay at the emergency department'];
 });
+// Medication error rename (2026-07): indicators renamed "Medication Administration Error"
+// keep resolving to the same correction as the legacy "Medication Error" name.
+['medication administration error', 'medication administration error rate'].forEach(function (k) {
+  window.QI_CORRECTIONS[k] = window.QI_CORRECTIONS['medication error'];
+});
 window.QI_CORRECTIONS_BY_DEFID = {
   "cauti": {
     "canonicalName": "Catheter-Associated Urinary Tract Infection (CAUTI) Rate",
@@ -1349,18 +1442,18 @@ window.QI_CORRECTIONS_BY_DEFID = {
     "referenceUrl": "https://p4qm.org/measures/0141"
   },
   "hapu": {
-    "canonicalName": "Hospital-Acquired Pressure Injury (HAPI) Prevalence",
-    "formula": "pct",
-    "numLabel": "Patients with a hospital-acquired Stage 2+ pressure injury",
-    "denLabel": "Patients surveyed",
-    "numeratorDef": "Number of patients on the unit/facility, on the survey day, who have one or more hospital-acquired (nosocomial) pressure injuries of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of injuries.",
-    "denominatorDef": "Total number of eligible patients present and assessed (via skin/pressure-injury assessment) on the unit during the one-day prevalence survey. Multiply numerator/denominator by 100.",
-    "unit": "% (percent of patients surveyed)",
-    "benchmarkValue": 3.6,
-    "benchmark": "≤ 3.6%",
-    "benchmarkNote": "<= ~3.6% hospital-acquired prevalence (NDNQI 2010 national reference; lower is better; aspirational target 0). Note: more recent NDNQI/IPUP national acute-care HAPI prevalence is lower, ~2.5-3.0%.",
+    "canonicalName": "Hospital-Acquired Pressure Ulcer (HAPU) Incidence Rate",
+    "formula": "rate1000",
+    "numLabel": "Patients who developed ≥ 1 HAPU (Stage 2+)",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Number of patients who developed one or more NEW hospital-acquired (nosocomial) pressure ulcers of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging during the reporting period. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of ulcers.",
+    "denominatorDef": "Total number of patient-days for the same unit and period, obtained by summing the daily inpatient census over the month. Rate = (patients who developed ≥ 1 HAPU ÷ total patient-days) × 1,000.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 0.75,
+    "benchmark": "≤ 0.75 per 1000 patient-days",
+    "benchmarkNote": "HAPU incidence rate = (patients with ≥ 1 new hospital-acquired pressure ulcer ÷ patient-days) × 1,000 — the standard for ongoing internal clinical quality tracking. < 0.75 per 1000 patient-days is the commonly used NDNQI-derived benchmark (lower is better; aspirational target 0). Note: the one-day prevalence survey (~≤ 3.6% of patients surveyed, NDNQI) is a DIFFERENT metric — do not mix the two.",
     "goalDirection": "lower_is_better",
-    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Survey; NQF #0201 Pressure Ulcer Prevalence, Hospital-Acquired (steward: The Joint Commission); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Incidence; AHRQ Preventing Pressure Ulcers in Hospitals Toolkit (incidence & prevalence measurement); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
     "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
   },
   "phlebitis": {
@@ -1748,7 +1841,11 @@ window.QI_CORRECTIONS_BY_DEFID = {
   function mergeDept(seedDept, ov) {
     let dept;
     if (!ov) {
-      dept = seedDept;
+      // No overlay for this department — STILL run each indicator through mergeIndicator:
+      // it applies the QI_CORRECTIONS definition fixes and computes quarter rollups. The
+      // old pass-through skipped both, so a never-edited department kept wrong formulas
+      // (e.g. NSI shown as a plain count with no admin denominator control).
+      dept = Object.assign({}, seedDept, { indicators: (seedDept.indicators || []).map(i => mergeIndicator(i)) });
     } else {
       const removed = new Set(ov.indRemoved || []);
       const patches = ov.indPatches || {};
@@ -1767,19 +1864,84 @@ window.QI_CORRECTIONS_BY_DEFID = {
     return dept;
   }
 
+  // ---- Hand-hygiene audit → each department's own HH indicator ----
+  // The WHO hand-hygiene audit is submitted ONCE (hospital-wide) with a per-department
+  // breakdown stored on the hospital indicator: mDeptBreakdown[month] =
+  // [{dept:'<display name>', g:{nurse:{n,d},doctor,pca,other}}]. The departments' own
+  // "Hand Hygiene Compliance" indicators stayed empty, so every dept row showed
+  // "not reported" even though the audit covered that department. This pass fills a
+  // department's HH indicator from its audit rows — only for months the department has
+  // not entered itself (its own entry always wins) — so dashboards, scorecards and
+  // reports read one connected dataset.
+  function applyHHDeptBreakdown(list) {
+    try {
+      const isHH = (ind) => /hand\s*hygiene/i.test((ind && ind.name) || '');
+      let src = null;
+      list.forEach((d) => (d.indicators || []).forEach((ind) => {
+        if (isHH(ind) && ind.mDeptBreakdown && Object.keys(ind.mDeptBreakdown).length) {
+          if (!src || /overall|hospital/i.test(d.name + ' ' + ind.name)) src = { dep: d, ind: ind };
+        }
+      }));
+      if (!src) return list;
+      const normN = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const bd = src.ind.mDeptBreakdown;
+      return list.map((d) => {
+        if (d === src.dep) return d;
+        const idx = (d.indicators || []).findIndex(isHH);
+        // A dept with audited rows but NO hand-hygiene indicator of its own (e.g. CT ICU)
+        // gets a synthetic one cloned from the hospital-wide source — otherwise its
+        // audited compliance renders as a blank '—' column in every heatmap/report.
+        // Once the dept records a real HH indicator, findIndex hits that one instead
+        // and the synthetic simply stops being created.
+        const hh = idx >= 0 ? d.indicators[idx] : {
+          id: 'ind-hh-from-audit', name: 'Hand Hygiene Compliance', formula: 'pct', unit: '%', valueType: '%',
+          numLabel: src.ind.numLabel || 'Compliant moments', denLabel: src.ind.denLabel || 'Observed moments',
+          benchmark: src.ind.benchmark || '≥ 90 %', benchmarkValue: (src.ind.benchmarkValue != null ? src.ind.benchmarkValue : 90),
+          goalDirection: 'higher_is_better', months: {}, mNum: {}, mDen: {},
+        };
+        let months = null, mNum = null, mDen = null;
+        Object.keys(bd).forEach((mk) => {
+          const rows = bd[mk]; if (!Array.isArray(rows)) return;
+          const row = rows.find((r) => r && normN(r.dept) === normN(d.name)); if (!row) return;
+          let n = 0, den = 0; const g = row.g || {};
+          ['nurse', 'doctor', 'pca', 'other'].forEach((k) => { const x = g[k] || {}; n += Number(x.n) || 0; den += Number(x.d) || 0; });
+          if (!(den > 0)) return; // this dept was not audited that month (0/0 row)
+          const own = (hh.mNum && hh.mNum[mk] != null && hh.mNum[mk] !== '') || (hh.months && hh.months[mk] != null && hh.months[mk] !== '');
+          if (own) return;
+          if (!months) { months = Object.assign({}, hh.months || {}); mNum = Object.assign({}, hh.mNum || {}); mDen = Object.assign({}, hh.mDen || {}); }
+          // fill BOTH shapes: months (formula 'direct' reads it) and mNum/mDen ('pct' reads those)
+          months[mk] = Math.round((n / den) * 10000) / 100;
+          mNum[mk] = n; mDen[mk] = den;
+        });
+        if (!months) return d;
+        const patched = Object.assign({}, hh, { months: months, mNum: mNum, mDen: mDen, hhFromAudit: true });
+        // refresh the per-year quarter rollups so quarter-based views see the filled months
+        const fys = fysInInd(patched);
+        if (fys.length) { const byFy = {}; fys.forEach((fy) => { byFy[fy] = computeQuartersFor(patched, fyQuarterMonths(fy)); }); patched.quartersByFy = byFy; }
+        const inds = (d.indicators || []).slice();
+        if (idx >= 0) inds[idx] = patched; else inds.push(patched);
+        return Object.assign({}, d, { indicators: inds });
+      });
+    } catch (e) { return list; }
+  }
+
   // Merged, read-anywhere snapshot (reads localStorage fresh each call).
   function qualityData() {
     const ov = loadOverlay();
-    return (window.QUALITY_SEED || []).map(d => mergeDept(d, ov.depts[d.key]));
+    return applyHHDeptBreakdown((window.QUALITY_SEED || []).map(d => mergeDept(d, ov.depts[d.key])));
   }
 
   // React hook for screens that EDIT quality data.
   function useQualityStore() {
     const [overlay, setOverlay] = React.useState(loadOverlay);
+    // window.QUALITY_SEED is swapped in place by refreshQualitySeed (approval / tab
+    // refocus); the memo only watches the overlay, so bump to rebuild from fresh seed.
+    const [rev, setRev] = React.useState(0);
+    React.useEffect(() => { const h = () => setRev(r => r + 1); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
     React.useEffect(() => { saveOverlay(overlay); }, [overlay]);
     const merged = React.useMemo(
-      () => (window.QUALITY_SEED || []).map(d => mergeDept(d, overlay.depts[d.key])),
-      [overlay]
+      () => applyHHDeptBreakdown((window.QUALITY_SEED || []).map(d => mergeDept(d, overlay.depts[d.key]))),
+      [overlay, rev]
     );
 
     const patchDept = (key, fn) => setOverlay(o => {
@@ -3671,6 +3833,12 @@ const UNICO_MODULES = [{
   icon: I.heart,
   home: 'quality'
 }, {
+  id: 'reports',
+  label: 'Reports',
+  short: 'Reports',
+  icon: I.doc,
+  home: 'reports'
+}, {
   id: 'users',
   label: 'User Management',
   short: 'Users',
@@ -3678,10 +3846,11 @@ const UNICO_MODULES = [{
   home: 'users'
 }];
 const UNICO_MODULE_VIEWS = {
-  stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'input', 'reports', 'settings'],
+  stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'input', 'settings'],
   datacol: ['dcPatient', 'dcQuality', 'dcResponsibles', 'dcShare', 'dcFields', 'dcReview'],
   staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffProfile', 'staffForm'],
-  quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityReport', 'qualityReportQ', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
+  quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
+  reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
   users: ['users']
 };
 function unicoModuleOf(view) {
@@ -3770,11 +3939,6 @@ function unicoSidebarGroups(moduleId) {
   }, {
     sec: 'Reporting',
     items: [{
-      id: 'qualityReport',
-      label: 'Reports',
-      icon: I.doc,
-      match: ['qualityReport', 'qualityReportQ']
-    }, {
       id: 'qualityIncidents',
       label: 'Incident Reports',
       icon: I.activity
@@ -3798,6 +3962,18 @@ function unicoSidebarGroups(moduleId) {
       id: 'qualityCapa',
       label: 'Action Plans',
       icon: I.check
+    }]
+  }];
+  if (moduleId === 'reports') return [{
+    sec: 'Report Generator',
+    items: [{
+      id: 'reports',
+      label: 'Patient Statistics',
+      icon: I.doc
+    }, {
+      id: 'reportsQuality',
+      label: 'Quality Indicators',
+      icon: I.heart
     }]
   }];
   if (moduleId === 'users') return [{
@@ -3830,10 +4006,6 @@ function unicoSidebarGroups(moduleId) {
       id: 'input',
       label: 'Data Entry',
       icon: I.input
-    }, {
-      id: 'reports',
-      label: 'Reports',
-      icon: I.doc
     }, {
       id: 'settings',
       label: 'Settings',
@@ -9792,6 +9964,10 @@ function DataEntry({
     if (hard.length) {
       return false;
     }
+    if (d.cols.every(c => vals[c.id] === undefined || vals[c.id] === '')) {
+      window.UI && window.UI.toast ? window.UI.toast('Enter at least one value before saving', 'error') : alert('Enter at least one value before saving');
+      return false;
+    }
     const missing = d.cols.filter(c => e[c.id] === 'Required');
     if (missing.length) {
       const names = missing.map(c => c.label).join(', ');
@@ -10796,6 +10972,12 @@ function msReportHTML(depts) {
     }).join('');
     body += '<table border="1" style="border-collapse:collapse"><thead><tr>' + th + '</tr></thead><tbody>' + trs + '</tbody></table>';
   });
+  const sig = window.unicoSig && window.unicoSig.load() || {
+    prepared: '',
+    reviewed: '',
+    approved: ''
+  };
+  body += '<table style="border-collapse:collapse;width:100%;margin-top:30px"><tr>' + [['Prepared by', sig.prepared], ['Checked by', sig.reviewed], ['Approved by', sig.approved]].map(([role, name]) => '<td style="width:33%;padding:0 22px 0 0;border:0"><div style="border-bottom:1.2px solid #16202e;height:36px"></div>' + '<div style="font-family:Calibri;font-size:10.5pt;font-weight:700;color:#16202e;margin-top:3px">' + msEsc(name || ' ') + '</div>' + '<div style="font-family:Calibri;font-size:8.5pt;color:#555;text-transform:uppercase">' + role + '</div></td>').join('') + '</tr></table>';
   return body;
 }
 function msExport(depts, f) {
@@ -11339,7 +11521,58 @@ function MonthlyStatsReport({
       d: d,
       colId: col.id
     })));
-  })))))));
+  })))))), (() => {
+    const sig = window.unicoSig && window.unicoSig.load() || {
+      prepared: '',
+      reviewed: '',
+      approved: ''
+    };
+    return React.createElement("div", {
+      style: {
+        ...cardBox,
+        marginTop: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 16
+      }
+    }, "Authorisation"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 30
+      }
+    }, [['Prepared by', sig.prepared], ['Checked by', sig.reviewed], ['Approved by', sig.approved]].map(([role, name]) => React.createElement("div", {
+      key: role,
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        borderBottom: '1px solid var(--ink-2)',
+        height: 30
+      }
+    }), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--ink)',
+        marginTop: 4
+      }
+    }, name || ' '), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .3
+      }
+    }, role)))));
+  })());
 }
 function Reports({
   depts
@@ -11363,6 +11596,15 @@ function Reports({
   const [pageSize, setPageSize] = React.useState('A4');
   const [orient, setOrient] = React.useState('portrait');
   const [pageIdx, setPageIdx] = React.useState(0);
+  const [sig, setSig] = React.useState(() => window.unicoSig ? window.unicoSig.load() : {
+    prepared: '',
+    reviewed: '',
+    approved: ''
+  });
+  React.useEffect(() => {
+    if (window.unicoSig) window.unicoSig.save(sig);
+  }, [sig]);
+  const [showSig, setShowSig] = React.useState(true);
   const toggle = id => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   const chosen = depts.filter(d => sel.includes(d.id));
   const allMonths = [...new Set(depts.flatMap(d => d.months))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b));
@@ -11402,7 +11644,7 @@ function Reports({
   const portrait = orient === 'portrait';
   const pageW = portrait ? base : Math.round(base * ratio);
   const pageMinH = portrait ? Math.round(base * ratio) : base;
-  const pages = type === 'compare' ? 1 : Math.max(1, chosen.length);
+  const pages = type === 'compare' || type === 'board' ? 1 : Math.max(1, chosen.length);
   const pi = Math.min(pageIdx, pages - 1);
   const pageDept = chosen[pi] || depts[0];
   const sel2 = {
@@ -11481,6 +11723,57 @@ function Reports({
   }), React.createElement("span", null, "Page ", n, " of ", total), React.createElement("span", {
     className: "spacer"
   }), React.createElement("span", null, footerNote ? footerNote + ' · ' : '', confidential ? 'Confidential · ' : '', pageSize, " ", orient));
+  const SigBlock = () => React.createElement("div", {
+    style: {
+      marginTop: 26,
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 12
+    }
+  }, "Authorisation \xB7 ", hospitalName), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 30
+    }
+  }, [['Prepared by', sig.prepared], ['Checked by', sig.reviewed], ['Approved by', sig.approved]].map(([role, name]) => React.createElement("div", {
+    key: role,
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      borderBottom: '1px solid var(--ink-2)',
+      height: 34
+    }
+  }), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginTop: 4
+    }
+  }, name || ' '), React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .3
+    }
+  }, role), React.createElement("div", {
+    style: {
+      fontSize: 8.5,
+      color: 'var(--faint)',
+      marginTop: 1
+    }
+  }, "Signature & date")))));
   function DeptPage({
     d,
     n,
@@ -11608,7 +11901,7 @@ function Reports({
       className: "tot"
     }, React.createElement("td", null, "TOTAL"), d.cols.slice(0, d.cols.length).map(c => React.createElement("td", {
       key: c.id
-    }, c.pct ? '—' : fmt(fs.reduce((s, r) => s + (r[c.id] || 0), 0)))))))), React.createElement(Footer, {
+    }, c.pct ? '—' : fmt(fs.reduce((s, r) => s + (r[c.id] || 0), 0))))))), showSig && n === total && React.createElement(SigBlock, null)), React.createElement(Footer, {
       n: n,
       total: total
     }));
@@ -11668,7 +11961,156 @@ function Reports({
       }
     }, React.createElement(Delta, {
       v: d.delta
-    }))))))), React.createElement(Footer, {
+    })))))), showSig && React.createElement(SigBlock, null)), React.createElement(Footer, {
+      n: 1,
+      total: 1
+    }));
+  }
+  function BoardPage() {
+    const rows = chosen.map(d => {
+      const fs = fseriesOf(d);
+      const st = statOf(d, fs);
+      return {
+        d,
+        st,
+        fs
+      };
+    });
+    const totAll = rows.reduce((s, r) => s + r.st.total, 0);
+    const top = rows.slice().sort((a, b) => b.st.total - a.st.total)[0];
+    const mTot = {};
+    rows.forEach(({
+      d,
+      fs
+    }) => fs.forEach(r => {
+      mTot[r.month] = (mTot[r.month] || 0) + (r[d.primary] || 0);
+    }));
+    const trend = pMonths.filter(m => mTot[m] != null).map(m => ({
+      label: m.split('-')[0],
+      val: mTot[m]
+    }));
+    const peakM = trend.slice().sort((a, b) => b.val - a.val)[0];
+    const hbar = rows.map(({
+      d,
+      st
+    }) => ({
+      label: d.short,
+      value: st.total,
+      color: PALETTE[d.id.charCodeAt(0) % PALETTE.length]
+    })).sort((a, b) => b.value - a.value);
+    const kpis = [['Total patients', fmt(totAll)], ['Departments', String(rows.length)], ['Busiest dept', top ? top.d.short : '—'], ['Peak month', peakM ? peakM.label : '—']];
+    return React.createElement("div", {
+      className: "qc-rpage"
+    }, React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 12
+      }
+    }, React.createElement(Ic, {
+      d: I.doc,
+      s: 18,
+      c: PALETTE[0]
+    }), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 15
+      }
+    }, "Executive Board Report"), React.createElement("span", {
+      className: "tag"
+    }, rangeLabel), React.createElement("span", {
+      className: "spacer"
+    }), React.createElement("span", {
+      className: "tag"
+    }, rows.length, " departments")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4,1fr)',
+        gap: 10,
+        marginBottom: 16
+      }
+    }, kpis.map(([l, v], i) => React.createElement("div", {
+      key: i,
+      style: {
+        background: 'var(--panel-2)',
+        borderRadius: 7,
+        padding: '9px 11px',
+        borderLeft: '3px solid ' + PALETTE[i % PALETTE.length]
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .3
+      }
+    }, l), React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 18,
+        fontWeight: 600
+      }
+    }, v)))), trend.length > 1 && typeof window.BarChart === 'function' && React.createElement("div", {
+      style: {
+        margin: '4px 0 12px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        margin: '8px 0 2px'
+      }
+    }, "Hospital volume \u2014 monthly trend"), window.BarChart({
+      data: trend,
+      x: 'label',
+      y: 'val',
+      height: 170,
+      color: PALETTE[0],
+      flat: true
+    })), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        margin: '8px 0 6px'
+      }
+    }, "Department ranking (period total)"), React.createElement("div", {
+      style: {
+        marginBottom: 14
+      }
+    }, React.createElement(HBar, {
+      rows: hbar
+    })), React.createElement("table", {
+      className: "tbl",
+      style: {
+        fontSize: 11
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Department"), React.createElement("th", null, "Service line"), React.createElement("th", null, "Total"), React.createElement("th", null, "Share"), React.createElement("th", null, "Avg / month"), React.createElement("th", null, "Trend"))), React.createElement("tbody", null, rows.slice().sort((a, b) => b.st.total - a.st.total).map(({
+      d,
+      st
+    }) => React.createElement("tr", {
+      key: d.id
+    }, React.createElement("td", null, d.name), React.createElement("td", {
+      style: {
+        fontFamily: "'IBM Plex Sans'"
+      }
+    }, d.group), React.createElement("td", null, fmt(st.total)), React.createElement("td", null, totAll ? Math.round(st.total * 100 / totAll) + '%' : '—'), React.createElement("td", null, fmt(st.avg)), React.createElement("td", {
+      style: {
+        textAlign: 'right'
+      }
+    }, React.createElement(Delta, {
+      v: d.delta
+    })))))), showSig && React.createElement(SigBlock, null)), React.createElement(Footer, {
       n: 1,
       total: 1
     }));
@@ -11840,7 +12282,9 @@ function Reports({
     className: "pdf-doc" + (orient === 'portrait' ? ' portrait' : '')
   }, chosen.length > 0 && (type === 'compare' ? React.createElement("section", {
     className: "pdf-page"
-  }, React.createElement(ComparePage, null)) : chosen.map((d, i) => React.createElement("section", {
+  }, React.createElement(ComparePage, null)) : type === 'board' ? React.createElement("section", {
+    className: "pdf-page"
+  }, React.createElement(BoardPage, null)) : chosen.map((d, i) => React.createElement("section", {
     className: "pdf-page",
     key: d.id
   }, React.createElement(DeptPage, {
@@ -11869,7 +12313,7 @@ function Reports({
     style: {
       width: '100%'
     }
-  }, [['summary', 'Summary'], ['detail', 'Detailed'], ['compare', 'Comparison']].map(([id, l]) => React.createElement("button", {
+  }, [['summary', 'Summary'], ['detail', 'Detailed'], ['compare', 'Comparison'], ['board', 'Board']].map(([id, l]) => React.createElement("button", {
     key: id,
     className: type === id ? 'on' : '',
     style: {
@@ -11885,7 +12329,7 @@ function Reports({
       color: 'var(--muted)',
       marginTop: 6
     }
-  }, type === 'summary' ? 'KPIs + chart, one page per department.' : type === 'detail' ? 'Full data table & composition per department.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
+  }, type === 'summary' ? 'KPIs + chart, one page per department.' : type === 'detail' ? 'Full data table & composition per department.' : type === 'board' ? 'Executive board summary — hospital KPIs, ranking, trend + authorisation sign-off.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
     value: period.mode,
     onChange: e => setPeriod({
       mode: e.target.value,
@@ -12040,7 +12484,58 @@ function Reports({
     type: "checkbox",
     checked: confidential,
     onChange: e => setConfidential(e.target.checked)
-  }), "Confidential mark")))), React.createElement("div", null, fieldLabel('Page setup'), React.createElement("div", {
+  }), "Confidential mark")))), React.createElement("div", null, fieldLabel('Signatures — saved automatically, shared with every report'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, React.createElement("input", {
+    value: sig.prepared,
+    onChange: e => setSig(s => ({
+      ...s,
+      prepared: e.target.value
+    })),
+    placeholder: "Prepared by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.reviewed,
+    onChange: e => setSig(s => ({
+      ...s,
+      reviewed: e.target.value
+    })),
+    placeholder: "Checked by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.approved,
+    onChange: e => setSig(s => ({
+      ...s,
+      approved: e.target.value
+    })),
+    placeholder: "Approved by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: 'var(--ink-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: showSig,
+    onChange: e => setShowSig(e.target.checked)
+  }), "Signature block on the last page"))), React.createElement("div", null, fieldLabel('Page setup'), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8
@@ -12195,7 +12690,7 @@ function Reports({
       color: 'var(--faint)',
       padding: '60px 0'
     }
-  }, "Select at least one department.") : type === 'compare' ? React.createElement(ComparePage, null) : React.createElement(DeptPage, {
+  }, "Select at least one department.") : type === 'compare' ? React.createElement(ComparePage, null) : type === 'board' ? React.createElement(BoardPage, null) : React.createElement(DeptPage, {
     d: pageDept,
     n: pi + 1,
     total: pages
@@ -13388,7 +13883,7 @@ var HQI_STANDARDS = [{
 }, {
   "code": "B1",
   "sec": "B",
-  "name": "Medication Error",
+  "name": "Medication Administration Error",
   "ft": "count",
   "dir": "low",
   "unit": "count",
@@ -14646,6 +15141,15 @@ function qtrRaw(ind, Q, fy) {
 function qtrStatus(ind, Q, fy) {
   return qStatus(ind, qtrSrc(ind, fy)[Q]);
 }
+function qcCellVal(ind, m) {
+  const v = monthRaw(ind, m[0]);
+  if (v != null) return v;
+  const fy = fyOfKey(m[0]);
+  if (fy == null || !m[2]) return null;
+  const qMonths = fyAxis(fy).filter(r => r[2] === m[2]);
+  if (qMonths.some(r => monthRaw(ind, r[0]) != null)) return null;
+  return qtrRaw(ind, m[2], fy);
+}
 function isPctInd(ind) {
   const t = (ind && ind.valueType || '').toString().toLowerCase();
   return t.indexOf('%') >= 0 || t.startsWith('per') || ind.formula === 'pct';
@@ -14714,7 +15218,7 @@ function isEventIndicator(ind) {
   if (/zero.?defect/i.test(String(ind.benchmark || ''))) return true;
   if (ind.incidents && Object.keys(ind.incidents).length) return true;
   const n = (ind.name || '').toLowerCase();
-  if (/extubation|removal of ett|accidental removal|dislodge|self-?extubat|needle ?stick|sharps|wrong-?site|wrong-?patient|wrong-?procedure|specimen labeling|medication error|fall|de-?lining/.test(n)) return true;
+  if (/extubation|removal of ett|accidental removal|dislodge|self-?extubat|needle ?stick|sharps|wrong-?site|wrong-?patient|wrong-?procedure|specimen labeling|medication (administration )?error|fall|de-?lining/.test(n)) return true;
   return false;
 }
 function rateUnitWord(ind) {
@@ -14770,7 +15274,7 @@ function catOf(n) {
 }
 function stdMatch(name) {
   const n = (name || '').toLowerCase();
-  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of ett|unplanned extubation|extubation/, 'D8'], [/accidental removal of catheter/, 'L5'], [/catheter dislodgement|dislodgement/, 'L4']];
+  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication (administration )?error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of ett|unplanned extubation|extubation/, 'D8'], [/accidental removal of catheter/, 'L5'], [/catheter dislodgement|dislodgement/, 'L4']];
   for (const [re, code] of T) {
     if (re.test(n)) return code;
   }
@@ -14901,20 +15405,28 @@ function QCDashboard({
       const cells = fyMonths.map(m => {
         let b = 0,
           rep = 0;
+        const missing = [];
         inds.forEach(ind => {
           const s = monthStatus(ind, m[0]);
-          if (s === 'breach') b++;else if (s !== 'na') rep++;
+          if (s === 'breach') b++;else if (s !== 'na') rep++;else missing.push(ind.name);
         });
-        const bg = b + rep === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : '#e7f6ed';
-        const fg = b + rep === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : '#1f9d57';
+        const total = inds.length,
+          sub = b + rep;
+        const partial = sub > 0 && sub < total;
+        const bg = sub === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : partial ? '#fdf3e3' : '#e7f6ed';
+        const fg = sub === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : partial ? '#b26a0f' : '#1f9d57';
+        const sym = sub === 0 ? '–' : b > 0 ? String(b) : partial ? sub + '/' + total : '✓';
         return {
-          sym: b + rep === 0 ? '–' : b > 0 ? String(b) : '✓',
+          sym,
           bg,
           fg,
           mk: m[0],
           mlabel: m[1],
           breach: b,
-          has: b + rep > 0
+          sub,
+          total,
+          missing,
+          has: sub > 0
         };
       });
       const st = deptStat(dep, fyMonths);
@@ -15226,7 +15738,19 @@ function QCDashboard({
       fontSize: '11.5px',
       color: '#6c7a8c'
     }
-  }, "breaches per month \u2014 green clean \xB7 red breach \xB7 grey not reported")), React.createElement("div", {
+  }, "per assigned indicator \u2014 ", React.createElement("b", {
+    style: {
+      color: '#1f9d57'
+    }
+  }, "\u2713 all submitted"), " \xB7 ", React.createElement("b", {
+    style: {
+      color: '#b26a0f'
+    }
+  }, "n/N partially submitted"), " \xB7 ", React.createElement("b", {
+    style: {
+      color: '#d23a52'
+    }
+  }, "red = breaches"), " \xB7 grey none \u2014 click any cell to see what's submitted & missing")), React.createElement("div", {
     style: {
       overflowX: 'auto'
     }
@@ -15289,25 +15813,26 @@ function QCDashboard({
       padding: '6px 4px'
     }
   }, React.createElement("span", {
-    onClick: c.has ? () => setCellSel({
+    onClick: () => setCellSel({
       depKey: r.dep.key,
       mk: c.mk,
       mlabel: c.mlabel
-    }) : undefined,
-    title: c.has ? r.name + ' · ' + c.mlabel + (c.breach ? ' — ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + ' · click to view' : undefined,
+    }),
+    title: r.name + ' · ' + c.mlabel + ' — ' + c.sub + ' of ' + c.total + ' assigned indicator' + (c.total !== 1 ? 's' : '') + ' submitted' + (c.breach ? ' · ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + (c.missing.length ? ' · not submitted: ' + c.missing.slice(0, 5).join(', ') + (c.missing.length > 5 ? ' +' + (c.missing.length - 5) + ' more' : '') : '') + ' · click for details',
     style: {
       display: 'inline-grid',
       placeItems: 'center',
       minWidth: '24px',
       height: '24px',
+      padding: '0 4px',
       borderRadius: '6px',
       background: c.bg,
       color: c.fg,
       fontWeight: 700,
-      fontSize: '11px',
+      fontSize: c.sym.length > 2 ? '9.5px' : '11px',
       fontFamily: MONO,
-      cursor: c.has ? 'pointer' : 'default',
-      boxShadow: c.has && c.breach ? '0 0 0 1px #eeb9c2' : 'none'
+      cursor: 'pointer',
+      boxShadow: c.breach ? '0 0 0 1px #eeb9c2' : 'none'
     }
   }, c.sym))), React.createElement("td", {
     style: {
@@ -15421,7 +15946,7 @@ function QCCellDetail({
       gridTemplateColumns: '1fr 1fr',
       columnGap: 16
     }
-  }, field('UHID', x.uhid), field('Patient', x.patientName), field('Age / Sex', [x.age, x.gender].filter(Boolean).join(' / ')), field('Diagnosis', x.diagnosis), field('Admission', x.admissionDate), field('Procedure date', x.procedureDate), field('Victim (staff)', x.victimName), field('Victim emp ID / UHID', x.victimId)), field('Incident details', x.details), field('Finding / root cause', x.finding), field('Corrective action', x.corrective), field('Preventive action', x.preventive), field('Remark', x.remark));
+  }, field('UHID', x.uhid), field('Patient', x.patientName), field('Age / Sex', [x.age, x.gender].filter(Boolean).join(' / ')), field('Diagnosis', x.diagnosis), field('Date of incident', x.incidentDate), field('Admission', x.admissionDate), field('Procedure date', x.procedureDate), field('Victim (staff)', x.victimName), field('Victim emp ID / UHID', x.victimId)), field('Incident details', x.details), field('Finding / root cause', x.finding), field('Corrective action', x.corrective), field('Preventive action', x.preventive), field('Remark', x.remark));
   const viewCard = r => {
     const isBr = r.s === 'breach';
     const col = isBr ? P.rose : P.green;
@@ -15577,7 +16102,11 @@ function QCCellDetail({
       color: P.muted,
       marginTop: 2
     }
-  }, reported.length, " indicator", reported.length !== 1 ? 's' : '', " reported \xB7 ", React.createElement("b", {
+  }, React.createElement("b", {
+    style: {
+      color: reported.length === allInds.length ? P.green : P.ink2
+    }
+  }, reported.length, " of ", allInds.length), " assigned indicator", allInds.length !== 1 ? 's' : '', " submitted \xB7 ", React.createElement("b", {
     style: {
       color: breaches ? P.rose : P.green
     }
@@ -15625,7 +16154,7 @@ function QCCellDetail({
       padding: '24px 0',
       textAlign: 'center'
     }
-  }, "No indicators were reported for this month.", canEdit ? ' Use “Add a reading” below.' : ''), reported.map(r => editId === r.ind.id ? React.createElement(QCIndEdit, {
+  }, "No indicators were submitted for this month.", canEdit ? ' Click an indicator below to add its reading.' : ''), reported.map(r => editId === r.ind.id ? React.createElement(QCIndEdit, {
     key: r.ind.id,
     dep: dep,
     ind: r.ind,
@@ -15642,38 +16171,10 @@ function QCCellDetail({
     Q: Q,
     isNew: true,
     onClose: () => setEditId(null)
-  }), canEdit && !editId && unreported.length > 0 && React.createElement("div", {
+  }), !editId && unreported.length > 0 && React.createElement("div", {
     style: {
-      marginTop: 4
-    }
-  }, !addOpen ? React.createElement("button", {
-    onClick: () => setAddOpen(true),
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6,
+      marginTop: 4,
       border: '1px dashed #b9c6d2',
-      background: '#f7f9fc',
-      color: P.ink2,
-      padding: '9px 14px',
-      borderRadius: 9,
-      fontSize: 12.5,
-      fontWeight: 700,
-      cursor: 'pointer'
-    }
-  }, React.createElement("svg", {
-    width: "14",
-    height: "14",
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: "2",
-    strokeLinecap: "round"
-  }, React.createElement("path", {
-    d: "M12 5v14M5 12h14"
-  })), "Add a reading for another indicator") : React.createElement("div", {
-    style: {
-      border: '1px solid #dde3ec',
       borderRadius: 9,
       padding: '11px 13px',
       background: '#f7f9fc'
@@ -15682,19 +16183,20 @@ function QCCellDetail({
     style: {
       fontSize: 11,
       fontWeight: 700,
-      color: P.muted,
+      color: '#b26a0f',
       textTransform: 'uppercase',
       letterSpacing: '.3px',
       marginBottom: 7
     }
-  }, "Add a reading \u2014 pick an indicator"), React.createElement("div", {
+  }, "Not submitted for ", mlabel, " (", unreported.length, " of ", allInds.length, " assigned)"), React.createElement("div", {
     style: {
       display: 'flex',
       flexWrap: 'wrap',
       gap: 7
     }
-  }, unreported.map(ind => React.createElement("button", {
+  }, unreported.map(ind => canEdit ? React.createElement("button", {
     key: ind.id,
+    title: 'Add the ' + mlabel + ' reading for ' + ind.name,
     onClick: () => {
       setAddOpen(false);
       setEditId(ind.id);
@@ -15709,18 +16211,24 @@ function QCCellDetail({
       fontWeight: 600,
       cursor: 'pointer'
     }
-  }, ind.name))), React.createElement("button", {
-    onClick: () => setAddOpen(false),
+  }, "+ ", ind.name) : React.createElement("span", {
+    key: ind.id,
     style: {
-      marginTop: 9,
-      border: 'none',
-      background: 'transparent',
+      border: '1px solid #dde3ec',
+      background: '#fff',
       color: P.muted,
+      padding: '6px 11px',
+      borderRadius: 20,
       fontSize: 11.5,
-      fontWeight: 600,
-      cursor: 'pointer'
+      fontWeight: 600
     }
-  }, "Cancel"))))));
+  }, ind.name))), canEdit && React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: P.muted,
+      marginTop: 8
+    }
+  }, "Click an indicator to add its ", mlabel, " reading now.")))));
 }
 function QCIndEdit({
   dep,
@@ -16000,7 +16508,7 @@ function QCIndEdit({
       gridTemplateColumns: '1fr 1fr',
       columnGap: 12
     }
-  }, fin('Patient name', i, 'patientName'), fin('UHID', i, 'uhid'), fin('Age', i, 'age'), fin('Sex', i, 'gender'), fin('Admission date', i, 'admissionDate'), fin('Procedure date', i, 'procedureDate')), fin('Diagnosis', i, 'diagnosis', true), fin('Incident details', i, 'details', true), fin('Finding / root cause', i, 'finding', true), fin('Corrective action', i, 'corrective', true), fin('Preventive action', i, 'preventive', true), fin('Remark', i, 'remark'))), React.createElement("button", {
+  }, fin('Patient name', i, 'patientName'), fin('UHID', i, 'uhid'), fin('Age', i, 'age'), fin('Sex', i, 'gender'), fin('Date of incident', i, 'incidentDate'), fin('Admission date', i, 'admissionDate'), fin('Procedure date', i, 'procedureDate')), fin('Diagnosis', i, 'diagnosis', true), fin('Incident details', i, 'details', true), fin('Finding / root cause', i, 'finding', true), fin('Corrective action', i, 'corrective', true), fin('Preventive action', i, 'preventive', true), fin('Remark', i, 'remark'))), React.createElement("button", {
     onClick: addInc,
     style: {
       display: 'inline-flex',
@@ -16624,10 +17132,12 @@ function qcIncidentsOf(d) {
     const incs = ind.incidents || {};
     Object.keys(incs).forEach(mk => {
       const arr = incs[mk];
+      const isQ = /^Q[1-4]$/.test(mk);
       if (Array.isArray(arr)) arr.forEach(x => {
         if (x && (x.details || x.finding || x.corrective || x.preventive || x.patientName || x.uhid || x.victimName || x.victimId)) out.push({
           ind: ind.name,
-          month: qcMonthLabel(mk),
+          month: isQ ? qtrLabelOf(mk) : qcMonthLabel(mk),
+          q: isQ ? mk : null,
           x: x
         });
       });
@@ -16635,12 +17145,16 @@ function qcIncidentsOf(d) {
   });
   return out;
 }
+function qcIncInPeriod(r, months) {
+  if (!months || !months.length) return true;
+  if (r.q) return months.some(m => m[2] === r.q);
+  return months.some(m => m[1] === r.month);
+}
 function qcReportHTML(depts, months, fyIn, opts) {
   const o = opts || {};
   const date = new Date().toISOString().slice(0, 10);
   const fy = fyIn != null ? fyIn : defaultFy(depts);
   const MONTHS = Array.isArray(months) && months.length ? months : fyAxis(fy);
-  const mset = new Set(MONTHS.map(m => m[1]));
   let body = o.noTitle ? '' : '<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Quality Indicator Report</h1>' + '<div style="font-family:Calibri;color:#555;margin-bottom:12px">' + fyLabelOf(fy) + ' · ' + MONTHS[0][1] + ' - ' + MONTHS[MONTHS.length - 1][1] + ' · generated ' + date + ' · Confidential</div>';
   depts.forEach(d => {
     const st = deptStat(d, MONTHS);
@@ -16648,8 +17162,7 @@ function qcReportHTML(depts, months, fyIn, opts) {
     const th = ['Indicator', 'Benchmark'].concat(MONTHS.map(m => m[1].split(' ')[0])).map(h => '<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">' + h + '</th>').join('');
     const trs = (d.indicators || []).map((ind, i) => {
       const cells = [qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m => {
-        let v = monthRaw(ind, m[0]);
-        if (v == null && m[2]) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
+        const v = qcCellVal(ind, m);
         const s = qStatus(ind, v);
         const disp = s === 'na' ? '—' : fmtVal(ind, v);
         const col = s === 'breach' ? '#d23a52' : s === 'ok' ? '#1f9d57' : '#9aa6b4';
@@ -16658,13 +17171,13 @@ function qcReportHTML(depts, months, fyIn, opts) {
       return '<tr style="background:' + (i % 2 ? '#eef6fb' : '#fff') + '">' + cells.map((c, ci) => '<td style="border:1px solid #b9c6d2;padding:4px 7px;font-family:Calibri;font-size:10pt;' + (ci > 1 ? 'text-align:center' : '') + '">' + c + '</td>').join('') + '</tr>';
     }).join('');
     body += '<table border="1" style="border-collapse:collapse"><thead><tr>' + th + '</tr></thead><tbody>' + trs + '</tbody></table>';
-    const inc = qcIncidentsOf(d).filter(r => mset.has(r.month));
+    const inc = qcIncidentsOf(d).filter(r => qcIncInPeriod(r, MONTHS));
     if (inc.length) {
       body += '<h3 style="font-family:Calibri;color:#b32339;margin:12px 0 3px">Incident details (' + inc.length + ')</h3>';
-      const ith = ['Indicator', 'Month', 'UHID', 'Patient', 'Age/Sex', 'Incident details', 'Finding', 'Corrective action', 'Preventive action'].map(h => '<th style="background:#d23a52;color:#fff;border:1px solid #a02a3c;padding:5px 7px;font-family:Calibri;font-size:9.5pt;text-align:left">' + h + '</th>').join('');
+      const ith = ['Indicator', 'Month', 'Date of incident', 'UHID', 'Patient', 'Age/Sex', 'Incident details', 'Finding', 'Corrective action', 'Preventive action'].map(h => '<th style="background:#d23a52;color:#fff;border:1px solid #a02a3c;padding:5px 7px;font-family:Calibri;font-size:9.5pt;text-align:left">' + h + '</th>').join('');
       const itrs = inc.map((r, i) => {
         const x = r.x;
-        const cols = [r.ind, r.month, x.uhid || '', x.patientName || '', (x.age || '') + (x.gender ? ' / ' + x.gender : ''), x.details || '', x.finding || '', x.corrective || '', x.preventive || ''];
+        const cols = [r.ind, r.month, x.incidentDate || '', x.uhid || '', x.patientName || '', (x.age || '') + (x.gender ? ' / ' + x.gender : ''), x.details || '', x.finding || '', x.corrective || '', x.preventive || ''];
         return '<tr style="background:' + (i % 2 ? '#fbeef0' : '#fff') + '">' + cols.map(c => '<td style="border:1px solid #e0b6bf;padding:4px 7px;font-family:Calibri;font-size:9pt;vertical-align:top">' + qcEsc(c) + '</td>').join('') + '</tr>';
       }).join('');
       body += '<table border="1" style="border-collapse:collapse;margin-top:2px"><thead><tr>' + ith + '</tr></thead><tbody>' + itrs + '</tbody></table>';
@@ -16686,11 +17199,10 @@ function qcExport(depts, fmt) {
     }));
     rows.push([]);
     rows.push(['INCIDENT DETAILS']);
-    rows.push(['Department', 'Indicator', 'Month', 'UHID', 'Patient', 'Age', 'Sex', 'Diagnosis', 'Details', 'Finding', 'Corrective', 'Preventive']);
-    const mset = new Set(MONTHS.map(m => m[1]));
-    depts.forEach(d => qcIncidentsOf(d).filter(r => mset.has(r.month)).forEach(r => {
+    rows.push(['Department', 'Indicator', 'Month', 'Date of incident', 'UHID', 'Patient', 'Age', 'Sex', 'Diagnosis', 'Details', 'Finding', 'Corrective', 'Preventive']);
+    depts.forEach(d => qcIncidentsOf(d).filter(r => qcIncInPeriod(r, MONTHS)).forEach(r => {
       const x = r.x;
-      rows.push([d.name, r.ind, r.month, x.uhid || '', x.patientName || '', x.age || '', x.gender || '', x.diagnosis || '', x.details || '', x.finding || '', x.corrective || '', x.preventive || '']);
+      rows.push([d.name, r.ind, r.month, x.incidentDate || '', x.uhid || '', x.patientName || '', x.age || '', x.gender || '', x.diagnosis || '', x.details || '', x.finding || '', x.corrective || '', x.preventive || '']);
     }));
     qcDownload('﻿' + rows.map(r => r.map(c => '"' + ((c == null ? '' : c) + '').replace(/"/g, '""') + '"').join(',')).join('\r\n'), base + '.csv', 'text/csv;charset=utf-8');
     return;
@@ -16875,6 +17387,7 @@ function QCPagedPreview({
 }) {
   const ref = React.useRef(null);
   const [starts, setStarts] = React.useState([0]);
+  const [foot, setFoot] = React.useState(null);
   const usableH = Math.max(240, pageMinH - 56);
   React.useLayoutEffect(() => {
     const root = ref.current;
@@ -16893,6 +17406,12 @@ function QCPagedPreview({
       const s = el.getAttribute('style');
       if (s && s.indexOf('break-inside') >= 0) push(el);
     });
+    const fEl = root.querySelector('.pdf-foot');
+    let f = null;
+    if (fEl) {
+      const r = fEl.getBoundingClientRect();
+      if (r.height > 0 && r.height <= usableH) f = [r.top - rootTop, r.bottom - rootTop];
+    }
     const st = [0];
     let s = 0,
       guard = 0;
@@ -16906,6 +17425,7 @@ function QCPagedPreview({
       s = brk;
     }
     if (st.length !== starts.length || st.some((v, i) => Math.abs(v - (starts[i] || 0)) > 2)) setStarts(st);
+    if ((f ? 1 : 0) !== (foot ? 1 : 0) || f && foot && (Math.abs(f[0] - foot[0]) > 2 || Math.abs(f[1] - foot[1]) > 2)) setFoot(f);
   });
   const frame = {
     background: '#fff',
@@ -16933,23 +17453,48 @@ function QCPagedPreview({
       boxSizing: 'border-box',
       padding: '0 30px'
     }
-  }, children), starts.map((s0, k) => React.createElement("div", {
-    key: k,
-    style: frame
-  }, React.createElement("div", {
-    style: {
-      transform: 'translateY(' + -s0 + 'px)'
-    }
-  }, children), n > 1 && React.createElement("div", {
-    style: {
-      position: 'absolute',
-      right: 9,
-      bottom: 5,
-      fontSize: 9,
-      color: '#aeb7c2',
-      fontFamily: MONO
-    }
-  }, k + 1 + ' / ' + n))));
+  }, children), starts.map((s0, k) => {
+    const last = k === n - 1;
+    const pin = last && foot && foot[0] >= s0 - 2;
+    const footH = pin ? Math.max(0, foot[1] - foot[0]) : 0;
+    const cut = last ? pin ? foot[0] : s0 + usableH : starts[k + 1];
+    const mainH = Math.max(0, Math.min(cut - s0, usableH - footH));
+    return React.createElement("div", {
+      key: k,
+      style: frame
+    }, React.createElement("div", {
+      style: {
+        overflow: 'hidden',
+        height: mainH
+      }
+    }, React.createElement("div", {
+      style: {
+        transform: 'translateY(' + -s0 + 'px)'
+      }
+    }, children)), pin && React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: 30,
+        right: 30,
+        bottom: 28,
+        overflow: 'hidden',
+        height: footH
+      }
+    }, React.createElement("div", {
+      style: {
+        transform: 'translateY(' + -foot[0] + 'px)'
+      }
+    }, children)), n > 1 && React.createElement("div", {
+      style: {
+        position: 'absolute',
+        right: 9,
+        bottom: 5,
+        fontSize: 9,
+        color: '#aeb7c2',
+        fontFamily: MONO
+      }
+    }, k + 1 + ' / ' + n));
+  }));
 }
 const QC_CHART_STYLE_LABEL = {
   bar3d: '3D Bars',
@@ -17093,11 +17638,7 @@ function qcTone(d) {
 }
 function qcMonthVals(ind, months) {
   months = months || MONTHS;
-  return months.map(m => {
-    let v = monthRaw(ind, m[0]);
-    if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
-    return v;
-  });
+  return months.map(m => qcCellVal(ind, m));
 }
 function qcChartRows(ind, months) {
   months = months || MONTHS;
@@ -17341,11 +17882,7 @@ function qcDeptKpis(d, months) {
   return [['Zero-Defect %', st.rate + '%', st.rate >= 90 ? P.green : st.rate >= 70 ? P.amber : P.rose, st.ok + ' on benchmark · ' + breaches + ' breaches'], ['Breaches', String(breaches), breaches > 0 ? P.rose : P.green, 'indicator-months off benchmark'], ['Indicators', String(inds.length), P.violet, 'reporting quality KPIs'], ['Latest', latest.split(' ')[0] + ' ' + (latestStatus === 'breach' ? '✕' : latestStatus === 'ok' ? '✓' : '·'), statusColorFor(latestStatus === 'breach' ? 'Needs Improvement' : latestStatus === 'ok' ? 'Excellent' : ''), 'most recent reported month']];
 }
 function qcIndKpis(ind, months) {
-  const vals = months.map(m => {
-    let v = monthRaw(ind, m[0]);
-    if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
-    return v;
-  });
+  const vals = months.map(m => qcCellVal(ind, m));
   const qHasMonth = {};
   months.forEach(m => {
     if (monthRaw(ind, m[0]) != null) qHasMonth[fyOfKey(m[0]) + ':' + m[2]] = true;
@@ -17547,8 +18084,7 @@ function QCHeatGrid({
       fontWeight: 400
     }
   }, ind.goalDirection === 'higher_is_better' ? '↑' : '↓')), months.map(m => {
-    let v = monthRaw(ind, m[0]);
-    if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
+    const v = qcCellVal(ind, m);
     const s = qStatus(ind, v);
     const c = qcHeatColors(s);
     return React.createElement("td", {
@@ -17607,7 +18143,7 @@ function QCIncidentCard({
   showMonth = true
 }) {
   const x = r.x || {};
-  const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.admissionDate && 'Adm ' + x.admissionDate, x.procedureDate && 'Proc ' + x.procedureDate, x.victimName && 'Victim ' + x.victimName, x.victimId && 'Victim ID ' + x.victimId].filter(Boolean).join(' · ');
+  const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.incidentDate && 'Incident ' + x.incidentDate, x.admissionDate && 'Adm ' + x.admissionDate, x.procedureDate && 'Proc ' + x.procedureDate, x.victimName && 'Victim ' + x.victimName, x.victimId && 'Victim ID ' + x.victimId].filter(Boolean).join(' · ');
   const line = (lbl, v) => v != null && v !== '' ? React.createElement("div", {
     style: {
       fontSize: 10,
@@ -17666,8 +18202,7 @@ function QCIncidentBlock({
   d,
   months
 }) {
-  const set = months ? new Set(months.map(m => m[1])) : null;
-  const inc = qcIncidentsOf(d).filter(r => !set || set.has(r.month));
+  const inc = qcIncidentsOf(d).filter(r => qcIncInPeriod(r, months));
   if (!inc.length) return null;
   return React.createElement("div", {
     style: {
@@ -17763,8 +18298,7 @@ function qcBenchRows(chosen, months) {
     if (bv == null || bv === '') return;
     let latest = null;
     for (let i = months.length - 1; i >= 0; i--) {
-      let v = monthRaw(ind, months[i][0]);
-      if (v == null) v = qtrRaw(ind, months[i][2], fyOfKey(months[i][0]));
+      const v = qcCellVal(ind, months[i]);
       if (v != null) {
         latest = v;
         break;
@@ -18393,7 +18927,7 @@ function QCSignatureBlock({
       display: 'flex',
       gap: 30
     }
-  }, cell('Prepared by', sig.prepared), cell('Reviewed by', sig.reviewed), cell('Approved by', sig.approved)));
+  }, cell('Prepared by', sig.prepared), cell('Checked by', sig.reviewed), cell('Approved by', sig.approved)));
 }
 function qcCapaMap() {
   try {
@@ -18401,6 +18935,26 @@ function qcCapaMap() {
   } catch (e) {
     return {};
   }
+}
+function qcHHOf(chosen, depts, months) {
+  const isHH = ind => /hand\s*hygiene/i.test(ind && ind.name || '') && (ind.formula === 'pct' || ind.formula === 'direct' || isPctInd(ind));
+  const hh = [];
+  (chosen || []).forEach(d => (d.indicators || []).forEach(ind => {
+    if (isHH(ind)) hh.push({
+      d,
+      ind
+    });
+  }));
+  if (!hh.some(h => hasData(h.ind, months))) {
+    const seen = new Set(hh.map(h => h.ind));
+    (depts || []).forEach(d => (d.indicators || []).forEach(ind => {
+      if (isHH(ind) && !seen.has(ind) && hasData(ind, months)) hh.push({
+        d,
+        ind
+      });
+    }));
+  }
+  return hh;
 }
 function QCReportBuilder({
   depts
@@ -18447,11 +19001,14 @@ function QCReportBuilder({
   });
   const [activeTemplate, setActiveTemplate] = useState('custom');
   const [compareBaseline, setCompareBaseline] = useState('prev');
-  const [sig, setSig] = useState({
+  const [sig, setSig] = useState(() => window.unicoSig ? window.unicoSig.load() : {
     prepared: '',
     reviewed: '',
     approved: ''
   });
+  useEffect(() => {
+    if (window.unicoSig) window.unicoSig.save(sig);
+  }, [sig]);
   const [indMode, setIndMode] = useState('all');
   const [indSel, setIndSel] = useState(() => new Set());
   const [indQ, setIndQ] = useState('');
@@ -18543,10 +19100,13 @@ function QCReportBuilder({
       ...(c.sections || {})
     }));
     setCompareBaseline(c.compareBaseline || 'prev');
-    setSig(c.sig || {
-      prepared: '',
-      reviewed: '',
-      approved: ''
+    setSig(s => {
+      const cs = c.sig || {};
+      return cs.prepared || cs.reviewed || cs.approved ? {
+        prepared: cs.prepared || '',
+        reviewed: cs.reviewed || '',
+        approved: cs.approved || ''
+      } : s;
     });
     setIndMode(c.indMode || 'all');
     setIndSel(new Set(c.indSel || []));
@@ -18652,8 +19212,7 @@ function QCReportBuilder({
       kind: 'compare'
     }] : [];else if (reportType === 'detail') base = chosen.flatMap(d => {
       const inds = (d.indicators || []).filter(i => hasData(i, pMonths));
-      const list = inds.length ? inds : d.indicators || [];
-      return (list.length ? list : [null]).map(ind => ({
+      return (inds.length ? inds : [null]).map(ind => ({
         kind: 'detail',
         dept: d,
         ind
@@ -18661,13 +19220,7 @@ function QCReportBuilder({
     });else if (reportType === 'heatmap') base = chosen.length ? [{
       kind: 'heatmap'
     }] : [];else if (reportType === 'handhygiene') {
-      const hh = [];
-      chosen.forEach(d => (d.indicators || []).forEach(ind => {
-        if (/hand\s*hygiene/i.test(ind.name || '')) hh.push({
-          d,
-          ind
-        });
-      }));
+      const hh = qcHHOf(chosen, depts, pMonths);
       base = chosen.length ? [{
         kind: 'hh',
         part: 'overview'
@@ -18677,8 +19230,12 @@ function QCReportBuilder({
           const g = h.ind.mGroups || {};
           return Object.keys(g).some(k => g[k] && Object.keys(g[k]).length);
         });
+        const hasDeptBd = hh.some(h => {
+          const b = h.ind.mDeptBreakdown || {};
+          return Object.keys(b).some(k => Array.isArray(b[k]) && b[k].length);
+        });
         const deptCount = new Set(hh.map(h => h.d.key)).size;
-        if (hasGroups || deptCount > 1) base.push({
+        if (hasGroups || hasDeptBd || deptCount > 1) base.push({
           kind: 'hh',
           part: 'breakdown'
         });
@@ -18938,8 +19495,7 @@ function QCReportBuilder({
     ind,
     m
   }) => {
-    let v = monthRaw(ind, m[0]);
-    if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
+    const v = qcCellVal(ind, m);
     const s = qStatus(ind, v);
     const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
     const bg = s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : '#f4f6f9';
@@ -19081,8 +19637,7 @@ function QCReportBuilder({
   }) => {
     const code = stdMatch(ind.name);
     const g = guideOf(code);
-    const mset = new Set(pMonths.map(m => m[1]));
-    const incs = isEventIndicator(ind) ? qcIncidentsOf(d).filter(r => r.ind === ind.name && mset.has(r.month)) : [];
+    const incs = isEventIndicator(ind) ? qcIncidentsOf(d).filter(r => r.ind === ind.name && qcIncInPeriod(r, pMonths)) : [];
     return React.createElement("div", {
       style: {
         marginTop: 14
@@ -19166,7 +19721,7 @@ function QCReportBuilder({
     const leadInd = qcLeadIndicator(d, pMonths);
     const code = leadInd ? stdMatch(leadInd.name) : null;
     const secLabel = code ? HQI_SECN[code[0]] || code : leadInd ? catOf(leadInd.name) : 'Quality';
-    const cards = detailed ? chartInd ? qcIndKpis(chartInd, pMonths) : [] : qcDeptKpis(d, pMonths);
+    const cards = detailed ? chartInd ? qcIndKpis(chartInd, pMonths) : qcDeptKpis(d, pMonths) : qcDeptKpis(d, pMonths);
     const dd = qcDonutData(d, pMonths);
     return React.createElement("div", {
       className: "qc-rpage",
@@ -19329,19 +19884,23 @@ function QCReportBuilder({
     total,
     lead
   }) {
+    const normN = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase().replace(/\s*\(hospital\)$/, '');
     const names = [];
     const seen = new Set();
     chosen.forEach(d => (d.indicators || []).forEach(ind => {
-      if (!seen.has(ind.name)) {
-        seen.add(ind.name);
+      const k = normN(ind.name);
+      if (!seen.has(k)) {
+        seen.add(k);
         names.push(ind.name);
       }
     }));
-    const findInd = (d, name) => (d.indicators || []).find(i => i.name === name);
-    const set = new Set(pMonths.map(m => m[1]));
+    const findInd = (d, name) => {
+      const k = normN(name);
+      return (d.indicators || []).find(i => normN(i.name) === k);
+    };
     const incs = [];
     chosen.forEach(d => qcIncidentsOf(d).forEach(r => {
-      if (set.has(r.month)) incs.push({
+      if (qcIncInPeriod(r, pMonths)) incs.push({
         dept: d.name,
         ind: r.ind,
         x: r.x,
@@ -19487,17 +20046,25 @@ function QCReportBuilder({
         }
       }, vertHead ? React.createElement("div", {
         style: {
-          writingMode: 'vertical-rl',
-          transform: 'rotate(180deg)',
-          margin: '0 auto',
-          maxHeight: 60,
+          height: 60,
+          position: 'relative',
+          margin: '0 auto'
+        }
+      }, React.createElement("div", {
+        style: {
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%,-50%) rotate(-90deg)',
+          width: 58,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
+          textAlign: 'left',
           fontSize: dense ? 7.5 : 8.5,
           lineHeight: 1.1
         }
-      }, d.name) : d.name)))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+      }, d.name)) : d.name)))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
         colSpan: chosen.length + 3,
         style: {
           padding: 14,
@@ -19588,7 +20155,7 @@ function QCReportBuilder({
           }
         }, "\u2014") : pill(c, i, name)));
       })));
-    })()), incs.length > 0 && React.createElement("div", {
+    })()), sections.incidents && incs.length > 0 && React.createElement("div", {
       style: {
         marginTop: 14
       }
@@ -19620,15 +20187,20 @@ function QCReportBuilder({
     lead
   }) {
     const m = page.month;
+    const normN = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase().replace(/\s*\(hospital\)$/, '');
     const names = [];
     const seen = new Set();
     chosen.forEach(d => (d.indicators || []).forEach(ind => {
-      if (!seen.has(ind.name)) {
-        seen.add(ind.name);
+      const k = normN(ind.name);
+      if (!seen.has(k)) {
+        seen.add(k);
         names.push(ind.name);
       }
     }));
-    const findInd = (d, name) => (d.indicators || []).find(i => i.name === name);
+    const findInd = (d, name) => {
+      const k = normN(name);
+      return (d.indicators || []).find(i => normN(i.name) === k);
+    };
     const incs = [];
     chosen.forEach(d => qcIncidentsOf(d).forEach(r => {
       if (r.month === m[1]) incs.push({
@@ -19752,17 +20324,25 @@ function QCReportBuilder({
         }
       }, vertHead ? React.createElement("div", {
         style: {
-          writingMode: 'vertical-rl',
-          transform: 'rotate(180deg)',
-          margin: '0 auto',
-          maxHeight: 60,
+          height: 60,
+          position: 'relative',
+          margin: '0 auto'
+        }
+      }, React.createElement("div", {
+        style: {
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%,-50%) rotate(-90deg)',
+          width: 58,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
+          textAlign: 'left',
           fontSize: dense ? 7.5 : 8.5,
           lineHeight: 1.1
         }
-      }, d.name) : d.name)))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+      }, d.name)) : d.name)))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
         colSpan: chosen.length + 3,
         style: {
           padding: 14,
@@ -19788,8 +20368,7 @@ function QCReportBuilder({
             benchSet.add(be);
             if (!bench) bench = be;
           }
-          let v = monthRaw(ind, m[0]);
-          if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
+          const v = qcCellVal(ind, m);
           const s = qStatus(ind, v);
           const isRate = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
           if (v != null) {
@@ -19883,7 +20462,7 @@ function QCReportBuilder({
           }
         }, c.s === 'na' ? '·' : fmtVal(c.ind, c.v)))));
       })));
-    })()), incs.length > 0 && React.createElement("div", {
+    })()), sections.incidents && incs.length > 0 && React.createElement("div", {
       style: {
         marginTop: 14
       }
@@ -20278,8 +20857,7 @@ function QCReportBuilder({
     const capa = qcCapaMap();
     const incs = [];
     chosen.forEach(d => qcIncidentsOf(d).forEach(r => {
-      const set = new Set(pMonths.map(m => m[1]));
-      if (set.has(r.month)) incs.push({
+      if (qcIncInPeriod(r, pMonths)) incs.push({
         dept: d.name,
         ind: r.ind,
         month: r.month,
@@ -20534,25 +21112,11 @@ function QCReportBuilder({
   function HHPage({
     page,
     n,
-    total
+    total,
+    lead
   }) {
     const part = page.part || 'overview';
-    const isHH = ind => /hand\s*hygiene/i.test(ind && ind.name || '') && (ind.formula === 'pct' || ind.formula === 'direct' || isPctInd(ind));
-    const hh = [];
-    chosen.forEach(d => (d.indicators || []).forEach(ind => {
-      if (isHH(ind)) hh.push({
-        d,
-        ind
-      });
-    }));
-    if (!hh.length) {
-      (depts || []).forEach(d => (d.indicators || []).forEach(ind => {
-        if (isHH(ind)) hh.push({
-          d,
-          ind
-        });
-      }));
-    }
+    const hh = qcHHOf(chosen, depts, pMonths);
     if (!hh.length) return React.createElement("div", {
       className: "qc-rpage",
       style: {
@@ -20721,7 +21285,25 @@ function QCReportBuilder({
         style: {
           marginTop: 18
         }
-      }, React.createElement("div", {
+      }, lead && sections.execSummary && React.createElement(QCExecSummary, {
+        chosen: chosen,
+        months: pMonths,
+        rangeLabel: rangeLabel
+      }), lead && sections.periodCompare && React.createElement(QCPeriodCompare, {
+        chosen: chosen,
+        months: pMonths,
+        baseMonths: baseMonths,
+        baselineLabel: baselineLabel
+      }), lead && sections.ragHeatmap && React.createElement(QCRagHeatmap, {
+        chosen: chosen,
+        months: pMonths
+      }), lead && sections.deptRanking && React.createElement(QCDeptRanking, {
+        chosen: chosen,
+        months: pMonths
+      }), lead && sections.benchmarkCompare && React.createElement(QCBenchmarkCompare, {
+        chosen: chosen,
+        months: pMonths
+      }), React.createElement("div", {
         className: "qc-band",
         style: {
           display: 'flex',
@@ -20828,7 +21410,10 @@ function QCReportBuilder({
             fontSize: 10
           }
         }, s.label)));
-      })))), React.createElement(Footer, {
+      }))), lead && sections.signatures && React.createElement(QCSignatureBlock, {
+        sig: sig,
+        orgName: orgName
+      })), React.createElement(Footer, {
         n: n,
         total: total
       }));
@@ -20842,7 +21427,40 @@ function QCReportBuilder({
       return null;
     })();
     const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
-    const groupRows = gMonth ? GROUP_KEYS.map(([k, lbl]) => {
+    const bdSrc = (() => {
+      for (let i = pMonths.length - 1; i >= 0; i--) {
+        const mk = pMonths[i][0];
+        for (const h of hh) {
+          const b = h.ind.mDeptBreakdown && h.ind.mDeptBreakdown[mk];
+          if (Array.isArray(b) && b.length) return {
+            month: pMonths[i],
+            rows: b
+          };
+        }
+      }
+      return null;
+    })();
+    const bdTot = g => GROUP_KEYS.reduce((a, [k]) => {
+      const x = (g || {})[k] || {};
+      return {
+        n: a.n + (Number(x.n) || 0),
+        d: a.d + (Number(x.d) || 0)
+      };
+    }, {
+      n: 0,
+      d: 0
+    });
+    const bdRows = bdSrc ? bdSrc.rows.map(r => {
+      const t = bdTot(r.g);
+      return {
+        label: r.dept || '—',
+        g: r.g || {},
+        n: t.n,
+        d: t.d,
+        value: t.d > 0 ? Math.round(t.n / t.d * 10000) / 100 : null
+      };
+    }).sort((a, b) => (b.value == null ? -1 : b.value) - (a.value == null ? -1 : a.value)) : [];
+    let groupRows = gMonth ? GROUP_KEYS.map(([k, lbl]) => {
       const gN = pind.mGroups[gMonth[0]] || {};
       const gD = pind.mGroupsDen && pind.mGroupsDen[gMonth[0]] || {};
       const nn = Number(gN[k]) || 0,
@@ -20854,6 +21472,23 @@ function QCReportBuilder({
         value: dd > 0 ? Math.round(nn / dd * 10000) / 100 : null
       };
     }).filter(r => r.d > 0 || r.n > 0) : [];
+    if (!groupRows.length && bdSrc) {
+      groupRows = GROUP_KEYS.map(([k, lbl]) => {
+        let n = 0,
+          d = 0;
+        bdSrc.rows.forEach(r => {
+          const x = (r.g || {})[k] || {};
+          n += Number(x.n) || 0;
+          d += Number(x.d) || 0;
+        });
+        return {
+          label: lbl,
+          n,
+          d,
+          value: d > 0 ? Math.round(n / d * 10000) / 100 : null
+        };
+      }).filter(r => r.d > 0 || r.n > 0);
+    }
     const deptGroups = {};
     hh.forEach(h => {
       (deptGroups[h.d.key] = deptGroups[h.d.key] || {
@@ -20938,7 +21573,7 @@ function QCReportBuilder({
         fontSize: 15,
         color: P.ink
       }
-    }, "Hand Hygiene \u2014 breakdown", gMonth ? ' · ' + gMonth[1] : ''), React.createElement("span", {
+    }, "Hand Hygiene \u2014 breakdown", bdSrc ? ' · ' + bdSrc.month[1] : gMonth ? ' · ' + gMonth[1] : ''), React.createElement("span", {
       style: {
         flex: 1
       }
@@ -20997,23 +21632,103 @@ function QCReportBuilder({
           color: s.color
         }
       }, r.value != null ? r.value + '%' : '—'));
-    })))), deptRows.length > 1 && React.createElement("div", {
+    })))), bdRows.length > 0 && React.createElement("div", {
       style: {
-        marginBottom: 14
+        marginBottom: 16
       }
     }, React.createElement("div", {
       style: uSub
-    }, "Compliance by department (latest reported month, %)"), typeof window.BarChart === 'function' && window.BarChart({
-      data: deptRows.map(r => ({
+    }, "Department-wise audit \xB7 ", bdSrc.month[1], " \xB7 compliant / observed moments (WHO 5 Moments)"), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        marginTop: 6,
+        fontSize: 10.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th
+    }, "Department"), GROUP_KEYS.map(([k, lbl]) => React.createElement("th", {
+      key: k,
+      style: thr
+    }, lbl)), React.createElement("th", {
+      style: thr
+    }, "Total"), React.createElement("th", {
+      style: thr
+    }, "Compliance"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      }
+    }, "Status"))), React.createElement("tbody", null, bdRows.map(r => {
+      const s = whoStat(r.value);
+      return React.createElement("tr", {
+        key: r.label
+      }, React.createElement("td", {
+        style: {
+          ...tdc,
+          fontWeight: 600,
+          color: P.ink
+        }
+      }, r.label), GROUP_KEYS.map(([k]) => {
+        const x = r.g[k] || {};
+        const nn = Number(x.n) || 0,
+          dd = Number(x.d) || 0;
+        return React.createElement("td", {
+          key: k,
+          style: tdr
+        }, nn || dd ? nn + '/' + dd : '—');
+      }), React.createElement("td", {
+        style: {
+          ...tdr,
+          fontWeight: 600
+        }
+      }, r.d > 0 ? r.n + '/' + r.d : '—'), React.createElement("td", {
+        style: {
+          ...tdr,
+          fontWeight: 700,
+          color: r.value == null ? P.faint : P.ink
+        }
+      }, r.value != null ? r.value + '%' : '—'), React.createElement("td", {
+        style: {
+          textAlign: 'center',
+          padding: '4px 6px'
+        }
+      }, React.createElement("span", {
+        style: {
+          display: 'inline-block',
+          padding: '2px 8px',
+          borderRadius: 20,
+          background: s.bg,
+          color: s.color,
+          fontWeight: 700,
+          fontSize: 9.5
+        }
+      }, r.value == null ? 'Not audited' : s.label)));
+    })))), (() => {
+      const audited = bdRows.filter(r => r.value != null);
+      const src = audited.length ? audited.map(r => ({
+        label: (r.label || '').slice(0, 20),
+        val: r.value
+      })) : deptRows.map(r => ({
         label: r.label,
         val: r.value
-      })),
-      x: 'label',
-      y: 'val',
-      height: Math.max(170, deptRows.length * 26),
-      color: P.violet,
-      flat: true
-    })), React.createElement("div", {
+      }));
+      return src.length > 1 && React.createElement("div", {
+        style: {
+          marginBottom: 14
+        }
+      }, React.createElement("div", {
+        style: uSub
+      }, "Compliance by department (", audited.length ? bdSrc.month[1] : 'latest reported month', ", %)"), typeof window.BarChart === 'function' && window.BarChart({
+        data: src,
+        x: 'label',
+        y: 'val',
+        height: Math.max(170, src.length * 26),
+        color: P.violet,
+        flat: true
+      }));
+    })(), React.createElement("div", {
       style: {
         background: '#eef8fc',
         border: '1px solid #cfe6f7',
@@ -21129,6 +21844,12 @@ function QCReportBuilder({
             const r = a.getBoundingClientRect();
             if (r.height > 0) guardsCss.push([r.top - elRect.top, r.bottom - elRect.top]);
           });
+          const fEl = el.querySelector('.pdf-foot');
+          let fCss = null;
+          if (fEl) {
+            const fr = fEl.getBoundingClientRect();
+            if (fr.height > 0) fCss = [fr.top - elRect.top, fr.bottom - elRect.top];
+          }
           const canvas = await H(el, {
             scale: 2,
             backgroundColor: '#ffffff',
@@ -21143,15 +21864,16 @@ function QCReportBuilder({
             pageHpx = Math.round(ph * pxPerPt);
           const k = elRect.height > 0 ? cH / elRect.height : 2;
           const guards = guardsCss.map(g => [g[0] * k, g[1] * k]).filter(g => g[1] - g[0] < pageHpx * 0.9);
-          const pickEnd = y0 => {
-            if (cH - y0 <= pageHpx) return cH;
-            let cut = y0 + pageHpx;
+          const fPx = fCss ? [fCss[0] * k, fCss[1] * k] : null;
+          const pickEnd = (y0, budget) => {
+            if (cH - y0 <= budget) return cH;
+            let cut = y0 + budget;
             for (let pass = 0; pass < 8; pass++) {
               let moved = false;
               for (const g of guards) {
                 if (g[0] < cut - 1 && g[1] > cut + 1) {
                   const c2 = Math.floor(g[0]);
-                  if (c2 > y0 + pageHpx * 0.35) {
+                  if (c2 > y0 + budget * 0.35) {
                     cut = c2;
                     moved = true;
                   }
@@ -21159,25 +21881,64 @@ function QCReportBuilder({
               }
               if (!moved) break;
             }
-            return Math.max(cut, y0 + Math.round(pageHpx * 0.35));
+            return Math.max(cut, y0 + Math.round(budget * 0.35));
           };
-          let y = 0;
-          do {
-            const end = pickEnd(y),
-              sliceH = end - y;
-            let srcC = canvas;
-            if (sliceH < cH) {
-              const tmp = document.createElement('canvas');
-              tmp.width = cW;
-              tmp.height = sliceH;
-              tmp.getContext('2d').drawImage(canvas, 0, y, cW, sliceH, 0, 0, cW, sliceH);
-              srcC = tmp;
+          const crop = (top, h) => {
+            const tmp = document.createElement('canvas');
+            tmp.width = cW;
+            tmp.height = h;
+            tmp.getContext('2d').drawImage(canvas, 0, top, cW, h, 0, 0, cW, h);
+            return tmp.toDataURL('image/jpeg', 0.94);
+          };
+          const snapCtx = canvas.getContext('2d', {
+            willReadFrequently: true
+          });
+          const rowBlank = yy => {
+            if (yy <= 0 || yy >= cH) return false;
+            const d = snapCtx.getImageData(0, yy, cW, 1).data;
+            for (let i = 0; i < d.length; i += 4) {
+              if (d[i] < 252 || d[i + 1] < 252 || d[i + 2] < 252) return false;
             }
+            return true;
+          };
+          const snapCut = (cut, y0) => {
+            if (rowBlank(cut)) return cut;
+            const up = Math.min(90, cut - (y0 + 24));
+            for (let dY = 1; dY <= 90; dY++) {
+              if (dY <= up && rowBlank(cut - dY)) return cut - dY;
+              if (dY <= 8 && cut + dY < cH - 1 && rowBlank(cut + dY)) return cut + dY;
+            }
+            return cut;
+          };
+          const padPx = Math.round(28 * k),
+            padPt = padPx / pxPerPt;
+          if (cH <= pageHpx + 4) {
             if (!firstPage) doc.addPage(fmt, ori);
             firstPage = false;
-            doc.addImage(srcC.toDataURL('image/jpeg', 0.94), 'JPEG', 0, 0, pw, sliceH / pxPerPt, undefined, 'FAST');
-            y = end;
-          } while (cH - y > 2);
+            doc.addImage(canvas.toDataURL('image/jpeg', 0.94), 'JPEG', 0, 0, pw, Math.min(ph, cH / pxPerPt), undefined, 'FAST');
+          } else {
+            let y = 0;
+            do {
+              const first = y === 0,
+                top = first ? 0 : padPt,
+                budget = pageHpx - (first ? 1 : 2) * padPx;
+              let end = pickEnd(y, budget);
+              if (end < cH) end = snapCut(end, y);
+              const sliceH = end - y;
+              if (!firstPage) doc.addPage(fmt, ori);
+              firstPage = false;
+              if (cH - end <= 2 && sliceH < budget - 4 && fPx && fPx[0] >= y - 2 && fPx[0] < end) {
+                const fTop = Math.max(y, snapCut(Math.floor(fPx[0]), y)),
+                  contentH = fTop - y,
+                  footH = end - fTop;
+                if (contentH > 2) doc.addImage(crop(y, contentH), 'JPEG', 0, top, pw, contentH / pxPerPt, undefined, 'FAST');
+                if (footH > 2) doc.addImage(crop(fTop, footH), 'JPEG', 0, ph - footH / pxPerPt, pw, footH / pxPerPt, undefined, 'FAST');
+              } else {
+                doc.addImage(crop(y, sliceH), 'JPEG', 0, top, pw, sliceH / pxPerPt, undefined, 'FAST');
+              }
+              y = end;
+            } while (cH - y > 2);
+          }
         }
         els.forEach((el, i) => el.setAttribute('style', prev[i]));
         els = [];
@@ -21235,15 +21996,13 @@ function QCReportBuilder({
     if (fmt === 'csv') {
       const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(pMonths.map(m => m[1]))];
       scope.forEach(d => (d.indicators || []).forEach(ind => rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(pMonths.map(m => {
-        let v = monthRaw(ind, m[0]);
-        if (v == null) v = qtrRaw(ind, m[2], fyOfKey(m[0]));
+        const v = qcCellVal(ind, m);
         return qStatus(ind, v) === 'na' ? '' : fmtVal(ind, v);
       })))));
       rows.push([]);
       rows.push(['INCIDENT DETAILS']);
       rows.push(['Department', 'Indicator', 'Month', 'UHID', 'Patient', 'Age', 'Sex', 'Diagnosis', 'Details', 'Finding', 'Corrective', 'Preventive']);
-      const mset = new Set(pMonths.map(m => m[1]));
-      scope.forEach(d => qcIncidentsOf(d).filter(r => mset.has(r.month)).forEach(r => {
+      scope.forEach(d => qcIncidentsOf(d).filter(r => qcIncInPeriod(r, pMonths)).forEach(r => {
         const x = r.x;
         rows.push([d.name, r.ind, r.month, x.uhid || '', x.patientName || '', x.age || '', x.gender || '', x.diagnosis || '', x.details || '', x.finding || '', x.corrective || '', x.preventive || '']);
       }));
@@ -22078,7 +22837,7 @@ function QCReportBuilder({
       ...s,
       reviewed: e.target.value
     })),
-    placeholder: "Reviewed by (name)",
+    placeholder: "Checked by (name)",
     style: {
       ...sel2,
       width: '100%'
@@ -22268,7 +23027,8 @@ function QCReports({
   });
 }
 function QCIncidents({
-  depts
+  depts,
+  Q
 }) {
   const [dept, setDept] = useState('all');
   const [sel, setSel] = useState(null);
@@ -22334,7 +23094,8 @@ function QCIncidents({
   if (sel) {
     return React.createElement(IncidentReport, {
       rec: sel,
-      onBack: () => setSel(null)
+      onBack: () => setSel(null),
+      Q: Q
     });
   }
   return React.createElement("div", null, React.createElement("div", {
@@ -22561,9 +23322,14 @@ function QCIncidents({
 }
 function IncidentReport({
   rec,
-  onBack
+  onBack,
+  Q
 }) {
-  const ind = rec.indObj;
+  const liveDep = Q && Array.isArray(Q.depts) ? Q.depts.find(d => d.key === rec.deptKey) : null;
+  const liveInd = liveDep ? (liveDep.indicators || []).find(i => i.id === rec.indObj.id) : null;
+  const ind = liveInd || rec.indObj;
+  const dep = liveDep || rec.deptObj;
+  const [editing, setEditing] = useState(false);
   const gd = guideOf(stdMatch(rec.ind)) || {};
   const meas = measureOf(ind.formula);
   const isQtr = rec.period === 'quarter';
@@ -22649,6 +23415,10 @@ function IncidentReport({
   const gapDir = gap == null ? '' : gap < 0 ? 'below' : gap > 0 ? 'above' : 'at';
   const incidents = ind.incidents && ind.incidents[isQtr ? rec.quarter : rec.monthKey] || [];
   const remarkShownInSection = isEvent && incidents.length === 0 && remark || !isEvent && remark;
+  const liveStatus = isQtr ? qtrStatus(ind, rec.quarter) : monthStatus(ind, rec.monthKey);
+  const isBreachNow = liveStatus === 'breach';
+  const liveValue = liveStatus === 'na' ? '—' : fmtVal(ind, isQtr ? qtrRaw(ind, rec.quarter) : monthRaw(ind, rec.monthKey));
+  const canEdit = qcCanEdit() && !!Q && !isQtr;
   return React.createElement("div", {
     style: {
       display: 'flex',
@@ -22657,8 +23427,16 @@ function IncidentReport({
     }
   }, React.createElement("div", {
     style: Object.assign({}, card, {
-      borderTop: '3px solid ' + P.rose
+      borderTop: '3px solid ' + (isBreachNow ? P.rose : P.green)
     })
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: 12,
+      flexWrap: 'wrap'
+    }
   }, React.createElement("button", {
     onClick: onBack,
     style: {
@@ -22669,10 +23447,37 @@ function IncidentReport({
       fontSize: 12,
       fontWeight: 600,
       color: P.ink2,
-      cursor: 'pointer',
-      marginBottom: 12
+      cursor: 'pointer'
     }
-  }, "\u2190 Back to incidents"), React.createElement("div", {
+  }, "\u2190 Back to incidents"), canEdit && React.createElement("button", {
+    onClick: () => setEditing(e => !e),
+    title: editing ? 'Close editor' : 'Edit this reading & incident report',
+    style: {
+      marginLeft: 'auto',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid #cfe6f4',
+      background: editing ? '#0090ca' : '#eef8fc',
+      color: editing ? '#fff' : '#0090ca',
+      padding: '6px 13px',
+      borderRadius: 8,
+      fontSize: 12,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"
+  })), editing ? 'Close editor' : 'Edit report')), React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'flex-start',
@@ -22714,10 +23519,10 @@ function IncidentReport({
       fontFamily: MONO,
       fontSize: 30,
       fontWeight: 700,
-      color: P.rose,
+      color: isBreachNow ? P.rose : P.green,
       lineHeight: 1.1
     }
-  }, rec.value), React.createElement("div", {
+  }, liveValue), React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: P.ink2,
@@ -22729,18 +23534,25 @@ function IncidentReport({
       fontWeight: 600,
       color: P.blue700
     }
-  }, rec.bench)), React.createElement("span", {
+  }, benchExpr(ind))), React.createElement("span", {
     style: {
       display: 'inline-block',
       marginTop: 6,
       fontSize: 10.5,
       fontWeight: 700,
-      color: P.rose,
-      background: '#fbe9ec',
+      color: isBreachNow ? P.rose : P.green,
+      background: isBreachNow ? '#fbe9ec' : '#e7f6ed',
       padding: '3px 10px',
       borderRadius: 20
     }
-  }, "Breach")))), React.createElement("div", {
+  }, isBreachNow ? 'Breach' : liveStatus === 'na' ? 'No reading' : 'On benchmark')))), canEdit && editing && React.createElement(QCIndEdit, {
+    dep: dep,
+    ind: ind,
+    mk: rec.monthKey,
+    mlabel: rec.month,
+    Q: Q,
+    onClose: () => setEditing(false)
+  }), React.createElement("div", {
     style: card
   }, React.createElement("h3", {
     style: secTitle
@@ -22827,7 +23639,7 @@ function IncidentReport({
       gap: 12
     }
   }, incidents.map((inc, ii) => {
-    const patient = [['UHID', inc.uhid], ['Patient name', inc.patientName], ['Age · Gender', [inc.age, inc.gender].filter(Boolean).join(' · ')], ['Diagnosis', inc.diagnosis], ['Date of admission', inc.admissionDate], ['Date of procedure', inc.procedureDate]].filter(r => r[1] != null && r[1] !== '');
+    const patient = [['UHID', inc.uhid], ['Patient name', inc.patientName], ['Age · Gender', [inc.age, inc.gender].filter(Boolean).join(' · ')], ['Date of incident', inc.incidentDate], ['Diagnosis', inc.diagnosis], ['Date of admission', inc.admissionDate], ['Date of procedure', inc.procedureDate]].filter(r => r[1] != null && r[1] !== '');
     const capa = [['Incident details', inc.details], ['Finding / observation', inc.finding], ['Corrective action', inc.corrective], ['Preventive action', inc.preventive], ['Remark', inc.remark]].filter(r => r[1] != null && r[1] !== '');
     return React.createElement("div", {
       key: inc.id || inc.uhid || ii,
@@ -23213,6 +24025,14 @@ function QCAdmin({
   const [expand, setExpand] = useState('');
   const [entryFy, setEntryFy] = useState(() => defaultFy(allDepts));
   const MONTHS = fyAxis(entryFy);
+  const [editScope, setEditScope] = useState('one');
+  useEffect(() => {
+    setEditScope('one');
+  }, [sel.deptKey, sel.id]);
+  const [hcAll, setHcAll] = useState('');
+  useEffect(() => {
+    setHcAll('');
+  }, [sel.deptKey, sel.id, entryFy]);
   const CATS = ['Healthcare-Associated Infection', 'Infection Prevention', 'Patient Safety', 'Clinical Outcomes', 'Staff Safety', 'Staff Competency', 'Activity / Volume', 'Medication Safety'];
   const FREQ = ['Monthly', 'Quarterly', 'Annually', 'Bi-annually'];
   const FORMULAS = [['direct', 'Direct value — enter the number as-is'], ['count', 'Count — a running tally (numerator only)'], ['avg', 'Average (mean) — numerator ÷ denominator (e.g. avg length of stay)'], ['rate1000', 'Rate per 1000 — numerator ÷ denominator × 1000'], ['rate100', 'Rate per 100 — numerator ÷ denominator × 100'], ['pct', 'Percentage — numerator ÷ denominator × 100']];
@@ -23354,12 +24174,13 @@ function QCAdmin({
   const patch = obj => {
     if (sel.deptKey && sel.id) Q.patchIndicator(sel.deptKey, sel.id, obj);
   };
-  const patchDef = obj => {
+  const patchShared = obj => {
     if (!sel.id) return;
     const targets = (Q.depts || []).filter(d => (d.indicators || []).some(i => i.id === sel.id)).map(d => d.key);
     if (sel.deptKey && targets.indexOf(sel.deptKey) < 0) targets.push(sel.deptKey);
     targets.forEach(k => Q.patchIndicator(k, sel.id, obj));
   };
+  const patchDef = obj => editScope === 'shared' ? patchShared(obj) : patch(obj);
   const patchField = f => e => patchDef({
     [f]: e.target.value
   });
@@ -23444,6 +24265,8 @@ function QCAdmin({
     setCopyT({});
   };
   const meas = selInd ? measureOf(selInd.formula) : null;
+  const sharedIdDepts = selInd ? (Q.depts || []).filter(d => (d.indicators || []).some(i => i.id === sel.id)) : [];
+  const sharedOthers = sharedIdDepts.filter(d => d.key !== sel.deptKey).map(d => d.name);
   const dirHigh = selInd && selInd.goalDirection === 'higher_is_better';
   const benchSet = selInd && selInd.benchmarkValue != null && selInd.benchmarkValue !== '';
   const needsNum = selInd && selInd.formula !== 'direct';
@@ -24346,7 +25169,66 @@ function QCAdmin({
       fontSize: 12.5,
       color: '#0072a3'
     }
-  }, "\u0192\xA0 ", formulaText(selInd)), copyOpen && React.createElement("div", {
+  }, "\u0192\xA0 ", formulaText(selInd)), sharedOthers.length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 9,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      flexWrap: 'wrap',
+      border: '1px solid ' + (editScope === 'shared' ? '#f0d9a8' : '#dde3ec'),
+      background: editScope === 'shared' ? '#fff8ec' : '#f7f9fc',
+      borderRadius: 8,
+      padding: '7px 11px'
+    }
+  }, React.createElement("span", {
+    title: 'Also in: ' + sharedOthers.join(', '),
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: editScope === 'shared' ? '#9a6b00' : P.ink2
+    }
+  }, "Common indicator \u2014 also in ", React.createElement("b", null, sharedOthers.length), " other department", sharedOthers.length !== 1 ? 's' : '', " ", React.createElement("span", {
+    style: {
+      fontWeight: 400,
+      color: P.muted
+    }
+  }, "(", sharedOthers.slice(0, 3).join(', '), sharedOthers.length > 3 ? ' +' + (sharedOthers.length - 3) + ' more' : '', ")")), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .3
+    }
+  }, "Apply edits to"), [['one', 'This department only'], ['shared', 'All ' + sharedIdDepts.length + ' departments']].map(([id, l]) => {
+    const on = editScope === id;
+    return React.createElement("button", {
+      key: id,
+      onClick: () => setEditScope(id),
+      title: id === 'one' ? 'Changes affect only ' + (selDept ? selDept.name : 'this department') + "'s copy" : 'Definition changes sync to every department listed (monthly values always stay per-department)',
+      style: {
+        border: '1px solid ' + (on ? P.blue : '#dde3ec'),
+        background: on ? P.blue : '#fff',
+        color: on ? '#fff' : P.ink2,
+        padding: '4px 11px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, l);
+  }), editScope === 'shared' && React.createElement("span", {
+    style: {
+      width: '100%',
+      fontSize: 10.5,
+      color: '#9a6b00'
+    }
+  }, "Name, formula, benchmark & definition edits now update every department above. Monthly values always stay per-department.")), copyOpen && React.createElement("div", {
     style: {
       marginTop: 11,
       border: '1px solid #dceffa',
@@ -24824,12 +25706,19 @@ function QCAdmin({
     style: {
       display: 'flex',
       flexDirection: 'column',
-      gap: 5,
+      gap: 7,
       gridColumn: '1 / -1',
       background: '#fff4e0',
       border: '1px solid #f0d9a8',
       borderRadius: 8,
       padding: '11px 13px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
     }
   }, React.createElement("label", {
     style: {
@@ -24837,37 +25726,119 @@ function QCAdmin({
       fontWeight: 700,
       color: '#9a6b00'
     }
-  }, selInd.denLabel || 'Total healthcare workers', " \u2014 hospital-wide headcount ", React.createElement("span", {
+  }, selInd.denLabel || 'Total healthcare workers', " \u2014 hospital-wide headcount, month by month ", React.createElement("span", {
     style: {
       fontWeight: 400,
       fontSize: 10.5,
       color: '#b07d15'
     }
-  }, "admin-set \xB7 applies to every month and department; collectors see it read-only")), React.createElement("input", {
+  }, "admin-set \xB7 applies to every department; collectors see it read-only")), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement(QCFyPicker, {
+    fy: entryFy,
+    setFy: setEntryFy,
+    depts: allDepts,
+    style: {
+      padding: '5px 8px',
+      fontSize: 11.5
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(96px,1fr))',
+      gap: 7
+    }
+  }, MONTHS.map(mm => {
+    const v = selInd.mDen && selInd.mDen[mm[0]];
+    return React.createElement("div", {
+      key: mm[0],
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: '#b07d15',
+        fontFamily: MONO
+      }
+    }, mm[1]), React.createElement("input", {
+      type: "number",
+      step: "any",
+      value: v == null || v === '' ? '' : v,
+      onChange: e => patchShared({
+        mDen: {
+          [mm[0]]: e.target.value === '' ? null : Number(e.target.value)
+        }
+      }),
+      placeholder: "\u2014",
+      style: {
+        padding: '7px 8px',
+        border: '1px solid #dde3ec',
+        borderRadius: 7,
+        fontSize: 12.5,
+        fontFamily: MONO,
+        background: '#fff',
+        outline: 'none',
+        width: '100%',
+        boxSizing: 'border-box'
+      }
+    }));
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("input", {
     type: "number",
     step: "any",
-    value: (selInd.mDen && MONTHS.map(mm => selInd.mDen[mm[0]]).filter(v => v != null && v !== '')[0]) ?? '',
-    onChange: e => {
-      const v = e.target.value === '' ? null : Number(e.target.value);
-      patchDef({
+    value: hcAll,
+    onChange: e => setHcAll(e.target.value),
+    placeholder: 'Same figure for all 12 months of ' + fyLabelOf(entryFy) + '…',
+    style: {
+      padding: '7px 10px',
+      border: '1px solid #dde3ec',
+      borderRadius: 7,
+      fontSize: 12.5,
+      fontFamily: MONO,
+      background: '#fff',
+      outline: 'none',
+      width: 250
+    }
+  }), React.createElement("button", {
+    onClick: () => {
+      if (hcAll === '') return;
+      const v = Number(hcAll);
+      patchShared({
         mDen: MONTHS.reduce((o, mm) => {
           o[mm[0]] = v;
           return o;
         }, {})
       });
+      setHcAll('');
     },
-    placeholder: "e.g. 1200 total staff",
     style: {
-      padding: '9px 11px',
-      border: '1px solid #dde3ec',
-      borderRadius: 8,
-      fontSize: 13,
-      fontFamily: MONO,
+      border: '1px solid #d8a63c',
       background: '#fff',
-      outline: 'none',
-      maxWidth: 240
+      color: '#9a6b00',
+      padding: '6px 12px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 700,
+      cursor: 'pointer'
     }
-  }))), tab === 'target' && React.createElement("div", null, React.createElement("div", {
+  }, "Fill all months"), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: '#b07d15'
+    }
+  }, "Fills every month of ", fyLabelOf(entryFy), "; you can then adjust individual months above.")))), tab === 'target' && React.createElement("div", null, React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -26074,7 +27045,8 @@ function QualityView({
   }), v === 'reports' && React.createElement(QCReports, {
     depts: depts
   }), v === 'incidents' && React.createElement(QCIncidents, {
-    depts: depts
+    depts: depts,
+    Q: Q
   }), v === 'actionplans' && React.createElement(QCActionPlans, {
     depts: depts
   }), v === 'dataentry' && React.createElement(QCDataEntry, null), v === 'admin' && React.createElement(QCAdmin, {
@@ -26564,7 +27536,8 @@ function QualityConsole({
   }), module === 'reports' && React.createElement(QCReports, {
     depts: depts
   }), module === 'incidents' && React.createElement(QCIncidents, {
-    depts: depts
+    depts: depts,
+    Q: Q
   }), module === 'actionplans' && React.createElement(QCActionPlans, {
     depts: depts
   }), module === 'dataentry' && React.createElement(QCDataEntry, null), module === 'admin' && React.createElement(QCAdmin, {
@@ -28606,6 +29579,14 @@ window.LockScreen = LockScreen;
       method: 'DELETE'
     }).then(r => r.json())
   };
+  const dcRefreshLive = () => {
+    try {
+      window.UNICO && window.UNICO.refreshDepartments && window.UNICO.refreshDepartments();
+    } catch (e) {}
+    try {
+      window.refreshQualitySeed && window.refreshQualitySeed();
+    } catch (e) {}
+  };
   const MO = () => window.UNICO && window.UNICO.MONTH_ORDER || [];
   const MONS_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const MONS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -28768,11 +29749,379 @@ window.LockScreen = LockScreen;
       value: n
     }))));
   }
+  function AccessMatrix({
+    persons,
+    areas,
+    areaInds,
+    onChanged,
+    onEditPerson
+  }) {
+    const DM = window.DEPTMAP;
+    const [q, setQ] = useState('');
+    const [menu, setMenu] = useState(null);
+    const [menuQ, setMenuQ] = useState('');
+    const [busy, setBusy] = useState(false);
+    const hasArea = (r, ak) => !!r.allQualityAreas || (r.qualityAreas || []).includes(ak);
+    const selOf = (r, ak) => (r.qualityIndicators || {})[ak] || [];
+    const covers = (r, ak, id) => hasArea(r, ak) && (selOf(r, ak).length === 0 || selOf(r, ak).includes(id));
+    const derived = (r, ak) => !!r.allQualityAreas || (DM ? DM.areasFromDepts(r.departments || []) : []).includes(ak);
+    const initials = n => String(n || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+    const tipOf = (r, ak) => {
+      const via = r.allQualityAreas ? 'hospital-wide access' : derived(r, ak) ? 'via department assignment' : 'custom area access';
+      const sel = selOf(r, ak);
+      return r.name + (r.title ? ' · ' + r.title : '') + (r.empId ? ' · ' + r.empId : '') + ' — ' + via + (sel.length ? ' · restricted to ' + sel.length + ' indicator' + (sel.length > 1 ? 's' : '') : ' · all indicators of this area') + (r.active === false ? ' · INACTIVE' : '');
+    };
+    const saveRec = (rec, okMsg) => {
+      setBusy(true);
+      return dcApi.post('/api/responsibles', rec).then(res => {
+        setBusy(false);
+        if (res.ok) {
+          toast(okMsg, 'success');
+          onChanged && onChanged();
+        } else toast(res.error || 'Could not save', 'error');
+      }).catch(() => {
+        setBusy(false);
+        toast('Could not save', 'error');
+      });
+    };
+    const give = (r, ak, ind) => {
+      setMenu(null);
+      setMenuQ('');
+      const qi = {
+        ...(r.qualityIndicators || {})
+      };
+      if (!hasArea(r, ak)) {
+        qi[ak] = [ind.id];
+        return saveRec({
+          ...r,
+          qualityAreas: [...(r.qualityAreas || []), ak],
+          qualityIndicators: qi
+        }, r.name + ' can now report ' + ind.name);
+      }
+      const sel = selOf(r, ak);
+      if (sel.length === 0) {
+        toast(r.name + ' already has every indicator of this area.', 'info');
+        return;
+      }
+      qi[ak] = [...sel, ind.id];
+      return saveRec({
+        ...r,
+        qualityIndicators: qi
+      }, r.name + ' can now report ' + ind.name);
+    };
+    const revoke = (r, ak, ind, aName) => {
+      const allIds = (areaInds[ak] || []).map(x => x.id);
+      const sel0 = selOf(r, ak);
+      const left = (sel0.length === 0 ? allIds : sel0).filter(x => x !== ind.id);
+      const qi = {
+        ...(r.qualityIndicators || {})
+      };
+      if (left.length > 0) {
+        qi[ak] = left;
+        return saveRec({
+          ...r,
+          qualityIndicators: qi
+        }, 'Removed ' + ind.name + ' from ' + r.name);
+      }
+      if (derived(r, ak)) {
+        toast(r.name + "'s " + aName + ' access comes from their department assignment — edit the person to change departments.', 'error');
+        onEditPerson && onEditPerson(r);
+        return;
+      }
+      delete qi[ak];
+      return saveRec({
+        ...r,
+        qualityAreas: (r.qualityAreas || []).filter(k => k !== ak),
+        qualityIndicators: qi
+      }, 'Removed ' + r.name + ' from ' + aName);
+    };
+    const qn = q.trim().toLowerCase();
+    const areasShown = areas.filter(a => {
+      if (!qn) return true;
+      if ((a.name || '').toLowerCase().includes(qn)) return true;
+      const inds = areaInds[a.key] || [];
+      return inds.some(ind => (ind.name || '').toLowerCase().includes(qn) || persons.some(r => covers(r, a.key, ind.id) && (r.name || '').toLowerCase().includes(qn)));
+    });
+    const totInds = areas.reduce((s, a) => s + (areaInds[a.key] || []).length, 0);
+    const unassigned = areas.reduce((s, a) => s + (areaInds[a.key] || []).filter(ind => !persons.some(r => covers(r, a.key, ind.id))).length, 0);
+    const chip = (r, a, ind) => React.createElement("span", {
+      key: r.id,
+      title: tipOf(r, a.key),
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        padding: '3px 4px 3px 3px',
+        borderRadius: 999,
+        background: 'var(--blue-50)',
+        border: '1px solid var(--blue)',
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: 'var(--blue-700)',
+        opacity: r.active === false ? 0.55 : 1
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 18,
+        height: 18,
+        borderRadius: '50%',
+        background: 'var(--blue)',
+        color: '#fff',
+        display: 'grid',
+        placeItems: 'center',
+        fontSize: 9,
+        fontWeight: 700,
+        flexShrink: 0
+      }
+    }, initials(r.name)), React.createElement("span", {
+      style: {
+        cursor: onEditPerson ? 'pointer' : 'default'
+      },
+      onClick: () => onEditPerson && onEditPerson(r)
+    }, r.name), React.createElement("button", {
+      title: 'Remove ' + ind.name + ' access from ' + r.name,
+      disabled: busy,
+      onClick: () => revoke(r, a.key, ind, a.name),
+      style: {
+        border: 0,
+        background: 'transparent',
+        cursor: 'pointer',
+        color: 'var(--rose)',
+        display: 'grid',
+        placeItems: 'center',
+        padding: '0 3px'
+      }
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 11
+    })));
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 14
+      }
+    }, React.createElement(Card, {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        flexWrap: 'wrap',
+        padding: '12px 16px'
+      }
+    }, React.createElement("input", {
+      style: {
+        ...inputStyle,
+        width: 300,
+        flex: '0 1 auto'
+      },
+      value: q,
+      onChange: e => setQ(e.target.value),
+      placeholder: "Filter by department, indicator or person\u2026"
+    }), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), [['Departments', areas.length], ['Indicators', totInds], ['People', persons.filter(r => r.active !== false).length], ['Unassigned indicators', unassigned]].map(([l, v]) => React.createElement("span", {
+      key: l,
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, React.createElement("b", {
+      style: {
+        color: l.startsWith('Unassigned') && v > 0 ? 'var(--rose)' : 'var(--ink)',
+        fontFamily: 'var(--mono)'
+      }
+    }, v), " ", l))), areasShown.length === 0 && React.createElement(Card, null, React.createElement("div", {
+      style: {
+        padding: 10,
+        color: 'var(--muted)',
+        textAlign: 'center'
+      }
+    }, "Nothing matches \u201C", q, "\u201D.")), areasShown.map(a => {
+      const inds = (areaInds[a.key] || []).filter(ind => !qn || (a.name || '').toLowerCase().includes(qn) || (ind.name || '').toLowerCase().includes(qn) || persons.some(r => covers(r, a.key, ind.id) && (r.name || '').toLowerCase().includes(qn)));
+      if (!inds.length) return null;
+      const areaPeople = persons.filter(r => (areaInds[a.key] || []).some(ind => covers(r, a.key, ind.id)));
+      return React.createElement(Card, {
+        key: a.key,
+        style: {
+          padding: 0,
+          overflow: 'visible'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 10,
+          padding: '12px 16px',
+          borderBottom: '1px solid var(--line)',
+          background: 'var(--panel-2)',
+          borderRadius: '12px 12px 0 0'
+        }
+      }, React.createElement("span", {
+        style: {
+          fontWeight: 700,
+          fontSize: 13.5,
+          color: 'var(--ink)'
+        }
+      }, a.name), React.createElement("span", {
+        style: {
+          fontSize: 11.5,
+          color: 'var(--muted)'
+        }
+      }, inds.length, " indicator", inds.length !== 1 ? 's' : '', " \xB7 ", areaPeople.length, " ", areaPeople.length === 1 ? 'person' : 'people')), inds.map((ind, i) => {
+        const owners = persons.filter(r => covers(r, a.key, ind.id));
+        const open = menu && menu.area === a.key && menu.indId === ind.id;
+        const mq = menuQ.trim().toLowerCase();
+        const candidates = persons.filter(r => !covers(r, a.key, ind.id) && (!mq || (r.name || '').toLowerCase().includes(mq) || (r.title || '').toLowerCase().includes(mq)));
+        return React.createElement("div", {
+          key: ind.id,
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            padding: '8px 16px',
+            borderBottom: i < inds.length - 1 ? '1px solid var(--line-2, var(--line))' : 0,
+            background: owners.length === 0 ? 'rgba(224,138,30,.06)' : 'transparent'
+          }
+        }, React.createElement("span", {
+          style: {
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: 'var(--ink)',
+            width: 300,
+            flex: '0 1 auto'
+          }
+        }, ind.name), React.createElement("span", {
+          style: {
+            flex: 1
+          }
+        }), owners.length === 0 && React.createElement("span", {
+          style: {
+            fontSize: 11,
+            fontWeight: 700,
+            color: 'var(--amber, #e08a1e)'
+          }
+        }, "No one assigned"), owners.map(r => chip(r, a, ind)), React.createElement("span", {
+          style: {
+            position: 'relative'
+          }
+        }, React.createElement("button", {
+          className: "btn sm",
+          disabled: busy,
+          onClick: () => {
+            setMenu(open ? null : {
+              area: a.key,
+              indId: ind.id
+            });
+            setMenuQ('');
+          }
+        }, React.createElement(Ic, {
+          d: I.plus,
+          s: 12
+        }), "Assign"), open && React.createElement(React.Fragment, null, React.createElement("div", {
+          onClick: () => setMenu(null),
+          style: {
+            position: 'fixed',
+            inset: 0,
+            zIndex: 40
+          }
+        }), React.createElement("div", {
+          style: {
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            right: 0,
+            zIndex: 41,
+            width: 280,
+            background: '#fff',
+            border: '1px solid var(--line)',
+            borderRadius: 10,
+            boxShadow: '0 8px 24px rgba(20,32,46,.16)',
+            padding: 8
+          }
+        }, React.createElement("input", {
+          autoFocus: true,
+          style: {
+            ...inputStyle,
+            marginBottom: 6,
+            fontSize: 12.5
+          },
+          value: menuQ,
+          onChange: e => setMenuQ(e.target.value),
+          placeholder: "Search people\u2026"
+        }), React.createElement("div", {
+          style: {
+            maxHeight: 240,
+            overflowY: 'auto'
+          }
+        }, candidates.length === 0 && React.createElement("div", {
+          style: {
+            padding: 10,
+            fontSize: 12,
+            color: 'var(--muted)',
+            textAlign: 'center'
+          }
+        }, persons.length ? 'Everyone matching already has access.' : 'No responsible persons yet.'), candidates.map(r => React.createElement("div", {
+          key: r.id,
+          onClick: () => give(r, a.key, ind),
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '7px 8px',
+            borderRadius: 8,
+            cursor: 'pointer',
+            opacity: r.active === false ? 0.55 : 1
+          },
+          onMouseEnter: e => {
+            e.currentTarget.style.background = 'var(--blue-50)';
+          },
+          onMouseLeave: e => {
+            e.currentTarget.style.background = 'transparent';
+          }
+        }, React.createElement("span", {
+          style: {
+            width: 22,
+            height: 22,
+            borderRadius: '50%',
+            background: 'var(--blue)',
+            color: '#fff',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 10,
+            fontWeight: 700,
+            flexShrink: 0
+          }
+        }, initials(r.name)), React.createElement("span", {
+          style: {
+            minWidth: 0,
+            flex: 1
+          }
+        }, React.createElement("div", {
+          style: {
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: 'var(--ink)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }
+        }, r.name, r.active === false ? ' (inactive)' : ''), React.createElement("div", {
+          style: {
+            fontSize: 10.5,
+            color: 'var(--muted)'
+          }
+        }, hasArea(r, a.key) ? 'Adds this indicator to their list' : 'Grants ' + a.name + ' · only this indicator')))))))));
+      }));
+    }));
+  }
   function DataResponsibles({
     depts
   }) {
     const [list, setList] = useState(null);
     const [editing, setEditing] = useState(null);
+    const [view, setView] = useState('people');
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
       key: d.key,
       name: d.name
@@ -28791,6 +30140,7 @@ window.LockScreen = LockScreen;
     useEffect(() => {
       load();
     }, []);
+    const assignedNames = (ak, indId, exceptId) => (list || []).filter(r => r.id !== exceptId && (!!r.allQualityAreas || (r.qualityAreas || []).includes(ak)) && (((r.qualityIndicators || {})[ak] || []).length === 0 || ((r.qualityIndicators || {})[ak] || []).includes(indId))).map(r => r.name);
     const blank = () => ({
       name: '',
       title: '',
@@ -28850,14 +30200,54 @@ window.LockScreen = LockScreen;
       icon: I.user,
       title: "Responsible Persons",
       sub: "Who gives the data \u2014 assign each person to the departments / quality areas they own (e.g. Rabbi Miah \u2192 Cathlab).",
-      right: !editing && React.createElement("button", {
+      right: React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap'
+        }
+      }, React.createElement("button", {
+        className: 'btn sm' + (view === 'people' ? ' pri' : ''),
+        onClick: () => setView('people')
+      }, React.createElement(Ic, {
+        d: I.user,
+        s: 13
+      }), "People"), React.createElement("button", {
+        className: 'btn sm' + (view === 'access' ? ' pri' : ''),
+        title: "Department-wise: every indicator with the people assigned to it \u2014 give or remove access inline",
+        onClick: () => {
+          setView('access');
+          setEditing(null);
+        }
+      }, React.createElement(Ic, {
+        d: I.check,
+        s: 13
+      }), "Indicator Access"), !editing && view === 'people' && React.createElement("button", {
         className: "btn pri sm",
         onClick: () => setEditing(blank())
       }, React.createElement(Ic, {
         d: I.plus,
         s: 15
-      }), "Add person")
-    }), editing && React.createElement(Card, null, React.createElement("div", {
+      }), "Add person"))
+    }), view === 'access' && (list === null ? React.createElement(Card, null, React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026")) : React.createElement(AccessMatrix, {
+      persons: list,
+      areas: areas,
+      areaInds: areaInds,
+      onChanged: load,
+      onEditPerson: r => {
+        setView('people');
+        setEditing({
+          ...blank(),
+          ...r
+        });
+      }
+    })), view === 'people' && editing && React.createElement(Card, null, React.createElement("div", {
       style: {
         fontWeight: 700,
         fontSize: 14,
@@ -29085,9 +30475,11 @@ window.LockScreen = LockScreen;
         }
       }, list.map(ind => {
         const on = sel.includes(ind.id);
+        const others = assignedNames(ak, ind.id, editing.id);
         return React.createElement("span", {
           key: ind.id,
           onClick: () => setSel(on ? sel.filter(x => x !== ind.id) : [...sel, ind.id]),
+          title: others.length ? 'Also assigned to: ' + others.join(', ') : 'No one else is assigned to this indicator yet',
           style: {
             cursor: 'pointer',
             userSelect: 'none',
@@ -29099,7 +30491,19 @@ window.LockScreen = LockScreen;
             background: on ? 'var(--blue-50)' : '#fff',
             color: on ? 'var(--blue-700)' : 'var(--ink-2)'
           }
-        }, ind.name);
+        }, ind.name, others.length > 0 && React.createElement("span", {
+          title: 'Also assigned to: ' + others.join(', '),
+          style: {
+            marginLeft: 5,
+            fontSize: 9.5,
+            fontWeight: 700,
+            borderRadius: 999,
+            padding: '1px 6px',
+            background: on ? 'var(--blue)' : 'var(--panel-2)',
+            color: on ? '#fff' : 'var(--muted)',
+            border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)')
+          }
+        }, "\uD83D\uDC64", others.length));
       })));
     }))), React.createElement("div", {
       style: {
@@ -29116,7 +30520,7 @@ window.LockScreen = LockScreen;
     }), "Save"), React.createElement("button", {
       className: "btn",
       onClick: () => setEditing(null)
-    }, "Cancel"))), React.createElement(Card, {
+    }, "Cancel"))), view === 'people' && React.createElement(Card, {
       style: {
         padding: 0,
         overflow: 'hidden'
@@ -29572,7 +30976,7 @@ window.LockScreen = LockScreen;
       }
     }, "Clear"))));
   }
-  const HQI_MATCH = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of catheter/, 'L5']];
+  const HQI_MATCH = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication (administration )?error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/accidental removal of catheter/, 'L5']];
   function hqiGuideFor(name) {
     try {
       const G = typeof window !== 'undefined' && window.HQI_GUIDE || null;
@@ -29785,6 +31189,7 @@ window.LockScreen = LockScreen;
       age: '',
       gender: '',
       diagnosis: '',
+      incidentDate: '',
       admissionDate: '',
       victimName: '',
       victimId: '',
@@ -29917,6 +31322,7 @@ window.LockScreen = LockScreen;
         age: x.age || '',
         gender: x.gender || '',
         diagnosis: x.diagnosis || '',
+        incidentDate: x.incidentDate || '',
         admissionDate: x.admissionDate || '',
         victimName: x.victimName || '',
         victimId: x.victimId || '',
@@ -29997,6 +31403,7 @@ window.LockScreen = LockScreen;
           age: x.age,
           gender: x.gender,
           diagnosis: x.diagnosis,
+          incidentDate: x.incidentDate,
           admissionDate: x.admissionDate,
           victimName: x.victimName,
           victimId: x.victimId,
@@ -30813,6 +32220,13 @@ window.LockScreen = LockScreen;
       onChange: e => setIncidentField(i, 'gender', e.target.value),
       placeholder: "M / F"
     })), React.createElement(Field, {
+      label: "Date of incident"
+    }, React.createElement("input", {
+      type: "date",
+      style: inputStyle,
+      value: x.incidentDate,
+      onChange: e => setIncidentField(i, 'incidentDate', e.target.value)
+    })), React.createElement(Field, {
       label: "Admission date"
     }, React.createElement("input", {
       type: "date",
@@ -31358,6 +32772,7 @@ window.LockScreen = LockScreen;
         setBusy(false);
         if (r.ok) {
           toast('Submission updated', 'success');
+          if (r.submission && r.submission.status === 'approved') dcRefreshLive();
           onSaved && onSaved(r.submission);
         } else toast(r.error || 'Could not save', 'error');
       }).catch(() => {
@@ -32244,6 +33659,7 @@ window.LockScreen = LockScreen;
       setSel({});
       setRejectFor(null);
       toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
+      if (kind === 'approve' && ok) dcRefreshLive();
       load();
     };
     const act = (id, kind) => {
@@ -34607,6 +36023,32 @@ function App() {
     window.addEventListener('unico:logout', h);
     return () => window.removeEventListener('unico:logout', h);
   }, []);
+  useEffect(() => {
+    let stamp = Date.now(),
+      busy = false;
+    const refresh = () => {
+      if (busy || typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (Date.now() - stamp < 15000) return;
+      busy = true;
+      stamp = Date.now();
+      const jobs = [];
+      try {
+        if (window.UNICO && window.UNICO.refreshDepartments) jobs.push(window.UNICO.refreshDepartments());
+      } catch (e) {}
+      try {
+        if (window.refreshQualitySeed) jobs.push(window.refreshQualitySeed());
+      } catch (e) {}
+      Promise.all(jobs).catch(() => {}).then(() => {
+        busy = false;
+      });
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, []);
   const openDept = id => setRoute({
     view: 'departments',
     dept: id
@@ -34688,10 +36130,13 @@ function App() {
       canUndo: store.canUndo
     });
   } else if (route.view === 'reports') {
-    crumbs = ['UNICO', 'Reports'];
+    crumbs = ['UNICO', 'Reports', 'Patient Statistics'];
     body = React.createElement(Reports, {
       depts: depts
     });
+  } else if (route.view === 'reportsQuality') {
+    crumbs = ['UNICO', 'Reports', 'Quality Indicators'];
+    body = typeof QualityReportsPanel !== 'undefined' ? React.createElement(QualityReportsPanel, null) : null;
   } else if (route.view === 'settings') {
     crumbs = ['UNICO', 'Settings'];
     body = React.createElement(Settings, {

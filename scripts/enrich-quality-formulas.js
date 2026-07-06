@@ -66,7 +66,7 @@ function famRef(name) {
   if (/\bssi\b|surgical site/.test(n)) return M('Surgical site infections following an operative procedure.', 'CDC NHSN — SSI surveillance definition.');
   if (/\bhapu\b|pressure ulcer|pressure injury|bed sore/.test(n)) return M('Hospital-acquired pressure ulcers (stage II+).', 'NPUAP/EPUAP staging · NABH patient-safety indicator.');
   if (/\bfall\b|patient fall/.test(n)) return M('Patient fall events during the in-patient stay.', 'NABH / NDNQI — patient fall events.');
-  if (/medication error/.test(n)) return M('Medication errors reported (prescribing/dispensing/administration).', 'NABH MOM · NCC-MERP medication-error taxonomy.');
+  if (/medication (administration )?error/.test(n)) return M('Medication errors reported (prescribing/dispensing/administration).', 'NABH MOM · NCC-MERP medication-error taxonomy.');
   if (/phlebitis/.test(n)) return M('Peripheral IV phlebitis events (grade ≥2).', 'INS Infusion Therapy Standards — phlebitis scale.');
   if (/needle.?stick|\bnsi\b/.test(n)) return M('Needle-stick / sharps injuries to staff.', 'CDC sharps-safety · NABH staff-safety indicator.');
   if (/\bdvt\b|deep vein thrombosis/.test(n)) return M('Hospital-acquired deep-vein thrombosis events.', 'NABH VTE prophylaxis & surveillance.');

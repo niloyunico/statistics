@@ -29,7 +29,7 @@ const DEPARTMENTS = (typeof window !== 'undefined' && Array.isArray(window.__UNI
 
 // Attach the derived fields the app expects (series/total/latest/prev/delta/peak),
 // guarded so a department with no rows can't throw.
-DEPARTMENTS.forEach(d => {
+function decorateDept(d) {
   d.months = Array.isArray(d.months) ? d.months : [];
   d.data   = Array.isArray(d.data) ? d.data : [];
   d.cols   = Array.isArray(d.cols) ? d.cols : [];
@@ -43,7 +43,8 @@ DEPARTMENTS.forEach(d => {
   const prev = d.prev ? (d.prev[d.primary] || 0) : 0;
   d.delta = prev === 0 ? (cur > 0 ? 100 : 0) : Math.round(((cur - prev) / prev) * 100);
   d.peak = Math.max(0, ...d.series.map(r => r[d.primary] || 0));
-});
+}
+DEPARTMENTS.forEach(decorateDept);
 
 const GROUPS = [...new Set(DEPARTMENTS.map(d => d.group))];
 
@@ -65,3 +66,49 @@ const HOSPITAL = {
 };
 
 window.UNICO = { DEPARTMENTS, GROUPS, MONTHS_FULL, MONTH_ORDER, HOSPITAL };
+
+// Report signatures (Prepared / Checked / Approved by) — typed once, saved, and shared
+// by EVERY report builder (Patient Statistics, Monthly Statistics, Quality console).
+window.unicoSig = {
+  KEY: 'unico_report_sig_v1',
+  blank() { return { prepared: '', reviewed: '', approved: '' }; },
+  load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(this.KEY));
+      return (s && typeof s === 'object')
+        ? { prepared: s.prepared || '', reviewed: s.reviewed || '', approved: s.approved || '' }
+        : this.blank();
+    } catch (e) { return this.blank(); }
+  },
+  save(sig) {
+    try { localStorage.setItem(this.KEY, JSON.stringify({ prepared: (sig && sig.prepared) || '', reviewed: (sig && sig.reviewed) || '', approved: (sig && sig.approved) || '' })); } catch (e) { }
+  },
+};
+
+// Live refetch: after an approved Data-Collection submission is APPLIED on the
+// server, the page-load snapshot above is stale. Swap the canonical department
+// data in place so every view that (re)mounts sees the fresh numbers without a
+// full page reload.
+window.UNICO.refreshDepartments = function () {
+  return fetch('/api/departments', { credentials: 'same-origin' })
+    .then(r => r.json())
+    .then(j => {
+      if (!j || !j.ok || !Array.isArray(j.departments)) return false;
+      const fresh = j.departments.map(d => ({ ...d }));
+      fresh.forEach(decorateDept);
+      DEPARTMENTS.length = 0; fresh.forEach(d => DEPARTMENTS.push(d));
+      GROUPS.length = 0; [...new Set(DEPARTMENTS.map(d => d.group))].forEach(g => GROUPS.push(g));
+      const find = id => DEPARTMENTS.find(d => d.id === id);
+      const er = find('er'), opd = find('opd'), ot = find('ot'), cath = find('cathlab');
+      HOSPITAL.kpis = {
+        erLatest: (er && er.latest && er.latest.total) || 0,
+        opdTotal: (opd && opd.total) || 0,
+        otTotal: (ot && ot.total) || 0,
+        cathTotal: (cath && cath.total) || 0,
+      };
+      // The dept store memoizes over its overlay only — tell every mounted store the
+      // canonical snapshot changed so open views rebuild without a remount/reload.
+      try { window.dispatchEvent(new CustomEvent('unico:data-refreshed', { detail: { source: 'departments' } })); } catch (e) { }
+      return true;
+    }).catch(() => false);
+};

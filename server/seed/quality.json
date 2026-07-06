@@ -565,7 +565,7 @@
     "name": "Dialysis",
     "year": "2025-2026",
     "executive": {
-      "keyAchievements": "Zero events across six safety indicators (Patient Fall, Medication Error, Catheter De-lining, NSI, Infection Rate, Vascular Access Complications) in October 2025.",
+      "keyAchievements": "Zero events across six safety indicators (Patient Fall, Medication Administration Error, Catheter De-lining, NSI, Infection Rate, Vascular Access Complications) in October 2025.",
       "majorGaps": "1 hypotension event in October 2025. Dialysis Adequacy and Water Quality data not yet reported - establish per-session and per-sample tracking.",
       "overallStatus": "Good",
       "recommendations": "Review hypotension case for fluid removal protocol adherence (UF rate, dry weight assessment). Begin routine reporting of Kt/V or URR per session and AAMI water quality samples. Sustain current infection-prevention and access-care bundles."
@@ -605,7 +605,7 @@
       },
       {
         "id": "ind-dial-med-error",
-        "name": "Medication Error",
+        "name": "Medication Administration Error",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
         "benchmarkValue": 0,
@@ -624,9 +624,9 @@
           "Q4": "Not reported"
         },
         "formula": "count",
-        "numLabel": "Medication Error",
+        "numLabel": "Medication Administration Error",
         "unit": "count",
-        "formulaText": "value = Medication Error",
+        "formulaText": "value = Medication Administration Error",
         "numeratorDef": "Medication errors reported (prescribing/dispensing/administration).",
         "reference": "NABH MOM · NCC-MERP medication-error taxonomy."
       },
@@ -830,7 +830,7 @@
     "name": "Gastroenterology",
     "year": "2025-2026",
     "executive": {
-      "keyAchievements": "Zero events across all four quality indicators (Phlebitis, Medication Error, Patient Fall, Post-Procedure Complication) for every reported quarter. Full-year coverage with 110 total patients (24 Sep-Nov 2025, 6 Dec 2025, 34 Jan-Mar 2026, 46 Apr-May 2026).",
+      "keyAchievements": "Zero events across all four quality indicators (Phlebitis, Medication Administration Error, Patient Fall, Post-Procedure Complication) for every reported quarter. Full-year coverage with 110 total patients (24 Sep-Nov 2025, 6 Dec 2025, 34 Jan-Mar 2026, 46 Apr-May 2026).",
       "majorGaps": "None identified - zero defect maintained across all indicators.",
       "overallStatus": "Excellent",
       "recommendations": "Sustain pre/post-procedure assessment, sedation safety protocol, fall-risk screening for sedated patients, and IV-site care to maintain zero adverse events."
@@ -870,7 +870,7 @@
       },
       {
         "id": "ind-gastro-med-error",
-        "name": "Medication Error",
+        "name": "Medication Administration Error",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
         "benchmarkValue": 0,
@@ -889,9 +889,9 @@
           "Q4": "Apr-May 2026: nil"
         },
         "formula": "count",
-        "numLabel": "Medication Error",
+        "numLabel": "Medication Administration Error",
         "unit": "count",
-        "formulaText": "value = Medication Error",
+        "formulaText": "value = Medication Administration Error",
         "numeratorDef": "Medication errors reported (prescribing/dispensing/administration).",
         "reference": "NABH MOM · NCC-MERP medication-error taxonomy."
       },
@@ -1382,7 +1382,7 @@
     "name": "Level 10",
     "year": "2025-2026",
     "executive": {
-      "keyAchievements": "Zero events across seven IPD quality indicators (Medication Error, HAPU, Phlebitis, CLABSI, CAUTI, NSI, SSI) in both reporting periods.",
+      "keyAchievements": "Zero events across seven IPD quality indicators (Medication Administration Error, HAPU, Phlebitis, CLABSI, CAUTI, NSI, SSI) in both reporting periods.",
       "majorGaps": "2 patient falls reported during the year: 1 in 2025 Q3 (Jul-Sep) and 1 in 2026 Q2 (Apr-Jun). Other quarters not reported.",
       "overallStatus": "Good",
       "recommendations": "Conduct root cause analysis on both fall incidents. Reinforce fall-risk assessment protocol (Morse scale on admission and shift change), bed-alarm use for high-risk patients, and patient/family education on call-bell use. Sustain current infection-prevention and medication-safety practices."
@@ -1395,7 +1395,7 @@
     "indicators": [
       {
         "id": "ind-l10-medication-error",
-        "name": "Medication Error",
+        "name": "Medication Administration Error",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
         "benchmarkValue": 0,
@@ -1414,9 +1414,9 @@
           "Q4": "Apr-May 2026 (reported as 2026 Q2): nil"
         },
         "formula": "count",
-        "numLabel": "Medication Error",
+        "numLabel": "Medication Administration Error",
         "unit": "count",
-        "formulaText": "value = Medication Error",
+        "formulaText": "value = Medication Administration Error",
         "numeratorDef": "Medication errors reported (prescribing/dispensing/administration).",
         "reference": "NABH MOM · NCC-MERP medication-error taxonomy."
       },
@@ -1616,7 +1616,7 @@
     "name": "Level 9",
     "year": "2025-2026",
     "executive": {
-      "keyAchievements": "Zero events across all nine IPD quality indicators (HAPU, Patient Fall, Phlebitis, Medication Error, NSI, CAUTI, CLABSI, SSI, Accidental Catheter Removal) for both reported quarters. Patient volume: 20 (Q3 Jan-Mar 2026), 61 (Q4 Apr-May 2026); total 81 patients.",
+      "keyAchievements": "Zero events across all nine IPD quality indicators (HAPU, Patient Fall, Phlebitis, Medication Administration Error, NSI, CAUTI, CLABSI, SSI, Accidental Catheter Removal) for both reported quarters. Patient volume: 20 (Q3 Jan-Mar 2026), 61 (Q4 Apr-May 2026); total 81 patients.",
       "majorGaps": "Q1 (Aug-Oct 2025) and Q2 (Nov-Dec 2025) data not reported.",
       "overallStatus": "Excellent",
       "recommendations": "Sustain current infection-prevention and patient-safety protocols. Begin reporting Q1 and Q2 data going forward to enable full-year trending."
@@ -1710,7 +1710,7 @@
       },
       {
         "id": "ind-l9-medication-error",
-        "name": "Medication Error",
+        "name": "Medication Administration Error",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
         "benchmarkValue": 0,
@@ -1729,9 +1729,9 @@
           "Q4": "Apr-May 2026 (61 patients): nil"
         },
         "formula": "count",
-        "numLabel": "Medication Error",
+        "numLabel": "Medication Administration Error",
         "unit": "count",
-        "formulaText": "value = Medication Error",
+        "formulaText": "value = Medication Administration Error",
         "numeratorDef": "Medication errors reported (prescribing/dispensing/administration).",
         "reference": "NABH MOM · NCC-MERP medication-error taxonomy."
       },
@@ -1877,7 +1877,7 @@
     "name": "MICU",
     "year": "2025-2026",
     "executive": {
-      "keyAchievements": "Zero events across all twelve MICU quality indicators (Re-intubation within 48hr, ICU Re-admission within 48hr, HAPU, CAUTI, CLABSI, VAP, SSI, Phlebitis, Patient Fall, Accidental Catheter Dislodgement, Medication Error, Needle Stick Injury) for Q2, Q3, and Q4.",
+      "keyAchievements": "Zero events across all twelve MICU quality indicators (Re-intubation within 48hr, ICU Re-admission within 48hr, HAPU, CAUTI, CLABSI, VAP, SSI, Phlebitis, Patient Fall, Accidental Catheter Dislodgement, Medication Administration Error, Needle Stick Injury) for Q2, Q3, and Q4.",
       "majorGaps": "Q1 (Aug-Oct 2025) data not reported.",
       "overallStatus": "Excellent",
       "recommendations": "Sustain current infection-prevention bundles (VAP, CAUTI, CLABSI), ventilator weaning protocol, pressure-injury prevention, fall-risk assessment, and medication-safety practices. Begin reporting Q1 data going forward for full-year trending."
@@ -2160,7 +2160,7 @@
       },
       {
         "id": "ind-micu-medication-error",
-        "name": "Medication Error",
+        "name": "Medication Administration Error",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
         "benchmarkValue": 0,
@@ -2179,9 +2179,9 @@
           "Q4": "Apr-May 2026: nil"
         },
         "formula": "count",
-        "numLabel": "Medication Error",
+        "numLabel": "Medication Administration Error",
         "unit": "count",
-        "formulaText": "value = Medication Error",
+        "formulaText": "value = Medication Administration Error",
         "numeratorDef": "Medication errors reported (prescribing/dispensing/administration).",
         "reference": "NABH MOM · NCC-MERP medication-error taxonomy."
       },

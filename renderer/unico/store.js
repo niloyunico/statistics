@@ -22,7 +22,16 @@
   function buildDepts(store){
     const base=window.UNICO.DEPARTMENTS.map(d=>({...d, custom:false, months:[...d.months], data:d.data.map(r=>({...r})), cols:d.cols.map(c=>({...c}))}));
     const custom=(store.custom||[]).map(d=>({...d, custom:true, months:[...(d.months||[])], data:(d.data||[]).map(r=>({...r})), cols:(d.cols||[]).map(c=>({...c}))}));
-    let list=[...base,...custom].filter(d=>!(store.deleted||[]).includes(d.id));
+    // A custom dept later promoted to a REAL dept (CT OT / CT ICU class) exists in BOTH
+    // lists under the same id. Never render two copies: the server copy is canonical;
+    // fold in any months/cols that still live only in the overlay copy.
+    const baseIds=new Set(base.map(d=>d.id));
+    custom.filter(d=>baseIds.has(d.id)).forEach(cd=>{
+      const bd=base.find(d=>d.id===cd.id);
+      (cd.months||[]).forEach((m,i)=>{ if(bd.months.indexOf(m)<0){ bd.months.push(m); bd.data.push({...((cd.data||[])[i]||{})}); } });
+      (cd.cols||[]).forEach(c=>{ if(!bd.cols.some(x=>x.id===c.id)) bd.cols.push({...c}); });
+    });
+    let list=[...base,...custom.filter(d=>!baseIds.has(d.id))].filter(d=>!(store.deleted||[]).includes(d.id));
     // renames / overrides
     list.forEach(d=>{ const r=(store.renames||{})[d.id]; if(r){ Object.assign(d,r); } });
     // explicitly-deleted months (a later entry for the same month re-adds it)
@@ -33,8 +42,19 @@
     (store.entries||[]).forEach(e=>{
       const d=byId[e.dept]; if(!d) return;
       const idx=d.months.indexOf(e.month);
+      // An entry with no actual values must not create a new month — an accidental
+      // empty save would otherwise add an all-blank row that poisons "latest".
+      const hasValue=Object.values(e.row||{}).some(v=>v!==null&&v!==''&&v!==undefined);
       if(idx>=0) d.data[idx]={...d.data[idx],...e.row};
-      else { d.months.push(e.month); d.data.push({...e.row}); }
+      else if(hasValue) { d.months.push(e.month); d.data.push({...e.row}); }
+    });
+    // Chronological order AFTER all merging: an overlay entry for an out-of-order month
+    // (e.g. a correction) is pushed at the END above, which would otherwise become the
+    // false "latest" month everywhere (cards, deltas, charts, report ranges).
+    const MO=(window.UNICO&&window.UNICO.MONTH_ORDER)||[];
+    list.forEach(d=>{
+      const zip=d.months.map((m,i)=>({m,r:d.data[i],k:MO.indexOf(m)})).sort((a,b)=>(a.k<0?1e9:a.k)-(b.k<0?1e9:b.k));
+      d.months=zip.map(z=>z.m); d.data=zip.map(z=>z.r);
     });
     // Normalise partially-populated department docs so a missing short / group /
     // primaryLabel never renders blank (e.g. CT OT was added without a short code,
@@ -58,8 +78,13 @@
     const [store,setStore]=React.useState(()=>load()||blank());
     const hist=React.useRef([]);
     const [canUndo,setCanUndo]=React.useState(false);
+    // The canonical snapshot (window.UNICO.DEPARTMENTS) is refetched IN PLACE after an
+    // approved submission or a tab refocus; the memo below only watches the overlay, so
+    // bump on the refresh event or open views keep rendering the page-load data forever.
+    const [rev,setRev]=React.useState(0);
+    React.useEffect(()=>{ const h=()=>setRev(r=>r+1); window.addEventListener('unico:data-refreshed',h); return ()=>window.removeEventListener('unico:data-refreshed',h); },[]);
     React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(store)); },[store]);
-    const depts=React.useMemo(()=>buildDepts(store),[store]);
+    const depts=React.useMemo(()=>buildDepts(store),[store,rev]);
 
     // Snapshot the current state before every change so it can be undone.
     const commit=(updater)=>{ hist.current=[...hist.current.slice(-49), store]; setCanUndo(true); setStore(typeof updater==='function'?updater(store):updater); };

@@ -19,6 +19,25 @@ function App(){
     return ()=>{ live=false; };
   },[]);
   useEffect(()=>{ const h=()=>setAuthed(false); window.addEventListener('unico:logout',h); return ()=>window.removeEventListener('unico:logout',h); },[]);
+  // Long-lived tabs go stale: department/quality snapshots are injected at page LOAD,
+  // and an approval made in ANOTHER tab (or by a collector) never reaches this one.
+  // On tab refocus (away ≥15s), refetch both; the refreshers dispatch
+  // 'unico:data-refreshed' and the stores rebuild, so open views update live.
+  useEffect(()=>{
+    let stamp=Date.now(), busy=false;
+    const refresh=()=>{
+      if(busy || (typeof document!=='undefined' && document.visibilityState==='hidden')) return;
+      if(Date.now()-stamp<15000) return;
+      busy=true; stamp=Date.now();
+      const jobs=[];
+      try{ if(window.UNICO&&window.UNICO.refreshDepartments) jobs.push(window.UNICO.refreshDepartments()); }catch(e){}
+      try{ if(window.refreshQualitySeed) jobs.push(window.refreshQualitySeed()); }catch(e){}
+      Promise.all(jobs).catch(()=>{}).then(()=>{ busy=false; });
+    };
+    window.addEventListener('focus',refresh);
+    document.addEventListener('visibilitychange',refresh);
+    return ()=>{ window.removeEventListener('focus',refresh); document.removeEventListener('visibilitychange',refresh); };
+  },[]);
 
   const openDept=id=>setRoute({view:'departments',dept:id});
   const safeDepts = depts.length?depts:[];
@@ -52,8 +71,11 @@ function App(){
     crumbs=['UNICO','Data Entry'];
     body=<DataEntry depts={depts} addEntry={store.addEntry} entries={store.entries} initialDept={route.dept} updateDept={store.updateDept} deleteDept={store.deleteDept} deleteMonth={store.deleteMonth} undo={store.undo} canUndo={store.canUndo}/>;
   } else if(route.view==='reports'){
-    crumbs=['UNICO','Reports'];
+    crumbs=['UNICO','Reports','Patient Statistics'];
     body=<Reports depts={depts}/>;
+  } else if(route.view==='reportsQuality'){
+    crumbs=['UNICO','Reports','Quality Indicators'];
+    body= (typeof QualityReportsPanel!=='undefined') ? <QualityReportsPanel/> : null;
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];
     body=<Settings depts={depts} store={store}/>;

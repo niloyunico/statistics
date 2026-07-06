@@ -48,13 +48,15 @@ const UNICO_MODULES = [
   { id:'datacol', label:'Data Collection',    short:'Data',       icon:I.input, home:'dcReview' },
   { id:'staff',   label:'Staff Management',   short:'Staff',      icon:I.steth, home:'nurseHome' },
   { id:'quality', label:'Quality Indicators', short:'Quality',    icon:I.heart, home:'quality' },
+  { id:'reports', label:'Reports',            short:'Reports',    icon:I.doc,   home:'reports' },
   { id:'users',   label:'User Management',    short:'Users',      icon:I.user,  home:'users' },
 ];
 const UNICO_MODULE_VIEWS = {
-  stats:  ['dashboard','departments','compare','gallery','manage','input','reports','settings'],
+  stats:  ['dashboard','departments','compare','gallery','manage','input','settings'],
   datacol:['dcPatient','dcQuality','dcResponsibles','dcShare','dcFields','dcReview'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffProfile','staffForm'],
-  quality:['quality','qualityScore','qualityTrend','qualityReport','qualityReportQ','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
+  quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
+  reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
 };
 function unicoModuleOf(view){
@@ -85,7 +87,6 @@ function unicoSidebarGroups(moduleId){
       {id:'qualityTrend',label:'Trends',icon:I.trend},
     ]},
     {sec:'Reporting', items:[
-      {id:'qualityReport',label:'Reports',icon:I.doc,match:['qualityReport','qualityReportQ']},
       {id:'qualityIncidents',label:'Incident Reports',icon:I.activity},
     ]},
     {sec:'Administration', items:[
@@ -93,6 +94,12 @@ function unicoSidebarGroups(moduleId){
       {id:'qualityManage',label:'Indicator Administration',icon:I.edit,match:['qualityManage','qualityCatalog','qualityAssign','qualityEdit']},
       {id:'qualityDataEntry',label:'Quality Data Entry',icon:I.input},
       {id:'qualityCapa',label:'Action Plans',icon:I.check},
+    ]},
+  ];
+  if(moduleId==='reports') return [
+    {sec:'Report Generator', items:[
+      {id:'reports',label:'Patient Statistics',icon:I.doc},
+      {id:'reportsQuality',label:'Quality Indicators',icon:I.heart},
     ]},
   ];
   if(moduleId==='users') return [
@@ -107,7 +114,6 @@ function unicoSidebarGroups(moduleId){
       {id:'compare',label:'Compare',icon:I.trend},
       {id:'manage',label:'Manage Depts',icon:I.edit},
       {id:'input',label:'Data Entry',icon:I.input},
-      {id:'reports',label:'Reports',icon:I.doc},
       {id:'settings',label:'Settings',icon:I.gear},
     ]},
   ];

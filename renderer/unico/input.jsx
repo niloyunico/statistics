@@ -148,6 +148,12 @@ function DataEntry({depts, addEntry, entries, initialDept, updateDept, deleteMon
     // Hard errors (negative, non-whole, total≠sum) must be fixed — they're bad data, not missing data.
     const hard=Object.keys(e).filter(k=>e[k]!=='Required');
     if(hard.length){ return false; }
+    // An entirely empty form must never create a month of blank data (an accidental
+    // save would add an all-null row that poisons the department's "latest" month).
+    if(d.cols.every(c=>vals[c.id]===undefined||vals[c.id]==='')){
+      window.UI&&window.UI.toast?window.UI.toast('Enter at least one value before saving','error'):alert('Enter at least one value before saving');
+      return false;
+    }
     // Missing fields are allowed: warn the admin, and on confirm save them blank (null) rather than a fake 0.
     const missing=d.cols.filter(c=>e[c.id]==='Required');
     if(missing.length){

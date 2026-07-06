@@ -108,33 +108,33 @@ window.QI_CORRECTIONS = {
     "referenceUrl": "https://p4qm.org/measures/0141"
   },
   "hospital-acquired pressure ulcer (hapu)": {
-    "canonicalName": "Hospital-Acquired Pressure Injury (HAPI) Prevalence",
-    "formula": "pct",
-    "numLabel": "Patients with a hospital-acquired Stage 2+ pressure injury",
-    "denLabel": "Patients surveyed",
-    "numeratorDef": "Number of patients on the unit/facility, on the survey day, who have one or more hospital-acquired (nosocomial) pressure injuries of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of injuries.",
-    "denominatorDef": "Total number of eligible patients present and assessed (via skin/pressure-injury assessment) on the unit during the one-day prevalence survey. Multiply numerator/denominator by 100.",
-    "unit": "% (percent of patients surveyed)",
-    "benchmarkValue": 3.6,
-    "benchmark": "≤ 3.6%",
-    "benchmarkNote": "<= ~3.6% hospital-acquired prevalence (NDNQI 2010 national reference; lower is better; aspirational target 0). Note: more recent NDNQI/IPUP national acute-care HAPI prevalence is lower, ~2.5-3.0%.",
+    "canonicalName": "Hospital-Acquired Pressure Ulcer (HAPU) Incidence Rate",
+    "formula": "rate1000",
+    "numLabel": "Patients who developed ≥ 1 HAPU (Stage 2+)",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Number of patients who developed one or more NEW hospital-acquired (nosocomial) pressure ulcers of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging during the reporting period. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of ulcers.",
+    "denominatorDef": "Total number of patient-days for the same unit and period, obtained by summing the daily inpatient census over the month. Rate = (patients who developed ≥ 1 HAPU ÷ total patient-days) × 1,000.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 0.75,
+    "benchmark": "≤ 0.75 per 1000 patient-days",
+    "benchmarkNote": "HAPU incidence rate = (patients with ≥ 1 new hospital-acquired pressure ulcer ÷ patient-days) × 1,000 — the standard for ongoing internal clinical quality tracking. < 0.75 per 1000 patient-days is the commonly used NDNQI-derived benchmark (lower is better; aspirational target 0). Note: the one-day prevalence survey (~≤ 3.6% of patients surveyed, NDNQI) is a DIFFERENT metric — do not mix the two.",
     "goalDirection": "lower_is_better",
-    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Survey; NQF #0201 Pressure Ulcer Prevalence, Hospital-Acquired (steward: The Joint Commission); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Incidence; AHRQ Preventing Pressure Ulcers in Hospitals Toolkit (incidence & prevalence measurement); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
     "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
   },
   "bed sore (pressure injury)": {
-    "canonicalName": "Hospital-Acquired Pressure Injury (HAPI) Prevalence",
-    "formula": "pct",
-    "numLabel": "Patients with a hospital-acquired Stage 2+ pressure injury",
-    "denLabel": "Patients surveyed",
-    "numeratorDef": "Number of patients on the unit/facility, on the survey day, who have one or more hospital-acquired (nosocomial) pressure injuries of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of injuries.",
-    "denominatorDef": "Total number of eligible patients present and assessed (via skin/pressure-injury assessment) on the unit during the one-day prevalence survey. Multiply numerator/denominator by 100.",
-    "unit": "% (percent of patients surveyed)",
-    "benchmarkValue": 3.6,
-    "benchmark": "≤ 3.6%",
-    "benchmarkNote": "<= ~3.6% hospital-acquired prevalence (NDNQI 2010 national reference; lower is better; aspirational target 0). Note: more recent NDNQI/IPUP national acute-care HAPI prevalence is lower, ~2.5-3.0%.",
+    "canonicalName": "Hospital-Acquired Pressure Ulcer (HAPU) Incidence Rate",
+    "formula": "rate1000",
+    "numLabel": "Patients who developed ≥ 1 HAPU (Stage 2+)",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Number of patients who developed one or more NEW hospital-acquired (nosocomial) pressure ulcers of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging during the reporting period. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of ulcers.",
+    "denominatorDef": "Total number of patient-days for the same unit and period, obtained by summing the daily inpatient census over the month. Rate = (patients who developed ≥ 1 HAPU ÷ total patient-days) × 1,000.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 0.75,
+    "benchmark": "≤ 0.75 per 1000 patient-days",
+    "benchmarkNote": "HAPU incidence rate = (patients with ≥ 1 new hospital-acquired pressure ulcer ÷ patient-days) × 1,000 — the standard for ongoing internal clinical quality tracking. < 0.75 per 1000 patient-days is the commonly used NDNQI-derived benchmark (lower is better; aspirational target 0). Note: the one-day prevalence survey (~≤ 3.6% of patients surveyed, NDNQI) is a DIFFERENT metric — do not mix the two.",
     "goalDirection": "lower_is_better",
-    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Survey; NQF #0201 Pressure Ulcer Prevalence, Hospital-Acquired (steward: The Joint Commission); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Incidence; AHRQ Preventing Pressure Ulcers in Hospitals Toolkit (incidence & prevalence measurement); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
     "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
   },
   "surgical site infection (ssi)": {
@@ -794,6 +794,11 @@ window.QI_CORRECTIONS = {
 ['average length of stay (emergency department)', 'average length of stay - emergency department', 'average length of stay in the emergency department', 'average length of stay at emergency department', 'average length of stay (ed)', 'average ed length of stay', 'ed average length of stay', 'emergency department average length of stay', 'average length of stay emergency department', 'ed alos', 'alos (ed)'].forEach(function (k) {
   window.QI_CORRECTIONS[k] = window.QI_CORRECTIONS['average length of stay at the emergency department'];
 });
+// Medication error rename (2026-07): indicators renamed "Medication Administration Error"
+// keep resolving to the same correction as the legacy "Medication Error" name.
+['medication administration error', 'medication administration error rate'].forEach(function (k) {
+  window.QI_CORRECTIONS[k] = window.QI_CORRECTIONS['medication error'];
+});
 window.QI_CORRECTIONS_BY_DEFID = {
   "cauti": {
     "canonicalName": "Catheter-Associated Urinary Tract Infection (CAUTI) Rate",
@@ -901,18 +906,18 @@ window.QI_CORRECTIONS_BY_DEFID = {
     "referenceUrl": "https://p4qm.org/measures/0141"
   },
   "hapu": {
-    "canonicalName": "Hospital-Acquired Pressure Injury (HAPI) Prevalence",
-    "formula": "pct",
-    "numLabel": "Patients with a hospital-acquired Stage 2+ pressure injury",
-    "denLabel": "Patients surveyed",
-    "numeratorDef": "Number of patients on the unit/facility, on the survey day, who have one or more hospital-acquired (nosocomial) pressure injuries of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of injuries.",
-    "denominatorDef": "Total number of eligible patients present and assessed (via skin/pressure-injury assessment) on the unit during the one-day prevalence survey. Multiply numerator/denominator by 100.",
-    "unit": "% (percent of patients surveyed)",
-    "benchmarkValue": 3.6,
-    "benchmark": "≤ 3.6%",
-    "benchmarkNote": "<= ~3.6% hospital-acquired prevalence (NDNQI 2010 national reference; lower is better; aspirational target 0). Note: more recent NDNQI/IPUP national acute-care HAPI prevalence is lower, ~2.5-3.0%.",
+    "canonicalName": "Hospital-Acquired Pressure Ulcer (HAPU) Incidence Rate",
+    "formula": "rate1000",
+    "numLabel": "Patients who developed ≥ 1 HAPU (Stage 2+)",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Number of patients who developed one or more NEW hospital-acquired (nosocomial) pressure ulcers of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging during the reporting period. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of ulcers.",
+    "denominatorDef": "Total number of patient-days for the same unit and period, obtained by summing the daily inpatient census over the month. Rate = (patients who developed ≥ 1 HAPU ÷ total patient-days) × 1,000.",
+    "unit": "per 1000 patient-days",
+    "benchmarkValue": 0.75,
+    "benchmark": "≤ 0.75 per 1000 patient-days",
+    "benchmarkNote": "HAPU incidence rate = (patients with ≥ 1 new hospital-acquired pressure ulcer ÷ patient-days) × 1,000 — the standard for ongoing internal clinical quality tracking. < 0.75 per 1000 patient-days is the commonly used NDNQI-derived benchmark (lower is better; aspirational target 0). Note: the one-day prevalence survey (~≤ 3.6% of patients surveyed, NDNQI) is a DIFFERENT metric — do not mix the two.",
     "goalDirection": "lower_is_better",
-    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Survey; NQF #0201 Pressure Ulcer Prevalence, Hospital-Acquired (steward: The Joint Commission); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Incidence; AHRQ Preventing Pressure Ulcers in Hospitals Toolkit (incidence & prevalence measurement); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
     "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
   },
   "phlebitis": {

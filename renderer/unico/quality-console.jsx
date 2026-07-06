@@ -5,7 +5,7 @@
 
 /* ===== part: 05-standards.jsx ===== */
 /* HQI framework standards (96 indicators, A–M) — extracted verbatim from the design. */
-var HQI_STANDARDS = [{"code":"A1","sec":"A","name":"Hand Hygiene Compliance","ft":"pct","dir":"high","unit":"%","bench":">90%","bv":90,"expr":"(Hand-hygiene actions performed ÷ Opportunities observed) × 100","ref":"WHO 2009 — Hand Hygiene Guidelines","num":"Hand-hygiene actions performed","den":"Opportunities observed"},{"code":"A2","sec":"A","name":"CAUTI Rate","ft":"rate1000","dir":"low","unit":"per 1000 cath-days","bench":"<1","bv":1,"expr":"(Catheter-associated UTIs ÷ Urinary catheter-days) × 1,000","ref":"CDC/NHSN 2024 — UTI Event","num":"CAUTI cases","den":"Urinary catheter-days"},{"code":"A3","sec":"A","name":"CLABSI Rate","ft":"rate1000","dir":"low","unit":"per 1000 line-days","bench":"<1","bv":1,"expr":"(Central line-associated BSIs ÷ Central-line days) × 1,000","ref":"CDC/NHSN 2024 — BSI Event","num":"CLABSI cases","den":"Central-line days"},{"code":"A4","sec":"A","name":"VAP / VAE Rate","ft":"rate1000","dir":"low","unit":"per 1000 vent-days","bench":"<1","bv":1,"expr":"(Ventilator-associated events ÷ Ventilator-days) × 1,000","ref":"CDC/NHSN 2024 — VAE Module","num":"VAP / VAE events","den":"Ventilator-days"},{"code":"A5","sec":"A","name":"Surgical Site Infection (SSI) Rate","ft":"pct","dir":"low","unit":"%","bench":"<1–2%","bv":2,"expr":"(SSIs within 30/90 days ÷ Surgical procedures) × 100","ref":"CDC/NHSN 2024; WHO 2018 SSI Guidelines","num":"SSI cases","den":"Surgical procedures"},{"code":"A6","sec":"A","name":"Phlebitis Rate (IV Site)","ft":"pct","dir":"low","unit":"%","bench":"≤5%","bv":5,"expr":"(IV sites with phlebitis VIP ≥2 ÷ Peripheral IV sites in use) × 100","ref":"INS 2021; Jackson VIP Score","num":"IV sites with phlebitis (VIP ≥2)","den":"Peripheral IV sites in use"},{"code":"A7","sec":"A","name":"MRSA / MDRO Infection Rate","ft":"rate1000","dir":"low","unit":"per 1000 pt-days","bench":"Minimize / track","bv":null,"expr":"(HA MRSA/MDRO infections ÷ Patient-days) × 1,000","ref":"CDC/NHSN 2024 MDRO; WHO 2022 AMR","num":"HA MRSA/MDRO infections","den":"Patient-days"},{"code":"A8","sec":"A","name":"Overall HAI Rate","ft":"pct","dir":"low","unit":"%","bench":"<5%","bv":5,"expr":"(All healthcare-associated infections ÷ Patient-days) × 100","ref":"WHO 2022 IPC Report; Allegranzi 2011","num":"All HAIs","den":"Patient-days"},{"code":"A9","sec":"A","name":"Blood Culture Contamination Rate","ft":"pct","dir":"low","unit":"%","bench":"<3%","bv":3,"expr":"(Culture sets with skin-flora contaminants ÷ Total culture sets) × 100","ref":"CLSI 2022 M47-A2","num":"Contaminated culture sets","den":"Blood culture sets collected"},{"code":"A10","sec":"A","name":"Surgical Antibiotic Prophylaxis Timing","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Prophylaxis ≤60 min before incision ÷ Eligible surgical patients) × 100","ref":"SCIP Inf-1; Bratzler 2013","num":"Patients with timely prophylaxis","den":"Eligible surgical patients"},{"code":"A11","sec":"A","name":"CSSD Sterilization (BI) Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Cycles with passing biological indicator ÷ Total sterilization cycles) × 100","ref":"AAMI/ANSI ST79:2017; ISO 11138-3","num":"Cycles passing BI","den":"Sterilization cycles run"},{"code":"A12","sec":"A","name":"Biomedical Waste Segregation Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Compliant waste-audit observations ÷ Total audit observations) × 100","ref":"WHO 2014 Safe Waste Mgmt","num":"Compliant audit observations","den":"Waste audit observations"},{"code":"A13","sec":"A","name":"Needle Stick / Sharps Injury","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of reported needlestick & sharps injuries","ref":"OSHA 29 CFR 1910.1030; WHO 2018","num":"Needlestick / sharps injuries","den":""},{"code":"A14","sec":"A","name":"Isolation / Transmission-Precaution Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Patients in correct isolation ÷ Patients requiring isolation) × 100","ref":"CDC/HICPAC 2007 (rev 2023)","num":"Correct isolations","den":"Patients requiring isolation"},{"code":"B1","sec":"B","name":"Medication Error","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of medication errors (all categories)","ref":"ISMP 2023; NQF 2011","num":"Medication errors","den":""},{"code":"B2","sec":"B","name":"Adverse Drug Reaction (ADR) Rate","ft":"count","dir":"","unit":"count","bench":"Track","bv":null,"expr":"Total count of confirmed ADRs (by severity)","ref":"WHO 2002 Pharmacovigilance; ICH E2A","num":"Confirmed ADRs","den":""},{"code":"B3","sec":"B","name":"Medication Reconciliation Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Reconciliation at admit AND discharge ÷ Admissions & discharges) × 100","ref":"JCI 2021 IPSG.3; ISMP 2011","num":"Completed reconciliations","den":"Admissions & discharges"},{"code":"B4","sec":"B","name":"High-Alert Medication Double-Check","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(High-alert doses with independent double-check ÷ High-alert doses) × 100","ref":"ISMP 2023; JCI 2021 MMU.5","num":"Doses double-checked","den":"High-alert doses administered"},{"code":"B5","sec":"B","name":"Verbal / Telephone Order Read-Back","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Orders with documented read-back ÷ Verbal/telephone orders) × 100","ref":"JCI 2021 IPSG.2; TJC NPSG 02.01.01","num":"Orders with read-back","den":"Verbal/telephone orders"},{"code":"B6","sec":"B","name":"LASA Drug Storage / Labeling Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(LASA drugs stored & labelled correctly ÷ LASA drugs audited) × 100","ref":"ISMP 2023; WHO 2019","num":"LASA drugs compliant","den":"LASA drugs audited"},{"code":"B7","sec":"B","name":"Controlled Drug Count Accuracy","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Shift counts with zero discrepancy ÷ Controlled-drug counts) × 100","ref":"DEA 21 CFR 1304; Pharmacy Policy","num":"Counts with zero discrepancy","den":"Controlled-drug shift counts"},{"code":"B8","sec":"B","name":"STAT Medication Administration Timeliness","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(STAT orders within TAT ÷ Total STAT orders) × 100","ref":"ISMP 2011; TJC MM.04.01.01","num":"STAT orders within TAT","den":"STAT medication orders"},{"code":"C1","sec":"C","name":"Patient Identification (2-Identifier)","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Interactions with verified 2-identifier check ÷ Interactions audited) × 100","ref":"JCI 2021 IPSG.1; TJC NPSG 01.01.01","num":"Verified 2-identifier checks","den":"Care interactions audited"},{"code":"C2","sec":"C","name":"Patient Fall Rate","ft":"rate1000","dir":"low","unit":"per 1000 pt-days","bench":"≤3.3","bv":3.3,"expr":"(Patient falls assisted + unassisted ÷ Patient-days) × 1,000","ref":"NDNQI 2023; Morse 2009","num":"Patient falls","den":"Patient-days"},{"code":"C3","sec":"C","name":"Falls with Injury","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of falls resulting in any injury","ref":"NDNQI 2023; AHRQ 2013","num":"Falls with injury","den":""},{"code":"C4","sec":"C","name":"Hospital-Acquired Pressure Ulcer (HAPU) Rate","ft":"rate1000","dir":"low","unit":"per 1000 pt-days","bench":"<0.75","bv":0.75,"expr":"(New stage 2–4/unstageable pressure injuries >72 h ÷ Patient-days) × 1,000","ref":"NPUAP/EPUAP/PPPIA 2019; NDNQI 2023","num":"New pressure injuries (stage 2–4)","den":"Patient-days"},{"code":"C5","sec":"C","name":"VTE / DVT Prophylaxis Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Eligible inpatients on VTE prophylaxis by day 2 ÷ Eligible inpatients) × 100","ref":"ACCP 2012; JCI 2021 IPSG.6","num":"Patients on prophylaxis","den":"Eligible adult inpatients"},{"code":"C6","sec":"C","name":"Hospital-Acquired DVT","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of new DVT events ≥48 h after admission","ref":"ACCP 2012; Goldhaber 2011","num":"New DVT events ≥48 h","den":""},{"code":"C7","sec":"C","name":"Wrong-Site / -Patient / -Procedure Events","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of wrong-site/-patient/-procedure (sentinel) events","ref":"TJC Universal Protocol; JCI 2021 IPSG.4","num":"Wrong-site/-patient/-procedure events","den":""},{"code":"C8","sec":"C","name":"Surgical Safety Checklist Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Procedures with all 3 checklist phases ÷ Surgical procedures) × 100","ref":"WHO 2009 SSC; Haynes 2009","num":"Procedures with full checklist","den":"Surgical procedures"},{"code":"C9","sec":"C","name":"Restraint Use Appropriateness / Monitoring","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Restraints with order + justification + monitoring ÷ Restrained patients) × 100","ref":"TJC RC.02.01.01; CMS 42 CFR 482.13(e)","num":"Appropriate restraints","den":"Restrained patients"},{"code":"C10","sec":"C","name":"Pain Assessment & Reassessment","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Pain assessed + reassessed ÷ Patients requiring assessment) × 100","ref":"JCI 2021 COP; TJC PC.01.02.07","num":"Pain assessed + reassessed","den":"Patients requiring assessment"},{"code":"C11","sec":"C","name":"Critical Value Reporting Timeliness","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Critical values reported within TAT ÷ Critical values generated) × 100","ref":"TJC NPSG 02.03.01; CLIA","num":"Critical values within TAT","den":"Critical values generated"},{"code":"C12","sec":"C","name":"Patient Handover (SBAR) Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Handovers using SBAR ÷ Handovers audited) × 100","ref":"JCI 2021 IPSG.2.2; WHO 2007","num":"SBAR handovers","den":"Handovers audited"},{"code":"D1","sec":"D","name":"Gross Hospital Mortality Rate","ft":"pct","dir":"","unit":"%","bench":"Track / benchmark","bv":null,"expr":"(Inpatient deaths ÷ Discharges incl. deaths) × 100","ref":"AHRQ 2020 IQI; CMS IQR","num":"Inpatient deaths","den":"Discharges incl. deaths"},{"code":"D2","sec":"D","name":"ICU Mortality Rate","ft":"pct","dir":"","unit":"%","bench":"Track (APACHE/SOFA)","bv":null,"expr":"(ICU deaths ÷ ICU admissions) × 100","ref":"SCCM 2020; Knaus 1985 APACHE II","num":"ICU deaths","den":"ICU admissions"},{"code":"D3","sec":"D","name":"ICU Re-admission within 48 h","ft":"pct","dir":"low","unit":"%","bench":"<5%","bv":5,"expr":"(ICU readmits ≤48 h ÷ Planned ICU step-downs) × 100","ref":"SCCM 2020; Rosenberg 2001","num":"ICU readmits ≤48 h","den":"Planned ICU discharges"},{"code":"D4","sec":"D","name":"Re-admission within 30 Days","ft":"pct","dir":"low","unit":"%","bench":"Track / minimize","bv":null,"expr":"(30-day readmissions ÷ Discharges excl. deaths/planned) × 100","ref":"CMS HRRP; Jencks 2009","num":"30-day readmissions","den":"Eligible discharges"},{"code":"D5","sec":"D","name":"Re-intubation within 48 h","ft":"pct","dir":"low","unit":"%","bench":"<10%","bv":10,"expr":"(Re-intubations ≤48 h ÷ Planned extubations) × 100","ref":"Epstein 1998; SCCM 2020","num":"Re-intubations ≤48 h","den":"Planned extubations"},{"code":"D6","sec":"D","name":"Return to ICU","ft":"count","dir":"low","unit":"count","bench":"0 / minimize","bv":0,"expr":"Count of ward→ICU transfers  (or ÷ ICU discharges to ward × 100)","ref":"SCCM 2020; Rosenberg 2001","num":"Ward patients returned to ICU","den":""},{"code":"D7","sec":"D","name":"Unplanned Return to OT","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(Unplanned OT returns ÷ Surgical procedures) × 100","ref":"ACS NSQIP 2022; Clavien-Dindo","num":"Unplanned OT returns","den":"Surgical procedures"},{"code":"D8","sec":"D","name":"Accidental Removal of ETT (Unplanned Extubation)","ft":"rate100","dir":"low","unit":"per 100 vent-days","bench":"<1","bv":1,"expr":"(Unplanned extubations ÷ Ventilator-days) × 100","ref":"Girard 2008; SCCM 2020","num":"Unplanned extubations","den":"Ventilator-days"},{"code":"D9","sec":"D","name":"LAMA / DAMA Rate","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(AMA/LAMA discharges ÷ Total discharges) × 100","ref":"WHO 2014; Alfandre 2009","num":"AMA / LAMA discharges","den":"Hospital discharges"},{"code":"D10","sec":"D","name":"Cardiac Arrest (Code Blue) Events","ft":"count","dir":"","unit":"count","bench":"Track","bv":null,"expr":"Total count of in-hospital cardiac arrest (Code Blue) events","ref":"AHA 2020 ACLS; Utstein Style","num":"IHCA (Code Blue) events","den":""},{"code":"D11","sec":"D","name":"Cardiac Arrest Survival (ROSC)","ft":"pct","dir":"high","unit":"%","bench":"≥25%","bv":25,"expr":"(IHCA with sustained ROSC ≥20 min ÷ IHCA events) × 100","ref":"AHA 2020 ACLS; ILCOR 2020","num":"IHCA with sustained ROSC","den":"In-hospital cardiac arrest events"},{"code":"E1","sec":"E","name":"Informed Consent Completeness","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Procedures with complete signed consent ÷ Procedures needing consent) × 100","ref":"JCI 2021 PFR.5; TJC RI.01.03.01","num":"Complete signed consents","den":"Procedures requiring consent"},{"code":"E2","sec":"E","name":"Initial Nursing Assessment within 24 h","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Nursing assessment ≤24 h ÷ Inpatient admissions) × 100","ref":"JCI 2021 AOP.1; TJC PC.01.02.01","num":"Assessments ≤24 h","den":"Inpatient admissions"},{"code":"E3","sec":"E","name":"Nursing Care Plan Documentation","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Care plans ≤24–48 h ÷ Admitted patients) × 100","ref":"JCI 2021 AOP.1; NANDA 2021","num":"Documented care plans","den":"Admitted patients"},{"code":"E4","sec":"E","name":"Discharge Summary Timeliness","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Discharge summaries within TAT ÷ Discharges) × 100","ref":"JCI 2021 ACC.3; TJC RC.02.04.01","num":"Summaries within TAT","den":"Patient discharges"},{"code":"E5","sec":"E","name":"Allergy Documentation Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Allergy/NKDA documented ÷ Admissions) × 100","ref":"JCI 2021 IPSG.3; TJC NPSG 03.06.01","num":"Allergy/NKDA documented","den":"Patient admissions"},{"code":"E6","sec":"E","name":"Medication Chart Completeness","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Complete medication charts ÷ Charts audited) × 100","ref":"JCI 2021 MMU; TJC MM.04.01.01","num":"Complete medication charts","den":"Medication charts audited"},{"code":"E7","sec":"E","name":"Patient / Family Education Documentation","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Documented education sessions ÷ Eligible patients) × 100","ref":"JCI 2021 PFE.2; TJC PC.02.03.01","num":"Documented education sessions","den":"Eligible patients"},{"code":"F1","sec":"F","name":"Partograph Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Completed partographs ÷ Labours monitored) × 100","ref":"WHO 2014; FIGO 2018","num":"Completed partographs","den":"Labours monitored"},{"code":"F2","sec":"F","name":"Fetal Heart Rate (FHR) Monitoring","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Appropriate FHR monitoring ÷ Deliveries) × 100","ref":"ACOG #106 2021; FIGO 2015","num":"Appropriate FHR monitoring","den":"Deliveries"},{"code":"F3","sec":"F","name":"Caesarean-Section Rate","ft":"pct","dir":"","unit":"%","bench":"WHO optimal 10–15%","bv":null,"expr":"(Caesarean deliveries ÷ Total deliveries) × 100","ref":"WHO 2015; Robson Classification","num":"Caesarean deliveries","den":"Total deliveries"},{"code":"F4","sec":"F","name":"Postpartum Haemorrhage (PPH) Rate","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(Deliveries with PPH ÷ Total deliveries) × 100","ref":"WHO 2012; ACOG 183 2017","num":"Deliveries with PPH","den":"Total deliveries"},{"code":"F5","sec":"F","name":"Birth Asphyxia Rate","ft":"rate1000","dir":"low","unit":"per 1000 live births","bench":"Minimize","bv":null,"expr":"(5-min APGAR <7 / needing PPV ÷ Live births) × 1,000","ref":"WHO 2012; AAP/AHA NRP 2015","num":"Asphyxiated live births","den":"Live births"},{"code":"F6","sec":"F","name":"Neonatal Mortality Rate","ft":"rate1000","dir":"","unit":"per 1000 live births","bench":"Track (national)","bv":null,"expr":"(Neonatal deaths ≤28 days ÷ Live births) × 1,000","ref":"WHO 2023; UNICEF 2023","num":"Neonatal deaths ≤28 days","den":"Live births"},{"code":"F7","sec":"F","name":"Breastfeeding Initiation within 1 h","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Breastfeeding ≤1 h ÷ Live births) × 100","ref":"WHO/UNICEF 2018 BFHI","num":"Breastfeeding ≤1 h","den":"Live births"},{"code":"F8","sec":"F","name":"NICU CLABSI Rate","ft":"rate1000","dir":"low","unit":"per 1000 line-days","bench":"<1","bv":1,"expr":"(NICU CLABSI events ÷ NICU central-line days) × 1,000","ref":"CDC/NHSN 2024; Polin 2012","num":"NICU CLABSI events","den":"NICU central-line days"},{"code":"F9","sec":"F","name":"Kangaroo Mother Care (KMC) Compliance","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Eligible neonates receiving KMC ÷ Eligible neonates) × 100","ref":"WHO 2022; Conde-Agudelo 2016","num":"Neonates receiving KMC","den":"Eligible preterm/LBW neonates"},{"code":"G1","sec":"G","name":"Door-to-Balloon Time ≤90 min","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(STEMI PCI with D2B ≤90 min ÷ STEMI primary-PCI patients) × 100","ref":"ACC/AHA 2013; TJC AMI-8a","num":"STEMI PCI D2B ≤90 min","den":"STEMI primary-PCI patients"},{"code":"G2","sec":"G","name":"Post-PCI Complication","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of major post-PCI adverse events (24–48 h)","ref":"ACC/AHA 2021; NCDR CathPCI","num":"Major post-PCI adverse events","den":""},{"code":"G3","sec":"G","name":"Puncture Site Hematoma","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of access-site hematomas >5 cm after catheterization","ref":"ACC/AHA 2012; NCDR CathPCI","num":"Access-site hematomas >5 cm","den":""},{"code":"G4","sec":"G","name":"Door-to-ECG ≤10 min","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(ACS with ECG ≤10 min ÷ ACS presentations) × 100","ref":"ACC/AHA 2014; TJC AMI-1","num":"ACS with ECG ≤10 min","den":"ACS / chest-pain presentations"},{"code":"G5","sec":"G","name":"STEMI Door-to-Needle (Fibrinolysis)","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(STEMI fibrinolysis ≤30 min ÷ Eligible STEMI patients) × 100","ref":"ACC/AHA 2013; TJC AMI-7a","num":"Fibrinolysis ≤30 min","den":"Eligible STEMI patients"},{"code":"G6","sec":"G","name":"Heart Failure 30-Day Readmission","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(HF readmissions ≤30 days ÷ HF discharges) × 100","ref":"CMS HRRP (HF-30); AHRQ 2020","num":"HF 30-day readmissions","den":"Heart-failure discharges"},{"code":"H1","sec":"H","name":"Dialysis Adequacy — URR","ft":"pct","dir":"high","unit":"%","bench":"≥65%","bv":65,"expr":"(Patients with URR ≥65% ÷ Patients dialyzed) × 100 · URR=[(pre-BUN−post-BUN)÷pre-BUN]×100","ref":"KDOQI 2015; Tattersall 1996","num":"Patients with URR ≥65%","den":"Patients dialyzed"},{"code":"H2","sec":"H","name":"Kt/V Achievement","ft":"pct","dir":"high","unit":"%","bench":"≥90% achieve Kt/V ≥1.2","bv":90,"expr":"(Patients Kt/V ≥1.2 ÷ Patients dialyzed) × 100 · Kt/V via Daugirdas 2nd-gen","ref":"KDOQI 2015; Daugirdas 1993","num":"Patients with Kt/V ≥1.2","den":"Patients dialyzed"},{"code":"H3","sec":"H","name":"Water Quality Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Water/dialysate tests meeting AAMI/ISO ÷ Tests performed) × 100","ref":"AAMI/ANSI 23500:2019; ISO 23500","num":"Tests meeting AAMI/ISO","den":"Water quality tests performed"},{"code":"H4","sec":"H","name":"Intradialytic Hypotension","ft":"count","dir":"low","unit":"count","bench":"0 / minimize","bv":0,"expr":"Count of sessions with symptomatic hypotension (SBP drop ≥20 / <90 mmHg)","ref":"KDOQI 2015; Flythe 2015","num":"Sessions with symptomatic hypotension","den":""},{"code":"H5","sec":"H","name":"Vascular Access Complication","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of vascular access complications","ref":"KDOQI 2006; KDIGO 2019","num":"Vascular access complications","den":""},{"code":"H6","sec":"H","name":"Accidental De-lining of Catheter","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of accidental catheter disconnection events during dialysis","ref":"KDOQI 2006; Dialysis Nursing Policy","num":"Accidental de-lining events","den":""},{"code":"H7","sec":"H","name":"Dialysis Access Infection Rate","ft":"rate1000","dir":"low","unit":"per 1000 access-days","bench":"0","bv":0,"expr":"(Dialysis access infections ÷ Access-days) × 1,000","ref":"CDC/NHSN 2024 Dialysis Event; KDOQI 2006","num":"Dialysis access infections","den":"Access-days"},{"code":"H8","sec":"H","name":"Missed / Shortened Dialysis Sessions","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(Missed or shortened >10% sessions ÷ Scheduled sessions) × 100","ref":"KDOQI 2015; Saran 2003","num":"Missed / shortened sessions","den":"Scheduled dialysis sessions"},{"code":"I1","sec":"I","name":"On-Time First-Case Start","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(First cases starting on time ÷ First cases scheduled) × 100","ref":"AORN 2022; NHS England 2021","num":"First cases on time","den":"First cases scheduled"},{"code":"I2","sec":"I","name":"Elective Case Cancellation Rate","ft":"pct","dir":"low","unit":"%","bench":"<5%","bv":5,"expr":"(Elective cases cancelled same-day ÷ Elective cases scheduled) × 100","ref":"AORN 2022; RCS standards","num":"Same-day cancellations","den":"Elective cases scheduled"},{"code":"I3","sec":"I","name":"Instrument / Sponge Count Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Cases with documented counts at all timepoints ÷ Surgical procedures) × 100","ref":"AORN 2022; WHO 2009","num":"Cases with documented counts","den":"Surgical procedures"},{"code":"I4","sec":"I","name":"Specimen Labeling Error Rate","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of surgical specimen labeling errors","ref":"CAP 2021; TJC NPSG 01.01.01","num":"Specimen labeling errors","den":""},{"code":"I5","sec":"I","name":"Anaesthesia-Related Complication Rate","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of anaesthesia-related adverse events","ref":"ASA 2019; APSF; Merry 2010","num":"Anaesthesia adverse events","den":""},{"code":"I6","sec":"I","name":"PACU Recovery Delay Rate","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(PACU stays beyond threshold ÷ PACU admissions) × 100","ref":"ASPAN 2021; Aldrete 1995","num":"Delayed PACU discharges","den":"PACU admissions"},{"code":"J1","sec":"J","name":"Post-Procedure Complication","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Count of post-endoscopy complications within 30 days","ref":"ASGE 2015; BSG 2019","num":"Post-endoscopy complications","den":""},{"code":"J2","sec":"J","name":"Endoscope Reprocessing Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Endoscopes reprocessed per HLD protocol ÷ Endoscopes reprocessed) × 100","ref":"SGNA 2022; ESGE/ESGENA 2018","num":"Endoscopes per HLD protocol","den":"Endoscopes reprocessed"},{"code":"J3","sec":"J","name":"Perforation Rate","ft":"pct","dir":"low","unit":"%","bench":"Minimize (<0.1%)","bv":0.1,"expr":"(Iatrogenic perforations ÷ Endoscopic procedures) × 100","ref":"ASGE 2015; Pohl 2012","num":"Iatrogenic perforations","den":"Endoscopic procedures"},{"code":"J4","sec":"J","name":"Post-Polypectomy Bleeding","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Count of significant post-polypectomy bleeds within 30 days","ref":"ASGE 2015; ESGE 2022","num":"Post-polypectomy bleeds","den":""},{"code":"K1","sec":"K","name":"Triage-to-Consult / Door-to-Doctor Time","ft":"pct","dir":"high","unit":"%","bench":"≥90% per category","bv":90,"expr":"(Patients seen within triage TAT ÷ ED presentations by category) × 100","ref":"ACEP 2019 ESI; CTAS 2020","num":"Patients seen within TAT","den":"ED presentations"},{"code":"K2","sec":"K","name":"Left Without Being Seen (LWBS) Rate","ft":"pct","dir":"low","unit":"%","bench":"<2%","bv":2,"expr":"(Patients who left without being seen ÷ ED registrations) × 100","ref":"ACEP 2019; Hobbs 2000","num":"Left without being seen","den":"ED registrations"},{"code":"K3","sec":"K","name":"ED Re-attendance within 72 h","ft":"pct","dir":"low","unit":"%","bench":"<5%","bv":5,"expr":"(ED re-attendances ≤72 h ÷ ED discharges) × 100","ref":"ACEP 2019; NHS England","num":"ED re-attendances ≤72 h","den":"ED discharges"},{"code":"K4","sec":"K","name":"Door-to-Needle for Stroke Thrombolysis","ft":"pct","dir":"high","unit":"%","bench":"≥80%","bv":80,"expr":"(Stroke tPA ≤60 min ÷ Eligible stroke patients) × 100","ref":"AHA/ASA 2019; ESO 2021","num":"Stroke tPA ≤60 min","den":"Eligible ischemic-stroke patients"},{"code":"L1","sec":"L","name":"Mandatory Training Compliance","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Staff completing mandatory training ÷ Staff required) × 100","ref":"JCI 2021 SQE.3; TJC HR.01.05.01","num":"Staff completing training","den":"Staff required to train"},{"code":"L2","sec":"L","name":"BLS / ACLS Certification Rate","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Staff with valid BLS/ACLS ÷ Staff required) × 100","ref":"AHA 2020 BLS/ACLS; JCI 2021 SQE","num":"Staff with valid certification","den":"Staff required to certify"},{"code":"L3","sec":"L","name":"Induction Completion within 30 Days","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(New staff induction ≤30 days ÷ New staff) × 100","ref":"JCI 2021 SQE.7; TJC HR.01.04.01","num":"Inductions ≤30 days","den":"New employees"},{"code":"L4","sec":"L","name":"Accidental Catheter Dislodgement","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of accidental catheter dislodgements","ref":"JCI 2021 QPS; NDNQI 2023","num":"Accidental dislodgements","den":""},{"code":"L5","sec":"L","name":"Accidental Removal of Catheter","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of accidental (unplanned) catheter removals","ref":"JCI 2021 QPS; NDNQI 2023","num":"Accidental catheter removals","den":""},{"code":"M1","sec":"M","name":"Patient Satisfaction Score","ft":"pct","dir":"high","unit":"%","bench":"≥85%","bv":85,"expr":"(Patients rating care 'Very Good/Excellent' ÷ Patients surveyed) × 100","ref":"HCAHPS 2024; Press Ganey 2023","num":"Top-box ratings","den":"Patients surveyed"},{"code":"M2","sec":"M","name":"Complaint Resolution within TAT","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Complaints resolved within TAT ÷ Complaints received) × 100","ref":"JCI 2021 PFR.3; TJC RI.01.07.01","num":"Complaints resolved within TAT","den":"Complaints received"}];
+var HQI_STANDARDS = [{"code":"A1","sec":"A","name":"Hand Hygiene Compliance","ft":"pct","dir":"high","unit":"%","bench":">90%","bv":90,"expr":"(Hand-hygiene actions performed ÷ Opportunities observed) × 100","ref":"WHO 2009 — Hand Hygiene Guidelines","num":"Hand-hygiene actions performed","den":"Opportunities observed"},{"code":"A2","sec":"A","name":"CAUTI Rate","ft":"rate1000","dir":"low","unit":"per 1000 cath-days","bench":"<1","bv":1,"expr":"(Catheter-associated UTIs ÷ Urinary catheter-days) × 1,000","ref":"CDC/NHSN 2024 — UTI Event","num":"CAUTI cases","den":"Urinary catheter-days"},{"code":"A3","sec":"A","name":"CLABSI Rate","ft":"rate1000","dir":"low","unit":"per 1000 line-days","bench":"<1","bv":1,"expr":"(Central line-associated BSIs ÷ Central-line days) × 1,000","ref":"CDC/NHSN 2024 — BSI Event","num":"CLABSI cases","den":"Central-line days"},{"code":"A4","sec":"A","name":"VAP / VAE Rate","ft":"rate1000","dir":"low","unit":"per 1000 vent-days","bench":"<1","bv":1,"expr":"(Ventilator-associated events ÷ Ventilator-days) × 1,000","ref":"CDC/NHSN 2024 — VAE Module","num":"VAP / VAE events","den":"Ventilator-days"},{"code":"A5","sec":"A","name":"Surgical Site Infection (SSI) Rate","ft":"pct","dir":"low","unit":"%","bench":"<1–2%","bv":2,"expr":"(SSIs within 30/90 days ÷ Surgical procedures) × 100","ref":"CDC/NHSN 2024; WHO 2018 SSI Guidelines","num":"SSI cases","den":"Surgical procedures"},{"code":"A6","sec":"A","name":"Phlebitis Rate (IV Site)","ft":"pct","dir":"low","unit":"%","bench":"≤5%","bv":5,"expr":"(IV sites with phlebitis VIP ≥2 ÷ Peripheral IV sites in use) × 100","ref":"INS 2021; Jackson VIP Score","num":"IV sites with phlebitis (VIP ≥2)","den":"Peripheral IV sites in use"},{"code":"A7","sec":"A","name":"MRSA / MDRO Infection Rate","ft":"rate1000","dir":"low","unit":"per 1000 pt-days","bench":"Minimize / track","bv":null,"expr":"(HA MRSA/MDRO infections ÷ Patient-days) × 1,000","ref":"CDC/NHSN 2024 MDRO; WHO 2022 AMR","num":"HA MRSA/MDRO infections","den":"Patient-days"},{"code":"A8","sec":"A","name":"Overall HAI Rate","ft":"pct","dir":"low","unit":"%","bench":"<5%","bv":5,"expr":"(All healthcare-associated infections ÷ Patient-days) × 100","ref":"WHO 2022 IPC Report; Allegranzi 2011","num":"All HAIs","den":"Patient-days"},{"code":"A9","sec":"A","name":"Blood Culture Contamination Rate","ft":"pct","dir":"low","unit":"%","bench":"<3%","bv":3,"expr":"(Culture sets with skin-flora contaminants ÷ Total culture sets) × 100","ref":"CLSI 2022 M47-A2","num":"Contaminated culture sets","den":"Blood culture sets collected"},{"code":"A10","sec":"A","name":"Surgical Antibiotic Prophylaxis Timing","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Prophylaxis ≤60 min before incision ÷ Eligible surgical patients) × 100","ref":"SCIP Inf-1; Bratzler 2013","num":"Patients with timely prophylaxis","den":"Eligible surgical patients"},{"code":"A11","sec":"A","name":"CSSD Sterilization (BI) Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Cycles with passing biological indicator ÷ Total sterilization cycles) × 100","ref":"AAMI/ANSI ST79:2017; ISO 11138-3","num":"Cycles passing BI","den":"Sterilization cycles run"},{"code":"A12","sec":"A","name":"Biomedical Waste Segregation Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Compliant waste-audit observations ÷ Total audit observations) × 100","ref":"WHO 2014 Safe Waste Mgmt","num":"Compliant audit observations","den":"Waste audit observations"},{"code":"A13","sec":"A","name":"Needle Stick / Sharps Injury","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of reported needlestick & sharps injuries","ref":"OSHA 29 CFR 1910.1030; WHO 2018","num":"Needlestick / sharps injuries","den":""},{"code":"A14","sec":"A","name":"Isolation / Transmission-Precaution Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Patients in correct isolation ÷ Patients requiring isolation) × 100","ref":"CDC/HICPAC 2007 (rev 2023)","num":"Correct isolations","den":"Patients requiring isolation"},{"code":"B1","sec":"B","name":"Medication Administration Error","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of medication errors (all categories)","ref":"ISMP 2023; NQF 2011","num":"Medication errors","den":""},{"code":"B2","sec":"B","name":"Adverse Drug Reaction (ADR) Rate","ft":"count","dir":"","unit":"count","bench":"Track","bv":null,"expr":"Total count of confirmed ADRs (by severity)","ref":"WHO 2002 Pharmacovigilance; ICH E2A","num":"Confirmed ADRs","den":""},{"code":"B3","sec":"B","name":"Medication Reconciliation Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Reconciliation at admit AND discharge ÷ Admissions & discharges) × 100","ref":"JCI 2021 IPSG.3; ISMP 2011","num":"Completed reconciliations","den":"Admissions & discharges"},{"code":"B4","sec":"B","name":"High-Alert Medication Double-Check","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(High-alert doses with independent double-check ÷ High-alert doses) × 100","ref":"ISMP 2023; JCI 2021 MMU.5","num":"Doses double-checked","den":"High-alert doses administered"},{"code":"B5","sec":"B","name":"Verbal / Telephone Order Read-Back","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Orders with documented read-back ÷ Verbal/telephone orders) × 100","ref":"JCI 2021 IPSG.2; TJC NPSG 02.01.01","num":"Orders with read-back","den":"Verbal/telephone orders"},{"code":"B6","sec":"B","name":"LASA Drug Storage / Labeling Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(LASA drugs stored & labelled correctly ÷ LASA drugs audited) × 100","ref":"ISMP 2023; WHO 2019","num":"LASA drugs compliant","den":"LASA drugs audited"},{"code":"B7","sec":"B","name":"Controlled Drug Count Accuracy","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Shift counts with zero discrepancy ÷ Controlled-drug counts) × 100","ref":"DEA 21 CFR 1304; Pharmacy Policy","num":"Counts with zero discrepancy","den":"Controlled-drug shift counts"},{"code":"B8","sec":"B","name":"STAT Medication Administration Timeliness","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(STAT orders within TAT ÷ Total STAT orders) × 100","ref":"ISMP 2011; TJC MM.04.01.01","num":"STAT orders within TAT","den":"STAT medication orders"},{"code":"C1","sec":"C","name":"Patient Identification (2-Identifier)","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Interactions with verified 2-identifier check ÷ Interactions audited) × 100","ref":"JCI 2021 IPSG.1; TJC NPSG 01.01.01","num":"Verified 2-identifier checks","den":"Care interactions audited"},{"code":"C2","sec":"C","name":"Patient Fall Rate","ft":"rate1000","dir":"low","unit":"per 1000 pt-days","bench":"≤3.3","bv":3.3,"expr":"(Patient falls assisted + unassisted ÷ Patient-days) × 1,000","ref":"NDNQI 2023; Morse 2009","num":"Patient falls","den":"Patient-days"},{"code":"C3","sec":"C","name":"Falls with Injury","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of falls resulting in any injury","ref":"NDNQI 2023; AHRQ 2013","num":"Falls with injury","den":""},{"code":"C4","sec":"C","name":"Hospital-Acquired Pressure Ulcer (HAPU) Rate","ft":"rate1000","dir":"low","unit":"per 1000 pt-days","bench":"<0.75","bv":0.75,"expr":"(New stage 2–4/unstageable pressure injuries >72 h ÷ Patient-days) × 1,000","ref":"NPUAP/EPUAP/PPPIA 2019; NDNQI 2023","num":"New pressure injuries (stage 2–4)","den":"Patient-days"},{"code":"C5","sec":"C","name":"VTE / DVT Prophylaxis Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Eligible inpatients on VTE prophylaxis by day 2 ÷ Eligible inpatients) × 100","ref":"ACCP 2012; JCI 2021 IPSG.6","num":"Patients on prophylaxis","den":"Eligible adult inpatients"},{"code":"C6","sec":"C","name":"Hospital-Acquired DVT","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of new DVT events ≥48 h after admission","ref":"ACCP 2012; Goldhaber 2011","num":"New DVT events ≥48 h","den":""},{"code":"C7","sec":"C","name":"Wrong-Site / -Patient / -Procedure Events","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of wrong-site/-patient/-procedure (sentinel) events","ref":"TJC Universal Protocol; JCI 2021 IPSG.4","num":"Wrong-site/-patient/-procedure events","den":""},{"code":"C8","sec":"C","name":"Surgical Safety Checklist Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Procedures with all 3 checklist phases ÷ Surgical procedures) × 100","ref":"WHO 2009 SSC; Haynes 2009","num":"Procedures with full checklist","den":"Surgical procedures"},{"code":"C9","sec":"C","name":"Restraint Use Appropriateness / Monitoring","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Restraints with order + justification + monitoring ÷ Restrained patients) × 100","ref":"TJC RC.02.01.01; CMS 42 CFR 482.13(e)","num":"Appropriate restraints","den":"Restrained patients"},{"code":"C10","sec":"C","name":"Pain Assessment & Reassessment","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Pain assessed + reassessed ÷ Patients requiring assessment) × 100","ref":"JCI 2021 COP; TJC PC.01.02.07","num":"Pain assessed + reassessed","den":"Patients requiring assessment"},{"code":"C11","sec":"C","name":"Critical Value Reporting Timeliness","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Critical values reported within TAT ÷ Critical values generated) × 100","ref":"TJC NPSG 02.03.01; CLIA","num":"Critical values within TAT","den":"Critical values generated"},{"code":"C12","sec":"C","name":"Patient Handover (SBAR) Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Handovers using SBAR ÷ Handovers audited) × 100","ref":"JCI 2021 IPSG.2.2; WHO 2007","num":"SBAR handovers","den":"Handovers audited"},{"code":"D1","sec":"D","name":"Gross Hospital Mortality Rate","ft":"pct","dir":"","unit":"%","bench":"Track / benchmark","bv":null,"expr":"(Inpatient deaths ÷ Discharges incl. deaths) × 100","ref":"AHRQ 2020 IQI; CMS IQR","num":"Inpatient deaths","den":"Discharges incl. deaths"},{"code":"D2","sec":"D","name":"ICU Mortality Rate","ft":"pct","dir":"","unit":"%","bench":"Track (APACHE/SOFA)","bv":null,"expr":"(ICU deaths ÷ ICU admissions) × 100","ref":"SCCM 2020; Knaus 1985 APACHE II","num":"ICU deaths","den":"ICU admissions"},{"code":"D3","sec":"D","name":"ICU Re-admission within 48 h","ft":"pct","dir":"low","unit":"%","bench":"<5%","bv":5,"expr":"(ICU readmits ≤48 h ÷ Planned ICU step-downs) × 100","ref":"SCCM 2020; Rosenberg 2001","num":"ICU readmits ≤48 h","den":"Planned ICU discharges"},{"code":"D4","sec":"D","name":"Re-admission within 30 Days","ft":"pct","dir":"low","unit":"%","bench":"Track / minimize","bv":null,"expr":"(30-day readmissions ÷ Discharges excl. deaths/planned) × 100","ref":"CMS HRRP; Jencks 2009","num":"30-day readmissions","den":"Eligible discharges"},{"code":"D5","sec":"D","name":"Re-intubation within 48 h","ft":"pct","dir":"low","unit":"%","bench":"<10%","bv":10,"expr":"(Re-intubations ≤48 h ÷ Planned extubations) × 100","ref":"Epstein 1998; SCCM 2020","num":"Re-intubations ≤48 h","den":"Planned extubations"},{"code":"D6","sec":"D","name":"Return to ICU","ft":"count","dir":"low","unit":"count","bench":"0 / minimize","bv":0,"expr":"Count of ward→ICU transfers  (or ÷ ICU discharges to ward × 100)","ref":"SCCM 2020; Rosenberg 2001","num":"Ward patients returned to ICU","den":""},{"code":"D7","sec":"D","name":"Unplanned Return to OT","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(Unplanned OT returns ÷ Surgical procedures) × 100","ref":"ACS NSQIP 2022; Clavien-Dindo","num":"Unplanned OT returns","den":"Surgical procedures"},{"code":"D8","sec":"D","name":"Accidental Removal of ETT (Unplanned Extubation)","ft":"rate100","dir":"low","unit":"per 100 vent-days","bench":"<1","bv":1,"expr":"(Unplanned extubations ÷ Ventilator-days) × 100","ref":"Girard 2008; SCCM 2020","num":"Unplanned extubations","den":"Ventilator-days"},{"code":"D9","sec":"D","name":"LAMA / DAMA Rate","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(AMA/LAMA discharges ÷ Total discharges) × 100","ref":"WHO 2014; Alfandre 2009","num":"AMA / LAMA discharges","den":"Hospital discharges"},{"code":"D10","sec":"D","name":"Cardiac Arrest (Code Blue) Events","ft":"count","dir":"","unit":"count","bench":"Track","bv":null,"expr":"Total count of in-hospital cardiac arrest (Code Blue) events","ref":"AHA 2020 ACLS; Utstein Style","num":"IHCA (Code Blue) events","den":""},{"code":"D11","sec":"D","name":"Cardiac Arrest Survival (ROSC)","ft":"pct","dir":"high","unit":"%","bench":"≥25%","bv":25,"expr":"(IHCA with sustained ROSC ≥20 min ÷ IHCA events) × 100","ref":"AHA 2020 ACLS; ILCOR 2020","num":"IHCA with sustained ROSC","den":"In-hospital cardiac arrest events"},{"code":"E1","sec":"E","name":"Informed Consent Completeness","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Procedures with complete signed consent ÷ Procedures needing consent) × 100","ref":"JCI 2021 PFR.5; TJC RI.01.03.01","num":"Complete signed consents","den":"Procedures requiring consent"},{"code":"E2","sec":"E","name":"Initial Nursing Assessment within 24 h","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Nursing assessment ≤24 h ÷ Inpatient admissions) × 100","ref":"JCI 2021 AOP.1; TJC PC.01.02.01","num":"Assessments ≤24 h","den":"Inpatient admissions"},{"code":"E3","sec":"E","name":"Nursing Care Plan Documentation","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Care plans ≤24–48 h ÷ Admitted patients) × 100","ref":"JCI 2021 AOP.1; NANDA 2021","num":"Documented care plans","den":"Admitted patients"},{"code":"E4","sec":"E","name":"Discharge Summary Timeliness","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Discharge summaries within TAT ÷ Discharges) × 100","ref":"JCI 2021 ACC.3; TJC RC.02.04.01","num":"Summaries within TAT","den":"Patient discharges"},{"code":"E5","sec":"E","name":"Allergy Documentation Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Allergy/NKDA documented ÷ Admissions) × 100","ref":"JCI 2021 IPSG.3; TJC NPSG 03.06.01","num":"Allergy/NKDA documented","den":"Patient admissions"},{"code":"E6","sec":"E","name":"Medication Chart Completeness","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Complete medication charts ÷ Charts audited) × 100","ref":"JCI 2021 MMU; TJC MM.04.01.01","num":"Complete medication charts","den":"Medication charts audited"},{"code":"E7","sec":"E","name":"Patient / Family Education Documentation","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Documented education sessions ÷ Eligible patients) × 100","ref":"JCI 2021 PFE.2; TJC PC.02.03.01","num":"Documented education sessions","den":"Eligible patients"},{"code":"F1","sec":"F","name":"Partograph Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Completed partographs ÷ Labours monitored) × 100","ref":"WHO 2014; FIGO 2018","num":"Completed partographs","den":"Labours monitored"},{"code":"F2","sec":"F","name":"Fetal Heart Rate (FHR) Monitoring","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Appropriate FHR monitoring ÷ Deliveries) × 100","ref":"ACOG #106 2021; FIGO 2015","num":"Appropriate FHR monitoring","den":"Deliveries"},{"code":"F3","sec":"F","name":"Caesarean-Section Rate","ft":"pct","dir":"","unit":"%","bench":"WHO optimal 10–15%","bv":null,"expr":"(Caesarean deliveries ÷ Total deliveries) × 100","ref":"WHO 2015; Robson Classification","num":"Caesarean deliveries","den":"Total deliveries"},{"code":"F4","sec":"F","name":"Postpartum Haemorrhage (PPH) Rate","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(Deliveries with PPH ÷ Total deliveries) × 100","ref":"WHO 2012; ACOG 183 2017","num":"Deliveries with PPH","den":"Total deliveries"},{"code":"F5","sec":"F","name":"Birth Asphyxia Rate","ft":"rate1000","dir":"low","unit":"per 1000 live births","bench":"Minimize","bv":null,"expr":"(5-min APGAR <7 / needing PPV ÷ Live births) × 1,000","ref":"WHO 2012; AAP/AHA NRP 2015","num":"Asphyxiated live births","den":"Live births"},{"code":"F6","sec":"F","name":"Neonatal Mortality Rate","ft":"rate1000","dir":"","unit":"per 1000 live births","bench":"Track (national)","bv":null,"expr":"(Neonatal deaths ≤28 days ÷ Live births) × 1,000","ref":"WHO 2023; UNICEF 2023","num":"Neonatal deaths ≤28 days","den":"Live births"},{"code":"F7","sec":"F","name":"Breastfeeding Initiation within 1 h","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Breastfeeding ≤1 h ÷ Live births) × 100","ref":"WHO/UNICEF 2018 BFHI","num":"Breastfeeding ≤1 h","den":"Live births"},{"code":"F8","sec":"F","name":"NICU CLABSI Rate","ft":"rate1000","dir":"low","unit":"per 1000 line-days","bench":"<1","bv":1,"expr":"(NICU CLABSI events ÷ NICU central-line days) × 1,000","ref":"CDC/NHSN 2024; Polin 2012","num":"NICU CLABSI events","den":"NICU central-line days"},{"code":"F9","sec":"F","name":"Kangaroo Mother Care (KMC) Compliance","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Eligible neonates receiving KMC ÷ Eligible neonates) × 100","ref":"WHO 2022; Conde-Agudelo 2016","num":"Neonates receiving KMC","den":"Eligible preterm/LBW neonates"},{"code":"G1","sec":"G","name":"Door-to-Balloon Time ≤90 min","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(STEMI PCI with D2B ≤90 min ÷ STEMI primary-PCI patients) × 100","ref":"ACC/AHA 2013; TJC AMI-8a","num":"STEMI PCI D2B ≤90 min","den":"STEMI primary-PCI patients"},{"code":"G2","sec":"G","name":"Post-PCI Complication","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of major post-PCI adverse events (24–48 h)","ref":"ACC/AHA 2021; NCDR CathPCI","num":"Major post-PCI adverse events","den":""},{"code":"G3","sec":"G","name":"Puncture Site Hematoma","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of access-site hematomas >5 cm after catheterization","ref":"ACC/AHA 2012; NCDR CathPCI","num":"Access-site hematomas >5 cm","den":""},{"code":"G4","sec":"G","name":"Door-to-ECG ≤10 min","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(ACS with ECG ≤10 min ÷ ACS presentations) × 100","ref":"ACC/AHA 2014; TJC AMI-1","num":"ACS with ECG ≤10 min","den":"ACS / chest-pain presentations"},{"code":"G5","sec":"G","name":"STEMI Door-to-Needle (Fibrinolysis)","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(STEMI fibrinolysis ≤30 min ÷ Eligible STEMI patients) × 100","ref":"ACC/AHA 2013; TJC AMI-7a","num":"Fibrinolysis ≤30 min","den":"Eligible STEMI patients"},{"code":"G6","sec":"G","name":"Heart Failure 30-Day Readmission","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(HF readmissions ≤30 days ÷ HF discharges) × 100","ref":"CMS HRRP (HF-30); AHRQ 2020","num":"HF 30-day readmissions","den":"Heart-failure discharges"},{"code":"H1","sec":"H","name":"Dialysis Adequacy — URR","ft":"pct","dir":"high","unit":"%","bench":"≥65%","bv":65,"expr":"(Patients with URR ≥65% ÷ Patients dialyzed) × 100 · URR=[(pre-BUN−post-BUN)÷pre-BUN]×100","ref":"KDOQI 2015; Tattersall 1996","num":"Patients with URR ≥65%","den":"Patients dialyzed"},{"code":"H2","sec":"H","name":"Kt/V Achievement","ft":"pct","dir":"high","unit":"%","bench":"≥90% achieve Kt/V ≥1.2","bv":90,"expr":"(Patients Kt/V ≥1.2 ÷ Patients dialyzed) × 100 · Kt/V via Daugirdas 2nd-gen","ref":"KDOQI 2015; Daugirdas 1993","num":"Patients with Kt/V ≥1.2","den":"Patients dialyzed"},{"code":"H3","sec":"H","name":"Water Quality Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Water/dialysate tests meeting AAMI/ISO ÷ Tests performed) × 100","ref":"AAMI/ANSI 23500:2019; ISO 23500","num":"Tests meeting AAMI/ISO","den":"Water quality tests performed"},{"code":"H4","sec":"H","name":"Intradialytic Hypotension","ft":"count","dir":"low","unit":"count","bench":"0 / minimize","bv":0,"expr":"Count of sessions with symptomatic hypotension (SBP drop ≥20 / <90 mmHg)","ref":"KDOQI 2015; Flythe 2015","num":"Sessions with symptomatic hypotension","den":""},{"code":"H5","sec":"H","name":"Vascular Access Complication","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of vascular access complications","ref":"KDOQI 2006; KDIGO 2019","num":"Vascular access complications","den":""},{"code":"H6","sec":"H","name":"Accidental De-lining of Catheter","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of accidental catheter disconnection events during dialysis","ref":"KDOQI 2006; Dialysis Nursing Policy","num":"Accidental de-lining events","den":""},{"code":"H7","sec":"H","name":"Dialysis Access Infection Rate","ft":"rate1000","dir":"low","unit":"per 1000 access-days","bench":"0","bv":0,"expr":"(Dialysis access infections ÷ Access-days) × 1,000","ref":"CDC/NHSN 2024 Dialysis Event; KDOQI 2006","num":"Dialysis access infections","den":"Access-days"},{"code":"H8","sec":"H","name":"Missed / Shortened Dialysis Sessions","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(Missed or shortened >10% sessions ÷ Scheduled sessions) × 100","ref":"KDOQI 2015; Saran 2003","num":"Missed / shortened sessions","den":"Scheduled dialysis sessions"},{"code":"I1","sec":"I","name":"On-Time First-Case Start","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(First cases starting on time ÷ First cases scheduled) × 100","ref":"AORN 2022; NHS England 2021","num":"First cases on time","den":"First cases scheduled"},{"code":"I2","sec":"I","name":"Elective Case Cancellation Rate","ft":"pct","dir":"low","unit":"%","bench":"<5%","bv":5,"expr":"(Elective cases cancelled same-day ÷ Elective cases scheduled) × 100","ref":"AORN 2022; RCS standards","num":"Same-day cancellations","den":"Elective cases scheduled"},{"code":"I3","sec":"I","name":"Instrument / Sponge Count Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Cases with documented counts at all timepoints ÷ Surgical procedures) × 100","ref":"AORN 2022; WHO 2009","num":"Cases with documented counts","den":"Surgical procedures"},{"code":"I4","sec":"I","name":"Specimen Labeling Error Rate","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of surgical specimen labeling errors","ref":"CAP 2021; TJC NPSG 01.01.01","num":"Specimen labeling errors","den":""},{"code":"I5","sec":"I","name":"Anaesthesia-Related Complication Rate","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of anaesthesia-related adverse events","ref":"ASA 2019; APSF; Merry 2010","num":"Anaesthesia adverse events","den":""},{"code":"I6","sec":"I","name":"PACU Recovery Delay Rate","ft":"pct","dir":"low","unit":"%","bench":"Minimize","bv":null,"expr":"(PACU stays beyond threshold ÷ PACU admissions) × 100","ref":"ASPAN 2021; Aldrete 1995","num":"Delayed PACU discharges","den":"PACU admissions"},{"code":"J1","sec":"J","name":"Post-Procedure Complication","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Count of post-endoscopy complications within 30 days","ref":"ASGE 2015; BSG 2019","num":"Post-endoscopy complications","den":""},{"code":"J2","sec":"J","name":"Endoscope Reprocessing Compliance","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(Endoscopes reprocessed per HLD protocol ÷ Endoscopes reprocessed) × 100","ref":"SGNA 2022; ESGE/ESGENA 2018","num":"Endoscopes per HLD protocol","den":"Endoscopes reprocessed"},{"code":"J3","sec":"J","name":"Perforation Rate","ft":"pct","dir":"low","unit":"%","bench":"Minimize (<0.1%)","bv":0.1,"expr":"(Iatrogenic perforations ÷ Endoscopic procedures) × 100","ref":"ASGE 2015; Pohl 2012","num":"Iatrogenic perforations","den":"Endoscopic procedures"},{"code":"J4","sec":"J","name":"Post-Polypectomy Bleeding","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Count of significant post-polypectomy bleeds within 30 days","ref":"ASGE 2015; ESGE 2022","num":"Post-polypectomy bleeds","den":""},{"code":"K1","sec":"K","name":"Triage-to-Consult / Door-to-Doctor Time","ft":"pct","dir":"high","unit":"%","bench":"≥90% per category","bv":90,"expr":"(Patients seen within triage TAT ÷ ED presentations by category) × 100","ref":"ACEP 2019 ESI; CTAS 2020","num":"Patients seen within TAT","den":"ED presentations"},{"code":"K2","sec":"K","name":"Left Without Being Seen (LWBS) Rate","ft":"pct","dir":"low","unit":"%","bench":"<2%","bv":2,"expr":"(Patients who left without being seen ÷ ED registrations) × 100","ref":"ACEP 2019; Hobbs 2000","num":"Left without being seen","den":"ED registrations"},{"code":"K3","sec":"K","name":"ED Re-attendance within 72 h","ft":"pct","dir":"low","unit":"%","bench":"<5%","bv":5,"expr":"(ED re-attendances ≤72 h ÷ ED discharges) × 100","ref":"ACEP 2019; NHS England","num":"ED re-attendances ≤72 h","den":"ED discharges"},{"code":"K4","sec":"K","name":"Door-to-Needle for Stroke Thrombolysis","ft":"pct","dir":"high","unit":"%","bench":"≥80%","bv":80,"expr":"(Stroke tPA ≤60 min ÷ Eligible stroke patients) × 100","ref":"AHA/ASA 2019; ESO 2021","num":"Stroke tPA ≤60 min","den":"Eligible ischemic-stroke patients"},{"code":"L1","sec":"L","name":"Mandatory Training Compliance","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Staff completing mandatory training ÷ Staff required) × 100","ref":"JCI 2021 SQE.3; TJC HR.01.05.01","num":"Staff completing training","den":"Staff required to train"},{"code":"L2","sec":"L","name":"BLS / ACLS Certification Rate","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Staff with valid BLS/ACLS ÷ Staff required) × 100","ref":"AHA 2020 BLS/ACLS; JCI 2021 SQE","num":"Staff with valid certification","den":"Staff required to certify"},{"code":"L3","sec":"L","name":"Induction Completion within 30 Days","ft":"pct","dir":"high","unit":"%","bench":"100%","bv":100,"expr":"(New staff induction ≤30 days ÷ New staff) × 100","ref":"JCI 2021 SQE.7; TJC HR.01.04.01","num":"Inductions ≤30 days","den":"New employees"},{"code":"L4","sec":"L","name":"Accidental Catheter Dislodgement","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of accidental catheter dislodgements","ref":"JCI 2021 QPS; NDNQI 2023","num":"Accidental dislodgements","den":""},{"code":"L5","sec":"L","name":"Accidental Removal of Catheter","ft":"count","dir":"low","unit":"count","bench":"0","bv":0,"expr":"Total count of accidental (unplanned) catheter removals","ref":"JCI 2021 QPS; NDNQI 2023","num":"Accidental catheter removals","den":""},{"code":"M1","sec":"M","name":"Patient Satisfaction Score","ft":"pct","dir":"high","unit":"%","bench":"≥85%","bv":85,"expr":"(Patients rating care 'Very Good/Excellent' ÷ Patients surveyed) × 100","ref":"HCAHPS 2024; Press Ganey 2023","num":"Top-box ratings","den":"Patients surveyed"},{"code":"M2","sec":"M","name":"Complaint Resolution within TAT","ft":"pct","dir":"high","unit":"%","bench":"≥90%","bv":90,"expr":"(Complaints resolved within TAT ÷ Complaints received) × 100","ref":"JCI 2021 PFR.3; TJC RI.01.07.01","num":"Complaints resolved within TAT","den":"Complaints received"}];
 var HQI_SECN = {"A":"Infection Prevention & Control","B":"Medication Safety","C":"Patient Safety (IPSG)","D":"Clinical Outcomes & Mortality","E":"Documentation & Process","F":"Maternal & Neonatal","G":"Cardiac / Cath Lab / CCU","H":"Dialysis","I":"Surgery / OT / Anaesthesia","J":"Endoscopy","K":"Emergency","L":"Staff / Device Safety / Training","M":"Patient Experience"};
 
 /* ===== part: prelude.jsx ===== */
@@ -155,6 +155,22 @@ function qtrSrc(ind, fy){ return (fy!=null && ind && ind.quartersByFy && ind.qua
 function qtrRaw(ind, Q, fy){ const v = qtrSrc(ind, fy)[Q]; return (v==null||v==='') ? null : Number(v); }
 function qtrStatus(ind, Q, fy){ return qStatus(ind, qtrSrc(ind, fy)[Q]); }
 
+/* Display value for ONE month cell (report tables, heat grids, chart series, exports).
+   Monthly value when present; else the quarter rollup ONLY when that whole quarter has
+   no monthly entries at all (pure quarter-recorded data legitimately spreads across its
+   3 months). A partially-reported quarter must return null for its gap months — the
+   rollup already CONTAINS the reported months, so painting it into a gap month showed
+   a phantom duplicated total (e.g. Jan=2, Feb=3, Mar unreported → Mar showed "5"). */
+function qcCellVal(ind, m){
+  const v = monthRaw(ind, m[0]);
+  if(v!=null) return v;
+  const fy = fyOfKey(m[0]);
+  if(fy==null || !m[2]) return null;
+  const qMonths = fyAxis(fy).filter(r=>r[2]===m[2]);
+  if(qMonths.some(r=>monthRaw(ind, r[0])!=null)) return null;
+  return qtrRaw(ind, m[2], fy);
+}
+
 function isPctInd(ind){
   const t = ((ind && ind.valueType) || '').toString().toLowerCase();
   return t.indexOf('%')>=0 || t.startsWith('per') || ind.formula==='pct';
@@ -216,7 +232,7 @@ function isEventIndicator(ind){
   if(/zero.?defect/i.test(String(ind.benchmark||''))) return true;
   if(ind.incidents && Object.keys(ind.incidents).length) return true;
   const n = (ind.name||'').toLowerCase();
-  if(/extubation|removal of ett|accidental removal|dislodge|self-?extubat|needle ?stick|sharps|wrong-?site|wrong-?patient|wrong-?procedure|specimen labeling|medication error|fall|de-?lining/.test(n)) return true;
+  if(/extubation|removal of ett|accidental removal|dislodge|self-?extubat|needle ?stick|sharps|wrong-?site|wrong-?patient|wrong-?procedure|specimen labeling|medication (administration )?error|fall|de-?lining/.test(n)) return true;
   return false;
 }
 
@@ -278,7 +294,7 @@ function stdMatch(name){
     [/hand hygiene/,'A1'], [/\bcauti\b|catheter-associated uti/,'A2'], [/\bclabsi\b|central line/,'A3'],
     [/\bvap\b|ventilator-associated pneumonia/,'A4'], [/\bvae\b|ventilator-associated event/,'A4'],
     [/surgical site infection|\bssi\b/,'A5'], [/phlebitis/,'A6'], [/needle stick|\bnsi\b/,'A13'],
-    [/medication error/,'B1'], [/falls with injury/,'C3'], [/patient fall/,'C2'],
+    [/medication (administration )?error/,'B1'], [/falls with injury/,'C3'], [/patient fall/,'C2'],
     [/pressure ulcer|hapu|bed sore|pressure injury/,'C4'], [/deep vein thrombosis|\bdvt\b/,'C6'],
     [/return to icu/,'D6'], [/cardiac arrest survival/,'D11'], [/cardiac arrest events|code blue/,'D10'],
     [/partograph/,'F1'], [/door-to-balloon/,'G1'], [/post-pci/,'G2'], [/puncture site hematoma/,'G3'],
@@ -373,15 +389,22 @@ function QCDashboard({ depts, Q }) {
       // One cell per month of the selected fiscal year (was one per quarter). Uses the
       // real monthly values, so cells now populate instead of showing all "–".
       const cells = fyMonths.map(m => {
-        let b = 0, rep = 0;
+        // Per-ASSIGNED-indicator submission state: which of this department's indicators
+        // have a value for the month and which are still missing — so a cell can say
+        // "9/15 submitted" instead of a flat ✓ that hid the missing ones.
+        let b = 0, rep = 0; const missing = [];
         inds.forEach(ind => {
           const s = monthStatus(ind, m[0]);
-          if (s === 'breach') b++; else if (s !== 'na') rep++;
+          if (s === 'breach') b++; else if (s !== 'na') rep++; else missing.push(ind.name);
         });
-        const bg = (b + rep) === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : '#e7f6ed';
-        const fg = (b + rep) === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : '#1f9d57';
-        // mk/mlabel + has let the cell open a full dept×month incident drill-down.
-        return { sym: (b + rep) === 0 ? '–' : b > 0 ? String(b) : '✓', bg, fg, mk: m[0], mlabel: m[1], breach: b, has: (b + rep) > 0 };
+        const total = inds.length, sub = b + rep;
+        const partial = sub > 0 && sub < total;
+        const bg = sub === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : partial ? '#fdf3e3' : '#e7f6ed';
+        const fg = sub === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : partial ? '#b26a0f' : '#1f9d57';
+        const sym = sub === 0 ? '–' : b > 0 ? String(b) : partial ? (sub + '/' + total) : '✓';
+        // mk/mlabel let the cell open a full dept×month drill-down (all cells clickable —
+        // a grey/partial cell opens the same modal, which lists what is NOT submitted).
+        return { sym, bg, fg, mk: m[0], mlabel: m[1], breach: b, sub, total, missing, has: sub > 0 };
       });
       const st = deptStat(dep, fyMonths);
       let status = dep.status;
@@ -461,7 +484,7 @@ function QCDashboard({ depts, Q }) {
       <div style={{ background: '#fff', border: '1px solid #dde3ec', borderRadius: '12px', boxShadow: '0 1px 2px rgba(20,32,46,.06)', overflow: 'hidden' }}>
         <div style={{ padding: '13px 16px', borderBottom: '1px solid #e8edf3' }}>
           <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#16202e' }}>Department × Month Heatmap <span style={{ fontWeight: 600, color: '#9aa6b4', fontSize: '11.5px' }}>· {fyLabelOf(safeFy)}</span></div>
-          <div style={{ fontSize: '11.5px', color: '#6c7a8c' }}>breaches per month — green clean · red breach · grey not reported</div>
+          <div style={{ fontSize: '11.5px', color: '#6c7a8c' }}>per assigned indicator — <b style={{ color: '#1f9d57' }}>✓ all submitted</b> · <b style={{ color: '#b26a0f' }}>n/N partially submitted</b> · <b style={{ color: '#d23a52' }}>red = breaches</b> · grey none — click any cell to see what's submitted &amp; missing</div>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ borderCollapse: 'collapse', fontSize: '12.5px', width: '100%' }}>
@@ -484,9 +507,12 @@ function QCDashboard({ depts, Q }) {
                   {r.cells.map((c, ci) => (
                     <td key={ci} style={{ textAlign: 'center', padding: '6px 4px' }}>
                       <span
-                        onClick={c.has ? () => setCellSel({ depKey: r.dep.key, mk: c.mk, mlabel: c.mlabel }) : undefined}
-                        title={c.has ? (r.name + ' · ' + c.mlabel + (c.breach ? ' — ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + ' · click to view') : undefined}
-                        style={{ display: 'inline-grid', placeItems: 'center', minWidth: '24px', height: '24px', borderRadius: '6px', background: c.bg, color: c.fg, fontWeight: 700, fontSize: '11px', fontFamily: MONO, cursor: c.has ? 'pointer' : 'default', boxShadow: c.has && c.breach ? '0 0 0 1px #eeb9c2' : 'none' }}
+                        onClick={() => setCellSel({ depKey: r.dep.key, mk: c.mk, mlabel: c.mlabel })}
+                        title={r.name + ' · ' + c.mlabel + ' — ' + c.sub + ' of ' + c.total + ' assigned indicator' + (c.total !== 1 ? 's' : '') + ' submitted'
+                          + (c.breach ? ' · ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '')
+                          + (c.missing.length ? ' · not submitted: ' + c.missing.slice(0, 5).join(', ') + (c.missing.length > 5 ? ' +' + (c.missing.length - 5) + ' more' : '') : '')
+                          + ' · click for details'}
+                        style={{ display: 'inline-grid', placeItems: 'center', minWidth: '24px', height: '24px', padding: '0 4px', borderRadius: '6px', background: c.bg, color: c.fg, fontWeight: 700, fontSize: c.sym.length > 2 ? '9.5px' : '11px', fontFamily: MONO, cursor: 'pointer', boxShadow: c.breach ? '0 0 0 1px #eeb9c2' : 'none' }}
                       >{c.sym}</span>
                     </td>
                   ))}
@@ -553,6 +579,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
         {field('Patient', x.patientName)}
         {field('Age / Sex', [x.age, x.gender].filter(Boolean).join(' / '))}
         {field('Diagnosis', x.diagnosis)}
+        {field('Date of incident', x.incidentDate)}
         {field('Admission', x.admissionDate)}
         {field('Procedure date', x.procedureDate)}
         {field('Victim (staff)', x.victimName)}
@@ -598,7 +625,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
           <div>
             <div style={{ fontSize: 16.5, fontWeight: 700, color: P.ink }}>{dep.name} <span style={{ color: P.muted, fontWeight: 600, fontSize: 13 }}>· {mlabel}</span></div>
             <div style={{ fontSize: 12, color: P.muted, marginTop: 2 }}>
-              {reported.length} indicator{reported.length !== 1 ? 's' : ''} reported · <b style={{ color: breaches ? P.rose : P.green }}>{breaches} breach{breaches !== 1 ? 'es' : ''}</b>
+              <b style={{ color: reported.length === allInds.length ? P.green : P.ink2 }}>{reported.length} of {allInds.length}</b> assigned indicator{allInds.length !== 1 ? 's' : ''} submitted · <b style={{ color: breaches ? P.rose : P.green }}>{breaches} breach{breaches !== 1 ? 'es' : ''}</b>
               {canEdit && <span style={{ marginLeft: 8, color: '#0090ca', fontWeight: 700 }}>· admin edit</span>}
             </div>
           </div>
@@ -607,7 +634,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
           </button>
         </div>
         <div style={{ padding: '14px 20px 20px', maxHeight: '72vh', overflowY: 'auto' }}>
-          {reported.length === 0 && !editing && <div style={{ fontSize: 13, color: P.muted, padding: '24px 0', textAlign: 'center' }}>No indicators were reported for this month.{canEdit ? ' Use “Add a reading” below.' : ''}</div>}
+          {reported.length === 0 && !editing && <div style={{ fontSize: 13, color: P.muted, padding: '24px 0', textAlign: 'center' }}>No indicators were submitted for this month.{canEdit ? ' Click an indicator below to add its reading.' : ''}</div>}
 
           {reported.map((r) => (editId === r.ind.id
             ? <QCIndEdit key={r.ind.id} dep={dep} ind={r.ind} mk={mk} mlabel={mlabel} Q={Q} onClose={() => setEditId(null)} />
@@ -616,20 +643,20 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
           {/* editing an indicator that had no reading yet (create path) */}
           {editing && editingUnreported && <QCIndEdit key={editing.id} dep={dep} ind={editing} mk={mk} mlabel={mlabel} Q={Q} isNew onClose={() => setEditId(null)} />}
 
-          {/* admin: add a reading for an indicator not yet reported this month */}
-          {canEdit && !editId && unreported.length > 0 && (
-            <div style={{ marginTop: 4 }}>
-              {!addOpen
-                ? <button onClick={() => setAddOpen(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px dashed #b9c6d2', background: '#f7f9fc', color: P.ink2, padding: '9px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"></path></svg>Add a reading for another indicator</button>
-                : <div style={{ border: '1px solid #dde3ec', borderRadius: 9, padding: '11px 13px', background: '#f7f9fc' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: P.muted, textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: 7 }}>Add a reading — pick an indicator</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                      {unreported.map(ind => (
-                        <button key={ind.id} onClick={() => { setAddOpen(false); setEditId(ind.id); }} style={{ border: '1px solid #cfe6f4', background: '#eef8fc', color: '#0072a3', padding: '6px 11px', borderRadius: 20, fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}>{ind.name}</button>
-                      ))}
-                    </div>
-                    <button onClick={() => setAddOpen(false)} style={{ marginTop: 9, border: 'none', background: 'transparent', color: P.muted, fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-                  </div>}
+          {/* Which ASSIGNED indicators are still missing this month — always visible so
+              the submitted/not-submitted split is explicit; admins click one to add
+              its reading (the old collapsed "Add a reading" flow, now one click). */}
+          {!editId && unreported.length > 0 && (
+            <div style={{ marginTop: 4, border: '1px dashed #b9c6d2', borderRadius: 9, padding: '11px 13px', background: '#f7f9fc' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#b26a0f', textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: 7 }}>
+                Not submitted for {mlabel} ({unreported.length} of {allInds.length} assigned)
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                {unreported.map(ind => canEdit
+                  ? <button key={ind.id} title={'Add the ' + mlabel + ' reading for ' + ind.name} onClick={() => { setAddOpen(false); setEditId(ind.id); }} style={{ border: '1px solid #cfe6f4', background: '#eef8fc', color: '#0072a3', padding: '6px 11px', borderRadius: 20, fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}>+ {ind.name}</button>
+                  : <span key={ind.id} style={{ border: '1px solid #dde3ec', background: '#fff', color: P.muted, padding: '6px 11px', borderRadius: 20, fontSize: 11.5, fontWeight: 600 }}>{ind.name}</span>)}
+              </div>
+              {canEdit && <div style={{ fontSize: 10.5, color: P.muted, marginTop: 8 }}>Click an indicator to add its {mlabel} reading now.</div>}
             </div>
           )}
         </div>
@@ -721,6 +748,7 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
             {fin('UHID', i, 'uhid')}
             {fin('Age', i, 'age')}
             {fin('Sex', i, 'gender')}
+            {fin('Date of incident', i, 'incidentDate')}
             {fin('Admission date', i, 'admissionDate')}
             {fin('Procedure date', i, 'procedureDate')}
           </div>
@@ -938,10 +966,22 @@ function qcDownload(content, filename, mime){
 function qcIncidentsOf(d){
   const out=[];
   // Iterate the indicator's OWN incident month keys (not a fixed fiscal-year axis) so incidents
-  // in ANY year are surfaced; callers filter by month label for their selected period.
+  // in ANY year are surfaced; callers filter with qcIncInPeriod for their selected period.
+  // Legacy records can be keyed by QUARTER ('Q1'..'Q4') instead of month — carry the
+  // quarter on `q` and label it readably instead of a bare 'Q1' that no filter matched.
   (d.indicators||[]).forEach(ind=>{ const incs=ind.incidents||{}; Object.keys(incs).forEach(mk=>{ const arr=incs[mk];
-    if(Array.isArray(arr)) arr.forEach(x=>{ if(x && (x.details||x.finding||x.corrective||x.preventive||x.patientName||x.uhid||x.victimName||x.victimId)) out.push({ind:ind.name, month:qcMonthLabel(mk), x:x}); }); }); });
+    const isQ=/^Q[1-4]$/.test(mk);
+    if(Array.isArray(arr)) arr.forEach(x=>{ if(x && (x.details||x.finding||x.corrective||x.preventive||x.patientName||x.uhid||x.victimName||x.victimId)) out.push({ind:ind.name, month:isQ?qtrLabelOf(mk):qcMonthLabel(mk), q:isQ?mk:null, x:x}); }); }); });
   return out;
+}
+/* Incident-in-period test shared by EVERY report surface (dept pages, heatmap, appendix,
+   CSV/Excel/Word). Month-keyed records match by month label; legacy quarter-keyed records
+   match when the period spans that quarter — they used to be silently dropped from every
+   report and export because 'Q1' never equals a month label. */
+function qcIncInPeriod(r, months){
+  if(!months || !months.length) return true;
+  if(r.q) return months.some(m=>m[2]===r.q);
+  return months.some(m=>m[1]===r.month);
 }
 // Full multi-department report HTML (tables + incident details).
 // `months`/`fyIn` parameterize the axis (the Report Builder passes ITS selected year and
@@ -952,7 +992,6 @@ function qcReportHTML(depts, months, fyIn, opts){
   const date=new Date().toISOString().slice(0,10);
   const fy=(fyIn!=null)?fyIn:defaultFy(depts);
   const MONTHS=(Array.isArray(months)&&months.length)?months:fyAxis(fy);
-  const mset=new Set(MONTHS.map(m=>m[1]));
   let body=o.noTitle?'':('<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Quality Indicator Report</h1>'
     +'<div style="font-family:Calibri;color:#555;margin-bottom:12px">'+fyLabelOf(fy)+' · '+MONTHS[0][1]+' - '+MONTHS[MONTHS.length-1][1]+' · generated '+date+' · Confidential</div>');
   depts.forEach(d=>{
@@ -962,15 +1001,15 @@ function qcReportHTML(depts, months, fyIn, opts){
     const th=['Indicator','Benchmark'].concat(MONTHS.map(m=>m[1].split(' ')[0])).map(h=>'<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">'+h+'</th>').join('');
     const trs=(d.indicators||[]).map((ind,i)=>{
       // month value with the same quarter fallback the on-screen pages use
-      const cells=[qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null&&m[2]) v=qtrRaw(ind,m[2],fyOfKey(m[0])); const s=qStatus(ind,v); const disp=s==='na'?'—':fmtVal(ind,v); const col=s==='breach'?'#d23a52':s==='ok'?'#1f9d57':'#9aa6b4'; return '<span style="color:'+col+';font-weight:600">'+qcEsc(disp)+'</span>'; }));
+      const cells=[qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m); const s=qStatus(ind,v); const disp=s==='na'?'—':fmtVal(ind,v); const col=s==='breach'?'#d23a52':s==='ok'?'#1f9d57':'#9aa6b4'; return '<span style="color:'+col+';font-weight:600">'+qcEsc(disp)+'</span>'; }));
       return '<tr style="background:'+(i%2?'#eef6fb':'#fff')+'">'+cells.map((c,ci)=>'<td style="border:1px solid #b9c6d2;padding:4px 7px;font-family:Calibri;font-size:10pt;'+(ci>1?'text-align:center':'')+'">'+c+'</td>').join('')+'</tr>';
     }).join('');
     body+='<table border="1" style="border-collapse:collapse"><thead><tr>'+th+'</tr></thead><tbody>'+trs+'</tbody></table>';
-    const inc=qcIncidentsOf(d).filter(r=>mset.has(r.month));
+    const inc=qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,MONTHS));
     if(inc.length){
       body+='<h3 style="font-family:Calibri;color:#b32339;margin:12px 0 3px">Incident details ('+inc.length+')</h3>';
-      const ith=['Indicator','Month','UHID','Patient','Age/Sex','Incident details','Finding','Corrective action','Preventive action'].map(h=>'<th style="background:#d23a52;color:#fff;border:1px solid #a02a3c;padding:5px 7px;font-family:Calibri;font-size:9.5pt;text-align:left">'+h+'</th>').join('');
-      const itrs=inc.map((r,i)=>{ const x=r.x; const cols=[r.ind, r.month, x.uhid||'', x.patientName||'', ((x.age||'')+(x.gender?(' / '+x.gender):'')), x.details||'', x.finding||'', x.corrective||'', x.preventive||'']; return '<tr style="background:'+(i%2?'#fbeef0':'#fff')+'">'+cols.map(c=>'<td style="border:1px solid #e0b6bf;padding:4px 7px;font-family:Calibri;font-size:9pt;vertical-align:top">'+qcEsc(c)+'</td>').join('')+'</tr>'; }).join('');
+      const ith=['Indicator','Month','Date of incident','UHID','Patient','Age/Sex','Incident details','Finding','Corrective action','Preventive action'].map(h=>'<th style="background:#d23a52;color:#fff;border:1px solid #a02a3c;padding:5px 7px;font-family:Calibri;font-size:9.5pt;text-align:left">'+h+'</th>').join('');
+      const itrs=inc.map((r,i)=>{ const x=r.x; const cols=[r.ind, r.month, x.incidentDate||'', x.uhid||'', x.patientName||'', ((x.age||'')+(x.gender?(' / '+x.gender):'')), x.details||'', x.finding||'', x.corrective||'', x.preventive||'']; return '<tr style="background:'+(i%2?'#fbeef0':'#fff')+'">'+cols.map(c=>'<td style="border:1px solid #e0b6bf;padding:4px 7px;font-family:Calibri;font-size:9pt;vertical-align:top">'+qcEsc(c)+'</td>').join('')+'</tr>'; }).join('');
       body+='<table border="1" style="border-collapse:collapse;margin-top:2px"><thead><tr>'+ith+'</tr></thead><tbody>'+itrs+'</tbody></table>';
     }
   });
@@ -982,9 +1021,8 @@ function qcExport(depts, fmt){
   if(fmt==='csv'){
     const rows=[['Department','Indicator','Benchmark','Goal'].concat(MONTHS.map(m=>m[1]))];
     depts.forEach(d=>(d.indicators||[]).forEach(ind=>{ rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection==='higher_is_better'?'higher is better':'lower is better'].concat(MONTHS.map(m=>{ const s=monthStatus(ind,m[0]); return s==='na'?'':fmtVal(ind,monthRaw(ind,m[0])); }))); }));
-    rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
-    const mset=new Set(MONTHS.map(m=>m[1]));
-    depts.forEach(d=>qcIncidentsOf(d).filter(r=>mset.has(r.month)).forEach(r=>{ const x=r.x; rows.push([d.name, r.ind, r.month, x.uhid||'', x.patientName||'', x.age||'', x.gender||'', x.diagnosis||'', x.details||'', x.finding||'', x.corrective||'', x.preventive||'']); }));
+    rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','Date of incident','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
+    depts.forEach(d=>qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,MONTHS)).forEach(r=>{ const x=r.x; rows.push([d.name, r.ind, r.month, x.incidentDate||'', x.uhid||'', x.patientName||'', x.age||'', x.gender||'', x.diagnosis||'', x.details||'', x.finding||'', x.corrective||'', x.preventive||'']); }));
     qcDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), base+'.csv','text/csv;charset=utf-8'); return;
   }
   const html='<html xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><style>@page{size:A4 landscape;margin:1cm}</style></head><body>'+qcReportHTML(depts)+'</body></html>';
@@ -1045,6 +1083,7 @@ const QC_PAGE_SIZES={A4:[700,1.414],A3:[815,1.414],Letter:[700,1.294]};
 function QCPagedPreview({pageW, pageMinH, children}){
   const ref=React.useRef(null);
   const [starts,setStarts]=React.useState([0]);
+  const [foot,setFoot]=React.useState(null);           // [top,bottom] of .pdf-foot in content coords
   const usableH=Math.max(240, pageMinH-56);            // A4 minus top+bottom padding (28+28)
   React.useLayoutEffect(()=>{
     const root=ref.current; if(!root) return;
@@ -1056,6 +1095,9 @@ function QCPagedPreview({pageW, pageMinH, children}){
     // are small plain divs the old scan didn't protect, so a break could land mid-footer.
     root.querySelectorAll('svg,table,tr,.pdf-foot,.qc-band').forEach(push);
     root.querySelectorAll('*').forEach(el=>{ const s=el.getAttribute('style'); if(s && s.indexOf('break-inside')>=0) push(el); });
+    // page-footer band — the last sheet pins it to the sheet bottom instead of letting it flow
+    const fEl=root.querySelector('.pdf-foot'); let f=null;
+    if(fEl){ const r=fEl.getBoundingClientRect(); if(r.height>0 && r.height<=usableH) f=[r.top-rootTop, r.bottom-rootTop]; }
     const st=[0]; let s=0, guard=0;
     while(s+usableH < H-2 && guard++<80){
       let brk=s+usableH;                                  // default: fill the page
@@ -1064,6 +1106,7 @@ function QCPagedPreview({pageW, pageMinH, children}){
       st.push(brk); s=brk;
     }
     if(st.length!==starts.length || st.some((v,i)=>Math.abs(v-(starts[i]||0))>2)) setStarts(st);
+    if((f?1:0)!==(foot?1:0) || (f&&foot&&(Math.abs(f[0]-foot[0])>2||Math.abs(f[1]-foot[1])>2))) setFoot(f);
   });
   const frame={background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',width:pageW,height:pageMinH,boxSizing:'border-box',padding:'28px 30px',margin:'0 auto 18px',overflow:'hidden',position:'relative'};
   const n=starts.length;
@@ -1071,12 +1114,29 @@ function QCPagedPreview({pageW, pageMinH, children}){
     <div>
       {/* hidden measurer at the same content width as a sheet */}
       <div ref={ref} aria-hidden="true" style={{position:'absolute',left:-99999,top:0,visibility:'hidden',pointerEvents:'none',width:pageW,boxSizing:'border-box',padding:'0 30px'}}>{children}</div>
-      {starts.map((s0,k)=>(
-        <div key={k} style={frame}>
-          <div style={{transform:'translateY('+(-s0)+'px)'}}>{children}</div>
-          {n>1&&<div style={{position:'absolute',right:9,bottom:5,fontSize:9,color:'#aeb7c2',fontFamily:MONO}}>{(k+1)+' / '+n}</div>}
-        </div>
-      ))}
+      {starts.map((s0,k)=>{
+        const last=k===n-1;
+        // The last sheet clips the in-flow footer OUT of the content window and re-renders
+        // it pinned to the sheet bottom, so it never floats mid-page after short content.
+        const pin=last && foot && foot[0]>=s0-2;
+        const footH=pin?Math.max(0,foot[1]-foot[0]):0;
+        const cut=last?(pin?foot[0]:s0+usableH):starts[k+1];
+        // Exact-window clip per sheet: the frame-level clip alone let content bleed into the
+        // 28px paddings, so everything between a pulled-up break and the fill line rendered
+        // on BOTH the bottom of one sheet and the top of the next (duplicated sections).
+        const mainH=Math.max(0, Math.min(cut-s0, usableH-footH));
+        return (
+          <div key={k} style={frame}>
+            <div style={{overflow:'hidden',height:mainH}}>
+              <div style={{transform:'translateY('+(-s0)+'px)'}}>{children}</div>
+            </div>
+            {pin&&<div style={{position:'absolute',left:30,right:30,bottom:28,overflow:'hidden',height:footH}}>
+              <div style={{transform:'translateY('+(-foot[0])+'px)'}}>{children}</div>
+            </div>}
+            {n>1&&<div style={{position:'absolute',right:9,bottom:5,fontSize:9,color:'#aeb7c2',fontFamily:MONO}}>{(k+1)+' / '+n}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1121,7 +1181,7 @@ function qcTone(d){ const k=(d&&d.key)||''; return QC_PAL[(k.charCodeAt(0)||0)%Q
 /* One value per month over the given axis, month fallback -> quarter (seed is quarter-only). */
 function qcMonthVals(ind, months){
   months = months || MONTHS;
-  return months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); return v; });
+  return months.map(m=>qcCellVal(ind,m));
 }
 /* Rows shaped for the window.* charts: {mon, mfull, q, val, has, bench}. */
 function qcChartRows(ind, months){
@@ -1219,7 +1279,7 @@ function qcIndKpis(ind, months){
   // Display axis: per-month values with quarter fill (for Latest). Aggregation uses a
   // DEDUPED series — a quarter rollup covers 3 months and must be totalled/averaged once,
   // and only for quarters with no monthly entries (else Q1=2 reported "YTD Total 6").
-  const vals=months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); return v; });
+  const vals=months.map(m=>qcCellVal(ind,m));
   const qHasMonth={}; months.forEach(m=>{ if(monthRaw(ind,m[0])!=null) qHasMonth[fyOfKey(m[0])+':'+m[2]]=true; });
   const qUsed=new Set();
   const agg=[]; months.forEach(m=>{
@@ -1309,7 +1369,7 @@ function QCHeatGrid({d, months}){
           : inds.map(ind=>(
           <tr key={ind.id}>
             <td style={{padding:'3px 8px',textAlign:'left',fontWeight:600,color:P.ink,fontSize:9.5}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
-            {months.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); const s=qStatus(ind,v); const c=qcHeatColors(s);
+            {months.map(m=>{ const v=qcCellVal(ind,m); const s=qStatus(ind,v); const c=qcHeatColors(s);
               return <td key={m[0]} style={{padding:'3px 2px',textAlign:'center'}}><span title={ind.name+' · '+m[1]+' · '+(s==='na'?'not reported':s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:22,height:24,borderRadius:5,background:c.bg,color:c.col,fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{s==='na'?'·':fmtVal(ind,v)}</span></td>;
             })}
           </tr>
@@ -1329,7 +1389,7 @@ function QCHeatLegend(){
 function QCIncidentCard({r, showDept, showMonth=true}){
   const x=r.x||{};
   const meta=[x.patientName, x.uhid&&('UHID '+x.uhid), [x.age,x.gender].filter(Boolean).join('/'),
-              x.admissionDate&&('Adm '+x.admissionDate), x.procedureDate&&('Proc '+x.procedureDate),
+              x.incidentDate&&('Incident '+x.incidentDate), x.admissionDate&&('Adm '+x.admissionDate), x.procedureDate&&('Proc '+x.procedureDate),
               x.victimName&&('Victim '+x.victimName), x.victimId&&('Victim ID '+x.victimId)].filter(Boolean).join(' · ');
   const line=(lbl,v)=> (v!=null&&v!=='')? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5,marginTop:2}}><b style={{color:P.ink}}>{lbl}:</b> {v}</div> : null;
   return (
@@ -1351,8 +1411,7 @@ function QCIncidentCard({r, showDept, showMonth=true}){
 }
 
 function QCIncidentBlock({d, months}){
-  const set = months ? new Set(months.map(m=>m[1])) : null;
-  const inc = qcIncidentsOf(d).filter(r=> !set || set.has(r.month));
+  const inc = qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,months));
   if(!inc.length) return null;
   return (
     <div style={{marginTop:14}}>
@@ -1426,7 +1485,7 @@ function qcBenchRows(chosen, months){
   const out=[];
   chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{
     const bv=ind.benchmarkValue; if(bv==null||bv==='') return;
-    let latest=null; for(let i=months.length-1;i>=0;i--){ let v=monthRaw(ind,months[i][0]); if(v==null) v=qtrRaw(ind,months[i][2],fyOfKey(months[i][0])); if(v!=null){ latest=v; break; } }
+    let latest=null; for(let i=months.length-1;i>=0;i--){ const v=qcCellVal(ind,months[i]); if(v!=null){ latest=v; break; } }
     if(latest==null) return;
     out.push({dept:d.name, ind, name:ind.name, bench:Number(bv), actual:latest, status:qStatus(ind,latest)});
   }));
@@ -1629,7 +1688,7 @@ function QCSignatureBlock({sig, orgName}){
       <div style={{fontSize:9.5,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:.4,marginBottom:12}}>Authorisation · {orgName}</div>
       <div style={{display:'flex',gap:30}}>
         {cell('Prepared by', sig.prepared)}
-        {cell('Reviewed by', sig.reviewed)}
+        {cell('Checked by', sig.reviewed)}
         {cell('Approved by', sig.approved)}
       </div>
     </div>
@@ -1639,6 +1698,24 @@ function QCSignatureBlock({sig, orgName}){
 /* Read the CAPA status map from the same localStorage key the Action Plans view
    owns (unico_capa_v1). Keyed by dept.key+'/'+ind.id, default 'Open'. */
 function qcCapaMap(){ try{ return JSON.parse(localStorage.getItem('unico_capa_v1'))||{}; }catch(e){ return {}; } }
+
+/* Hand-hygiene indicators for the HH report: percentage-typed only (a count/rate1000
+   indicator's monthRaw is not a compliance % and must not be averaged in). Falls back
+   to the rest of the hospital — surfacing the hospital-wide 'Overall Hospital' record —
+   when the SELECTED departments' HH indicators carry no data ON THE REPORT AXIS. The
+   fallback must key off reported DATA, not indicator existence: dept-level HH indicators
+   exist (empty) in several areas while the only reported record is hospital-wide, so an
+   existence test rendered an all-dashes report and never reached the fallback. Shared by
+   the page-list memo AND HHPage so the page count can never disagree with the bodies. */
+function qcHHOf(chosen, depts, months){
+  const isHH=ind=>/hand\s*hygiene/i.test((ind&&ind.name)||'') && (ind.formula==='pct'||ind.formula==='direct'||isPctInd(ind));
+  const hh=[]; (chosen||[]).forEach(d=>(d.indicators||[]).forEach(ind=>{ if(isHH(ind)) hh.push({d,ind}); }));
+  if(!hh.some(h=>hasData(h.ind, months))){
+    const seen=new Set(hh.map(h=>h.ind));
+    (depts||[]).forEach(d=>(d.indicators||[]).forEach(ind=>{ if(isHH(ind) && !seen.has(ind) && hasData(ind, months)) hh.push({d,ind}); }));
+  }
+  return hh;
+}
 
 function QCReportBuilder({depts}){
   const allKeys = depts.map(d=>d.key);
@@ -1675,7 +1752,10 @@ function QCReportBuilder({depts}){
   });
   const [activeTemplate,setActiveTemplate]=useState('custom');
   const [compareBaseline,setCompareBaseline]=useState('prev'); // 'prev' | 'yoy'
-  const [sig,setSig]=useState({prepared:'',reviewed:'',approved:''}); // signature names
+  // Signature names — loaded from the SHARED saved set (window.unicoSig, also used by
+  // the Patient Statistics report builders) and auto-saved on every edit.
+  const [sig,setSig]=useState(()=> (window.unicoSig?window.unicoSig.load():{prepared:'',reviewed:'',approved:''}));
+  useEffect(()=>{ if(window.unicoSig) window.unicoSig.save(sig); },[sig]);
   // custom indicator selection — keys are "deptKey::indId"; narrows every page + export at once
   const [indMode,setIndMode]=useState('all');            // 'all' | 'custom'
   const [indSel,setIndSel]=useState(()=>new Set());
@@ -1707,7 +1787,10 @@ function QCReportBuilder({depts}){
     setReportType(c.reportType||'summary'); setPeriod(c.period||{mode:'all'}); setChartStyles((c.chartStyles&&c.chartStyles.length)?c.chartStyles:['bar3d']);
     setHdrTitle(c.hdrTitle||''); setHdrSub(c.hdrSub||''); setOrgName(c.orgName||'UNICO HOSPITALS PLC'); setShowLogo(c.showLogo!==false); setConfidential(c.confidential!==false); setFooterNote(c.footerNote||'');
     setPageSize(c.pageSize||'A4'); setOrient(c.orient||'portrait'); setSelectedDepts(Array.isArray(c.selectedDepts)?c.selectedDepts:allKeys.slice(0,4));
-    setSections(s=>({...s,...(c.sections||{})})); setCompareBaseline(c.compareBaseline||'prev'); setSig(c.sig||{prepared:'',reviewed:'',approved:''});
+    setSections(s=>({...s,...(c.sections||{})})); setCompareBaseline(c.compareBaseline||'prev');
+    // A preset only overrides the signatures when it actually SAVED names — otherwise the
+    // shared auto-saved set (window.unicoSig) would be wiped by loading an older format.
+    setSig(s=>{ const cs=c.sig||{}; return (cs.prepared||cs.reviewed||cs.approved)?{prepared:cs.prepared||'',reviewed:cs.reviewed||'',approved:cs.approved||''}:s; });
     setIndMode(c.indMode||'all'); setIndSel(new Set(c.indSel||[])); setActiveTemplate('custom'); setPageIdx(0); };
   const saveFormat=()=>{ const name=presetName.trim(); if(!name){ setNote({ok:false,text:'Type a name for this format first.'}); return; }
     setPresets(ps=>[...ps.filter(p=>p.name!==name),{name,config:snapshot()}]); setPresetSel(name); setPresetName(''); setNote({ok:true,text:'Saved format "'+name+'". Reload it any time from Saved formats.'}); };
@@ -1775,20 +1858,26 @@ function QCReportBuilder({depts}){
         // current calendar year, which silently dropped indicator pages (and corrupted the
         // TOC) whenever the selected report year differed from today's.
         const inds=(d.indicators||[]).filter(i=>hasData(i, pMonths));
-        const list=inds.length?inds:(d.indicators||[]);
-        return (list.length?list:[null]).map(ind=>({kind:'detail', dept:d, ind}));
+        // A dept with NOTHING reported gets ONE honest empty page (dept header, month
+        // table of all its indicators, which-year hint) — it used to emit a near-identical
+        // "no data" sheet per indicator, which read as a run of duplicated pages.
+        return (inds.length?inds:[null]).map(ind=>({kind:'detail', dept:d, ind}));
       });
     else if(reportType==='heatmap') base = chosen.length ? [{kind:'heatmap'}] : [];
     else if(reportType==='handhygiene'){
       // Overview page whenever a department is selected (HHPage shows a helpful empty-state
       // if none report hand hygiene); add a breakdown page only when staff-group or ≥2 dept
-      // HH indicators exist.
-      const hh=[]; chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ if(/hand\s*hygiene/i.test(ind.name||'')) hh.push({d,ind}); }));
+      // HH indicators exist. qcHHOf is the SAME finder HHPage renders from (pct-typed,
+      // hospital-wide fallback), so the page list always matches the page bodies.
+      const hh=qcHHOf(chosen, depts, pMonths);
       base = chosen.length ? [{kind:'hh', part:'overview'}] : [];
       if(hh.length){
         const hasGroups = hh.some(h=>{ const g=h.ind.mGroups||{}; return Object.keys(g).some(k=>g[k]&&Object.keys(g[k]).length); });
+        // dept-wise audit rows stored on the submission month (mDeptBreakdown) also fill
+        // the breakdown page — the hospital-wide record alone can carry per-dept data.
+        const hasDeptBd = hh.some(h=>{ const b=h.ind.mDeptBreakdown||{}; return Object.keys(b).some(k=>Array.isArray(b[k])&&b[k].length); });
         const deptCount = new Set(hh.map(h=>h.d.key)).size;
-        if(hasGroups || deptCount>1) base.push({kind:'hh', part:'breakdown'});
+        if(hasGroups || hasDeptBd || deptCount>1) base.push({kind:'hh', part:'breakdown'});
       }
     }
     // Guard month pages on a real selection (parity with compare/heatmap) so the
@@ -1859,7 +1948,7 @@ function QCReportBuilder({depts}){
 
   /* month-wise table cell */
   const MonthCell=({ind,m})=>{
-    let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0]));
+    const v=qcCellVal(ind,m);
     const s=qStatus(ind,v);
     const col=s==='breach'?P.rose:s==='ok'?P.green:P.faint;
     const bg =s==='breach'?'#fbe9ec':s==='ok'?'#e7f6ed':'#f4f6f9';
@@ -1895,8 +1984,7 @@ function QCReportBuilder({depts}){
     const code=stdMatch(ind.name); const g=guideOf(code);
     // Scope incidents to the REPORT PERIOD (like every other incident section) — without
     // the month filter, events from other years leaked into e.g. a Q1-2026 report.
-    const mset=new Set(pMonths.map(m=>m[1]));
-    const incs = isEventIndicator(ind) ? qcIncidentsOf(d).filter(r=>r.ind===ind.name && mset.has(r.month)) : [];
+    const incs = isEventIndicator(ind) ? qcIncidentsOf(d).filter(r=>r.ind===ind.name && qcIncInPeriod(r,pMonths)) : [];
     return (
       <div style={{marginTop:14}}>
         <div style={{background:P.panel2,border:'1px solid '+P.line,borderRadius:9,padding:'11px 14px',fontSize:11.5,color:P.ink2}}>
@@ -1931,7 +2019,9 @@ function QCReportBuilder({depts}){
     const leadInd=qcLeadIndicator(d, pMonths);
     const code=leadInd?stdMatch(leadInd.name):null;
     const secLabel=code?(HQI_SECN[code[0]]||code):(leadInd?catOf(leadInd.name):'Quality');
-    const cards=detailed?(chartInd?qcIndKpis(chartInd, pMonths):[]):qcDeptKpis(d, pMonths);
+    // A detail page with no indicator (empty-dept placeholder) shows the dept-level
+    // "no data" KPI cards instead of a blank card strip.
+    const cards=detailed?(chartInd?qcIndKpis(chartInd, pMonths):qcDeptKpis(d, pMonths)):qcDeptKpis(d, pMonths);
     const dd=qcDonutData(d, pMonths);
     return (
       <div className="qc-rpage" style={{position:'relative'}}>
@@ -1998,12 +2088,18 @@ function QCReportBuilder({depts}){
      down the rows, departments across the columns, plus Total-incidence & Benchmark
      columns. One page for all selected departments, with the year's incident details. */
   function HeatmapPage({page,n,total,lead}){
-    // union of indicator names across the chosen departments, in first-seen order
+    // Union of indicator names across the chosen departments, in first-seen order.
+    // Matched on a NORMALISED name (trim/collapse spaces, case-fold): departments that
+    // spelt the same indicator with different case/spacing produced two half-empty rows
+    // (a duplicate row AND missing cells) instead of one complete row.
+    // '(hospital)' suffix folds too: the hospital-wide record is named "Hand Hygiene
+    // Compliance (Hospital)" — without the fold, the Overall Hospital column showed '—'
+    // on the shared row while a duplicate one-cell "(Hospital)" row appeared below.
+    const normN=s=>String(s||'').trim().replace(/\s+/g,' ').toLowerCase().replace(/\s*\(hospital\)$/,'');
     const names=[]; const seen=new Set();
-    chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ if(!seen.has(ind.name)){ seen.add(ind.name); names.push(ind.name); } }));
-    const findInd=(d,name)=>(d.indicators||[]).find(i=>i.name===name);
-    const set=new Set(pMonths.map(m=>m[1]));
-    const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ if(set.has(r.month)) incs.push({dept:d.name, ind:r.ind, x:r.x, month:r.month}); }));
+    chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ const k=normN(ind.name); if(!seen.has(k)){ seen.add(k); names.push(ind.name); } }));
+    const findInd=(d,name)=>{ const k=normN(name); return (d.indicators||[]).find(i=>normN(i.name)===k); };
+    const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ if(qcIncInPeriod(r,pMonths)) incs.push({dept:d.name, ind:r.ind, x:r.x, month:r.month}); }));
     const line=(l,v)=> v? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5}}><b style={{color:P.ink}}>{l}:</b> {v}</div>:null;
     return (
       <div className="qc-rpage" style={{position:'relative'}}>
@@ -2042,7 +2138,11 @@ function QCReportBuilder({depts}){
                 {chosen.map(d=>
                   <th key={d.key} title={d.name} style={{...thc,padding:'4px 1px',height:vertHead?66:undefined,verticalAlign:'bottom'}}>
                     {vertHead
-                      ? <div style={{writingMode:'vertical-rl',transform:'rotate(180deg)',margin:'0 auto',maxHeight:60,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:dense?7.5:8.5,lineHeight:1.1}}>{d.name}</div>
+                      // rotate() instead of writing-mode: html2canvas (the web PDF exporter)
+                      // cannot rasterize vertical writing-mode text — it came out garbled in
+                      // the downloaded PDF. A plain -90° transform renders identically on
+                      // screen AND in the capture.
+                      ? <div style={{height:60,position:'relative',margin:'0 auto'}}><div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%) rotate(-90deg)',width:58,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textAlign:'left',fontSize:dense?7.5:8.5,lineHeight:1.1}}>{d.name}</div></div>
                       : d.name}
                   </th>)}
               </tr></thead>
@@ -2078,7 +2178,7 @@ function QCReportBuilder({depts}){
             </table>
             ); })()}
           </div>
-          {incs.length>0 && (
+          {sections.incidents&&incs.length>0 && (
             <div style={{marginTop:14}}>
               <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Occurred incident details · {rangeLabel} ({incs.length})</div>
               {incs.map((r,i)=><QCIncidentCard key={i} r={r} showDept/>)}
@@ -2095,9 +2195,12 @@ function QCReportBuilder({depts}){
      monthly sheets — one page per month, with that month's incident details. */
   function MonthlyPage({page,n,total,lead}){
     const m=page.month;
+    // Normalised-name union — same duplicate-row / missing-cell guard as HeatmapPage
+    // (including the '(hospital)' suffix fold for the hospital-wide HH record).
+    const normN=s=>String(s||'').trim().replace(/\s+/g,' ').toLowerCase().replace(/\s*\(hospital\)$/,'');
     const names=[]; const seen=new Set();
-    chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ if(!seen.has(ind.name)){ seen.add(ind.name); names.push(ind.name); } }));
-    const findInd=(d,name)=>(d.indicators||[]).find(i=>i.name===name);
+    chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ const k=normN(ind.name); if(!seen.has(k)){ seen.add(k); names.push(ind.name); } }));
+    const findInd=(d,name)=>{ const k=normN(name); return (d.indicators||[]).find(i=>normN(i.name)===k); };
     const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ if(r.month===m[1]) incs.push({dept:d.name, ind:r.ind, x:r.x}); }));
     const line=(l,v)=> v? <div style={{fontSize:10,color:P.ink2,lineHeight:1.5}}><b style={{color:P.ink}}>{l}:</b> {v}</div>:null;
     return (
@@ -2127,7 +2230,11 @@ function QCReportBuilder({depts}){
                 {chosen.map(d=>
                   <th key={d.key} title={d.name} style={{...thc,padding:'4px 1px',height:vertHead?66:undefined,verticalAlign:'bottom'}}>
                     {vertHead
-                      ? <div style={{writingMode:'vertical-rl',transform:'rotate(180deg)',margin:'0 auto',maxHeight:60,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:dense?7.5:8.5,lineHeight:1.1}}>{d.name}</div>
+                      // rotate() instead of writing-mode: html2canvas (the web PDF exporter)
+                      // cannot rasterize vertical writing-mode text — it came out garbled in
+                      // the downloaded PDF. A plain -90° transform renders identically on
+                      // screen AND in the capture.
+                      ? <div style={{height:60,position:'relative',margin:'0 auto'}}><div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%) rotate(-90deg)',width:58,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textAlign:'left',fontSize:dense?7.5:8.5,lineHeight:1.1}}>{d.name}</div></div>
                       : d.name}
                   </th>)}
               </tr></thead>
@@ -2141,7 +2248,7 @@ function QCReportBuilder({depts}){
                 const benchSet=new Set(); let bench='';
                 const cells=chosen.map(d=>{ const ind=findInd(d,name); if(!ind) return {none:true};
                   const be=benchExpr(ind); if(be && be!=='No benchmark'){ benchSet.add(be); if(!bench) bench=be; }
-                  let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); const s=qStatus(ind,v);
+                  const v=qcCellVal(ind,m); const s=qStatus(ind,v);
                   const isRate=['pct','rate100','rate1000','avg'].indexOf(ind.formula)>=0 || isPctInd(ind);
                   if(v!=null){
                     if(!isRate){ anyCount=true; tot+=Number(v)||0; }
@@ -2167,7 +2274,7 @@ function QCReportBuilder({depts}){
             </table>
             ); })()}
           </div>
-          {incs.length>0 && (
+          {sections.incidents&&incs.length>0 && (
             <div style={{marginTop:14}}>
               <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Occurred incident details in {m[1]} ({incs.length})</div>
               {incs.map((r,i)=><QCIncidentCard key={i} r={r} showDept showMonth={false}/>)}
@@ -2293,7 +2400,7 @@ function QCReportBuilder({depts}){
 
   function AppendixPage({n,total}){
     const capa=qcCapaMap();
-    const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ const set=new Set(pMonths.map(m=>m[1])); if(set.has(r.month)) incs.push({dept:d.name, ind:r.ind, month:r.month, x:r.x}); }));
+    const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ if(qcIncInPeriod(r,pMonths)) incs.push({dept:d.name, ind:r.ind, month:r.month, x:r.x}); }));
     // CAPA rows: replicate the Action Plans eligibility (last-quarter breach OR ≥3 breaches).
     const plans=[]; chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{
       let lastQ=null; QORDER.forEach(Q=>{ if(qtrRaw(ind,Q,fy)!=null) lastQ=Q; });
@@ -2376,16 +2483,11 @@ function QCReportBuilder({depts}){
      Aggregates the selected departments' hand-hygiene indicators; monthly compliance vs the
      ≥ benchmark, staff-group (Nurse/Doctor/PCA/Other) and by-department breakdown. Reuses the
      builder chrome (Header/Footer/KpiCards) and the console's monthRaw/qStatus math. */
-  function HHPage({page,n,total}){
+  function HHPage({page,n,total,lead}){
     const part=page.part||'overview';
-    // Only percentage-typed hand-hygiene indicators belong on a compliance report — a
-    // count/rate1000 indicator's monthRaw() is not a percentage and must not be averaged in.
-    const isHH=ind=>/hand\s*hygiene/i.test((ind&&ind.name)||'') && (ind.formula==='pct'||ind.formula==='direct'||isPctInd(ind));
-    const hh=[]; chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{ if(isHH(ind)) hh.push({d,ind}); }));
-    // Hospital-wide fallback: if none of the SELECTED departments reports hand hygiene, search
-    // every department so the hospital-wide 'Overall Hospital' HH record is surfaced regardless
-    // of which departments the user picked (the primary-picker below then prefers it).
-    if(!hh.length){ (depts||[]).forEach(d=>(d.indicators||[]).forEach(ind=>{ if(isHH(ind)) hh.push({d,ind}); })); }
+    // Percentage-typed HH indicators of the selected departments, with the hospital-wide
+    // fallback — the SAME qcHHOf the page-list memo counts, so list and body agree.
+    const hh=qcHHOf(chosen, depts, pMonths);
     if(!hh.length) return (
       <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
@@ -2450,6 +2552,13 @@ function QCReportBuilder({depts}){
           {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
           <Header/>
           <div style={{marginTop:18}}>
+            {/* hospital-level aggregate sections — same lead-page contract as every other
+                report type; they were silently missing from Hand Hygiene reports. */}
+            {lead&&sections.execSummary&&<QCExecSummary chosen={chosen} months={pMonths} rangeLabel={rangeLabel}/>}
+            {lead&&sections.periodCompare&&<QCPeriodCompare chosen={chosen} months={pMonths} baseMonths={baseMonths} baselineLabel={baselineLabel}/>}
+            {lead&&sections.ragHeatmap&&<QCRagHeatmap chosen={chosen} months={pMonths}/>}
+            {lead&&sections.deptRanking&&<QCDeptRanking chosen={chosen} months={pMonths}/>}
+            {lead&&sections.benchmarkCompare&&<QCBenchmarkCompare chosen={chosen} months={pMonths}/>}
             <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
               <span style={{width:30,height:30,borderRadius:8,background:tone+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={tone}/></span>
               <div style={{fontWeight:700,fontSize:15,color:P.ink}}>Hand Hygiene Compliance</div>
@@ -2475,6 +2584,7 @@ function QCReportBuilder({depts}){
                   <td style={{textAlign:'center',padding:'4px 6px'}}><span style={{display:'inline-block',padding:'2px 8px',borderRadius:20,background:s.bg,color:s.color,fontWeight:700,fontSize:10}}>{s.label}</span></td>
                 </tr>); })}</tbody>
             </table>
+            {lead&&sections.signatures&&<QCSignatureBlock sig={sig} orgName={orgName}/>}
           </div>
           <Footer n={n} total={total}/>
         </div>
@@ -2483,7 +2593,20 @@ function QCReportBuilder({depts}){
     // breakdown page — staff groups (latest month with group data) + by-department
     const gMonth=(()=>{ for(let i=pMonths.length-1;i>=0;i--){ const mk=pMonths[i][0]; const g=pind.mGroups&&pind.mGroups[mk]; if(g&&Object.keys(g).some(k=>g[k]!=null&&g[k]!=='')) return pMonths[i]; } return null; })();
     const GROUP_KEYS=[['nurse','Nurse'],['doctor','Doctor'],['pca','PCA'],['other','Other']];
-    const groupRows=gMonth?GROUP_KEYS.map(([k,lbl])=>{ const gN=(pind.mGroups[gMonth[0]]||{}); const gD=(pind.mGroupsDen&&pind.mGroupsDen[gMonth[0]])||{}; const nn=Number(gN[k])||0, dd=Number(gD[k])||0; return {label:lbl,n:nn,d:dd,value:dd>0?Math.round(nn/dd*10000)/100:null}; }).filter(r=>r.d>0||r.n>0):[];
+    // Department-wise audit rows captured on the SUBMISSION (ind.mDeptBreakdown[month] =
+    // [{dept, g:{nurse:{n,d},…}}]) — the only place dept-wise HH lives when the audit is
+    // recorded on the hospital-wide indicator; latest reported month on the axis wins.
+    const bdSrc=(()=>{ for(let i=pMonths.length-1;i>=0;i--){ const mk=pMonths[i][0];
+      for(const h of hh){ const b=h.ind.mDeptBreakdown&&h.ind.mDeptBreakdown[mk]; if(Array.isArray(b)&&b.length) return {month:pMonths[i], rows:b}; } }
+      return null; })();
+    const bdTot=g=>GROUP_KEYS.reduce((a,[k])=>{ const x=(g||{})[k]||{}; return {n:a.n+(Number(x.n)||0), d:a.d+(Number(x.d)||0)}; },{n:0,d:0});
+    const bdRows=bdSrc?bdSrc.rows.map(r=>{ const t=bdTot(r.g); return {label:r.dept||'—', g:r.g||{}, n:t.n, d:t.d, value:t.d>0?Math.round(t.n/t.d*10000)/100:null}; })
+      .sort((a,b)=>(b.value==null?-1:b.value)-(a.value==null?-1:a.value)):[];
+    let groupRows=gMonth?GROUP_KEYS.map(([k,lbl])=>{ const gN=(pind.mGroups[gMonth[0]]||{}); const gD=(pind.mGroupsDen&&pind.mGroupsDen[gMonth[0]])||{}; const nn=Number(gN[k])||0, dd=Number(gD[k])||0; return {label:lbl,n:nn,d:dd,value:dd>0?Math.round(nn/dd*10000)/100:null}; }).filter(r=>r.d>0||r.n>0):[];
+    // No indicator-level staff-group entries? Pool them from the dept-wise audit rows.
+    if(!groupRows.length&&bdSrc){
+      groupRows=GROUP_KEYS.map(([k,lbl])=>{ let n=0,d=0; bdSrc.rows.forEach(r=>{ const x=(r.g||{})[k]||{}; n+=Number(x.n)||0; d+=Number(x.d)||0; }); return {label:lbl,n,d,value:d>0?Math.round(n/d*10000)/100:null}; }).filter(r=>r.d>0||r.n>0);
+    }
     // Group ALL hand-hygiene indicators by department, then take each department's compliance
     // at its latest reported month — pooled Σnum/Σden when every reporting indicator has a
     // denominator, else the mean — so a department with >1 HH indicator isn't misrepresented.
@@ -2503,7 +2626,7 @@ function QCReportBuilder({depts}){
         <div style={{marginTop:18}}>
           <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
             <span style={{width:30,height:30,borderRadius:8,background:P.blue+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={P.blue}/></span>
-            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>Hand Hygiene — breakdown{gMonth?(' · '+gMonth[1]):''}</div>
+            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>Hand Hygiene — breakdown{bdSrc?(' · '+bdSrc.month[1]):gMonth?(' · '+gMonth[1]):''}</div>
             <span style={{flex:1}}/><span className="tag">by staff group &amp; department</span>
           </div>
           {groupRows.length>0&&(
@@ -2518,12 +2641,35 @@ function QCReportBuilder({depts}){
               </table>
             </div>
           )}
-          {deptRows.length>1&&(
-            <div style={{marginBottom:14}}>
-              <div style={uSub}>Compliance by department (latest reported month, %)</div>
-              {typeof window.BarChart==='function'&&window.BarChart({data:deptRows.map(r=>({label:r.label,val:r.value})), x:'label', y:'val', height:Math.max(170,deptRows.length*26), color:P.violet, flat:true})}
+          {bdRows.length>0&&(
+            <div style={{marginBottom:16}}>
+              <div style={uSub}>Department-wise audit · {bdSrc.month[1]} · compliant / observed moments (WHO 5 Moments)</div>
+              <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',marginTop:6,fontSize:10.5}}>
+                <thead><tr>
+                  <th style={th}>Department</th>
+                  {GROUP_KEYS.map(([k,lbl])=><th key={k} style={thr}>{lbl}</th>)}
+                  <th style={thr}>Total</th><th style={thr}>Compliance</th><th style={{...th,textAlign:'center'}}>Status</th>
+                </tr></thead>
+                <tbody>{bdRows.map(r=>{ const s=whoStat(r.value); return (
+                  <tr key={r.label}>
+                    <td style={{...tdc,fontWeight:600,color:P.ink}}>{r.label}</td>
+                    {GROUP_KEYS.map(([k])=>{ const x=r.g[k]||{}; const nn=Number(x.n)||0, dd=Number(x.d)||0; return <td key={k} style={tdr}>{(nn||dd)?nn+'/'+dd:'—'}</td>; })}
+                    <td style={{...tdr,fontWeight:600}}>{r.d>0?r.n+'/'+r.d:'—'}</td>
+                    <td style={{...tdr,fontWeight:700,color:r.value==null?P.faint:P.ink}}>{r.value!=null?r.value+'%':'—'}</td>
+                    <td style={{textAlign:'center',padding:'4px 6px'}}><span style={{display:'inline-block',padding:'2px 8px',borderRadius:20,background:s.bg,color:s.color,fontWeight:700,fontSize:9.5}}>{r.value==null?'Not audited':s.label}</span></td>
+                  </tr>); })}</tbody>
+              </table>
             </div>
           )}
+          {(()=>{ // dept compliance chart — audit breakdown first, per-dept HH indicators as fallback
+            const audited=bdRows.filter(r=>r.value!=null);
+            const src=audited.length?audited.map(r=>({label:(r.label||'').slice(0,20),val:r.value})):deptRows.map(r=>({label:r.label,val:r.value}));
+            return src.length>1&&(
+              <div style={{marginBottom:14}}>
+                <div style={uSub}>Compliance by department ({audited.length?bdSrc.month[1]:'latest reported month'}, %)</div>
+                {typeof window.BarChart==='function'&&window.BarChart({data:src, x:'label', y:'val', height:Math.max(170,src.length*26), color:P.violet, flat:true})}
+              </div>
+            ); })()}
           <div style={{background:'#eef8fc',border:'1px solid #cfe6f7',borderRadius:9,padding:'10px 13px',fontSize:11,color:P.blue700||P.blue}}>
             <b>Interpretation (WHO):</b> ≥ {bench}% compliant · 75–{bench-1}% needs improvement (re-audit within 2 weeks) · &lt; 75% unacceptable (escalate). Reference: WHO (2009) Guidelines on Hand Hygiene in Health Care.
           </div>
@@ -2585,32 +2731,76 @@ function QCReportBuilder({depts}){
             const r=a.getBoundingClientRect();
             if(r.height>0) guardsCss.push([r.top-elRect.top, r.bottom-elRect.top]);
           });
+          // footer band position — the last slice pins it to the sheet bottom (see below)
+          const fEl=el.querySelector('.pdf-foot'); let fCss=null;
+          if(fEl){ const fr=fEl.getBoundingClientRect(); if(fr.height>0) fCss=[fr.top-elRect.top, fr.bottom-elRect.top]; }
           const canvas=await H(el,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false});
           el.style.height='auto'; el.style.overflow='visible';
           const cW=canvas.width, cH=canvas.height, pxPerPt=cW/pw, pageHpx=Math.round(ph*pxPerPt);
           const k=elRect.height>0?(cH/elRect.height):2;
           const guards=guardsCss.map(g=>[g[0]*k, g[1]*k]).filter(g=>(g[1]-g[0])<pageHpx*0.9);
-          const pickEnd=(y0)=>{
-            if(cH-y0<=pageHpx) return cH;
-            let cut=y0+pageHpx;
+          const fPx=fCss?[fCss[0]*k, fCss[1]*k]:null;
+          const pickEnd=(y0,budget)=>{
+            if(cH-y0<=budget) return cH;
+            let cut=y0+budget;
             for(let pass=0; pass<8; pass++){
               let moved=false;
               for(const g of guards){
-                if(g[0]<cut-1 && g[1]>cut+1){ const c2=Math.floor(g[0]); if(c2>y0+pageHpx*0.35){ cut=c2; moved=true; } }
+                if(g[0]<cut-1 && g[1]>cut+1){ const c2=Math.floor(g[0]); if(c2>y0+budget*0.35){ cut=c2; moved=true; } }
               }
               if(!moved) break;
             }
-            return Math.max(cut, y0+Math.round(pageHpx*0.35));
+            return Math.max(cut, y0+Math.round(budget*0.35));
           };
-          let y=0;
-          do{
-            const end=pickEnd(y), sliceH=end-y;
-            let srcC=canvas;
-            if(sliceH<cH){ const tmp=document.createElement('canvas'); tmp.width=cW; tmp.height=sliceH; tmp.getContext('2d').drawImage(canvas,0,y,cW,sliceH,0,0,cW,sliceH); srcC=tmp; }
+          const crop=(top,h)=>{ const tmp=document.createElement('canvas'); tmp.width=cW; tmp.height=h; tmp.getContext('2d').drawImage(canvas,0,top,cW,h,0,0,cW,h); return tmp.toDataURL('image/jpeg',0.94); };
+          // Snap a guard-chosen cut to a truly-BLANK raster row. Guards are measured on the
+          // live DOM but slices are cut from the html2canvas re-render, whose layout drifts a
+          // few px over a long page — a "cut at card top" then lands a hair inside the card,
+          // stranding its border strip on the previous sheet. The canvas is the ground truth,
+          // so a cut on an all-white row can never split a bordered/tinted block. Threshold
+          // 252 keeps tinted card interiors (#fffafb) and zebra rows non-blank; if no white
+          // row exists nearby (tables, watermark band) the guard cut stands.
+          const snapCtx=canvas.getContext('2d',{willReadFrequently:true});
+          const rowBlank=(yy)=>{ if(yy<=0||yy>=cH) return false; const d=snapCtx.getImageData(0,yy,cW,1).data;
+            for(let i=0;i<d.length;i+=4){ if(d[i]<252||d[i+1]<252||d[i+2]<252) return false; } return true; };
+          const snapCut=(cut,y0)=>{
+            if(rowBlank(cut)) return cut;
+            const up=Math.min(90, cut-(y0+24));           // never snap into/behind the slice start
+            for(let dY=1; dY<=90; dY++){
+              if(dY<=up && rowBlank(cut-dY)) return cut-dY;      // prefer upward: keep the block whole on the next sheet
+              if(dY<=8 && cut+dY<cH-1 && rowBlank(cut+dY)) return cut+dY;
+            }
+            return cut;
+          };
+          const padPx=Math.round(28*k), padPt=padPx/pxPerPt;   // sheet margin = the 28px sheet padding, at capture scale
+          if(cH<=pageHpx+4){
+            // short page captured as exactly one sheet — padding + flex-pinned footer baked in
             if(!firstPage) doc.addPage(fmt,ori); firstPage=false;
-            doc.addImage(srcC.toDataURL('image/jpeg',0.94),'JPEG',0,0,pw,sliceH/pxPerPt,undefined,'FAST');
-            y=end;
-          } while(cH-y>2);
+            doc.addImage(canvas.toDataURL('image/jpeg',0.94),'JPEG',0,0,pw,Math.min(ph,cH/pxPerPt),undefined,'FAST');
+          } else {
+            let y=0;
+            do{
+              // Reserve sheet margins per slice: slice 1 has the 28px top padding baked into
+              // the capture, continuation slices get it as a draw offset — content no longer
+              // starts at the literal top edge of the page, and the usable-height budget now
+              // MATCHES the on-screen preview (sheet minus both pads), so breaks line up.
+              const first=y===0, top=first?0:padPt, budget=pageHpx-(first?1:2)*padPx;
+              let end=pickEnd(y,budget); if(end<cH) end=snapCut(end,y);
+              const sliceH=end-y;
+              if(!firstPage) doc.addPage(fmt,ori); firstPage=false;
+              // Final slice shorter than a sheet: split it at the footer band and pin the
+              // footer to the sheet bottom — flowed as-is it floats mid-page after content.
+              if(cH-end<=2 && sliceH<budget-4 && fPx && fPx[0]>=y-2 && fPx[0]<end){
+                // snap the footer split too — same DOM→raster drift as the page cuts
+                const fTop=Math.max(y,snapCut(Math.floor(fPx[0]),y)), contentH=fTop-y, footH=end-fTop;
+                if(contentH>2) doc.addImage(crop(y,contentH),'JPEG',0,top,pw,contentH/pxPerPt,undefined,'FAST');
+                if(footH>2) doc.addImage(crop(fTop,footH),'JPEG',0,ph-footH/pxPerPt,pw,footH/pxPerPt,undefined,'FAST');
+              } else {
+                doc.addImage(crop(y,sliceH),'JPEG',0,top,pw,sliceH/pxPerPt,undefined,'FAST');
+              }
+              y=end;
+            } while(cH-y>2);
+          }
         }
         els.forEach((el,i)=>el.setAttribute('style',prev[i])); els=[];
         document.body.classList.remove('qc-pdfcap');
@@ -2642,11 +2832,10 @@ function QCReportBuilder({depts}){
       const rows=[['Department','Indicator','Benchmark','Goal'].concat(pMonths.map(m=>m[1]))];
       scope.forEach(d=>(d.indicators||[]).forEach(ind=>rows.push(
         [d.name,ind.name,benchExpr(ind),ind.goalDirection==='higher_is_better'?'higher is better':'lower is better']
-        .concat(pMonths.map(m=>{ let v=monthRaw(ind,m[0]); if(v==null) v=qtrRaw(ind,m[2],fyOfKey(m[0])); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
+        .concat(pMonths.map(m=>{ const v=qcCellVal(ind,m); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
       rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
       // period-scoped like every report page — the CSV used to dump incidents from ANY year
-      const mset=new Set(pMonths.map(m=>m[1]));
-      scope.forEach(d=>qcIncidentsOf(d).filter(r=>mset.has(r.month)).forEach(r=>{ const x=r.x; rows.push([d.name,r.ind,r.month,x.uhid||'',x.patientName||'',x.age||'',x.gender||'',x.diagnosis||'',x.details||'',x.finding||'',x.corrective||'',x.preventive||'']); }));
+      scope.forEach(d=>qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,pMonths)).forEach(r=>{ const x=r.x; rows.push([d.name,r.ind,r.month,x.uhid||'',x.patientName||'',x.age||'',x.gender||'',x.diagnosis||'',x.details||'',x.finding||'',x.corrective||'',x.preventive||'']); }));
       return qcDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), baseName+'.csv','text/csv;charset=utf-8');
     }
     // Honour the Page setup control (A4 / A3 / Letter + orientation) in the exported
@@ -2932,7 +3121,7 @@ function QCReportBuilder({depts}){
                 {fieldLabel('Signatures')}
                 <div style={{display:'flex',flexDirection:'column',gap:8}}>
                   <input value={sig.prepared} onChange={e=>setSig(s=>({...s,prepared:e.target.value}))} placeholder="Prepared by (name)" style={{...sel2,width:'100%'}}/>
-                  <input value={sig.reviewed} onChange={e=>setSig(s=>({...s,reviewed:e.target.value}))} placeholder="Reviewed by (name)" style={{...sel2,width:'100%'}}/>
+                  <input value={sig.reviewed} onChange={e=>setSig(s=>({...s,reviewed:e.target.value}))} placeholder="Checked by (name)" style={{...sel2,width:'100%'}}/>
                   <input value={sig.approved} onChange={e=>setSig(s=>({...s,approved:e.target.value}))} placeholder="Approved by (name)" style={{...sel2,width:'100%'}}/>
                 </div>
               </div>
@@ -2981,7 +3170,7 @@ function QCReportBuilder({depts}){
 function QCReports({depts}){ return <QCReportBuilder depts={depts}/>; }
 
 /* ===== part: mod-incidents.jsx ===== */
-function QCIncidents({depts}){
+function QCIncidents({depts,Q}){
   const [dept,setDept]=useState('all');
   const [sel,setSel]=useState(null);
   const [fy,setFy]=useState(()=>defaultFy(depts));
@@ -3045,7 +3234,7 @@ function QCIncidents({depts}){
   const options=[{key:'all',label:'All departments'}].concat((depts||[]).map(d=>({key:d.key,label:d.name})));
 
   if(sel){
-    return <IncidentReport rec={sel} onBack={()=>setSel(null)}/>;
+    return <IncidentReport rec={sel} onBack={()=>setSel(null)} Q={Q}/>;
   }
 
   return (
@@ -3103,8 +3292,14 @@ function QCIncidents({depts}){
    Layout adapts to the indicator TYPE: event indicators (Count) get an incident
    register with per-patient CAPA cards; percentage/rate indicators get a
    compliance-gap analysis. Reuses the file's shared helpers/globals only. ---- */
-function IncidentReport({rec,onBack}){
-  const ind = rec.indObj;
+function IncidentReport({rec,onBack,Q}){
+  // Read the indicator LIVE from the store (when available) so admin edits made on
+  // this page reflect immediately; fall back to the frozen rec snapshot otherwise.
+  const liveDep = (Q && Array.isArray(Q.depts)) ? Q.depts.find(d => d.key === rec.deptKey) : null;
+  const liveInd = liveDep ? (liveDep.indicators || []).find(i => i.id === rec.indObj.id) : null;
+  const ind = liveInd || rec.indObj;
+  const dep = liveDep || rec.deptObj;
+  const [editing, setEditing] = useState(false);
   const gd = guideOf(stdMatch(rec.ind)) || {};
   const meas = measureOf(ind.formula);
   // A rec may be month-keyed (rec.period==='month') or quarter-keyed (rec.period==='quarter'),
@@ -3161,12 +3356,27 @@ function IncidentReport({rec,onBack}){
   const incidents = (ind.incidents && ind.incidents[isQtr ? rec.quarter : rec.monthKey]) || [];
   const remarkShownInSection = (isEvent && incidents.length===0 && remark) || (!isEvent && remark);
 
+  // Live header value/status (reflects edits). QCIndEdit is month-keyed, so inline
+  // editing is offered only for month recs (quarter-only legacy data stays read-only).
+  const liveStatus = isQtr ? qtrStatus(ind,rec.quarter) : monthStatus(ind,rec.monthKey);
+  const isBreachNow = liveStatus==='breach';
+  const liveValue = liveStatus==='na' ? '—' : fmtVal(ind, isQtr ? qtrRaw(ind,rec.quarter) : monthRaw(ind,rec.monthKey));
+  const canEdit = qcCanEdit() && !!Q && !isQtr;
+
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
 
       {/* HEADER card */}
-      <div style={Object.assign({},card,{borderTop:'3px solid '+P.rose})}>
-        <button onClick={onBack} style={{background:'none',border:'1px solid '+P.line,borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:600,color:P.ink2,cursor:'pointer',marginBottom:12}}>← Back to incidents</button>
+      <div style={Object.assign({},card,{borderTop:'3px solid '+(isBreachNow?P.rose:P.green)})}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+          <button onClick={onBack} style={{background:'none',border:'1px solid '+P.line,borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:600,color:P.ink2,cursor:'pointer'}}>← Back to incidents</button>
+          {canEdit && (
+            <button onClick={()=>setEditing(e=>!e)} title={editing?'Close editor':'Edit this reading & incident report'} style={{marginLeft:'auto',display:'inline-flex',alignItems:'center',gap:6,border:'1px solid #cfe6f4',background:editing?'#0090ca':'#eef8fc',color:editing?'#fff':'#0090ca',padding:'6px 13px',borderRadius:8,fontSize:12,fontWeight:700,cursor:'pointer'}}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>
+              {editing?'Close editor':'Edit report'}
+            </button>
+          )}
+        </div>
         <div style={{display:'flex',alignItems:'flex-start',gap:16,flexWrap:'wrap'}}>
           <div style={{flex:1,minWidth:220}}>
             <div style={{fontSize:19,fontWeight:700,color:P.ink,letterSpacing:'-.3px'}}>{rec.ind}</div>
@@ -3175,12 +3385,17 @@ function IncidentReport({rec,onBack}){
           </div>
           <div style={{textAlign:'right'}}>
             <div style={lbl}>Recorded value</div>
-            <div style={{fontFamily:MONO,fontSize:30,fontWeight:700,color:P.rose,lineHeight:1.1}}>{rec.value}</div>
-            <div style={{fontSize:11.5,color:P.ink2,marginTop:4}}>Benchmark <span style={{fontFamily:MONO,fontWeight:600,color:P.blue700}}>{rec.bench}</span></div>
-            <span style={{display:'inline-block',marginTop:6,fontSize:10.5,fontWeight:700,color:P.rose,background:'#fbe9ec',padding:'3px 10px',borderRadius:20}}>Breach</span>
+            <div style={{fontFamily:MONO,fontSize:30,fontWeight:700,color:isBreachNow?P.rose:P.green,lineHeight:1.1}}>{liveValue}</div>
+            <div style={{fontSize:11.5,color:P.ink2,marginTop:4}}>Benchmark <span style={{fontFamily:MONO,fontWeight:600,color:P.blue700}}>{benchExpr(ind)}</span></div>
+            <span style={{display:'inline-block',marginTop:6,fontSize:10.5,fontWeight:700,color:isBreachNow?P.rose:P.green,background:isBreachNow?'#fbe9ec':'#e7f6ed',padding:'3px 10px',borderRadius:20}}>{isBreachNow?'Breach':liveStatus==='na'?'No reading':'On benchmark'}</span>
           </div>
         </div>
       </div>
+
+      {/* inline admin editor — reuses the same form as the Dashboard drill-down */}
+      {canEdit && editing && (
+        <QCIndEdit dep={dep} ind={ind} mk={rec.monthKey} mlabel={rec.month} Q={Q} onClose={()=>setEditing(false)}/>
+      )}
 
       {/* Indicator definition */}
       <div style={card}>
@@ -3225,7 +3440,7 @@ function IncidentReport({rec,onBack}){
                 const patient = [
                   ['UHID',inc.uhid],['Patient name',inc.patientName],
                   ['Age · Gender',[inc.age,inc.gender].filter(Boolean).join(' · ')],
-                  ['Diagnosis',inc.diagnosis],['Date of admission',inc.admissionDate],['Date of procedure',inc.procedureDate]
+                  ['Date of incident',inc.incidentDate],['Diagnosis',inc.diagnosis],['Date of admission',inc.admissionDate],['Date of procedure',inc.procedureDate]
                 ].filter(r=>r[1]!=null && r[1]!=='');
                 const capa = [
                   ['Incident details',inc.details],['Finding / observation',inc.finding],
@@ -3419,6 +3634,14 @@ function QCAdmin({Q,q,onQ,initialDept}){
   // history. Shadows the module MONTHS for the grid + its patch handlers only.
   const [entryFy,setEntryFy]=useState(()=>defaultFy(allDepts));
   const MONTHS=fyAxis(entryFy);
+  // Scope for DEFINITION edits on a shared indicator: 'one' (default — only this
+  // department's copy changes) or 'shared' (sync to every department with this id).
+  // Resets to the safe default whenever a different indicator is selected.
+  const [editScope,setEditScope]=useState('one');
+  useEffect(()=>{ setEditScope('one'); },[sel.deptKey,sel.id]);
+  // "Fill all 12 months" convenience value for the month-wise admin headcount editor.
+  const [hcAll,setHcAll]=useState('');
+  useEffect(()=>{ setHcAll(''); },[sel.deptKey,sel.id,entryFy]);
 
   const CATS = ['Healthcare-Associated Infection','Infection Prevention','Patient Safety','Clinical Outcomes','Staff Safety','Staff Competency','Activity / Volume','Medication Safety'];
   const FREQ = ['Monthly','Quarterly','Annually','Bi-annually'];
@@ -3502,16 +3725,18 @@ function QCAdmin({Q,q,onQ,initialDept}){
 
   // ---- edit helpers (ALL through Q) ----
   const patch = (obj)=>{ if(sel.deptKey&&sel.id) Q.patchIndicator(sel.deptKey,sel.id,obj); };
-  // COMMON INDICATOR MODULE: editing an indicator's DEFINITION (formula / benchmark / labels /
-  // reference / measurement) fans out to EVERY department that reports this indicator id, so it
-  // is edited ONCE and shows the SAME details everywhere. (Month VALUES stay per-department via
-  // `patch` above.) All departments share the same indicator id, so matching by id is exact.
-  const patchDef = (obj)=>{
+  // COMMON INDICATOR MODULE — now SCOPED. Definition edits used to fan out to EVERY
+  // department sharing the indicator id unconditionally, so editing "one" indicator
+  // silently rewrote it hospital-wide. Default is now THIS department's copy only;
+  // the admin opts into hospital-wide sync per edit session with the editScope toggle
+  // in the editor header. (Month VALUES were always per-department via `patch`.)
+  const patchShared = (obj)=>{
     if(!sel.id) return;
     const targets = (Q.depts||[]).filter(d=>(d.indicators||[]).some(i=>i.id===sel.id)).map(d=>d.key);
     if(sel.deptKey && targets.indexOf(sel.deptKey)<0) targets.push(sel.deptKey);
     targets.forEach(k=> Q.patchIndicator(k, sel.id, obj));
   };
+  const patchDef = (obj)=> (editScope==='shared' ? patchShared(obj) : patch(obj));
   const patchField = (f)=> (e)=> patchDef({[f]:e.target.value});
   const patchMonthVal = (idx)=> (e)=>{ const v=e.target.value; const nv=(v===''?null:Number(v)); const obj={ months:{ [MONTHS[idx][0]]: nv } }; if(selInd && selInd.formula==='count') obj.mNum={ [MONTHS[idx][0]]: nv }; patch(obj); };
   const patchMonthNum = (idx)=> (e)=>{ const v=e.target.value; patch({ mNum:{ [MONTHS[idx][0]]: (v===''?null:Number(v)) } }); };
@@ -3524,6 +3749,9 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const onDoCopy = ()=>{ if(!selInd) return; Object.keys(copyT).forEach(dk=>{ if(copyT[dk]){ const c=Object.assign({},selInd,{ id:window.qualitySlug(selInd.name) }); Q.addIndicator(dk,c); } }); setCopyOpen(false); setCopyT({}); };
 
   const meas = selInd? measureOf(selInd.formula) : null;
+  // every department reporting the SAME indicator id — drives the edit-scope banner
+  const sharedIdDepts = selInd ? (Q.depts||[]).filter(d=>(d.indicators||[]).some(i=>i.id===sel.id)) : [];
+  const sharedOthers = sharedIdDepts.filter(d=>d.key!==sel.deptKey).map(d=>d.name);
   const dirHigh = selInd && selInd.goalDirection==='higher_is_better';
   const benchSet = selInd && selInd.benchmarkValue!=null && selInd.benchmarkValue!=='';
   const needsNum = selInd && selInd.formula!=='direct';
@@ -3731,6 +3959,23 @@ function QCAdmin({Q,q,onQ,initialDept}){
                 <input value={selInd.name||''} onInput={patchField('name')} onChange={patchField('name')} placeholder="Indicator name" style={{width:'100%',border:'1px solid transparent',background:'transparent',fontFamily:'inherit',fontSize:19,fontWeight:700,color:P.ink,padding:'3px 6px',marginLeft:-6,borderRadius:7,outline:'none'}}/>
                 <div style={{marginTop:9,background:'#eef8fc',border:'1px solid #dceffa',borderRadius:8,padding:'8px 12px',fontFamily:MONO,fontSize:12.5,color:'#0072a3'}}>ƒ&nbsp; {formulaText(selInd)}</div>
 
+                {/* SHARED indicator — edit-scope control. Edits used to sync hospital-wide
+                    with no warning; now the admin chooses per session, default this-dept. */}
+                {sharedOthers.length>0 && (
+                <div style={{marginTop:9,display:'flex',alignItems:'center',gap:9,flexWrap:'wrap',border:'1px solid '+(editScope==='shared'?'#f0d9a8':'#dde3ec'),background:editScope==='shared'?'#fff8ec':'#f7f9fc',borderRadius:8,padding:'7px 11px'}}>
+                  <span title={'Also in: '+sharedOthers.join(', ')} style={{fontSize:11.5,fontWeight:600,color:editScope==='shared'?'#9a6b00':P.ink2}}>
+                    Common indicator — also in <b>{sharedOthers.length}</b> other department{sharedOthers.length!==1?'s':''} <span style={{fontWeight:400,color:P.muted}}>({sharedOthers.slice(0,3).join(', ')}{sharedOthers.length>3?' +'+(sharedOthers.length-3)+' more':''})</span>
+                  </span>
+                  <span style={{flex:1}}/>
+                  <span style={{fontSize:10.5,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:.3}}>Apply edits to</span>
+                  {[['one','This department only'],['shared','All '+sharedIdDepts.length+' departments']].map(([id,l])=>{ const on=editScope===id; return (
+                    <button key={id} onClick={()=>setEditScope(id)} title={id==='one'?'Changes affect only '+(selDept?selDept.name:'this department')+"'s copy":'Definition changes sync to every department listed (monthly values always stay per-department)'}
+                      style={{border:'1px solid '+(on?P.blue:'#dde3ec'),background:on?P.blue:'#fff',color:on?'#fff':P.ink2,padding:'4px 11px',borderRadius:20,fontSize:11,fontWeight:700,cursor:'pointer'}}>{l}</button>
+                  ); })}
+                  {editScope==='shared'&&<span style={{width:'100%',fontSize:10.5,color:'#9a6b00'}}>Name, formula, benchmark &amp; definition edits now update every department above. Monthly values always stay per-department.</span>}
+                </div>
+                )}
+
                 {copyOpen && (
                 <div style={{marginTop:11,border:'1px solid #dceffa',borderRadius:9,background:'#eef8fc',padding:'11px 13px'}}>
                   <div style={{fontSize:11.5,fontWeight:600,marginBottom:8,color:P.ink}}>Copy this indicator (with its values) to:</div>
@@ -3783,7 +4028,34 @@ function QCAdmin({Q,q,onQ,initialDept}){
                   <div style={{display:'flex',flexDirection:'column',gap:5}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Unit <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>display label</span></label><input value={selInd.unit||''} onInput={patchField('unit')} onChange={patchField('unit')} placeholder="per 1000 cath-days · % · count" style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,background:'#fff',outline:'none'}}/></div>
                   {needsNum && <div style={{display:'flex',flexDirection:'column',gap:5,gridColumn:'1 / -1'}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Numerator definition <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>what counts</span></label><textarea value={selInd.numeratorDef||''} onInput={patchField('numeratorDef')} onChange={patchField('numeratorDef')} placeholder="Precise definition of the numerator" style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:12.5,background:'#fff',outline:'none',minHeight:54,resize:'vertical',lineHeight:1.5}}/></div>}
                   {needsDen && <div style={{display:'flex',flexDirection:'column',gap:5,gridColumn:'1 / -1'}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Denominator definition <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>what counts</span></label><textarea value={selInd.denominatorDef||''} onInput={patchField('denominatorDef')} onChange={patchField('denominatorDef')} placeholder="Precise definition of the denominator" style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:12.5,background:'#fff',outline:'none',minHeight:54,resize:'vertical',lineHeight:1.5}}/></div>}
-                  {needsDen && !!selInd.denAdminOnly && <div style={{display:'flex',flexDirection:'column',gap:5,gridColumn:'1 / -1',background:'#fff4e0',border:'1px solid #f0d9a8',borderRadius:8,padding:'11px 13px'}}><label style={{fontSize:11.5,fontWeight:700,color:'#9a6b00'}}>{(selInd.denLabel||'Total healthcare workers')} — hospital-wide headcount <span style={{fontWeight:400,fontSize:10.5,color:'#b07d15'}}>admin-set · applies to every month and department; collectors see it read-only</span></label><input type="number" step="any" value={(selInd.mDen&&MONTHS.map(mm=>selInd.mDen[mm[0]]).filter(v=>v!=null&&v!=='')[0])??''} onChange={e=>{const v=e.target.value===''?null:Number(e.target.value); patchDef({mDen: MONTHS.reduce((o,mm)=>{o[mm[0]]=v; return o;},{})});}} placeholder="e.g. 1200 total staff" style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,fontFamily:MONO,background:'#fff',outline:'none',maxWidth:240}}/></div>}
+                  {/* Admin-owned denominator, MONTH-WISE: the staff headcount changes month to
+                      month, so each month has its own input (the old single value silently
+                      overwrote every month). Always hospital-wide via patchShared. */}
+                  {needsDen && !!selInd.denAdminOnly && <div style={{display:'flex',flexDirection:'column',gap:7,gridColumn:'1 / -1',background:'#fff4e0',border:'1px solid #f0d9a8',borderRadius:8,padding:'11px 13px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                      <label style={{fontSize:11.5,fontWeight:700,color:'#9a6b00'}}>{(selInd.denLabel||'Total healthcare workers')} — hospital-wide headcount, month by month <span style={{fontWeight:400,fontSize:10.5,color:'#b07d15'}}>admin-set · applies to every department; collectors see it read-only</span></label>
+                      <span style={{flex:1}}/>
+                      <QCFyPicker fy={entryFy} setFy={setEntryFy} depts={allDepts} style={{padding:'5px 8px',fontSize:11.5}}/>
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(96px,1fr))',gap:7}}>
+                      {MONTHS.map(mm=>{ const v=selInd.mDen&&selInd.mDen[mm[0]];
+                        return (
+                        <div key={mm[0]} style={{display:'flex',flexDirection:'column',gap:3}}>
+                          <label style={{fontSize:10,fontWeight:700,color:'#b07d15',fontFamily:MONO}}>{mm[1]}</label>
+                          <input type="number" step="any" value={(v==null||v==='')?'':v}
+                            onChange={e=>patchShared({mDen:{ [mm[0]]: e.target.value===''?null:Number(e.target.value) }})}
+                            placeholder="—" style={{padding:'7px 8px',border:'1px solid #dde3ec',borderRadius:7,fontSize:12.5,fontFamily:MONO,background:'#fff',outline:'none',width:'100%',boxSizing:'border-box'}}/>
+                        </div>);
+                      })}
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                      <input type="number" step="any" value={hcAll} onChange={e=>setHcAll(e.target.value)} placeholder={'Same figure for all 12 months of '+fyLabelOf(entryFy)+'…'}
+                        style={{padding:'7px 10px',border:'1px solid #dde3ec',borderRadius:7,fontSize:12.5,fontFamily:MONO,background:'#fff',outline:'none',width:250}}/>
+                      <button onClick={()=>{ if(hcAll==='') return; const v=Number(hcAll); patchShared({mDen: MONTHS.reduce((o,mm)=>{o[mm[0]]=v; return o;},{})}); setHcAll(''); }}
+                        style={{border:'1px solid #d8a63c',background:'#fff',color:'#9a6b00',padding:'6px 12px',borderRadius:7,fontSize:11.5,fontWeight:700,cursor:'pointer'}}>Fill all months</button>
+                      <span style={{fontSize:10.5,color:'#b07d15'}}>Fills every month of {fyLabelOf(entryFy)}; you can then adjust individual months above.</span>
+                    </div>
+                  </div>}
                 </div>
                 )}
 
@@ -4031,7 +4303,7 @@ function QualityView({ view, initialDept, setRoute }){
       {v==='scorecard'   && <QCScorecard depts={depts}/>}
       {v==='trends'      && <QCTrends depts={depts}/>}
       {v==='reports'     && <QCReports depts={depts}/>}
-      {v==='incidents'   && <QCIncidents depts={depts}/>}
+      {v==='incidents'   && <QCIncidents depts={depts} Q={Q}/>}
       {v==='actionplans' && <QCActionPlans depts={depts}/>}
       {v==='dataentry'   && <QCDataEntry/>}
       {v==='admin'       && <QCAdmin Q={Q} q={q} onQ={setQ} initialDept={initialDept}/>}
@@ -4189,7 +4461,7 @@ function QualityConsole({ onExit, initialView, initialDept, setRoute }){
           {module==='scorecard'   && <QCScorecard depts={depts}/>}
           {module==='trends'      && <QCTrends depts={depts}/>}
           {module==='reports'     && <QCReports depts={depts}/>}
-          {module==='incidents'   && <QCIncidents depts={depts}/>}
+          {module==='incidents'   && <QCIncidents depts={depts} Q={Q}/>}
           {module==='actionplans' && <QCActionPlans depts={depts}/>}
           {module==='dataentry'   && <QCDataEntry/>}
           {module==='admin'       && <QCAdmin Q={Q} q={gq} onQ={setGq} initialDept={initialDept}/>}

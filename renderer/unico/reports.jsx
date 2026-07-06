@@ -71,6 +71,14 @@ function msReportHTML(depts){
     }).join('');
     body+='<table border="1" style="border-collapse:collapse"><thead><tr>'+th+'</tr></thead><tbody>'+trs+'</tbody></table>';
   });
+  // Authorisation sign-off — the shared saved names (Prepared / Checked / Approved by)
+  const sig=(window.unicoSig&&window.unicoSig.load())||{prepared:'',reviewed:'',approved:''};
+  body+='<table style="border-collapse:collapse;width:100%;margin-top:30px"><tr>'
+    +[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]].map(([role,name])=>
+      '<td style="width:33%;padding:0 22px 0 0;border:0"><div style="border-bottom:1.2px solid #16202e;height:36px"></div>'
+      +'<div style="font-family:Calibri;font-size:10.5pt;font-weight:700;color:#16202e;margin-top:3px">'+msEsc(name||' ')+'</div>'
+      +'<div style="font-family:Calibri;font-size:8.5pt;color:#555;text-transform:uppercase">'+role+'</div></td>').join('')
+    +'</tr></table>';
   return body;
 }
 // PDF / Excel / Word / CSV — buttons ALWAYS export all depts (§5.1).
@@ -268,6 +276,23 @@ function MonthlyStatsReport({depts}){
           </table>
         </div>
       </div>
+
+      {/* Authorisation sign-off — the same shared saved names every report builder uses */}
+      {(()=>{ const sig=(window.unicoSig&&window.unicoSig.load())||{prepared:'',reviewed:'',approved:''};
+        return (
+          <div style={{...cardBox,marginTop:14}}>
+            <div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:16}}>Authorisation</div>
+            <div style={{display:'flex',gap:30}}>
+              {[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]].map(([role,name])=>(
+                <div key={role} style={{flex:1,minWidth:0}}>
+                  <div style={{borderBottom:'1px solid var(--ink-2)',height:30}}/>
+                  <div style={{fontSize:11,fontWeight:700,color:'var(--ink)',marginTop:4}}>{name||' '}</div>
+                  <div style={{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.3}}>{role}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ); })()}
     </div>
   );
 }
@@ -290,6 +315,11 @@ function Reports({depts}){
   const [pageSize,setPageSize]=React.useState('A4');
   const [orient,setOrient]=React.useState('portrait');
   const [pageIdx,setPageIdx]=React.useState(0);
+  // Prepared / Checked / Approved by — loaded from the SHARED saved set (window.unicoSig)
+  // and auto-saved on every edit, so all report builders reuse the same names.
+  const [sig,setSig]=React.useState(()=> window.unicoSig?window.unicoSig.load():{prepared:'',reviewed:'',approved:''});
+  React.useEffect(()=>{ if(window.unicoSig) window.unicoSig.save(sig); },[sig]);
+  const [showSig,setShowSig]=React.useState(true);
   const toggle=id=>setSel(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
   const chosen=depts.filter(d=>sel.includes(d.id));
 
@@ -313,7 +343,7 @@ function Reports({depts}){
   const pageW=portrait?base:Math.round(base*ratio);
   const pageMinH=portrait?Math.round(base*ratio):base;
 
-  const pages = type==='compare' ? 1 : Math.max(1,chosen.length);
+  const pages = (type==='compare'||type==='board') ? 1 : Math.max(1,chosen.length);
   const pi=Math.min(pageIdx,pages-1);
   const pageDept = chosen[pi] || depts[0];
 
@@ -333,6 +363,23 @@ function Reports({depts}){
   const Footer=({n,total})=>(
     <div className="pdf-foot" style={{borderTop:'1px solid var(--line)',paddingTop:8,fontSize:9.5,color:'var(--faint)',display:'flex',flex:'0 0 auto'}}>
       <span>{hospitalName}</span><span className="spacer"/><span>Page {n} of {total}</span><span className="spacer"/><span>{footerNote?footerNote+' · ':''}{confidential?'Confidential · ':''}{pageSize} {orient}</span>
+    </div>
+  );
+  // Authorisation sign-off (Prepared / Checked / Approved by) — rendered on the LAST
+  // page of the document when enabled; names come from the shared saved set.
+  const SigBlock=()=>(
+    <div style={{marginTop:26,pageBreakInside:'avoid'}}>
+      <div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:12}}>Authorisation · {hospitalName}</div>
+      <div style={{display:'flex',gap:30}}>
+        {[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]].map(([role,name])=>(
+          <div key={role} style={{flex:1,minWidth:0}}>
+            <div style={{borderBottom:'1px solid var(--ink-2)',height:34}}/>
+            <div style={{fontSize:11,fontWeight:700,color:'var(--ink)',marginTop:4}}>{name||' '}</div>
+            <div style={{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.3}}>{role}</div>
+            <div style={{fontSize:8.5,color:'var(--faint)',marginTop:1}}>Signature &amp; date</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 
@@ -381,6 +428,7 @@ function Reports({depts}){
             {detailed&&<tr className="tot"><td>TOTAL</td>{d.cols.slice(0,d.cols.length).map(c=><td key={c.id}>{c.pct?'—':fmt(fs.reduce((s,r)=>s+(r[c.id]||0),0))}</td>)}</tr>}
             </tbody>
           </table>
+          {showSig&&n===total&&<SigBlock/>}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -404,6 +452,65 @@ function Reports({depts}){
                 <td style={{textAlign:'right'}}><Delta v={d.delta}/></td></tr>
             ))}</tbody>
           </table>
+          {showSig&&<SigBlock/>}
+        </div>
+        <Footer n={1} total={1}/>
+      </div>
+    );
+  }
+
+  /* Board Report — hospital-level executive page: headline KPIs, department ranking,
+     aggregate monthly trend and share-of-volume table, closed by the authorisation
+     sign-off. One page, board-meeting ready. */
+  function BoardPage(){
+    const rows=chosen.map(d=>{const fs=fseriesOf(d);const st=statOf(d,fs);return {d,st,fs};});
+    const totAll=rows.reduce((s,r)=>s+r.st.total,0);
+    const top=rows.slice().sort((a,b)=>b.st.total-a.st.total)[0];
+    // aggregate monthly trend: per month, the summed primary across the chosen departments
+    const mTot={}; rows.forEach(({d,fs})=>fs.forEach(r=>{ mTot[r.month]=(mTot[r.month]||0)+(r[d.primary]||0); }));
+    const trend=pMonths.filter(m=>mTot[m]!=null).map(m=>({label:m.split('-')[0],val:mTot[m]}));
+    const peakM=trend.slice().sort((a,b)=>b.val-a.val)[0];
+    const hbar=rows.map(({d,st})=>({label:d.short,value:st.total,color:PALETTE[(d.id.charCodeAt(0))%PALETTE.length]})).sort((a,b)=>b.value-a.value);
+    const kpis=[
+      ['Total patients',fmt(totAll)],
+      ['Departments',String(rows.length)],
+      ['Busiest dept',top?top.d.short:'—'],
+      ['Peak month',peakM?peakM.label:'—'],
+    ];
+    return (
+      <div className="qc-rpage">
+        <Header/>
+        <div style={{marginTop:18}}>
+          <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
+            <Ic d={I.doc} s={18} c={PALETTE[0]}/>
+            <div style={{fontWeight:700,fontSize:15}}>Executive Board Report</div>
+            <span className="tag">{rangeLabel}</span><span className="spacer"/><span className="tag">{rows.length} departments</span>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:16}}>
+            {kpis.map(([l,v],i)=>(
+              <div key={i} style={{background:'var(--panel-2)',borderRadius:7,padding:'9px 11px',borderLeft:'3px solid '+PALETTE[i%PALETTE.length]}}>
+                <div style={{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.3}}>{l}</div>
+                <div className="num" style={{fontSize:18,fontWeight:600}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          {trend.length>1&&typeof window.BarChart==='function'&&(
+            <div style={{margin:'4px 0 12px'}}>
+              <div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,margin:'8px 0 2px'}}>Hospital volume — monthly trend</div>
+              {window.BarChart({data:trend,x:'label',y:'val',height:170,color:PALETTE[0],flat:true})}
+            </div>
+          )}
+          <div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,margin:'8px 0 6px'}}>Department ranking (period total)</div>
+          <div style={{marginBottom:14}}><HBar rows={hbar}/></div>
+          <table className="tbl" style={{fontSize:11}}>
+            <thead><tr><th>Department</th><th>Service line</th><th>Total</th><th>Share</th><th>Avg / month</th><th>Trend</th></tr></thead>
+            <tbody>{rows.slice().sort((a,b)=>b.st.total-a.st.total).map(({d,st})=>(
+              <tr key={d.id}><td>{d.name}</td><td style={{fontFamily:"'IBM Plex Sans'"}}>{d.group}</td>
+                <td>{fmt(st.total)}</td><td>{totAll?Math.round(st.total*100/totAll)+'%':'—'}</td><td>{fmt(st.avg)}</td>
+                <td style={{textAlign:'right'}}><Delta v={d.delta}/></td></tr>
+            ))}</tbody>
+          </table>
+          {showSig&&<SigBlock/>}
         </div>
         <Footer n={1} total={1}/>
       </div>
@@ -478,6 +585,8 @@ function Reports({depts}){
         <div className={"pdf-doc"+(orient==='portrait'?' portrait':'')}>
           {chosen.length>0 && (type==='compare'
             ? <section className="pdf-page"><ComparePage/></section>
+            : type==='board'
+            ? <section className="pdf-page"><BoardPage/></section>
             : chosen.map((d,i)=><section className="pdf-page" key={d.id}><DeptPage d={d} n={i+1} total={pages}/></section>))}
         </div>,
         pdfRoot
@@ -490,12 +599,12 @@ function Reports({depts}){
             <div>
               {fieldLabel('Report type')}
               <div className="seg" style={{width:'100%'}}>
-                {[['summary','Summary'],['detail','Detailed'],['compare','Comparison']].map(([id,l])=>(
+                {[['summary','Summary'],['detail','Detailed'],['compare','Comparison'],['board','Board']].map(([id,l])=>(
                   <button key={id} className={type===id?'on':''} style={{flex:1}} onClick={()=>{setType(id);setPageIdx(0);}}>{l}</button>
                 ))}
               </div>
               <div style={{fontSize:11,color:'var(--muted)',marginTop:6}}>
-                {type==='summary'?'KPIs + chart, one page per department.':type==='detail'?'Full data table & composition per department.':'All selected departments on one comparison page.'}
+                {type==='summary'?'KPIs + chart, one page per department.':type==='detail'?'Full data table & composition per department.':type==='board'?'Executive board summary — hospital KPIs, ranking, trend + authorisation sign-off.':'All selected departments on one comparison page.'}
               </div>
             </div>
             <div>
@@ -538,6 +647,17 @@ function Reports({depts}){
                   <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-2)'}}><input type="checkbox" checked={showLogo} onChange={e=>setShowLogo(e.target.checked)}/>Show logo</label>
                   <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-2)'}}><input type="checkbox" checked={confidential} onChange={e=>setConfidential(e.target.checked)}/>Confidential mark</label>
                 </div>
+              </div>
+            </div>
+            <div>
+              {fieldLabel('Signatures — saved automatically, shared with every report')}
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                <input value={sig.prepared} onChange={e=>setSig(s=>({...s,prepared:e.target.value}))} placeholder="Prepared by (name & title)" style={{...sel2,width:'100%'}}/>
+                <input value={sig.reviewed} onChange={e=>setSig(s=>({...s,reviewed:e.target.value}))} placeholder="Checked by (name & title)" style={{...sel2,width:'100%'}}/>
+                <input value={sig.approved} onChange={e=>setSig(s=>({...s,approved:e.target.value}))} placeholder="Approved by (name & title)" style={{...sel2,width:'100%'}}/>
+                <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-2)'}}>
+                  <input type="checkbox" checked={showSig} onChange={e=>setShowSig(e.target.checked)}/>Signature block on the last page
+                </label>
               </div>
             </div>
             <div>
@@ -585,7 +705,7 @@ function Reports({depts}){
           <div style={{padding:26,background:'#eef1f5',overflowX:'auto'}}>
             <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,boxSizing:'border-box',display:'flex',flexDirection:'column',margin:'0 auto',transition:'width .25s'}}>
               {chosen.length===0?<div style={{textAlign:'center',color:'var(--faint)',padding:'60px 0'}}>Select at least one department.</div>
-                : type==='compare'?<ComparePage/>:<DeptPage d={pageDept} n={pi+1} total={pages}/>}
+                : type==='compare'?<ComparePage/>:type==='board'?<BoardPage/>:<DeptPage d={pageDept} n={pi+1} total={pages}/>}
             </div>
           </div>
         </div>

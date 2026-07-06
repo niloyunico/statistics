@@ -20,6 +20,14 @@
   };
 
   // ---- shared helpers ----
+  // After an approve (or an admin edit of an APPROVED submission) is applied
+  // server-side, the page-load snapshots (window.UNICO.DEPARTMENTS /
+  // window.QUALITY_SEED) are stale — refetch them so Statistics & Quality show
+  // the new data as soon as their views remount (no full page reload needed).
+  const dcRefreshLive = () => {
+    try { window.UNICO && window.UNICO.refreshDepartments && window.UNICO.refreshDepartments(); } catch (e) { }
+    try { window.refreshQualitySeed && window.refreshQualitySeed(); } catch (e) { }
+  };
   const MO = () => (window.UNICO && window.UNICO.MONTH_ORDER) || [];
   const MONS_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const MONS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -107,14 +115,180 @@
     );
   }
 
+  /* ============================ Access Matrix ============================
+     Department-wise indicator → assigned-person overview. Every indicator row shows
+     WHO collects it as person chips (hover = how the access is granted); ✕ on a chip
+     revokes, “+ Assign” grants — writing the SAME /api/responsibles records the People
+     editor saves (the server re-derives areas and mirrors the collector login). */
+  function AccessMatrix({ persons, areas, areaInds, onChanged, onEditPerson }) {
+    const DM = window.DEPTMAP;
+    const [q, setQ] = useState('');
+    const [menu, setMenu] = useState(null);   // {area, indId} — the open “+ Assign” picker
+    const [menuQ, setMenuQ] = useState('');
+    const [busy, setBusy] = useState(false);
+
+    const hasArea = (r, ak) => !!r.allQualityAreas || (r.qualityAreas || []).includes(ak);
+    const selOf = (r, ak) => ((r.qualityIndicators || {})[ak]) || [];
+    const covers = (r, ak, id) => hasArea(r, ak) && (selOf(r, ak).length === 0 || selOf(r, ak).includes(id));
+    const derived = (r, ak) => !!r.allQualityAreas || (DM ? DM.areasFromDepts(r.departments || []) : []).includes(ak);
+    const initials = (n) => String(n || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+    const tipOf = (r, ak) => {
+      const via = r.allQualityAreas ? 'hospital-wide access' : derived(r, ak) ? 'via department assignment' : 'custom area access';
+      const sel = selOf(r, ak);
+      return r.name + (r.title ? ' · ' + r.title : '') + (r.empId ? ' · ' + r.empId : '') + ' — ' + via
+        + (sel.length ? ' · restricted to ' + sel.length + ' indicator' + (sel.length > 1 ? 's' : '') : ' · all indicators of this area')
+        + (r.active === false ? ' · INACTIVE' : '');
+    };
+
+    const saveRec = (rec, okMsg) => {
+      setBusy(true);
+      return dcApi.post('/api/responsibles', rec).then((res) => {
+        setBusy(false);
+        if (res.ok) { toast(okMsg, 'success'); onChanged && onChanged(); }
+        else toast(res.error || 'Could not save', 'error');
+      }).catch(() => { setBusy(false); toast('Could not save', 'error'); });
+    };
+
+    // Give: person without the area gets the area RESTRICTED to just this indicator;
+    // a restricted person gets the indicator added to their list.
+    const give = (r, ak, ind) => {
+      setMenu(null); setMenuQ('');
+      const qi = { ...(r.qualityIndicators || {}) };
+      if (!hasArea(r, ak)) {
+        qi[ak] = [ind.id];
+        return saveRec({ ...r, qualityAreas: [...(r.qualityAreas || []), ak], qualityIndicators: qi }, r.name + ' can now report ' + ind.name);
+      }
+      const sel = selOf(r, ak);
+      if (sel.length === 0) { toast(r.name + ' already has every indicator of this area.', 'info'); return; }
+      qi[ak] = [...sel, ind.id];
+      return saveRec({ ...r, qualityIndicators: qi }, r.name + ' can now report ' + ind.name);
+    };
+
+    // Revoke: full-area access becomes an explicit list minus this indicator; removing the
+    // LAST indicator drops the whole (custom) area — a department-derived area can only be
+    // changed by editing the person's departments, so that case is explained instead.
+    const revoke = (r, ak, ind, aName) => {
+      const allIds = (areaInds[ak] || []).map((x) => x.id);
+      const sel0 = selOf(r, ak);
+      const left = (sel0.length === 0 ? allIds : sel0).filter((x) => x !== ind.id);
+      const qi = { ...(r.qualityIndicators || {}) };
+      if (left.length > 0) { qi[ak] = left; return saveRec({ ...r, qualityIndicators: qi }, 'Removed ' + ind.name + ' from ' + r.name); }
+      if (derived(r, ak)) {
+        toast(r.name + "'s " + aName + ' access comes from their department assignment — edit the person to change departments.', 'error');
+        onEditPerson && onEditPerson(r);
+        return;
+      }
+      delete qi[ak];
+      return saveRec({ ...r, qualityAreas: (r.qualityAreas || []).filter((k) => k !== ak), qualityIndicators: qi }, 'Removed ' + r.name + ' from ' + aName);
+    };
+
+    // search filters by department/area, indicator or person name
+    const qn = q.trim().toLowerCase();
+    const areasShown = areas.filter((a) => {
+      if (!qn) return true;
+      if ((a.name || '').toLowerCase().includes(qn)) return true;
+      const inds = areaInds[a.key] || [];
+      return inds.some((ind) => (ind.name || '').toLowerCase().includes(qn)
+        || persons.some((r) => covers(r, a.key, ind.id) && (r.name || '').toLowerCase().includes(qn)));
+    });
+    const totInds = areas.reduce((s, a) => s + (areaInds[a.key] || []).length, 0);
+    const unassigned = areas.reduce((s, a) => s + (areaInds[a.key] || []).filter((ind) => !persons.some((r) => covers(r, a.key, ind.id))).length, 0);
+
+    const chip = (r, a, ind) => (
+      <span key={r.id} title={tipOf(r, a.key)}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 4px 3px 3px', borderRadius: 999, background: 'var(--blue-50)', border: '1px solid var(--blue)', fontSize: 11.5, fontWeight: 600, color: 'var(--blue-700)', opacity: r.active === false ? 0.55 : 1 }}>
+        <span style={{ width: 18, height: 18, borderRadius: '50%', background: 'var(--blue)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{initials(r.name)}</span>
+        <span style={{ cursor: onEditPerson ? 'pointer' : 'default' }} onClick={() => onEditPerson && onEditPerson(r)}>{r.name}</span>
+        <button title={'Remove ' + ind.name + ' access from ' + r.name} disabled={busy}
+          onClick={() => revoke(r, a.key, ind, a.name)}
+          style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--rose)', display: 'grid', placeItems: 'center', padding: '0 3px' }}><Ic d={I.x} s={11} /></button>
+      </span>
+    );
+
+    return (
+      <div className="grid" style={{ gap: 14 }}>
+        <Card style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '12px 16px' }}>
+          <input style={{ ...inputStyle, width: 300, flex: '0 1 auto' }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by department, indicator or person…" />
+          <span style={{ flex: 1 }} />
+          {[['Departments', areas.length], ['Indicators', totInds], ['People', persons.filter((r) => r.active !== false).length], ['Unassigned indicators', unassigned]].map(([l, v]) => (
+            <span key={l} style={{ fontSize: 12, color: 'var(--muted)' }}><b style={{ color: l.startsWith('Unassigned') && v > 0 ? 'var(--rose)' : 'var(--ink)', fontFamily: 'var(--mono)' }}>{v}</b> {l}</span>
+          ))}
+        </Card>
+        {areasShown.length === 0 && <Card><div style={{ padding: 10, color: 'var(--muted)', textAlign: 'center' }}>Nothing matches “{q}”.</div></Card>}
+        {areasShown.map((a) => {
+          const inds = (areaInds[a.key] || []).filter((ind) => !qn
+            || (a.name || '').toLowerCase().includes(qn)
+            || (ind.name || '').toLowerCase().includes(qn)
+            || persons.some((r) => covers(r, a.key, ind.id) && (r.name || '').toLowerCase().includes(qn)));
+          if (!inds.length) return null;
+          const areaPeople = persons.filter((r) => (areaInds[a.key] || []).some((ind) => covers(r, a.key, ind.id)));
+          return (
+            <Card key={a.key} style={{ padding: 0, overflow: 'visible' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--line)', background: 'var(--panel-2)', borderRadius: '12px 12px 0 0' }}>
+                <span style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>{a.name}</span>
+                <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>{inds.length} indicator{inds.length !== 1 ? 's' : ''} · {areaPeople.length} {areaPeople.length === 1 ? 'person' : 'people'}</span>
+              </div>
+              {inds.map((ind, i) => {
+                const owners = persons.filter((r) => covers(r, a.key, ind.id));
+                const open = menu && menu.area === a.key && menu.indId === ind.id;
+                const mq = menuQ.trim().toLowerCase();
+                const candidates = persons.filter((r) => !covers(r, a.key, ind.id) && (!mq || (r.name || '').toLowerCase().includes(mq) || (r.title || '').toLowerCase().includes(mq)));
+                return (
+                  <div key={ind.id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 16px', borderBottom: i < inds.length - 1 ? '1px solid var(--line-2, var(--line))' : 0, background: owners.length === 0 ? 'rgba(224,138,30,.06)' : 'transparent' }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', width: 300, flex: '0 1 auto' }}>{ind.name}</span>
+                    <span style={{ flex: 1 }} />
+                    {owners.length === 0 && <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--amber, #e08a1e)' }}>No one assigned</span>}
+                    {owners.map((r) => chip(r, a, ind))}
+                    <span style={{ position: 'relative' }}>
+                      <button className="btn sm" disabled={busy} onClick={() => { setMenu(open ? null : { area: a.key, indId: ind.id }); setMenuQ(''); }}><Ic d={I.plus} s={12} />Assign</button>
+                      {open && (
+                        <React.Fragment>
+                          <div onClick={() => setMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                          <div style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 41, width: 280, background: '#fff', border: '1px solid var(--line)', borderRadius: 10, boxShadow: '0 8px 24px rgba(20,32,46,.16)', padding: 8 }}>
+                            <input autoFocus style={{ ...inputStyle, marginBottom: 6, fontSize: 12.5 }} value={menuQ} onChange={(e) => setMenuQ(e.target.value)} placeholder="Search people…" />
+                            <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                              {candidates.length === 0 && <div style={{ padding: 10, fontSize: 12, color: 'var(--muted)', textAlign: 'center' }}>{persons.length ? 'Everyone matching already has access.' : 'No responsible persons yet.'}</div>}
+                              {candidates.map((r) => (
+                                <div key={r.id} onClick={() => give(r, a.key, ind)}
+                                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, cursor: 'pointer', opacity: r.active === false ? 0.55 : 1 }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--blue-50)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                                  <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--blue)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{initials(r.name)}</span>
+                                  <span style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}{r.active === false ? ' (inactive)' : ''}</div>
+                                    <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>{hasArea(r, a.key) ? 'Adds this indicator to their list' : 'Grants ' + a.name + ' · only this indicator'}</div>
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </Card>
+          );
+        })}
+      </div>
+    );
+  }
+
   /* ============================ Responsible Persons ============================ */
   function DataResponsibles({ depts }) {
     const [list, setList] = useState(null);
     const [editing, setEditing] = useState(null); // the record being added/edited
+    const [view, setView] = useState('people');   // 'people' | 'access' (indicator access matrix)
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), []);
     const areaInds = useMemo(() => { const m = {}; (window.qualityData ? window.qualityData() : []).forEach((d) => { m[d.key] = (d.indicators || []).map((i) => ({ id: i.id, name: i.name })); }); return m; }, []);
     const load = () => dcApi.get('/api/responsibles').then((r) => setList(r.ok ? r.responsibles : [])).catch(() => setList([]));
     useEffect(() => { load(); }, []);
+    // Everyone (except the person being edited) who can report indicator `indId` of area `ak` —
+    // powers the “who else is assigned” tooltips/badges on the editor's indicator pills.
+    const assignedNames = (ak, indId, exceptId) => (list || [])
+      .filter((r) => r.id !== exceptId && (!!r.allQualityAreas || (r.qualityAreas || []).includes(ak))
+        && ((((r.qualityIndicators || {})[ak]) || []).length === 0 || (((r.qualityIndicators || {})[ak]) || []).includes(indId)))
+      .map((r) => r.name);
 
     const blank = () => ({ name: '', title: '', phone: '', staffId: null, empId: '', password: '', departments: [], qualityAreas: [], allQualityAreas: false, qualityIndicators: {}, active: true });
     const save = () => {
@@ -153,9 +327,21 @@
     return (
       <div className="grid" style={{ gap: 14 }}>
         <SectionTitle icon={I.user} title="Responsible Persons" sub="Who gives the data — assign each person to the departments / quality areas they own (e.g. Rabbi Miah → Cathlab)."
-          right={!editing && <button className="btn pri sm" onClick={() => setEditing(blank())}><Ic d={I.plus} s={15} />Add person</button>} />
+          right={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <button className={'btn sm' + (view === 'people' ? ' pri' : '')} onClick={() => setView('people')}><Ic d={I.user} s={13} />People</button>
+              <button className={'btn sm' + (view === 'access' ? ' pri' : '')} title="Department-wise: every indicator with the people assigned to it — give or remove access inline" onClick={() => { setView('access'); setEditing(null); }}><Ic d={I.check} s={13} />Indicator Access</button>
+              {!editing && view === 'people' && <button className="btn pri sm" onClick={() => setEditing(blank())}><Ic d={I.plus} s={15} />Add person</button>}
+            </div>
+          } />
 
-        {editing && (
+        {view === 'access' && (
+          list === null ? <Card><div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div></Card>
+            : <AccessMatrix persons={list} areas={areas} areaInds={areaInds} onChanged={load}
+                onEditPerson={(r) => { setView('people'); setEditing({ ...blank(), ...r }); }} />
+        )}
+
+        {view === 'people' && editing && (
           <Card>
             <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>{editing.id ? 'Edit responsible person' : 'New responsible person'}</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -221,8 +407,14 @@
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
                           {list.map((ind) => {
                             const on = sel.includes(ind.id);
+                            // who ELSE already reports this indicator — visible on hover + 👤n badge
+                            const others = assignedNames(ak, ind.id, editing.id);
                             return <span key={ind.id} onClick={() => setSel(on ? sel.filter((x) => x !== ind.id) : [...sel, ind.id])}
-                              style={{ cursor: 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)' }}>{ind.name}</span>;
+                              title={others.length ? 'Also assigned to: ' + others.join(', ') : 'No one else is assigned to this indicator yet'}
+                              style={{ cursor: 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)' }}>
+                              {ind.name}
+                              {others.length > 0 && <span title={'Also assigned to: ' + others.join(', ')} style={{ marginLeft: 5, fontSize: 9.5, fontWeight: 700, borderRadius: 999, padding: '1px 6px', background: on ? 'var(--blue)' : 'var(--panel-2)', color: on ? '#fff' : 'var(--muted)', border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)') }}>👤{others.length}</span>}
+                            </span>;
                           })}
                         </div>
                       </div>
@@ -238,7 +430,7 @@
           </Card>
         )}
 
-        <Card style={{ padding: 0, overflow: 'hidden' }}>
+        {view === 'people' && <Card style={{ padding: 0, overflow: 'hidden' }}>
           {list === null ? <div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div>
             : list.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No responsible persons yet. Click “Add person”.</div>
               : <table className="tbl" style={{ width: '100%' }}>
@@ -257,7 +449,7 @@
                   </tr>
                 ))}</tbody>
               </table>}
-        </Card>
+        </Card>}
       </div>
     );
   }
@@ -437,7 +629,7 @@
     [/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'],
     [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'],
     [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'],
-    [/medication error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'],
+    [/medication (administration )?error/, 'B1'], [/falls with injury/, 'C3'], [/patient fall/, 'C2'],
     [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'],
     [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'],
     [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'],
@@ -593,7 +785,7 @@
     // NSI (needle-stick injury) logs BOTH the source patient AND the injured staff member
     // (victim) + their employee id — enabled per-indicator via the `victimField` flag.
     const victimField = !!def.victimField;
-    const blankIncident = () => ({ patientName: '', uhid: '', age: '', gender: '', diagnosis: '', admissionDate: '', victimName: '', victimId: '', details: '', finding: '', corrective: '', preventive: '', remark: '' });
+    const blankIncident = () => ({ patientName: '', uhid: '', age: '', gender: '', diagnosis: '', incidentDate: '', admissionDate: '', victimName: '', victimId: '', details: '', finding: '', corrective: '', preventive: '', remark: '' });
     const addIncident = () => setIncidents((a) => [...a, blankIncident()]);
     const setIncidentField = (i, k, v) => setIncidents((a) => a.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
     const delIncident = (i) => setIncidents((a) => a.filter((_, j) => j !== i));
@@ -663,7 +855,7 @@
       setCapa(cp && typeof cp === 'object' ? { finding: cp.finding || '', corrective: cp.corrective || '', preventive: cp.preventive || '' } : { finding: '', corrective: '', preventive: '' });
       // Load any incident reports already recorded for this indicator × month.
       const incs = (curInd.incidents && Array.isArray(curInd.incidents[month])) ? curInd.incidents[month] : [];
-      setIncidents(incs.map((x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', admissionDate: x.admissionDate || '', victimName: x.victimName || '', victimId: x.victimId || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' })));
+      setIncidents(incs.map((x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', incidentDate: x.incidentDate || '', admissionDate: x.admissionDate || '', victimName: x.victimName || '', victimId: x.victimId || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' })));
     }, [indId, month]); // eslint-disable-line
 
     // The numerator (by group or direct) drives the count / rate.
@@ -706,7 +898,7 @@
         capa: (capa.finding || capa.corrective || capa.preventive) ? { finding: capa.finding, corrective: capa.corrective, preventive: capa.preventive } : undefined,
         // Per-incident reports (only those with something filled in). The server stores
         // them on the indicator's month; the count above already reflects how many.
-        incidents: incidents.length ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, admissionDate: x.admissionDate, victimName: x.victimName, victimId: x.victimId, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : undefined,
+        incidents: incidents.length ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, incidentDate: x.incidentDate, admissionDate: x.admissionDate, victimName: x.victimName, victimId: x.victimId, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : undefined,
         remark,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
@@ -909,6 +1101,7 @@
                         <Field label="UHID"><input style={inputStyle} value={x.uhid} onChange={(e) => setIncidentField(i, 'uhid', e.target.value)} placeholder="Hospital ID" /></Field>
                         <Field label="Age"><input style={inputStyle} value={x.age} onChange={(e) => setIncidentField(i, 'age', e.target.value)} placeholder="e.g. 54" /></Field>
                         <Field label="Sex"><input style={inputStyle} value={x.gender} onChange={(e) => setIncidentField(i, 'gender', e.target.value)} placeholder="M / F" /></Field>
+                        <Field label="Date of incident"><input type="date" style={inputStyle} value={x.incidentDate} onChange={(e) => setIncidentField(i, 'incidentDate', e.target.value)} /></Field>
                         <Field label="Admission date"><input type="date" style={inputStyle} value={x.admissionDate} onChange={(e) => setIncidentField(i, 'admissionDate', e.target.value)} /></Field>
                         <Field label="Diagnosis"><input style={inputStyle} value={x.diagnosis} onChange={(e) => setIncidentField(i, 'diagnosis', e.target.value)} placeholder="Diagnosis" /></Field>
                       </div>
@@ -1080,7 +1273,12 @@
       }
       dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), body).then((r) => {
         setBusy(false);
-        if (r.ok) { toast('Submission updated', 'success'); onSaved && onSaved(r.submission); }
+        if (r.ok) {
+          toast('Submission updated', 'success');
+          // An approved submission's edit was re-applied to live data on the server.
+          if (r.submission && r.submission.status === 'approved') dcRefreshLive();
+          onSaved && onSaved(r.submission);
+        }
         else toast(r.error || 'Could not save', 'error');
       }).catch(() => { setBusy(false); toast('Could not save', 'error'); });
     };
@@ -1349,6 +1547,7 @@
       }
       setBusy(''); setSel({}); setRejectFor(null);
       toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
+      if (kind === 'approve' && ok) dcRefreshLive();
       load();
     };
     const act = (id, kind) => { if (kind === 'reject') { setRejectFor({ ids: [id] }); } else { runAction([id], 'approve'); } };
