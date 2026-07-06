@@ -11661,10 +11661,7 @@ function Reports({
   })();
   const pSet = new Set(pMonths);
   const rangeLabel = pMonths.length ? `${MF[pMonths[0]] || pMonths[0]} – ${MF[pMonths[pMonths.length - 1]] || pMonths[pMonths.length - 1]}` : '—';
-  const fseriesOf = d => {
-    const f = d.series.filter(r => pSet.has(r.month));
-    return f.length ? f : d.series;
-  };
+  const fseriesOf = d => d.series.filter(r => pSet.has(r.month));
   const statOf = (d, fs) => {
     const total = fs.reduce((s, r) => s + (r[d.primary] || 0), 0);
     const latest = fs[fs.length - 1] || {};
@@ -11800,20 +11797,14 @@ function Reports({
       color: 'var(--ink)',
       marginTop: 4
     }
-  }, name || ' '), React.createElement("div", {
+  }, name || ' '), React.createElement("div", {
     style: {
       fontSize: 9.5,
       color: 'var(--muted)',
       textTransform: 'uppercase',
       letterSpacing: .3
     }
-  }, role), React.createElement("div", {
-    style: {
-      fontSize: 8.5,
-      color: 'var(--faint)',
-      marginTop: 1
-    }
-  }, "Signature & date")))));
+  }, role)))));
   function CoverPage({
     n,
     total
@@ -11935,7 +11926,13 @@ function Reports({
         color: 'var(--faint)',
         marginTop: 20
       }
-    }, "Generated ", new Date().toLocaleDateString('en-US'))), React.createElement(Footer, {
+    }, "Generated ", new Date().toLocaleDateString('en-US')), (sig.prepared || sig.reviewed || sig.approved) && React.createElement("div", {
+      style: {
+        width: '100%',
+        maxWidth: 600,
+        textAlign: 'left'
+      }
+    }, React.createElement(SigBlock, null))), React.createElement(Footer, {
       n: n,
       total: total
     }));
@@ -11957,6 +11954,46 @@ function Reports({
     const detailed = type === 'detail';
     const ncol = (detailed ? d.cols.length : 5) + 1;
     const tblFont = detailed ? ncol > 10 ? 8 : ncol > 8 ? 8.5 : ncol > 6 ? 9.5 : 10.5 : 11;
+    const partial = fs.length > 0 && fs.length < pMonths.length;
+    if (fs.length === 0) {
+      return React.createElement("div", {
+        className: "qc-rpage"
+      }, React.createElement(Header, null), React.createElement("div", {
+        style: {
+          marginTop: 18
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+          marginBottom: 12
+        }
+      }, React.createElement(Ic, {
+        d: DEPT_ICON[d.id] || I.activity,
+        s: 18,
+        c: tone
+      }), React.createElement("div", {
+        style: {
+          fontWeight: 700,
+          fontSize: 15
+        }
+      }, d.name), React.createElement("span", {
+        className: "tag"
+      }, d.group)), React.createElement("div", {
+        style: {
+          border: '1px dashed var(--line)',
+          borderRadius: 10,
+          padding: '38px 20px',
+          textAlign: 'center',
+          color: 'var(--muted)',
+          fontSize: 12.5
+        }
+      }, "No data reported for ", d.name, " in the selected period (", rangeLabel, ")."), showSig && n === total && React.createElement(SigBlock, null)), React.createElement(Footer, {
+        n: n,
+        total: total
+      }));
+    }
     return React.createElement("div", {
       className: "qc-rpage"
     }, React.createElement(Header, null), React.createElement("div", {
@@ -11985,7 +12022,16 @@ function Reports({
       className: "spacer"
     }), React.createElement(Delta, {
       v: d.delta
-    })), React.createElement("div", {
+    })), partial && React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: 'var(--muted)',
+        background: 'var(--panel-2)',
+        borderRadius: 6,
+        padding: '5px 10px',
+        marginBottom: 10
+      }
+    }, "Reported data covers ", React.createElement("b", null, fs[0].full, " \u2013 ", fs[fs.length - 1].full), " (", fs.length, " of the ", pMonths.length, " months in the selected period); months without a report are not plotted."), React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: 'repeat(4,1fr)',

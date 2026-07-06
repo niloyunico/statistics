@@ -336,7 +336,10 @@ function Reports({depts}){
   })();
   const pSet=new Set(pMonths);
   const rangeLabel = pMonths.length?`${MF[pMonths[0]]||pMonths[0]} – ${MF[pMonths[pMonths.length-1]]||pMonths[pMonths.length-1]}`:'—';
-  const fseriesOf=d=>{const f=d.series.filter(r=>pSet.has(r.month));return f.length?f:d.series;};
+  // STRICT range filter — no silent fallback: a department with no data inside the
+  // selected period must show "no data", not its full history (the old fallback made
+  // a narrowed custom range look like it wasn't applied at all).
+  const fseriesOf=d=>d.series.filter(r=>pSet.has(r.month));
   const statOf=(d,fs)=>{const total=fs.reduce((s,r)=>s+(r[d.primary]||0),0);const latest=fs[fs.length-1]||{};const peak=fs.length?Math.max(...fs.map(r=>r[d.primary]||0)):0;const avg=fs.length?Math.round(total/fs.length):0;return {total,latest,peak,avg};};
 
   const [base,ratio]=PAGE_SIZES[pageSize];
@@ -380,9 +383,8 @@ function Reports({depts}){
         {[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]].map(([role,name])=>(
           <div key={role} style={{flex:1,minWidth:0}}>
             <div style={{borderBottom:'1px solid var(--ink-2)',height:34}}/>
-            <div style={{fontSize:11,fontWeight:700,color:'var(--ink)',marginTop:4}}>{name||' '}</div>
+            <div style={{fontSize:11,fontWeight:700,color:'var(--ink)',marginTop:4}}>{name||' '}</div>
             <div style={{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.3}}>{role}</div>
-            <div style={{fontSize:8.5,color:'var(--faint)',marginTop:1}}>Signature &amp; date</div>
           </div>
         ))}
       </div>
@@ -415,6 +417,11 @@ function Reports({depts}){
           </div>
           {confidential&&<div style={{marginTop:34,fontSize:10.5,color:'var(--rose)',fontWeight:700,textTransform:'uppercase',letterSpacing:1,border:'1px solid #f1c6cd',borderRadius:6,padding:'6px 14px'}}>Confidential — for authorised recipients only</div>}
           <div style={{fontSize:10,color:'var(--faint)',marginTop:20}}>Generated {new Date().toLocaleDateString('en-US')}</div>
+          {(sig.prepared||sig.reviewed||sig.approved)&&(
+            /* Saved sign-off names on the COVER too — same Authorisation block style as
+               the last page (rule line + bold name + role), per the approved design. */
+            <div style={{width:'100%',maxWidth:600,textAlign:'left'}}><SigBlock/></div>
+          )}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -429,6 +436,28 @@ function Reports({depts}){
     const detailed=type==='detail';
     const ncol=(detailed?d.cols.length:5)+1;
     const tblFont=detailed?(ncol>10?8:ncol>8?8.5:ncol>6?9.5:10.5):11;
+    // Coverage note: the axis only plots REPORTED months, so when the dept's data
+    // covers less than the selected period, say so instead of looking broken.
+    const partial=fs.length>0&&fs.length<pMonths.length;
+    if(fs.length===0){
+      return (
+        <div className="qc-rpage">
+          <Header/>
+          <div style={{marginTop:18}}>
+            <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
+              <Ic d={DEPT_ICON[d.id]||I.activity} s={18} c={tone}/>
+              <div style={{fontWeight:700,fontSize:15}}>{d.name}</div>
+              <span className="tag">{d.group}</span>
+            </div>
+            <div style={{border:'1px dashed var(--line)',borderRadius:10,padding:'38px 20px',textAlign:'center',color:'var(--muted)',fontSize:12.5}}>
+              No data reported for {d.name} in the selected period ({rangeLabel}).
+            </div>
+            {showSig&&n===total&&<SigBlock/>}
+          </div>
+          <Footer n={n} total={total}/>
+        </div>
+      );
+    }
     return (
       <div className="qc-rpage">
         <Header/>
@@ -438,6 +467,11 @@ function Reports({depts}){
             <div style={{fontWeight:700,fontSize:15}}>{d.name}</div>
             <span className="tag">{d.group}</span><span className="spacer"/><Delta v={d.delta}/>
           </div>
+          {partial&&(
+            <div style={{fontSize:10,color:'var(--muted)',background:'var(--panel-2)',borderRadius:6,padding:'5px 10px',marginBottom:10}}>
+              Reported data covers <b>{fs[0].full} – {fs[fs.length-1].full}</b> ({fs.length} of the {pMonths.length} months in the selected period); months without a report are not plotted.
+            </div>
+          )}
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:16}}>
             {[['Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Avg',fmt(st.avg)]].map(([l,v],i)=>(
               <div key={i} style={{background:'var(--panel-2)',borderRadius:7,padding:'9px 11px',borderLeft:'3px solid '+tone}}>
