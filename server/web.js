@@ -278,6 +278,9 @@ function loginPage(opts) {
     + 'background:rgba(210,58,82,.10);border:1px solid rgba(210,58,82,.3);border-radius:8px;padding:7px 10px}\n'
     + '.err-spacer{min-height:18px;margin:2px 0 8px}\n'
     + '.legal{margin-top:18px;font-size:10.5px;letter-spacing:.4px;color:#9aa6b4}\n'
+    + '.credit{margin-top:7px;font-size:10.5px;color:#9aa6b4}\n'
+    + '.credit a{color:#27a8db;text-decoration:none;font-weight:600}\n'
+    + '.credit a:hover{text-decoration:underline}\n'
     + '</style></head><body>\n'
     + '<form class="card" method="POST" action="/login" autocomplete="on">\n'
     + '<img class="logo" src="/unico/logo.svg" alt="UNICO Healthcare"/>\n'
@@ -294,6 +297,7 @@ function loginPage(opts) {
     + '<input id="p" name="password" type="password" autocomplete="current-password" placeholder="Enter your password"/></div>\n'
     + '<button class="btn" type="submit">Sign in</button>\n'
     + '<div class="legal">UNICO Healthcare - Statistics Suite - Secure sign-in</div>\n'
+    + '<div class="credit">Design &amp; Development by <a href="https://nasifahammedniloy.com" target="_blank" rel="noopener">Nasif Ahammed Niloy</a></div>\n'
     + '</form></body></html>';
 }
 

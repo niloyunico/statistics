@@ -434,8 +434,11 @@ function Reports({depts}){
     const breakdown=d.cols.filter(c=>c.id!==d.primary&&!c.pct);
     const donutData=breakdown.map((c,i)=>({label:c.label,value:fs.reduce((s,r)=>s+(r[c.id]||0),0),color:PALETTE[i%PALETTE.length]})).filter(x=>x.value>0);
     const detailed=type==='detail';
-    const ncol=(detailed?d.cols.length:5)+1;
-    const tblFont=detailed?(ncol>10?8:ncol>8?8.5:ncol>6?9.5:10.5):11;
+    // ALL metric columns, always — the summary table used to slice to the first 5,
+    // silently dropping the rest for wide departments (Dialysis lost Total, ER lost
+    // half its census). Width is handled by the adaptive font + fixed layout below.
+    const ncol=d.cols.length+1;
+    const tblFont=ncol>10?8:ncol>8?8.5:ncol>6?9.5:(detailed?10.5:11);
     // Coverage note: the axis only plots REPORTED months, so when the dept's data
     // covers less than the selected period, say so instead of looking broken.
     const partial=fs.length>0&&fs.length<pMonths.length;
@@ -492,12 +495,12 @@ function Reports({depts}){
               <Donut data={donutData} size={104} thickness={20} flat/>
             </div>
           )}
-          <table className={detailed?'tbl rpt':'tbl'} style={{marginTop:14,fontSize:tblFont}}>
-            <thead><tr><th>Month</th>{d.cols.slice(0,detailed?d.cols.length:5).map(c=><th key={c.id}>{c.label}</th>)}</tr></thead>
+          <table className={(detailed||ncol>7)?'tbl rpt':'tbl'} style={{marginTop:14,fontSize:tblFont}}>
+            <thead><tr><th>Month</th>{d.cols.map(c=><th key={c.id}>{c.label}</th>)}</tr></thead>
             <tbody>{fs.map((r,i)=>(
-              <tr key={i}><td>{detailed?r.month:r.full}</td>{d.cols.slice(0,detailed?d.cols.length:5).map(c=><td key={c.id}>{r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id]))}</td>)}</tr>
+              <tr key={i}><td>{detailed?r.month:r.full}</td>{d.cols.map(c=><td key={c.id}>{r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id]))}</td>)}</tr>
             ))}
-            {detailed&&<tr className="tot"><td>TOTAL</td>{d.cols.slice(0,d.cols.length).map(c=><td key={c.id}>{c.pct?'—':fmt(fs.reduce((s,r)=>s+(r[c.id]||0),0))}</td>)}</tr>}
+            {detailed&&<tr className="tot"><td>TOTAL</td>{d.cols.map(c=><td key={c.id}>{c.pct?'—':fmt(fs.reduce((s,r)=>s+(r[c.id]||0),0))}</td>)}</tr>}
             </tbody>
           </table>
           {showSig&&n===total&&<SigBlock/>}

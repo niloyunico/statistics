@@ -11952,8 +11952,8 @@ function Reports({
       color: PALETTE[i % PALETTE.length]
     })).filter(x => x.value > 0);
     const detailed = type === 'detail';
-    const ncol = (detailed ? d.cols.length : 5) + 1;
-    const tblFont = detailed ? ncol > 10 ? 8 : ncol > 8 ? 8.5 : ncol > 6 ? 9.5 : 10.5 : 11;
+    const ncol = d.cols.length + 1;
+    const tblFont = ncol > 10 ? 8 : ncol > 8 ? 8.5 : ncol > 6 ? 9.5 : detailed ? 10.5 : 11;
     const partial = fs.length > 0 && fs.length < pMonths.length;
     if (fs.length === 0) {
       return React.createElement("div", {
@@ -12098,20 +12098,20 @@ function Reports({
       thickness: 20,
       flat: true
     })), React.createElement("table", {
-      className: detailed ? 'tbl rpt' : 'tbl',
+      className: detailed || ncol > 7 ? 'tbl rpt' : 'tbl',
       style: {
         marginTop: 14,
         fontSize: tblFont
       }
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Month"), d.cols.slice(0, detailed ? d.cols.length : 5).map(c => React.createElement("th", {
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Month"), d.cols.map(c => React.createElement("th", {
       key: c.id
     }, c.label)))), React.createElement("tbody", null, fs.map((r, i) => React.createElement("tr", {
       key: i
-    }, React.createElement("td", null, detailed ? r.month : r.full), d.cols.slice(0, detailed ? d.cols.length : 5).map(c => React.createElement("td", {
+    }, React.createElement("td", null, detailed ? r.month : r.full), d.cols.map(c => React.createElement("td", {
       key: c.id
     }, r[c.id] == null ? '–' : c.pct ? r[c.id] + '%' : fmt(r[c.id]))))), detailed && React.createElement("tr", {
       className: "tot"
-    }, React.createElement("td", null, "TOTAL"), d.cols.slice(0, d.cols.length).map(c => React.createElement("td", {
+    }, React.createElement("td", null, "TOTAL"), d.cols.map(c => React.createElement("td", {
       key: c.id
     }, c.pct ? '—' : fmt(fs.reduce((s, r) => s + (r[c.id] || 0), 0))))))), showSig && n === total && React.createElement(SigBlock, null)), React.createElement(Footer, {
       n: n,

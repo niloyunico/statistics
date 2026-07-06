@@ -390,3 +390,72 @@ table.tbl tr.tot td{font-weight:700;color:var(--ink);background:var(--panel-2);b
    export we reveal #pdf-root off-canvas (never visible) and let it be captured page by page. */
 body.qc-pdfcap #pdf-root{display:block !important;position:fixed;left:-11000px;top:0;z-index:-1}
 body.qc-pdfcap #pdf-root .pdf-doc{background:transparent}
+
+/* ============================================================================
+   PREMIUM MOTION LAYER — app-wide micro-transitions & view animations.
+   Rules: animate ONLY compositor-friendly properties (transform / opacity /
+   box-shadow / color / background); durations 120–280 ms; hard-disabled during
+   PDF capture, under print media, and for prefers-reduced-motion. Many
+   components set hover styles inline from JS (onMouseEnter) — the transitions
+   declared here make those inline changes glide instead of snapping.
+   ============================================================================ */
+
+/* Every route change remounts the view under .content — fade+rise it in. */
+.content>*{animation:viewin .26s cubic-bezier(.2,.7,.3,1) both}
+@keyframes viewin{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+
+/* Buttons — hover lift, pressed squash, animated focus ring. */
+.btn{transition:background .15s,border-color .15s,color .15s,box-shadow .18s,transform .12s}
+.btn:hover{transform:translateY(-1px);box-shadow:var(--shadow-md)}
+.btn:active{transform:translateY(0) scale(.98);box-shadow:none;transition-duration:.06s}
+.btn.pri:hover{box-shadow:0 6px 16px rgba(0,144,202,.35)}
+.btn:focus-visible,.icon-btn:focus-visible,.tb-icon:focus-visible,.seg button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,144,202,.22)}
+.icon-btn,.tb-icon,.tb-burger{transition:background .15s,border-color .15s,color .15s,transform .12s,box-shadow .15s}
+.icon-btn:hover,.tb-icon:hover,.tb-burger:hover{transform:translateY(-1px)}
+.icon-btn:active,.tb-icon:active,.tb-burger:active{transform:scale(.93);transition-duration:.06s}
+
+/* Segmented controls & workspace switcher — sliding-feel state changes. */
+.seg button,.modswitch button{transition:background .16s,color .16s,box-shadow .16s,transform .12s}
+.seg button:active,.modswitch button:active{transform:scale(.96)}
+
+/* Sidebar — hover indent + smooth active gradient. */
+.sb-item{transition:background .16s,color .16s,border-color .16s,padding-left .16s}
+.app:not(.collapsed) .sb-item:hover{padding-left:20px}
+.sb-item .ico{transition:transform .16s,opacity .16s}
+.sb-item:hover .ico{transform:scale(1.12);opacity:1}
+
+/* Cards & KPI tiles — smooth elevation (also animates the many inline JS hovers). */
+.card{transition:box-shadow .2s,border-color .2s,transform .18s}
+.kpi{transition:box-shadow .2s,transform .18s}
+.kpi:hover{transform:translateY(-2px)}
+.dept-row:hover{transform:translateY(-1px)}
+
+/* Tables, chips, palette rows — quick color glides. */
+table.tbl td{transition:background-color .13s}
+.chip,.tag,.gs-row,.col-chip{transition:background .14s,color .14s,border-color .14s}
+
+/* Inputs — animated focus (border + soft ring). */
+input,select,textarea{transition:border-color .16s,box-shadow .16s,background .16s}
+.field input:focus,.field select:focus,.tb-search:focus-within{box-shadow:0 0 0 3px rgba(0,144,202,.13)}
+.tb-search{transition:border-color .16s,box-shadow .16s,background .16s}
+
+/* Loading shimmer utility — drop className="skeleton" on any placeholder box. */
+.skeleton{position:relative;overflow:hidden;background:#e9eef4;border-radius:6px;color:transparent !important}
+.skeleton::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.7),transparent);animation:shimmer 1.3s infinite}
+@keyframes shimmer{100%{transform:translateX(100%)}}
+
+/* Modal exit + subtle backdrop zoom already covered by fade/pop above. Smooth
+   in-page scrolling for anchor/keyboard navigation. */
+.content{scroll-behavior:smooth}
+
+/* ---- kill switches: exports must capture a STILL frame, and reduced-motion
+   users get an instant UI. Print path likewise renders without motion. ---- */
+body.qc-pdfcap *,body.qc-pdfcap *::before,body.qc-pdfcap *::after,
+body.pdf-export-mode *,body.pdf-export-mode *::before,body.pdf-export-mode *::after{
+  animation:none !important;transition:none !important}
+@media print{*,*::before,*::after{animation:none !important;transition:none !important}}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+  .content{scroll-behavior:auto}
+}

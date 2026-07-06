@@ -8,6 +8,13 @@
 <!-- Offline IBM Plex fonts (vendored locally, no internet) -->
 <link rel="stylesheet" href="vendor/fonts/ibm-plex.css"/>
 <link rel="stylesheet" href="unico/theme.css"/>
+<!-- Early asset discovery: the scripts live at the END of <body>, so without these
+     hints the browser only finds them after parsing the whole document. Preloading
+     here starts the (cached, immutable) downloads in parallel with the CSS. The
+     bundle's ?v= token is kept in sync by scripts/build-renderer.js. -->
+<link rel="preload" href="vendor/react.production.min.js" as="script"/>
+<link rel="preload" href="vendor/react-dom.production.min.js" as="script"/>
+<link rel="preload" href="dist/app.bundle.js?v=cc7261ebb3" as="script"/>
 <style>
 /* Boot splash — visible from the first byte of HTML until React mounts (its first
    render replaces #root's children). Styled inline so it needs no other asset. */
@@ -40,12 +47,15 @@ setTimeout(function(){
 <!-- Off-screen render target for PDF/print export (Reports). Only this node is
      shown under @media print; #root is hidden. See theme.css + reports.jsx. -->
 <div id="pdf-root"></div>
-<!-- Vendored libraries — run fully offline, no CDN -->
-<script src="vendor/react.production.min.js"></script>
-<script src="vendor/react-dom.production.min.js"></script>
+<!-- Vendored libraries — run fully offline, no CDN. All external scripts are
+     `defer`red: they download in parallel without blocking HTML parsing and still
+     execute in document order (react -> react-dom -> jspdf -> html2canvas -> bundle).
+     The inline DB-bridge below is NOT deferred, so it always runs first. -->
+<script defer src="vendor/react.production.min.js"></script>
+<script defer src="vendor/react-dom.production.min.js"></script>
 <!-- PDF export (offline, vendored): powers the Report Builder's one-click PDF download -->
-<script src="vendor/jspdf.umd.min.js"></script>
-<script src="vendor/html2canvas.min.js"></script>
+<script defer src="vendor/jspdf.umd.min.js"></script>
+<script defer src="vendor/html2canvas.min.js"></script>
 <!-- Database bridge: hydrate localStorage from the on-disk DB, then mirror every
      change back to it. Runs before the app's stores read localStorage. -->
 <script>
@@ -77,6 +87,6 @@ setTimeout(function(){
      concatenated into ONE cacheable bundle by scripts/build-renderer.js, so the
      browser no longer downloads Babel (3.14 MB) or compiles JSX at runtime. Rebuilt
      by `npm run web`; the ?v= token is the bundle's content hash (auto-updated). -->
-<script src="dist/app.bundle.js?v=28e803e2a0"></script>
+<script defer src="dist/app.bundle.js?v=cc7261ebb3"></script>
 </body>
 </html>
