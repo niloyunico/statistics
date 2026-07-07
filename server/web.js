@@ -211,15 +211,9 @@ async function serveIndex(req, res) {
   const anchor = html.includes('<!-- Vendored libraries') ? '<!-- Vendored libraries' : '</head>';
   html = html.replace(anchor, function () { return inject + anchor; });
 
-  // When the login portal is active, add a small "Sign out" control so the
-  // signed-in admin can end the session (clears the cookie via /logout).
-  if (session.authRequired() && req.user) {
-    const signOut = '<a href="/logout" title="Sign out" style="position:fixed;right:14px;bottom:12px;z-index:4000;'
-      + 'font:600 11px/1 system-ui,Segoe UI,sans-serif;color:#5b6b80;background:rgba(255,255,255,.94);'
-      + 'border:1px solid #e3e9f1;border-radius:8px;padding:7px 11px;text-decoration:none;'
-      + 'box-shadow:0 2px 10px rgba(5,12,24,.12)">Sign out</a>\n';
-    html = html.replace('</body>', function () { return signOut + '</body>'; });
-  }
+  // No floating "Sign out" pill: it overlapped page content at the bottom-right.
+  // Signing out lives in the sidebar (next to the signed-in user) and the
+  // collector portal header — both link to /logout.
   res.set('Cache-Control', 'no-store'); // snapshot is per-request; never cache the shell
   res.type('html').send(html);
 }
