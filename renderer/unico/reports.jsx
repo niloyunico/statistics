@@ -141,19 +141,22 @@ function MonthlyStatsReport({depts}){
   const single = dept!=='all' ? scope[0] : null;
   const primaryLabel = single ? (msPrimaryCol(single).label||single.primaryLabel||'Volume') : 'Volume';
 
-  // KPI aggregation over scope, each dept summed on its own primary (§3.1).
-  const kpi = scope.reduce((a,d)=>{
-    const fs=d.series;
-    const tot=fs.reduce((s,r)=>s+(r[d.primary]||0),0);
-    const peak=fs.length?Math.max(...fs.map(r=>r[d.primary]||0)):0;
-    a.total+=tot; a.peak=Math.max(a.peak,peak); a.months=Math.max(a.months,fs.length);
-    return a;
-  },{total:0,peak:0,months:0});
+  // KPI aggregation over scope (§3.1). Total = sum of each dept's primary; Peak = the
+  // busiest COMBINED month; Avg = total ÷ DISTINCT months in scope. (Previously Avg used
+  // the largest single-department month count as the denominator — up to 2× too high when
+  // departments reported different months — and Peak used the max single-department month,
+  // contradicting the combined chart shown beside it.)
+  const monthTotals = AX.map(k=>scope.reduce((s,d)=>{ const r=d.series.find(x=>x.month===k); return s+((r&&r[d.primary])||0); },0));
+  const kpi = { total: scope.reduce((a,d)=>a+d.series.reduce((s,r)=>s+(r[d.primary]||0),0),0),
+    peak: monthTotals.length?Math.max(...monthTotals):0, months: AX.length };
   const avg = kpi.months?Math.round(kpi.total/kpi.months):0;
   const metricCount = scope.reduce((n,d)=>n+d.cols.length,0);
 
   // Combined summed-primary series over AX for the headline all-depts chart (§6.1b).
-  const barData = AX.map(k=>({ month:k.split('-')[0], val: scope.reduce((s,d)=>{ const r=d.series.find(x=>x.month===k); return s+((r&&r[d.primary])||0); },0) }));
+  // Label with the year when the axis spans >1 calendar year (else two "Jan" bars for
+  // different years are indistinguishable).
+  const multiYr = new Set(AX.map(k=>k.split('-')[1])).size>1;
+  const barData = AX.map((k,i)=>({ month: multiYr ? k.split('-')[0]+" '"+k.split('-')[1] : k.split('-')[0], val: monthTotals[i] }));
 
   const hasCombo = typeof window.ComboChart==='function';
   const cardBox={background:'#fff',border:'1px solid var(--line)',borderRadius:12,padding:'14px 16px',boxShadow:'0 1px 2px rgba(20,32,46,.06)'};
@@ -340,7 +343,12 @@ function Reports({depts}){
   // selected period must show "no data", not its full history (the old fallback made
   // a narrowed custom range look like it wasn't applied at all).
   const fseriesOf=d=>d.series.filter(r=>pSet.has(r.month));
-  const statOf=(d,fs)=>{const total=fs.reduce((s,r)=>s+(r[d.primary]||0),0);const latest=fs[fs.length-1]||{};const peak=fs.length?Math.max(...fs.map(r=>r[d.primary]||0)):0;const avg=fs.length?Math.round(total/fs.length):0;return {total,latest,peak,avg};};
+  const statOf=(d,fs)=>{const total=fs.reduce((s,r)=>s+(r[d.primary]||0),0);const latest=fs[fs.length-1]||{};const peak=fs.length?Math.max(...fs.map(r=>r[d.primary]||0)):0;const avg=fs.length?Math.round(total/fs.length):0;
+    // period-scoped trend: last vs previous reported month WITHIN the selected period, so
+    // the arrow reflects the report's period rather than the dataset's all-time last two.
+    const lv=fs.length?(fs[fs.length-1][d.primary]||0):0, pv=fs.length>1?(fs[fs.length-2][d.primary]||0):0;
+    const delta=fs.length<2?0:(pv===0?(lv>0?100:0):Math.round(((lv-pv)/pv)*100));
+    return {total,latest,peak,avg,delta};};
 
   const [base,ratio]=PAGE_SIZES[pageSize];
   const portrait=orient==='portrait';
@@ -468,7 +476,7 @@ function Reports({depts}){
           <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
             <Ic d={DEPT_ICON[d.id]||I.activity} s={18} c={tone}/>
             <div style={{fontWeight:700,fontSize:15}}>{d.name}</div>
-            <span className="tag">{d.group}</span><span className="spacer"/><Delta v={d.delta}/>
+            <span className="tag">{d.group}</span><span className="spacer"/><Delta v={st.delta}/>
           </div>
           {partial&&(
             <div style={{fontSize:10,color:'var(--muted)',background:'var(--panel-2)',borderRadius:6,padding:'5px 10px',marginBottom:10}}>
@@ -524,7 +532,7 @@ function Reports({depts}){
             <tbody>{rows.map(({d,st})=>(
               <tr key={d.id}><td>{d.name}</td><td style={{fontFamily:"'IBM Plex Sans'"}}>{d.group}</td>
                 <td>{fmt(st.latest[d.primary]||0)}</td><td>{fmt(st.total)}</td><td>{fmt(st.peak)}</td><td>{fmt(st.avg)}</td>
-                <td style={{textAlign:'right'}}><Delta v={d.delta}/></td></tr>
+                <td style={{textAlign:'right'}}><Delta v={st.delta}/></td></tr>
             ))}</tbody>
           </table>
           {showSig&&<SigBlock/>}
@@ -582,7 +590,7 @@ function Reports({depts}){
             <tbody>{rows.slice().sort((a,b)=>b.st.total-a.st.total).map(({d,st})=>(
               <tr key={d.id}><td>{d.name}</td><td style={{fontFamily:"'IBM Plex Sans'"}}>{d.group}</td>
                 <td>{fmt(st.total)}</td><td>{totAll?Math.round(st.total*100/totAll)+'%':'—'}</td><td>{fmt(st.avg)}</td>
-                <td style={{textAlign:'right'}}><Delta v={d.delta}/></td></tr>
+                <td style={{textAlign:'right'}}><Delta v={st.delta}/></td></tr>
             ))}</tbody>
           </table>
           {showSig&&<SigBlock/>}
@@ -596,234 +604,591 @@ function Reports({depts}){
   const [note,setNote]=React.useState(null); // {ok:boolean, text:string}
 
   /* ================= TRUE VECTOR PDF (web export) =================
-     Draws the report directly with jsPDF primitives — real selectable text,
-     vector charts and rules, ~100 KB and ~1 s for a full 17-page run — instead
-     of rasterizing the DOM with html2canvas (30 s+, megabytes, blurry zoom).
+     Draws the report with jsPDF primitives in "preview space": every block
+     below reproduces the on-screen page (CoverPage / DeptPage / ComparePage /
+     BoardPage) coordinate-for-coordinate — the same 10 chart styles, the same
+     donut composition, KPI tiles, tag/trend chips and table — scaled uniformly
+     from the preview's px page onto the PDF's pt page, so the export looks
+     exactly like the live preview. Selectable text, sharp at any zoom, ~100 KB.
      The raster path below remains only as an automatic fallback. */
   const buildVectorPDF=async(J)=>{
-    const RGB={blue:[0,144,202],blue700:[0,114,163],ink:[22,32,46],ink2:[60,72,88],muted:[108,122,140],faint:[154,166,180],
-      line:[221,227,236],panel:[247,249,252],rose:[210,58,82],roseBg:[251,233,236],green:[31,157,87],posBg:[231,246,237]};
-    const hex2rgb=h=>{const m=/^#?([0-9a-f]{6})$/i.exec(String(h||''));if(!m)return RGB.blue;const n=parseInt(m[1],16);return [(n>>16)&255,(n>>8)&255,n&255];};
-    const TONES=PALETTE.map(hex2rgb);
+    const hx=h=>{const m=/^#?([0-9a-f]{6})$/i.exec(String(h||''));const n=m?parseInt(m[1],16):0x16202e;return [(n>>16)&255,(n>>8)&255,n&255];};
+    // theme.css tokens
+    const C={ink:hx('#16202e'),ink2:hx('#3c4858'),muted:hx('#6c7a8c'),faint:hx('#9aa6b4'),
+      line:hx('#dde3ec'),line2:hx('#e8edf3'),panel2:hx('#f7f9fc'),grid:hx('#eef1f5'),grid3:hx('#e9edf3'),
+      blue:hx('#0090ca'),blue700:hx('#0072a3'),blue50:hx('#eef8fc'),rose:hx('#d23a52'),roseLine:hx('#f1c6cd'),
+      pos:hx('#1f9d57'),posBg:hx('#e7f6ed'),negBg:hx('#fbe9ec'),slate:hx('#5b6b80'),flatBg:hx('#eef1f5'),white:[255,255,255]};
+    const PALV=PALETTE.map(hx);
+    // same hexes the on-screen charts use: charts.jsx BAR_COLORS + charts3d.jsx PAL
+    const BARC=['#0090ca','#159fbf','#2bb3a3','#46b87e','#7cc35a','#f0a93b','#ef8049','#e85c69','#b65cc6','#6a6fd4'].map(hx);
+    const PAL3=['#0090ca','#159fbf','#2bb3a3','#46b87e','#7cc35a','#f0a93b','#ef8049','#e85c69','#e0679b','#b65cc6','#6a6fd4','#4f8df7'].map(hx);
+    const lift=(c,p)=>c.map(v=>Math.max(0,Math.min(255,v+p)));   // Bar3D lighten()
+    const mixW=(c,a)=>c.map(v=>Math.round(v*a+255*(1-a)));       // svg fill-opacity over white
+
     const ori=orient==='landscape'?'l':'p';
     const fmtP=pageSize==='A3'?'a3':pageSize==='Letter'?'letter':'a4';
     const doc=new J({orientation:ori,unit:'pt',format:fmtP,compress:true});
-    const PW=doc.internal.pageSize.getWidth(), PH=doc.internal.pageSize.getHeight();
-    const M=42, CW=PW-2*M, FOOT=PH-30;
-    const F=(style,size,color)=>{doc.setFont('helvetica',style);doc.setFontSize(size);const c=color||RGB.ink;doc.setTextColor(c[0],c[1],c[2]);};
-    const line=(x1,y1,x2,y2,c,w2)=>{const cc=c||RGB.line;doc.setDrawColor(cc[0],cc[1],cc[2]);doc.setLineWidth(w2||0.7);doc.line(x1,y1,x2,y2);};
-    const box=(x,y,w,h,fill,r)=>{doc.setFillColor(fill[0],fill[1],fill[2]);doc.roundedRect(x,y,w,h,r==null?4:r,r==null?4:r,'F');};
+    const PW=doc.internal.pageSize.getWidth();
+    // ---- preview space: coordinates in preview px, scaled uniformly onto pt.
+    // The pt page has the SAME aspect ratio as the preview page (PAGE_SIZES),
+    // so one scale factor maps the whole layout 1:1. ----
+    const S=PW/pageW, X=v=>v*S;
+    const MX=30, MT=28, CWx=pageW-60;              // preview page padding: 28px 30px
+    const FOOTY=pageMinH-MT-21;                    // footer border-top y (px)
+    const LIMIT=FOOTY-12;                          // content floor before a page break
     const genDate=new Date().toLocaleDateString('en-US');
 
-    // brand logo: rasterize the small SVG ONCE (tiny + fast; text stays vector)
-    const logo=await new Promise(res=>{
-      try{
-        const img=new Image();
-        img.onload=()=>{try{const c=document.createElement('canvas');const s=3;c.width=img.width*s||360;c.height=img.height*s||120;
-          c.getContext('2d').drawImage(img,0,0,c.width,c.height);res({d:c.toDataURL('image/png'),w:c.width/s,h:c.height/s});}catch(e){res(null);}};
-        img.onerror=()=>res(null); img.src='unico/logo.svg';
-        setTimeout(()=>res(null),2500);
-      }catch(e){res(null);}
-    });
-    const drawLogo=(x,y,h)=>{ if(!logo) return 0; const w=h*(logo.w/logo.h); try{doc.addImage(logo.d,'PNG',x,y,w,h);}catch(e){} return w; };
+    const font=(style,size,color)=>{doc.setFont('helvetica',style);doc.setFontSize(size*S);const c=color||C.ink;doc.setTextColor(c[0],c[1],c[2]);};
+    const T=(t,x,y,o)=>doc.text(String(t),X(x),X(y),o);
+    const tw=t=>doc.getTextWidth(String(t))/S;
+    const LN=(x1,y1,x2,y2,c,w2)=>{const cc=c||C.line;doc.setDrawColor(cc[0],cc[1],cc[2]);doc.setLineWidth((w2==null?1:w2)*S);doc.line(X(x1),X(y1),X(x2),X(y2));};
+    const FR=(x,y,w2,h2,c,rx,ry)=>{doc.setFillColor(c[0],c[1],c[2]);if(rx)doc.roundedRect(X(x),X(y),X(w2),X(h2),X(rx),X(ry==null?rx:ry),'F');else doc.rect(X(x),X(y),X(w2),X(h2),'F');};
+    const TRI=(x1,y1,x2,y2,x3,y3,c)=>{doc.setFillColor(c[0],c[1],c[2]);doc.triangle(X(x1),X(y1),X(x2),X(y2),X(x3),X(y3),'F');};
+    const CIRC=(x,y,r,fill,stroke,lw)=>{if(fill)doc.setFillColor(fill[0],fill[1],fill[2]);if(stroke){doc.setDrawColor(stroke[0],stroke[1],stroke[2]);doc.setLineWidth((lw||1)*S);}doc.circle(X(x),X(y),X(r),fill&&stroke?'FD':(fill?'F':'S'));};
+    const POLY=(pts,c)=>{if(pts.length<3)return;doc.setFillColor(c[0],c[1],c[2]);
+      doc.lines(pts.slice(1).map((p,i)=>[p[0]-pts[i][0],p[1]-pts[i][1]]),X(pts[0][0]),X(pts[0][1]),[S,S],'F',true);};
+    const PLINE=(pts,c,lw)=>{if(pts.length<2)return;doc.setDrawColor(c[0],c[1],c[2]);doc.setLineWidth((lw||2)*S);
+      try{doc.setLineCap('round');doc.setLineJoin('round');}catch(e){}
+      doc.lines(pts.slice(1).map((p,i)=>[p[0]-pts[i][0],p[1]-pts[i][1]]),X(pts[0][0]),X(pts[0][1]),[S,S],'S',false);};
+    const clip=(s,w2)=>{s=String(s==null?'–':s);if(tw(s)<=w2)return s;while(s.length>1&&tw(s+'…')>w2)s=s.slice(0,-1);return s+'…';};
+    // donut wedge (solid ring segment) via cubic-bezier arc approximation
+    const wedge=(cx,cy,rO,rI,a0,a1,c)=>{
+      if(a1-a0>=Math.PI*2-1e-4)a1=a0+Math.PI*2-1e-4;
+      const pt=(r,a)=>[cx+r*Math.cos(a),cy+r*Math.sin(a)];
+      const arc=(r,s0,e0)=>{const out=[];const n=Math.max(1,Math.ceil(Math.abs(e0-s0)/(Math.PI/3)));
+        for(let i=0;i<n;i++){const u=s0+(e0-s0)*i/n,v2=s0+(e0-s0)*(i+1)/n,k=(4/3)*Math.tan((v2-u)/4)*r;
+          out.push([[cx+r*Math.cos(u)-k*Math.sin(u),cy+r*Math.sin(u)+k*Math.cos(u)],[cx+r*Math.cos(v2)+k*Math.sin(v2),cy+r*Math.sin(v2)-k*Math.cos(v2)],pt(r,v2)]);}
+        return out;};
+      const start=pt(rO,a0);let cur=start;const segs=[];
+      arc(rO,a0,a1).forEach(([c1,c2,p])=>{segs.push([c1[0]-cur[0],c1[1]-cur[1],c2[0]-cur[0],c2[1]-cur[1],p[0]-cur[0],p[1]-cur[1]]);cur=p;});
+      const q=pt(rI,a1);segs.push([q[0]-cur[0],q[1]-cur[1]]);cur=q;
+      arc(rI,a1,a0).forEach(([c1,c2,p])=>{segs.push([c1[0]-cur[0],c1[1]-cur[1],c2[0]-cur[0],c2[1]-cur[1],p[0]-cur[0],p[1]-cur[1]]);cur=p;});
+      doc.setFillColor(c[0],c[1],c[2]);
+      doc.lines(segs,X(start[0]),X(start[1]),[S,S],'F',true);
+    };
+
+    // brand logo + dept icons: rasterized ONCE at 3x (tiny); all text stays vector
+    const logo=showLogo?await new Promise(res=>{try{
+      const img=new Image();
+      img.onload=()=>{try{const c=document.createElement('canvas');const s3=3;c.width=(img.width||120)*s3;c.height=(img.height||40)*s3;
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);res({d:c.toDataURL('image/png'),w:c.width/s3,h:c.height/s3});}catch(e){res(null);}};
+      img.onerror=()=>res(null);img.src='unico/logo.svg';setTimeout(()=>res(null),2500);
+    }catch(e){res(null);}}):null;
+    const drawLogo=(x,y,h2)=>{if(!logo)return 0;const w2=h2*(logo.w/logo.h);try{doc.addImage(logo.d,'PNG',X(x),X(y),X(w2),X(h2));}catch(e){}return w2;};
+    const iconPng=(d,hex)=>{try{const c=document.createElement('canvas');c.width=c.height=72;const g=c.getContext('2d');
+      g.scale(3,3);g.strokeStyle=hex;g.lineWidth=1.9;g.lineCap='round';g.lineJoin='round';
+      String(d).split('M').filter(Boolean).forEach(seg=>g.stroke(new Path2D('M'+seg)));return c.toDataURL('image/png');}catch(e){return null;}};
+    const drawIcon=(d,x,y,s3,hex)=>{const p=iconPng(d,hex);if(p)try{doc.addImage(p,'PNG',X(x),X(y),X(s3),X(s3));}catch(e){}};
+
+    // .tag chip — uppercase blue pill; returns its width
+    const tagChip=(x,y,txt)=>{font('bold',10.5,C.blue700);const t2=String(txt||'').toUpperCase();const w2=tw(t2)+16;
+      FR(x,y,w2,17,C.blue50,5);T(t2,x+8,y+12);return w2;};
+    // Delta ▲/▼/— trend chip (ui.jsx Delta), right edge at xr
+    const deltaChip=(xr,y,v)=>{const pos=v>0,neg=v<0;
+      const fg=pos?C.pos:neg?C.rose:C.slate,bg=pos?C.posBg:neg?C.negBg:C.flatBg;
+      font('bold',11,fg);const t2=Math.abs(v||0)+'%';const w2=9+tw(t2)+16;
+      FR(xr-w2,y,w2,18,bg,9);
+      const ax=xr-w2+7,ay=y+6.5;
+      if(pos)TRI(ax,ay+5,ax+3,ay,ax+6,ay+5,fg);else if(neg)TRI(ax,ay,ax+6,ay,ax+3,ay+5,fg);else FR(ax,ay+2,6,1.6,fg);
+      T(t2,ax+9,y+13);return w2;};
+    // mixed-weight word-wrapped paragraph (for the coverage note)
+    const richText=(segs,x,y,maxW,fs2,lh,color)=>{let cx2=x,cy2=y;
+      segs.forEach(([t2,b])=>{String(t2).split(/(\s+)/).forEach(wd=>{if(!wd)return;
+        font(b?'bold':'normal',fs2,color);const w2=tw(wd);
+        if(cx2+w2>x+maxW&&wd.trim()){cx2=x;cy2+=lh;}
+        if(!(!wd.trim()&&cx2===x)){T(wd,cx2,cy2);cx2+=w2;}});});
+      return cy2;};
 
     const pageHeader=()=>{
-      let x=M;
-      if(logo){ drawLogo(M,M-14,26); x=M+26*(logo.w/logo.h)+10; }
-      F('bold',12); doc.text(hdrTitle||'Report',x,M+2);
-      F('normal',7.5,RGB.muted); doc.text(((hdrSub?hdrSub+'  ·  ':'')+rangeLabel).toUpperCase(),x,M+13);
-      F('normal',7.5,RGB.faint); doc.text('Generated',PW-M,M-2,{align:'right'});
-      F('bold',9,RGB.ink2); doc.text(genDate,PW-M,M+9,{align:'right'});
-      line(M,M+22,PW-M,M+22,RGB.blue,1.4);
-      return M+40;
+      let x=MX;
+      if(logo){const w2=drawLogo(MX,MT,38);x=MX+w2+12;}
+      font('bold',14);T(hdrTitle||'Report',x,MT+16);
+      font('normal',10.5,C.muted);doc.text(((hdrSub?hdrSub+' · ':'')+rangeLabel).toUpperCase(),X(x),X(MT+30),{charSpace:0.4*S});
+      font('normal',10,C.faint);T('Generated',pageW-MX,MT+12,{align:'right'});
+      font('bold',10,C.ink2);T(genDate,pageW-MX,MT+25,{align:'right'});
+      LN(MX,MT+52,pageW-MX,MT+52,C.blue,2);
+      return MT+52+18;
     };
+    const newPage=()=>{doc.addPage(fmtP,ori);return pageHeader();};
+
+    // KPI tiles — panel-2, 3px accent, label + big number (preview: h=56)
     const kpiRow=(y,items)=>{
-      const gap=10, w=(CW-gap*(items.length-1))/items.length;
-      items.forEach((it,i)=>{
-        const x=M+i*(w+gap); box(x,y,w,44,RGB.panel,5);
-        doc.setFillColor(it.tone[0],it.tone[1],it.tone[2]); doc.rect(x,y,3,44,'F');
-        F('normal',6.6,RGB.muted); doc.text(String(it.label).toUpperCase(),x+10,y+13);
-        F('bold',14,RGB.ink); doc.text(String(it.value),x+10,y+32);
-      });
-      return y+44+14;
+      const gap=10,w2=(CWx-gap*(items.length-1))/items.length;
+      items.forEach((it,i)=>{const x=MX+i*(w2+gap);
+        FR(x,y,w2,56,C.panel2,7);FR(x,y,3,56,it.tone,1.5);
+        font('normal',9.5,C.muted);doc.text(String(it.label).toUpperCase(),X(x+14),X(y+19),{charSpace:0.3*S});
+        font('bold',18,C.ink);T(it.value,x+14,y+41);});
+      return y+56+16;
     };
-    const vBarChart=(x,y,w,h,pts,tone,lineMode)=>{
-      const max=Math.max(1,...pts.map(p=>Number(p.val)||0));
-      const n=pts.length, gap=n>14?3:6, bw=(w-gap*(n-1))/n;
-      line(x,y+h,x+w,y+h);
-      const lblEvery=n>13?2:1;
-      if(lineMode){
-        doc.setDrawColor(tone[0],tone[1],tone[2]); doc.setLineWidth(1.5);
-        let px=null,py=null;
-        pts.forEach((p,i)=>{const cx=x+i*(bw+gap)+bw/2, cy=y+h-((Number(p.val)||0)/max)*(h-16);
-          if(px!=null)doc.line(px,py,cx,cy); px=cx;py=cy;
-          doc.setFillColor(tone[0],tone[1],tone[2]); doc.circle(cx,cy,1.6,'F');});
-      }
-      pts.forEach((p,i)=>{
-        const v=Number(p.val)||0, bh=Math.max(1.5,(v/max)*(h-16)), bx=x+i*(bw+gap);
-        if(!lineMode){ doc.setFillColor(tone[0],tone[1],tone[2]); doc.roundedRect(bx,y+h-bh,bw,bh,1.5,1.5,'F'); }
-        if(i%lblEvery===0){ F('normal',6,RGB.faint); doc.text(String(p.label),bx+bw/2,y+h+9,{align:'center'}); }
-        if(!lineMode&&bw>13){ F('normal',6.4,RGB.ink2); doc.text(fmt(v),bx+bw/2,y+h-bh-3,{align:'center'}); }
-      });
-      return y+h+18;
+
+    /* ---------- vector charts: 1:1 ports of the on-screen SVG components ---------- */
+    const monthLbl=s=>String(s).replace(/ \d{4}| 20\d\d/,'').slice(0,6);
+    const gridLines=(ox,rw,y0,hgt)=>{[0,.25,.5,.75,1].forEach(g=>LN(ox,y0+hgt-20-g*(hgt-44),ox+rw,y0+hgt-20-g*(hgt-44),C.grid,1));};
+
+    // charts3d.jsx Bar3D (flat) — isometric bars, per-month palette, iso floor grid
+    const vBar3D=(y0,data,xKey,yKey,hgt)=>{
+      const n=Math.max(1,data.length),dx=13,dy=-9;
+      const step=Math.max(46,Math.min(78,640/n)),Wv=n*step+dx+10,baseY=hgt-26,bw=Math.min(30,step-22);
+      const max=Math.max(1,...data.map(d=>d[yKey]||0));
+      const s3=Math.min(CWx/Wv,1),ox=MX+(CWx-Wv*s3)/2,oy=y0+(hgt-hgt*s3)/2;
+      const gx=v=>ox+v*s3,gy=v=>oy+v*s3;
+      [0,.25,.5,.75,1].forEach(g=>{const gyv=baseY-g*(hgt-58);
+        LN(gx(0),gy(gyv),gx(n*step),gy(gyv),C.grid3,s3);
+        LN(gx(n*step),gy(gyv),gx(n*step+dx),gy(gyv+dy),C.grid,s3);});
+      data.forEach((d,i)=>{
+        const v=d[yKey]||0,bh=(v/max)*(hgt-58),bx=i*step+12,by=baseY-bh,c=PAL3[i%PAL3.length];
+        TRI(gx(bx+bw),gy(by),gx(bx+bw+dx),gy(by+dy),gx(bx+bw+dx),gy(baseY+dy),lift(c,-44));
+        TRI(gx(bx+bw),gy(by),gx(bx+bw+dx),gy(baseY+dy),gx(bx+bw),gy(baseY),lift(c,-44));
+        TRI(gx(bx),gy(by),gx(bx+dx),gy(by+dy),gx(bx+bw+dx),gy(by+dy),lift(c,46));
+        TRI(gx(bx),gy(by),gx(bx+bw+dx),gy(by+dy),gx(bx+bw),gy(by),lift(c,46));
+        doc.setFillColor(c[0],c[1],c[2]);const st3=lift(c,-18);doc.setDrawColor(st3[0],st3[1],st3[2]);doc.setLineWidth(0.5*S*s3);
+        doc.rect(X(gx(bx)),X(gy(by)),X(bw*s3),X(Math.max(bh,0.1)*s3),'FD');
+        if(v>0){font('bold',11*s3,C.ink);T(fmt(v),gx(bx+bw/2+dx/2),gy(by+dy-6),{align:'center'});}
+        font('normal',9.5*s3,C.faint);T(monthLbl(d[xKey]),gx(bx+bw/2),gy(hgt-6),{align:'center'});});
+      return y0+hgt;
     };
-    const compositionBar=(y,parts)=>{ // stacked horizontal bar + legend (vector "donut")
-      const tot=parts.reduce((s,p)=>s+p.value,0); if(!tot||parts.length<2) return y;
-      F('normal',6.6,RGB.muted); doc.text('COMPOSITION',M,y+8);
-      let x=M+70; const w=CW-70;
-      parts.forEach((p,i)=>{const pw2=w*(p.value/tot); doc.setFillColor(p.tone[0],p.tone[1],p.tone[2]); doc.rect(x,y,pw2,10,'F'); x+=pw2;});
-      let lx=M+70, ly=y+22;
-      parts.forEach((p)=>{
-        const t=p.label+'  '+fmt(p.value);
-        const tw=doc.getTextWidth(t)+16;
-        if(lx+tw>PW-M){lx=M+70;ly+=11;}
-        doc.setFillColor(p.tone[0],p.tone[1],p.tone[2]); doc.rect(lx,ly-5.5,5.5,5.5,'F');
-        F('normal',7,RGB.ink2); doc.text(t,lx+8,ly);
-        lx+=tw;
-      });
-      return ly+16;
+    // charts.jsx BarChart (flat) — rounded bars, per-bar colors, value labels
+    const vBarFlat=(y0,data,xKey,yKey,hgt)=>{
+      const n=Math.max(1,data.length),rw=Math.min(CWx,n*74),sx=rw/(n*54),ox=MX+(CWx-rw)/2;
+      const max=Math.max(1,...data.map(d=>d[yKey]||0));
+      gridLines(ox,rw,y0,hgt);
+      data.forEach((d,i)=>{
+        const v=d[yKey]||0,bh=(v/max)*(hgt-44),c=BARC[i%BARC.length];
+        const bx=ox+(i*54+14)*sx,bwv=26*sx,by=y0+hgt-20-bh;
+        doc.setFillColor(c[0],c[1],c[2]);
+        doc.roundedRect(X(bx),X(by),X(bwv),X(Math.max(bh,0.1)),X(Math.min(4,bwv/2)),X(Math.min(4,Math.max(bh,0.1)/2)),'F');
+        if(v>0){font('bold',10.5,c);T(fmt(v),bx+bwv/2,by-6,{align:'center'});}
+        font('normal',9.5,C.faint);T(monthLbl(d[xKey]),bx+bwv/2,y0+hgt-6,{align:'center'});});
+      return y0+hgt;
     };
-    const vTable=(y,headers,widths,rows,opts)=>{
-      const o=opts||{}; const rowH=o.rowH||14, headH=15;
-      const fs=o.fontSize||(headers.length>9?6.4:headers.length>7?7:8);
-      const xs=[]; let ax=M; widths.forEach(w2=>{xs.push(ax);ax+=w2;});
-      // Clip any string to its column width (long headers like "IPD CONVERSION"
-      // overlapped their neighbours when columns are narrow).
-      const clip=(s,w2)=>{s=String(s==null?'-':s);if(doc.getTextWidth(s)<=w2)return s;
-        while(s.length>1&&doc.getTextWidth(s+'…')>w2)s=s.slice(0,-1);return s+'…';};
+    // charts.jsx LineChart (flat, area) — soft area + line + points, no x labels
+    const vLine=(y0,data,xKey,yKey,tone,hgt)=>{
+      const n=data.length;
+      if(!n){font('normal',11,C.faint);T('No data',pageW/2,y0+hgt/2,{align:'center'});return y0+hgt;}
+      const viewW=Math.max(360,n*60),rw=Math.min(CWx,Math.max(140,n*80)),sx=rw/viewW,ox=MX+(CWx-rw)/2;
+      const max=Math.max(1,...data.map(d=>d[yKey]||0));
+      const px2=i=>ox+(26+(n<=1?(viewW-52)/2:(i/(n-1))*(viewW-52)))*sx;
+      const py2=v=>y0+hgt-22-(v/max)*(hgt-44);
+      [0,.25,.5,.75,1].forEach(g=>LN(ox+26*sx,y0+22+g*(hgt-44),ox+(viewW-26)*sx,y0+22+g*(hgt-44),C.grid,1));
+      const pts=data.map((d,i)=>[px2(i),py2(d[yKey]||0)]);
+      if(n>1){POLY(pts.concat([[pts[n-1][0],y0+hgt-22],[pts[0][0],y0+hgt-22]]),mixW(tone,0.12));PLINE(pts,tone,2.5);}
+      pts.forEach(p=>CIRC(p[0],p[1],3.2,C.white,tone,2.5));
+      return y0+hgt;
+    };
+    // charts-extra.jsx AreaTargetChart (flat) — area + dashed target + axes
+    const vArea=(y0,data,xKey,yKey,tone,target,hgt)=>{
+      const n=Math.max(1,data.length);
+      const viewW=Math.max(320,n*60),rw=Math.min(CWx,Math.max(160,n*80)),sx=rw/viewW,ox=MX+(CWx-rw)/2;
+      const pad=30,padT=18,plotH=hgt-42;
+      const max=Math.max(1,...data.map(d=>+d[yKey]||0),target!=null?target:0);
+      const px2=i=>ox+(pad+(n<=1?(viewW-60)/2:(i/(n-1))*(viewW-60)))*sx;
+      const py2=v=>y0+padT+plotH-(v/max)*plotH;
+      [0,.25,.5,.75,1].forEach(g=>{LN(ox+pad*sx,y0+padT+g*plotH,ox+(viewW-pad)*sx,y0+padT+g*plotH,C.grid,1);
+        font('normal',9,C.faint);T(fmt(Math.round(max*(1-g))),ox+(pad-6)*sx,y0+padT+g*plotH+3,{align:'right'});});
+      const pts=data.map((d,i)=>[px2(i),py2(+d[yKey]||0)]);
+      if(pts.length>1){POLY(pts.concat([[pts[pts.length-1][0],y0+padT+plotH],[pts[0][0],y0+padT+plotH]]),mixW(tone,0.12));PLINE(pts,tone,2.5);}
+      if(target!=null){try{doc.setLineDashPattern([5*S,4*S],0);}catch(e){}
+        LN(ox+pad*sx,py2(target),ox+(viewW-pad)*sx,py2(target),C.rose,1.5);
+        try{doc.setLineDashPattern([],0);}catch(e){}
+        font('bold',10,C.rose);T('target '+fmt(target),ox+(viewW-pad)*sx,py2(target)-4,{align:'right'});}
+      pts.forEach(p=>CIRC(p[0],p[1],3.2,C.white,tone,2.5));
+      data.forEach((d,i)=>{font('normal',9.5,C.faint);T(monthLbl(d[xKey]),px2(i),y0+hgt-6,{align:'center'});});
+      return y0+hgt;
+    };
+    // charts-extra.jsx ComboChart (flat) — legend, dual axes, bars + trend line
+    const vCombo=(y0,data,xKey,barKey,lineKey,barC,lineC,barLabel,lineLabel,hgt)=>{
+      const n=Math.max(1,data.length);
+      font('normal',11.5,C.ink2);
+      const t1=String(barLabel||barKey),t2=String(lineLabel||lineKey);
+      const lw2=11+6+tw(t1)+18+14+6+tw(t2);let lx=MX+Math.max(0,(CWx-lw2)/2);
+      FR(lx,y0+2,11,11,barC,3);T(t1,lx+17,y0+12);lx+=11+6+tw(t1)+18;
+      FR(lx,y0+6,14,3,lineC,1.5);T(t2,lx+20,y0+12);
+      y0+=21;
+      const isPct=/pct|percent|rate/.test(String(lineKey).toLowerCase());
+      const padL=42,padR=46,padT=22,plotH=hgt-46;
+      const step=Math.max(46,Math.min(82,560/n)),viewW=Math.max(320,n*step+padL+padR);
+      const rw=Math.min(CWx,Math.max(260,n*step+padL+padR)),sx=rw/viewW,ox=MX+(CWx-rw)/2;
+      const plotW=viewW-padL-padR,baseY=y0+padT+plotH;
+      const barMax=Math.max(1,...data.map(d=>+d[barKey]||0));
+      const lineMax=Math.max(isPct?100:1,...data.map(d=>+d[lineKey]||0));
+      const cx2=i=>ox+(padL+(n<=1?plotW/2:(i+0.5)*plotW/n))*sx;
+      const lpy=v=>y0+padT+plotH-(v/lineMax)*plotH;
+      [0,.25,.5,.75,1].forEach(g=>{const yy=baseY-g*plotH;
+        LN(ox+padL*sx,yy,ox+(viewW-padR)*sx,yy,C.grid,1);
+        font('normal',9,C.faint);T(fmt(Math.round(barMax*g)),ox+(padL-6)*sx,yy+3,{align:'right'});
+        font('normal',9,lineC);T(isPct?Math.round(lineMax*g)+'%':fmt(Math.round(lineMax*g)),ox+(viewW-padR+6)*sx,yy+3);});
+      const bw=Math.min(28,(plotW/n)*0.5)*sx;
+      data.forEach((d,i)=>{const v=+d[barKey]||0,bh=(v/barMax)*plotH;
+        doc.setFillColor(barC[0],barC[1],barC[2]);
+        doc.roundedRect(X(cx2(i)-bw/2),X(baseY-bh),X(bw),X(Math.max(bh,0.1)),X(Math.min(4,bw/2)),X(Math.min(4,Math.max(bh,0.1)/2)),'F');
+        if(v>0){font('bold',9.5,barC);T(fmt(v),cx2(i),baseY-bh-5,{align:'center'});}
+        font('normal',9.5,C.faint);T(monthLbl(d[xKey]),cx2(i),y0+hgt-6,{align:'center'});});
+      const pts=data.map((d,i)=>[cx2(i),lpy(+d[lineKey]||0)]);
+      PLINE(pts,lineC,2.5);pts.forEach(p=>CIRC(p[0],p[1],3.4,C.white,lineC,2.5));
+      return y0+hgt;
+    };
+    // charts.jsx GroupedBar — clustered series bars
+    const vGrouped=(y0,data,xKey,series,hgt)=>{
+      const n=Math.max(1,data.length),ns=Math.max(1,series.length);
+      const groupW=Math.max(48,ns*16+18),bw=Math.min(15,(groupW-14)/ns-3);
+      const rw=Math.min(CWx,n*Math.max(70,groupW)),sx=rw/(n*groupW),ox=MX+(CWx-rw)/2;
+      const max=Math.max(1,...data.flatMap(d=>series.map(s3=>d[s3.id]||0)));
+      gridLines(ox,rw,y0,hgt);
+      data.forEach((d,gi)=>{
+        series.forEach((s3,si)=>{const v=d[s3.id]||0,h2=(v/max)*(hgt-44);if(h2<=0)return;
+          const c=hx(s3.color),bx=ox+(gi*groupW+9+si*(bw+3))*sx,by=y0+hgt-20-h2;
+          doc.setFillColor(c[0],c[1],c[2]);
+          doc.roundedRect(X(bx),X(by),X(bw*sx),X(h2),X(Math.min(3,bw*sx/2)),X(Math.min(3,h2/2)),'F');});
+        font('normal',9.5,C.faint);T(monthLbl(d[xKey]),ox+(gi*groupW+groupW/2)*sx,y0+hgt-6,{align:'center'});});
+      return y0+hgt;
+    };
+    // charts.jsx StackedBar — stacked series, rounded top segment
+    const vStacked=(y0,data,xKey,series,hgt)=>{
+      const n=Math.max(1,data.length);
+      const step=Math.max(40,Math.min(70,600/n)),rw=Math.min(CWx,n*Math.max(64,step)),sx=rw/(n*step),ox=MX+(CWx-rw)/2;
+      const totals=data.map(d=>series.reduce((s3,k)=>s3+(d[k.id]||0),0));
+      const max=Math.max(1,...totals);
+      gridLines(ox,rw,y0,hgt);
+      data.forEach((d,gi)=>{
+        let acc=0;const bx=ox+(gi*step+(step-24)/2)*sx,bwv=24*sx;
+        series.forEach((s3,si)=>{const v=d[s3.id]||0,h2=(v/max)*(hgt-44);if(h2<=0)return;
+          const by=y0+hgt-20-acc-h2;acc+=h2;const c=hx(s3.color);
+          doc.setFillColor(c[0],c[1],c[2]);
+          if(si===series.length-1)doc.roundedRect(X(bx),X(by),X(bwv),X(h2),X(Math.min(3,bwv/2)),X(Math.min(3,h2/2)),'F');
+          else doc.rect(X(bx),X(by),X(bwv),X(h2),'F');});
+        font('normal',9.5,C.faint);T(monthLbl(d[xKey]),ox+(gi*step+step/2)*sx,y0+hgt-6,{align:'center'});});
+      return y0+hgt;
+    };
+    // charts-extra.jsx StackedPctBar — legend + 100% normalized stacks + % axis
+    const vPct=(y0,data,xKey,series,hgt)=>{
+      const items=series.map((s3,i)=>({t:String(s3.label||s3.id),c:hx(s3.color||PALETTE[i%PALETTE.length])}));
+      font('normal',11.5,C.ink2);
+      const totW=items.reduce((a,it)=>a+11+6+tw(it.t),0)+14*(items.length-1);
+      let lx=MX+Math.max(0,(CWx-totW)/2),ly=y0+2;
+      items.forEach(it=>{const w2=11+6+tw(it.t);
+        if(lx+w2>MX+CWx){lx=MX;ly+=16;}
+        FR(lx,ly,11,11,it.c,3);font('normal',11.5,C.ink2);T(it.t,lx+17,ly+9.5);lx+=w2+14;});
+      y0=ly+19;
+      const n=Math.max(1,data.length),padT=16,plotH=hgt-40;
+      const step=Math.max(40,Math.min(74,560/n)),viewW=Math.max(280,n*step);
+      const rw=Math.min(CWx,Math.max(260,n*Math.max(64,step))),sx=rw/viewW,ox=MX+(CWx-rw)/2;
+      const totals=data.map(d=>series.reduce((s3,k)=>s3+(+d[k.id]||0),0));
+      const baseY=y0+padT+plotH;
+      [0,.25,.5,.75,1].forEach(g=>{LN(ox,baseY-g*plotH,ox+rw,baseY-g*plotH,C.grid,1);
+        font('normal',9,C.faint);T(Math.round(g*100)+'%',ox+2*sx,baseY-g*plotH-2);});
+      data.forEach((d,gi)=>{const tot=totals[gi]||0,bwp=Math.min(26,step*0.5),bwv=bwp*sx,bx=ox+(gi*step+(step-bwp)/2)*sx;
+        let acc=0;
+        series.forEach((s3,si)=>{const v=+d[s3.id]||0,frac=tot?v/tot:0,h2=frac*plotH;if(h2<=0)return;
+          const by=baseY-acc-h2;acc+=h2;const c=hx(s3.color||PALETTE[si%PALETTE.length]);
+          doc.setFillColor(c[0],c[1],c[2]);
+          if(si===series.length-1)doc.roundedRect(X(bx),X(by),X(bwv),X(h2),X(Math.min(3,bwv/2)),X(Math.min(3,h2/2)),'F');
+          else doc.rect(X(bx),X(by),X(bwv),X(h2),'F');});
+        font('normal',9.5,C.faint);T(monthLbl(d[xKey]),ox+(gi*step+step/2)*sx,y0+hgt-6,{align:'center'});});
+      return y0+hgt;
+    };
+    // charts.jsx HBar / charts-extra.jsx HBarChart — label · track · value rows.
+    // Paginates per row (a 16-department ranking on landscape would otherwise
+    // run under the footer and clip past the page edge).
+    const vHBarRows=(y0,rows)=>{
+      const max=Math.max(1,...rows.map(r=>r.value));
+      let y=y0;
+      rows.forEach(r=>{
+        if(y+20>LIMIT)y=newPage();
+        font('bold',12,C.ink2);T(clip(r.label,116),MX,y+12);
+        const tx=MX+130,twd=CWx-130-64;
+        FR(tx,y+1.5,twd,15,C.grid,5);
+        if(r.value>0)FR(tx,y+1.5,Math.max(4,twd*(r.value/max)),15,r.color,5);
+        font('bold',12.5,C.ink);T(fmt(r.value),MX+CWx,y+12.5,{align:'right'});
+        y+=24;});
+      return y-9+4;
+    };
+    // charts.jsx Donut (flat) — wedge ring + centre value + legend
+    const vDonut=(x,y,size,thickness,data,centerValue,centerLabel)=>{
+      const total=data.reduce((s3,d)=>s3+d.value,0)||1;
+      const cx2=x+size/2,cy2=y+size/2,rO=size/2,rI=size/2-thickness;
+      let ang=-Math.PI/2;
+      data.forEach((d,i)=>{const frac=d.value/total,a1=ang+frac*2*Math.PI;
+        if(frac>0)wedge(cx2,cy2,rO,rI,ang,a1,hx(d.color||PALETTE[i%PALETTE.length]));ang=a1;});
+      if(centerValue!=null){font('bold',24,C.ink);T(centerValue,cx2,cy2+3,{align:'center'});
+        font('normal',10,C.muted);doc.text(String(centerLabel||'').toUpperCase(),X(cx2),X(cy2+16),{align:'center',charSpace:0.4*S});}
+    };
+    const donutLegend=(x,y,data)=>{
+      data.forEach((d,i)=>{const ry=y+i*21;
+        FR(x,ry,9,9,hx(d.color||PALETTE[i%PALETTE.length]),3);
+        font('normal',12,C.ink2);T(d.label,x+17,ry+9);});
+      // values right-aligned in a second pass so the column lines up
+      font('bold',12,C.ink);
+      const labW=Math.max(...data.map(d=>tw(d.label)));
+      const w2=9+8+labW+14+Math.max(...data.map(d=>tw(fmt(d.value))));
+      data.forEach((d,i)=>{font('bold',12,C.ink);T(fmt(d.value),x+w2,y+i*21+9,{align:'right'});});
+      return w2;
+    };
+    const donutLegendW=data=>{font('normal',12,C.ink2);
+      const labW=Math.max(...data.map(d=>tw(d.label)));
+      font('bold',12,C.ink);
+      return 9+8+labW+14+Math.max(...data.map(d=>tw(fmt(d.value))));};
+    // reportChartEl 'donut' style — centered donut + legend
+    const vDonutBlock=(y0,data,hgt)=>{
+      const legW=donutLegendW(data),size=188,legH=data.length*21-6;
+      const x0=MX+Math.max(0,(CWx-(size+18+legW))/2),blockH=Math.max(hgt,size);
+      vDonut(x0,y0+(blockH-size)/2,size,30,data,fmt(data.reduce((s3,d)=>s3+d.value,0)),'Total');
+      donutLegend(x0+size+18,y0+(blockH-legH)/2,data);
+      return y0+blockH;
+    };
+    // DeptPage composition strip — grey box, small donut + legend
+    const compositionStrip=(y0,data)=>{
+      const legH=data.length*21-6,boxH=Math.max(124,legH+20);
+      FR(MX,y0,CWx,boxH,C.panel2,9);
+      font('bold',10.5,C.muted);doc.text('COMPOSITION',X(MX+14),X(y0+boxH/2+3),{charSpace:0.3*S});
+      const dx0=MX+14+78+10;
+      vDonut(dx0,y0+(boxH-104)/2,104,20,data,null,null);
+      donutLegend(dx0+104+18,y0+(boxH-legH)/2,data);
+      return y0+boxH;
+    };
+
+    // theme.css table.tbl / .tbl.rpt — wrapped headers, right-aligned numeric cells
+    const vTable=(y,heads,widths,rows,o)=>{
+      o=o||{};
+      const fs2=o.fs||12.5,rpt=!!o.rpt;
+      const hfs=rpt?fs2:10.5,padX=rpt?6:12,padY=rpt?5:8;
+      const rowH=Math.round(fs2*1.3+padY*2),lh=hfs*1.18;
+      const xs=[];let ax=MX;widths.forEach(w2=>{xs.push(ax);ax+=w2;});
       const drawHead=(yy)=>{
-        box(M,yy,CW,headH,RGB.panel,0);
-        F('bold',fs-0.4,RGB.muted);
-        headers.forEach((h2,i)=>{const right=i>0; doc.text(clip(String(h2).toUpperCase(),widths[i]-8),right?xs[i]+widths[i]-4:xs[i]+4,yy+10,right?{align:'right'}:undefined);});
-        line(M,yy+headH,M+CW,yy+headH);
-        return yy+headH;
+        font('bold',hfs,C.muted);
+        const wrapped=heads.map((h2,i)=>doc.splitTextToSize(String(h2).toUpperCase(),X(Math.max(10,widths[i]-padX-4))));
+        const maxL=Math.max(1,...wrapped.map(w2=>w2.length));
+        const hH=Math.round(maxL*lh+padY*2+2);
+        FR(MX,yy,CWx,hH,C.panel2);
+        wrapped.forEach((lines,i)=>{const right=i>0;
+          const tx=right?xs[i]+widths[i]-padX:xs[i]+padX;
+          const sy=yy+hH-padY-3-(lines.length-1)*lh;
+          lines.forEach((ln2,li)=>T(ln2,tx,sy+li*lh,right?{align:'right'}:undefined));});
+        LN(MX,yy+hH,MX+CWx,yy+hH,C.line,1);
+        return yy+hH;
       };
+      // the initial header must also fit (with at least one row) above the footer,
+      // else it would paint across the footer rule and duplicate on the next page
+      {
+        font('bold',hfs,C.muted);
+        const wrapped0=heads.map((h2,i)=>doc.splitTextToSize(String(h2).toUpperCase(),X(Math.max(10,widths[i]-padX-4))));
+        const hH0=Math.round(Math.max(1,...wrapped0.map(w2=>w2.length))*lh+padY*2+2);
+        if(y+hH0+rowH>LIMIT)y=newPage();
+      }
       y=drawHead(y);
       rows.forEach((r,ri)=>{
-        if(y+rowH>FOOT-14){ doc.addPage(fmtP,ori); y=pageHeader(); y=drawHead(y); }
-        if(ri%2){ doc.setFillColor(251,253,255); doc.rect(M,y,CW,rowH,'F'); }
+        if(y+rowH>LIMIT){y=newPage();y=drawHead(y);}
         const tot=o.totalRow&&ri===rows.length-1;
+        if(tot){FR(MX,y,CWx,rowH,C.panel2);LN(MX,y,MX+CWx,y,C.line,2);}
         r.forEach((cell,ci)=>{
+          if(o.deltaCol===ci){deltaChip(xs[ci]+widths[ci]-padX,y+(rowH-18)/2,Number(cell)||0);return;}
           const right=ci>0;
-          F(tot||ci===0?'bold':'normal',fs,tot?RGB.ink:(ci===0?RGB.ink:RGB.ink2));
-          doc.text(clip(cell,widths[ci]-8),right?xs[ci]+widths[ci]-4:xs[ci]+4,y+rowH-4,right?{align:'right'}:undefined);
+          font(ci===0||tot?'bold':'normal',fs2,tot?C.ink:(ci===0?C.ink:C.ink2));
+          T(clip(cell,widths[ci]-padX-4),right?xs[ci]+widths[ci]-padX:xs[ci]+padX,y+rowH-padY-fs2*0.24,right?{align:'right'}:undefined);
         });
-        line(M,y+rowH,M+CW,y+rowH,RGB.line,0.4);
+        LN(MX,y+rowH,MX+CWx,y+rowH,C.line2,1);
         y+=rowH;
       });
-      return y+10;
+      return y;
     };
-    const sigBlock=(y)=>{
-      if(y>PH-140){ doc.addPage(fmtP,ori); y=pageHeader(); }
-      F('bold',7.5,RGB.muted); doc.text(('Authorisation · '+hospitalName).toUpperCase(),M,y+10);
-      const gap=26, w=(CW-2*gap)/3; y+=44;
+
+    // Authorisation sign-off (SigBlock) — includes its own 26px top margin
+    const sigBlockAt=(x0,wAll,y)=>{
+      y+=26;
+      font('bold',9.5,C.muted);doc.text(('Authorisation · '+hospitalName).toUpperCase(),X(x0),X(y+9),{charSpace:0.4*S});
+      const gap=30,w3=(wAll-2*gap)/3,ly=y+9+12+34;
       [['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]].forEach(([role,name],i)=>{
-        const x=M+i*(w+gap);
-        line(x,y,x+w,y,RGB.ink2,0.8);
-        F('bold',9,RGB.ink); doc.text(String(name||' '),x,y+12);
-        F('normal',7,RGB.muted); doc.text(role.toUpperCase(),x,y+22);
-      });
-      return y+34;
+        const x=x0+i*(w3+gap);
+        LN(x,ly,x+w3,ly,C.ink2,1);
+        font('bold',11,C.ink);T(name||' ',x,ly+14);
+        font('normal',9.5,C.muted);doc.text(role.toUpperCase(),X(x),X(ly+26),{charSpace:0.3*S});});
+      return ly+32;
+    };
+    const sigBlockPx=y=>sigBlockAt(MX,CWx,y);
+    const SIGH=113;
+
+    // reportChartEl equivalent — block height estimate + renderer per style
+    const chartH=(cs,fs2,donutData)=>{
+      if(cs==='horizontal')return Math.max(1,fs2.length)*24-5;
+      if(cs==='donut')return donutData.length>1?205:205;
+      if(cs==='combo'||cs==='pct')return 231;
+      if(cs==='grouped'||cs==='stacked')return 210;
+      if(cs==='area')return 200;
+      if(cs==='bar'||cs==='line')return 195;
+      return 205;
+    };
+    const drawChart=(cs,y,d,fs2,tone,donutData)=>{
+      const prim=d.primary;
+      if(cs==='bar')return vBarFlat(y,fs2,'month',prim,195);
+      if(cs==='line')return vLine(y,fs2,'full',prim,tone,195);
+      if(cs==='area'){const avg=fs2.length?Math.round(fs2.reduce((s3,r)=>s3+(r[prim]||0),0)/fs2.length):0;return vArea(y,fs2,'full',prim,tone,avg,200);}
+      if(cs==='combo'){const pctCol=d.cols.find(c=>c.pct);const lineKey=pctCol?pctCol.id:((d.cols.find(c=>c.id!==prim&&!c.pct)||{}).id||prim);
+        return vCombo(y,fs2,'month',prim,lineKey,tone,hx('#e08a1e'),(d.cols.find(c=>c.id===prim)||{}).label||'Value',(d.cols.find(c=>c.id===lineKey)||{}).label||'Trend',210);}
+      if(cs==='grouped'){const sr=reportSeries(d);return sr.length?vGrouped(y,fs2,'month',sr,210):vBarFlat(y,fs2,'month',prim,195);}
+      if(cs==='stacked'){const sr=reportSeries(d);return sr.length?vStacked(y,fs2,'month',sr,210):vBarFlat(y,fs2,'month',prim,195);}
+      if(cs==='pct'){const sr=reportSeries(d);return sr.length?vPct(y,fs2,'month',sr,210):vBarFlat(y,fs2,'month',prim,195);}
+      if(cs==='horizontal')return vHBarRows(y,fs2.map((r,i)=>({label:r.full,value:r[prim]||0,color:PALV[i%PALV.length]})));
+      if(cs==='donut')return donutData.length>1?vDonutBlock(y,donutData,205):vBar3D(y,fs2,'month',prim,205);
+      return vBar3D(y,fs2,'month',prim,205); // bar3d + default
     };
 
-    // ---------- cover ----------
-    const typeLabel={summary:'Department Summary Report',detail:'Detailed Statistical Report',compare:'Cross-Department Comparison',board:'Executive Board Report'}[type]||'Statistical Report';
-    if(showCover){
-      const rows=chosen.map(d=>{const fsr=fseriesOf(d);return {d,st:statOf(d,fsr),fs:fsr};});
-      const totAll=rows.reduce((s,r)=>s+r.st.total,0);
-      const mTot={}; rows.forEach(({d,fs})=>fs.forEach(r=>{mTot[r.month]=(mTot[r.month]||0)+(r[d.primary]||0);}));
-      const peakM=Object.keys(mTot).sort((a,b)=>mTot[b]-mTot[a])[0];
-      let y=PH*0.16;
-      if(logo){const lw=110*(logo.w/logo.h)>170?170:110*(logo.w/logo.h);drawLogo(PW/2-lw/2,y,110*(logo.h/logo.w)>60?60:110*(logo.h/logo.w));y+=(110*(logo.h/logo.w)>60?60:110*(logo.h/logo.w))+26;}
-      F('bold',10,RGB.blue); doc.text(String(hospitalName).toUpperCase(),PW/2,y,{align:'center'}); y+=30;
-      F('bold',26,RGB.ink); doc.text(hdrTitle||'Patient Statistics Report',PW/2,y,{align:'center'}); y+=18;
-      F('normal',10.5,RGB.muted); doc.text((hdrSub?hdrSub+' · ':'')+typeLabel,PW/2,y,{align:'center'}); y+=17;
-      F('bold',11,RGB.ink2); doc.text(rangeLabel,PW/2,y,{align:'center'}); y+=40;
-      const stats=[['Departments',String(chosen.length),TONES[0]],['Total patients',fmt(totAll),TONES[1]],['Peak month',peakM?(peakM.split('-')[0]+' 20'+peakM.split('-')[1]):'-',TONES[2]],['Months covered',String(pMonths.length),TONES[3]]];
-      const sw=CW/4;
-      stats.forEach((s2,i)=>{const x=M+i*sw+sw/2;
-        F('bold',19,s2[2]); doc.text(s2[1],x,y,{align:'center'});
-        F('normal',6.8,RGB.muted); doc.text(s2[0].toUpperCase(),x,y+12,{align:'center'});});
-      y+=44;
-      if(confidential){
-        const t='CONFIDENTIAL - FOR AUTHORISED RECIPIENTS ONLY'; F('bold',8,RGB.rose);
-        const tw=doc.getTextWidth(t)+28;
-        doc.setDrawColor(241,198,205); doc.setLineWidth(0.8); doc.roundedRect(PW/2-tw/2,y-11,tw,18,4,4,'S');
-        doc.text(t,PW/2,y+1,{align:'center'}); y+=30;
+    /* ---------- DeptPage ---------- */
+    const deptPage=(d,isLast)=>{
+      let y=pageHeader();
+      const fs2=fseriesOf(d),st=statOf(d,fs2);
+      const toneHex=PALETTE[(d.id.charCodeAt(0))%PALETTE.length],tone=hx(toneHex);
+      drawIcon(DEPT_ICON[d.id]||I.activity,MX,y+1,18,toneHex);
+      font('bold',15,C.ink);T(d.name,MX+27,y+15);
+      tagChip(MX+27+tw(d.name)+9,y+2,d.group||'');
+      if(fs2.length)deltaChip(pageW-MX,y+1,st.delta);
+      y+=31;
+      if(!fs2.length){
+        try{doc.setLineDashPattern([4*S,3*S],0);}catch(e){}
+        doc.setDrawColor(C.line[0],C.line[1],C.line[2]);doc.setLineWidth(1*S);
+        doc.roundedRect(X(MX),X(y),X(CWx),X(96),X(10),X(10),'S');
+        try{doc.setLineDashPattern([],0);}catch(e){}
+        font('normal',12.5,C.muted);
+        T('No data reported for '+d.name+' in the selected period ('+rangeLabel+').',MX+CWx/2,y+52,{align:'center'});
+        y+=96;
+        if(showSig&&isLast)sigBlockPx(y);
+        return;
       }
-      F('normal',7.5,RGB.faint); doc.text('Generated '+genDate,PW/2,y,{align:'center'}); y+=26;
-      if(sig.prepared||sig.reviewed||sig.approved) sigBlock(y-6);
-    }
+      if(fs2.length<pMonths.length){
+        const segs=[['Reported data covers ',false],[fs2[0].full+' – '+fs2[fs2.length-1].full,true],
+          [' ('+fs2.length+' of the '+pMonths.length+' months in the selected period); months without a report are not plotted.',false]];
+        font('normal',10,C.muted);
+        const lines=doc.splitTextToSize(segs.map(s3=>s3[0]).join(''),X(CWx-20)).length;
+        const boxH=lines*14+10;
+        FR(MX,y,CWx,boxH,C.panel2,6);
+        richText(segs,MX+10,y+15,CWx-20,10,14,C.muted);
+        y+=boxH+10;
+      }
+      // preview: all four KPI tiles carry the DEPARTMENT tone
+      y=kpiRow(y,[['Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Avg',fmt(st.avg)]]
+        .map(p=>({label:p[0],value:p[1],tone})));
+      const breakdown=d.cols.filter(c=>c.id!==d.primary&&!c.pct);
+      const donutData=breakdown.map((c,i)=>({label:c.label,value:fs2.reduce((s3,r)=>s3+(r[c.id]||0),0),color:PALETTE[i%PALETTE.length]})).filter(x=>x.value>0);
+      chartStyles.forEach(cs=>{
+        const capH=chartStyles.length>1?18:0;
+        const need=capH+chartH(cs,fs2,donutData)+12;
+        // break to a fresh page whenever the block doesn't fit — unless we're already
+        // at the top of one (an over-tall horizontal chart then paginates row-wise)
+        if(y+need>LIMIT&&y>MT+71)y=newPage();
+        y+=4;
+        if(chartStyles.length>1){font('bold',9.5,C.muted);doc.text(String(CHART_STYLE_LABEL[cs]||cs).toUpperCase(),X(MX),X(y+12),{charSpace:0.4*S});y+=18;}
+        y=drawChart(cs,y,d,fs2,tone,donutData);
+        y+=8;
+      });
+      if(donutData.length>1&&!chartStyles.includes('donut')){
+        const boxH=Math.max(124,donutData.length*21-6+20);
+        if(y+6+boxH>LIMIT)y=newPage();
+        y=compositionStrip(y+6,donutData);
+      }
+      const detailed=type==='detail';
+      const ncol=d.cols.length+1;
+      const tblFont=ncol>10?8:ncol>8?8.5:ncol>6?9.5:(detailed?10.5:11);
+      const rpt=detailed||ncol>7;
+      font('bold',tblFont);
+      const firstW=rpt?58:Math.min(120,Math.max(76,...fs2.map(r=>tw(detailed?r.month:r.full)+24)));
+      const widths=[firstW].concat(d.cols.map(()=>(CWx-firstW)/d.cols.length));
+      const rows=fs2.map(r=>[detailed?r.month:r.full].concat(d.cols.map(c=>r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id])))));
+      if(detailed)rows.push(['TOTAL'].concat(d.cols.map(c=>c.pct?'—':fmt(fs2.reduce((s3,r)=>s3+(r[c.id]||0),0)))));
+      y=vTable(y+14,['Month'].concat(d.cols.map(c=>c.label)),widths,rows,{fs:tblFont,rpt:rpt,totalRow:detailed});
+      if(showSig&&isLast){if(y+SIGH>LIMIT)y=newPage();sigBlockPx(y);}
+    };
 
-    // ---------- content pages ----------
-    const money=(d,r,c)=>r[c.id]==null?'-':(c.pct?r[c.id]+'%':fmt(r[c.id]));
-    if(type==='compare'||type==='board'){
-      if(showCover) doc.addPage(fmtP,ori); let y=pageHeader();
+    /* ---------- CoverPage ---------- */
+    const coverPage=()=>{
       const rows=chosen.map(d=>{const fsr=fseriesOf(d);return {d,st:statOf(d,fsr),fs:fsr};});
-      const totAll=rows.reduce((s,r)=>s+r.st.total,0);
-      F('bold',13); doc.text(type==='board'?'Executive Board Report':'Cross-Department Comparison',M,y); y+=8;
-      F('normal',8,RGB.muted); doc.text(rangeLabel+'  ·  '+rows.length+' departments',M,y+10); y+=24;
-      if(type==='board'){
-        const top=rows.slice().sort((a,b)=>b.st.total-a.st.total)[0];
-        const mTot={}; rows.forEach(({d,fs})=>fs.forEach(r=>{mTot[r.month]=(mTot[r.month]||0)+(r[d.primary]||0);}));
-        const trend=pMonths.filter(m=>mTot[m]!=null).map(m=>({label:m,val:mTot[m]}));
-        const peak=trend.slice().sort((a,b)=>b.val-a.val)[0];
-        y=kpiRow(y,[{label:'Total patients',value:fmt(totAll),tone:TONES[0]},{label:'Departments',value:String(rows.length),tone:TONES[1]},{label:'Busiest dept',value:top?top.d.short:'-',tone:TONES[2]},{label:'Peak month',value:peak?peak.label:'-',tone:TONES[3]}]);
-        if(trend.length>1){F('normal',6.6,RGB.muted);doc.text('HOSPITAL VOLUME - MONTHLY TREND',M,y+6);y=vBarChart(M,y+12,CW,120,trend,TONES[0]);}
+      const totAll=rows.reduce((s3,r)=>s3+r.st.total,0);
+      const mTot={};rows.forEach(rr=>rr.fs.forEach(r=>{mTot[r.month]=(mTot[r.month]||0)+(r[rr.d.primary]||0);}));
+      const peakM=Object.keys(mTot).sort((a,b)=>mTot[b]-mTot[a])[0];
+      const typeLabel={summary:'Department Summary Report',detail:'Detailed Statistical Report',compare:'Cross-Department Comparison',board:'Executive Board Report'}[type]||'Statistical Report';
+      const hasSig=!!(sig.prepared||sig.reviewed||sig.approved);
+      const totalH=(logo?92:0)+16+58+17+28+82+(confidential?54:0)+29+(hasSig?SIGH:0);
+      let y=MT+Math.max(24,(FOOTY-MT-totalH)/2+15);
+      if(logo){const w2=66*(logo.w/logo.h);drawLogo(pageW/2-w2/2,y,66);y+=92;}
+      font('bold',13,C.blue);doc.text(String(hospitalName).toUpperCase(),X(pageW/2),X(y+11),{align:'center',charSpace:1.5*S});y+=16;
+      font('bold',32,C.ink);T(hdrTitle||'Patient Statistics Report',pageW/2,y+40,{align:'center'});y+=58;
+      font('normal',13,C.muted);T((hdrSub?hdrSub+' · ':'')+typeLabel,pageW/2,y+12,{align:'center'});y+=17;
+      font('bold',14,C.ink2);T(rangeLabel,pageW/2,y+21,{align:'center'});y+=28;
+      const sw=CWx/4;
+      [['Departments',String(chosen.length),PALV[0]],['Total patients',fmt(totAll),PALV[1]],
+       ['Peak month',peakM?(peakM.split('-')[0]+' 20'+peakM.split('-')[1]):'—',PALV[2]],['Months covered',String(pMonths.length),PALV[3]]]
+      .forEach((s3,i)=>{const x=MX+i*sw+sw/2;
+        font('bold',26,s3[2]);T(s3[1],x,y+58,{align:'center'});
+        font('normal',9.5,C.muted);doc.text(String(s3[0]).toUpperCase(),X(x),X(y+72),{align:'center',charSpace:0.4*S});});
+      y+=82;
+      if(confidential){
+        font('bold',10.5,C.rose);const t2='CONFIDENTIAL — FOR AUTHORISED RECIPIENTS ONLY';const w2=tw(t2)+28;
+        doc.setDrawColor(C.roseLine[0],C.roseLine[1],C.roseLine[2]);doc.setLineWidth(1*S);
+        doc.roundedRect(X(pageW/2-w2/2),X(y+28),X(w2),X(26),X(6),X(6),'S');
+        T(t2,pageW/2,y+44.5,{align:'center'});y+=54;
       }
-      // ranking bars
-      const rank=rows.slice().sort((a,b)=>b.st.total-a.st.total);
-      const maxT=Math.max(1,...rank.map(r=>r.st.total));
-      F('normal',6.6,RGB.muted); doc.text('DEPARTMENT RANKING (PERIOD TOTAL)',M,y+6); y+=14;
-      rank.forEach(({d,st},i)=>{
-        if(y+15>FOOT-14){doc.addPage(fmtP,ori);y=pageHeader();}
-        const bw=(CW-150)*(st.total/maxT), tone=TONES[(d.id.charCodeAt(0))%TONES.length];
-        F('normal',7.5,RGB.ink2); doc.text(d.short,M,y+8);
-        doc.setFillColor(tone[0],tone[1],tone[2]); doc.roundedRect(M+56,y,Math.max(2,bw),9,2,2,'F');
-        F('bold',7.5,RGB.ink); doc.text(fmt(st.total),M+62+Math.max(2,bw),y+7.5);
-        y+=15;
-      });
-      y+=10;
-      y=vTable(y,['Department','Service line','Total','Share','Avg / month'],
-        [CW*0.30,CW*0.26,CW*0.16,CW*0.12,CW*0.16],
-        rank.map(({d,st})=>[d.name,d.group,fmt(st.total),totAll?Math.round(st.total*100/totAll)+'%':'-',fmt(st.avg)]));
-      if(showSig) sigBlock(y+4);
-    } else {
-      chosen.forEach((d,di)=>{
-        if(showCover||di>0) doc.addPage(fmtP,ori);
-        let y=pageHeader();
-        const fsr=fseriesOf(d), st=statOf(d,fsr), tone=TONES[(d.id.charCodeAt(0))%TONES.length];
-        F('bold',13); const nw=doc.getTextWidth(d.name); doc.text(d.name,M,y);
-        F('normal',7.5,RGB.muted); doc.text(d.group.toUpperCase(),M+nw+12,y);
-        y+=16;
-        if(fsr.length===0){
-          F('normal',9,RGB.muted); doc.text('No data reported for '+d.name+' in the selected period ('+rangeLabel+').',M,y+18);
-          if(showSig&&di===chosen.length-1) sigBlock(y+40);
-          return;
-        }
-        if(fsr.length<pMonths.length){F('normal',7,RGB.faint);doc.text('Reported data covers '+fsr[0].full+' - '+fsr[fsr.length-1].full+' ('+fsr.length+' of '+pMonths.length+' months in the selected period).',M,y);y+=12;}
-        y=kpiRow(y,[{label:'Latest',value:fmt(st.latest[d.primary]||0),tone:tone},{label:'Total',value:fmt(st.total),tone:TONES[1]},{label:'Peak',value:fmt(st.peak),tone:TONES[2]},{label:'Avg',value:fmt(st.avg),tone:TONES[3]}]);
-        y=vBarChart(M,y,CW,110,fsr.map(r=>({label:r.month,val:r[d.primary]||0})),tone,chartStyles.includes('line')&&!chartStyles.includes('bar3d'));
-        const breakdown=d.cols.filter(c=>c.id!==d.primary&&!c.pct)
-          .map((c,i)=>({label:c.label,value:fsr.reduce((s,r)=>s+(r[c.id]||0),0),tone:TONES[i%TONES.length]})).filter(p=>p.value>0);
-        y=compositionBar(y,breakdown)+4;
-        const widths=[70].concat(d.cols.map(()=>(CW-70)/d.cols.length));
-        const rows=fsr.map(r=>[type==='detail'?r.month:r.full].concat(d.cols.map(c=>money(d,r,c))));
-        if(type==='detail') rows.push(['TOTAL'].concat(d.cols.map(c=>c.pct?'-':fmt(fsr.reduce((s,r)=>s+(r[c.id]||0),0)))));
-        y=vTable(y,['Month'].concat(d.cols.map(c=>c.label)),widths,rows,{totalRow:type==='detail'});
-        if(showSig&&di===chosen.length-1) sigBlock(y+2);
-      });
-    }
+      font('normal',10,C.faint);T('Generated '+genDate,pageW/2,y+24,{align:'center'});y+=29;
+      if(hasSig)sigBlockAt(Math.max(MX,(pageW-600)/2),Math.min(600,CWx),y);
+    };
+
+    /* ---------- ComparePage ---------- */
+    const comparePage=()=>{
+      let y=pageHeader();
+      const rows=chosen.map(d=>{const fsr=fseriesOf(d);return {d,st:statOf(d,fsr)};});
+      font('bold',15,C.ink);T('Cross-department comparison · '+chosen.length+' departments',MX,y+14);y+=31;
+      const hbar=rows.map(rr=>({label:rr.d.short,value:rr.st.total,color:PALV[(rr.d.id.charCodeAt(0))%PALV.length]})).sort((a,b)=>b.value-a.value);
+      y=vHBarRows(y,hbar)+16;
+      const widths=[CWx*0.22,CWx*0.18,CWx*0.11,CWx*0.11,CWx*0.11,CWx*0.11,CWx*0.16];
+      y=vTable(y,['Department','Service line','Latest','Total','Peak','Avg','Trend'],widths,
+        rows.map(rr=>[rr.d.name,rr.d.group,fmt(rr.st.latest[rr.d.primary]||0),fmt(rr.st.total),fmt(rr.st.peak),fmt(rr.st.avg),rr.st.delta]),
+        {fs:11.5,deltaCol:6});
+      if(showSig){if(y+SIGH>LIMIT)y=newPage();sigBlockPx(y);}
+    };
+
+    /* ---------- BoardPage ---------- */
+    const boardPage=()=>{
+      let y=pageHeader();
+      const rows=chosen.map(d=>{const fsr=fseriesOf(d);return {d,st:statOf(d,fsr),fs:fsr};});
+      const totAll=rows.reduce((s3,r)=>s3+r.st.total,0);
+      const top=rows.slice().sort((a,b)=>b.st.total-a.st.total)[0];
+      const mTot={};rows.forEach(rr=>rr.fs.forEach(r=>{mTot[r.month]=(mTot[r.month]||0)+(r[rr.d.primary]||0);}));
+      const trend=pMonths.filter(m=>mTot[m]!=null).map(m=>({label:m.split('-')[0],val:mTot[m]}));
+      const peakM=trend.slice().sort((a,b)=>b.val-a.val)[0];
+      drawIcon(I.doc,MX,y+1,18,PALETTE[0]);
+      font('bold',15,C.ink);T('Executive Board Report',MX+27,y+15);
+      tagChip(MX+27+tw('Executive Board Report')+9,y+2,rangeLabel);
+      font('bold',10.5,C.blue700);
+      tagChip(pageW-MX-(tw(String(rows.length)+' DEPARTMENTS')+16),y+2,rows.length+' departments');
+      y+=31;
+      y=kpiRow(y,[['Total patients',fmt(totAll)],['Departments',String(rows.length)],['Busiest dept',top?top.d.short:'—'],['Peak month',peakM?peakM.label:'—']]
+        .map((p,i)=>({label:p[0],value:p[1],tone:PALV[i%PALV.length]})));
+      if(trend.length>1){
+        font('bold',9.5,C.muted);doc.text('HOSPITAL VOLUME — MONTHLY TREND',X(MX),X(y+12),{charSpace:0.4*S});y+=18;
+        y=vBarFlat(y,trend,'label','val',170)+12;
+      }
+      font('bold',9.5,C.muted);doc.text('DEPARTMENT RANKING (PERIOD TOTAL)',X(MX),X(y+12),{charSpace:0.4*S});y+=20;
+      const hbar=rows.map(rr=>({label:rr.d.short,value:rr.st.total,color:PALV[(rr.d.id.charCodeAt(0))%PALV.length]})).sort((a,b)=>b.value-a.value);
+      y=vHBarRows(y,hbar)+14;
+      const ranked=rows.slice().sort((a,b)=>b.st.total-a.st.total);
+      const widths=[CWx*0.24,CWx*0.20,CWx*0.13,CWx*0.11,CWx*0.16,CWx*0.16];
+      y=vTable(y,['Department','Service line','Total','Share','Avg / month','Trend'],widths,
+        ranked.map(rr=>[rr.d.name,rr.d.group,fmt(rr.st.total),totAll?Math.round(rr.st.total*100/totAll)+'%':'—',fmt(rr.st.avg),rr.st.delta]),
+        {fs:11,deltaCol:5});
+      if(showSig){if(y+SIGH>LIMIT)y=newPage();sigBlockPx(y);}
+    };
+
+    /* ---------- assemble ---------- */
+    if(showCover&&chosen.length>0)coverPage();
+    if(type==='compare'){if(showCover)doc.addPage(fmtP,ori);comparePage();}
+    else if(type==='board'){if(showCover)doc.addPage(fmtP,ori);boardPage();}
+    else chosen.forEach((d,di)=>{if(showCover||di>0)doc.addPage(fmtP,ori);deptPage(d,di===chosen.length-1);});
 
     // footers on every page (needs the final page count)
     const total=doc.getNumberOfPages();
     for(let p=1;p<=total;p++){
       doc.setPage(p);
-      line(M,FOOT,PW-M,FOOT);
-      F('normal',7,RGB.faint);
-      doc.text(hospitalName,M,FOOT+11);
-      doc.text('Page '+p+' of '+total,PW/2,FOOT+11,{align:'center'});
-      doc.text((footerNote?footerNote+' · ':'')+(confidential?'Confidential · ':'')+pageSize+' '+orient,PW-M,FOOT+11,{align:'right'});
+      LN(MX,FOOTY,pageW-MX,FOOTY,C.line,1);
+      font('normal',9.5,C.faint);
+      T(hospitalName,MX,FOOTY+16);
+      T('Page '+p+' of '+total,pageW/2,FOOTY+16,{align:'center'});
+      T((footerNote?footerNote+' · ':'')+(confidential?'Confidential · ':'')+pageSize+' '+orient,pageW-MX,FOOTY+16,{align:'right'});
     }
     doc.save('UNICO-statistics-'+type+'-'+new Date().toISOString().slice(0,10)+'.pdf');
   };
@@ -848,6 +1213,8 @@ function Reports({depts}){
     // razor-sharp at any zoom, ~100 KB, and ~1 s even for a 17-page all-departments
     // run (the raster path below needed 25-40 s of html2canvas captures).
     const J0=window.jspdf&&window.jspdf.jsPDF;
+    // Vector PDF reproduces ALL report types (summary / detailed / comparison / board)
+    // page-for-page as the live preview shows them.
     if(J0){
       setExporting('Building PDF…'); setNote(null);
       try{

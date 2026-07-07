@@ -166,10 +166,18 @@ function qtrStatus(ind, Q, fy){ return qStatus(ind, qtrSrc(ind, fy)[Q]); }
    no monthly entries at all (pure quarter-recorded data legitimately spreads across its
    3 months). A partially-reported quarter must return null for its gap months — the
    rollup already CONTAINS the reported months, so painting it into a gap month showed
-   a phantom duplicated total (e.g. Jan=2, Feb=3, Mar unreported → Mar showed "5"). */
-function qcCellVal(ind, m){
+   a phantom duplicated total (e.g. Jan=2, Feb=3, Mar unreported → Mar showed "5").
+   `spread===false` = MONTH-STRICT: never paint a quarter rollup into a month cell.
+   Month-granular renderers (per-month table cells, heat grids, CSV/Word/PDF month
+   columns) pass false, so a month with NO submission always shows "·" — a quarterly
+   "0" no longer fabricates six green zero cells for months nobody reported (a real
+   submitted monthly 0 still renders: monthRaw returns the Number 0, not null).
+   Aggregates (deptStat, KPIs, hasData, countBreaches) keep the default quarter-aware
+   behaviour so quarter-recorded data still counts in totals and compliance rates. */
+function qcCellVal(ind, m, spread){
   const v = monthRaw(ind, m[0]);
   if(v!=null) return v;
+  if(spread===false) return null;
   const fy = fyOfKey(m[0]);
   if(fy==null || !m[2]) return null;
   const qMonths = fyAxis(fy).filter(r=>r[2]===m[2]);
@@ -189,8 +197,12 @@ function deptStat(d, months){
   if(!Array.isArray(months)) months = MONTHS; // guards .filter/.map callers passing the index
 
   let ok=0, breach=0, na=0;
+  // Quarter-AWARE status (qcCellVal) so aggregates agree with the cells the tables paint:
+  // a quarter-only breach that shows as red cells now also counts in Zero-Defect %/breaches
+  // instead of being silently dropped as "not reported". Degrades to the monthly value when
+  // the month tuple carries no quarter tag, so non-report callers are unchanged.
   (d.indicators||[]).forEach(ind => months.forEach(m => {
-    const s = monthStatus(ind, m[0]);
+    const s = qStatus(ind, qcCellVal(ind, m));
     if(s==='ok') ok++; else if(s==='breach') breach++; else na++;
   }));
   return { ok, breach, na, rate: (ok+breach) ? Math.round(ok*100/(ok+breach)) : 100 };
@@ -208,7 +220,7 @@ function hasData(ind, months){
 function countBreaches(ind, months){
   if(!Array.isArray(months)) months = MONTHS; // guards .filter/.map callers passing the index
 
-  let n=0; months.forEach(m => { if(monthStatus(ind, m[0])==='breach') n++; }); return n;
+  let n=0; months.forEach(m => { if(qStatus(ind, qcCellVal(ind, m))==='breach') n++; }); return n;
 }
 
 function fmtVal(ind, v){
@@ -1014,8 +1026,8 @@ function qcReportHTML(depts, months, fyIn, opts){
       +'<div style="font-family:Calibri;color:#555;margin-bottom:6px">Zero-defect: <b>'+st.rate+'%</b> · Breaches: <b style="color:#d23a52">'+st.breach+'</b> · Indicators: '+((d.indicators||[]).length)+'</div>';
     const th=['Indicator','Benchmark'].concat(MONTHS.map(m=>m[1].split(' ')[0])).map(h=>'<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">'+h+'</th>').join('');
     const trs=(d.indicators||[]).map((ind,i)=>{
-      // month value with the same quarter fallback the on-screen pages use
-      const cells=[qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m); const s=qStatus(ind,v); const disp=s==='na'?'—':fmtVal(ind,v); const col=s==='breach'?'#d23a52':s==='ok'?'#1f9d57':'#9aa6b4'; return '<span style="color:'+col+';font-weight:600">'+qcEsc(disp)+'</span>'; }));
+      // month-strict like the on-screen cells: an unsubmitted month exports as '—'
+      const cells=[qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m,false); const s=qStatus(ind,v); const disp=s==='na'?'—':fmtVal(ind,v); const col=s==='breach'?'#d23a52':s==='ok'?'#1f9d57':'#9aa6b4'; return '<span style="color:'+col+';font-weight:600">'+qcEsc(disp)+'</span>'; }));
       return '<tr style="background:'+(i%2?'#eef6fb':'#fff')+'">'+cells.map((c,ci)=>'<td style="border:1px solid #b9c6d2;padding:4px 7px;font-family:Calibri;font-size:10pt;'+(ci>1?'text-align:center':'')+'">'+c+'</td>').join('')+'</tr>';
     }).join('');
     body+='<table border="1" style="border-collapse:collapse"><thead><tr>'+th+'</tr></thead><tbody>'+trs+'</tbody></table>';
@@ -1034,7 +1046,7 @@ function qcExport(depts, fmt){
   const MONTHS=fyAxis(defaultFy(depts));
   if(fmt==='csv'){
     const rows=[['Department','Indicator','Benchmark','Goal'].concat(MONTHS.map(m=>m[1]))];
-    depts.forEach(d=>(d.indicators||[]).forEach(ind=>{ rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection==='higher_is_better'?'higher is better':'lower is better'].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); }))); }));
+    depts.forEach(d=>(d.indicators||[]).forEach(ind=>{ rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection==='higher_is_better'?'higher is better':'lower is better'].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m,false); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); }))); }));
     rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','Date of incident','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
     depts.forEach(d=>qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,MONTHS)).forEach(r=>{ const x=r.x; rows.push([d.name, r.ind, r.month, x.incidentDate||'', x.uhid||'', x.patientName||'', x.age||'', x.gender||'', x.diagnosis||'', x.details||'', x.finding||'', x.corrective||'', x.preventive||'']); }));
     qcDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), base+'.csv','text/csv;charset=utf-8'); return;
@@ -1204,6 +1216,35 @@ function qcChartRows(ind, months){
   const vals=qcMonthVals(ind, months);
   return months.map((m,i)=>{ const v=vals[i]; return {mon:m[1].split(' ')[0], mfull:m[1], q:m[2], val:v==null?0:v, has:v!=null, bench}; });
 }
+/* Department-level series for SUMMARY pages: zero-defect % per month — the share of
+   reported indicators on benchmark, the SAME metric the KPI cards / heatmap / ranking
+   use — instead of one arbitrary indicator's raw values (mixed units, and a quarter
+   rollup used to repeat flat across Jan/Feb/Mar, e.g. the meaningless 58.82 bars).
+   Month-strict: only months with real monthly submissions plot. When the period holds
+   ONLY quarter rollups, falls back to one point per QUARTER so quarter-recorded
+   departments still chart. Row shape matches qcChartRows so every style can plot it. */
+function qcDeptSummaryRows(d, months){
+  months = months || MONTHS;
+  const inds=d.indicators||[];
+  const mRows=months.map(m=>{
+    let ok=0, breach=0;
+    inds.forEach(ind=>{ const s=monthStatus(ind,m[0]); if(s==='ok')ok++; else if(s==='breach')breach++; });
+    const tot=ok+breach;
+    return {mon:m[1].split(' ')[0], mfull:m[1], q:m[2], val:tot?Math.round(ok*100/tot):0, has:tot>0, bench:90};
+  });
+  if(mRows.some(r=>r.has)) return mRows;
+  const seen=new Set(), qRows=[];
+  months.forEach(m=>{
+    if(!m[2]) return;
+    const fy=fyOfKey(m[0]), qk=fy+':'+m[2];
+    if(seen.has(qk)) return; seen.add(qk);
+    let ok=0, breach=0;
+    inds.forEach(ind=>{ const s=qStatus(ind, qtrRaw(ind, m[2], fy)); if(s==='ok')ok++; else if(s==='breach')breach++; });
+    const tot=ok+breach;
+    qRows.push({mon:m[2], mfull:m[2]+" '"+String(fy).slice(-2), q:m[2], val:tot?Math.round(ok*100/tot):0, has:tot>0, bench:90});
+  });
+  return qRows;
+}
 /* Representative indicator for a department: worst-performing with data, else first with data, else [0].
    `months` = the REPORT's axis — without it this judged "has data"/"worst" against the
    current calendar year, so past-year reports charted the wrong indicator. */
@@ -1244,21 +1285,28 @@ function qcStatusComp(d, months){
     {label:'Not reported', value:st.na||0, color:'#c3ccd8'},
   ].filter(x=>x.value>0);
 }
-/* Chart dispatcher — every element uses window.* (cross-IIFE) + flat for print. */
-function qcChartEl(d, style, ind, tone, months){
+/* Chart dispatcher — every element uses window.* (cross-IIFE) + flat for print.
+   `summary` = department-level mode (Summary pages): the single-series styles plot
+   qcDeptSummaryRows (zero-defect % vs a 90% target) instead of one indicator. */
+function qcChartEl(d, style, ind, tone, months, summary){
   months = months || MONTHS;
-  if(!ind) return <div style={{height:150,display:'grid',placeItems:'center',color:P.faint,fontSize:12}}>No data</div>;
-  const rows=qcChartRows(ind, months); const bench=rows.length?rows[0].bench:null;
+  if(!summary && !ind) return <div style={{height:150,display:'grid',placeItems:'center',color:P.faint,fontSize:12}}>No data</div>;
+  // Plot only REPORTED months — an unreported interior month must not chart as a 0 bar/point
+  // (a false "dip"). Real reported zeros keep has=true and stay; only true gaps drop.
+  const rows=(summary?qcDeptSummaryRows(d, months):qcChartRows(ind, months)).filter(r=>r.has);
+  const bench=rows.length?rows[0].bench:null;
+  if(!rows.length) return <div style={{height:150,display:'grid',placeItems:'center',color:P.faint,fontSize:12}}>No reported data to chart</div>;
   const W=window;
+  const vLabel=summary?'Zero-defect %':ind.name;
   if(style==='bar')  return W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true});
   if(style==='line') return W.LineChart({data:rows, x:'mon', y:'val', height:195, color:tone, area:false, flat:true});
   if(style==='area') return bench!=null ? W.AreaTargetChart({data:rows, x:'mon', y:'val', target:bench, height:195, color:tone, flat:true})
                                         : W.LineChart({data:rows, x:'mon', y:'val', height:195, color:tone, area:true, flat:true});
-  if(style==='combo') return W.ComboChart({data:rows, x:'mon', barKey:'val', lineKey:'bench', barColor:tone, lineColor:P.amber, barLabel:ind.name, lineLabel:'Benchmark', height:210, flat:true});
+  if(style==='combo') return W.ComboChart({data:rows, x:'mon', barKey:'val', lineKey:'bench', barColor:tone, lineColor:P.amber, barLabel:vLabel, lineLabel:summary?'Target':'Benchmark', height:210, flat:true});
   if(style==='grouped'){ const sr=qcIndSeries(d, months); return sr.length>1 ? W.GroupedBar({data:qcDeptCompareRows(d, months), x:'mon', series:sr, height:210}) : W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true}); }
   if(style==='stacked'){ const sr=qcIndSeries(d, months); return sr.length>1 ? W.StackedBar({data:qcDeptCompareRows(d, months), x:'mon', series:sr, height:210}) : W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true}); }
   if(style==='pct'){ const sr=qcIndSeries(d, months); return sr.length>1 ? W.StackedPctBar({data:qcDeptCompareRows(d, months), x:'mon', series:sr, height:210, flat:true}) : W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true}); }
-  if(style==='horizontal'){ const vals=qcMonthVals(ind, months); return W.HBar({rows:months.map((m,i)=>({label:m[1], value:vals[i]||0, color:tone})), height:Math.max(150,months.length*22)}); }
+  if(style==='horizontal') return W.HBar({rows:rows.map(r=>({label:r.mfull, value:r.val, color:tone})), height:Math.max(150,rows.length*22)});
   if(style==='donut'){ const dd=qcDonutData(d, months); const pie=dd.length>1?dd:qcStatusComp(d, months);
       return <div style={{display:'grid',placeItems:'center',minHeight:205}}>{W.Donut({data:pie, size:188, centerValue:pie.reduce((s,x)=>s+x.value,0), centerLabel:dd.length>1?'Breaches':'Ind-months', flat:true})}</div>; }
   // bar3d + default — multi:true colors each MONTH separately (matches the stats reports)
@@ -1384,7 +1432,7 @@ function QCHeatGrid({d, months}){
           : inds.map(ind=>(
           <tr key={ind.id}>
             <td style={{padding:'3px 8px',textAlign:'left',fontWeight:600,color:P.ink,fontSize:9.5}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
-            {months.map(m=>{ const v=qcCellVal(ind,m); const s=qStatus(ind,v); const c=qcHeatColors(s);
+            {months.map(m=>{ const v=qcCellVal(ind,m,false); const s=qStatus(ind,v); const c=qcHeatColors(s);
               return <td key={m[0]} style={{padding:'3px 2px',textAlign:'center'}}><span title={ind.name+' · '+m[1]+' · '+(s==='na'?'not reported':s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:22,height:24,borderRadius:5,background:c.bg,color:c.col,fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{s==='na'?'·':fmtVal(ind,v)}</span></td>;
             })}
           </tr>
@@ -1837,16 +1885,28 @@ function QCReportBuilder({depts}){
   /* period -> months (12-entry FY axis, filtered) */
   const pMonths=(()=>{
     const q=Q=>MONTHS.filter(m=>m[2]===Q);
-    if(period.mode==='q1')    return q('Q1');
-    if(period.mode==='q2')    return q('Q2');
-    if(period.mode==='q3')    return q('Q3');
-    if(period.mode==='q4')    return q('Q4');
-    if(period.mode==='h1')    return MONTHS.slice(0,6);
-    if(period.mode==='h2')    return MONTHS.slice(6);
-    if(period.mode==='last3') return MONTHS.slice(-3);
-    if(period.mode==='custom'){ const a=MONTHS.findIndex(m=>m[0]===period.from), b=MONTHS.findIndex(m=>m[0]===period.to);
-      if(a>=0&&b>=0){ const lo=Math.min(a,b),hi=Math.max(a,b); return MONTHS.slice(lo,hi+1); } return MONTHS; }
-    return MONTHS;
+    let base;
+    if(period.mode==='q1')         base=q('Q1');
+    else if(period.mode==='q2')    base=q('Q2');
+    else if(period.mode==='q3')    base=q('Q3');
+    else if(period.mode==='q4')    base=q('Q4');
+    else if(period.mode==='h1')    base=MONTHS.slice(0,6);
+    else if(period.mode==='h2')    base=MONTHS.slice(6);
+    else if(period.mode==='last3') base=MONTHS.slice(-3);
+    else if(period.mode==='custom'){ const a=MONTHS.findIndex(m=>m[0]===period.from), b=MONTHS.findIndex(m=>m[0]===period.to);
+      base=(a>=0&&b>=0)?MONTHS.slice(Math.min(a,b),Math.max(a,b)+1):MONTHS; }
+    else base=MONTHS;
+    // Trim leading/trailing months with NO reported data across the chosen departments, so
+    // the report (table, charts, KPIs) STOPS at the last reported month instead of padding
+    // empty future months — a mid-year "Full Year" run now shows Jan–Jun, not Jan–Dec of
+    // blanks. If the whole span is empty (e.g. a future quarter picked on purpose) it is
+    // left intact so the report still renders the requested period.
+    if(!base.length) return base;
+    const has=m=>chosen.some(d=>(d.indicators||[]).some(ind=>qcCellVal(ind,m)!=null));
+    let lo=0,hi=base.length-1;
+    while(lo<hi&&!has(base[lo]))lo++;
+    while(hi>lo&&!has(base[hi]))hi--;
+    return has(base[lo])?base.slice(lo,hi+1):base;
   })();
   const rangeLabel = pMonths.length ? (pMonths[0][1]+' – '+pMonths[pMonths.length-1][1]) : fyLabelOf(fy);
 
@@ -1963,7 +2023,7 @@ function QCReportBuilder({depts}){
 
   /* month-wise table cell */
   const MonthCell=({ind,m})=>{
-    const v=qcCellVal(ind,m);
+    const v=qcCellVal(ind,m,false); // month-strict: unsubmitted month = '·', never a quarter rollup
     const s=qStatus(ind,v);
     const col=s==='breach'?P.rose:s==='ok'?P.green:P.faint;
     const bg =s==='breach'?'#fbe9ec':s==='ok'?'#e7f6ed':'#f4f6f9';
@@ -1987,7 +2047,7 @@ function QCReportBuilder({depts}){
             <td style={{padding:'6px 6px',textAlign:'left',fontWeight:600,color:P.ink,fontSize:9.5}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
             <td style={{padding:'6px 4px',textAlign:'left',fontFamily:MONO,fontSize:8.5,color:P.ink2}}>{benchExpr(ind)}</td>
             {pMonths.map(m=><MonthCell key={m[0]} ind={ind} m={m}/>)}
-            <td style={{textAlign:'center',padding:'4px 2px'}}><QCSpark ind={ind} months={MONTHS} w={52} h={20}/></td>
+            <td style={{textAlign:'center',padding:'4px 2px'}}><QCSpark ind={ind} months={pMonths} w={52} h={20}/></td>
           </tr>
         ))}</tbody>
       </table>
@@ -2063,7 +2123,11 @@ function QCReportBuilder({depts}){
               — two near-identical dot grids on one page read as a duplicated table. Instead
               say where the data actually lives (other reporting years). */}
           {sections.chart&&(() => {
-            const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r=>r.has);
+            // Summary pages chart the DEPARTMENT (zero-defect % per month); only the
+            // Detailed pages chart their specific indicator.
+            const chartable = detailed
+              ? (chartInd && qcChartRows(chartInd, pMonths).some(r=>r.has))
+              : qcDeptSummaryRows(d, pMonths).some(r=>r.has);
             if(!chartable){
               const otherYears=[...dataFySet([d])].filter(y=>y!==fy).sort((a,b)=>b-a);
               return (
@@ -2074,12 +2138,18 @@ function QCReportBuilder({depts}){
                 </div>
               );
             }
-            return chartStyles.map((cs)=>(
-              <div key={cs} style={{margin:'4px 0 8px'}}>
-                {chartStyles.length>1&&<div style={uSub}>{QC_CHART_STYLE_LABEL[cs]||cs}</div>}
-                {qcChartEl(d, cs, chartInd, tone, pMonths)}
-              </div>
-            ));
+            const SINGLE_SERIES=['bar3d','bar','line','area','combo','horizontal'];
+            return chartStyles.map((cs)=>{
+              const cap=[];
+              if(chartStyles.length>1) cap.push(QC_CHART_STYLE_LABEL[cs]||cs);
+              if(!detailed&&SINGLE_SERIES.indexOf(cs)>=0) cap.push('Zero-defect % by month — reported indicators on benchmark');
+              return (
+                <div key={cs} style={{margin:'4px 0 8px'}}>
+                  {cap.length>0&&<div style={uSub}>{cap.join(' · ')}</div>}
+                  {qcChartEl(d, cs, chartInd, tone, pMonths, !detailed)}
+                </div>
+              );
+            });
           })()}
           {sections.breachDonut&&!chartStyles.includes('donut')&&(()=>{ const pie=dd.length>1?dd:qcStatusComp(d, pMonths); if(!pie.length) return null;
             return (
@@ -2263,7 +2333,7 @@ function QCReportBuilder({depts}){
                 const benchSet=new Set(); let bench='';
                 const cells=chosen.map(d=>{ const ind=findInd(d,name); if(!ind) return {none:true};
                   const be=benchExpr(ind); if(be && be!=='No benchmark'){ benchSet.add(be); if(!bench) bench=be; }
-                  const v=qcCellVal(ind,m); const s=qStatus(ind,v);
+                  const v=qcCellVal(ind,m,false); const s=qStatus(ind,v);
                   const isRate=['pct','rate100','rate1000','avg'].indexOf(ind.formula)>=0 || isPctInd(ind);
                   if(v!=null){
                     if(!isRate){ anyCount=true; tot+=Number(v)||0; }
@@ -2419,7 +2489,7 @@ function QCReportBuilder({depts}){
     // CAPA rows: replicate the Action Plans eligibility (last-quarter breach OR ≥3 breaches).
     const plans=[]; chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{
       let lastQ=null; QORDER.forEach(Q=>{ if(qtrRaw(ind,Q,fy)!=null) lastQ=Q; });
-      const lastBreach=lastQ!=null && qtrStatus(ind,lastQ,fy)==='breach'; const nB=countBreaches(ind, MONTHS);
+      const lastBreach=lastQ!=null && qtrStatus(ind,lastQ,fy)==='breach'; const nB=countBreaches(ind, pMonths);
       if(!(lastBreach||nB>=3)) return;
       plans.push({dept:d.name, ind:ind.name, breaches:nB, status:capa[d.key+'/'+ind.id]||'Open'}); }));
     const stCol=s=>s==='Closed'?P.green:s==='In Progress'?P.amber:P.rose;
@@ -2700,6 +2770,127 @@ function QCReportBuilder({depts}){
     // mounted, so printing produced completely blank pages.
     if(chosen.length===0){ setNote({ok:false,text:'Select at least one department first.'}); return; }
     try{ document.body.classList.add('pdf-export-mode'); window.print(); }catch(e){} finally{ setTimeout(()=>document.body.classList.remove('pdf-export-mode'),500); } };
+  // TRUE VECTOR PDF for the quality report — drawn with jsPDF primitives (selectable
+  // text, ~1s, small file), mirroring the Patient-report vector export so the Quality
+  // report downloads in ONE click instead of the slow/hanging html2canvas raster.
+  async function buildQualityVectorPDF(J){
+    const RGB={blue:[0,144,202],ink:[22,32,46],ink2:[60,72,88],muted:[108,122,140],faint:[154,166,180],
+      line:[221,227,236],panel:[247,249,252],rose:[210,58,82],green:[31,157,87],violet:[106,82,212],amber:[224,138,30],white:[255,255,255]};
+    const PAL=[[0,144,202],[21,159,191],[43,179,163],[70,184,126],[124,195,90],[240,169,59],[239,128,73],[232,92,105],[224,103,155],[182,92,198],[106,111,212],[79,141,247]];
+    const hex2rgb=h=>{const m=/#?([0-9a-f]{6})/i.exec(String(h||''));if(!m)return RGB.blue;const n=parseInt(m[1],16);return[(n>>16)&255,(n>>8)&255,n&255];};
+    const ori=orient==='landscape'?'l':'p', fmtP=pageSize==='A3'?'a3':pageSize==='Letter'?'letter':'a4';
+    const doc=new J({orientation:ori,unit:'pt',format:fmtP,compress:true});
+    const PW=doc.internal.pageSize.getWidth(), PH=doc.internal.pageSize.getHeight();
+    const M=42, CW=PW-2*M;
+    const F=(st,sz,c)=>{doc.setFont('helvetica',st);doc.setFontSize(sz);const cc=c||RGB.ink;doc.setTextColor(cc[0],cc[1],cc[2]);};
+    const line=(x1,y1,x2,y2,c,w)=>{const cc=c||RGB.line;doc.setDrawColor(cc[0],cc[1],cc[2]);doc.setLineWidth(w||0.7);doc.line(x1,y1,x2,y2);};
+    const box=(x,y,w,h,f,r)=>{doc.setFillColor(f[0],f[1],f[2]);doc.roundedRect(x,y,w,h,r==null?4:r,r==null?4:r,'F');};
+    const genDate=new Date().toLocaleDateString('en-US');
+    const clip=(s,w)=>{s=String(s==null?'':s);if(doc.getTextWidth(s)<=w)return s;while(s.length>1&&doc.getTextWidth(s+'…')>w)s=s.slice(0,-1);return s+'…';};
+    const statCol=s=>s==='breach'?RGB.rose:s==='ok'?RGB.green:RGB.faint;
+    const logo=await new Promise(res=>{try{const img=new Image();img.onload=()=>{try{const c=document.createElement('canvas');const s=3;c.width=(img.width||120)*s;c.height=(img.height||40)*s;c.getContext('2d').drawImage(img,0,0,c.width,c.height);res({d:c.toDataURL('image/png'),w:c.width/s,h:c.height/s});}catch(e){res(null);}};img.onerror=()=>res(null);img.src='unico/logo.svg';setTimeout(()=>res(null),2000);}catch(e){res(null);}});
+    const pageHeader=()=>{
+      let x=M;
+      if(showLogo&&logo){const w=26*(logo.w/logo.h);try{doc.addImage(logo.d,'PNG',M,M-16,w,26);}catch(e){}x=M+w+10;}
+      F('bold',12);doc.text(clip(hdrTitle||'Quality Indicator Report',CW-150),x,M+2);
+      F('normal',7.5,RGB.muted);doc.text(String((hdrSub?hdrSub+'  ·  ':'')+rangeLabel).toUpperCase(),x,M+13);
+      F('normal',7.5,RGB.faint);doc.text('Generated',PW-M,M-2,{align:'right'});
+      F('bold',9,RGB.ink2);doc.text(genDate,PW-M,M+9,{align:'right'});
+      line(M,M+22,PW-M,M+22,RGB.blue,1.4);
+      F('normal',7,RGB.faint);doc.text(clip(String(orgName||''),CW-120),M,PH-16);
+      if(confidential){F('bold',6.5,RGB.rose);doc.text('CONFIDENTIAL',PW-M,PH-16,{align:'right'});}
+      return M+42;
+    };
+    const kpiRow=(y,items)=>{
+      const gap=10,w=(CW-gap*(items.length-1))/items.length;
+      items.forEach((it,i)=>{const x=M+i*(w+gap);box(x,y,w,46,RGB.panel,5);const t=it.tone||RGB.blue;doc.setFillColor(t[0],t[1],t[2]);doc.rect(x,y,3,46,'F');
+        F('normal',6.4,RGB.muted);doc.text(clip(String(it.label).toUpperCase(),w-14),x+10,y+13);
+        F('bold',14,it.tone||RGB.ink);doc.text(clip(String(it.value),w-14),x+10,y+31);
+        if(it.foot){F('normal',5.6,RGB.faint);doc.text(clip(String(it.foot),w-14),x+10,y+41);}});
+      return y+46+12;
+    };
+    const vBars=(y,ind,pts)=>{
+      const h=96,x=M,w=CW,max=Math.max(1,...pts.map(p=>Number(p.val)||0));
+      const n=pts.length,gap=n>14?3:6,bw=n?(w-gap*(n-1))/n:w;
+      const bar3d=(bx,bh,c)=>{const yT=y+h-bh,yB=y+h,dx=Math.min(6,bw*0.3),dy=-dx*0.75,li=[Math.min(255,c[0]+34),Math.min(255,c[1]+34),Math.min(255,c[2]+34)],dk=[Math.max(0,c[0]-28),Math.max(0,c[1]-28),Math.max(0,c[2]-28)];
+        doc.setFillColor(c[0],c[1],c[2]);doc.rect(bx,yT,bw,bh,'F');
+        doc.setFillColor(li[0],li[1],li[2]);doc.triangle(bx,yT,bx+dx,yT+dy,bx+bw+dx,yT+dy,'F');doc.triangle(bx,yT,bx+bw+dx,yT+dy,bx+bw,yT,'F');
+        doc.setFillColor(dk[0],dk[1],dk[2]);doc.triangle(bx+bw,yT,bx+bw+dx,yT+dy,bx+bw+dx,yB+dy,'F');doc.triangle(bx+bw,yT,bx+bw+dx,yB+dy,bx+bw,yB,'F');};
+      line(x,y+h,x+w,y+h);
+      pts.forEach((p,i)=>{const v=Number(p.val)||0,bh=Math.max(1.2,(v/max)*(h-16)),bx=x+i*(bw+gap);const c=PAL[i%PAL.length];
+        bar3d(bx,bh,c);
+        F('normal',5.6,RGB.faint);doc.text(String(p.mon),bx+bw/2,y+h+8,{align:'center'});
+        // label sits above the 3D TOP FACE (which extends dy above the bar), not on it
+        if(bw>12){F('normal',6,RGB.ink2);doc.text(fmtVal(ind,v),bx+bw/2,y+h-bh-Math.min(6,bw*0.3)*0.75-3,{align:'center'});}});
+      return y+h+18;
+    };
+    const deptTable=(y,d)=>{
+      const inds=(d.indicators||[]),mCols=pMonths;
+      const nameW=Math.min(150,Math.max(96,CW*0.26)),benchW=54,mW=(CW-nameW-benchW)/mCols.length,rowH=13,headH=15;
+      const head=(yy)=>{doc.setFillColor(RGB.blue[0],RGB.blue[1],RGB.blue[2]);doc.rect(M,yy,CW,headH,'F');
+        F('bold',6.4,RGB.white);doc.text('INDICATOR',M+4,yy+10);doc.text('BENCH',M+nameW+3,yy+10);
+        mCols.forEach((m,i)=>doc.text(m[1].split(' ')[0].slice(0,3).toUpperCase(),M+nameW+benchW+i*mW+mW/2,yy+10,{align:'center'}));return yy+headH;};
+      y=head(y);
+      inds.forEach((ind,ri)=>{
+        if(y+rowH>PH-40){doc.addPage(fmtP,ori);y=pageHeader();y=head(y);}
+        if(ri%2){doc.setFillColor(247,250,253);doc.rect(M,y,CW,rowH,'F');}
+        F('normal',6.6,RGB.ink);doc.text(clip(ind.name,nameW-6),M+4,y+9);
+        F('normal',5.8,RGB.muted);doc.text(clip(benchExpr(ind),benchW-3),M+nameW+2,y+9);
+        mCols.forEach((m,i)=>{const v=qcCellVal(ind,m,false),s=qStatus(ind,v),cx=M+nameW+benchW+i*mW+mW/2;
+          F('normal',6.2,statCol(s));doc.text(s==='na'?'·':clip(fmtVal(ind,v),mW-1),cx,y+9,{align:'center'});});
+        y+=rowH;line(M,y,M+CW,y,RGB.line,0.35);
+      });
+      return y+12;
+    };
+    const sigBlock=(y)=>{
+      // honour the "Signature block on the last page" toggle like the on-screen pages do
+      if(!sections.signatures)return y;
+      if(!(sig&&(sig.prepared||sig.reviewed||sig.approved)))return y;
+      y=Math.max(y+8,PH-118);
+      F('bold',7,RGB.muted);doc.text('AUTHORISATION · '+String(orgName||'').toUpperCase(),M,y);
+      const cols=[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]],cw=CW/3;
+      cols.forEach((c,i)=>{const x=M+i*cw;line(x,y+42,x+cw-22,y+42,RGB.ink2,0.8);
+        F('bold',8.5,RGB.ink);doc.text(clip(c[1]||'',cw-26),x,y+54);
+        F('normal',6.2,RGB.muted);doc.text(c[0].toUpperCase(),x,y+63);});
+      return y+72;
+    };
+
+    if(sections.cover){
+      let y=pageHeader();
+      F('bold',24,RGB.ink);doc.text(clip(hdrTitle||'Quality Indicator Report',CW),M,y+34);
+      F('normal',12,RGB.muted);doc.text(String(rangeLabel),M,y+54);
+      const agg={ok:0,breach:0,inds:0};chosen.forEach(d=>{const s=deptStat(d,pMonths);agg.ok+=s.ok;agg.breach+=s.breach;agg.inds+=(d.indicators||[]).length;});
+      // a fully-unreported period must not read as a triumphant "100% · 0 breaches"
+      const anyRep=(agg.ok+agg.breach)>0;
+      const rate=anyRep?Math.round(agg.ok*100/(agg.ok+agg.breach)):null;
+      y=kpiRow(y+72,[
+        {label:'Zero-Defect %',value:anyRep?rate+'%':'—',tone:!anyRep?RGB.muted:rate>=90?RGB.green:rate>=70?RGB.amber:RGB.rose,foot:anyRep?(agg.ok+' on benchmark'):'no data reported this period'},
+        {label:'Breaches',value:anyRep?String(agg.breach):'—',tone:!anyRep?RGB.muted:(agg.breach?RGB.rose:RGB.green),foot:anyRep?'indicator-months off benchmark':'no data reported this period'},
+        {label:'Departments',value:String(chosen.length),tone:RGB.blue,foot:'in this report'},
+        {label:'Indicators',value:String(agg.inds),tone:RGB.violet,foot:'quality KPIs'},
+      ]);
+      sigBlock(y);
+    }
+    chosen.forEach((d,di)=>{
+      if(sections.cover||di>0)doc.addPage(fmtP,ori);
+      let y=pageHeader();
+      const ds=qcDeptStatus(d,pMonths);
+      // like the on-screen page: nothing reported => neutral "No data", not an earned "Excellent"
+      const dsRep=!!(ds&&ds.st&&(ds.st.ok+ds.st.breach)>0);
+      F('bold',15,RGB.ink);doc.text(clip(d.name,CW-130),M,y+4);
+      if(dsRep){F('bold',7.5,statCol(ds.st.breach?'breach':'ok'));doc.text(String(ds.status||'').toUpperCase(),PW-M,y+2,{align:'right'});}
+      else{F('bold',7.5,RGB.muted);doc.text('NO DATA',PW-M,y+2,{align:'right'});}
+      y+=18;
+      const kp=qcDeptKpis(d,pMonths).map(k=>({label:k[0],value:k[1],tone:hex2rgb(k[2]),foot:k[3]}));
+      y=kpiRow(y,kp);
+      // dept-level zero-defect % series — same metric/series the on-screen Summary page charts
+      if(sections.chart!==false){const rows=qcDeptSummaryRows(d,pMonths).filter(r=>r.has);
+        if(rows.length){F('bold',8,RGB.ink2);doc.text('ZERO-DEFECT % BY MONTH — REPORTED INDICATORS ON BENCHMARK',M,y+2);y=vBars(y+8,{valueType:'%'},rows);}}
+      if(sections.table!==false)y=deptTable(y+4,d);
+      if(di===chosen.length-1)sigBlock(y);
+    });
+    doc.save('UNICO-quality-'+reportType+'-'+new Date().toISOString().slice(0,10)+'.pdf');
+  }
   async function doExportPDF(){
     const native=window.unicoNative;
     if(chosen.length===0){ setNote({ok:false,text:'Select at least one department first.'}); return; }
@@ -2713,8 +2904,25 @@ function QCReportBuilder({depts}){
       finally{ document.body.classList.remove('pdf-export-mode'); setExporting(false); }
       return;
     }
-    // Web: TRUE one-click download — rasterize every report page (html2canvas) into a jsPDF.
     const H=window.html2canvas, J=window.jspdf&&window.jspdf.jsPDF;
+    // Web preferred: fast VECTOR PDF (selectable text, ~1s, one-click download) — but ONLY
+    // when it faithfully reproduces the previewed pages: Summary type, the default 3D
+    // chart style, and none of the sections it doesn't draw (exec summary, breach donut,
+    // incidents, heatmaps, appendices, TOC, watermark…). Anything else falls through to
+    // the html2canvas raster capture below, which renders the ACTUAL preview pages (so the
+    // download always matches what's shown). The print dialog remains the last resort.
+    const vectorFaithful = reportType==='summary'
+      && chartStyles.length===1 && chartStyles[0]==='bar3d'
+      && !sections.execSummary && !sections.breachDonut && !sections.incidents
+      && !sections.ragHeatmap && !sections.deptRanking && !sections.benchmarkCompare && !sections.indTrend
+      && !sections.incidentAppendix && !sections.standardsRefs
+      && !sections.toc && !sections.periodCompare && !sections.watermark;
+    if(J && vectorFaithful){
+      setExporting(true); setNote(null);
+      try{ await buildQualityVectorPDF(J); setNote({ok:true,text:'PDF downloaded — vector quality (selectable text).'}); setExporting(false); return; }
+      catch(e){ try{ console.warn('[quality] vector PDF failed, falling back to raster:',e); }catch(_){} setExporting(false); }
+    }
+    // Fallback: rasterize every report page (html2canvas) into a jsPDF.
     if(H&&J){
       setExporting(true); setNote(null);
       const stage=document.getElementById('pdf-root'); let els=[], prev=[];
@@ -2847,10 +3055,10 @@ function QCReportBuilder({depts}){
       const rows=[['Department','Indicator','Benchmark','Goal'].concat(pMonths.map(m=>m[1]))];
       scope.forEach(d=>(d.indicators||[]).forEach(ind=>rows.push(
         [d.name,ind.name,benchExpr(ind),ind.goalDirection==='higher_is_better'?'higher is better':'lower is better']
-        .concat(pMonths.map(m=>{ const v=qcCellVal(ind,m); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
-      rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
+        .concat(pMonths.map(m=>{ const v=qcCellVal(ind,m,false); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
+      rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','Date of incident','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
       // period-scoped like every report page — the CSV used to dump incidents from ANY year
-      scope.forEach(d=>qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,pMonths)).forEach(r=>{ const x=r.x; rows.push([d.name,r.ind,r.month,x.uhid||'',x.patientName||'',x.age||'',x.gender||'',x.diagnosis||'',x.details||'',x.finding||'',x.corrective||'',x.preventive||'']); }));
+      scope.forEach(d=>qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,pMonths)).forEach(r=>{ const x=r.x; rows.push([d.name,r.ind,r.month,x.incidentDate||'',x.uhid||'',x.patientName||'',x.age||'',x.gender||'',x.diagnosis||'',x.details||'',x.finding||'',x.corrective||'',x.preventive||'']); }));
       return qcDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), baseName+'.csv','text/csv;charset=utf-8');
     }
     // Honour the Page setup control (A4 / A3 / Letter + orientation) in the exported
@@ -3037,6 +3245,15 @@ function QCReportBuilder({depts}){
                   <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:P.ink2}}><input type="checkbox" checked={showLogo} onChange={e=>setShowLogo(e.target.checked)}/>Show logo</label>
                   <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:P.ink2}}><input type="checkbox" checked={confidential} onChange={e=>setConfidential(e.target.checked)}/>Confidential mark</label>
                 </div>
+              </div>
+            </div>
+            <div>
+              {fieldLabel('Signatures — saved automatically, shared with every report')}
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                <input value={sig.prepared} onChange={e=>setSig(s=>({...s,prepared:e.target.value}))} placeholder="Prepared by (name & title)" style={{...sel2,width:'100%'}}/>
+                <input value={sig.reviewed} onChange={e=>setSig(s=>({...s,reviewed:e.target.value}))} placeholder="Checked by (name & title)" style={{...sel2,width:'100%'}}/>
+                <input value={sig.approved} onChange={e=>setSig(s=>({...s,approved:e.target.value}))} placeholder="Approved by (name & title)" style={{...sel2,width:'100%'}}/>
+                <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:P.ink2}}><input type="checkbox" checked={!!sections.signatures} onChange={e=>setSec('signatures',e.target.checked)}/>Signature block on the last page</label>
               </div>
             </div>
             <div>

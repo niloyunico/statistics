@@ -15206,27 +15206,21 @@ function MonthlyStatsReport({
   const scopeName = dept === 'all' ? 'All departments' : scope[0] && scope[0].name || '—';
   const single = dept !== 'all' ? scope[0] : null;
   const primaryLabel = single ? msPrimaryCol(single).label || single.primaryLabel || 'Volume' : 'Volume';
-  const kpi = scope.reduce((a, d) => {
-    const fs = d.series;
-    const tot = fs.reduce((s, r) => s + (r[d.primary] || 0), 0);
-    const peak = fs.length ? Math.max(...fs.map(r => r[d.primary] || 0)) : 0;
-    a.total += tot;
-    a.peak = Math.max(a.peak, peak);
-    a.months = Math.max(a.months, fs.length);
-    return a;
-  }, {
-    total: 0,
-    peak: 0,
-    months: 0
-  });
+  const monthTotals = AX.map(k => scope.reduce((s, d) => {
+    const r = d.series.find(x => x.month === k);
+    return s + (r && r[d.primary] || 0);
+  }, 0));
+  const kpi = {
+    total: scope.reduce((a, d) => a + d.series.reduce((s, r) => s + (r[d.primary] || 0), 0), 0),
+    peak: monthTotals.length ? Math.max(...monthTotals) : 0,
+    months: AX.length
+  };
   const avg = kpi.months ? Math.round(kpi.total / kpi.months) : 0;
   const metricCount = scope.reduce((n, d) => n + d.cols.length, 0);
-  const barData = AX.map(k => ({
-    month: k.split('-')[0],
-    val: scope.reduce((s, d) => {
-      const r = d.series.find(x => x.month === k);
-      return s + (r && r[d.primary] || 0);
-    }, 0)
+  const multiYr = new Set(AX.map(k => k.split('-')[1])).size > 1;
+  const barData = AX.map((k, i) => ({
+    month: multiYr ? k.split('-')[0] + " '" + k.split('-')[1] : k.split('-')[0],
+    val: monthTotals[i]
   }));
   const hasCombo = typeof window.ComboChart === 'function';
   const cardBox = {
@@ -15719,11 +15713,15 @@ function Reports({
     const latest = fs[fs.length - 1] || {};
     const peak = fs.length ? Math.max(...fs.map(r => r[d.primary] || 0)) : 0;
     const avg = fs.length ? Math.round(total / fs.length) : 0;
+    const lv = fs.length ? fs[fs.length - 1][d.primary] || 0 : 0,
+      pv = fs.length > 1 ? fs[fs.length - 2][d.primary] || 0 : 0;
+    const delta = fs.length < 2 ? 0 : pv === 0 ? lv > 0 ? 100 : 0 : Math.round((lv - pv) / pv * 100);
     return {
       total,
       latest,
       peak,
-      avg
+      avg,
+      delta
     };
   };
   const [base, ratio] = PAGE_SIZES[pageSize];
@@ -16073,7 +16071,7 @@ function Reports({
     }, d.group), React.createElement("span", {
       className: "spacer"
     }), React.createElement(Delta, {
-      v: d.delta
+      v: st.delta
     })), partial && React.createElement("div", {
       style: {
         fontSize: 10,
@@ -16227,7 +16225,7 @@ function Reports({
         textAlign: 'right'
       }
     }, React.createElement(Delta, {
-      v: d.delta
+      v: st.delta
     })))))), showSig && React.createElement(SigBlock, null)), React.createElement(Footer, {
       n: n,
       total: total
@@ -16379,7 +16377,7 @@ function Reports({
         textAlign: 'right'
       }
     }, React.createElement(Delta, {
-      v: d.delta
+      v: st.delta
     })))))), showSig && React.createElement(SigBlock, null)), React.createElement(Footer, {
       n: n,
       total: total
@@ -16388,27 +16386,38 @@ function Reports({
   const [exporting, setExporting] = React.useState(false);
   const [note, setNote] = React.useState(null);
   const buildVectorPDF = async J => {
-    const RGB = {
-      blue: [0, 144, 202],
-      blue700: [0, 114, 163],
-      ink: [22, 32, 46],
-      ink2: [60, 72, 88],
-      muted: [108, 122, 140],
-      faint: [154, 166, 180],
-      line: [221, 227, 236],
-      panel: [247, 249, 252],
-      rose: [210, 58, 82],
-      roseBg: [251, 233, 236],
-      green: [31, 157, 87],
-      posBg: [231, 246, 237]
-    };
-    const hex2rgb = h => {
+    const hx = h => {
       const m = /^#?([0-9a-f]{6})$/i.exec(String(h || ''));
-      if (!m) return RGB.blue;
-      const n = parseInt(m[1], 16);
+      const n = m ? parseInt(m[1], 16) : 0x16202e;
       return [n >> 16 & 255, n >> 8 & 255, n & 255];
     };
-    const TONES = PALETTE.map(hex2rgb);
+    const C = {
+      ink: hx('#16202e'),
+      ink2: hx('#3c4858'),
+      muted: hx('#6c7a8c'),
+      faint: hx('#9aa6b4'),
+      line: hx('#dde3ec'),
+      line2: hx('#e8edf3'),
+      panel2: hx('#f7f9fc'),
+      grid: hx('#eef1f5'),
+      grid3: hx('#e9edf3'),
+      blue: hx('#0090ca'),
+      blue700: hx('#0072a3'),
+      blue50: hx('#eef8fc'),
+      rose: hx('#d23a52'),
+      roseLine: hx('#f1c6cd'),
+      pos: hx('#1f9d57'),
+      posBg: hx('#e7f6ed'),
+      negBg: hx('#fbe9ec'),
+      slate: hx('#5b6b80'),
+      flatBg: hx('#eef1f5'),
+      white: [255, 255, 255]
+    };
+    const PALV = PALETTE.map(hx);
+    const BARC = ['#0090ca', '#159fbf', '#2bb3a3', '#46b87e', '#7cc35a', '#f0a93b', '#ef8049', '#e85c69', '#b65cc6', '#6a6fd4'].map(hx);
+    const PAL3 = ['#0090ca', '#159fbf', '#2bb3a3', '#46b87e', '#7cc35a', '#f0a93b', '#ef8049', '#e85c69', '#e0679b', '#b65cc6', '#6a6fd4', '#4f8df7'].map(hx);
+    const lift = (c, p) => c.map(v => Math.max(0, Math.min(255, v + p)));
+    const mixW = (c, a) => c.map(v => Math.round(v * a + 255 * (1 - a)));
     const ori = orient === 'landscape' ? 'l' : 'p';
     const fmtP = pageSize === 'A3' ? 'a3' : pageSize === 'Letter' ? 'letter' : 'a4';
     const doc = new J({
@@ -16417,42 +16426,111 @@ function Reports({
       format: fmtP,
       compress: true
     });
-    const PW = doc.internal.pageSize.getWidth(),
-      PH = doc.internal.pageSize.getHeight();
-    const M = 42,
-      CW = PW - 2 * M,
-      FOOT = PH - 30;
-    const F = (style, size, color) => {
+    const PW = doc.internal.pageSize.getWidth();
+    const S = PW / pageW,
+      X = v => v * S;
+    const MX = 30,
+      MT = 28,
+      CWx = pageW - 60;
+    const FOOTY = pageMinH - MT - 21;
+    const LIMIT = FOOTY - 12;
+    const genDate = new Date().toLocaleDateString('en-US');
+    const font = (style, size, color) => {
       doc.setFont('helvetica', style);
-      doc.setFontSize(size);
-      const c = color || RGB.ink;
+      doc.setFontSize(size * S);
+      const c = color || C.ink;
       doc.setTextColor(c[0], c[1], c[2]);
     };
-    const line = (x1, y1, x2, y2, c, w2) => {
-      const cc = c || RGB.line;
+    const T = (t, x, y, o) => doc.text(String(t), X(x), X(y), o);
+    const tw = t => doc.getTextWidth(String(t)) / S;
+    const LN = (x1, y1, x2, y2, c, w2) => {
+      const cc = c || C.line;
       doc.setDrawColor(cc[0], cc[1], cc[2]);
-      doc.setLineWidth(w2 || 0.7);
-      doc.line(x1, y1, x2, y2);
+      doc.setLineWidth((w2 == null ? 1 : w2) * S);
+      doc.line(X(x1), X(y1), X(x2), X(y2));
     };
-    const box = (x, y, w, h, fill, r) => {
-      doc.setFillColor(fill[0], fill[1], fill[2]);
-      doc.roundedRect(x, y, w, h, r == null ? 4 : r, r == null ? 4 : r, 'F');
+    const FR = (x, y, w2, h2, c, rx, ry) => {
+      doc.setFillColor(c[0], c[1], c[2]);
+      if (rx) doc.roundedRect(X(x), X(y), X(w2), X(h2), X(rx), X(ry == null ? rx : ry), 'F');else doc.rect(X(x), X(y), X(w2), X(h2), 'F');
     };
-    const genDate = new Date().toLocaleDateString('en-US');
-    const logo = await new Promise(res => {
+    const TRI = (x1, y1, x2, y2, x3, y3, c) => {
+      doc.setFillColor(c[0], c[1], c[2]);
+      doc.triangle(X(x1), X(y1), X(x2), X(y2), X(x3), X(y3), 'F');
+    };
+    const CIRC = (x, y, r, fill, stroke, lw) => {
+      if (fill) doc.setFillColor(fill[0], fill[1], fill[2]);
+      if (stroke) {
+        doc.setDrawColor(stroke[0], stroke[1], stroke[2]);
+        doc.setLineWidth((lw || 1) * S);
+      }
+      doc.circle(X(x), X(y), X(r), fill && stroke ? 'FD' : fill ? 'F' : 'S');
+    };
+    const POLY = (pts, c) => {
+      if (pts.length < 3) return;
+      doc.setFillColor(c[0], c[1], c[2]);
+      doc.lines(pts.slice(1).map((p, i) => [p[0] - pts[i][0], p[1] - pts[i][1]]), X(pts[0][0]), X(pts[0][1]), [S, S], 'F', true);
+    };
+    const PLINE = (pts, c, lw) => {
+      if (pts.length < 2) return;
+      doc.setDrawColor(c[0], c[1], c[2]);
+      doc.setLineWidth((lw || 2) * S);
+      try {
+        doc.setLineCap('round');
+        doc.setLineJoin('round');
+      } catch (e) {}
+      doc.lines(pts.slice(1).map((p, i) => [p[0] - pts[i][0], p[1] - pts[i][1]]), X(pts[0][0]), X(pts[0][1]), [S, S], 'S', false);
+    };
+    const clip = (s, w2) => {
+      s = String(s == null ? '–' : s);
+      if (tw(s) <= w2) return s;
+      while (s.length > 1 && tw(s + '…') > w2) s = s.slice(0, -1);
+      return s + '…';
+    };
+    const wedge = (cx, cy, rO, rI, a0, a1, c) => {
+      if (a1 - a0 >= Math.PI * 2 - 1e-4) a1 = a0 + Math.PI * 2 - 1e-4;
+      const pt = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+      const arc = (r, s0, e0) => {
+        const out = [];
+        const n = Math.max(1, Math.ceil(Math.abs(e0 - s0) / (Math.PI / 3)));
+        for (let i = 0; i < n; i++) {
+          const u = s0 + (e0 - s0) * i / n,
+            v2 = s0 + (e0 - s0) * (i + 1) / n,
+            k = 4 / 3 * Math.tan((v2 - u) / 4) * r;
+          out.push([[cx + r * Math.cos(u) - k * Math.sin(u), cy + r * Math.sin(u) + k * Math.cos(u)], [cx + r * Math.cos(v2) + k * Math.sin(v2), cy + r * Math.sin(v2) - k * Math.cos(v2)], pt(r, v2)]);
+        }
+        return out;
+      };
+      const start = pt(rO, a0);
+      let cur = start;
+      const segs = [];
+      arc(rO, a0, a1).forEach(([c1, c2, p]) => {
+        segs.push([c1[0] - cur[0], c1[1] - cur[1], c2[0] - cur[0], c2[1] - cur[1], p[0] - cur[0], p[1] - cur[1]]);
+        cur = p;
+      });
+      const q = pt(rI, a1);
+      segs.push([q[0] - cur[0], q[1] - cur[1]]);
+      cur = q;
+      arc(rI, a1, a0).forEach(([c1, c2, p]) => {
+        segs.push([c1[0] - cur[0], c1[1] - cur[1], c2[0] - cur[0], c2[1] - cur[1], p[0] - cur[0], p[1] - cur[1]]);
+        cur = p;
+      });
+      doc.setFillColor(c[0], c[1], c[2]);
+      doc.lines(segs, X(start[0]), X(start[1]), [S, S], 'F', true);
+    };
+    const logo = showLogo ? await new Promise(res => {
       try {
         const img = new Image();
         img.onload = () => {
           try {
             const c = document.createElement('canvas');
-            const s = 3;
-            c.width = img.width * s || 360;
-            c.height = img.height * s || 120;
+            const s3 = 3;
+            c.width = (img.width || 120) * s3;
+            c.height = (img.height || 40) * s3;
             c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
             res({
               d: c.toDataURL('image/png'),
-              w: c.width / s,
-              h: c.height / s
+              w: c.width / s3,
+              h: c.height / s3
             });
           } catch (e) {
             res(null);
@@ -16464,206 +16542,764 @@ function Reports({
       } catch (e) {
         res(null);
       }
-    });
-    const drawLogo = (x, y, h) => {
+    }) : null;
+    const drawLogo = (x, y, h2) => {
       if (!logo) return 0;
-      const w = h * (logo.w / logo.h);
+      const w2 = h2 * (logo.w / logo.h);
       try {
-        doc.addImage(logo.d, 'PNG', x, y, w, h);
+        doc.addImage(logo.d, 'PNG', X(x), X(y), X(w2), X(h2));
       } catch (e) {}
-      return w;
+      return w2;
+    };
+    const iconPng = (d, hex) => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = c.height = 72;
+        const g = c.getContext('2d');
+        g.scale(3, 3);
+        g.strokeStyle = hex;
+        g.lineWidth = 1.9;
+        g.lineCap = 'round';
+        g.lineJoin = 'round';
+        String(d).split('M').filter(Boolean).forEach(seg => g.stroke(new Path2D('M' + seg)));
+        return c.toDataURL('image/png');
+      } catch (e) {
+        return null;
+      }
+    };
+    const drawIcon = (d, x, y, s3, hex) => {
+      const p = iconPng(d, hex);
+      if (p) try {
+        doc.addImage(p, 'PNG', X(x), X(y), X(s3), X(s3));
+      } catch (e) {}
+    };
+    const tagChip = (x, y, txt) => {
+      font('bold', 10.5, C.blue700);
+      const t2 = String(txt || '').toUpperCase();
+      const w2 = tw(t2) + 16;
+      FR(x, y, w2, 17, C.blue50, 5);
+      T(t2, x + 8, y + 12);
+      return w2;
+    };
+    const deltaChip = (xr, y, v) => {
+      const pos = v > 0,
+        neg = v < 0;
+      const fg = pos ? C.pos : neg ? C.rose : C.slate,
+        bg = pos ? C.posBg : neg ? C.negBg : C.flatBg;
+      font('bold', 11, fg);
+      const t2 = Math.abs(v || 0) + '%';
+      const w2 = 9 + tw(t2) + 16;
+      FR(xr - w2, y, w2, 18, bg, 9);
+      const ax = xr - w2 + 7,
+        ay = y + 6.5;
+      if (pos) TRI(ax, ay + 5, ax + 3, ay, ax + 6, ay + 5, fg);else if (neg) TRI(ax, ay, ax + 6, ay, ax + 3, ay + 5, fg);else FR(ax, ay + 2, 6, 1.6, fg);
+      T(t2, ax + 9, y + 13);
+      return w2;
+    };
+    const richText = (segs, x, y, maxW, fs2, lh, color) => {
+      let cx2 = x,
+        cy2 = y;
+      segs.forEach(([t2, b]) => {
+        String(t2).split(/(\s+)/).forEach(wd => {
+          if (!wd) return;
+          font(b ? 'bold' : 'normal', fs2, color);
+          const w2 = tw(wd);
+          if (cx2 + w2 > x + maxW && wd.trim()) {
+            cx2 = x;
+            cy2 += lh;
+          }
+          if (!(!wd.trim() && cx2 === x)) {
+            T(wd, cx2, cy2);
+            cx2 += w2;
+          }
+        });
+      });
+      return cy2;
     };
     const pageHeader = () => {
-      let x = M;
+      let x = MX;
       if (logo) {
-        drawLogo(M, M - 14, 26);
-        x = M + 26 * (logo.w / logo.h) + 10;
+        const w2 = drawLogo(MX, MT, 38);
+        x = MX + w2 + 12;
       }
-      F('bold', 12);
-      doc.text(hdrTitle || 'Report', x, M + 2);
-      F('normal', 7.5, RGB.muted);
-      doc.text(((hdrSub ? hdrSub + '  ·  ' : '') + rangeLabel).toUpperCase(), x, M + 13);
-      F('normal', 7.5, RGB.faint);
-      doc.text('Generated', PW - M, M - 2, {
+      font('bold', 14);
+      T(hdrTitle || 'Report', x, MT + 16);
+      font('normal', 10.5, C.muted);
+      doc.text(((hdrSub ? hdrSub + ' · ' : '') + rangeLabel).toUpperCase(), X(x), X(MT + 30), {
+        charSpace: 0.4 * S
+      });
+      font('normal', 10, C.faint);
+      T('Generated', pageW - MX, MT + 12, {
         align: 'right'
       });
-      F('bold', 9, RGB.ink2);
-      doc.text(genDate, PW - M, M + 9, {
+      font('bold', 10, C.ink2);
+      T(genDate, pageW - MX, MT + 25, {
         align: 'right'
       });
-      line(M, M + 22, PW - M, M + 22, RGB.blue, 1.4);
-      return M + 40;
+      LN(MX, MT + 52, pageW - MX, MT + 52, C.blue, 2);
+      return MT + 52 + 18;
+    };
+    const newPage = () => {
+      doc.addPage(fmtP, ori);
+      return pageHeader();
     };
     const kpiRow = (y, items) => {
       const gap = 10,
-        w = (CW - gap * (items.length - 1)) / items.length;
+        w2 = (CWx - gap * (items.length - 1)) / items.length;
       items.forEach((it, i) => {
-        const x = M + i * (w + gap);
-        box(x, y, w, 44, RGB.panel, 5);
-        doc.setFillColor(it.tone[0], it.tone[1], it.tone[2]);
-        doc.rect(x, y, 3, 44, 'F');
-        F('normal', 6.6, RGB.muted);
-        doc.text(String(it.label).toUpperCase(), x + 10, y + 13);
-        F('bold', 14, RGB.ink);
-        doc.text(String(it.value), x + 10, y + 32);
+        const x = MX + i * (w2 + gap);
+        FR(x, y, w2, 56, C.panel2, 7);
+        FR(x, y, 3, 56, it.tone, 1.5);
+        font('normal', 9.5, C.muted);
+        doc.text(String(it.label).toUpperCase(), X(x + 14), X(y + 19), {
+          charSpace: 0.3 * S
+        });
+        font('bold', 18, C.ink);
+        T(it.value, x + 14, y + 41);
       });
-      return y + 44 + 14;
+      return y + 56 + 16;
     };
-    const vBarChart = (x, y, w, h, pts, tone, lineMode) => {
-      const max = Math.max(1, ...pts.map(p => Number(p.val) || 0));
-      const n = pts.length,
-        gap = n > 14 ? 3 : 6,
-        bw = (w - gap * (n - 1)) / n;
-      line(x, y + h, x + w, y + h);
-      const lblEvery = n > 13 ? 2 : 1;
-      if (lineMode) {
-        doc.setDrawColor(tone[0], tone[1], tone[2]);
-        doc.setLineWidth(1.5);
-        let px = null,
-          py = null;
-        pts.forEach((p, i) => {
-          const cx = x + i * (bw + gap) + bw / 2,
-            cy = y + h - (Number(p.val) || 0) / max * (h - 16);
-          if (px != null) doc.line(px, py, cx, cy);
-          px = cx;
-          py = cy;
-          doc.setFillColor(tone[0], tone[1], tone[2]);
-          doc.circle(cx, cy, 1.6, 'F');
+    const monthLbl = s => String(s).replace(/ \d{4}| 20\d\d/, '').slice(0, 6);
+    const gridLines = (ox, rw, y0, hgt) => {
+      [0, .25, .5, .75, 1].forEach(g => LN(ox, y0 + hgt - 20 - g * (hgt - 44), ox + rw, y0 + hgt - 20 - g * (hgt - 44), C.grid, 1));
+    };
+    const vBar3D = (y0, data, xKey, yKey, hgt) => {
+      const n = Math.max(1, data.length),
+        dx = 13,
+        dy = -9;
+      const step = Math.max(46, Math.min(78, 640 / n)),
+        Wv = n * step + dx + 10,
+        baseY = hgt - 26,
+        bw = Math.min(30, step - 22);
+      const max = Math.max(1, ...data.map(d => d[yKey] || 0));
+      const s3 = Math.min(CWx / Wv, 1),
+        ox = MX + (CWx - Wv * s3) / 2,
+        oy = y0 + (hgt - hgt * s3) / 2;
+      const gx = v => ox + v * s3,
+        gy = v => oy + v * s3;
+      [0, .25, .5, .75, 1].forEach(g => {
+        const gyv = baseY - g * (hgt - 58);
+        LN(gx(0), gy(gyv), gx(n * step), gy(gyv), C.grid3, s3);
+        LN(gx(n * step), gy(gyv), gx(n * step + dx), gy(gyv + dy), C.grid, s3);
+      });
+      data.forEach((d, i) => {
+        const v = d[yKey] || 0,
+          bh = v / max * (hgt - 58),
+          bx = i * step + 12,
+          by = baseY - bh,
+          c = PAL3[i % PAL3.length];
+        TRI(gx(bx + bw), gy(by), gx(bx + bw + dx), gy(by + dy), gx(bx + bw + dx), gy(baseY + dy), lift(c, -44));
+        TRI(gx(bx + bw), gy(by), gx(bx + bw + dx), gy(baseY + dy), gx(bx + bw), gy(baseY), lift(c, -44));
+        TRI(gx(bx), gy(by), gx(bx + dx), gy(by + dy), gx(bx + bw + dx), gy(by + dy), lift(c, 46));
+        TRI(gx(bx), gy(by), gx(bx + bw + dx), gy(by + dy), gx(bx + bw), gy(by), lift(c, 46));
+        doc.setFillColor(c[0], c[1], c[2]);
+        const st3 = lift(c, -18);
+        doc.setDrawColor(st3[0], st3[1], st3[2]);
+        doc.setLineWidth(0.5 * S * s3);
+        doc.rect(X(gx(bx)), X(gy(by)), X(bw * s3), X(Math.max(bh, 0.1) * s3), 'FD');
+        if (v > 0) {
+          font('bold', 11 * s3, C.ink);
+          T(fmt(v), gx(bx + bw / 2 + dx / 2), gy(by + dy - 6), {
+            align: 'center'
+          });
+        }
+        font('normal', 9.5 * s3, C.faint);
+        T(monthLbl(d[xKey]), gx(bx + bw / 2), gy(hgt - 6), {
+          align: 'center'
+        });
+      });
+      return y0 + hgt;
+    };
+    const vBarFlat = (y0, data, xKey, yKey, hgt) => {
+      const n = Math.max(1, data.length),
+        rw = Math.min(CWx, n * 74),
+        sx = rw / (n * 54),
+        ox = MX + (CWx - rw) / 2;
+      const max = Math.max(1, ...data.map(d => d[yKey] || 0));
+      gridLines(ox, rw, y0, hgt);
+      data.forEach((d, i) => {
+        const v = d[yKey] || 0,
+          bh = v / max * (hgt - 44),
+          c = BARC[i % BARC.length];
+        const bx = ox + (i * 54 + 14) * sx,
+          bwv = 26 * sx,
+          by = y0 + hgt - 20 - bh;
+        doc.setFillColor(c[0], c[1], c[2]);
+        doc.roundedRect(X(bx), X(by), X(bwv), X(Math.max(bh, 0.1)), X(Math.min(4, bwv / 2)), X(Math.min(4, Math.max(bh, 0.1) / 2)), 'F');
+        if (v > 0) {
+          font('bold', 10.5, c);
+          T(fmt(v), bx + bwv / 2, by - 6, {
+            align: 'center'
+          });
+        }
+        font('normal', 9.5, C.faint);
+        T(monthLbl(d[xKey]), bx + bwv / 2, y0 + hgt - 6, {
+          align: 'center'
+        });
+      });
+      return y0 + hgt;
+    };
+    const vLine = (y0, data, xKey, yKey, tone, hgt) => {
+      const n = data.length;
+      if (!n) {
+        font('normal', 11, C.faint);
+        T('No data', pageW / 2, y0 + hgt / 2, {
+          align: 'center'
+        });
+        return y0 + hgt;
+      }
+      const viewW = Math.max(360, n * 60),
+        rw = Math.min(CWx, Math.max(140, n * 80)),
+        sx = rw / viewW,
+        ox = MX + (CWx - rw) / 2;
+      const max = Math.max(1, ...data.map(d => d[yKey] || 0));
+      const px2 = i => ox + (26 + (n <= 1 ? (viewW - 52) / 2 : i / (n - 1) * (viewW - 52))) * sx;
+      const py2 = v => y0 + hgt - 22 - v / max * (hgt - 44);
+      [0, .25, .5, .75, 1].forEach(g => LN(ox + 26 * sx, y0 + 22 + g * (hgt - 44), ox + (viewW - 26) * sx, y0 + 22 + g * (hgt - 44), C.grid, 1));
+      const pts = data.map((d, i) => [px2(i), py2(d[yKey] || 0)]);
+      if (n > 1) {
+        POLY(pts.concat([[pts[n - 1][0], y0 + hgt - 22], [pts[0][0], y0 + hgt - 22]]), mixW(tone, 0.12));
+        PLINE(pts, tone, 2.5);
+      }
+      pts.forEach(p => CIRC(p[0], p[1], 3.2, C.white, tone, 2.5));
+      return y0 + hgt;
+    };
+    const vArea = (y0, data, xKey, yKey, tone, target, hgt) => {
+      const n = Math.max(1, data.length);
+      const viewW = Math.max(320, n * 60),
+        rw = Math.min(CWx, Math.max(160, n * 80)),
+        sx = rw / viewW,
+        ox = MX + (CWx - rw) / 2;
+      const pad = 30,
+        padT = 18,
+        plotH = hgt - 42;
+      const max = Math.max(1, ...data.map(d => +d[yKey] || 0), target != null ? target : 0);
+      const px2 = i => ox + (pad + (n <= 1 ? (viewW - 60) / 2 : i / (n - 1) * (viewW - 60))) * sx;
+      const py2 = v => y0 + padT + plotH - v / max * plotH;
+      [0, .25, .5, .75, 1].forEach(g => {
+        LN(ox + pad * sx, y0 + padT + g * plotH, ox + (viewW - pad) * sx, y0 + padT + g * plotH, C.grid, 1);
+        font('normal', 9, C.faint);
+        T(fmt(Math.round(max * (1 - g))), ox + (pad - 6) * sx, y0 + padT + g * plotH + 3, {
+          align: 'right'
+        });
+      });
+      const pts = data.map((d, i) => [px2(i), py2(+d[yKey] || 0)]);
+      if (pts.length > 1) {
+        POLY(pts.concat([[pts[pts.length - 1][0], y0 + padT + plotH], [pts[0][0], y0 + padT + plotH]]), mixW(tone, 0.12));
+        PLINE(pts, tone, 2.5);
+      }
+      if (target != null) {
+        try {
+          doc.setLineDashPattern([5 * S, 4 * S], 0);
+        } catch (e) {}
+        LN(ox + pad * sx, py2(target), ox + (viewW - pad) * sx, py2(target), C.rose, 1.5);
+        try {
+          doc.setLineDashPattern([], 0);
+        } catch (e) {}
+        font('bold', 10, C.rose);
+        T('target ' + fmt(target), ox + (viewW - pad) * sx, py2(target) - 4, {
+          align: 'right'
         });
       }
-      pts.forEach((p, i) => {
-        const v = Number(p.val) || 0,
-          bh = Math.max(1.5, v / max * (h - 16)),
-          bx = x + i * (bw + gap);
-        if (!lineMode) {
-          doc.setFillColor(tone[0], tone[1], tone[2]);
-          doc.roundedRect(bx, y + h - bh, bw, bh, 1.5, 1.5, 'F');
-        }
-        if (i % lblEvery === 0) {
-          F('normal', 6, RGB.faint);
-          doc.text(String(p.label), bx + bw / 2, y + h + 9, {
+      pts.forEach(p => CIRC(p[0], p[1], 3.2, C.white, tone, 2.5));
+      data.forEach((d, i) => {
+        font('normal', 9.5, C.faint);
+        T(monthLbl(d[xKey]), px2(i), y0 + hgt - 6, {
+          align: 'center'
+        });
+      });
+      return y0 + hgt;
+    };
+    const vCombo = (y0, data, xKey, barKey, lineKey, barC, lineC, barLabel, lineLabel, hgt) => {
+      const n = Math.max(1, data.length);
+      font('normal', 11.5, C.ink2);
+      const t1 = String(barLabel || barKey),
+        t2 = String(lineLabel || lineKey);
+      const lw2 = 11 + 6 + tw(t1) + 18 + 14 + 6 + tw(t2);
+      let lx = MX + Math.max(0, (CWx - lw2) / 2);
+      FR(lx, y0 + 2, 11, 11, barC, 3);
+      T(t1, lx + 17, y0 + 12);
+      lx += 11 + 6 + tw(t1) + 18;
+      FR(lx, y0 + 6, 14, 3, lineC, 1.5);
+      T(t2, lx + 20, y0 + 12);
+      y0 += 21;
+      const isPct = /pct|percent|rate/.test(String(lineKey).toLowerCase());
+      const padL = 42,
+        padR = 46,
+        padT = 22,
+        plotH = hgt - 46;
+      const step = Math.max(46, Math.min(82, 560 / n)),
+        viewW = Math.max(320, n * step + padL + padR);
+      const rw = Math.min(CWx, Math.max(260, n * step + padL + padR)),
+        sx = rw / viewW,
+        ox = MX + (CWx - rw) / 2;
+      const plotW = viewW - padL - padR,
+        baseY = y0 + padT + plotH;
+      const barMax = Math.max(1, ...data.map(d => +d[barKey] || 0));
+      const lineMax = Math.max(isPct ? 100 : 1, ...data.map(d => +d[lineKey] || 0));
+      const cx2 = i => ox + (padL + (n <= 1 ? plotW / 2 : (i + 0.5) * plotW / n)) * sx;
+      const lpy = v => y0 + padT + plotH - v / lineMax * plotH;
+      [0, .25, .5, .75, 1].forEach(g => {
+        const yy = baseY - g * plotH;
+        LN(ox + padL * sx, yy, ox + (viewW - padR) * sx, yy, C.grid, 1);
+        font('normal', 9, C.faint);
+        T(fmt(Math.round(barMax * g)), ox + (padL - 6) * sx, yy + 3, {
+          align: 'right'
+        });
+        font('normal', 9, lineC);
+        T(isPct ? Math.round(lineMax * g) + '%' : fmt(Math.round(lineMax * g)), ox + (viewW - padR + 6) * sx, yy + 3);
+      });
+      const bw = Math.min(28, plotW / n * 0.5) * sx;
+      data.forEach((d, i) => {
+        const v = +d[barKey] || 0,
+          bh = v / barMax * plotH;
+        doc.setFillColor(barC[0], barC[1], barC[2]);
+        doc.roundedRect(X(cx2(i) - bw / 2), X(baseY - bh), X(bw), X(Math.max(bh, 0.1)), X(Math.min(4, bw / 2)), X(Math.min(4, Math.max(bh, 0.1) / 2)), 'F');
+        if (v > 0) {
+          font('bold', 9.5, barC);
+          T(fmt(v), cx2(i), baseY - bh - 5, {
             align: 'center'
           });
         }
-        if (!lineMode && bw > 13) {
-          F('normal', 6.4, RGB.ink2);
-          doc.text(fmt(v), bx + bw / 2, y + h - bh - 3, {
-            align: 'center'
-          });
-        }
+        font('normal', 9.5, C.faint);
+        T(monthLbl(d[xKey]), cx2(i), y0 + hgt - 6, {
+          align: 'center'
+        });
       });
-      return y + h + 18;
+      const pts = data.map((d, i) => [cx2(i), lpy(+d[lineKey] || 0)]);
+      PLINE(pts, lineC, 2.5);
+      pts.forEach(p => CIRC(p[0], p[1], 3.4, C.white, lineC, 2.5));
+      return y0 + hgt;
     };
-    const compositionBar = (y, parts) => {
-      const tot = parts.reduce((s, p) => s + p.value, 0);
-      if (!tot || parts.length < 2) return y;
-      F('normal', 6.6, RGB.muted);
-      doc.text('COMPOSITION', M, y + 8);
-      let x = M + 70;
-      const w = CW - 70;
-      parts.forEach((p, i) => {
-        const pw2 = w * (p.value / tot);
-        doc.setFillColor(p.tone[0], p.tone[1], p.tone[2]);
-        doc.rect(x, y, pw2, 10, 'F');
-        x += pw2;
+    const vGrouped = (y0, data, xKey, series, hgt) => {
+      const n = Math.max(1, data.length),
+        ns = Math.max(1, series.length);
+      const groupW = Math.max(48, ns * 16 + 18),
+        bw = Math.min(15, (groupW - 14) / ns - 3);
+      const rw = Math.min(CWx, n * Math.max(70, groupW)),
+        sx = rw / (n * groupW),
+        ox = MX + (CWx - rw) / 2;
+      const max = Math.max(1, ...data.flatMap(d => series.map(s3 => d[s3.id] || 0)));
+      gridLines(ox, rw, y0, hgt);
+      data.forEach((d, gi) => {
+        series.forEach((s3, si) => {
+          const v = d[s3.id] || 0,
+            h2 = v / max * (hgt - 44);
+          if (h2 <= 0) return;
+          const c = hx(s3.color),
+            bx = ox + (gi * groupW + 9 + si * (bw + 3)) * sx,
+            by = y0 + hgt - 20 - h2;
+          doc.setFillColor(c[0], c[1], c[2]);
+          doc.roundedRect(X(bx), X(by), X(bw * sx), X(h2), X(Math.min(3, bw * sx / 2)), X(Math.min(3, h2 / 2)), 'F');
+        });
+        font('normal', 9.5, C.faint);
+        T(monthLbl(d[xKey]), ox + (gi * groupW + groupW / 2) * sx, y0 + hgt - 6, {
+          align: 'center'
+        });
       });
-      let lx = M + 70,
-        ly = y + 22;
-      parts.forEach(p => {
-        const t = p.label + '  ' + fmt(p.value);
-        const tw = doc.getTextWidth(t) + 16;
-        if (lx + tw > PW - M) {
-          lx = M + 70;
-          ly += 11;
-        }
-        doc.setFillColor(p.tone[0], p.tone[1], p.tone[2]);
-        doc.rect(lx, ly - 5.5, 5.5, 5.5, 'F');
-        F('normal', 7, RGB.ink2);
-        doc.text(t, lx + 8, ly);
-        lx += tw;
-      });
-      return ly + 16;
+      return y0 + hgt;
     };
-    const vTable = (y, headers, widths, rows, opts) => {
-      const o = opts || {};
-      const rowH = o.rowH || 14,
-        headH = 15;
-      const fs = o.fontSize || (headers.length > 9 ? 6.4 : headers.length > 7 ? 7 : 8);
+    const vStacked = (y0, data, xKey, series, hgt) => {
+      const n = Math.max(1, data.length);
+      const step = Math.max(40, Math.min(70, 600 / n)),
+        rw = Math.min(CWx, n * Math.max(64, step)),
+        sx = rw / (n * step),
+        ox = MX + (CWx - rw) / 2;
+      const totals = data.map(d => series.reduce((s3, k) => s3 + (d[k.id] || 0), 0));
+      const max = Math.max(1, ...totals);
+      gridLines(ox, rw, y0, hgt);
+      data.forEach((d, gi) => {
+        let acc = 0;
+        const bx = ox + (gi * step + (step - 24) / 2) * sx,
+          bwv = 24 * sx;
+        series.forEach((s3, si) => {
+          const v = d[s3.id] || 0,
+            h2 = v / max * (hgt - 44);
+          if (h2 <= 0) return;
+          const by = y0 + hgt - 20 - acc - h2;
+          acc += h2;
+          const c = hx(s3.color);
+          doc.setFillColor(c[0], c[1], c[2]);
+          if (si === series.length - 1) doc.roundedRect(X(bx), X(by), X(bwv), X(h2), X(Math.min(3, bwv / 2)), X(Math.min(3, h2 / 2)), 'F');else doc.rect(X(bx), X(by), X(bwv), X(h2), 'F');
+        });
+        font('normal', 9.5, C.faint);
+        T(monthLbl(d[xKey]), ox + (gi * step + step / 2) * sx, y0 + hgt - 6, {
+          align: 'center'
+        });
+      });
+      return y0 + hgt;
+    };
+    const vPct = (y0, data, xKey, series, hgt) => {
+      const items = series.map((s3, i) => ({
+        t: String(s3.label || s3.id),
+        c: hx(s3.color || PALETTE[i % PALETTE.length])
+      }));
+      font('normal', 11.5, C.ink2);
+      const totW = items.reduce((a, it) => a + 11 + 6 + tw(it.t), 0) + 14 * (items.length - 1);
+      let lx = MX + Math.max(0, (CWx - totW) / 2),
+        ly = y0 + 2;
+      items.forEach(it => {
+        const w2 = 11 + 6 + tw(it.t);
+        if (lx + w2 > MX + CWx) {
+          lx = MX;
+          ly += 16;
+        }
+        FR(lx, ly, 11, 11, it.c, 3);
+        font('normal', 11.5, C.ink2);
+        T(it.t, lx + 17, ly + 9.5);
+        lx += w2 + 14;
+      });
+      y0 = ly + 19;
+      const n = Math.max(1, data.length),
+        padT = 16,
+        plotH = hgt - 40;
+      const step = Math.max(40, Math.min(74, 560 / n)),
+        viewW = Math.max(280, n * step);
+      const rw = Math.min(CWx, Math.max(260, n * Math.max(64, step))),
+        sx = rw / viewW,
+        ox = MX + (CWx - rw) / 2;
+      const totals = data.map(d => series.reduce((s3, k) => s3 + (+d[k.id] || 0), 0));
+      const baseY = y0 + padT + plotH;
+      [0, .25, .5, .75, 1].forEach(g => {
+        LN(ox, baseY - g * plotH, ox + rw, baseY - g * plotH, C.grid, 1);
+        font('normal', 9, C.faint);
+        T(Math.round(g * 100) + '%', ox + 2 * sx, baseY - g * plotH - 2);
+      });
+      data.forEach((d, gi) => {
+        const tot = totals[gi] || 0,
+          bwp = Math.min(26, step * 0.5),
+          bwv = bwp * sx,
+          bx = ox + (gi * step + (step - bwp) / 2) * sx;
+        let acc = 0;
+        series.forEach((s3, si) => {
+          const v = +d[s3.id] || 0,
+            frac = tot ? v / tot : 0,
+            h2 = frac * plotH;
+          if (h2 <= 0) return;
+          const by = baseY - acc - h2;
+          acc += h2;
+          const c = hx(s3.color || PALETTE[si % PALETTE.length]);
+          doc.setFillColor(c[0], c[1], c[2]);
+          if (si === series.length - 1) doc.roundedRect(X(bx), X(by), X(bwv), X(h2), X(Math.min(3, bwv / 2)), X(Math.min(3, h2 / 2)), 'F');else doc.rect(X(bx), X(by), X(bwv), X(h2), 'F');
+        });
+        font('normal', 9.5, C.faint);
+        T(monthLbl(d[xKey]), ox + (gi * step + step / 2) * sx, y0 + hgt - 6, {
+          align: 'center'
+        });
+      });
+      return y0 + hgt;
+    };
+    const vHBarRows = (y0, rows) => {
+      const max = Math.max(1, ...rows.map(r => r.value));
+      let y = y0;
+      rows.forEach(r => {
+        if (y + 20 > LIMIT) y = newPage();
+        font('bold', 12, C.ink2);
+        T(clip(r.label, 116), MX, y + 12);
+        const tx = MX + 130,
+          twd = CWx - 130 - 64;
+        FR(tx, y + 1.5, twd, 15, C.grid, 5);
+        if (r.value > 0) FR(tx, y + 1.5, Math.max(4, twd * (r.value / max)), 15, r.color, 5);
+        font('bold', 12.5, C.ink);
+        T(fmt(r.value), MX + CWx, y + 12.5, {
+          align: 'right'
+        });
+        y += 24;
+      });
+      return y - 9 + 4;
+    };
+    const vDonut = (x, y, size, thickness, data, centerValue, centerLabel) => {
+      const total = data.reduce((s3, d) => s3 + d.value, 0) || 1;
+      const cx2 = x + size / 2,
+        cy2 = y + size / 2,
+        rO = size / 2,
+        rI = size / 2 - thickness;
+      let ang = -Math.PI / 2;
+      data.forEach((d, i) => {
+        const frac = d.value / total,
+          a1 = ang + frac * 2 * Math.PI;
+        if (frac > 0) wedge(cx2, cy2, rO, rI, ang, a1, hx(d.color || PALETTE[i % PALETTE.length]));
+        ang = a1;
+      });
+      if (centerValue != null) {
+        font('bold', 24, C.ink);
+        T(centerValue, cx2, cy2 + 3, {
+          align: 'center'
+        });
+        font('normal', 10, C.muted);
+        doc.text(String(centerLabel || '').toUpperCase(), X(cx2), X(cy2 + 16), {
+          align: 'center',
+          charSpace: 0.4 * S
+        });
+      }
+    };
+    const donutLegend = (x, y, data) => {
+      data.forEach((d, i) => {
+        const ry = y + i * 21;
+        FR(x, ry, 9, 9, hx(d.color || PALETTE[i % PALETTE.length]), 3);
+        font('normal', 12, C.ink2);
+        T(d.label, x + 17, ry + 9);
+      });
+      font('bold', 12, C.ink);
+      const labW = Math.max(...data.map(d => tw(d.label)));
+      const w2 = 9 + 8 + labW + 14 + Math.max(...data.map(d => tw(fmt(d.value))));
+      data.forEach((d, i) => {
+        font('bold', 12, C.ink);
+        T(fmt(d.value), x + w2, y + i * 21 + 9, {
+          align: 'right'
+        });
+      });
+      return w2;
+    };
+    const donutLegendW = data => {
+      font('normal', 12, C.ink2);
+      const labW = Math.max(...data.map(d => tw(d.label)));
+      font('bold', 12, C.ink);
+      return 9 + 8 + labW + 14 + Math.max(...data.map(d => tw(fmt(d.value))));
+    };
+    const vDonutBlock = (y0, data, hgt) => {
+      const legW = donutLegendW(data),
+        size = 188,
+        legH = data.length * 21 - 6;
+      const x0 = MX + Math.max(0, (CWx - (size + 18 + legW)) / 2),
+        blockH = Math.max(hgt, size);
+      vDonut(x0, y0 + (blockH - size) / 2, size, 30, data, fmt(data.reduce((s3, d) => s3 + d.value, 0)), 'Total');
+      donutLegend(x0 + size + 18, y0 + (blockH - legH) / 2, data);
+      return y0 + blockH;
+    };
+    const compositionStrip = (y0, data) => {
+      const legH = data.length * 21 - 6,
+        boxH = Math.max(124, legH + 20);
+      FR(MX, y0, CWx, boxH, C.panel2, 9);
+      font('bold', 10.5, C.muted);
+      doc.text('COMPOSITION', X(MX + 14), X(y0 + boxH / 2 + 3), {
+        charSpace: 0.3 * S
+      });
+      const dx0 = MX + 14 + 78 + 10;
+      vDonut(dx0, y0 + (boxH - 104) / 2, 104, 20, data, null, null);
+      donutLegend(dx0 + 104 + 18, y0 + (boxH - legH) / 2, data);
+      return y0 + boxH;
+    };
+    const vTable = (y, heads, widths, rows, o) => {
+      o = o || {};
+      const fs2 = o.fs || 12.5,
+        rpt = !!o.rpt;
+      const hfs = rpt ? fs2 : 10.5,
+        padX = rpt ? 6 : 12,
+        padY = rpt ? 5 : 8;
+      const rowH = Math.round(fs2 * 1.3 + padY * 2),
+        lh = hfs * 1.18;
       const xs = [];
-      let ax = M;
+      let ax = MX;
       widths.forEach(w2 => {
         xs.push(ax);
         ax += w2;
       });
-      const clip = (s, w2) => {
-        s = String(s == null ? '-' : s);
-        if (doc.getTextWidth(s) <= w2) return s;
-        while (s.length > 1 && doc.getTextWidth(s + '…') > w2) s = s.slice(0, -1);
-        return s + '…';
-      };
       const drawHead = yy => {
-        box(M, yy, CW, headH, RGB.panel, 0);
-        F('bold', fs - 0.4, RGB.muted);
-        headers.forEach((h2, i) => {
+        font('bold', hfs, C.muted);
+        const wrapped = heads.map((h2, i) => doc.splitTextToSize(String(h2).toUpperCase(), X(Math.max(10, widths[i] - padX - 4))));
+        const maxL = Math.max(1, ...wrapped.map(w2 => w2.length));
+        const hH = Math.round(maxL * lh + padY * 2 + 2);
+        FR(MX, yy, CWx, hH, C.panel2);
+        wrapped.forEach((lines, i) => {
           const right = i > 0;
-          doc.text(clip(String(h2).toUpperCase(), widths[i] - 8), right ? xs[i] + widths[i] - 4 : xs[i] + 4, yy + 10, right ? {
+          const tx = right ? xs[i] + widths[i] - padX : xs[i] + padX;
+          const sy = yy + hH - padY - 3 - (lines.length - 1) * lh;
+          lines.forEach((ln2, li) => T(ln2, tx, sy + li * lh, right ? {
             align: 'right'
-          } : undefined);
+          } : undefined));
         });
-        line(M, yy + headH, M + CW, yy + headH);
-        return yy + headH;
+        LN(MX, yy + hH, MX + CWx, yy + hH, C.line, 1);
+        return yy + hH;
       };
+      {
+        font('bold', hfs, C.muted);
+        const wrapped0 = heads.map((h2, i) => doc.splitTextToSize(String(h2).toUpperCase(), X(Math.max(10, widths[i] - padX - 4))));
+        const hH0 = Math.round(Math.max(1, ...wrapped0.map(w2 => w2.length)) * lh + padY * 2 + 2);
+        if (y + hH0 + rowH > LIMIT) y = newPage();
+      }
       y = drawHead(y);
       rows.forEach((r, ri) => {
-        if (y + rowH > FOOT - 14) {
-          doc.addPage(fmtP, ori);
-          y = pageHeader();
+        if (y + rowH > LIMIT) {
+          y = newPage();
           y = drawHead(y);
         }
-        if (ri % 2) {
-          doc.setFillColor(251, 253, 255);
-          doc.rect(M, y, CW, rowH, 'F');
-        }
         const tot = o.totalRow && ri === rows.length - 1;
+        if (tot) {
+          FR(MX, y, CWx, rowH, C.panel2);
+          LN(MX, y, MX + CWx, y, C.line, 2);
+        }
         r.forEach((cell, ci) => {
+          if (o.deltaCol === ci) {
+            deltaChip(xs[ci] + widths[ci] - padX, y + (rowH - 18) / 2, Number(cell) || 0);
+            return;
+          }
           const right = ci > 0;
-          F(tot || ci === 0 ? 'bold' : 'normal', fs, tot ? RGB.ink : ci === 0 ? RGB.ink : RGB.ink2);
-          doc.text(clip(cell, widths[ci] - 8), right ? xs[ci] + widths[ci] - 4 : xs[ci] + 4, y + rowH - 4, right ? {
+          font(ci === 0 || tot ? 'bold' : 'normal', fs2, tot ? C.ink : ci === 0 ? C.ink : C.ink2);
+          T(clip(cell, widths[ci] - padX - 4), right ? xs[ci] + widths[ci] - padX : xs[ci] + padX, y + rowH - padY - fs2 * 0.24, right ? {
             align: 'right'
           } : undefined);
         });
-        line(M, y + rowH, M + CW, y + rowH, RGB.line, 0.4);
+        LN(MX, y + rowH, MX + CWx, y + rowH, C.line2, 1);
         y += rowH;
       });
-      return y + 10;
+      return y;
     };
-    const sigBlock = y => {
-      if (y > PH - 140) {
-        doc.addPage(fmtP, ori);
-        y = pageHeader();
-      }
-      F('bold', 7.5, RGB.muted);
-      doc.text(('Authorisation · ' + hospitalName).toUpperCase(), M, y + 10);
-      const gap = 26,
-        w = (CW - 2 * gap) / 3;
-      y += 44;
-      [['Prepared by', sig.prepared], ['Checked by', sig.reviewed], ['Approved by', sig.approved]].forEach(([role, name], i) => {
-        const x = M + i * (w + gap);
-        line(x, y, x + w, y, RGB.ink2, 0.8);
-        F('bold', 9, RGB.ink);
-        doc.text(String(name || ' '), x, y + 12);
-        F('normal', 7, RGB.muted);
-        doc.text(role.toUpperCase(), x, y + 22);
+    const sigBlockAt = (x0, wAll, y) => {
+      y += 26;
+      font('bold', 9.5, C.muted);
+      doc.text(('Authorisation · ' + hospitalName).toUpperCase(), X(x0), X(y + 9), {
+        charSpace: 0.4 * S
       });
-      return y + 34;
+      const gap = 30,
+        w3 = (wAll - 2 * gap) / 3,
+        ly = y + 9 + 12 + 34;
+      [['Prepared by', sig.prepared], ['Checked by', sig.reviewed], ['Approved by', sig.approved]].forEach(([role, name], i) => {
+        const x = x0 + i * (w3 + gap);
+        LN(x, ly, x + w3, ly, C.ink2, 1);
+        font('bold', 11, C.ink);
+        T(name || ' ', x, ly + 14);
+        font('normal', 9.5, C.muted);
+        doc.text(role.toUpperCase(), X(x), X(ly + 26), {
+          charSpace: 0.3 * S
+        });
+      });
+      return ly + 32;
     };
-    const typeLabel = {
-      summary: 'Department Summary Report',
-      detail: 'Detailed Statistical Report',
-      compare: 'Cross-Department Comparison',
-      board: 'Executive Board Report'
-    }[type] || 'Statistical Report';
-    if (showCover) {
+    const sigBlockPx = y => sigBlockAt(MX, CWx, y);
+    const SIGH = 113;
+    const chartH = (cs, fs2, donutData) => {
+      if (cs === 'horizontal') return Math.max(1, fs2.length) * 24 - 5;
+      if (cs === 'donut') return donutData.length > 1 ? 205 : 205;
+      if (cs === 'combo' || cs === 'pct') return 231;
+      if (cs === 'grouped' || cs === 'stacked') return 210;
+      if (cs === 'area') return 200;
+      if (cs === 'bar' || cs === 'line') return 195;
+      return 205;
+    };
+    const drawChart = (cs, y, d, fs2, tone, donutData) => {
+      const prim = d.primary;
+      if (cs === 'bar') return vBarFlat(y, fs2, 'month', prim, 195);
+      if (cs === 'line') return vLine(y, fs2, 'full', prim, tone, 195);
+      if (cs === 'area') {
+        const avg = fs2.length ? Math.round(fs2.reduce((s3, r) => s3 + (r[prim] || 0), 0) / fs2.length) : 0;
+        return vArea(y, fs2, 'full', prim, tone, avg, 200);
+      }
+      if (cs === 'combo') {
+        const pctCol = d.cols.find(c => c.pct);
+        const lineKey = pctCol ? pctCol.id : (d.cols.find(c => c.id !== prim && !c.pct) || {}).id || prim;
+        return vCombo(y, fs2, 'month', prim, lineKey, tone, hx('#e08a1e'), (d.cols.find(c => c.id === prim) || {}).label || 'Value', (d.cols.find(c => c.id === lineKey) || {}).label || 'Trend', 210);
+      }
+      if (cs === 'grouped') {
+        const sr = reportSeries(d);
+        return sr.length ? vGrouped(y, fs2, 'month', sr, 210) : vBarFlat(y, fs2, 'month', prim, 195);
+      }
+      if (cs === 'stacked') {
+        const sr = reportSeries(d);
+        return sr.length ? vStacked(y, fs2, 'month', sr, 210) : vBarFlat(y, fs2, 'month', prim, 195);
+      }
+      if (cs === 'pct') {
+        const sr = reportSeries(d);
+        return sr.length ? vPct(y, fs2, 'month', sr, 210) : vBarFlat(y, fs2, 'month', prim, 195);
+      }
+      if (cs === 'horizontal') return vHBarRows(y, fs2.map((r, i) => ({
+        label: r.full,
+        value: r[prim] || 0,
+        color: PALV[i % PALV.length]
+      })));
+      if (cs === 'donut') return donutData.length > 1 ? vDonutBlock(y, donutData, 205) : vBar3D(y, fs2, 'month', prim, 205);
+      return vBar3D(y, fs2, 'month', prim, 205);
+    };
+    const deptPage = (d, isLast) => {
+      let y = pageHeader();
+      const fs2 = fseriesOf(d),
+        st = statOf(d, fs2);
+      const toneHex = PALETTE[d.id.charCodeAt(0) % PALETTE.length],
+        tone = hx(toneHex);
+      drawIcon(DEPT_ICON[d.id] || I.activity, MX, y + 1, 18, toneHex);
+      font('bold', 15, C.ink);
+      T(d.name, MX + 27, y + 15);
+      tagChip(MX + 27 + tw(d.name) + 9, y + 2, d.group || '');
+      if (fs2.length) deltaChip(pageW - MX, y + 1, st.delta);
+      y += 31;
+      if (!fs2.length) {
+        try {
+          doc.setLineDashPattern([4 * S, 3 * S], 0);
+        } catch (e) {}
+        doc.setDrawColor(C.line[0], C.line[1], C.line[2]);
+        doc.setLineWidth(1 * S);
+        doc.roundedRect(X(MX), X(y), X(CWx), X(96), X(10), X(10), 'S');
+        try {
+          doc.setLineDashPattern([], 0);
+        } catch (e) {}
+        font('normal', 12.5, C.muted);
+        T('No data reported for ' + d.name + ' in the selected period (' + rangeLabel + ').', MX + CWx / 2, y + 52, {
+          align: 'center'
+        });
+        y += 96;
+        if (showSig && isLast) sigBlockPx(y);
+        return;
+      }
+      if (fs2.length < pMonths.length) {
+        const segs = [['Reported data covers ', false], [fs2[0].full + ' – ' + fs2[fs2.length - 1].full, true], [' (' + fs2.length + ' of the ' + pMonths.length + ' months in the selected period); months without a report are not plotted.', false]];
+        font('normal', 10, C.muted);
+        const lines = doc.splitTextToSize(segs.map(s3 => s3[0]).join(''), X(CWx - 20)).length;
+        const boxH = lines * 14 + 10;
+        FR(MX, y, CWx, boxH, C.panel2, 6);
+        richText(segs, MX + 10, y + 15, CWx - 20, 10, 14, C.muted);
+        y += boxH + 10;
+      }
+      y = kpiRow(y, [['Latest', fmt(st.latest[d.primary] || 0)], ['Total', fmt(st.total)], ['Peak', fmt(st.peak)], ['Avg', fmt(st.avg)]].map(p => ({
+        label: p[0],
+        value: p[1],
+        tone
+      })));
+      const breakdown = d.cols.filter(c => c.id !== d.primary && !c.pct);
+      const donutData = breakdown.map((c, i) => ({
+        label: c.label,
+        value: fs2.reduce((s3, r) => s3 + (r[c.id] || 0), 0),
+        color: PALETTE[i % PALETTE.length]
+      })).filter(x => x.value > 0);
+      chartStyles.forEach(cs => {
+        const capH = chartStyles.length > 1 ? 18 : 0;
+        const need = capH + chartH(cs, fs2, donutData) + 12;
+        if (y + need > LIMIT && y > MT + 71) y = newPage();
+        y += 4;
+        if (chartStyles.length > 1) {
+          font('bold', 9.5, C.muted);
+          doc.text(String(CHART_STYLE_LABEL[cs] || cs).toUpperCase(), X(MX), X(y + 12), {
+            charSpace: 0.4 * S
+          });
+          y += 18;
+        }
+        y = drawChart(cs, y, d, fs2, tone, donutData);
+        y += 8;
+      });
+      if (donutData.length > 1 && !chartStyles.includes('donut')) {
+        const boxH = Math.max(124, donutData.length * 21 - 6 + 20);
+        if (y + 6 + boxH > LIMIT) y = newPage();
+        y = compositionStrip(y + 6, donutData);
+      }
+      const detailed = type === 'detail';
+      const ncol = d.cols.length + 1;
+      const tblFont = ncol > 10 ? 8 : ncol > 8 ? 8.5 : ncol > 6 ? 9.5 : detailed ? 10.5 : 11;
+      const rpt = detailed || ncol > 7;
+      font('bold', tblFont);
+      const firstW = rpt ? 58 : Math.min(120, Math.max(76, ...fs2.map(r => tw(detailed ? r.month : r.full) + 24)));
+      const widths = [firstW].concat(d.cols.map(() => (CWx - firstW) / d.cols.length));
+      const rows = fs2.map(r => [detailed ? r.month : r.full].concat(d.cols.map(c => r[c.id] == null ? '–' : c.pct ? r[c.id] + '%' : fmt(r[c.id]))));
+      if (detailed) rows.push(['TOTAL'].concat(d.cols.map(c => c.pct ? '—' : fmt(fs2.reduce((s3, r) => s3 + (r[c.id] || 0), 0)))));
+      y = vTable(y + 14, ['Month'].concat(d.cols.map(c => c.label)), widths, rows, {
+        fs: tblFont,
+        rpt: rpt,
+        totalRow: detailed
+      });
+      if (showSig && isLast) {
+        if (y + SIGH > LIMIT) y = newPage();
+        sigBlockPx(y);
+      }
+    };
+    const coverPage = () => {
       const rows = chosen.map(d => {
         const fsr = fseriesOf(d);
         return {
@@ -16672,77 +17308,109 @@ function Reports({
           fs: fsr
         };
       });
-      const totAll = rows.reduce((s, r) => s + r.st.total, 0);
+      const totAll = rows.reduce((s3, r) => s3 + r.st.total, 0);
       const mTot = {};
-      rows.forEach(({
-        d,
-        fs
-      }) => fs.forEach(r => {
-        mTot[r.month] = (mTot[r.month] || 0) + (r[d.primary] || 0);
+      rows.forEach(rr => rr.fs.forEach(r => {
+        mTot[r.month] = (mTot[r.month] || 0) + (r[rr.d.primary] || 0);
       }));
       const peakM = Object.keys(mTot).sort((a, b) => mTot[b] - mTot[a])[0];
-      let y = PH * 0.16;
+      const typeLabel = {
+        summary: 'Department Summary Report',
+        detail: 'Detailed Statistical Report',
+        compare: 'Cross-Department Comparison',
+        board: 'Executive Board Report'
+      }[type] || 'Statistical Report';
+      const hasSig = !!(sig.prepared || sig.reviewed || sig.approved);
+      const totalH = (logo ? 92 : 0) + 16 + 58 + 17 + 28 + 82 + (confidential ? 54 : 0) + 29 + (hasSig ? SIGH : 0);
+      let y = MT + Math.max(24, (FOOTY - MT - totalH) / 2 + 15);
       if (logo) {
-        const lw = 110 * (logo.w / logo.h) > 170 ? 170 : 110 * (logo.w / logo.h);
-        drawLogo(PW / 2 - lw / 2, y, 110 * (logo.h / logo.w) > 60 ? 60 : 110 * (logo.h / logo.w));
-        y += (110 * (logo.h / logo.w) > 60 ? 60 : 110 * (logo.h / logo.w)) + 26;
+        const w2 = 66 * (logo.w / logo.h);
+        drawLogo(pageW / 2 - w2 / 2, y, 66);
+        y += 92;
       }
-      F('bold', 10, RGB.blue);
-      doc.text(String(hospitalName).toUpperCase(), PW / 2, y, {
+      font('bold', 13, C.blue);
+      doc.text(String(hospitalName).toUpperCase(), X(pageW / 2), X(y + 11), {
+        align: 'center',
+        charSpace: 1.5 * S
+      });
+      y += 16;
+      font('bold', 32, C.ink);
+      T(hdrTitle || 'Patient Statistics Report', pageW / 2, y + 40, {
         align: 'center'
       });
-      y += 30;
-      F('bold', 26, RGB.ink);
-      doc.text(hdrTitle || 'Patient Statistics Report', PW / 2, y, {
-        align: 'center'
-      });
-      y += 18;
-      F('normal', 10.5, RGB.muted);
-      doc.text((hdrSub ? hdrSub + ' · ' : '') + typeLabel, PW / 2, y, {
+      y += 58;
+      font('normal', 13, C.muted);
+      T((hdrSub ? hdrSub + ' · ' : '') + typeLabel, pageW / 2, y + 12, {
         align: 'center'
       });
       y += 17;
-      F('bold', 11, RGB.ink2);
-      doc.text(rangeLabel, PW / 2, y, {
+      font('bold', 14, C.ink2);
+      T(rangeLabel, pageW / 2, y + 21, {
         align: 'center'
       });
-      y += 40;
-      const stats = [['Departments', String(chosen.length), TONES[0]], ['Total patients', fmt(totAll), TONES[1]], ['Peak month', peakM ? peakM.split('-')[0] + ' 20' + peakM.split('-')[1] : '-', TONES[2]], ['Months covered', String(pMonths.length), TONES[3]]];
-      const sw = CW / 4;
-      stats.forEach((s2, i) => {
-        const x = M + i * sw + sw / 2;
-        F('bold', 19, s2[2]);
-        doc.text(s2[1], x, y, {
+      y += 28;
+      const sw = CWx / 4;
+      [['Departments', String(chosen.length), PALV[0]], ['Total patients', fmt(totAll), PALV[1]], ['Peak month', peakM ? peakM.split('-')[0] + ' 20' + peakM.split('-')[1] : '—', PALV[2]], ['Months covered', String(pMonths.length), PALV[3]]].forEach((s3, i) => {
+        const x = MX + i * sw + sw / 2;
+        font('bold', 26, s3[2]);
+        T(s3[1], x, y + 58, {
           align: 'center'
         });
-        F('normal', 6.8, RGB.muted);
-        doc.text(s2[0].toUpperCase(), x, y + 12, {
-          align: 'center'
+        font('normal', 9.5, C.muted);
+        doc.text(String(s3[0]).toUpperCase(), X(x), X(y + 72), {
+          align: 'center',
+          charSpace: 0.4 * S
         });
       });
-      y += 44;
+      y += 82;
       if (confidential) {
-        const t = 'CONFIDENTIAL - FOR AUTHORISED RECIPIENTS ONLY';
-        F('bold', 8, RGB.rose);
-        const tw = doc.getTextWidth(t) + 28;
-        doc.setDrawColor(241, 198, 205);
-        doc.setLineWidth(0.8);
-        doc.roundedRect(PW / 2 - tw / 2, y - 11, tw, 18, 4, 4, 'S');
-        doc.text(t, PW / 2, y + 1, {
+        font('bold', 10.5, C.rose);
+        const t2 = 'CONFIDENTIAL — FOR AUTHORISED RECIPIENTS ONLY';
+        const w2 = tw(t2) + 28;
+        doc.setDrawColor(C.roseLine[0], C.roseLine[1], C.roseLine[2]);
+        doc.setLineWidth(1 * S);
+        doc.roundedRect(X(pageW / 2 - w2 / 2), X(y + 28), X(w2), X(26), X(6), X(6), 'S');
+        T(t2, pageW / 2, y + 44.5, {
           align: 'center'
         });
-        y += 30;
+        y += 54;
       }
-      F('normal', 7.5, RGB.faint);
-      doc.text('Generated ' + genDate, PW / 2, y, {
+      font('normal', 10, C.faint);
+      T('Generated ' + genDate, pageW / 2, y + 24, {
         align: 'center'
       });
-      y += 26;
-      if (sig.prepared || sig.reviewed || sig.approved) sigBlock(y - 6);
-    }
-    const money = (d, r, c) => r[c.id] == null ? '-' : c.pct ? r[c.id] + '%' : fmt(r[c.id]);
-    if (type === 'compare' || type === 'board') {
-      if (showCover) doc.addPage(fmtP, ori);
+      y += 29;
+      if (hasSig) sigBlockAt(Math.max(MX, (pageW - 600) / 2), Math.min(600, CWx), y);
+    };
+    const comparePage = () => {
+      let y = pageHeader();
+      const rows = chosen.map(d => {
+        const fsr = fseriesOf(d);
+        return {
+          d,
+          st: statOf(d, fsr)
+        };
+      });
+      font('bold', 15, C.ink);
+      T('Cross-department comparison · ' + chosen.length + ' departments', MX, y + 14);
+      y += 31;
+      const hbar = rows.map(rr => ({
+        label: rr.d.short,
+        value: rr.st.total,
+        color: PALV[rr.d.id.charCodeAt(0) % PALV.length]
+      })).sort((a, b) => b.value - a.value);
+      y = vHBarRows(y, hbar) + 16;
+      const widths = [CWx * 0.22, CWx * 0.18, CWx * 0.11, CWx * 0.11, CWx * 0.11, CWx * 0.11, CWx * 0.16];
+      y = vTable(y, ['Department', 'Service line', 'Latest', 'Total', 'Peak', 'Avg', 'Trend'], widths, rows.map(rr => [rr.d.name, rr.d.group, fmt(rr.st.latest[rr.d.primary] || 0), fmt(rr.st.total), fmt(rr.st.peak), fmt(rr.st.avg), rr.st.delta]), {
+        fs: 11.5,
+        deltaCol: 6
+      });
+      if (showSig) {
+        if (y + SIGH > LIMIT) y = newPage();
+        sigBlockPx(y);
+      }
+    };
+    const boardPage = () => {
       let y = pageHeader();
       const rows = chosen.map(d => {
         const fsr = fseriesOf(d);
@@ -16752,149 +17420,80 @@ function Reports({
           fs: fsr
         };
       });
-      const totAll = rows.reduce((s, r) => s + r.st.total, 0);
-      F('bold', 13);
-      doc.text(type === 'board' ? 'Executive Board Report' : 'Cross-Department Comparison', M, y);
-      y += 8;
-      F('normal', 8, RGB.muted);
-      doc.text(rangeLabel + '  ·  ' + rows.length + ' departments', M, y + 10);
-      y += 24;
-      if (type === 'board') {
-        const top = rows.slice().sort((a, b) => b.st.total - a.st.total)[0];
-        const mTot = {};
-        rows.forEach(({
-          d,
-          fs
-        }) => fs.forEach(r => {
-          mTot[r.month] = (mTot[r.month] || 0) + (r[d.primary] || 0);
-        }));
-        const trend = pMonths.filter(m => mTot[m] != null).map(m => ({
-          label: m,
-          val: mTot[m]
-        }));
-        const peak = trend.slice().sort((a, b) => b.val - a.val)[0];
-        y = kpiRow(y, [{
-          label: 'Total patients',
-          value: fmt(totAll),
-          tone: TONES[0]
-        }, {
-          label: 'Departments',
-          value: String(rows.length),
-          tone: TONES[1]
-        }, {
-          label: 'Busiest dept',
-          value: top ? top.d.short : '-',
-          tone: TONES[2]
-        }, {
-          label: 'Peak month',
-          value: peak ? peak.label : '-',
-          tone: TONES[3]
-        }]);
-        if (trend.length > 1) {
-          F('normal', 6.6, RGB.muted);
-          doc.text('HOSPITAL VOLUME - MONTHLY TREND', M, y + 6);
-          y = vBarChart(M, y + 12, CW, 120, trend, TONES[0]);
-        }
-      }
-      const rank = rows.slice().sort((a, b) => b.st.total - a.st.total);
-      const maxT = Math.max(1, ...rank.map(r => r.st.total));
-      F('normal', 6.6, RGB.muted);
-      doc.text('DEPARTMENT RANKING (PERIOD TOTAL)', M, y + 6);
-      y += 14;
-      rank.forEach(({
-        d,
-        st
-      }, i) => {
-        if (y + 15 > FOOT - 14) {
-          doc.addPage(fmtP, ori);
-          y = pageHeader();
-        }
-        const bw = (CW - 150) * (st.total / maxT),
-          tone = TONES[d.id.charCodeAt(0) % TONES.length];
-        F('normal', 7.5, RGB.ink2);
-        doc.text(d.short, M, y + 8);
-        doc.setFillColor(tone[0], tone[1], tone[2]);
-        doc.roundedRect(M + 56, y, Math.max(2, bw), 9, 2, 2, 'F');
-        F('bold', 7.5, RGB.ink);
-        doc.text(fmt(st.total), M + 62 + Math.max(2, bw), y + 7.5);
-        y += 15;
-      });
-      y += 10;
-      y = vTable(y, ['Department', 'Service line', 'Total', 'Share', 'Avg / month'], [CW * 0.30, CW * 0.26, CW * 0.16, CW * 0.12, CW * 0.16], rank.map(({
-        d,
-        st
-      }) => [d.name, d.group, fmt(st.total), totAll ? Math.round(st.total * 100 / totAll) + '%' : '-', fmt(st.avg)]));
-      if (showSig) sigBlock(y + 4);
-    } else {
-      chosen.forEach((d, di) => {
-        if (showCover || di > 0) doc.addPage(fmtP, ori);
-        let y = pageHeader();
-        const fsr = fseriesOf(d),
-          st = statOf(d, fsr),
-          tone = TONES[d.id.charCodeAt(0) % TONES.length];
-        F('bold', 13);
-        const nw = doc.getTextWidth(d.name);
-        doc.text(d.name, M, y);
-        F('normal', 7.5, RGB.muted);
-        doc.text(d.group.toUpperCase(), M + nw + 12, y);
-        y += 16;
-        if (fsr.length === 0) {
-          F('normal', 9, RGB.muted);
-          doc.text('No data reported for ' + d.name + ' in the selected period (' + rangeLabel + ').', M, y + 18);
-          if (showSig && di === chosen.length - 1) sigBlock(y + 40);
-          return;
-        }
-        if (fsr.length < pMonths.length) {
-          F('normal', 7, RGB.faint);
-          doc.text('Reported data covers ' + fsr[0].full + ' - ' + fsr[fsr.length - 1].full + ' (' + fsr.length + ' of ' + pMonths.length + ' months in the selected period).', M, y);
-          y += 12;
-        }
-        y = kpiRow(y, [{
-          label: 'Latest',
-          value: fmt(st.latest[d.primary] || 0),
-          tone: tone
-        }, {
-          label: 'Total',
-          value: fmt(st.total),
-          tone: TONES[1]
-        }, {
-          label: 'Peak',
-          value: fmt(st.peak),
-          tone: TONES[2]
-        }, {
-          label: 'Avg',
-          value: fmt(st.avg),
-          tone: TONES[3]
-        }]);
-        y = vBarChart(M, y, CW, 110, fsr.map(r => ({
-          label: r.month,
-          val: r[d.primary] || 0
-        })), tone, chartStyles.includes('line') && !chartStyles.includes('bar3d'));
-        const breakdown = d.cols.filter(c => c.id !== d.primary && !c.pct).map((c, i) => ({
-          label: c.label,
-          value: fsr.reduce((s, r) => s + (r[c.id] || 0), 0),
-          tone: TONES[i % TONES.length]
-        })).filter(p => p.value > 0);
-        y = compositionBar(y, breakdown) + 4;
-        const widths = [70].concat(d.cols.map(() => (CW - 70) / d.cols.length));
-        const rows = fsr.map(r => [type === 'detail' ? r.month : r.full].concat(d.cols.map(c => money(d, r, c))));
-        if (type === 'detail') rows.push(['TOTAL'].concat(d.cols.map(c => c.pct ? '-' : fmt(fsr.reduce((s, r) => s + (r[c.id] || 0), 0)))));
-        y = vTable(y, ['Month'].concat(d.cols.map(c => c.label)), widths, rows, {
-          totalRow: type === 'detail'
+      const totAll = rows.reduce((s3, r) => s3 + r.st.total, 0);
+      const top = rows.slice().sort((a, b) => b.st.total - a.st.total)[0];
+      const mTot = {};
+      rows.forEach(rr => rr.fs.forEach(r => {
+        mTot[r.month] = (mTot[r.month] || 0) + (r[rr.d.primary] || 0);
+      }));
+      const trend = pMonths.filter(m => mTot[m] != null).map(m => ({
+        label: m.split('-')[0],
+        val: mTot[m]
+      }));
+      const peakM = trend.slice().sort((a, b) => b.val - a.val)[0];
+      drawIcon(I.doc, MX, y + 1, 18, PALETTE[0]);
+      font('bold', 15, C.ink);
+      T('Executive Board Report', MX + 27, y + 15);
+      tagChip(MX + 27 + tw('Executive Board Report') + 9, y + 2, rangeLabel);
+      font('bold', 10.5, C.blue700);
+      tagChip(pageW - MX - (tw(String(rows.length) + ' DEPARTMENTS') + 16), y + 2, rows.length + ' departments');
+      y += 31;
+      y = kpiRow(y, [['Total patients', fmt(totAll)], ['Departments', String(rows.length)], ['Busiest dept', top ? top.d.short : '—'], ['Peak month', peakM ? peakM.label : '—']].map((p, i) => ({
+        label: p[0],
+        value: p[1],
+        tone: PALV[i % PALV.length]
+      })));
+      if (trend.length > 1) {
+        font('bold', 9.5, C.muted);
+        doc.text('HOSPITAL VOLUME — MONTHLY TREND', X(MX), X(y + 12), {
+          charSpace: 0.4 * S
         });
-        if (showSig && di === chosen.length - 1) sigBlock(y + 2);
+        y += 18;
+        y = vBarFlat(y, trend, 'label', 'val', 170) + 12;
+      }
+      font('bold', 9.5, C.muted);
+      doc.text('DEPARTMENT RANKING (PERIOD TOTAL)', X(MX), X(y + 12), {
+        charSpace: 0.4 * S
       });
-    }
+      y += 20;
+      const hbar = rows.map(rr => ({
+        label: rr.d.short,
+        value: rr.st.total,
+        color: PALV[rr.d.id.charCodeAt(0) % PALV.length]
+      })).sort((a, b) => b.value - a.value);
+      y = vHBarRows(y, hbar) + 14;
+      const ranked = rows.slice().sort((a, b) => b.st.total - a.st.total);
+      const widths = [CWx * 0.24, CWx * 0.20, CWx * 0.13, CWx * 0.11, CWx * 0.16, CWx * 0.16];
+      y = vTable(y, ['Department', 'Service line', 'Total', 'Share', 'Avg / month', 'Trend'], widths, ranked.map(rr => [rr.d.name, rr.d.group, fmt(rr.st.total), totAll ? Math.round(rr.st.total * 100 / totAll) + '%' : '—', fmt(rr.st.avg), rr.st.delta]), {
+        fs: 11,
+        deltaCol: 5
+      });
+      if (showSig) {
+        if (y + SIGH > LIMIT) y = newPage();
+        sigBlockPx(y);
+      }
+    };
+    if (showCover && chosen.length > 0) coverPage();
+    if (type === 'compare') {
+      if (showCover) doc.addPage(fmtP, ori);
+      comparePage();
+    } else if (type === 'board') {
+      if (showCover) doc.addPage(fmtP, ori);
+      boardPage();
+    } else chosen.forEach((d, di) => {
+      if (showCover || di > 0) doc.addPage(fmtP, ori);
+      deptPage(d, di === chosen.length - 1);
+    });
     const total = doc.getNumberOfPages();
     for (let p = 1; p <= total; p++) {
       doc.setPage(p);
-      line(M, FOOT, PW - M, FOOT);
-      F('normal', 7, RGB.faint);
-      doc.text(hospitalName, M, FOOT + 11);
-      doc.text('Page ' + p + ' of ' + total, PW / 2, FOOT + 11, {
+      LN(MX, FOOTY, pageW - MX, FOOTY, C.line, 1);
+      font('normal', 9.5, C.faint);
+      T(hospitalName, MX, FOOTY + 16);
+      T('Page ' + p + ' of ' + total, pageW / 2, FOOTY + 16, {
         align: 'center'
       });
-      doc.text((footerNote ? footerNote + ' · ' : '') + (confidential ? 'Confidential · ' : '') + pageSize + ' ' + orient, PW - M, FOOT + 11, {
+      T((footerNote ? footerNote + ' · ' : '') + (confidential ? 'Confidential · ' : '') + pageSize + ' ' + orient, pageW - MX, FOOTY + 16, {
         align: 'right'
       });
     }
@@ -20155,9 +20754,10 @@ function qtrRaw(ind, Q, fy) {
 function qtrStatus(ind, Q, fy) {
   return qStatus(ind, qtrSrc(ind, fy)[Q]);
 }
-function qcCellVal(ind, m) {
+function qcCellVal(ind, m, spread) {
   const v = monthRaw(ind, m[0]);
   if (v != null) return v;
+  if (spread === false) return null;
   const fy = fyOfKey(m[0]);
   if (fy == null || !m[2]) return null;
   const qMonths = fyAxis(fy).filter(r => r[2] === m[2]);
@@ -20174,7 +20774,7 @@ function deptStat(d, months) {
     breach = 0,
     na = 0;
   (d.indicators || []).forEach(ind => months.forEach(m => {
-    const s = monthStatus(ind, m[0]);
+    const s = qStatus(ind, qcCellVal(ind, m));
     if (s === 'ok') ok++;else if (s === 'breach') breach++;else na++;
   }));
   return {
@@ -20193,7 +20793,7 @@ function countBreaches(ind, months) {
   if (!Array.isArray(months)) months = MONTHS;
   let n = 0;
   months.forEach(m => {
-    if (monthStatus(ind, m[0]) === 'breach') n++;
+    if (qStatus(ind, qcCellVal(ind, m)) === 'breach') n++;
   });
   return n;
 }
@@ -22177,7 +22777,7 @@ function qcReportHTML(depts, months, fyIn, opts) {
     const th = ['Indicator', 'Benchmark'].concat(MONTHS.map(m => m[1].split(' ')[0])).map(h => '<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">' + h + '</th>').join('');
     const trs = (d.indicators || []).map((ind, i) => {
       const cells = [qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m => {
-        const v = qcCellVal(ind, m);
+        const v = qcCellVal(ind, m, false);
         const s = qStatus(ind, v);
         const disp = s === 'na' ? '—' : fmtVal(ind, v);
         const col = s === 'breach' ? '#d23a52' : s === 'ok' ? '#1f9d57' : '#9aa6b4';
@@ -22208,7 +22808,7 @@ function qcExport(depts, fmt) {
     const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(MONTHS.map(m => m[1]))];
     depts.forEach(d => (d.indicators || []).forEach(ind => {
       rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(MONTHS.map(m => {
-        const v = qcCellVal(ind, m);
+        const v = qcCellVal(ind, m, false);
         return qStatus(ind, v) === 'na' ? '' : fmtVal(ind, v);
       })));
     }));
@@ -22671,6 +23271,53 @@ function qcChartRows(ind, months) {
     };
   });
 }
+function qcDeptSummaryRows(d, months) {
+  months = months || MONTHS;
+  const inds = d.indicators || [];
+  const mRows = months.map(m => {
+    let ok = 0,
+      breach = 0;
+    inds.forEach(ind => {
+      const s = monthStatus(ind, m[0]);
+      if (s === 'ok') ok++;else if (s === 'breach') breach++;
+    });
+    const tot = ok + breach;
+    return {
+      mon: m[1].split(' ')[0],
+      mfull: m[1],
+      q: m[2],
+      val: tot ? Math.round(ok * 100 / tot) : 0,
+      has: tot > 0,
+      bench: 90
+    };
+  });
+  if (mRows.some(r => r.has)) return mRows;
+  const seen = new Set(),
+    qRows = [];
+  months.forEach(m => {
+    if (!m[2]) return;
+    const fy = fyOfKey(m[0]),
+      qk = fy + ':' + m[2];
+    if (seen.has(qk)) return;
+    seen.add(qk);
+    let ok = 0,
+      breach = 0;
+    inds.forEach(ind => {
+      const s = qStatus(ind, qtrRaw(ind, m[2], fy));
+      if (s === 'ok') ok++;else if (s === 'breach') breach++;
+    });
+    const tot = ok + breach;
+    qRows.push({
+      mon: m[2],
+      mfull: m[2] + " '" + String(fy).slice(-2),
+      q: m[2],
+      val: tot ? Math.round(ok * 100 / tot) : 0,
+      has: tot > 0,
+      bench: 90
+    });
+  });
+  return qRows;
+}
 function qcLeadIndicator(d, months) {
   const withData = (d.indicators || []).filter(i => hasData(i, months));
   if (!withData.length) return (d.indicators || [])[0] || null;
@@ -22730,9 +23377,9 @@ function qcStatusComp(d, months) {
     color: '#c3ccd8'
   }].filter(x => x.value > 0);
 }
-function qcChartEl(d, style, ind, tone, months) {
+function qcChartEl(d, style, ind, tone, months, summary) {
   months = months || MONTHS;
-  if (!ind) return React.createElement("div", {
+  if (!summary && !ind) return React.createElement("div", {
     style: {
       height: 150,
       display: 'grid',
@@ -22741,9 +23388,19 @@ function qcChartEl(d, style, ind, tone, months) {
       fontSize: 12
     }
   }, "No data");
-  const rows = qcChartRows(ind, months);
+  const rows = (summary ? qcDeptSummaryRows(d, months) : qcChartRows(ind, months)).filter(r => r.has);
   const bench = rows.length ? rows[0].bench : null;
+  if (!rows.length) return React.createElement("div", {
+    style: {
+      height: 150,
+      display: 'grid',
+      placeItems: 'center',
+      color: P.faint,
+      fontSize: 12
+    }
+  }, "No reported data to chart");
   const W = window;
+  const vLabel = summary ? 'Zero-defect %' : ind.name;
   if (style === 'bar') return W.BarChart({
     data: rows,
     x: 'mon',
@@ -22785,8 +23442,8 @@ function qcChartEl(d, style, ind, tone, months) {
     lineKey: 'bench',
     barColor: tone,
     lineColor: P.amber,
-    barLabel: ind.name,
-    lineLabel: 'Benchmark',
+    barLabel: vLabel,
+    lineLabel: summary ? 'Target' : 'Benchmark',
     height: 210,
     flat: true
   });
@@ -22839,17 +23496,14 @@ function qcChartEl(d, style, ind, tone, months) {
       flat: true
     });
   }
-  if (style === 'horizontal') {
-    const vals = qcMonthVals(ind, months);
-    return W.HBar({
-      rows: months.map((m, i) => ({
-        label: m[1],
-        value: vals[i] || 0,
-        color: tone
-      })),
-      height: Math.max(150, months.length * 22)
-    });
-  }
+  if (style === 'horizontal') return W.HBar({
+    rows: rows.map(r => ({
+      label: r.mfull,
+      value: r.val,
+      color: tone
+    })),
+    height: Math.max(150, rows.length * 22)
+  });
   if (style === 'donut') {
     const dd = qcDonutData(d, months);
     const pie = dd.length > 1 ? dd : qcStatusComp(d, months);
@@ -23099,7 +23753,7 @@ function QCHeatGrid({
       fontWeight: 400
     }
   }, ind.goalDirection === 'higher_is_better' ? '↑' : '↓')), months.map(m => {
-    const v = qcCellVal(ind, m);
+    const v = qcCellVal(ind, m, false);
     const s = qStatus(ind, v);
     const c = qcHeatColors(s);
     return React.createElement("td", {
@@ -24195,24 +24849,19 @@ function QCReportBuilder({
   };
   const pMonths = (() => {
     const q = Q => MONTHS.filter(m => m[2] === Q);
-    if (period.mode === 'q1') return q('Q1');
-    if (period.mode === 'q2') return q('Q2');
-    if (period.mode === 'q3') return q('Q3');
-    if (period.mode === 'q4') return q('Q4');
-    if (period.mode === 'h1') return MONTHS.slice(0, 6);
-    if (period.mode === 'h2') return MONTHS.slice(6);
-    if (period.mode === 'last3') return MONTHS.slice(-3);
-    if (period.mode === 'custom') {
+    let base;
+    if (period.mode === 'q1') base = q('Q1');else if (period.mode === 'q2') base = q('Q2');else if (period.mode === 'q3') base = q('Q3');else if (period.mode === 'q4') base = q('Q4');else if (period.mode === 'h1') base = MONTHS.slice(0, 6);else if (period.mode === 'h2') base = MONTHS.slice(6);else if (period.mode === 'last3') base = MONTHS.slice(-3);else if (period.mode === 'custom') {
       const a = MONTHS.findIndex(m => m[0] === period.from),
         b = MONTHS.findIndex(m => m[0] === period.to);
-      if (a >= 0 && b >= 0) {
-        const lo = Math.min(a, b),
-          hi = Math.max(a, b);
-        return MONTHS.slice(lo, hi + 1);
-      }
-      return MONTHS;
-    }
-    return MONTHS;
+      base = a >= 0 && b >= 0 ? MONTHS.slice(Math.min(a, b), Math.max(a, b) + 1) : MONTHS;
+    } else base = MONTHS;
+    if (!base.length) return base;
+    const has = m => chosen.some(d => (d.indicators || []).some(ind => qcCellVal(ind, m) != null));
+    let lo = 0,
+      hi = base.length - 1;
+    while (lo < hi && !has(base[lo])) lo++;
+    while (hi > lo && !has(base[hi])) hi--;
+    return has(base[lo]) ? base.slice(lo, hi + 1) : base;
   })();
   const rangeLabel = pMonths.length ? pMonths[0][1] + ' – ' + pMonths[pMonths.length - 1][1] : fyLabelOf(fy);
   const baseMonths = qcBaselineMonths(pMonths, compareBaseline);
@@ -24510,7 +25159,7 @@ function QCReportBuilder({
     ind,
     m
   }) => {
-    const v = qcCellVal(ind, m);
+    const v = qcCellVal(ind, m, false);
     const s = qStatus(ind, v);
     const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
     const bg = s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : '#f4f6f9';
@@ -24641,7 +25290,7 @@ function QCReportBuilder({
       }
     }, React.createElement(QCSpark, {
       ind: ind,
-      months: MONTHS,
+      months: pMonths,
       w: 52,
       h: 20
     }))))));
@@ -24812,7 +25461,7 @@ function QCReportBuilder({
       cards: cards,
       tone: tone
     }), sections.chart && (() => {
-      const chartable = chartInd && qcChartRows(chartInd, pMonths).some(r => r.has);
+      const chartable = detailed ? chartInd && qcChartRows(chartInd, pMonths).some(r => r.has) : qcDeptSummaryRows(d, pMonths).some(r => r.has);
       if (!chartable) {
         const otherYears = [...dataFySet([d])].filter(y => y !== fy).sort((a, b) => b - a);
         return React.createElement("div", {
@@ -24837,14 +25486,20 @@ function QCReportBuilder({
           months: pMonths
         })));
       }
-      return chartStyles.map(cs => React.createElement("div", {
-        key: cs,
-        style: {
-          margin: '4px 0 8px'
-        }
-      }, chartStyles.length > 1 && React.createElement("div", {
-        style: uSub
-      }, QC_CHART_STYLE_LABEL[cs] || cs), qcChartEl(d, cs, chartInd, tone, pMonths)));
+      const SINGLE_SERIES = ['bar3d', 'bar', 'line', 'area', 'combo', 'horizontal'];
+      return chartStyles.map(cs => {
+        const cap = [];
+        if (chartStyles.length > 1) cap.push(QC_CHART_STYLE_LABEL[cs] || cs);
+        if (!detailed && SINGLE_SERIES.indexOf(cs) >= 0) cap.push('Zero-defect % by month — reported indicators on benchmark');
+        return React.createElement("div", {
+          key: cs,
+          style: {
+            margin: '4px 0 8px'
+          }
+        }, cap.length > 0 && React.createElement("div", {
+          style: uSub
+        }, cap.join(' · ')), qcChartEl(d, cs, chartInd, tone, pMonths, !detailed));
+      });
     })(), sections.breachDonut && !chartStyles.includes('donut') && (() => {
       const pie = dd.length > 1 ? dd : qcStatusComp(d, pMonths);
       if (!pie.length) return null;
@@ -25383,7 +26038,7 @@ function QCReportBuilder({
             benchSet.add(be);
             if (!bench) bench = be;
           }
-          const v = qcCellVal(ind, m);
+          const v = qcCellVal(ind, m, false);
           const s = qStatus(ind, v);
           const isRate = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
           if (v != null) {
@@ -25886,7 +26541,7 @@ function QCReportBuilder({
         if (qtrRaw(ind, Q, fy) != null) lastQ = Q;
       });
       const lastBreach = lastQ != null && qtrStatus(ind, lastQ, fy) === 'breach';
-      const nB = countBreaches(ind, MONTHS);
+      const nB = countBreaches(ind, pMonths);
       if (!(lastBreach || nB >= 3)) return;
       plans.push({
         dept: d.name,
@@ -26772,6 +27427,335 @@ function QCReportBuilder({
       setTimeout(() => document.body.classList.remove('pdf-export-mode'), 500);
     }
   };
+  async function buildQualityVectorPDF(J) {
+    const RGB = {
+      blue: [0, 144, 202],
+      ink: [22, 32, 46],
+      ink2: [60, 72, 88],
+      muted: [108, 122, 140],
+      faint: [154, 166, 180],
+      line: [221, 227, 236],
+      panel: [247, 249, 252],
+      rose: [210, 58, 82],
+      green: [31, 157, 87],
+      violet: [106, 82, 212],
+      amber: [224, 138, 30],
+      white: [255, 255, 255]
+    };
+    const PAL = [[0, 144, 202], [21, 159, 191], [43, 179, 163], [70, 184, 126], [124, 195, 90], [240, 169, 59], [239, 128, 73], [232, 92, 105], [224, 103, 155], [182, 92, 198], [106, 111, 212], [79, 141, 247]];
+    const hex2rgb = h => {
+      const m = /#?([0-9a-f]{6})/i.exec(String(h || ''));
+      if (!m) return RGB.blue;
+      const n = parseInt(m[1], 16);
+      return [n >> 16 & 255, n >> 8 & 255, n & 255];
+    };
+    const ori = orient === 'landscape' ? 'l' : 'p',
+      fmtP = pageSize === 'A3' ? 'a3' : pageSize === 'Letter' ? 'letter' : 'a4';
+    const doc = new J({
+      orientation: ori,
+      unit: 'pt',
+      format: fmtP,
+      compress: true
+    });
+    const PW = doc.internal.pageSize.getWidth(),
+      PH = doc.internal.pageSize.getHeight();
+    const M = 42,
+      CW = PW - 2 * M;
+    const F = (st, sz, c) => {
+      doc.setFont('helvetica', st);
+      doc.setFontSize(sz);
+      const cc = c || RGB.ink;
+      doc.setTextColor(cc[0], cc[1], cc[2]);
+    };
+    const line = (x1, y1, x2, y2, c, w) => {
+      const cc = c || RGB.line;
+      doc.setDrawColor(cc[0], cc[1], cc[2]);
+      doc.setLineWidth(w || 0.7);
+      doc.line(x1, y1, x2, y2);
+    };
+    const box = (x, y, w, h, f, r) => {
+      doc.setFillColor(f[0], f[1], f[2]);
+      doc.roundedRect(x, y, w, h, r == null ? 4 : r, r == null ? 4 : r, 'F');
+    };
+    const genDate = new Date().toLocaleDateString('en-US');
+    const clip = (s, w) => {
+      s = String(s == null ? '' : s);
+      if (doc.getTextWidth(s) <= w) return s;
+      while (s.length > 1 && doc.getTextWidth(s + '…') > w) s = s.slice(0, -1);
+      return s + '…';
+    };
+    const statCol = s => s === 'breach' ? RGB.rose : s === 'ok' ? RGB.green : RGB.faint;
+    const logo = await new Promise(res => {
+      try {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const c = document.createElement('canvas');
+            const s = 3;
+            c.width = (img.width || 120) * s;
+            c.height = (img.height || 40) * s;
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            res({
+              d: c.toDataURL('image/png'),
+              w: c.width / s,
+              h: c.height / s
+            });
+          } catch (e) {
+            res(null);
+          }
+        };
+        img.onerror = () => res(null);
+        img.src = 'unico/logo.svg';
+        setTimeout(() => res(null), 2000);
+      } catch (e) {
+        res(null);
+      }
+    });
+    const pageHeader = () => {
+      let x = M;
+      if (showLogo && logo) {
+        const w = 26 * (logo.w / logo.h);
+        try {
+          doc.addImage(logo.d, 'PNG', M, M - 16, w, 26);
+        } catch (e) {}
+        x = M + w + 10;
+      }
+      F('bold', 12);
+      doc.text(clip(hdrTitle || 'Quality Indicator Report', CW - 150), x, M + 2);
+      F('normal', 7.5, RGB.muted);
+      doc.text(String((hdrSub ? hdrSub + '  ·  ' : '') + rangeLabel).toUpperCase(), x, M + 13);
+      F('normal', 7.5, RGB.faint);
+      doc.text('Generated', PW - M, M - 2, {
+        align: 'right'
+      });
+      F('bold', 9, RGB.ink2);
+      doc.text(genDate, PW - M, M + 9, {
+        align: 'right'
+      });
+      line(M, M + 22, PW - M, M + 22, RGB.blue, 1.4);
+      F('normal', 7, RGB.faint);
+      doc.text(clip(String(orgName || ''), CW - 120), M, PH - 16);
+      if (confidential) {
+        F('bold', 6.5, RGB.rose);
+        doc.text('CONFIDENTIAL', PW - M, PH - 16, {
+          align: 'right'
+        });
+      }
+      return M + 42;
+    };
+    const kpiRow = (y, items) => {
+      const gap = 10,
+        w = (CW - gap * (items.length - 1)) / items.length;
+      items.forEach((it, i) => {
+        const x = M + i * (w + gap);
+        box(x, y, w, 46, RGB.panel, 5);
+        const t = it.tone || RGB.blue;
+        doc.setFillColor(t[0], t[1], t[2]);
+        doc.rect(x, y, 3, 46, 'F');
+        F('normal', 6.4, RGB.muted);
+        doc.text(clip(String(it.label).toUpperCase(), w - 14), x + 10, y + 13);
+        F('bold', 14, it.tone || RGB.ink);
+        doc.text(clip(String(it.value), w - 14), x + 10, y + 31);
+        if (it.foot) {
+          F('normal', 5.6, RGB.faint);
+          doc.text(clip(String(it.foot), w - 14), x + 10, y + 41);
+        }
+      });
+      return y + 46 + 12;
+    };
+    const vBars = (y, ind, pts) => {
+      const h = 96,
+        x = M,
+        w = CW,
+        max = Math.max(1, ...pts.map(p => Number(p.val) || 0));
+      const n = pts.length,
+        gap = n > 14 ? 3 : 6,
+        bw = n ? (w - gap * (n - 1)) / n : w;
+      const bar3d = (bx, bh, c) => {
+        const yT = y + h - bh,
+          yB = y + h,
+          dx = Math.min(6, bw * 0.3),
+          dy = -dx * 0.75,
+          li = [Math.min(255, c[0] + 34), Math.min(255, c[1] + 34), Math.min(255, c[2] + 34)],
+          dk = [Math.max(0, c[0] - 28), Math.max(0, c[1] - 28), Math.max(0, c[2] - 28)];
+        doc.setFillColor(c[0], c[1], c[2]);
+        doc.rect(bx, yT, bw, bh, 'F');
+        doc.setFillColor(li[0], li[1], li[2]);
+        doc.triangle(bx, yT, bx + dx, yT + dy, bx + bw + dx, yT + dy, 'F');
+        doc.triangle(bx, yT, bx + bw + dx, yT + dy, bx + bw, yT, 'F');
+        doc.setFillColor(dk[0], dk[1], dk[2]);
+        doc.triangle(bx + bw, yT, bx + bw + dx, yT + dy, bx + bw + dx, yB + dy, 'F');
+        doc.triangle(bx + bw, yT, bx + bw + dx, yB + dy, bx + bw, yB, 'F');
+      };
+      line(x, y + h, x + w, y + h);
+      pts.forEach((p, i) => {
+        const v = Number(p.val) || 0,
+          bh = Math.max(1.2, v / max * (h - 16)),
+          bx = x + i * (bw + gap);
+        const c = PAL[i % PAL.length];
+        bar3d(bx, bh, c);
+        F('normal', 5.6, RGB.faint);
+        doc.text(String(p.mon), bx + bw / 2, y + h + 8, {
+          align: 'center'
+        });
+        if (bw > 12) {
+          F('normal', 6, RGB.ink2);
+          doc.text(fmtVal(ind, v), bx + bw / 2, y + h - bh - Math.min(6, bw * 0.3) * 0.75 - 3, {
+            align: 'center'
+          });
+        }
+      });
+      return y + h + 18;
+    };
+    const deptTable = (y, d) => {
+      const inds = d.indicators || [],
+        mCols = pMonths;
+      const nameW = Math.min(150, Math.max(96, CW * 0.26)),
+        benchW = 54,
+        mW = (CW - nameW - benchW) / mCols.length,
+        rowH = 13,
+        headH = 15;
+      const head = yy => {
+        doc.setFillColor(RGB.blue[0], RGB.blue[1], RGB.blue[2]);
+        doc.rect(M, yy, CW, headH, 'F');
+        F('bold', 6.4, RGB.white);
+        doc.text('INDICATOR', M + 4, yy + 10);
+        doc.text('BENCH', M + nameW + 3, yy + 10);
+        mCols.forEach((m, i) => doc.text(m[1].split(' ')[0].slice(0, 3).toUpperCase(), M + nameW + benchW + i * mW + mW / 2, yy + 10, {
+          align: 'center'
+        }));
+        return yy + headH;
+      };
+      y = head(y);
+      inds.forEach((ind, ri) => {
+        if (y + rowH > PH - 40) {
+          doc.addPage(fmtP, ori);
+          y = pageHeader();
+          y = head(y);
+        }
+        if (ri % 2) {
+          doc.setFillColor(247, 250, 253);
+          doc.rect(M, y, CW, rowH, 'F');
+        }
+        F('normal', 6.6, RGB.ink);
+        doc.text(clip(ind.name, nameW - 6), M + 4, y + 9);
+        F('normal', 5.8, RGB.muted);
+        doc.text(clip(benchExpr(ind), benchW - 3), M + nameW + 2, y + 9);
+        mCols.forEach((m, i) => {
+          const v = qcCellVal(ind, m, false),
+            s = qStatus(ind, v),
+            cx = M + nameW + benchW + i * mW + mW / 2;
+          F('normal', 6.2, statCol(s));
+          doc.text(s === 'na' ? '·' : clip(fmtVal(ind, v), mW - 1), cx, y + 9, {
+            align: 'center'
+          });
+        });
+        y += rowH;
+        line(M, y, M + CW, y, RGB.line, 0.35);
+      });
+      return y + 12;
+    };
+    const sigBlock = y => {
+      if (!sections.signatures) return y;
+      if (!(sig && (sig.prepared || sig.reviewed || sig.approved))) return y;
+      y = Math.max(y + 8, PH - 118);
+      F('bold', 7, RGB.muted);
+      doc.text('AUTHORISATION · ' + String(orgName || '').toUpperCase(), M, y);
+      const cols = [['Prepared by', sig.prepared], ['Checked by', sig.reviewed], ['Approved by', sig.approved]],
+        cw = CW / 3;
+      cols.forEach((c, i) => {
+        const x = M + i * cw;
+        line(x, y + 42, x + cw - 22, y + 42, RGB.ink2, 0.8);
+        F('bold', 8.5, RGB.ink);
+        doc.text(clip(c[1] || '', cw - 26), x, y + 54);
+        F('normal', 6.2, RGB.muted);
+        doc.text(c[0].toUpperCase(), x, y + 63);
+      });
+      return y + 72;
+    };
+    if (sections.cover) {
+      let y = pageHeader();
+      F('bold', 24, RGB.ink);
+      doc.text(clip(hdrTitle || 'Quality Indicator Report', CW), M, y + 34);
+      F('normal', 12, RGB.muted);
+      doc.text(String(rangeLabel), M, y + 54);
+      const agg = {
+        ok: 0,
+        breach: 0,
+        inds: 0
+      };
+      chosen.forEach(d => {
+        const s = deptStat(d, pMonths);
+        agg.ok += s.ok;
+        agg.breach += s.breach;
+        agg.inds += (d.indicators || []).length;
+      });
+      const anyRep = agg.ok + agg.breach > 0;
+      const rate = anyRep ? Math.round(agg.ok * 100 / (agg.ok + agg.breach)) : null;
+      y = kpiRow(y + 72, [{
+        label: 'Zero-Defect %',
+        value: anyRep ? rate + '%' : '—',
+        tone: !anyRep ? RGB.muted : rate >= 90 ? RGB.green : rate >= 70 ? RGB.amber : RGB.rose,
+        foot: anyRep ? agg.ok + ' on benchmark' : 'no data reported this period'
+      }, {
+        label: 'Breaches',
+        value: anyRep ? String(agg.breach) : '—',
+        tone: !anyRep ? RGB.muted : agg.breach ? RGB.rose : RGB.green,
+        foot: anyRep ? 'indicator-months off benchmark' : 'no data reported this period'
+      }, {
+        label: 'Departments',
+        value: String(chosen.length),
+        tone: RGB.blue,
+        foot: 'in this report'
+      }, {
+        label: 'Indicators',
+        value: String(agg.inds),
+        tone: RGB.violet,
+        foot: 'quality KPIs'
+      }]);
+      sigBlock(y);
+    }
+    chosen.forEach((d, di) => {
+      if (sections.cover || di > 0) doc.addPage(fmtP, ori);
+      let y = pageHeader();
+      const ds = qcDeptStatus(d, pMonths);
+      const dsRep = !!(ds && ds.st && ds.st.ok + ds.st.breach > 0);
+      F('bold', 15, RGB.ink);
+      doc.text(clip(d.name, CW - 130), M, y + 4);
+      if (dsRep) {
+        F('bold', 7.5, statCol(ds.st.breach ? 'breach' : 'ok'));
+        doc.text(String(ds.status || '').toUpperCase(), PW - M, y + 2, {
+          align: 'right'
+        });
+      } else {
+        F('bold', 7.5, RGB.muted);
+        doc.text('NO DATA', PW - M, y + 2, {
+          align: 'right'
+        });
+      }
+      y += 18;
+      const kp = qcDeptKpis(d, pMonths).map(k => ({
+        label: k[0],
+        value: k[1],
+        tone: hex2rgb(k[2]),
+        foot: k[3]
+      }));
+      y = kpiRow(y, kp);
+      if (sections.chart !== false) {
+        const rows = qcDeptSummaryRows(d, pMonths).filter(r => r.has);
+        if (rows.length) {
+          F('bold', 8, RGB.ink2);
+          doc.text('ZERO-DEFECT % BY MONTH — REPORTED INDICATORS ON BENCHMARK', M, y + 2);
+          y = vBars(y + 8, {
+            valueType: '%'
+          }, rows);
+        }
+      }
+      if (sections.table !== false) y = deptTable(y + 4, d);
+      if (di === chosen.length - 1) sigBlock(y);
+    });
+    doc.save('UNICO-quality-' + reportType + '-' + new Date().toISOString().slice(0, 10) + '.pdf');
+  }
   async function doExportPDF() {
     const native = window.unicoNative;
     if (chosen.length === 0) {
@@ -26811,6 +27795,25 @@ function QCReportBuilder({
     }
     const H = window.html2canvas,
       J = window.jspdf && window.jspdf.jsPDF;
+    const vectorFaithful = reportType === 'summary' && chartStyles.length === 1 && chartStyles[0] === 'bar3d' && !sections.execSummary && !sections.breachDonut && !sections.incidents && !sections.ragHeatmap && !sections.deptRanking && !sections.benchmarkCompare && !sections.indTrend && !sections.incidentAppendix && !sections.standardsRefs && !sections.toc && !sections.periodCompare && !sections.watermark;
+    if (J && vectorFaithful) {
+      setExporting(true);
+      setNote(null);
+      try {
+        await buildQualityVectorPDF(J);
+        setNote({
+          ok: true,
+          text: 'PDF downloaded — vector quality (selectable text).'
+        });
+        setExporting(false);
+        return;
+      } catch (e) {
+        try {
+          console.warn('[quality] vector PDF failed, falling back to raster:', e);
+        } catch (_) {}
+        setExporting(false);
+      }
+    }
     if (H && J) {
       setExporting(true);
       setNote(null);
@@ -27011,15 +28014,15 @@ function QCReportBuilder({
     if (fmt === 'csv') {
       const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(pMonths.map(m => m[1]))];
       scope.forEach(d => (d.indicators || []).forEach(ind => rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(pMonths.map(m => {
-        const v = qcCellVal(ind, m);
+        const v = qcCellVal(ind, m, false);
         return qStatus(ind, v) === 'na' ? '' : fmtVal(ind, v);
       })))));
       rows.push([]);
       rows.push(['INCIDENT DETAILS']);
-      rows.push(['Department', 'Indicator', 'Month', 'UHID', 'Patient', 'Age', 'Sex', 'Diagnosis', 'Details', 'Finding', 'Corrective', 'Preventive']);
+      rows.push(['Department', 'Indicator', 'Month', 'Date of incident', 'UHID', 'Patient', 'Age', 'Sex', 'Diagnosis', 'Details', 'Finding', 'Corrective', 'Preventive']);
       scope.forEach(d => qcIncidentsOf(d).filter(r => qcIncInPeriod(r, pMonths)).forEach(r => {
         const x = r.x;
-        rows.push([d.name, r.ind, r.month, x.uhid || '', x.patientName || '', x.age || '', x.gender || '', x.diagnosis || '', x.details || '', x.finding || '', x.corrective || '', x.preventive || '']);
+        rows.push([d.name, r.ind, r.month, x.incidentDate || '', x.uhid || '', x.patientName || '', x.age || '', x.gender || '', x.diagnosis || '', x.details || '', x.finding || '', x.corrective || '', x.preventive || '']);
       }));
       return qcDownload('﻿' + rows.map(r => r.map(c => '"' + ((c == null ? '' : c) + '').replace(/"/g, '""') + '"').join(',')).join('\r\n'), baseName + '.csv', 'text/csv;charset=utf-8');
     }
@@ -27579,7 +28582,58 @@ function QCReportBuilder({
     type: "checkbox",
     checked: confidential,
     onChange: e => setConfidential(e.target.checked)
-  }), "Confidential mark")))), React.createElement("div", null, fieldLabel('Page setup'), React.createElement("div", {
+  }), "Confidential mark")))), React.createElement("div", null, fieldLabel('Signatures — saved automatically, shared with every report'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, React.createElement("input", {
+    value: sig.prepared,
+    onChange: e => setSig(s => ({
+      ...s,
+      prepared: e.target.value
+    })),
+    placeholder: "Prepared by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.reviewed,
+    onChange: e => setSig(s => ({
+      ...s,
+      reviewed: e.target.value
+    })),
+    placeholder: "Checked by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.approved,
+    onChange: e => setSig(s => ({
+      ...s,
+      approved: e.target.value
+    })),
+    placeholder: "Approved by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: P.ink2
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!sections.signatures,
+    onChange: e => setSec('signatures', e.target.checked)
+  }), "Signature block on the last page"))), React.createElement("div", null, fieldLabel('Page setup'), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8
