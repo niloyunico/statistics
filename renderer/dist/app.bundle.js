@@ -6937,7 +6937,7 @@ function Bar3D({
     }));
   }), data.map((d, i) => {
     const v = d[y] || 0,
-      bh = v / max * (height - 58);
+      bh = v > 0 ? v / max * (height - 58) : 2;
     const bx = i * step + 12,
       by = baseY - bh,
       on = hi === i;
@@ -6985,7 +6985,7 @@ function Bar3D({
       fill: flat ? colAt(i) : `url(#${id}_${i % PAL.length})`,
       stroke: lighten(colAt(i), -18),
       strokeWidth: "0.5"
-    })), (m || flat) && v > 0 && React.createElement("text", {
+    })), (m || flat) && React.createElement("text", {
       x: bx + bw / 2 + dx / 2,
       y: by + dy - 6,
       textAnchor: "middle",
@@ -16684,7 +16684,7 @@ function Reports({
       });
       data.forEach((d, i) => {
         const v = d[yKey] || 0,
-          bh = v / max * (hgt - 58),
+          bh = v > 0 ? v / max * (hgt - 58) : 2,
           bx = i * step + 12,
           by = baseY - bh,
           c = PAL3[i % PAL3.length];
@@ -16697,12 +16697,10 @@ function Reports({
         doc.setDrawColor(st3[0], st3[1], st3[2]);
         doc.setLineWidth(0.5 * S * s3);
         doc.rect(X(gx(bx)), X(gy(by)), X(bw * s3), X(Math.max(bh, 0.1) * s3), 'FD');
-        if (v > 0) {
-          font('bold', 11 * s3, C.ink);
-          T(fmt(v), gx(bx + bw / 2 + dx / 2), gy(by + dy - 6), {
-            align: 'center'
-          });
-        }
+        font('bold', 11 * s3, C.ink);
+        T(fmt(v), gx(bx + bw / 2 + dx / 2), gy(by + dy - 6), {
+          align: 'center'
+        });
         font('normal', 9.5 * s3, C.faint);
         T(monthLbl(d[xKey]), gx(bx + bw / 2), gy(hgt - 6), {
           align: 'center'

@@ -736,14 +736,15 @@ function Reports({depts}){
         LN(gx(0),gy(gyv),gx(n*step),gy(gyv),C.grid3,s3);
         LN(gx(n*step),gy(gyv),gx(n*step+dx),gy(gyv+dy),C.grid,s3);});
       data.forEach((d,i)=>{
-        const v=d[yKey]||0,bh=(v/max)*(hgt-58),bx=i*step+12,by=baseY-bh,c=PAL3[i%PAL3.length];
+        // zero values keep a 2px stub + label, matching the on-screen Bar3D
+        const v=d[yKey]||0,bh=v>0?(v/max)*(hgt-58):2,bx=i*step+12,by=baseY-bh,c=PAL3[i%PAL3.length];
         TRI(gx(bx+bw),gy(by),gx(bx+bw+dx),gy(by+dy),gx(bx+bw+dx),gy(baseY+dy),lift(c,-44));
         TRI(gx(bx+bw),gy(by),gx(bx+bw+dx),gy(baseY+dy),gx(bx+bw),gy(baseY),lift(c,-44));
         TRI(gx(bx),gy(by),gx(bx+dx),gy(by+dy),gx(bx+bw+dx),gy(by+dy),lift(c,46));
         TRI(gx(bx),gy(by),gx(bx+bw+dx),gy(by+dy),gx(bx+bw),gy(by),lift(c,46));
         doc.setFillColor(c[0],c[1],c[2]);const st3=lift(c,-18);doc.setDrawColor(st3[0],st3[1],st3[2]);doc.setLineWidth(0.5*S*s3);
         doc.rect(X(gx(bx)),X(gy(by)),X(bw*s3),X(Math.max(bh,0.1)*s3),'FD');
-        if(v>0){font('bold',11*s3,C.ink);T(fmt(v),gx(bx+bw/2+dx/2),gy(by+dy-6),{align:'center'});}
+        font('bold',11*s3,C.ink);T(fmt(v),gx(bx+bw/2+dx/2),gy(by+dy-6),{align:'center'});
         font('normal',9.5*s3,C.faint);T(monthLbl(d[xKey]),gx(bx+bw/2),gy(hgt-6),{align:'center'});});
       return y0+hgt;
     };

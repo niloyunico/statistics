@@ -32,7 +32,9 @@ function Bar3D({data, x, y, height=300, color='#0b66d0', multi=true, flat=false}
           <line x1={data.length*step} y1={gy} x2={data.length*step+dx} y2={gy+dy} stroke="#eef1f5"/></g>
         );})}
         {data.map((d,i)=>{
-          const v=d[y]||0, bh=(v/max)*(height-58);
+          // a zero VALUE still gets a 2px stub + label — a 0-height bar rendered only
+          // its floating top face (an odd sliver) and no number, which read as broken
+          const v=d[y]||0, bh=v>0?(v/max)*(height-58):2;
           const bx=i*step+12, by=baseY-bh, on=hi===i;
           const pts={
             top:`${bx},${by} ${bx+dx},${by+dy} ${bx+bw+dx},${by+dy} ${bx+bw},${by}`,
@@ -48,7 +50,7 @@ function Bar3D({data, x, y, height=300, color='#0b66d0', multi=true, flat=false}
                 <polygon points={pts.top} fill={lighten(colAt(i),46)}/>
                 <rect x={bx} y={by} width={bw} height={bh} fill={flat?colAt(i):`url(#${id}_${i%PAL.length})`} stroke={lighten(colAt(i),-18)} strokeWidth="0.5"/>
               </g>
-              {(m||flat)&&v>0&&<text x={bx+bw/2+dx/2} y={by+dy-6} textAnchor="middle" fontSize="11" fontFamily="IBM Plex Mono" fontWeight="600" fill="#16202e">{v}</text>}
+              {(m||flat)&&<text x={bx+bw/2+dx/2} y={by+dy-6} textAnchor="middle" fontSize="11" fontFamily="IBM Plex Mono" fontWeight="600" fill="#16202e">{v}</text>}
               <text x={bx+bw/2} y={height-6} textAnchor="middle" fontSize="9.5" fill="#9aa6b4">{String(d[x]).replace(/ \d{4}| 20\d\d/,'').slice(0,6)}</text>
             </g>
           );
