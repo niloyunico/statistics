@@ -20754,10 +20754,19 @@ function qtrRaw(ind, Q, fy) {
 function qtrStatus(ind, Q, fy) {
   return qStatus(ind, qtrSrc(ind, fy)[Q]);
 }
-function qcCellVal(ind, m, spread) {
+function qcMonthEnded(mk) {
+  const p = String(mk || '').split('-');
+  const mi = FY_MONS.indexOf(p[0]);
+  const yy = parseInt(p[1], 10);
+  if (mi < 0 || isNaN(yy)) return false;
+  const now = new Date();
+  const y = 2000 + yy;
+  return y < now.getFullYear() || y === now.getFullYear() && mi < now.getMonth();
+}
+function qcCellVal(ind, m) {
   const v = monthRaw(ind, m[0]);
   if (v != null) return v;
-  if (spread === false) return null;
+  if (!qcMonthEnded(m[0])) return null;
   const fy = fyOfKey(m[0]);
   if (fy == null || !m[2]) return null;
   const qMonths = fyAxis(fy).filter(r => r[2] === m[2]);
@@ -22777,7 +22786,7 @@ function qcReportHTML(depts, months, fyIn, opts) {
     const th = ['Indicator', 'Benchmark'].concat(MONTHS.map(m => m[1].split(' ')[0])).map(h => '<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">' + h + '</th>').join('');
     const trs = (d.indicators || []).map((ind, i) => {
       const cells = [qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m => {
-        const v = qcCellVal(ind, m, false);
+        const v = qcCellVal(ind, m);
         const s = qStatus(ind, v);
         const disp = s === 'na' ? '—' : fmtVal(ind, v);
         const col = s === 'breach' ? '#d23a52' : s === 'ok' ? '#1f9d57' : '#9aa6b4';
@@ -22808,7 +22817,7 @@ function qcExport(depts, fmt) {
     const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(MONTHS.map(m => m[1]))];
     depts.forEach(d => (d.indicators || []).forEach(ind => {
       rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(MONTHS.map(m => {
-        const v = qcCellVal(ind, m, false);
+        const v = qcCellVal(ind, m);
         return qStatus(ind, v) === 'na' ? '' : fmtVal(ind, v);
       })));
     }));
@@ -23278,7 +23287,7 @@ function qcDeptSummaryRows(d, months) {
     let ok = 0,
       breach = 0;
     inds.forEach(ind => {
-      const s = monthStatus(ind, m[0]);
+      const s = qStatus(ind, qcCellVal(ind, m));
       if (s === 'ok') ok++;else if (s === 'breach') breach++;
     });
     const tot = ok + breach;
@@ -23295,7 +23304,7 @@ function qcDeptSummaryRows(d, months) {
   const seen = new Set(),
     qRows = [];
   months.forEach(m => {
-    if (!m[2]) return;
+    if (!m[2] || !qcMonthEnded(m[0])) return;
     const fy = fyOfKey(m[0]),
       qk = fy + ':' + m[2];
     if (seen.has(qk)) return;
@@ -23753,7 +23762,7 @@ function QCHeatGrid({
       fontWeight: 400
     }
   }, ind.goalDirection === 'higher_is_better' ? '↑' : '↓')), months.map(m => {
-    const v = qcCellVal(ind, m, false);
+    const v = qcCellVal(ind, m);
     const s = qStatus(ind, v);
     const c = qcHeatColors(s);
     return React.createElement("td", {
@@ -25159,7 +25168,7 @@ function QCReportBuilder({
     ind,
     m
   }) => {
-    const v = qcCellVal(ind, m, false);
+    const v = qcCellVal(ind, m);
     const s = qStatus(ind, v);
     const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
     const bg = s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : '#f4f6f9';
@@ -26038,7 +26047,7 @@ function QCReportBuilder({
             benchSet.add(be);
             if (!bench) bench = be;
           }
-          const v = qcCellVal(ind, m, false);
+          const v = qcCellVal(ind, m);
           const s = qStatus(ind, v);
           const isRate = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
           if (v != null) {
@@ -27642,7 +27651,7 @@ function QCReportBuilder({
         F('normal', 5.8, RGB.muted);
         doc.text(clip(benchExpr(ind), benchW - 3), M + nameW + 2, y + 9);
         mCols.forEach((m, i) => {
-          const v = qcCellVal(ind, m, false),
+          const v = qcCellVal(ind, m),
             s = qStatus(ind, v),
             cx = M + nameW + benchW + i * mW + mW / 2;
           F('normal', 6.2, statCol(s));
@@ -28014,7 +28023,7 @@ function QCReportBuilder({
     if (fmt === 'csv') {
       const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(pMonths.map(m => m[1]))];
       scope.forEach(d => (d.indicators || []).forEach(ind => rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(pMonths.map(m => {
-        const v = qcCellVal(ind, m, false);
+        const v = qcCellVal(ind, m);
         return qStatus(ind, v) === 'na' ? '' : fmtVal(ind, v);
       })))));
       rows.push([]);

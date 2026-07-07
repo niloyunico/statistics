@@ -161,23 +161,29 @@ function qtrSrc(ind, fy){ return (fy!=null && ind && ind.quartersByFy && ind.qua
 function qtrRaw(ind, Q, fy){ const v = qtrSrc(ind, fy)[Q]; return (v==null||v==='') ? null : Number(v); }
 function qtrStatus(ind, Q, fy){ return qStatus(ind, qtrSrc(ind, fy)[Q]); }
 
-/* Display value for ONE month cell (report tables, heat grids, chart series, exports).
-   Monthly value when present; else the quarter rollup ONLY when that whole quarter has
-   no monthly entries at all (pure quarter-recorded data legitimately spreads across its
-   3 months). A partially-reported quarter must return null for its gap months — the
-   rollup already CONTAINS the reported months, so painting it into a gap month showed
-   a phantom duplicated total (e.g. Jan=2, Feb=3, Mar unreported → Mar showed "5").
-   `spread===false` = MONTH-STRICT: never paint a quarter rollup into a month cell.
-   Month-granular renderers (per-month table cells, heat grids, CSV/Word/PDF month
-   columns) pass false, so a month with NO submission always shows "·" — a quarterly
-   "0" no longer fabricates six green zero cells for months nobody reported (a real
-   submitted monthly 0 still renders: monthRaw returns the Number 0, not null).
-   Aggregates (deptStat, KPIs, hasData, countBreaches) keep the default quarter-aware
-   behaviour so quarter-recorded data still counts in totals and compliance rates. */
-function qcCellVal(ind, m, spread){
+/* A month that hasn't ENDED yet cannot carry a report. This clock rule stops quarter
+   rollups (including pre-seeded zeros for future quarters) from painting reported-
+   looking values into months nobody could have reported yet. */
+function qcMonthEnded(mk){
+  const p = String(mk||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10);
+  if(mi < 0 || isNaN(yy)) return false;
+  const now = new Date(); const y = 2000 + yy;
+  return y < now.getFullYear() || (y === now.getFullYear() && mi < now.getMonth());
+}
+/* Display value for ONE month cell — the SINGLE source every consumer shares (table
+   cells, heat grids, KPIs/deptStat, summary chart, CSV/Word/PDF exports), so the
+   chart, the KPI cards and the month table can never disagree.
+   Rules: monthly value when present; else the quarter rollup ONLY when (a) that whole
+   quarter has no monthly entries (a pure quarter report legitimately covers its 3
+   months — partially-reported quarters must NOT paint the rollup into gap months) and
+   (b) the month has already ENDED (qcMonthEnded) — a rollup stored against a future
+   quarter is seed noise, not a report, and used to render six phantom "0" cells for
+   months nobody submitted. A genuinely submitted monthly 0 always renders (monthRaw
+   returns the Number 0, not null). */
+function qcCellVal(ind, m){
   const v = monthRaw(ind, m[0]);
   if(v!=null) return v;
-  if(spread===false) return null;
+  if(!qcMonthEnded(m[0])) return null;
   const fy = fyOfKey(m[0]);
   if(fy==null || !m[2]) return null;
   const qMonths = fyAxis(fy).filter(r=>r[2]===m[2]);
@@ -1026,8 +1032,8 @@ function qcReportHTML(depts, months, fyIn, opts){
       +'<div style="font-family:Calibri;color:#555;margin-bottom:6px">Zero-defect: <b>'+st.rate+'%</b> · Breaches: <b style="color:#d23a52">'+st.breach+'</b> · Indicators: '+((d.indicators||[]).length)+'</div>';
     const th=['Indicator','Benchmark'].concat(MONTHS.map(m=>m[1].split(' ')[0])).map(h=>'<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">'+h+'</th>').join('');
     const trs=(d.indicators||[]).map((ind,i)=>{
-      // month-strict like the on-screen cells: an unsubmitted month exports as '—'
-      const cells=[qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m,false); const s=qStatus(ind,v); const disp=s==='na'?'—':fmtVal(ind,v); const col=s==='breach'?'#d23a52':s==='ok'?'#1f9d57':'#9aa6b4'; return '<span style="color:'+col+';font-weight:600">'+qcEsc(disp)+'</span>'; }));
+      // same shared month resolver the on-screen cells use
+      const cells=[qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m); const s=qStatus(ind,v); const disp=s==='na'?'—':fmtVal(ind,v); const col=s==='breach'?'#d23a52':s==='ok'?'#1f9d57':'#9aa6b4'; return '<span style="color:'+col+';font-weight:600">'+qcEsc(disp)+'</span>'; }));
       return '<tr style="background:'+(i%2?'#eef6fb':'#fff')+'">'+cells.map((c,ci)=>'<td style="border:1px solid #b9c6d2;padding:4px 7px;font-family:Calibri;font-size:10pt;'+(ci>1?'text-align:center':'')+'">'+c+'</td>').join('')+'</tr>';
     }).join('');
     body+='<table border="1" style="border-collapse:collapse"><thead><tr>'+th+'</tr></thead><tbody>'+trs+'</tbody></table>';
@@ -1046,7 +1052,7 @@ function qcExport(depts, fmt){
   const MONTHS=fyAxis(defaultFy(depts));
   if(fmt==='csv'){
     const rows=[['Department','Indicator','Benchmark','Goal'].concat(MONTHS.map(m=>m[1]))];
-    depts.forEach(d=>(d.indicators||[]).forEach(ind=>{ rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection==='higher_is_better'?'higher is better':'lower is better'].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m,false); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); }))); }));
+    depts.forEach(d=>(d.indicators||[]).forEach(ind=>{ rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection==='higher_is_better'?'higher is better':'lower is better'].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); }))); }));
     rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','Date of incident','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
     depts.forEach(d=>qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,MONTHS)).forEach(r=>{ const x=r.x; rows.push([d.name, r.ind, r.month, x.incidentDate||'', x.uhid||'', x.patientName||'', x.age||'', x.gender||'', x.diagnosis||'', x.details||'', x.finding||'', x.corrective||'', x.preventive||'']); }));
     qcDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), base+'.csv','text/csv;charset=utf-8'); return;
@@ -1220,22 +1226,24 @@ function qcChartRows(ind, months){
    reported indicators on benchmark, the SAME metric the KPI cards / heatmap / ranking
    use — instead of one arbitrary indicator's raw values (mixed units, and a quarter
    rollup used to repeat flat across Jan/Feb/Mar, e.g. the meaningless 58.82 bars).
-   Month-strict: only months with real monthly submissions plot. When the period holds
-   ONLY quarter rollups, falls back to one point per QUARTER so quarter-recorded
-   departments still chart. Row shape matches qcChartRows so every style can plot it. */
+   Uses qcCellVal — the SAME resolver as the month table and deptStat — so the chart,
+   the KPI cards and the table always agree. Months without any resolvable value drop
+   from the axis. When the period holds ONLY quarter rollups with no monthly entries,
+   falls back to one point per ENDED quarter so quarter-recorded departments still
+   chart. Row shape matches qcChartRows so every style can plot it. */
 function qcDeptSummaryRows(d, months){
   months = months || MONTHS;
   const inds=d.indicators||[];
   const mRows=months.map(m=>{
     let ok=0, breach=0;
-    inds.forEach(ind=>{ const s=monthStatus(ind,m[0]); if(s==='ok')ok++; else if(s==='breach')breach++; });
+    inds.forEach(ind=>{ const s=qStatus(ind, qcCellVal(ind, m)); if(s==='ok')ok++; else if(s==='breach')breach++; });
     const tot=ok+breach;
     return {mon:m[1].split(' ')[0], mfull:m[1], q:m[2], val:tot?Math.round(ok*100/tot):0, has:tot>0, bench:90};
   });
   if(mRows.some(r=>r.has)) return mRows;
   const seen=new Set(), qRows=[];
   months.forEach(m=>{
-    if(!m[2]) return;
+    if(!m[2] || !qcMonthEnded(m[0])) return;
     const fy=fyOfKey(m[0]), qk=fy+':'+m[2];
     if(seen.has(qk)) return; seen.add(qk);
     let ok=0, breach=0;
@@ -1432,7 +1440,7 @@ function QCHeatGrid({d, months}){
           : inds.map(ind=>(
           <tr key={ind.id}>
             <td style={{padding:'3px 8px',textAlign:'left',fontWeight:600,color:P.ink,fontSize:9.5}}>{ind.name} <span style={{color:P.faint,fontWeight:400}}>{ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
-            {months.map(m=>{ const v=qcCellVal(ind,m,false); const s=qStatus(ind,v); const c=qcHeatColors(s);
+            {months.map(m=>{ const v=qcCellVal(ind,m); const s=qStatus(ind,v); const c=qcHeatColors(s);
               return <td key={m[0]} style={{padding:'3px 2px',textAlign:'center'}}><span title={ind.name+' · '+m[1]+' · '+(s==='na'?'not reported':s==='breach'?'breach':'on benchmark')} style={{display:'inline-grid',placeItems:'center',minWidth:22,height:24,borderRadius:5,background:c.bg,color:c.col,fontFamily:MONO,fontWeight:700,fontSize:9.5}}>{s==='na'?'·':fmtVal(ind,v)}</span></td>;
             })}
           </tr>
@@ -2023,7 +2031,7 @@ function QCReportBuilder({depts}){
 
   /* month-wise table cell */
   const MonthCell=({ind,m})=>{
-    const v=qcCellVal(ind,m,false); // month-strict: unsubmitted month = '·', never a quarter rollup
+    const v=qcCellVal(ind,m); // shared resolver: same value the KPIs and chart use
     const s=qStatus(ind,v);
     const col=s==='breach'?P.rose:s==='ok'?P.green:P.faint;
     const bg =s==='breach'?'#fbe9ec':s==='ok'?'#e7f6ed':'#f4f6f9';
@@ -2333,7 +2341,7 @@ function QCReportBuilder({depts}){
                 const benchSet=new Set(); let bench='';
                 const cells=chosen.map(d=>{ const ind=findInd(d,name); if(!ind) return {none:true};
                   const be=benchExpr(ind); if(be && be!=='No benchmark'){ benchSet.add(be); if(!bench) bench=be; }
-                  const v=qcCellVal(ind,m,false); const s=qStatus(ind,v);
+                  const v=qcCellVal(ind,m); const s=qStatus(ind,v);
                   const isRate=['pct','rate100','rate1000','avg'].indexOf(ind.formula)>=0 || isPctInd(ind);
                   if(v!=null){
                     if(!isRate){ anyCount=true; tot+=Number(v)||0; }
@@ -2836,7 +2844,7 @@ function QCReportBuilder({depts}){
         if(ri%2){doc.setFillColor(247,250,253);doc.rect(M,y,CW,rowH,'F');}
         F('normal',6.6,RGB.ink);doc.text(clip(ind.name,nameW-6),M+4,y+9);
         F('normal',5.8,RGB.muted);doc.text(clip(benchExpr(ind),benchW-3),M+nameW+2,y+9);
-        mCols.forEach((m,i)=>{const v=qcCellVal(ind,m,false),s=qStatus(ind,v),cx=M+nameW+benchW+i*mW+mW/2;
+        mCols.forEach((m,i)=>{const v=qcCellVal(ind,m),s=qStatus(ind,v),cx=M+nameW+benchW+i*mW+mW/2;
           F('normal',6.2,statCol(s));doc.text(s==='na'?'·':clip(fmtVal(ind,v),mW-1),cx,y+9,{align:'center'});});
         y+=rowH;line(M,y,M+CW,y,RGB.line,0.35);
       });
@@ -3055,7 +3063,7 @@ function QCReportBuilder({depts}){
       const rows=[['Department','Indicator','Benchmark','Goal'].concat(pMonths.map(m=>m[1]))];
       scope.forEach(d=>(d.indicators||[]).forEach(ind=>rows.push(
         [d.name,ind.name,benchExpr(ind),ind.goalDirection==='higher_is_better'?'higher is better':'lower is better']
-        .concat(pMonths.map(m=>{ const v=qcCellVal(ind,m,false); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
+        .concat(pMonths.map(m=>{ const v=qcCellVal(ind,m); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
       rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','Date of incident','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
       // period-scoped like every report page — the CSV used to dump incidents from ANY year
       scope.forEach(d=>qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,pMonths)).forEach(r=>{ const x=r.x; rows.push([d.name,r.ind,r.month,x.incidentDate||'',x.uhid||'',x.patientName||'',x.age||'',x.gender||'',x.diagnosis||'',x.details||'',x.finding||'',x.corrective||'',x.preventive||'']); }));
