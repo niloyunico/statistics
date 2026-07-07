@@ -25,9 +25,9 @@
 
   // Fiscal-year (Jun–May) helpers so quarters can be rolled up PER YEAR, not just for the
   // hardcoded 2025-26 above. A month's quarter depends only on its month name, so any year works.
-  const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return 2000+yy; }
-  function fyQuarterMonths(startYear){ const yy=String(startYear%100).padStart(2,'0'); const k=FY_MONS.map(mn=>mn+'-'+yy); return { Q1:k.slice(0,3), Q2:k.slice(3,6), Q3:k.slice(6,9), Q4:k.slice(9,12) }; }
+  const FY_MONS = ['Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May'];
+  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return 2000+yy-(mi>=7?1:0); }
+  function fyQuarterMonths(startYear){ const yy=String(startYear%100).padStart(2,'0'); const ny=String((startYear+1)%100).padStart(2,'0'); return { Q1:['Jun-'+yy,'Jul-'+yy,'Aug-'+yy], Q2:['Sep-'+yy,'Oct-'+yy,'Nov-'+yy], Q3:['Dec-'+yy,'Jan-'+ny,'Feb-'+ny], Q4:['Mar-'+ny,'Apr-'+ny,'May-'+ny] }; }
   function fysInInd(ind){ const set=new Set(); ['months','mNum','mDen'].forEach(f=>{ const o=ind && ind[f]; if(o) Object.keys(o).forEach(k=>{ if(o[k]!=null&&o[k]!==''){ const fy=fyOfKeyS(k); if(fy!=null) set.add(fy); } }); }); return [...set]; }
 
   function isPct(ind) {
@@ -56,10 +56,20 @@
       Object.keys(QM).forEach(q => {
         const ms = QM[q] || [];
         const have = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
-        if (!have) return;
-        const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
-        const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
-        out[q] = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
+        let v = null;
+        if (have) {
+          const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+          const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+          v = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
+        }
+        if (v == null) {
+          // Approved zero-event / denominator-less readings store their computed value
+          // in months{} — roll those up (mean for rates/%, sum for counts) so a quarter
+          // of "0 events" reads as 0 on benchmark instead of not-reported.
+          const vals = ms.map(m => (ind.months || {})[m]).filter(x => x != null && x !== '').map(Number);
+          if (vals.length) v = f === 'count' ? vals.reduce((s, x) => s + x, 0) : Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100;
+        }
+        if (v != null) out[q] = v;
       });
     } else {
       const months = ind.months || {};
@@ -139,17 +149,23 @@
         // denominator — otherwise summing empty denominators yields den=0 → a false on-benchmark 0.
         const haveMonths = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''
           && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
-        let num, den;
+        let num, den, hadInput = haveMonths;
         if (haveMonths) {
           num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
           den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
         } else {
           const n = (ind.qNum || {})[q];
-          if (n == null || n === '') return; // no data this quarter → leave as-is (null)
-          num = n; den = (ind.qDen || {})[q];
+          if (n != null && n !== '') { hadInput = true; num = n; den = (ind.qDen || {})[q]; }
         }
-        // No denominator for a rate/pct ⇒ show "no data" (null), not a misleading 0.
-        q2[q] = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
+        // No denominator for a rate/pct ⇒ not computable from num/den…
+        let v = hadInput ? ((needDen && !den) ? null : qiFormulaCompute(f, num, den)) : null;
+        if (v == null) {
+          // …but approved zero-event / denominator-less readings store their computed
+          // value in months{} — roll those up so "0 events" isn't shown as not-reported.
+          const vals = ms.map(m => (ind.months || {})[m]).filter(x => x != null && x !== '').map(Number);
+          if (vals.length) v = f === 'count' ? vals.reduce((s, x) => s + x, 0) : Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100;
+        }
+        if (v != null) q2[q] = v; else if (hadInput) q2[q] = null; // explicit null only when something was entered
       });
       ind.quarters = q2;
     } else if (ind.months && Object.keys(ind.months).length) {
@@ -338,6 +354,13 @@
         }
         return Object.assign({}, cur, { indRemoved: [...(cur.indRemoved || []), indId] });
       }),
+
+      // Un-hide a SEED indicator a previous unassign put in indRemoved. The assign
+      // matrix uses this on re-tick so the department's ORIGINAL indicator (with all
+      // its recorded data) comes back, instead of minting an empty twin with a new id.
+      restoreIndicator: (deptKey, indId) => patchDept(deptKey, cur => Object.assign({}, cur, {
+        indRemoved: (cur.indRemoved || []).filter(x => String(x) !== String(indId)),
+      })),
 
       setExecutive: (deptKey, patch) => patchDept(deptKey, cur => ({
         ...cur, executive: Object.assign({}, cur.executive || {}, patch),

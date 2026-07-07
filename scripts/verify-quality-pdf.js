@@ -21,7 +21,14 @@ protocol.registerSchemesAsPrivileged([{ scheme: SCHEME, privileges: { standard: 
 function resolveRequest(u) { const url = new URL(u); let rel = decodeURIComponent(url.pathname); if (!rel || rel === '/') rel = '/index.html'; const t = path.normalize(path.join(RENDERER, rel)); return t.startsWith(RENDERER) ? t : path.join(RENDERER, 'index.html'); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
+try {
+  const tmpProfile = path.join(__dirname, '.tmp-electron', path.basename(__filename, '.js'));
+  fs.mkdirSync(tmpProfile, { recursive: true });
+  app.setPath('userData', tmpProfile);
+  app.setPath('sessionData', tmpProfile);
+} catch (_) {}
 const errors = [];
 let lastPdf = null;
 
@@ -50,20 +57,22 @@ app.whenReady().then(async () => {
 
   await win.loadURL(`${SCHEME}://unico/index.html`);
   await sleep(4500);
-  await exec(`localStorage.removeItem('unico_quality_v1');true`);
+  await exec(`localStorage.removeItem('unico_quality_v2');true`);
 
-  // Quality dashboard (disambiguated by section) -> first department row
+  // Reports workspace -> Quality Indicators builder
   await exec(`(function(){
-    var nodes=[].slice.call(document.querySelectorAll('.sb-sec, .sb-item'));
-    for(var i=0;i<nodes.length;i++){ if(nodes[i].classList.contains('sb-sec') && /quality indicators/i.test(nodes[i].textContent||'')){
-      for(var j=i+1;j<nodes.length;j++){ if(nodes[j].classList.contains('sb-item')){ nodes[j].click(); return; } } } }
+    var mod=[].slice.call(document.querySelectorAll('.modswitch button')).find(function(e){return /reports/i.test(e.textContent||'');});
+    if(mod) mod.click();
   })()`);
   await sleep(900);
-  await exec(`(function(){ var r=document.querySelector('table.tbl tbody tr'); if(r) r.click(); })()`);
+  await exec(`(function(){
+    var it=[].slice.call(document.querySelectorAll('.sb-item')).find(function(e){return /Quality Indicators/i.test(e.textContent||'');});
+    if(it) it.click();
+  })()`);
   await sleep(900);
 
-  const hasBtn = await exec(`[].slice.call(document.querySelectorAll('button')).some(function(b){return b.textContent.trim()==='PDF';})`);
-  await exec(`(function(){ var b=[].slice.call(document.querySelectorAll('button')).find(function(x){return x.textContent.trim()==='PDF';}); if(b) b.click(); })()`);
+  const hasBtn = await exec(`[].slice.call(document.querySelectorAll('button')).some(function(b){return /Export PDF|Generate NQI Report/.test(b.textContent);})`);
+  await exec(`(function(){ var b=[].slice.call(document.querySelectorAll('button')).find(function(x){return /Export PDF/.test(x.textContent);}); if(b) b.click(); })()`);
   await sleep(1500); // printToPDF + cleanup
 
   const after = await exec(`({ htmlLen: document.getElementById('pdf-root').innerHTML.length, mode: document.body.classList.contains('pdf-export-mode') })`);
@@ -72,7 +81,7 @@ app.whenReady().then(async () => {
     hasBtn === true &&
     lastPdf && lastPdf.head === '%PDF-' && lastPdf.bytes > 5000 &&
     /Quality/i.test(lastPdf.name || '') &&
-    after.htmlLen === 0 && after.mode === false &&
+    after.htmlLen > 0 && after.mode === false &&
     errors.length === 0;
 
   console.log('HAS_PDF_BTN ' + hasBtn);

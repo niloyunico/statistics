@@ -25,20 +25,99 @@ const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
 const QUARTER_MONTHS = { Q1: ['Jun-25', 'Jul-25', 'Aug-25'], Q2: ['Sep-25', 'Oct-25', 'Nov-25'], Q3: ['Dec-25', 'Jan-26', 'Feb-26'], Q4: ['Mar-26', 'Apr-26', 'May-26'] };
 // Fiscal-year (Jun–May) helpers so quarters roll up PER YEAR, not just 2025-26. A month's
 // quarter depends only on its month name, so any year works.
-const FY_MONS_S = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-function fyOfKeyS(key) { const p = String(key || '').split('-'); const mi = FY_MONS_S.indexOf(p[0]); const yy = parseInt(p[1], 10); if (mi < 0 || isNaN(yy)) return null; return 2000 + yy; }
-function fyQuarterMonths(startYear) { const yy = String(startYear % 100).padStart(2, '0'); const k = FY_MONS_S.map((mn) => mn + '-' + yy); return { Q1: k.slice(0, 3), Q2: k.slice(3, 6), Q3: k.slice(6, 9), Q4: k.slice(9, 12) }; }
+const FY_MONS_S = ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'];
+function fyOfKeyS(key) { const p = String(key || '').split('-'); const mi = FY_MONS_S.indexOf(p[0]); const yy = parseInt(p[1], 10); if (mi < 0 || isNaN(yy)) return null; return 2000 + yy - (mi >= 7 ? 1 : 0); }
+function fyQuarterMonths(startYear) { const yy = String(startYear % 100).padStart(2, '0'); const ny = String((startYear + 1) % 100).padStart(2, '0'); return { Q1: ['Jun-' + yy, 'Jul-' + yy, 'Aug-' + yy], Q2: ['Sep-' + yy, 'Oct-' + yy, 'Nov-' + yy], Q3: ['Dec-' + yy, 'Jan-' + ny, 'Feb-' + ny], Q4: ['Mar-' + ny, 'Apr-' + ny, 'May-' + ny] }; }
 function fysInInd(ind) { const set = new Set(); ['months', 'mNum', 'mDen'].forEach((f) => { const o = ind && ind[f]; if (o) Object.keys(o).forEach((k) => { if (o[k] != null && o[k] !== '') { const fy = fyOfKeyS(k); if (fy != null) set.add(fy); } }); }); return [...set]; }
-function computeQuartersFor(ind, QM) { const f = ind.formula; const out = {}; if (f && f !== 'direct') { const needDen = f !== 'count'; Object.keys(QM).forEach((q) => { const ms = QM[q] || []; const have = ms.some((m) => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== ''))); if (!have) return; const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0); const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0); out[q] = (needDen && !den) ? null : qiFormulaCompute(f, num, den); }); } else { const months = ind.months || {}; Object.keys(QM).forEach((q) => { const vals = (QM[q] || []).map((m) => months[m]).filter((v) => v != null && v !== '').map(Number); if (!vals.length) return; out[q] = indIsPct(ind) ? Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100 : vals.reduce((s, x) => s + x, 0); }); } return out; }
+function avgVals(vals) { return Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100; }
+function computeFallbackFormulaQuarter(formula, vals) {
+  if (!vals.length) return null;
+  return formula === 'count' ? vals.reduce((s, x) => s + x, 0) : avgVals(vals);
+}
+function computeQuartersFor(ind, QM) {
+  const f = ind.formula;
+  const out = {};
+  if (f && f !== 'direct') {
+    const needDen = f !== 'count';
+    Object.keys(QM).forEach((q) => {
+      const ms = QM[q] || [];
+      const have = ms.some((m) => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
+      let v = null;
+      if (have) {
+        const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+        const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+        v = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
+      }
+      if (v == null) {
+        const vals = ms.map((m) => (ind.months || {})[m]).filter((x) => x != null && x !== '').map(Number);
+        v = computeFallbackFormulaQuarter(f, vals);
+      }
+      if (v != null) out[q] = v;
+    });
+  } else {
+    const months = ind.months || {};
+    Object.keys(QM).forEach((q) => {
+      const vals = (QM[q] || []).map((m) => months[m]).filter((v) => v != null && v !== '').map(Number);
+      if (!vals.length) return;
+      out[q] = indIsPct(ind) ? avgVals(vals) : vals.reduce((s, x) => s + x, 0);
+    });
+  }
+  return out;
+}
 // Mirrors quality-store.js qiFormulaCompute (count=num; rate1000/rate100/pct = num/den*mult).
-function qiFormulaCompute(formula, num, den) { const n = Number(num) || 0, d = Number(den) || 0; if (formula === 'count') return n; if (!d) return 0; if (formula === 'rate1000') return Math.round((n / d) * 1000 * 100) / 100; return Math.round((n / d) * 100 * 100) / 100; }
+function qiFormulaCompute(formula, num, den) { const n = Number(num) || 0, d = Number(den) || 0; if (formula === 'count') return n; if (!d) return 0; if (formula === 'rate1000') return Math.round((n / d) * 1000 * 100) / 100; if (formula === 'avg') return Math.round((n / d) * 100) / 100; return Math.round((n / d) * 100 * 100) / 100; }
 function indIsPct(ind) { const t = ((ind && ind.valueType) || '').toString().toLowerCase(); return t.indexOf('%') >= 0 || t.startsWith('per'); }
 // Benchmark status for one quarter value, per CONTRACT: null/'' benchmark => 'n-a';
 // higher_is_better => value>=bench 'ok' else 'breach'; else value<=bench 'ok' else 'breach'.
 function indStatus(ind, value) { const braw = (ind && ind.benchmarkValue != null && ind.benchmarkValue !== '') ? ind.benchmarkValue : (ind && ind.benchmark); const bn = Number(braw); if (braw == null || braw === '' || isNaN(bn)) return 'n-a'; if (value == null || value === '') return 'n-a'; const higher = String((ind && ind.goalDirection) || '') === 'higher_is_better'; const ok = higher ? Number(value) >= bn : Number(value) <= bn; return ok ? 'ok' : 'breach'; }
 // Pure: recompute ind.quarters + ind.quarterStatus + ind.status from monthly data.
 // Mirrors quality-store.js mergeIndicator rollup so server/client never disagree.
-function recomputeQuarters(ind) { if (!ind || typeof ind !== 'object') return ind; const f = ind.formula; const quarters = Object.assign({}, ind.quarters || {}); const quarterStatus = {}; Object.keys(QUARTER_MONTHS).forEach((q) => { const ms = QUARTER_MONTHS[q]; let val; if (f && f !== 'direct') { const haveMonths = ms.some((m) => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''); if (haveMonths) { const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0); const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0); val = qiFormulaCompute(f, num, den); } else { const n = (ind.qNum || {})[q]; if (n == null || n === '') return; val = qiFormulaCompute(f, n, (ind.qDen || {})[q]); } } else { const months = ind.months || {}; const vals = ms.map((m) => months[m]).filter((v) => v != null && v !== '').map(Number); if (!vals.length) return; val = indIsPct(ind) ? Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100 : vals.reduce((s, x) => s + x, 0); } quarters[q] = val; quarterStatus[q] = indStatus(ind, val); }); ind.quarters = quarters; ind.quarterStatus = quarterStatus; const present = Object.keys(quarterStatus); ind.status = present.some((q) => quarterStatus[q] === 'breach') ? 'breach' : (present.some((q) => quarterStatus[q] === 'ok') ? 'ok' : 'n-a'); const fys = fysInInd(ind); if (fys.length) { const byFy = {}; fys.forEach((fy) => { byFy[fy] = computeQuartersFor(ind, fyQuarterMonths(fy)); }); ind.quartersByFy = byFy; } return ind; }
+function recomputeQuarters(ind) {
+  if (!ind || typeof ind !== 'object') return ind;
+  const f = ind.formula;
+  const quarters = Object.assign({}, ind.quarters || {});
+  const quarterStatus = {};
+  Object.keys(QUARTER_MONTHS).forEach((q) => {
+    const ms = QUARTER_MONTHS[q];
+    let val = null;
+    if (f && f !== 'direct') {
+      const needDen = f !== 'count';
+      const haveMonths = ms.some((m) => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
+      if (haveMonths) {
+        const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+        const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+        val = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
+      } else {
+        const n = (ind.qNum || {})[q];
+        const d = (ind.qDen || {})[q];
+        if (n != null && n !== '' && (!needDen || (d != null && d !== ''))) val = qiFormulaCompute(f, n, d);
+      }
+      if (val == null) {
+        const vals = ms.map((m) => (ind.months || {})[m]).filter((v) => v != null && v !== '').map(Number);
+        val = computeFallbackFormulaQuarter(f, vals);
+      }
+    } else {
+      const months = ind.months || {};
+      const vals = ms.map((m) => months[m]).filter((v) => v != null && v !== '').map(Number);
+      if (!vals.length) return;
+      val = indIsPct(ind) ? avgVals(vals) : vals.reduce((s, x) => s + x, 0);
+    }
+    if (val == null) return;
+    quarters[q] = val;
+    quarterStatus[q] = indStatus(ind, val);
+  });
+  ind.quarters = quarters;
+  ind.quarterStatus = quarterStatus;
+  const present = Object.keys(quarterStatus);
+  ind.status = present.some((q) => quarterStatus[q] === 'breach') ? 'breach' : (present.some((q) => quarterStatus[q] === 'ok') ? 'ok' : 'n-a');
+  const fys = fysInInd(ind);
+  if (fys.length) {
+    const byFy = {};
+    fys.forEach((fy) => { byFy[fy] = computeQuartersFor(ind, fyQuarterMonths(fy)); });
+    ind.quartersByFy = byFy;
+  }
+  return ind;
+}
 
 function monthRank(key) {
   const p = String(key || '').split('-');
@@ -248,15 +327,25 @@ async function buildQualitySpec(payload) {
   // Single-month entry; the SYSTEM computes the result (the collector never pre-computes):
   //   count  -> the entered value;  rate/% -> numerator / denominator * multiplier
   const formulaIn = (payload && payload.formula) || (found && found.formula) || null;
-  const entryMode = ((payload && payload.entryMode === 'rate') || formulaIn === 'pct' || formulaIn === 'rate1000') ? 'rate' : 'count';
-  const mult = (formulaIn === 'rate1000' || Number(payload && payload.mult) === 1000) ? 1000 : 100;
+  const rateFormulas = ['pct', 'rate100', 'rate1000', 'avg'];
+  const entryMode = ((payload && payload.entryMode === 'rate') || rateFormulas.includes(formulaIn)) ? 'rate' : 'count';
+  const mult = (formulaIn === 'rate1000' || Number(payload && payload.mult) === 1000) ? 1000 : (formulaIn === 'avg' ? 1 : 100);
   let value = null, num = null, den = null;
   if (entryMode === 'rate') {
-    num = Number(payload && payload.num) || 0;
-    den = Number(payload && payload.den) || 0;
-    // No denominator: 0 events is a true 0, but events WITHOUT a denominator have no
-    // computable rate — storing 0 would show a real incident as "on benchmark".
-    value = den > 0 ? Math.round((num / den) * mult * 100) / 100 : (num > 0 ? null : 0);
+    const hasNum = payload && payload.num != null && payload.num !== '' && !isNaN(Number(payload.num));
+    const hasDen = payload && payload.den != null && payload.den !== '' && !isNaN(Number(payload.den));
+    const hasDirectValue = payload && payload.value != null && payload.value !== '' && !isNaN(Number(payload.value));
+    if (!hasNum && !hasDen && hasDirectValue) {
+      // Shared/public links may submit an already-computed rate/average value only.
+      // Keep it as the month value; applyQuality will use months{} fallback for rollups.
+      value = Number(payload.value);
+    } else {
+      num = Number(payload && payload.num) || 0;
+      den = Number(payload && payload.den) || 0;
+      // No denominator: 0 events is a true 0, but events WITHOUT a denominator have no
+      // computable rate — storing 0 would show a real incident as "on benchmark".
+      value = den > 0 ? Math.round((num / den) * mult * 100) / 100 : (num > 0 ? null : 0);
+    }
   } else {
     const rawVal = payload && payload.value;
     value = (rawVal === '' || rawVal == null) ? 0 : (Number(rawVal) || 0);
@@ -300,7 +389,7 @@ async function buildQualitySpec(payload) {
     goalDirection: (payload && payload.goalDirection) || (found && found.goalDirection) || 'lower_is_better',
     // calculation definition (named inputs + unit) so the rich entry form persists
     formula: entryMode === 'rate'
-      ? ((formulaIn === 'rate1000' || formulaIn === 'rate100' || formulaIn === 'pct') ? formulaIn : (mult === 1000 ? 'rate1000' : 'pct'))
+      ? (rateFormulas.includes(formulaIn) ? formulaIn : (mult === 1000 ? 'rate1000' : (mult === 1 ? 'avg' : 'pct')))
       : 'count',
     numLabel: (payload && payload.numLabel) || (found && found.numLabel) || '',
     denLabel: (payload && payload.denLabel) || (found && found.denLabel) || '',
@@ -376,6 +465,14 @@ async function applyQuality(spec) {
   if (spec.entryMode === 'rate') {
     let num = spec.num;
     const mlt = Number(spec.mult) || 100;
+    if ((num == null || num === '') && spec.value != null && spec.value !== '') {
+      ind.months = Object.assign({}, ind.months || {}, { [spec.month]: spec.value });
+      if (spec.remark) ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [spec.month]: spec.remark });
+      if (spec.capa) ind.capa = Object.assign({}, ind.capa || {}, { [spec.month]: Object.assign({ value: spec.value, recordedAt: Date.now() }, spec.capa) });
+      recomputeQuarters(ind);
+      await c.updateOne({ _id: spec.area }, { $set: { indicators } });
+      return;
+    }
     // A submission with no real denominator (e.g. a collector logging NSI cases against the
     // ADMIN-owned staff headcount) must NOT overwrite the stored denominator. Fall back to the
     // month's own mDen, else the last non-empty mDen, so the rate still computes.
@@ -518,6 +615,7 @@ async function approveSubmission(id, by) {
 async function rejectSubmission(id, by, reason) {
   const s = await getSubmissionById(id);
   if (!s) throw new Error('Submission not found.');
+  if (s.status !== 'pending') throw new Error('Only pending submissions can be rejected (this one is "' + s.status + '").');
   const upd = await setSubmissionStatus(id, { status: 'rejected', reviewedBy: by || 'admin', reviewedAt: Date.now(), rejectReason: String(reason || '') });
   return { ok: true, submission: upd };
 }
@@ -768,14 +866,54 @@ function mount(app, opts) {
     if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
     next();
   };
+  const filterSubmissionsForUser = async (req, subs) => {
+    if (!req.user || req.user.role !== 'collector') return subs;
+    const scope = await getUserScope(req.user.sub);
+    const names = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
+    let depts = (scope && scope.departments) || [];
+    try {
+      const map = await deptmap.get();
+      const set = new Set(depts);
+      ((scope && scope.qualityAreas) || []).forEach((ak) => { const id = map && map.qkToId && map.qkToId[ak]; if (id && id !== deptmap.HOSPITAL) set.add(id); });
+      if (scope && scope.allQualityAreas) (map.patientDepts || []).forEach((id) => set.add(id));
+      depts = [...set];
+    } catch (e) { /* keep stored dept scope */ }
+    const areas = (scope && scope.qualityAreas) || [];
+    return (subs || []).filter((s) => names.includes(s.submittedBy)
+      || (s.responsible && names.includes(s.responsible.name))
+      || (s.type === 'patient' && depts.includes(s.department))
+      || (s.type === 'quality' && areas.includes(s.area)));
+  };
+  const statsFromSubmissions = (subs) => {
+    const arr = subs || [];
+    const by = (f) => arr.filter(f).length;
+    return {
+      total: arr.length,
+      pending: by((s) => s.status === 'pending'),
+      approved: by((s) => s.status === 'approved'),
+      rejected: by((s) => s.status === 'rejected'),
+      patient: by((s) => s.type === 'patient'),
+      quality: by((s) => s.type === 'quality'),
+      lastSubmittedAt: arr[0] ? arr[0].submittedAt : null,
+    };
+  };
   // Collectors may only submit for departments/quality areas they are assigned to. Admins
   // and open local mode (no req.user) are unrestricted. Returns an error string, or null.
   const denyIfOutOfScope = async (req, kind, target) => {
     if (!req.user || req.user.role !== 'collector') return null;
     const scope = await getUserScope(req.user.sub);
-    const allowed = kind === 'patient' ? ((scope && scope.departments) || []) : ((scope && scope.qualityAreas) || []);
     const what = kind === 'patient' ? 'department' : 'quality area';
     if (!target) return 'A ' + what + ' is required.';
+    let allowed = kind === 'patient' ? ((scope && scope.departments) || []) : ((scope && scope.qualityAreas) || []);
+    if (kind === 'patient') {
+      try {
+        const map = await deptmap.get();
+        const set = new Set(allowed);
+        ((scope && scope.qualityAreas) || []).forEach((ak) => { const id = map && map.qkToId && map.qkToId[ak]; if (id && id !== deptmap.HOSPITAL) set.add(id); });
+        if (scope && scope.allQualityAreas) (map.patientDepts || []).forEach((id) => set.add(id));
+        allowed = [...set];
+      } catch (e) { /* fall back to stored department scope */ }
+    }
     if (!allowed.includes(target)) return 'You are not assigned to that ' + what + '.';
     return null;
   };
@@ -794,21 +932,18 @@ function mount(app, opts) {
     try {
       let subs = await getSubmissions(req.query);
       // Collectors only see submissions they made or that touch their assignments.
-      if (req.user && req.user.role === 'collector') {
-        const scope = await getUserScope(req.user.sub);
-        const names = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
-        const depts = (scope && scope.departments) || [];
-        const areas = (scope && scope.qualityAreas) || [];
-        subs = subs.filter((s) => names.includes(s.submittedBy)
-          || (s.responsible && names.includes(s.responsible.name))
-          || (s.type === 'patient' && depts.includes(s.department))
-          || (s.type === 'quality' && areas.includes(s.area)));
-      }
+      subs = await filterSubmissionsForUser(req, subs);
       res.json({ ok: true, submissions: subs });
     } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.get('/api/submissions/stats', guard, async (req, res) => {
-    try { res.json({ ok: true, stats: await getStats() }); } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
+    try {
+      if (req.user && req.user.role === 'collector') {
+        const subs = await filterSubmissionsForUser(req, await getSubmissions({ limit: 1000 }));
+        return res.json({ ok: true, stats: statsFromSubmissions(subs) });
+      }
+      res.json({ ok: true, stats: await getStats() });
+    } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.post('/api/submissions/patient', guard, async (req, res) => {
     try {
@@ -861,6 +996,9 @@ function mount(app, opts) {
       // re-assign to a different department/area/month).
       const isAdmin = !(req.user && req.user.role && req.user.role !== 'Administrator');
       if (s.status !== 'pending' && !isAdmin) return res.status(400).json({ ok: false, error: 'Only pending submissions can be edited.' });
+      if (isAdmin && s.status === 'approved' && (req.body && (req.body.month || req.body.department || req.body.area))) {
+        return res.status(400).json({ ok: false, error: 'Approved submissions can only have their values/details edited. Create a new correction to change department, area, or month.' });
+      }
       if (!isAdmin) {
         const scope = await getUserScope(req.user.sub);
         const mine = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
@@ -911,12 +1049,15 @@ function mount(app, opts) {
 
   // Shareable short links — management (admin) ...
   app.get('/api/shortlinks', guard, async (req, res) => {
+    if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
     try { res.json({ ok: true, links: await getShortlinks() }); } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.post('/api/shortlinks', guard, async (req, res) => {
+    if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
     try { res.json({ ok: true, link: await createShortlink(req.body || {}, who(req)) }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
   app.delete('/api/shortlinks/:code', guard, async (req, res) => {
+    if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
     try { await deleteShortlink(req.params.code); res.json({ ok: true }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
 

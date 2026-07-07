@@ -5,6 +5,7 @@ process.env.SEED_ADMIN_USER = 'admin';
 process.env.SEED_ADMIN_PASSWORD = 'test-pass-123';
 process.env.JWT_SECRET = 'test-secret-please-change';
 process.env.PORT = '4099';
+process.env.REQUIRE_AUTH = 'true';
 
 const assert = require('assert');
 const auth = require('../auth');

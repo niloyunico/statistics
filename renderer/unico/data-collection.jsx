@@ -36,6 +36,26 @@
     useEffect(() => { const h = () => setRev((r) => r + 1); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
     return rev;
   };
+
+  // Unmissable submission-success popup: centered, animated check, auto-dismisses after
+  // 3 seconds (click anywhere to close sooner). Collectors kept missing the inline
+  // banner + corner toast and re-submitted, unsure whether the data went through.
+  function DcSuccessPopup({ title, sub, onClose }) {
+    useEffect(() => { const t = setTimeout(() => { try { onClose && onClose(); } catch (e) { } }, 3000); return () => clearTimeout(t); }, []);
+    return (
+      <div onClick={onClose} role="status" aria-live="polite" style={{ position: 'fixed', inset: 0, zIndex: 3000, display: 'grid', placeItems: 'center', background: 'rgba(13,27,46,.42)', animation: 'dcpop-bg .22s ease-out' }}>
+        <style>{'@keyframes dcpop-bg{from{opacity:0}to{opacity:1}}@keyframes dcpop-card{0%{opacity:0;transform:scale(.82) translateY(12px)}60%{transform:scale(1.03)}100%{opacity:1;transform:scale(1) translateY(0)}}@keyframes dcpop-check{from{stroke-dashoffset:48}to{stroke-dashoffset:0}}'}</style>
+        <div style={{ background: '#fff', borderRadius: 18, padding: '30px 38px 24px', textAlign: 'center', maxWidth: 360, boxShadow: '0 24px 70px rgba(5,12,24,.35)', animation: 'dcpop-card .35s cubic-bezier(.2,.85,.3,1.15) both' }}>
+          <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#e7f6ed', display: 'grid', placeItems: 'center', margin: '0 auto 14px' }}>
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#1f9d57" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" strokeDasharray="48" style={{ animation: 'dcpop-check .5s .15s ease-out both' }} /></svg>
+          </div>
+          <div style={{ fontSize: 16.5, fontWeight: 700, color: '#17202b' }}>{title || 'Data submitted successfully!'}</div>
+          {sub && <div style={{ fontSize: 12.5, color: '#6c7a8c', marginTop: 6 }}>{sub}</div>}
+          <div style={{ fontSize: 11, color: '#9aa6b4', marginTop: 12 }}>Sent for admin review · closes automatically</div>
+        </div>
+      </div>
+    );
+  }
   const MO = () => (window.UNICO && window.UNICO.MONTH_ORDER) || [];
   const MONS_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const MONS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -522,18 +542,25 @@
 
     useEffect(() => { dcApi.get('/api/responsibles').then((r) => setResps(r.ok ? r.responsibles : [])).catch(() => {}); }, []);
     useEffect(() => { dcApi.get('/api/submissions?limit=300').then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {}); }, [done]);
+    const canReportDept = (r, id) => {
+      if (!r || !id) return false;
+      if ((r.departments || []).includes(id)) return true;
+      if (r.allQualityAreas) return true;
+      const areas = window.DEPTMAP ? window.DEPTMAP.areasFromDepts([id]) : [];
+      return areas.some((ak) => (r.qualityAreas || []).includes(ak));
+    };
     // when department changes, reset month/values + auto-fill the assigned responsible
     useEffect(() => {
       if (!dept) return;
       setMonth((m) => m || defaultMonthFor(dept));
       setValues({});
       if (!(prefill && prefill.responsible)) {
-        const assigned = resps.filter((r) => (r.departments || []).includes(dept.id));
+        const assigned = resps.filter((r) => canReportDept(r, dept.id));
         if (assigned.length) setResponsible(assigned[0].name);
       }
     }, [deptId, resps.length]);
 
-    const assigned = resps.filter((r) => dept && (r.departments || []).includes(dept.id));
+    const assigned = resps.filter((r) => dept && canReportDept(r, dept.id));
     const order = MO();
     const monthOpts = order.slice(Math.max(0, order.indexOf('Jan-25')), order.length); // sensible window
     // What's already on record for each month of THIS department: the latest
@@ -555,6 +582,7 @@
     const cols = (dept && dept.cols) || [];
     const last = (dept && dept.data && dept.data.length) ? dept.data[dept.data.length - 1] : {};
 
+    const [flash, setFlash] = useState(null); // 3s success popup
     const submit = () => {
       if (!dept) return;
       if (!month) { toast('Pick a month', 'error'); return; }
@@ -569,7 +597,7 @@
         isCorrection: pCorrection, correctionReason: pCorrection ? reason.trim() : '',
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ month, dept: dept.name, correction: pCorrection }); setValues({}); setNote(''); setReason(''); toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success'); }
+        if (r.ok) { setDone({ month, dept: dept.name, correction: pCorrection }); setFlash({ ts: Date.now(), title: pCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: dept.name + ' · ' + monthLabel(month) }); setValues({}); setNote(''); setReason(''); toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success'); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch((e) => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -577,6 +605,7 @@
     return (
       <div className="grid" style={{ gap: 14, maxWidth: 760 }}>
         <SectionTitle icon={I.input} title="Submit Patient Statistics" sub="Fill in a department's monthly numbers — saved straight to the database and logged." />
+        {flash && <DcSuccessPopup key={flash.ts} title={flash.title} sub={flash.sub} onClose={() => setFlash(null)} />}
         {done && <Banner ok onClose={() => setDone(null)}>Submitted ✓ — {done.dept} · {monthLabel(done.month)} sent for admin review. It appears on the dashboard once approved in Review &amp; History.</Banner>}
         <Card>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -701,6 +730,7 @@
     const [responsible, setResponsible] = useState(lockResp ? (me.name || '') : ((prefill && prefill.responsible) || ''));
     const [busy, setBusy] = useState(false);
     const [done, setDone] = useState(null);
+    const [flash, setFlash] = useState(null); // 3s success popup
     const [guideOpen, setGuideOpen] = useState(false); // HQI guide collapsed by default (click "Show" to expand)
     const [resps, setResps] = useState([]);
     useEffect(() => { if (!lockResp) dcApi.get('/api/responsibles').then((r) => setResps(r.ok ? r.responsibles : [])).catch(() => {}); }, []);
@@ -709,8 +739,14 @@
     const firstAreaRef = React.useRef(true);
     useEffect(() => { if (firstAreaRef.current) { firstAreaRef.current = false; return; } setIndId(''); }, [areaKey]);
 
+    const canReportArea = (r, ak) => {
+      if (!r || !ak) return false;
+      if (r.allQualityAreas) return true;
+      if ((r.qualityAreas || []).includes(ak)) return true;
+      return (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(r.departments || []) : []).includes(ak);
+    };
     const inds = (area && area.indicators) || [];
-    const assigned = resps.filter((r) => (r.qualityAreas || []).includes(areaKey));
+    const assigned = resps.filter((r) => canReportArea(r, areaKey));
     const isNew = indId === '__new__';
     const curInd = inds.find((i) => i.id === indId);
     const def = isNew ? newInd : (curInd || {});
@@ -919,7 +955,7 @@
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ area: area.name, month }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setDen(''); setRemark(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
+        if (r.ok) { setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: qCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setDen(''); setRemark(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -928,6 +964,7 @@
     return (
       <div className="grid" style={{ gap: 14, maxWidth: 760 }}>
         <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Enter the month's value — by staff group (Nurse / Doctor / PCA / Other) or directly — the count / rate is calculated automatically." />
+        {flash && <DcSuccessPopup key={flash.ts} title={flash.title} sub={flash.sub} onClose={() => setFlash(null)} />}
         {done && <Banner ok onClose={() => setDone(null)}>Saved ✓ — {done.area} · {monthLabel(done.month)} sent for admin review.</Banner>}
         <Card>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -1714,9 +1751,22 @@
     const copy = (code) => { try { navigator.clipboard.writeText(fullUrl(code)); toast('Link copied to clipboard', 'success'); } catch (e) { window.prompt('Copy this link:', fullUrl(code)); } };
     const remove = (code) => { const go = () => dcApi.del('/api/shortlinks/' + encodeURIComponent(code)).then(load); if (window.UI && window.UI.confirm) window.UI.confirm('Delete this share link?').then((ok) => ok && go()); else if (window.confirm('Delete this share link?')) go(); };
 
+    const canReportArea = (r, ak) => {
+      if (!r || !ak) return false;
+      if (r.allQualityAreas) return true;
+      if ((r.qualityAreas || []).includes(ak)) return true;
+      return (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(r.departments || []) : []).includes(ak);
+    };
+    const canReportDept = (r, id) => {
+      if (!r || !id) return false;
+      if ((r.departments || []).includes(id)) return true;
+      if (r.allQualityAreas) return true;
+      const areasForDept = window.DEPTMAP ? window.DEPTMAP.areasFromDepts([id]) : [];
+      return areasForDept.some((ak) => (r.qualityAreas || []).includes(ak));
+    };
     const assigned = form.type === 'patient'
-      ? resps.filter((r) => (r.departments || []).includes(form.department))
-      : resps.filter((r) => (r.qualityAreas || []).includes(form.area));
+      ? resps.filter((r) => canReportDept(r, form.department))
+      : resps.filter((r) => canReportArea(r, form.area));
 
     return (
       <div className="grid" style={{ gap: 14 }}>

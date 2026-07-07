@@ -49,10 +49,12 @@ const MANIFEST = [
   // --- head data/stores (plain JS) — must run before the components ---
   { file: 'config.js', jsx: false },
   { file: 'deptmap.js', jsx: false },
+  { file: 'departments-seed.js', jsx: false },
   { file: 'data.js', jsx: false },
   { file: 'store.js', jsx: false },
   { file: 'staff-seed.js', jsx: false },
   { file: 'staff-data.js', jsx: false },
+  { file: 'quality-seed.js', jsx: false },
   { file: 'quality-data.js', jsx: false },
   { file: 'quality-guide.js', jsx: false },
   { file: 'quality-corrections.js', jsx: false },

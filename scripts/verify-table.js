@@ -16,7 +16,14 @@ protocol.registerSchemesAsPrivileged([{ scheme: SCHEME, privileges: { standard: 
 function resolveRequest(u) { const url = new URL(u); let rel = decodeURIComponent(url.pathname); if (!rel || rel === '/') rel = '/index.html'; const t = path.normalize(path.join(RENDERER, rel)); return t.startsWith(RENDERER) ? t : path.join(RENDERER, 'index.html'); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
+try {
+  const tmpProfile = path.join(__dirname, '.tmp-electron', path.basename(__filename, '.js'));
+  fs.mkdirSync(tmpProfile, { recursive: true });
+  app.setPath('userData', tmpProfile);
+  app.setPath('sessionData', tmpProfile);
+} catch (_) {}
 const errors = [];
 
 app.whenReady().then(async () => {
@@ -37,7 +44,12 @@ app.whenReady().then(async () => {
   await sleep(4500);
 
   // go to Reports
-  await win.webContents.executeJavaScript(`(function(){ var it=[].slice.call(document.querySelectorAll('.sb-item')).find(function(e){return /reports/i.test(e.textContent||'');}); if(it) it.click(); })()`);
+  await win.webContents.executeJavaScript(`(function(){
+    var mod=[].slice.call(document.querySelectorAll('.modswitch button')).find(function(e){return /reports/i.test(e.textContent||'');});
+    if(mod){ mod.click(); return; }
+    var it=[].slice.call(document.querySelectorAll('.sb-item')).find(function(e){return /reports/i.test(e.textContent||'');});
+    if(it) it.click();
+  })()`);
   await sleep(1200);
 
   // switch to the Detailed report type
@@ -47,8 +59,9 @@ app.whenReady().then(async () => {
 
   // measure the visible (preview) detailed table for horizontal overflow
   const m = await win.webContents.executeJavaScript(`(function(){
-    var t=document.querySelector('#root table.tbl.rpt');
-    if(!t) return { hasTable:false };
+    var tables=[].slice.call(document.querySelectorAll('#pdf-root table, #root table'));
+    var t=tables.find(function(x){ return x.querySelectorAll('thead th').length>=9; });
+    if(!t) return { hasTable:false, tableCount:tables.length, thCounts:tables.map(function(x){return x.querySelectorAll('thead th').length;}), text:(document.body.textContent||'').slice(0,500) };
     var cols=t.querySelectorAll('thead th').length;
     var sheet=t.closest('div[style*="background: rgb(255, 255, 255)"]') || t.parentElement;
     var tr=t.getBoundingClientRect(), sr=sheet?sheet.getBoundingClientRect():tr;

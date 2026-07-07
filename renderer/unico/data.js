@@ -23,9 +23,13 @@ for (let y = 2024; y <= 2045; y++) {
 // Department definitions (metadata + months[] + monthly data[]) come from the
 // database via the server-injected global. Clone so the computed helpers below
 // never mutate the injected source.
-const DEPARTMENTS = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_DEPARTMENTS__))
-  ? window.__UNICO_DEPARTMENTS__.map(d => ({ ...d }))
+const _INJECTED_DEPTS = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_DEPARTMENTS__))
+  ? window.__UNICO_DEPARTMENTS__
+  : null;
+const _FALLBACK_DEPTS = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_DEPARTMENTS_FALLBACK__))
+  ? window.__UNICO_DEPARTMENTS_FALLBACK__
   : [];
+const DEPARTMENTS = ((_INJECTED_DEPTS && _INJECTED_DEPTS.length) ? _INJECTED_DEPTS : _FALLBACK_DEPTS).map(d => ({ ...d }));
 
 // Attach the derived fields the app expects (series/total/latest/prev/delta/peak),
 // guarded so a department with no rows can't throw.

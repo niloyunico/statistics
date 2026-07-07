@@ -3,7 +3,9 @@
    Express web server as window.__UNICO_QUALITY__ before this script runs. No hardcoded
    quality data remains here. To edit the seed: server/seed/quality.json then
    npm --prefix server run seed-data -- quality --force */
-window.QUALITY_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_QUALITY__)) ? window.__UNICO_QUALITY__ : [];
+window.QUALITY_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_QUALITY__) && window.__UNICO_QUALITY__.length)
+  ? window.__UNICO_QUALITY__
+  : ((typeof window !== 'undefined' && Array.isArray(window.__UNICO_QUALITY_FALLBACK__)) ? window.__UNICO_QUALITY_FALLBACK__ : []);
 
 // Live refetch (same contract as window.UNICO.refreshDepartments): after an approved
 // quality submission is applied server-side, replace the stale page-load snapshot so

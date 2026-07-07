@@ -9,7 +9,8 @@ function Bar3D({data, x, y, height=300, color='#0b66d0', multi=true, flat=false}
   const lighten=(h,p)=>{const n=parseInt(h.slice(1),16);let r=(n>>16)+p,g=((n>>8)&255)+p,b=(n&255)+p;
     r=Math.max(0,Math.min(255,r));g=Math.max(0,Math.min(255,g));b=Math.max(0,Math.min(255,b));
     return '#'+(r<<16|g<<8|b).toString(16).padStart(6,'0');};
-  const PAL=['#0090ca','#159fbf','#2bb3a3','#46b87e','#7cc35a','#f0a93b','#ef8049','#e85c69','#b65cc6','#6a6fd4'];
+  // 12 entries so a full Jan–Dec axis gets a UNIQUE color per month (no repeats)
+  const PAL=['#0090ca','#159fbf','#2bb3a3','#46b87e','#7cc35a','#f0a93b','#ef8049','#e85c69','#e0679b','#b65cc6','#6a6fd4','#4f8df7'];
   const colAt=i=>multi?PAL[i%PAL.length]:color;
   const id='b3'+color.replace('#','');
   return (

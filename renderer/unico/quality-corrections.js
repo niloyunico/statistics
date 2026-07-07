@@ -799,6 +799,22 @@ window.QI_CORRECTIONS = {
 ['medication administration error', 'medication administration error rate'].forEach(function (k) {
   window.QI_CORRECTIONS[k] = window.QI_CORRECTIONS['medication error'];
 });
+// In/Out Patient Fall split (2026-07): inpatient wards report "In Patient Fall", the
+// Out-Patient Department reports "Out Patient Fall" — both inherit the patient-fall
+// correction (formula/benchmark/defs) so the split names keep the enforced definition.
+['in patient fall', 'inpatient fall', 'in-patient fall'].forEach(function (k) {
+  window.QI_CORRECTIONS[k] = window.QI_CORRECTIONS['patient fall'];
+});
+['out patient fall', 'outpatient fall', 'out-patient fall'].forEach(function (k) {
+  window.QI_CORRECTIONS[k] = Object.assign({}, window.QI_CORRECTIONS['patient fall'], {
+    canonicalName: 'Out Patient Fall',
+    denLabel: 'Out-patient visits',
+    denominatorDef: 'Total number of out-patient visits during the reporting period. Rate = (falls ÷ out-patient visits) × 1,000.',
+    unit: 'per 1000 out-patient visits',
+    benchmark: '≤ 3.3 per 1000 out-patient visits',
+    benchmarkNote: '<= 3.3 falls per 1000 out-patient visits (adapted from the NDNQI inpatient median; set your own out-patient target if agreed differently)',
+  });
+});
 window.QI_CORRECTIONS_BY_DEFID = {
   "cauti": {
     "canonicalName": "Catheter-Associated Urinary Tract Infection (CAUTI) Rate",

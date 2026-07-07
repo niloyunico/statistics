@@ -16,10 +16,11 @@ const HOSPITAL = '__hospital__';
 function fromArrays(deps, quals) {
   const byId = {}, idToQk = {}, qkToId = {}, patientDepts = [], allKeys = [];
   (deps || []).forEach((d) => {
-    if (!d || !d.id) return;
-    byId[d.id] = { id: d.id, name: d.name || d.id, qualityKey: d.qualityKey || null };
-    patientDepts.push(d.id);
-    if (d.qualityKey) { idToQk[d.id] = d.qualityKey; qkToId[d.qualityKey] = d.id; }
+    const id = d && (d.id || d._id);
+    if (!id) return;
+    byId[id] = { id, name: d.name || id, qualityKey: d.qualityKey || null };
+    patientDepts.push(id);
+    if (d.qualityKey) { idToQk[id] = d.qualityKey; qkToId[d.qualityKey] = id; }
   });
   (quals || []).forEach((q) => {
     if (!q) return;

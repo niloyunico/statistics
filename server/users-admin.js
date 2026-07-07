@@ -37,6 +37,17 @@ const cleanList = (v) => Array.isArray(v) ? v.map(x => String(x).trim()).filter(
 // Specific-indicator access map: { areaKey: [indicatorId,...] } — empty lists dropped.
 const cleanQI = (qi) => { const out = {}; if (!qi || typeof qi !== 'object' || Array.isArray(qi)) return out; Object.keys(qi).forEach(k => { const list = Array.isArray(qi[k]) ? qi[k].map(x => String(x).trim()).filter(Boolean) : []; if (list.length) out[String(k)] = list; }); return out; };
 
+async function storedCustomAreas(user) {
+  const map = await deptmap.get();
+  if (user && user.allQualityAreas) return [];
+  const auto = new Set();
+  (Array.isArray(user && user.departments) ? user.departments : []).forEach((id) => {
+    const ak = map.idToQk && map.idToQk[id];
+    if (ak) auto.add(ak);
+  });
+  return (Array.isArray(user && user.qualityAreas) ? user.qualityAreas : []).filter((ak) => !auto.has(ak));
+}
+
 // Count active administrators (so we never strand the system without one).
 async function activeAdminCount(users) {
   if (typeof users.find !== 'function') return 1; // dev shim: assume the seed admin
@@ -112,7 +123,7 @@ function mount(app, opts) {
       if (role === 'collector') {
         const departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
         const allQualityAreas = (b.allQualityAreas != null) ? !!b.allQualityAreas : !!u.allQualityAreas;
-        const customAreas = (b.qualityAreas != null) ? cleanList(b.qualityAreas) : [];
+        const customAreas = (b.qualityAreas != null) ? cleanList(b.qualityAreas) : await storedCustomAreas(u);
         if (b.departments != null) set.departments = departments;
         set.allQualityAreas = allQualityAreas;
         // Departments' auto areas UNION custom/extra areas (assign-once + custom access on top).

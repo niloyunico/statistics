@@ -160,7 +160,18 @@ function HBar({rows, height}){
 
 /* ---------- Line / area chart ---------- */
 function LineChart({data, x, y, height=240, color='#0b66d0', area=true, flat=false}){
+  data = Array.isArray(data) ? data : [];
   const mounted=useMounted(); const m=flat||mounted; const [tip,setTip]=useTip(); const [hi,setHi]=useState(-1);
+  if(!data.length){
+    return (
+      <svg viewBox={`0 0 360 ${height}`} height={height} preserveAspectRatio="none" style={{overflow:'visible',width:'100%',maxWidth:360,margin:'0 auto',display:'block'}}>
+        {[0,.25,.5,.75,1].map((g,i)=>(
+          <line key={i} x1="26" x2="334" y1={22+g*(height-44)} y2={22+g*(height-44)} stroke="#eef1f5"/>
+        ))}
+        <text x="180" y={height/2} textAnchor="middle" fontSize="11" fill="#9aa6b4">No data</text>
+      </svg>
+    );
+  }
   const W=Math.max(360,data.length*60), H=height, pad=26;
   const max=Math.max(1,...data.map(d=>d[y]||0)), min=0;
   const px=i=>pad+ (data.length<=1?W/2:(i/(data.length-1))*(W-pad*2));
@@ -263,6 +274,10 @@ function Donut({data, size=180, thickness=30, centerLabel, centerValue, flat=fal
 /* ---------- Sparkline ---------- */
 function Spark({values, color='#0b66d0', w=110, h=34, fill=true}){
   const m=useMounted();
+  values = Array.isArray(values) ? values.filter(v=>v!=null && !isNaN(Number(v))).map(Number) : [];
+  if(!values.length){
+    return <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{display:'block'}}><line x1="2" x2={w-2} y1={h-4} y2={h-4} stroke="#e7ecf3" strokeWidth="2" strokeLinecap="round"/></svg>;
+  }
   const max=Math.max(1,...values), min=Math.min(...values,0);
   const px=i=>(i/(values.length-1||1))*w;
   const py=v=>h-3-((v-min)/((max-min)||1))*(h-6);
