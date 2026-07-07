@@ -12335,6 +12335,519 @@ function Reports({
   }
   const [exporting, setExporting] = React.useState(false);
   const [note, setNote] = React.useState(null);
+  const buildVectorPDF = async J => {
+    const RGB = {
+      blue: [0, 144, 202],
+      blue700: [0, 114, 163],
+      ink: [22, 32, 46],
+      ink2: [60, 72, 88],
+      muted: [108, 122, 140],
+      faint: [154, 166, 180],
+      line: [221, 227, 236],
+      panel: [247, 249, 252],
+      rose: [210, 58, 82],
+      roseBg: [251, 233, 236],
+      green: [31, 157, 87],
+      posBg: [231, 246, 237]
+    };
+    const hex2rgb = h => {
+      const m = /^#?([0-9a-f]{6})$/i.exec(String(h || ''));
+      if (!m) return RGB.blue;
+      const n = parseInt(m[1], 16);
+      return [n >> 16 & 255, n >> 8 & 255, n & 255];
+    };
+    const TONES = PALETTE.map(hex2rgb);
+    const ori = orient === 'landscape' ? 'l' : 'p';
+    const fmtP = pageSize === 'A3' ? 'a3' : pageSize === 'Letter' ? 'letter' : 'a4';
+    const doc = new J({
+      orientation: ori,
+      unit: 'pt',
+      format: fmtP,
+      compress: true
+    });
+    const PW = doc.internal.pageSize.getWidth(),
+      PH = doc.internal.pageSize.getHeight();
+    const M = 42,
+      CW = PW - 2 * M,
+      FOOT = PH - 30;
+    const F = (style, size, color) => {
+      doc.setFont('helvetica', style);
+      doc.setFontSize(size);
+      const c = color || RGB.ink;
+      doc.setTextColor(c[0], c[1], c[2]);
+    };
+    const line = (x1, y1, x2, y2, c, w2) => {
+      const cc = c || RGB.line;
+      doc.setDrawColor(cc[0], cc[1], cc[2]);
+      doc.setLineWidth(w2 || 0.7);
+      doc.line(x1, y1, x2, y2);
+    };
+    const box = (x, y, w, h, fill, r) => {
+      doc.setFillColor(fill[0], fill[1], fill[2]);
+      doc.roundedRect(x, y, w, h, r == null ? 4 : r, r == null ? 4 : r, 'F');
+    };
+    const genDate = new Date().toLocaleDateString('en-US');
+    const logo = await new Promise(res => {
+      try {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const c = document.createElement('canvas');
+            const s = 3;
+            c.width = img.width * s || 360;
+            c.height = img.height * s || 120;
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            res({
+              d: c.toDataURL('image/png'),
+              w: c.width / s,
+              h: c.height / s
+            });
+          } catch (e) {
+            res(null);
+          }
+        };
+        img.onerror = () => res(null);
+        img.src = 'unico/logo.svg';
+        setTimeout(() => res(null), 2500);
+      } catch (e) {
+        res(null);
+      }
+    });
+    const drawLogo = (x, y, h) => {
+      if (!logo) return 0;
+      const w = h * (logo.w / logo.h);
+      try {
+        doc.addImage(logo.d, 'PNG', x, y, w, h);
+      } catch (e) {}
+      return w;
+    };
+    const pageHeader = () => {
+      let x = M;
+      if (logo) {
+        drawLogo(M, M - 14, 26);
+        x = M + 26 * (logo.w / logo.h) + 10;
+      }
+      F('bold', 12);
+      doc.text(hdrTitle || 'Report', x, M + 2);
+      F('normal', 7.5, RGB.muted);
+      doc.text(((hdrSub ? hdrSub + '  ·  ' : '') + rangeLabel).toUpperCase(), x, M + 13);
+      F('normal', 7.5, RGB.faint);
+      doc.text('Generated', PW - M, M - 2, {
+        align: 'right'
+      });
+      F('bold', 9, RGB.ink2);
+      doc.text(genDate, PW - M, M + 9, {
+        align: 'right'
+      });
+      line(M, M + 22, PW - M, M + 22, RGB.blue, 1.4);
+      return M + 40;
+    };
+    const kpiRow = (y, items) => {
+      const gap = 10,
+        w = (CW - gap * (items.length - 1)) / items.length;
+      items.forEach((it, i) => {
+        const x = M + i * (w + gap);
+        box(x, y, w, 44, RGB.panel, 5);
+        doc.setFillColor(it.tone[0], it.tone[1], it.tone[2]);
+        doc.rect(x, y, 3, 44, 'F');
+        F('normal', 6.6, RGB.muted);
+        doc.text(String(it.label).toUpperCase(), x + 10, y + 13);
+        F('bold', 14, RGB.ink);
+        doc.text(String(it.value), x + 10, y + 32);
+      });
+      return y + 44 + 14;
+    };
+    const vBarChart = (x, y, w, h, pts, tone, lineMode) => {
+      const max = Math.max(1, ...pts.map(p => Number(p.val) || 0));
+      const n = pts.length,
+        gap = n > 14 ? 3 : 6,
+        bw = (w - gap * (n - 1)) / n;
+      line(x, y + h, x + w, y + h);
+      const lblEvery = n > 13 ? 2 : 1;
+      if (lineMode) {
+        doc.setDrawColor(tone[0], tone[1], tone[2]);
+        doc.setLineWidth(1.5);
+        let px = null,
+          py = null;
+        pts.forEach((p, i) => {
+          const cx = x + i * (bw + gap) + bw / 2,
+            cy = y + h - (Number(p.val) || 0) / max * (h - 16);
+          if (px != null) doc.line(px, py, cx, cy);
+          px = cx;
+          py = cy;
+          doc.setFillColor(tone[0], tone[1], tone[2]);
+          doc.circle(cx, cy, 1.6, 'F');
+        });
+      }
+      pts.forEach((p, i) => {
+        const v = Number(p.val) || 0,
+          bh = Math.max(1.5, v / max * (h - 16)),
+          bx = x + i * (bw + gap);
+        if (!lineMode) {
+          doc.setFillColor(tone[0], tone[1], tone[2]);
+          doc.roundedRect(bx, y + h - bh, bw, bh, 1.5, 1.5, 'F');
+        }
+        if (i % lblEvery === 0) {
+          F('normal', 6, RGB.faint);
+          doc.text(String(p.label), bx + bw / 2, y + h + 9, {
+            align: 'center'
+          });
+        }
+        if (!lineMode && bw > 13) {
+          F('normal', 6.4, RGB.ink2);
+          doc.text(fmt(v), bx + bw / 2, y + h - bh - 3, {
+            align: 'center'
+          });
+        }
+      });
+      return y + h + 18;
+    };
+    const compositionBar = (y, parts) => {
+      const tot = parts.reduce((s, p) => s + p.value, 0);
+      if (!tot || parts.length < 2) return y;
+      F('normal', 6.6, RGB.muted);
+      doc.text('COMPOSITION', M, y + 8);
+      let x = M + 70;
+      const w = CW - 70;
+      parts.forEach((p, i) => {
+        const pw2 = w * (p.value / tot);
+        doc.setFillColor(p.tone[0], p.tone[1], p.tone[2]);
+        doc.rect(x, y, pw2, 10, 'F');
+        x += pw2;
+      });
+      let lx = M + 70,
+        ly = y + 22;
+      parts.forEach(p => {
+        const t = p.label + '  ' + fmt(p.value);
+        const tw = doc.getTextWidth(t) + 16;
+        if (lx + tw > PW - M) {
+          lx = M + 70;
+          ly += 11;
+        }
+        doc.setFillColor(p.tone[0], p.tone[1], p.tone[2]);
+        doc.rect(lx, ly - 5.5, 5.5, 5.5, 'F');
+        F('normal', 7, RGB.ink2);
+        doc.text(t, lx + 8, ly);
+        lx += tw;
+      });
+      return ly + 16;
+    };
+    const vTable = (y, headers, widths, rows, opts) => {
+      const o = opts || {};
+      const rowH = o.rowH || 14,
+        headH = 15;
+      const fs = o.fontSize || (headers.length > 9 ? 6.4 : headers.length > 7 ? 7 : 8);
+      const xs = [];
+      let ax = M;
+      widths.forEach(w2 => {
+        xs.push(ax);
+        ax += w2;
+      });
+      const clip = (s, w2) => {
+        s = String(s == null ? '-' : s);
+        if (doc.getTextWidth(s) <= w2) return s;
+        while (s.length > 1 && doc.getTextWidth(s + '…') > w2) s = s.slice(0, -1);
+        return s + '…';
+      };
+      const drawHead = yy => {
+        box(M, yy, CW, headH, RGB.panel, 0);
+        F('bold', fs - 0.4, RGB.muted);
+        headers.forEach((h2, i) => {
+          const right = i > 0;
+          doc.text(clip(String(h2).toUpperCase(), widths[i] - 8), right ? xs[i] + widths[i] - 4 : xs[i] + 4, yy + 10, right ? {
+            align: 'right'
+          } : undefined);
+        });
+        line(M, yy + headH, M + CW, yy + headH);
+        return yy + headH;
+      };
+      y = drawHead(y);
+      rows.forEach((r, ri) => {
+        if (y + rowH > FOOT - 14) {
+          doc.addPage(fmtP, ori);
+          y = pageHeader();
+          y = drawHead(y);
+        }
+        if (ri % 2) {
+          doc.setFillColor(251, 253, 255);
+          doc.rect(M, y, CW, rowH, 'F');
+        }
+        const tot = o.totalRow && ri === rows.length - 1;
+        r.forEach((cell, ci) => {
+          const right = ci > 0;
+          F(tot || ci === 0 ? 'bold' : 'normal', fs, tot ? RGB.ink : ci === 0 ? RGB.ink : RGB.ink2);
+          doc.text(clip(cell, widths[ci] - 8), right ? xs[ci] + widths[ci] - 4 : xs[ci] + 4, y + rowH - 4, right ? {
+            align: 'right'
+          } : undefined);
+        });
+        line(M, y + rowH, M + CW, y + rowH, RGB.line, 0.4);
+        y += rowH;
+      });
+      return y + 10;
+    };
+    const sigBlock = y => {
+      if (y > PH - 140) {
+        doc.addPage(fmtP, ori);
+        y = pageHeader();
+      }
+      F('bold', 7.5, RGB.muted);
+      doc.text(('Authorisation · ' + hospitalName).toUpperCase(), M, y + 10);
+      const gap = 26,
+        w = (CW - 2 * gap) / 3;
+      y += 44;
+      [['Prepared by', sig.prepared], ['Checked by', sig.reviewed], ['Approved by', sig.approved]].forEach(([role, name], i) => {
+        const x = M + i * (w + gap);
+        line(x, y, x + w, y, RGB.ink2, 0.8);
+        F('bold', 9, RGB.ink);
+        doc.text(String(name || ' '), x, y + 12);
+        F('normal', 7, RGB.muted);
+        doc.text(role.toUpperCase(), x, y + 22);
+      });
+      return y + 34;
+    };
+    const typeLabel = {
+      summary: 'Department Summary Report',
+      detail: 'Detailed Statistical Report',
+      compare: 'Cross-Department Comparison',
+      board: 'Executive Board Report'
+    }[type] || 'Statistical Report';
+    if (showCover) {
+      const rows = chosen.map(d => {
+        const fsr = fseriesOf(d);
+        return {
+          d,
+          st: statOf(d, fsr),
+          fs: fsr
+        };
+      });
+      const totAll = rows.reduce((s, r) => s + r.st.total, 0);
+      const mTot = {};
+      rows.forEach(({
+        d,
+        fs
+      }) => fs.forEach(r => {
+        mTot[r.month] = (mTot[r.month] || 0) + (r[d.primary] || 0);
+      }));
+      const peakM = Object.keys(mTot).sort((a, b) => mTot[b] - mTot[a])[0];
+      let y = PH * 0.16;
+      if (logo) {
+        const lw = 110 * (logo.w / logo.h) > 170 ? 170 : 110 * (logo.w / logo.h);
+        drawLogo(PW / 2 - lw / 2, y, 110 * (logo.h / logo.w) > 60 ? 60 : 110 * (logo.h / logo.w));
+        y += (110 * (logo.h / logo.w) > 60 ? 60 : 110 * (logo.h / logo.w)) + 26;
+      }
+      F('bold', 10, RGB.blue);
+      doc.text(String(hospitalName).toUpperCase(), PW / 2, y, {
+        align: 'center'
+      });
+      y += 30;
+      F('bold', 26, RGB.ink);
+      doc.text(hdrTitle || 'Patient Statistics Report', PW / 2, y, {
+        align: 'center'
+      });
+      y += 18;
+      F('normal', 10.5, RGB.muted);
+      doc.text((hdrSub ? hdrSub + ' · ' : '') + typeLabel, PW / 2, y, {
+        align: 'center'
+      });
+      y += 17;
+      F('bold', 11, RGB.ink2);
+      doc.text(rangeLabel, PW / 2, y, {
+        align: 'center'
+      });
+      y += 40;
+      const stats = [['Departments', String(chosen.length), TONES[0]], ['Total patients', fmt(totAll), TONES[1]], ['Peak month', peakM ? peakM.split('-')[0] + ' 20' + peakM.split('-')[1] : '-', TONES[2]], ['Months covered', String(pMonths.length), TONES[3]]];
+      const sw = CW / 4;
+      stats.forEach((s2, i) => {
+        const x = M + i * sw + sw / 2;
+        F('bold', 19, s2[2]);
+        doc.text(s2[1], x, y, {
+          align: 'center'
+        });
+        F('normal', 6.8, RGB.muted);
+        doc.text(s2[0].toUpperCase(), x, y + 12, {
+          align: 'center'
+        });
+      });
+      y += 44;
+      if (confidential) {
+        const t = 'CONFIDENTIAL - FOR AUTHORISED RECIPIENTS ONLY';
+        F('bold', 8, RGB.rose);
+        const tw = doc.getTextWidth(t) + 28;
+        doc.setDrawColor(241, 198, 205);
+        doc.setLineWidth(0.8);
+        doc.roundedRect(PW / 2 - tw / 2, y - 11, tw, 18, 4, 4, 'S');
+        doc.text(t, PW / 2, y + 1, {
+          align: 'center'
+        });
+        y += 30;
+      }
+      F('normal', 7.5, RGB.faint);
+      doc.text('Generated ' + genDate, PW / 2, y, {
+        align: 'center'
+      });
+      y += 26;
+      if (sig.prepared || sig.reviewed || sig.approved) sigBlock(y - 6);
+    }
+    const money = (d, r, c) => r[c.id] == null ? '-' : c.pct ? r[c.id] + '%' : fmt(r[c.id]);
+    if (type === 'compare' || type === 'board') {
+      if (showCover) doc.addPage(fmtP, ori);
+      let y = pageHeader();
+      const rows = chosen.map(d => {
+        const fsr = fseriesOf(d);
+        return {
+          d,
+          st: statOf(d, fsr),
+          fs: fsr
+        };
+      });
+      const totAll = rows.reduce((s, r) => s + r.st.total, 0);
+      F('bold', 13);
+      doc.text(type === 'board' ? 'Executive Board Report' : 'Cross-Department Comparison', M, y);
+      y += 8;
+      F('normal', 8, RGB.muted);
+      doc.text(rangeLabel + '  ·  ' + rows.length + ' departments', M, y + 10);
+      y += 24;
+      if (type === 'board') {
+        const top = rows.slice().sort((a, b) => b.st.total - a.st.total)[0];
+        const mTot = {};
+        rows.forEach(({
+          d,
+          fs
+        }) => fs.forEach(r => {
+          mTot[r.month] = (mTot[r.month] || 0) + (r[d.primary] || 0);
+        }));
+        const trend = pMonths.filter(m => mTot[m] != null).map(m => ({
+          label: m,
+          val: mTot[m]
+        }));
+        const peak = trend.slice().sort((a, b) => b.val - a.val)[0];
+        y = kpiRow(y, [{
+          label: 'Total patients',
+          value: fmt(totAll),
+          tone: TONES[0]
+        }, {
+          label: 'Departments',
+          value: String(rows.length),
+          tone: TONES[1]
+        }, {
+          label: 'Busiest dept',
+          value: top ? top.d.short : '-',
+          tone: TONES[2]
+        }, {
+          label: 'Peak month',
+          value: peak ? peak.label : '-',
+          tone: TONES[3]
+        }]);
+        if (trend.length > 1) {
+          F('normal', 6.6, RGB.muted);
+          doc.text('HOSPITAL VOLUME - MONTHLY TREND', M, y + 6);
+          y = vBarChart(M, y + 12, CW, 120, trend, TONES[0]);
+        }
+      }
+      const rank = rows.slice().sort((a, b) => b.st.total - a.st.total);
+      const maxT = Math.max(1, ...rank.map(r => r.st.total));
+      F('normal', 6.6, RGB.muted);
+      doc.text('DEPARTMENT RANKING (PERIOD TOTAL)', M, y + 6);
+      y += 14;
+      rank.forEach(({
+        d,
+        st
+      }, i) => {
+        if (y + 15 > FOOT - 14) {
+          doc.addPage(fmtP, ori);
+          y = pageHeader();
+        }
+        const bw = (CW - 150) * (st.total / maxT),
+          tone = TONES[d.id.charCodeAt(0) % TONES.length];
+        F('normal', 7.5, RGB.ink2);
+        doc.text(d.short, M, y + 8);
+        doc.setFillColor(tone[0], tone[1], tone[2]);
+        doc.roundedRect(M + 56, y, Math.max(2, bw), 9, 2, 2, 'F');
+        F('bold', 7.5, RGB.ink);
+        doc.text(fmt(st.total), M + 62 + Math.max(2, bw), y + 7.5);
+        y += 15;
+      });
+      y += 10;
+      y = vTable(y, ['Department', 'Service line', 'Total', 'Share', 'Avg / month'], [CW * 0.30, CW * 0.26, CW * 0.16, CW * 0.12, CW * 0.16], rank.map(({
+        d,
+        st
+      }) => [d.name, d.group, fmt(st.total), totAll ? Math.round(st.total * 100 / totAll) + '%' : '-', fmt(st.avg)]));
+      if (showSig) sigBlock(y + 4);
+    } else {
+      chosen.forEach((d, di) => {
+        if (showCover || di > 0) doc.addPage(fmtP, ori);
+        let y = pageHeader();
+        const fsr = fseriesOf(d),
+          st = statOf(d, fsr),
+          tone = TONES[d.id.charCodeAt(0) % TONES.length];
+        F('bold', 13);
+        const nw = doc.getTextWidth(d.name);
+        doc.text(d.name, M, y);
+        F('normal', 7.5, RGB.muted);
+        doc.text(d.group.toUpperCase(), M + nw + 12, y);
+        y += 16;
+        if (fsr.length === 0) {
+          F('normal', 9, RGB.muted);
+          doc.text('No data reported for ' + d.name + ' in the selected period (' + rangeLabel + ').', M, y + 18);
+          if (showSig && di === chosen.length - 1) sigBlock(y + 40);
+          return;
+        }
+        if (fsr.length < pMonths.length) {
+          F('normal', 7, RGB.faint);
+          doc.text('Reported data covers ' + fsr[0].full + ' - ' + fsr[fsr.length - 1].full + ' (' + fsr.length + ' of ' + pMonths.length + ' months in the selected period).', M, y);
+          y += 12;
+        }
+        y = kpiRow(y, [{
+          label: 'Latest',
+          value: fmt(st.latest[d.primary] || 0),
+          tone: tone
+        }, {
+          label: 'Total',
+          value: fmt(st.total),
+          tone: TONES[1]
+        }, {
+          label: 'Peak',
+          value: fmt(st.peak),
+          tone: TONES[2]
+        }, {
+          label: 'Avg',
+          value: fmt(st.avg),
+          tone: TONES[3]
+        }]);
+        y = vBarChart(M, y, CW, 110, fsr.map(r => ({
+          label: r.month,
+          val: r[d.primary] || 0
+        })), tone, chartStyles.includes('line') && !chartStyles.includes('bar3d'));
+        const breakdown = d.cols.filter(c => c.id !== d.primary && !c.pct).map((c, i) => ({
+          label: c.label,
+          value: fsr.reduce((s, r) => s + (r[c.id] || 0), 0),
+          tone: TONES[i % TONES.length]
+        })).filter(p => p.value > 0);
+        y = compositionBar(y, breakdown) + 4;
+        const widths = [70].concat(d.cols.map(() => (CW - 70) / d.cols.length));
+        const rows = fsr.map(r => [type === 'detail' ? r.month : r.full].concat(d.cols.map(c => money(d, r, c))));
+        if (type === 'detail') rows.push(['TOTAL'].concat(d.cols.map(c => c.pct ? '-' : fmt(fsr.reduce((s, r) => s + (r[c.id] || 0), 0)))));
+        y = vTable(y, ['Month'].concat(d.cols.map(c => c.label)), widths, rows, {
+          totalRow: type === 'detail'
+        });
+        if (showSig && di === chosen.length - 1) sigBlock(y + 2);
+      });
+    }
+    const total = doc.getNumberOfPages();
+    for (let p = 1; p <= total; p++) {
+      doc.setPage(p);
+      line(M, FOOT, PW - M, FOOT);
+      F('normal', 7, RGB.faint);
+      doc.text(hospitalName, M, FOOT + 11);
+      doc.text('Page ' + p + ' of ' + total, PW / 2, FOOT + 11, {
+        align: 'center'
+      });
+      doc.text((footerNote ? footerNote + ' · ' : '') + (confidential ? 'Confidential · ' : '') + pageSize + ' ' + orient, PW - M, FOOT + 11, {
+        align: 'right'
+      });
+    }
+    doc.save('UNICO-statistics-' + type + '-' + new Date().toISOString().slice(0, 10) + '.pdf');
+  };
   const doPrint = () => {
     try {
       document.body.classList.add('pdf-export-mode');
@@ -12379,6 +12892,24 @@ function Reports({
         setExporting(false);
       }
       return;
+    }
+    const J0 = window.jspdf && window.jspdf.jsPDF;
+    if (J0) {
+      setExporting('Building PDF…');
+      setNote(null);
+      try {
+        await buildVectorPDF(J0);
+        setNote({
+          ok: true,
+          text: 'PDF downloaded — vector quality (selectable text).'
+        });
+        setExporting(false);
+        return;
+      } catch (e) {
+        try {
+          console.warn('[reports] vector PDF failed, falling back to raster:', e);
+        } catch (_) {}
+      }
     }
     const H = window.html2canvas,
       J = window.jspdf && window.jspdf.jsPDF;
