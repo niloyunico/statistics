@@ -23325,6 +23325,10 @@ function qcDeptSummaryRows(d, months) {
   });
   return qRows;
 }
+function qcSoleReportedInd(d, months) {
+  const withData = (d.indicators || []).filter(i => hasData(i, months));
+  return withData.length === 1 ? withData[0] : null;
+}
 function qcLeadIndicator(d, months) {
   const withData = (d.indicators || []).filter(i => hasData(i, months));
   if (!withData.length) return (d.indicators || [])[0] || null;
@@ -23386,6 +23390,11 @@ function qcStatusComp(d, months) {
 }
 function qcChartEl(d, style, ind, tone, months, summary) {
   months = months || MONTHS;
+  const sole = summary ? qcSoleReportedInd(d, months) : null;
+  if (sole) {
+    ind = sole;
+    summary = false;
+  }
   if (!summary && !ind) return React.createElement("div", {
     style: {
       height: 150,
@@ -25389,6 +25398,7 @@ function QCReportBuilder({
       chipColor = reported ? color : P.faint;
     const detailed = page.kind === 'detail';
     const chartInd = detailed ? page.ind : qcLeadIndicator(d, pMonths);
+    const soleInd = !detailed ? qcSoleReportedInd(d, pMonths) : null;
     const leadInd = qcLeadIndicator(d, pMonths);
     const code = leadInd ? stdMatch(leadInd.name) : null;
     const secLabel = code ? HQI_SECN[code[0]] || code : leadInd ? catOf(leadInd.name) : 'Quality';
@@ -25497,7 +25507,7 @@ function QCReportBuilder({
       return chartStyles.map(cs => {
         const cap = [];
         if (chartStyles.length > 1) cap.push(QC_CHART_STYLE_LABEL[cs] || cs);
-        if (!detailed && SINGLE_SERIES.indexOf(cs) >= 0) cap.push('Zero-defect % by month — reported indicators on benchmark');
+        if (!detailed && SINGLE_SERIES.indexOf(cs) >= 0) cap.push(soleInd ? soleInd.name + ' — monthly value vs benchmark' : 'Zero-defect % by month — reported indicators on benchmark');
         return React.createElement("div", {
           key: cs,
           style: {
@@ -27749,11 +27759,13 @@ function QCReportBuilder({
       }));
       y = kpiRow(y, kp);
       if (sections.chart !== false) {
-        const rows = qcDeptSummaryRows(d, pMonths).filter(r => r.has);
+        const sole = qcSoleReportedInd(d, pMonths);
+        const rows = (sole ? qcChartRows(sole, pMonths) : qcDeptSummaryRows(d, pMonths)).filter(r => r.has);
         if (rows.length) {
+          const cap = sole ? sole.name + ' — monthly value vs benchmark' : 'Zero-defect % by month — reported indicators on benchmark';
           F('bold', 8, RGB.ink2);
-          doc.text('ZERO-DEFECT % BY MONTH — REPORTED INDICATORS ON BENCHMARK', M, y + 2);
-          y = vBars(y + 8, {
+          doc.text(clip(cap.toUpperCase(), CW), M, y + 2);
+          y = vBars(y + 8, sole || {
             valueType: '%'
           }, rows);
         }

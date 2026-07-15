@@ -1253,6 +1253,16 @@ function qcDeptSummaryRows(d, months){
   });
   return qRows;
 }
+/* When a SUMMARY page's department has exactly ONE indicator with reported data, the
+   zero-defect % aggregate is degenerate: it can only be a flat 0%/100% line that reads as
+   "the same value in every month" AND it HIDES the indicator's real trend (e.g. Overall
+   Hospital / Hand Hygiene, which climbs 62→72%, charts as a flat 0% because it is always
+   below its 90% benchmark). In that case the summary chart should plot the lone indicator's
+   ACTUAL monthly values instead. Returns that sole reported indicator, else null. */
+function qcSoleReportedInd(d, months){
+  const withData=(d.indicators||[]).filter(i=>hasData(i, months));
+  return withData.length===1 ? withData[0] : null;
+}
 /* Representative indicator for a department: worst-performing with data, else first with data, else [0].
    `months` = the REPORT's axis — without it this judged "has data"/"worst" against the
    current calendar year, so past-year reports charted the wrong indicator. */
@@ -1298,6 +1308,10 @@ function qcStatusComp(d, months){
    qcDeptSummaryRows (zero-defect % vs a 90% target) instead of one indicator. */
 function qcChartEl(d, style, ind, tone, months, summary){
   months = months || MONTHS;
+  // A single-indicator summary has no meaningful aggregate — chart that indicator's real
+  // monthly trend (qcSoleReportedInd) rather than a flat, data-hiding zero-defect % line.
+  const sole = summary ? qcSoleReportedInd(d, months) : null;
+  if(sole){ ind = sole; summary = false; }
   if(!summary && !ind) return <div style={{height:150,display:'grid',placeItems:'center',color:P.faint,fontSize:12}}>No data</div>;
   // Plot only REPORTED months — an unreported interior month must not chart as a 0 bar/point
   // (a false "dip"). Real reported zeros keep has=true and stay; only true gaps drop.
@@ -2099,6 +2113,9 @@ function QCReportBuilder({depts}){
     const chipStatus=reported?status:'No data', chipColor=reported?color:P.faint;
     const detailed=page.kind==='detail';
     const chartInd=detailed?page.ind:qcLeadIndicator(d, pMonths);
+    // Single-indicator summary pages chart that indicator's real values (see qcSoleReportedInd),
+    // so the caption must name the indicator, not the (unused) "Zero-defect %" aggregate.
+    const soleInd=!detailed?qcSoleReportedInd(d, pMonths):null;
     const leadInd=qcLeadIndicator(d, pMonths);
     const code=leadInd?stdMatch(leadInd.name):null;
     const secLabel=code?(HQI_SECN[code[0]]||code):(leadInd?catOf(leadInd.name):'Quality');
@@ -2150,7 +2167,7 @@ function QCReportBuilder({depts}){
             return chartStyles.map((cs)=>{
               const cap=[];
               if(chartStyles.length>1) cap.push(QC_CHART_STYLE_LABEL[cs]||cs);
-              if(!detailed&&SINGLE_SERIES.indexOf(cs)>=0) cap.push('Zero-defect % by month — reported indicators on benchmark');
+              if(!detailed&&SINGLE_SERIES.indexOf(cs)>=0) cap.push(soleInd?(soleInd.name+' — monthly value vs benchmark'):'Zero-defect % by month — reported indicators on benchmark');
               return (
                 <div key={cs} style={{margin:'4px 0 8px'}}>
                   {cap.length>0&&<div style={uSub}>{cap.join(' · ')}</div>}
@@ -2891,9 +2908,13 @@ function QCReportBuilder({depts}){
       y+=18;
       const kp=qcDeptKpis(d,pMonths).map(k=>({label:k[0],value:k[1],tone:hex2rgb(k[2]),foot:k[3]}));
       y=kpiRow(y,kp);
-      // dept-level zero-defect % series — same metric/series the on-screen Summary page charts
-      if(sections.chart!==false){const rows=qcDeptSummaryRows(d,pMonths).filter(r=>r.has);
-        if(rows.length){F('bold',8,RGB.ink2);doc.text('ZERO-DEFECT % BY MONTH — REPORTED INDICATORS ON BENCHMARK',M,y+2);y=vBars(y+8,{valueType:'%'},rows);}}
+      // dept-level zero-defect % series — same metric/series the on-screen Summary page charts.
+      // A single-indicator dept plots that indicator's real values instead (qcSoleReportedInd),
+      // matching the on-screen chart so the exported PDF is not a flat data-hiding aggregate.
+      if(sections.chart!==false){const sole=qcSoleReportedInd(d,pMonths);
+        const rows=(sole?qcChartRows(sole,pMonths):qcDeptSummaryRows(d,pMonths)).filter(r=>r.has);
+        if(rows.length){const cap=sole?(sole.name+' — monthly value vs benchmark'):'Zero-defect % by month — reported indicators on benchmark';
+          F('bold',8,RGB.ink2);doc.text(clip(cap.toUpperCase(),CW),M,y+2);y=vBars(y+8,sole||{valueType:'%'},rows);}}
       if(sections.table!==false)y=deptTable(y+4,d);
       if(di===chosen.length-1)sigBlock(y);
     });
