@@ -170,22 +170,21 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
 
   // Hospital-wide Quality & Safety KPIs (reads the merged quality data + CAPA store).
   const qualityKpis=(function(){
-    if(!window.qualityData) return null;
-    // Monthly is the source of truth (matches the Quality console exactly). Aggregate
-    // over the 12 FY months, not quarters, so this strip and the console never disagree.
-    const MONTHS = window.QUALITY_QUARTER_MONTHS ? ['Q1','Q2','Q3','Q4'].reduce((a,q)=>a.concat(window.QUALITY_QUARTER_MONTHS[q]||[]),[]) : [];
-    const qiC = window.qiFormulaCompute || ((f,n,d)=>Number(n)||0);
-    const monthRaw=(ind,mk)=>{ const f=(ind&&ind.formula)||((ind&&ind.valueType==='%')?'pct':'direct'); if(f==='direct'){const v=ind.months&&ind.months[mk];return (v==null||v==='')?null:Number(v);} const n=ind.mNum&&ind.mNum[mk]; if(n==null||n===''){const v=ind.months&&ind.months[mk];return (v==null||v==='')?null:Number(v);} const d=(f!=='count')?(ind.mDen&&ind.mDen[mk]):null; return qiC(f,n,d); };
-    const mStatus=(ind,mk)=>{ const v=monthRaw(ind,mk); if(v==null)return 'na'; const b=ind.benchmarkValue; if(b==null||b==='')return 'ok'; return ind.goalDirection==='higher_is_better'?(v>=b?'ok':'breach'):(v<=b?'ok':'breach'); };
+    const Qh=window.UNICO_Q;
+    if(!window.qualityData || !Qh) return null;
+    // Use the Quality console's authoritative, YEAR/quarter-aware helpers so this strip
+    // and the console's own dashboard KPIs are always identical (the old fixed-window
+    // scan silently read the wrong months and showed a flat 100% / 0 breaches).
     const qd=window.qualityData().filter(d=>d.indicators&&d.indicators.length);
+    const months=Qh.fyAxis(Qh.defaultFy(qd));
     let okC=0,brC=0;
-    qd.forEach(d=>d.indicators.forEach(ind=>MONTHS.forEach(mk=>{ const s=mStatus(ind,mk); if(s==='ok')okC++; else if(s==='breach')brC++; })));
+    qd.forEach(d=>{ const s=Qh.deptStat(d,months); okC+=s.ok; brC+=s.breach; });
     const zero=okC+brC?Math.round(okC*100/(okC+brC)):100;
     // Action Plans (CAPA): the console stores a status map {'<deptKey>/<indId>':'Open'|'In Progress'|'Closed'}.
     let capaMap={}; try{ capaMap=JSON.parse(localStorage.getItem('unico_capa_v1'))||{}; }catch(e){}
     if(Array.isArray(capaMap)) capaMap={}; // ignore any stale legacy array format
     let open=0;
-    qd.forEach(d=>d.indicators.forEach(ind=>{ if(MONTHS.some(mk=>mStatus(ind,mk)==='breach') && capaMap[d.key+'/'+ind.id]!=='Closed') open++; }));
+    qd.forEach(d=>d.indicators.forEach(ind=>{ if(Qh.countBreaches(ind,months)>0 && capaMap[d.key+'/'+ind.id]!=='Closed') open++; }));
     return {depts:qd.length, zero:zero, breach:brC, capaOpen:open};
   })();
   const qCard=(label,val,foot,color,route)=>(
@@ -196,14 +195,14 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
     </div>
   );
   const qualityStrip = qualityKpis ? (
-    <div className="grid" style={{gap:10}}>
-      <SectionTitle icon={I.heart} title="Quality & Safety" sub={`hospital-wide quality indicators · ${qualityKpis.depts} departments · click to open`}/>
-      <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))'}}>
+    <React.Fragment>
+      <div className="eyebrow" style={{marginTop:6}}>Quality &amp; Safety</div>
+      <div className="grid" style={{gridTemplateColumns:'repeat(3,minmax(0,1fr))'}}>
         {qCard('Zero-Defect Rate', qualityKpis.zero+'%', 'on-benchmark indicator-months', qualityKpis.zero>=90?'#1f9d57':qualityKpis.zero>=70?'#e08a1e':'#d23a52', {view:'quality'})}
         {qCard('Open Breaches', fmt(qualityKpis.breach), 'indicator-months off benchmark', qualityKpis.breach>0?'#d23a52':'#1f9d57', {view:'quality',qview:'incidents'})}
         {qCard('Open Action Plans', fmt(qualityKpis.capaOpen), 'breaches not yet closed', qualityKpis.capaOpen>0?'#0090ca':'#1f9d57', {view:'quality',qview:'actionplans'})}
       </div>
-    </div>
+    </React.Fragment>
   ) : null;
 
   if(layout==='operational'){
@@ -214,6 +213,7 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
         <div className="grid" style={{gridTemplateColumns:'repeat(auto-fill,minmax(232px,1fr))'}}>
           {depts.map(d=><DeptMiniCard key={d.id} d={d} onOpen={()=>openDept(d.id)}/>)}
         </div>
+        <ReportingCompliance depts={depts} onFill={onFill}/>
       </div>
     );
   }
@@ -250,24 +250,31 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
     );
   }
 
-  // executive (default)
+  // executive (default) — matches UNICO.dc.html "Hospital Overview"
   const ranking=depts.map(d=>({label:d.short,value:d.latest[d.primary]||0,color:PALETTE[(d.id.charCodeAt(0))%PALETTE.length]}))
     .sort((a,b)=>b.value-a.value).slice(0,8);
   const groupMix=window.UNICO.GROUPS.map((g,i)=>({label:g,value:depts.filter(d=>d.group===g).reduce((s,d)=>s+d.total,0),color:PALETTE[i]})).filter(x=>x.value>0);
   const erConv=er&&er.latest&&er.latest.conv!=null?er.latest.conv:0;
+  const latestFull=activeMonths.length?(MF[activeMonths[activeMonths.length-1]]||activeMonths[activeMonths.length-1]):'';
   return (
-    <div className="grid" style={{gap:16}}>
+    <div className="grid" style={{gap:14}}>
+      {/* hero header */}
+      <div style={{display:'flex',alignItems:'flex-end',gap:16,flexWrap:'wrap'}}>
+        <div>
+          <div style={{fontSize:23,fontWeight:700,letterSpacing:-.5}}>Hospital Overview</div>
+          <div style={{fontSize:13,color:'var(--muted)',marginTop:3}}>Unico Hospitals · {depts.length} department{depts.length===1?'':'s'} reporting{latestFull?' · '+latestFull:''}</div>
+        </div>
+        <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:9}}>
+          <button className="btn" onClick={()=>setRoute&&setRoute({view:'quality'})}><Ic d={I.heart} s={15}/>Quality board</button>
+          <button className="btn pri" onClick={()=>setRoute&&setRoute({view:'reports'})}><Ic d={I.doc} s={15}/>Generate Report</button>
+        </div>
+      </div>
+
+      <div className="eyebrow">Patient Volume</div>
       {kpis}
       {qualityStrip}
-      <div className="card feature">
-          <div className="card-h"><h3>Operational Pulse</h3><span className="sub">current month indicators</span><span className="spacer"/><span className="tag">snapshot</span></div>
-          <div className="card-b" style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,placeItems:'center'}}>
-            <Gauge value={Math.round(erConv)} max={100} label="ED → IPD %" color="#0090ca" size={150}/>
-            <Gauge value={icuTotal} max={Math.max(60,icuTotal)} label="Critical care" color="#6a52d4" size={150}/>
-            <Gauge value={ot.latest.ot||0} max={Math.max(40,ot.peak)} label="OT / month" color="#3ab5a7" size={150}/>
-          </div>
-        </div>
-      <ReportingCompliance depts={depts} onFill={onFill}/>
+
+      <div className="eyebrow" style={{marginTop:6}}>Trends &amp; Distribution</div>
       <div className="grid" style={{gridTemplateColumns:'1.55fr 1fr'}}>
         <div className="card">
           <div className="card-h">
@@ -284,16 +291,7 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
           </div>
         </div>
       </div>
-      <div className="grid" style={{gridTemplateColumns:'1fr 1.55fr'}}>
-        <div className="card">
-          <div className="card-h"><h3>Top Departments</h3><span className="sub">latest month</span></div>
-          <div className="card-b"><HBar rows={ranking}/></div>
-        </div>
-        <div className="card">
-          <div className="card-h"><h3>Emergency Department — Monthly Throughput</h3><span className="spacer"/><span className="tag">3D · Total ED</span></div>
-          <div className="card-b"><Bar3D data={er.series} x="month" y="total" height={272} color="#d23a52"/></div>
-        </div>
-      </div>
+
     </div>
   );
 }

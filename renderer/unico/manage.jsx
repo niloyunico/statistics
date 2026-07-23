@@ -7,7 +7,10 @@ function DeptModal({initial, onClose, onSave, groups}){
   const [short,setShort]=React.useState(initial?.short||'');
   const [group,setGroup]=React.useState(initial?.group||groups[0]);
   const [desc,setDesc]=React.useState(initial?.desc||'');
-  const [cols,setCols]=React.useState(()=> initial?.cols?.map(c=>({label:c.label,pct:!!c.pct})) || [{label:'Patients',pct:false}]);
+  // Keep each column's original id: it is the KEY the monthly data is stored under.
+  // Dropping it (and re-slugging from the label on save) orphaned every existing
+  // value — the report then showed "–"/0 for every renamed column.
+  const [cols,setCols]=React.useState(()=> initial?.cols?.map(c=>({id:c.id,label:c.label,pct:!!c.pct})) || [{label:'Patients',pct:false}]);
   const [err,setErr]=React.useState('');
   const [dragIdx,setDragIdx]=React.useState(null);   // row being dragged
   const [overIdx,setOverIdx]=React.useState(null);   // row hovered as drop target
@@ -24,12 +27,23 @@ function DeptModal({initial, onClose, onSave, groups}){
     if(!name.trim()){ setErr('Department name is required'); return; }
     const clean=cols.filter(c=>c.label.trim());
     if(!clean.length){ setErr('Add at least one metric column'); return; }
-    const ids=[]; const finalCols=clean.map(c=>{ let id=slug(c.label); let b=id,k=1; while(ids.includes(id)){id=b+'_'+(++k);} ids.push(id); return {id,label:c.label.trim(),pct:c.pct}; });
+    // Preserve the existing id for any column that already has one (so its stored
+    // data stays connected); slug a fresh, unique id ONLY for newly-added columns.
+    const used=new Set(clean.filter(c=>c.id).map(c=>c.id));
+    const finalCols=clean.map(c=>{
+      if(c.id) return {id:c.id,label:c.label.trim(),pct:c.pct};
+      let id=slug(c.label),b=id,k=1; while(used.has(id)){id=b+'_'+(++k);} used.add(id);
+      return {id,label:c.label.trim(),pct:c.pct};
+    });
+    // Keep the department's original headline metric on edit — the primary column is
+    // NOT always the first one (e.g. many wards headline "Total"). Only fall back to
+    // the first column for a new dept, or if the old primary column was deleted.
+    const primaryCol=(editing && finalCols.find(c=>c.id===initial.primary)) || finalCols[0];
     const def={
       id: initial?.id || ('cust_'+Date.now().toString(36)),
       name:name.trim(), short:(short.trim()||name.trim().slice(0,5)), group:group.trim()||'Custom',
       desc:desc.trim()||'Custom department added in-app.',
-      cols:finalCols, primary:finalCols[0].id, primaryLabel:finalCols[0].label,
+      cols:finalCols, primary:primaryCol.id, primaryLabel:primaryCol.label,
       months: initial?.months || [], data: initial?.data || []
     };
     onSave(def, editing);
@@ -127,6 +141,23 @@ function ManageDepts({depts, store, setRoute}){
   const [confirm,setConfirm]=React.useState(null);
   const groups=window.UNICO.GROUPS;
   const customCount=depts.filter(d=>d.custom).length;
+  // Departments now carry BOTH statistics AND quality (merged), so this ONE screen
+  // manages the whole record. Count each department's linked quality indicators.
+  const qByDept=React.useMemo(()=>{
+    const m={};
+    try{
+      const areas=window.qualityData?window.qualityData():[];
+      const qk=window.DEPTMAP?window.DEPTMAP.qkFromId:null;
+      const norm=s=>String(s||'').trim().toLowerCase();
+      depts.forEach(d=>{
+        const key=qk?qk(d.id):null;
+        const area=areas.find(a=>(key&&a.key===key)||a.deptId===d.id||norm(a.name)===norm(d.name)||norm(a.key)===norm(d.id)||norm(a.key)===norm(d.short));
+        m[d.id]=area?(area.indicators||[]).length:0;
+      });
+    }catch(e){}
+    return m;
+  },[depts]);
+  const totalInd=Object.keys(qByDept).reduce((s,k)=>s+qByDept[k],0);
 
   const onSave=(def,editing)=>{
     if(editing) store.updateDept(def.id,{name:def.name,short:def.short,group:def.group,desc:def.desc,cols:def.cols,primary:def.primary,primaryLabel:def.primaryLabel});
@@ -136,7 +167,7 @@ function ManageDepts({depts, store, setRoute}){
 
   return (
     <div className="grid" style={{gap:16}}>
-      <SectionTitle icon={I.edit} title="Manage Departments" sub={`${depts.length} active · ${customCount} custom — add, rename, delete and define custom metrics`}
+      <SectionTitle icon={I.edit} title="Manage Departments" sub={`${depts.length} departments · ${totalInd} quality indicators · ${customCount} custom — one place for statistics AND quality`}
         right={<button className="btn pri" onClick={()=>setModal({type:'add'})}><Ic d={I.plus} s={16}/>Add Department</button>}/>
 
       <div className="grid" style={{gap:10}}>
@@ -151,15 +182,16 @@ function ManageDepts({depts, store, setRoute}){
                   <span className="tag">{d.short}</span>
                   {d.custom&&<span className="tag" style={{background:'var(--pos-bg)',color:'var(--pos)'}}>Custom</span>}
                 </div>
-                <div style={{fontSize:11.5,color:'var(--muted)',marginTop:2}}>{d.group} · {d.cols.length} metric{d.cols.length>1?'s':''} · {d.series.length} month{d.series.length!==1?'s':''} of data</div>
+                <div style={{fontSize:11.5,color:'var(--muted)',marginTop:2}}>{d.group} · {d.cols.length} metric{d.cols.length>1?'s':''} · <span style={{color:'#6a52d4',fontWeight:600}}>{qByDept[d.id]||0} quality indicator{(qByDept[d.id]||0)===1?'':'s'}</span> · {d.series.length} month{d.series.length!==1?'s':''}</div>
               </div>
               <div style={{display:'flex',gap:6,flexWrap:'wrap',maxWidth:280,justifyContent:'flex-end'}}>
                 {d.cols.slice(0,4).map(c=><span key={c.id} className="col-chip">{c.label}</span>)}
                 {d.cols.length>4&&<span className="col-chip">+{d.cols.length-4}</span>}
               </div>
               <div style={{display:'flex',gap:6,flexShrink:0}}>
-                <button className="btn sm" title="Enter data" onClick={()=>setRoute({view:'input',dept:d.id})}><Ic d={I.plus} s={14}/>Data</button>
-                <button className="icon-btn" title="Rename / edit" onClick={()=>setModal({type:'edit',dept:d})}><Ic d={I.edit} s={15}/></button>
+                <button className="btn sm" title="Enter statistics data" onClick={()=>setRoute({view:'input',dept:d.id})}><Ic d={I.plus} s={14}/>Data</button>
+                <button className="btn sm" title="Manage quality indicators" onClick={()=>setRoute({view:'qualityManage',dept:(window.DEPTMAP&&window.DEPTMAP.qkFromId(d.id))||d.id})}><Ic d={I.heart} s={14}/>Quality</button>
+                <button className="icon-btn" title="Rename / edit metrics" onClick={()=>setModal({type:'edit',dept:d})}><Ic d={I.edit} s={15}/></button>
                 <button className="icon-btn danger" title="Delete" onClick={()=>setConfirm(d)}><Ic d={I.x} s={15}/></button>
               </div>
             </div>

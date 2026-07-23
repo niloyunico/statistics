@@ -87,7 +87,10 @@ async function getDepartments() {
   if (process.env.MONGODB_URI) {
     await ensureClient();
     const docs = await dbHandle().collection('departments').find({}).sort({ order: 1, _id: 1 }).toArray();
-    return docs.map((d) => { const { _id, ...rest } = d; return rest; });
+    // Statistics + Quality are now ONE record (dept.quality embedded). For the stats
+    // inject, hide qualityOnly pseudo-depts (Overall Hospital) and strip the embedded
+    // quality blob — it is served separately by getQuality() as __UNICO_QUALITY__.
+    return docs.filter((d) => !d.qualityOnly).map((d) => { const { _id, quality, ...rest } = d; return rest; });
   }
   // dev/in-memory: serve the on-disk seed directly so the app still has data.
   try { return require('./seed-departments').loadSeed(); } catch (e) { return []; }
@@ -110,7 +113,22 @@ async function getRendererData(name) {
   try { return require('./seed-data').loadSeed(name); } catch (e) { return []; }
 }
 async function getStaff() { return getRendererData('staff'); }
-async function getQuality() { return getRendererData('quality'); }
+// Quality now lives EMBEDDED in each department doc (dept.quality) after the
+// Statistics+Quality merge. Derive the quality-area list from departments so the
+// renderer's __UNICO_QUALITY__ keeps the exact shape it had as its own collection.
+async function getQuality() {
+  if (process.env.MONGODB_URI) {
+    await ensureClient();
+    const deps = await dbHandle().collection('departments').find({}).sort({ order: 1, _id: 1 }).toArray();
+    return deps.filter((d) => d.quality && d.quality.key).map((d) => {
+      const q = Object.assign({}, d.quality);
+      q.deptId = q.deptId || d.id;
+      if (q.key == null) q.key = d.qualityKey;
+      return q;
+    });
+  }
+  try { return require('./seed-data').loadSeed('quality'); } catch (e) { return []; }
+}
 async function ensureRendererSeeded(name) {
   if (!process.env.MONGODB_URI) return { name, seeded: 0, existing: 0 };
   await ensureClient();

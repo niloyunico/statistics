@@ -24,7 +24,7 @@
   --shadow:0 1px 2px rgba(20,32,46,.06), 0 1px 1px rgba(20,32,46,.04);
   --shadow-md:0 4px 14px rgba(20,32,46,.10);
   --shadow-pop:0 12px 34px rgba(20,32,46,.18);
-  --sb-w:230px; --topbar-h:54px;
+  --sb-w:248px; --topbar-h:60px;
   --mono:'IBM Plex Mono',ui-monospace,monospace;
 }
 
@@ -46,7 +46,10 @@ button{font-family:inherit;cursor:pointer}
 .app{display:grid;grid-template-columns:var(--sb-w) 1fr;grid-template-rows:100vh;height:100vh}
 .app.collapsed{--sb-w:60px}
 .main{display:flex;flex-direction:column;min-width:0;height:100vh;overflow:hidden}
-.content{flex:1;overflow-y:auto;padding:18px 22px 60px}
+.content{flex:1;overflow-y:auto;padding:22px 26px 64px}
+/* Contain the page on wide monitors so it reads as one organized, centered column
+   instead of sprawling edge-to-edge. Full-width below the cap; no effect ≤~1450px. */
+.content>*{max-width:1400px;margin-left:auto;margin-right:auto;width:100%}
 
 /* Sidebar */
 .sb{background:#0d1b2e;color:#c7d2e0;display:flex;flex-direction:column;min-width:0;overflow:hidden}
@@ -66,6 +69,23 @@ button{font-family:inherit;cursor:pointer}
 .collapsed .sb-name,.collapsed .sb-sec,.collapsed .sb-item span.lbl,.collapsed .badge,.collapsed .sb-foot .who{display:none}
 .collapsed .sb-item{justify-content:center;padding:9px 0}
 .collapsed .sb-brand{justify-content:center;padding:0}
+
+/* Redesign: unified "Workspace" sidebar — contextual dot sub-nav under the active
+   area, matching UNICO.dc.html. Reuses .sb-item for the top-level workspace rows. */
+.sb-brand-txt{min-width:0}
+.sb-item .badge.alert{background:rgba(210,58,82,.22);color:#ff8ba0}
+.sb-div{margin:8px 12px;height:1px;background:rgba(255,255,255,.07)}
+.sb-sec.sub{padding:9px 18px 4px 22px;font-size:9px;color:#5f6f86}
+.sb-sub-item{display:flex;align-items:center;gap:10px;padding:6px 18px 6px 22px;color:#8b98ab;cursor:pointer;font-size:12.5px;font-weight:500;white-space:nowrap;transition:color .16s,background .16s,padding-left .16s}
+.sb-sub-item:hover{color:#fff;background:rgba(255,255,255,.05)}
+.app:not(.collapsed) .sb-sub-item:hover{padding-left:26px}
+.sb-sub-item.active{color:#fff}
+.sb-sub-item .dot{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.5;flex-shrink:0}
+.sb-sub-item.active .dot{opacity:1;background:var(--blue-500)}
+.collapsed .sb-sub,.collapsed .sb-div,.collapsed .sb-brand-txt{display:none}
+
+/* Redesign: shared eyebrow label used above card groups on Overview & detail views */
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--faint)}
 
 /* Topbar */
 .topbar{height:var(--topbar-h);background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 18px;flex-shrink:0;z-index:5}
@@ -161,6 +181,7 @@ button{font-family:inherit;cursor:pointer}
   [style*="repeat(2"],
   [style*="repeat(3"],
   [style*="repeat(4"],
+  [style*="repeat(5"],
   [style*="320px 1fr"],[style*="340px 1fr"],[style*="230px 1fr"],[style*="200px 1fr"],[style*="160px 1fr"],
   .qm-split{grid-template-columns:1fr !important}
 

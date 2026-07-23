@@ -235,6 +235,17 @@ function fmtVal(ind, v){
   return isPctInd(ind) ? (num+'%') : num.toLocaleString();
 }
 
+// Expose the AUTHORITATIVE quality-compute helpers so the merged Statistics surfaces
+// (Department 360, sidebar breach badge) read the EXACT same numbers as this console —
+// quarter/year-aware, not the legacy fixed month window.
+if (typeof window !== 'undefined') {
+  window.UNICO_Q = {
+    defaultFy, fyOptions, fyAxis, fyMonthsFor, fyLabelOf, currentFy, fyOfKey,
+    deptStat, hasData, countBreaches, qcCellVal, qStatus, monthStatus, monthRaw,
+    qtrRaw, qtrSrc, isPctInd, fmtVal,
+  };
+}
+
 function measureOf(f){
   if(f==='pct') return { name:'Percentage', color:P.teal, letter:'%' };
   if(f==='rate1000'||f==='rate100') return { name:'Rate', color:P.violet, letter:'R' };
@@ -1774,6 +1785,7 @@ function QCSignatureBlock({sig, orgName}){
       <div style={{display:'flex',gap:30}}>
         {cell('Prepared by', sig.prepared)}
         {cell('Checked by', sig.reviewed)}
+        {cell('Recommended by', sig.recommended)}
         {cell('Approved by', sig.approved)}
       </div>
     </div>
@@ -1839,7 +1851,7 @@ function QCReportBuilder({depts}){
   const [compareBaseline,setCompareBaseline]=useState('prev'); // 'prev' | 'yoy'
   // Signature names — loaded from the SHARED saved set (window.unicoSig, also used by
   // the Patient Statistics report builders) and auto-saved on every edit.
-  const [sig,setSig]=useState(()=> (window.unicoSig?window.unicoSig.load():{prepared:'',reviewed:'',approved:''}));
+  const [sig,setSig]=useState(()=> (window.unicoSig?window.unicoSig.load():{prepared:'',reviewed:'',recommended:'',approved:''}));
   useEffect(()=>{ if(window.unicoSig) window.unicoSig.save(sig); },[sig]);
   // custom indicator selection — keys are "deptKey::indId"; narrows every page + export at once
   const [indMode,setIndMode]=useState('all');            // 'all' | 'custom'
@@ -1875,7 +1887,7 @@ function QCReportBuilder({depts}){
     setSections(s=>({...s,...(c.sections||{})})); setCompareBaseline(c.compareBaseline||'prev');
     // A preset only overrides the signatures when it actually SAVED names — otherwise the
     // shared auto-saved set (window.unicoSig) would be wiped by loading an older format.
-    setSig(s=>{ const cs=c.sig||{}; return (cs.prepared||cs.reviewed||cs.approved)?{prepared:cs.prepared||'',reviewed:cs.reviewed||'',approved:cs.approved||''}:s; });
+    setSig(s=>{ const cs=c.sig||{}; return (cs.prepared||cs.reviewed||cs.recommended||cs.approved)?{prepared:cs.prepared||'',reviewed:cs.reviewed||'',recommended:cs.recommended||'',approved:cs.approved||''}:s; });
     setIndMode(c.indMode||'all'); setIndSel(new Set(c.indSel||[])); setActiveTemplate('custom'); setPageIdx(0); };
   const saveFormat=()=>{ const name=presetName.trim(); if(!name){ setNote({ok:false,text:'Type a name for this format first.'}); return; }
     setPresets(ps=>[...ps.filter(p=>p.name!==name),{name,config:snapshot()}]); setPresetSel(name); setPresetName(''); setNote({ok:true,text:'Saved format "'+name+'". Reload it any time from Saved formats.'}); };
@@ -2187,7 +2199,7 @@ function QCReportBuilder({depts}){
           {sections.indTrend&&<QCIndTrend d={d} months={pMonths}/>}
           {sections.indicatorDetail&&detailed&&page.ind&&<IndicatorDetail d={d} ind={page.ind}/>}
           {sections.incidents&&!detailed&&<QCIncidentBlock d={d} months={pMonths}/>}
-          {lead&&sections.signatures&&<QCSignatureBlock sig={sig} orgName={orgName}/>}
+          {/* authorisation now shown on the cover page only */}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -2294,7 +2306,7 @@ function QCReportBuilder({depts}){
               {incs.map((r,i)=><QCIncidentCard key={i} r={r} showDept/>)}
             </div>
           )}
-          {lead&&sections.signatures&&<QCSignatureBlock sig={sig} orgName={orgName}/>}
+          {/* authorisation now shown on the cover page only */}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -2390,7 +2402,7 @@ function QCReportBuilder({depts}){
               {incs.map((r,i)=><QCIncidentCard key={i} r={r} showDept showMonth={false}/>)}
             </div>
           )}
-          {lead&&sections.signatures&&<QCSignatureBlock sig={sig} orgName={orgName}/>}
+          {/* authorisation now shown on the cover page only */}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -2430,7 +2442,7 @@ function QCReportBuilder({depts}){
                 <td style={{padding:'7px 10px',textAlign:'center'}}><span style={{background:r.color+'1c',color:r.color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11}}>{r.status}</span></td>
               </tr>); })}</tbody>
           </table>
-          {sections.signatures&&<QCSignatureBlock sig={sig} orgName={orgName}/>}
+          {/* authorisation now shown on the cover page only */}
         </div>
         <Footer n={n||1} total={total||1}/>
       </div>
@@ -2694,7 +2706,7 @@ function QCReportBuilder({depts}){
                   <td style={{textAlign:'center',padding:'4px 6px'}}><span style={{display:'inline-block',padding:'2px 8px',borderRadius:20,background:s.bg,color:s.color,fontWeight:700,fontSize:10}}>{s.label}</span></td>
                 </tr>); })}</tbody>
             </table>
-            {lead&&sections.signatures&&<QCSignatureBlock sig={sig} orgName={orgName}/>}
+            {/* authorisation now shown on the cover page only */}
           </div>
           <Footer n={n} total={total}/>
         </div>
@@ -2870,10 +2882,10 @@ function QCReportBuilder({depts}){
     const sigBlock=(y)=>{
       // honour the "Signature block on the last page" toggle like the on-screen pages do
       if(!sections.signatures)return y;
-      if(!(sig&&(sig.prepared||sig.reviewed||sig.approved)))return y;
+      if(!(sig&&(sig.prepared||sig.reviewed||sig.recommended||sig.approved)))return y;
       y=Math.max(y+8,PH-118);
       F('bold',7,RGB.muted);doc.text('AUTHORISATION · '+String(orgName||'').toUpperCase(),M,y);
-      const cols=[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]],cw=CW/3;
+      const cols=[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Recommended by',sig.recommended],['Approved by',sig.approved]],cw=CW/4;
       cols.forEach((c,i)=>{const x=M+i*cw;line(x,y+42,x+cw-22,y+42,RGB.ink2,0.8);
         F('bold',8.5,RGB.ink);doc.text(clip(c[1]||'',cw-26),x,y+54);
         F('normal',6.2,RGB.muted);doc.text(c[0].toUpperCase(),x,y+63);});
@@ -2916,7 +2928,7 @@ function QCReportBuilder({depts}){
         if(rows.length){const cap=sole?(sole.name+' — monthly value vs benchmark'):'Zero-defect % by month — reported indicators on benchmark';
           F('bold',8,RGB.ink2);doc.text(clip(cap.toUpperCase(),CW),M,y+2);y=vBars(y+8,sole||{valueType:'%'},rows);}}
       if(sections.table!==false)y=deptTable(y+4,d);
-      if(di===chosen.length-1)sigBlock(y);
+      /* authorisation drawn on the cover page only */
     });
     doc.save('UNICO-quality-'+reportType+'-'+new Date().toISOString().slice(0,10)+'.pdf');
   }
@@ -2932,6 +2944,83 @@ function QCReportBuilder({depts}){
       }catch(e){ setNote({ok:false,text:String(e&&e.message||e)}); }
       finally{ document.body.classList.remove('pdf-export-mode'); setExporting(false); }
       return;
+    }
+    // Web PREFERRED: the Python report service (api/report_pdf.py, ReportLab on Vercel) —
+    // the SAME server generator the Statistics reports use. Sends a resolved quality model;
+    // Python reproduces the cover, per-dept summary (status + KPIs + zero-defect chart +
+    // colored indicator×month table), Hand Hygiene and compare. Any failure (offline /
+    // localhost without the function / non-PDF response) silently falls through to the
+    // vector + raster paths below, so export never breaks.
+    // Web PREFERRED: render the EXACT on-screen preview to PDF via the local report
+    // service (headless browser). Reproduces every report type, section, chart style and
+    // customization 1:1. Falls through to the ReportLab model / vector / raster paths
+    // (e.g. on Vercel, where the headless renderer isn't present).
+    if(window.__UNICO_HTML_PDF__===true && window.__UNICO_SERVER_PDF__!==false && typeof window.unicoHtmlServerPDF==='function'){
+      setExporting(true); setNote(null);
+      try{
+        if(await window.unicoHtmlServerPDF(pageSize,orient,'UNICO-quality-'+reportType+'-'+new Date().toISOString().slice(0,10)+'.pdf')){
+          setNote({ok:true,text:'PDF downloaded.'}); setExporting(false); return;
+        }
+      }catch(e){ /* fall through */ }
+      setExporting(false);
+    }
+    // Python covers Summary / Comparison / Hand-Hygiene with the CONTENT sections
+    // (exec summary, KPI cards, chart, breach donut, month table) + cover + signature,
+    // and the 3D / Bar / Line / Area chart styles. Detailed / Heatmap / Monthly, the
+    // advanced ANALYTICS / STRUCTURE sections, and other chart styles fall through to the
+    // faithful browser export below so every filter combination still renders correctly.
+    const QC_PY_TYPES=['summary','detail','compare','handhygiene'];
+    const QC_PY_STYLES=['bar3d','bar','line','area','combo','grouped','stacked','pct','horizontal','donut'];
+    const qcAdvanced=['ragHeatmap','deptRanking','benchmarkCompare','indTrend','periodCompare','incidentAppendix','standardsRefs','toc','watermark'].some(k=>sections[k]);
+    const qcCanServer = QC_PY_TYPES.indexOf(reportType)>=0
+      && chartStyles.every(s=>QC_PY_STYLES.indexOf(s)>=0) && !qcAdvanced;
+    if(window.__UNICO_SERVER_PDF__!==false && qcCanServer){
+      setExporting(true); setNote(null);
+      try{
+        const liteInd=ind=>{ const c=stdMatch(ind.name);
+          return {id:ind.id,name:ind.name,formula:ind.formula,valueType:ind.valueType,unit:ind.unit,
+            benchmark:ind.benchmark,benchmarkValue:ind.benchmarkValue,goalDirection:ind.goalDirection,
+            numeratorDef:ind.numeratorDef,denominatorDef:ind.denominatorDef,formulaText:formulaText(ind),
+            indSec:(c?((HQI_SECN[c[0]]||'')+' ('+c+')'):catOf(ind.name)),
+            months:ind.months,mNum:ind.mNum,mDen:ind.mDen,quarters:ind.quarters,quartersByFy:ind.quartersByFy}; };
+        const secLabelOf=d=>{ const lead=qcLeadIndicator(d,pMonths); const code=lead?stdMatch(lead.name):null;
+          return code?(HQI_SECN[code[0]]||code):(lead?catOf(lead.name):'Quality'); };
+        const liteDept=d=>({key:d.key,name:d.name,secLabel:secLabelOf(d),indicators:(d.indicators||[]).map(liteInd)});
+        // Executive-summary prose — same computation as the on-screen QCExecSummary.
+        const es=(()=>{ const agg=qcAggStat(chosen,pMonths), rank=qcRankRows(chosen,pMonths);
+          const rep=rank.filter(r=>r.reported), best=rep[0], worst=rep[rep.length-1];
+          const noData=rank.length-rep.length, breaching=rank.filter(r=>r.breaches>0);
+          const verdict=agg.rate>=90?'strong compliance':agg.rate>=70?'moderate compliance with pockets of risk':'compliance below target with material risk';
+          let t;
+          if(!agg.reported){ t='Across '+agg.depts+' department'+(agg.depts!==1?'s':'')+' and '+agg.inds+' quality indicators, no data was reported for '+rangeLabel+' — the figures below reflect an unreported period, not performance.'; }
+          else { t='Across '+agg.depts+' department'+(agg.depts!==1?'s':'')+' and '+agg.inds+' quality indicators for '+rangeLabel+', the hospital achieved an aggregate zero-defect rate of '+agg.rate+'% ('+agg.ok+' indicator-months on benchmark, '+agg.breach+' breach'+(agg.breach!==1?'es':'')+'), reflecting '+verdict+'.';
+            if(best&&(best.breaches<((worst&&worst.breaches)||0)||best.rate>((worst&&worst.rate)||0)||rep.length===1)) t+=' The strongest performer was '+best.d.name+' ('+best.rate+'% zero-defect'+(best.breaches?', '+best.breaches+' breach'+(best.breaches!==1?'es':''):'')+').';
+            if(worst&&worst!==best&&(worst.breaches>0||worst.rate<best.rate)) t+=' The area needing most attention was '+worst.d.name+' ('+worst.rate+'% zero-defect, '+worst.breaches+' breach'+(worst.breaches!==1?'es':'')+').';
+            if(breaching.length>0) t+=' '+breaching.length+' department'+(breaching.length!==1?'s are':' is')+' carrying open breaches, tracked for corrective & preventive action.';
+            else t+=' No department is currently carrying a breach for the reporting period.';
+            if(noData>0) t+=' '+noData+' selected department'+(noData!==1?'s':'')+' reported no data for this period.'; }
+          return {text:t, tone:(!agg.reported?'#6c7a8c':agg.rate>=90?'#1f9d57':agg.rate>=70?'#e08a1e':'#d23a52')}; })();
+        const model={ quality:true,
+          doc:{ type:reportType, pageSize, orient, hdrTitle, hdrSub, orgName, confidential, footerNote,
+            showCover:!!sections.cover, showSig:!!sections.signatures, rangeLabel,
+            genDate:new Date().toLocaleDateString('en-US'), sig, fy, fyLabel:fyLabelOf(fy), sections,
+            chartStyles, execSummary:es.text, execTone:es.tone },
+          depts: chosen.map(liteDept), allDepts: (depts||[]).map(liteDept), pMonths };
+        const res=await fetch('/api/report-pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(model)});
+        // localhost:8080 (no Vercel router) returns index.html 200 — the content-type guard
+        // rejects that so we cleanly fall through to the JS vector/raster export below.
+        const ct=(res.headers.get('content-type')||'').toLowerCase();
+        if(res.ok && ct.indexOf('pdf')>=0){
+          const blob=await res.blob(), url=URL.createObjectURL(blob), a=document.createElement('a');
+          a.href=url; a.download='UNICO-quality-'+reportType+'-'+new Date().toISOString().slice(0,10)+'.pdf';
+          document.body.appendChild(a); a.click();
+          setTimeout(()=>{ try{document.body.removeChild(a);}catch(_){} URL.revokeObjectURL(url); },600);
+          setNote({ok:true,text:'PDF downloaded.'});
+          setExporting(false); return;
+        }
+        try{ console.warn('[quality] server PDF unavailable ('+res.status+' '+ct+') — falling back to vector/raster'); }catch(_){}
+      }catch(e){ try{ console.warn('[quality] server PDF failed, falling back:',e); }catch(_){} }
+      setExporting(false);
     }
     const H=window.html2canvas, J=window.jspdf&&window.jspdf.jsPDF;
     // Web preferred: fast VECTOR PDF (selectable text, ~1s, one-click download) — but ONLY
@@ -3281,8 +3370,9 @@ function QCReportBuilder({depts}){
               <div style={{display:'flex',flexDirection:'column',gap:8}}>
                 <input value={sig.prepared} onChange={e=>setSig(s=>({...s,prepared:e.target.value}))} placeholder="Prepared by (name & title)" style={{...sel2,width:'100%'}}/>
                 <input value={sig.reviewed} onChange={e=>setSig(s=>({...s,reviewed:e.target.value}))} placeholder="Checked by (name & title)" style={{...sel2,width:'100%'}}/>
+                <input value={sig.recommended} onChange={e=>setSig(s=>({...s,recommended:e.target.value}))} placeholder="Recommended by (name & title)" style={{...sel2,width:'100%'}}/>
                 <input value={sig.approved} onChange={e=>setSig(s=>({...s,approved:e.target.value}))} placeholder="Approved by (name & title)" style={{...sel2,width:'100%'}}/>
-                <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:P.ink2}}><input type="checkbox" checked={!!sections.signatures} onChange={e=>setSec('signatures',e.target.checked)}/>Signature block on the last page</label>
+                <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:P.ink2}}><input type="checkbox" checked={!!sections.signatures} onChange={e=>setSec('signatures',e.target.checked)}/>Signature block on cover page</label>
               </div>
             </div>
             <div>
@@ -3383,6 +3473,7 @@ function QCReportBuilder({depts}){
                 <div style={{display:'flex',flexDirection:'column',gap:8}}>
                   <input value={sig.prepared} onChange={e=>setSig(s=>({...s,prepared:e.target.value}))} placeholder="Prepared by (name)" style={{...sel2,width:'100%'}}/>
                   <input value={sig.reviewed} onChange={e=>setSig(s=>({...s,reviewed:e.target.value}))} placeholder="Checked by (name)" style={{...sel2,width:'100%'}}/>
+                  <input value={sig.recommended} onChange={e=>setSig(s=>({...s,recommended:e.target.value}))} placeholder="Recommended by (name)" style={{...sel2,width:'100%'}}/>
                   <input value={sig.approved} onChange={e=>setSig(s=>({...s,approved:e.target.value}))} placeholder="Approved by (name)" style={{...sel2,width:'100%'}}/>
                 </div>
               </div>
@@ -3882,6 +3973,146 @@ function QCActionPlans({depts}){
   );
 }
 
+/* ===== part: mod-formula-master.jsx ===== */
+/* Master Formula editor — the ONE canonical definition per indicator, stored in
+   the `qualityFormulas` collection and injected as window.__UNICO_QI_FORMULAS__.
+   Editing a row PUTs /api/quality-formulas/:id, then rebuilds window.QI_CORRECTIONS
+   in memory and fires 'unico:data-refreshed' so every open view recomputes live —
+   the change applies to every department at once (per-dept overlay edits still win). */
+const QF_DEF_FIELDS = ['formula','unit','numLabel','denLabel','numeratorDef','denominatorDef','benchmark','benchmarkValue','benchmarkNote','goalDirection','reference','referenceUrl','denAdminOnly','victimField'];
+const QF_FORMULAS = [['direct','Direct value — enter as-is'],['count','Count — running tally (numerator only)'],['avg','Average (mean) — num ÷ den'],['rate1000','Rate per 1000 — num ÷ den × 1000'],['rate100','Rate per 100 — num ÷ den × 100'],['pct','Percentage — num ÷ den × 100']];
+const QF_DIRS = [['lower_is_better','↓ Lower is better'],['higher_is_better','↑ Higher is better']];
+const QF_BADGE = {pct:'%',rate1000:'/1000',rate100:'/100',avg:'avg',count:'count',direct:'direct'};
+function qfMeasColor(f){ return f==='pct'?P.teal : (f==='rate1000'||f==='rate100')?P.violet : (f==='avg'?P.amber||'#c98a12':P.blue); }
+
+function QCFormulaMaster(){
+  const canEdit = qcCanEdit();
+  const initial = (typeof window!=='undefined' && Array.isArray(window.__UNICO_QI_FORMULAS__)) ? window.__UNICO_QI_FORMULAS__ : [];
+  const [list,setList]=useState(initial);
+  const [flt,setFlt]=useState('');
+  const [open,setOpen]=useState('');       // expanded formula id
+  const [draft,setDraft]=useState(null);   // working copy while editing
+  const [saving,setSaving]=useState(false);
+  const [msg,setMsg]=useState(null);       // { type:'ok'|'err', text }
+
+  // Rebuild window.QI_CORRECTIONS from the (edited) list so correctedBase() fans the
+  // new definition out to every department without a reload.
+  const applyLive=(rows)=>{
+    try{
+      const map={};
+      rows.forEach(f=>{ const def={canonicalName:f.canonicalName}; QF_DEF_FIELDS.forEach(k=>{ if(f[k]!==undefined&&f[k]!==null&&f[k]!=='') def[k]=f[k]; });
+        const keys=new Set([...((f.aliases||[]).map(a=>norm(a))), norm(f.canonicalName)].filter(Boolean));
+        keys.forEach(k=>{ map[k]=def; });
+      });
+      window.QI_CORRECTIONS=map; window.__UNICO_QI_CORRECTIONS__=map; window.__UNICO_QI_FORMULAS__=rows;
+      window.dispatchEvent(new CustomEvent('unico:data-refreshed',{detail:{source:'formulas'}}));
+    }catch(e){}
+  };
+
+  const startEdit=(f)=>{ setOpen(f.id); setDraft(Object.assign({},f)); setMsg(null); };
+  const cancel=()=>{ setOpen(''); setDraft(null); };
+  const set=(k,v)=>setDraft(d=>Object.assign({},d,{[k]:v}));
+
+  const save=async()=>{
+    if(!draft) return;
+    setSaving(true); setMsg(null);
+    const body={ canonicalName:draft.canonicalName, formula:draft.formula, unit:draft.unit, numLabel:draft.numLabel, denLabel:draft.denLabel,
+      numeratorDef:draft.numeratorDef, denominatorDef:draft.denominatorDef, benchmark:draft.benchmark,
+      benchmarkValue:(draft.benchmarkValue===''||draft.benchmarkValue==null)?'':draft.benchmarkValue,
+      benchmarkNote:draft.benchmarkNote, goalDirection:draft.goalDirection, reference:draft.reference, referenceUrl:draft.referenceUrl };
+    try{
+      const r=await fetch('/api/quality-formulas/'+encodeURIComponent(draft.id),{method:'PUT',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok||!j.ok) throw new Error(j.error||('HTTP '+r.status));
+      const saved=j.formula||Object.assign({},draft);
+      const next=list.map(f=> f.id===saved.id? Object.assign({},f,saved): f);
+      setList(next); applyLive(next);
+      setMsg({type:'ok',text:'Saved — "'+(saved.canonicalName||draft.canonicalName)+'" now applies to every department.'});
+      setOpen(''); setDraft(null);
+    }catch(e){ setMsg({type:'err',text:'Save failed: '+(e.message||e)}); }
+    setSaving(false);
+  };
+
+  const inp={padding:'8px 10px',border:'1px solid #dde3ec',borderRadius:7,fontSize:12.5,color:P.ink,background:'#fff',outline:'none',width:'100%',fontFamily:'inherit',boxSizing:'border-box'};
+  const lab={fontSize:10,fontWeight:700,color:P.faint,textTransform:'uppercase',letterSpacing:'.3px',marginBottom:4,display:'block'};
+
+  const fl=(flt||'').trim().toLowerCase();
+  const rows=list.filter(f=> !fl || (f.canonicalName||'').toLowerCase().includes(fl) || ((f.aliases||[]).some(a=>String(a).includes(fl))) || (f.formula||'').includes(fl));
+
+  return (
+    <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',borderBottom:'1px solid #e8edf3',background:'#f7f9fc',flexWrap:'wrap'}}>
+        <div style={{width:30,height:30,borderRadius:8,background:'#0090ca',color:'#fff',display:'grid',placeItems:'center',flexShrink:0}}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M4 12h16M4 17h10"></path></svg>
+        </div>
+        <div style={{minWidth:0,flex:1}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Master Formulas — one definition per indicator</div>
+          <div style={{fontSize:11.5,color:P.muted,marginTop:1}}>Edit a formula once here and it applies to <b>every</b> department. Monthly values stay per-department; a department with its own explicit edit keeps it.</div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,background:'#fff',border:'1px solid #dde3ec',borderRadius:8,padding:'7px 11px',color:P.faint,minWidth:200}}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><path d="M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12"></path></svg>
+          <input placeholder="Filter formulas…" value={flt} onInput={e=>setFlt(e.target.value)} onChange={e=>setFlt(e.target.value)} style={{border:0,background:'transparent',outline:'none',fontSize:12.5,color:P.ink,width:'100%'}}/>
+        </div>
+        <span style={{fontSize:11,color:P.faint,fontFamily:MONO,whiteSpace:'nowrap'}}>{rows.length} / {list.length}</span>
+      </div>
+
+      {msg && <div style={{margin:'12px 16px 0',padding:'9px 12px',borderRadius:8,fontSize:12,fontWeight:600,color:msg.type==='ok'?'#1f7a45':'#b4232f',background:msg.type==='ok'?'#e7f6ed':'#fbe9ec',border:'1px solid '+(msg.type==='ok'?'#bce5cc':'#f3c9d0')}}>{msg.text}</div>}
+
+      {!list.length ? (
+        <div style={{padding:'22px 16px',fontSize:12.5,color:P.muted}}>No database formula catalogue is loaded — the built-in code defaults are driving the app, and they already apply to every department. (Start the web server against MongoDB to manage formulas here.)</div>
+      ) : (
+      <div>
+        {rows.map(f=>{
+          const editing = open===f.id && !!draft;
+          const mc = qfMeasColor(f.formula);
+          return (
+          <div key={f.id} style={{borderBottom:'1px solid #eef1f5'}}>
+            <div onClick={()=>{ if(editing) cancel(); else if(canEdit) startEdit(f); else setOpen(open===f.id?'':f.id); }} style={{display:'flex',alignItems:'center',gap:11,padding:'11px 16px',cursor:'pointer',background:editing?'#f7fbfe':'#fff'}}>
+              <span style={{color:'#cdd6e2',fontFamily:MONO,fontSize:12,width:10}}>{editing?'▾':'▸'}</span>
+              <span style={{width:8,height:8,borderRadius:'50%',background:mc,flexShrink:0}}></span>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{fontSize:13,fontWeight:600,color:P.ink,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{f.canonicalName}</div>
+                {(f.aliases||[]).length>1 && <div style={{fontSize:10,color:P.faint,marginTop:1}}>covers {f.aliases.length} name variants</div>}
+              </div>
+              <span style={{fontSize:10.5,fontWeight:600,color:mc,background:mc+'1c',padding:'2px 9px',borderRadius:6,whiteSpace:'nowrap'}}>{QF_BADGE[f.formula]||f.formula||'—'}</span>
+              <span style={{fontSize:11,color:P.ink2,minWidth:78,textAlign:'right',whiteSpace:'nowrap'}}>{f.unit||'—'}</span>
+              <span style={{fontFamily:MONO,fontSize:11.5,fontWeight:600,color:P.ink,minWidth:74,textAlign:'right'}}>{f.benchmark||'—'}</span>
+            </div>
+
+            {editing && (
+            <div style={{padding:'6px 16px 16px 37px',background:'#f7fbfe'}}>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>
+                <div><span style={lab}>Formula / calculation</span>
+                  <select value={draft.formula||'direct'} onChange={e=>set('formula',e.target.value)} style={inp}>{QF_FORMULAS.map(o=><option key={o[0]} value={o[0]}>{o[1]}</option>)}</select></div>
+                <div><span style={lab}>Unit</span><input value={draft.unit||''} onChange={e=>set('unit',e.target.value)} style={inp} placeholder="e.g. per 1000 patient-days"/></div>
+                <div><span style={lab}>Goal direction</span>
+                  <select value={draft.goalDirection||'lower_is_better'} onChange={e=>set('goalDirection',e.target.value)} style={inp}>{QF_DIRS.map(o=><option key={o[0]} value={o[0]}>{o[1]}</option>)}</select></div>
+                <div><span style={lab}>Benchmark (text)</span><input value={draft.benchmark||''} onChange={e=>set('benchmark',e.target.value)} style={inp} placeholder="e.g. ≤ 1 per 1000"/></div>
+                <div><span style={lab}>Benchmark value (number)</span><input value={draft.benchmarkValue==null?'':draft.benchmarkValue} onChange={e=>set('benchmarkValue',e.target.value)} style={inp} placeholder="e.g. 1" inputMode="decimal"/></div>
+                <div><span style={lab}>Numerator label</span><input value={draft.numLabel||''} onChange={e=>set('numLabel',e.target.value)} style={inp} placeholder="what the numerator counts"/></div>
+                <div><span style={lab}>Denominator label</span><input value={draft.denLabel||''} onChange={e=>set('denLabel',e.target.value)} style={inp} placeholder="what the denominator counts"/></div>
+                <div style={{gridColumn:'1 / -1'}}><span style={lab}>Numerator definition</span><textarea value={draft.numeratorDef||''} onChange={e=>set('numeratorDef',e.target.value)} style={Object.assign({},inp,{minHeight:56,resize:'vertical'})}/></div>
+                <div style={{gridColumn:'1 / -1'}}><span style={lab}>Denominator definition</span><textarea value={draft.denominatorDef||''} onChange={e=>set('denominatorDef',e.target.value)} style={Object.assign({},inp,{minHeight:56,resize:'vertical'})}/></div>
+                <div style={{gridColumn:'1 / -1'}}><span style={lab}>Reference</span><input value={draft.reference||''} onChange={e=>set('reference',e.target.value)} style={inp}/></div>
+                <div style={{gridColumn:'1 / -1'}}><span style={lab}>Reference URL</span><input value={draft.referenceUrl||''} onChange={e=>set('referenceUrl',e.target.value)} style={inp}/></div>
+              </div>
+              {(f.aliases||[]).length>0 && <div style={{marginTop:10,display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}><span style={{fontSize:10,fontWeight:700,color:P.faint,textTransform:'uppercase',letterSpacing:'.3px'}}>Applies to</span>{f.aliases.map(a=><span key={a} style={{fontSize:10.5,color:P.ink2,background:'#eef1f5',padding:'2px 8px',borderRadius:12}}>{a}</span>)}</div>}
+              <div style={{display:'flex',gap:9,marginTop:14,alignItems:'center'}}>
+                <button onClick={save} disabled={saving} style={{border:0,background:saving?'#8fc7e2':'#0090ca',color:'#fff',padding:'9px 18px',borderRadius:8,fontSize:12.5,fontWeight:700,cursor:saving?'default':'pointer'}}>{saving?'Saving…':'Save — apply everywhere'}</button>
+                <button onClick={cancel} disabled={saving} style={{border:'1px solid #dde3ec',background:'#fff',color:P.muted,padding:'9px 16px',borderRadius:8,fontSize:12.5,fontWeight:600,cursor:'pointer'}}>Cancel</button>
+              </div>
+            </div>
+            )}
+          </div>
+          );
+        })}
+        {!canEdit && <div style={{padding:'11px 16px',fontSize:11.5,color:P.faint,fontStyle:'italic'}}>Sign in as an administrator to edit formulas.</div>}
+      </div>
+      )}
+    </div>
+  );
+}
+
 /* ===== part: mod-admin.jsx ===== */
 function QCAdmin({Q,q,onQ,initialDept}){
   // `depts` = only departments that already report an indicator (used for the grouped
@@ -4303,6 +4534,10 @@ function QCAdmin({Q,q,onQ,initialDept}){
                 {/* MEASUREMENT */}
                 {tab==='measure' && (
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+                  <div style={{gridColumn:'1 / -1',background:'#fff8ec',border:'1px solid #f3e3c0',borderRadius:8,padding:'9px 12px',fontSize:11.5,color:'#8a6a1f',display:'flex',gap:8,alignItems:'flex-start'}}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0,marginTop:1}}><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>
+                    <span>The shared definition for this indicator lives in <b>Formula Library</b> (edit once, applies to every department). Changing it <b>here</b> creates an override for <b>this department only</b>.</span>
+                  </div>
                   <div style={{display:'flex',flexDirection:'column',gap:5,gridColumn:'1 / -1'}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>How is this measured?</label><select value={selInd.formula||'count'} onChange={patchField('formula')} style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,background:'#fff',outline:'none'}}>{FORMULAS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
                   <div style={{gridColumn:'1 / -1',background:'#eef8fc',border:'1px solid #dceffa',borderRadius:8,padding:'11px 13px'}}>
                     <div style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'.4px',fontWeight:700,marginBottom:4}}>Formula used to calculate the value</div>
@@ -4488,6 +4723,9 @@ function QCAdmin({Q,q,onQ,initialDept}){
       {/* ============ CATALOG / FORMULA LIBRARY ============ */}
       {view==='catalog' && (
       <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        {/* Editable master: the ONE canonical formula per indicator (DB-backed). */}
+        <QCFormulaMaster/>
+        {/* Reference framework (read-only) below the editable master. */}
         <div style={{background:'#0d1b2e',color:'#fff',borderRadius:12,padding:'16px 20px',display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
           <div style={{width:42,height:42,borderRadius:11,background:'rgba(39,168,219,.2)',color:'#7fd0f0',display:'grid',placeItems:'center',flexShrink:0}}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7"></path></svg></div>
           <div style={{minWidth:0,flex:1}}><div style={{fontSize:16,fontWeight:700}}>Hospital Quality Indicator Framework</div><div style={{fontSize:12,color:'#9fb0c4',marginTop:2}}>Standardised measurement formulas, benchmarks &amp; evidence-based references · 13 domains · aligned to WHO · JCI · CDC/NHSN · KDOQI · ACC/AHA</div></div>

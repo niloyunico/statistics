@@ -75,17 +75,17 @@ window.UNICO = { DEPARTMENTS, GROUPS, MONTHS_FULL, MONTH_ORDER, HOSPITAL };
 // by EVERY report builder (Patient Statistics, Monthly Statistics, Quality console).
 window.unicoSig = {
   KEY: 'unico_report_sig_v1',
-  blank() { return { prepared: '', reviewed: '', approved: '' }; },
+  blank() { return { prepared: '', reviewed: '', recommended: '', approved: '' }; },
   load() {
     try {
       const s = JSON.parse(localStorage.getItem(this.KEY));
       return (s && typeof s === 'object')
-        ? { prepared: s.prepared || '', reviewed: s.reviewed || '', approved: s.approved || '' }
+        ? { prepared: s.prepared || '', reviewed: s.reviewed || '', recommended: s.recommended || '', approved: s.approved || '' }
         : this.blank();
     } catch (e) { return this.blank(); }
   },
   save(sig) {
-    try { localStorage.setItem(this.KEY, JSON.stringify({ prepared: (sig && sig.prepared) || '', reviewed: (sig && sig.reviewed) || '', approved: (sig && sig.approved) || '' })); } catch (e) { }
+    try { localStorage.setItem(this.KEY, JSON.stringify({ prepared: (sig && sig.prepared) || '', reviewed: (sig && sig.reviewed) || '', recommended: (sig && sig.recommended) || '', approved: (sig && sig.approved) || '' })); } catch (e) { }
   },
 };
 

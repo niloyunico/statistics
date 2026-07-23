@@ -1,0 +1,932 @@
+[
+  {
+    "_id": "accidental-unplanned-catheter-removal-rate",
+    "canonicalName": "Accidental / unplanned catheter removal rate",
+    "aliases": [
+      "accidental catheter dislodgement",
+      "accidental de-lining of catheter",
+      "accidental removal of catheter"
+    ],
+    "order": 0,
+    "formula": "rate1000",
+    "unit": "per 1000 catheter-days",
+    "numLabel": "Accidental catheter removals/dislodgements",
+    "denLabel": "Catheter-days",
+    "numeratorDef": "Number of unplanned/accidental removals or dislodgements of an indwelling catheter (e.g. central venous catheter, PICC, arterial line, peripheral line) during the surveillance period - i.e. any removal not clinically ordered, including patient self-removal, accidental dislodgement, or migration requiring re-siting. Count each event once.",
+    "denominatorDef": "Total catheter-days = sum, over each day of the surveillance period, of the number of indwelling catheters in place that day across all patients (device-days).",
+    "benchmark": "≤ 1 per 1000 catheter-days",
+    "benchmarkValue": 1,
+    "benchmarkNote": "Lower is better; aspirational goal <= ~1 per 1000 catheter-days. Reported literature varies widely by device type and setting: central venous catheters ~2 per 1000 catheter-days (de la Torre/Lorente, Crit Care 2004, reported as 0.20/100 catheter-days), unplanned CVC removal ~5 per 1000 CVC-days in a multicenter ICU cohort, and ~11-16 per 1000 catheter-days for arterial lines and PICU central/PICC lines.",
+    "goalDirection": "lower_is_better",
+    "reference": "de la Torre / Lorente et al., 'Accidental catheter removal in critically ill patients: a prospective and observational study,' Critical Care 2004 (incidence density per catheter-days); INS Infusion Therapy Standards of Practice 2024 (device securement / dislodgement prevention)",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC522842/"
+  },
+  {
+    "_id": "average-length-of-stay-at-the-emergency-department",
+    "canonicalName": "Average Length of Stay at the Emergency Department",
+    "aliases": [
+      "alos (ed)",
+      "average ed length of stay",
+      "average length of stay (ed)",
+      "average length of stay (emergency department)",
+      "average length of stay - emergency department",
+      "average length of stay at emergency department",
+      "average length of stay at the emergency department",
+      "average length of stay emergency department",
+      "average length of stay in the emergency department",
+      "ed alos",
+      "ed average length of stay",
+      "emergency department average length of stay"
+    ],
+    "order": 1,
+    "formula": "avg",
+    "unit": "hours",
+    "numLabel": "Total ED patient-hours",
+    "denLabel": "Number of ED patient visits",
+    "numeratorDef": "Sum of the length of stay of every patient managed in the Emergency Department during the month = Σ (time of departure/disposition from the ED − time of ED arrival or triage registration), expressed in hours. Include every disposition (discharged, admitted/transferred to a ward, referred out, LAMA/DAMA, death in ED).",
+    "denominatorDef": "Total number of Emergency Department patient visits during the same month (every patient who arrived and was dispositioned) — the same visits whose stays are summed in the numerator.",
+    "benchmark": "≤ 4 hours",
+    "benchmarkValue": 4,
+    "benchmarkNote": "Average ED length of stay = total ED patient-hours ÷ number of ED visits (a mean DURATION, not a percentage or a count). ≤ 4 hours total ED LOS is a widely used throughput target (e.g. the NHS A&E 4-hour standard); many hospitals set ≤ 4 h for discharged and ≤ 6 h for admitted patients. Adjust the benchmark and the unit (hours or minutes) to your hospital's agreed target.",
+    "goalDirection": "lower_is_better",
+    "reference": "CMS Hospital Outpatient Quality Reporting — ED Throughput (OP-18: median time from ED arrival to ED departure for discharged patients); NHS A&E 4-hour standard; ACEP ED crowding / boarding resources",
+    "referenceUrl": "https://www.cms.gov/medicare/quality/hospital-outpatient-quality-reporting-program"
+  },
+  {
+    "_id": "bls-certification-rate",
+    "canonicalName": "BLS Certification Rate",
+    "aliases": [
+      "bls certification rate"
+    ],
+    "order": 2,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Clinical staff with current/valid BLS certification",
+    "denLabel": "Clinical staff required to hold BLS certification",
+    "numeratorDef": "Number of clinical (and other policy-designated) staff holding a current, non-expired Basic Life Support (BLS) certification (typically AHA BLS for Healthcare Providers, valid 2 years) at the measurement point.",
+    "denominatorDef": "Total number of staff for whom BLS certification is mandated by role or hospital policy at the measurement point. Rate = (certified / required) x 100.",
+    "benchmark": "≥ 100%",
+    "benchmarkValue": 100,
+    "benchmarkNote": "100% of required clinical staff with valid BLS certification",
+    "goalDirection": "higher_is_better",
+    "reference": "American Heart Association (AHA) BLS Provider standards; NABH HRM (Human Resource Management) staff competency/credentialing requirements",
+    "referenceUrl": "https://cpr.heart.org/en/cpr-courses-and-kits/healthcare-professional/basic-life-support-bls-training"
+  },
+  {
+    "_id": "cardiac-arrest-code-blue-events",
+    "canonicalName": "Cardiac Arrest (Code Blue) Events",
+    "aliases": [
+      "cardiac arrest events"
+    ],
+    "order": 3,
+    "formula": "count",
+    "unit": "count",
+    "numLabel": "Number of cardiac arrest (code blue) events",
+    "numeratorDef": "Count of in-hospital cardiac arrest events (pulselessness requiring chest compressions and/or defibrillation, i.e. a resuscitation/code-blue activation) occurring during the reporting period, per AHA Get With The Guidelines-Resuscitation event definition. Excludes patients with an existing do-not-resuscitate order who did not receive CPR. Tally each qualifying arrest event.",
+    "benchmark": "0 — track & RCA every event",
+    "benchmarkValue": 0,
+    "benchmarkNote": "No fixed external benchmark; tracked as an absolute event count and trended internally (lower is better). For context, published IHCA incidence is often normalized to roughly 1-10 per 1000 admissions, but the registry sets no fixed threshold.",
+    "goalDirection": "lower_is_better",
+    "reference": "American Heart Association Get With The Guidelines-Resuscitation (in-hospital cardiac arrest registry; cardiac arrest defined as pulselessness requiring chest compression and/or defibrillation)",
+    "referenceUrl": "https://www.heart.org/en/professional/quality-improvement/get-with-the-guidelines/get-with-the-guidelines-resuscitation"
+  },
+  {
+    "_id": "cardiac-arrest-survival-to-discharge-rate",
+    "canonicalName": "Cardiac Arrest Survival to Discharge Rate",
+    "aliases": [
+      "cardiac arrest survival rate"
+    ],
+    "order": 4,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Cardiac arrest patients surviving to hospital discharge",
+    "denLabel": "Patients with an in-hospital cardiac arrest with attempted resuscitation",
+    "numeratorDef": "Number of in-hospital cardiac arrest patients who survived to hospital discharge (alive at discharge) following resuscitation. Count each patient once per index arrest.",
+    "denominatorDef": "Number of patients who had an in-hospital cardiac arrest (pulseless event requiring chest compressions and/or defibrillation) with an attempted resuscitation during the reporting period (GWTG-Resuscitation index-event population; excludes patients with pre-existing do-not-resuscitate orders).",
+    "benchmark": "≥ 25%",
+    "benchmarkValue": 25,
+    "benchmarkNote": "Higher is better; AHA GWTG-R contemporary adult IHCA survival-to-discharge ~24% (benchmark ~25%)",
+    "goalDirection": "higher_is_better",
+    "reference": "American Heart Association Get With The Guidelines-Resuscitation; AHA Heart Disease & Stroke Statistics / 2025 ECC Guidelines",
+    "referenceUrl": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001372"
+  },
+  {
+    "_id": "catheter-associated-urinary-tract-infection-cauti-rate",
+    "canonicalName": "Catheter-Associated Urinary Tract Infection (CAUTI) Rate",
+    "aliases": [
+      "catheter-associated uti (cauti)",
+      "cauti rate (per 1000 cath-days)"
+    ],
+    "order": 5,
+    "formula": "rate1000",
+    "unit": "per 1000 catheter-days",
+    "numLabel": "CAUTIs",
+    "denLabel": "Urinary catheter-days",
+    "numeratorDef": "Number of CAUTI events meeting the NHSN UTI surveillance definition (symptomatic UTI/SUTI) in patients who had an indwelling urinary catheter in place for >2 consecutive days (day of catheter placement = Day 1) in an inpatient location on the date of event, with the catheter in place on that date or removed the day before. Count each qualifying event once.",
+    "denominatorDef": "Total number of indwelling urinary catheter-days, obtained by counting, once each day at the same time each day during the surveillance month, the number of patients in the location with one or more indwelling urinary catheters, and summing these daily counts over the month (electronic counts allowed if validated to within 5% of manual counts).",
+    "benchmark": "≤ 1 per 1000 catheter-days",
+    "benchmarkValue": 1,
+    "benchmarkNote": "NHSN primary benchmark is the SIR < 1.0 vs the NHSN baseline (fewer infections observed than predicted); pooled-mean CAUTI rate is roughly 1.0 per 1000 catheter-days but varies widely by unit type and is not an official fixed threshold",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 7: Urinary Tract Infection (CAUTI) Events; CDC NHSN SIR Guide (A Guide to the SIR)",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/7psccauticurrent.pdf"
+  },
+  {
+    "_id": "central-line-associated-bloodstream-infection-clabsi-rate",
+    "canonicalName": "Central Line-Associated Bloodstream Infection (CLABSI) Rate",
+    "aliases": [
+      "central line-associated bloodstream infection (clabsi)"
+    ],
+    "order": 6,
+    "formula": "rate1000",
+    "unit": "per 1000 central line-days",
+    "numLabel": "CLABSIs",
+    "denLabel": "Central line-days",
+    "numeratorDef": "Number of laboratory-confirmed bloodstream infections (LCBI) meeting the NHSN CLABSI definition: a primary LCBI not secondary to an infection at another site, in a patient with an eligible central line in place for >2 consecutive calendar days (following first access in an inpatient location) on the date of event, with the line present on that date or removed the day before.",
+    "denominatorDef": "Total number of central line-days, summed by counting the number of patients with one or more central lines in the location once each day at the same time each day during the surveillance month.",
+    "benchmark": "≤ 1 per 1000 central line-days",
+    "benchmarkValue": 1,
+    "benchmarkNote": "SIR < 1.0 vs NHSN baseline; pooled-mean CLABSI rate ~1.0 per 1000 central line-days (varies by unit type)",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 4: Bloodstream Infection Event (CLABSI); CDC NHSN SIR Guide",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/4psc_clabscurrent.pdf"
+  },
+  {
+    "_id": "deep-vein-thrombosis-vte-rate",
+    "canonicalName": "Deep vein thrombosis / VTE rate",
+    "aliases": [
+      "deep vein thrombosis (dvt)"
+    ],
+    "order": 7,
+    "formula": "rate1000",
+    "unit": "per 1000 surgical discharges",
+    "numLabel": "DVT/VTE cases",
+    "denLabel": "Surgical discharges",
+    "numeratorDef": "Number of surgical discharges with a secondary (not present-on-admission) ICD-10-CM diagnosis of PROXIMAL deep vein thrombosis or pulmonary embolism arising perioperatively (hospital-acquired VTE). Per AHRQ PSI-12, only proximal DVT/PE qualify; isolated distal/calf DVT is excluded. Excludes cases with a principal diagnosis of PE/proximal DVT, POA PE/proximal DVT, vena cava interruption or pulmonary thrombectomy on/before the first OR procedure day, ECMO, acute brain/spinal injury POA, and obstetric discharges.",
+    "denominatorDef": "Surgical discharges for patients age >=18 with any-listed ICD-10-PCS operating-room procedure code and a surgical MS-DRG (PSI-12 denominator). For general HA-VTE monitoring the denominator may be broadened to all eligible admissions, but the AHRQ-standard denominator is surgical discharges.",
+    "benchmark": "≤ 4 per 1000 surgical discharges",
+    "benchmarkValue": 4,
+    "benchmarkNote": "Lower is better; track against the AHRQ risk-adjusted PSI-12 national reference (observed rates roughly 3-5 per 1000 surgical discharges); no fixed zero target",
+    "goalDirection": "lower_is_better",
+    "reference": "AHRQ Quality Indicators, Patient Safety Indicator 12 (PSI-12): Perioperative Pulmonary Embolism or Deep Vein Thrombosis Rate (NQF #0450; titled 'Postoperative...' in older ICD-9 versions)",
+    "referenceUrl": "https://qualityindicators.ahrq.gov/Downloads/Modules/PSI/V2025/TechSpecs/PSI_12_Perioperative_Pulmonary_Embolism_or_Deep_Vein_Thrombosis_Rate.pdf"
+  },
+  {
+    "_id": "dialysis-adequacy-urr",
+    "canonicalName": "Dialysis Adequacy (URR)",
+    "aliases": [
+      "dialysis adequacy (urr)"
+    ],
+    "order": 8,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Pre-BUN minus post-BUN",
+    "denLabel": "Pre-dialysis BUN",
+    "numeratorDef": "(Pre-dialysis BUN minus post-dialysis BUN) for the treatment session; equivalently, count of HD patients meeting the adequacy target when reporting facility compliance",
+    "denominatorDef": "Pre-dialysis BUN drawn immediately before the session (post-BUN drawn per the slow-flow/stop-pump technique); for facility reporting, total HD patients with a measured URR in the period",
+    "benchmark": "≥ 65%",
+    "benchmarkValue": 65,
+    "benchmarkNote": ">= 65% minimum (target > 70%); equivalent to spKt/V minimum 1.2, target 1.4 for thrice-weekly HD",
+    "goalDirection": "higher_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guideline for Hemodialysis Adequacy: 2015 Update",
+    "referenceUrl": "https://www.ajkd.org/article/S0272-6386(15)01019-7/fulltext"
+  },
+  {
+    "_id": "dialysis-water-quality-compliance",
+    "canonicalName": "Dialysis Water Quality Compliance",
+    "aliases": [
+      "water quality compliance"
+    ],
+    "order": 9,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Water/dialysate samples within AAMI/ISO limits",
+    "denLabel": "Total water/dialysate samples tested",
+    "numeratorDef": "Number of dialysis water and dialysate microbiological/endotoxin samples meeting applicable ANSI/AAMI/ISO 23500 limits. For standard dialysis WATER: total viable count (TVC) < 100 CFU/mL (action level 50 CFU/mL) and endotoxin < 0.25 EU/mL (action level 0.125 EU/mL). For standard dialysate (dialysis fluid): TVC < 100 CFU/mL and endotoxin < 0.5 EU/mL (action levels 50 CFU/mL and 0.25 EU/mL). For ultrapure dialysate: TVC < 0.1 CFU/mL and endotoxin < 0.03 EU/mL. Cultures performed on low-nutrient media (e.g., TGEA/R2A) at 17-23 C for >=168 h; do not use nutrient-rich media.",
+    "denominatorDef": "Total number of scheduled water/dialysate quality samples tested in the period (microbiological cultures and endotoxin/LAL assays at required sampling points)",
+    "benchmark": "≥ 100%",
+    "benchmarkValue": 100,
+    "benchmarkNote": "100% of samples within ANSI/AAMI/ISO 23500 limits (water: TVC < 100 CFU/mL, endotoxin < 0.25 EU/mL; dialysate: TVC < 100 CFU/mL, endotoxin < 0.5 EU/mL)",
+    "goalDirection": "higher_is_better",
+    "reference": "ANSI/AAMI/ISO 23500 series (incl. ISO 13959 / ISO 23500-3 water for haemodialysis; ISO 23500-5 dialysis fluid) - Preparation and quality management of fluids for haemodialysis and related therapies; CMS ESRD Conditions for Coverage; CDC dialysis water quality recommendations",
+    "referenceUrl": "https://www.cdc.gov/dialysis-safety/hcp/recommendations-resources/water-use-in-dialysis.html"
+  },
+  {
+    "_id": "door-to-cath-lab",
+    "canonicalName": "Door to Cath Lab",
+    "aliases": [
+      "door to cath lab"
+    ],
+    "order": 10,
+    "formula": "count",
+    "unit": "minutes",
+    "numLabel": "Mean door-to-cath-lab time (minutes)",
+    "numeratorDef": "Mean time from ED arrival (door) to cath-lab arrival for eligible cardiac patients.",
+    "benchmark": "<= 90 minutes",
+    "benchmarkValue": 90,
+    "goalDirection": "lower_is_better",
+    "reference": "ACC/AHA STEMI pathway (door-to-cath / door-to-balloon)"
+  },
+  {
+    "_id": "door-to-balloon-time-90-min-compliance",
+    "canonicalName": "Door-to-Balloon Time <=90 min Compliance",
+    "aliases": [
+      "door-to-balloon compliance (<=90 min)",
+      "door-to-balloon compliance rate (<=90 min)"
+    ],
+    "order": 11,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "STEMI patients with primary PCI within 90 min",
+    "denLabel": "STEMI patients receiving primary PCI",
+    "numeratorDef": "Number of AMI/STEMI (ST-elevation or new LBBB on ECG closest to arrival) patients whose interval from hospital arrival (door) to first device deployment / balloon inflation during primary PCI is <= 90 minutes. Count each qualifying patient once.",
+    "denominatorDef": "Number of AMI patients with ST-segment elevation or LBBB on the ECG closest to arrival who receive primary PCI as the reperfusion strategy during the hospital stay (CMS CMS53v7 / AMI-8a initial population: patients >=18 yr with STEMI undergoing primary PCI). Exclude transfers-in, fibrinolytic patients, and documented contraindication/delay reasons per measure spec.",
+    "benchmark": "≥ 90%",
+    "benchmarkValue": 90,
+    "benchmarkNote": ">= 90% of primary-PCI STEMI patients treated within 90 minutes (each individual case target door-to-balloon <= 90 min; ACC/AHA Class I). Original ACC D2B Alliance population goal was >=75%; high performers reach ~85-90%+.",
+    "goalDirection": "higher_is_better",
+    "reference": "CMS/Joint Commission measure CMS53v7 / AMI-8a 'Primary PCI Received Within 90 Minutes of Hospital Arrival' (NQF #0163); ACC/AHA STEMI guideline & performance measures",
+    "referenceUrl": "https://ecqi.healthit.gov/ecqm/eh/2019/cms053v7"
+  },
+  {
+    "_id": "hand-hygiene-compliance-doctors",
+    "canonicalName": "Hand Hygiene Compliance - Doctors",
+    "aliases": [
+      "hand hygiene compliance - doctors"
+    ],
+    "order": 12,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Hand hygiene actions performed by doctors",
+    "denLabel": "Hand hygiene opportunities observed for doctors",
+    "numeratorDef": "Number of observed hand hygiene actions performed (alcohol-based handrub OR soap-and-water handwash) by DOCTORS / medical staff when an opportunity occurs, via WHO 'My 5 Moments' direct observation.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed for DOCTORS / medical staff, where an opportunity is any of the WHO 5 Moments (before patient contact; before aseptic task; after body fluid exposure risk; after patient contact; after contact with patient surroundings). Simultaneous indications = one opportunity.",
+    "benchmark": "≥ 80%",
+    "benchmarkValue": 80,
+    "benchmarkNote": ">= 80% compliance (institutional/program target; not a WHO- or Joint Commission-mandated threshold)",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), 'My 5 Moments for Hand Hygiene' and WHO Hand Hygiene Technical Reference Manual (compliance = actions/opportunities x 100; stratification by professional category recommended)",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  {
+    "_id": "hand-hygiene-compliance-nurses",
+    "canonicalName": "Hand Hygiene Compliance - Nurses",
+    "aliases": [
+      "hand hygiene compliance - nurses"
+    ],
+    "order": 13,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Hand hygiene actions performed by nurses",
+    "denLabel": "Hand hygiene opportunities observed for nurses",
+    "numeratorDef": "Number of observed hand hygiene actions performed (alcohol-based handrub OR soap-and-water handwash) by NURSES / nursing staff when an opportunity occurs, via WHO 'My 5 Moments' direct observation.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed for NURSES / nursing staff, where an opportunity is any of the WHO 5 Moments (before patient contact; before aseptic task; after body fluid exposure risk; after patient contact; after contact with patient surroundings). Simultaneous/overlapping indications during a single care sequence count as ONE opportunity.",
+    "benchmark": "≥ 80%",
+    "benchmarkValue": 80,
+    "benchmarkNote": ">= 80% compliance",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), 'Hand hygiene as a performance indicator' / 'My 5 Moments for Hand Hygiene' (defines the actions/opportunities formula). Note: the >=80% target is a commonly used institutional/operational benchmark, NOT an official numeric standard of WHO or The Joint Commission.",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  {
+    "_id": "hand-hygiene-compliance-others",
+    "canonicalName": "Hand Hygiene Compliance - Others",
+    "aliases": [
+      "hand hygiene compliance - others"
+    ],
+    "order": 14,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Hand hygiene actions performed by other staff",
+    "denLabel": "Hand hygiene opportunities observed for other staff",
+    "numeratorDef": "Number of observed hand hygiene actions performed (alcohol-based handrub OR soap-and-water handwash) by healthcare workers in the WHO 'Other health-care worker' professional category (therapists e.g. physiotherapists/occupational/speech therapists; technicians e.g. radiology/laboratory/cardiology; dieticians, dentists, social workers, students, and lay persons providing care) when an opportunity occurs, via WHO 'My 5 Moments' direct observation.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed for healthcare workers in the WHO 'Other health-care worker' professional category, where an opportunity is any of the WHO 5 Moments (before patient contact; before aseptic task; after body fluid exposure risk; after patient contact; after contact with patient surroundings). Simultaneous indications count as one opportunity.",
+    "benchmark": "≥ 80%",
+    "benchmarkValue": 80,
+    "benchmarkNote": ">= 80% compliance",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), Part III Ch.1 'Hand hygiene as a performance indicator' and 'My 5 Moments for Hand Hygiene'; benchmark per The Joint Commission NPSG.07.01.01 hand hygiene standard",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  {
+    "_id": "hand-hygiene-compliance-overall",
+    "canonicalName": "Hand Hygiene Compliance - Overall",
+    "aliases": [
+      "hand hygiene compliance",
+      "hand hygiene compliance (hospital)",
+      "hand hygiene compliance - overall"
+    ],
+    "order": 15,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Hand hygiene actions performed",
+    "denLabel": "Hand hygiene opportunities observed",
+    "numeratorDef": "Number of observed hand hygiene actions performed (rubbing hands with alcohol-based handrub OR washing with soap and water) when an opportunity occurs, counted across ALL healthcare worker categories via direct observation using the WHO 'My 5 Moments for Hand Hygiene' method.",
+    "denominatorDef": "Total number of hand hygiene opportunities observed across ALL healthcare worker categories. An opportunity is defined by one or more of the WHO 5 Moments (before touching a patient; before clean/aseptic procedure; after body fluid exposure risk; after touching a patient; after touching patient surroundings). Several indications arising simultaneously count as a single opportunity.",
+    "benchmark": "≥ 80%",
+    "benchmarkValue": 80,
+    "benchmarkNote": ">= 80% compliance",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO Guidelines on Hand Hygiene in Health Care (2009), 'My 5 Moments for Hand Hygiene' and WHO Hand Hygiene Technical Reference Manual; benchmark reflects a commonly used operational target (The Joint Commission no longer mandates a fixed numeric compliance percentage).",
+    "referenceUrl": "https://www.ncbi.nlm.nih.gov/books/NBK144028/"
+  },
+  {
+    "_id": "healthcare-associated-infection-hai-rate",
+    "canonicalName": "Healthcare-Associated Infection (HAI) Rate",
+    "aliases": [
+      "infection rate"
+    ],
+    "order": 16,
+    "formula": "rate1000",
+    "unit": "per 1000 patient-days",
+    "numLabel": "HAI events",
+    "denLabel": "Patient-days (or device-days)",
+    "numeratorDef": "Number of healthcare-associated infections meeting the applicable NHSN site-specific surveillance definition during the surveillance period, where the date of event occurs on or after the 3rd calendar day of admission to an inpatient location (day of admission = calendar day 1), i.e., not present or incubating on admission. For device-associated infections use the corresponding device-day denominator; for overall HAI surveillance use patient-days.",
+    "denominatorDef": "Total patient-days for overall HAI rates (sum of the daily census over the surveillance month), or the relevant device-days for device-associated infection rates, counted once per patient per day at a consistent time each day.",
+    "benchmark": "≤ 5 per 1000 patient-days",
+    "benchmarkValue": 5,
+    "benchmarkNote": "Lower is better; no universal fixed target. NHSN's authoritative benchmark is the Standardized Infection Ratio (SIR = observed/expected vs. risk-adjusted national baseline, target < 1.0), not a fixed rate. Overall HAI incidence is indicatively ~2-5 per 1000 patient-days and should trend downward facility-wide.",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 2 (Identifying HAIs in NHSN / Present on Admission vs HAI); WHO Guidelines on Core Components of IPC Programmes",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/2psc_identifyinghais_nhsncurrent.pdf"
+  },
+  {
+    "_id": "hospital-acquired-pressure-ulcer-hapu-incidence-rate",
+    "canonicalName": "Hospital-Acquired Pressure Ulcer (HAPU) Incidence Rate",
+    "aliases": [
+      "bed sore (pressure injury)",
+      "hospital-acquired pressure ulcer (hapu)"
+    ],
+    "order": 17,
+    "formula": "rate1000",
+    "unit": "per 1000 patient-days",
+    "numLabel": "Patients who developed ≥ 1 HAPU (Stage 2+)",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Number of patients who developed one or more NEW hospital-acquired (nosocomial) pressure ulcers of Stage 2 or greater (including Stage 2, Stage 3, Stage 4, unstageable, and deep tissue injury) per NPIAP staging during the reporting period. Hospital-acquired = not present on admission; identified on/after the assessment that follows admission. A patient is counted once regardless of the number of ulcers.",
+    "denominatorDef": "Total number of patient-days for the same unit and period, obtained by summing the daily inpatient census over the month. Rate = (patients who developed ≥ 1 HAPU ÷ total patient-days) × 1,000.",
+    "benchmark": "≤ 0.75 per 1000 patient-days",
+    "benchmarkValue": 0.75,
+    "benchmarkNote": "HAPU incidence rate = (patients with ≥ 1 new hospital-acquired pressure ulcer ÷ patient-days) × 1,000 — the standard for ongoing internal clinical quality tracking. < 0.75 per 1000 patient-days is the commonly used NDNQI-derived benchmark (lower is better; aspirational target 0). Note: the one-day prevalence survey (~≤ 3.6% of patients surveyed, NDNQI) is a DIFFERENT metric — do not mix the two.",
+    "goalDirection": "lower_is_better",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI) Pressure Injury Incidence; AHRQ Preventing Pressure Ulcers in Hospitals Toolkit (incidence & prevalence measurement); NPIAP (formerly NPUAP/EPUAP) International Pressure Injury Staging",
+    "referenceUrl": "https://www.ahrq.gov/patient-safety/settings/hospital/resource/pressureulcer/tool/put5.html"
+  },
+  {
+    "_id": "icu-readmission-rate-within-48-hours",
+    "canonicalName": "ICU Readmission Rate within 48 Hours",
+    "aliases": [
+      "icu re-admission within 48 hours",
+      "re-admission within 48 hours (icu)",
+      "return to icu"
+    ],
+    "order": 18,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "ICU readmissions within 48h",
+    "denLabel": "ICU discharges/transfers",
+    "numeratorDef": "Number of patients readmitted to (returned to) the ICU within 48 hours of being discharged or transferred out of the ICU to a lower level of care (ward/step-down) during the reporting period. Count each unplanned return; planned/scheduled returns (e.g., staged post-operative ICU admissions) are typically excluded. A patient is counted once per qualifying readmission event.",
+    "denominatorDef": "Total number of patients discharged or transferred alive from the ICU to a lower level of care (ward/step-down) during the reporting period (the population at risk of returning). ICU deaths and patients discharged directly home or to another facility (not at risk of ICU return) are excluded from the at-risk denominator.",
+    "benchmark": "≤ 4%",
+    "benchmarkValue": 4,
+    "benchmarkNote": "<= 4% of ICU discharges (soft target; no single hard accreditation threshold). The 48h subset typically runs ~2-2.5%; all-cause/longer-window readmission ~6-7%. Reported rates vary widely (~1.7% up to ~15% when unexpected death is bundled in) by case-mix and discharge policy.",
+    "goalDirection": "lower_is_better",
+    "reference": "Society of Critical Care Medicine (SCCM) Quality Indicators Committee (48h ICU readmission listed as a performance indicator); Woldhek AL et al., 'Readmission of ICU patients: A quality indicator?', J Crit Care 2017;38:328-334",
+    "referenceUrl": "https://pubmed.ncbi.nlm.nih.gov/27939901/"
+  },
+  {
+    "_id": "incidence-of-cautery-burn",
+    "canonicalName": "Incidence of Cautery Burn",
+    "aliases": [
+      "incidence of cautery burn"
+    ],
+    "order": 19,
+    "formula": "count",
+    "unit": "count",
+    "numLabel": "Cautery / diathermy burn events",
+    "numeratorDef": "Electrosurgical (cautery/diathermy) burn injuries to patients.",
+    "benchmark": "0 (zero defect)",
+    "benchmarkValue": 0,
+    "goalDirection": "lower_is_better",
+    "reference": "Electrosurgical safety (AORN)"
+  },
+  {
+    "_id": "induction-completion-within-30-days",
+    "canonicalName": "Induction Completion Within 30 Days",
+    "aliases": [
+      "induction completion within 30 days"
+    ],
+    "order": 20,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "New employees who completed induction within 30 days of joining",
+    "denLabel": "New employees who joined in the period",
+    "numeratorDef": "Number of new employees who completed their mandatory induction/orientation training within 30 days (one month) of their date of joining.",
+    "denominatorDef": "Total number of new employees who joined during the surveillance period. Compliance % = (completed induction within 30 days / total new joiners) x 100.",
+    "benchmark": "≥ 100%",
+    "benchmarkValue": 100,
+    "benchmarkNote": "100% of new hires inducted within 30 days",
+    "goalDirection": "higher_is_better",
+    "reference": "NABH Accreditation Standards (Hospitals), Human Resource Management (HRM) - Standard HRM.3: staff are provided induction training at the time of joining; objective element requires induction within one month of joining (CORE)",
+    "referenceUrl": "https://nabh.co/hospitals/"
+  },
+  {
+    "_id": "intradialytic-hypotension-rate",
+    "canonicalName": "Intradialytic Hypotension Rate",
+    "aliases": [
+      "hypotension rate",
+      "intradialytic hypotension"
+    ],
+    "order": 21,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "HD sessions with intradialytic hypotension",
+    "denLabel": "Total HD sessions",
+    "numeratorDef": "Number of hemodialysis sessions during which intradialytic hypotension occurred, defined per KDOQI as a decrease in systolic BP >= 20 mmHg (or a fall in mean arterial pressure >= 10 mmHg) associated with symptoms (e.g., cramps, nausea, dizziness, fainting) and requiring nursing intervention (e.g., stopping ultrafiltration and/or saline infusion)",
+    "denominatorDef": "Total number of hemodialysis sessions delivered in the reporting period",
+    "benchmark": "≤ 20%",
+    "benchmarkValue": 20,
+    "benchmarkNote": "<= 20% of sessions (KDOQI background prevalence ~20-30%, about 25%; lower is better)",
+    "goalDirection": "lower_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guidelines for Cardiovascular Disease in Dialysis Patients - Intradialytic Hypotension",
+    "referenceUrl": "https://kidneyfoundation.cachefly.net/professionals/KDOQI/guidelines_cvd/intradialytic.htm"
+  },
+  {
+    "_id": "intrapartum-fetal-heart-rate-monitoring-compliance",
+    "canonicalName": "Intrapartum Fetal Heart Rate Monitoring Compliance",
+    "aliases": [
+      "fetal heart rate monitoring compliance"
+    ],
+    "order": 22,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Labours with FHR monitored & documented per protocol",
+    "denLabel": "Labours requiring intrapartum FHR monitoring",
+    "numeratorDef": "Number of monitored labours in which intrapartum fetal heart rate was assessed and documented at the protocol-required frequency and method (e.g. intermittent auscultation immediately after a palpated contraction for >=1 minute, at least every 15 minutes in established first stage and at least every 5 minutes in second stage for low-risk women, or continuous CTG when antenatal/intrapartum risk factors are present). Counted by chart/partogram audit as fully compliant only when all required FHR entries are present at the required interval and method. State whether scoring per labour or per assessment opportunity and keep it consistent.",
+    "denominatorDef": "Total number of labours audited that required intrapartum fetal heart rate monitoring during the period (eligible labours). If scoring at the observation level, the denominator is instead the total number of required FHR-assessment opportunities; choose one level and apply it consistently across the numerator and denominator.",
+    "benchmark": "≥ 100%",
+    "benchmarkValue": 100,
+    "benchmarkNote": "Target 100% (full compliance); >=90% commonly used as an interim audit threshold",
+    "goalDirection": "higher_is_better",
+    "reference": "NICE NG229 Fetal monitoring in labour (2022); FIGO consensus guidelines on intrapartum fetal monitoring (2015); ACOG Clinical Practice Guideline No. 10: Intrapartum Fetal Heart Rate Monitoring: Interpretation and Management (Oct 2025), which replaces the retired Practice Bulletins No. 106 (2009) and No. 116 (2010)",
+    "referenceUrl": "https://www.nice.org.uk/guidance/ng229/chapter/Recommendations"
+  },
+  {
+    "_id": "mandatory-training-compliance",
+    "canonicalName": "Mandatory Training Compliance",
+    "aliases": [
+      "mandatory training compliance"
+    ],
+    "order": 23,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Staff who completed required mandatory training",
+    "denLabel": "Staff required to complete the training",
+    "numeratorDef": "Number of staff who completed all assigned mandatory/statutory training (e.g., infection control, biomedical waste management, fire & emergency, patient safety, BLS) within the required cycle/timeframe.",
+    "denominatorDef": "Total number of staff who were due/required to complete that mandatory training during the surveillance period.",
+    "benchmark": "≥ 100%",
+    "benchmarkValue": 100,
+    "benchmarkNote": "100% (target); high performers >= 90-95%",
+    "goalDirection": "higher_is_better",
+    "reference": "NABH Accreditation Standards for Hospitals - Human Resource Management (HRM) chapter (HRM.3 induction training, HRM.4 ongoing professional training & development, HRM.5 job-specific training, HRM.6 safety & quality training)",
+    "referenceUrl": "https://nabh.co/hospitals/"
+  },
+  {
+    "_id": "medication-administration-error-rate",
+    "canonicalName": "Medication Administration Error Rate",
+    "aliases": [
+      "medication administration error",
+      "medication administration error rate",
+      "medication error"
+    ],
+    "order": 24,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Number of medication administration errors",
+    "denLabel": "Total doses administered (opportunities for error)",
+    "numeratorDef": "Number of medication administration errors: doses given incorrectly at the administration stage per the NCC-MERP definition (wrong drug, wrong dose, wrong route, wrong time/rate, wrong patient, wrong preparation/technique, or an omitted / unauthorised dose), detected by direct observation or incident report.",
+    "denominatorDef": "Total Opportunities for Error (TOE) = total doses administered during the period (doses given plus doses omitted). Rate = (number of medication administration errors / total doses administered) x 100.",
+    "benchmark": "0% (zero-error target)",
+    "benchmarkValue": 0,
+    "benchmarkNote": "NCC-MERP: there is no acceptable incidence rate for medication errors; operational target is 0% with continual reduction toward zero. Some programmes benchmark against a < 5% threshold using the direct-observation method (Barker KN et al.).",
+    "goalDirection": "lower_is_better",
+    "reference": "NCC-MERP Index for Categorizing Medication Errors (2001, rev. 2022); Barker KN et al. — medication administration error direct-observation method",
+    "referenceUrl": "https://www.nccmerp.org/statement-medication-error-rates"
+  },
+  {
+    "_id": "needle-stick-sharps-injury-rate",
+    "canonicalName": "Needle Stick / Sharps Injury Rate",
+    "aliases": [
+      "needle stick / sharps injury",
+      "needle stick injury",
+      "needle stick injury (nsi)"
+    ],
+    "order": 25,
+    "formula": "rate100",
+    "unit": "per 100 healthcare workers",
+    "numLabel": "Number of NSI cases",
+    "denLabel": "Total healthcare workers",
+    "numeratorDef": "Count every reported needlestick / sharps (NSI) injury sustained by a healthcare worker during the month; log each case with its injured staff member (victim). Data collectors enter only the NSI cases (one per incident) — they do NOT enter the denominator.",
+    "denominatorDef": "Total number of healthcare workers at risk (the hospital's staff headcount). This is a fixed figure set by the ADMINISTRATOR (not by data collectors). Rate = (NSI cases / total healthcare workers) x 100.",
+    "benchmark": "≤ 2 per 100 FTE per year",
+    "benchmarkValue": 2,
+    "benchmarkNote": "<= 2.0 injuries per 100 FTE per year (US national EXPO-S.T.O.P./EPINet benchmark; rate has held near 1.9-2.0 since 2021); aspirational target 0. Note: nurse-specific rates run higher (~4-5 per 100 FTE).",
+    "goalDirection": "lower_is_better",
+    "reference": "AOHP EXPO-S.T.O.P. national survey (Grimmond/Good); International Safety Center EPINet (Exposure Prevention Information Network); OSHA Bloodborne Pathogens Standard 29 CFR 1910.1030.",
+    "referenceUrl": "https://internationalsafetycenter.org/exposure-data-network-epinet/",
+    "denAdminOnly": true,
+    "victimField": true
+  },
+  {
+    "_id": "ot-utilization-rate",
+    "canonicalName": "OT Utilization Rate",
+    "aliases": [
+      "ot utilization rate"
+    ],
+    "order": 26,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "OT in-use time (minutes)",
+    "denLabel": "OT available time (minutes)",
+    "numeratorDef": "Operating-theatre time actually used for surgery.",
+    "denominatorDef": "Total scheduled / available operating-theatre time.",
+    "benchmark": ">= 75%",
+    "benchmarkValue": 75,
+    "goalDirection": "higher_is_better",
+    "reference": "OT efficiency metric (AORN; anaesthesia OT utilisation)"
+  },
+  {
+    "_id": "out-patient-fall",
+    "canonicalName": "Out Patient Fall",
+    "aliases": [
+      "out patient fall",
+      "out-patient fall",
+      "outpatient fall"
+    ],
+    "order": 27,
+    "formula": "rate1000",
+    "unit": "per 1000 out-patient visits",
+    "numLabel": "Number of patient falls",
+    "denLabel": "Out-patient visits",
+    "numeratorDef": "Total number of patient falls (with or without injury, whether or not assisted by a staff member) occurring on the eligible reporting unit during the calendar month. A fall = an unplanned descent to the floor (or extension of the floor, e.g., trash can or other equipment) with or without injury. Includes assisted falls and falls in which the patient was found on the floor. Count each fall event; a patient who falls more than once is counted each time.",
+    "denominatorDef": "Total number of out-patient visits during the reporting period. Rate = (falls ÷ out-patient visits) × 1,000.",
+    "benchmark": "≤ 3.3 per 1000 out-patient visits",
+    "benchmarkValue": 3.3,
+    "benchmarkNote": "<= 3.3 falls per 1000 out-patient visits (adapted from the NDNQI inpatient median; set your own out-patient target if agreed differently)",
+    "goalDirection": "lower_is_better",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI), a Press Ganey solution (measure copyrighted by the American Nurses Association); NQF/CBE #0141 Patient Fall Rate, a nursing-sensitive indicator (now maintained under the Partnership for Quality Measurement / Battelle CBE framework)",
+    "referenceUrl": "https://p4qm.org/measures/0141"
+  },
+  {
+    "_id": "partograph-labour-care-guide-compliance",
+    "canonicalName": "Partograph / Labour Care Guide Compliance",
+    "aliases": [
+      "partograph compliance"
+    ],
+    "order": 28,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Eligible labours with partograph correctly used/completed",
+    "denLabel": "Eligible women in active labour",
+    "numeratorDef": "Number of eligible women in active labour for whom the partograph (or WHO Labour Care Guide) was correctly commenced and completed per protocol — i.e. cervical dilatation, fetal heart rate, contractions, descent, maternal vitals and the alert/action line plotted at the required intervals. Determined by retrospective chart audit against a defined completeness checklist.",
+    "denominatorDef": "Total number of eligible women in active labour (vaginal-birth pathway) audited during the period for whom a partograph/Labour Care Guide should have been used. Exclude pre-labour caesarean and other women in whom partograph monitoring is not indicated.",
+    "benchmark": "≥ 100%",
+    "benchmarkValue": 100,
+    "benchmarkNote": "Target 100% (full compliance); commonly set >=90% as an interim quality threshold",
+    "goalDirection": "higher_is_better",
+    "reference": "WHO recommendations: intrapartum care for a positive childbirth experience (2018, ISBN 9789241550215) and WHO Labour Care Guide: User's Manual (2020, ISBN 9789240017566); NABH accreditation standards (Nursing Excellence / Nursing Quality Indicators) as general accreditation context",
+    "referenceUrl": "https://www.who.int/publications/i/item/9789240017566"
+  },
+  {
+    "_id": "patient-falls-total-fall-rate",
+    "canonicalName": "Patient Falls (Total Fall Rate)",
+    "aliases": [
+      "in patient fall",
+      "in-patient fall",
+      "inpatient fall",
+      "patient fall"
+    ],
+    "order": 29,
+    "formula": "rate1000",
+    "unit": "per 1000 patient-days",
+    "numLabel": "Number of patient falls",
+    "denLabel": "Patient-days",
+    "numeratorDef": "Total number of patient falls (with or without injury, whether or not assisted by a staff member) occurring on the eligible reporting unit during the calendar month. A fall = an unplanned descent to the floor (or extension of the floor, e.g., trash can or other equipment) with or without injury. Includes assisted falls and falls in which the patient was found on the floor. Count each fall event; a patient who falls more than once is counted each time.",
+    "denominatorDef": "Total patient-days for the eligible reporting unit during the same calendar month. Patient-days = sum of the daily inpatient census (typically counted at a consistent time each day, e.g., midnight) over the reporting period. Multiply the falls/patient-day ratio by 1000.",
+    "benchmark": "≤ 3.3 per 1000 patient-days",
+    "benchmarkValue": 3.3,
+    "benchmarkNote": "<= 3.3 falls per 1000 patient-days (NDNQI national median; lower is better)",
+    "goalDirection": "lower_is_better",
+    "reference": "National Database of Nursing Quality Indicators (NDNQI), a Press Ganey solution (measure copyrighted by the American Nurses Association); NQF/CBE #0141 Patient Fall Rate, a nursing-sensitive indicator (now maintained under the Partnership for Quality Measurement / Battelle CBE framework)",
+    "referenceUrl": "https://p4qm.org/measures/0141"
+  },
+  {
+    "_id": "patient-volume",
+    "canonicalName": "Patient Volume",
+    "aliases": [
+      "patient volume"
+    ],
+    "order": 30,
+    "formula": "direct",
+    "unit": "count",
+    "numLabel": "Number of patients",
+    "denLabel": "Period",
+    "numeratorDef": "Count of patients seen/treated/admitted during the reporting period (e.g., OPD visits, IP admissions, ED visits, or total patient encounters depending on the unit). A raw workload/census/throughput figure, not a quality rate.",
+    "denominatorDef": "None - this is a direct count reported per period (day/month/quarter/year). Patient volume commonly serves as the denominator base (e.g., patient-days, admissions, encounters) for other rate-based indicators rather than having its own denominator.",
+    "benchmark": "0 — track & RCA every event",
+    "benchmarkValue": 0,
+    "benchmarkNote": "Not applicable - operational/workload volume metric monitored for trend and capacity planning; no authoritative clinical benchmark",
+    "goalDirection": "higher_is_better",
+    "reference": "Operational hospital statistics / NABH Hospital Accreditation Programme workload & utilization indicators (no external clinical surveillance standard)",
+    "referenceUrl": "https://nabh.co/programmes/hospitals-accreditation-programme-hco/"
+  },
+  {
+    "_id": "percentage-of-cases-with-intraoperative-change-in-the-planne",
+    "canonicalName": "Percentage of Cases with Intraoperative Change in the Planned Surgery",
+    "aliases": [
+      "percentage of cases with intraoperative change in the planned surgery"
+    ],
+    "order": 31,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Cases with intraoperative change",
+    "denLabel": "Total surgeries",
+    "numeratorDef": "Cases where the planned surgical procedure was changed during the operation due to unexpected findings or complications.",
+    "denominatorDef": "Total number of surgeries performed in the reporting period.",
+    "benchmark": "≤ 2%",
+    "benchmarkValue": 2,
+    "goalDirection": "lower_is_better"
+  },
+  {
+    "_id": "percentage-of-compliance-with-the-organization-s-surgical-sa",
+    "canonicalName": "Percentage of Compliance with the Organization's Surgical Safety Protocol (Prevention of Wrong Patient, Wrong Site, and Wrong Surgery)",
+    "aliases": [
+      "percentage of compliance with the organization's surgical safety protocol (prevention of wrong patient, wrong site, and wrong surgery)"
+    ],
+    "order": 32,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Surgeries fully compliant with the surgical safety protocol",
+    "denLabel": "Surgeries performed / audited",
+    "numeratorDef": "Number of surgeries during the month in which the organization's surgical safety protocol was FULLY followed — correct patient, correct site and correct procedure verified at every required step (pre-operative verification, surgical site marking, and time-out before incision per the WHO Surgical Safety Checklist / JCI IPSG.4).",
+    "denominatorDef": "Total number of surgeries performed (or audited) in the same month. Compliance % = (fully compliant surgeries / total surgeries) x 100.",
+    "benchmark": "100%",
+    "benchmarkValue": 100,
+    "goalDirection": "higher_is_better",
+    "reference": "NABH MOM · WHO Surgical Safety Checklist (2009) · JCI IPSG.4 (Universal Protocol)"
+  },
+  {
+    "_id": "percentage-of-rescheduled-surgeries",
+    "canonicalName": "Percentage of Rescheduled Surgeries",
+    "aliases": [
+      "percentage of rescheduled surgeries"
+    ],
+    "order": 33,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Rescheduled surgeries",
+    "denLabel": "Total scheduled surgeries",
+    "numeratorDef": "Surgeries postponed and assigned a new date before being completed.",
+    "denominatorDef": "Total scheduled surgeries in the reporting period.",
+    "benchmark": "≤ 5%",
+    "benchmarkValue": 5,
+    "goalDirection": "lower_is_better"
+  },
+  {
+    "_id": "percentage-of-unplanned-return-to-the-operating-theatre-ot",
+    "canonicalName": "Percentage of Unplanned Return to the Operating Theatre (OT)",
+    "aliases": [
+      "percentage of unplanned return to the operating theatre (ot)"
+    ],
+    "order": 34,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Unplanned return surgeries",
+    "denLabel": "Total surgeries",
+    "numeratorDef": "Number of patients requiring an unexpected return to the OT due to complications related to the initial surgery during the reporting period.",
+    "denominatorDef": "Total number of surgeries performed in the reporting period.",
+    "benchmark": "≤ 1%",
+    "benchmarkValue": 1,
+    "goalDirection": "lower_is_better"
+  },
+  {
+    "_id": "phlebitis-rate-peripheral-iv",
+    "canonicalName": "Phlebitis rate (peripheral IV)",
+    "aliases": [
+      "phlebitis"
+    ],
+    "order": 35,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Phlebitis events",
+    "denLabel": "Peripheral IV catheters",
+    "numeratorDef": "Number of peripheral intravenous (PIV) catheters that developed phlebitis (typically Visual Infusion Phlebitis [VIP] score >=2, i.e. pain plus erythema and/or induration/swelling along the vein) during the surveillance period. Count each affected catheter once.",
+    "denominatorDef": "Total number of peripheral IV catheters in place / inserted during the same surveillance period.",
+    "benchmark": "≤ 5%",
+    "benchmarkValue": 5,
+    "benchmarkNote": "<= 5% of peripheral IV catheters",
+    "goalDirection": "lower_is_better",
+    "reference": "Infusion Nurses Society (INS), Infusion Therapy Standards of Practice (8th ed., 2021), Journal of Infusion Nursing 44(1S):S1-S224 - Phlebitis standard",
+    "referenceUrl": "https://www.ins1.org/wp-content/uploads/2021/07/JIN-D-21-00031_SOP-Update-Hi-resWithout_Folio-7.13.21.pdf"
+  },
+  {
+    "_id": "post-pci-complication-rate",
+    "canonicalName": "Post-PCI Complication Rate",
+    "aliases": [
+      "post-pci complication"
+    ],
+    "order": 36,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Number of PCI procedures with a complication",
+    "denLabel": "Number of PCI procedures",
+    "numeratorDef": "Count of PCI procedures with any in-hospital post-procedure complication as defined by the NCDR CathPCI Registry — including access-site/vascular complications (hematoma, pseudoaneurysm, AV fistula, retroperitoneal bleed, dissection/occlusion requiring treatment), major bleeding (per NCDR bleeding definition: bleeding within 72h, hemorrhagic stroke, cardiac tamponade, post-PCI transfusion when preprocedure Hgb >8 g/dL, or absolute Hgb drop >=3 g/dL when preprocedure Hgb <=16 g/dL), periprocedural MI, stroke/TIA, emergency CABG, new dialysis/acute kidney injury (AKIN stage 1+ or new dialysis), cardiac tamponade, or death — occurring from procedure start until discharge.",
+    "denominatorDef": "Total number of PCI procedures performed in the same period. Rate = (PCIs with complication / total PCIs) x 100. NOTE: this unadjusted composite is a local quality-tracking metric, NOT an official NCDR surveillance measure. NCDR formally reports complications as separate RISK-ADJUSTED / risk-standardized outcome measures (in-hospital risk-adjusted mortality, risk-adjusted major bleeding, risk-adjusted AKI), because raw rates are confounded by patient risk mix.",
+    "benchmark": "≤ 5%",
+    "benchmarkValue": 5,
+    "benchmarkNote": "<= 5% of PCI procedures (generic composite target; not an official NCDR threshold). Real-world overall periprocedural complication ~2-3.5%; component targets lower (major bleeding ~1-2%). Prefer NCDR risk-adjusted, NQF-endorsed component measures where available.",
+    "goalDirection": "lower_is_better",
+    "reference": "American College of Cardiology NCDR CathPCI Registry — outcome/performance measure definitions (risk-adjusted mortality, bleeding, AKI; mortality & bleeding NQF-endorsed)",
+    "referenceUrl": "https://www.ncdr.com/WebNCDR/docs/default-source/ncdr-general-documents/cathpci-registry-2014-sample-report.pdf?sfvrsn=2"
+  },
+  {
+    "_id": "post-procedure-complication-rate",
+    "canonicalName": "Post-Procedure Complication Rate",
+    "aliases": [
+      "post-procedure complication"
+    ],
+    "order": 37,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Number of procedures with a complication",
+    "denLabel": "Number of procedures performed",
+    "numeratorDef": "Count of procedures with any post-procedure complication (e.g., bleeding/hematoma, infection, perforation, vascular injury, adverse event requiring intervention) identified from the time of procedure through the defined follow-up/discharge window (commonly up to 30 days for invasive/operative procedures), per the relevant procedure-specific surveillance definition.",
+    "denominatorDef": "Total number of procedures of that type performed during the same period. Rate = (procedures with complication / total procedures) x 100.",
+    "benchmark": "≤ 5%",
+    "benchmarkValue": 5,
+    "benchmarkNote": "<= 5% of procedures (placeholder; strongly procedure-dependent)",
+    "goalDirection": "lower_is_better",
+    "reference": "AHRQ Quality Indicators / Patient Safety Indicators (postoperative complication rates) and NABH quality indicators; refine with procedure-specific registries (e.g., ACC NCDR for cardiac procedures)",
+    "referenceUrl": "https://qualityindicators.ahrq.gov/measures/psi_resources"
+  },
+  {
+    "_id": "puncture-site-hematoma-rate",
+    "canonicalName": "Puncture Site Hematoma Rate",
+    "aliases": [
+      "puncture site hematoma"
+    ],
+    "order": 38,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Number of puncture-site hematomas",
+    "denLabel": "Number of vascular access procedures",
+    "numeratorDef": "Count of clinically significant access-site hematomas occurring after a percutaneous vascular access procedure (e.g., cardiac catheterization/PCI), within 72 hours of the procedure (or by discharge if earlier), per NCDR CathPCI access-site complication definitions. A reportable/clinically significant hematoma is one associated with a hemoglobin drop >=3 g/dL, requiring blood transfusion, or requiring surgical or percutaneous intervention.",
+    "denominatorDef": "Total number of percutaneous vascular access procedures performed in the same period. Rate = (puncture-site hematomas / access procedures) x 100.",
+    "benchmark": "≤ 2%",
+    "benchmarkValue": 2,
+    "benchmarkNote": "<= 2% of access procedures (route-dependent: transradial ~1-2%; transfemoral typically 2-12%)",
+    "goalDirection": "lower_is_better",
+    "reference": "ACC NCDR CathPCI Registry — access-site / vascular (hematoma) complication definitions; SCAI quality-improvement guidance on access-site bleeding (transradial best-practices consensus & femoral access-site bleeding QI)",
+    "referenceUrl": "https://www.ncdr.com/WebNCDR/docs/default-source/ncdr-general-documents/cathpci-registry-2014-sample-report.pdf?sfvrsn=2"
+  },
+  {
+    "_id": "re-intubation-rate-within-48-hours-extubation-failure",
+    "canonicalName": "Re-intubation Rate within 48 Hours (Extubation Failure)",
+    "aliases": [
+      "re-intubation within 48 hours",
+      "re-intubation within 48 hours (icu)"
+    ],
+    "order": 39,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Re-intubations within 48h",
+    "denLabel": "Planned extubations",
+    "numeratorDef": "Number of patients requiring reintubation (or return to invasive mechanical ventilation via any invasive airway) within 48 hours of a planned extubation during the reporting period. This is 'extubation failure.' Reintubation following unplanned/accidental (self-)extubation, or reintubation for a new, unrelated surgical procedure, is typically excluded.",
+    "denominatorDef": "Total number of planned (elective) extubations of mechanically ventilated patients performed during the reporting period. Each planned extubation event counts as one denominator unit.",
+    "benchmark": "≤ 10%",
+    "benchmarkValue": 10,
+    "benchmarkNote": "Acceptable/target extubation-failure rate ~5-10% of planned extubations (wider reasonable band 5-15%); commonly benchmarked at <=10%",
+    "goalDirection": "lower_is_better",
+    "reference": "Epstein SK. 'What is the optimal rate of failed extubation?' Critical Care 2012;16(1):111. Also supported by ATS/CHEST ventilator liberation guidance and standard critical-care weaning literature.",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3396264/"
+  },
+  {
+    "_id": "return-of-patient-within-72-hours-same-complaint-excl-lama",
+    "canonicalName": "Return of Patient within 72 Hours (same complaint, excl. LAMA)",
+    "aliases": [
+      "return of patient within 72 hours (same complaint, excl. lama)"
+    ],
+    "order": 40,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "ED returns <=72h with same complaint (excl. LAMA)",
+    "denLabel": "ED discharges",
+    "numeratorDef": "Patients returning to the ED within 72 hours with the same complaint, excluding Left-Against-Medical-Advice (LAMA).",
+    "denominatorDef": "Total ED discharges in the period.",
+    "benchmark": "< 5%",
+    "benchmarkValue": 5,
+    "goalDirection": "lower_is_better",
+    "reference": "ACEP; ED re-attendance quality metric"
+  },
+  {
+    "_id": "surgical-site-infection-ssi-rate",
+    "canonicalName": "Surgical Site Infection (SSI) Rate",
+    "aliases": [
+      "surgical site infection (ssi)"
+    ],
+    "order": 41,
+    "formula": "pct",
+    "unit": "%",
+    "numLabel": "Number of SSIs",
+    "denLabel": "Number of operative procedures",
+    "numeratorDef": "Count of surgical site infections (superficial incisional, deep incisional, or organ/space) detected through routine surveillance within the applicable NHSN surveillance period for the procedure category (a 30- or 90-day period determined by the NHSN operative procedure CATEGORY and the tissue level/depth of the SSI event, per the 2013+ definitions — note this is no longer based on implant presence). Include SSIs identified during admission, on readmission, and via post-discharge surveillance. Each procedure-related SSI is counted once per NHSN protocol.",
+    "denominatorDef": "Total number of NHSN operative procedures of that category performed during the same period (each trip to the OR meeting the NHSN procedure-code definition counts as one procedure), applying standard NHSN exclusion criteria. SSI rate = (SSIs / procedures) x 100. NHSN also risk-adjusts via the Standardized Infection Ratio (SIR = observed/predicted SSIs), with target SIR < 1.0.",
+    "benchmark": "≤ 2%",
+    "benchmarkValue": 2,
+    "benchmarkNote": "<= 2% per 100 procedures (procedure-dependent; NHSN risk-adjusted target SIR < 1.0)",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component — Surgical Site Infection (SSI) Event protocol; WHO Global Guidelines for the Prevention of SSI",
+    "referenceUrl": "https://www.cdc.gov/nhsn/psc/ssi/index.html"
+  },
+  {
+    "_id": "unplanned-accidental-extubation-rate",
+    "canonicalName": "Unplanned (accidental) extubation rate",
+    "aliases": [
+      "accidental removal of ett tube"
+    ],
+    "order": 42,
+    "formula": "rate100",
+    "unit": "per 100 ventilator-days",
+    "numLabel": "Unplanned extubations",
+    "denLabel": "Ventilator-days",
+    "numeratorDef": "Number of unplanned/accidental extubations - any removal of the endotracheal (ETT) tube not deliberately performed by the care team, including patient self-extubation and accidental dislodgement during care/transport. Count each event once.",
+    "denominatorDef": "Total ventilator-days = sum across the surveillance period of the number of patients with an ETT on mechanical ventilation each day. Multiply the ratio by 100 (rate expressed per 100 ventilator-days).",
+    "benchmark": "≤ 0.95 per 100 ventilator-days",
+    "benchmarkValue": 0.95,
+    "benchmarkNote": "<= 0.95 unplanned extubations per 100 ventilator-days (Solutions for Patient Safety national goal); reported literature rates typically ~0.9-1.06 per 100 ventilator-days",
+    "goalDirection": "lower_is_better",
+    "reference": "Solutions for Patient Safety (SPS) unplanned-extubation bundle benchmark goal (<=0.95 per 100 ventilator-days, introduced May 2018); per-100-ventilator-day surveillance convention per published ICU/NICU/PICU UE literature (e.g., Respir Care editorial, PMC10753604, defining UE per 100 days of mechanical ventilation)",
+    "referenceUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10753604/"
+  },
+  {
+    "_id": "vascular-access-thrombosis-rate-av-fistula-graft",
+    "canonicalName": "Vascular Access Thrombosis Rate (AV Fistula/Graft)",
+    "aliases": [
+      "vascular access complication",
+      "vascular access complication rate",
+      "vascular access thrombosis rate"
+    ],
+    "order": 43,
+    "formula": "rate1000",
+    "unit": "per 1000 access-days at risk",
+    "numLabel": "Access thrombosis events",
+    "denLabel": "Access-days at risk",
+    "numeratorDef": "Number of thrombosis events occurring in functioning AV fistulae/grafts during the period. (KDOQI benchmarks are defined for thrombosis specifically; a broader composite that also counts stenosis requiring intervention or access infection may be reported separately but is not directly comparable to the per-access-year thrombosis benchmark.)",
+    "denominatorDef": "Cumulative access-days at risk (sum of days each functioning AV access is in use during the period). The native KDOQI metric is events per access-year (= access-days / 365); divide access-days by 365 to compare with the per-access-year benchmark.",
+    "benchmark": "≤ 0.5 per 1000 access-days at risk",
+    "benchmarkValue": 0.5,
+    "benchmarkNote": "<= 0.5 thrombosis events per access-year (~1.37 per 1000 access-days). AV grafts: baseline 0.5-0.8/graft-year, target 0.2-0.4/graft-year with surveillance; AV fistulae lower (~0.1-0.5/year).",
+    "goalDirection": "lower_is_better",
+    "reference": "NKF KDOQI Clinical Practice Guideline for Vascular Access: 2019 Update (Am J Kidney Dis. 2020;75(4)(suppl 2):S1-S164)",
+    "referenceUrl": "https://www.ajkd.org/article/S0272-6386(19)31137-0/fulltext"
+  },
+  {
+    "_id": "ventilator-associated-event-vae-rate",
+    "canonicalName": "Ventilator-Associated Event (VAE) Rate",
+    "aliases": [
+      "ventilator-associated event (vae)"
+    ],
+    "order": 44,
+    "formula": "rate1000",
+    "unit": "per 1000 ventilator-days",
+    "numLabel": "VAE events (VAC/IVAC/PVAP)",
+    "denLabel": "Ventilator-days",
+    "numeratorDef": "Number of Ventilator-Associated Events meeting the NHSN VAE algorithm tiers — Ventilator-Associated Condition (VAC), Infection-related Ventilator-Associated Complication (IVAC), and Possible VAP (PVAP) — identified in adult patients (>=18 years) mechanically ventilated for >2 calendar days, triggered by a sustained increase (>=2 calendar days) in daily minimum FiO2 (increase >=0.20) or PEEP (increase >=3 cmH2O) after a baseline period of >=2 days of stability or improvement. Each event counted once; rates may be reported by tier.",
+    "denominatorDef": "Total number of ventilator-days, summed by counting the number of patients on mechanical ventilation in the location once each day at the same time each day during the surveillance month (eligible adult inpatient locations); only the monthly total is entered into NHSN.",
+    "benchmark": "≤ 1 per 1000 ventilator-days",
+    "benchmarkValue": 1,
+    "benchmarkNote": "SIR < 1.0 vs NHSN baseline (observed/predicted; SIR not computed when predicted <1.0); aim toward 0. Pooled VAC/IVAC raw rates vary widely (~3-17 per 1000 ventilator-days) by setting.",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 10: Ventilator-Associated Event (VAE) Protocol",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/10-vae_final.pdf"
+  },
+  {
+    "_id": "ventilator-associated-pneumonia-vap-rate",
+    "canonicalName": "Ventilator-Associated Pneumonia (VAP) Rate",
+    "aliases": [
+      "ventilator-associated pneumonia (vap)"
+    ],
+    "order": 45,
+    "formula": "rate1000",
+    "unit": "per 1000 ventilator-days",
+    "numLabel": "VAP events",
+    "denLabel": "Ventilator-days",
+    "numeratorDef": "Number of pneumonia events meeting the NHSN PNEU/VAP surveillance criteria in a patient who was on mechanical ventilation with the ventilator in place on the date of event or the day before. (Note: the NHSN PNEU/VAP definition has NO minimum ventilation-duration requirement; the '>2 consecutive ventilator-days' rule belongs to the separate VAE algorithm, not to VAP/PNEU. For adult and pediatric inpatient locations NHSN replaced in-plan VAP surveillance with the VAE algorithm in January 2013 [PedVAE for pediatric locations]; the PNEU/VAP protocol remains available for in-plan PedVAP surveillance in pediatric locations and off-plan PNEU surveillance in any inpatient location, including neonatal.)",
+    "denominatorDef": "Total number of ventilator-days, summed by counting the number of patients on mechanical ventilation in the location once each day at the same time each day during the surveillance month.",
+    "benchmark": "≤ 1 per 1000 ventilator-days",
+    "benchmarkValue": 1,
+    "benchmarkNote": "No single fixed target; aim toward 0. Historical NHSN pooled-mean VAP rates ~1-2 per 1000 ventilator-days depending on unit type",
+    "goalDirection": "lower_is_better",
+    "reference": "CDC NHSN Patient Safety Component Manual, Chapter 6: Pneumonia (Ventilator-associated [VAP] and non-ventilator-associated [PNEU]) Event",
+    "referenceUrl": "https://www.cdc.gov/nhsn/pdfs/pscmanual/6pscvapcurrent.pdf"
+  }
+]

@@ -58,6 +58,7 @@ const MANIFEST = [
   { file: 'quality-data.js', jsx: false },
   { file: 'quality-guide.js', jsx: false },
   { file: 'quality-corrections.js', jsx: false },
+  { file: 'quality-corrections-apply.js', jsx: false }, // DB master overrides the static one (must run after corrections, before store)
   { file: 'quality-store.js', jsx: false },
   // --- components (JSX) — app.jsx LAST: it calls ReactDOM.render() ---
   { file: 'charts.jsx', jsx: true },

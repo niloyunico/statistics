@@ -52,8 +52,8 @@ const UNICO_MODULES = [
   { id:'users',   label:'User Management',    short:'Users',      icon:I.user,  home:'users' },
 ];
 const UNICO_MODULE_VIEWS = {
-  stats:  ['dashboard','departments','compare','gallery','manage','input','settings'],
-  datacol:['dcPatient','dcQuality','dcResponsibles','dcShare','dcFields','dcReview'],
+  stats:  ['dashboard','departments','compare','gallery','manage','settings'],
+  datacol:['dcReview','dcPatient','dcQuality','input','dcResponsibles','dcShare','dcFields'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffProfile','staffForm'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
@@ -153,47 +153,121 @@ function unicoPeriodMonths(allMonths, period){
 }
 window.unicoPeriodMonths=unicoPeriodMonths;
 
+// Hospital-wide open-breach count for the sidebar "Quality" badge — same monthly
+// logic the Dashboard/quality-console use. Computed once per mount (cheap, guarded).
+function unicoQualityBreachCount(){
+  try{
+    const Qh = window.UNICO_Q;
+    if(!window.qualityData || !Qh) return 0;
+    // Same year-aware, quarter-aware breach count the Quality console reports.
+    const areas = window.qualityData();
+    const months = Qh.fyAxis(Qh.defaultFy(areas));
+    let br=0; areas.forEach(d=>(d.indicators||[]).forEach(ind=>{ br += Qh.countBreaches(ind, months); }));
+    return br;
+  }catch(e){ return 0; }
+}
+window.unicoQualityBreachCount=unicoQualityBreachCount;
+
+// Unified workspace navigation — Statistics + Quality are MERGED into peer
+// destinations (Overview / Departments / Quality) instead of separate switchable
+// modules. Secondary views nest (indented) under the active destination.
+const UNICO_WS = [
+  { sec:'', items:[
+    { id:'overview',    label:'Overview',        icon:I.grid,   home:'dashboard',   on:v=>v==='dashboard' },
+  ]},
+  { sec:'Clinical', items:[
+    { id:'departments', label:'Departments',     icon:I.layers, home:'departments', on:v=>unicoModuleOf(v)==='stats'&&['dashboard','settings'].indexOf(v)<0 },
+    { id:'quality',     label:'Quality',         icon:I.heart,  home:'quality',     on:v=>unicoModuleOf(v)==='quality', badge:true },
+  ]},
+  { sec:'Data', items:[
+    { id:'datacol',     label:'Data Collection', icon:I.input,  home:'dcReview',    on:v=>unicoModuleOf(v)==='datacol' },
+    { id:'reports',     label:'Reports',         icon:I.doc,    home:'reports',     on:v=>unicoModuleOf(v)==='reports' },
+  ]},
+  { sec:'Administer', items:[
+    { id:'staff',       label:'Staff',           icon:I.steth,  home:'nurseHome',   on:v=>unicoModuleOf(v)==='staff' },
+    // Settings is the admin HUB (Departments config, Users & Roles, Responsible Persons,
+    // Form Fields, Data & Export) — the scattered admin submodules fold into its tabs.
+    { id:'settings',    label:'Settings',        icon:I.gear,   home:'settings',    on:v=>v==='settings'||unicoModuleOf(v)==='users' },
+  ]},
+];
+// Secondary views shown (indented) under the ACTIVE primary destination.
+function unicoWorkspaceSub(view){
+  const mod = unicoModuleOf(view);
+  if(view==='settings' || mod==='users') return [];   // Settings uses its own internal tabs
+  if(mod==='stats' && view!=='dashboard' && view!=='settings') return [
+    { label:'Compare', view:'compare' },
+  ];
+  if(mod==='quality') return [
+    { label:'Scorecard',                view:'qualityScore' },
+    { label:'Trends',                   view:'qualityTrend' },
+    { label:'Incident Reports',         view:'qualityIncidents' },
+    { label:'Indicator Administration', view:'qualityManage', match:['qualityManage','qualityCatalog','qualityAssign','qualityEdit'] },
+    { label:'Quality Data Entry',       view:'qualityDataEntry' },
+    { label:'Action Plans',             view:'qualityCapa' },
+  ];
+  if(mod==='reports') return [
+    { label:'Patient Statistics', view:'reports' },
+    { label:'Quality Indicators', view:'reportsQuality' },
+  ];
+  if(mod==='datacol') return [
+    { label:'Data Entry',          view:'input' },
+    { label:'Review & History',    view:'dcReview' },
+    { label:'Patient Statistics',  view:'dcPatient' },
+    { label:'Quality Data',        view:'dcQuality' },
+    { label:'Share Links',         view:'dcShare' },
+  ];
+  if(mod==='staff') return [
+    { label:'Nurse Dashboard',  view:'nurseHome' },
+    { label:'Nurse Directory',  view:'nurses' },
+    { label:'Nurse Compliance', view:'nurseCompliance' },
+    { label:'PCA Dashboard',    view:'pcaHome' },
+    { label:'PCA Directory',    view:'pca' },
+    { label:'PCA Compliance',   view:'pcaCompliance' },
+  ];
+  return [];
+}
+
 function Sidebar({route, setRoute, collapsed, depts}){
-  const activeMod = unicoModuleOf(route.view);
-  const groups = unicoSidebarGroups(activeMod);
-  const curMod = UNICO_MODULES.find(m=>m.id===activeMod) || UNICO_MODULES[0];
-  const isOn = it => it.match ? it.match.indexOf(route.view)>=0 : route.view===it.id;
+  const view = route.view;
+  const qBadge = React.useMemo(()=>unicoQualityBreachCount(),[]);
+  const sub = unicoWorkspaceSub(view);
+  const subOn = s => s.match ? s.match.indexOf(view)>=0 : view===s.view;
   return (
     <aside className="sb">
       <div className="sb-brand">
-        <img className="sb-logo-img sb-logo-full" src="unico/logo.svg" alt="UNICO Healthcare"/>
-        <img className="sb-logo-mark" src="unico/logo-mark.svg" alt="UNICO"/>
+        <div className="sb-logo">
+          <svg width="20" height="18" viewBox="0 0 51 45" fill="#fff" aria-hidden="true"><path d="M25.519 21.607A18.35 18.35 0 0 0 34.352 12.8C36.742 7.25 35.567.727 35.567.727a8.9 8.9 0 0 1-5.552.812C26.45 1.09 25.519 0 25.519 0s-.931 1.1-4.5 1.538A8.87 8.87 0 0 1 15.47.727S14.295 7.25 16.685 12.8a18.35 18.35 0 0 0 8.834 8.805m-3.912 1.028A18.35 18.35 0 0 0 12.8 13.8C7.25 11.411.727 12.586.727 12.586a8.9 8.9 0 0 1 .812 5.552C1.09 21.7 0 22.635 0 22.635s1.1.931 1.538 4.5a8.87 8.87 0 0 1-.812 5.552S7.25 33.858 12.8 31.468a18.32 18.32 0 0 0 8.805-8.834m3.912 1.028a18.35 18.35 0 0 0-8.834 8.805c-2.39 5.552-1.215 12.075-1.215 12.075a8.9 8.9 0 0 1 5.552-.812c3.565.443 4.5 1.538 4.5 1.538s.931-1.1 4.5-1.538a8.9 8.9 0 0 1 5.552.812s1.175-6.523-1.215-12.075a18.35 18.35 0 0 0-8.834-8.805m25.644-1.028s-1.1-.931-1.538-4.5a8.87 8.87 0 0 1 .812-5.552S43.912 11.411 38.36 13.8a18.35 18.35 0 0 0-8.805 8.834 18.35 18.35 0 0 0 8.805 8.834c5.552 2.39 12.075 1.215 12.075 1.215a8.9 8.9 0 0 1-.812-5.552c.443-3.565 1.538-4.5 1.538-4.5"/></svg>
+        </div>
+        <div className="sb-brand-txt sb-name">UNICO<small>Statistics Suite</small></div>
       </div>
       <div className="sb-scroll">
-        {/* current workspace label — mirrors the top-bar ModuleSwitch so the admin always knows where they are */}
-        <div className="sb-sec" style={{display:'flex',alignItems:'center',gap:7,color:'var(--blue)'}}>
-          <Ic d={curMod.icon} s={14}/><span style={{fontWeight:800,letterSpacing:.3}}>{curMod.label}</span>
-        </div>
-        {groups.map((g,gi)=>(
+        {UNICO_WS.map((g,gi)=>(
           <React.Fragment key={gi}>
-            <div className="sb-sec">{g.sec}</div>
-            {g.items.map(n=>(
-              <div key={n.id} className={'sb-item'+(isOn(n)?' active':'')} onClick={()=>setRoute({view:n.id})}>
-                <Ic d={n.icon} s={18}/><span className="lbl">{n.label}</span>
-              </div>
-            ))}
+            {g.sec && <div className="sb-sec">{g.sec}</div>}
+            {g.items.map(it=>{
+              const active = it.on(view);
+              const badge = it.badge && qBadge>0 ? qBadge : null;
+              return (
+                <React.Fragment key={it.id}>
+                  <div className={'sb-item'+(active?' active':'')} onClick={()=>setRoute({view:it.home})} title={it.label}>
+                    <Ic d={it.icon} s={18}/><span className="lbl">{it.label}</span>
+                    {badge!=null && <span className="badge alert num">{badge}</span>}
+                  </div>
+                  {/* secondary views nest under the active destination */}
+                  {active && sub.length>0 && (
+                    <div className="sb-sub">
+                      {sub.map(s=>(
+                        <div key={s.view} className={'sb-sub-item'+(subOn(s)?' active':'')} onClick={()=>setRoute({view:s.view})}>
+                          <span className="dot"/><span className="lbl">{s.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </React.Fragment>
         ))}
-        {activeMod==='stats' && (
-          <>
-            <div className="sb-sec" style={{display:'flex',alignItems:'center'}}>Departments<span className="spacer" style={{flex:1}}/>
-              <span onClick={()=>setRoute({view:'manage'})} title="Add / manage" style={{cursor:'pointer',color:'#7e8da0',display:'grid',placeItems:'center',padding:'0 2px'}}><Ic d={I.plus} s={15}/></span>
-            </div>
-            {depts.map(d=>(
-              <div key={d.id} className={'sb-item'+(route.view==='departments'&&route.dept===d.id?' active':'')}
-                onClick={()=>setRoute({view:'departments',dept:d.id})} title={d.name}>
-                <Ic d={DEPT_ICON[d.id]||I.activity} s={17}/>
-                <span className="lbl">{d.short}</span>
-                <span className="badge num">{d.total}</span>
-              </div>
-            ))}
-          </>
-        )}
       </div>
       <div className="sb-foot">
         {(()=>{
@@ -284,13 +358,12 @@ function TopBar({route, setRoute, onBurger, crumbs, actions, depts=[], onFill, p
   return (
     <div className="topbar">
       <button className="tb-burger" onClick={onBurger} title="Toggle menu"><Ic d={I.grid} s={16}/></button>
-      <ModuleSwitch route={route} setRoute={setRoute}/>
       <div className="crumb">
         {crumbs.map((c,i)=>(
           <React.Fragment key={i}>
             {i>0&&<Ic d={I.chevR} s={13} c="#b6c0cc"/>}
             {i===crumbs.length-1
-              ? ((route.view==='departments'&&depts&&depts.length)
+              ? ((route.view==='departments'&&route.dept&&depts&&depts.length)
                   ? <select value={route.dept||depts[0].id} onChange={e=>setRoute({view:'departments',dept:e.target.value})} title="Switch department"
                       style={{border:'1px solid var(--line)',borderRadius:7,padding:'3px 8px',fontSize:14,fontWeight:600,color:'var(--ink)',fontFamily:'inherit',background:'var(--panel-2)',cursor:'pointer',maxWidth:240}}>
                       {depts.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}

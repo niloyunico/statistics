@@ -24,7 +24,7 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
       },
       {
         "id": "lama",
-        "label": "LAMA"
+        "label": "LAMA / DAMA"
       },
       {
         "id": "daycare",
@@ -916,11 +916,7 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
       },
       {
         "id": "lama",
-        "label": "LAMA"
-      },
-      {
-        "id": "dama",
-        "label": "DAMA"
+        "label": "LAMA / DAMA"
       },
       {
         "id": "dis",
@@ -947,7 +943,6 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
         "tin": 0,
         "tout": 0,
         "lama": 0,
-        "dama": 0,
         "dis": 0,
         "death": 0
       },
@@ -956,7 +951,6 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
         "tin": 1,
         "tout": 4,
         "lama": 1,
-        "dama": 0,
         "dis": 1,
         "death": 0
       },
@@ -965,7 +959,6 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
         "tin": 3,
         "tout": 7,
         "lama": 1,
-        "dama": 0,
         "dis": 0,
         "death": 0
       },
@@ -974,7 +967,6 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
         "tin": 1,
         "tout": 6,
         "lama": 0,
-        "dama": 0,
         "dis": 0,
         "death": 0
       },
@@ -982,8 +974,7 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
         "adm": 12,
         "tin": 5,
         "tout": 10,
-        "lama": 4,
-        "dama": 2,
+        "lama": 6,
         "dis": 0,
         "death": 0
       },
@@ -991,8 +982,7 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
         "adm": 8,
         "tin": 4,
         "tout": 8,
-        "lama": 1,
-        "dama": 1,
+        "lama": 2,
         "dis": 0,
         "death": 2
       },
@@ -1000,8 +990,7 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
         "adm": 10,
         "tin": 2,
         "tout": 5,
-        "lama": 3,
-        "dama": 1,
+        "lama": 4,
         "dis": 0,
         "death": 3
       },
@@ -1010,7 +999,6 @@ window.__UNICO_DEPARTMENTS_FALLBACK__ = [
         "tin": 4,
         "tout": 15,
         "lama": 2,
-        "dama": 0,
         "dis": 0,
         "death": 1
       }

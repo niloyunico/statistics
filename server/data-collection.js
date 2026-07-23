@@ -151,6 +151,50 @@ function normResp(r) {
 }
 async function col(name) { const db = await getDbHandle(); return db ? db.collection(name) : null; }
 
+// ---- Quality is now EMBEDDED in each department doc as `dept.quality` (Statistics +
+// Quality merged into ONE collection). These helpers read/write a quality "area" by its
+// key against the department that carries it, returning the same {_id,key,name,deptId,
+// indicators,...} shape the old standalone `quality` collection exposed, so every caller
+// keeps working unchanged. ----
+async function qArea(key) {
+  const c = await col('departments'); if (!c) return null;
+  const dep = await c.findOne({ 'quality.key': String(key) });
+  if (!dep || !dep.quality) return null;
+  return Object.assign({ _id: dep.quality.key, deptId: dep.id }, dep.quality);
+}
+async function qAllAreas() {
+  const c = await col('departments'); if (!c) return [];
+  const deps = await c.find({}).toArray();
+  return deps.filter((d) => d.quality && d.quality.key)
+    .map((d) => Object.assign({ _id: d.quality.key, deptId: d.id }, d.quality))
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+async function qSetIndicators(key, indicators) {
+  const c = await col('departments'); if (!c) return { matchedCount: 0 };
+  return c.updateOne({ 'quality.key': String(key) }, { $set: { 'quality.indicators': indicators } });
+}
+async function qSetArea(key, setObj) {
+  const c = await col('departments'); if (!c) return { matchedCount: 0 };
+  const set = {}; Object.keys(setObj || {}).forEach((k) => { set['quality.' + k] = setObj[k]; });
+  return c.updateOne({ 'quality.key': String(key) }, { $set: set });
+}
+async function qCreateArea(name) {
+  const c = await col('departments'); if (!c) throw new Error('Database not available.');
+  const base = 'area-' + (String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'dept');
+  let key = base, n = 1; while (await c.findOne({ 'quality.key': key })) key = base + '-' + (++n);
+  const _id = '__q_' + key; // quality-only pseudo-department (hidden from stats views)
+  await c.insertOne({ _id, id: _id, name, short: name, group: 'Quality', qualityOnly: true, qualityKey: key, order: 9500, months: [], data: [], cols: [], quality: { key, name, indicators: [], deptId: _id, createdAt: Date.now() } });
+  return { key, name };
+}
+async function qDeleteArea(key) {
+  const c = await col('departments'); if (!c) throw new Error('Database not available.');
+  const dep = await c.findOne({ 'quality.key': String(key) });
+  if (!dep) return { deletedCount: 0 };
+  if (dep.qualityOnly) { const r = await c.deleteOne({ _id: dep._id }); return { deletedCount: r.deletedCount }; }
+  const r = await c.updateOne({ _id: dep._id }, { $unset: { quality: '' } });
+  return { deletedCount: r.matchedCount };
+}
+
 // In-memory fallback for dev (no MONGODB_URI). The web app always has Mongo.
 const mem = { responsibles: [], submissions: [] };
 
@@ -295,9 +339,7 @@ async function buildQualitySpec(payload) {
   const month = String((payload && payload.month) || '').trim();
   if (!area) throw new Error('Quality area is required.');
   if (!month) throw new Error('Reporting month is required.');
-  const c = await col('quality');
-  if (!c) throw new Error('Database not available.');
-  const doc = await c.findOne({ _id: area });
+  const doc = await qArea(area);
   if (!doc) throw new Error('Unknown quality area: ' + area);
   const indicators = Array.isArray(doc.indicators) ? doc.indicators : [];
   let indId = payload && payload.indicatorId ? String(payload.indicatorId) : '';
@@ -440,9 +482,7 @@ async function applyPatient(spec) {
 }
 
 async function applyQuality(spec) {
-  const c = await col('quality');
-  if (!c) throw new Error('Database not available.');
-  const doc = await c.findOne({ _id: spec.area });
+  const doc = await qArea(spec.area);
   if (!doc) throw new Error('Quality area no longer exists: ' + spec.area);
   const indicators = Array.isArray(doc.indicators) ? doc.indicators.map((i) => Object.assign({}, i)) : [];
   let ind = indicators.find((i) => i.id === spec.indicatorId);
@@ -470,7 +510,7 @@ async function applyQuality(spec) {
       if (spec.remark) ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [spec.month]: spec.remark });
       if (spec.capa) ind.capa = Object.assign({}, ind.capa || {}, { [spec.month]: Object.assign({ value: spec.value, recordedAt: Date.now() }, spec.capa) });
       recomputeQuarters(ind);
-      await c.updateOne({ _id: spec.area }, { $set: { indicators } });
+      await qSetIndicators(spec.area, indicators);
       return;
     }
     // A submission with no real denominator (e.g. a collector logging NSI cases against the
@@ -498,7 +538,7 @@ async function applyQuality(spec) {
   // monthly data. `ind` is the same reference held in `indicators`, so the in-place
   // mutation is persisted by the $set below.
   recomputeQuarters(ind);
-  await c.updateOne({ _id: spec.area }, { $set: { indicators } });
+  await qSetIndicators(spec.area, indicators);
 }
 
 /* ---------------- admin: custom fields on the patient form ---------------- */
@@ -566,8 +606,7 @@ async function snapshotPatientPrior(spec) {
 }
 async function snapshotQualityPrior(spec) {
   try {
-    const c = await col('quality'); if (!c) return null;
-    const d = await c.findOne({ _id: String(spec.area) }); if (!d) return null;
+    const d = await qArea(spec.area); if (!d) return null;
     const ind = (d.indicators || []).find((i) => i.id === spec.indicatorId); if (!ind) return null;
     const m = spec.month;
     return { value: (ind.months || {})[m], num: (ind.mNum || {})[m], den: (ind.mDen || {})[m], incidents: (ind.incidents || {})[m] || null };
@@ -713,7 +752,7 @@ async function shortlinkMeta(code) {
       suggestedMonth: nextMonthSuggestion(dept),
     };
   }
-  const c = await col('quality'); const area = c ? await c.findOne({ _id: link.area }) : null;
+  const area = await qArea(link.area);
   if (!area) return { ok: false, error: 'Quality area not found.' };
   return {
     ok: true, type: 'quality', label: link.label, responsible: link.responsible,
@@ -822,37 +861,24 @@ function signupPage(opts) {
 
 /* ---------------- quality departments / areas (admin CRUD) ---------------- */
 async function getQualityAreas() {
-  const c = await col('quality');
-  if (!c) return [];
-  const docs = await c.find({}).sort({ name: 1 }).toArray();
-  return docs.map((d) => ({ key: d._id, name: d.name || d._id, indicatorCount: Array.isArray(d.indicators) ? d.indicators.length : 0 }));
+  const docs = await qAllAreas();
+  return docs.map((d) => ({ key: d.key, name: d.name || d.key, indicatorCount: Array.isArray(d.indicators) ? d.indicators.length : 0 }));
 }
 async function createQualityArea(input) {
   const name = String((input && input.name) || '').trim();
   if (!name) throw new Error('Department / area name is required.');
-  const c = await col('quality');
-  if (!c) throw new Error('Database not available.');
-  const base = 'area-' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'dept');
-  let _id = base, n = 1;
-  while (await c.findOne({ _id })) { _id = base + '-' + (++n); }
-  // Store `key` explicitly: getCollection() strips `_id`, so the renderer reads `key`.
-  // Omitting it left the doc with key:undefined, which broke the overlay/heatmap.
-  await c.insertOne({ _id, key: _id, name, indicators: [], createdAt: Date.now() });
-  return { ok: true, area: { key: _id, name, indicatorCount: 0 } };
+  const created = await qCreateArea(name);
+  return { ok: true, area: { key: created.key, name: created.name, indicatorCount: 0 } };
 }
 async function renameQualityArea(key, input) {
   const name = String((input && input.name) || '').trim();
   if (!name) throw new Error('Name is required.');
-  const c = await col('quality');
-  if (!c) throw new Error('Database not available.');
-  const r = await c.updateOne({ _id: String(key) }, { $set: { name } });
+  const r = await qSetArea(key, { name });
   if (!r.matchedCount) throw new Error('Department not found.');
   return { ok: true };
 }
 async function deleteQualityArea(key) {
-  const c = await col('quality');
-  if (!c) throw new Error('Database not available.');
-  const r = await c.deleteOne({ _id: String(key) });
+  const r = await qDeleteArea(key);
   if (!r.deletedCount) throw new Error('Department not found.');
   return { ok: true };
 }

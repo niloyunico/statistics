@@ -46,6 +46,33 @@ Vercel → Project → **Settings → Environment Variables → Import .env**, t
 - `server/.env` and `server/.env.production` are git-ignored — never commit real
   secrets.
 
+## 4b. Python PDF report service (`api/report_pdf.py`)
+The report **PDF export** is generated server-side by a Python function using
+**ReportLab** (`api/report_pdf.py`, deps in `api/requirements.txt`). `vercel.json`
+builds it with `@vercel/python` and routes `POST /api/report-pdf` to it *before*
+the catch-all. The browser (`renderer/unico/reports.jsx` → `tryServerPDF`) POSTs a
+pre-resolved render model and downloads the returned PDF; **any failure silently
+falls back** to the in-browser jsPDF vector exporter, so export never breaks.
+
+- Adds a **second runtime** (`@vercel/python`) to the project. After deploy, check
+  the build log shows both the Node function and the Python function building, and
+  that the function bundle is well under the 250 MB limit (ReportLab ≈ 10–15 MB).
+- `regions: ["bom1"]` applies to the Python function too.
+- **Local dev (localhost:8080):** `web.js` now includes a **Python bridge** — a
+  `POST /api/report-pdf` route (active only when `!process.env.VERCEL`) that spawns
+  the same `api/report_pdf.py` script to generate the PDF. This gives the local app
+  REAL Python output instead of falling back to the JS exporter. Requirements:
+  - Python on PATH (or set `PYTHON_BIN`), with **`pip install reportlab`**
+    (`pymongo dnspython` only if you POST Mongo-reading params — the app posts a
+    resolved model, so those aren't needed locally).
+  - The route streams request JSON to the script's stdin and returns its stdout PDF.
+  - Alternatively, run the whole app through `vercel dev` to use the `@vercel/python`
+    function exactly as in production.
+  If Python isn't installed, the browser's content-type guard still falls back to the
+  JS vector export, so local export never hard-breaks.
+- Kill-switch: set `window.__UNICO_SERVER_PDF__ = false` (console/inline) to force
+  the client-side vector exporter without touching the server.
+
 ## 5. Notes
 - Pages and APIs (`/`, `/collect`, `/api/*`, `/login`) flow through the Express
   function; `/` injects the live DB snapshot into `index.html` per request.

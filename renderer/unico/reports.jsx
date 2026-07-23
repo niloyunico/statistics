@@ -3,7 +3,52 @@ const PAGE_SIZES={A4:[700,1.414],A3:[815,1.414],Letter:[700,1.294]};
 const CHART_STYLE_LABEL={bar3d:'3D Bars',bar:'Bar',line:'Line',area:'Area + Target',combo:'Bar + Line',grouped:'Grouped',stacked:'Stacked',pct:'100% Stacked',horizontal:'Horizontal',donut:'Composition'};
 const REPORT_STYLES=[['bar3d','3D'],['bar','Bar'],['line','Line'],['area','Area'],['combo','Bar+Line'],['grouped','Grouped'],['stacked','Stacked'],['pct','100%'],['horizontal','Horizontal'],['donut','Donut']];
 function reportSeries(d){ return d.cols.filter(c=>c.id!==d.primary&&!c.pct).slice(0,6).map((c,i)=>({id:c.id,label:c.label,color:PALETTE[i%PALETTE.length]})); }
-function reportChartEl(d,style,tone,fs,donutData){
+// TR-IN (transfer-in) is clinically an admission — a patient entering the unit — so the
+// TREND + COMPOSITION GRAPHS fold it into "Admission". This is GRAPH-ONLY: the data table
+// and KPI figures keep the raw Admission and TR-IN columns. It only fires for
+// admission-primary flow departments (MICU/CCU/wards); "total"-primary departments
+// (ED, dialysis…) are untouched, since their TR-IN already sits inside the total.
+function rptTransferInCol(d){
+  return (d.cols||[]).find(c=> c.id!==d.primary && !c.pct && (
+    c.id==='tin' || c.id==='trin' || c.id==='tr_in' ||
+    /^\s*tr[\s._-]*in\s*$/i.test(c.label||'') || /transfer\s*[-\s]?in/i.test(c.label||'')
+  ));
+}
+function rptAdmitsPrimary(d){
+  const pc=(d.cols||[]).find(c=>c.id===d.primary)||{};
+  return d.primary==='adm' || d.primary==='admission' || /admission/i.test(pc.label||'') || /admission/i.test(d.primaryLabel||'');
+}
+// The transfer-in column to fold into the primary "Admission", or null.
+function rptMergeTin(d){ return rptAdmitsPrimary(d) ? rptTransferInCol(d) : null; }
+// fs rows with TR-IN folded into the primary field, for primary-keyed charts. Raw fs is
+// left untouched (tables/KPIs read it); only the returned copy carries the merged primary.
+function rptChartRows(d,fs){ const t=rptMergeTin(d); if(!t) return fs; return fs.map(r=>({...r,[d.primary]:(r[d.primary]||0)+(r[t.id]||0)})); }
+// Composition donut groups. Most departments have ONE donut = every non-primary count
+// column. Dialysis is special: IPD/OPD (patient location) and Conventional/Modi-SLED/SLED
+// (dialysis modality) are TWO independent breakdowns of the SAME Total — one combined
+// donut double-counts (they'd sum to 2× the total), so split them into two donuts.
+function compositionGroups(d, fs){
+  const sum=id=>fs.reduce((s,r)=>s+(r[id]||0),0);
+  const colBy=id=>(d.cols||[]).find(c=>c.id===id);
+  const mk=ids=>ids.map(colBy).filter(Boolean).map((c,i)=>({label:c.label,value:sum(c.id),color:PALETTE[i%PALETTE.length]})).filter(x=>x.value>0);
+  if(d.id==='dialysis'){
+    return [{title:'Patients',data:mk(['ipd','opd'])},{title:'Dialysis Type',data:mk(['conv','modi','sled'])}].filter(g=>g.data.length>1);
+  }
+  const tin=rptMergeTin(d);              // transfer-in folded into the Admission slice
+  const showAdm=rptAdmitsPrimary(d);     // primary is an admission event, not a running total
+  // Non-primary counts, minus the folded TR-IN (it lives inside Admission now).
+  const breakdown=(d.cols||[]).filter(c=>c.id!==d.primary && !c.pct && !(tin&&c.id===tin.id));
+  let list=breakdown.map(c=>({label:c.label,value:sum(c.id)}));
+  if(showAdm){
+    // Admission = new admissions + transfer-ins. Without this the donut silently dropped
+    // the largest inflow category (its primary), so it never appeared in the composition.
+    const pc=colBy(d.primary)||{};
+    list=[{label:pc.label||d.primaryLabel||'Admission', value:sum(d.primary)+(tin?sum(tin.id):0)}, ...list];
+  }
+  const data=list.map((x,i)=>({label:x.label,value:x.value,color:PALETTE[i%PALETTE.length]})).filter(x=>x.value>0);
+  return data.length>1?[{title:'Composition',data}]:[];
+}
+function reportChartEl(d,style,tone,fs,compGroups){
   const has=n=>typeof window[n]==='function';
   if(style==='bar') return <BarChart data={fs} x="month" y={d.primary} height={195} color={tone} flat/>;
   if(style==='line') return <LineChart data={fs} x="full" y={d.primary} height={195} color={tone} flat/>;
@@ -13,8 +58,8 @@ function reportChartEl(d,style,tone,fs,donutData){
   if(style==='stacked'){ const sr=reportSeries(d); return sr.length?<StackedBar data={fs} x="month" series={sr} height={210}/>:<BarChart data={fs} x="month" y={d.primary} height={195} color={tone} flat/>; }
   if(style==='pct'&&has('StackedPctBar')){ const sr=reportSeries(d); return sr.length?<StackedPctBar data={fs} x="month" series={sr} height={210} flat/>:<BarChart data={fs} x="month" y={d.primary} height={195} color={tone} flat/>; }
   if(style==='horizontal'&&has('HBarChart')) return <HBarChart data={fs.map(r=>({label:r.full,val:r[d.primary]||0}))} x="label" y="val" height={Math.max(150,fs.length*30)} flat/>;
-  if(style==='donut') return donutData.length>1
-    ? <div style={{display:'grid',placeItems:'center',minHeight:205}}><Donut data={donutData} size={188} centerValue={fmt(donutData.reduce((s,x)=>s+x.value,0))} centerLabel="Total" flat/></div>
+  if(style==='donut') return compGroups.length
+    ? <div style={{display:'flex',flexWrap:'wrap',gap:18,justifyContent:'space-around',alignItems:'center',minHeight:205}}>{compGroups.map((g,gi)=><div key={gi} style={{display:'grid',placeItems:'center'}}><Donut data={g.data} size={compGroups.length>1?152:188} centerValue={fmt(g.data.reduce((s,x)=>s+x.value,0))} centerLabel={compGroups.length>1?g.title:'Total'} flat/></div>)}</div>
     : <Bar3D data={fs} x="month" y={d.primary} height={205} color={tone} flat/>;
   return <Bar3D data={fs} x="month" y={d.primary} height={205} color={tone} flat/>; // bar3d + default
 }
@@ -72,10 +117,10 @@ function msReportHTML(depts){
     body+='<table border="1" style="border-collapse:collapse"><thead><tr>'+th+'</tr></thead><tbody>'+trs+'</tbody></table>';
   });
   // Authorisation sign-off — the shared saved names (Prepared / Checked / Approved by)
-  const sig=(window.unicoSig&&window.unicoSig.load())||{prepared:'',reviewed:'',approved:''};
+  const sig=(window.unicoSig&&window.unicoSig.load())||{prepared:'',reviewed:'',recommended:'',approved:''};
   body+='<table style="border-collapse:collapse;width:100%;margin-top:30px"><tr>'
-    +[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]].map(([role,name])=>
-      '<td style="width:33%;padding:0 22px 0 0;border:0"><div style="border-bottom:1.2px solid #16202e;height:36px"></div>'
+    +[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Recommended by',sig.recommended],['Approved by',sig.approved]].map(([role,name])=>
+      '<td style="width:25%;padding:0 18px 0 0;border:0"><div style="border-bottom:1.2px solid #16202e;height:36px"></div>'
       +'<div style="font-family:Calibri;font-size:10.5pt;font-weight:700;color:#16202e;margin-top:3px">'+msEsc(name||' ')+'</div>'
       +'<div style="font-family:Calibri;font-size:8.5pt;color:#555;text-transform:uppercase">'+role+'</div></td>').join('')
     +'</tr></table>';
@@ -281,12 +326,12 @@ function MonthlyStatsReport({depts}){
       </div>
 
       {/* Authorisation sign-off — the same shared saved names every report builder uses */}
-      {(()=>{ const sig=(window.unicoSig&&window.unicoSig.load())||{prepared:'',reviewed:'',approved:''};
+      {(()=>{ const sig=(window.unicoSig&&window.unicoSig.load())||{prepared:'',reviewed:'',recommended:'',approved:''};
         return (
           <div style={{...cardBox,marginTop:14}}>
             <div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:16}}>Authorisation</div>
             <div style={{display:'flex',gap:30}}>
-              {[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]].map(([role,name])=>(
+              {[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Recommended by',sig.recommended],['Approved by',sig.approved]].map(([role,name])=>(
                 <div key={role} style={{flex:1,minWidth:0}}>
                   <div style={{borderBottom:'1px solid var(--ink-2)',height:30}}/>
                   <div style={{fontSize:11,fontWeight:700,color:'var(--ink)',marginTop:4}}>{name||' '}</div>
@@ -300,30 +345,68 @@ function MonthlyStatsReport({depts}){
   );
 }
 
+/* EXACT-PREVIEW export — captures the rendered #pdf-root (all report pages) plus the
+   page CSS and sends it to the local report service, which renders it to a vector PDF
+   with a headless browser. Reproduces every report type / section / chart style /
+   customization 1:1 with the on-screen preview. Resolves false so callers fall back to
+   the client-side exporters (e.g. on Vercel, where the headless renderer isn't present). */
+async function unicoHtmlServerPDF(pageSize, orient, filename){
+  try{
+    const root = document.getElementById('pdf-root');
+    if(!root || !root.querySelector('.pdf-page,.qc-rpage')) return false;
+    let css='';
+    for(const s of Array.from(document.styleSheets)){
+      try{ const r=s.cssRules; for(let i=0;i<r.length;i++) css+=r[i].cssText+'\n'; }catch(_){}
+    }
+    const norm='@page{size:'+pageSize+' '+(orient==='landscape'?'landscape':'portrait')+';margin:0}'
+      +'html,body{margin:0;padding:0;background:#fff}'
+      +'.pdf-page,.qc-rpage{width:100%!important;min-height:0!important;box-shadow:none!important;margin:0!important;box-sizing:border-box;page-break-after:always;break-after:page}'
+      +'.pdf-page:last-child,.qc-rpage:last-child{page-break-after:auto}';
+    const html='<!doctype html><html><head><meta charset="utf-8"><base href="'+location.origin+'/">'
+      +'<style>'+css+norm+'</style></head><body class="pdf-export-mode qc-pdfcap">'+root.outerHTML+'</body></html>';
+    const res=await fetch('/api/report-pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'html',html:html,pageSize:pageSize,orient:orient})});
+    const ct=(res.headers.get('content-type')||'').toLowerCase();
+    if(res.ok && ct.indexOf('pdf')>=0){
+      const blob=await res.blob(), url=URL.createObjectURL(blob), a=document.createElement('a');
+      a.href=url; a.download=filename; document.body.appendChild(a); a.click();
+      setTimeout(()=>{ try{document.body.removeChild(a);}catch(_){} URL.revokeObjectURL(url); },600);
+      return true;
+    }
+  }catch(e){ try{ console.warn('[html-pdf] failed, falling back:',e); }catch(_){} }
+  return false;
+}
+try{ if(typeof window!=='undefined') window.unicoHtmlServerPDF=unicoHtmlServerPDF; }catch(e){}
+
 function Reports({depts}){
   const MO=window.UNICO.MONTH_ORDER, MF=window.UNICO.MONTHS_FULL;
   const [mode,setMode]=React.useState('builder'); // 'builder' | 'monthly'
-  const [sel,setSel]=React.useState(depts.slice(0,4).map(d=>d.id));
-  const [type,setType]=React.useState('summary');
-  const [period,setPeriod]=React.useState({mode:'all'});
-  const [chartStyles,setChartStyles]=React.useState(['bar3d']);
+  // Remember the LAST report configuration (department pick, type, period, chart styles,
+  // header/footer, page setup) so the builder reopens exactly where you left it.
+  const RB_KEY='unico_report_builder_v1';
+  const RB=(()=>{ try{ const s=JSON.parse(localStorage.getItem(RB_KEY)); return (s&&typeof s==='object')?s:{}; }catch(e){ return {}; } })();
+  const [sel,setSel]=React.useState(()=> (Array.isArray(RB.sel)&&RB.sel.length) ? RB.sel.filter(id=>depts.some(d=>d.id===id)) : depts.slice(0,4).map(d=>d.id));
+  const [type,setType]=React.useState(RB.type||'summary');
+  const [period,setPeriod]=React.useState((RB.period&&typeof RB.period==='object')?RB.period:{mode:'all'});
+  const [chartStyles,setChartStyles]=React.useState((Array.isArray(RB.chartStyles)&&RB.chartStyles.length)?RB.chartStyles:['bar3d']);
   const toggleStyle=s=>setChartStyles(a=>a.includes(s)?(a.length>1?a.filter(x=>x!==s):a):[...a,s]);
   // Header / footer editor
-  const [hdrTitle,setHdrTitle]=React.useState('Patient Flow Census');
-  const [hdrSub,setHdrSub]=React.useState('');
-  const [hospitalName,setHospitalName]=React.useState('UNICO HOSPITALS PLC');
-  const [showLogo,setShowLogo]=React.useState(true);
-  const [confidential,setConfidential]=React.useState(true);
-  const [footerNote,setFooterNote]=React.useState('');
-  const [pageSize,setPageSize]=React.useState('A4');
-  const [orient,setOrient]=React.useState('portrait');
+  const [hdrTitle,setHdrTitle]=React.useState(RB.hdrTitle!=null?RB.hdrTitle:'Patient Flow Census');
+  const [hdrSub,setHdrSub]=React.useState(RB.hdrSub||'');
+  const [hospitalName,setHospitalName]=React.useState(RB.hospitalName!=null?RB.hospitalName:'UNICO HOSPITALS PLC');
+  const [showLogo,setShowLogo]=React.useState(RB.showLogo!=null?RB.showLogo:true);
+  const [confidential,setConfidential]=React.useState(RB.confidential!=null?RB.confidential:true);
+  const [footerNote,setFooterNote]=React.useState(RB.footerNote||'');
+  const [pageSize,setPageSize]=React.useState(RB.pageSize||'A4');
+  const [orient,setOrient]=React.useState(RB.orient||'portrait');
   const [pageIdx,setPageIdx]=React.useState(0);
   // Prepared / Checked / Approved by — loaded from the SHARED saved set (window.unicoSig)
   // and auto-saved on every edit, so all report builders reuse the same names.
-  const [sig,setSig]=React.useState(()=> window.unicoSig?window.unicoSig.load():{prepared:'',reviewed:'',approved:''});
+  const [sig,setSig]=React.useState(()=> window.unicoSig?window.unicoSig.load():{prepared:'',reviewed:'',recommended:'',approved:''});
   React.useEffect(()=>{ if(window.unicoSig) window.unicoSig.save(sig); },[sig]);
-  const [showSig,setShowSig]=React.useState(true);
-  const [showCover,setShowCover]=React.useState(true); // title cover sheet before the content pages
+  const [showSig,setShowSig]=React.useState(RB.showSig!=null?RB.showSig:true);
+  const [showCover,setShowCover]=React.useState(RB.showCover!=null?RB.showCover:true); // title cover sheet before the content pages
+  // Persist the whole config on every change, so the last report generation is restored next visit.
+  React.useEffect(()=>{ try{ localStorage.setItem(RB_KEY, JSON.stringify({sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover})); }catch(e){} },[sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover]);
   const toggle=id=>setSel(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
   const chosen=depts.filter(d=>sel.includes(d.id));
 
@@ -388,7 +471,7 @@ function Reports({depts}){
     <div style={{marginTop:26,pageBreakInside:'avoid'}}>
       <div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:12}}>Authorisation · {hospitalName}</div>
       <div style={{display:'flex',gap:30}}>
-        {[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]].map(([role,name])=>(
+        {[['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Recommended by',sig.recommended],['Approved by',sig.approved]].map(([role,name])=>(
           <div key={role} style={{flex:1,minWidth:0}}>
             <div style={{borderBottom:'1px solid var(--ink-2)',height:34}}/>
             <div style={{fontSize:11,fontWeight:700,color:'var(--ink)',marginTop:4}}>{name||' '}</div>
@@ -425,7 +508,7 @@ function Reports({depts}){
           </div>
           {confidential&&<div style={{marginTop:34,fontSize:10.5,color:'var(--rose)',fontWeight:700,textTransform:'uppercase',letterSpacing:1,border:'1px solid #f1c6cd',borderRadius:6,padding:'6px 14px'}}>Confidential — for authorised recipients only</div>}
           <div style={{fontSize:10,color:'var(--faint)',marginTop:20}}>Generated {new Date().toLocaleDateString('en-US')}</div>
-          {(sig.prepared||sig.reviewed||sig.approved)&&(
+          {showSig&&(sig.prepared||sig.reviewed||sig.recommended||sig.approved)&&(
             /* Saved sign-off names on the COVER too — same Authorisation block style as
                the last page (rule line + bold name + role), per the approved design. */
             <div style={{width:'100%',maxWidth:600,textAlign:'left'}}><SigBlock/></div>
@@ -439,8 +522,7 @@ function Reports({depts}){
   function DeptPage({d, n, total}){
     const tone=PALETTE[(d.id.charCodeAt(0))%PALETTE.length];
     const fs=fseriesOf(d); const st=statOf(d,fs);
-    const breakdown=d.cols.filter(c=>c.id!==d.primary&&!c.pct);
-    const donutData=breakdown.map((c,i)=>({label:c.label,value:fs.reduce((s,r)=>s+(r[c.id]||0),0),color:PALETTE[i%PALETTE.length]})).filter(x=>x.value>0);
+    const compGroups=compositionGroups(d,fs);
     const detailed=type==='detail';
     // ALL metric columns, always — the summary table used to slice to the first 5,
     // silently dropping the rest for wide departments (Dialysis lost Total, ER lost
@@ -463,7 +545,7 @@ function Reports({depts}){
             <div style={{border:'1px dashed var(--line)',borderRadius:10,padding:'38px 20px',textAlign:'center',color:'var(--muted)',fontSize:12.5}}>
               No data reported for {d.name} in the selected period ({rangeLabel}).
             </div>
-            {showSig&&n===total&&<SigBlock/>}
+            {/* authorisation now shown on the cover page only */}
           </div>
           <Footer n={n} total={total}/>
         </div>
@@ -484,7 +566,7 @@ function Reports({depts}){
             </div>
           )}
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:16}}>
-            {[['Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Avg',fmt(st.avg)]].map(([l,v],i)=>(
+            {[[st.latest.full||'Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Average',fmt(st.avg)]].map(([l,v],i)=>(
               <div key={i} style={{background:'var(--panel-2)',borderRadius:7,padding:'9px 11px',borderLeft:'3px solid '+tone}}>
                 <div style={{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.3}}>{l}</div>
                 <div className="num" style={{fontSize:18,fontWeight:600}}>{v}</div>
@@ -494,15 +576,15 @@ function Reports({depts}){
           {chartStyles.map((cs,ci)=>(
             <div key={ci} style={{margin:'4px 0 8px'}}>
               {chartStyles.length>1&&<div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,margin:'8px 0 2px'}}>{CHART_STYLE_LABEL[cs]||cs}</div>}
-              {reportChartEl(d,cs,tone,fs,donutData)}
+              {reportChartEl(d,cs,tone,rptChartRows(d,fs),compGroups)}
             </div>
           ))}
-          {donutData.length>1&&!chartStyles.includes('donut')&&(
-            <div style={{display:'flex',alignItems:'center',gap:10,background:'var(--panel-2)',borderRadius:9,padding:'10px 14px',marginTop:6}}>
-              <div style={{fontSize:10.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.3,fontWeight:600,width:78}}>Composition</div>
-              <Donut data={donutData} size={104} thickness={20} flat/>
+          {!chartStyles.includes('donut')&&compGroups.map((g,gi)=>(
+            <div key={gi} style={{display:'flex',alignItems:'center',gap:10,background:'var(--panel-2)',borderRadius:9,padding:'10px 14px',marginTop:6}}>
+              <div style={{fontSize:10.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.3,fontWeight:600,width:78}}>{g.title}</div>
+              <Donut data={g.data} size={104} thickness={20} flat/>
             </div>
-          )}
+          ))}
           <table className={(detailed||ncol>7)?'tbl rpt':'tbl'} style={{marginTop:14,fontSize:tblFont}}>
             <thead><tr><th>Month</th>{d.cols.map(c=><th key={c.id}>{c.label}</th>)}</tr></thead>
             <tbody>{fs.map((r,i)=>(
@@ -511,7 +593,7 @@ function Reports({depts}){
             {detailed&&<tr className="tot"><td>TOTAL</td>{d.cols.map(c=><td key={c.id}>{c.pct?'—':fmt(fs.reduce((s,r)=>s+(r[c.id]||0),0))}</td>)}</tr>}
             </tbody>
           </table>
-          {showSig&&n===total&&<SigBlock/>}
+          {/* authorisation now shown on the cover page only */}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -535,7 +617,7 @@ function Reports({depts}){
                 <td style={{textAlign:'right'}}><Delta v={st.delta}/></td></tr>
             ))}</tbody>
           </table>
-          {showSig&&<SigBlock/>}
+          {/* authorisation now shown on the cover page only */}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -593,7 +675,7 @@ function Reports({depts}){
                 <td style={{textAlign:'right'}}><Delta v={st.delta}/></td></tr>
             ))}</tbody>
           </table>
-          {showSig&&<SigBlock/>}
+          {/* authorisation now shown on the cover page only */}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -937,10 +1019,10 @@ function Reports({depts}){
       return y0+blockH;
     };
     // DeptPage composition strip — grey box, small donut + legend
-    const compositionStrip=(y0,data)=>{
+    const compositionStrip=(y0,data,title)=>{
       const legH=data.length*21-6,boxH=Math.max(124,legH+20);
       FR(MX,y0,CWx,boxH,C.panel2,9);
-      font('bold',10.5,C.muted);doc.text('COMPOSITION',X(MX+14),X(y0+boxH/2+3),{charSpace:0.3*S});
+      font('bold',10.5,C.muted);doc.text(String(title||'COMPOSITION').toUpperCase(),X(MX+14),X(y0+boxH/2+3),{charSpace:0.3*S});
       const dx0=MX+14+78+10;
       vDonut(dx0,y0+(boxH-104)/2,104,20,data,null,null);
       donutLegend(dx0+104+18,y0+(boxH-legH)/2,data);
@@ -996,8 +1078,8 @@ function Reports({depts}){
     const sigBlockAt=(x0,wAll,y)=>{
       y+=26;
       font('bold',9.5,C.muted);doc.text(('Authorisation · '+hospitalName).toUpperCase(),X(x0),X(y+9),{charSpace:0.4*S});
-      const gap=30,w3=(wAll-2*gap)/3,ly=y+9+12+34;
-      [['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Approved by',sig.approved]].forEach(([role,name],i)=>{
+      const gap=22,w3=(wAll-3*gap)/4,ly=y+9+12+34;
+      [['Prepared by',sig.prepared],['Checked by',sig.reviewed],['Recommended by',sig.recommended],['Approved by',sig.approved]].forEach(([role,name],i)=>{
         const x=x0+i*(w3+gap);
         LN(x,ly,x+w3,ly,C.ink2,1);
         font('bold',11,C.ink);T(name||' ',x,ly+14);
@@ -1008,16 +1090,16 @@ function Reports({depts}){
     const SIGH=113;
 
     // reportChartEl equivalent — block height estimate + renderer per style
-    const chartH=(cs,fs2,donutData)=>{
+    const chartH=(cs,fs2,compGroups)=>{
       if(cs==='horizontal')return Math.max(1,fs2.length)*24-5;
-      if(cs==='donut')return donutData.length>1?205:205;
+      if(cs==='donut')return compGroups.length?Math.max(205,compGroups.length*210-5):205;
       if(cs==='combo'||cs==='pct')return 231;
       if(cs==='grouped'||cs==='stacked')return 210;
       if(cs==='area')return 200;
       if(cs==='bar'||cs==='line')return 195;
       return 205;
     };
-    const drawChart=(cs,y,d,fs2,tone,donutData)=>{
+    const drawChart=(cs,y,d,fs2,tone,compGroups)=>{
       const prim=d.primary;
       if(cs==='bar')return vBarFlat(y,fs2,'month',prim,195);
       if(cs==='line')return vLine(y,fs2,'full',prim,tone,195);
@@ -1028,7 +1110,7 @@ function Reports({depts}){
       if(cs==='stacked'){const sr=reportSeries(d);return sr.length?vStacked(y,fs2,'month',sr,210):vBarFlat(y,fs2,'month',prim,195);}
       if(cs==='pct'){const sr=reportSeries(d);return sr.length?vPct(y,fs2,'month',sr,210):vBarFlat(y,fs2,'month',prim,195);}
       if(cs==='horizontal')return vHBarRows(y,fs2.map((r,i)=>({label:r.full,value:r[prim]||0,color:PALV[i%PALV.length]})));
-      if(cs==='donut')return donutData.length>1?vDonutBlock(y,donutData,205):vBar3D(y,fs2,'month',prim,205);
+      if(cs==='donut')return compGroups.length?compGroups.reduce((yy,g)=>vDonutBlock(yy,g.data,205)+8,y):vBar3D(y,fs2,'month',prim,205);
       return vBar3D(y,fs2,'month',prim,205); // bar3d + default
     };
 
@@ -1050,7 +1132,7 @@ function Reports({depts}){
         font('normal',12.5,C.muted);
         T('No data reported for '+d.name+' in the selected period ('+rangeLabel+').',MX+CWx/2,y+52,{align:'center'});
         y+=96;
-        if(showSig&&isLast)sigBlockPx(y);
+        /* authorisation drawn on the cover page only */
         return;
       }
       if(fs2.length<pMonths.length){
@@ -1064,25 +1146,26 @@ function Reports({depts}){
         y+=boxH+10;
       }
       // preview: all four KPI tiles carry the DEPARTMENT tone
-      y=kpiRow(y,[['Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Avg',fmt(st.avg)]]
+      y=kpiRow(y,[[st.latest.full||'Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Average',fmt(st.avg)]]
         .map(p=>({label:p[0],value:p[1],tone})));
-      const breakdown=d.cols.filter(c=>c.id!==d.primary&&!c.pct);
-      const donutData=breakdown.map((c,i)=>({label:c.label,value:fs2.reduce((s3,r)=>s3+(r[c.id]||0),0),color:PALETTE[i%PALETTE.length]})).filter(x=>x.value>0);
+      const compGroups=compositionGroups(d,fs2);
       chartStyles.forEach(cs=>{
         const capH=chartStyles.length>1?18:0;
-        const need=capH+chartH(cs,fs2,donutData)+12;
+        const need=capH+chartH(cs,fs2,compGroups)+12;
         // break to a fresh page whenever the block doesn't fit — unless we're already
         // at the top of one (an over-tall horizontal chart then paginates row-wise)
         if(y+need>LIMIT&&y>MT+71)y=newPage();
         y+=4;
         if(chartStyles.length>1){font('bold',9.5,C.muted);doc.text(String(CHART_STYLE_LABEL[cs]||cs).toUpperCase(),X(MX),X(y+12),{charSpace:0.4*S});y+=18;}
-        y=drawChart(cs,y,d,fs2,tone,donutData);
+        y=drawChart(cs,y,d,rptChartRows(d,fs2),tone,compGroups);
         y+=8;
       });
-      if(donutData.length>1&&!chartStyles.includes('donut')){
-        const boxH=Math.max(124,donutData.length*21-6+20);
-        if(y+6+boxH>LIMIT)y=newPage();
-        y=compositionStrip(y+6,donutData);
+      if(!chartStyles.includes('donut')){
+        compGroups.forEach(g=>{
+          const boxH=Math.max(124,g.data.length*21-6+20);
+          if(y+6+boxH>LIMIT)y=newPage();
+          y=compositionStrip(y+6,g.data,g.title);
+        });
       }
       const detailed=type==='detail';
       const ncol=d.cols.length+1;
@@ -1094,7 +1177,7 @@ function Reports({depts}){
       const rows=fs2.map(r=>[detailed?r.month:r.full].concat(d.cols.map(c=>r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id])))));
       if(detailed)rows.push(['TOTAL'].concat(d.cols.map(c=>c.pct?'—':fmt(fs2.reduce((s3,r)=>s3+(r[c.id]||0),0)))));
       y=vTable(y+14,['Month'].concat(d.cols.map(c=>c.label)),widths,rows,{fs:tblFont,rpt:rpt,totalRow:detailed});
-      if(showSig&&isLast){if(y+SIGH>LIMIT)y=newPage();sigBlockPx(y);}
+      /* authorisation drawn on the cover page only */
     };
 
     /* ---------- CoverPage ---------- */
@@ -1104,7 +1187,7 @@ function Reports({depts}){
       const mTot={};rows.forEach(rr=>rr.fs.forEach(r=>{mTot[r.month]=(mTot[r.month]||0)+(r[rr.d.primary]||0);}));
       const peakM=Object.keys(mTot).sort((a,b)=>mTot[b]-mTot[a])[0];
       const typeLabel={summary:'Department Summary Report',detail:'Detailed Statistical Report',compare:'Cross-Department Comparison',board:'Executive Board Report'}[type]||'Statistical Report';
-      const hasSig=!!(sig.prepared||sig.reviewed||sig.approved);
+      const hasSig=!!(sig.prepared||sig.reviewed||sig.recommended||sig.approved);
       const totalH=(logo?92:0)+16+58+17+28+82+(confidential?54:0)+29+(hasSig?SIGH:0);
       let y=MT+Math.max(24,(FOOTY-MT-totalH)/2+15);
       if(logo){const w2=66*(logo.w/logo.h);drawLogo(pageW/2-w2/2,y,66);y+=92;}
@@ -1126,7 +1209,7 @@ function Reports({depts}){
         T(t2,pageW/2,y+44.5,{align:'center'});y+=54;
       }
       font('normal',10,C.faint);T('Generated '+genDate,pageW/2,y+24,{align:'center'});y+=29;
-      if(hasSig)sigBlockAt(Math.max(MX,(pageW-600)/2),Math.min(600,CWx),y);
+      if(showSig&&hasSig)sigBlockAt(Math.max(MX,(pageW-600)/2),Math.min(600,CWx),y);
     };
 
     /* ---------- ComparePage ---------- */
@@ -1140,7 +1223,7 @@ function Reports({depts}){
       y=vTable(y,['Department','Service line','Latest','Total','Peak','Avg','Trend'],widths,
         rows.map(rr=>[rr.d.name,rr.d.group,fmt(rr.st.latest[rr.d.primary]||0),fmt(rr.st.total),fmt(rr.st.peak),fmt(rr.st.avg),rr.st.delta]),
         {fs:11.5,deltaCol:6});
-      if(showSig){if(y+SIGH>LIMIT)y=newPage();sigBlockPx(y);}
+      /* authorisation drawn on the cover page only */
     };
 
     /* ---------- BoardPage ---------- */
@@ -1172,7 +1255,7 @@ function Reports({depts}){
       y=vTable(y,['Department','Service line','Total','Share','Avg / month','Trend'],widths,
         ranked.map(rr=>[rr.d.name,rr.d.group,fmt(rr.st.total),totAll?Math.round(rr.st.total*100/totAll)+'%':'—',fmt(rr.st.avg),rr.st.delta]),
         {fs:11,deltaCol:5});
-      if(showSig){if(y+SIGH>LIMIT)y=newPage();sigBlockPx(y);}
+      /* authorisation drawn on the cover page only */
     };
 
     /* ---------- assemble ---------- */
@@ -1194,6 +1277,77 @@ function Reports({depts}){
     doc.save('UNICO-statistics-'+type+'-'+new Date().toISOString().slice(0,10)+'.pdf');
   };
   const doPrint=()=>{ try{ document.body.classList.add('pdf-export-mode'); window.print(); }catch(e){} finally{ setTimeout(()=>document.body.classList.remove('pdf-export-mode'),500); } };
+
+  /* ============ SERVER PDF (Python / ReportLab on Vercel) ============
+     Serializes a PRE-RESOLVED render model — the browser owns every clinical
+     derivation (fseriesOf / statOf / rptChartRows / compositionGroups); the
+     Python function (api/report_pdf.py) is a pure layout engine. Mirrors the
+     aggregates the on-screen pages (CoverPage / BoardPage / ComparePage /
+     DeptPage) compute, so the server output matches the preview.  */
+  const buildRenderModel=()=>{
+    const toneOf=d=>PALETTE[(d.id.charCodeAt(0))%PALETTE.length];
+    const typeLabel={summary:'Department Summary Report',detail:'Detailed Statistical Report',compare:'Cross-Department Comparison',board:'Executive Board Report'}[type]||'Statistical Report';
+    // per-department resolved blocks (shared by summary/detail/cover/board/compare)
+    const rows=chosen.map(d=>{const fs=fseriesOf(d);return {d,fs,st:statOf(d,fs)};});
+    const depts=rows.map(({d,fs,st})=>{
+      const cg=compositionGroups(d,fs).map(g=>({title:g.title,data:g.data.map(x=>({label:x.label,value:x.value,color:x.color}))}));
+      const chart=rptChartRows(d,fs);
+      return {
+        id:d.id,name:d.name,short:d.short,group:d.group||'',primary:d.primary,primaryLabel:d.primaryLabel||'',
+        toneHex:toneOf(d),
+        cols:d.cols.map(c=>({id:c.id,label:c.label,pct:!!c.pct})),
+        fs:fs.map(r=>{const o={month:r.month,full:r.full};d.cols.forEach(c=>{o[c.id]=r[c.id]==null?null:r[c.id];});return o;}),
+        chartRows:chart.map(r=>({x:r.month,full:r.full,v:r[d.primary]||0})),
+        series:reportSeries(d),
+        stat:{latestFull:st.latest.full||'Latest',latestValue:st.latest[d.primary]||0,total:st.total,peak:st.peak,avg:st.avg,delta:st.delta},
+        partial:(fs.length>0&&fs.length<pMonths.length)?{from:fs[0].full,to:fs[fs.length-1].full,reported:fs.length,periodMonths:pMonths.length}:null,
+        compGroups:cg,
+      };
+    });
+    const totAll=rows.reduce((s,r)=>s+r.st.total,0);
+    const mTot={}; rows.forEach(({d,fs})=>fs.forEach(r=>{mTot[r.month]=(mTot[r.month]||0)+(r[d.primary]||0);}));
+    const peakM=Object.keys(mTot).sort((a,b)=>mTot[b]-mTot[a])[0];
+    // board aggregates (mirror BoardPage)
+    const trend=pMonths.filter(m=>mTot[m]!=null).map(m=>({label:m.split('-')[0],val:mTot[m]}));
+    const bPeak=trend.slice().sort((a,b)=>b.val-a.val)[0];
+    const bTop=rows.slice().sort((a,b)=>b.st.total-a.st.total)[0];
+    const ranked=rows.slice().sort((a,b)=>b.st.total-a.st.total);
+    const board={
+      kpis:[['Total patients',fmt(totAll)],['Departments',String(rows.length)],['Busiest dept',bTop?bTop.d.short:'—'],['Peak month',bPeak?bPeak.label:'—']],
+      trend,
+      hbar:rows.map(({d,st})=>({label:d.short,value:st.total,color:toneOf(d)})).sort((a,b)=>b.value-a.value),
+      ranked:ranked.map(({d,st})=>({name:d.name,group:d.group||'',total:st.total,share:totAll?Math.round(st.total*100/totAll)+'%':'—',avg:st.avg,delta:st.delta})),
+    };
+    const compare={
+      hbar:rows.map(({d,st})=>({label:d.short,value:st.total,color:toneOf(d)})).sort((a,b)=>b.value-a.value),
+      rows:rows.map(({d,st})=>({name:d.name,group:d.group||'',latest:st.latest[d.primary]||0,total:st.total,peak:st.peak,avg:st.avg,delta:st.delta})),
+    };
+    const cover={typeLabel,deptCount:chosen.length,totAll,peakMonthLabel:peakM?(peakM.split('-')[0]+' 20'+peakM.split('-')[1]):'—',monthsCovered:pMonths.length};
+    return {
+      doc:{type,pageSize,orient,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,
+        showCover:showCover&&chosen.length>0,showSig,rangeLabel,genDate:new Date().toLocaleDateString('en-US'),
+        chartStyles,sig,palette:PALETTE},
+      depts,board,compare,cover,
+    };
+  };
+  // Try the Python report service; resolves true on a real PDF download, false to fall back.
+  const tryServerPDF=async()=>{
+    if(window.__UNICO_SERVER_PDF__===false) return false;
+    try{
+      const res=await fetch('/api/report-pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(buildRenderModel())});
+      // On localhost:8080 (no Vercel router) the catch-all returns index.html with 200 —
+      // the content-type guard rejects that so we cleanly fall back to the JS vector export.
+      const ct=(res.headers.get('content-type')||'').toLowerCase();
+      if(res.ok&&ct.indexOf('pdf')>=0){
+        const blob=await res.blob();
+        msDownload(blob,'UNICO-statistics-'+type+'-'+new Date().toISOString().slice(0,10)+'.pdf','application/pdf');
+        return true;
+      }
+      try{ console.warn('[reports] server PDF unavailable ('+res.status+' '+ct+') — falling back to vector'); }catch(_){}
+    }catch(e){ try{ console.warn('[reports] server PDF failed, falling back to vector:',e); }catch(_){} }
+    return false;
+  };
+
   const doExport=async()=>{
     const native=window.unicoNative;
     if(chosen.length===0){ setNote({ok:false,text:'Select at least one department first.'}); return; }
@@ -1210,7 +1364,32 @@ function Reports({depts}){
       finally{ document.body.classList.remove('pdf-export-mode'); setExporting(false); }
       return;
     }
-    // Web, preferred: TRUE VECTOR PDF — drawn with jsPDF primitives. Selectable text,
+    // Web, PREFERRED: the Python report service (api/report_pdf.py, ReportLab on
+    // Vercel). Generated server-side from a resolved render model. Any failure
+    // (offline, localhost without the function, non-PDF response) silently falls
+    // through to the client-side jsPDF vector path below — export never breaks.
+    if(chosen.length>0){
+      setExporting('Generating PDF…'); setNote(null);
+      // OPT-IN exact-preview render via the local report service (headless browser).
+      // Off by default (set window.__UNICO_HTML_PDF__=true to enable) — it's still being
+      // tuned; the proven exporters below are the default so export never breaks.
+      if(window.__UNICO_HTML_PDF__===true){
+        try{
+          if(await unicoHtmlServerPDF(pageSize,orient,'UNICO-statistics-'+type+'-'+new Date().toISOString().slice(0,10)+'.pdf')){
+            setNote({ok:true,text:'PDF downloaded.'}); setExporting(false); return;
+          }
+        }catch(e){ /* fall through */ }
+      }
+      // PREFERRED: server ReportLab model (also used on Vercel).
+      try{
+        if(await tryServerPDF()){
+          setNote({ok:true,text:'PDF downloaded.'});
+          setExporting(false);
+          return;
+        }
+      }catch(e){ /* fall through to vector */ }
+    }
+    // Web fallback #1: TRUE VECTOR PDF — drawn with jsPDF primitives. Selectable text,
     // razor-sharp at any zoom, ~100 KB, and ~1 s even for a 17-page all-departments
     // run (the raster path below needed 25-40 s of html2canvas captures).
     const J0=window.jspdf&&window.jspdf.jsPDF;
@@ -1455,9 +1634,10 @@ function Reports({depts}){
               <div style={{display:'flex',flexDirection:'column',gap:8}}>
                 <input value={sig.prepared} onChange={e=>setSig(s=>({...s,prepared:e.target.value}))} placeholder="Prepared by (name & title)" style={{...sel2,width:'100%'}}/>
                 <input value={sig.reviewed} onChange={e=>setSig(s=>({...s,reviewed:e.target.value}))} placeholder="Checked by (name & title)" style={{...sel2,width:'100%'}}/>
+                <input value={sig.recommended} onChange={e=>setSig(s=>({...s,recommended:e.target.value}))} placeholder="Recommended by (name & title)" style={{...sel2,width:'100%'}}/>
                 <input value={sig.approved} onChange={e=>setSig(s=>({...s,approved:e.target.value}))} placeholder="Approved by (name & title)" style={{...sel2,width:'100%'}}/>
                 <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-2)'}}>
-                  <input type="checkbox" checked={showSig} onChange={e=>setShowSig(e.target.checked)}/>Signature block on the last page
+                  <input type="checkbox" checked={showSig} onChange={e=>setShowSig(e.target.checked)}/>Signature block on cover page
                 </label>
               </div>
             </div>
@@ -1652,8 +1832,8 @@ function UserManagement(){
   );
 }
 
-function Settings({depts, store}){
-  const [tab,setTab]=React.useState('general');
+function Settings({depts, store, setRoute}){
+  const [tab,setTab]=React.useState((typeof window!=='undefined'&&window.__UNICO_SETTINGS_TAB__)||'general');
   const [dbFile,setDbFile]=React.useState('');
   const native=window.unicoNative;
   React.useEffect(()=>{ if(native&&native.dbPath){ native.dbPath().then(setDbFile).catch(()=>{}); } },[]);
@@ -1725,15 +1905,15 @@ function Settings({depts, store}){
       <SectionTitle icon={I.gear} title="Settings" sub="Configure the statistics platform"/>
       <div className="grid" style={{gridTemplateColumns:'200px 1fr',alignItems:'start'}}>
         <div className="card" style={{padding:6}}>
-          {[['general','General',I.gear],['departments','Departments',I.layers],['users','Users & Roles',I.user],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
+          {[['general','General',I.gear],['departments','Departments',I.layers],['users','Users & Roles',I.user],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
             <div key={id} onClick={()=>setTab(id)} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:7,cursor:'pointer',fontSize:13,fontWeight:600,
               background:tab===id?'var(--blue-50)':'transparent',color:tab===id?'var(--blue-700)':'var(--ink-2)'}}>
               <Ic d={ic} s={16}/>{l}
             </div>
           ))}
         </div>
-        <div className="card"><div className="card-b">
-          {tab==='general'&&<div>
+        <div style={{minWidth:0,display:'flex',flexDirection:'column',gap:16}}>
+          {tab==='general'&&<div className="card"><div className="card-b">
             {row({t:'Hospital name',s:'Shown across the platform and on exports'},<input defaultValue="UNICO Hospitals PLC" style={{padding:'8px 11px',border:'1px solid var(--line)',borderRadius:7,fontFamily:'inherit',fontSize:13,width:230}}/>)}
             {row({t:'Default reporting period',s:'Initial range when opening dashboards'},<select style={{padding:'8px 11px',border:'1px solid var(--line)',borderRadius:7,fontFamily:'inherit',fontSize:13}}><option>Last 9 months</option><option>Year to date</option><option>All time</option></select>)}
             {row({t:'Week starts on',s:'Calendar & trend grouping'},<select style={{padding:'8px 11px',border:'1px solid var(--line)',borderRadius:7,fontFamily:'inherit',fontSize:13}}><option>Sunday</option><option>Monday</option></select>)}
@@ -1753,15 +1933,12 @@ function Settings({depts, store}){
                 <button className="btn sm" onClick={()=>{setPinMode(false);setPin1('');setPin2('');}}>Cancel</button>
               </div>}
             </div>}
-          </div>}
-          {tab==='departments'&&<div>
-            <div style={{display:'flex',marginBottom:10}}><div style={{fontSize:12.5,color:'var(--muted)'}}>{depts.length} departments configured</div><span className="spacer"/><button className="btn sm pri"><Ic d={I.plus} s={14}/>Add department</button></div>
-            <table className="tbl"><thead><tr><th>Department</th><th>Code</th><th>Service line</th><th>Metrics</th><th>Status</th></tr></thead>
-              <tbody>{depts.map(d=>(<tr key={d.id}><td>{d.name}</td><td>{d.short}</td><td style={{fontFamily:'IBM Plex Sans'}}>{d.group}</td><td>{d.cols.length}</td>
-                <td><span className="chip pos">● Active</span></td></tr>))}</tbody></table>
-          </div>}
-          {tab==='users'&&<UserManagement/>}
-          {tab==='data'&&<div>
+          </div></div>}
+          {tab==='departments'&&(typeof ManageDepts!=='undefined'?<ManageDepts depts={depts} store={store} setRoute={setRoute}/>:null)}
+          {tab==='users'&&<div className="card"><div className="card-b"><UserManagement/></div></div>}
+          {tab==='responsibles'&&(typeof DataResponsibles!=='undefined'?<DataResponsibles depts={depts}/>:null)}
+          {tab==='fields'&&(typeof DataFields!=='undefined'?<DataFields setRoute={setRoute}/>:null)}
+          {tab==='data'&&<div className="card"><div className="card-b">
             <div style={{fontSize:13,fontWeight:700,color:'var(--ink)',marginBottom:2}}>Backup &amp; restore</div>
             <div style={{fontSize:11.5,color:'var(--muted)',marginBottom:10}}>All data is stored in a local database on this PC. Back it up to a file you can keep safe or move to another PC.</div>
             <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
@@ -1776,8 +1953,8 @@ function Settings({depts, store}){
               <button className="btn" style={{color:'var(--rose)',borderColor:'#f1c6cd'}} onClick={doClear}>Clear session entries</button>
               <button className="btn" style={{color:'var(--rose)',borderColor:'#f1c6cd'}} onClick={doReset}>Reset all customizations</button>
             </div>
-          </div>}
-        </div></div>
+          </div></div>}
+        </div>
       </div>
     </div>
   );

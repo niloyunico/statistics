@@ -19,7 +19,7 @@ function fromArrays(deps, quals) {
     const id = d && (d.id || d._id);
     if (!id) return;
     byId[id] = { id, name: d.name || id, qualityKey: d.qualityKey || null };
-    patientDepts.push(id);
+    if (d.qualityOnly) byId[id].qualityOnly = true; else patientDepts.push(id);
     if (d.qualityKey) { idToQk[id] = d.qualityKey; qkToId[d.qualityKey] = id; }
   });
   (quals || []).forEach((q) => {
@@ -43,10 +43,10 @@ async function get(force) {
   if (!force && _cache && (now - _ts) < TTL) return _cache;
   const db = await getDbHandle();
   if (!db) { _cache = fromArrays([], []); _ts = now; return _cache; }
-  const [deps, quals] = await Promise.all([
-    db.collection('departments').find({}, { projection: { id: 1, name: 1, qualityKey: 1 } }).toArray(),
-    db.collection('quality').find({}, { projection: { key: 1, name: 1, deptId: 1 } }).toArray(),
-  ]);
+  // Quality lives EMBEDDED in departments (dept.quality) after the Statistics+Quality
+  // merge — derive the quality-area link list from departments (single source of truth).
+  const deps = await db.collection('departments').find({}, { projection: { id: 1, name: 1, qualityKey: 1, qualityOnly: 1, quality: 1 } }).toArray();
+  const quals = deps.filter((d) => d.quality && d.quality.key).map((d) => ({ key: d.quality.key, name: d.quality.name || d.name, deptId: d.id }));
   _cache = fromArrays(deps, quals); _ts = now;
   return _cache;
 }

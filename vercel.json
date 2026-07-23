@@ -8,6 +8,7 @@
       "use": "@vercel/node",
       "config": { "includeFiles": ["renderer/index.html", "server/seed/**"] }
     },
+    { "src": "api/report_pdf.py", "use": "@vercel/python" },
     { "src": "renderer/dist/**", "use": "@vercel/static" },
     { "src": "renderer/vendor/**", "use": "@vercel/static" },
     { "src": "renderer/unico/**", "use": "@vercel/static" }
@@ -28,6 +29,7 @@
       "dest": "/renderer/unico/$1",
       "headers": { "Cache-Control": "public, max-age=0, must-revalidate" }
     },
+    { "src": "/api/report-pdf", "dest": "/api/report_pdf" },
     { "src": "/(.*)", "dest": "server/web.js" }
   ]
 }

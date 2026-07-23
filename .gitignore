@@ -6,6 +6,7 @@ dist/
 
 # generated migration backups (operational snapshots, not source)
 scripts/backups/
+**/_backup_*
 
 # Secrets & local env — NEVER commit real values
 .env
@@ -19,3 +20,8 @@ scripts/backups/
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# Local Python venv for the PDF bridge (machine-specific)
+.pyenv/
+__pycache__/
+*.pyc

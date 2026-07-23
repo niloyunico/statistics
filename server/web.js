@@ -35,9 +35,56 @@ const auth = require('./auth');
 const session = require('./session');
 const dataCollection = require('./data-collection');
 const deptmap = require('./deptmap');
+const qualityFormulas = require('./quality-formulas');
 
 // Parse login-form posts (the portal uses a plain HTML form, no JS required).
 app.use(express.urlencoded({ extended: false }));
+
+// ---- Local Python PDF bridge (localhost only) --------------------------------
+// On Vercel the PDF is served by the @vercel/python function (api/report_pdf.py).
+// Locally (`npm run web`) there is no Vercel router, so this route spawns the SAME
+// Python script to generate the PDF, giving the localhost app real Python output
+// instead of falling back to the in-browser JS exporter. Needs Python on PATH with
+// `pip install reportlab` (and pymongo only if you POST Mongo-reading params).
+// Set PYTHON_BIN to override the interpreter; the browser posts a resolved model so
+// no MongoDB access is required for this path.
+if (!process.env.VERCEL) {
+  const { spawn } = require('child_process');
+  const PY_SCRIPT = path.join(__dirname, '..', 'api', 'report_pdf.py');
+  // Prefer the project venv (created with `python -m venv .pyenv` + reportlab) so the
+  // bridge works out of the box; else PYTHON_BIN; else the system `python`.
+  const VENV_PY = process.platform === 'win32'
+    ? path.join(__dirname, '..', '.pyenv', 'Scripts', 'python.exe')
+    : path.join(__dirname, '..', '.pyenv', 'bin', 'python');
+  const PY_BIN = process.env.PYTHON_BIN || (fs.existsSync(VENV_PY) ? VENV_PY : 'python');
+  console.log('[pdf] Python bridge active at POST /api/report-pdf  (python: ' + PY_BIN + ')');
+  // Health probe — visit http://localhost:8080/api/report-pdf in a browser to confirm
+  // the bridge loaded. If you see the app HTML instead of this JSON, restart the server.
+  app.get('/api/report-pdf', (req, res) => {
+    res.json({ ok: true, engine: 'python-bridge', python: PY_BIN, ready: PY_BIN === 'python' || fs.existsSync(PY_BIN) });
+  });
+  app.post('/api/report-pdf', express.json({ limit: '48mb' }), (req, res) => {
+    const bin = PY_BIN;
+    let cp;
+    try { cp = spawn(bin, [PY_SCRIPT], { cwd: path.join(__dirname, '..') }); }
+    catch (e) { return res.status(500).json({ error: 'python spawn failed: ' + e.message }); }
+    const chunks = []; let err = '';
+    cp.stdout.on('data', (d) => chunks.push(d));
+    cp.stderr.on('data', (d) => { err += d.toString(); });
+    cp.on('error', (e) => { if (!res.headersSent) res.status(500).json({ error: 'python not found (set PYTHON_BIN): ' + e.message }); });
+    cp.on('close', (code) => {
+      const buf = Buffer.concat(chunks);
+      if (code === 0 && buf.slice(0, 5).toString() === '%PDF-') {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="UNICO-report.pdf"');
+        return res.send(buf);
+      }
+      res.status(500).json({ error: 'python exited ' + code, stderr: err.slice(-1200) });
+    });
+    try { cp.stdin.write(JSON.stringify(req.body || {})); cp.stdin.end(); }
+    catch (e) { /* stream closed */ }
+  });
+}
 
 const RENDERER = path.join(__dirname, '..', 'renderer');
 const INDEX_FILE = path.join(RENDERER, 'index.html');
@@ -137,12 +184,15 @@ async function serveIndex(req, res) {
   // serial ones, so the shell starts streaming sooner. Each query falls back
   // independently (.catch), preserving the per-dataset failure tolerance the previous
   // sequential try/catches had: a slow/unreachable query blanks only its own data.
-  const [appRes, deptRes, staffRes, qualRes, scopeRes] = await Promise.all([
+  const [appRes, deptRes, staffRes, qualRes, scopeRes, formulaRes] = await Promise.all([
     getAppData().catch(() => null),           // DB unreachable -> empty snapshot
     getDepartments().catch(() => []),         // /api/departments reports the error
     getStaff().catch(() => []),
     getQuality().catch(() => []),
     (req.user && req.user.sub) ? dataCollection.getUserScope(req.user.sub).catch(() => null) : null,
+    // Canonical quality-formula catalogue (one row per formula). Reference data —
+    // injected for every role so the by-name master drives all departments.
+    (async () => { try { const db = await getDbHandle(); return db ? await qualityFormulas.getFormulas(db) : []; } catch (e) { return []; } })(),
   ]);
   let snap = (appRes && appRes.data) || {};
   let depts = deptRes || [], staff = staffRes || [], quality = qualRes || [];
@@ -188,6 +238,14 @@ async function serveIndex(req, res) {
     ? { username: scopeUser.username, name: scopeUser.name, role: scopeUser.role, departments: scopeUser.departments, qualityAreas: scopeUser.qualityAreas }
     : (req.user ? { username: req.user.sub, name: req.user.name, role: req.user.role } : null);
 
+  // Canonical quality-formula master: the DB catalogue expanded to the
+  // window.QI_CORRECTIONS shape (by indicator name). Injected BEFORE the bundle so
+  // quality-corrections-apply.js swaps it in over the static fallback, and the raw
+  // catalogue array feeds the Formula Library editor. Empty in dev/in-memory mode
+  // (no DB) -> the bundled static QI_CORRECTIONS keeps driving the app.
+  const formulas = formulaRes || [];
+  const qiByName = qualityFormulas.buildByNameMap(formulas);
+
   // Inject the saved state + DB-backed datasets (scoped per user above). __UNICO_USER__
   // tells the app who is signed in; __UNICO_INITIAL_ROUTE__ lets /collect open the app
   // straight on the Data Collection section.
@@ -198,6 +256,7 @@ async function serveIndex(req, res) {
     'window.__UNICO_QUALITY__=' + safeJSON(quality) + ';' +
     'window.__UNICO_DEPT_MAP__=' + safeJSON(deptMap) + ';' +
     'window.__UNICO_USER__=' + safeJSON(userInject) + ';' +
+    (formulas.length ? 'window.__UNICO_QI_CORRECTIONS__=' + safeJSON(qiByName) + ';window.__UNICO_QI_FORMULAS__=' + safeJSON(formulas) + ';' : '') +
     (req.unicoLanding ? 'window.__UNICO_INITIAL_ROUTE__=' + safeJSON(req.unicoLanding) + ';' : '') +
     '</script>\n' +
     '<script src="unico/web-native.js"></script>\n';
@@ -428,6 +487,10 @@ require('./data-collection').mount(app, { requireApi: session.requireApi });
 // User Management module: admin-only account CRUD over the `users` collection.
 require('./users-admin').mount(app, { requireApi: session.requireApi });
 
+// Quality Formula catalogue: list (all roles) + admin-only edit of the ONE
+// canonical formula row per indicator; changes fan out to every department.
+qualityFormulas.mount(app, { requireApi: session.requireApi });
+
 // All other renderer assets (jsx/js/css/svg/fonts) are static. index:false so our
 // handler owns "/". The /api/* routes were registered by ./index before this.
 // The app's own source (jsx/js/css) is transpiled in-browser by Babel, so it MUST
@@ -504,7 +567,12 @@ if (require.main === module) {
 Promise.allSettled([
   ensureDepartmentsSeeded(),
   ensureRendererSeeded('staff'),
-  ensureRendererSeeded('quality'),
+  // Quality is no longer its own collection — it lives embedded in departments
+  // (dept.quality) after the Statistics+Quality merge, so nothing to seed here.
+  Promise.resolve({ name: 'quality', seeded: 0, note: 'merged into departments.quality' }),
+  // Canonical formula catalogue: seeded once from the static QI_CORRECTIONS + the
+  // quality collection (needs a DB handle; harmless no-op in dev in-memory mode).
+  (async () => { const db = await getDbHandle(); return db ? qualityFormulas.ensureSeeded(db) : { name: 'qualityFormulas', seeded: 0 }; })(),
 ])
   .then((results) => {
     results.forEach((r) => {

@@ -55,8 +55,9 @@ function App(){
       </div>
     );
   } else if(route.view==='departments'){
-    if(!curDept){ body=<EmptyState setRoute={setRoute}/>; crumbs=['UNICO','Departments']; }
-    else { crumbs=['UNICO','Departments',curDept.name]; body=<DeptDetail dept={curDept} openDept={openDept} depts={depts} setRoute={setRoute}/>; }
+    if(!depts.length){ body=<EmptyState setRoute={setRoute}/>; crumbs=['UNICO','Departments']; }
+    else if(!route.dept){ crumbs=['UNICO','Departments']; body=<DeptGrid depts={depts} openDept={openDept} setRoute={setRoute}/>; }
+    else { const cd=depts.find(d=>d.id===route.dept)||depts[0]; crumbs=['UNICO','Departments',cd.name]; body=<DeptDetail dept={cd} openDept={openDept} depts={depts} setRoute={setRoute}/>; }
   } else if(route.view==='compare'){
     crumbs=['UNICO','Compare'];
     body=<DeptCompare depts={depts} openDept={openDept}/>;
@@ -68,7 +69,7 @@ function App(){
     crumbs=['UNICO','Manage Departments'];
     body=<ManageDepts depts={depts} store={store} setRoute={setRoute}/>;
   } else if(route.view==='input'){
-    crumbs=['UNICO','Data Entry'];
+    crumbs=['UNICO','Data Collection','Data Entry'];
     body=<DataEntry depts={depts} addEntry={store.addEntry} entries={store.entries} initialDept={route.dept} updateDept={store.updateDept} deleteDept={store.deleteDept} deleteMonth={store.deleteMonth} undo={store.undo} canUndo={store.canUndo}/>;
   } else if(route.view==='reports'){
     crumbs=['UNICO','Reports','Patient Statistics'];
@@ -78,12 +79,12 @@ function App(){
     body= (typeof QualityReportsPanel!=='undefined') ? <QualityReportsPanel/> : null;
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];
-    body=<Settings depts={depts} store={store}/>;
+    body=<Settings depts={depts} store={store} setRoute={setRoute}/>;
   } else if(route.view==='qualityDeptManage'){
-    // Standalone Manage-Departments screen (its own file); handled BEFORE the quality
-    // catch-all so it does not get routed into QualityView.
-    crumbs=['UNICO','Quality Indicators','Manage Departments'];
-    body= (typeof QualityDeptManage!=='undefined') ? <QualityDeptManage setRoute={setRoute}/> : null;
+    // Department management is now ONE unified screen (statistics + quality merged), so
+    // the old quality "Manage Departments" link lands on the single manager.
+    crumbs=['UNICO','Departments','Manage'];
+    body=<ManageDepts depts={depts} store={store} setRoute={setRoute}/>;
   } else if(route.view && route.view.indexOf('quality')===0){
     // Quality module renders INSIDE the global shell now (window.QualityView); the 8
     // views are the quality submenu. Legacy quality* routes map to a module id.
