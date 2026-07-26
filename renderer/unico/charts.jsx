@@ -225,6 +225,9 @@ function Donut({data, size=180, thickness=30, centerLabel, centerValue, flat=fal
   let off=0, ang=-Math.PI/2;
   return (
     <div style={{position:'relative',display:'flex',alignItems:'center',gap:18}}>
+      {/* Fixed-size ring box so the center label stays centered on the DONUT even
+          when the legend column (right) is much taller than the ring. */}
+      <div style={{position:'relative',width:size,height:size,flexShrink:0}}>
       {flat ? (
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         {data.map((d,i)=>{
@@ -251,11 +254,12 @@ function Donut({data, size=180, thickness=30, centerLabel, centerValue, flat=fal
       </svg>
       )}
       {(centerValue!=null)&&(
-        <div style={{position:'absolute',left:size/2,top:size/2,transform:'translate(-50%,-50%)',textAlign:'center'}}>
+        <div style={{position:'absolute',left:'50%',top:'50%',transform:'translate(-50%,-50%)',textAlign:'center',width:'82%',pointerEvents:'none'}}>
           <div className="num" style={{fontSize:24,fontWeight:600,color:'#16202e',lineHeight:1}}>{centerValue}</div>
           <div style={{fontSize:10,color:'#6c7a8c',textTransform:'uppercase',letterSpacing:.4}}>{centerLabel}</div>
         </div>
       )}
+      </div>
       <div style={{display:'flex',flexDirection:'column',gap:6}}>
         {data.map((d,i)=>(
           <div key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:12,opacity:hi<0||hi===i?1:.45,transition:'opacity .15s'}}

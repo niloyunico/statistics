@@ -807,7 +807,7 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
 
       {/* actions */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 14, paddingTop: 12, borderTop: '1px solid #e8edf3' }}>
-        <button onClick={save} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: 0, background: '#0090ca', color: '#fff', padding: '9px 16px', borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,144,202,.4)' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"></path></svg>Save changes</button>
+        {(!window.unicoCan||window.unicoCan('quality','edit'))&&<button onClick={save} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: 0, background: '#0090ca', color: '#fff', padding: '9px 16px', borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,144,202,.4)' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"></path></svg>Save changes</button>}
         <button onClick={onClose} style={{ border: '1px solid #dde3ec', background: '#fff', color: P.ink2, padding: '9px 14px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
         {!isNew && <button onClick={clearAll} title="Delete this month's reading + incidents" style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid #f1c6cd', background: '#fff', color: '#d23a52', padding: '9px 14px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"></path></svg>Delete reading</button>}
       </div>
@@ -4098,7 +4098,7 @@ function QCFormulaMaster(){
               </div>
               {(f.aliases||[]).length>0 && <div style={{marginTop:10,display:'flex',flexWrap:'wrap',gap:6,alignItems:'center'}}><span style={{fontSize:10,fontWeight:700,color:P.faint,textTransform:'uppercase',letterSpacing:'.3px'}}>Applies to</span>{f.aliases.map(a=><span key={a} style={{fontSize:10.5,color:P.ink2,background:'#eef1f5',padding:'2px 8px',borderRadius:12}}>{a}</span>)}</div>}
               <div style={{display:'flex',gap:9,marginTop:14,alignItems:'center'}}>
-                <button onClick={save} disabled={saving} style={{border:0,background:saving?'#8fc7e2':'#0090ca',color:'#fff',padding:'9px 18px',borderRadius:8,fontSize:12.5,fontWeight:700,cursor:saving?'default':'pointer'}}>{saving?'Saving…':'Save — apply everywhere'}</button>
+                {(!window.unicoCan||window.unicoCan('quality','edit'))&&<button onClick={save} disabled={saving} style={{border:0,background:saving?'#8fc7e2':'#0090ca',color:'#fff',padding:'9px 18px',borderRadius:8,fontSize:12.5,fontWeight:700,cursor:saving?'default':'pointer'}}>{saving?'Saving…':'Save — apply everywhere'}</button>}
                 <button onClick={cancel} disabled={saving} style={{border:'1px solid #dde3ec',background:'#fff',color:P.muted,padding:'9px 16px',borderRadius:8,fontSize:12.5,fontWeight:600,cursor:'pointer'}}>Cancel</button>
               </div>
             </div>
@@ -4353,9 +4353,9 @@ function QCAdmin({Q,q,onQ,initialDept}){
           <h1 style={{margin:0,fontSize:21,fontWeight:700,color:P.ink,letterSpacing:'-.3px'}}>Indicator Administration</h1>
           <div style={{fontSize:12.5,color:P.muted,marginTop:2}}>Define, organise &amp; assign every quality indicator across the hospital. Changes flow to the Dashboard, Scorecard, Reports &amp; CAPA.</div>
         </div>
-        <button onClick={onNew} style={{display:'inline-flex',alignItems:'center',gap:7,border:'1px solid #0090ca',background:'#0090ca',color:'#fff',padding:'9px 15px',borderRadius:8,fontSize:13,fontWeight:600,boxShadow:'0 1px 3px rgba(0,144,202,.4)',cursor:'pointer'}}>
+        {(!window.unicoCan||window.unicoCan('quality','add'))&&<button onClick={onNew} style={{display:'inline-flex',alignItems:'center',gap:7,border:'1px solid #0090ca',background:'#0090ca',color:'#fff',padding:'9px 15px',borderRadius:8,fontSize:13,fontWeight:600,boxShadow:'0 1px 3px rgba(0,144,202,.4)',cursor:'pointer'}}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round"><path d="M12 5v14M5 12h14"></path></svg>New indicator
-        </button>
+        </button>}
       </div>
 
       {/* sub-nav */}
@@ -4471,7 +4471,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
                   <span style={{flex:1}}></span>
                   <button onClick={onClone} style={{display:'inline-flex',alignItems:'center',gap:5,border:'1px solid #dde3ec',background:'#fff',color:P.ink2,padding:'5px 10px',borderRadius:7,fontSize:11.5,fontWeight:600,cursor:'pointer'}}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"></path></svg>Clone</button>
                   <button onClick={()=>setCopyOpen(!copyOpen)} style={{display:'inline-flex',alignItems:'center',gap:5,border:'1px solid #dde3ec',background:'#fff',color:P.ink2,padding:'5px 10px',borderRadius:7,fontSize:11.5,fontWeight:600,cursor:'pointer'}}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 2 7l10 5 10-5zM2 12l10 5 10-5"></path></svg>Copy to…</button>
-                  <button onClick={onDelete} title="Delete indicator" style={{width:30,height:30,borderRadius:7,border:'1px solid #f1c6cd',background:'#fff',display:'grid',placeItems:'center',color:'#d23a52',cursor:'pointer'}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+                  {(!window.unicoCan||window.unicoCan('quality','delete'))&&<button onClick={onDelete} title="Delete indicator" style={{width:30,height:30,borderRadius:7,border:'1px solid #f1c6cd',background:'#fff',display:'grid',placeItems:'center',color:'#d23a52',cursor:'pointer'}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>}
                 </div>
                 <input value={selInd.name||''} onInput={patchField('name')} onChange={patchField('name')} placeholder="Indicator name" style={{width:'100%',border:'1px solid transparent',background:'transparent',fontFamily:'inherit',fontSize:19,fontWeight:700,color:P.ink,padding:'3px 6px',marginLeft:-6,borderRadius:7,outline:'none'}}/>
                 <div style={{marginTop:9,background:'#eef8fc',border:'1px solid #dceffa',borderRadius:8,padding:'8px 12px',fontFamily:MONO,fontSize:12.5,color:'#0072a3'}}>ƒ&nbsp; {formulaText(selInd)}</div>
@@ -4660,7 +4660,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
                   <div style={{display:'flex',flexDirection:'column',gap:5,maxWidth:280,marginBottom:18}}><label style={{fontSize:11.5,fontWeight:600,color:P.ink2}}>Department <span style={{color:P.faint,fontWeight:400,fontSize:10.5}}>move this indicator</span></label><select value={sel.deptKey} onChange={onMove} style={{padding:'9px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:13,background:'#fff',outline:'none'}}>{allDepts.map(d=><option key={d.key} value={d.key}>{d.name}</option>)}</select></div>
                   <div style={{borderTop:'1px solid #e8edf3',paddingTop:16}}>
                     <div style={{fontSize:11,fontWeight:700,color:'#d23a52',textTransform:'uppercase',letterSpacing:'.4px',marginBottom:9}}>Danger zone</div>
-                    <button onClick={onDelete} style={{display:'inline-flex',alignItems:'center',gap:6,border:'1px solid #f1c6cd',background:'#fff',color:'#d23a52',padding:'8px 13px',borderRadius:8,fontSize:12.5,fontWeight:600,cursor:'pointer'}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>Delete indicator</button>
+                    {(!window.unicoCan||window.unicoCan('quality','delete'))&&<button onClick={onDelete} style={{display:'inline-flex',alignItems:'center',gap:6,border:'1px solid #f1c6cd',background:'#fff',color:'#d23a52',padding:'8px 13px',borderRadius:8,fontSize:12.5,fontWeight:600,cursor:'pointer'}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>Delete indicator</button>}
                   </div>
                 </div>
                 )}

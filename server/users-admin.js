@@ -17,17 +17,51 @@ const deptmap = require('./deptmap');
 
 const ROLES = ['Administrator', 'collector', 'User'];
 
+// Grantable workspaces (per-module access for the standard 'User' role). Ids match
+// the renderer's unicoAccessModuleOf() output so a user's `perms` map keys 1:1 to
+// sidebar destinations. Administrators are unrestricted; collectors use their own
+// portal; a 'User' gets exactly the access levels in `perms`.
+const ACCESS_MODULES = ['stats', 'quality', 'staff', 'datacol', 'reports', 'users'];
+
+// Per-module access level, ESCALATING: each level includes every one before it.
+//   none   → module hidden
+//   view   → read-only
+//   edit   → may modify existing records
+//   add    → may modify + create new
+//   delete → full control (modify + create + delete)
+const PERM_LEVELS = ['none', 'view', 'edit', 'add', 'delete'];
+const fullPerms = () => ACCESS_MODULES.reduce((m, k) => (m[k] = 'delete', m), {});
+const nonePerms = () => ACCESS_MODULES.reduce((m, k) => (m[k] = 'none', m), {});
+// Normalise an incoming perms object to a complete {module: level} map over the known
+// modules (unknown keys dropped, invalid/absent levels => 'none').
+function cleanPerms(v) {
+  const out = nonePerms();
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    ACCESS_MODULES.forEach((k) => { const lv = String(v[k] || 'none'); if (PERM_LEVELS.includes(lv)) out[k] = lv; });
+  }
+  return out;
+}
+
 // Public projection — never leak passwordHash.
 function safe(u) {
+  const role = u.role || 'User';
   return {
     username: u.username,
     name: u.name || u.username,
-    role: u.role || 'User',
+    email: u.email || null,
+    title: u.title || null,           // display label / access template (e.g. "Manager")
+    role,
     active: u.active !== false,
     departments: Array.isArray(u.departments) ? u.departments : [],
     qualityAreas: Array.isArray(u.qualityAreas) ? u.qualityAreas : [],
     allQualityAreas: !!u.allQualityAreas,
     qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {},
+    // Per-module access levels. Administrators are always full; a 'User' carries its
+    // own map; null = unrestricted (legacy account predating this feature => full access
+    // until an admin assigns levels).
+    perms: role === 'Administrator' ? fullPerms()
+      : (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? cleanPerms(u.perms)
+      : null,
     createdAt: u.createdAt || null,
     updatedAt: u.updatedAt || null,
   };
@@ -91,6 +125,8 @@ function mount(app, opts) {
       const allQualityAreas = role === 'collector' ? !!b.allQualityAreas : false;
       const doc = {
         username, name: String(b.name || username).trim(), role,
+        email: String(b.email || '').trim().toLowerCase() || null,
+        title: String(b.title || '').trim() || null,
         active: b.active !== false,
         departments,
         allQualityAreas,
@@ -98,6 +134,9 @@ function mount(app, opts) {
         // ALL when hospital-wide. Assign once + optional custom access on top.
         qualityAreas: role === 'collector' ? await deptmap.deriveQualityAreas(departments, allQualityAreas, cleanList(b.qualityAreas)) : [],
         qualityIndicators: role === 'collector' ? cleanQI(b.qualityIndicators) : {}, // specific-indicator access
+        // Per-module access levels — only meaningful for the 'User' role. Admins are
+        // full (null => resolved to full in safe()); collectors use the collector portal.
+        perms: role === 'User' ? cleanPerms(b.perms) : null,
         passwordHash: await auth.hash(password),
         createdAt: Date.now(), updatedAt: Date.now(),
       };
@@ -117,6 +156,8 @@ function mount(app, opts) {
 
       const set = { updatedAt: Date.now() };
       if (b.name != null) set.name = String(b.name).trim();
+      if (b.email != null) set.email = String(b.email).trim().toLowerCase() || null;
+      if (b.title != null) set.title = String(b.title).trim() || null;
       if (b.role != null && ROLES.includes(b.role)) set.role = b.role;
       if (b.active != null) set.active = !!b.active;
       const role = set.role || u.role;
@@ -131,6 +172,14 @@ function mount(app, opts) {
         if (b.qualityIndicators != null) set.qualityIndicators = cleanQI(b.qualityIndicators);
       } else if (set.role && set.role !== 'collector') {
         set.departments = []; set.qualityAreas = []; set.allQualityAreas = false; set.qualityIndicators = {};
+      }
+
+      // Per-module access levels. Only the 'User' role carries a perms map; Administrators
+      // and collectors are cleared to null (full / portal). Absent leaves it untouched.
+      if (role === 'User') {
+        if (b.perms !== undefined) set.perms = cleanPerms(b.perms);
+      } else {
+        set.perms = null;
       }
 
       // Never strand the system without an active administrator.

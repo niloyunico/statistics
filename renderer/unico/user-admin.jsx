@@ -18,6 +18,18 @@
 
 const UA_ROLES = ['Administrator', 'collector', 'User'];
 const UA_ROLE_LABEL = { Administrator: 'Administrator', collector: 'Data Collector', User: 'User' };
+// Grantable workspaces for the standard 'User' role — ids match the server's
+// ACCESS_MODULES and the renderer's unicoAccessModuleOf(). Administrators get every
+// module automatically; collectors use the data-collection portal.
+const UA_MODULES = [
+  { id: 'stats', label: 'Statistics', icon: I.grid, desc: 'Dashboards, departments & data entry' },
+  { id: 'quality', label: 'Quality', icon: I.heart, desc: 'Quality indicators, scorecards & trends' },
+  { id: 'staff', label: 'Staff', icon: I.steth, desc: 'Nurse & PCA management' },
+  { id: 'datacol', label: 'Data Collection', icon: I.input, desc: 'Submission forms & review' },
+  { id: 'reports', label: 'Reports', icon: I.doc, desc: 'Report generator' },
+  { id: 'users', label: 'Administration', icon: I.gear, desc: 'Users, roles & settings' },
+];
+const UA_MODULE_LABEL = UA_MODULES.reduce((m, x) => { m[x.id] = x.label; return m; }, {});
 const UA_ROLE_TONE = { Administrator: ['#6a52d4', 'rgba(106,82,212,.12)'], collector: ['#0090ca', 'var(--blue-50)'], User: ['#5b6b80', '#eef1f5'] };
 function uaRoleTone(r) { return UA_ROLE_TONE[r] || UA_ROLE_TONE.User; }
 
@@ -51,6 +63,10 @@ function UAUserForm({ user, roles, onClose, onSaved }) {
   const [allQualityAreas, setAllQualityAreas] = useState(user ? !!user.allQualityAreas : false);
   const [qualityAreas, setQualityAreas] = useState(user && Array.isArray(user.qualityAreas) ? user.qualityAreas : []);
   const [qualityIndicators, setQualityIndicators] = useState(user && user.qualityIndicators && typeof user.qualityIndicators === 'object' && !Array.isArray(user.qualityIndicators) ? user.qualityIndicators : {});
+  // Per-module workspace access (role 'User'). Editing a legacy account whose modules
+  // is null (unrestricted before this feature) pre-selects ALL so saving preserves its
+  // access; a brand-new user starts with none, forcing an explicit grant.
+  const [modules, setModules] = useState(user ? (Array.isArray(user.modules) ? user.modules : UA_MODULES.map(m => m.id)) : []);
   const qAreas = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({ key: d.key, name: d.name })), []);
   const qAreaInds = React.useMemo(() => { const m = {}; (window.qualityData ? window.qualityData() : []).forEach(d => { m[d.key] = (d.indicators || []).map(i => ({ id: i.id, name: i.name })); }); return m; }, []);
   const [busy, setBusy] = useState(false);
@@ -68,8 +84,8 @@ function UAUserForm({ user, roles, onClose, onSaved }) {
       // Quality areas are DERIVED server-side from departments (+ hospital-wide flag), so we
       // only send the department list and the flag — never a separate qualityAreas array.
       const scope = role === 'collector'
-        ? { departments: list(departments), allQualityAreas, qualityAreas, qualityIndicators }
-        : { departments: [], allQualityAreas: false, qualityAreas: [], qualityIndicators: {} };
+        ? { departments: list(departments), allQualityAreas, qualityAreas, qualityIndicators, modules: null }
+        : { departments: [], allQualityAreas: false, qualityAreas: [], qualityIndicators: {}, modules: role === 'User' ? modules : null };
       if (editing) {
         await uaApi('PATCH', '/api/users/' + encodeURIComponent(user.username), { name, role, active, ...scope });
       } else {
@@ -134,6 +150,36 @@ function UAUserForm({ user, roles, onClose, onSaved }) {
                 </div>
               </div>}
             </>;
+          })()}
+          {role === 'User' && (() => {
+            const toggle = (id) => setModules(ms => ms.includes(id) ? ms.filter(x => x !== id) : [...ms, id]);
+            const allIds = UA_MODULES.map(m => m.id);
+            const allOn = allIds.every(id => modules.includes(id));
+            return (
+              <div className="field">
+                <label>Module access <span style={{ fontWeight: 400, color: 'var(--muted)' }}>· which workspaces this user can open</span></label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '2px 0 8px' }}>
+                  <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>{modules.length ? (modules.length + ' of ' + allIds.length + ' granted') : 'No access yet — select at least one'}</span>
+                  <span style={{ flex: 1 }} />
+                  <button type="button" onClick={() => setModules(allOn ? [] : allIds)} style={{ border: 0, background: 'none', color: 'var(--blue)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>{allOn ? 'Clear all' : 'Select all'}</button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  {UA_MODULES.map(m => {
+                    const on = modules.includes(m.id);
+                    return (
+                      <div key={m.id} onClick={() => toggle(m.id)} title={m.desc}
+                        style={{ cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 11px', borderRadius: 9, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff' }}>
+                        <span style={{ marginTop: 1, width: 16, height: 16, borderRadius: 5, flexShrink: 0, display: 'grid', placeItems: 'center', border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue)' : '#fff' }}>{on && <Ic d={I.check} s={11} c="#fff" />}</span>
+                        <span style={{ minWidth: 0 }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: on ? 'var(--blue-700)' : 'var(--ink)' }}><Ic d={m.icon} s={13} />{m.label}</span>
+                          <span style={{ display: 'block', fontSize: 10.5, color: 'var(--muted)', marginTop: 2, lineHeight: 1.35 }}>{m.desc}</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
           })()}
           {!editing && (
             <div className="field"><label>Password</label>
@@ -284,7 +330,13 @@ function UserAdmin() {
               {shown.map(u => {
                 const [fg, bg] = uaRoleTone(u.role);
                 const active = u.active !== false;
-                const scope = [].concat(u.departments || []).concat(u.qualityAreas || []);
+                // Scope column: Administrators are unrestricted; a 'User' shows its granted
+                // workspaces (or "All"/"No access"); collectors show their data scope.
+                const scope = u.role === 'Administrator'
+                  ? ['All workspaces']
+                  : u.role === 'User'
+                    ? (Array.isArray(u.modules) ? (u.modules.length ? u.modules.map(m => UA_MODULE_LABEL[m] || m) : ['No access']) : ['All workspaces'])
+                    : [].concat(u.departments || []).concat(u.qualityAreas || []);
                 return (
                   <tr key={u.username}>
                     <td style={{ textAlign: 'left' }}><b style={{ color: 'var(--ink)' }}>{u.name || u.username}</b></td>

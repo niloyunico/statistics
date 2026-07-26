@@ -5,7 +5,16 @@ function App(){
   const store=window.useDeptStore();
   const staff=window.useStaffStore();
   const depts=store.depts;
-  const [route,setRoute]=useState(()=> (typeof window!=='undefined' && window.__UNICO_INITIAL_ROUTE__) || {view:'dashboard'});
+  const [route,setRoute]=useState(()=>{
+    const init=(typeof window!=='undefined' && window.__UNICO_INITIAL_ROUTE__) || {view:'dashboard'};
+    // Per-module access: if the default landing isn't granted to this user, open the
+    // first workspace they CAN access instead (avoids landing on a forbidden view).
+    if(window.unicoCanAccessView && !window.unicoCanAccessView(init.view)){
+      const home=window.unicoFirstAllowedHome && window.unicoFirstAllowedHome();
+      if(home) return {view:home};
+    }
+    return init;
+  });
   const [collapsed,setCollapsed]=useState(()=> typeof window!=='undefined' && window.innerWidth<=820);
   const [layout,setLayout]=useState('executive');
   const [period,setPeriod]=useState({mode:'all'});
@@ -38,6 +47,16 @@ function App(){
     document.addEventListener('visibilitychange',refresh);
     return ()=>{ window.removeEventListener('focus',refresh); document.removeEventListener('visibilitychange',refresh); };
   },[]);
+
+  // Per-module access guard: if the current view belongs to a workspace this user was
+  // not granted (e.g. reached via a stale route or deep link), bounce to their first
+  // allowed workspace. The sidebar already hides forbidden destinations.
+  useEffect(()=>{
+    if(window.unicoCanAccessView && !window.unicoCanAccessView(route.view)){
+      const home=window.unicoFirstAllowedHome && window.unicoFirstAllowedHome();
+      if(home && home!==route.view) setRoute({view:home});
+    }
+  },[route.view]);
 
   const openDept=id=>setRoute({view:'departments',dept:id});
   const safeDepts = depts.length?depts:[];
@@ -112,8 +131,10 @@ function App(){
     crumbs=['UNICO','Data Collection','Form Fields'];
     body=<DataFields setRoute={setRoute}/>;
   } else if(route.view==='users'){
+    // Single real user-management UI (Settings → Users & Roles). The old standalone
+    // UserAdmin screen is retired; this route renders the same backend-backed panel.
     crumbs=['UNICO','User Management'];
-    body=<UserAdmin setRoute={setRoute}/>;
+    body=(typeof UserManagement!=='undefined') ? <UserManagement setRoute={setRoute}/> : <SectionTitle icon={I.user} title="User Management"/>;
   } else if(route.view==='nurseHome'){
     crumbs=['UNICO','Nurse Management','Dashboard'];
     body=<WorkforceDashboard store={staff} setRoute={setRoute} role="Nurse"/>;
@@ -132,6 +153,9 @@ function App(){
   } else if(route.view==='pcaCompliance'){
     crumbs=['UNICO','PCA Management','Compliance'];
     body=<StaffCompliance store={staff} setRoute={setRoute} role="PCA"/>;
+  } else if(route.view==='staffPrevious'){
+    crumbs=['UNICO','Staff','Previous Staff'];
+    body=<PreviousStaff store={staff} setRoute={setRoute}/>;
   } else if(route.view==='staffProfile'){
     const emp=staff.get(route.emp);
     crumbs=['UNICO','Staff',emp?emp.name:'Profile'];
@@ -148,6 +172,15 @@ function App(){
   if(typeof window!=='undefined' && window.__UNICO_USER__ && window.__UNICO_USER__.role==='collector' && typeof CollectorPortal!=='undefined'){
     return <CollectorPortal/>;
   }
+  // Per-module access: a 'User' with no workspaces granted has nothing to show.
+  const accessMods = window.unicoAllowedModules ? window.unicoAllowedModules() : null;
+  if(Array.isArray(accessMods) && accessMods.length===0){ return <NoAccessScreen/>; }
+  // Belt-and-braces: never render a forbidden view's body (the guard effect redirects
+  // on the next tick; this just avoids a one-frame flash of restricted content).
+  if(window.unicoCanAccessView && !window.unicoCanAccessView(route.view)){
+    crumbs=['UNICO'];
+    body=<div style={{display:'grid',placeItems:'center',height:'50vh',color:'var(--muted)',fontSize:13}}>Redirecting…</div>;
+  }
 
   return (
     <div className={'app'+(collapsed?' collapsed':'')}>
@@ -156,6 +189,21 @@ function App(){
       <div className="main">
         <TopBar route={route} setRoute={setRoute} onBurger={()=>setCollapsed(c=>!c)} crumbs={crumbs} actions={actions} depts={depts} onFill={(id)=>setRoute({view:'input',dept:id})} period={period} setPeriod={setPeriod}/>
         <div className="content" key={route.view+(route.dept||'')+(route.emp||'')+layout}>{body}</div>
+      </div>
+    </div>
+  );
+}
+
+// Shown when a signed-in 'User' has been granted zero workspaces. They can only sign
+// out; an administrator must assign at least one module (Statistics / Quality / Staff…).
+function NoAccessScreen(){
+  return (
+    <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'#eef2f7',fontFamily:'"IBM Plex Sans",system-ui,sans-serif',padding:24}}>
+      <div style={{maxWidth:440,background:'#fff',border:'1px solid #e3e9f1',borderRadius:16,padding:'28px 30px',textAlign:'center',boxShadow:'0 18px 50px rgba(5,12,24,.14)'}}>
+        <div style={{fontSize:34,marginBottom:8}}>🔒</div>
+        <div style={{fontSize:16,fontWeight:700,color:'#16202e',marginBottom:6}}>No workspace access</div>
+        <div style={{fontSize:12.5,color:'#6c7a8c',lineHeight:1.5,marginBottom:16}}>Your account hasn’t been granted access to any module yet. Please ask an administrator to assign the workspaces you need.</div>
+        <a href="/logout" style={{display:'inline-block',border:0,borderRadius:9,padding:'10px 22px',cursor:'pointer',fontSize:13,fontWeight:700,color:'#fff',textDecoration:'none',background:'linear-gradient(135deg,#27a8db,#0072a3)'}}>Sign out</a>
       </div>
     </div>
   );

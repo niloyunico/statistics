@@ -303,7 +303,7 @@ async function getUserScope(username) {
   const users = await getUsers();
   const u = await users.findOne({ username: String(username).toLowerCase() });
   if (!u) return null;
-  return { username: u.username, name: u.name || u.username, role: u.role || 'User', departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {} };
+  return { username: u.username, name: u.name || u.username, role: u.role || 'User', departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null };
 }
 
 async function deleteResponsible(id) {

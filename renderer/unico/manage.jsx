@@ -168,7 +168,7 @@ function ManageDepts({depts, store, setRoute}){
   return (
     <div className="grid" style={{gap:16}}>
       <SectionTitle icon={I.edit} title="Manage Departments" sub={`${depts.length} departments · ${totalInd} quality indicators · ${customCount} custom — one place for statistics AND quality`}
-        right={<button className="btn pri" onClick={()=>setModal({type:'add'})}><Ic d={I.plus} s={16}/>Add Department</button>}/>
+        right={(!window.unicoCan||window.unicoCan('stats','add'))?<button className="btn pri" onClick={()=>setModal({type:'add'})}><Ic d={I.plus} s={16}/>Add Department</button>:null}/>
 
       <div className="grid" style={{gap:10}}>
         {depts.map(d=>{
@@ -191,8 +191,8 @@ function ManageDepts({depts, store, setRoute}){
               <div style={{display:'flex',gap:6,flexShrink:0}}>
                 <button className="btn sm" title="Enter statistics data" onClick={()=>setRoute({view:'input',dept:d.id})}><Ic d={I.plus} s={14}/>Data</button>
                 <button className="btn sm" title="Manage quality indicators" onClick={()=>setRoute({view:'qualityManage',dept:(window.DEPTMAP&&window.DEPTMAP.qkFromId(d.id))||d.id})}><Ic d={I.heart} s={14}/>Quality</button>
-                <button className="icon-btn" title="Rename / edit metrics" onClick={()=>setModal({type:'edit',dept:d})}><Ic d={I.edit} s={15}/></button>
-                <button className="icon-btn danger" title="Delete" onClick={()=>setConfirm(d)}><Ic d={I.x} s={15}/></button>
+                {(!window.unicoCan||window.unicoCan('stats','edit'))&&<button className="icon-btn" title="Rename / edit metrics" onClick={()=>setModal({type:'edit',dept:d})}><Ic d={I.edit} s={15}/></button>}
+                {(!window.unicoCan||window.unicoCan('stats','delete'))&&<button className="icon-btn danger" title="Delete" onClick={()=>setConfirm(d)}><Ic d={I.x} s={15}/></button>}
               </div>
             </div>
           );
@@ -204,7 +204,7 @@ function ManageDepts({depts, store, setRoute}){
         <div><div style={{fontSize:13.5,fontWeight:700}}>Add a new department with custom metrics</div>
           <div style={{fontSize:12,color:'var(--muted)'}}>Define your own fields — e.g. Physiotherapy, Blood Bank, Pharmacy — then capture data in the Data Entry module.</div></div>
         <span className="spacer"/>
-        <button className="btn pri" onClick={()=>setModal({type:'add'})}><Ic d={I.plus} s={16}/>New Department</button>
+        {(!window.unicoCan||window.unicoCan('stats','add'))&&<button className="btn pri" onClick={()=>setModal({type:'add'})}><Ic d={I.plus} s={16}/>New Department</button>}
       </div>
 
       {modal&&<DeptModal initial={modal.type==='edit'?modal.dept:null} groups={groups} onClose={()=>setModal(null)} onSave={onSave}/>}

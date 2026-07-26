@@ -1,9 +1,12 @@
 /* UNICO — Workforce module: shared bits, dashboard, directory, compliance */
 
-const VACC_TONE={"Completed":"pos","Vaccinated":"pos","3 dose":"pos","2 dose":"warn","1 dose":"warn","Not Completed":"neg","Unknown":"flat"};
-function vaccColor(s){const t=VACC_TONE[s]||"flat";return t==='pos'?'#1f9d57':t==='warn'?'#e08a1e':t==='neg'?'#d23a52':'#8a93a3';}
+const VACC_TONE={"Completed":"pos","3rd Dose":"pos","2nd Dose":"warn","1st Dose":"warn","Not Completed":"neg","Unknown":"flat"};
+// Normalise any raw value (imports/typos) to a canonical state before colouring/labelling.
+function vaccCanon(s){ return (window.STAFF&&window.STAFF.canonVacc)?window.STAFF.canonVacc(s):(s||'Unknown'); }
+function vaccOK(s){ return ((window.STAFF&&window.STAFF.VACC_OK)||['Completed','3rd Dose']).includes(vaccCanon(s)); }
+function vaccColor(s){const t=VACC_TONE[vaccCanon(s)]||"flat";return t==='pos'?'#1f9d57':t==='warn'?'#e08a1e':t==='neg'?'#d23a52':'#8a93a3';}
 function VaccBadge({status}){
-  const c=vaccColor(status); return <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:11,fontWeight:600,padding:'2px 9px',borderRadius:20,color:c,background:c+'1c'}}><i style={{width:6,height:6,borderRadius:'50%',background:c}}/>{status||'Unknown'}</span>;
+  const cs=vaccCanon(status), c=vaccColor(status); return <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:11,fontWeight:600,padding:'2px 9px',borderRadius:20,color:c,background:c+'1c'}}><i style={{width:6,height:6,borderRadius:'50%',background:c}}/>{cs}</span>;
 }
 function Avatar({name,size=34,fontSize}){
   const parts=(name||'?').split(' '); const ini=(parts[0][0]||'')+(parts.length>1?parts[parts.length-1][0]:'');
@@ -72,22 +75,158 @@ function ExportMenu({rows,role}){
   );
 }
 
+/* Resolve a raw current_department to its REAL department. Some imported records have
+   designation text baked in ("MICU, Supervisor", "Charge Nurse ER", "Nurse Manager"),
+   which would otherwise each show as a bogus "department". We map to the canonical
+   DEPARTMENTS list (longest match wins so "CT ICU" beats "ICU"); pure-designation values
+   with no detectable department fall into "Unassigned". */
+function staffCanonDept(raw){
+  const S=window.STAFF; const DEPTS=(S&&S.DEPARTMENTS)||[]; const DESIGS=(S&&S.DESIGNATIONS)||[];
+  const s=String(raw||'').trim();
+  if(!s) return 'Unassigned';
+  const lc=s.toLowerCase();
+  for(const d of DEPTS){ if(d.toLowerCase()===lc) return d; }
+  const norm=s.replace(/[.,;/]+/g,' ').replace(/\s+/g,' ').trim();
+  const nl=norm.toLowerCase();
+  const padded=' '+nl+' ';
+  const esc=x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const sorted=[...DEPTS].sort((a,b)=>b.length-a.length);
+  for(const d of sorted){ if(new RegExp('(^| )'+esc(d.toLowerCase())+'( |$)').test(padded)) return d; }
+  // spelling / spacing variants
+  if(/training\s*(and|&)\s*development/.test(nl)) return 'Training & Development';
+  if(/infection\s*(prevention|control)/.test(nl)) return 'Infection Control';
+  const lvl=nl.match(/level\s*-?\s*(\d+)/); if(lvl) return 'Level-'+lvl[1];
+  if(/cath\s*lab/.test(nl)) return 'Cath Lab';
+  // pure designation with no department -> Unassigned
+  if(DESIGS.some(g=>{ const gl=g.toLowerCase(); return nl===gl || new RegExp('(^| )'+esc(gl)+'( |$)').test(padded); })) return 'Unassigned';
+  return s; // a genuine unit not in the canonical list (kept as-is)
+}
+
+/* ---------------- Employees per department — ALL units, searchable / sortable ---------------- */
+function StaffDeptChart({list, tone='#0090ca', role='Nurse'}){
+  const {useState,useEffect,useMemo}=React;
+  const [q,setQ]=useState('');
+  const [pick,setPick]=useState('');                // selected department ('' = all)
+  const [sortMode,setSortMode]=useState('count');   // 'count' | 'name'
+  const [mounted,setMounted]=useState(false);
+  useEffect(()=>{ const t=setTimeout(()=>setMounted(true),30); return ()=>clearTimeout(t); },[]);
+  // Group by the CANONICAL department so "Level-10"/"Level - 10"/"Level- 10", or
+  // "MICU"/"MICU, Supervisor" merge into one bar instead of many.
+  const rows=useMemo(()=>{
+    const m={};
+    list.forEach(e=>{ const d=staffCanonDept(e.current_department); m[d]=(m[d]||0)+1; });
+    return Object.entries(m).map(([label,value])=>({label,value}));
+  },[list]);
+  const total=rows.reduce((s,r)=>s+r.value,0)||1;
+  const max=Math.max(1,...rows.map(r=>r.value));
+  const noun=role==='PCA'?'PCA':'nurses';
+  const ql=q.trim().toLowerCase();
+  let shown=rows.filter(r=>(!ql||r.label.toLowerCase().includes(ql))&&(!pick||r.label===pick));
+  shown=sortMode==='name'?[...shown].sort((a,b)=>a.label.localeCompare(b.label)):[...shown].sort((a,b)=>b.value-a.value);
+  const tone2='#27a8db';
+  const deptOptions=[...rows.map(r=>r.label)].sort((a,b)=>a.localeCompare(b));
+  const selSty={padding:'6px 8px',border:'1px solid var(--line)',borderRadius:7,fontSize:11.5,fontFamily:'inherit',background:'#fff',color:'var(--ink-2)',maxWidth:150};
+  return (
+    <div className="card" style={{display:'flex',flexDirection:'column'}}>
+      <div className="card-h" style={{flexWrap:'wrap',gap:8}}>
+        <h3>Employees per Department</h3>
+        <span className="sub">{rows.length} units · {total} {noun}</span>
+        <span className="spacer"/>
+        <select value={pick} onChange={e=>setPick(e.target.value)} style={selSty} title="Filter to a department">
+          <option value="">All departments</option>
+          {deptOptions.map(d=><option key={d} value={d}>{d}</option>)}
+        </select>
+        <div style={{display:'flex',alignItems:'center',gap:6,background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:7,padding:'5px 9px',width:128,color:'var(--faint)'}}>
+          <Ic d={I.search} s={13}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Find unit…" style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:12,color:'var(--ink)',width:'100%'}}/>
+        </div>
+        <div className="seg">
+          <button className={sortMode==='count'?'on':''} onClick={()=>setSortMode('count')}>Count</button>
+          <button className={sortMode==='name'?'on':''} onClick={()=>setSortMode('name')}>A–Z</button>
+        </div>
+      </div>
+      <div className="card-b" style={{maxHeight:360,overflowY:'auto',display:'flex',flexDirection:'column',gap:9}}>
+        {shown.length===0&&<div style={{textAlign:'center',color:'var(--faint)',fontSize:12.5,padding:20}}>No units match “{q}”.</div>}
+        {shown.map((r,i)=>{
+          const pct=Math.round((r.value/total)*100), w=(r.value/max)*100, top=sortMode==='count'&&i===0;
+          return (
+            <div key={r.label} style={{display:'grid',gridTemplateColumns:'160px 1fr 64px',alignItems:'center',gap:10}} title={`${r.label} — ${r.value} ${noun} (${pct}%)`}
+              onMouseEnter={e=>{const b=e.currentTarget.querySelector('.dbar');if(b)b.style.filter='brightness(1.08)';}}
+              onMouseLeave={e=>{const b=e.currentTarget.querySelector('.dbar');if(b)b.style.filter='none';}}>
+              <div style={{fontSize:12,fontWeight:top?700:600,color:top?'var(--ink)':'var(--ink-2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.label}</div>
+              <div style={{height:18,background:'var(--panel-2)',borderRadius:6,overflow:'hidden'}}>
+                <div className="dbar" style={{height:'100%',width:mounted?w+'%':'0%',minWidth:r.value?6:0,background:`linear-gradient(90deg,${tone},${tone2})`,borderRadius:6,transition:`width .8s ${Math.min(i,22)*45}ms cubic-bezier(.2,.8,.25,1),filter .15s`}}/>
+              </div>
+              <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
+                <span className="num" style={{fontSize:13,fontWeight:700,color:'var(--ink)'}}>{r.value}</span>
+                <span style={{fontSize:10.5,color:'var(--muted)',marginLeft:4}}>{pct}%</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Experience Distribution — interactive (click a bar → staff list) ---------------- */
+function StaffExpChart({list, setRoute, role='Nurse'}){
+  const {useState}=React;
+  const [sel,setSel]=useState(-1);
+  const S=window.STAFF;
+  const BUCKETS=[['<1y',0,1],['1-3y',1,3],['3-5y',3,5],['5-10y',5,10],['10y+',10,Infinity]];
+  const members=BUCKETS.map(()=>[]);
+  list.forEach(e=>{ const y=S.expYears(e); if(y==null) return; for(let i=0;i<BUCKETS.length;i++){ if(y>=BUCKETS[i][1]&&y<BUCKETS[i][2]){ members[i].push(e); break; } } });
+  const data=BUCKETS.map(([label],i)=>({label,value:members[i].length}));
+  const total=data.reduce((s,d)=>s+d.value,0)||1;
+  const noun=role==='PCA'?'PCA':'nurses';
+  const cur=sel>=0?members[sel]:null;
+  return (
+    <div className="card">
+      <div className="card-h"><h3>Experience Distribution</h3><span className="sub">click a bar to list staff</span><span className="spacer"/><span className="tag">3D</span></div>
+      <div className="card-b">
+        <Bar3D data={data} x="label" y="value" height={240} color="#0090ca" onBar={(i)=>setSel(s=>s===i?-1:i)}/>
+        {cur&&(
+          <div style={{marginTop:6,borderTop:'1px solid var(--line-2)',paddingTop:10}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+              <b style={{fontSize:13}}>{BUCKETS[sel][0]} experience</b>
+              <span className="tag" style={{background:'var(--blue-50)',color:'var(--blue-700)'}}>{cur.length} {noun} · {Math.round(cur.length/total*100)}%</span>
+              <span className="spacer" style={{flex:1}}/>
+              <button className="btn sm" onClick={()=>setSel(-1)}><Ic d={I.x} s={13}/>Close</button>
+            </div>
+            <div style={{maxHeight:168,overflowY:'auto',display:'flex',flexDirection:'column',gap:4}}>
+              {cur.length===0&&<div style={{color:'var(--faint)',fontSize:12,padding:'4px 2px'}}>No {noun} in this range.</div>}
+              {[...cur].sort((a,b)=>S.expYears(b)-S.expYears(a)).map(e=>(
+                <div key={e.id} onClick={()=>setRoute({view:'staffProfile',emp:e.id})} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 8px',borderRadius:7,cursor:'pointer',border:'1px solid var(--line-2)'}}
+                  onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                  <Avatar name={e.name} size={26}/>
+                  <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
+                    <div style={{fontSize:10.5,color:'var(--muted)'}}>{e.designation||'—'} · {staffCanonDept(e.current_department)}</div></div>
+                  <span className="num" style={{fontSize:11.5,color:'var(--ink-2)',fontWeight:600}}>{S.expLabel(e)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- Workforce Dashboard (NEMS-style) ---------------- */
 function WorkforceDashboard({store, setRoute, role='Nurse'}){
   const S=window.STAFF;
   const list=store.staff.filter(e=>(e.role||'Nurse')===role);
   const [welcome,setWelcome]=React.useState(true);
+  const [showHi,setShowHi]=React.useState(false);
   const tone=role==='PCA'?'#6a52d4':'#0090ca';
   const listView=role==='PCA'?'pca':'nurses';
   const compView=role==='PCA'?'pcaCompliance':'nurseCompliance';
   const homeView=role==='PCA'?'pcaHome':'nurseHome';
   const k=S.kpis(list);
-  const byDept=S.countBy(list,'current_department').slice(0,13).map(([label,value])=>({label,value,color:'#0090ca',color2:'#27a8db'}));
   const desigAll=S.countBy(list,'designation');
   const desigTop=desigAll.slice(0,6), desigOther=desigAll.slice(6).reduce((s,d)=>s+d[1],0);
   const desigDonut=[...desigTop.map(([label,value],i)=>({label,value,color:PALETTE[i%PALETTE.length]})),...(desigOther?[{label:'Other',value:desigOther,color:'#c2486f'}]:[])];
   const vacc=S.vaccinationBreakdown(list).map(([label,value])=>({label,value,color:vaccColor(label)}));
-  const exp=S.experienceBuckets(list).map(([label,value])=>({label,value}));
   const recent=S.recentJoiners(list,6);
   const annv=S.anniversaries(list,60);
   const comp=S.compliance(list);
@@ -103,9 +242,11 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
   return (
     <div className="grid" style={{gap:16}}>
       <SectionTitle icon={role==='PCA'?I.bed:I.steth} title={`${role==='PCA'?'PCA':'Nurse'} Dashboard`} sub={`Live overview of the ${role} roster`}
-        right={<><button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>
+        right={<><button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#b8860b',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
+          <button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>
           <button className="btn sm" onClick={()=>setRoute({view:compView})}><Ic d={I.heart} s={15}/>Compliance</button>
-          <button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:homeView})}><Ic d={I.activity} s={15}/>Refresh</button></>}/>
+          <button className="btn sm" onClick={()=>setRoute({view:homeView})}><Ic d={I.activity} s={15}/>Refresh</button>
+          {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role})}><Ic d={I.plus} s={15}/>Add {role==='PCA'?'PCA':'Nurse'}</button>}</>}/>
       {welcome&&(
         <div className="card" style={{background:'var(--blue-50)',border:'1px solid var(--blue-100)',padding:'14px 16px',display:'flex',alignItems:'flex-start',gap:12}}>
           <div style={{color:'var(--blue)',marginTop:1}}><Ic d={I.heart} s={20}/></div>
@@ -118,16 +259,13 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
       )}
       <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))'}}>
         <Kpi label={`Total ${role==='PCA'?'PCAs':'Nurses'}`} val={fmt(k.total_staff)} foot={`active ${role} on roster`} color={tone}/>
-        <Kpi label="Departments" val={fmt(k.departments)} foot="distinct units staffed" color="#6a52d4"/>
+        <Kpi label="Departments" val={fmt(new Set(list.map(e=>staffCanonDept(e.current_department))).size)} foot="distinct units staffed" color="#6a52d4"/>
         <Kpi label="Vaccinated" val={k.vaccinated_pct+'%'} foot="Hep-B completed / vaccinated" color="#1f9d57"/>
         <Kpi label="Compliance Issues" val={fmt(compIssues)} foot={`${comp.missing_vaccination.length} vacc · ${comp.missing_training.length} training · click for details`} color="#d23a52"/>
       </div>
 
       <div className="grid" style={{gridTemplateColumns:'1.25fr 1fr'}}>
-        <div className="card">
-          <div className="card-h"><h3>Employees per Department</h3><span className="sub">top units by headcount</span><span className="spacer"/></div>
-          <div className="card-b"><HBar rows={byDept}/></div>
-        </div>
+        <StaffDeptChart list={list} tone={tone} role={role}/>
         <div className="card">
           <div className="card-h"><h3>Designation Breakdown</h3><span className="sub">role mix across the workforce</span><span className="spacer"/></div>
           <div className="card-b" style={{display:'grid',placeItems:'center'}}><Donut data={desigDonut} size={188} centerValue={fmt(k.total_staff)} centerLabel="staff"/></div>
@@ -139,10 +277,7 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
           <div className="card-h"><h3>Hep-B Vaccination</h3><span className="spacer"/></div>
           <div className="card-b" style={{display:'grid',placeItems:'center'}}><Donut data={vacc} size={172} centerValue={k.vaccinated_pct+'%'} centerLabel="compliant"/></div>
         </div>
-        <div className="card">
-          <div className="card-h"><h3>Experience Distribution</h3><span className="spacer"/><span className="tag">3D</span></div>
-          <div className="card-b"><Bar3D data={exp} x="label" y="value" height={240} color="#0090ca"/></div>
-        </div>
+        <StaffExpChart list={list} setRoute={setRoute} role={role}/>
       </div>
 
       <div className="grid" style={{gridTemplateColumns:'1fr 1fr'}}>
@@ -188,6 +323,64 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
         <span className="spacer"/>
         <button className="btn pri sm" onClick={()=>setRoute({view:compView})}>Review compliance<Ic d={I.arrowR} s={15}/></button>
       </div>
+
+      {showHi&&<StaffHighlight list={list} role={role} tone={tone} setRoute={setRoute} onClose={()=>setShowHi(false)}/>}
+    </div>
+  );
+}
+
+/* ---------------- Staff Highlight (spotlight modal) ---------------- */
+function StaffHighlight({list, role, tone, setRoute, onClose}){
+  const S=window.STAFF;
+  const active=list.filter(e=>e.is_active);
+  const go=(e)=>{onClose();setRoute({view:'staffProfile',emp:e.id});};
+  const topExp=[...active].map(e=>({e,y:S.expYears(e)})).filter(x=>x.y!=null)
+    .sort((a,b)=>b.y-a.y).slice(0,5);
+  const newest=S.recentJoiners(active,5);
+  const annv=S.anniversaries(active,90).slice(0,5);
+  const Row=({e,right})=>(
+    <div onClick={()=>go(e)} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 6px',borderBottom:'1px solid var(--line-2)',cursor:'pointer',borderRadius:6}}
+      onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+      <Avatar name={e.name} size={30}/>
+      <div style={{minWidth:0,flex:1}}>
+        <div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
+        <div style={{fontSize:10.5,color:'var(--muted)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.designation||'—'} · {e.current_department||'—'}</div>
+      </div>
+      <span className="num" style={{fontSize:11.5,fontWeight:700,color:tone,flexShrink:0}}>{right}</span>
+    </div>
+  );
+  const Card=({icon,color,title,sub,children,empty})=>(
+    <div className="card" style={{padding:0,display:'flex',flexDirection:'column',minWidth:0}}>
+      <div className="card-h" style={{padding:'11px 13px',borderBottom:'1px solid var(--line-2)'}}>
+        <span style={{color,display:'inline-flex'}}><Ic d={icon} s={16}/></span>
+        <h3 style={{fontSize:13}}>{title}</h3><span className="sub" style={{fontSize:10.5}}>{sub}</span><span className="spacer"/>
+      </div>
+      <div style={{padding:'4px 9px 8px'}}>{children.length?children:<div style={{color:'var(--faint)',fontSize:12,padding:'12px 4px'}}>{empty}</div>}</div>
+    </div>
+  );
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,zIndex:1200,background:'rgba(16,24,40,.5)',display:'grid',placeItems:'center',padding:20,backdropFilter:'blur(2px)'}}>
+      <div onClick={ev=>ev.stopPropagation()} className="card anim-pop" style={{width:'min(860px,96vw)',maxHeight:'92vh',overflow:'auto',padding:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:11,padding:'16px 20px',borderBottom:'1px solid var(--line)',background:'linear-gradient(120deg,#fff8e6,#fff)'}}>
+          <span style={{color:'#e0a81e',display:'inline-flex'}}><Ic d={I.star} s={22}/></span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:16,fontWeight:800,color:'var(--ink)'}}>{role} Highlights</div>
+            <div style={{fontSize:12,color:'var(--muted)'}}>Standout members of the {role.toLowerCase()} roster — {active.length} active</div>
+          </div>
+          <button className="icon-btn" onClick={onClose}><Ic d={I.x} s={16}/></button>
+        </div>
+        <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(240px,1fr))',gap:14,padding:16}}>
+          <Card icon={I.star} color="#e0a81e" title="Most Experienced" sub="by total experience" empty="No experience on record">
+            {topExp.map(({e,y})=><Row key={e.id} e={e} right={S.expLabel(e)}/>)}
+          </Card>
+          <Card icon={I.plus} color="#1f9d57" title="Newest Joiners" sub="recent hires" empty="No joining dates on record">
+            {newest.map(e=><Row key={e.id} e={e} right={e.doj}/>)}
+          </Card>
+          <Card icon={I.heart} color="#6a52d4" title="Upcoming Anniversaries" sub="next 90 days" empty="None in the window">
+            {annv.map(({e,years})=><Row key={e.id} e={e} right={`${years} yr${years>1?'s':''}`}/>)}
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }
@@ -205,9 +398,9 @@ function StaffDirectory({store, setRoute, initialFilter}){
     if(role&&(e.role||'Nurse')!==role)return false;
     if(dept&&e.current_department!==dept)return false;
     if(desig&&e.designation!==desig)return false;
-    if(vacc==='__ok'&&!window.STAFF.VACC_OK.includes(e.hepatitis_b_vaccination))return false;
-    if(vacc==='__gap'&&!["Not Completed","Unknown","1 dose","2 dose"].includes(e.hepatitis_b_vaccination))return false;
-    if(vacc&&!vacc.startsWith('__')&&e.hepatitis_b_vaccination!==vacc)return false;
+    if(vacc==='__ok'&&!vaccOK(e.hepatitis_b_vaccination))return false;
+    if(vacc==='__gap'&&vaccOK(e.hepatitis_b_vaccination))return false;
+    if(vacc&&!vacc.startsWith('__')&&vaccCanon(e.hepatitis_b_vaccination)!==vacc)return false;
     return true;
   });
   const sel={padding:'8px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:12.5,fontFamily:'inherit',background:'#fff'};
@@ -215,7 +408,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
   return (
     <div className="grid" style={{gap:16}}>
       <SectionTitle icon={I.layers} title="Staff Directory" sub={`${filtered.length} shown · ${nurses} nurses · ${pcas} PCA`}
-        right={<button className="btn pri sm" onClick={()=>setRoute({view:'staffForm'})}><Ic d={I.plus} s={15}/>Add Staff</button>}/>
+        right={(!window.unicoCan||window.unicoCan('staff','add'))?<button className="btn pri sm" onClick={()=>setRoute({view:'staffForm'})}><Ic d={I.plus} s={15}/>Add Staff</button>:null}/>
       <div className="card" style={{padding:'12px 14px',display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>
         <div style={{display:'flex',alignItems:'center',gap:8,background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:7,padding:'7px 11px',width:240,flexShrink:0,color:'var(--faint)'}}><Ic d={I.search} s={15}/>
           <input placeholder="Search name, ID, phone…" value={q} onChange={e=>setQ(e.target.value)} style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:12.5,color:'var(--ink)',width:'100%'}}/></div>
@@ -225,7 +418,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
         <select style={sel} value={vacc} onChange={e=>setVacc(e.target.value)}><option value="">Any vaccination</option><option value="__ok">✓ Compliant</option><option value="__gap">⚠ Has gap</option>{window.STAFF.VACCINATION_STATES.map(d=><option key={d}>{d}</option>)}</select>
         {(q||role||dept||desig||vacc)&&<button className="btn sm" onClick={()=>{setQ('');setRole('');setDept('');setDesig('');setVacc('');}}>Clear</button>}
         <span className="spacer"/>
-        <ExportMenu rows={list} role={role}/>
+        <ExportMenu rows={filtered} role={role||'Staff'}/>
       </div>
       <div className="card" style={{overflow:'hidden'}}>
         <div style={{overflowX:'auto'}}>
@@ -239,7 +432,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.designation||'—'}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.current_department||'—'}</td>
-                  <td>{e.total_experience_text||'—'}</td>
+                  <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left'}}><VaccBadge status={e.hepatitis_b_vaccination}/></td>
                   <td style={{textAlign:'left'}}>{e.phone||<span style={{color:'var(--rose)'}}>missing</span>}</td>
                   <td><Ic d={I.chevR} s={15} c="#b6c0cc"/></td>
@@ -308,7 +501,7 @@ function ManageStaff({store, setRoute, role}){
     const d=(e.current_department||'');
     switch(chip){
       case 'fav': return !!e.fav;
-      case 'missing': return !S.VACC_OK.includes(e.hepatitis_b_vaccination);
+      case 'missing': return !vaccOK(e.hepatitis_b_vaccination);
       case 'icu': return /\b(icu|ccu|nicu|micu|sicu)\b/i.test(d)||/ct\s*icu/i.test(d);
       case 'emergency': return /emerg|\ber\b/i.test(d);
       case 'otcath': return /\bot\b|cath|theatre/i.test(d);
@@ -321,20 +514,21 @@ function ManageStaff({store, setRoute, role}){
     if(q&&!`${e.name} ${e.emp_id} ${e.phone||''}`.toLowerCase().includes(q.toLowerCase()))return false;
     if(dept&&e.current_department!==dept)return false;
     if(desig&&e.designation!==desig)return false;
-    if(vacc==='__ok'&&!S.VACC_OK.includes(e.hepatitis_b_vaccination))return false;
-    if(vacc==='__gap'&&!["Not Completed","Unknown","1 dose","2 dose"].includes(e.hepatitis_b_vaccination))return false;
-    if(vacc&&!vacc.startsWith('__')&&e.hepatitis_b_vaccination!==vacc)return false;
+    if(vacc==='__ok'&&!vaccOK(e.hepatitis_b_vaccination))return false;
+    if(vacc==='__gap'&&vaccOK(e.hepatitis_b_vaccination))return false;
+    if(vacc&&!vacc.startsWith('__')&&vaccCanon(e.hepatitis_b_vaccination)!==vacc)return false;
     if(qual&&e.qualification!==qual)return false;
     if(training==='has'&&!(e.special_training&&e.special_training.trim()))return false;
     if(training==='none'&&(e.special_training&&e.special_training.trim()))return false;
-    if(expB){const y=e.total_experience_years; if(y==null)return false;
+    if(expB){const y=S.expYears(e); if(y==null)return false;
       if(expB==='<1'&&!(y<1))return false; if(expB==='1-3'&&!(y>=1&&y<3))return false;
       if(expB==='3-5'&&!(y>=3&&y<5))return false; if(expB==='5-10'&&!(y>=5&&y<10))return false;
       if(expB==='10+'&&!(y>=10))return false;}
     return true;
   });
   const sorted=[...filtered].sort((a,b)=>{
-    if(sortBy==='exp')return (b.total_experience_years||0)-(a.total_experience_years||0);
+    if(sortBy==='exp'){const ya=S.expYears(a),yb=S.expYears(b);
+      return (yb==null?-1:yb)-(ya==null?-1:ya)||(a.name||'').localeCompare(b.name||'');}
     if(sortBy==='doj')return (b.doj||'').localeCompare(a.doj||'');
     if(sortBy==='dept')return (a.current_department||'').localeCompare(b.current_department||'')||(a.name||'').localeCompare(b.name||'');
     return (a.name||'').localeCompare(b.name||'');
@@ -352,7 +546,7 @@ function ManageStaff({store, setRoute, role}){
           <div style={{fontSize:12,color:'var(--muted)'}}>Dedicated {role} roster{all.length>active.length?` · ${all.length-active.length} inactive hidden`:''}</div></div>
         <span className="spacer" style={{flex:1}}/>
         <button className="btn sm" onClick={()=>setShowInactive(v=>!v)}>{showInactive?'Hide inactive':'Show inactive'}</button>
-        <button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role})}><Ic d={I.plus} s={15}/>Add {role}</button>
+        {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role})}><Ic d={I.plus} s={15}/>Add {role}</button>}
         <span className="num" style={{fontSize:12.5,color:'var(--muted)',fontWeight:600}}>{active.length} employee(s)</span>
       </div>
 
@@ -392,18 +586,18 @@ function ManageStaff({store, setRoute, role}){
                   <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.designation||'—'}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.current_department||'—'}</td>
-                  <td>{e.total_experience_text||'—'}</td>
+                  <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}><span style={{color:vaccColor(e.hepatitis_b_vaccination),fontWeight:600}}>{e.hepatitis_b_vaccination||'Unknown'}</span></td>
                   <td style={{textAlign:'left'}}>{e.phone||<span style={{color:'var(--rose)'}}>—</span>}</td>
                   <td><div style={{display:'flex',gap:6,justifyContent:'flex-end'}}>
-                    <button className="icon-btn" title="Edit" onClick={()=>setRoute({view:'staffForm',emp:e.id})}><Ic d={I.edit} s={14}/></button>
-                    {e.is_active
+                    {(!window.unicoCan||window.unicoCan('staff','edit'))&&<button className="icon-btn" title="Edit" onClick={()=>setRoute({view:'staffForm',emp:e.id})}><Ic d={I.edit} s={14}/></button>}
+                    {(!window.unicoCan||window.unicoCan('staff','edit'))&&(e.is_active
                       ? <button className="icon-btn danger" title="Deactivate" onClick={()=>store.remove(e.id)}><Ic d={I.x} s={14}/></button>
-                      : <button className="icon-btn" title="Restore" onClick={()=>store.restore(e.id)} style={{color:'var(--pos)'}}><Ic d={I.check} s={14}/></button>}
-                    <button className="icon-btn" title="Delete permanently" onClick={async()=>{
+                      : <button className="icon-btn" title="Restore" onClick={()=>store.restore(e.id)} style={{color:'var(--pos)'}}><Ic d={I.check} s={14}/></button>)}
+                    {(!window.unicoCan||window.unicoCan('staff','delete'))&&<button className="icon-btn" title="Delete permanently" onClick={async()=>{
                       const ok=await window.UI.confirm({title:`Permanently delete ${e.name}?`,message:'This removes the record entirely and cannot be undone. (Use Deactivate to keep the record.)',danger:true,confirmLabel:'Delete permanently'});
                       if(ok){store.destroy(e.id);window.UI.toast('Staff record deleted','success');}
-                    }} style={{color:'#d23a52',background:'#d23a521a',border:'1px solid #d23a5240'}}><Ic d={I.x} s={14} sw={2.6}/></button>
+                    }} style={{color:'#d23a52',background:'#d23a521a',border:'1px solid #d23a5240'}}><Ic d={I.x} s={14} sw={2.6}/></button>}
                   </div></td>
                 </tr>
               ))}
@@ -416,4 +610,58 @@ function ManageStaff({store, setRoute, role}){
   );
 }
 
-Object.assign(window,{ Avatar, VaccBadge, RoleBadge, vaccColor, WorkforceDashboard, StaffDirectory, StaffCompliance, ManageStaff });
+/* ---------------- Previous Staff (archived / former roster) ---------------- */
+function PreviousStaff({store, setRoute}){
+  const [q,setQ]=React.useState('');
+  const [role,setRole]=React.useState('');
+  const list=store.staff.filter(e=>e.former);
+  const fmtd=d=>{ try{ return d?new Date(d).toLocaleDateString():''; }catch(e){ return ''; } };
+  const rows=list
+    .filter(e=>!role||(e.role||'Nurse')===role)
+    .filter(e=>!q||`${e.name} ${e.emp_id||''} ${e.current_department||''}`.toLowerCase().includes(q.toLowerCase()))
+    .sort((a,b)=>(b.archived_at||0)-(a.archived_at||0));
+  const inp={padding:'8px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:13,fontFamily:'inherit',background:'#fff',outline:'none'};
+  const nurses=list.filter(e=>(e.role||'Nurse')==='Nurse').length, pcas=list.filter(e=>e.role==='PCA').length;
+  return (
+    <div className="grid" style={{gap:16}}>
+      <SectionTitle icon={I.steth} title="Previous Staff"
+        sub={`${list.length} former staff — removed from the active roster (not in the latest list). Records are kept for history; restore anyone anytime.`}
+        right={<input placeholder="Search former staff…" value={q} onChange={e=>setQ(e.target.value)} style={{...inp,minWidth:220}}/>}/>
+      <div className="card" style={{overflow:'hidden'}}>
+        <div className="card-h">
+          <h3>Archived Roster</h3>
+          <span className="spacer"/>
+          <div className="seg">{[['','All'],['Nurse','Nurses ('+nurses+')'],['PCA','PCA ('+pcas+')']].map(([v,l])=>(<button key={v} className={role===v?'on':''} onClick={()=>setRole(v)}>{l}</button>))}</div>
+          <span className="tag num" style={{marginLeft:8}}>{rows.length}</span>
+        </div>
+        {rows.length===0
+          ? <div style={{padding:'34px',textAlign:'center',color:'var(--faint)',fontSize:13}}>No previous staff.</div>
+          : <div style={{overflowX:'auto'}}><table className="tbl">
+              <thead><tr><th style={{textAlign:'left'}}>Name</th><th>Emp ID</th><th>Role</th><th style={{textAlign:'left'}}>Department</th><th style={{textAlign:'left'}}>Designation</th><th>Archived</th><th style={{textAlign:'left'}}>Reason</th><th></th></tr></thead>
+              <tbody>
+                {rows.map(e=>(
+                  <tr key={e.id} style={{opacity:.9}}>
+                    <td style={{textAlign:'left'}}><b style={{color:'var(--ink)'}}>{e.name}</b></td>
+                    <td className="num">{e.emp_id||'—'}</td>
+                    <td><RoleBadge role={e.role}/></td>
+                    <td style={{textAlign:'left'}}>{e.current_department||'—'}</td>
+                    <td style={{textAlign:'left'}}>{e.designation||'—'}</td>
+                    <td style={{fontSize:12,color:'var(--muted)'}}>{fmtd(e.archived_at)}</td>
+                    <td style={{textAlign:'left',fontSize:12,color:'var(--muted)'}}>{e.archived_reason||'—'}</td>
+                    <td style={{textAlign:'right',whiteSpace:'nowrap'}}>
+                      <button className="btn sm" style={{marginRight:5}} onClick={()=>setRoute&&setRoute({view:(e.role==='PCA'?'pca':'nurses')})} title="Open in directory"><Ic d={I.user} s={13}/>View</button>
+                      <button className="btn sm pri" onClick={()=>{ store.update(e.id,{is_active:true,former:false}); window.UI&&window.UI.toast(e.name+' restored to the active roster','success'); }}><Ic d={I.check} s={13}/>Restore</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>}
+      </div>
+      <div style={{fontSize:11.5,color:'var(--muted)',padding:'0 2px',display:'flex',alignItems:'center',gap:6}}>
+        <Ic d={I.doc} s={13}/> Restoring a staff member returns them to the active Nurse / PCA roster with all their details intact.
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window,{ Avatar, VaccBadge, RoleBadge, vaccColor, WorkforceDashboard, StaffDirectory, StaffCompliance, ManageStaff, PreviousStaff });

@@ -27,6 +27,8 @@ const I = {
   print:'M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z',
   arrowR:'M5 12h14M13 6l6 6-6 6',
   grip:'M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01',
+  star:'M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4 6.1 20.5l1.2-6.5-4.8-4.6 6.6-.9z',
+  phone:'M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.8 19.8 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0122 16.92z',
 };
 function Ic({d,s=18,sw=1.9,c='currentColor',fill='none',style}){
   return <svg width={s} height={s} viewBox="0 0 24 24" fill={fill} stroke={c} strokeWidth={sw}
@@ -54,7 +56,7 @@ const UNICO_MODULES = [
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
   datacol:['dcReview','dcPatient','dcQuality','input','dcResponsibles','dcShare','dcFields'],
-  staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffProfile','staffForm'],
+  staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
@@ -62,6 +64,47 @@ const UNICO_MODULE_VIEWS = {
 function unicoModuleOf(view){
   for(let i=0;i<UNICO_MODULES.length;i++){ const m=UNICO_MODULES[i]; if((UNICO_MODULE_VIEWS[m.id]||[]).indexOf(view)>=0) return m.id; }
   return 'stats';
+}
+
+/* ---- Per-module workspace access (multi-user deployments) ---------------------
+   A signed-in 'User' account can be granted only specific workspaces (Statistics /
+   Quality / Staff / Data Collection / Reports / Administration). The grant lives on
+   window.__UNICO_USER__.modules (injected by the server). Administrators and the
+   open local-PC session are unrestricted; collectors render their own portal, so
+   they are never gated here. `modules` null/absent = unrestricted (legacy accounts
+   keep full access until an admin assigns modules). ---- */
+const UNICO_ACCESS_MODULES = ['stats','quality','staff','datacol','reports','users'];
+// The workspace a route.view belongs to for ACCESS purposes. Settings is the admin
+// hub, so it is gated under 'users' rather than 'stats'.
+function unicoAccessModuleOf(view){
+  if(view==='settings') return 'users';
+  return unicoModuleOf(view);
+}
+// Per-module access LEVELS (escalating): none < view < edit < add < delete. A signed-in
+// 'User' carries window.__UNICO_USER__.perms = {moduleId: level}. Administrators and the
+// open local-PC session are unrestricted (full). unicoCan(module, action) is the app-wide
+// CRUD gate used by every add/edit/delete control.
+const UNICO_PERM_RANK={none:0,view:1,edit:2,add:3,delete:4};
+function unicoUserPerms(){
+  const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
+  if(!u) return null;                       // open local mode -> full
+  if(u.role==='Administrator') return null; // admins -> full
+  if(u.role==='collector') return null;     // collector uses its own portal
+  return (u.perms && typeof u.perms==='object' && !Array.isArray(u.perms)) ? u.perms : null; // User map, else legacy=full
+}
+function unicoModuleLevel(mid){ const p=unicoUserPerms(); if(!p) return 'delete'; return p[mid]||'none'; }
+// Can this session perform `action` (view|edit|add|delete) in module `mid`?
+function unicoCan(mid, action){ return (UNICO_PERM_RANK[unicoModuleLevel(mid)]||0) >= (UNICO_PERM_RANK[action]||UNICO_PERM_RANK.view); }
+function unicoCanAccessModule(mid){ return unicoCan(mid,'view'); }
+function unicoCanAccessView(view){ return unicoCanAccessModule(unicoAccessModuleOf(view)); }
+// Viewable module ids, or null when unrestricted. [] => the user has no access at all.
+function unicoAllowedModules(){ const p=unicoUserPerms(); if(!p) return null; return UNICO_ACCESS_MODULES.filter(m=>unicoCan(m,'view')); }
+// The landing view for the first workspace this session can open (sidebar order).
+// Returns null when nothing is granted (=> the app shows a "no access" screen).
+function unicoFirstAllowedHome(){
+  const homes=[['stats','dashboard'],['quality','quality'],['staff','nurseHome'],['datacol','dcReview'],['reports','reports'],['users','settings']];
+  for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return homes[i][1]; }
+  return null;
 }
 function unicoSidebarGroups(moduleId){
   if(moduleId==='datacol') return [
@@ -223,6 +266,7 @@ function unicoWorkspaceSub(view){
     { label:'PCA Dashboard',    view:'pcaHome' },
     { label:'PCA Directory',    view:'pca' },
     { label:'PCA Compliance',   view:'pcaCompliance' },
+    { label:'Previous Staff',   view:'staffPrevious' },
   ];
   return [];
 }
@@ -241,10 +285,15 @@ function Sidebar({route, setRoute, collapsed, depts}){
         <div className="sb-brand-txt sb-name">UNICO<small>Statistics Suite</small></div>
       </div>
       <div className="sb-scroll">
-        {UNICO_WS.map((g,gi)=>(
+        {UNICO_WS.map((g,gi)=>{
+          // Show only the workspaces this session is allowed to open. A section whose
+          // items are all gated away is dropped entirely (no empty header).
+          const items = g.items.filter(it=>unicoCanAccessModule(unicoAccessModuleOf(it.home)));
+          if(!items.length) return null;
+          return (
           <React.Fragment key={gi}>
             {g.sec && <div className="sb-sec">{g.sec}</div>}
-            {g.items.map(it=>{
+            {items.map(it=>{
               const active = it.on(view);
               const badge = it.badge && qBadge>0 ? qBadge : null;
               return (
@@ -267,7 +316,8 @@ function Sidebar({route, setRoute, collapsed, depts}){
               );
             })}
           </React.Fragment>
-        ))}
+          );
+        })}
       </div>
       <div className="sb-foot">
         {(()=>{
@@ -446,4 +496,6 @@ function SectionTitle({icon,title,sub,right}){
   );
 }
 
-Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, ModuleSwitch, unicoModuleOf });
+Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, ModuleSwitch, unicoModuleOf,
+  UNICO_ACCESS_MODULES, unicoAccessModuleOf, unicoAllowedModules, unicoCanAccessModule, unicoCanAccessView, unicoFirstAllowedHome,
+  unicoCan, unicoModuleLevel, unicoUserPerms });

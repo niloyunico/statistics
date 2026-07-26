@@ -1,7 +1,7 @@
 /* UNICO — premium 3D + live charts */
 
 /* ---------- 3D isometric bar chart ---------- */
-function Bar3D({data, x, y, height=300, color='#0b66d0', multi=true, flat=false}){
+function Bar3D({data, x, y, height=300, color='#0b66d0', multi=true, flat=false, onBar}){
   const m=useMounted(60); const [tip,setTip]=useTip(); const [hi,setHi]=React.useState(-1);
   const max=Math.max(1,...data.map(d=>d[y]||0));
   const dx=13, dy=-9, step=Math.max(46,Math.min(78,640/data.length));
@@ -42,8 +42,9 @@ function Bar3D({data, x, y, height=300, color='#0b66d0', multi=true, flat=false}
           };
           return (
             <g key={i} filter={flat?undefined:`url(#${id}sh)`}
-              onMouseMove={e=>{setHi(i);setTip({x:e.clientX,y:e.clientY,title:d[x],single:fmt(v)});}}
-              onMouseLeave={()=>{setHi(-1);setTip(null);}} style={{cursor:'pointer'}}>
+              onMouseMove={e=>{setHi(i);setTip({x:e.clientX,y:e.clientY,title:d[x],single:fmt(v)+(onBar?' · click to view':'')});}}
+              onMouseLeave={()=>{setHi(-1);setTip(null);}}
+              onClick={()=>onBar&&onBar(i,d)} style={{cursor:'pointer'}}>
               <g style={{transformOrigin:`${bx+bw/2}px ${baseY}px`,transform:`scaleY(${(m||flat)?1:0.001})`,
                 transition:flat?'none':`transform .8s ${i*55}ms cubic-bezier(.2,.85,.3,1)`,opacity:hi<0||on?1:.82}}>
                 <polygon points={pts.side} fill={lighten(colAt(i),-44)}/>

@@ -1698,84 +1698,136 @@ function Reports({depts}){
   );
 }
 
+/* ============ Users & Roles — REAL accounts (server/users-admin.js) ============
+   Backed by the MongoDB `users` collection via /api/users. Each 'User' account gets a
+   per-module access LEVEL (none<view<edit<add<delete); Administrators are full. In the
+   default open local mode these endpoints are unguarded (local PC admin); with
+   REQUIRE_AUTH=true they require an Administrator session. ---- */
 const UCOLORS=['#0090ca','#3ab5a7','#6a52d4','#e08a1e','#d23a52','#1f9d57'];
-const USER_MODS=[['stats','Hospital Statistics'],['entry','Data Entry'],['reports','Reports'],['nurse','Nurse Management'],['pca','PCA Management'],['depts','Manage Departments'],['settings','Settings']];
-const USER_ROLES=['Administrator','Manager','Department Head','Data Entry','Read-only'];
-const ROLE_PERMS={
-  'Administrator':{stats:'edit',entry:'edit',reports:'edit',nurse:'edit',pca:'edit',depts:'edit',settings:'edit'},
-  'Manager':{stats:'edit',entry:'edit',reports:'edit',nurse:'edit',pca:'edit',depts:'edit',settings:'view'},
-  'Department Head':{stats:'view',entry:'edit',reports:'view',nurse:'edit',pca:'edit',depts:'none',settings:'none'},
-  'Data Entry':{stats:'view',entry:'edit',reports:'view',nurse:'none',pca:'none',depts:'none',settings:'none'},
-  'Read-only':{stats:'view',entry:'none',reports:'view',nurse:'view',pca:'view',depts:'none',settings:'none'},
+// Module ids match server ACCESS_MODULES + renderer unicoAccessModuleOf().
+const USER_MODS=[['stats','Hospital Statistics'],['quality','Quality Indicators'],['staff','Staff Management'],['datacol','Data Collection'],['reports','Reports'],['users','Administration']];
+const PERM_LEVELS=[['none','None'],['view','View'],['edit','Edit'],['add','Add'],['delete','Delete']];
+const PERM_RANK={none:0,view:1,edit:2,add:3,delete:4};
+// Access templates → default per-module levels. 'Administrator' maps to the backend
+// Administrator role (unrestricted); the rest store as role 'User' with these presets.
+const ROLE_PRESETS={
+  'Administrator':{stats:'delete',quality:'delete',staff:'delete',datacol:'delete',reports:'delete',users:'delete'},
+  'Manager':{stats:'edit',quality:'edit',staff:'edit',datacol:'edit',reports:'edit',users:'view'},
+  'Department Head':{stats:'view',quality:'add',staff:'edit',datacol:'add',reports:'view',users:'none'},
+  'Data Entry':{stats:'view',quality:'add',staff:'none',datacol:'add',reports:'view',users:'none'},
+  'Read-only':{stats:'view',quality:'view',staff:'view',datacol:'view',reports:'view',users:'none'},
 };
+const USER_ROLES=Object.keys(ROLE_PRESETS);
+const FULL_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]='delete',m),{});
+const NONE_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]='none',m),{});
 const inits=n=>(n||'?').split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase();
-const permSummary=p=>{const vals=USER_MODS.map(m=>p[m[0]]||'none');const ed=vals.filter(v=>v==='edit').length;
-  if(ed===USER_MODS.length)return 'Full access'; if(vals.every(v=>v==='view'||v==='none')&&vals.some(v=>v==='view'))return 'Read-only';
-  return `${ed} edit · ${vals.filter(v=>v==='view').length} view`;};
+// Which template a perms map matches (for the Role dropdown); 'Custom' if none.
+const detectTemplate=p=>{ for(const r of USER_ROLES){ const pr=ROLE_PRESETS[r]; if(USER_MODS.every(([k])=>(p[k]||'none')===(pr[k]||'none'))) return r; } return 'Custom'; };
+const permSummary=p=>{ if(!p) return 'Full access'; const vals=USER_MODS.map(([k])=>p[k]||'none'); const on=vals.filter(v=>v!=='none').length; if(!on) return 'No access'; if(vals.every(v=>v==='delete')) return 'Full access'; const ed=vals.filter(v=>PERM_RANK[v]>=PERM_RANK.edit).length; return `${on} module${on!==1?'s':''}${ed?' · '+ed+' editable':''}`; };
 
-function useUserStore(){
-  const KEY='unico_users_v1';
-  const seed=()=>[{id:1,name:'Nasif Ahammed Niloy',email:'nasif.niloy@unicohospitals.com',role:'Administrator',status:'active',color:'#0090ca',lastActive:Date.now(),perms:{...ROLE_PERMS['Administrator']}}];
-  const [users,setUsers]=React.useState(()=>{try{const s=JSON.parse(localStorage.getItem(KEY));return Array.isArray(s)&&s.length?s:seed();}catch(e){return seed();}});
-  React.useEffect(()=>{localStorage.setItem(KEY,JSON.stringify(users));},[users]);
-  return {users,
-    add:(u)=>setUsers(s=>[...s,{id:Math.max(0,...s.map(x=>x.id))+1,status:'active',color:UCOLORS[s.length%UCOLORS.length],lastActive:null,...u}]),
-    update:(id,p)=>setUsers(s=>s.map(x=>x.id===id?{...x,...p}:x)),
-    remove:(id)=>setUsers(s=>s.filter(x=>x.id!==id)),
-    toggle:(id)=>setUsers(s=>s.map(x=>x.id===id?{...x,status:x.status==='active'?'inactive':'active'}:x))};
+function usersApi(method,path,body){
+  return fetch(path,{method,headers:{'Content-Type':'application/json'},credentials:'same-origin',body:body?JSON.stringify(body):undefined})
+    .then(async r=>{ let j=null; try{j=await r.json();}catch(e){} if(!r.ok||!j||j.ok===false){ throw new Error((j&&j.error)||(r.status===401?'Sign in as an administrator to manage users.':r.status===403?'Administrator access required.':'Request failed ('+r.status+').')); } return j; });
 }
+function uToast(m,k){ try{ if(window.UI&&window.UI.toast) window.UI.toast(m,k||'success'); }catch(e){} }
 
-function UserModal({initial,onClose,onSave}){
+function UserModal({initial,onClose,onSaved}){
+  const {useState}=React;
   const editing=!!initial;
-  const [name,setName]=React.useState(initial?.name||'');
-  const [email,setEmail]=React.useState(initial?.email||'');
-  const [role,setRole]=React.useState(initial?.role||'Data Entry');
-  const [status,setStatus]=React.useState(initial?.status||'active');
-  const [perms,setPerms]=React.useState(()=>initial?{...initial.perms}:{...ROLE_PERMS['Data Entry']});
-  const [err,setErr]=React.useState('');
-  const pickRole=r=>{setRole(r);setPerms({...ROLE_PERMS[r]});};
-  const save=()=>{
-    if(!name.trim()){setErr('Name is required');return;}
-    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())){setErr('Enter a valid email');return;}
-    onSave({name:name.trim(),email:email.trim().toLowerCase(),role,status,perms},editing);
+  const [username,setUsername]=useState(editing?initial.username:'');
+  const [name,setName]=useState(editing?(initial.name||''):'');
+  const [email,setEmail]=useState(editing?(initial.email||''):'');
+  const [password,setPassword]=useState('');
+  const [status,setStatus]=useState(editing?(initial.active!==false?'active':'inactive'):'active');
+  const initTemplate=editing
+    ? (initial.role==='Administrator' ? 'Administrator'
+       : (initial.perms ? detectTemplate(initial.perms) : (initial.title && USER_ROLES.includes(initial.title) ? initial.title : 'Custom')))
+    : 'Data Entry';
+  const [role,setRole]=useState(initTemplate);
+  const [perms,setPerms]=useState(()=>{
+    if(editing){ if(initial.role==='Administrator') return FULL_PERMS(); return initial.perms ? {...NONE_PERMS(),...initial.perms} : FULL_PERMS(); }
+    return {...ROLE_PRESETS['Data Entry']};
+  });
+  const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
+  const isAdmin=role==='Administrator';
+  const pickRole=r=>{ setRole(r); if(r!=='Custom') setPerms({...ROLE_PRESETS[r]}); };
+  const setLevel=(mid,lv)=>{ setPerms(p=>({...p,[mid]:lv})); setRole('Custom'); };
+  const roleOpts=[...USER_ROLES,'Custom'];
+
+  const save=async()=>{
+    setErr('');
+    if(!editing){
+      if(!/^[a-z0-9._-]{2,40}$/.test(String(username).trim().toLowerCase())) return setErr('Username: letters, numbers, dot, dash or underscore (2–40 chars).');
+      if(password.length<6) return setErr('Password must be at least 6 characters.');
+    }
+    if(!name.trim()) return setErr('Full name is required.');
+    if(email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
+    setBusy(true);
+    try{
+      const backendRole=isAdmin?'Administrator':'User';
+      const payload={ name:name.trim(), email:email.trim().toLowerCase(), role:backendRole,
+        title:isAdmin?null:(role==='Custom'?'Custom access':role), active:status==='active', perms:isAdmin?null:perms };
+      if(editing){
+        await usersApi('PATCH','/api/users/'+encodeURIComponent(initial.username),payload);
+        if(password){ if(password.length<6){ setBusy(false); return setErr('New password must be at least 6 characters.'); } await usersApi('POST','/api/users/'+encodeURIComponent(initial.username)+'/password',{password}); }
+      } else {
+        await usersApi('POST','/api/users',{username:String(username).trim().toLowerCase(),password,...payload});
+      }
+      uToast(editing?'User updated':'User created'); onSaved();
+    }catch(e){ setErr(e.message||'Could not save.'); }
+    finally{ setBusy(false); }
   };
+
+  const lvlColor={none:'var(--muted)',view:'#0090ca',edit:'#3ab5a7',add:'#e08a1e',delete:'#d23a52'};
   return (
     <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div className="modal">
+      <div className="modal" style={{width:'min(560px,94vw)',maxHeight:'92vh',overflow:'auto'}}>
         <div className="modal-h">
           <div style={{width:30,height:30,borderRadius:8,background:'var(--blue-50)',color:'var(--blue)',display:'grid',placeItems:'center'}}><Ic d={editing?I.edit:I.plus} s={17}/></div>
-          <h3>{editing?'Manage User':'Invite User'}</h3><span className="spacer"/>
+          <h3>{editing?'Manage user':'Add user'}</h3><span className="spacer"/>
           <button className="icon-btn" onClick={onClose}><Ic d={I.x} s={16}/></button>
         </div>
         <div style={{padding:20,display:'flex',flexDirection:'column',gap:16}}>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            <div className="field"><label>Full name</label><input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Nasif Ahammed Niloy" autoFocus/></div>
-            <div className="field"><label>Email</label><input value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@unicohospitals.com"/></div>
+            <div className="field"><label>Username{editing&&<span style={{fontWeight:400,color:'var(--muted)'}}> · fixed</span>}</label><input value={username} disabled={editing} onChange={e=>setUsername(e.target.value)} placeholder="e.g. j.smith" style={editing?{opacity:.6}:null} autoFocus={!editing}/></div>
+            <div className="field"><label>Full name</label><input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Nasif Ahammed Niloy"/></div>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            <div className="field"><label>Role</label><select value={role} onChange={e=>pickRole(e.target.value)}>{USER_ROLES.map(r=><option key={r}>{r}</option>)}</select></div>
+            <div className="field"><label>Email <span style={{fontWeight:400,color:'var(--muted)'}}>· optional</span></label><input value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@unicohospitals.com"/></div>
+            <div className="field"><label>{editing?'Reset password':'Password'} {editing&&<span style={{fontWeight:400,color:'var(--muted)'}}>· blank = keep</span>}</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters"/></div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div className="field"><label>Role / template</label><select value={role} onChange={e=>pickRole(e.target.value)}>{roleOpts.map(r=><option key={r}>{r}</option>)}</select></div>
             <div className="field"><label>Status</label><select value={status} onChange={e=>setStatus(e.target.value)}><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
           </div>
+          {isAdmin ? (
+            <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'center'}}>
+              <Ic d={I.check} s={16} c="var(--blue)"/><span><b>Full access.</b> Administrators can view, add, edit and delete in every module.</span>
+            </div>
+          ) : (
           <div>
-            <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:8}}>Module permissions <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· picking a role sets defaults; fine-tune below</span></div>
+            <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Module permissions <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· a template sets defaults; fine-tune per module</span></div>
+            <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Each level includes the ones before it: View → Edit → Add → Delete.</div>
             <div style={{display:'flex',flexDirection:'column',gap:7}}>
               {USER_MODS.map(([id,label])=>(
-                <div key={id} style={{display:'flex',alignItems:'center',gap:10}}>
-                  <span style={{flex:1,fontSize:12.5,color:'var(--ink-2)'}}>{label}</span>
-                  <div className="seg">
-                    {[['none','None'],['view','View'],['edit','Edit']].map(([v,l])=>(
-                      <button key={v} className={(perms[id]||'none')===v?'on':''} onClick={()=>setPerms(p=>({...p,[id]:v}))}>{l}</button>
+                <div key={id} style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                  <span style={{flex:'1 1 140px',fontSize:12.5,color:'var(--ink-2)',fontWeight:600}}>{label}</span>
+                  <div className="seg" style={{flexShrink:0}}>
+                    {PERM_LEVELS.map(([v,l])=>(
+                      <button key={v} className={(perms[id]||'none')===v?'on':''} onClick={()=>setLevel(id,v)}
+                        style={(perms[id]||'none')===v?{color:'#fff',background:lvlColor[v],borderColor:lvlColor[v]}:null}>{l}</button>
                     ))}
                   </div>
                 </div>
               ))}
             </div>
           </div>
-          {err&&<div style={{fontSize:12,color:'var(--rose)',fontWeight:600}}>{err}</div>}
+          )}
+          {err&&<div style={{fontSize:12,color:'var(--rose)',fontWeight:600,background:'var(--neg-bg)',borderRadius:7,padding:'8px 10px'}}>{err}</div>}
           <div style={{display:'flex',gap:10,borderTop:'1px solid var(--line-2)',paddingTop:14}}>
             <span className="spacer" style={{flex:1}}/>
             <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn pri" onClick={save}><Ic d={I.check} s={16} sw={2.4}/>{editing?'Save changes':'Send invite'}</button>
+            <button className="btn pri" onClick={save} disabled={busy}><Ic d={I.check} s={16} sw={2.4}/>{busy?'Saving…':(editing?'Save changes':'Create user')}</button>
           </div>
         </div>
       </div>
@@ -1783,54 +1835,71 @@ function UserModal({initial,onClose,onSave}){
   );
 }
 
+function uAvatarColor(s){ let h=0; for(const ch of s||'') h=(h*31+ch.charCodeAt(0))>>>0; return UCOLORS[h%UCOLORS.length]; }
 function UserManagement(){
-  const us=useUserStore();
-  const [q,setQ]=React.useState('');
-  const [modal,setModal]=React.useState(null);
-  const [confirm,setConfirm]=React.useState(null);
-  const admins=us.users.filter(u=>u.role==='Administrator'&&u.status==='active').length;
-  const filtered=us.users.filter(u=>!q||`${u.name} ${u.email} ${u.role}`.toLowerCase().includes(q.toLowerCase()));
-  const onSave=(data,editing)=>{ if(editing) us.update(modal.user.id,data); else us.add(data); setModal(null); };
-  const ago=ts=>{ if(!ts)return 'never'; const m=Math.floor((Date.now()-ts)/60000); if(m<1)return 'just now'; if(m<60)return m+'m ago'; const h=Math.floor(m/60); if(h<24)return h+'h ago'; return Math.floor(h/24)+'d ago'; };
+  const {useState,useEffect}=React;
+  const [users,setUsers]=useState(null); // null = loading
+  const [err,setErr]=useState('');
+  const [q,setQ]=useState('');
+  const [modal,setModal]=useState(null);   // {user|null}
+  const [confirm,setConfirm]=useState(null);
+  const me=(typeof window!=='undefined'&&window.__UNICO_USER__&&window.__UNICO_USER__.username)||null;
+  const load=()=>{ setErr(''); usersApi('GET','/api/users').then(j=>setUsers(j.users||[])).catch(e=>{ setUsers([]); setErr(e.message||'Could not load users.'); }); };
+  useEffect(load,[]);
+  const all=users||[];
+  const admins=all.filter(u=>u.role==='Administrator'&&u.active!==false).length;
+  const filtered=all.filter(u=>!q||`${u.name} ${u.username} ${u.email||''} ${u.title||u.role}`.toLowerCase().includes(q.toLowerCase()));
+  const toggle=async(u)=>{ try{ await usersApi('PATCH','/api/users/'+encodeURIComponent(u.username),{active:u.active===false}); uToast(u.active===false?'Activated':'Deactivated'); load(); }catch(e){ uToast(e.message||'Failed','error'); } };
+  const del=async(u)=>{ try{ await usersApi('DELETE','/api/users/'+encodeURIComponent(u.username)); uToast('User removed'); setConfirm(null); load(); }catch(e){ uToast(e.message||'Failed','error'); setConfirm(null); } };
+  const roleLabel=u=> u.role==='Administrator'?'Administrator':(u.role==='collector'?'Data Collector':(u.title||'User'));
+  const summaryOf=u=> u.role==='Administrator'?'Full access':(u.role==='collector'?'Data collection':permSummary(u.perms));
   return (
     <div>
-      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
-        <div><div style={{fontSize:14,fontWeight:700}}>Users &amp; Roles</div><div style={{fontSize:11.5,color:'var(--muted)'}}>{us.users.length} user{us.users.length!==1?'s':''} · {admins} administrator{admins!==1?'s':''}</div></div>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+        <div><div style={{fontSize:14,fontWeight:700}}>Users &amp; Roles</div><div style={{fontSize:11.5,color:'var(--muted)'}}>{all.length} user{all.length!==1?'s':''} · {admins} administrator{admins!==1?'s':''}</div></div>
         <span className="spacer" style={{flex:1}}/>
         <div style={{display:'flex',alignItems:'center',gap:7,background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:7,padding:'6px 10px',width:190,color:'var(--faint)'}}><Ic d={I.search} s={14}/><input placeholder="Search users…" value={q} onChange={e=>setQ(e.target.value)} style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:12.5,color:'var(--ink)',width:'100%'}}/></div>
-        <button className="btn pri sm" onClick={()=>setModal({user:null})}><Ic d={I.plus} s={14}/>Invite user</button>
+        <button className="btn sm" onClick={load}><Ic d={I.search} s={14}/>Refresh</button>
+        <button className="btn pri sm" onClick={()=>setModal({user:null})}><Ic d={I.plus} s={14}/>Add user</button>
       </div>
+      {err&&<div style={{fontSize:12.5,color:'#b32339',background:'var(--neg-bg)',border:'1px solid var(--line)',borderRadius:9,padding:'11px 13px',marginBottom:12}}>{err}{String(err).toLowerCase().includes('administrator')?'':' · Is the server running with a database connection?'}</div>}
       <div style={{display:'flex',flexDirection:'column',gap:8}}>
-        {filtered.map(u=>(
-          <div key={u.id} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 13px',border:'1px solid var(--line)',borderRadius:10,opacity:u.status==='active'?1:.6,flexWrap:'wrap'}}>
-            <div className="avatar" style={{background:u.color,width:38,height:38}}>{inits(u.name)}</div>
+        {users===null&&<div style={{textAlign:'center',color:'var(--faint)',padding:'24px',fontSize:13}}>Loading…</div>}
+        {users!==null&&filtered.map(u=>{
+          const active=u.active!==false; const isMe=me&&u.username===me; const isColl=u.role==='collector';
+          const lastAdmin=u.role==='Administrator'&&admins<=1;
+          return (
+          <div key={u.username} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 13px',border:'1px solid var(--line)',borderRadius:10,opacity:active?1:.6,flexWrap:'wrap'}}>
+            <div className="avatar" style={{background:uAvatarColor(u.username),width:38,height:38}}>{inits(u.name)}</div>
             <div style={{minWidth:0,flex:'1 1 180px'}}>
-              <div style={{display:'flex',alignItems:'center',gap:8}}><span style={{fontSize:13.5,fontWeight:700}}>{u.name}</span>{u.id===1&&<span className="tag" style={{background:'var(--pos-bg)',color:'var(--pos)'}}>You</span>}</div>
-              <div style={{fontSize:11.5,color:'var(--muted)'}}>{u.email} · {u.role}</div>
+              <div style={{display:'flex',alignItems:'center',gap:8}}><span style={{fontSize:13.5,fontWeight:700}}>{u.name}</span>{isMe&&<span className="tag" style={{background:'var(--pos-bg)',color:'var(--pos)'}}>You</span>}</div>
+              <div style={{fontSize:11.5,color:'var(--muted)'}}>@{u.username}{u.email?' · '+u.email:''}</div>
             </div>
-            <div style={{textAlign:'right',fontSize:11,color:'var(--faint)'}}>last active<br/><b style={{color:'var(--ink-2)'}}>{ago(u.lastActive)}</b></div>
-            <span className="tag" style={{minWidth:74,justifyContent:'center'}}>{permSummary(u.perms)}</span>
-            {u.status==='active'?<span className="chip pos">● Active</span>:<span className="chip flat">○ Inactive</span>}
-            <button className="btn sm" onClick={()=>setModal({user:u})}>Manage</button>
-            <button className="icon-btn" title={u.status==='active'?'Deactivate':'Activate'} onClick={()=>us.toggle(u.id)} disabled={u.id===1}><Ic d={u.status==='active'?I.x:I.check} s={14}/></button>
-            <button className="icon-btn danger" title="Remove" onClick={()=>setConfirm(u)} disabled={u.id===1||(u.role==='Administrator'&&admins<=1)}><Ic d={I.x} s={14}/></button>
+            <span className="tag" style={{minWidth:96,justifyContent:'center'}}>{roleLabel(u)}</span>
+            <span className="tag" style={{minWidth:96,justifyContent:'center',color:'var(--ink-2)'}}>{summaryOf(u)}</span>
+            {active?<span className="chip pos">● Active</span>:<span className="chip flat">○ Inactive</span>}
+            {!isColl&&<button className="btn sm" onClick={()=>setModal({user:u})}>Manage</button>}
+            <button className="icon-btn" title={active?'Deactivate':'Activate'} onClick={()=>toggle(u)} disabled={isMe||lastAdmin}><Ic d={active?I.x:I.check} s={14}/></button>
+            <button className="icon-btn danger" title="Remove" onClick={()=>setConfirm(u)} disabled={isMe||lastAdmin}><Ic d={I.x} s={14}/></button>
           </div>
-        ))}
-        {filtered.length===0&&<div style={{textAlign:'center',color:'var(--faint)',padding:'24px',fontSize:13}}>No users match.</div>}
+          );
+        })}
+        {users!==null&&filtered.length===0&&<div style={{textAlign:'center',color:'var(--faint)',padding:'24px',fontSize:13}}>No users{q?' match the search':' yet'}.</div>}
       </div>
-      {modal&&<UserModal initial={modal.user} onClose={()=>setModal(null)} onSave={onSave}/>}
+      {modal&&<UserModal initial={modal.user} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load();}}/>}
       {confirm&&(
         <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)setConfirm(null);}}>
           <div className="modal" style={{width:'min(400px,92vw)'}}><div style={{padding:'22px'}}>
             <div style={{fontSize:15.5,fontWeight:700}}>Remove {confirm.name}?</div>
-            <div style={{fontSize:13,color:'var(--muted)',marginTop:4}}>This revokes their access to the platform.</div>
-            <div style={{display:'flex',gap:10,marginTop:18}}><span className="spacer" style={{flex:1}}/><button className="btn" onClick={()=>setConfirm(null)}>Cancel</button><button className="btn pri" style={{background:'var(--rose)',borderColor:'var(--rose)'}} onClick={()=>{us.remove(confirm.id);setConfirm(null);}}>Remove</button></div>
+            <div style={{fontSize:13,color:'var(--muted)',marginTop:4}}>Permanently deletes the account “@{confirm.username}” and revokes all access.</div>
+            <div style={{display:'flex',gap:10,marginTop:18}}><span className="spacer" style={{flex:1}}/><button className="btn" onClick={()=>setConfirm(null)}>Cancel</button><button className="btn pri" style={{background:'var(--rose)',borderColor:'var(--rose)'}} onClick={()=>del(confirm)}>Remove</button></div>
           </div></div>
         </div>
       )}
     </div>
   );
 }
+window.UserManagement=UserManagement;
 
 function Settings({depts, store, setRoute}){
   const [tab,setTab]=React.useState((typeof window!=='undefined'&&window.__UNICO_SETTINGS_TAB__)||'general');
