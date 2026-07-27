@@ -182,6 +182,22 @@ function StaffForm({store, empId, setRoute, role}){
       <option value="">—</option>{opts.map(o=><option key={o}>{o}</option>)}
     </select>
   );
+  // Combo box: pick from `opts` OR type a new value. Ensures every value already in the
+  // data (e.g. "Nurse Manager", "Supervisor", any unit) is listed AND lets you add new ones.
+  const cmbFree=(k,opts,ph)=>(
+    <div>
+      <input list={'dl_'+k} value={f[k]||''} onChange={e=>set(k,e.target.value)} placeholder={ph||'Select or type…'}
+        style={{padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',background:'#fff',width:'100%',outline:'none'}}/>
+      <datalist id={'dl_'+k}>{opts.map(o=><option key={o} value={o}/>)}</datalist>
+    </div>
+  );
+  // Every department / designation that exists in the roster, canonical list first.
+  const allStaff=(store&&store.staff)||[];
+  const uniq=(arr)=>[...new Set(arr.filter(Boolean).map(x=>String(x).trim()).filter(Boolean))];
+  const baseDepts=S.DEPARTMENTS||[];
+  const deptOpts=[...baseDepts,...uniq(allStaff.map(x=>x&&x.current_department)).filter(d=>!baseDepts.includes(d)).sort((a,b)=>a.localeCompare(b))];
+  const baseDesig=S.designationsFor?S.designationsFor(f.role):[];
+  const desigOpts=[...baseDesig,...uniq(allStaff.map(x=>x&&x.designation)).filter(d=>!baseDesig.includes(d)).sort((a,b)=>a.localeCompare(b))];
   // Multi-select chip picker. Stored as a comma-separated string in f[k] so tables,
   // exports and the profile view (which read a plain string) keep working unchanged.
   // Any existing value not in `opts` (e.g. a previously typed custom) is preserved.
@@ -281,8 +297,8 @@ function StaffForm({store, empId, setRoute, role}){
             <div style={{gridColumn:'1 / -1'}}>{field('Qualification'+(chipsOf('qualification').length?' · '+chipsOf('qualification').length+' selected':''),multiChk('qualification',S.qualificationsFor(f.role),customQ,setCustomQ))}</div>
           </>)}
           {sec('Job',<>
-            {field('Designation',cmb('designation',S.designationsFor(f.role)))}
-            {field('Current Department',cmb('current_department',S.DEPARTMENTS))}
+            {field('Designation',cmbFree('designation',desigOpts,'Select or type — e.g. Nurse Manager, Supervisor'))}
+            {field('Current Department',cmbFree('current_department',deptOpts,'Select or type a department'))}
             {field('Date of Joining',inp('doj','YYYY-MM-DD','date'))}
             {field('Total Experience',
               <div style={{padding:'9px 11px',border:'1px dashed var(--line)',borderRadius:7,fontSize:13,background:'var(--panel-2)',color:'var(--ink)',fontWeight:600}}>{S.fmtYM(totalY)}</div>,

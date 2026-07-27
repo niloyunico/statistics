@@ -13684,7 +13684,7 @@ function StaffDirectory({
   const filtered = list.filter(e => {
     if (q && !`${e.name} ${e.emp_id} ${e.phone || ''}`.toLowerCase().includes(q.toLowerCase())) return false;
     if (role && (e.role || 'Nurse') !== role) return false;
-    if (dept && e.current_department !== dept) return false;
+    if (dept && staffCanonDept(e.current_department) !== dept) return false;
     if (desig && e.designation !== desig) return false;
     if (vacc === '__ok' && !vaccOK(e.hepatitis_b_vaccination)) return false;
     if (vacc === '__gap' && vaccOK(e.hepatitis_b_vaccination)) return false;
@@ -13897,7 +13897,7 @@ function StaffDirectory({
       textAlign: 'left',
       fontFamily: "'IBM Plex Sans'"
     }
-  }, e.current_department || '—'), React.createElement("td", {
+  }, staffCanonDept(e.current_department)), React.createElement("td", {
     title: e.total_experience_text || '',
     className: "num"
   }, window.STAFF.expLabel(e)), React.createElement("td", {
@@ -14086,7 +14086,7 @@ function ManageStaff({
   const filtered = base.filter(e => {
     if (!matchChip(e)) return false;
     if (q && !`${e.name} ${e.emp_id} ${e.phone || ''}`.toLowerCase().includes(q.toLowerCase())) return false;
-    if (dept && e.current_department !== dept) return false;
+    if (dept && staffCanonDept(e.current_department) !== dept) return false;
     if (desig && e.designation !== desig) return false;
     if (vacc === '__ok' && !vaccOK(e.hepatitis_b_vaccination)) return false;
     if (vacc === '__gap' && vaccOK(e.hepatitis_b_vaccination)) return false;
@@ -14115,7 +14115,7 @@ function ManageStaff({
     if (sortBy === 'dept') return (a.current_department || '').localeCompare(b.current_department || '') || (a.name || '').localeCompare(b.name || '');
     return (a.name || '').localeCompare(b.name || '');
   });
-  const deptOpts = S.uniqueVals(all, 'current_department');
+  const deptOpts = [...new Set(all.map(e => staffCanonDept(e.current_department)))].sort((a, b) => a.localeCompare(b));
   const desigOpts = S.uniqueVals(all, 'designation');
   const qualOpts = S.uniqueVals(all, 'qualification');
   const sel = {
@@ -14433,7 +14433,7 @@ function ManageStaff({
       textAlign: 'left',
       fontFamily: "'IBM Plex Sans'"
     }
-  }, e.current_department || '—'), React.createElement("td", {
+  }, staffCanonDept(e.current_department)), React.createElement("td", {
     title: e.total_experience_text || '',
     className: "num"
   }, window.STAFF.expLabel(e)), React.createElement("td", {
@@ -14634,7 +14634,7 @@ function PreviousStaff({
     style: {
       textAlign: 'left'
     }
-  }, e.current_department || '—'), React.createElement("td", {
+  }, staffCanonDept(e.current_department)), React.createElement("td", {
     style: {
       textAlign: 'left'
     }
@@ -15291,6 +15291,33 @@ function StaffForm({
   }, "\u2014"), opts.map(o => React.createElement("option", {
     key: o
   }, o)));
+  const cmbFree = (k, opts, ph) => React.createElement("div", null, React.createElement("input", {
+    list: 'dl_' + k,
+    value: f[k] || '',
+    onChange: e => set(k, e.target.value),
+    placeholder: ph || 'Select or type…',
+    style: {
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      background: '#fff',
+      width: '100%',
+      outline: 'none'
+    }
+  }), React.createElement("datalist", {
+    id: 'dl_' + k
+  }, opts.map(o => React.createElement("option", {
+    key: o,
+    value: o
+  }))));
+  const allStaff = store && store.staff || [];
+  const uniq = arr => [...new Set(arr.filter(Boolean).map(x => String(x).trim()).filter(Boolean))];
+  const baseDepts = S.DEPARTMENTS || [];
+  const deptOpts = [...baseDepts, ...uniq(allStaff.map(x => x && x.current_department)).filter(d => !baseDepts.includes(d)).sort((a, b) => a.localeCompare(b))];
+  const baseDesig = S.designationsFor ? S.designationsFor(f.role) : [];
+  const desigOpts = [...baseDesig, ...uniq(allStaff.map(x => x && x.designation)).filter(d => !baseDesig.includes(d)).sort((a, b) => a.localeCompare(b))];
   const chipsOf = k => String(f[k] || '').split(',').map(x => x.trim()).filter(Boolean);
   const multiChk = (k, opts, customText, setCustomText) => {
     const sel = chipsOf(k);
@@ -15570,7 +15597,7 @@ function StaffForm({
     style: {
       gridColumn: '1 / -1'
     }
-  }, field('Qualification' + (chipsOf('qualification').length ? ' · ' + chipsOf('qualification').length + ' selected' : ''), multiChk('qualification', S.qualificationsFor(f.role), customQ, setCustomQ))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', cmb('designation', S.designationsFor(f.role))), field('Current Department', cmb('current_department', S.DEPARTMENTS)), field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date')), field('Total Experience', React.createElement("div", {
+  }, field('Qualification' + (chipsOf('qualification').length ? ' · ' + chipsOf('qualification').length + ' selected' : ''), multiChk('qualification', S.qualificationsFor(f.role), customQ, setCustomQ))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', cmbFree('designation', desigOpts, 'Select or type — e.g. Nurse Manager, Supervisor')), field('Current Department', cmbFree('current_department', deptOpts, 'Select or type a department')), field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date')), field('Total Experience', React.createElement("div", {
     style: {
       padding: '9px 11px',
       border: '1px dashed var(--line)',

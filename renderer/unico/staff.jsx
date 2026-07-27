@@ -396,7 +396,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
   const filtered=list.filter(e=>{
     if(q&&!(`${e.name} ${e.emp_id} ${e.phone||''}`.toLowerCase().includes(q.toLowerCase())))return false;
     if(role&&(e.role||'Nurse')!==role)return false;
-    if(dept&&e.current_department!==dept)return false;
+    if(dept&&staffCanonDept(e.current_department)!==dept)return false;
     if(desig&&e.designation!==desig)return false;
     if(vacc==='__ok'&&!vaccOK(e.hepatitis_b_vaccination))return false;
     if(vacc==='__gap'&&vaccOK(e.hepatitis_b_vaccination))return false;
@@ -431,7 +431,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
                   <td style={{textAlign:'left'}}><RoleBadge role={e.role}/></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.designation||'—'}</td>
-                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.current_department||'—'}</td>
+                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDept(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left'}}><VaccBadge status={e.hepatitis_b_vaccination}/></td>
                   <td style={{textAlign:'left'}}>{e.phone||<span style={{color:'var(--rose)'}}>missing</span>}</td>
@@ -512,7 +512,7 @@ function ManageStaff({store, setRoute, role}){
   const filtered=base.filter(e=>{
     if(!matchChip(e))return false;
     if(q&&!`${e.name} ${e.emp_id} ${e.phone||''}`.toLowerCase().includes(q.toLowerCase()))return false;
-    if(dept&&e.current_department!==dept)return false;
+    if(dept&&staffCanonDept(e.current_department)!==dept)return false;
     if(desig&&e.designation!==desig)return false;
     if(vacc==='__ok'&&!vaccOK(e.hepatitis_b_vaccination))return false;
     if(vacc==='__gap'&&vaccOK(e.hepatitis_b_vaccination))return false;
@@ -533,7 +533,7 @@ function ManageStaff({store, setRoute, role}){
     if(sortBy==='dept')return (a.current_department||'').localeCompare(b.current_department||'')||(a.name||'').localeCompare(b.name||'');
     return (a.name||'').localeCompare(b.name||'');
   });
-  const deptOpts=S.uniqueVals(all,'current_department');
+  const deptOpts=[...new Set(all.map(e=>staffCanonDept(e.current_department)))].sort((a,b)=>a.localeCompare(b));
   const desigOpts=S.uniqueVals(all,'designation');
   const qualOpts=S.uniqueVals(all,'qualification');
   const sel={padding:'9px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:12.5,fontFamily:'inherit',background:'#fff'};
@@ -585,7 +585,7 @@ function ManageStaff({store, setRoute, role}){
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
                   <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.designation||'—'}</td>
-                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.current_department||'—'}</td>
+                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDept(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}><span style={{color:vaccColor(e.hepatitis_b_vaccination),fontWeight:600}}>{e.hepatitis_b_vaccination||'Unknown'}</span></td>
                   <td style={{textAlign:'left'}}>{e.phone||<span style={{color:'var(--rose)'}}>—</span>}</td>
@@ -644,7 +644,7 @@ function PreviousStaff({store, setRoute}){
                     <td style={{textAlign:'left'}}><b style={{color:'var(--ink)'}}>{e.name}</b></td>
                     <td className="num">{e.emp_id||'—'}</td>
                     <td><RoleBadge role={e.role}/></td>
-                    <td style={{textAlign:'left'}}>{e.current_department||'—'}</td>
+                    <td style={{textAlign:'left'}}>{staffCanonDept(e.current_department)}</td>
                     <td style={{textAlign:'left'}}>{e.designation||'—'}</td>
                     <td style={{fontSize:12,color:'var(--muted)'}}>{fmtd(e.archived_at)}</td>
                     <td style={{textAlign:'left',fontSize:12,color:'var(--muted)'}}>{e.archived_reason||'—'}</td>
