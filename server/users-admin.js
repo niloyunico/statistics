@@ -14,6 +14,7 @@
 const db = require('./db');
 const auth = require('./auth');
 const deptmap = require('./deptmap');
+const activity = require('./activity-log');
 
 const ROLES = ['Administrator', 'collector', 'User'];
 
@@ -156,6 +157,7 @@ function mount(app, opts) {
         createdAt: Date.now(), updatedAt: Date.now(),
       };
       await users.insertOne(doc);
+      activity.log(req, 'user_created', { target: username, detail: 'role: ' + role });
       res.json({ ok: true, user: safe(doc) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not create user.' }); }
   });
@@ -203,6 +205,7 @@ function mount(app, opts) {
         return res.status(400).json({ ok: false, error: 'Cannot demote or deactivate the last active administrator.' });
       }
       await users.updateOne({ username }, { $set: set });
+      activity.log(req, 'user_updated', { target: username, detail: Object.keys(set).filter((k) => k !== 'updatedAt').join(', ') || 'no changes' });
       res.json({ ok: true, user: safe(Object.assign({}, u, set)) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not update user.' }); }
   });
@@ -216,6 +219,7 @@ function mount(app, opts) {
       const users = await db.getUsers();
       if (!await users.findOne({ username })) return res.status(404).json({ ok: false, error: 'User not found.' });
       await users.updateOne({ username }, { $set: { passwordHash: await auth.hash(password), updatedAt: Date.now() } });
+      activity.log(req, 'password_reset', { target: username });
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not reset password.' }); }
   });
@@ -232,6 +236,7 @@ function mount(app, opts) {
         return res.status(400).json({ ok: false, error: 'Cannot delete the last active administrator.' });
       }
       await users.deleteOne({ username });
+      activity.log(req, 'user_deleted', { target: username, detail: 'role: ' + (u.role || 'User') });
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not delete user.' }); }
   });

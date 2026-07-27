@@ -33,6 +33,7 @@ const {
 } = require('./db');
 const auth = require('./auth');
 const session = require('./session');
+const activity = require('./activity-log');
 const dataCollection = require('./data-collection');
 const deptmap = require('./deptmap');
 const qualityFormulas = require('./quality-formulas');
@@ -418,9 +419,11 @@ app.post('/login', async function (req, res) {
     const valid = user && user.active !== false && await auth.verify(password, user.passwordHash);
     if (!valid) {
       noteLoginFail(key);
+      activity.record({ action: 'login_failed', username, ip: activity.ipOf(req), detail: 'invalid credentials' });
       return res.status(401).type('html').send(loginPage({ error: 'Invalid username or password.', username, next, portal }));
     }
     loginFails.delete(key); // success clears the counter
+    activity.record({ action: 'login', username: user.username, name: user.name || user.username, role: user.role, ip: activity.ipOf(req), detail: portal ? ('portal: ' + portal) : '' });
     session.setSession(res, auth.sign(user));
     // Honor an explicit return target; else collectors land on /collect, admins on the app.
     res.redirect(302, next || ((user.role === 'collector') ? '/collect' : '/'));
@@ -430,6 +433,8 @@ app.post('/login', async function (req, res) {
 });
 
 app.get('/logout', function (req, res) {
+  const who = session.userFromReq(req);
+  if (who) activity.record({ action: 'logout', username: who.sub, name: who.name, role: who.role, ip: activity.ipOf(req) });
   session.clearSession(res);
   res.redirect(302, '/login');
 });
@@ -528,6 +533,9 @@ require('./data-collection').mount(app, { requireApi: session.requireApi });
 
 // User Management module: admin-only account CRUD over the `users` collection.
 require('./users-admin').mount(app, { requireApi: session.requireApi });
+
+// Admin activity log: read/clear the auth + user-management audit trail.
+activity.mount(app, { requireApi: session.requireApi });
 
 // Quality Formula catalogue: list (all roles) + admin-only edit of the ONE
 // canonical formula row per indicator; changes fan out to every department.

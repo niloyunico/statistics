@@ -59,7 +59,7 @@ const UNICO_MODULE_VIEWS = {
   datacol:['dcReview','dcPatient','dcQuality','input','dcResponsibles','dcShare','dcFields'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
-  supervisor:['supHome','supNew','supHistory','supReport'],
+  supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
 };
@@ -277,6 +277,7 @@ function unicoWorkspaceSub(view){
   ];
   if(mod==='supervisor') return [
     { label:'Dashboard',       view:'supHome' },
+    { label:'Patient Board',   view:'supBoard' },
     { label:'New Report',      view:'supNew' },
     { label:'History',         view:'supHistory' },
     { label:'Generate Report', view:'supReport' },

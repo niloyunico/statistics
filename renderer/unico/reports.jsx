@@ -2039,6 +2039,70 @@ function StaffFieldsSettings({depts, setRoute}){
   );
 }
 
+/* Activity Log — read-only audit trail of authentication + user-management events,
+   served by GET /api/activity (admin only). */
+function ActivityLog(){
+  const [rows,setRows]=React.useState(null);
+  const [err,setErr]=React.useState('');
+  const [busy,setBusy]=React.useState(false);
+  const [q,setQ]=React.useState('');
+  const load=React.useCallback(()=>{
+    setBusy(true); setErr('');
+    fetch('/api/activity?limit=400',{credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>{ if(j&&j.ok) setRows(j.entries||[]); else setErr((j&&j.error)||'Could not load the activity log.'); })
+      .catch(()=>setErr('Could not reach the server.')).finally(()=>setBusy(false));
+  },[]);
+  React.useEffect(()=>{ load(); },[load]);
+  const clear=async()=>{ const ok=await window.UI.confirm({title:'Clear the activity log?',message:'Permanently removes every recorded event. This cannot be undone.',danger:true,confirmLabel:'Clear log'}); if(!ok) return;
+    fetch('/api/activity',{method:'DELETE',credentials:'same-origin'}).then(r=>r.json()).then(()=>{load();window.UI&&window.UI.toast('Activity log cleared','success');}).catch(()=>{}); };
+  const META={ login:{l:'Signed in',c:'#1f9d57'}, login_failed:{l:'Failed sign-in',c:'#d23a52'}, logout:{l:'Signed out',c:'#6a52d4'},
+    user_created:{l:'User created',c:'#0090ca'}, user_updated:{l:'User updated',c:'#e08a1e'}, user_deleted:{l:'User deleted',c:'#d23a52'},
+    password_reset:{l:'Password reset',c:'#e08a1e'}, activity_cleared:{l:'Log cleared',c:'#8a93a3'} };
+  const meta=a=>META[a]||{l:a,c:'#8a93a3'};
+  const fmtTs=ts=>{ try{ return new Date(ts).toLocaleString([],{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } };
+  const filtered=(rows||[]).filter(r=>{ if(!q.trim()) return true; const s=(r.username+' '+r.name+' '+meta(r.action).l+' '+r.target+' '+r.detail+' '+r.ip).toLowerCase(); return s.includes(q.trim().toLowerCase()); });
+  const cell={padding:'9px 12px',fontSize:12.5,borderBottom:'1px solid var(--line-2)',textAlign:'left',verticalAlign:'top'};
+  return (
+    <div className="card"><div className="card-b">
+      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12}}>
+        <div style={{flex:1,minWidth:160}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)'}}>Activity log</div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>Sign-ins and account changes across the platform{rows?` · ${rows.length} events`:''}.</div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,background:'#fff',border:'1px solid var(--line)',borderRadius:7,padding:'7px 10px',minWidth:200,color:'var(--faint)'}}>
+          <Ic d={I.search} s={14}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search user / action / IP…" style={{border:0,outline:'none',background:'transparent',fontSize:12.5,fontFamily:'inherit',color:'var(--ink)',width:'100%'}}/>
+        </div>
+        <button className="btn sm" onClick={load} disabled={busy}><Ic d={I.activity} s={14}/>{busy?'Loading…':'Refresh'}</button>
+        <button className="btn sm" style={{color:'var(--rose)',borderColor:'#f1c6cd'}} onClick={clear}><Ic d={I.x} s={14}/>Clear</button>
+      </div>
+      {err&&<div style={{fontSize:12.5,color:'var(--rose)',fontWeight:600,background:'var(--neg-bg)',borderRadius:7,padding:'9px 11px'}}>{err}</div>}
+      {!err&&rows&&rows.length===0&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'22px',textAlign:'center'}}>No activity recorded yet.</div>}
+      {!err&&rows&&rows.length>0&&(
+        <div style={{overflowX:'auto',border:'1px solid var(--line-2)',borderRadius:9}}>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr style={{background:'var(--panel-2)'}}>
+              {['When','User','Action','Details','IP'].map(h=><th key={h} style={{...cell,fontSize:10.5,textTransform:'uppercase',letterSpacing:.4,color:'var(--muted)',fontWeight:700,borderBottom:'1px solid var(--line)'}}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {filtered.map((r,i)=>{ const m=meta(r.action); return (
+                <tr key={i}>
+                  <td style={{...cell,whiteSpace:'nowrap',color:'var(--muted)',fontFamily:'IBM Plex Mono'}}>{fmtTs(r.ts)}</td>
+                  <td style={{...cell}}><div style={{fontWeight:600,color:'var(--ink)'}}>{r.name||r.username||'—'}</div>{r.username&&r.name&&<div style={{fontSize:10.5,color:'var(--faint)'}}>@{r.username}</div>}</td>
+                  <td style={{...cell,whiteSpace:'nowrap'}}><span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11.5,fontWeight:700,color:m.c}}><i style={{width:7,height:7,borderRadius:'50%',background:m.c}}/>{m.l}</span></td>
+                  <td style={{...cell,color:'var(--ink-2)'}}>{r.target?<b>{r.target}</b>:''}{r.target&&r.detail?' — ':''}{r.detail||(!r.target?'—':'')}</td>
+                  <td style={{...cell,whiteSpace:'nowrap',color:'var(--muted)',fontFamily:'IBM Plex Mono'}}>{r.ip||'—'}</td>
+                </tr>
+              );})}
+              {filtered.length===0&&<tr><td colSpan={5} style={{...cell,textAlign:'center',color:'var(--faint)'}}>No events match “{q}”.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {!err&&!rows&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'22px',textAlign:'center'}}>Loading…</div>}
+    </div></div>
+  );
+}
+
 function Settings({depts, store, setRoute}){
   const [tab,setTab]=React.useState((typeof window!=='undefined'&&window.__UNICO_SETTINGS_TAB__)||'general');
   const [dbFile,setDbFile]=React.useState('');
@@ -2112,7 +2176,7 @@ function Settings({depts, store, setRoute}){
       <SectionTitle icon={I.gear} title="Settings" sub="Configure the statistics platform"/>
       <div className="grid" style={{gridTemplateColumns:'200px 1fr',alignItems:'start'}}>
         <div className="card" style={{padding:6}}>
-          {[['general','General',I.gear],['departments','Departments',I.layers],['stafffields','Staff Fields',I.steth],['users','Users & Roles',I.user],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
+          {[['general','General',I.gear],['departments','Departments',I.layers],['stafffields','Staff Fields',I.steth],['users','Users & Roles',I.user],['activity','Activity Log',I.activity],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
             <div key={id} onClick={()=>setTab(id)} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:7,cursor:'pointer',fontSize:13,fontWeight:600,
               background:tab===id?'var(--blue-50)':'transparent',color:tab===id?'var(--blue-700)':'var(--ink-2)'}}>
               <Ic d={ic} s={16}/>{l}
@@ -2143,6 +2207,7 @@ function Settings({depts, store, setRoute}){
           </div></div>}
           {tab==='departments'&&(typeof ManageDepts!=='undefined'?<ManageDepts depts={depts} store={store} setRoute={setRoute}/>:null)}
           {tab==='stafffields'&&<StaffFieldsSettings depts={depts} setRoute={setRoute}/>}
+          {tab==='activity'&&<ActivityLog/>}
           {tab==='users'&&<div className="card"><div className="card-b"><UserManagement/></div></div>}
           {tab==='responsibles'&&(typeof DataResponsibles!=='undefined'?<DataResponsibles depts={depts}/>:null)}
           {tab==='fields'&&(typeof DataFields!=='undefined'?<DataFields setRoute={setRoute}/>:null)}

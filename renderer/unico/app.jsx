@@ -114,9 +114,9 @@ function App(){
     body= (typeof QualityView!=='undefined') ? <QualityView view={qv} initialDept={route.dept} setRoute={setRoute}/> : null;
   } else if(route.view && route.view.indexOf('sup')===0 && typeof SupervisorView!=='undefined'){
     // Shift Supervisor Reports module — renders INSIDE the global shell (window.SupervisorView).
-    const SV_TITLE={supHome:'Dashboard',supNew:'New Report',supHistory:'History',supReport:'Generate Report'};
+    const SV_TITLE={supHome:'Dashboard',supBoard:'Patient Board',supNew:'New Report',supHistory:'History',supReport:'Generate Report'};
     crumbs=['UNICO','Supervisor Reports',SV_TITLE[route.view]||'Dashboard'];
-    body=<SupervisorView view={route.view} id={route.id} shift={route.shift} depts={depts} setRoute={setRoute}/>;
+    body=<SupervisorView view={route.view} id={route.id} shift={route.shift} openAdd={route.openAdd} depts={depts} setRoute={setRoute}/>;
   } else if(route.view==='dcPatient'){
     crumbs=['UNICO','Data Collection','Patient Statistics'];
     body=<DataPatientForm depts={depts} prefill={{dept:route.dept,responsible:route.responsible,month:route.month}}/>;

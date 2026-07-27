@@ -46,6 +46,7 @@ function normReport(input) {
     status,
     newAdmissions: rows(i.newAdmissions),
     criticalArea: rows(i.criticalArea),
+    cabinArea: rows(i.cabinArea),
     lama: rows(i.lama),
     discharged: rows(i.discharged),
     otTable: rows(i.otTable),
@@ -65,6 +66,10 @@ function normReport(input) {
     totals: obj(i.totals),
     sign: obj(i.sign),
   };
+  // Preserve user-defined custom sections (keys like custom_xxx) as row arrays so the
+  // client's dynamic-fields engine round-trips. Custom COLUMNS inside built-in sections
+  // already persist because rows keep every key on each row object.
+  Object.keys(i).forEach((k) => { if (/^custom_[a-z0-9_]+$/i.test(k) && Array.isArray(i[k])) doc[k] = rows(i[k]); });
   return doc;
 }
 
