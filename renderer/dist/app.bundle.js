@@ -12671,6 +12671,34 @@ function staffCanonDept(raw) {
   })) return 'Unassigned';
   return s;
 }
+const STAFF_DEPT_FULL = {
+  'ER': 'Emergency (ER)',
+  'OPD': 'Outpatient Department (OPD)',
+  'NICU': 'Neonatal ICU (NICU)',
+  'MICU': 'Medical ICU (MICU)',
+  'SICU': 'Surgical ICU (SICU)',
+  'CCU': 'Coronary Care Unit (CCU)',
+  'CT ICU': 'Cardiac ICU (CT ICU)',
+  'CT OT': 'Cardiac Operation Theatre (CT OT)',
+  'LDR': 'Labour, Delivery & Recovery (LDR)',
+  'Cath Lab': 'Catheterization Lab',
+  'General OT': 'General Operation Theatre',
+  'Cardiac OT': 'Cardiac Operation Theatre',
+  'Level-9': 'Cabin Level 9',
+  'Level-10': 'Cabin Level 10',
+  'Level-11': 'Cabin Level 11'
+};
+function staffDeptLabel(n) {
+  return STAFF_DEPT_FULL[n] || n;
+}
+function staffDeptShow(raw) {
+  return staffDeptLabel(staffCanonDept(raw));
+}
+if (typeof window !== 'undefined') {
+  window.staffCanonDept = staffCanonDept;
+  window.staffDeptLabel = staffDeptLabel;
+  window.staffDeptShow = staffDeptShow;
+}
 function StaffDeptChart({
   list,
   tone = '#0090ca',
@@ -12704,10 +12732,10 @@ function StaffDeptChart({
   const max = Math.max(1, ...rows.map(r => r.value));
   const noun = role === 'PCA' ? 'PCA' : 'nurses';
   const ql = q.trim().toLowerCase();
-  let shown = rows.filter(r => (!ql || r.label.toLowerCase().includes(ql)) && (!pick || r.label === pick));
-  shown = sortMode === 'name' ? [...shown].sort((a, b) => a.label.localeCompare(b.label)) : [...shown].sort((a, b) => b.value - a.value);
+  let shown = rows.filter(r => (!ql || r.label.toLowerCase().includes(ql) || staffDeptLabel(r.label).toLowerCase().includes(ql)) && (!pick || r.label === pick));
+  shown = sortMode === 'name' ? [...shown].sort((a, b) => staffDeptLabel(a.label).localeCompare(staffDeptLabel(b.label))) : [...shown].sort((a, b) => b.value - a.value);
   const tone2 = '#27a8db';
-  const deptOptions = [...rows.map(r => r.label)].sort((a, b) => a.localeCompare(b));
+  const deptOptions = [...rows.map(r => r.label)].sort((a, b) => staffDeptLabel(a).localeCompare(staffDeptLabel(b)));
   const selSty = {
     padding: '6px 8px',
     border: '1px solid var(--line)',
@@ -12716,7 +12744,7 @@ function StaffDeptChart({
     fontFamily: 'inherit',
     background: '#fff',
     color: 'var(--ink-2)',
-    maxWidth: 150
+    maxWidth: 170
   };
   return React.createElement("div", {
     className: "card",
@@ -12744,7 +12772,7 @@ function StaffDeptChart({
   }, "All departments"), deptOptions.map(d => React.createElement("option", {
     key: d,
     value: d
-  }, d))), React.createElement("div", {
+  }, staffDeptLabel(d)))), React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -12804,11 +12832,11 @@ function StaffDeptChart({
       key: r.label,
       style: {
         display: 'grid',
-        gridTemplateColumns: '160px 1fr 64px',
+        gridTemplateColumns: '190px 1fr 64px',
         alignItems: 'center',
         gap: 10
       },
-      title: `${r.label} — ${r.value} ${noun} (${pct}%)`,
+      title: `${staffDeptLabel(r.label)} — ${r.value} ${noun} (${pct}%)`,
       onMouseEnter: e => {
         const b = e.currentTarget.querySelector('.dbar');
         if (b) b.style.filter = 'brightness(1.08)';
@@ -12826,7 +12854,7 @@ function StaffDeptChart({
         overflow: 'hidden',
         textOverflow: 'ellipsis'
       }
-    }, r.label), React.createElement("div", {
+    }, staffDeptLabel(r.label)), React.createElement("div", {
       style: {
         height: 18,
         background: 'var(--panel-2)',
@@ -12999,7 +13027,7 @@ function StaffExpChart({
       fontSize: 10.5,
       color: 'var(--muted)'
     }
-  }, e.designation || '—', " \xB7 ", staffCanonDept(e.current_department))), React.createElement("span", {
+  }, e.designation || '—', " \xB7 ", staffDeptShow(e.current_department))), React.createElement("span", {
     className: "num",
     style: {
       fontSize: 11.5,
@@ -13770,8 +13798,9 @@ function StaffDirectory({
   }, React.createElement("option", {
     value: ""
   }, "All departments"), window.STAFF.DEPARTMENTS.map(d => React.createElement("option", {
-    key: d
-  }, d))), React.createElement("select", {
+    key: d,
+    value: d
+  }, staffDeptLabel(d)))), React.createElement("select", {
     style: sel,
     value: desig,
     onChange: e => setDesig(e.target.value)
@@ -13897,7 +13926,7 @@ function StaffDirectory({
       textAlign: 'left',
       fontFamily: "'IBM Plex Sans'"
     }
-  }, staffCanonDept(e.current_department)), React.createElement("td", {
+  }, staffDeptShow(e.current_department)), React.createElement("td", {
     title: e.total_experience_text || '',
     className: "num"
   }, window.STAFF.expLabel(e)), React.createElement("td", {
@@ -14249,8 +14278,9 @@ function ManageStaff({
   }, React.createElement("option", {
     value: ""
   }, "All Departments"), deptOpts.map(d => React.createElement("option", {
-    key: d
-  }, d))), React.createElement("select", {
+    key: d,
+    value: d
+  }, staffDeptLabel(d)))), React.createElement("select", {
     style: sel,
     value: desig,
     onChange: e => setDesig(e.target.value)
@@ -14433,7 +14463,7 @@ function ManageStaff({
       textAlign: 'left',
       fontFamily: "'IBM Plex Sans'"
     }
-  }, staffCanonDept(e.current_department)), React.createElement("td", {
+  }, staffDeptShow(e.current_department)), React.createElement("td", {
     title: e.total_experience_text || '',
     className: "num"
   }, window.STAFF.expLabel(e)), React.createElement("td", {
@@ -14634,7 +14664,7 @@ function PreviousStaff({
     style: {
       textAlign: 'left'
     }
-  }, staffCanonDept(e.current_department)), React.createElement("td", {
+  }, staffDeptShow(e.current_department)), React.createElement("td", {
     style: {
       textAlign: 'left'
     }
@@ -14901,7 +14931,7 @@ function StaffProfile({
       color: 'var(--muted)',
       marginTop: 3
     }
-  }, e.designation || '—', " \xB7 ", e.current_department || '—')), e.phone ? React.createElement("a", {
+  }, e.designation || '—', " \xB7 ", window.staffDeptShow ? window.staffDeptShow(e.current_department) : e.current_department || '—')), e.phone ? React.createElement("a", {
     href: `tel:${(e.phone || '').replace(/[^\d+]/g, '')}`,
     title: `Call ${e.name} · ${e.phone}`,
     style: {
@@ -15043,7 +15073,7 @@ function StaffProfile({
     style: {
       gridTemplateColumns: '1fr 1fr'
     }
-  }, sec('Personal', React.createElement(React.Fragment, null, field('Employee ID', e.emp_id, true), field('Phone', e.phone, true), field('Qualification', e.qualification), field('Status', e.is_active ? 'Active' : 'Inactive'))), sec('Job', React.createElement(React.Fragment, null, field('Designation', e.designation), field('Department', e.current_department), field('Date of Joining', e.doj, true), field('Total Experience', totalText, true)))), React.createElement("div", {
+  }, sec('Personal', React.createElement(React.Fragment, null, field('Employee ID', e.emp_id, true), field('Phone', e.phone, true), field('Qualification', e.qualification), field('Status', e.is_active ? 'Active' : 'Inactive'))), sec('Job', React.createElement(React.Fragment, null, field('Designation', e.designation), field('Department', window.staffDeptShow ? window.staffDeptShow(e.current_department) : e.current_department), field('Date of Joining', e.doj, true), field('Total Experience', totalText, true)))), React.createElement("div", {
     className: "grid",
     style: {
       gridTemplateColumns: '1fr 1fr'
@@ -20953,7 +20983,7 @@ function UserModal({
   const [email, setEmail] = useState(editing ? initial.email || '' : '');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState(editing ? initial.active !== false ? 'active' : 'inactive' : 'active');
-  const initTemplate = editing ? initial.role === 'Administrator' ? 'Administrator' : initial.perms ? detectTemplate(initial.perms) : initial.title && USER_ROLES.includes(initial.title) ? initial.title : 'Custom' : 'Data Entry';
+  const initTemplate = editing ? initial.role === 'Administrator' ? 'Administrator' : initial.perms ? detectTemplate(initial.perms) : initial.title && USER_ROLES.includes(initial.title) ? initial.title : 'Custom' : 'Custom';
   const [role, setRole] = useState(initTemplate);
   const [perms, setPerms] = useState(() => {
     if (editing) {
@@ -20961,11 +20991,9 @@ function UserModal({
       return initial.perms ? {
         ...NONE_PERMS(),
         ...initial.perms
-      } : FULL_PERMS();
+      } : NONE_PERMS();
     }
-    return {
-      ...ROLE_PRESETS['Data Entry']
-    };
+    return NONE_PERMS();
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');

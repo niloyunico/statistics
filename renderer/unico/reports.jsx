@@ -1742,11 +1742,13 @@ function UserModal({initial,onClose,onSaved}){
   const initTemplate=editing
     ? (initial.role==='Administrator' ? 'Administrator'
        : (initial.perms ? detectTemplate(initial.perms) : (initial.title && USER_ROLES.includes(initial.title) ? initial.title : 'Custom')))
-    : 'Data Entry';
+    : 'Custom';
   const [role,setRole]=useState(initTemplate);
+  // Default to NO access (start from nothing, grant only what's explicitly set). A blank
+  // default of FULL_PERMS silently granted every module a User's perms map didn't mention.
   const [perms,setPerms]=useState(()=>{
-    if(editing){ if(initial.role==='Administrator') return FULL_PERMS(); return initial.perms ? {...NONE_PERMS(),...initial.perms} : FULL_PERMS(); }
-    return {...ROLE_PRESETS['Data Entry']};
+    if(editing){ if(initial.role==='Administrator') return FULL_PERMS(); return initial.perms ? {...NONE_PERMS(),...initial.perms} : NONE_PERMS(); }
+    return NONE_PERMS();
   });
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=role==='Administrator';

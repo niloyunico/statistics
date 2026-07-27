@@ -102,6 +102,31 @@ function staffCanonDept(raw){
   return s; // a genuine unit not in the canonical list (kept as-is)
 }
 
+/* Full display name for a (canonical) department. The stored/matched value stays the
+   short code (e.g. "ER") so data & filters keep working; only what's SHOWN expands.
+   Edit these labels to match your hospital's exact naming. */
+const STAFF_DEPT_FULL={
+  'ER':'Emergency (ER)',
+  'OPD':'Outpatient Department (OPD)',
+  'NICU':'Neonatal ICU (NICU)',
+  'MICU':'Medical ICU (MICU)',
+  'SICU':'Surgical ICU (SICU)',
+  'CCU':'Coronary Care Unit (CCU)',
+  'CT ICU':'Cardiac ICU (CT ICU)',
+  'CT OT':'Cardiac Operation Theatre (CT OT)',
+  'LDR':'Labour, Delivery & Recovery (LDR)',
+  'Cath Lab':'Catheterization Lab',
+  'General OT':'General Operation Theatre',
+  'Cardiac OT':'Cardiac Operation Theatre',
+  'Level-9':'Cabin Level 9',
+  'Level-10':'Cabin Level 10',
+  'Level-11':'Cabin Level 11',
+};
+function staffDeptLabel(n){ return STAFF_DEPT_FULL[n]||n; }
+// Raw value -> canonical merge -> full display label (for read-only views).
+function staffDeptShow(raw){ return staffDeptLabel(staffCanonDept(raw)); }
+if(typeof window!=='undefined'){ window.staffCanonDept=staffCanonDept; window.staffDeptLabel=staffDeptLabel; window.staffDeptShow=staffDeptShow; }
+
 /* ---------------- Employees per department — ALL units, searchable / sortable ---------------- */
 function StaffDeptChart({list, tone='#0090ca', role='Nurse'}){
   const {useState,useEffect,useMemo}=React;
@@ -121,11 +146,11 @@ function StaffDeptChart({list, tone='#0090ca', role='Nurse'}){
   const max=Math.max(1,...rows.map(r=>r.value));
   const noun=role==='PCA'?'PCA':'nurses';
   const ql=q.trim().toLowerCase();
-  let shown=rows.filter(r=>(!ql||r.label.toLowerCase().includes(ql))&&(!pick||r.label===pick));
-  shown=sortMode==='name'?[...shown].sort((a,b)=>a.label.localeCompare(b.label)):[...shown].sort((a,b)=>b.value-a.value);
+  let shown=rows.filter(r=>(!ql||r.label.toLowerCase().includes(ql)||staffDeptLabel(r.label).toLowerCase().includes(ql))&&(!pick||r.label===pick));
+  shown=sortMode==='name'?[...shown].sort((a,b)=>staffDeptLabel(a.label).localeCompare(staffDeptLabel(b.label))):[...shown].sort((a,b)=>b.value-a.value);
   const tone2='#27a8db';
-  const deptOptions=[...rows.map(r=>r.label)].sort((a,b)=>a.localeCompare(b));
-  const selSty={padding:'6px 8px',border:'1px solid var(--line)',borderRadius:7,fontSize:11.5,fontFamily:'inherit',background:'#fff',color:'var(--ink-2)',maxWidth:150};
+  const deptOptions=[...rows.map(r=>r.label)].sort((a,b)=>staffDeptLabel(a).localeCompare(staffDeptLabel(b)));
+  const selSty={padding:'6px 8px',border:'1px solid var(--line)',borderRadius:7,fontSize:11.5,fontFamily:'inherit',background:'#fff',color:'var(--ink-2)',maxWidth:170};
   return (
     <div className="card" style={{display:'flex',flexDirection:'column'}}>
       <div className="card-h" style={{flexWrap:'wrap',gap:8}}>
@@ -134,7 +159,7 @@ function StaffDeptChart({list, tone='#0090ca', role='Nurse'}){
         <span className="spacer"/>
         <select value={pick} onChange={e=>setPick(e.target.value)} style={selSty} title="Filter to a department">
           <option value="">All departments</option>
-          {deptOptions.map(d=><option key={d} value={d}>{d}</option>)}
+          {deptOptions.map(d=><option key={d} value={d}>{staffDeptLabel(d)}</option>)}
         </select>
         <div style={{display:'flex',alignItems:'center',gap:6,background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:7,padding:'5px 9px',width:128,color:'var(--faint)'}}>
           <Ic d={I.search} s={13}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Find unit…" style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:12,color:'var(--ink)',width:'100%'}}/>
@@ -149,10 +174,10 @@ function StaffDeptChart({list, tone='#0090ca', role='Nurse'}){
         {shown.map((r,i)=>{
           const pct=Math.round((r.value/total)*100), w=(r.value/max)*100, top=sortMode==='count'&&i===0;
           return (
-            <div key={r.label} style={{display:'grid',gridTemplateColumns:'160px 1fr 64px',alignItems:'center',gap:10}} title={`${r.label} — ${r.value} ${noun} (${pct}%)`}
+            <div key={r.label} style={{display:'grid',gridTemplateColumns:'190px 1fr 64px',alignItems:'center',gap:10}} title={`${staffDeptLabel(r.label)} — ${r.value} ${noun} (${pct}%)`}
               onMouseEnter={e=>{const b=e.currentTarget.querySelector('.dbar');if(b)b.style.filter='brightness(1.08)';}}
               onMouseLeave={e=>{const b=e.currentTarget.querySelector('.dbar');if(b)b.style.filter='none';}}>
-              <div style={{fontSize:12,fontWeight:top?700:600,color:top?'var(--ink)':'var(--ink-2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.label}</div>
+              <div style={{fontSize:12,fontWeight:top?700:600,color:top?'var(--ink)':'var(--ink-2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{staffDeptLabel(r.label)}</div>
               <div style={{height:18,background:'var(--panel-2)',borderRadius:6,overflow:'hidden'}}>
                 <div className="dbar" style={{height:'100%',width:mounted?w+'%':'0%',minWidth:r.value?6:0,background:`linear-gradient(90deg,${tone},${tone2})`,borderRadius:6,transition:`width .8s ${Math.min(i,22)*45}ms cubic-bezier(.2,.8,.25,1),filter .15s`}}/>
               </div>
@@ -200,7 +225,7 @@ function StaffExpChart({list, setRoute, role='Nurse'}){
                   onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
                   <Avatar name={e.name} size={26}/>
                   <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
-                    <div style={{fontSize:10.5,color:'var(--muted)'}}>{e.designation||'—'} · {staffCanonDept(e.current_department)}</div></div>
+                    <div style={{fontSize:10.5,color:'var(--muted)'}}>{e.designation||'—'} · {staffDeptShow(e.current_department)}</div></div>
                   <span className="num" style={{fontSize:11.5,color:'var(--ink-2)',fontWeight:600}}>{S.expLabel(e)}</span>
                 </div>
               ))}
@@ -413,7 +438,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
         <div style={{display:'flex',alignItems:'center',gap:8,background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:7,padding:'7px 11px',width:240,flexShrink:0,color:'var(--faint)'}}><Ic d={I.search} s={15}/>
           <input placeholder="Search name, ID, phone…" value={q} onChange={e=>setQ(e.target.value)} style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:12.5,color:'var(--ink)',width:'100%'}}/></div>
         <div className="seg">{[['','All'],['Nurse','Nurses'],['PCA','PCA']].map(([v,l])=>(<button key={v} className={role===v?'on':''} onClick={()=>setRole(v)}>{l}</button>))}</div>
-        <select style={sel} value={dept} onChange={e=>setDept(e.target.value)}><option value="">All departments</option>{window.STAFF.DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select>
+        <select style={sel} value={dept} onChange={e=>setDept(e.target.value)}><option value="">All departments</option>{window.STAFF.DEPARTMENTS.map(d=><option key={d} value={d}>{staffDeptLabel(d)}</option>)}</select>
         <select style={sel} value={desig} onChange={e=>setDesig(e.target.value)}><option value="">All designations</option>{[...window.STAFF.DESIGNATIONS,...window.STAFF.PCA_DESIGNATIONS].map(d=><option key={d}>{d}</option>)}</select>
         <select style={sel} value={vacc} onChange={e=>setVacc(e.target.value)}><option value="">Any vaccination</option><option value="__ok">✓ Compliant</option><option value="__gap">⚠ Has gap</option>{window.STAFF.VACCINATION_STATES.map(d=><option key={d}>{d}</option>)}</select>
         {(q||role||dept||desig||vacc)&&<button className="btn sm" onClick={()=>{setQ('');setRole('');setDept('');setDesig('');setVacc('');}}>Clear</button>}
@@ -431,7 +456,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
                   <td style={{textAlign:'left'}}><RoleBadge role={e.role}/></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.designation||'—'}</td>
-                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDept(e.current_department)}</td>
+                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left'}}><VaccBadge status={e.hepatitis_b_vaccination}/></td>
                   <td style={{textAlign:'left'}}>{e.phone||<span style={{color:'var(--rose)'}}>missing</span>}</td>
@@ -562,7 +587,7 @@ function ManageStaff({store, setRoute, role}){
       <div className="card" style={{padding:'12px 14px',display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>
         <div style={{display:'flex',alignItems:'center',gap:8,background:'#fff',border:'1px solid var(--line)',borderRadius:8,padding:'8px 11px',flex:1,minWidth:200,color:'var(--faint)'}}><Ic d={I.search} s={15}/>
           <input placeholder="Search name / Emp ID / Phone" value={q} onChange={e=>setQ(e.target.value)} style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:13,color:'var(--ink)',width:'100%'}}/></div>
-        <select style={sel} value={dept} onChange={e=>setDept(e.target.value)}><option value="">All Departments</option>{deptOpts.map(d=><option key={d}>{d}</option>)}</select>
+        <select style={sel} value={dept} onChange={e=>setDept(e.target.value)}><option value="">All Departments</option>{deptOpts.map(d=><option key={d} value={d}>{staffDeptLabel(d)}</option>)}</select>
         <select style={sel} value={desig} onChange={e=>setDesig(e.target.value)}><option value="">All Designations</option>{desigOpts.map(d=><option key={d}>{d}</option>)}</select>
         <select style={sel} value={vacc} onChange={e=>setVacc(e.target.value)}><option value="">All Vaccination</option><option value="__ok">✓ Compliant</option><option value="__gap">⚠ Has gap</option>{[...new Set(all.map(e=>e.hepatitis_b_vaccination).filter(Boolean))].map(d=><option key={d}>{d}</option>)}</select>
         {qualOpts.length>0&&<select style={sel} value={qual} onChange={e=>setQual(e.target.value)}><option value="">All Qualifications</option>{qualOpts.map(d=><option key={d}>{d}</option>)}</select>}
@@ -585,7 +610,7 @@ function ManageStaff({store, setRoute, role}){
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
                   <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.designation||'—'}</td>
-                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDept(e.current_department)}</td>
+                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}><span style={{color:vaccColor(e.hepatitis_b_vaccination),fontWeight:600}}>{e.hepatitis_b_vaccination||'Unknown'}</span></td>
                   <td style={{textAlign:'left'}}>{e.phone||<span style={{color:'var(--rose)'}}>—</span>}</td>
@@ -644,7 +669,7 @@ function PreviousStaff({store, setRoute}){
                     <td style={{textAlign:'left'}}><b style={{color:'var(--ink)'}}>{e.name}</b></td>
                     <td className="num">{e.emp_id||'—'}</td>
                     <td><RoleBadge role={e.role}/></td>
-                    <td style={{textAlign:'left'}}>{staffCanonDept(e.current_department)}</td>
+                    <td style={{textAlign:'left'}}>{staffDeptShow(e.current_department)}</td>
                     <td style={{textAlign:'left'}}>{e.designation||'—'}</td>
                     <td style={{fontSize:12,color:'var(--muted)'}}>{fmtd(e.archived_at)}</td>
                     <td style={{textAlign:'left',fontSize:12,color:'var(--muted)'}}>{e.archived_reason||'—'}</td>

@@ -70,7 +70,7 @@ function StaffProfile({store, empId, setRoute}){
             <span className="tag">{e.emp_id}</span>
             {!e.is_active&&<span className="chip neg">Inactive</span>}
           </div>
-          <div style={{fontSize:13.5,color:'var(--muted)',marginTop:3}}>{e.designation||'—'} · {e.current_department||'—'}</div>
+          <div style={{fontSize:13.5,color:'var(--muted)',marginTop:3}}>{e.designation||'—'} · {window.staffDeptShow?window.staffDeptShow(e.current_department):(e.current_department||'—')}</div>
         </div>
         {e.phone
           ? <a href={`tel:${(e.phone||'').replace(/[^\d+]/g,'')}`} title={`Call ${e.name} · ${e.phone}`} style={{display:'inline-flex',alignItems:'center',gap:9,textDecoration:'none',padding:'8px 14px',borderRadius:24,background:'#e7f6ed',border:'1px solid #bfe6cf'}}>
@@ -90,7 +90,7 @@ function StaffProfile({store, empId, setRoute}){
 
       <div className="grid" style={{gridTemplateColumns:'1fr 1fr'}}>
         {sec('Personal',<>{field('Employee ID',e.emp_id,true)}{field('Phone',e.phone,true)}{field('Qualification',e.qualification)}{field('Status',e.is_active?'Active':'Inactive')}</>)}
-        {sec('Job',<>{field('Designation',e.designation)}{field('Department',e.current_department)}{field('Date of Joining',e.doj,true)}{field('Total Experience',totalText,true)}</>)}
+        {sec('Job',<>{field('Designation',e.designation)}{field('Department',window.staffDeptShow?window.staffDeptShow(e.current_department):e.current_department)}{field('Date of Joining',e.doj,true)}{field('Total Experience',totalText,true)}</>)}
       </div>
       <div className="grid" style={{gridTemplateColumns:'1fr 1fr'}}>
         {sec('Experience',<>
