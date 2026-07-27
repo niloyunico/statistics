@@ -8050,7 +8050,7 @@ function unicoUserPerms() {
   if (!u) return null;
   if (u.role === 'Administrator') return null;
   if (u.role === 'collector') return null;
-  return u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms) ? u.perms : null;
+  return u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms) ? u.perms : {};
 }
 function unicoModuleLevel(mid) {
   const p = unicoUserPerms();

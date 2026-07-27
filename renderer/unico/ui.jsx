@@ -90,7 +90,10 @@ function unicoUserPerms(){
   if(!u) return null;                       // open local mode -> full
   if(u.role==='Administrator') return null; // admins -> full
   if(u.role==='collector') return null;     // collector uses its own portal
-  return (u.perms && typeof u.perms==='object' && !Array.isArray(u.perms)) ? u.perms : null; // User map, else legacy=full
+  // A 'User' is restricted to EXACTLY the modules in its perms map. No perms map = NO
+  // access (must be granted explicitly) — never silently full, or a half-configured
+  // account would see the whole app.
+  return (u.perms && typeof u.perms==='object' && !Array.isArray(u.perms)) ? u.perms : {};
 }
 function unicoModuleLevel(mid){ const p=unicoUserPerms(); if(!p) return 'delete'; return p[mid]||'none'; }
 // Can this session perform `action` (view|edit|add|delete) in module `mid`?
