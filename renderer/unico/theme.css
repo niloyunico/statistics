@@ -211,6 +211,15 @@ button{font-family:inherit;cursor:pointer}
 }
 
 .grid{display:grid;gap:14px}
+/* staff profile portfolio: sticky ID card on wide screens, stacks on narrow */
+@media (min-width:960px){.staff-portfolio>div:first-child{position:sticky;top:16px}}
+@media (max-width:960px){.staff-portfolio{grid-template-columns:1fr !important}}
+/* nurse-ID badge: medical-cross watermarks behind the content for a medical/ID feel */
+.id-badge{position:relative}
+.id-badge>*{position:relative;z-index:1}
+.id-badge::before{content:"";position:absolute;right:-26px;bottom:60px;width:210px;height:210px;z-index:0;opacity:.055;pointer-events:none;transform:rotate(-10deg);background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%230090ca' d='M9 2h6v7h7v6h-7v7H9v-7H2V9h7z'/%3E%3C/svg%3E") center/contain no-repeat}
+.id-badge::after{content:"";position:absolute;left:-30px;top:150px;width:118px;height:118px;z-index:0;opacity:.045;pointer-events:none;transform:rotate(14deg);background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%233ab5a7' d='M9 2h6v7h7v6h-7v7H9v-7H2V9h7z'/%3E%3C/svg%3E") center/contain no-repeat}
+@media print{.id-badge::before,.id-badge::after{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 .tag{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:5px;background:var(--blue-50);color:var(--blue-700);text-transform:uppercase;letter-spacing:.3px}
 
 /* tables */

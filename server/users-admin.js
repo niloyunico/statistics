@@ -30,14 +30,29 @@ const ACCESS_MODULES = ['stats', 'quality', 'staff', 'datacol', 'reports', 'user
 //   add    → may modify + create new
 //   delete → full control (modify + create + delete)
 const PERM_LEVELS = ['none', 'view', 'edit', 'add', 'delete'];
+const PERM_ACTIONS = ['view', 'edit', 'add', 'delete'];
 const fullPerms = () => ACCESS_MODULES.reduce((m, k) => (m[k] = 'delete', m), {});
 const nonePerms = () => ACCESS_MODULES.reduce((m, k) => (m[k] = 'none', m), {});
-// Normalise an incoming perms object to a complete {module: level} map over the known
-// modules (unknown keys dropped, invalid/absent levels => 'none').
+// Normalise an incoming perms object to a complete map over the known modules. Each
+// module value is either an ARRAY of independently-granted actions (new model, e.g.
+// ['view','edit','delete']) or a legacy escalating LEVEL string. Unknown module keys
+// are dropped; invalid entries => 'none'. Any granted action forces 'view' (a user
+// must be able to open a module to edit/add/delete in it), and actions are stored in
+// canonical order.
 function cleanPerms(v) {
   const out = nonePerms();
   if (v && typeof v === 'object' && !Array.isArray(v)) {
-    ACCESS_MODULES.forEach((k) => { const lv = String(v[k] || 'none'); if (PERM_LEVELS.includes(lv)) out[k] = lv; });
+    ACCESS_MODULES.forEach((k) => {
+      const val = v[k];
+      if (Array.isArray(val)) {
+        let acts = val.filter((a) => PERM_ACTIONS.includes(a));
+        if (acts.some((a) => a !== 'view') && acts.indexOf('view') < 0) acts.push('view');
+        acts = PERM_ACTIONS.filter((a) => acts.indexOf(a) >= 0);   // canonical order + dedupe
+        out[k] = acts.length ? acts : 'none';
+      } else {
+        const lv = String(val || 'none'); if (PERM_LEVELS.includes(lv)) out[k] = lv;
+      }
+    });
   }
   return out;
 }

@@ -1646,9 +1646,20 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   const DEPARTMENTS=["ER","OPD","NICU","MICU","SICU","CCU","CT ICU","Level-10","Level-9","Level-11",
     "LDR","Dialysis","Endoscopy","Cath Lab","General OT","Cardiac OT","Radiology","HomeCare","DayCare",
     "Oncology","Infection Control","Training & Development","Management","Vaccination Room"];
-  const DESIGNATIONS=["Staff Nurse","Senior Staff Nurse","Charge Nurse","Acting Charge Nurse","Incharge Nurse",
-    "OT Incharge Nurse","Team Leader","Nurse Manager","Senior Manager","Instructor","Infection Control Nurse","Supervisor"];
-  const QUALIFICATIONS=["Diploma","B.Sc","Post B.Sc","PBSC","BSC MSN","MSS","NCLEX RN","Diploma in Midwifery","Diploma in Renal Nursing"];
+  const DESIGNATIONS=["Staff Nurse","Senior Staff Nurse","Charge Nurse","Acting Charge Nurse",
+    "Team Leader","Assistant Nurse Manager","Nurse Manager","Senior Manager","Instructor","Infection Control Nurse","Supervisor"];
+  // Bangladesh (BNMC) nursing qualifications — full current list; legacy short forms kept
+  // at the end so already-recorded values still match their chip.
+  // One valid name per qualification (no short-code duplicates like "B.Sc" vs
+  // "B.Sc in Nursing"). Common degrees first, then specialised diplomas.
+  const QUALIFICATIONS=[
+    "Diploma in Nursing","Diploma in Midwifery",
+    "B.Sc in Nursing","Post Basic B.Sc in Nursing","B.Sc in Public Health Nursing",
+    "M.Sc in Nursing","Master of Nursing (MN)","M.Phil in Nursing","PhD in Nursing","MPH","NCLEX-RN",
+    "Community Health Nursing","Diploma in Renal Nursing","Diploma in Cardiac Nursing",
+    "Diploma in Critical Care Nursing","Diploma in Orthopaedic Nursing",
+    "Diploma in Psychiatric / Mental Health Nursing","Diploma in Anaesthesia",
+    "Diploma in OT / Operating Room Nursing"];
   const VACCINATION_STATES=["Completed","3rd Dose","2nd Dose","1st Dose","Not Completed","Unknown"];
   // Collapse any free-text Hep-B value (imports, typos) into one canonical state, so the
   // chart/compliance never fragment again ("Not completed" vs "Not Completed", "Vacinated",
@@ -1665,16 +1676,48 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     if(/^complet/.test(s)||/vacc?inat/.test(s)||/full/.test(s)) return 'Completed';
     return 'Unknown';
   }
-  const TRAININGS=["BLS","ACLS","ICU Care","Wound Care","Dialysis","Infection Control","Cath Lab Assist",
-    "OT Scrub","Neonatal Resuscitation","Triage","Phlebotomy","Ventilator Management",""];
+  const TRAININGS=["BLS","ACLS","PALS","Neonatal Resuscitation (NRP)","First Aid","CPR",
+    "ICU / Critical Care","Ventilator Management","Wound Care","IV Cannulation","Phlebotomy",
+    "Dialysis","Cath Lab Assist","OT Scrub","Triage","Infection Control","Medication Safety","Fire Safety"];
 
   // PCA (Patient Care Assistant) role config
   const ROLES=["Nurse","PCA"];
   const PCA_DESIGNATIONS=["Patient Care Assistant","Senior PCA","ICU PCA","Ward Assistant","OT Helper","PCA Trainee"];
   const PCA_QUALIFICATIONS=["SSC","HSC","PCA Certificate","Care Giving Course","Nursing Aide Diploma","Basic First Aid"];
   const PCA_TRAININGS=["BLS","Patient Handling","Hygiene & Bed Care","Infection Control","Vital Signs","Specimen Transport",""];
-  function designationsFor(role){ return role==="PCA"?PCA_DESIGNATIONS:DESIGNATIONS; }
-  function qualificationsFor(role){ return role==="PCA"?PCA_QUALIFICATIONS:QUALIFICATIONS; }
+  // ---------- custom field options (managed in Settings → Staff Fields) ----------
+  // Admins can extend the Education (qualification), Designation and Training option
+  // lists without a code change. Stored in localStorage, merged on top of the defaults.
+  const FIELDOPT_KEY='unico_staff_fieldopts_v1';
+  function loadFieldOpts(){ try{const o=JSON.parse(localStorage.getItem(FIELDOPT_KEY));return (o&&typeof o==='object'&&!Array.isArray(o))?o:{};}catch(e){return {};} }
+  function fieldOptList(kind){ const o=loadFieldOpts(); return Array.isArray(o[kind])?o[kind]:[]; }
+  function addFieldOpt(kind,val){ val=String(val||'').trim(); if(!val) return false; const o=loadFieldOpts(); const a=Array.isArray(o[kind])?o[kind]:[]; if(a.some(x=>x.toLowerCase()===val.toLowerCase())) return false; a.push(val); o[kind]=a; try{localStorage.setItem(FIELDOPT_KEY,JSON.stringify(o));}catch(e){} return true; }
+  function removeFieldOpt(kind,val){ const o=loadFieldOpts(); o[kind]=(o[kind]||[]).filter(x=>x!==val); try{localStorage.setItem(FIELDOPT_KEY,JSON.stringify(o));}catch(e){} }
+
+  function designationsFor(role){ const base=role==="PCA"?PCA_DESIGNATIONS:DESIGNATIONS; return [...base,...fieldOptList(role==="PCA"?'pca_designations':'designations')]; }
+  function qualificationsFor(role){ const base=role==="PCA"?PCA_QUALIFICATIONS:QUALIFICATIONS; return [...base,...fieldOptList(role==="PCA"?'pca_qualifications':'qualifications')]; }
+
+  // ---------- custom field CATEGORIES (fully dynamic, admin-defined) ----------
+  // Each definition: {id, name, kind:'single'|'multi'|'text', options:[]}. Admins add
+  // these in Settings → Staff Fields; the Add/Edit Staff form renders one input per
+  // definition and stores values on the staff record under e.custom[id].
+  const CF_KEY='unico_staff_customfields_v1';
+  function loadCustomFields(){ try{const a=JSON.parse(localStorage.getItem(CF_KEY));return Array.isArray(a)?a:[];}catch(e){return [];} }
+  function saveCustomFields(a){ try{localStorage.setItem(CF_KEY,JSON.stringify(a));}catch(e){} }
+  function customFields(){ return loadCustomFields(); }
+  function addCustomField(name,kind){ name=String(name||'').trim(); if(!name) return null;
+    const a=loadCustomFields();
+    const base='cf_'+(name.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'')||'field');
+    let id=base,n=2; while(a.some(f=>f.id===id)){ id=base+'_'+(n++); }
+    const def={id,name,kind:(kind==='multi'||kind==='text')?kind:'single',options:[]};
+    a.push(def); saveCustomFields(a); return def; }
+  function removeCustomField(id){ saveCustomFields(loadCustomFields().filter(f=>f.id!==id)); }
+  function renameCustomField(id,name){ name=String(name||'').trim(); if(!name) return; saveCustomFields(loadCustomFields().map(f=>f.id===id?{...f,name}:f)); }
+  function addCustomFieldOption(id,val){ val=String(val||'').trim(); if(!val) return false; let done=false;
+    saveCustomFields(loadCustomFields().map(f=>{ if(f.id!==id) return f; const opts=Array.isArray(f.options)?f.options:[];
+      if(opts.some(x=>x.toLowerCase()===val.toLowerCase())) return f; done=true; return {...f,options:[...opts,val]}; }));
+    return done; }
+  function removeCustomFieldOption(id,val){ saveCustomFields(loadCustomFields().map(f=>f.id===id?{...f,options:(f.options||[]).filter(x=>x!==val)}:f)); }
 
   const FIRST=["Ayesha","Farzana","Nusrat","Tahmina","Ruma","Shirin","Kamrun","Sabina","Rokeya","Mahmuda",
     "Salma","Nasrin","Jahanara","Rebeka","Parvin","Shahida","Morsheda","Anjuman","Dilruba","Hosne",
@@ -1866,8 +1909,10 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
       nextEmpId:()=>{ const max=staff.reduce((m,e)=>{const n=parseInt((e.emp_id||'').replace(/\D/g,''))||0;return Math.max(m,n);},100); return `UNC-${String(max+1).padStart(4,'0')}`; },
       create:(data)=>setStaff(s=>{ const id=Math.max(0,...s.map(e=>e.id))+1; return [...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]; }),
       update:(id,patch)=>setStaff(s=>s.map(e=>e.id===id?{...e,...patch}:e)),
-      remove:(id)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:false}:e)),
-      restore:(id)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:true}:e)),
+      // Deactivating a staff member archives them: they leave the active roster AND
+      // move to Previous Staff (which keys on `former`). Keep first-archived timestamp.
+      remove:(id,reason)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:false,former:true,archived_at:e.archived_at||Date.now(),archived_reason:reason||e.archived_reason||'Deactivated from roster'}:e)),
+      restore:(id)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:true,former:false,archived_at:null,archived_reason:''}:e)),
       destroy:(id)=>setStaff(s=>s.filter(e=>e.id!==id)),
       addNote:(id,text)=>setStaff(s=>s.map(e=>e.id===id?{...e,notes:[...(e.notes||[]),{id:Date.now(),text,author:'Dr. A. Rahman',ts:Date.now()}]}:e)),
       delNote:(id,nid)=>setStaff(s=>s.map(e=>e.id===id?{...e,notes:(e.notes||[]).filter(n=>n.id!==nid)}:e)),
@@ -1879,6 +1924,8 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
 
   window.STAFF={DEPARTMENTS,DESIGNATIONS,QUALIFICATIONS,VACCINATION_STATES,TRAININGS,VACC_OK,canonVacc,
     ROLES,PCA_DESIGNATIONS,PCA_QUALIFICATIONS,PCA_TRAININGS,designationsFor,qualificationsFor,
+    fieldOptList,addFieldOpt,removeFieldOpt,
+    customFields,addCustomField,removeCustomField,renameCustomField,addCustomFieldOption,removeCustomFieldOption,
     seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,byRole,uniqueVals};
   window.useStaffStore=useStaffStore;
 })();
@@ -6709,7 +6756,8 @@ function Donut({
   thickness = 30,
   centerLabel,
   centerValue,
-  flat = false
+  flat = false,
+  onSlice
 }) {
   const mounted = useMounted();
   const m = flat || mounted;
@@ -6757,13 +6805,14 @@ function Donut({
           x: e.clientX,
           y: e.clientY,
           title: d.label,
-          single: fmt(d.value) + ` (${Math.round(frac * 100)}%)`
+          single: fmt(d.value) + ` (${Math.round(frac * 100)}%)` + (onSlice ? ' · click to view' : '')
         });
       },
       onMouseLeave: () => {
         setHi(-1);
         setTip(null);
       },
+      onClick: () => onSlice && onSlice(i, d),
       style: {
         cursor: 'pointer'
       }
@@ -6796,13 +6845,14 @@ function Donut({
           x: e.clientX,
           y: e.clientY,
           title: d.label,
-          single: fmt(d.value) + ` (${Math.round(frac * 100)}%)`
+          single: fmt(d.value) + ` (${Math.round(frac * 100)}%)` + (onSlice ? ' · click to view' : '')
         });
       },
       onMouseLeave: () => {
         setHi(-1);
         setTip(null);
       },
+      onClick: () => onSlice && onSlice(i, d),
       style: {
         transition: `stroke-dasharray .9s ${i * 80}ms cubic-bezier(.3,.8,.3,1), stroke-width .15s`,
         cursor: 'pointer'
@@ -6849,10 +6899,12 @@ function Donut({
       gap: 8,
       fontSize: 12,
       opacity: hi < 0 || hi === i ? 1 : .45,
-      transition: 'opacity .15s'
+      transition: 'opacity .15s',
+      cursor: onSlice ? 'pointer' : 'default'
     },
     onMouseEnter: () => setHi(i),
-    onMouseLeave: () => setHi(-1)
+    onMouseLeave: () => setHi(-1),
+    onClick: () => onSlice && onSlice(i, d)
   }, React.createElement("i", {
     style: {
       width: 9,
@@ -8006,6 +8058,12 @@ const UNICO_MODULES = [{
   icon: I.heart,
   home: 'quality'
 }, {
+  id: 'supervisor',
+  label: 'Supervisor Reports',
+  short: 'Supervisor',
+  icon: I.doc,
+  home: 'supHome'
+}, {
   id: 'reports',
   label: 'Reports',
   short: 'Reports',
@@ -8023,6 +8081,7 @@ const UNICO_MODULE_VIEWS = {
   datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcResponsibles', 'dcShare', 'dcFields'],
   staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
+  supervisor: ['supHome', 'supNew', 'supHistory', 'supReport'],
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
   users: ['users']
 };
@@ -8033,7 +8092,7 @@ function unicoModuleOf(view) {
   }
   return 'stats';
 }
-const UNICO_ACCESS_MODULES = ['stats', 'quality', 'staff', 'datacol', 'reports', 'users'];
+const UNICO_ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users'];
 function unicoAccessModuleOf(view) {
   if (view === 'settings') return 'users';
   return unicoModuleOf(view);
@@ -8058,7 +8117,14 @@ function unicoModuleLevel(mid) {
   return p[mid] || 'none';
 }
 function unicoCan(mid, action) {
-  return (UNICO_PERM_RANK[unicoModuleLevel(mid)] || 0) >= (UNICO_PERM_RANK[action] || UNICO_PERM_RANK.view);
+  const p = unicoUserPerms();
+  if (!p) return true;
+  const val = p[mid];
+  if (Array.isArray(val)) {
+    if (action === 'view') return val.length > 0;
+    return val.indexOf(action) >= 0;
+  }
+  return (UNICO_PERM_RANK[val || 'none'] || 0) >= (UNICO_PERM_RANK[action] || UNICO_PERM_RANK.view);
 }
 function unicoCanAccessModule(mid) {
   return unicoCan(mid, 'view');
@@ -8072,7 +8138,7 @@ function unicoAllowedModules() {
   return UNICO_ACCESS_MODULES.filter(m => unicoCan(m, 'view'));
 }
 function unicoFirstAllowedHome() {
-  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['reports', 'reports'], ['users', 'settings']];
+  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['reports', 'reports'], ['users', 'settings']];
   for (let i = 0; i < homes.length; i++) {
     if (unicoCanAccessModule(homes[i][0])) return homes[i][1];
   }
@@ -8302,6 +8368,14 @@ function unicoQualityBreachCount() {
   }
 }
 window.unicoQualityBreachCount = unicoQualityBreachCount;
+function unicoSupAlertCount() {
+  try {
+    return window.__UNICO_SUP_ALERTS__ || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+window.unicoSupAlertCount = unicoSupAlertCount;
 const UNICO_WS = [{
   sec: '',
   items: [{
@@ -8326,6 +8400,13 @@ const UNICO_WS = [{
     home: 'quality',
     on: v => unicoModuleOf(v) === 'quality',
     badge: true
+  }, {
+    id: 'supervisor',
+    label: 'Supervisor Reports',
+    icon: I.doc,
+    home: 'supHome',
+    on: v => unicoModuleOf(v) === 'supervisor',
+    badge: 'sup'
   }]
 }, {
   sec: 'Data',
@@ -8345,11 +8426,17 @@ const UNICO_WS = [{
 }, {
   sec: 'Administer',
   items: [{
-    id: 'staff',
-    label: 'Staff',
+    id: 'nurses',
+    label: 'Nurse Management',
     icon: I.steth,
     home: 'nurseHome',
-    on: v => unicoModuleOf(v) === 'staff'
+    on: v => ['nurseHome', 'nurses', 'nurseCompliance', 'staffPrevious', 'staffProfile', 'staffForm'].indexOf(v) >= 0
+  }, {
+    id: 'pca',
+    label: 'PCA Management',
+    icon: I.bed,
+    home: 'pcaHome',
+    on: v => ['pcaHome', 'pca', 'pcaCompliance'].indexOf(v) >= 0
   }, {
     id: 'settings',
     label: 'Settings',
@@ -8385,6 +8472,19 @@ function unicoWorkspaceSub(view) {
     label: 'Action Plans',
     view: 'qualityCapa'
   }];
+  if (mod === 'supervisor') return [{
+    label: 'Dashboard',
+    view: 'supHome'
+  }, {
+    label: 'New Report',
+    view: 'supNew'
+  }, {
+    label: 'History',
+    view: 'supHistory'
+  }, {
+    label: 'Generate Report',
+    view: 'supReport'
+  }];
   if (mod === 'reports') return [{
     label: 'Patient Statistics',
     view: 'reports'
@@ -8408,28 +8508,34 @@ function unicoWorkspaceSub(view) {
     label: 'Share Links',
     view: 'dcShare'
   }];
-  if (mod === 'staff') return [{
-    label: 'Nurse Dashboard',
-    view: 'nurseHome'
-  }, {
-    label: 'Nurse Directory',
-    view: 'nurses'
-  }, {
-    label: 'Nurse Compliance',
-    view: 'nurseCompliance'
-  }, {
-    label: 'PCA Dashboard',
-    view: 'pcaHome'
-  }, {
-    label: 'PCA Directory',
-    view: 'pca'
-  }, {
-    label: 'PCA Compliance',
-    view: 'pcaCompliance'
-  }, {
-    label: 'Previous Staff',
-    view: 'staffPrevious'
-  }];
+  if (mod === 'staff') {
+    const isPca = ['pcaHome', 'pca', 'pcaCompliance'].indexOf(view) >= 0;
+    return isPca ? [{
+      label: 'Dashboard',
+      view: 'pcaHome'
+    }, {
+      label: 'Directory',
+      view: 'pca'
+    }, {
+      label: 'Compliance',
+      view: 'pcaCompliance'
+    }, {
+      label: 'Previous Staff',
+      view: 'staffPrevious'
+    }] : [{
+      label: 'Dashboard',
+      view: 'nurseHome'
+    }, {
+      label: 'Directory',
+      view: 'nurses'
+    }, {
+      label: 'Compliance',
+      view: 'nurseCompliance'
+    }, {
+      label: 'Previous Staff',
+      view: 'staffPrevious'
+    }];
+  }
   return [];
 }
 function Sidebar({
@@ -8440,25 +8546,22 @@ function Sidebar({
 }) {
   const view = route.view;
   const qBadge = React.useMemo(() => unicoQualityBreachCount(), []);
+  const supBadge = React.useMemo(() => unicoSupAlertCount(), [view]);
   const sub = unicoWorkspaceSub(view);
   const subOn = s => s.match ? s.match.indexOf(view) >= 0 : view === s.view;
   return React.createElement("aside", {
     className: "sb"
   }, React.createElement("div", {
     className: "sb-brand"
-  }, React.createElement("div", {
-    className: "sb-logo"
-  }, React.createElement("svg", {
-    width: "20",
-    height: "18",
-    viewBox: "0 0 51 45",
-    fill: "#fff",
-    "aria-hidden": "true"
-  }, React.createElement("path", {
-    d: "M25.519 21.607A18.35 18.35 0 0 0 34.352 12.8C36.742 7.25 35.567.727 35.567.727a8.9 8.9 0 0 1-5.552.812C26.45 1.09 25.519 0 25.519 0s-.931 1.1-4.5 1.538A8.87 8.87 0 0 1 15.47.727S14.295 7.25 16.685 12.8a18.35 18.35 0 0 0 8.834 8.805m-3.912 1.028A18.35 18.35 0 0 0 12.8 13.8C7.25 11.411.727 12.586.727 12.586a8.9 8.9 0 0 1 .812 5.552C1.09 21.7 0 22.635 0 22.635s1.1.931 1.538 4.5a8.87 8.87 0 0 1-.812 5.552S7.25 33.858 12.8 31.468a18.32 18.32 0 0 0 8.805-8.834m3.912 1.028a18.35 18.35 0 0 0-8.834 8.805c-2.39 5.552-1.215 12.075-1.215 12.075a8.9 8.9 0 0 1 5.552-.812c3.565.443 4.5 1.538 4.5 1.538s.931-1.1 4.5-1.538a8.9 8.9 0 0 1 5.552.812s1.175-6.523-1.215-12.075a18.35 18.35 0 0 0-8.834-8.805m25.644-1.028s-1.1-.931-1.538-4.5a8.87 8.87 0 0 1 .812-5.552S43.912 11.411 38.36 13.8a18.35 18.35 0 0 0-8.805 8.834 18.35 18.35 0 0 0 8.805 8.834c5.552 2.39 12.075 1.215 12.075 1.215a8.9 8.9 0 0 1-.812-5.552c.443-3.565 1.538-4.5 1.538-4.5"
-  }))), React.createElement("div", {
-    className: "sb-brand-txt sb-name"
-  }, "UNICO", React.createElement("small", null, "Statistics Suite"))), React.createElement("div", {
+  }, React.createElement("img", {
+    className: "sb-logo-img sb-logo-full",
+    src: "unico/logo.svg",
+    alt: "UNICO \u2014 Hands of Care Hospitals"
+  }), React.createElement("img", {
+    className: "sb-logo-img sb-logo-mark",
+    src: "unico/logo-mark.svg",
+    alt: "UNICO"
+  })), React.createElement("div", {
     className: "sb-scroll"
   }, UNICO_WS.map((g, gi) => {
     const items = g.items.filter(it => unicoCanAccessModule(unicoAccessModuleOf(it.home)));
@@ -8469,7 +8572,8 @@ function Sidebar({
       className: "sb-sec"
     }, g.sec), items.map(it => {
       const active = it.on(view);
-      const badge = it.badge && qBadge > 0 ? qBadge : null;
+      const badgeN = it.badge === 'sup' ? supBadge : it.badge ? qBadge : 0;
+      const badge = badgeN > 0 ? badgeN : null;
       return React.createElement(React.Fragment, {
         key: it.id
       }, React.createElement("div", {
@@ -12642,7 +12746,7 @@ function ExportMenu({
     c: "var(--blue)"
   }), l))));
 }
-function staffCanonDept(raw) {
+function staffShortCanon(raw) {
   const S = window.STAFF;
   const DEPTS = S && S.DEPARTMENTS || [];
   const DESIGS = S && S.DESIGNATIONS || [];
@@ -12655,6 +12759,19 @@ function staffCanonDept(raw) {
   const norm = s.replace(/[.,;/]+/g, ' ').replace(/\s+/g, ' ').trim();
   const nl = norm.toLowerCase();
   const padded = ' ' + nl + ' ';
+  const ALIAS = {
+    emergency: 'ER',
+    cticu: 'CT ICU',
+    'ct icu': 'CT ICU',
+    'cardiac icu': 'CT ICU',
+    'ctvs icu': 'CT ICU',
+    homecare: 'HomeCare',
+    'home care': 'HomeCare',
+    'family medicine': 'HomeCare',
+    daycare: 'DayCare',
+    'day care': 'DayCare'
+  };
+  if (ALIAS[nl]) return ALIAS[nl];
   const esc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const sorted = [...DEPTS].sort((a, b) => b.length - a.length);
   for (const d of sorted) {
@@ -12671,6 +12788,35 @@ function staffCanonDept(raw) {
   })) return 'Unassigned';
   return s;
 }
+let _staffStatsCache = null,
+  _staffStatsKey = null;
+function staffStatsList() {
+  try {
+    if (!window.buildDepts) return null;
+    const rawOv = localStorage.getItem('unico_store_v3') || '';
+    if (_staffStatsKey === rawOv && _staffStatsCache) return _staffStatsCache;
+    const m = window.buildDepts(JSON.parse(rawOv || '{}') || {});
+    if (Array.isArray(m) && m.length) {
+      _staffStatsKey = rawOv;
+      _staffStatsCache = m;
+      return m;
+    }
+  } catch (e) {}
+  return null;
+}
+function staffStatsName(raw) {
+  const list = staffStatsList();
+  if (!list) return null;
+  const v = String(raw || '').trim();
+  if (!v || v === 'Unassigned') return null;
+  const lc = v.toLowerCase();
+  const d = list.find(x => [x.name, x.id, x.key, x.short].some(a => String(a || '').trim().toLowerCase() === lc));
+  return d ? d.name : null;
+}
+function staffCanonDept(raw) {
+  const short = staffShortCanon(raw);
+  return staffStatsName(raw) || staffStatsName(short) || short;
+}
 const STAFF_DEPT_FULL = {
   'ER': 'Emergency (ER)',
   'OPD': 'Outpatient Department (OPD)',
@@ -12684,6 +12830,8 @@ const STAFF_DEPT_FULL = {
   'Cath Lab': 'Catheterization Lab',
   'General OT': 'General Operation Theatre',
   'Cardiac OT': 'Cardiac Operation Theatre',
+  'HomeCare': 'Family Medicine',
+  'DayCare': 'Day Care',
   'Level-9': 'Cabin Level 9',
   'Level-10': 'Cabin Level 10',
   'Level-11': 'Cabin Level 11'
@@ -12692,15 +12840,35 @@ function staffDeptLabel(n) {
   return STAFF_DEPT_FULL[n] || n;
 }
 function staffDeptShow(raw) {
-  return staffDeptLabel(staffCanonDept(raw));
+  const parts = String(raw || '').split(',').map(x => x.trim()).filter(Boolean);
+  const one = v => {
+    const short = staffShortCanon(v);
+    return staffStatsName(v) || staffStatsName(short) || staffDeptLabel(short);
+  };
+  if (parts.length > 1) return [...new Set(parts.map(one))].join(', ');
+  return one(raw);
+}
+function staffCanonDesig(raw) {
+  let s = String(raw || '').trim().replace(/\s+/g, ' ');
+  if (!s) return '';
+  s = s.replace(/satff/gi, 'Staff').replace(/\bsr\.?\b/gi, 'Senior').replace(/\bjr\.?\b/gi, 'Junior').replace(/incharge/gi, 'Incharge').replace(/\s+/g, ' ').trim();
+  if (/in\s*charge nurse$/i.test(s)) return 'Charge Nurse';
+  const DESIGS = window.STAFF && window.STAFF.DESIGNATIONS || [];
+  const lc = s.toLowerCase();
+  for (const d of DESIGS) {
+    if (d.toLowerCase() === lc) return d;
+  }
+  return s;
 }
 if (typeof window !== 'undefined') {
   window.staffCanonDept = staffCanonDept;
   window.staffDeptLabel = staffDeptLabel;
   window.staffDeptShow = staffDeptShow;
+  window.staffCanonDesig = staffCanonDesig;
 }
 function StaffDeptChart({
   list,
+  setRoute,
   tone = '#0090ca',
   role = 'Nurse'
 }) {
@@ -12713,21 +12881,25 @@ function StaffDeptChart({
   const [pick, setPick] = useState('');
   const [sortMode, setSortMode] = useState('count');
   const [mounted, setMounted] = useState(false);
+  const [sel, setSel] = useState('');
   useEffect(() => {
     const t = setTimeout(() => setMounted(true), 30);
     return () => clearTimeout(t);
   }, []);
-  const rows = useMemo(() => {
+  const members = useMemo(() => {
     const m = {};
     list.forEach(e => {
-      const d = staffCanonDept(e.current_department);
-      m[d] = (m[d] || 0) + 1;
+      const parts = [...new Set(String(e.current_department || '').split(',').map(x => staffCanonDept(x.trim())).filter(Boolean))];
+      (parts.length ? parts : ['Unassigned']).forEach(d => {
+        (m[d] = m[d] || []).push(e);
+      });
     });
-    return Object.entries(m).map(([label, value]) => ({
-      label,
-      value
-    }));
+    return m;
   }, [list]);
+  const rows = Object.entries(members).map(([label, arr]) => ({
+    label,
+    value: arr.length
+  }));
   const total = rows.reduce((s, r) => s + r.value, 0) || 1;
   const max = Math.max(1, ...rows.map(r => r.value));
   const noun = role === 'PCA' ? 'PCA' : 'nurses';
@@ -12830,13 +13002,18 @@ function StaffDeptChart({
       top = sortMode === 'count' && i === 0;
     return React.createElement("div", {
       key: r.label,
+      onClick: () => setSel(s => s === r.label ? '' : r.label),
+      title: `Click to list ${staffDeptLabel(r.label)} ${noun}`,
       style: {
         display: 'grid',
         gridTemplateColumns: '190px 1fr 64px',
         alignItems: 'center',
-        gap: 10
+        gap: 10,
+        cursor: 'pointer',
+        borderRadius: 7,
+        padding: '2px 4px',
+        background: sel === r.label ? 'var(--blue-50)' : 'transparent'
       },
-      title: `${staffDeptLabel(r.label)} — ${r.value} ${noun} (${pct}%)`,
       onMouseEnter: e => {
         const b = e.currentTarget.querySelector('.dbar');
         if (b) b.style.filter = 'brightness(1.08)';
@@ -12890,7 +13067,93 @@ function StaffDeptChart({
         marginLeft: 4
       }
     }, pct, "%")));
-  })));
+  })), sel && members[sel] && React.createElement("div", {
+    style: {
+      borderTop: '1px solid var(--line-2)',
+      padding: '10px 14px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("b", {
+    style: {
+      fontSize: 13
+    }
+  }, staffDeptLabel(sel)), React.createElement("span", {
+    className: "tag",
+    style: {
+      background: 'var(--blue-50)',
+      color: 'var(--blue-700)'
+    }
+  }, members[sel].length, " ", noun), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setSel('')
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 13
+  }), "Close")), React.createElement("div", {
+    style: {
+      maxHeight: 210,
+      overflowY: 'auto',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, [...members[sel]].sort((a, b) => String(a.name).localeCompare(String(b.name))).map(e => React.createElement("div", {
+    key: e.id,
+    onClick: () => setRoute && setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    }),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '6px 8px',
+      borderRadius: 7,
+      cursor: 'pointer',
+      border: '1px solid var(--line-2)'
+    },
+    onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
+    onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
+  }, React.createElement(Avatar, {
+    name: e.name,
+    size: 26
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, e.name), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)'
+    }
+  }, e.designation || '—', e.emp_id ? ' · ' + e.emp_id : '')), e.phone && React.createElement("span", {
+    className: "num",
+    style: {
+      fontSize: 11,
+      color: 'var(--ink-2)'
+    }
+  }, e.phone))))));
 }
 function StaffExpChart({
   list,
@@ -13036,32 +13299,161 @@ function StaffExpChart({
     }
   }, S.expLabel(e))))))));
 }
+function StaffDesigChart({
+  list,
+  setRoute,
+  role = 'Nurse'
+}) {
+  const {
+    useState
+  } = React;
+  const [sel, setSel] = useState(null);
+  const S = window.STAFF;
+  const canon = window.staffCanonDesig || (x => x);
+  const count = {},
+    members = {};
+  list.forEach(e => {
+    const d = canon(e.designation) || '—';
+    count[d] = (count[d] || 0) + 1;
+    (members[d] = members[d] || []).push(e);
+  });
+  const all = Object.entries(count).sort((a, b) => b[1] - a[1]);
+  const donut = all.map(([label, value], i) => ({
+    label,
+    value,
+    color: PALETTE[i] || `hsl(${i * 67 % 360} 58% 52%)`
+  }));
+  const noun = role === 'PCA' ? 'PCA' : 'nurses';
+  let curLabel = null,
+    curList = null;
+  if (sel) {
+    curLabel = sel;
+    curList = members[sel] || [];
+  }
+  return React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Designation Breakdown"), React.createElement("span", {
+    className: "sub"
+  }, "click a role to list staff"), React.createElement("span", {
+    className: "spacer"
+  })), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement("div", {
+    style: {
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement(Donut, {
+    data: donut,
+    size: 188,
+    centerValue: fmt(list.length),
+    centerLabel: "staff",
+    onSlice: (i, d) => setSel(s => s === d.label ? null : d.label)
+  })), curList && React.createElement("div", {
+    style: {
+      marginTop: 8,
+      borderTop: '1px solid var(--line-2)',
+      paddingTop: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("b", {
+    style: {
+      fontSize: 13
+    }
+  }, curLabel), React.createElement("span", {
+    className: "tag",
+    style: {
+      background: 'var(--blue-50)',
+      color: 'var(--blue-700)'
+    }
+  }, curList.length, " ", noun, " \xB7 ", Math.round(curList.length / (list.length || 1) * 100), "%"), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setSel(null)
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 13
+  }), "Close")), React.createElement("div", {
+    style: {
+      maxHeight: 180,
+      overflowY: 'auto',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, [...curList].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(e => React.createElement("div", {
+    key: e.id,
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    }),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '6px 8px',
+      borderRadius: 7,
+      cursor: 'pointer',
+      border: '1px solid var(--line-2)'
+    },
+    onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
+    onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
+  }, React.createElement(Avatar, {
+    name: e.name,
+    size: 26
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, e.name), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)'
+    }
+  }, canon(e.designation) || '—', " \xB7 ", staffDeptShow(e.current_department))), React.createElement("span", {
+    className: "num",
+    style: {
+      fontSize: 11.5,
+      color: 'var(--ink-2)',
+      fontWeight: 600
+    }
+  }, S.expLabel(e))))))));
+}
 function WorkforceDashboard({
   store,
   setRoute,
   role = 'Nurse'
 }) {
   const S = window.STAFF;
-  const list = store.staff.filter(e => (e.role || 'Nurse') === role);
-  const [welcome, setWelcome] = React.useState(true);
+  const list = store.staff.filter(e => (e.role || 'Nurse') === role && e.is_active && !e.former);
   const [showHi, setShowHi] = React.useState(false);
   const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
   const listView = role === 'PCA' ? 'pca' : 'nurses';
   const compView = role === 'PCA' ? 'pcaCompliance' : 'nurseCompliance';
   const homeView = role === 'PCA' ? 'pcaHome' : 'nurseHome';
   const k = S.kpis(list);
-  const desigAll = S.countBy(list, 'designation');
-  const desigTop = desigAll.slice(0, 6),
-    desigOther = desigAll.slice(6).reduce((s, d) => s + d[1], 0);
-  const desigDonut = [...desigTop.map(([label, value], i) => ({
-    label,
-    value,
-    color: PALETTE[i % PALETTE.length]
-  })), ...(desigOther ? [{
-    label: 'Other',
-    value: desigOther,
-    color: '#c2486f'
-  }] : [])];
   const vacc = S.vaccinationBreakdown(list).map(([label, value]) => ({
     label,
     value,
@@ -13164,47 +13556,7 @@ function WorkforceDashboard({
       d: I.plus,
       s: 15
     }), "Add ", role === 'PCA' ? 'PCA' : 'Nurse'))
-  }), welcome && React.createElement("div", {
-    className: "card",
-    style: {
-      background: 'var(--blue-50)',
-      border: '1px solid var(--blue-100)',
-      padding: '14px 16px',
-      display: 'flex',
-      alignItems: 'flex-start',
-      gap: 12
-    }
-  }, React.createElement("div", {
-    style: {
-      color: 'var(--blue)',
-      marginTop: 1
-    }
-  }, React.createElement(Ic, {
-    d: I.heart,
-    s: 20
-  })), React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700,
-      color: 'var(--ink)'
-    }
-  }, role, " Management"), React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      color: 'var(--ink-2)',
-      marginTop: 2
-    }
-  }, "Manage the ", role, " roster, filter with the quick chips, export to Excel/Word, and use ", React.createElement("b", null, "Compliance"), " to close gaps.")), React.createElement("button", {
-    className: "icon-btn",
-    onClick: () => setWelcome(false)
-  }, React.createElement(Ic, {
-    d: I.x,
-    s: 15
-  }))), React.createElement("div", {
+  }), React.createElement("div", {
     className: "grid",
     style: {
       gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))'
@@ -13236,28 +13588,14 @@ function WorkforceDashboard({
     }
   }, React.createElement(StaffDeptChart, {
     list: list,
+    setRoute: setRoute,
     tone: tone,
     role: role
-  }), React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Designation Breakdown"), React.createElement("span", {
-    className: "sub"
-  }, "role mix across the workforce"), React.createElement("span", {
-    className: "spacer"
+  }), React.createElement(StaffDesigChart, {
+    list: list,
+    setRoute: setRoute,
+    role: role
   })), React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'grid',
-      placeItems: 'center'
-    }
-  }, React.createElement(Donut, {
-    data: desigDonut,
-    size: 188,
-    centerValue: fmt(k.total_staff),
-    centerLabel: "staff"
-  })))), React.createElement("div", {
     className: "grid",
     style: {
       gridTemplateColumns: '1fr 1.25fr'
@@ -13713,7 +14051,7 @@ function StaffDirectory({
     if (q && !`${e.name} ${e.emp_id} ${e.phone || ''}`.toLowerCase().includes(q.toLowerCase())) return false;
     if (role && (e.role || 'Nurse') !== role) return false;
     if (dept && staffCanonDept(e.current_department) !== dept) return false;
-    if (desig && e.designation !== desig) return false;
+    if (desig && staffCanonDesig(e.designation) !== desig) return false;
     if (vacc === '__ok' && !vaccOK(e.hepatitis_b_vaccination)) return false;
     if (vacc === '__gap' && vaccOK(e.hepatitis_b_vaccination)) return false;
     if (vacc && !vacc.startsWith('__') && vaccCanon(e.hepatitis_b_vaccination) !== vacc) return false;
@@ -13921,7 +14259,7 @@ function StaffDirectory({
       textAlign: 'left',
       fontFamily: "'IBM Plex Sans'"
     }
-  }, e.designation || '—'), React.createElement("td", {
+  }, staffCanonDesig(e.designation) || '—'), React.createElement("td", {
     style: {
       textAlign: 'left',
       fontFamily: "'IBM Plex Sans'"
@@ -13961,7 +14299,7 @@ function StaffCompliance({
   setRoute,
   role = 'Nurse'
 }) {
-  const comp = window.STAFF.compliance(store.staff.filter(e => (e.role || 'Nurse') === role));
+  const comp = window.STAFF.compliance(store.staff.filter(e => (e.role || 'Nurse') === role && e.is_active && !e.former));
   const card = (title, icon, tone, rows, emptyMsg, filter) => React.createElement("div", {
     className: "card",
     style: {
@@ -14116,7 +14454,7 @@ function ManageStaff({
     if (!matchChip(e)) return false;
     if (q && !`${e.name} ${e.emp_id} ${e.phone || ''}`.toLowerCase().includes(q.toLowerCase())) return false;
     if (dept && staffCanonDept(e.current_department) !== dept) return false;
-    if (desig && e.designation !== desig) return false;
+    if (desig && staffCanonDesig(e.designation) !== desig) return false;
     if (vacc === '__ok' && !vaccOK(e.hepatitis_b_vaccination)) return false;
     if (vacc === '__gap' && vaccOK(e.hepatitis_b_vaccination)) return false;
     if (vacc && !vacc.startsWith('__') && vaccCanon(e.hepatitis_b_vaccination) !== vacc) return false;
@@ -14145,7 +14483,7 @@ function ManageStaff({
     return (a.name || '').localeCompare(b.name || '');
   });
   const deptOpts = [...new Set(all.map(e => staffCanonDept(e.current_department)))].sort((a, b) => a.localeCompare(b));
-  const desigOpts = S.uniqueVals(all, 'designation');
+  const desigOpts = [...new Set(all.map(e => staffCanonDesig(e.designation)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const qualOpts = S.uniqueVals(all, 'qualification');
   const sel = {
     padding: '9px 11px',
@@ -14458,7 +14796,7 @@ function ManageStaff({
       textAlign: 'left',
       fontFamily: "'IBM Plex Sans'"
     }
-  }, e.designation || '—'), React.createElement("td", {
+  }, staffCanonDesig(e.designation) || '—'), React.createElement("td", {
     style: {
       textAlign: 'left',
       fontFamily: "'IBM Plex Sans'"
@@ -14503,14 +14841,27 @@ function ManageStaff({
   })), (!window.unicoCan || window.unicoCan('staff', 'edit')) && (e.is_active ? React.createElement("button", {
     className: "icon-btn danger",
     title: "Deactivate",
-    onClick: () => store.remove(e.id)
+    onClick: async () => {
+      const ok = await window.UI.confirm({
+        title: `Deactivate ${e.name}?`,
+        message: 'They will be moved off the active roster into Previous Staff. You can restore them anytime.',
+        confirmLabel: 'Deactivate'
+      });
+      if (ok) {
+        store.remove(e.id);
+        window.UI.toast(e.name + ' moved to Previous Staff', 'success');
+      }
+    }
   }, React.createElement(Ic, {
     d: I.x,
     s: 14
   })) : React.createElement("button", {
     className: "icon-btn",
     title: "Restore",
-    onClick: () => store.restore(e.id),
+    onClick: () => {
+      store.restore(e.id);
+      window.UI && window.UI.toast(e.name + ' restored to the active roster', 'success');
+    },
     style: {
       color: 'var(--pos)'
     }
@@ -14556,7 +14907,7 @@ function PreviousStaff({
 }) {
   const [q, setQ] = React.useState('');
   const [role, setRole] = React.useState('');
-  const list = store.staff.filter(e => e.former);
+  const list = store.staff.filter(e => e.former || e.is_active === false);
   const fmtd = d => {
     try {
       return d ? new Date(d).toLocaleDateString() : '';
@@ -14584,7 +14935,7 @@ function PreviousStaff({
   }, React.createElement(SectionTitle, {
     icon: I.steth,
     title: "Previous Staff",
-    sub: `${list.length} former staff — removed from the active roster (not in the latest list). Records are kept for history; restore anyone anytime.`,
+    sub: `${list.length} inactive staff — archived from an import or deactivated, so off the active roster. Records are kept for history; restore anyone anytime.`,
     right: React.createElement("input", {
       placeholder: "Search former staff\u2026",
       value: q,
@@ -14668,7 +15019,7 @@ function PreviousStaff({
     style: {
       textAlign: 'left'
     }
-  }, e.designation || '—'), React.createElement("td", {
+  }, staffCanonDesig(e.designation) || '—'), React.createElement("td", {
     style: {
       fontSize: 12,
       color: 'var(--muted)'
@@ -14679,7 +15030,7 @@ function PreviousStaff({
       fontSize: 12,
       color: 'var(--muted)'
     }
-  }, e.archived_reason || '—'), React.createElement("td", {
+  }, e.archived_reason || (e.former ? 'Not in latest import' : 'Deactivated')), React.createElement("td", {
     style: {
       textAlign: 'right',
       whiteSpace: 'nowrap'
@@ -14699,9 +15050,11 @@ function PreviousStaff({
   }), "View"), React.createElement("button", {
     className: "btn sm pri",
     onClick: () => {
-      store.update(e.id, {
+      store.restore ? store.restore(e.id) : store.update(e.id, {
         is_active: true,
-        former: false
+        former: false,
+        archived_at: null,
+        archived_reason: ''
       });
       window.UI && window.UI.toast(e.name + ' restored to the active roster', 'success');
     }
@@ -14830,6 +15183,200 @@ function StaffProfile({
       gap: '16px 22px'
     }
   }, kids));
+  const desig = (window.staffCanonDesig ? window.staffCanonDesig(e.designation) : e.designation) || '';
+  const deptText = (window.staffDeptShow ? window.staffDeptShow(e.current_department) : e.current_department) || '';
+  const lbl = t => React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      fontWeight: 700,
+      marginBottom: 9
+    }
+  }, t);
+  const chipRow = (val, tone) => {
+    const arr = String(val || '').split(',').map(x => x.trim()).filter(Boolean);
+    return arr.length ? React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 7
+      }
+    }, arr.map((x, i) => React.createElement("span", {
+      key: i,
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        padding: '5px 11px',
+        borderRadius: 15,
+        background: tone.bg,
+        color: tone.fg,
+        border: '1px solid ' + tone.br
+      }
+    }, x))) : React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: 'var(--faint)',
+        padding: '5px 11px',
+        borderRadius: 15,
+        background: 'var(--panel-2)',
+        border: '1px dashed var(--line)',
+        display: 'inline-block'
+      }
+    }, "Not recorded");
+  };
+  const deptChipRow = val => {
+    const arr = [...new Set(String(val || '').split(',').map(x => x.trim()).filter(Boolean).map(x => {
+      const c = window.staffCanonDept ? window.staffCanonDept(x) : x;
+      return (window.staffDeptLabel ? window.staffDeptLabel(c) : c) || x;
+    }))];
+    return chipRow(arr.join(', '), {
+      bg: '#eef2ff',
+      fg: '#4353b0',
+      br: '#dfe4fb'
+    });
+  };
+  const statBox = (l, v, c, bg, br) => React.createElement("div", {
+    style: {
+      background: bg || 'var(--panel-2)',
+      border: '1px solid ' + (br || 'var(--line-2)'),
+      borderRadius: 10,
+      padding: '10px 6px',
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 15,
+      fontWeight: 800,
+      color: c,
+      lineHeight: 1.1
+    }
+  }, v || '—'), React.createElement("div", {
+    style: {
+      fontSize: 9,
+      color: 'var(--muted)',
+      marginTop: 4,
+      textTransform: 'uppercase',
+      letterSpacing: .3,
+      fontWeight: 700
+    }
+  }, l));
+  const secHead = (icon, title, sub, ac) => React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 30,
+      height: 30,
+      borderRadius: 9,
+      background: ac ? ac.bg : 'var(--blue-50)',
+      color: ac ? ac.fg : 'var(--blue)',
+      marginRight: 7
+    }
+  }, React.createElement(Ic, {
+    d: icon,
+    s: 16
+  })), React.createElement("h3", null, title), sub && React.createElement("span", {
+    className: "sub"
+  }, sub), React.createElement("span", {
+    className: "spacer"
+  }));
+  const infoTile = (label, val, mono) => React.createElement("div", {
+    style: {
+      background: 'var(--panel-2)',
+      borderRadius: 9,
+      padding: '8px 11px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9,
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      color: 'var(--muted)',
+      fontWeight: 700,
+      marginBottom: 3
+    }
+  }, label), React.createElement("div", {
+    className: mono ? 'num' : '',
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: val ? 'var(--ink)' : 'var(--faint)'
+    }
+  }, val || '—'));
+  const idRow = (icon, label, val, tint) => React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '7px 0',
+      borderTop: '1px solid var(--line-2)'
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 27,
+      height: 27,
+      borderRadius: 8,
+      background: tint ? tint.bg : 'var(--panel-2)',
+      color: tint ? tint.fg : 'var(--muted)',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: icon,
+    s: 14
+  })), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, label), React.createElement("span", {
+    className: "num",
+    style: {
+      marginLeft: 'auto',
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      textAlign: 'right'
+    }
+  }, val));
+  const badgeIni = (() => {
+    const p = (e.name || '?').split(' ').filter(Boolean);
+    return ((p[0] && p[0][0] || '') + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase();
+  })();
+  let badgeHue = 0;
+  for (const ch of e.name || '') badgeHue = (badgeHue * 31 + ch.charCodeAt(0)) % 360;
+  const barcode = seed => {
+    const s = String(seed || 'UNICO0000');
+    const bars = [];
+    let acc = 7;
+    for (let i = 0; i < 48; i++) {
+      acc = acc * 31 + (s.charCodeAt(i % s.length) || 48) + i * 7 >>> 0;
+      const w = 1 + acc % 4;
+      const on = (acc >> 3) % 5 !== 0;
+      bars.push(React.createElement("span", {
+        key: i,
+        style: {
+          width: w + 'px',
+          background: on ? '#15181c' : 'transparent'
+        }
+      }));
+    }
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'stretch',
+        gap: '1.5px',
+        height: 42,
+        justifyContent: 'center'
+      }
+    }, bars);
+  };
   return React.createElement("div", {
     className: "grid",
     style: {
@@ -14853,8 +15400,18 @@ function StaffProfile({
       transform: 'rotate(180deg)'
     }
   }), e.role === 'PCA' ? 'PCA' : 'Nurses'), React.createElement("span", {
-    className: "spacer"
+    className: "spacer",
+    style: {
+      flex: 1
+    }
   }), React.createElement("button", {
+    className: "btn sm",
+    title: "Print / Save as PDF",
+    onClick: () => window.print()
+  }, React.createElement(Ic, {
+    d: I.print,
+    s: 15
+  }), "Print"), React.createElement("button", {
     className: "btn sm",
     title: "Delete permanently",
     style: {
@@ -14880,7 +15437,7 @@ function StaffProfile({
     d: I.x,
     s: 15,
     sw: 2.4
-  }), "Delete record"), React.createElement("button", {
+  }), "Delete"), React.createElement("button", {
     className: "btn pri sm",
     onClick: () => setRoute({
       view: 'staffForm',
@@ -14889,60 +15446,208 @@ function StaffProfile({
   }, React.createElement(Ic, {
     d: I.edit,
     s: 15
-  }), "Edit")), React.createElement("div", {
-    className: "card feature",
+  }), "Edit profile")), React.createElement("div", {
+    className: "grid staff-portfolio",
     style: {
-      padding: '20px 22px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 18
-    }
-  }, React.createElement(Avatar, {
-    name: e.name,
-    size: 72,
-    fontSize: 26
-  }), React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 0
+      gridTemplateColumns: '320px minmax(0,1fr)',
+      gap: 14,
+      alignItems: 'start'
     }
   }, React.createElement("div", {
     style: {
       display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    className: "card id-badge",
+    style: {
+      padding: 0,
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'center',
+      paddingTop: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 48,
+      height: 7,
+      borderRadius: 5,
+      background: 'var(--line)'
+    }
+  })), React.createElement("div", {
+    style: {
+      marginTop: 8,
+      padding: '11px 15px',
+      background: 'var(--panel)',
+      display: 'flex',
       alignItems: 'center',
-      gap: 10,
-      flexWrap: 'wrap'
+      gap: 10
     }
-  }, React.createElement("h2", {
+  }, React.createElement("img", {
+    src: "unico/logo.svg",
+    alt: "UNICO Hospitals",
     style: {
-      margin: 0,
-      fontSize: 23,
-      fontWeight: 700
+      height: 29,
+      width: 'auto',
+      display: 'block'
     }
-  }, e.name), React.createElement(RoleBadge, {
-    role: e.role
   }), React.createElement("span", {
-    className: "tag"
-  }, e.emp_id), !e.is_active && React.createElement("span", {
-    className: "chip neg"
-  }, "Inactive")), React.createElement("div", {
+    className: "spacer",
     style: {
-      fontSize: 13.5,
-      color: 'var(--muted)',
-      marginTop: 3
+      flex: 1
     }
-  }, e.designation || '—', " \xB7 ", window.staffDeptShow ? window.staffDeptShow(e.current_department) : e.current_department || '—')), e.phone ? React.createElement("a", {
-    href: `tel:${(e.phone || '').replace(/[^\d+]/g, '')}`,
-    title: `Call ${e.name} · ${e.phone}`,
+  }), React.createElement("span", {
     style: {
       display: 'inline-flex',
       alignItems: 'center',
-      gap: 9,
-      textDecoration: 'none',
-      padding: '8px 14px',
-      borderRadius: 24,
-      background: '#e7f6ed',
-      border: '1px solid #bfe6cf'
+      gap: 4,
+      fontSize: 9,
+      fontWeight: 800,
+      letterSpacing: .8,
+      color: '#fff',
+      background: 'linear-gradient(130deg,#0aa0d4,#0072a3)',
+      padding: '4px 9px',
+      borderRadius: 6,
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.steth,
+    s: 12,
+    c: "#fff"
+  }), e.role === 'PCA' ? 'PCA ID' : 'NURSE ID')), React.createElement("div", {
+    style: {
+      height: 4,
+      background: 'linear-gradient(90deg,#3ab5a7,#0aa0d4,#0072a3)'
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      padding: '18px 22px 4px'
+    }
+  }, React.createElement("div", {
+    style: {
+      borderRadius: 14,
+      padding: 4,
+      background: 'var(--panel)',
+      border: '1px solid var(--line)',
+      boxShadow: '0 6px 16px rgba(0,0,0,.13)'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 104,
+      height: 120,
+      borderRadius: 10,
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: 44,
+      fontWeight: 800,
+      color: '#fff',
+      letterSpacing: 1,
+      background: `linear-gradient(135deg,hsl(${badgeHue} 60% 52%),hsl(${(badgeHue + 40) % 360} 62% 42%))`
+    }
+  }, badgeIni)), React.createElement("h2", {
+    style: {
+      margin: '14px 0 3px',
+      fontSize: 19,
+      fontWeight: 800,
+      letterSpacing: '-.2px',
+      textAlign: 'center'
+    }
+  }, e.name), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--blue-700)',
+      fontWeight: 700,
+      textAlign: 'center'
+    }
+  }, desig || '—'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginTop: 11,
+      flexWrap: 'wrap',
+      justifyContent: 'center'
+    }
+  }, React.createElement(RoleBadge, {
+    role: e.role
+  }), e.is_active ? React.createElement("span", {
+    className: "chip pos"
+  }, "\u25CF Active") : React.createElement("span", {
+    className: "chip neg"
+  }, "\u25CB Inactive"))), React.createElement("div", {
+    style: {
+      padding: '8px 22px 0'
+    }
+  }, [['ID No.', e.emp_id || 'Not set', true], ['Department', deptText || '—', false], ['Joined', e.doj || '—', true], ['Phone', e.phone || '—', true]].map(([l, v, mono], i) => React.createElement("div", {
+    key: l,
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 12,
+      padding: '8px 0',
+      borderTop: i ? '1px solid var(--line-2)' : 'none'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      color: 'var(--muted)',
+      fontWeight: 700,
+      flex: '0 0 78px'
+    }
+  }, l), l === 'Phone' && e.phone ? React.createElement("a", {
+    href: `tel:${(e.phone || '').replace(/[^\d+]/g, '')}`,
+    className: "num",
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: '#0f6a39',
+      marginLeft: 'auto',
+      textAlign: 'right',
+      textDecoration: 'none'
+    }
+  }, v) : React.createElement("span", {
+    className: mono ? 'num' : '',
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: v === 'Not set' || v === '—' ? 'var(--faint)' : 'var(--ink)',
+      marginLeft: 'auto',
+      textAlign: 'right',
+      wordBreak: 'break-word'
+    }
+  }, v)))), React.createElement("div", {
+    style: {
+      margin: '14px 18px 16px',
+      padding: '11px 10px 7px',
+      borderRadius: 10,
+      background: '#fff',
+      border: '1px solid var(--line-2)'
+    }
+  }, barcode(e.emp_id || e.name), React.createElement("div", {
+    className: "num",
+    style: {
+      textAlign: 'center',
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: 3,
+      color: '#15181c',
+      marginTop: 6
+    }
+  }, e.emp_id || '— — — —'))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      paddingBottom: 0,
+      borderBottom: 'none'
     }
   }, React.createElement("span", {
     style: {
@@ -14950,191 +15655,201 @@ function StaffProfile({
       placeItems: 'center',
       width: 30,
       height: 30,
-      borderRadius: '50%',
-      background: '#1f9d57',
-      color: '#fff'
+      borderRadius: 9,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      marginRight: 7
     }
   }, React.createElement(Ic, {
-    d: I.phone,
-    s: 15,
-    sw: 2
-  })), React.createElement("span", {
-    className: "num",
+    d: I.activity,
+    s: 16
+  })), React.createElement("h3", null, "Key Facts"), React.createElement("span", {
+    className: "spacer"
+  })), React.createElement("div", {
+    className: "card-b",
     style: {
-      fontSize: 14.5,
-      fontWeight: 700,
-      color: '#137a41',
-      letterSpacing: .2
+      padding: '0 18px 8px'
     }
-  }, e.phone)) : React.createElement("span", {
+  }, idRow(I.trend, 'Total experience', totalText, {
+    bg: '#eef8fc',
+    fg: 'var(--blue)'
+  }), idRow(I.cal, 'Before UNICO', priorExclText, {
+    bg: '#f1eefb',
+    fg: '#6a52d4'
+  }), idRow(I.steth, 'At UNICO', tenure ? tenure.text : '—', {
+    bg: '#e7f6ed',
+    fg: '#1f9d57'
+  }), React.createElement("div", {
     style: {
-      display: 'inline-flex',
+      display: 'flex',
       alignItems: 'center',
-      gap: 8,
-      padding: '8px 14px',
-      borderRadius: 24,
-      background: 'var(--panel-2)',
-      border: '1px dashed var(--line)',
-      color: 'var(--faint)',
-      fontSize: 12.5
+      gap: 10,
+      padding: '7px 0',
+      borderTop: '1px solid var(--line-2)'
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 27,
+      height: 27,
+      borderRadius: 8,
+      background: '#e7f6ed',
+      color: '#1f9d57',
+      flexShrink: 0
     }
   }, React.createElement(Ic, {
-    d: I.phone,
-    s: 15
-  }), "No phone on file"), React.createElement("div", {
+    d: I.syringe,
+    s: 14
+  })), React.createElement("span", {
     style: {
-      width: 1,
-      height: 42,
-      background: 'var(--line)'
-    }
-  }), React.createElement("div", {
-    style: {
-      textAlign: 'center'
-    },
-    title: "Previous experience + UNICO tenure"
-  }, React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 22,
-      fontWeight: 600,
-      color: 'var(--blue)'
-    }
-  }, totalText), React.createElement("div", {
-    style: {
-      fontSize: 11,
+      fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, "total experience")), React.createElement("div", {
+  }, "Hep-B status"), React.createElement("span", {
     style: {
-      width: 1,
-      height: 42,
-      background: 'var(--line)'
-    }
-  }), React.createElement("div", {
-    style: {
-      textAlign: 'center'
-    },
-    title: "Experience before joining UNICO (Total \u2212 UNICO)"
-  }, React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 22,
-      fontWeight: 600,
-      color: '#6a52d4'
-    }
-  }, priorExclText), React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: 'var(--muted)'
-    }
-  }, "previous experience")), React.createElement("div", {
-    style: {
-      width: 1,
-      height: 42,
-      background: 'var(--line)'
-    }
-  }), React.createElement("div", {
-    style: {
-      textAlign: 'center'
-    },
-    title: e.doj ? `Joined ${e.doj}` : 'No joining date on file'
-  }, React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 22,
-      fontWeight: 600,
-      color: '#1f9d57'
-    }
-  }, tenure ? tenure.text : '—'), React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: 'var(--muted)'
-    }
-  }, "UNICO experience")), React.createElement("div", {
-    style: {
-      width: 1,
-      height: 42,
-      background: 'var(--line)'
-    }
-  }), React.createElement("div", {
-    style: {
-      textAlign: 'center'
+      marginLeft: 'auto'
     }
   }, React.createElement(VaccBadge, {
     status: e.hepatitis_b_vaccination
+  })))))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    className: "card",
+    style: {
+      borderLeft: '4px solid #6a52d4'
+    }
+  }, secHead(I.layers, 'Profile', 'role · department · credentials', {
+    bg: '#f1eefb',
+    fg: '#6a52d4'
   }), React.createElement("div", {
+    className: "card-b",
     style: {
-      fontSize: 11,
-      color: 'var(--muted)',
-      marginTop: 5
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: '11px 12px'
     }
-  }, "Hep-B status"))), React.createElement("div", {
-    className: "grid",
+  }, infoTile('Designation', desig), infoTile('Date of joining', e.doj, true), React.createElement("div", {
     style: {
-      gridTemplateColumns: '1fr 1fr'
+      gridColumn: '1 / -1'
     }
-  }, sec('Personal', React.createElement(React.Fragment, null, field('Employee ID', e.emp_id, true), field('Phone', e.phone, true), field('Qualification', e.qualification), field('Status', e.is_active ? 'Active' : 'Inactive'))), sec('Job', React.createElement(React.Fragment, null, field('Designation', e.designation), field('Department', window.staffDeptShow ? window.staffDeptShow(e.current_department) : e.current_department), field('Date of Joining', e.doj, true), field('Total Experience', totalText, true)))), React.createElement("div", {
-    className: "grid",
+  }, lbl('Department(s)'), deptChipRow(e.current_department)), React.createElement("div", null, lbl('Qualification'), chipRow(e.qualification, {
+    bg: '#eef8fc',
+    fg: '#0072a3',
+    br: '#dceffa'
+  })), React.createElement("div", null, lbl('Special Training'), chipRow(e.special_training, {
+    bg: '#fff4e5',
+    fg: '#b5670a',
+    br: '#ffe2b8'
+  })))), React.createElement("div", {
+    className: "card",
     style: {
-      gridTemplateColumns: '1fr 1fr'
+      borderLeft: '4px solid #1f9d57'
     }
-  }, sec('Experience', React.createElement(React.Fragment, null, field('Previous Experience (excl. UNICO)', priorExclText, true), field('UNICO Experience', tenure ? `${tenure.text}  ·  since ${e.doj}` : '', true), field('Total Experience', totalText, true), entries.length > 0 && React.createElement("div", {
-    style: {
-      gridColumn: '1 / -1',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 3
-    }
-  }, React.createElement("span", {
-    style: {
-      fontSize: 10.5,
-      color: 'var(--muted)',
-      textTransform: 'uppercase',
-      letterSpacing: .4,
-      fontWeight: 600
-    }
-  }, "Prior Positions"), React.createElement("div", {
+  }, secHead(I.trend, 'Experience', 'career timeline', {
+    bg: '#e7f6ed',
+    fg: '#1f9d57'
+  }), React.createElement("div", {
+    className: "card-b",
     style: {
       display: 'flex',
       flexDirection: 'column',
-      gap: 4,
-      marginTop: 2
+      gap: 11
     }
-  }, entries.map((x, i) => React.createElement("div", {
+  }, React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr 1fr',
+      gap: 9
+    }
+  }, statBox('Total', totalText, 'var(--blue-700)', '#eef8fc', '#dceffa'), statBox('Before UNICO', priorExclText, '#6a52d4', '#f1eefb', '#e2dbf7'), statBox('At UNICO', tenure ? tenure.text : '—', '#1f9d57', '#e7f6ed', '#c5e8d4')), entries.length > 0 && React.createElement("div", null, lbl('Prior Positions'), React.createElement("div", null, entries.map((x, i) => React.createElement("div", {
     key: i,
     style: {
-      fontSize: 12.5,
-      color: 'var(--ink)',
       display: 'flex',
-      gap: 8,
-      alignItems: 'baseline'
+      gap: 12,
+      alignItems: 'stretch'
     }
-  }, React.createElement("span", {
-    style: {
-      fontWeight: 600
-    }
-  }, x.org || 'Prior role'), React.createElement("span", {
-    className: "num",
-    style: {
-      color: 'var(--muted)'
-    }
-  }, S.fmtYM((parseFloat(x.years) || 0) + (parseFloat(x.months) || 0) / 12)))))))), sec('Compliance', React.createElement(React.Fragment, null, field('Special Training', e.special_training), React.createElement("div", {
+  }, React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
-      gap: 3
+      alignItems: 'center',
+      width: 12,
+      flexShrink: 0
     }
   }, React.createElement("span", {
     style: {
-      fontSize: 10.5,
-      color: 'var(--muted)',
-      textTransform: 'uppercase',
-      letterSpacing: .4,
-      fontWeight: 600
+      width: 10,
+      height: 10,
+      borderRadius: '50%',
+      background: 'var(--blue)',
+      marginTop: 5
     }
-  }, "Hep-B Vaccination"), React.createElement("div", null, React.createElement(VaccBadge, {
-    status: e.hepatitis_b_vaccination
-  }))), field('Remarks', e.remarks)))), React.createElement("div", {
+  }), i < entries.length - 1 && React.createElement("span", {
+    style: {
+      flex: 1,
+      width: 2,
+      background: 'var(--line)'
+    }
+  })), React.createElement("div", {
+    style: {
+      paddingBottom: i < entries.length - 1 ? 14 : 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, x.org || 'Prior role'), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)',
+      marginTop: 1
+    }
+  }, S.fmtYM((parseFloat(x.years) || 0) + (parseFloat(x.months) || 0) / 12))))))), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)',
+      borderTop: '1px solid var(--line-2)',
+      paddingTop: 12
+    }
+  }, "UNICO tenure since ", React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, e.doj || '—'), tenure ? ` · ${tenure.text}` : '', "."))), e.remarks && React.createElement("div", {
+    className: "card",
+    style: {
+      borderLeft: '4px solid #b5670a'
+    }
+  }, secHead(I.doc, 'Remarks', null, {
+    bg: '#fff4e5',
+    fg: '#b5670a'
+  }), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: 'var(--ink)',
+      lineHeight: 1.6
+    }
+  }, e.remarks))))), (() => {
+    const defs = S.customFields && S.customFields() || [];
+    const cv = e.custom || {};
+    const shown = defs.filter(d => String(cv[d.id] || '').trim());
+    return shown.length > 0 && React.createElement("div", {
+      className: "grid",
+      style: {
+        gridTemplateColumns: '1fr 1fr'
+      }
+    }, sec('Additional Details', shown.map(d => field(d.name, cv[d.id]))));
+  })(), React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-h"
@@ -15247,6 +15962,421 @@ function initPriorEntries(ex) {
   }
   return [];
 }
+function MultiSelectDropdown({
+  value,
+  onChange,
+  options,
+  placeholder = 'Select…',
+  labelFn,
+  allowCustom = true
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState('');
+  const sel = String(value || '').split(',').map(x => x.trim()).filter(Boolean);
+  const extras = sel.filter(x => !(options || []).includes(x));
+  const all = [...(options || []), ...extras];
+  const lab = o => labelFn ? labelFn(o) : o;
+  const setSel = arr => onChange(arr.join(', '));
+  const toggle = o => setSel(sel.includes(o) ? sel.filter(x => x !== o) : [...sel, o]);
+  const filtered = all.filter(o => !q.trim() || lab(o).toLowerCase().includes(q.trim().toLowerCase()));
+  const canAdd = allowCustom && q.trim() && !all.some(o => lab(o).toLowerCase() === q.trim().toLowerCase());
+  const addCustom = () => {
+    const v = q.trim();
+    if (v && !sel.includes(v)) setSel([...sel, v]);
+    setQ('');
+  };
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("div", {
+    onClick: () => setOpen(o => !o),
+    style: {
+      minHeight: 40,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      flexWrap: 'wrap',
+      padding: '6px 10px',
+      border: '1px solid ' + (open ? 'var(--blue)' : 'var(--line)'),
+      borderRadius: 7,
+      background: '#fff',
+      cursor: 'pointer'
+    }
+  }, sel.length === 0 ? React.createElement("span", {
+    style: {
+      fontSize: 13,
+      color: 'var(--faint)'
+    }
+  }, placeholder) : sel.map(o => React.createElement("span", {
+    key: o,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '3px 8px',
+      borderRadius: 15,
+      fontSize: 12,
+      fontWeight: 600,
+      background: 'var(--blue-50)',
+      color: 'var(--blue-700)',
+      border: '1px solid var(--blue-100)'
+    }
+  }, lab(o), React.createElement("span", {
+    onClick: ev => {
+      ev.stopPropagation();
+      toggle(o);
+    },
+    title: "Remove",
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      cursor: 'pointer',
+      opacity: .7
+    }
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 11,
+    sw: 2.4
+  })))), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement(Ic, {
+    d: I.chevR,
+    s: 15,
+    c: "var(--faint)",
+    style: {
+      transform: open ? 'rotate(-90deg)' : 'rotate(90deg)',
+      transition: 'transform .15s'
+    }
+  })), open && React.createElement(React.Fragment, null, React.createElement("div", {
+    onClick: () => {
+      setOpen(false);
+      setQ('');
+    },
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 80
+    }
+  }), React.createElement("div", {
+    style: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 'calc(100% + 5px)',
+      zIndex: 81,
+      background: '#fff',
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      boxShadow: 'var(--shadow-pop)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: 8,
+      borderBottom: '1px solid var(--line-2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 14,
+    c: "var(--faint)"
+  }), React.createElement("input", {
+    autoFocus: true,
+    value: q,
+    onChange: e => setQ(e.target.value),
+    onKeyDown: e => {
+      if (e.key === 'Enter' && canAdd) {
+        e.preventDefault();
+        addCustom();
+      }
+    },
+    placeholder: "Search or type to add\u2026",
+    style: {
+      flex: 1,
+      border: 0,
+      outline: 'none',
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      background: 'transparent'
+    }
+  }), sel.length > 0 && React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => setSel([]),
+    style: {
+      padding: '3px 8px',
+      fontSize: 11
+    }
+  }, "Clear")), React.createElement("div", {
+    style: {
+      maxHeight: 240,
+      overflowY: 'auto',
+      padding: 4
+    }
+  }, filtered.length === 0 && !canAdd && React.createElement("div", {
+    style: {
+      padding: '12px',
+      fontSize: 12,
+      color: 'var(--faint)',
+      textAlign: 'center'
+    }
+  }, "No matches"), filtered.map(o => {
+    const on = sel.includes(o);
+    return React.createElement("div", {
+      key: o,
+      onClick: () => toggle(o),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '7px 9px',
+        borderRadius: 6,
+        cursor: 'pointer',
+        fontSize: 12.5,
+        color: 'var(--ink-2)',
+        fontWeight: on ? 600 : 500,
+        background: on ? 'var(--blue-50)' : 'transparent'
+      },
+      onMouseEnter: ev => {
+        if (!on) ev.currentTarget.style.background = 'var(--panel-2)';
+      },
+      onMouseLeave: ev => {
+        if (!on) ev.currentTarget.style.background = 'transparent';
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 16,
+        height: 16,
+        borderRadius: 4,
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0,
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue)' : '#fff'
+      }
+    }, on && React.createElement(Ic, {
+      d: I.check,
+      s: 11,
+      c: "#fff",
+      sw: 2.6
+    })), lab(o));
+  }), canAdd && React.createElement("div", {
+    onClick: addCustom,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '7px 9px',
+      borderRadius: 6,
+      cursor: 'pointer',
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: 'var(--blue)'
+    },
+    onMouseEnter: ev => ev.currentTarget.style.background = 'var(--blue-50)',
+    onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "Add \u201C", q.trim(), "\u201D")))));
+}
+function SelectDropdown({
+  value,
+  onChange,
+  options,
+  placeholder = 'Select…',
+  labelFn,
+  allowCustom = true
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState('');
+  const cur = String(value || '').trim();
+  const extras = cur && !(options || []).includes(cur) ? [cur] : [];
+  const all = [...(options || []), ...extras];
+  const lab = o => labelFn ? labelFn(o) : o;
+  const filtered = all.filter(o => !q.trim() || lab(o).toLowerCase().includes(q.trim().toLowerCase()));
+  const canAdd = allowCustom && q.trim() && !all.some(o => lab(o).toLowerCase() === q.trim().toLowerCase());
+  const pick = v => {
+    onChange(v);
+    setOpen(false);
+    setQ('');
+  };
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("div", {
+    onClick: () => setOpen(o => !o),
+    style: {
+      minHeight: 40,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '8px 10px',
+      border: '1px solid ' + (open ? 'var(--blue)' : 'var(--line)'),
+      borderRadius: 7,
+      background: '#fff',
+      cursor: 'pointer'
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 13,
+      color: cur ? 'var(--ink)' : 'var(--faint)',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, cur ? lab(cur) : placeholder), cur && React.createElement("span", {
+    onClick: ev => {
+      ev.stopPropagation();
+      onChange('');
+    },
+    title: "Clear",
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      cursor: 'pointer',
+      color: 'var(--faint)'
+    }
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 13,
+    sw: 2.2
+  })), React.createElement(Ic, {
+    d: I.chevR,
+    s: 15,
+    c: "var(--faint)",
+    style: {
+      transform: open ? 'rotate(-90deg)' : 'rotate(90deg)',
+      transition: 'transform .15s'
+    }
+  })), open && React.createElement(React.Fragment, null, React.createElement("div", {
+    onClick: () => {
+      setOpen(false);
+      setQ('');
+    },
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 80
+    }
+  }), React.createElement("div", {
+    style: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 'calc(100% + 5px)',
+      zIndex: 81,
+      background: '#fff',
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      boxShadow: 'var(--shadow-pop)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: 8,
+      borderBottom: '1px solid var(--line-2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 14,
+    c: "var(--faint)"
+  }), React.createElement("input", {
+    autoFocus: true,
+    value: q,
+    onChange: e => setQ(e.target.value),
+    onKeyDown: e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (canAdd) pick(q.trim());else if (filtered.length) pick(filtered[0]);
+      }
+    },
+    placeholder: "Search or type to add\u2026",
+    style: {
+      flex: 1,
+      border: 0,
+      outline: 'none',
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      background: 'transparent'
+    }
+  })), React.createElement("div", {
+    style: {
+      maxHeight: 260,
+      overflowY: 'auto',
+      padding: 4
+    }
+  }, filtered.length === 0 && !canAdd && React.createElement("div", {
+    style: {
+      padding: '12px',
+      fontSize: 12,
+      color: 'var(--faint)',
+      textAlign: 'center'
+    }
+  }, "No matches"), filtered.map(o => {
+    const on = cur === o;
+    return React.createElement("div", {
+      key: o,
+      onClick: () => pick(o),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '7px 9px',
+        borderRadius: 6,
+        cursor: 'pointer',
+        fontSize: 12.5,
+        color: 'var(--ink-2)',
+        fontWeight: on ? 700 : 500,
+        background: on ? 'var(--blue-50)' : 'transparent'
+      },
+      onMouseEnter: ev => {
+        if (!on) ev.currentTarget.style.background = 'var(--panel-2)';
+      },
+      onMouseLeave: ev => {
+        if (!on) ev.currentTarget.style.background = 'transparent';
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        flexShrink: 0,
+        background: on ? 'var(--blue)' : 'transparent',
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)')
+      }
+    }), lab(o));
+  }), canAdd && React.createElement("div", {
+    onClick: () => pick(q.trim()),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '7px 9px',
+      borderRadius: 6,
+      cursor: 'pointer',
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: 'var(--blue)'
+    },
+    onMouseEnter: ev => ev.currentTarget.style.background = 'var(--blue-50)',
+    onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "Add \u201C", q.trim(), "\u201D")))));
+}
 function StaffForm({
   store,
   empId,
@@ -15275,6 +16405,8 @@ function StaffForm({
   });
   const [err, setErr] = React.useState('');
   const [customQ, setCustomQ] = React.useState('');
+  const [customT, setCustomT] = React.useState('');
+  const [customD, setCustomD] = React.useState('');
   const priorInit0 = existing && existing.prior_experience_years != null && existing.prior_experience_years !== '' && !isNaN(existing.prior_experience_years) ? +existing.prior_experience_years : 0;
   const [dpY, setDpY] = React.useState(() => {
     const y = Math.floor(priorInit0);
@@ -15289,6 +16421,14 @@ function StaffForm({
     [k]: v
   }));
   const S = window.STAFF;
+  const customFieldDefs = S.customFields && S.customFields() || [];
+  const setCustom = (id, v) => setF(s => ({
+    ...s,
+    custom: {
+      ...(s.custom || {}),
+      [id]: v
+    }
+  }));
   const inp = (k, ph, type = 'text') => React.createElement("input", {
     value: f[k] || '',
     onChange: e => set(k, e.target.value),
@@ -15321,7 +16461,7 @@ function StaffForm({
   }, "\u2014"), opts.map(o => React.createElement("option", {
     key: o
   }, o)));
-  const cmbFree = (k, opts, ph) => React.createElement("div", null, React.createElement("input", {
+  const cmbFree = (k, opts, ph, labelFn) => React.createElement("div", null, React.createElement("input", {
     list: 'dl_' + k,
     value: f[k] || '',
     onChange: e => set(k, e.target.value),
@@ -15341,15 +16481,28 @@ function StaffForm({
   }, opts.map(o => React.createElement("option", {
     key: o,
     value: o
-  }))));
+  }, labelFn ? labelFn(o) : o))));
   const allStaff = store && store.staff || [];
   const uniq = arr => [...new Set(arr.filter(Boolean).map(x => String(x).trim()).filter(Boolean))];
+  const canon = window.staffCanonDept || (x => x);
+  const deptLabel = window.staffDeptLabel || (x => x);
   const baseDepts = S.DEPARTMENTS || [];
-  const deptOpts = [...baseDepts, ...uniq(allStaff.map(x => x && x.current_department)).filter(d => !baseDepts.includes(d)).sort((a, b) => a.localeCompare(b))];
+  const statsDeptNames = (() => {
+    try {
+      if (window.buildDepts) {
+        const ov = JSON.parse(localStorage.getItem('unico_store_v3')) || {};
+        const m = window.buildDepts(ov);
+        if (Array.isArray(m) && m.length) return m.map(d => d.name).filter(Boolean);
+      }
+    } catch (e) {}
+    return null;
+  })();
+  const deptOpts = statsDeptNames && statsDeptNames.length ? [...new Set(statsDeptNames)].sort((a, b) => a.localeCompare(b)) : [...new Set([...baseDepts, ...uniq(allStaff.map(x => canon(x && x.current_department)))])].filter(d => d && d !== 'Unassigned').sort((a, b) => deptLabel(a).localeCompare(deptLabel(b)));
+  const canonDesig = window.staffCanonDesig || (x => x);
   const baseDesig = S.designationsFor ? S.designationsFor(f.role) : [];
-  const desigOpts = [...baseDesig, ...uniq(allStaff.map(x => x && x.designation)).filter(d => !baseDesig.includes(d)).sort((a, b) => a.localeCompare(b))];
+  const desigOpts = [...new Set([...baseDesig, ...uniq(allStaff.map(x => canonDesig(x && x.designation)))])].filter(Boolean).sort((a, b) => a.localeCompare(b));
   const chipsOf = k => String(f[k] || '').split(',').map(x => x.trim()).filter(Boolean);
-  const multiChk = (k, opts, customText, setCustomText) => {
+  const multiChk = (k, opts, customText, setCustomText, ph) => {
     const sel = chipsOf(k);
     const extras = sel.filter(x => !opts.includes(x));
     const all = [...opts, ...extras];
@@ -15415,7 +16568,7 @@ function StaffForm({
           addCustom();
         }
       },
-      placeholder: "Add another qualification\u2026",
+      placeholder: ph || 'Add another…',
       style: {
         flex: 1,
         padding: '8px 11px',
@@ -15627,7 +16780,19 @@ function StaffForm({
     style: {
       gridColumn: '1 / -1'
     }
-  }, field('Qualification' + (chipsOf('qualification').length ? ' · ' + chipsOf('qualification').length + ' selected' : ''), multiChk('qualification', S.qualificationsFor(f.role), customQ, setCustomQ))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', cmbFree('designation', desigOpts, 'Select or type — e.g. Nurse Manager, Supervisor')), field('Current Department', cmbFree('current_department', deptOpts, 'Select or type a department')), field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date')), field('Total Experience', React.createElement("div", {
+  }, field('Qualification' + (chipsOf('qualification').length ? ' · ' + chipsOf('qualification').length + ' selected' : ''), multiChk('qualification', S.qualificationsFor(f.role), customQ, setCustomQ))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', React.createElement(SelectDropdown, {
+    value: f.designation,
+    onChange: v => set('designation', v),
+    options: desigOpts,
+    labelFn: canonDesig,
+    placeholder: "Select or type \u2014 e.g. Nurse Manager, Supervisor"
+  })), field('Current Department' + (chipsOf('current_department').length > 1 ? ' · ' + chipsOf('current_department').length + ' selected' : ''), React.createElement(MultiSelectDropdown, {
+    value: f.current_department,
+    onChange: v => set('current_department', v),
+    options: deptOpts,
+    labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
+    placeholder: "Select department(s)\u2026"
+  })), field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date')), field('Total Experience', React.createElement("div", {
     style: {
       padding: '9px 11px',
       border: '1px dashed var(--line)',
@@ -15829,7 +16994,43 @@ function StaffForm({
       fontWeight: i === 2 ? 800 : 700,
       color: c
     }
-  }, v))))))), sec('Compliance', React.createElement(React.Fragment, null, field('Special Training', inp('special_training', 'e.g. BLS, ACLS')), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), field('Remarks', inp('remarks', 'Any notes')))), err && React.createElement("div", {
+  }, v))))))), sec('Compliance', React.createElement(React.Fragment, null, React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1'
+    }
+  }, field('Special Training' + (chipsOf('special_training').length ? ' · ' + chipsOf('special_training').length + ' selected' : ''), multiChk('special_training', S.TRAININGS.filter(Boolean), customT, setCustomT, 'Add another training…'))), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), field('Remarks', inp('remarks', 'Any notes')))), customFieldDefs.length > 0 && sec('Additional Details', customFieldDefs.map(cf => {
+    const cv = (f.custom || {})[cf.id] || '';
+    const node = cf.kind === 'multi' ? React.createElement(MultiSelectDropdown, {
+      value: cv,
+      onChange: v => setCustom(cf.id, v),
+      options: cf.options || [],
+      placeholder: 'Select ' + cf.name.toLowerCase() + '…'
+    }) : cf.kind === 'text' ? React.createElement("input", {
+      value: cv,
+      onChange: e => setCustom(cf.id, e.target.value),
+      placeholder: cf.name,
+      style: {
+        padding: '9px 11px',
+        border: '1px solid var(--line)',
+        borderRadius: 7,
+        fontSize: 13,
+        fontFamily: 'inherit',
+        outline: 'none',
+        width: '100%'
+      }
+    }) : React.createElement(SelectDropdown, {
+      value: cv,
+      onChange: v => setCustom(cf.id, v),
+      options: cf.options || [],
+      placeholder: 'Select ' + cf.name.toLowerCase() + '…'
+    });
+    return React.createElement("div", {
+      key: cf.id,
+      style: cf.kind === 'text' ? null : {
+        gridColumn: '1 / -1'
+      }
+    }, field(cf.name, node));
+  })), err && React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: 'var(--rose)',
@@ -20883,6 +22084,21 @@ const PERM_RANK = {
   add: 3,
   delete: 4
 };
+const PERM_ACTS = [['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
+const PERM_ORDER = ['view', 'edit', 'add', 'delete'];
+function levelToActions(lv) {
+  const i = ['none', 'view', 'edit', 'add', 'delete'].indexOf(lv);
+  return i <= 0 ? [] : PERM_ORDER.slice(0, i);
+}
+function asActions(v) {
+  if (Array.isArray(v)) return PERM_ORDER.filter(a => v.indexOf(a) >= 0);
+  return levelToActions(v || 'none');
+}
+function sameActs(a, b) {
+  a = asActions(a);
+  b = asActions(b);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
 const ROLE_PRESETS = {
   'Administrator': {
     stats: 'delete',
@@ -20926,23 +22142,23 @@ const ROLE_PRESETS = {
   }
 };
 const USER_ROLES = Object.keys(ROLE_PRESETS);
-const FULL_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = 'delete', m), {});
-const NONE_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = 'none', m), {});
+const FULL_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = [...PERM_ORDER], m), {});
+const NONE_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = [], m), {});
 const inits = n => (n || '?').split(' ').map(x => x[0]).slice(0, 2).join('').toUpperCase();
 const detectTemplate = p => {
   for (const r of USER_ROLES) {
     const pr = ROLE_PRESETS[r];
-    if (USER_MODS.every(([k]) => (p[k] || 'none') === (pr[k] || 'none'))) return r;
+    if (USER_MODS.every(([k]) => sameActs(p[k], pr[k]))) return r;
   }
   return 'Custom';
 };
 const permSummary = p => {
   if (!p) return 'Full access';
-  const vals = USER_MODS.map(([k]) => p[k] || 'none');
-  const on = vals.filter(v => v !== 'none').length;
+  const acts = USER_MODS.map(([k]) => asActions(p[k]));
+  const on = acts.filter(a => a.length).length;
   if (!on) return 'No access';
-  if (vals.every(v => v === 'delete')) return 'Full access';
-  const ed = vals.filter(v => PERM_RANK[v] >= PERM_RANK.edit).length;
+  if (acts.every(a => a.length === 4)) return 'Full access';
+  const ed = acts.filter(a => a.indexOf('edit') >= 0 || a.indexOf('add') >= 0 || a.indexOf('delete') >= 0).length;
   return `${on} module${on !== 1 ? 's' : ''}${ed ? ' · ' + ed + ' editable' : ''}`;
 };
 function usersApi(method, path, body) {
@@ -20983,35 +22199,45 @@ function UserModal({
   const [email, setEmail] = useState(editing ? initial.email || '' : '');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState(editing ? initial.active !== false ? 'active' : 'inactive' : 'active');
-  const initTemplate = editing ? initial.role === 'Administrator' ? 'Administrator' : initial.perms ? detectTemplate(initial.perms) : initial.title && USER_ROLES.includes(initial.title) ? initial.title : 'Custom' : 'Custom';
+  const initTemplate = editing ? initial.role === 'Administrator' ? 'Administrator' : initial.role === 'collector' ? 'Data Collector' : initial.perms ? detectTemplate(initial.perms) : initial.title && USER_ROLES.includes(initial.title) ? initial.title : 'Custom' : 'Custom';
   const [role, setRole] = useState(initTemplate);
   const [perms, setPerms] = useState(() => {
-    if (editing) {
-      if (initial.role === 'Administrator') return FULL_PERMS();
-      return initial.perms ? {
-        ...NONE_PERMS(),
-        ...initial.perms
-      } : NONE_PERMS();
-    }
-    return NONE_PERMS();
+    if (editing && initial.role === 'Administrator') return FULL_PERMS();
+    const src = editing && initial.perms ? {
+      ...NONE_PERMS(),
+      ...initial.perms
+    } : NONE_PERMS();
+    return USER_MODS.reduce((m, [k]) => (m[k] = asActions(src[k]), m), {});
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const isAdmin = role === 'Administrator';
+  const isColl = role === 'Data Collector';
   const pickRole = r => {
     setRole(r);
-    if (r !== 'Custom') setPerms({
-      ...ROLE_PRESETS[r]
-    });
+    if (r !== 'Custom' && r !== 'Data Collector' && ROLE_PRESETS[r]) setPerms(USER_MODS.reduce((m, [k]) => (m[k] = levelToActions(ROLE_PRESETS[r][k] || 'none'), m), {}));
   };
-  const setLevel = (mid, lv) => {
+  const toggleAct = (mid, act) => {
+    setPerms(p => {
+      const cur = asActions(p[mid]);
+      let next = cur.indexOf(act) >= 0 ? cur.filter(a => a !== act) : [...cur, act];
+      if (next.some(a => a !== 'view') && next.indexOf('view') < 0) next.push('view');
+      next = PERM_ORDER.filter(a => next.indexOf(a) >= 0);
+      return {
+        ...p,
+        [mid]: next
+      };
+    });
+    setRole('Custom');
+  };
+  const clearMod = mid => {
     setPerms(p => ({
       ...p,
-      [mid]: lv
+      [mid]: []
     }));
     setRole('Custom');
   };
-  const roleOpts = [...USER_ROLES, 'Custom'];
+  const roleOpts = [...USER_ROLES, 'Data Collector', 'Custom'];
   const save = async () => {
     setErr('');
     if (!editing) {
@@ -21022,14 +22248,14 @@ function UserModal({
     if (email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
     setBusy(true);
     try {
-      const backendRole = isAdmin ? 'Administrator' : 'User';
+      const backendRole = isAdmin ? 'Administrator' : isColl ? 'collector' : 'User';
       const payload = {
         name: name.trim(),
         email: email.trim().toLowerCase(),
         role: backendRole,
-        title: isAdmin ? null : role === 'Custom' ? 'Custom access' : role,
+        title: isAdmin || isColl ? null : role === 'Custom' ? 'Custom access' : role,
         active: status === 'active',
-        perms: isAdmin ? null : perms
+        perms: isAdmin || isColl ? null : perms
       };
       if (editing) {
         await usersApi('PATCH', '/api/users/' + encodeURIComponent(initial.username), payload);
@@ -21201,7 +22427,23 @@ function UserModal({
     d: I.check,
     s: 16,
     c: "var(--blue)"
-  }), React.createElement("span", null, React.createElement("b", null, "Full access."), " Administrators can view, add, edit and delete in every module.")) : React.createElement("div", null, React.createElement("div", {
+  }), React.createElement("span", null, React.createElement("b", null, "Full access."), " Administrators can view, add, edit and delete in every module.")) : isColl ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--ink-2)',
+      background: 'var(--blue-50)',
+      border: '1px solid var(--blue-100)',
+      borderRadius: 9,
+      padding: '12px 14px',
+      display: 'flex',
+      gap: 9,
+      alignItems: 'flex-start'
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 16,
+    c: "var(--blue)"
+  }), React.createElement("span", null, React.createElement("b", null, "Data Collector."), " Signs in to the data-collection portal only. Choose which departments & indicators they collect in ", React.createElement("b", null, "Settings \u2192 Responsible Persons"), " \u2014 that assignment is kept when you save here.")) : React.createElement("div", null, React.createElement("div", {
     style: {
       fontSize: 12.5,
       fontWeight: 700,
@@ -21220,42 +22462,88 @@ function UserModal({
       color: 'var(--muted)',
       marginBottom: 9
     }
-  }, "Each level includes the ones before it: View \u2192 Edit \u2192 Add \u2192 Delete."), React.createElement("div", {
+  }, "Tick any combination \u2014 ", React.createElement("b", null, "Edit"), ", ", React.createElement("b", null, "Add"), " and ", React.createElement("b", null, "Delete"), " are independent (e.g. grant Delete without Add). Selecting any of them includes View automatically."), React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
-      gap: 7
+      gap: 8
     }
-  }, USER_MODS.map(([id, label]) => React.createElement("div", {
-    key: id,
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("span", {
-    style: {
-      flex: '1 1 140px',
-      fontSize: 12.5,
-      color: 'var(--ink-2)',
-      fontWeight: 600
-    }
-  }, label), React.createElement("div", {
-    className: "seg",
-    style: {
-      flexShrink: 0
-    }
-  }, PERM_LEVELS.map(([v, l]) => React.createElement("button", {
-    key: v,
-    className: (perms[id] || 'none') === v ? 'on' : '',
-    onClick: () => setLevel(id, v),
-    style: (perms[id] || 'none') === v ? {
-      color: '#fff',
-      background: lvlColor[v],
-      borderColor: lvlColor[v]
-    } : null
-  }, l))))))), err && React.createElement("div", {
+  }, USER_MODS.map(([id, label]) => {
+    const acts = asActions(perms[id]);
+    const none = acts.length === 0;
+    return React.createElement("div", {
+      key: id,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        flex: '1 1 140px',
+        fontSize: 12.5,
+        color: 'var(--ink-2)',
+        fontWeight: 600
+      }
+    }, label), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexShrink: 0,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("button", {
+      onClick: () => clearMod(id),
+      style: {
+        padding: '5px 12px',
+        borderRadius: 7,
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: 'pointer',
+        border: '1px solid ' + (none ? 'var(--muted)' : 'var(--line)'),
+        background: none ? 'var(--panel-2)' : '#fff',
+        color: none ? 'var(--ink)' : 'var(--muted)'
+      }
+    }, "None"), PERM_ACTS.map(([v, l]) => {
+      const on = acts.indexOf(v) >= 0;
+      const c = lvlColor[v];
+      return React.createElement("button", {
+        key: v,
+        onClick: () => toggleAct(id, v),
+        title: v === 'view' ? 'Can open / read' : v === 'edit' ? 'Can modify existing' : v === 'add' ? 'Can create new' : 'Can delete',
+        style: {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '5px 11px',
+          borderRadius: 7,
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: 'pointer',
+          border: '1px solid ' + (on ? c : 'var(--line)'),
+          background: on ? c : '#fff',
+          color: on ? '#fff' : 'var(--ink-2)'
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 13,
+          height: 13,
+          borderRadius: 4,
+          display: 'grid',
+          placeItems: 'center',
+          flexShrink: 0,
+          border: '1px solid ' + (on ? '#fff' : 'var(--line)'),
+          background: on ? 'rgba(255,255,255,.25)' : '#fff'
+        }
+      }, on && React.createElement(Ic, {
+        d: I.check,
+        s: 9,
+        c: "#fff",
+        sw: 3
+      })), l);
+    })));
+  }))), err && React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--rose)',
@@ -21496,7 +22784,7 @@ function UserManagement() {
       className: "chip pos"
     }, "\u25CF Active") : React.createElement("span", {
       className: "chip flat"
-    }, "\u25CB Inactive"), !isColl && React.createElement("button", {
+    }, "\u25CB Inactive"), React.createElement("button", {
       className: "btn sm",
       onClick: () => setModal({
         user: u
@@ -21581,6 +22869,440 @@ function UserManagement() {
   }, "Remove"))))));
 }
 window.UserManagement = UserManagement;
+function StaffFieldsSettings({
+  depts,
+  setRoute
+}) {
+  const S = window.STAFF || {};
+  const [, force] = React.useState(0);
+  const rerender = () => force(x => x + 1);
+  const [draft, setDraft] = React.useState({
+    qualifications: '',
+    designations: ''
+  });
+  const add = kind => {
+    const v = (draft[kind] || '').trim();
+    if (!v) return;
+    if (S.addFieldOpt && S.addFieldOpt(kind, v)) {
+      window.UI && window.UI.toast('Added “' + v + '”', 'success');
+    } else {
+      window.UI && window.UI.toast('That option already exists', 'warn');
+    }
+    setDraft(s => ({
+      ...s,
+      [kind]: ''
+    }));
+    rerender();
+  };
+  const del = (kind, v) => {
+    S.removeFieldOpt && S.removeFieldOpt(kind, v);
+    rerender();
+  };
+  const chip = (label, removable, onDel) => React.createElement("span", {
+    key: label,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '5px 10px',
+      borderRadius: 16,
+      fontSize: 12,
+      fontWeight: 600,
+      background: removable ? 'var(--blue-50)' : 'var(--panel-2)',
+      color: removable ? 'var(--blue-700)' : 'var(--muted)',
+      border: '1px solid ' + (removable ? 'var(--blue-100)' : 'var(--line)')
+    }
+  }, label, removable && React.createElement("span", {
+    onClick: onDel,
+    title: "Remove",
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      cursor: 'pointer',
+      opacity: .7
+    }
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 11,
+    sw: 2.4
+  })));
+  const group = (kind, title, sub, base) => {
+    const custom = S.fieldOptList && S.fieldOptList(kind) || [];
+    return React.createElement("div", {
+      style: {
+        padding: '16px 0',
+        borderBottom: '1px solid var(--line-2)'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: 'var(--ink)'
+      }
+    }, title), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginBottom: 10
+      }
+    }, sub), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 7,
+        marginBottom: 10
+      }
+    }, base.map(o => chip(o, false)), custom.map(o => chip(o, true, () => del(kind, o))), base.length + custom.length === 0 && React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--faint)'
+      }
+    }, "No options yet.")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        maxWidth: 460
+      }
+    }, React.createElement("input", {
+      value: draft[kind] || '',
+      onChange: e => setDraft(s => ({
+        ...s,
+        [kind]: e.target.value
+      })),
+      onKeyDown: e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          add(kind);
+        }
+      },
+      placeholder: 'Add a new ' + title.toLowerCase() + '…',
+      style: {
+        flex: 1,
+        padding: '9px 11px',
+        border: '1px solid var(--line)',
+        borderRadius: 7,
+        fontFamily: 'inherit',
+        fontSize: 13,
+        outline: 'none'
+      }
+    }), React.createElement("button", {
+      className: "btn pri sm",
+      onClick: () => add(kind),
+      disabled: !(draft[kind] || '').trim()
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 14
+    }), "Add")), custom.length > 0 && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        marginTop: 8
+      }
+    }, "Built-in options are shown in grey and can\u2019t be removed; your added options are blue and removable."));
+  };
+  const deptNames = depts && depts.length ? depts.map(d => d.name || d).filter(Boolean) : [];
+  const cfs = S.customFields && S.customFields() || [];
+  const [nf, setNf] = React.useState({
+    name: '',
+    kind: 'single'
+  });
+  const [cfDraft, setCfDraft] = React.useState({});
+  const addField = () => {
+    const n = (nf.name || '').trim();
+    if (!n) return;
+    S.addCustomField && S.addCustomField(n, nf.kind);
+    setNf({
+      name: '',
+      kind: 'single'
+    });
+    rerender();
+    window.UI && window.UI.toast('Field “' + n + '” added', 'success');
+  };
+  const kindLabel = {
+    single: 'Single-select',
+    multi: 'Multi-select',
+    text: 'Free text'
+  };
+  return React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b"
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 2
+    }
+  }, "Staff form fields"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginBottom: 6
+    }
+  }, "These lists populate the dropdowns in Add / Edit Staff. Add your own values below; they appear instantly in the form."), group('qualifications', 'Education / Qualification', 'Degrees & diplomas offered in the Qualification picker.', S.QUALIFICATIONS || []), group('designations', 'Designation', 'Job titles offered in the Designation picker.', S.DESIGNATIONS || []), React.createElement("div", {
+    style: {
+      padding: '16px 0',
+      borderBottom: '1px solid var(--line-2)'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "Department"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginBottom: 10
+    }
+  }, "Departments come automatically from the ", React.createElement("b", null, "Statistics"), " module \u2014 ", deptNames.length, " in use. Add or rename them in Departments and they update here."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 7,
+      marginBottom: 10
+    }
+  }, deptNames.length ? deptNames.map(d => chip(d, false)) : React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--faint)'
+    }
+  }, "No statistics departments loaded.")), setRoute && React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setRoute({
+      view: 'qualityDeptManage'
+    })
+  }, React.createElement(Ic, {
+    d: I.layers,
+    s: 14
+  }), "Manage departments")), React.createElement("div", {
+    style: {
+      padding: '16px 0'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "Custom fields"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginBottom: 12
+    }
+  }, "Create your own fields (e.g. Shift, Unit Type, Certification). Each one appears in the Add / Edit Staff form."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, cfs.map(f => {
+    const custom = Array.isArray(f.options) ? f.options : [];
+    const dkey = 'opt_' + f.id;
+    return React.createElement("div", {
+      key: f.id,
+      style: {
+        border: '1px solid var(--line)',
+        borderRadius: 9,
+        padding: '12px 14px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        marginBottom: custom.length || f.kind !== 'text' ? 8 : 0
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 13,
+        color: 'var(--ink)'
+      }
+    }, f.name), React.createElement("span", {
+      className: "tag",
+      style: {
+        background: 'var(--panel-2)',
+        color: 'var(--muted)'
+      }
+    }, kindLabel[f.kind] || f.kind), React.createElement("span", {
+      className: "spacer",
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "btn sm",
+      onClick: () => {
+        const nn = prompt('Rename field', f.name);
+        if (nn && nn.trim()) {
+          S.renameCustomField(f.id, nn.trim());
+          rerender();
+        }
+      }
+    }, React.createElement(Ic, {
+      d: I.edit,
+      s: 13
+    }), "Rename"), React.createElement("button", {
+      className: "btn sm",
+      style: {
+        color: 'var(--rose)',
+        borderColor: '#f1c6cd'
+      },
+      onClick: async () => {
+        const ok = await window.UI.confirm({
+          title: `Delete field “${f.name}”?`,
+          message: 'Removes it from the staff form. Values already saved on staff records are kept but hidden.',
+          danger: true,
+          confirmLabel: 'Delete field'
+        });
+        if (ok) {
+          S.removeCustomField(f.id);
+          rerender();
+        }
+      }
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 13
+    }), "Delete")), f.kind !== 'text' && React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 7,
+        marginBottom: 9
+      }
+    }, custom.length ? custom.map(o => chip(o, true, () => {
+      S.removeCustomFieldOption(f.id, o);
+      rerender();
+    })) : React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--faint)'
+      }
+    }, "No options yet.")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        maxWidth: 460
+      }
+    }, React.createElement("input", {
+      value: cfDraft[dkey] || '',
+      onChange: e => setCfDraft(s => ({
+        ...s,
+        [dkey]: e.target.value
+      })),
+      onKeyDown: e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const v = (cfDraft[dkey] || '').trim();
+          if (v) {
+            S.addCustomFieldOption(f.id, v);
+            setCfDraft(s => ({
+              ...s,
+              [dkey]: ''
+            }));
+            rerender();
+          }
+        }
+      },
+      placeholder: 'Add an option to ' + f.name + '…',
+      style: {
+        flex: 1,
+        padding: '9px 11px',
+        border: '1px solid var(--line)',
+        borderRadius: 7,
+        fontFamily: 'inherit',
+        fontSize: 13,
+        outline: 'none'
+      }
+    }), React.createElement("button", {
+      className: "btn pri sm",
+      onClick: () => {
+        const v = (cfDraft[dkey] || '').trim();
+        if (v) {
+          S.addCustomFieldOption(f.id, v);
+          setCfDraft(s => ({
+            ...s,
+            [dkey]: ''
+          }));
+          rerender();
+        }
+      },
+      disabled: !(cfDraft[dkey] || '').trim()
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 14
+    }), "Add"))), f.kind === 'text' && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "Free-text field \u2014 staff type any value in the form."));
+  }), cfs.length === 0 && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--faint)'
+    }
+  }, "No custom fields yet.")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center',
+      marginTop: 14,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("input", {
+    value: nf.name,
+    onChange: e => setNf(s => ({
+      ...s,
+      name: e.target.value
+    })),
+    onKeyDown: e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addField();
+      }
+    },
+    placeholder: "New field name \u2014 e.g. Shift, Unit Type, Certification",
+    style: {
+      flex: '1 1 240px',
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontFamily: 'inherit',
+      fontSize: 13,
+      outline: 'none'
+    }
+  }), React.createElement("select", {
+    value: nf.kind,
+    onChange: e => setNf(s => ({
+      ...s,
+      kind: e.target.value
+    })),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontFamily: 'inherit',
+      fontSize: 13,
+      background: '#fff'
+    }
+  }, React.createElement("option", {
+    value: "single"
+  }, "Single-select"), React.createElement("option", {
+    value: "multi"
+  }, "Multi-select"), React.createElement("option", {
+    value: "text"
+  }, "Free text")), React.createElement("button", {
+    className: "btn pri",
+    onClick: addField,
+    disabled: !nf.name.trim()
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 15
+  }), "Add field")))));
+}
 function Settings({
   depts,
   store,
@@ -21773,7 +23495,7 @@ function Settings({
     style: {
       padding: 6
     }
-  }, [['general', 'General', I.gear], ['departments', 'Departments', I.layers], ['users', 'Users & Roles', I.user], ['responsibles', 'Responsible Persons', I.user], ['fields', 'Form Fields', I.filter], ['data', 'Data & Export', I.doc]].map(([id, l, ic]) => React.createElement("div", {
+  }, [['general', 'General', I.gear], ['departments', 'Departments', I.layers], ['stafffields', 'Staff Fields', I.steth], ['users', 'Users & Roles', I.user], ['responsibles', 'Responsible Persons', I.user], ['fields', 'Form Fields', I.filter], ['data', 'Data & Export', I.doc]].map(([id, l, ic]) => React.createElement("div", {
     key: id,
     onClick: () => setTab(id),
     style: {
@@ -21951,7 +23673,10 @@ function Settings({
     depts: depts,
     store: store,
     setRoute: setRoute
-  }) : null), tab === 'users' && React.createElement("div", {
+  }) : null), tab === 'stafffields' && React.createElement(StaffFieldsSettings, {
+    depts: depts,
+    setRoute: setRoute
+  }), tab === 'users' && React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b"
@@ -44650,6 +46375,2061 @@ window.LockScreen = LockScreen;
 })();
 })();
 ;
+/* ===== supervisor.jsx ===== */
+(function(){
+const {
+  useState,
+  useEffect,
+  useMemo,
+  useRef
+} = React;
+const Ic = window.Ic,
+  I = window.I;
+const supNum = v => {
+  const n = parseFloat(v);
+  return isNaN(n) ? 0 : n;
+};
+const supToast = (m, t) => {
+  try {
+    window.UI && window.UI.toast && window.UI.toast(m, t || 'success');
+  } catch (e) {}
+};
+const supApi = {
+  get: u => fetch(u, {
+    headers: {
+      accept: 'application/json'
+    }
+  }).then(r => r.json()),
+  post: (u, b) => fetch(u, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify(b || {})
+  }).then(r => r.json()),
+  del: u => fetch(u, {
+    method: 'DELETE'
+  }).then(r => r.json())
+};
+const SUP_SHIFTS = ['Morning', 'Evening', 'Night'];
+function supTodayISO() {
+  try {
+    const d = new Date();
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  } catch (e) {
+    return '';
+  }
+}
+function supCurrentShift() {
+  try {
+    const h = new Date().getHours();
+    if (h >= 6 && h < 14) return 'Morning';
+    if (h >= 14 && h < 21) return 'Evening';
+    return 'Night';
+  } catch (e) {
+    return 'Night';
+  }
+}
+function supIsAdmin() {
+  try {
+    const u = window.__UNICO_USER__;
+    return !u || u.role === 'Administrator';
+  } catch (e) {
+    return true;
+  }
+}
+function supDeptNames(depts) {
+  try {
+    const m = window.DEPTMAP;
+    if (m && m.patientDeptIds) {
+      const ids = m.patientDeptIds();
+      if (ids && ids.length) return ids.map(id => m.nameFromId(id));
+    }
+  } catch (e) {}
+  return (depts || []).map(d => d.name).filter(Boolean);
+}
+const C = {
+  dept: {
+    id: 'dept',
+    label: 'Department',
+    type: 'select',
+    w: 120
+  },
+  bed: {
+    id: 'bed',
+    label: 'Bed',
+    w: 70
+  },
+  name: {
+    id: 'name',
+    label: 'Name of Patient',
+    w: 130
+  },
+  age: {
+    id: 'age',
+    label: 'Age',
+    w: 70
+  },
+  uhid: {
+    id: 'uhid',
+    label: 'UHID',
+    w: 90,
+    lookup: true
+  },
+  consultant: {
+    id: 'consultant',
+    label: 'Consultant',
+    w: 120
+  },
+  diagnosis: {
+    id: 'diagnosis',
+    label: 'Diagnosis',
+    type: 'area',
+    w: 150
+  },
+  doa: {
+    id: 'doa',
+    label: 'DOA',
+    w: 90
+  }
+};
+const SUP_SECTIONS = [{
+  key: 'newAdmissions',
+  title: 'New Admission',
+  sn: true,
+  cols: [C.dept, C.bed, C.name, C.age, C.uhid, C.consultant, C.diagnosis, C.doa, {
+    id: 'remarks',
+    label: 'Remarks',
+    type: 'area',
+    w: 200
+  }]
+}, {
+  key: 'criticalArea',
+  title: 'Patient in Critical Areas',
+  sn: true,
+  cols: [C.dept, C.bed, C.name, C.age, C.uhid, C.consultant, C.diagnosis, C.doa, {
+    id: 'remarks',
+    label: 'Remarks',
+    type: 'area',
+    w: 200
+  }]
+}, {
+  key: 'lama',
+  title: 'LAMA / DAMA',
+  sn: true,
+  cols: [C.dept, C.name, C.age, C.uhid, C.consultant, C.diagnosis, C.doa, {
+    id: 'reasonDama',
+    label: 'Reason for DAMA',
+    type: 'area',
+    w: 150
+  }, {
+    id: 'billing',
+    label: 'Billing Clearance',
+    w: 90
+  }]
+}, {
+  key: 'discharged',
+  title: 'Discharged',
+  sn: true,
+  cols: [C.dept, C.name, C.age, C.uhid, C.consultant, C.diagnosis, C.doa, {
+    id: 'billing',
+    label: 'Billing Clearance',
+    w: 90
+  }]
+}, {
+  key: 'otTable',
+  title: 'OT (Operation Theatre)',
+  sn: true,
+  cols: [{
+    id: 'ot',
+    label: 'OT',
+    w: 90
+  }, {
+    id: 'planned',
+    label: 'Planned Cases',
+    type: 'num'
+  }, {
+    id: 'added',
+    label: 'Added / Emergency',
+    type: 'num'
+  }, {
+    id: 'cancelledReason',
+    label: 'Reason of Cancelled',
+    type: 'area',
+    w: 150
+  }, {
+    id: 'total',
+    label: 'Total Cases',
+    type: 'num'
+  }, {
+    id: 'billing',
+    label: 'Billing Status',
+    w: 100
+  }]
+}, {
+  key: 'surgeries',
+  title: 'Surgery Details',
+  sn: true,
+  cols: [{
+    id: 'name',
+    label: 'Name of Patient',
+    w: 120
+  }, {
+    id: 'surgery',
+    label: 'Name of Surgery',
+    w: 130
+  }, {
+    id: 'surgeon',
+    label: 'Surgeon',
+    w: 120
+  }, {
+    id: 'anaesthetist',
+    label: 'Anesthesiologist',
+    w: 120
+  }, {
+    id: 'anaesthesia',
+    label: 'Type of Anesthesia',
+    w: 90
+  }, {
+    id: 'note',
+    label: 'Special Note',
+    type: 'area',
+    w: 140
+  }]
+}, {
+  key: 'interventional',
+  title: 'Interventional Procedure (Cath Lab, Endoscopy, Dialysis etc.)',
+  sn: true,
+  cols: [C.dept, C.name, C.age, C.uhid, C.consultant, {
+    id: 'procedure',
+    label: 'Name of Procedure',
+    w: 130
+  }, {
+    id: 'bed',
+    label: 'Bed No',
+    w: 70
+  }, {
+    id: 'remarks',
+    label: 'Remarks',
+    type: 'area',
+    w: 150
+  }]
+}, {
+  key: 'radiological',
+  title: 'Radiological Interventional Procedure',
+  sn: true,
+  cols: [C.dept, C.name, C.age, C.uhid, {
+    id: 'procedure',
+    label: 'Name of Procedure',
+    w: 130
+  }, {
+    id: 'bed',
+    label: 'Bed No',
+    w: 70
+  }]
+}, {
+  key: 'ventilators',
+  title: 'Ventilator Status',
+  sn: false,
+  cols: [{
+    id: 'type',
+    label: 'Type of Ventilation',
+    w: 150
+  }, {
+    id: 'adult',
+    label: 'Adult',
+    type: 'num'
+  }, {
+    id: 'ped',
+    label: 'Pediatric',
+    type: 'num'
+  }, {
+    id: 'total',
+    label: 'Total',
+    type: 'num'
+  }, C.dept, {
+    id: 'inUse',
+    label: 'In Use',
+    type: 'num'
+  }, {
+    id: 'standby',
+    label: 'Stand By',
+    type: 'num'
+  }, {
+    id: 'remarks',
+    label: 'Remarks',
+    w: 120
+  }]
+}, {
+  key: 'pressureSore',
+  title: 'Patients with Pressure Sore',
+  sn: true,
+  cols: [C.name, C.age, {
+    id: 'bed',
+    label: 'Bed No',
+    w: 90
+  }, C.diagnosis, C.consultant, {
+    id: 'stage',
+    label: 'Stage of Ulceration',
+    w: 110
+  }, {
+    id: 'remarks',
+    label: 'Remarks',
+    type: 'area',
+    w: 150
+  }]
+}, {
+  key: 'phlebitis',
+  title: 'Patients with Phlebitis',
+  sn: true,
+  cols: [C.name, C.age, {
+    id: 'bed',
+    label: 'Bed No',
+    w: 90
+  }, C.diagnosis, C.consultant, {
+    id: 'vipScore',
+    label: 'VIP Score',
+    w: 80
+  }, {
+    id: 'remarks',
+    label: 'Remarks',
+    type: 'area',
+    w: 150
+  }]
+}];
+const SUP_SEC_BY_KEY = SUP_SECTIONS.reduce((m, s) => (m[s.key] = s, m), {});
+const RADIOLOGY_FIELDS = [['xray', 'X-ray', 'num'], ['usg', 'USG', 'num'], ['ct', 'CT-Scan', 'num'], ['mri', 'MRI', 'num'], ['bmd', 'BMD', 'num'], ['mammogram', 'Mammogram', 'num'], ['ecg', 'ECG', 'num'], ['echo', 'Echo', 'num'], ['uroflow', 'Uroflometry', 'num']];
+const ER_FIELDS = [['total', 'Total Patient', 'num'], ['admission', 'Admission', 'num'], ['discharged', 'Discharged', 'num'], ['lama', 'LAMA', 'num'], ['daycare', 'Daycare', 'num'], ['bid', 'BID', 'num'], ['present', 'Present Patient', 'num'], ['refused', 'Refused', 'num'], ['death', 'Death', 'num']];
+const GENERAL_FIELDS = [['pickUp', 'Pick Up', 'text'], ['drop', 'Drop', 'text'], ['nvd', 'Birth — NVD', 'num'], ['cs', 'Birth — CS', 'num'], ['death', 'Death', 'num'], ['broughtDead', 'Brought Dead', 'num'], ['codeBlue', 'Code Blue', 'num'], ['patientComplaint', 'Patient Complaint', 'num'], ['medError', 'Med. Error', 'num'], ['doctorComplaint', "Doctors' complaint", 'num'], ['nearMiss', 'Near Miss & Incident', 'num'], ['hoToError', 'H/O & T/O Error', 'num'], ['sampleError', 'Sample Error', 'num'], ['patientFall', 'No. of Patient Fall', 'num'], ['bloodTransfusion', 'Blood Transfusion (Bed No)', 'text'], ['adr', 'ADR', 'num'], ['plannedDischarge', 'Planned Discharges', 'num'], ['vipAdmitted', 'VIP Admitted', 'text'], ['vipVisits', 'VIP Visits', 'text'], ['employeeAdmitted', 'Hospital Employee Admitted', 'text']];
+const ALERT_FIELDS = [['codeBlue', 'Code Blue', 'critical'], ['death', 'Death', 'critical'], ['broughtDead', 'Brought Dead', 'critical'], ['patientFall', 'Patient Fall', 'critical'], ['medError', 'Medication Error', 'critical'], ['nearMiss', 'Near Miss / Incident', 'warn'], ['sampleError', 'Sample Error', 'warn'], ['hoToError', 'H/O & T/O Error', 'warn'], ['patientComplaint', 'Patient Complaint', 'warn'], ['adr', 'ADR', 'warn']];
+function supComputeTotals(r) {
+  const g = r.general || {},
+    er = r.erCensus || {};
+  const death = supNum(g.death) || supNum(er.death);
+  return {
+    newAdmission: (r.newAdmissions || []).length,
+    discharge: (r.discharged || []).length,
+    death
+  };
+}
+function supComputeCensusTotal(census, deptNames) {
+  let t = supNum((census || {})['OPD Total']);
+  (deptNames || []).forEach(n => {
+    t += supNum((census || {})[n]);
+  });
+  return t;
+}
+function supComputeAlerts(r) {
+  const out = [];
+  const g = r.general || {};
+  ALERT_FIELDS.forEach(([k, label, level]) => {
+    const n = supNum(g[k]);
+    if (n > 0) out.push({
+      level,
+      text: label + ': ' + n
+    });
+  });
+  if ((r.pressureSore || []).length) out.push({
+    level: 'warn',
+    text: r.pressureSore.length + ' patient(s) with pressure sore'
+  });
+  if ((r.phlebitis || []).length) out.push({
+    level: 'warn',
+    text: r.phlebitis.length + ' patient(s) with phlebitis'
+  });
+  return out;
+}
+function supRefreshAlertBadge(reports) {
+  try {
+    const today = supTodayISO();
+    const todays = (reports || []).filter(r => r.date === today);
+    let n = 0;
+    todays.forEach(r => {
+      n += supComputeAlerts(r).filter(a => a.level === 'critical').length;
+    });
+    SUP_SHIFTS.forEach(sh => {
+      if (!todays.some(r => r.shift === sh)) n += 1;
+    });
+    window.__UNICO_SUP_ALERTS__ = n;
+    try {
+      window.dispatchEvent(new CustomEvent('unico:sup-alerts', {
+        detail: n
+      }));
+    } catch (e) {}
+  } catch (e) {}
+}
+function SupBtn({
+  kind,
+  sm,
+  onClick,
+  children,
+  title,
+  disabled
+}) {
+  return React.createElement("button", {
+    className: 'sup-btn' + (kind ? ' ' + kind : '') + (sm ? ' sm' : ''),
+    onClick: onClick,
+    title: title || '',
+    disabled: disabled
+  }, children);
+}
+function StatusBadge({
+  status
+}) {
+  return React.createElement("span", {
+    className: 'sup-status ' + (status || 'draft')
+  }, status || 'draft');
+}
+function RowsEditor({
+  section,
+  rows,
+  deptNames,
+  readOnly,
+  onChange,
+  onLookup
+}) {
+  rows = rows || [];
+  const cols = section.cols;
+  const set = (i, k, v) => onChange(rows.map((r, x) => x === i ? {
+    ...r,
+    [k]: v
+  } : r));
+  const add = () => onChange([...rows, {}]);
+  const dup = i => {
+    const c = rows.slice();
+    c.splice(i + 1, 0, {
+      ...rows[i]
+    });
+    onChange(c);
+  };
+  const del = i => onChange(rows.filter((_, x) => x !== i));
+  const doLookup = async (i, uhid) => {
+    if (!onLookup || !String(uhid || '').trim()) return;
+    const p = await onLookup(uhid);
+    if (!p) return;
+    onChange(rows.map((r, x) => {
+      if (x !== i) return r;
+      const nr = {
+        ...r
+      };
+      ['name', 'age', 'consultant', 'diagnosis', 'dept'].forEach(k => {
+        if (p[k] && !String(nr[k] || '').trim()) nr[k] = p[k];
+      });
+      return nr;
+    }));
+    supToast('Autofilled from a previous entry', 'success');
+  };
+  const span = cols.length + (section.sn ? 1 : 0) + (readOnly ? 0 : 1);
+  return React.createElement("div", {
+    className: "sup-tblwrap"
+  }, React.createElement("table", {
+    className: "sup-tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, section.sn && React.createElement("th", {
+    style: {
+      width: 38
+    }
+  }, "#"), cols.map(c => React.createElement("th", {
+    key: c.id,
+    style: c.w ? {
+      minWidth: c.w
+    } : null
+  }, c.label)), !readOnly && React.createElement("th", {
+    style: {
+      width: 68
+    }
+  }))), React.createElement("tbody", null, rows.length === 0 && React.createElement("tr", null, React.createElement("td", {
+    "data-label": "",
+    colSpan: span,
+    style: {
+      color: '#94a3b8',
+      textAlign: 'center',
+      padding: 10
+    }
+  }, "No entries yet.")), rows.map((row, i) => React.createElement("tr", {
+    key: i
+  }, section.sn && React.createElement("td", {
+    "data-label": "#"
+  }, i + 1), cols.map(c => React.createElement("td", {
+    key: c.id,
+    "data-label": c.label
+  }, readOnly ? React.createElement("span", null, row[c.id] || '') : c.type === 'select' ? React.createElement("select", {
+    value: row[c.id] || '',
+    onChange: e => set(i, c.id, e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }), deptNames.concat(row[c.id] && deptNames.indexOf(row[c.id]) < 0 ? [row[c.id]] : []).map(n => React.createElement("option", {
+    key: n,
+    value: n
+  }, n))) : c.type === 'area' ? React.createElement("textarea", {
+    rows: 2,
+    value: row[c.id] || '',
+    onChange: e => set(i, c.id, e.target.value)
+  }) : React.createElement("input", {
+    type: c.type === 'num' ? 'number' : 'text',
+    value: row[c.id] || '',
+    onChange: e => set(i, c.id, e.target.value),
+    onBlur: c.lookup ? () => doLookup(i, row[c.id]) : undefined
+  }))), !readOnly && React.createElement("td", {
+    "data-label": "",
+    style: {
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement("button", {
+    className: "sup-btn sm",
+    title: "Duplicate row",
+    onClick: () => dup(i)
+  }, "\u29C9"), ' ', React.createElement("button", {
+    className: "sup-rowdel",
+    title: "Remove row",
+    onClick: () => del(i)
+  }, "\u2715")))))), !readOnly && React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, React.createElement(SupBtn, {
+    sm: true,
+    onClick: add
+  }, "+ Add row")));
+}
+function ScalarFields({
+  fields,
+  val,
+  onChange,
+  readOnly
+}) {
+  val = val || {};
+  return React.createElement("div", {
+    className: "sup-scalar"
+  }, fields.map(f => {
+    const id = f[0],
+      label = f[1],
+      type = f[2];
+    return React.createElement("div", {
+      className: "sup-fld",
+      key: id
+    }, React.createElement("label", null, label), readOnly ? React.createElement("div", {
+      style: {
+        fontWeight: 600
+      }
+    }, val[id] || '—') : React.createElement("input", {
+      type: type === 'num' ? 'number' : 'text',
+      value: val[id] || '',
+      onChange: e => onChange({
+        ...val,
+        [id]: e.target.value
+      })
+    }));
+  }));
+}
+function CensusFields({
+  deptNames,
+  val,
+  onChange,
+  readOnly
+}) {
+  val = val || {};
+  const total = supComputeCensusTotal(val, deptNames);
+  const setK = (k, v) => onChange({
+    ...val,
+    [k]: v
+  });
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted,#64748b)',
+      marginBottom: 8
+    }
+  }, "Department-wise patient census (departments pulled from Statistics)."), React.createElement("div", {
+    className: "sup-scalar"
+  }, React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "OPD Total"), React.createElement("input", {
+    type: "number",
+    value: val['OPD Total'] || '',
+    onChange: e => setK('OPD Total', e.target.value),
+    disabled: readOnly
+  })), deptNames.map(n => React.createElement("div", {
+    className: "sup-fld",
+    key: n
+  }, React.createElement("label", null, n), React.createElement("input", {
+    type: "number",
+    value: val[n] || '',
+    onChange: e => setK(n, e.target.value),
+    disabled: readOnly
+  })))), React.createElement("div", {
+    style: {
+      marginTop: 10,
+      fontWeight: 800,
+      fontSize: 13
+    }
+  }, "TOTAL: ", total));
+}
+function SecCard({
+  title,
+  count,
+  children,
+  open,
+  onToggle,
+  anchor
+}) {
+  return React.createElement("div", {
+    className: "sup-card",
+    id: anchor
+  }, React.createElement("div", {
+    className: "sup-card-h",
+    onClick: onToggle
+  }, React.createElement(Ic, {
+    d: I.chevR,
+    s: 15,
+    style: {
+      transform: open ? 'rotate(90deg)' : 'none',
+      transition: '.15s',
+      flex: '0 0 auto'
+    }
+  }), React.createElement("h4", null, title), count != null && React.createElement("span", {
+    className: "sup-count"
+  }, count)), open && React.createElement("div", {
+    className: "sup-card-b"
+  }, children));
+}
+function MiniBars({
+  data,
+  height
+}) {
+  height = height || 90;
+  const max = Math.max(1, ...data.map(d => d.v));
+  const bw = 100 / Math.max(1, data.length);
+  return React.createElement("svg", {
+    viewBox: "0 0 100 40",
+    preserveAspectRatio: "none",
+    style: {
+      width: '100%',
+      height
+    }
+  }, data.map((d, i) => {
+    const h = d.v / max * 36;
+    return React.createElement("rect", {
+      key: i,
+      x: i * bw + bw * 0.15,
+      y: 40 - h,
+      width: bw * 0.7,
+      height: h,
+      rx: "0.6",
+      fill: "#2563eb"
+    });
+  }));
+}
+function blankReport(shift) {
+  return {
+    date: supTodayISO(),
+    shift: shift || supCurrentShift(),
+    shiftTime: '',
+    supervisorName: '',
+    status: 'draft',
+    newAdmissions: [],
+    criticalArea: [],
+    lama: [],
+    discharged: [],
+    otTable: [],
+    surgeries: [],
+    interventional: [],
+    radiological: [],
+    radiologyCounts: {},
+    ventilators: [],
+    erCensus: {},
+    general: {},
+    pressureSore: [],
+    phlebitis: [],
+    absenteeism: '',
+    sickLeave: '',
+    roundObservation: '',
+    census: {},
+    totals: {},
+    sign: window.unicoSig ? window.unicoSig.load() : {
+      prepared: '',
+      reviewed: '',
+      recommended: '',
+      approved: ''
+    }
+  };
+}
+function SupEditor({
+  id,
+  shift,
+  depts,
+  setRoute
+}) {
+  const deptNames = useMemo(() => supDeptNames(depts), [depts]);
+  const [rep, setRep] = useState(() => blankReport(shift));
+  const [loading, setLoading] = useState(!!id);
+  const [saved, setSaved] = useState('');
+  const dirty = useRef(false);
+  const timer = useRef(null);
+  const [open, setOpen] = useState({
+    newAdmissions: true
+  });
+  const admin = supIsAdmin();
+  const readOnly = rep.status === 'approved' && !admin;
+  useEffect(() => {
+    if (!id) return;
+    setLoading(true);
+    supApi.get('/api/supervisor-reports/' + encodeURIComponent(id)).then(j => {
+      if (j.ok && j.report) setRep({
+        ...blankReport(),
+        ...j.report
+      });
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [id]);
+  const edit = patch => {
+    dirty.current = true;
+    setRep(r => ({
+      ...r,
+      ...patch
+    }));
+  };
+  const editSec = (key, val) => edit({
+    [key]: val
+  });
+  useEffect(() => {
+    if (!dirty.current || readOnly) return;
+    if (!(rep.date && String(rep.supervisorName || '').trim())) return;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      setSaved('Saving…');
+      const payload = {
+        ...rep,
+        totals: supComputeTotals(rep),
+        census: {
+          ...rep.census,
+          TOTAL: supComputeCensusTotal(rep.census, deptNames)
+        }
+      };
+      try {
+        const j = await supApi.post('/api/supervisor-reports', payload);
+        if (j.ok) {
+          dirty.current = false;
+          setSaved('Saved');
+          if (!rep.id && j.report && j.report.id) setRep(r => ({
+            ...r,
+            id: j.report.id
+          }));
+        } else setSaved('Save failed');
+      } catch (e) {
+        setSaved('Save failed');
+      }
+    }, 1100);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [rep, readOnly, deptNames]);
+  const lookupUhid = async uhid => {
+    try {
+      const j = await supApi.get('/api/supervisor-reports/lookup?uhid=' + encodeURIComponent(uhid));
+      return j.ok && j.patient ? j.patient : null;
+    } catch (e) {
+      return null;
+    }
+  };
+  const importPrevious = async () => {
+    try {
+      const j = await supApi.get('/api/supervisor-reports/previous?date=' + encodeURIComponent(rep.date) + '&shift=' + encodeURIComponent(rep.shift));
+      if (!j.ok || !j.report) {
+        supToast('No previous shift report found to carry forward.', 'info');
+        return;
+      }
+      const p = j.report;
+      edit({
+        criticalArea: [...(rep.criticalArea || []), ...(p.criticalArea || [])],
+        pressureSore: [...(rep.pressureSore || []), ...(p.pressureSore || [])],
+        phlebitis: [...(rep.phlebitis || []), ...(p.phlebitis || [])]
+      });
+      setOpen(o => ({
+        ...o,
+        criticalArea: true,
+        pressureSore: true,
+        phlebitis: true
+      }));
+      supToast('Carried forward critical patients & registers from ' + p.date + ' ' + p.shift, 'success');
+    } catch (e) {
+      supToast('Carry-forward failed.', 'error');
+    }
+  };
+  const setStatus = async status => {
+    if (!rep.id) {
+      supToast('Save the report first.', 'info');
+      return;
+    }
+    try {
+      const j = await supApi.post('/api/supervisor-reports/' + rep.id + '/status', {
+        status
+      });
+      if (j.ok) {
+        setRep(r => ({
+          ...r,
+          status
+        }));
+        supToast('Report ' + status + '.', 'success');
+      }
+    } catch (e) {
+      supToast('Could not update status.', 'error');
+    }
+  };
+  const saveSig = sig => {
+    if (window.unicoSig) window.unicoSig.save(sig);
+    edit({
+      sign: sig
+    });
+  };
+  if (loading) return React.createElement("div", {
+    style: {
+      padding: 40,
+      textAlign: 'center',
+      color: 'var(--muted,#64748b)'
+    }
+  }, "Loading report\u2026");
+  const totals = supComputeTotals(rep);
+  const alerts = supComputeAlerts(rep);
+  const jump = SUP_SECTIONS.map(s => ({
+    key: s.key,
+    title: s.title
+  }));
+  const go = anchor => {
+    const el = document.getElementById('sup-sec-' + anchor);
+    if (el) el.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
+    setOpen(o => ({
+      ...o,
+      [anchor]: true
+    }));
+  };
+  return React.createElement("div", {
+    className: "sup-wrap"
+  }, React.createElement("div", {
+    className: "sup-toolbar"
+  }, React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supHistory'
+    })
+  }, React.createElement(Ic, {
+    d: I.chevR,
+    s: 14,
+    style: {
+      transform: 'rotate(180deg)'
+    }
+  }), "Back"), React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 15
+    }
+  }, id ? 'Edit' : 'New', " Supervisor Report"), React.createElement(StatusBadge, {
+    status: rep.status
+  }), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted,#64748b)'
+    }
+  }, saved), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), !id ? null : React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supReport',
+      id: rep.id
+    })
+  }, React.createElement(Ic, {
+    d: I.print,
+    s: 14
+  }), "Generate / Export"), !readOnly && rep.status === 'draft' && React.createElement(SupBtn, {
+    sm: true,
+    kind: "pri",
+    onClick: () => setStatus('submitted')
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 14
+  }), "Submit"), admin && rep.status === 'submitted' && React.createElement(SupBtn, {
+    sm: true,
+    kind: "pri",
+    onClick: () => setStatus('approved')
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 14
+  }), "Approve"), admin && rep.status === 'approved' && React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setStatus('draft')
+  }, React.createElement(Ic, {
+    d: I.edit,
+    s: 14
+  }), "Reopen")), readOnly && React.createElement("div", {
+    className: "sup-alert info"
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 15
+  }), "This report is approved and locked. An administrator can reopen it for edits."), alerts.length > 0 && React.createElement("div", null, alerts.map((a, i) => React.createElement("div", {
+    key: i,
+    className: 'sup-alert ' + a.level
+  }, React.createElement(Ic, {
+    d: I.bell,
+    s: 15
+  }), a.text))), React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("div", {
+    className: "sup-scalar"
+  }, React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Date"), React.createElement("input", {
+    type: "date",
+    value: rep.date,
+    onChange: e => edit({
+      date: e.target.value
+    }),
+    disabled: readOnly
+  })), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Shift"), React.createElement("select", {
+    value: rep.shift,
+    onChange: e => edit({
+      shift: e.target.value
+    }),
+    disabled: readOnly
+  }, SUP_SHIFTS.map(s => React.createElement("option", {
+    key: s,
+    value: s
+  }, s)))), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Shift Time"), React.createElement("input", {
+    value: rep.shiftTime,
+    placeholder: "e.g. 8:00 PM TO 8:00 AM",
+    onChange: e => edit({
+      shiftTime: e.target.value
+    }),
+    disabled: readOnly
+  })), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Name of Nursing Supervisor"), React.createElement("input", {
+    value: rep.supervisorName,
+    onChange: e => edit({
+      supervisorName: e.target.value
+    }),
+    disabled: readOnly
+  }))), !readOnly && !id && React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, React.createElement(SupBtn, {
+    sm: true,
+    onClick: importPrevious
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 14
+  }), "Carry forward from previous shift")))), React.createElement("div", {
+    className: "sup-jump"
+  }, jump.map(j => React.createElement("a", {
+    key: j.key,
+    onClick: () => go(j.key)
+  }, j.title))), React.createElement("div", {
+    className: "sup-kpis"
+  }, React.createElement("div", {
+    className: "sup-kpi"
+  }, React.createElement("div", {
+    className: "n"
+  }, totals.newAdmission), React.createElement("div", {
+    className: "l"
+  }, "New Admissions")), React.createElement("div", {
+    className: "sup-kpi"
+  }, React.createElement("div", {
+    className: "n"
+  }, totals.discharge), React.createElement("div", {
+    className: "l"
+  }, "Discharged")), React.createElement("div", {
+    className: "sup-kpi"
+  }, React.createElement("div", {
+    className: "n"
+  }, (rep.criticalArea || []).length), React.createElement("div", {
+    className: "l"
+  }, "Critical-area patients")), React.createElement("div", {
+    className: "sup-kpi"
+  }, React.createElement("div", {
+    className: "n"
+  }, totals.death), React.createElement("div", {
+    className: "l"
+  }, "Deaths"))), SUP_SECTIONS.map(s => React.createElement(SecCard, {
+    key: s.key,
+    anchor: 'sup-sec-' + s.key,
+    title: s.title,
+    count: (rep[s.key] || []).length,
+    open: !!open[s.key],
+    onToggle: () => setOpen(o => ({
+      ...o,
+      [s.key]: !o[s.key]
+    }))
+  }, React.createElement(RowsEditor, {
+    section: s,
+    rows: rep[s.key],
+    deptNames: deptNames,
+    readOnly: readOnly,
+    onChange: v => editSec(s.key, v),
+    onLookup: lookupUhid
+  }))), React.createElement(SecCard, {
+    anchor: "sup-sec-radiologyCounts",
+    title: "Radiology Counts",
+    open: !!open.radiologyCounts,
+    onToggle: () => setOpen(o => ({
+      ...o,
+      radiologyCounts: !o.radiologyCounts
+    }))
+  }, React.createElement(ScalarFields, {
+    fields: RADIOLOGY_FIELDS,
+    val: rep.radiologyCounts,
+    onChange: v => editSec('radiologyCounts', v),
+    readOnly: readOnly
+  })), React.createElement(SecCard, {
+    anchor: "sup-sec-erCensus",
+    title: "ER Census",
+    open: !!open.erCensus,
+    onToggle: () => setOpen(o => ({
+      ...o,
+      erCensus: !o.erCensus
+    }))
+  }, React.createElement(ScalarFields, {
+    fields: ER_FIELDS,
+    val: rep.erCensus,
+    onChange: v => editSec('erCensus', v),
+    readOnly: readOnly
+  })), React.createElement(SecCard, {
+    anchor: "sup-sec-general",
+    title: "General Information",
+    open: !!open.general,
+    onToggle: () => setOpen(o => ({
+      ...o,
+      general: !o.general
+    }))
+  }, React.createElement(ScalarFields, {
+    fields: GENERAL_FIELDS,
+    val: rep.general,
+    onChange: v => editSec('general', v),
+    readOnly: readOnly
+  })), React.createElement(SecCard, {
+    anchor: "sup-sec-census",
+    title: "Department-wise Census",
+    open: !!open.census,
+    onToggle: () => setOpen(o => ({
+      ...o,
+      census: !o.census
+    }))
+  }, React.createElement(CensusFields, {
+    deptNames: deptNames,
+    val: rep.census,
+    onChange: v => editSec('census', v),
+    readOnly: readOnly
+  })), React.createElement(SecCard, {
+    anchor: "sup-sec-notes",
+    title: "Absenteeism \xB7 Sick Leave \xB7 Round Observation",
+    open: !!open.notes,
+    onToggle: () => setOpen(o => ({
+      ...o,
+      notes: !o.notes
+    }))
+  }, React.createElement("div", {
+    className: "sup-fld",
+    style: {
+      marginBottom: 10
+    }
+  }, React.createElement("label", null, "Absenteeism"), React.createElement("textarea", {
+    rows: 2,
+    value: rep.absenteeism,
+    onChange: e => edit({
+      absenteeism: e.target.value
+    }),
+    disabled: readOnly
+  })), React.createElement("div", {
+    className: "sup-fld",
+    style: {
+      marginBottom: 10
+    }
+  }, React.createElement("label", null, "Sick Leave"), React.createElement("textarea", {
+    rows: 2,
+    value: rep.sickLeave,
+    onChange: e => edit({
+      sickLeave: e.target.value
+    }),
+    disabled: readOnly
+  })), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Observation During Hospital Round"), React.createElement("textarea", {
+    rows: 3,
+    value: rep.roundObservation,
+    onChange: e => edit({
+      roundObservation: e.target.value
+    }),
+    disabled: readOnly
+  }))), React.createElement(SecCard, {
+    anchor: "sup-sec-sign",
+    title: "Authorisation / Sign-off",
+    open: !!open.sign,
+    onToggle: () => setOpen(o => ({
+      ...o,
+      sign: !o.sign
+    }))
+  }, React.createElement("div", {
+    className: "sup-scalar"
+  }, [['prepared', 'Prepared by'], ['reviewed', 'Checked by'], ['recommended', 'Recommended by'], ['approved', 'Approved by']].map(([k, l]) => React.createElement("div", {
+    className: "sup-fld",
+    key: k
+  }, React.createElement("label", null, l), React.createElement("input", {
+    value: (rep.sign || {})[k] || '',
+    onChange: e => saveSig({
+      ...(rep.sign || {}),
+      [k]: e.target.value
+    }),
+    disabled: readOnly
+  })))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted,#64748b)',
+      marginTop: 8
+    }
+  }, "These names are shared with every UNICO report builder.")));
+}
+function SupHistory({
+  setRoute
+}) {
+  const [list, setList] = useState(null);
+  const [f, setF] = useState({
+    from: '',
+    to: '',
+    shift: '',
+    status: '',
+    q: ''
+  });
+  const [sel, setSel] = useState([]);
+  const admin = supIsAdmin();
+  const load = () => supApi.get('/api/supervisor-reports?limit=1000').then(j => {
+    if (j.ok) {
+      setList(j.reports);
+      supRefreshAlertBadge(j.reports);
+    }
+  });
+  useEffect(() => {
+    load();
+  }, []);
+  const filtered = useMemo(() => {
+    if (!list) return [];
+    const q = f.q.trim().toLowerCase();
+    return list.filter(r => {
+      if (f.from && r.date < f.from) return false;
+      if (f.to && r.date > f.to) return false;
+      if (f.shift && r.shift !== f.shift) return false;
+      if (f.status && r.status !== f.status) return false;
+      if (q) {
+        const hay = (r.supervisorName || '') + ' ' + r.date + ' ' + r.shift + ' ' + ['newAdmissions', 'criticalArea', 'discharged'].map(k => (r[k] || []).map(x => (x.name || '') + ' ' + (x.uhid || '')).join(' ')).join(' ');
+        if (hay.toLowerCase().indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+  }, [list, f]);
+  const duplicate = async r => {
+    const full = await supApi.get('/api/supervisor-reports/' + r.id).then(j => j.report);
+    if (!full) return;
+    const copy = {
+      ...full
+    };
+    delete copy.id;
+    delete copy._id;
+    copy.status = 'draft';
+    copy.date = supTodayISO();
+    copy.shift = supCurrentShift();
+    const j = await supApi.post('/api/supervisor-reports', copy);
+    if (j.ok) {
+      supToast('Duplicated as a new draft.', 'success');
+      setRoute({
+        view: 'supNew',
+        id: j.report.id
+      });
+    }
+  };
+  const remove = async r => {
+    if (!window.confirm('Delete this report permanently?')) return;
+    await supApi.del('/api/supervisor-reports/' + r.id);
+    load();
+    setSel(s => s.filter(x => x !== r.id));
+  };
+  const setStatus = async (r, status) => {
+    await supApi.post('/api/supervisor-reports/' + r.id + '/status', {
+      status
+    });
+    load();
+  };
+  const toggleSel = id => setSel(s => s.indexOf(id) >= 0 ? s.filter(x => x !== id) : s.length < 2 ? [...s, id] : [s[1], id]);
+  if (!list) return React.createElement("div", {
+    style: {
+      padding: 40,
+      textAlign: 'center',
+      color: 'var(--muted,#64748b)'
+    }
+  }, "Loading\u2026");
+  const cmp = sel.length === 2 ? sel.map(id => list.find(r => r.id === id)).filter(Boolean) : [];
+  return React.createElement("div", {
+    className: "sup-wrap"
+  }, React.createElement("div", {
+    className: "sup-toolbar"
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 15
+    }
+  }, "Report History"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement(SupBtn, {
+    sm: true,
+    kind: "pri",
+    onClick: () => setRoute({
+      view: 'supNew'
+    })
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 15
+  }), "New Report")), React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("div", {
+    className: "sup-scalar"
+  }, React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "From"), React.createElement("input", {
+    type: "date",
+    value: f.from,
+    onChange: e => setF({
+      ...f,
+      from: e.target.value
+    })
+  })), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "To"), React.createElement("input", {
+    type: "date",
+    value: f.to,
+    onChange: e => setF({
+      ...f,
+      to: e.target.value
+    })
+  })), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Shift"), React.createElement("select", {
+    value: f.shift,
+    onChange: e => setF({
+      ...f,
+      shift: e.target.value
+    })
+  }, React.createElement("option", {
+    value: ""
+  }, "All"), SUP_SHIFTS.map(s => React.createElement("option", {
+    key: s
+  }, s)))), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Status"), React.createElement("select", {
+    value: f.status,
+    onChange: e => setF({
+      ...f,
+      status: e.target.value
+    })
+  }, React.createElement("option", {
+    value: ""
+  }, "All"), ['draft', 'submitted', 'approved'].map(s => React.createElement("option", {
+    key: s
+  }, s)))), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Search (name / UHID)"), React.createElement("input", {
+    value: f.q,
+    onChange: e => setF({
+      ...f,
+      q: e.target.value
+    }),
+    placeholder: "Search\u2026"
+  }))))), cmp.length === 2 && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      marginBottom: 8
+    }
+  }, "Compare shifts"), React.createElement("div", {
+    className: "sup-tblwrap"
+  }, React.createElement("table", {
+    className: "sup-tbl",
+    style: {
+      minWidth: 320
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Metric"), cmp.map(r => React.createElement("th", {
+    key: r.id
+  }, r.date, " \xB7 ", r.shift)))), React.createElement("tbody", null, [['New Admissions', r => (r.newAdmissions || []).length], ['Discharged', r => (r.discharged || []).length], ['Critical-area', r => (r.criticalArea || []).length], ['Deaths', r => supComputeTotals(r).death], ['Census TOTAL', r => (r.census || {}).TOTAL || '—']].map(([l, fn]) => React.createElement("tr", {
+    key: l
+  }, React.createElement("td", {
+    "data-label": "Metric"
+  }, l), cmp.map(r => React.createElement("td", {
+    key: r.id,
+    "data-label": r.date
+  }, fn(r)))))))))), React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b",
+    style: {
+      padding: 0
+    }
+  }, React.createElement("div", {
+    className: "sup-tblwrap"
+  }, React.createElement("table", {
+    className: "sup-tbl",
+    style: {
+      minWidth: 720
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      width: 30
+    }
+  }), React.createElement("th", null, "Date"), React.createElement("th", null, "Shift"), React.createElement("th", null, "Supervisor"), React.createElement("th", null, "Adm."), React.createElement("th", null, "Disch."), React.createElement("th", null, "Status"), React.createElement("th", {
+    style: {
+      width: 250
+    }
+  }, "Actions"))), React.createElement("tbody", null, filtered.length === 0 && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 8,
+    "data-label": "",
+    style: {
+      textAlign: 'center',
+      padding: 16,
+      color: '#94a3b8'
+    }
+  }, "No reports match.")), filtered.map(r => React.createElement("tr", {
+    key: r.id
+  }, React.createElement("td", {
+    "data-label": "Compare"
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: sel.indexOf(r.id) >= 0,
+    onChange: () => toggleSel(r.id),
+    title: "Select to compare (max 2)"
+  })), React.createElement("td", {
+    "data-label": "Date"
+  }, r.date), React.createElement("td", {
+    "data-label": "Shift"
+  }, r.shift), React.createElement("td", {
+    "data-label": "Supervisor"
+  }, r.supervisorName || '—'), React.createElement("td", {
+    "data-label": "Adm."
+  }, (r.newAdmissions || []).length), React.createElement("td", {
+    "data-label": "Disch."
+  }, (r.discharged || []).length), React.createElement("td", {
+    "data-label": "Status"
+  }, React.createElement(StatusBadge, {
+    status: r.status
+  })), React.createElement("td", {
+    "data-label": "Actions",
+    style: {
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supNew',
+      id: r.id
+    })
+  }, "Open"), ' ', React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supReport',
+      id: r.id
+    })
+  }, React.createElement(Ic, {
+    d: I.print,
+    s: 13
+  }), "Export"), ' ', React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => duplicate(r)
+  }, "Duplicate"), ' ', r.status === 'draft' && React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setStatus(r, 'submitted')
+  }, "Submit"), admin && r.status === 'submitted' && React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setStatus(r, 'approved')
+  }, "Approve"), admin && React.createElement(SupBtn, {
+    sm: true,
+    kind: "dgr",
+    onClick: () => remove(r)
+  }, "Delete"))))))))));
+}
+function SupHome({
+  setRoute
+}) {
+  const [list, setList] = useState(null);
+  useEffect(() => {
+    supApi.get('/api/supervisor-reports?limit=90').then(j => {
+      if (j.ok) {
+        setList(j.reports);
+        supRefreshAlertBadge(j.reports);
+      }
+    });
+  }, []);
+  if (!list) return React.createElement("div", {
+    style: {
+      padding: 40,
+      textAlign: 'center',
+      color: 'var(--muted,#64748b)'
+    }
+  }, "Loading\u2026");
+  const today = supTodayISO();
+  const last7 = list.filter(r => r.date >= new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10));
+  const sum = (arr, fn) => arr.reduce((s, r) => s + fn(r), 0);
+  const kAdm = sum(last7, r => (r.newAdmissions || []).length);
+  const kDis = sum(last7, r => (r.discharged || []).length);
+  const kDeath = sum(last7, r => supComputeTotals(r).death);
+  const kCrit = sum(last7, r => (r.criticalArea || []).length);
+  const trend = list.slice(0, 14).reverse().map(r => ({
+    v: (r.newAdmissions || []).length,
+    label: r.date
+  }));
+  const todays = list.filter(r => r.date === today);
+  const missing = SUP_SHIFTS.filter(s => !todays.some(r => r.shift === s));
+  const critical = [];
+  todays.forEach(r => supComputeAlerts(r).filter(a => a.level === 'critical').forEach(a => critical.push(r.shift + ' shift — ' + a.text)));
+  return React.createElement("div", {
+    className: "sup-wrap"
+  }, React.createElement("div", {
+    className: "sup-toolbar"
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 15
+    }
+  }, "Supervisor Dashboard"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), SUP_SHIFTS.map(s => React.createElement(SupBtn, {
+    key: s,
+    sm: true,
+    kind: s === supCurrentShift() ? 'pri' : '',
+    onClick: () => setRoute({
+      view: 'supNew',
+      shift: s
+    })
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), s)), React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supHistory'
+    })
+  }, "History")), (missing.length > 0 || critical.length > 0) && React.createElement("div", null, critical.map((c, i) => React.createElement("div", {
+    key: 'c' + i,
+    className: "sup-alert critical"
+  }, React.createElement(Ic, {
+    d: I.bell,
+    s: 15
+  }), c)), missing.length > 0 && React.createElement("div", {
+    className: "sup-alert warn"
+  }, React.createElement(Ic, {
+    d: I.bell,
+    s: 15
+  }), "No report yet today for: ", missing.join(', '), " shift", missing.length > 1 ? 's' : '', ".")), React.createElement("div", {
+    className: "sup-kpis"
+  }, React.createElement("div", {
+    className: "sup-kpi"
+  }, React.createElement("div", {
+    className: "n"
+  }, kAdm), React.createElement("div", {
+    className: "l"
+  }, "Admissions (7 days)")), React.createElement("div", {
+    className: "sup-kpi"
+  }, React.createElement("div", {
+    className: "n"
+  }, kDis), React.createElement("div", {
+    className: "l"
+  }, "Discharges (7 days)")), React.createElement("div", {
+    className: "sup-kpi"
+  }, React.createElement("div", {
+    className: "n"
+  }, kCrit), React.createElement("div", {
+    className: "l"
+  }, "Critical-area (7 days)")), React.createElement("div", {
+    className: "sup-kpi"
+  }, React.createElement("div", {
+    className: "n"
+  }, kDeath), React.createElement("div", {
+    className: "l"
+  }, "Deaths (7 days)"))), React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      marginBottom: 6,
+      fontSize: 13
+    }
+  }, "New admissions \u2014 last 14 shifts"), trend.length ? React.createElement(MiniBars, {
+    data: trend
+  }) : React.createElement("div", {
+    style: {
+      color: '#94a3b8',
+      fontSize: 12
+    }
+  }, "No data yet."))), React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b",
+    style: {
+      padding: 0
+    }
+  }, React.createElement("div", {
+    className: "sup-tblwrap"
+  }, React.createElement("table", {
+    className: "sup-tbl",
+    style: {
+      minWidth: 560
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Shift"), React.createElement("th", null, "Supervisor"), React.createElement("th", null, "Adm."), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, list.slice(0, 8).map(r => React.createElement("tr", {
+    key: r.id
+  }, React.createElement("td", {
+    "data-label": "Date"
+  }, r.date), React.createElement("td", {
+    "data-label": "Shift"
+  }, r.shift), React.createElement("td", {
+    "data-label": "Supervisor"
+  }, r.supervisorName || '—'), React.createElement("td", {
+    "data-label": "Adm."
+  }, (r.newAdmissions || []).length), React.createElement("td", {
+    "data-label": "Status"
+  }, React.createElement(StatusBadge, {
+    status: r.status
+  })), React.createElement("td", {
+    "data-label": ""
+  }, React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supNew',
+      id: r.id
+    })
+  }, "Open")))), list.length === 0 && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 6,
+    "data-label": "",
+    style: {
+      textAlign: 'center',
+      padding: 16,
+      color: '#94a3b8'
+    }
+  }, "No reports yet \u2014 start one above."))))))));
+}
+const RPT_SECTIONS = [{
+  key: 'newAdmissions',
+  title: 'New Admission',
+  kind: 'rows'
+}, {
+  key: 'criticalArea',
+  title: 'Patient in Critical Areas',
+  kind: 'rows'
+}, {
+  key: 'lama',
+  title: 'LAMA / DAMA',
+  kind: 'rows'
+}, {
+  key: 'discharged',
+  title: 'Discharged',
+  kind: 'rows'
+}, {
+  key: 'otTable',
+  title: 'OT',
+  kind: 'rows'
+}, {
+  key: 'surgeries',
+  title: 'Surgery Details',
+  kind: 'rows'
+}, {
+  key: 'interventional',
+  title: 'Interventional Procedure',
+  kind: 'rows'
+}, {
+  key: 'radiological',
+  title: 'Radiological Interventional Procedure',
+  kind: 'rows'
+}, {
+  key: 'radiologyCounts',
+  title: 'Radiology Counts',
+  kind: 'counts',
+  fields: RADIOLOGY_FIELDS
+}, {
+  key: 'ventilators',
+  title: 'Ventilator Status',
+  kind: 'rows'
+}, {
+  key: 'erCensus',
+  title: 'ER Census',
+  kind: 'counts',
+  fields: ER_FIELDS
+}, {
+  key: 'general',
+  title: 'General Information',
+  kind: 'counts',
+  fields: GENERAL_FIELDS
+}, {
+  key: 'pressureSore',
+  title: 'Patients with Pressure Sore',
+  kind: 'rows'
+}, {
+  key: 'phlebitis',
+  title: 'Patients with Phlebitis',
+  kind: 'rows'
+}, {
+  key: 'notes',
+  title: 'Absenteeism · Sick Leave · Round Observation',
+  kind: 'notes'
+}, {
+  key: 'census',
+  title: 'Department-wise Census',
+  kind: 'census'
+}];
+const SUP_TEMPLATES = {
+  full: {
+    label: 'Full Log Sheet',
+    keys: null
+  },
+  summary: {
+    label: 'Summary Only',
+    keys: ['radiologyCounts', 'erCensus', 'general', 'census']
+  },
+  critical: {
+    label: 'Critical + Registers',
+    keys: ['criticalArea', 'pressureSore', 'phlebitis', 'general']
+  }
+};
+function RptRows({
+  section,
+  rows
+}) {
+  rows = rows || [];
+  if (!rows.length) return null;
+  const cols = SUP_SEC_BY_KEY[section.key].cols;
+  const sn = SUP_SEC_BY_KEY[section.key].sn;
+  return React.createElement("table", {
+    className: "sup-rpt-tbl"
+  }, React.createElement("thead", null, React.createElement("tr", null, sn && React.createElement("th", null, "S/N"), cols.map(c => React.createElement("th", {
+    key: c.id
+  }, c.label)))), React.createElement("tbody", null, rows.map((r, i) => React.createElement("tr", {
+    key: i
+  }, sn && React.createElement("td", null, i + 1), cols.map(c => React.createElement("td", {
+    key: c.id
+  }, r[c.id] || ''))))));
+}
+function RptCounts({
+  fields,
+  val
+}) {
+  val = val || {};
+  return React.createElement("table", {
+    className: "sup-rpt-tbl"
+  }, React.createElement("tbody", null, fields.map(f => React.createElement("tr", {
+    key: f[0]
+  }, React.createElement("th", {
+    style: {
+      width: '55%'
+    }
+  }, f[1]), React.createElement("td", null, val[f[0]] || '')))));
+}
+function SupReportView({
+  id,
+  depts,
+  setRoute
+}) {
+  const deptNames = useMemo(() => supDeptNames(depts), [depts]);
+  const [list, setList] = useState(null);
+  const [rep, setRep] = useState(null);
+  const [customize, setCustomize] = useState(false);
+  const [enabled, setEnabled] = useState(() => RPT_SECTIONS.reduce((m, s) => (m[s.key] = true, m), {}));
+  const [exporting, setExporting] = useState(false);
+  const pdfRoot = typeof document !== 'undefined' ? document.getElementById('pdf-root') : null;
+  useEffect(() => {
+    supApi.get('/api/supervisor-reports?limit=1000').then(j => {
+      if (j.ok) setList(j.reports);
+    });
+  }, []);
+  useEffect(() => {
+    const target = id || list && list[0] && list[0].id;
+    if (!target) return;
+    supApi.get('/api/supervisor-reports/' + target).then(j => {
+      if (j.ok) setRep(j.report);
+    });
+  }, [id, list]);
+  const applyTemplate = t => {
+    const keys = SUP_TEMPLATES[t].keys;
+    setEnabled(RPT_SECTIONS.reduce((m, s) => (m[s.key] = keys ? keys.indexOf(s.key) >= 0 : true, m), {}));
+  };
+  const doPrint = () => {
+    try {
+      document.body.classList.add('pdf-export-mode');
+      setTimeout(() => {
+        window.print();
+        setTimeout(() => document.body.classList.remove('pdf-export-mode'), 600);
+      }, 60);
+    } catch (e) {}
+  };
+  const doExport = async () => {
+    if (!rep) return;
+    setExporting(true);
+    const fn = 'Supervisor-Report-' + (rep.date || '') + '-' + (rep.shift || '') + '.pdf';
+    try {
+      let ok = false;
+      if (window.unicoHtmlServerPDF) ok = await window.unicoHtmlServerPDF('A4', 'portrait', fn);
+      if (!ok) doPrint();
+    } catch (e) {
+      doPrint();
+    } finally {
+      setExporting(false);
+    }
+  };
+  if (!list) return React.createElement("div", {
+    style: {
+      padding: 40,
+      textAlign: 'center',
+      color: 'var(--muted,#64748b)'
+    }
+  }, "Loading\u2026");
+  const sig = rep && rep.sign || (window.unicoSig ? window.unicoSig.load() : {});
+  const HOSP = window.UNICO && window.UNICO.HOSPITAL && window.UNICO.HOSPITAL.name || 'UNICO Hospitals PLC';
+  const activeSecs = RPT_SECTIONS.filter(s => enabled[s.key]);
+  const PageInner = rep ? React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      borderBottom: '2px solid #1e3a8a',
+      paddingBottom: 8,
+      marginBottom: 10
+    }
+  }, React.createElement("img", {
+    src: "unico/logo.svg",
+    alt: "",
+    style: {
+      height: 42
+    },
+    onError: e => {
+      e.target.style.display = 'none';
+    }
+  }), React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 800,
+      color: '#0f172a'
+    }
+  }, HOSP), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: '#1e3a8a'
+    }
+  }, "Log Sheet For ", rep.shift, " Supervisor")), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      textAlign: 'right',
+      color: '#334155'
+    }
+  }, React.createElement("div", null, React.createElement("b", null, "Supervisor:"), " ", rep.supervisorName || '—'), React.createElement("div", null, React.createElement("b", null, "Date:"), " ", rep.date, " \xA0 ", React.createElement("b", null, "Shift:"), " ", rep.shift), rep.shiftTime ? React.createElement("div", null, React.createElement("b", null, "Time:"), " ", rep.shiftTime) : null)), activeSecs.map(s => {
+    if (s.kind === 'rows') {
+      const rows = rep[s.key] || [];
+      if (!rows.length) return null;
+      return React.createElement("div", {
+        key: s.key
+      }, React.createElement("div", {
+        className: "sup-sec-h"
+      }, s.title, " : ", rows.length), React.createElement(RptRows, {
+        section: s,
+        rows: rows
+      }));
+    }
+    if (s.kind === 'counts') {
+      return React.createElement("div", {
+        key: s.key
+      }, React.createElement("div", {
+        className: "sup-sec-h"
+      }, s.title), React.createElement(RptCounts, {
+        fields: s.fields,
+        val: rep[s.key]
+      }));
+    }
+    if (s.kind === 'notes') {
+      return React.createElement("div", {
+        key: s.key
+      }, React.createElement("div", {
+        className: "sup-sec-h"
+      }, s.title), React.createElement("table", {
+        className: "sup-rpt-tbl"
+      }, React.createElement("tbody", null, React.createElement("tr", null, React.createElement("th", {
+        style: {
+          width: '25%'
+        }
+      }, "Absenteeism"), React.createElement("td", null, rep.absenteeism || '—')), React.createElement("tr", null, React.createElement("th", null, "Sick Leave"), React.createElement("td", null, rep.sickLeave || '—')), React.createElement("tr", null, React.createElement("th", null, "Observation During Round"), React.createElement("td", null, rep.roundObservation || '—')))));
+    }
+    if (s.kind === 'census') {
+      const cen = rep.census || {};
+      const keys = ['OPD Total'].concat(deptNames);
+      return React.createElement("div", {
+        key: s.key
+      }, React.createElement("div", {
+        className: "sup-sec-h"
+      }, s.title), React.createElement("table", {
+        className: "sup-rpt-tbl"
+      }, React.createElement("thead", null, React.createElement("tr", null, keys.map(k => React.createElement("th", {
+        key: k
+      }, k)), React.createElement("th", null, "TOTAL"))), React.createElement("tbody", null, React.createElement("tr", null, keys.map(k => React.createElement("td", {
+        key: k
+      }, cen[k] || '')), React.createElement("td", null, React.createElement("b", null, cen.TOTAL != null ? cen.TOTAL : supComputeCensusTotal(cen, deptNames)))))));
+    }
+    return null;
+  }), React.createElement("table", {
+    className: "sup-rpt-tbl",
+    style: {
+      marginTop: 16
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Prepared by"), React.createElement("th", null, "Checked by"), React.createElement("th", null, "Recommended by"), React.createElement("th", null, "Approved by"))), React.createElement("tbody", null, React.createElement("tr", {
+    style: {
+      height: 46
+    }
+  }, React.createElement("td", null, sig.prepared || ''), React.createElement("td", null, sig.reviewed || ''), React.createElement("td", null, sig.recommended || ''), React.createElement("td", null, sig.approved || '')))), React.createElement("div", {
+    className: "pdf-foot",
+    style: {
+      borderTop: '1px solid #cbd5e1',
+      marginTop: 12,
+      paddingTop: 6,
+      fontSize: 9,
+      color: '#64748b',
+      display: 'flex',
+      justifyContent: 'space-between'
+    }
+  }, React.createElement("span", null, HOSP, " \u2014 Supervisor Log Sheet"), React.createElement("span", null, "Generated ", supTodayISO()))) : null;
+  return React.createElement("div", {
+    className: "sup-wrap"
+  }, React.createElement("div", {
+    className: "sup-toolbar"
+  }, React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supHistory'
+    })
+  }, React.createElement(Ic, {
+    d: I.chevR,
+    s: 14,
+    style: {
+      transform: 'rotate(180deg)'
+    }
+  }), "Back"), React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 15
+    }
+  }, "Generate Report"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("select", {
+    value: rep && rep.id || '',
+    onChange: e => supApi.get('/api/supervisor-reports/' + e.target.value).then(j => {
+      if (j.ok) setRep(j.report);
+    }),
+    style: {
+      padding: '6px 9px',
+      borderRadius: 8,
+      border: '1px solid var(--line,#d1d5db)',
+      fontSize: 12.5
+    }
+  }, list.map(r => React.createElement("option", {
+    key: r.id,
+    value: r.id
+  }, r.date, " \xB7 ", r.shift, " \xB7 ", r.supervisorName || '—'))), React.createElement(SupBtn, {
+    sm: true,
+    onClick: doPrint
+  }, React.createElement(Ic, {
+    d: I.print,
+    s: 14
+  }), "Print"), React.createElement(SupBtn, {
+    sm: true,
+    kind: "pri",
+    onClick: doExport,
+    disabled: exporting || !rep
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 14
+  }), exporting ? 'Exporting…' : 'Export PDF')), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--muted,#64748b)'
+    }
+  }, "Quick template:"), Object.keys(SUP_TEMPLATES).map(t => React.createElement(SupBtn, {
+    key: t,
+    sm: true,
+    onClick: () => applyTemplate(t)
+  }, SUP_TEMPLATES[t].label)), React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setCustomize(c => !c)
+  }, React.createElement(Ic, {
+    d: I.filter,
+    s: 13
+  }), "Customize sections")), customize && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("div", {
+    className: "sup-scalar"
+  }, RPT_SECTIONS.map(s => React.createElement("label", {
+    key: s.key,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      fontSize: 12.5,
+      fontWeight: 600
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!enabled[s.key],
+    onChange: () => setEnabled(m => ({
+      ...m,
+      [s.key]: !m[s.key]
+    }))
+  }), s.title))))), React.createElement("div", {
+    className: "sup-paper"
+  }, rep ? React.createElement("div", {
+    className: "pdf-page"
+  }, PageInner) : React.createElement("div", {
+    style: {
+      padding: 30,
+      textAlign: 'center',
+      color: '#94a3b8'
+    }
+  }, "Select a report to preview.")), pdfRoot && rep && ReactDOM.createPortal(React.createElement("div", {
+    className: "pdf-doc portrait"
+  }, React.createElement("section", {
+    className: "pdf-page"
+  }, PageInner)), pdfRoot));
+}
+function SupervisorView({
+  view,
+  id,
+  shift,
+  depts,
+  setRoute
+}) {
+  if (view === 'supHistory') return React.createElement(SupHistory, {
+    setRoute: setRoute
+  });
+  if (view === 'supReport') return React.createElement(SupReportView, {
+    id: id,
+    depts: depts,
+    setRoute: setRoute
+  });
+  if (view === 'supNew') return React.createElement(SupEditor, {
+    id: id,
+    shift: shift,
+    depts: depts,
+    setRoute: setRoute
+  });
+  return React.createElement(SupHome, {
+    setRoute: setRoute
+  });
+}
+const SUP_CSS = `
+.sup-wrap{display:flex;flex-direction:column;gap:16px}
+.sup-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sup-card{background:var(--panel,#fff);border:1px solid var(--line,#e5e7eb);border-radius:12px;overflow:hidden}
+.sup-card-h{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;background:var(--panel-2,#f8fafc);border-bottom:1px solid var(--line,#eef2f7)}
+.sup-card-h h4{margin:0;font-size:13.5px;font-weight:700;flex:1}
+.sup-count{background:#eef2ff;color:#3730a3;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700}
+.sup-card-b{padding:13px 14px}
+.sup-tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.sup-tbl{width:100%;border-collapse:collapse;font-size:12px;min-width:640px}
+.sup-tbl th,.sup-tbl td{border:1px solid var(--line,#e5e7eb);padding:5px 6px;text-align:left;vertical-align:top}
+.sup-tbl th{background:#f1f5f9;font-weight:700;font-size:11px;white-space:nowrap}
+.sup-tbl input,.sup-tbl textarea,.sup-tbl select{width:100%;border:1px solid transparent;background:transparent;font:inherit;padding:3px;border-radius:4px;box-sizing:border-box}
+.sup-tbl input:focus,.sup-tbl textarea:focus,.sup-tbl select:focus{border-color:#93c5fd;background:#fff;outline:none}
+.sup-tbl textarea{resize:vertical;min-height:34px}
+.sup-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line,#d1d5db);background:#fff;border-radius:8px;padding:6px 11px;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--ink,#111827)}
+.sup-btn:hover{background:#f8fafc}
+.sup-btn:disabled{opacity:.55;cursor:default}
+.sup-btn.pri{background:#2563eb;border-color:#2563eb;color:#fff}
+.sup-btn.pri:hover{background:#1d4ed8}
+.sup-btn.dgr{color:#dc2626;border-color:#fecaca}
+.sup-btn.sm{padding:4px 9px;font-size:11.5px}
+.sup-rowdel{color:#dc2626;cursor:pointer;border:0;background:transparent;font-weight:700;font-size:13px}
+.sup-scalar{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:11px}
+.sup-fld label{display:block;font-size:11px;font-weight:600;color:var(--muted,#64748b);margin-bottom:3px}
+.sup-fld input,.sup-fld select,.sup-fld textarea{width:100%;border:1px solid var(--line,#d1d5db);border-radius:7px;padding:7px 9px;font:inherit;box-sizing:border-box;background:#fff;color:var(--ink,#111827)}
+.sup-fld textarea{resize:vertical}
+.sup-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.sup-kpi{background:var(--panel,#fff);border:1px solid var(--line,#e5e7eb);border-radius:12px;padding:14px 16px}
+.sup-kpi .n{font-size:26px;font-weight:800;line-height:1;color:#0f172a}
+.sup-kpi .l{font-size:11.5px;color:var(--muted,#64748b);margin-top:5px;font-weight:600}
+.sup-alert{display:flex;align-items:center;gap:9px;padding:9px 12px;border-radius:9px;font-size:12.5px;font-weight:600;margin-bottom:8px}
+.sup-alert.critical{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.sup-alert.warn{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+.sup-alert.info{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.sup-jump{display:flex;flex-wrap:wrap;gap:6px}
+.sup-jump a{font-size:11.5px;padding:4px 10px;border-radius:20px;background:#f1f5f9;color:#334155;cursor:pointer;font-weight:600}
+.sup-jump a:hover{background:#e2e8f0}
+.sup-status{font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:capitalize;display:inline-block}
+.sup-status.draft{background:#f1f5f9;color:#475569}
+.sup-status.submitted{background:#dbeafe;color:#1d4ed8}
+.sup-status.approved{background:#dcfce7;color:#15803d}
+.sup-paper{background:#e9edf2;padding:20px;border-radius:12px;overflow:auto}
+.sup-paper .pdf-page{background:#fff;max-width:900px;margin:0 auto;box-shadow:0 4px 18px rgba(0,0,0,.12);padding:26px 30px;box-sizing:border-box}
+.sup-rpt-tbl{width:100%;border-collapse:collapse;font-size:10.5px;margin:3px 0 12px}
+.sup-rpt-tbl th,.sup-rpt-tbl td{border:1px solid #cbd5e1;padding:3px 5px;text-align:left;vertical-align:top}
+.sup-rpt-tbl th{background:#eef2f7;font-weight:700}
+.sup-sec-h{font-size:12.5px;font-weight:800;margin:14px 0 4px;color:#0f172a;border-left:3px solid #2563eb;padding-left:8px}
+@media (max-width:820px){
+  .sup-tbl{min-width:0}
+  .sup-tbl thead{display:none}
+  .sup-tbl tr{display:block;border:1px solid var(--line,#e5e7eb);border-radius:8px;margin-bottom:10px;padding:4px;background:#fff}
+  .sup-tbl td{display:flex;gap:8px;border:0;border-bottom:1px solid #f1f5f9;padding:6px 4px;align-items:flex-start}
+  .sup-tbl td:last-child{border-bottom:0}
+  .sup-tbl td:before{content:attr(data-label);flex:0 0 42%;font-weight:700;font-size:11px;color:#64748b}
+  .sup-tbl td:empty{display:none}
+}`;
+(function injectSupCss() {
+  try {
+    if (typeof document === 'undefined' || document.getElementById('sup-css')) return;
+    const st = document.createElement('style');
+    st.id = 'sup-css';
+    st.textContent = SUP_CSS;
+    document.head.appendChild(st);
+  } catch (e) {}
+})();
+Object.assign(window, {
+  SupervisorView,
+  SupReports: SupervisorView
+});
+})();
+;
 /* ===== user-admin.jsx ===== */
 (function(){
 const UA_ROLES = ['Administrator', 'collector', 'User'];
@@ -46139,6 +49919,21 @@ function App() {
       initialDept: route.dept,
       setRoute: setRoute
     }) : null;
+  } else if (route.view && route.view.indexOf('sup') === 0 && typeof SupervisorView !== 'undefined') {
+    const SV_TITLE = {
+      supHome: 'Dashboard',
+      supNew: 'New Report',
+      supHistory: 'History',
+      supReport: 'Generate Report'
+    };
+    crumbs = ['UNICO', 'Supervisor Reports', SV_TITLE[route.view] || 'Dashboard'];
+    body = React.createElement(SupervisorView, {
+      view: route.view,
+      id: route.id,
+      shift: route.shift,
+      depts: depts,
+      setRoute: setRoute
+    });
   } else if (route.view === 'dcPatient') {
     crumbs = ['UNICO', 'Data Collection', 'Patient Statistics'];
     body = React.createElement(DataPatientForm, {

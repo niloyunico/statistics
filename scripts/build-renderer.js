@@ -81,6 +81,7 @@ const MANIFEST = [
   { file: 'auth-login.jsx', jsx: true },
   { file: 'search.jsx', jsx: true },
   { file: 'data-collection.jsx', jsx: true },
+  { file: 'supervisor.jsx', jsx: true },
   { file: 'user-admin.jsx', jsx: true },
   { file: 'data-fields.jsx', jsx: true },
   { file: 'app.jsx', jsx: true },

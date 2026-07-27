@@ -1708,6 +1708,14 @@ const UCOLORS=['#0090ca','#3ab5a7','#6a52d4','#e08a1e','#d23a52','#1f9d57'];
 const USER_MODS=[['stats','Hospital Statistics'],['quality','Quality Indicators'],['staff','Staff Management'],['datacol','Data Collection'],['reports','Reports'],['users','Administration']];
 const PERM_LEVELS=[['none','None'],['view','View'],['edit','Edit'],['add','Add'],['delete','Delete']];
 const PERM_RANK={none:0,view:1,edit:2,add:3,delete:4};
+// New model: each module grants an independent SET of actions (View/Edit/Add/Delete),
+// so e.g. Delete without Add is possible. These helpers bridge the legacy escalating
+// level strings (view<edit<add<delete) to action arrays and back.
+const PERM_ACTS=[['view','View'],['edit','Edit'],['add','Add'],['delete','Delete']];
+const PERM_ORDER=['view','edit','add','delete'];
+function levelToActions(lv){ const i=['none','view','edit','add','delete'].indexOf(lv); return i<=0?[]:PERM_ORDER.slice(0,i); }
+function asActions(v){ if(Array.isArray(v)) return PERM_ORDER.filter(a=>v.indexOf(a)>=0); return levelToActions(v||'none'); }
+function sameActs(a,b){ a=asActions(a); b=asActions(b); return a.length===b.length&&a.every((x,i)=>x===b[i]); }
 // Access templates → default per-module levels. 'Administrator' maps to the backend
 // Administrator role (unrestricted); the rest store as role 'User' with these presets.
 const ROLE_PRESETS={
@@ -1718,12 +1726,12 @@ const ROLE_PRESETS={
   'Read-only':{stats:'view',quality:'view',staff:'view',datacol:'view',reports:'view',users:'none'},
 };
 const USER_ROLES=Object.keys(ROLE_PRESETS);
-const FULL_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]='delete',m),{});
-const NONE_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]='none',m),{});
+const FULL_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]=[...PERM_ORDER],m),{});
+const NONE_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]=[],m),{});
 const inits=n=>(n||'?').split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase();
 // Which template a perms map matches (for the Role dropdown); 'Custom' if none.
-const detectTemplate=p=>{ for(const r of USER_ROLES){ const pr=ROLE_PRESETS[r]; if(USER_MODS.every(([k])=>(p[k]||'none')===(pr[k]||'none'))) return r; } return 'Custom'; };
-const permSummary=p=>{ if(!p) return 'Full access'; const vals=USER_MODS.map(([k])=>p[k]||'none'); const on=vals.filter(v=>v!=='none').length; if(!on) return 'No access'; if(vals.every(v=>v==='delete')) return 'Full access'; const ed=vals.filter(v=>PERM_RANK[v]>=PERM_RANK.edit).length; return `${on} module${on!==1?'s':''}${ed?' · '+ed+' editable':''}`; };
+const detectTemplate=p=>{ for(const r of USER_ROLES){ const pr=ROLE_PRESETS[r]; if(USER_MODS.every(([k])=>sameActs(p[k],pr[k]))) return r; } return 'Custom'; };
+const permSummary=p=>{ if(!p) return 'Full access'; const acts=USER_MODS.map(([k])=>asActions(p[k])); const on=acts.filter(a=>a.length).length; if(!on) return 'No access'; if(acts.every(a=>a.length===4)) return 'Full access'; const ed=acts.filter(a=>a.indexOf('edit')>=0||a.indexOf('add')>=0||a.indexOf('delete')>=0).length; return `${on} module${on!==1?'s':''}${ed?' · '+ed+' editable':''}`; };
 
 function usersApi(method,path,body){
   return fetch(path,{method,headers:{'Content-Type':'application/json'},credentials:'same-origin',body:body?JSON.stringify(body):undefined})
@@ -1741,20 +1749,28 @@ function UserModal({initial,onClose,onSaved}){
   const [status,setStatus]=useState(editing?(initial.active!==false?'active':'inactive'):'active');
   const initTemplate=editing
     ? (initial.role==='Administrator' ? 'Administrator'
+       : initial.role==='collector' ? 'Data Collector'
        : (initial.perms ? detectTemplate(initial.perms) : (initial.title && USER_ROLES.includes(initial.title) ? initial.title : 'Custom')))
     : 'Custom';
   const [role,setRole]=useState(initTemplate);
   // Default to NO access (start from nothing, grant only what's explicitly set). A blank
   // default of FULL_PERMS silently granted every module a User's perms map didn't mention.
+  // perms is a {module: actions[]} map. Legacy level strings (from older accounts /
+  // presets) are converted to action arrays via asActions() on load.
   const [perms,setPerms]=useState(()=>{
-    if(editing){ if(initial.role==='Administrator') return FULL_PERMS(); return initial.perms ? {...NONE_PERMS(),...initial.perms} : NONE_PERMS(); }
-    return NONE_PERMS();
+    if(editing && initial.role==='Administrator') return FULL_PERMS();
+    const src=(editing&&initial.perms)?{...NONE_PERMS(),...initial.perms}:NONE_PERMS();
+    return USER_MODS.reduce((m,[k])=>(m[k]=asActions(src[k]),m),{});
   });
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=role==='Administrator';
-  const pickRole=r=>{ setRole(r); if(r!=='Custom') setPerms({...ROLE_PRESETS[r]}); };
-  const setLevel=(mid,lv)=>{ setPerms(p=>({...p,[mid]:lv})); setRole('Custom'); };
-  const roleOpts=[...USER_ROLES,'Custom'];
+  const isColl=role==='Data Collector';   // backend role 'collector' — data-collection portal, scope set in Responsible Persons
+  const pickRole=r=>{ setRole(r); if(r!=='Custom'&&r!=='Data Collector'&&ROLE_PRESETS[r]) setPerms(USER_MODS.reduce((m,[k])=>(m[k]=levelToActions(ROLE_PRESETS[r][k]||'none'),m),{})); };
+  // Toggle one action for a module (independent). Granting edit/add/delete auto-adds view.
+  const toggleAct=(mid,act)=>{ setPerms(p=>{ const cur=asActions(p[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
+    if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); setRole('Custom'); };
+  const clearMod=(mid)=>{ setPerms(p=>({...p,[mid]:[]})); setRole('Custom'); };
+  const roleOpts=[...USER_ROLES,'Data Collector','Custom'];
 
   const save=async()=>{
     setErr('');
@@ -1766,9 +1782,12 @@ function UserModal({initial,onClose,onSaved}){
     if(email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
     setBusy(true);
     try{
-      const backendRole=isAdmin?'Administrator':'User';
+      const backendRole=isAdmin?'Administrator':(isColl?'collector':'User');
+      // Collectors keep their department/quality scope (managed in Responsible Persons); we
+      // omit `departments` so the backend preserves the existing assignment on PATCH.
       const payload={ name:name.trim(), email:email.trim().toLowerCase(), role:backendRole,
-        title:isAdmin?null:(role==='Custom'?'Custom access':role), active:status==='active', perms:isAdmin?null:perms };
+        title:(isAdmin||isColl)?null:(role==='Custom'?'Custom access':role), active:status==='active',
+        perms:(isAdmin||isColl)?null:perms };
       if(editing){
         await usersApi('PATCH','/api/users/'+encodeURIComponent(initial.username),payload);
         if(password){ if(password.length<6){ setBusy(false); return setErr('New password must be at least 6 characters.'); } await usersApi('POST','/api/users/'+encodeURIComponent(initial.username)+'/password',{password}); }
@@ -1806,22 +1825,32 @@ function UserModal({initial,onClose,onSaved}){
             <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'center'}}>
               <Ic d={I.check} s={16} c="var(--blue)"/><span><b>Full access.</b> Administrators can view, add, edit and delete in every module.</span>
             </div>
+          ) : isColl ? (
+            <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'flex-start'}}>
+              <Ic d={I.check} s={16} c="var(--blue)"/><span><b>Data Collector.</b> Signs in to the data-collection portal only. Choose which departments &amp; indicators they collect in <b>Settings → Responsible Persons</b> — that assignment is kept when you save here.</span>
+            </div>
           ) : (
           <div>
             <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Module permissions <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· a template sets defaults; fine-tune per module</span></div>
-            <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Each level includes the ones before it: View → Edit → Add → Delete.</div>
-            <div style={{display:'flex',flexDirection:'column',gap:7}}>
-              {USER_MODS.map(([id,label])=>(
+            <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Tick any combination — <b>Edit</b>, <b>Add</b> and <b>Delete</b> are independent (e.g. grant Delete without Add). Selecting any of them includes View automatically.</div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {USER_MODS.map(([id,label])=>{
+                const acts=asActions(perms[id]); const none=acts.length===0;
+                return (
                 <div key={id} style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
                   <span style={{flex:'1 1 140px',fontSize:12.5,color:'var(--ink-2)',fontWeight:600}}>{label}</span>
-                  <div className="seg" style={{flexShrink:0}}>
-                    {PERM_LEVELS.map(([v,l])=>(
-                      <button key={v} className={(perms[id]||'none')===v?'on':''} onClick={()=>setLevel(id,v)}
-                        style={(perms[id]||'none')===v?{color:'#fff',background:lvlColor[v],borderColor:lvlColor[v]}:null}>{l}</button>
-                    ))}
+                  <div style={{display:'flex',gap:6,flexShrink:0,flexWrap:'wrap'}}>
+                    <button onClick={()=>clearMod(id)} style={{padding:'5px 12px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(none?'var(--muted)':'var(--line)'),background:none?'var(--panel-2)':'#fff',color:none?'var(--ink)':'var(--muted)'}}>None</button>
+                    {PERM_ACTS.map(([v,l])=>{ const on=acts.indexOf(v)>=0; const c=lvlColor[v]; return (
+                      <button key={v} onClick={()=>toggleAct(id,v)} title={v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':'Can delete'}
+                        style={{display:'inline-flex',alignItems:'center',gap:6,padding:'5px 11px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?c:'var(--line)'),background:on?c:'#fff',color:on?'#fff':'var(--ink-2)'}}>
+                        <span style={{width:13,height:13,borderRadius:4,display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(on?'#fff':'var(--line)'),background:on?'rgba(255,255,255,.25)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff" sw={3}/>}</span>
+                        {l}
+                      </button>
+                    );})}
                   </div>
                 </div>
-              ))}
+              );})}
             </div>
           </div>
           )}
@@ -1880,7 +1909,7 @@ function UserManagement(){
             <span className="tag" style={{minWidth:96,justifyContent:'center'}}>{roleLabel(u)}</span>
             <span className="tag" style={{minWidth:96,justifyContent:'center',color:'var(--ink-2)'}}>{summaryOf(u)}</span>
             {active?<span className="chip pos">● Active</span>:<span className="chip flat">○ Inactive</span>}
-            {!isColl&&<button className="btn sm" onClick={()=>setModal({user:u})}>Manage</button>}
+            <button className="btn sm" onClick={()=>setModal({user:u})}>Manage</button>
             <button className="icon-btn" title={active?'Deactivate':'Activate'} onClick={()=>toggle(u)} disabled={isMe||lastAdmin}><Ic d={active?I.x:I.check} s={14}/></button>
             <button className="icon-btn danger" title="Remove" onClick={()=>setConfirm(u)} disabled={isMe||lastAdmin}><Ic d={I.x} s={14}/></button>
           </div>
@@ -1902,6 +1931,113 @@ function UserManagement(){
   );
 }
 window.UserManagement=UserManagement;
+
+/* Staff Fields — manage the option lists used by the Add/Edit Staff form. Education
+   (qualification) and Designation lists are extendable here; Department is sourced
+   automatically from the Statistics module and managed there. */
+function StaffFieldsSettings({depts, setRoute}){
+  const S=window.STAFF||{};
+  const [,force]=React.useState(0); const rerender=()=>force(x=>x+1);
+  const [draft,setDraft]=React.useState({qualifications:'',designations:''});
+  const add=(kind)=>{ const v=(draft[kind]||'').trim(); if(!v) return;
+    if(S.addFieldOpt&&S.addFieldOpt(kind,v)){ window.UI&&window.UI.toast('Added “'+v+'”','success'); }
+    else { window.UI&&window.UI.toast('That option already exists','warn'); }
+    setDraft(s=>({...s,[kind]:''})); rerender(); };
+  const del=(kind,v)=>{ S.removeFieldOpt&&S.removeFieldOpt(kind,v); rerender(); };
+  const chip=(label,removable,onDel)=>(
+    <span key={label} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'5px 10px',borderRadius:16,fontSize:12,fontWeight:600,
+      background:removable?'var(--blue-50)':'var(--panel-2)',color:removable?'var(--blue-700)':'var(--muted)',border:'1px solid '+(removable?'var(--blue-100)':'var(--line)')}}>
+      {label}
+      {removable&&<span onClick={onDel} title="Remove" style={{display:'inline-grid',placeItems:'center',cursor:'pointer',opacity:.7}}><Ic d={I.x} s={11} sw={2.4}/></span>}
+    </span>
+  );
+  const group=(kind,title,sub,base)=>{
+    const custom=(S.fieldOptList&&S.fieldOptList(kind))||[];
+    return (
+      <div style={{padding:'16px 0',borderBottom:'1px solid var(--line-2)'}}>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--ink)'}}>{title}</div>
+        <div style={{fontSize:11.5,color:'var(--muted)',marginBottom:10}}>{sub}</div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:7,marginBottom:10}}>
+          {base.map(o=>chip(o,false))}
+          {custom.map(o=>chip(o,true,()=>del(kind,o)))}
+          {base.length+custom.length===0&&<span style={{fontSize:12,color:'var(--faint)'}}>No options yet.</span>}
+        </div>
+        <div style={{display:'flex',gap:8,maxWidth:460}}>
+          <input value={draft[kind]||''} onChange={e=>setDraft(s=>({...s,[kind]:e.target.value}))} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();add(kind);}}}
+            placeholder={'Add a new '+title.toLowerCase()+'…'} style={{flex:1,padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontFamily:'inherit',fontSize:13,outline:'none'}}/>
+          <button className="btn pri sm" onClick={()=>add(kind)} disabled={!(draft[kind]||'').trim()}><Ic d={I.plus} s={14}/>Add</button>
+        </div>
+        {custom.length>0&&<div style={{fontSize:11,color:'var(--muted)',marginTop:8}}>Built-in options are shown in grey and can’t be removed; your added options are blue and removable.</div>}
+      </div>
+    );
+  };
+  const deptNames=(depts&&depts.length)?depts.map(d=>d.name||d).filter(Boolean):[];
+  // ---- fully custom field categories ----
+  const cfs=(S.customFields&&S.customFields())||[];
+  const [nf,setNf]=React.useState({name:'',kind:'single'});
+  const [cfDraft,setCfDraft]=React.useState({});
+  const addField=()=>{ const n=(nf.name||'').trim(); if(!n) return; S.addCustomField&&S.addCustomField(n,nf.kind); setNf({name:'',kind:'single'}); rerender(); window.UI&&window.UI.toast('Field “'+n+'” added','success'); };
+  const kindLabel={single:'Single-select',multi:'Multi-select',text:'Free text'};
+  return (
+    <div className="card"><div className="card-b">
+      <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)',marginBottom:2}}>Staff form fields</div>
+      <div style={{fontSize:11.5,color:'var(--muted)',marginBottom:6}}>These lists populate the dropdowns in Add / Edit Staff. Add your own values below; they appear instantly in the form.</div>
+      {group('qualifications','Education / Qualification','Degrees & diplomas offered in the Qualification picker.',(S.QUALIFICATIONS||[]))}
+      {group('designations','Designation','Job titles offered in the Designation picker.',(S.DESIGNATIONS||[]))}
+      <div style={{padding:'16px 0',borderBottom:'1px solid var(--line-2)'}}>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--ink)'}}>Department</div>
+        <div style={{fontSize:11.5,color:'var(--muted)',marginBottom:10}}>Departments come automatically from the <b>Statistics</b> module — {deptNames.length} in use. Add or rename them in Departments and they update here.</div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:7,marginBottom:10}}>
+          {deptNames.length?deptNames.map(d=>chip(d,false)):<span style={{fontSize:12,color:'var(--faint)'}}>No statistics departments loaded.</span>}
+        </div>
+        {setRoute&&<button className="btn sm" onClick={()=>setRoute({view:'qualityDeptManage'})}><Ic d={I.layers} s={14}/>Manage departments</button>}
+      </div>
+
+      {/* Custom, admin-defined field categories */}
+      <div style={{padding:'16px 0'}}>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--ink)'}}>Custom fields</div>
+        <div style={{fontSize:11.5,color:'var(--muted)',marginBottom:12}}>Create your own fields (e.g. Shift, Unit Type, Certification). Each one appears in the Add / Edit Staff form.</div>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          {cfs.map(f=>{
+            const custom=Array.isArray(f.options)?f.options:[];
+            const dkey='opt_'+f.id;
+            return (
+              <div key={f.id} style={{border:'1px solid var(--line)',borderRadius:9,padding:'12px 14px'}}>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:custom.length||f.kind!=='text'?8:0}}>
+                  <b style={{fontSize:13,color:'var(--ink)'}}>{f.name}</b>
+                  <span className="tag" style={{background:'var(--panel-2)',color:'var(--muted)'}}>{kindLabel[f.kind]||f.kind}</span>
+                  <span className="spacer" style={{flex:1}}/>
+                  <button className="btn sm" onClick={()=>{const nn=prompt('Rename field',f.name); if(nn&&nn.trim()){S.renameCustomField(f.id,nn.trim());rerender();}}}><Ic d={I.edit} s={13}/>Rename</button>
+                  <button className="btn sm" style={{color:'var(--rose)',borderColor:'#f1c6cd'}} onClick={async()=>{const ok=await window.UI.confirm({title:`Delete field “${f.name}”?`,message:'Removes it from the staff form. Values already saved on staff records are kept but hidden.',danger:true,confirmLabel:'Delete field'});if(ok){S.removeCustomField(f.id);rerender();}}}><Ic d={I.x} s={13}/>Delete</button>
+                </div>
+                {f.kind!=='text'&&<>
+                  <div style={{display:'flex',flexWrap:'wrap',gap:7,marginBottom:9}}>
+                    {custom.length?custom.map(o=>chip(o,true,()=>{S.removeCustomFieldOption(f.id,o);rerender();})):<span style={{fontSize:12,color:'var(--faint)'}}>No options yet.</span>}
+                  </div>
+                  <div style={{display:'flex',gap:8,maxWidth:460}}>
+                    <input value={cfDraft[dkey]||''} onChange={e=>setCfDraft(s=>({...s,[dkey]:e.target.value}))} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();const v=(cfDraft[dkey]||'').trim();if(v){S.addCustomFieldOption(f.id,v);setCfDraft(s=>({...s,[dkey]:''}));rerender();}}}}
+                      placeholder={'Add an option to '+f.name+'…'} style={{flex:1,padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontFamily:'inherit',fontSize:13,outline:'none'}}/>
+                    <button className="btn pri sm" onClick={()=>{const v=(cfDraft[dkey]||'').trim();if(v){S.addCustomFieldOption(f.id,v);setCfDraft(s=>({...s,[dkey]:''}));rerender();}}} disabled={!(cfDraft[dkey]||'').trim()}><Ic d={I.plus} s={14}/>Add</button>
+                  </div>
+                </>}
+                {f.kind==='text'&&<div style={{fontSize:11.5,color:'var(--muted)'}}>Free-text field — staff type any value in the form.</div>}
+              </div>
+            );
+          })}
+          {cfs.length===0&&<div style={{fontSize:12,color:'var(--faint)'}}>No custom fields yet.</div>}
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center',marginTop:14,flexWrap:'wrap'}}>
+          <input value={nf.name} onChange={e=>setNf(s=>({...s,name:e.target.value}))} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addField();}}}
+            placeholder="New field name — e.g. Shift, Unit Type, Certification" style={{flex:'1 1 240px',padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontFamily:'inherit',fontSize:13,outline:'none'}}/>
+          <select value={nf.kind} onChange={e=>setNf(s=>({...s,kind:e.target.value}))} style={{padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontFamily:'inherit',fontSize:13,background:'#fff'}}>
+            <option value="single">Single-select</option><option value="multi">Multi-select</option><option value="text">Free text</option>
+          </select>
+          <button className="btn pri" onClick={addField} disabled={!nf.name.trim()}><Ic d={I.plus} s={15}/>Add field</button>
+        </div>
+      </div>
+    </div></div>
+  );
+}
 
 function Settings({depts, store, setRoute}){
   const [tab,setTab]=React.useState((typeof window!=='undefined'&&window.__UNICO_SETTINGS_TAB__)||'general');
@@ -1976,7 +2112,7 @@ function Settings({depts, store, setRoute}){
       <SectionTitle icon={I.gear} title="Settings" sub="Configure the statistics platform"/>
       <div className="grid" style={{gridTemplateColumns:'200px 1fr',alignItems:'start'}}>
         <div className="card" style={{padding:6}}>
-          {[['general','General',I.gear],['departments','Departments',I.layers],['users','Users & Roles',I.user],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
+          {[['general','General',I.gear],['departments','Departments',I.layers],['stafffields','Staff Fields',I.steth],['users','Users & Roles',I.user],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
             <div key={id} onClick={()=>setTab(id)} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:7,cursor:'pointer',fontSize:13,fontWeight:600,
               background:tab===id?'var(--blue-50)':'transparent',color:tab===id?'var(--blue-700)':'var(--ink-2)'}}>
               <Ic d={ic} s={16}/>{l}
@@ -2006,6 +2142,7 @@ function Settings({depts, store, setRoute}){
             </div>}
           </div></div>}
           {tab==='departments'&&(typeof ManageDepts!=='undefined'?<ManageDepts depts={depts} store={store} setRoute={setRoute}/>:null)}
+          {tab==='stafffields'&&<StaffFieldsSettings depts={depts} setRoute={setRoute}/>}
           {tab==='users'&&<div className="card"><div className="card-b"><UserManagement/></div></div>}
           {tab==='responsibles'&&(typeof DataResponsibles!=='undefined'?<DataResponsibles depts={depts}/>:null)}
           {tab==='fields'&&(typeof DataFields!=='undefined'?<DataFields setRoute={setRoute}/>:null)}

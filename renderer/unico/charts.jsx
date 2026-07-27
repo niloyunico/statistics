@@ -217,7 +217,7 @@ function donutArc(cx,cy,rO,rI,a0,a1){
   const large=(a1-a0)>Math.PI?1:0;
   return `M ${P(rO,a0)} A ${rO} ${rO} 0 ${large} 1 ${P(rO,a1)} L ${P(rI,a1)} A ${rI} ${rI} 0 ${large} 0 ${P(rI,a0)} Z`;
 }
-function Donut({data, size=180, thickness=30, centerLabel, centerValue, flat=false}){
+function Donut({data, size=180, thickness=30, centerLabel, centerValue, flat=false, onSlice}){
   const mounted=useMounted(); const m=flat||mounted; const [tip,setTip]=useTip(); const [hi,setHi]=useState(-1);
   const total=data.reduce((s,d)=>s+d.value,0)||1;
   const r=(size-thickness)/2, cx=size/2, cy=size/2, C=2*Math.PI*r;
@@ -233,8 +233,8 @@ function Donut({data, size=180, thickness=30, centerLabel, centerValue, flat=fal
         {data.map((d,i)=>{
           const frac=d.value/total; const a0=ang, a1=ang+frac*2*Math.PI; ang=a1;
           return <path key={i} d={donutArc(cx,cy,rO,rI,a0,a1)} fill={d.color||PALETTE[i%PALETTE.length]}
-            onMouseMove={e=>{setHi(i);setTip({x:e.clientX,y:e.clientY,title:d.label,single:fmt(d.value)+` (${Math.round(frac*100)}%)`});}}
-            onMouseLeave={()=>{setHi(-1);setTip(null);}} style={{cursor:'pointer'}}/>;
+            onMouseMove={e=>{setHi(i);setTip({x:e.clientX,y:e.clientY,title:d.label,single:fmt(d.value)+` (${Math.round(frac*100)}%)`+(onSlice?' · click to view':'')});}}
+            onMouseLeave={()=>{setHi(-1);setTip(null);}} onClick={()=>onSlice&&onSlice(i,d)} style={{cursor:'pointer'}}/>;
         })}
       </svg>
       ) : (
@@ -245,8 +245,9 @@ function Donut({data, size=180, thickness=30, centerLabel, centerValue, flat=fal
             <circle key={i} cx={cx} cy={cy} r={r} fill="none"
               stroke={d.color||PALETTE[i%PALETTE.length]} strokeWidth={hi===i?thickness+5:thickness}
               strokeDasharray={dash} strokeDashoffset={-off} strokeLinecap="butt"
-              onMouseMove={e=>{setHi(i);setTip({x:e.clientX,y:e.clientY,title:d.label,single:fmt(d.value)+` (${Math.round(frac*100)}%)`});}}
+              onMouseMove={e=>{setHi(i);setTip({x:e.clientX,y:e.clientY,title:d.label,single:fmt(d.value)+` (${Math.round(frac*100)}%)`+(onSlice?' · click to view':'')});}}
               onMouseLeave={()=>{setHi(-1);setTip(null);}}
+              onClick={()=>onSlice&&onSlice(i,d)}
               style={{transition:`stroke-dasharray .9s ${i*80}ms cubic-bezier(.3,.8,.3,1), stroke-width .15s`,cursor:'pointer'}}/>
           );
           off+=len; return el;
@@ -262,8 +263,8 @@ function Donut({data, size=180, thickness=30, centerLabel, centerValue, flat=fal
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:6}}>
         {data.map((d,i)=>(
-          <div key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:12,opacity:hi<0||hi===i?1:.45,transition:'opacity .15s'}}
-            onMouseEnter={()=>setHi(i)} onMouseLeave={()=>setHi(-1)}>
+          <div key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:12,opacity:hi<0||hi===i?1:.45,transition:'opacity .15s',cursor:onSlice?'pointer':'default'}}
+            onMouseEnter={()=>setHi(i)} onMouseLeave={()=>setHi(-1)} onClick={()=>onSlice&&onSlice(i,d)}>
             <i style={{width:9,height:9,borderRadius:3,background:d.color||PALETTE[i%PALETTE.length],display:'inline-block'}}/>
             <span style={{color:'#3c4858',fontWeight:500}}>{d.label}</span>
             <b className="num" style={{marginLeft:'auto',paddingLeft:14,color:'#16202e'}}>{fmt(d.value)}</b>

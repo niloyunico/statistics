@@ -50,6 +50,7 @@ const UNICO_MODULES = [
   { id:'datacol', label:'Data Collection',    short:'Data',       icon:I.input, home:'dcReview' },
   { id:'staff',   label:'Staff Management',   short:'Staff',      icon:I.steth, home:'nurseHome' },
   { id:'quality', label:'Quality Indicators', short:'Quality',    icon:I.heart, home:'quality' },
+  { id:'supervisor', label:'Supervisor Reports', short:'Supervisor', icon:I.doc, home:'supHome' },
   { id:'reports', label:'Reports',            short:'Reports',    icon:I.doc,   home:'reports' },
   { id:'users',   label:'User Management',    short:'Users',      icon:I.user,  home:'users' },
 ];
@@ -58,6 +59,7 @@ const UNICO_MODULE_VIEWS = {
   datacol:['dcReview','dcPatient','dcQuality','input','dcResponsibles','dcShare','dcFields'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
+  supervisor:['supHome','supNew','supHistory','supReport'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
 };
@@ -73,7 +75,7 @@ function unicoModuleOf(view){
    open local-PC session are unrestricted; collectors render their own portal, so
    they are never gated here. `modules` null/absent = unrestricted (legacy accounts
    keep full access until an admin assigns modules). ---- */
-const UNICO_ACCESS_MODULES = ['stats','quality','staff','datacol','reports','users'];
+const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users'];
 // The workspace a route.view belongs to for ACCESS purposes. Settings is the admin
 // hub, so it is gated under 'users' rather than 'stats'.
 function unicoAccessModuleOf(view){
@@ -97,7 +99,18 @@ function unicoUserPerms(){
 }
 function unicoModuleLevel(mid){ const p=unicoUserPerms(); if(!p) return 'delete'; return p[mid]||'none'; }
 // Can this session perform `action` (view|edit|add|delete) in module `mid`?
-function unicoCan(mid, action){ return (UNICO_PERM_RANK[unicoModuleLevel(mid)]||0) >= (UNICO_PERM_RANK[action]||UNICO_PERM_RANK.view); }
+// Perms per module are either an ARRAY of independently-granted actions (new model,
+// e.g. ['view','edit','delete'] — Delete without Add) or a legacy escalating LEVEL
+// string (none<view<edit<add<delete). Any granted action implies module 'view'.
+function unicoCan(mid, action){
+  const p=unicoUserPerms(); if(!p) return true;   // admin / open local mode -> full
+  const val=p[mid];
+  if(Array.isArray(val)){
+    if(action==='view') return val.length>0;       // any granted action lets them open it
+    return val.indexOf(action)>=0;
+  }
+  return (UNICO_PERM_RANK[val||'none']||0) >= (UNICO_PERM_RANK[action]||UNICO_PERM_RANK.view);
+}
 function unicoCanAccessModule(mid){ return unicoCan(mid,'view'); }
 function unicoCanAccessView(view){ return unicoCanAccessModule(unicoAccessModuleOf(view)); }
 // Viewable module ids, or null when unrestricted. [] => the user has no access at all.
@@ -105,7 +118,7 @@ function unicoAllowedModules(){ const p=unicoUserPerms(); if(!p) return null; re
 // The landing view for the first workspace this session can open (sidebar order).
 // Returns null when nothing is granted (=> the app shows a "no access" screen).
 function unicoFirstAllowedHome(){
-  const homes=[['stats','dashboard'],['quality','quality'],['staff','nurseHome'],['datacol','dcReview'],['reports','reports'],['users','settings']];
+  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['staff','nurseHome'],['datacol','dcReview'],['reports','reports'],['users','settings']];
   for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return homes[i][1]; }
   return null;
 }
@@ -214,6 +227,12 @@ function unicoQualityBreachCount(){
 }
 window.unicoQualityBreachCount=unicoQualityBreachCount;
 
+// Supervisor-report alerts badge — count of today's critical events + shifts still
+// missing a report. Populated by the Supervisor module (window.__UNICO_SUP_ALERTS__)
+// on load/save; the sidebar reads this cheap global (0 => no badge until computed).
+function unicoSupAlertCount(){ try{ return window.__UNICO_SUP_ALERTS__||0; }catch(e){ return 0; } }
+window.unicoSupAlertCount=unicoSupAlertCount;
+
 // Unified workspace navigation — Statistics + Quality are MERGED into peer
 // destinations (Overview / Departments / Quality) instead of separate switchable
 // modules. Secondary views nest (indented) under the active destination.
@@ -224,13 +243,18 @@ const UNICO_WS = [
   { sec:'Clinical', items:[
     { id:'departments', label:'Departments',     icon:I.layers, home:'departments', on:v=>unicoModuleOf(v)==='stats'&&['dashboard','settings'].indexOf(v)<0 },
     { id:'quality',     label:'Quality',         icon:I.heart,  home:'quality',     on:v=>unicoModuleOf(v)==='quality', badge:true },
+    { id:'supervisor',  label:'Supervisor Reports', icon:I.doc,  home:'supHome',     on:v=>unicoModuleOf(v)==='supervisor', badge:'sup' },
   ]},
   { sec:'Data', items:[
     { id:'datacol',     label:'Data Collection', icon:I.input,  home:'dcReview',    on:v=>unicoModuleOf(v)==='datacol' },
     { id:'reports',     label:'Reports',         icon:I.doc,    home:'reports',     on:v=>unicoModuleOf(v)==='reports' },
   ]},
   { sec:'Administer', items:[
-    { id:'staff',       label:'Staff',           icon:I.steth,  home:'nurseHome',   on:v=>unicoModuleOf(v)==='staff' },
+    // Nurse and PCA are SEPARATE destinations (own dashboard/directory/compliance),
+    // though both belong to the 'staff' access module. staffProfile/staffForm/previous
+    // are shared and default to highlighting Nurse Management.
+    { id:'nurses',      label:'Nurse Management', icon:I.steth, home:'nurseHome',   on:v=>['nurseHome','nurses','nurseCompliance','staffPrevious','staffProfile','staffForm'].indexOf(v)>=0 },
+    { id:'pca',         label:'PCA Management',   icon:I.bed,   home:'pcaHome',     on:v=>['pcaHome','pca','pcaCompliance'].indexOf(v)>=0 },
     // Settings is the admin HUB (Departments config, Users & Roles, Responsible Persons,
     // Form Fields, Data & Export) — the scattered admin submodules fold into its tabs.
     { id:'settings',    label:'Settings',        icon:I.gear,   home:'settings',    on:v=>v==='settings'||unicoModuleOf(v)==='users' },
@@ -251,6 +275,12 @@ function unicoWorkspaceSub(view){
     { label:'Quality Data Entry',       view:'qualityDataEntry' },
     { label:'Action Plans',             view:'qualityCapa' },
   ];
+  if(mod==='supervisor') return [
+    { label:'Dashboard',       view:'supHome' },
+    { label:'New Report',      view:'supNew' },
+    { label:'History',         view:'supHistory' },
+    { label:'Generate Report', view:'supReport' },
+  ];
   if(mod==='reports') return [
     { label:'Patient Statistics', view:'reports' },
     { label:'Quality Indicators', view:'reportsQuality' },
@@ -262,30 +292,34 @@ function unicoWorkspaceSub(view){
     { label:'Quality Data',        view:'dcQuality' },
     { label:'Share Links',         view:'dcShare' },
   ];
-  if(mod==='staff') return [
-    { label:'Nurse Dashboard',  view:'nurseHome' },
-    { label:'Nurse Directory',  view:'nurses' },
-    { label:'Nurse Compliance', view:'nurseCompliance' },
-    { label:'PCA Dashboard',    view:'pcaHome' },
-    { label:'PCA Directory',    view:'pca' },
-    { label:'PCA Compliance',   view:'pcaCompliance' },
-    { label:'Previous Staff',   view:'staffPrevious' },
-  ];
+  if(mod==='staff'){
+    const isPca=['pcaHome','pca','pcaCompliance'].indexOf(view)>=0;
+    return isPca ? [
+      { label:'Dashboard',      view:'pcaHome' },
+      { label:'Directory',      view:'pca' },
+      { label:'Compliance',     view:'pcaCompliance' },
+      { label:'Previous Staff', view:'staffPrevious' },
+    ] : [
+      { label:'Dashboard',      view:'nurseHome' },
+      { label:'Directory',      view:'nurses' },
+      { label:'Compliance',     view:'nurseCompliance' },
+      { label:'Previous Staff', view:'staffPrevious' },
+    ];
+  }
   return [];
 }
 
 function Sidebar({route, setRoute, collapsed, depts}){
   const view = route.view;
   const qBadge = React.useMemo(()=>unicoQualityBreachCount(),[]);
+  const supBadge = React.useMemo(()=>unicoSupAlertCount(),[view]);
   const sub = unicoWorkspaceSub(view);
   const subOn = s => s.match ? s.match.indexOf(view)>=0 : view===s.view;
   return (
     <aside className="sb">
       <div className="sb-brand">
-        <div className="sb-logo">
-          <svg width="20" height="18" viewBox="0 0 51 45" fill="#fff" aria-hidden="true"><path d="M25.519 21.607A18.35 18.35 0 0 0 34.352 12.8C36.742 7.25 35.567.727 35.567.727a8.9 8.9 0 0 1-5.552.812C26.45 1.09 25.519 0 25.519 0s-.931 1.1-4.5 1.538A8.87 8.87 0 0 1 15.47.727S14.295 7.25 16.685 12.8a18.35 18.35 0 0 0 8.834 8.805m-3.912 1.028A18.35 18.35 0 0 0 12.8 13.8C7.25 11.411.727 12.586.727 12.586a8.9 8.9 0 0 1 .812 5.552C1.09 21.7 0 22.635 0 22.635s1.1.931 1.538 4.5a8.87 8.87 0 0 1-.812 5.552S7.25 33.858 12.8 31.468a18.32 18.32 0 0 0 8.805-8.834m3.912 1.028a18.35 18.35 0 0 0-8.834 8.805c-2.39 5.552-1.215 12.075-1.215 12.075a8.9 8.9 0 0 1 5.552-.812c3.565.443 4.5 1.538 4.5 1.538s.931-1.1 4.5-1.538a8.9 8.9 0 0 1 5.552.812s1.175-6.523-1.215-12.075a18.35 18.35 0 0 0-8.834-8.805m25.644-1.028s-1.1-.931-1.538-4.5a8.87 8.87 0 0 1 .812-5.552S43.912 11.411 38.36 13.8a18.35 18.35 0 0 0-8.805 8.834 18.35 18.35 0 0 0 8.805 8.834c5.552 2.39 12.075 1.215 12.075 1.215a8.9 8.9 0 0 1-.812-5.552c.443-3.565 1.538-4.5 1.538-4.5"/></svg>
-        </div>
-        <div className="sb-brand-txt sb-name">UNICO<small>Statistics Suite</small></div>
+        <img className="sb-logo-img sb-logo-full" src="unico/logo.svg" alt="UNICO — Hands of Care Hospitals"/>
+        <img className="sb-logo-img sb-logo-mark" src="unico/logo-mark.svg" alt="UNICO"/>
       </div>
       <div className="sb-scroll">
         {UNICO_WS.map((g,gi)=>{
@@ -298,7 +332,8 @@ function Sidebar({route, setRoute, collapsed, depts}){
             {g.sec && <div className="sb-sec">{g.sec}</div>}
             {items.map(it=>{
               const active = it.on(view);
-              const badge = it.badge && qBadge>0 ? qBadge : null;
+              const badgeN = it.badge==='sup' ? supBadge : (it.badge ? qBadge : 0);
+              const badge = badgeN>0 ? badgeN : null;
               return (
                 <React.Fragment key={it.id}>
                   <div className={'sb-item'+(active?' active':'')} onClick={()=>setRoute({view:it.home})} title={it.label}>

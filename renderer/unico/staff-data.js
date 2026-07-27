@@ -3,9 +3,20 @@
   const DEPARTMENTS=["ER","OPD","NICU","MICU","SICU","CCU","CT ICU","Level-10","Level-9","Level-11",
     "LDR","Dialysis","Endoscopy","Cath Lab","General OT","Cardiac OT","Radiology","HomeCare","DayCare",
     "Oncology","Infection Control","Training & Development","Management","Vaccination Room"];
-  const DESIGNATIONS=["Staff Nurse","Senior Staff Nurse","Charge Nurse","Acting Charge Nurse","Incharge Nurse",
-    "OT Incharge Nurse","Team Leader","Nurse Manager","Senior Manager","Instructor","Infection Control Nurse","Supervisor"];
-  const QUALIFICATIONS=["Diploma","B.Sc","Post B.Sc","PBSC","BSC MSN","MSS","NCLEX RN","Diploma in Midwifery","Diploma in Renal Nursing"];
+  const DESIGNATIONS=["Staff Nurse","Senior Staff Nurse","Charge Nurse","Acting Charge Nurse",
+    "Team Leader","Assistant Nurse Manager","Nurse Manager","Senior Manager","Instructor","Infection Control Nurse","Supervisor"];
+  // Bangladesh (BNMC) nursing qualifications — full current list; legacy short forms kept
+  // at the end so already-recorded values still match their chip.
+  // One valid name per qualification (no short-code duplicates like "B.Sc" vs
+  // "B.Sc in Nursing"). Common degrees first, then specialised diplomas.
+  const QUALIFICATIONS=[
+    "Diploma in Nursing","Diploma in Midwifery",
+    "B.Sc in Nursing","Post Basic B.Sc in Nursing","B.Sc in Public Health Nursing",
+    "M.Sc in Nursing","Master of Nursing (MN)","M.Phil in Nursing","PhD in Nursing","MPH","NCLEX-RN",
+    "Community Health Nursing","Diploma in Renal Nursing","Diploma in Cardiac Nursing",
+    "Diploma in Critical Care Nursing","Diploma in Orthopaedic Nursing",
+    "Diploma in Psychiatric / Mental Health Nursing","Diploma in Anaesthesia",
+    "Diploma in OT / Operating Room Nursing"];
   const VACCINATION_STATES=["Completed","3rd Dose","2nd Dose","1st Dose","Not Completed","Unknown"];
   // Collapse any free-text Hep-B value (imports, typos) into one canonical state, so the
   // chart/compliance never fragment again ("Not completed" vs "Not Completed", "Vacinated",
@@ -22,16 +33,48 @@
     if(/^complet/.test(s)||/vacc?inat/.test(s)||/full/.test(s)) return 'Completed';
     return 'Unknown';
   }
-  const TRAININGS=["BLS","ACLS","ICU Care","Wound Care","Dialysis","Infection Control","Cath Lab Assist",
-    "OT Scrub","Neonatal Resuscitation","Triage","Phlebotomy","Ventilator Management",""];
+  const TRAININGS=["BLS","ACLS","PALS","Neonatal Resuscitation (NRP)","First Aid","CPR",
+    "ICU / Critical Care","Ventilator Management","Wound Care","IV Cannulation","Phlebotomy",
+    "Dialysis","Cath Lab Assist","OT Scrub","Triage","Infection Control","Medication Safety","Fire Safety"];
 
   // PCA (Patient Care Assistant) role config
   const ROLES=["Nurse","PCA"];
   const PCA_DESIGNATIONS=["Patient Care Assistant","Senior PCA","ICU PCA","Ward Assistant","OT Helper","PCA Trainee"];
   const PCA_QUALIFICATIONS=["SSC","HSC","PCA Certificate","Care Giving Course","Nursing Aide Diploma","Basic First Aid"];
   const PCA_TRAININGS=["BLS","Patient Handling","Hygiene & Bed Care","Infection Control","Vital Signs","Specimen Transport",""];
-  function designationsFor(role){ return role==="PCA"?PCA_DESIGNATIONS:DESIGNATIONS; }
-  function qualificationsFor(role){ return role==="PCA"?PCA_QUALIFICATIONS:QUALIFICATIONS; }
+  // ---------- custom field options (managed in Settings → Staff Fields) ----------
+  // Admins can extend the Education (qualification), Designation and Training option
+  // lists without a code change. Stored in localStorage, merged on top of the defaults.
+  const FIELDOPT_KEY='unico_staff_fieldopts_v1';
+  function loadFieldOpts(){ try{const o=JSON.parse(localStorage.getItem(FIELDOPT_KEY));return (o&&typeof o==='object'&&!Array.isArray(o))?o:{};}catch(e){return {};} }
+  function fieldOptList(kind){ const o=loadFieldOpts(); return Array.isArray(o[kind])?o[kind]:[]; }
+  function addFieldOpt(kind,val){ val=String(val||'').trim(); if(!val) return false; const o=loadFieldOpts(); const a=Array.isArray(o[kind])?o[kind]:[]; if(a.some(x=>x.toLowerCase()===val.toLowerCase())) return false; a.push(val); o[kind]=a; try{localStorage.setItem(FIELDOPT_KEY,JSON.stringify(o));}catch(e){} return true; }
+  function removeFieldOpt(kind,val){ const o=loadFieldOpts(); o[kind]=(o[kind]||[]).filter(x=>x!==val); try{localStorage.setItem(FIELDOPT_KEY,JSON.stringify(o));}catch(e){} }
+
+  function designationsFor(role){ const base=role==="PCA"?PCA_DESIGNATIONS:DESIGNATIONS; return [...base,...fieldOptList(role==="PCA"?'pca_designations':'designations')]; }
+  function qualificationsFor(role){ const base=role==="PCA"?PCA_QUALIFICATIONS:QUALIFICATIONS; return [...base,...fieldOptList(role==="PCA"?'pca_qualifications':'qualifications')]; }
+
+  // ---------- custom field CATEGORIES (fully dynamic, admin-defined) ----------
+  // Each definition: {id, name, kind:'single'|'multi'|'text', options:[]}. Admins add
+  // these in Settings → Staff Fields; the Add/Edit Staff form renders one input per
+  // definition and stores values on the staff record under e.custom[id].
+  const CF_KEY='unico_staff_customfields_v1';
+  function loadCustomFields(){ try{const a=JSON.parse(localStorage.getItem(CF_KEY));return Array.isArray(a)?a:[];}catch(e){return [];} }
+  function saveCustomFields(a){ try{localStorage.setItem(CF_KEY,JSON.stringify(a));}catch(e){} }
+  function customFields(){ return loadCustomFields(); }
+  function addCustomField(name,kind){ name=String(name||'').trim(); if(!name) return null;
+    const a=loadCustomFields();
+    const base='cf_'+(name.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'')||'field');
+    let id=base,n=2; while(a.some(f=>f.id===id)){ id=base+'_'+(n++); }
+    const def={id,name,kind:(kind==='multi'||kind==='text')?kind:'single',options:[]};
+    a.push(def); saveCustomFields(a); return def; }
+  function removeCustomField(id){ saveCustomFields(loadCustomFields().filter(f=>f.id!==id)); }
+  function renameCustomField(id,name){ name=String(name||'').trim(); if(!name) return; saveCustomFields(loadCustomFields().map(f=>f.id===id?{...f,name}:f)); }
+  function addCustomFieldOption(id,val){ val=String(val||'').trim(); if(!val) return false; let done=false;
+    saveCustomFields(loadCustomFields().map(f=>{ if(f.id!==id) return f; const opts=Array.isArray(f.options)?f.options:[];
+      if(opts.some(x=>x.toLowerCase()===val.toLowerCase())) return f; done=true; return {...f,options:[...opts,val]}; }));
+    return done; }
+  function removeCustomFieldOption(id,val){ saveCustomFields(loadCustomFields().map(f=>f.id===id?{...f,options:(f.options||[]).filter(x=>x!==val)}:f)); }
 
   const FIRST=["Ayesha","Farzana","Nusrat","Tahmina","Ruma","Shirin","Kamrun","Sabina","Rokeya","Mahmuda",
     "Salma","Nasrin","Jahanara","Rebeka","Parvin","Shahida","Morsheda","Anjuman","Dilruba","Hosne",
@@ -223,8 +266,10 @@
       nextEmpId:()=>{ const max=staff.reduce((m,e)=>{const n=parseInt((e.emp_id||'').replace(/\D/g,''))||0;return Math.max(m,n);},100); return `UNC-${String(max+1).padStart(4,'0')}`; },
       create:(data)=>setStaff(s=>{ const id=Math.max(0,...s.map(e=>e.id))+1; return [...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]; }),
       update:(id,patch)=>setStaff(s=>s.map(e=>e.id===id?{...e,...patch}:e)),
-      remove:(id)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:false}:e)),
-      restore:(id)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:true}:e)),
+      // Deactivating a staff member archives them: they leave the active roster AND
+      // move to Previous Staff (which keys on `former`). Keep first-archived timestamp.
+      remove:(id,reason)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:false,former:true,archived_at:e.archived_at||Date.now(),archived_reason:reason||e.archived_reason||'Deactivated from roster'}:e)),
+      restore:(id)=>setStaff(s=>s.map(e=>e.id===id?{...e,is_active:true,former:false,archived_at:null,archived_reason:''}:e)),
       destroy:(id)=>setStaff(s=>s.filter(e=>e.id!==id)),
       addNote:(id,text)=>setStaff(s=>s.map(e=>e.id===id?{...e,notes:[...(e.notes||[]),{id:Date.now(),text,author:'Dr. A. Rahman',ts:Date.now()}]}:e)),
       delNote:(id,nid)=>setStaff(s=>s.map(e=>e.id===id?{...e,notes:(e.notes||[]).filter(n=>n.id!==nid)}:e)),
@@ -236,6 +281,8 @@
 
   window.STAFF={DEPARTMENTS,DESIGNATIONS,QUALIFICATIONS,VACCINATION_STATES,TRAININGS,VACC_OK,canonVacc,
     ROLES,PCA_DESIGNATIONS,PCA_QUALIFICATIONS,PCA_TRAININGS,designationsFor,qualificationsFor,
+    fieldOptList,addFieldOpt,removeFieldOpt,
+    customFields,addCustomField,removeCustomField,renameCustomField,addCustomFieldOption,removeCustomFieldOption,
     seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,byRole,uniqueVals};
   window.useStaffStore=useStaffStore;
 })();

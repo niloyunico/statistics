@@ -80,7 +80,7 @@ function ExportMenu({rows,role}){
    which would otherwise each show as a bogus "department". We map to the canonical
    DEPARTMENTS list (longest match wins so "CT ICU" beats "ICU"); pure-designation values
    with no detectable department fall into "Unassigned". */
-function staffCanonDept(raw){
+function staffShortCanon(raw){
   const S=window.STAFF; const DEPTS=(S&&S.DEPARTMENTS)||[]; const DESIGS=(S&&S.DESIGNATIONS)||[];
   const s=String(raw||'').trim();
   if(!s) return 'Unassigned';
@@ -89,6 +89,9 @@ function staffCanonDept(raw){
   const norm=s.replace(/[.,;/]+/g,' ').replace(/\s+/g,' ').trim();
   const nl=norm.toLowerCase();
   const padded=' '+nl+' ';
+  // Synonyms that map to a canonical department.
+  const ALIAS={emergency:'ER',cticu:'CT ICU','ct icu':'CT ICU','cardiac icu':'CT ICU','ctvs icu':'CT ICU',homecare:'HomeCare','home care':'HomeCare','family medicine':'HomeCare',daycare:'DayCare','day care':'DayCare'};
+  if(ALIAS[nl]) return ALIAS[nl];
   const esc=x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   const sorted=[...DEPTS].sort((a,b)=>b.length-a.length);
   for(const d of sorted){ if(new RegExp('(^| )'+esc(d.toLowerCase())+'( |$)').test(padded)) return d; }
@@ -100,6 +103,35 @@ function staffCanonDept(raw){
   // pure designation with no department -> Unassigned
   if(DESIGS.some(g=>{ const gl=g.toLowerCase(); return nl===gl || new RegExp('(^| )'+esc(gl)+'( |$)').test(padded); })) return 'Unassigned';
   return s; // a genuine unit not in the canonical list (kept as-is)
+}
+
+/* STATISTICS is the single source of department names. Read the live stats department
+   list (base + custom, via buildDepts) so ADDING or RENAMING a department in Statistics
+   auto-reflects in the staff module. Match a stored staff value to a stats dept by
+   name / id / key / short and return its CURRENT name. */
+let _staffStatsCache=null, _staffStatsKey=null;
+function staffStatsList(){
+  try{
+    if(!window.buildDepts) return null;
+    const rawOv=localStorage.getItem('unico_store_v3')||'';
+    if(_staffStatsKey===rawOv && _staffStatsCache) return _staffStatsCache; // cache until the overlay (renames/adds) changes
+    const m=window.buildDepts(JSON.parse(rawOv||'{}')||{});
+    if(Array.isArray(m)&&m.length){ _staffStatsKey=rawOv; _staffStatsCache=m; return m; }
+  }catch(e){}
+  return null;
+}
+function staffStatsName(raw){
+  const list=staffStatsList(); if(!list) return null;
+  const v=String(raw||'').trim(); if(!v||v==='Unassigned') return null;
+  const lc=v.toLowerCase();
+  const d=list.find(x=>[x.name,x.id,x.key,x.short].some(a=>String(a||'').trim().toLowerCase()===lc));
+  return d?d.name:null;
+}
+// Canonical department for grouping/filters: prefer the live STATISTICS name; else the
+// short-code normalization above. (Resolves both the raw value and its cleaned form.)
+function staffCanonDept(raw){
+  const short=staffShortCanon(raw);
+  return staffStatsName(raw) || staffStatsName(short) || short;
 }
 
 /* Full display name for a (canonical) department. The stored/matched value stays the
@@ -118,30 +150,63 @@ const STAFF_DEPT_FULL={
   'Cath Lab':'Catheterization Lab',
   'General OT':'General Operation Theatre',
   'Cardiac OT':'Cardiac Operation Theatre',
+  'HomeCare':'Family Medicine',
+  'DayCare':'Day Care',
   'Level-9':'Cabin Level 9',
   'Level-10':'Cabin Level 10',
   'Level-11':'Cabin Level 11',
 };
 function staffDeptLabel(n){ return STAFF_DEPT_FULL[n]||n; }
-// Raw value -> canonical merge -> full display label (for read-only views).
-function staffDeptShow(raw){ return staffDeptLabel(staffCanonDept(raw)); }
-if(typeof window!=='undefined'){ window.staffCanonDept=staffCanonDept; window.staffDeptLabel=staffDeptLabel; window.staffDeptShow=staffDeptShow; }
+// Display name (read-only views): the live STATISTICS name if resolvable (so renames
+// in Statistics show through), otherwise the short-code's full label.
+function staffDeptShow(raw){
+  // A staff member can belong to MULTIPLE departments (stored comma-separated, e.g.
+  // "General OT, CTVS OT"). Resolve each part to its display name and re-join.
+  const parts=String(raw||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const one=(v)=>{ const short=staffShortCanon(v); return staffStatsName(v)||staffStatsName(short)||staffDeptLabel(short); };
+  if(parts.length>1) return [...new Set(parts.map(one))].join(', ');
+  return one(raw);
+}
+/* Resolve a raw designation to its correct canonical spelling. Fixes common import
+   typos ("Satff Nurse" -> "Staff Nurse", "Sr." -> "Senior") and case/spacing so the
+   Designation Breakdown, filters and counts don't split the same role into duplicates. */
+function staffCanonDesig(raw){
+  let s=String(raw||'').trim().replace(/\s+/g,' ');
+  if(!s) return '';
+  s=s.replace(/satff/gi,'Staff').replace(/\bsr\.?\b/gi,'Senior').replace(/\bjr\.?\b/gi,'Junior')
+     .replace(/incharge/gi,'Incharge').replace(/\s+/g,' ').trim();
+  // Merge every "…incharge nurse" variant — "Incharge Nurse", "In charge Nurse",
+  // "OT Incharge Nurse" — into the single canonical "Charge Nurse".
+  if(/in\s*charge nurse$/i.test(s)) return 'Charge Nurse';
+  const DESIGS=(window.STAFF&&window.STAFF.DESIGNATIONS)||[];
+  const lc=s.toLowerCase();
+  for(const d of DESIGS){ if(d.toLowerCase()===lc) return d; } // canonical spelling wins
+  return s;
+}
+if(typeof window!=='undefined'){ window.staffCanonDept=staffCanonDept; window.staffDeptLabel=staffDeptLabel; window.staffDeptShow=staffDeptShow; window.staffCanonDesig=staffCanonDesig; }
 
 /* ---------------- Employees per department — ALL units, searchable / sortable ---------------- */
-function StaffDeptChart({list, tone='#0090ca', role='Nurse'}){
+function StaffDeptChart({list, setRoute, tone='#0090ca', role='Nurse'}){
   const {useState,useEffect,useMemo}=React;
   const [q,setQ]=useState('');
   const [pick,setPick]=useState('');                // selected department ('' = all)
   const [sortMode,setSortMode]=useState('count');   // 'count' | 'name'
   const [mounted,setMounted]=useState(false);
+  const [sel,setSel]=useState('');                  // clicked department -> staff list below
   useEffect(()=>{ const t=setTimeout(()=>setMounted(true),30); return ()=>clearTimeout(t); },[]);
   // Group by the CANONICAL department so "Level-10"/"Level - 10"/"Level- 10", or
   // "MICU"/"MICU, Supervisor" merge into one bar instead of many.
-  const rows=useMemo(()=>{
+  // Group by CANONICAL dept, SPLITTING comma-separated values so a nurse manager
+  // assigned to several units is counted under each. members[dept] = staff array.
+  const members=useMemo(()=>{
     const m={};
-    list.forEach(e=>{ const d=staffCanonDept(e.current_department); m[d]=(m[d]||0)+1; });
-    return Object.entries(m).map(([label,value])=>({label,value}));
+    list.forEach(e=>{
+      const parts=[...new Set(String(e.current_department||'').split(',').map(x=>staffCanonDept(x.trim())).filter(Boolean))];
+      (parts.length?parts:['Unassigned']).forEach(d=>{ (m[d]=m[d]||[]).push(e); });
+    });
+    return m;
   },[list]);
+  const rows=Object.entries(members).map(([label,arr])=>({label,value:arr.length}));
   const total=rows.reduce((s,r)=>s+r.value,0)||1;
   const max=Math.max(1,...rows.map(r=>r.value));
   const noun=role==='PCA'?'PCA':'nurses';
@@ -174,7 +239,8 @@ function StaffDeptChart({list, tone='#0090ca', role='Nurse'}){
         {shown.map((r,i)=>{
           const pct=Math.round((r.value/total)*100), w=(r.value/max)*100, top=sortMode==='count'&&i===0;
           return (
-            <div key={r.label} style={{display:'grid',gridTemplateColumns:'190px 1fr 64px',alignItems:'center',gap:10}} title={`${staffDeptLabel(r.label)} — ${r.value} ${noun} (${pct}%)`}
+            <div key={r.label} onClick={()=>setSel(s=>s===r.label?'':r.label)} title={`Click to list ${staffDeptLabel(r.label)} ${noun}`}
+              style={{display:'grid',gridTemplateColumns:'190px 1fr 64px',alignItems:'center',gap:10,cursor:'pointer',borderRadius:7,padding:'2px 4px',background:sel===r.label?'var(--blue-50)':'transparent'}}
               onMouseEnter={e=>{const b=e.currentTarget.querySelector('.dbar');if(b)b.style.filter='brightness(1.08)';}}
               onMouseLeave={e=>{const b=e.currentTarget.querySelector('.dbar');if(b)b.style.filter='none';}}>
               <div style={{fontSize:12,fontWeight:top?700:600,color:top?'var(--ink)':'var(--ink-2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{staffDeptLabel(r.label)}</div>
@@ -189,6 +255,27 @@ function StaffDeptChart({list, tone='#0090ca', role='Nurse'}){
           );
         })}
       </div>
+      {sel&&members[sel]&&(
+        <div style={{borderTop:'1px solid var(--line-2)',padding:'10px 14px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+            <b style={{fontSize:13}}>{staffDeptLabel(sel)}</b>
+            <span className="tag" style={{background:'var(--blue-50)',color:'var(--blue-700)'}}>{members[sel].length} {noun}</span>
+            <span className="spacer" style={{flex:1}}/>
+            <button className="btn sm" onClick={()=>setSel('')}><Ic d={I.x} s={13}/>Close</button>
+          </div>
+          <div style={{maxHeight:210,overflowY:'auto',display:'flex',flexDirection:'column',gap:4}}>
+            {[...members[sel]].sort((a,b)=>String(a.name).localeCompare(String(b.name))).map(e=>(
+              <div key={e.id} onClick={()=>setRoute&&setRoute({view:'staffProfile',emp:e.id})} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 8px',borderRadius:7,cursor:'pointer',border:'1px solid var(--line-2)'}}
+                onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                <Avatar name={e.name} size={26}/>
+                <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
+                  <div style={{fontSize:10.5,color:'var(--muted)'}}>{e.designation||'—'}{e.emp_id?' · '+e.emp_id:''}</div></div>
+                {e.phone&&<span className="num" style={{fontSize:11,color:'var(--ink-2)'}}>{e.phone}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -237,20 +324,65 @@ function StaffExpChart({list, setRoute, role='Nurse'}){
   );
 }
 
+/* ---------------- Designation Breakdown — interactive (click a role → staff list) ---------------- */
+function StaffDesigChart({list, setRoute, role='Nurse'}){
+  const {useState}=React;
+  const [sel,setSel]=useState(null);   // designation label ('Other' = the grouped rest)
+  const S=window.STAFF;
+  const canon=window.staffCanonDesig||((x)=>x);
+  const count={}, members={};
+  list.forEach(e=>{ const d=canon(e.designation)||'—'; count[d]=(count[d]||0)+1; (members[d]=members[d]||[]).push(e); });
+  const all=Object.entries(count).sort((a,b)=>b[1]-a[1]);
+  // Show EVERY designation as its own slice/legend row (no "Other" grouping) so roles
+  // like Acting Charge Nurse, Infection Control Nurse, etc. are always visible. Colours
+  // reuse the brand palette, then fall back to distinct generated hues beyond it.
+  const donut=all.map(([label,value],i)=>({label,value,color:PALETTE[i]||`hsl(${(i*67)%360} 58% 52%)`}));
+  const noun=role==='PCA'?'PCA':'nurses';
+  let curLabel=null, curList=null;
+  if(sel){ curLabel=sel; curList=members[sel]||[]; }
+  return (
+    <div className="card">
+      <div className="card-h"><h3>Designation Breakdown</h3><span className="sub">click a role to list staff</span><span className="spacer"/></div>
+      <div className="card-b">
+        <div style={{display:'grid',placeItems:'center'}}><Donut data={donut} size={188} centerValue={fmt(list.length)} centerLabel="staff" onSlice={(i,d)=>setSel(s=>s===d.label?null:d.label)}/></div>
+        {curList&&(
+          <div style={{marginTop:8,borderTop:'1px solid var(--line-2)',paddingTop:10}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+              <b style={{fontSize:13}}>{curLabel}</b>
+              <span className="tag" style={{background:'var(--blue-50)',color:'var(--blue-700)'}}>{curList.length} {noun} · {Math.round(curList.length/(list.length||1)*100)}%</span>
+              <span className="spacer" style={{flex:1}}/>
+              <button className="btn sm" onClick={()=>setSel(null)}><Ic d={I.x} s={13}/>Close</button>
+            </div>
+            <div style={{maxHeight:180,overflowY:'auto',display:'flex',flexDirection:'column',gap:4}}>
+              {[...curList].sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(e=>(
+                <div key={e.id} onClick={()=>setRoute({view:'staffProfile',emp:e.id})} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 8px',borderRadius:7,cursor:'pointer',border:'1px solid var(--line-2)'}}
+                  onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                  <Avatar name={e.name} size={26}/>
+                  <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
+                    <div style={{fontSize:10.5,color:'var(--muted)'}}>{canon(e.designation)||'—'} · {staffDeptShow(e.current_department)}</div></div>
+                  <span className="num" style={{fontSize:11.5,color:'var(--ink-2)',fontWeight:600}}>{S.expLabel(e)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- Workforce Dashboard (NEMS-style) ---------------- */
 function WorkforceDashboard({store, setRoute, role='Nurse'}){
   const S=window.STAFF;
-  const list=store.staff.filter(e=>(e.role||'Nurse')===role);
-  const [welcome,setWelcome]=React.useState(true);
+  // Active roster only — inactive / former staff never count in the dashboard charts,
+  // drill-down lists or KPIs (they live in the Directory's "Show inactive" and Previous Staff).
+  const list=store.staff.filter(e=>(e.role||'Nurse')===role && e.is_active && !e.former);
   const [showHi,setShowHi]=React.useState(false);
   const tone=role==='PCA'?'#6a52d4':'#0090ca';
   const listView=role==='PCA'?'pca':'nurses';
   const compView=role==='PCA'?'pcaCompliance':'nurseCompliance';
   const homeView=role==='PCA'?'pcaHome':'nurseHome';
   const k=S.kpis(list);
-  const desigAll=S.countBy(list,'designation');
-  const desigTop=desigAll.slice(0,6), desigOther=desigAll.slice(6).reduce((s,d)=>s+d[1],0);
-  const desigDonut=[...desigTop.map(([label,value],i)=>({label,value,color:PALETTE[i%PALETTE.length]})),...(desigOther?[{label:'Other',value:desigOther,color:'#c2486f'}]:[])];
   const vacc=S.vaccinationBreakdown(list).map(([label,value])=>({label,value,color:vaccColor(label)}));
   const recent=S.recentJoiners(list,6);
   const annv=S.anniversaries(list,60);
@@ -272,16 +404,6 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
           <button className="btn sm" onClick={()=>setRoute({view:compView})}><Ic d={I.heart} s={15}/>Compliance</button>
           <button className="btn sm" onClick={()=>setRoute({view:homeView})}><Ic d={I.activity} s={15}/>Refresh</button>
           {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role})}><Ic d={I.plus} s={15}/>Add {role==='PCA'?'PCA':'Nurse'}</button>}</>}/>
-      {welcome&&(
-        <div className="card" style={{background:'var(--blue-50)',border:'1px solid var(--blue-100)',padding:'14px 16px',display:'flex',alignItems:'flex-start',gap:12}}>
-          <div style={{color:'var(--blue)',marginTop:1}}><Ic d={I.heart} s={20}/></div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:14,fontWeight:700,color:'var(--ink)'}}>{role} Management</div>
-            <div style={{fontSize:12.5,color:'var(--ink-2)',marginTop:2}}>Manage the {role} roster, filter with the quick chips, export to Excel/Word, and use <b>Compliance</b> to close gaps.</div>
-          </div>
-          <button className="icon-btn" onClick={()=>setWelcome(false)}><Ic d={I.x} s={15}/></button>
-        </div>
-      )}
       <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))'}}>
         <Kpi label={`Total ${role==='PCA'?'PCAs':'Nurses'}`} val={fmt(k.total_staff)} foot={`active ${role} on roster`} color={tone}/>
         <Kpi label="Departments" val={fmt(new Set(list.map(e=>staffCanonDept(e.current_department))).size)} foot="distinct units staffed" color="#6a52d4"/>
@@ -290,11 +412,8 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
       </div>
 
       <div className="grid" style={{gridTemplateColumns:'1.25fr 1fr'}}>
-        <StaffDeptChart list={list} tone={tone} role={role}/>
-        <div className="card">
-          <div className="card-h"><h3>Designation Breakdown</h3><span className="sub">role mix across the workforce</span><span className="spacer"/></div>
-          <div className="card-b" style={{display:'grid',placeItems:'center'}}><Donut data={desigDonut} size={188} centerValue={fmt(k.total_staff)} centerLabel="staff"/></div>
-        </div>
+        <StaffDeptChart list={list} setRoute={setRoute} tone={tone} role={role}/>
+        <StaffDesigChart list={list} setRoute={setRoute} role={role}/>
       </div>
 
       <div className="grid" style={{gridTemplateColumns:'1fr 1.25fr'}}>
@@ -422,7 +541,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
     if(q&&!(`${e.name} ${e.emp_id} ${e.phone||''}`.toLowerCase().includes(q.toLowerCase())))return false;
     if(role&&(e.role||'Nurse')!==role)return false;
     if(dept&&staffCanonDept(e.current_department)!==dept)return false;
-    if(desig&&e.designation!==desig)return false;
+    if(desig&&staffCanonDesig(e.designation)!==desig)return false;
     if(vacc==='__ok'&&!vaccOK(e.hepatitis_b_vaccination))return false;
     if(vacc==='__gap'&&vaccOK(e.hepatitis_b_vaccination))return false;
     if(vacc&&!vacc.startsWith('__')&&vaccCanon(e.hepatitis_b_vaccination)!==vacc)return false;
@@ -455,7 +574,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
                   <td style={{textAlign:'left'}}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar name={e.name} size={30}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div><div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification||'—'}</div></div></div></td>
                   <td style={{textAlign:'left'}}><RoleBadge role={e.role}/></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
-                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.designation||'—'}</td>
+                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDesig(e.designation)||'—'}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left'}}><VaccBadge status={e.hepatitis_b_vaccination}/></td>
@@ -474,7 +593,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
 
 /* ---------------- Compliance ---------------- */
 function StaffCompliance({store, setRoute, role='Nurse'}){
-  const comp=window.STAFF.compliance(store.staff.filter(e=>(e.role||'Nurse')===role));
+  const comp=window.STAFF.compliance(store.staff.filter(e=>(e.role||'Nurse')===role && e.is_active && !e.former));
   const card=(title,icon,tone,rows,emptyMsg,filter)=>(
     <div className="card" style={{overflow:'hidden'}}>
       <div className="card-h"><div style={{width:28,height:28,borderRadius:7,background:tone+'1a',color:tone,display:'grid',placeItems:'center'}}><Ic d={icon} s={16}/></div>
@@ -538,7 +657,7 @@ function ManageStaff({store, setRoute, role}){
     if(!matchChip(e))return false;
     if(q&&!`${e.name} ${e.emp_id} ${e.phone||''}`.toLowerCase().includes(q.toLowerCase()))return false;
     if(dept&&staffCanonDept(e.current_department)!==dept)return false;
-    if(desig&&e.designation!==desig)return false;
+    if(desig&&staffCanonDesig(e.designation)!==desig)return false;
     if(vacc==='__ok'&&!vaccOK(e.hepatitis_b_vaccination))return false;
     if(vacc==='__gap'&&vaccOK(e.hepatitis_b_vaccination))return false;
     if(vacc&&!vacc.startsWith('__')&&vaccCanon(e.hepatitis_b_vaccination)!==vacc)return false;
@@ -559,7 +678,7 @@ function ManageStaff({store, setRoute, role}){
     return (a.name||'').localeCompare(b.name||'');
   });
   const deptOpts=[...new Set(all.map(e=>staffCanonDept(e.current_department)))].sort((a,b)=>a.localeCompare(b));
-  const desigOpts=S.uniqueVals(all,'designation');
+  const desigOpts=[...new Set(all.map(e=>staffCanonDesig(e.designation)).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const qualOpts=S.uniqueVals(all,'qualification');
   const sel={padding:'9px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:12.5,fontFamily:'inherit',background:'#fff'};
   const chips=[['all','All'],['fav','★ Favorites'],['missing','⚠ Missing vaccination'],['icu','ICU staff'],['emergency','Emergency / ER'],['otcath','OT / Cath Lab'],['newhire','New hire']];
@@ -609,7 +728,7 @@ function ManageStaff({store, setRoute, role}){
                   <td style={{textAlign:'center'}}><span onClick={ev=>{ev.stopPropagation();store.toggleFav(e.id);}} style={{cursor:'pointer',fontSize:16,color:e.fav?'#e0a81e':'#c4ccd6'}}>{e.fav?'★':'☆'}</span></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
                   <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
-                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{e.designation||'—'}</td>
+                  <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDesig(e.designation)||'—'}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}><span style={{color:vaccColor(e.hepatitis_b_vaccination),fontWeight:600}}>{e.hepatitis_b_vaccination||'Unknown'}</span></td>
@@ -617,8 +736,11 @@ function ManageStaff({store, setRoute, role}){
                   <td><div style={{display:'flex',gap:6,justifyContent:'flex-end'}}>
                     {(!window.unicoCan||window.unicoCan('staff','edit'))&&<button className="icon-btn" title="Edit" onClick={()=>setRoute({view:'staffForm',emp:e.id})}><Ic d={I.edit} s={14}/></button>}
                     {(!window.unicoCan||window.unicoCan('staff','edit'))&&(e.is_active
-                      ? <button className="icon-btn danger" title="Deactivate" onClick={()=>store.remove(e.id)}><Ic d={I.x} s={14}/></button>
-                      : <button className="icon-btn" title="Restore" onClick={()=>store.restore(e.id)} style={{color:'var(--pos)'}}><Ic d={I.check} s={14}/></button>)}
+                      ? <button className="icon-btn danger" title="Deactivate" onClick={async()=>{
+                          const ok=await window.UI.confirm({title:`Deactivate ${e.name}?`,message:'They will be moved off the active roster into Previous Staff. You can restore them anytime.',confirmLabel:'Deactivate'});
+                          if(ok){store.remove(e.id);window.UI.toast(e.name+' moved to Previous Staff','success');}
+                        }}><Ic d={I.x} s={14}/></button>
+                      : <button className="icon-btn" title="Restore" onClick={()=>{store.restore(e.id);window.UI&&window.UI.toast(e.name+' restored to the active roster','success');}} style={{color:'var(--pos)'}}><Ic d={I.check} s={14}/></button>)}
                     {(!window.unicoCan||window.unicoCan('staff','delete'))&&<button className="icon-btn" title="Delete permanently" onClick={async()=>{
                       const ok=await window.UI.confirm({title:`Permanently delete ${e.name}?`,message:'This removes the record entirely and cannot be undone. (Use Deactivate to keep the record.)',danger:true,confirmLabel:'Delete permanently'});
                       if(ok){store.destroy(e.id);window.UI.toast('Staff record deleted','success');}
@@ -639,7 +761,8 @@ function ManageStaff({store, setRoute, role}){
 function PreviousStaff({store, setRoute}){
   const [q,setQ]=React.useState('');
   const [role,setRole]=React.useState('');
-  const list=store.staff.filter(e=>e.former);
+  // Anyone off the active roster: import-archived (former) OR deactivated (is_active===false).
+  const list=store.staff.filter(e=>e.former||e.is_active===false);
   const fmtd=d=>{ try{ return d?new Date(d).toLocaleDateString():''; }catch(e){ return ''; } };
   const rows=list
     .filter(e=>!role||(e.role||'Nurse')===role)
@@ -650,7 +773,7 @@ function PreviousStaff({store, setRoute}){
   return (
     <div className="grid" style={{gap:16}}>
       <SectionTitle icon={I.steth} title="Previous Staff"
-        sub={`${list.length} former staff — removed from the active roster (not in the latest list). Records are kept for history; restore anyone anytime.`}
+        sub={`${list.length} inactive staff — archived from an import or deactivated, so off the active roster. Records are kept for history; restore anyone anytime.`}
         right={<input placeholder="Search former staff…" value={q} onChange={e=>setQ(e.target.value)} style={{...inp,minWidth:220}}/>}/>
       <div className="card" style={{overflow:'hidden'}}>
         <div className="card-h">
@@ -670,12 +793,12 @@ function PreviousStaff({store, setRoute}){
                     <td className="num">{e.emp_id||'—'}</td>
                     <td><RoleBadge role={e.role}/></td>
                     <td style={{textAlign:'left'}}>{staffDeptShow(e.current_department)}</td>
-                    <td style={{textAlign:'left'}}>{e.designation||'—'}</td>
+                    <td style={{textAlign:'left'}}>{staffCanonDesig(e.designation)||'—'}</td>
                     <td style={{fontSize:12,color:'var(--muted)'}}>{fmtd(e.archived_at)}</td>
-                    <td style={{textAlign:'left',fontSize:12,color:'var(--muted)'}}>{e.archived_reason||'—'}</td>
+                    <td style={{textAlign:'left',fontSize:12,color:'var(--muted)'}}>{e.archived_reason||(e.former?'Not in latest import':'Deactivated')}</td>
                     <td style={{textAlign:'right',whiteSpace:'nowrap'}}>
                       <button className="btn sm" style={{marginRight:5}} onClick={()=>setRoute&&setRoute({view:(e.role==='PCA'?'pca':'nurses')})} title="Open in directory"><Ic d={I.user} s={13}/>View</button>
-                      <button className="btn sm pri" onClick={()=>{ store.update(e.id,{is_active:true,former:false}); window.UI&&window.UI.toast(e.name+' restored to the active roster','success'); }}><Ic d={I.check} s={13}/>Restore</button>
+                      <button className="btn sm pri" onClick={()=>{ (store.restore?store.restore(e.id):store.update(e.id,{is_active:true,former:false,archived_at:null,archived_reason:''})); window.UI&&window.UI.toast(e.name+' restored to the active roster','success'); }}><Ic d={I.check} s={13}/>Restore</button>
                     </td>
                   </tr>
                 ))}

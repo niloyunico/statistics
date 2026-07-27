@@ -365,6 +365,37 @@ app.get('/login', function (req, res) {
   res.type('html').send(loginPage({ portal: req.query && req.query.portal, next }));
 });
 
+// --- Brute-force throttle -----------------------------------------------------
+// A signed JWT is only as safe as the password behind it, so cap how fast an
+// attacker can guess. In-memory, per client IP + username, with a sliding window
+// and a temporary lockout — no extra dependency, resets on a successful login.
+const LOGIN_MAX_FAILS = parseInt(process.env.LOGIN_MAX_FAILS || '8', 10);      // failures before lockout
+const LOGIN_WINDOW_MS = (parseInt(process.env.LOGIN_WINDOW_MIN || '15', 10)) * 60 * 1000; // rolling window
+const LOGIN_LOCK_MS   = (parseInt(process.env.LOGIN_LOCK_MIN || '15', 10)) * 60 * 1000;    // lockout duration
+const loginFails = new Map(); // key -> { count, first, until }
+function loginKey(req, username) {
+  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || (req.socket && req.socket.remoteAddress) || 'ip';
+  return ip + '|' + (username || '');
+}
+function loginBlockedFor(key) {
+  const rec = loginFails.get(key);
+  if (!rec) return 0;
+  if (rec.until && rec.until > Date.now()) return Math.ceil((rec.until - Date.now()) / 1000);
+  if (rec.first && Date.now() - rec.first > LOGIN_WINDOW_MS) { loginFails.delete(key); return 0; } // window expired
+  return 0;
+}
+function noteLoginFail(key) {
+  const now = Date.now();
+  const rec = loginFails.get(key) || { count: 0, first: now, until: 0 };
+  if (now - rec.first > LOGIN_WINDOW_MS) { rec.count = 0; rec.first = now; } // reset the rolling window
+  rec.count += 1;
+  if (rec.count >= LOGIN_MAX_FAILS) rec.until = now + LOGIN_LOCK_MS;
+  loginFails.set(key, rec);
+}
+// Occasional cleanup so the map can't grow unbounded on a long-lived server.
+const _loginSweep = setInterval(() => { const now = Date.now(); for (const [k, r] of loginFails) { if ((!r.until || r.until < now) && (now - r.first) > LOGIN_WINDOW_MS) loginFails.delete(k); } }, 10 * 60 * 1000);
+if (_loginSweep.unref) _loginSweep.unref(); // don't keep the process alive just for the sweep
+
 app.post('/login', async function (req, res) {
   if (!session.authRequired()) return res.redirect(302, '/');
   const username = String((req.body && req.body.username) || '').trim().toLowerCase();
@@ -374,11 +405,22 @@ app.post('/login', async function (req, res) {
   if (!username || !password) {
     return res.status(400).type('html').send(loginPage({ error: 'Enter your username and password.', username, next, portal }));
   }
+  const key = loginKey(req, username);
+  const wait = loginBlockedFor(key);
+  if (wait > 0) {
+    res.set('Retry-After', String(wait));
+    const mins = Math.ceil(wait / 60);
+    return res.status(429).type('html').send(loginPage({ error: `Too many failed attempts. Try again in about ${mins} minute${mins !== 1 ? 's' : ''}.`, username, next, portal }));
+  }
   try {
     const users = await getUsers();
     const user = await users.findOne({ username });
     const valid = user && user.active !== false && await auth.verify(password, user.passwordHash);
-    if (!valid) return res.status(401).type('html').send(loginPage({ error: 'Invalid username or password.', username, next, portal }));
+    if (!valid) {
+      noteLoginFail(key);
+      return res.status(401).type('html').send(loginPage({ error: 'Invalid username or password.', username, next, portal }));
+    }
+    loginFails.delete(key); // success clears the counter
     session.setSession(res, auth.sign(user));
     // Honor an explicit return target; else collectors land on /collect, admins on the app.
     res.redirect(302, next || ((user.role === 'collector') ? '/collect' : '/'));
@@ -490,6 +532,10 @@ require('./users-admin').mount(app, { requireApi: session.requireApi });
 // Quality Formula catalogue: list (all roles) + admin-only edit of the ONE
 // canonical formula row per indicator; changes fan out to every department.
 qualityFormulas.mount(app, { requireApi: session.requireApi });
+
+// Shift Supervisor Reports module: the "Night Supervisor Log Sheet" digitised —
+// one document per shift, stored in its own `supervisorReports` collection.
+require('./supervisor-reports').mount(app, { requireApi: session.requireApi });
 
 // All other renderer assets (jsx/js/css/svg/fonts) are static. index:false so our
 // handler owns "/". The /api/* routes were registered by ./index before this.
