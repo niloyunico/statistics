@@ -107,7 +107,7 @@
   // Object-valued indicator fields that deep-merge (rather than replace) on patch.
   // incidents/capa are month-keyed too, so editing one month's incident report from
   // the admin drill-down preserves every other month's.
-  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa'];
+  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups'];
 
   // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
   // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are
@@ -241,6 +241,19 @@
       }));
       if (!src) return list;
       const normN = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      // The hand-hygiene audit stored each dept's rows under its ORIGINAL name; several
+      // depts were later renamed to their canonical Quality name, which broke the plain
+      // name match (a renamed dept silently stopped receiving its audited compliance).
+      // Map the old audit names -> canonical so those departments match again.
+      const HH_DEPT_ALIAS = {
+        'endoscopy': 'endoscopic suite',
+        'level 10 ward': 'ipd cabin level 10',
+        'level 9 ward': 'ipd cabin level 9',
+        'labour / delivery / recovery': 'labour , delivery & recovery room',
+        'ct ot': 'ctvs ot',
+        'ct icu': 'ctvs icu',
+      };
+      const canonDept = (s) => { const n = normN(s); return HH_DEPT_ALIAS[n] || n; };
       const bd = src.ind.mDeptBreakdown;
       return list.map((d) => {
         if (d === src.dep) return d;
@@ -259,7 +272,9 @@
         let months = null, mNum = null, mDen = null;
         Object.keys(bd).forEach((mk) => {
           const rows = bd[mk]; if (!Array.isArray(rows)) return;
-          const row = rows.find((r) => r && normN(r.dept) === normN(d.name)); if (!row) return;
+          // Match by canonical name (alias-mapped) OR by the dept's stable key, so a
+          // later display-name change never breaks a department's audit distribution.
+          const row = rows.find((r) => r && (canonDept(r.dept) === canonDept(d.name) || normN(r.dept) === normN(d.key) || canonDept(r.dept) === normN(d.key))); if (!row) return;
           let n = 0, den = 0; const g = row.g || {};
           ['nurse', 'doctor', 'pca', 'other'].forEach((k) => { const x = g[k] || {}; n += Number(x.n) || 0; den += Number(x.d) || 0; });
           if (!(den > 0)) return; // this dept was not audited that month (0/0 row)

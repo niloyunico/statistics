@@ -389,10 +389,15 @@ function QCDashboard({ depts, Q }) {
   const [cellSel, setCellSel] = useState(null);
 
   const d = useMemo(() => {
+    // "Overall Hospital" is a data-entry container for the hospital-wide hand-hygiene
+    // audit, not a real department. Its audit is distributed down to each department, so
+    // exclude it from the department dashboard (heatmap rows, department count, compliance
+    // mix, breach counts) — otherwise it shows a misleading duplicate row and double-counts.
+    const rowDepts = depts.filter(dep => !/overall\s*hospital/i.test((dep && (dep.name || dep.key)) || ''));
     let ok = 0, br = 0, na = 0;
     const uniq = new Set();
     let totalInd = 0;
-    depts.forEach(dep => {
+    rowDepts.forEach(dep => {
       const s = deptStat(dep, fyMonths);
       ok += s.ok; br += s.breach; na += s.na;
       (dep.indicators || []).forEach(ind => { uniq.add(norm(ind.name)); totalInd++; });
@@ -400,7 +405,7 @@ function QCDashboard({ depts, Q }) {
     const totalCells = ok + br + na || 1;
 
     const dashKpis = [
-      { label: 'Departments', val: String(depts.length), foot: 'reporting quality KPIs', color: P.blue },
+      { label: 'Departments', val: String(rowDepts.length), foot: 'reporting quality KPIs', color: P.blue },
       { label: 'Indicators', val: String(uniq.size), foot: totalInd + ' across departments', color: P.violet },
       { label: 'Zero-Defect Rate', val: ((ok + br) ? Math.round(ok * 100 / (ok + br)) : 100) + '%', foot: ok + ' on benchmark · ' + br + ' breaches', color: P.green },
       { label: 'Breaches', val: String(br), foot: 'indicator-months off benchmark', color: br > 0 ? P.rose : P.green },
@@ -415,13 +420,13 @@ function QCDashboard({ depts, Q }) {
     let maxB = 1;
     const bbm = fyMonths.map(m => {
       let b = 0;
-      depts.forEach(dep => (dep.indicators || []).forEach(ind => { if (monthStatus(ind, m[0]) === 'breach') b++; }));
+      rowDepts.forEach(dep => (dep.indicators || []).forEach(ind => { if (monthStatus(ind, m[0]) === 'breach') b++; }));
       if (b > maxB) maxB = b;
       return { label: m[2], val: b };
     });
     const breachByMonth = bbm.map(x => Object.assign(x, { h: Math.round(x.val / maxB * 100) }));
 
-    const heatRows = depts.map(dep => {
+    const heatRows = rowDepts.map(dep => {
       const inds = dep.indicators || [];
       // One cell per month of the selected fiscal year (was one per quarter). Uses the
       // real monthly values, so cells now populate instead of showing all "–".
@@ -725,7 +730,27 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
   const addInc = () => setIncs(a => [...a, { source: 'admin edit' }]);
   const delInc = (i) => setIncs(a => a.filter((_, j) => j !== i));
 
-  const num2 = num === '' ? null : Number(num), den2 = den === '' ? null : Number(den);
+  // Hand-hygiene: enter compliance broken down by staff group (Nurse/Doctor/PCA/Others),
+  // each with actions-performed ÷ opportunities-observed, and roll up to an overall %.
+  const isHH = /hand\s*hygiene/i.test(ind.name || '');
+  const HH_GROUPS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Others']];
+  const [byGroup, setByGroup] = useState(() => isHH); // HH defaults to the group breakdown
+  const [grp, setGrp] = useState(() => {
+    const src = (ind.mGroups && ind.mGroups[mk]) || {};
+    const o = {}; HH_GROUPS.forEach(([k]) => { const x = src[k] || {}; o[k] = { n: x.n != null ? String(x.n) : '', d: x.d != null ? String(x.d) : '' }; });
+    return o;
+  });
+  const setG = (k, f, v) => setGrp(g => Object.assign({}, g, { [k]: Object.assign({}, g[k], { [f]: v }) }));
+  const grpTot = HH_GROUPS.reduce((a, [k]) => {
+    const n = grp[k].n === '' ? null : Number(grp[k].n), d = grp[k].d === '' ? null : Number(grp[k].d);
+    if (n != null) a.n += n; if (d != null) a.d += d;
+    if (grp[k].n !== '' || grp[k].d !== '') a.any = true; return a;
+  }, { n: 0, d: 0, any: false });
+  const grpPct = grpTot.d > 0 ? Math.round((grpTot.n / grpTot.d) * 10000) / 100 : null;
+  const useGroups = isHH && byGroup;
+
+  const num2 = useGroups ? (grpTot.d > 0 ? grpTot.n : null) : (num === '' ? null : Number(num));
+  const den2 = useGroups ? (grpTot.d > 0 ? grpTot.d : null) : (den === '' ? null : Number(den));
   const preview = isRate ? fmtVal(ind, window.qiFormulaCompute(ind.formula, num2 || 0, den2 || 0)) : null;
 
   const save = async () => {
@@ -742,7 +767,13 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
       if (!ok) return; // let them go back and enter the numbers
     }
     const patch = { monthRemarks: { [mk]: remark } };
-    if (isRate) { patch.mNum = { [mk]: num2 }; patch.mDen = { [mk]: den2 }; }
+    if (useGroups) {
+      // store both the rolled-up rate (mNum/mDen + months) AND the per-group breakdown
+      const gp = {}; HH_GROUPS.forEach(([k]) => { const n = grp[k].n === '' ? null : Number(grp[k].n), d = grp[k].d === '' ? null : Number(grp[k].d); if (n != null || d != null) gp[k] = { n: n, d: d }; });
+      patch.mNum = { [mk]: num2 }; patch.mDen = { [mk]: den2 }; patch.months = { [mk]: grpPct };
+      patch.mGroups = { [mk]: Object.keys(gp).length ? gp : null };
+    }
+    else if (isRate) { patch.mNum = { [mk]: num2 }; patch.mDen = { [mk]: den2 }; }
     else { const v = val === '' ? null : Number(val); patch.months = { [mk]: v }; if (ind.formula === 'count') patch.mNum = { [mk]: v }; }
     const clean = incs.map(x => {
       const o = {}; Object.keys(x).forEach(k => { const s = (x[k] == null ? '' : String(x[k])).trim(); if (s) o[k] = s; });
@@ -776,18 +807,55 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
         <div style={{ marginLeft: 'auto', fontSize: 11, color: P.muted }}>Benchmark {benchExpr(ind)}</div>
       </div>
 
-      {/* value */}
-      <div style={{ display: 'grid', gridTemplateColumns: isRate ? '1fr 1fr auto' : '1fr', gap: 12, alignItems: 'end', marginBottom: 11 }}>
-        {isRate ? (
-          <>
-            <div><label style={lbl}>{ind.numLabel || 'Numerator'}</label><input type="number" step="any" value={num} onChange={e => setNum(e.target.value)} style={inp} /></div>
-            <div><label style={lbl}>{ind.denLabel || 'Denominator'}</label><input type="number" step="any" value={den} onChange={e => setDen(e.target.value)} style={inp} /></div>
-            <div style={{ paddingBottom: 7, fontFamily: MONO, fontSize: 13, fontWeight: 700, color: P.ink }}>= {preview}</div>
-          </>
-        ) : (
-          <div><label style={lbl}>Value</label><input type="number" step="any" value={val} onChange={e => setVal(e.target.value)} style={inp} /></div>
-        )}
-      </div>
+      {/* value — hand hygiene supports a per-staff-group breakdown that rolls up to overall */}
+      {isHH && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+          {[['group', 'By staff group'], ['overall', 'Overall only']].map(([v, l]) => {
+            const on = (byGroup ? 'group' : 'overall') === v;
+            return <button key={v} onClick={() => setByGroup(v === 'group')} style={{ border: '1px solid ' + (on ? '#0090ca' : '#dde3ec'), background: on ? '#eef8fc' : '#fff', color: on ? '#0072a3' : P.muted, padding: '5px 12px', borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>{l}</button>;
+          })}
+        </div>
+      )}
+      {useGroups ? (
+        <div style={{ marginBottom: 11 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 54px', gap: 8, alignItems: 'center', marginBottom: 5 }}>
+            <span style={{ ...lbl, marginBottom: 0 }}>Group</span>
+            <span style={{ ...lbl, marginBottom: 0 }}>Actions done</span>
+            <span style={{ ...lbl, marginBottom: 0 }}>Opportunities</span>
+            <span style={{ ...lbl, marginBottom: 0, textAlign: 'right' }}>%</span>
+          </div>
+          {HH_GROUPS.map(([k, label]) => {
+            const n = grp[k].n === '' ? null : Number(grp[k].n), d = grp[k].d === '' ? null : Number(grp[k].d);
+            const p = (d > 0) ? Math.round((n / d) * 1000) / 10 : null;
+            return (
+              <div key={k} style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 54px', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: P.ink }}>{label}</span>
+                <input type="number" step="any" min="0" value={grp[k].n} onChange={e => setG(k, 'n', e.target.value)} style={inp} placeholder="0" />
+                <input type="number" step="any" min="0" value={grp[k].d} onChange={e => setG(k, 'd', e.target.value)} style={inp} placeholder="0" />
+                <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, color: p == null ? P.muted : P.ink, textAlign: 'right' }}>{p == null ? '—' : p + '%'}</span>
+              </div>
+            );
+          })}
+          <div style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 54px', gap: 8, alignItems: 'center', marginTop: 4, paddingTop: 8, borderTop: '1px solid #e3e9f1' }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: '#0072a3' }}>Overall</span>
+            <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 700, color: P.ink, paddingLeft: 9 }}>{grpTot.any ? grpTot.n : '—'}</span>
+            <span style={{ fontFamily: MONO, fontSize: 12.5, fontWeight: 700, color: P.ink, paddingLeft: 9 }}>{grpTot.any ? grpTot.d : '—'}</span>
+            <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 800, color: grpPct == null ? P.muted : '#0072a3', textAlign: 'right' }}>{grpPct == null ? '—' : grpPct + '%'}</span>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: isRate ? '1fr 1fr auto' : '1fr', gap: 12, alignItems: 'end', marginBottom: 11 }}>
+          {isRate ? (
+            <>
+              <div><label style={lbl}>{ind.numLabel || 'Numerator'}</label><input type="number" step="any" value={num} onChange={e => setNum(e.target.value)} style={inp} /></div>
+              <div><label style={lbl}>{ind.denLabel || 'Denominator'}</label><input type="number" step="any" value={den} onChange={e => setDen(e.target.value)} style={inp} /></div>
+              <div style={{ paddingBottom: 7, fontFamily: MONO, fontSize: 13, fontWeight: 700, color: P.ink }}>= {preview}</div>
+            </>
+          ) : (
+            <div><label style={lbl}>Value</label><input type="number" step="any" value={val} onChange={e => setVal(e.target.value)} style={inp} /></div>
+          )}
+        </div>
+      )}
       <div style={{ marginBottom: 12 }}><label style={lbl}>Month remark (optional)</label><input value={remark} onChange={e => setRemark(e.target.value)} style={inp} /></div>
 
       {/* incidents CRUD */}

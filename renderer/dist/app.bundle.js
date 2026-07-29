@@ -5903,7 +5903,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
   // Object-valued indicator fields that deep-merge (rather than replace) on patch.
   // incidents/capa are month-keyed too, so editing one month's incident report from
   // the admin drill-down preserves every other month's.
-  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa'];
+  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups'];
 
   // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
   // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are
@@ -6037,6 +6037,19 @@ window.QI_CORRECTIONS_BY_DEFID = {
       }));
       if (!src) return list;
       const normN = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      // The hand-hygiene audit stored each dept's rows under its ORIGINAL name; several
+      // depts were later renamed to their canonical Quality name, which broke the plain
+      // name match (a renamed dept silently stopped receiving its audited compliance).
+      // Map the old audit names -> canonical so those departments match again.
+      const HH_DEPT_ALIAS = {
+        'endoscopy': 'endoscopic suite',
+        'level 10 ward': 'ipd cabin level 10',
+        'level 9 ward': 'ipd cabin level 9',
+        'labour / delivery / recovery': 'labour , delivery & recovery room',
+        'ct ot': 'ctvs ot',
+        'ct icu': 'ctvs icu',
+      };
+      const canonDept = (s) => { const n = normN(s); return HH_DEPT_ALIAS[n] || n; };
       const bd = src.ind.mDeptBreakdown;
       return list.map((d) => {
         if (d === src.dep) return d;
@@ -6055,7 +6068,9 @@ window.QI_CORRECTIONS_BY_DEFID = {
         let months = null, mNum = null, mDen = null;
         Object.keys(bd).forEach((mk) => {
           const rows = bd[mk]; if (!Array.isArray(rows)) return;
-          const row = rows.find((r) => r && normN(r.dept) === normN(d.name)); if (!row) return;
+          // Match by canonical name (alias-mapped) OR by the dept's stable key, so a
+          // later display-name change never breaks a department's audit distribution.
+          const row = rows.find((r) => r && (canonDept(r.dept) === canonDept(d.name) || normN(r.dept) === normN(d.key) || canonDept(r.dept) === normN(d.key))); if (!row) return;
           let n = 0, den = 0; const g = row.g || {};
           ['nurse', 'doctor', 'pca', 'other'].forEach((k) => { const x = g[k] || {}; n += Number(x.n) || 0; den += Number(x.d) || 0; });
           if (!(den > 0)) return; // this dept was not audited that month (0/0 row)
@@ -25740,12 +25755,13 @@ function QCDashboard({
   };
   const [cellSel, setCellSel] = useState(null);
   const d = useMemo(() => {
+    const rowDepts = depts.filter(dep => !/overall\s*hospital/i.test(dep && (dep.name || dep.key) || ''));
     let ok = 0,
       br = 0,
       na = 0;
     const uniq = new Set();
     let totalInd = 0;
-    depts.forEach(dep => {
+    rowDepts.forEach(dep => {
       const s = deptStat(dep, fyMonths);
       ok += s.ok;
       br += s.breach;
@@ -25758,7 +25774,7 @@ function QCDashboard({
     const totalCells = ok + br + na || 1;
     const dashKpis = [{
       label: 'Departments',
-      val: String(depts.length),
+      val: String(rowDepts.length),
       foot: 'reporting quality KPIs',
       color: P.blue
     }, {
@@ -25795,7 +25811,7 @@ function QCDashboard({
     let maxB = 1;
     const bbm = fyMonths.map(m => {
       let b = 0;
-      depts.forEach(dep => (dep.indicators || []).forEach(ind => {
+      rowDepts.forEach(dep => (dep.indicators || []).forEach(ind => {
         if (monthStatus(ind, m[0]) === 'breach') b++;
       }));
       if (b > maxB) maxB = b;
@@ -25807,7 +25823,7 @@ function QCDashboard({
     const breachByMonth = bbm.map(x => Object.assign(x, {
       h: Math.round(x.val / maxB * 100)
     }));
-    const heatRows = depts.map(dep => {
+    const heatRows = rowDepts.map(dep => {
       const inds = dep.indicators || [];
       const cells = fyMonths.map(m => {
         let b = 0,
@@ -26661,8 +26677,42 @@ function QCIndEdit({
     source: 'admin edit'
   }]);
   const delInc = i => setIncs(a => a.filter((_, j) => j !== i));
-  const num2 = num === '' ? null : Number(num),
-    den2 = den === '' ? null : Number(den);
+  const isHH = /hand\s*hygiene/i.test(ind.name || '');
+  const HH_GROUPS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Others']];
+  const [byGroup, setByGroup] = useState(() => isHH);
+  const [grp, setGrp] = useState(() => {
+    const src = ind.mGroups && ind.mGroups[mk] || {};
+    const o = {};
+    HH_GROUPS.forEach(([k]) => {
+      const x = src[k] || {};
+      o[k] = {
+        n: x.n != null ? String(x.n) : '',
+        d: x.d != null ? String(x.d) : ''
+      };
+    });
+    return o;
+  });
+  const setG = (k, f, v) => setGrp(g => Object.assign({}, g, {
+    [k]: Object.assign({}, g[k], {
+      [f]: v
+    })
+  }));
+  const grpTot = HH_GROUPS.reduce((a, [k]) => {
+    const n = grp[k].n === '' ? null : Number(grp[k].n),
+      d = grp[k].d === '' ? null : Number(grp[k].d);
+    if (n != null) a.n += n;
+    if (d != null) a.d += d;
+    if (grp[k].n !== '' || grp[k].d !== '') a.any = true;
+    return a;
+  }, {
+    n: 0,
+    d: 0,
+    any: false
+  });
+  const grpPct = grpTot.d > 0 ? Math.round(grpTot.n / grpTot.d * 10000) / 100 : null;
+  const useGroups = isHH && byGroup;
+  const num2 = useGroups ? grpTot.d > 0 ? grpTot.n : null : num === '' ? null : Number(num);
+  const den2 = useGroups ? grpTot.d > 0 ? grpTot.d : null : den === '' ? null : Number(den);
   const preview = isRate ? fmtVal(ind, window.qiFormulaCompute(ind.formula, num2 || 0, den2 || 0)) : null;
   const save = async () => {
     const emptyReading = isRate ? num2 == null && den2 == null : val === '';
@@ -26681,7 +26731,29 @@ function QCIndEdit({
         [mk]: remark
       }
     };
-    if (isRate) {
+    if (useGroups) {
+      const gp = {};
+      HH_GROUPS.forEach(([k]) => {
+        const n = grp[k].n === '' ? null : Number(grp[k].n),
+          d = grp[k].d === '' ? null : Number(grp[k].d);
+        if (n != null || d != null) gp[k] = {
+          n: n,
+          d: d
+        };
+      });
+      patch.mNum = {
+        [mk]: num2
+      };
+      patch.mDen = {
+        [mk]: den2
+      };
+      patch.months = {
+        [mk]: grpPct
+      };
+      patch.mGroups = {
+        [mk]: Object.keys(gp).length ? gp : null
+      };
+    } else if (isRate) {
       patch.mNum = {
         [mk]: num2
       };
@@ -26812,7 +26884,146 @@ function QCIndEdit({
       fontSize: 11,
       color: P.muted
     }
-  }, "Benchmark ", benchExpr(ind))), React.createElement("div", {
+  }, "Benchmark ", benchExpr(ind))), isHH && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginBottom: 10
+    }
+  }, [['group', 'By staff group'], ['overall', 'Overall only']].map(([v, l]) => {
+    const on = (byGroup ? 'group' : 'overall') === v;
+    return React.createElement("button", {
+      key: v,
+      onClick: () => setByGroup(v === 'group'),
+      style: {
+        border: '1px solid ' + (on ? '#0090ca' : '#dde3ec'),
+        background: on ? '#eef8fc' : '#fff',
+        color: on ? '#0072a3' : P.muted,
+        padding: '5px 12px',
+        borderRadius: 7,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, l);
+  })), useGroups ? React.createElement("div", {
+    style: {
+      marginBottom: 11
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '86px 1fr 1fr 54px',
+      gap: 8,
+      alignItems: 'center',
+      marginBottom: 5
+    }
+  }, React.createElement("span", {
+    style: {
+      ...lbl,
+      marginBottom: 0
+    }
+  }, "Group"), React.createElement("span", {
+    style: {
+      ...lbl,
+      marginBottom: 0
+    }
+  }, "Actions done"), React.createElement("span", {
+    style: {
+      ...lbl,
+      marginBottom: 0
+    }
+  }, "Opportunities"), React.createElement("span", {
+    style: {
+      ...lbl,
+      marginBottom: 0,
+      textAlign: 'right'
+    }
+  }, "%")), HH_GROUPS.map(([k, label]) => {
+    const n = grp[k].n === '' ? null : Number(grp[k].n),
+      d = grp[k].d === '' ? null : Number(grp[k].d);
+    const p = d > 0 ? Math.round(n / d * 1000) / 10 : null;
+    return React.createElement("div", {
+      key: k,
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '86px 1fr 1fr 54px',
+        gap: 8,
+        alignItems: 'center',
+        marginBottom: 6
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, label), React.createElement("input", {
+      type: "number",
+      step: "any",
+      min: "0",
+      value: grp[k].n,
+      onChange: e => setG(k, 'n', e.target.value),
+      style: inp,
+      placeholder: "0"
+    }), React.createElement("input", {
+      type: "number",
+      step: "any",
+      min: "0",
+      value: grp[k].d,
+      onChange: e => setG(k, 'd', e.target.value),
+      style: inp,
+      placeholder: "0"
+    }), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 12,
+        fontWeight: 700,
+        color: p == null ? P.muted : P.ink,
+        textAlign: 'right'
+      }
+    }, p == null ? '—' : p + '%'));
+  }), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '86px 1fr 1fr 54px',
+      gap: 8,
+      alignItems: 'center',
+      marginTop: 4,
+      paddingTop: 8,
+      borderTop: '1px solid #e3e9f1'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 800,
+      color: '#0072a3'
+    }
+  }, "Overall"), React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: P.ink,
+      paddingLeft: 9
+    }
+  }, grpTot.any ? grpTot.n : '—'), React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: P.ink,
+      paddingLeft: 9
+    }
+  }, grpTot.any ? grpTot.d : '—'), React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 13,
+      fontWeight: 800,
+      color: grpPct == null ? P.muted : '#0072a3',
+      textAlign: 'right'
+    }
+  }, grpPct == null ? '—' : grpPct + '%'))) : React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: isRate ? '1fr 1fr auto' : '1fr',
