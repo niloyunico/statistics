@@ -26664,7 +26664,18 @@ function QCIndEdit({
   const num2 = num === '' ? null : Number(num),
     den2 = den === '' ? null : Number(den);
   const preview = isRate ? fmtVal(ind, window.qiFormulaCompute(ind.formula, num2 || 0, den2 || 0)) : null;
-  const save = () => {
+  const save = async () => {
+    const emptyReading = isRate ? num2 == null && den2 == null : val === '';
+    if (emptyReading) {
+      const msg = isRate ? `No reading will be recorded — “${ind.numLabel || 'Numerator'}” and “${ind.denLabel || 'Denominator'}” are both empty. For a "no event" month, enter 0 and the ${ind.denLabel || 'denominator'}. Save the remark only anyway?` : `No value entered for ${mlabel} — nothing will be recorded. Save the remark only anyway?`;
+      const ok = window.UI && window.UI.confirm ? await window.UI.confirm({
+        title: 'No reading entered',
+        message: msg,
+        confirmLabel: 'Save remark only',
+        cancelLabel: 'Go back'
+      }) : window.confirm(msg);
+      if (!ok) return;
+    }
     const patch = {
       monthRemarks: {
         [mk]: remark

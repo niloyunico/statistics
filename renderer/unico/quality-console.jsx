@@ -728,7 +728,19 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
   const num2 = num === '' ? null : Number(num), den2 = den === '' ? null : Number(den);
   const preview = isRate ? fmtVal(ind, window.qiFormulaCompute(ind.formula, num2 || 0, den2 || 0)) : null;
 
-  const save = () => {
+  const save = async () => {
+    // Guard: a reading with no number recorded nothing (only a remark), which silently
+    // left the month "not submitted". Warn before saving an empty reading.
+    const emptyReading = isRate ? (num2 == null && den2 == null) : (val === '');
+    if (emptyReading) {
+      const msg = isRate
+        ? `No reading will be recorded — “${ind.numLabel || 'Numerator'}” and “${ind.denLabel || 'Denominator'}” are both empty. For a "no event" month, enter 0 and the ${ind.denLabel || 'denominator'}. Save the remark only anyway?`
+        : `No value entered for ${mlabel} — nothing will be recorded. Save the remark only anyway?`;
+      const ok = (window.UI && window.UI.confirm)
+        ? await window.UI.confirm({ title: 'No reading entered', message: msg, confirmLabel: 'Save remark only', cancelLabel: 'Go back' })
+        : window.confirm(msg);
+      if (!ok) return; // let them go back and enter the numbers
+    }
     const patch = { monthRemarks: { [mk]: remark } };
     if (isRate) { patch.mNum = { [mk]: num2 }; patch.mDen = { [mk]: den2 }; }
     else { const v = val === '' ? null : Number(val); patch.months = { [mk]: v }; if (ind.formula === 'count') patch.mNum = { [mk]: v }; }
