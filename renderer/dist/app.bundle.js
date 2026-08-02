@@ -19057,11 +19057,11 @@ function MonthlyStatsReport({
   const single = dept !== 'all' ? scope[0] : null;
   const primaryLabel = single ? msPrimaryCol(single).label || single.primaryLabel || 'Volume' : 'Volume';
   const monthTotals = AX.map(k => scope.reduce((s, d) => {
-    const r = d.series.find(x => x.month === k);
+    const r = rptChartRows(d, d.series).find(x => x.month === k);
     return s + (r && r[d.primary] || 0);
   }, 0));
   const kpi = {
-    total: scope.reduce((a, d) => a + d.series.reduce((s, r) => s + (r[d.primary] || 0), 0), 0),
+    total: scope.reduce((a, d) => a + rptChartRows(d, d.series).reduce((s, r) => s + (r[d.primary] || 0), 0), 0),
     peak: monthTotals.length ? Math.max(...monthTotals) : 0,
     months: AX.length
   };
@@ -19927,7 +19927,7 @@ function Reports({
   }) {
     const tone = PALETTE[d.id.charCodeAt(0) % PALETTE.length];
     const fs = fseriesOf(d);
-    const st = statOf(d, fs);
+    const st = statOf(d, rptChartRows(d, fs));
     const compGroups = compositionGroups(d, fs);
     const detailed = type === 'detail';
     const ncol = d.cols.length + 1;
@@ -46091,11 +46091,15 @@ window.LockScreen = LockScreen;
     const busiest = React.useMemo(() => Object.keys(monthCounts).sort((a, b) => monthCounts[b] - monthCounts[a])[0] || '', [monthCounts]);
     const m = month || busiest || months[0] || '';
     const subsM = (subs || []).filter(s => s.month === m);
-    const pDone = new Set(subsM.filter(s => s.type === 'patient').map(s => s.department));
-    const qDone = new Set(subsM.filter(s => s.type === 'quality').map(s => s.area));
-    const pMissing = depts.filter(d => !pDone.has(d.id));
-    const qMissing = areas.filter(a => !qDone.has(a.key));
-    const pPct = depts.length ? Math.round((depts.length - pMissing.length) / depts.length * 100) : 0;
+    const everPatient = new Set((subs || []).filter(s => s.type === 'patient').map(s => s.department));
+    const patientDepts = depts.filter(d => (d.series || []).length > 0 || everPatient.has(d.id));
+    const hasRec = d => (d.series || []).some(r => r.month === m && Object.keys(r).some(k => k !== 'month' && k !== 'full' && r[k] != null && r[k] !== ''));
+    const qHasRec = a => (a.indicators || []).some(ind => ind.months && ind.months[m] != null && ind.months[m] !== '' || ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '');
+    const pSub = new Set(subsM.filter(s => s.type === 'patient').map(s => s.department));
+    const qSub = new Set(subsM.filter(s => s.type === 'quality').map(s => s.area));
+    const pMissing = patientDepts.filter(d => !pSub.has(d.id) && !hasRec(d));
+    const qMissing = areas.filter(a => !qSub.has(a.key) && !qHasRec(a));
+    const pPct = patientDepts.length ? Math.round((patientDepts.length - pMissing.length) / patientDepts.length * 100) : 0;
     const qPct = areas.length ? Math.round((areas.length - qMissing.length) / areas.length * 100) : 0;
     const gapN = pMissing.length + qMissing.length;
     const copyGaps = () => {
@@ -46204,8 +46208,8 @@ window.LockScreen = LockScreen;
       }
     }, [{
       label: 'Patient statistics',
-      done: depts.length - pMissing.length,
-      total: depts.length,
+      done: patientDepts.length - pMissing.length,
+      total: patientDepts.length,
       pct: pPct,
       color: 'linear-gradient(90deg,#1f9d57,#3ab5a7)',
       missing: pMissing,

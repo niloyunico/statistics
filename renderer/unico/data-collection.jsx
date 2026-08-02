@@ -1635,11 +1635,20 @@
     const busiest = React.useMemo(() => Object.keys(monthCounts).sort((a, b) => monthCounts[b] - monthCounts[a])[0] || '', [monthCounts]);
     const m = month || busiest || months[0] || '';
     const subsM = (subs || []).filter((s) => s.month === m);
-    const pDone = new Set(subsM.filter((s) => s.type === 'patient').map((s) => s.department));
-    const qDone = new Set(subsM.filter((s) => s.type === 'quality').map((s) => s.area));
-    const pMissing = depts.filter((d) => !pDone.has(d.id));
-    const qMissing = areas.filter((a) => !qDone.has(a.key));
-    const pPct = depts.length ? Math.round((depts.length - pMissing.length) / depts.length * 100) : 0;
+    // Only count departments that actually collect PATIENT statistics — have data on record
+    // OR have ever submitted patient data. Excludes quality-only units (e.g. Radiology) that
+    // never report a patient census, so they're not wrongly flagged as "missing".
+    const everPatient = new Set((subs || []).filter((s) => s.type === 'patient').map((s) => s.department));
+    const patientDepts = depts.filter((d) => (d.series || []).length > 0 || everPatient.has(d.id));
+    // A dept/area is COVERED for the month if it was submitted this month OR already has data
+    // on record for it (some data is entered directly, not through the submission flow).
+    const hasRec = (d) => (d.series || []).some((r) => r.month === m && Object.keys(r).some((k) => k !== 'month' && k !== 'full' && r[k] != null && r[k] !== ''));
+    const qHasRec = (a) => (a.indicators || []).some((ind) => (ind.months && ind.months[m] != null && ind.months[m] !== '') || (ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''));
+    const pSub = new Set(subsM.filter((s) => s.type === 'patient').map((s) => s.department));
+    const qSub = new Set(subsM.filter((s) => s.type === 'quality').map((s) => s.area));
+    const pMissing = patientDepts.filter((d) => !pSub.has(d.id) && !hasRec(d));
+    const qMissing = areas.filter((a) => !qSub.has(a.key) && !qHasRec(a));
+    const pPct = patientDepts.length ? Math.round((patientDepts.length - pMissing.length) / patientDepts.length * 100) : 0;
     const qPct = areas.length ? Math.round((areas.length - qMissing.length) / areas.length * 100) : 0;
     const gapN = pMissing.length + qMissing.length;
     const copyGaps = () => {
@@ -1669,7 +1678,7 @@
             "not submitted" toggle and gap chips — quality is no longer left blank. */}
         <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap' }}>
           {[
-            { label: 'Patient statistics', done: depts.length - pMissing.length, total: depts.length, pct: pPct, color: 'linear-gradient(90deg,#1f9d57,#3ab5a7)', missing: pMissing, keyOf: (x) => x.id, chipBg: 'var(--pos-bg)', chipFg: 'var(--pos)', show: showP, setShow: setShowP },
+            { label: 'Patient statistics', done: patientDepts.length - pMissing.length, total: patientDepts.length, pct: pPct, color: 'linear-gradient(90deg,#1f9d57,#3ab5a7)', missing: pMissing, keyOf: (x) => x.id, chipBg: 'var(--pos-bg)', chipFg: 'var(--pos)', show: showP, setShow: setShowP },
             { label: 'Quality indicators', done: areas.length - qMissing.length, total: areas.length, pct: qPct, color: 'linear-gradient(90deg,#0090ca,#27a8db)', missing: qMissing, keyOf: (x) => x.key, chipBg: 'var(--blue-50)', chipFg: 'var(--blue-700,#0b6aa2)', show: showQ, setShow: setShowQ },
           ].map((c, ci) => (
             <div key={ci} style={{ flex: '1 1 280px', minWidth: 0 }}>

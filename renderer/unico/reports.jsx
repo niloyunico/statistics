@@ -191,8 +191,10 @@ function MonthlyStatsReport({depts}){
   // the largest single-department month count as the denominator — up to 2× too high when
   // departments reported different months — and Peak used the max single-department month,
   // contradicting the combined chart shown beside it.)
-  const monthTotals = AX.map(k=>scope.reduce((s,d)=>{ const r=d.series.find(x=>x.month===k); return s+((r&&r[d.primary])||0); },0));
-  const kpi = { total: scope.reduce((a,d)=>a+d.series.reduce((s,r)=>s+(r[d.primary]||0),0),0),
+  // TR-in folded into the Admission primary for admission depts (no-op elsewhere), so the
+  // summary total/peak agree with the per-department pages and their charts.
+  const monthTotals = AX.map(k=>scope.reduce((s,d)=>{ const r=rptChartRows(d,d.series).find(x=>x.month===k); return s+((r&&r[d.primary])||0); },0));
+  const kpi = { total: scope.reduce((a,d)=>a+rptChartRows(d,d.series).reduce((s,r)=>s+(r[d.primary]||0),0),0),
     peak: monthTotals.length?Math.max(...monthTotals):0, months: AX.length };
   const avg = kpi.months?Math.round(kpi.total/kpi.months):0;
   const metricCount = scope.reduce((n,d)=>n+d.cols.length,0);
@@ -521,7 +523,10 @@ function Reports({depts}){
 
   function DeptPage({d, n, total}){
     const tone=PALETTE[(d.id.charCodeAt(0))%PALETTE.length];
-    const fs=fseriesOf(d); const st=statOf(d,fs);
+    // KPIs are computed over the SAME rows the chart/donut plot (TR-in folded into the
+    // Admission primary for admission-flow depts) so the headline figures, the trend chart
+    // and the composition donut all agree. Non-admission depts are unchanged (fold is a no-op).
+    const fs=fseriesOf(d); const st=statOf(d,rptChartRows(d,fs));
     const compGroups=compositionGroups(d,fs);
     const detailed=type==='detail';
     // ALL metric columns, always — the summary table used to slice to the first 5,
