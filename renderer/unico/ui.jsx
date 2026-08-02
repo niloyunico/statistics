@@ -310,7 +310,70 @@ function unicoWorkspaceSub(view){
   return [];
 }
 
+/* My Account — the signed-in user manages their OWN profile + password (any role).
+   Talks to the self-service API in server/users-admin.js (/api/me, /api/me/password). */
+function MyAccount({ onClose }){
+  const { useState } = React;
+  const u = (typeof window!=='undefined' && window.__UNICO_USER__) || null;
+  const [tab,setTab] = useState('password');
+  const [name,setName] = useState((u&&u.name)||'');
+  const [email,setEmail] = useState((u&&u.email)||'');
+  const [cur,setCur] = useState(''); const [nw,setNw] = useState(''); const [nw2,setNw2] = useState('');
+  const [busy,setBusy] = useState(false); const [err,setErr] = useState(''); const [ok,setOk] = useState('');
+  const api = (method,path,body)=>fetch(path,{method,headers:{'Content-Type':'application/json'},credentials:'same-origin',body:body?JSON.stringify(body):undefined}).then(async r=>{ let j=null; try{j=await r.json();}catch(e){} if(!r.ok||!j||j.ok===false) throw new Error((j&&j.error)||(r.status===401?'Sign in to manage your account.':'Request failed ('+r.status+').')); return j; });
+  const txt = { padding:'9px 11px', border:'1px solid var(--line)', borderRadius:8, fontSize:13, fontFamily:'inherit', width:'100%', outline:'none', background:'#fff', boxSizing:'border-box' };
+  const savePw = async ()=>{ setErr(''); setOk(''); if(nw.length<6) return setErr('New password must be at least 6 characters.'); if(nw!==nw2) return setErr('New passwords do not match.'); setBusy(true);
+    try{ await api('POST','/api/me/password',{currentPassword:cur,newPassword:nw}); setOk('Password changed successfully.'); setCur(''); setNw(''); setNw2(''); }catch(e){ setErr(e.message); } finally{ setBusy(false); } };
+  const saveProfile = async ()=>{ setErr(''); setOk(''); setBusy(true);
+    try{ await api('PATCH','/api/me',{name,email}); if(window.__UNICO_USER__){ window.__UNICO_USER__.name=name; window.__UNICO_USER__.email=email; } setOk('Profile updated. Reload to see it everywhere.'); }catch(e){ setErr(e.message); } finally{ setBusy(false); } };
+  const role = u ? (u.role==='collector'?'Data Collector':(u.title||u.role)) : 'Administrator (local)';
+  const initials = String((u&&u.name)||'U').split(/\s+/).map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()||'U';
+  const modal = (
+    <div onMouseDown={onClose} style={{position:'fixed',inset:0,background:'rgba(16,32,46,.42)',zIndex:500,display:'grid',placeItems:'center',padding:'clamp(6px,3vw,20px)'}}>
+      <div onMouseDown={e=>e.stopPropagation()} className="card" style={{width:'min(440px,96vw)',maxHeight:'92vh',overflow:'auto'}}>
+        <div className="card-h"><h3>My Account</h3><span className="spacer"/><button className="icon-btn" style={{width:28,height:28}} onClick={onClose}><Ic d={I.x} s={14}/></button></div>
+        <div className="card-b" style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <div style={{width:46,height:46,borderRadius:'50%',background:'var(--blue-50)',color:'var(--blue-700,#0b6aa2)',display:'grid',placeItems:'center',fontSize:16,fontWeight:800,flexShrink:0}}>{initials}</div>
+            <div style={{minWidth:0}}><div style={{fontSize:14.5,fontWeight:700,color:'var(--ink)'}}>{(u&&u.name)||'Local Administrator'}</div>
+              <div style={{fontSize:12,color:'var(--muted)'}}>{u?('@'+u.username+' · '+role):role}</div></div>
+          </div>
+          {!u && <div style={{fontSize:12.5,color:'#9a6b00',background:'var(--warn-bg,#fff4e0)',border:'1px solid #f0d9a8',borderRadius:8,padding:'9px 11px'}}>You're in local admin mode (no login). Account settings apply on the deployed site where sign-in is required.</div>}
+          <div className="seg"><button className={tab==='password'?'on':''} onClick={()=>{setTab('password');setErr('');setOk('');}}>Password</button><button className={tab==='profile'?'on':''} onClick={()=>{setTab('profile');setErr('');setOk('');}}>Profile</button></div>
+          {tab==='password' ? (
+            <div style={{display:'flex',flexDirection:'column',gap:10}}>
+              <div className="field"><label>Current password</label><input type="password" style={txt} value={cur} onChange={e=>setCur(e.target.value)} placeholder="Enter current password"/></div>
+              <div className="field"><label>New password</label><input type="password" style={txt} value={nw} onChange={e=>setNw(e.target.value)} placeholder="At least 6 characters"/></div>
+              <div className="field"><label>Confirm new password</label><input type="password" style={txt} value={nw2} onChange={e=>setNw2(e.target.value)} placeholder="Re-enter new password"/></div>
+              <div style={{display:'flex',justifyContent:'flex-end'}}><button className="btn pri sm" onClick={savePw} disabled={busy}><Ic d={I.check} s={14}/>{busy?'Saving…':'Change password'}</button></div>
+            </div>
+          ) : (
+            <div style={{display:'flex',flexDirection:'column',gap:10}}>
+              <div className="field"><label>Full name</label><input style={txt} value={name} onChange={e=>setName(e.target.value)} placeholder="Display name"/></div>
+              <div className="field"><label>Email</label><input style={txt} value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@unicohospitals.com"/></div>
+              <div style={{display:'flex',justifyContent:'flex-end'}}><button className="btn pri sm" onClick={saveProfile} disabled={busy}><Ic d={I.check} s={14}/>{busy?'Saving…':'Save profile'}</button></div>
+            </div>
+          )}
+          {err && <div style={{fontSize:12.5,color:'#b32339',background:'var(--neg-bg)',borderRadius:7,padding:'8px 10px'}}>{err}</div>}
+          {ok && <div style={{fontSize:12.5,color:'var(--pos)',background:'var(--pos-bg)',borderRadius:7,padding:'8px 10px'}}>{ok}</div>}
+          <div style={{borderTop:'1px solid var(--line-2)',paddingTop:12,display:'flex',alignItems:'center',gap:8}}>
+            <span style={{fontSize:11.5,color:'var(--muted)'}}>Signed in as {u?u.role:'local admin'}</span>
+            <span className="spacer" style={{flex:1}}/>
+            <a href="/logout" className="btn sm" style={{color:'var(--rose)',borderColor:'#f1c6cd',textDecoration:'none'}}>Sign out</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+  // Portal to <body> so no ancestor transform (the sidebar is transformed on mobile,
+  // .content>* is animated) can trap this fixed overlay off-centre.
+  return (typeof ReactDOM!=='undefined' && ReactDOM.createPortal && typeof document!=='undefined')
+    ? ReactDOM.createPortal(modal, document.body) : modal;
+}
+window.MyAccount = MyAccount;
+
 function Sidebar({route, setRoute, collapsed, depts}){
+  const [acct,setAcct]=React.useState(false);
   const view = route.view;
   const qBadge = React.useMemo(()=>unicoQualityBreachCount(),[]);
   const supBadge = React.useMemo(()=>unicoSupAlertCount(),[view]);
@@ -365,10 +428,12 @@ function Sidebar({route, setRoute, collapsed, depts}){
           const role=u?(u.role==='collector'?'Data Collector':u.role):'Administrator';
           const initials=String(name).split(/\s+/).map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()||'U';
           return (<>
-            <div className="avatar">{initials}</div>
-            <div className="who" style={{minWidth:0,flex:1}}>
-              <div style={{color:'#fff',fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{name}</div>
-              <div style={{color:'#83909f',fontSize:10.5,whiteSpace:'nowrap'}}>{role}</div>
+            <div onClick={()=>setAcct(true)} title="My account — profile & password" style={{display:'flex',alignItems:'center',gap:10,minWidth:0,flex:1,cursor:'pointer'}}>
+              <div className="avatar">{initials}</div>
+              <div className="who" style={{minWidth:0,flex:1}}>
+                <div style={{color:'#fff',fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{name}</div>
+                <div style={{color:'#83909f',fontSize:10.5,whiteSpace:'nowrap'}}>{role}</div>
+              </div>
             </div>
             <a href="/logout" title="Sign out" style={{marginLeft:'auto',display:'grid',placeItems:'center',width:32,height:32,borderRadius:8,color:'#cfe0f0',background:'rgba(255,255,255,.08)',textDecoration:'none',flexShrink:0}}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
@@ -376,6 +441,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
           </>);
         })()}
       </div>
+      {acct && <MyAccount onClose={()=>setAcct(false)}/>}
     </aside>
   );
 }

@@ -1796,11 +1796,22 @@
     const runAction = async (ids, kind, reason) => {
       if (!ids || !ids.length) return;
       setBusy('bulk');
-      let ok = 0;
+      let ok = 0; const doneIds = [];
       for (const id of ids) {
-        try { const r = await dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? { reason: reason || '' } : {}); if (r && r.ok) ok++; } catch (e) { }
+        try { const r = await dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? { reason: reason || '' } : {}); if (r && r.ok) { ok++; doneIds.push(id); } } catch (e) { }
       }
       setBusy(''); setSel({}); setRejectFor(null);
+      // Keep the duplicate-compare dialog in step. dupGroup is a SNAPSHOT taken when the ⚠
+      // badge was clicked and nothing here refreshed it, so a submission REJECTED from inside
+      // the dialog stayed on the list showing a stale "Pending" chip (approve happened to work
+      // only because its button patched the snapshot itself). Drop whatever actually succeeded
+      // — whichever button started it — and close once fewer than two responses remain, since
+      // there is then no duplicate left to compare.
+      if (doneIds.length) setDupGroup((cur) => {
+        if (!cur) return cur;
+        const next = cur.filter((x) => doneIds.indexOf(x.id) < 0);
+        return next.length > 1 ? next : null;
+      });
       toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
       if (kind === 'approve' && ok) dcRefreshLive();
       load();
@@ -2012,7 +2023,7 @@
                       <div style={{ display: 'flex', gap: 6, marginTop: 9, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                         <button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View / edit</button>
                         {s.status === 'pending' && <>
-                          <button className="btn sm pri" disabled={busy === 'bulk'} onClick={async () => { await runAction([s.id], 'approve'); setDupGroup((cur) => cur && cur.filter((x) => x.id !== s.id)); }}><Ic d={I.check} s={13} />Keep (approve)</button>
+                          <button className="btn sm pri" disabled={busy === 'bulk'} onClick={() => runAction([s.id], 'approve')}><Ic d={I.check} s={13} />Keep (approve)</button>
                           <button className="btn sm" style={{ color: 'var(--rose)' }} disabled={busy === 'bulk'} onClick={() => setRejectFor({ ids: [s.id] })}><Ic d={I.x} s={13} />Reject</button>
                         </>}
                       </div>

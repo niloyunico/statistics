@@ -279,6 +279,47 @@ function mount(app, opts) {
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not delete user.' }); }
   });
+
+  /* ---- self-service: the signed-in user manages their OWN account (ANY role, no
+     Administration permission needed) — used by the "My Account" screen. ---- */
+  const meOf = (req) => (req.user && (req.user.sub || req.user.username)) || null;
+
+  // Change my own password — requires the current password.
+  app.post('/api/me/password', requireApi, async (req, res) => {
+    const who = meOf(req);
+    if (!who) return res.status(401).json({ ok: false, error: 'Sign in to change your password.' });
+    const cur = String((req.body && req.body.currentPassword) || '');
+    const nw = String((req.body && req.body.newPassword) || '');
+    if (nw.length < 6) return res.status(400).json({ ok: false, error: 'New password must be at least 6 characters.' });
+    try {
+      const users = await db.getUsers();
+      const uname = norm(who);
+      const u = await users.findOne({ username: uname });
+      if (!u) return res.status(404).json({ ok: false, error: 'Account not found.' });
+      if (!(await auth.verify(cur, u.passwordHash))) return res.status(400).json({ ok: false, error: 'Your current password is incorrect.' });
+      await users.updateOne({ username: uname }, { $set: { passwordHash: await auth.hash(nw), updatedAt: Date.now() } });
+      activity.log(req, 'password_changed_self', { target: uname });
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not change your password.' }); }
+  });
+
+  // Update my own name / email.
+  app.patch('/api/me', requireApi, async (req, res) => {
+    const who = meOf(req);
+    if (!who) return res.status(401).json({ ok: false, error: 'Sign in.' });
+    try {
+      const users = await db.getUsers();
+      const uname = norm(who);
+      const u = await users.findOne({ username: uname });
+      if (!u) return res.status(404).json({ ok: false, error: 'Account not found.' });
+      const b = req.body || {};
+      const set = { updatedAt: Date.now() };
+      if (b.name != null) set.name = String(b.name).trim() || u.username;
+      if (b.email != null) set.email = String(b.email).trim().toLowerCase() || null;
+      await users.updateOne({ username: uname }, { $set: set });
+      res.json({ ok: true, user: safe(Object.assign({}, u, set)) });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not update your profile.' }); }
+  });
 }
 
 module.exports = { mount };
