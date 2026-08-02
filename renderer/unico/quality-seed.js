@@ -74,8 +74,8 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "benchmark": "0 (zero defect)",
         "benchmarkValue": 0,
         "goalDirection": "lower_is_better",
-        "id": "ind-needle-stick",
-        "name": "Needle Stick Injury",
+        "id": "ind-needle-stick-injury",
+        "name": "Needle Stick Injury (NSI)",
         "quarterRemarks": {
           "Q1": "Aug-Oct 2025: nil",
           "Q2": "Nov-Dec 2025: nil",
@@ -91,9 +91,9 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "remarks": "Staff safety indicator - zero injuries maintained across all quarters",
         "valueType": "Count",
         "formula": "count",
-        "numLabel": "Needle Stick Injury",
+        "numLabel": "Needle Stick Injury (NSI)",
         "unit": "count",
-        "formulaText": "value = Needle Stick Injury",
+        "formulaText": "value = Needle Stick Injury (NSI)",
         "numeratorDef": "Needle-stick / sharps injuries to staff.",
         "reference": "CDC sharps-safety · NABH staff-safety indicator."
       },
@@ -420,7 +420,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "CDC NHSN — SSI surveillance definition."
       },
       {
-        "id": "ind-ctvs-2026-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -659,7 +659,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "NABH device-management safety indicator."
       },
       {
-        "id": "ind-dial-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -1292,7 +1292,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "NABH / NDNQI — patient fall events."
       },
       {
-        "id": "ind-ldr-nsi-count",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -1530,7 +1530,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "CDC NHSN — CAUTI surveillance definition."
       },
       {
-        "id": "ind-l10-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -1737,7 +1737,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "NABH MOM · NCC-MERP medication-error taxonomy."
       },
       {
-        "id": "ind-l9-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -2187,7 +2187,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "NABH MOM · NCC-MERP medication-error taxonomy."
       },
       {
-        "id": "ind-micu-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -2509,7 +2509,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "CDC NHSN — SSI surveillance definition."
       },
       {
-        "id": "ind-sicu-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",

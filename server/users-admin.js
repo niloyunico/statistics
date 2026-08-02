@@ -1,13 +1,17 @@
 /* UNICO — admin-only User Management API.
  *
- * Powers the "Users" workspace (renderer/unico/user-admin.jsx): list/create/edit
- * accounts, reset passwords, activate/deactivate, delete — all against the same
- * MongoDB `users` collection used for login (server/db.js getUsers()).
+ * Powers the "Users & Roles" panel (UserManagement in renderer/unico/reports.jsx):
+ * list/create/edit accounts, reset passwords, activate/deactivate, delete — all
+ * against the same MongoDB `users` collection used for login (server/db.js getUsers()).
  *
- * Auth: each route runs requireApi (sets req.user) then adminOnly. In the default
- * open local mode (REQUIRE_AUTH=false) req.user is null and adminOnly is a no-op,
- * so the local PC admin can manage users without a login wall; with
- * REQUIRE_AUTH=true an Administrator session is required.
+ * Auth: each route runs requireApi (sets req.user) then need(action), which resolves the
+ * caller's access to THIS module. In the default open local mode (REQUIRE_AUTH=false)
+ * req.user is null and the gate is a no-op, so the local PC admin manages users without a
+ * login wall. With REQUIRE_AUTH=true: Administrators are unrestricted, and a 'User' granted
+ * the Administration module gets exactly the actions in its perms map — view to list, add
+ * to create, edit to update/reset passwords, delete to remove. A delegated user MAY assign
+ * the Administrator role (deliberate: full delegation), so grant Administration only to
+ * people you would make administrators anyway.
  *
  * Mounted by web.js:  require('./users-admin').mount(app, { requireApi })
  */
@@ -105,18 +109,47 @@ async function activeAdminCount(users) {
   return admins.length;
 }
 
+// Actions this session holds on the 'users' (Administration) module, or null when
+// unrestricted. Granting that module used to be meaningless — every endpoint here demanded
+// role === 'Administrator', so a User with Administration could open the panel and then got
+// "Administrator access required" on every call. A delegated User now gets exactly the
+// actions their perms map grants (view / add / edit / delete), including assigning the
+// Administrator role. The login JWT carries only sub/role/name, so perms come from the DB.
+async function usersModuleActions(req) {
+  const claims = req.user;
+  if (!claims) return null;                          // open local mode -> unrestricted
+  if (claims.role === 'Administrator') return null;  // administrators -> unrestricted
+  if (claims.role === 'collector') return [];        // collectors never manage accounts
+  const users = await db.getUsers();
+  if (typeof users.findOne !== 'function') return [];
+  const me = await users.findOne({ username: norm(claims.sub || claims.username) });
+  if (!me || me.active === false) return [];
+  const p = (me.perms && typeof me.perms === 'object' && !Array.isArray(me.perms)) ? me.perms : {};
+  const val = p.users;
+  if (Array.isArray(val)) return PERM_ACTIONS.filter((a) => val.indexOf(a) >= 0);
+  const i = PERM_LEVELS.indexOf(String(val || 'none'));   // legacy escalating level string
+  return i <= 0 ? [] : PERM_ACTIONS.slice(0, i);
+}
+
 function mount(app, opts) {
   const requireApi = (opts && opts.requireApi) || ((req, res, next) => { req.user = null; next(); });
-  const adminOnly = (req, res, next) => {
-    if (req.user && req.user.role && req.user.role !== 'Administrator') {
-      return res.status(403).json({ ok: false, error: 'Administrator access required.' });
-    }
-    next();
+  const VERB = { view: 'view', add: 'create', edit: 'modify', delete: 'delete' };
+  // Any granted action implies the module can be opened (matches unicoCan() in the renderer).
+  const need = (action) => async (req, res, next) => {
+    try {
+      const acts = await usersModuleActions(req);
+      if (acts === null) return next();
+      const allowed = action === 'view' ? acts.length > 0 : acts.indexOf(action) >= 0;
+      if (allowed) return next();
+      return res.status(403).json({ ok: false, error: acts.length
+        ? 'Your account cannot ' + VERB[action] + ' user accounts.'
+        : 'Administrator access required.' });
+    } catch (e) { return res.status(500).json({ ok: false, error: 'Could not verify permissions.' }); }
   };
-  const guard = [requireApi, adminOnly];
+  const guard = (action) => [requireApi, need(action)];
 
   // List every account.
-  app.get('/api/users', guard, async (req, res) => {
+  app.get('/api/users', guard('view'), async (req, res) => {
     try {
       const users = await db.getUsers();
       let list = [];
@@ -126,7 +159,7 @@ function mount(app, opts) {
   });
 
   // Create an account.
-  app.post('/api/users', guard, async (req, res) => {
+  app.post('/api/users', guard('add'), async (req, res) => {
     const b = req.body || {};
     const username = norm(b.username);
     const password = String(b.password || '');
@@ -163,7 +196,7 @@ function mount(app, opts) {
   });
 
   // Update name / role / active / scope.
-  app.patch('/api/users/:username', guard, async (req, res) => {
+  app.patch('/api/users/:username', guard('edit'), async (req, res) => {
     const username = norm(req.params.username);
     const b = req.body || {};
     try {
@@ -200,7 +233,11 @@ function mount(app, opts) {
       }
 
       // Never strand the system without an active administrator.
-      const demoting = u.role === 'Administrator' && ((set.role && set.role !== 'Administrator') || set.active === false);
+      // Only an ACTIVE administrator counts toward the total, so only demoting/deactivating
+      // one can strand the system. Without the u.active check an already-inactive admin
+      // could not be demoted at all while a single active admin existed.
+      const demoting = u.role === 'Administrator' && u.active !== false
+        && ((set.role && set.role !== 'Administrator') || set.active === false);
       if (demoting && (await activeAdminCount(users)) <= 1) {
         return res.status(400).json({ ok: false, error: 'Cannot demote or deactivate the last active administrator.' });
       }
@@ -211,7 +248,7 @@ function mount(app, opts) {
   });
 
   // Reset password.
-  app.post('/api/users/:username/password', guard, async (req, res) => {
+  app.post('/api/users/:username/password', guard('edit'), async (req, res) => {
     const username = norm(req.params.username);
     const password = String((req.body && req.body.password) || '');
     if (password.length < 6) return res.status(400).json({ ok: false, error: 'Password must be at least 6 characters.' });
@@ -225,14 +262,16 @@ function mount(app, opts) {
   });
 
   // Delete an account.
-  app.delete('/api/users/:username', guard, async (req, res) => {
+  app.delete('/api/users/:username', guard('delete'), async (req, res) => {
     const username = norm(req.params.username);
     try {
       const users = await db.getUsers();
       const u = await users.findOne({ username });
       if (!u) return res.status(404).json({ ok: false, error: 'User not found.' });
       if (typeof users.deleteOne !== 'function') return res.status(400).json({ ok: false, error: 'Delete is unavailable in dev (no database) mode.' });
-      if (u.role === 'Administrator' && (await activeAdminCount(users)) <= 1) {
+      // Deleting an INACTIVE admin cannot strand the system (they are not counted), so it
+      // only needs blocking when the target is the last ACTIVE administrator.
+      if (u.role === 'Administrator' && u.active !== false && (await activeAdminCount(users)) <= 1) {
         return res.status(400).json({ ok: false, error: 'Cannot delete the last active administrator.' });
       }
       await users.deleteOne({ username });

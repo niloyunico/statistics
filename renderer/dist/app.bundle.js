@@ -2008,8 +2008,8 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "benchmark": "0 (zero defect)",
         "benchmarkValue": 0,
         "goalDirection": "lower_is_better",
-        "id": "ind-needle-stick",
-        "name": "Needle Stick Injury",
+        "id": "ind-needle-stick-injury",
+        "name": "Needle Stick Injury (NSI)",
         "quarterRemarks": {
           "Q1": "Aug-Oct 2025: nil",
           "Q2": "Nov-Dec 2025: nil",
@@ -2025,9 +2025,9 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "remarks": "Staff safety indicator - zero injuries maintained across all quarters",
         "valueType": "Count",
         "formula": "count",
-        "numLabel": "Needle Stick Injury",
+        "numLabel": "Needle Stick Injury (NSI)",
         "unit": "count",
-        "formulaText": "value = Needle Stick Injury",
+        "formulaText": "value = Needle Stick Injury (NSI)",
         "numeratorDef": "Needle-stick / sharps injuries to staff.",
         "reference": "CDC sharps-safety · NABH staff-safety indicator."
       },
@@ -2354,7 +2354,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "CDC NHSN — SSI surveillance definition."
       },
       {
-        "id": "ind-ctvs-2026-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -2593,7 +2593,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "NABH device-management safety indicator."
       },
       {
-        "id": "ind-dial-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -3226,7 +3226,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "NABH / NDNQI — patient fall events."
       },
       {
-        "id": "ind-ldr-nsi-count",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -3464,7 +3464,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "CDC NHSN — CAUTI surveillance definition."
       },
       {
-        "id": "ind-l10-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -3671,7 +3671,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "NABH MOM · NCC-MERP medication-error taxonomy."
       },
       {
-        "id": "ind-l9-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -4121,7 +4121,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "NABH MOM · NCC-MERP medication-error taxonomy."
       },
       {
-        "id": "ind-micu-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -4443,7 +4443,7 @@ window.__UNICO_QUALITY_FALLBACK__ = [
         "reference": "CDC NHSN — SSI surveillance definition."
       },
       {
-        "id": "ind-sicu-nsi",
+        "id": "ind-needle-stick-injury",
         "name": "Needle Stick Injury (NSI)",
         "valueType": "Count",
         "benchmark": "0 (zero defect)",
@@ -6002,10 +6002,28 @@ window.QI_CORRECTIONS_BY_DEFID = {
     } else {
       const removed = new Set(ov.indRemoved || []);
       const patches = ov.indPatches || {};
-      const inds = (seedDept.indicators || [])
-        .filter(i => !removed.has(i.id))
-        .map(i => mergeIndicator(i, patches[i.id]));
-      (ov.indAdded || []).forEach(a => { if (!removed.has(a.id)) inds.push(mergeIndicator(a, patches[a.id])); });
+      const kept = (seedDept.indicators || []).filter(i => !removed.has(i.id));
+      const inds = kept.map(i => mergeIndicator(i, patches[i.id]));
+      // An overlay-added entry whose id ALSO exists in the seed used to be pushed as a
+      // SECOND row: the department rendered the same indicator twice, both rows sharing
+      // one indPatches entry, so editing either moved both. Fold it onto the seed copy
+      // instead — the added definition wins, but the seed's recorded months/incidents
+      // survive underneath, so nothing that was ever entered disappears.
+      const rawById = new Map(kept.map(i => [String(i.id), i]));
+      const idxById = new Map(kept.map((i, ix) => [String(i.id), ix]));
+      (ov.indAdded || []).forEach(a => {
+        if (removed.has(a.id)) return;
+        const key = String(a.id);
+        const base = rawById.get(key);
+        let raw = a;
+        if (base) {
+          raw = Object.assign({}, base, a);
+          NESTED.forEach(k => { if (base[k] || a[k]) raw[k] = Object.assign({}, base[k] || {}, a[k] || {}); });
+        }
+        const merged = mergeIndicator(raw, patches[a.id]);
+        const at = idxById.get(key);
+        if (at == null) { idxById.set(key, inds.length); inds.push(merged); } else { inds[at] = merged; }
+      });
       dept = Object.assign({}, seedDept, { indicators: inds });
       if (ov.executive) dept.executive = Object.assign({}, seedDept.executive || {}, ov.executive);
       if (ov.meta) dept.meta = Object.assign({}, seedDept.meta || {}, ov.meta);
@@ -6153,8 +6171,14 @@ window.QI_CORRECTIONS_BY_DEFID = {
         return Object.assign({}, cur, { indPatches: all });
       }),
 
-      addIndicator: (deptKey, ind) => patchDept(deptKey, cur => ({
-        ...cur, indAdded: [...(cur.indAdded || []), ind],
+      // Adding is an explicit "this department reports this indicator", so it must also
+      // UN-HIDE the id if a previous unassign put it in indRemoved — otherwise the
+      // freshly added indicator is filtered straight back out by the removed-set when
+      // the dept is merged, and it just never appears. Re-adding the same id replaces
+      // the entry rather than stacking a second twin next to it.
+      addIndicator: (deptKey, ind) => patchDept(deptKey, cur => Object.assign({}, cur, {
+        indAdded: [...(cur.indAdded || []).filter(a => String(a.id) !== String(ind.id)), ind],
+        indRemoved: (cur.indRemoved || []).filter(x => String(x) !== String(ind.id)),
       })),
 
       removeIndicator: (deptKey, indId) => patchDept(deptKey, cur => {
@@ -6188,8 +6212,23 @@ window.QI_CORRECTIONS_BY_DEFID = {
   }
 
   // helpers used across the Quality screens
-  function qualitySlug(s) {
-    return 'ind-' + String(s || 'indicator').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) + '-' + Math.random().toString(36).slice(2, 6);
+  // The id is the DATA KEY and is also what makes an indicator "the same indicator"
+  // across departments (the console's Common-indicator edit scope, the assignment
+  // matrix and every report group by id). This used to end in Math.random(), so
+  // adding the SAME indicator in two departments always minted two different ids —
+  // that is how needle-stick fragmented into ind-needle-stick-sharps-injury-t6z2 /
+  // -3hww / -f212 / -wzr4 …, one orphan per department. The slug is now DERIVED FROM
+  // THE NAME, so the same indicator lands on the same id everywhere.
+  // Ids only have to be unique WITHIN one department, so pass that department's
+  // existing ids as `taken` and a numeric suffix is added only on a real collision.
+  function qualitySlug(s, taken) {
+    const base = 'ind-' + String(s || 'indicator').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+    const used = taken instanceof Set ? taken : new Set(Array.isArray(taken) ? taken : []);
+    if (!used.has(base)) return base;
+    let n = 2;
+    while (used.has(base + '-' + n)) n++;
+    return base + '-' + n;
   }
 
   window.qualityData = qualityData;
@@ -22165,13 +22204,14 @@ const NONE_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = [], m), {});
 const inits = n => (n || '?').split(' ').map(x => x[0]).slice(0, 2).join('').toUpperCase();
 const detectTemplate = p => {
   for (const r of USER_ROLES) {
+    if (r === 'Administrator') continue;
     const pr = ROLE_PRESETS[r];
     if (USER_MODS.every(([k]) => sameActs(p[k], pr[k]))) return r;
   }
   return 'Custom';
 };
 const permSummary = p => {
-  if (!p) return 'Full access';
+  if (!p) return 'No access';
   const acts = USER_MODS.map(([k]) => asActions(p[k]));
   const on = acts.filter(a => a.length).length;
   if (!on) return 'No access';
@@ -22644,6 +22684,16 @@ function UserManagement() {
       setConfirm(null);
     }
   };
+  const may = a => {
+    try {
+      return typeof window.unicoCan !== 'function' || window.unicoCan('users', a);
+    } catch (e) {
+      return true;
+    }
+  };
+  const mayAdd = may('add'),
+    mayEdit = may('edit'),
+    mayDel = may('delete');
   const roleLabel = u => u.role === 'Administrator' ? 'Administrator' : u.role === 'collector' ? 'Data Collector' : u.title || 'User';
   const summaryOf = u => u.role === 'Administrator' ? 'Full access' : u.role === 'collector' ? 'Data collection' : permSummary(u.perms);
   return React.createElement("div", null, React.createElement("div", {
@@ -22703,7 +22753,7 @@ function UserManagement() {
   }, React.createElement(Ic, {
     d: I.search,
     s: 14
-  }), "Refresh"), React.createElement("button", {
+  }), "Refresh"), mayAdd && React.createElement("button", {
     className: "btn pri sm",
     onClick: () => setModal({
       user: null
@@ -22738,7 +22788,7 @@ function UserManagement() {
     const active = u.active !== false;
     const isMe = me && u.username === me;
     const isColl = u.role === 'collector';
-    const lastAdmin = u.role === 'Administrator' && admins <= 1;
+    const lastAdmin = u.role === 'Administrator' && u.active !== false && admins <= 1;
     return React.createElement("div", {
       key: u.username,
       style: {
@@ -22802,12 +22852,12 @@ function UserManagement() {
       className: "chip pos"
     }, "\u25CF Active") : React.createElement("span", {
       className: "chip flat"
-    }, "\u25CB Inactive"), React.createElement("button", {
+    }, "\u25CB Inactive"), mayEdit && React.createElement("button", {
       className: "btn sm",
       onClick: () => setModal({
         user: u
       })
-    }, "Manage"), React.createElement("button", {
+    }, "Manage"), mayEdit && React.createElement("button", {
       className: "icon-btn",
       title: active ? 'Deactivate' : 'Activate',
       onClick: () => toggle(u),
@@ -22815,7 +22865,7 @@ function UserManagement() {
     }, React.createElement(Ic, {
       d: active ? I.x : I.check,
       s: 14
-    })), React.createElement("button", {
+    })), mayDel && React.createElement("button", {
       className: "icon-btn danger",
       title: "Remove",
       onClick: () => setConfirm(u),
@@ -25712,9 +25762,9 @@ function guideOf(code) {
     return null;
   }
 }
-function blankIndicator(name) {
+function blankIndicator(name, taken) {
   return {
-    id: window.qualitySlug ? window.qualitySlug(name) : 'ind-' + norm(name).replace(/ /g, '-'),
+    id: window.qualitySlug ? window.qualitySlug(name, taken) : 'ind-' + norm(name).replace(/ /g, '-'),
     name,
     formula: 'count',
     valueType: 'Count',
@@ -35844,10 +35894,11 @@ function QCAdmin({
     const r = deptStat(d).rate;
     return r >= 95 ? 'Excellent' : r >= 85 ? 'Very Good' : r >= 70 ? 'Good' : r >= 55 ? 'Fair' : r >= 40 ? 'Needs Improvement' : 'Poor';
   };
+  const deptIndIds = dk => new Set((((Q.depts || []).find(d => d.key === dk) || {}).indicators || []).map(i => i.id));
   const onNew = () => {
     const dk = (scope !== 'all' ? scope : depts[0] && depts[0].key) || Q.depts[0] && Q.depts[0].key;
     if (!dk) return;
-    const blank = blankIndicator('New Indicator');
+    const blank = blankIndicator('New Indicator', deptIndIds(dk));
     Q.addIndicator(dk, blank);
     setSel({
       deptKey: dk,
@@ -35992,10 +36043,15 @@ function QCAdmin({
       [MONTHS[idx][0]]: e.target.value
     }
   });
+  const deptHasInd = dk => {
+    if (!selInd) return false;
+    const cid = window.qualitySlug ? window.qualitySlug(selInd.name) : '';
+    return (((Q.depts || []).find(d => d.key === dk) || {}).indicators || []).some(i => String(i.id) === cid || norm(i.name) === norm(selInd.name));
+  };
   const onClone = () => {
     if (!selInd) return;
     const copy = Object.assign({}, selInd, {
-      id: window.qualitySlug(selInd.name + ' copy'),
+      id: window.qualitySlug(selInd.name + ' copy', deptIndIds(sel.deptKey)),
       name: selInd.name + ' (copy)'
     });
     Q.addIndicator(sel.deptKey, copy);
@@ -36017,6 +36073,13 @@ function QCAdmin({
   const onMove = e => {
     const nd = e.target.value;
     if (!selInd || nd === sel.deptKey) return;
+    if (deptHasInd(nd)) {
+      const t = (allDepts.find(d => d.key === nd) || {}).name || nd;
+      if (!window.confirm(t + ' already reports "' + selInd.name + '".\n\nMoving will overwrite their recorded values for it with this department\'s. Continue?')) {
+        e.target.value = sel.deptKey;
+        return;
+      }
+    }
     const moved = Object.assign({}, selInd);
     Q.addIndicator(nd, moved);
     Q.removeIndicator(sel.deptKey, sel.id);
@@ -36028,7 +36091,7 @@ function QCAdmin({
   const onDoCopy = () => {
     if (!selInd) return;
     Object.keys(copyT).forEach(dk => {
-      if (copyT[dk]) {
+      if (copyT[dk] && !deptHasInd(dk)) {
         const c = Object.assign({}, selInd, {
           id: window.qualitySlug(selInd.name)
         });
@@ -37042,32 +37105,38 @@ function QCAdmin({
       gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))',
       gap: 6
     }
-  }, allDepts.filter(d => d.key !== sel.deptKey).map(d => React.createElement("label", {
-    key: d.key,
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 7,
-      fontSize: 12,
-      background: '#fff',
-      border: '1px solid #dde3ec',
-      borderRadius: 7,
-      padding: '6px 9px',
-      cursor: 'pointer'
-    }
-  }, React.createElement("input", {
-    type: "checkbox",
-    checked: !!copyT[d.key],
-    onChange: () => setCopyT(t => Object.assign({}, t, {
-      [d.key]: !t[d.key]
-    }))
-  }), React.createElement("span", {
-    style: {
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis'
-    }
-  }, d.name)))), React.createElement("div", {
+  }, allDepts.filter(d => d.key !== sel.deptKey).map(d => {
+    const has = deptHasInd(d.key);
+    return React.createElement("label", {
+      key: d.key,
+      title: has ? d.name + ' already reports this indicator — copying would overwrite their recorded values' : '',
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        fontSize: 12,
+        background: has ? '#f2f5f8' : '#fff',
+        border: '1px solid #dde3ec',
+        borderRadius: 7,
+        padding: '6px 9px',
+        cursor: has ? 'not-allowed' : 'pointer',
+        opacity: has ? .55 : 1
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      disabled: has,
+      checked: !has && !!copyT[d.key],
+      onChange: () => setCopyT(t => Object.assign({}, t, {
+        [d.key]: !t[d.key]
+      }))
+    }), React.createElement("span", {
+      style: {
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, d.name, has ? ' · has it' : ''));
+  })), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
@@ -44592,10 +44661,21 @@ window.LockScreen = LockScreen;
       }
     }, label));
   }
+  const prettyKey = k => String(k || '').replace(/^c_/, '').replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  function colLabelMap(s) {
+    if (s.type !== 'patient') return {};
+    const dept = dcAllDepts().find(d => d.id === s.department);
+    const m = {};
+    (dept && dept.cols || []).forEach(c => {
+      m[c.id] = c.label || prettyKey(c.id);
+    });
+    return m;
+  }
   function valuesSummary(s) {
     if (s.type === 'quality') return (s.indicatorName || '') + ' · ' + monthLabel(s.month) + (s.value != null ? ' = ' + s.value : '') + (s.remark ? ' (' + s.remark + ')' : '');
     const v = s.values || {};
-    const parts = Object.keys(v).map(k => k + ':' + v[k]);
+    const lm = colLabelMap(s);
+    const parts = Object.keys(v).map(k => (lm[k] || prettyKey(k)) + ': ' + v[k]);
     return monthLabel(s.month) + ' — ' + (parts.length ? parts.join(', ') : '(no values)');
   }
   const dcMonthChip = m => React.createElement("span", {
@@ -44615,8 +44695,19 @@ window.LockScreen = LockScreen;
       }
     }, s.value)), s.remark ? ' (' + s.remark + ')' : '');
     const v = s.values || {};
-    const parts = Object.keys(v).map(k => k + ':' + v[k]);
-    return React.createElement(React.Fragment, null, dcMonthChip(s.month), ' — ' + (parts.length ? parts.join(', ') : '(no values)'));
+    const lm = colLabelMap(s);
+    const keys = Object.keys(v);
+    return React.createElement(React.Fragment, null, dcMonthChip(s.month), ' — ', keys.length ? keys.map((k, i) => React.createElement("span", {
+      key: k
+    }, i ? ', ' : '', React.createElement("span", {
+      style: {
+        color: 'var(--muted)'
+      }
+    }, lm[k] || prettyKey(k), ":"), " ", React.createElement("b", {
+      style: {
+        color: 'var(--ink)'
+      }
+    }, v[k]))) : '(no values)');
   }
   function SubmissionDetail({
     s,
@@ -45620,12 +45711,523 @@ window.LockScreen = LockScreen;
       onClick: () => onConfirm(reason)
     }, busy ? 'Rejecting…' : 'Reject')))));
   }
+  const dcFilterSel = {
+    padding: '8px 10px',
+    border: '1px solid var(--line)',
+    borderRadius: 8,
+    fontSize: 12.5,
+    fontFamily: 'inherit',
+    background: '#fff',
+    color: 'var(--ink)',
+    outline: 'none',
+    cursor: 'pointer'
+  };
+  function CollectionCoverage() {
+    const [subs, setSubs] = useState(null);
+    const [month, setMonth] = useState('');
+    const [showGaps, setShowGaps] = useState(false);
+    const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
+    useEffect(() => {
+      load();
+      const h = () => load();
+      window.addEventListener('unico:data-refreshed', h);
+      return () => window.removeEventListener('unico:data-refreshed', h);
+    }, []);
+    const depts = React.useMemo(() => dcAllDepts(), []);
+    const areas = React.useMemo(() => window.qualityData ? window.qualityData() : [], []);
+    const MO = window.UNICO && window.UNICO.MONTH_ORDER || [];
+    const rank = mm => {
+      const i = MO.indexOf(mm);
+      return i < 0 ? -1 : i;
+    };
+    const months = React.useMemo(() => [...new Set((subs || []).map(s => s.month).filter(Boolean))].sort((a, b) => rank(b) - rank(a)), [subs]);
+    const m = month || months[0] || '';
+    const subsM = (subs || []).filter(s => s.month === m);
+    const pDone = new Set(subsM.filter(s => s.type === 'patient').map(s => s.department));
+    const qDone = new Set(subsM.filter(s => s.type === 'quality').map(s => s.area));
+    const pMissing = depts.filter(d => !pDone.has(d.id));
+    const qMissing = areas.filter(a => !qDone.has(a.key));
+    const pPct = depts.length ? Math.round((depts.length - pMissing.length) / depts.length * 100) : 0;
+    const qPct = areas.length ? Math.round((areas.length - qMissing.length) / areas.length * 100) : 0;
+    const gapN = pMissing.length + qMissing.length;
+    const copyGaps = () => {
+      const txt = 'Not yet submitted — ' + monthLabel(m) + '\n\nPatient statistics (' + pMissing.length + '):\n' + (pMissing.length ? pMissing.map(d => '• ' + d.name).join('\n') : '(all submitted)') + '\n\nQuality indicators (' + qMissing.length + '):\n' + (qMissing.length ? qMissing.map(a => '• ' + a.name).join('\n') : '(all submitted)');
+      try {
+        navigator.clipboard.writeText(txt);
+        toast('Gap list copied — paste into a reminder', 'success');
+      } catch (e) {
+        toast('Could not copy', 'error');
+      }
+    };
+    const Bar = ({
+      label,
+      done,
+      total,
+      pct,
+      color
+    }) => React.createElement("div", {
+      style: {
+        flex: '1 1 240px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 8,
+        marginBottom: 5
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink)'
+      }
+    }, label), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginLeft: 'auto'
+      }
+    }, done, "/", total, " \xB7 ", pct, "%")), React.createElement("div", {
+      style: {
+        height: 10,
+        background: 'var(--panel-2)',
+        borderRadius: 6,
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        height: '100%',
+        width: pct + '%',
+        background: color,
+        borderRadius: 6,
+        transition: 'width .5s'
+      }
+    })));
+    if (subs === null) return null;
+    return React.createElement(Card, {
+      style: {
+        padding: '14px 16px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        marginBottom: 12
+      }
+    }, React.createElement(Ic, {
+      d: I.activity,
+      s: 16,
+      c: "var(--blue)"
+    }), React.createElement("b", {
+      style: {
+        fontSize: 13.5
+      }
+    }, "Collection coverage"), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "who has submitted this month"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("select", {
+      value: m,
+      onChange: e => setMonth(e.target.value),
+      style: dcFilterSel
+    }, (months.length ? months : [m]).filter(Boolean).map(x => React.createElement("option", {
+      key: x,
+      value: x
+    }, monthLabel(x)))), gapN > 0 && React.createElement("button", {
+      className: "btn sm",
+      onClick: copyGaps,
+      title: "Copy the not-submitted list for a reminder"
+    }, React.createElement(Ic, {
+      d: I.download,
+      s: 13
+    }), "Copy gaps")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 20,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement(Bar, {
+      label: "Patient statistics",
+      done: depts.length - pMissing.length,
+      total: depts.length,
+      pct: pPct,
+      color: "linear-gradient(90deg,#1f9d57,#3ab5a7)"
+    }), React.createElement(Bar, {
+      label: "Quality indicators",
+      done: areas.length - qMissing.length,
+      total: areas.length,
+      pct: qPct,
+      color: "linear-gradient(90deg,#0090ca,#27a8db)"
+    })), gapN > 0 ? React.createElement("div", {
+      style: {
+        marginTop: 12
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setShowGaps(v => !v),
+      style: {
+        color: '#9a6b00',
+        borderColor: '#e6c34d'
+      }
+    }, React.createElement(Ic, {
+      d: I.bell,
+      s: 13
+    }), showGaps ? 'Hide' : 'Show', " ", gapN, " not submitted"), showGaps && React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 16,
+        marginTop: 10
+      }
+    }, pMissing.length > 0 && React.createElement("div", {
+      style: {
+        flex: '1 1 260px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Patient \u2014 ", pMissing.length, " missing"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6
+      }
+    }, pMissing.map(d => React.createElement("span", {
+      key: d.id,
+      style: {
+        fontSize: 11.5,
+        fontWeight: 600,
+        padding: '3px 9px',
+        borderRadius: 999,
+        background: 'var(--pos-bg)',
+        color: 'var(--pos)'
+      }
+    }, d.name)))), qMissing.length > 0 && React.createElement("div", {
+      style: {
+        flex: '1 1 260px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Quality \u2014 ", qMissing.length, " missing"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6
+      }
+    }, qMissing.map(a => React.createElement("span", {
+      key: a.key,
+      style: {
+        fontSize: 11.5,
+        fontWeight: 600,
+        padding: '3px 9px',
+        borderRadius: 999,
+        background: 'var(--blue-50)',
+        color: 'var(--blue-700,#0b6aa2)'
+      }
+    }, a.name)))))) : React.createElement("div", {
+      style: {
+        marginTop: 12,
+        fontSize: 12.5,
+        color: 'var(--pos)',
+        fontWeight: 600,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 14
+    }), "All departments and quality areas have submitted for ", monthLabel(m), "."));
+  }
+  function CollectorProgress() {
+    const [subs, setSubs] = useState(null);
+    const [open, setOpen] = useState(false);
+    const [sortBy, setSortBy] = useState('total');
+    const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
+    useEffect(() => {
+      load();
+      const h = () => load();
+      window.addEventListener('unico:data-refreshed', h);
+      return () => window.removeEventListener('unico:data-refreshed', h);
+    }, []);
+    const respOf = s => s.responsible && s.responsible.name || s.submittedBy || '—';
+    const byPerson = {};
+    (subs || []).forEach(s => {
+      const p = respOf(s);
+      const r = byPerson[p] = byPerson[p] || {
+        name: p,
+        total: 0,
+        pending: 0,
+        approved: 0,
+        rejected: 0,
+        patient: 0,
+        quality: 0,
+        last: 0
+      };
+      r.total++;
+      r[s.status] = (r[s.status] || 0) + 1;
+      r[s.type] = (r[s.type] || 0) + 1;
+      if ((s.submittedAt || 0) > r.last) r.last = s.submittedAt;
+    });
+    let people = Object.values(byPerson);
+    people.sort((a, b) => sortBy === 'name' ? a.name.localeCompare(b.name) : sortBy === 'pending' ? b.pending - a.pending : sortBy === 'last' ? b.last - a.last : b.total - a.total);
+    const ago = ts => {
+      if (!ts) return 'never';
+      const m = Math.floor((Date.now() - ts) / 60000);
+      if (m < 1) return 'just now';
+      if (m < 60) return m + 'm ago';
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + 'h ago';
+      return Math.floor(h / 24) + 'd ago';
+    };
+    const ini = n => (n || '?').split(' ').map(x => x[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+    if (subs === null) return null;
+    const th = {
+      textAlign: 'left',
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      fontWeight: 700,
+      padding: '6px 8px',
+      cursor: 'pointer'
+    };
+    return React.createElement(Card, {
+      style: {
+        padding: '12px 16px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        cursor: 'pointer'
+      },
+      onClick: () => setOpen(v => !v)
+    }, React.createElement(Ic, {
+      d: I.user,
+      s: 16,
+      c: "var(--blue)"
+    }), React.createElement("b", {
+      style: {
+        fontSize: 13.5
+      }
+    }, "Collector progress"), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, people.length, " people \xB7 ", (subs || []).length, " submissions"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement(Ic, {
+      d: I.chevR,
+      s: 16,
+      style: {
+        transform: open ? 'rotate(90deg)' : 'none',
+        transition: 'transform .15s',
+        opacity: .6
+      }
+    })), open && React.createElement("div", {
+      style: {
+        overflowX: 'auto',
+        marginTop: 10
+      }
+    }, React.createElement("table", {
+      className: "tbl",
+      style: {
+        width: '100%',
+        fontSize: 12.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th,
+      onClick: () => setSortBy('name')
+    }, "Collector"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      },
+      onClick: () => setSortBy('total')
+    }, "Submissions"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      },
+      onClick: () => setSortBy('pending')
+    }, "Pending"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      }
+    }, "Approved"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      }
+    }, "Rejected"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'left'
+      }
+    }, "Mix"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'right'
+      },
+      onClick: () => setSortBy('last')
+    }, "Last submitted"))), React.createElement("tbody", null, people.map(p => {
+      const appPct = p.total ? Math.round(p.approved / p.total * 100) : 0;
+      return React.createElement("tr", {
+        key: p.name
+      }, React.createElement("td", {
+        style: {
+          padding: '7px 8px'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 26,
+          height: 26,
+          borderRadius: '50%',
+          background: 'var(--blue-50)',
+          color: 'var(--blue-700,#0b6aa2)',
+          display: 'grid',
+          placeItems: 'center',
+          fontSize: 10.5,
+          fontWeight: 800,
+          flexShrink: 0
+        }
+      }, ini(p.name)), React.createElement("b", {
+        style: {
+          color: 'var(--ink)'
+        }
+      }, p.name))), React.createElement("td", {
+        style: {
+          textAlign: 'center',
+          fontWeight: 800
+        },
+        className: "num"
+      }, p.total), React.createElement("td", {
+        style: {
+          textAlign: 'center'
+        },
+        className: "num"
+      }, p.pending ? React.createElement("span", {
+        style: {
+          fontWeight: 700,
+          color: '#9a6b00'
+        }
+      }, p.pending) : React.createElement("span", {
+        style: {
+          color: 'var(--faint)'
+        }
+      }, "0")), React.createElement("td", {
+        style: {
+          textAlign: 'center',
+          color: 'var(--pos)',
+          fontWeight: 700
+        },
+        className: "num"
+      }, p.approved), React.createElement("td", {
+        style: {
+          textAlign: 'center',
+          color: p.rejected ? 'var(--rose)' : 'var(--faint)',
+          fontWeight: 700
+        },
+        className: "num"
+      }, p.rejected), React.createElement("td", {
+        style: {
+          padding: '7px 8px',
+          minWidth: 120
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          height: 8,
+          borderRadius: 5,
+          overflow: 'hidden',
+          background: 'var(--panel-2)'
+        },
+        title: `${p.approved} approved · ${p.pending} pending · ${p.rejected} rejected`
+      }, React.createElement("span", {
+        style: {
+          width: p.approved / (p.total || 1) * 100 + '%',
+          background: 'var(--pos)'
+        }
+      }), React.createElement("span", {
+        style: {
+          width: p.pending / (p.total || 1) * 100 + '%',
+          background: '#e0a81e'
+        }
+      }), React.createElement("span", {
+        style: {
+          width: p.rejected / (p.total || 1) * 100 + '%',
+          background: 'var(--rose)'
+        }
+      })), React.createElement("div", {
+        style: {
+          fontSize: 10,
+          color: 'var(--muted)',
+          marginTop: 3
+        }
+      }, p.patient, "P \xB7 ", p.quality, "Q \xB7 ", appPct, "% approved")), React.createElement("td", {
+        style: {
+          textAlign: 'right',
+          whiteSpace: 'nowrap',
+          color: 'var(--ink-2)'
+        }
+      }, ago(p.last)));
+    }), people.length === 0 && React.createElement("tr", null, React.createElement("td", {
+      colSpan: 7,
+      style: {
+        textAlign: 'center',
+        color: 'var(--muted)',
+        padding: 18
+      }
+    }, "No submissions yet."))))));
+  }
   function DataReview() {
     const [rows, setRows] = useState(null);
     const [stats, setStats] = useState(null);
     const [filter, setFilter] = useState('pending');
     const [busy, setBusy] = useState('');
     const [detail, setDetail] = useState(null);
+    const [dupGroup, setDupGroup] = useState(null);
+    const [fq, setFq] = useState('');
+    const [fType, setFType] = useState('');
+    const [fDept, setFDept] = useState('');
+    const [fMonth, setFMonth] = useState('');
+    const [fResp, setFResp] = useState('');
+    const [sortBy, setSortBy] = useState('when');
+    const [sortDir, setSortDir] = useState('desc');
     const when = ts => {
       try {
         return new Date(ts).toLocaleString();
@@ -45640,6 +46242,24 @@ window.LockScreen = LockScreen;
     useEffect(() => {
       setRows(null);
       load();
+    }, [filter]);
+    useEffect(() => {
+      const refresh = () => {
+        if (document.visibilityState !== 'hidden') load();
+      };
+      const onVis = () => {
+        if (document.visibilityState === 'visible') load();
+      };
+      window.addEventListener('focus', refresh);
+      document.addEventListener('visibilitychange', onVis);
+      window.addEventListener('unico:data-refreshed', refresh);
+      const iv = setInterval(refresh, 30000);
+      return () => {
+        window.removeEventListener('focus', refresh);
+        document.removeEventListener('visibilitychange', onVis);
+        window.removeEventListener('unico:data-refreshed', refresh);
+        clearInterval(iv);
+      };
     }, [filter]);
     const [sel, setSel] = useState({});
     const [rejectFor, setRejectFor] = useState(null);
@@ -45673,17 +46293,68 @@ window.LockScreen = LockScreen;
       }
     };
     const dupKey = s => s.type + '|' + (s.type === 'quality' ? (s.area || '') + '|' + (s.indicatorId || s.indicatorName || '') : s.department || '') + '|' + s.month;
+    const groupKey = s => (s.type === 'quality' ? window.DEPTMAP && window.DEPTMAP.nameFromQualityKey(s.area) || s.areaName : window.DEPTMAP && window.DEPTMAP.nameFromId(s.department) || s.departmentName) || '—';
+    const respOf = s => s.responsible && s.responsible.name || s.submittedBy || '';
+    const deptOptions = [...new Set((rows || []).map(groupKey))].sort();
+    const monthOptions = [...new Set((rows || []).map(s => s.month).filter(Boolean))].sort().reverse();
+    const respOptions = [...new Set((rows || []).map(respOf).filter(Boolean))].sort();
+    const matchesFilter = s => {
+      if (fType && s.type !== fType) return false;
+      if (fDept && groupKey(s) !== fDept) return false;
+      if (fMonth && s.month !== fMonth) return false;
+      if (fResp && respOf(s) !== fResp) return false;
+      if (fq.trim()) {
+        const hay = [s.areaName, s.departmentName, s.indicatorName, s.month, s.responsible && s.responsible.name, s.submittedBy, groupKey(s)].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(fq.trim().toLowerCase())) return false;
+      }
+      return true;
+    };
+    const anyFilter = !!(fq.trim() || fType || fDept || fMonth || fResp);
+    const sortVal = s => sortBy === 'when' ? s.submittedAt || 0 : sortBy === 'type' ? s.type || '' : sortBy === 'status' ? s.status || '' : (s.type === 'quality' ? s.areaName : s.departmentName) || '';
+    const cmp = (a, b) => {
+      const va = sortVal(a),
+        vb = sortVal(b);
+      const r = va < vb ? -1 : va > vb ? 1 : 0;
+      return sortDir === 'asc' ? r : -r;
+    };
+    const filtered = (rows || []).filter(matchesFilter).sort(cmp);
+    const setSort = k => {
+      if (sortBy === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');else {
+        setSortBy(k);
+        setSortDir(k === 'when' ? 'desc' : 'asc');
+      }
+    };
+    const sortCaret = k => sortBy === k ? sortDir === 'asc' ? ' ▲' : ' ▼' : '';
+    const exportCsv = () => {
+      const cols = [['When', s => when(s.submittedAt)], ['Type', s => s.type], ['Department', groupKey], ['Target', s => s.type === 'quality' ? s.indicatorName || s.areaName : s.departmentName], ['Period', s => s.month || ''], ['Responsible', respOf], ['Submitted by', s => s.submittedBy || ''], ['Status', s => s.status]];
+      const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const lines = [cols.map(c => esc(c[0])).join(',')].concat(filtered.map(s => cols.map(c => esc(c[1](s))).join(',')));
+      const blob = new Blob(['﻿' + lines.join('\r\n')], {
+        type: 'text/csv;charset=utf-8'
+      });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'submissions-' + filter + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        try {
+          document.body.removeChild(a);
+        } catch (e) {}
+        URL.revokeObjectURL(a.href);
+      }, 0);
+      toast(filtered.length + ' row' + (filtered.length !== 1 ? 's' : '') + ' exported', 'success');
+    };
     const dupCount = {};
-    (rows || []).forEach(s => {
+    filtered.forEach(s => {
       const k = dupKey(s);
       dupCount[k] = (dupCount[k] || 0) + 1;
     });
-    const pendingRows = (rows || []).filter(s => s.status === 'pending');
+    const pendingRows = filtered.filter(s => s.status === 'pending');
     const selIds = pendingRows.filter(s => sel[s.id]).map(s => s.id);
     const allSelected = pendingRows.length > 0 && selIds.length === pendingRows.length;
-    const groupKey = s => (s.type === 'quality' ? window.DEPTMAP && window.DEPTMAP.nameFromQualityKey(s.area) || s.areaName : window.DEPTMAP && window.DEPTMAP.nameFromId(s.department) || s.departmentName) || '—';
     const groups = {};
-    (rows || []).forEach(s => {
+    filtered.forEach(s => {
       const k = groupKey(s);
       (groups[k] = groups[k] || []).push(s);
     });
@@ -45723,7 +46394,12 @@ window.LockScreen = LockScreen;
         whiteSpace: 'nowrap'
       }
     }, s.type === 'quality' ? s.areaName : s.departmentName, dupCount[dupKey(s)] > 1 && React.createElement("span", {
-      title: "Multiple submissions for the same target and month",
+      title: "Multiple submissions for the same target and month \u2014 click to compare (incl. previous / on-record responses)",
+      onClick: e => {
+        e.stopPropagation();
+        const k = dupKey(s);
+        dcApi.get('/api/submissions?status=all&limit=1000').then(r => setDupGroup(r.ok ? (r.submissions || []).filter(x => dupKey(x) === k) : filtered.filter(x => dupKey(x) === k))).catch(() => setDupGroup(filtered.filter(x => dupKey(x) === k)));
+      },
       style: {
         marginLeft: 6,
         fontSize: 10,
@@ -45731,9 +46407,11 @@ window.LockScreen = LockScreen;
         color: '#9a6b00',
         background: 'var(--warn-bg,#fff4e0)',
         borderRadius: 999,
-        padding: '1px 6px'
+        padding: '1px 6px',
+        cursor: 'pointer',
+        border: '1px solid #e6c34d'
       }
-    }, "\u26A0 ", dupCount[dupKey(s)], "\xD7"), s.isCorrection && React.createElement("span", {
+    }, "\u26A0 ", dupCount[dupKey(s)], "\xD7 duplicate"), s.isCorrection && React.createElement("span", {
       title: s.correctionReason || 'Correction / edit request',
       style: {
         marginLeft: 6,
@@ -45828,12 +46506,20 @@ window.LockScreen = LockScreen;
       sub: "Every submission with time, data and status. Submissions stay pending until an admin approves \u2014 approval applies them to the live dashboard.",
       right: React.createElement(React.Fragment, null, React.createElement("button", {
         className: "btn sm",
+        onClick: exportCsv,
+        disabled: !filtered.length,
+        title: "Export the filtered rows to CSV (Excel)"
+      }, React.createElement(Ic, {
+        d: I.download,
+        s: 14
+      }), "Export"), React.createElement("button", {
+        className: "btn sm",
         onClick: load
       }, React.createElement(Ic, {
         d: I.trend,
         s: 14
       }), "Refresh"))
-    }), stats && React.createElement("div", {
+    }), React.createElement(CollectionCoverage, null), React.createElement(CollectorProgress, null), stats && React.createElement("div", {
       style: {
         display: 'flex',
         gap: 10,
@@ -45927,7 +46613,109 @@ window.LockScreen = LockScreen;
         borderRadius: 2,
         background: 'rgba(0,144,202,.35)'
       }
-    }), " Quality"))), selIds.length > 0 && React.createElement("div", {
+    }), " Quality"))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'relative',
+        flex: '1 1 220px',
+        minWidth: 180
+      }
+    }, React.createElement("span", {
+      style: {
+        position: 'absolute',
+        left: 10,
+        top: '50%',
+        transform: 'translateY(-50%)',
+        color: 'var(--muted)',
+        pointerEvents: 'none'
+      }
+    }, React.createElement(Ic, {
+      d: I.search,
+      s: 14
+    })), React.createElement("input", {
+      value: fq,
+      onChange: e => setFq(e.target.value),
+      placeholder: "Search target, indicator, person\u2026",
+      style: {
+        width: '100%',
+        padding: '8px 10px 8px 30px',
+        border: '1px solid var(--line)',
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontFamily: 'inherit',
+        outline: 'none',
+        boxSizing: 'border-box'
+      }
+    })), React.createElement("select", {
+      value: fType,
+      onChange: e => setFType(e.target.value),
+      style: dcFilterSel
+    }, React.createElement("option", {
+      value: ""
+    }, "All types"), React.createElement("option", {
+      value: "patient"
+    }, "Patient"), React.createElement("option", {
+      value: "quality"
+    }, "Quality")), React.createElement("select", {
+      value: fDept,
+      onChange: e => setFDept(e.target.value),
+      style: dcFilterSel
+    }, React.createElement("option", {
+      value: ""
+    }, "All departments"), deptOptions.map(n => React.createElement("option", {
+      key: n,
+      value: n
+    }, n))), React.createElement("select", {
+      value: fMonth,
+      onChange: e => setFMonth(e.target.value),
+      style: dcFilterSel
+    }, React.createElement("option", {
+      value: ""
+    }, "All periods"), monthOptions.map(m => React.createElement("option", {
+      key: m,
+      value: m
+    }, m))), React.createElement("select", {
+      value: fResp,
+      onChange: e => setFResp(e.target.value),
+      style: dcFilterSel
+    }, React.createElement("option", {
+      value: ""
+    }, "All people"), respOptions.map(n => React.createElement("option", {
+      key: n,
+      value: n
+    }, n))), anyFilter && React.createElement("button", {
+      className: "btn sm",
+      onClick: () => {
+        setFq('');
+        setFType('');
+        setFDept('');
+        setFMonth('');
+        setFResp('');
+      }
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 13
+    }), "Clear"), rows && React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginLeft: 'auto'
+      }
+    }, filtered.length, " of ", rows.length, " shown"), pendingRows.length > 0 && React.createElement("button", {
+      className: "btn sm pri",
+      disabled: busy === 'bulk',
+      onClick: () => runAction(pendingRows.map(s => s.id), 'approve'),
+      title: "Approve every pending submission currently shown"
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 13
+    }), "Approve all ", pendingRows.length)), selIds.length > 0 && React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -45980,7 +46768,24 @@ window.LockScreen = LockScreen;
         color: 'var(--muted)',
         textAlign: 'center'
       }
-    }, "No ", filter === 'all' ? '' : filter, " submissions.") : React.createElement("table", {
+    }, "No ", filter === 'all' ? '' : filter, " submissions.") : filtered.length === 0 ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)',
+        textAlign: 'center'
+      }
+    }, "No submissions match the filters. ", React.createElement("button", {
+      className: "btn sm",
+      style: {
+        marginLeft: 8
+      },
+      onClick: () => {
+        setFq('');
+        setFType('');
+        setFDept('');
+        setFMonth('');
+      }
+    }, "Clear filters")) : React.createElement("table", {
       className: "tbl",
       style: {
         width: '100%'
@@ -46001,7 +46806,31 @@ window.LockScreen = LockScreen;
           setSel(m);
         } else setSel({});
       }
-    })), React.createElement("th", null, "When"), React.createElement("th", null, "Type"), React.createElement("th", null, "Target"), React.createElement("th", null, "Data"), React.createElement("th", null, "Responsible / By"), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, grouped ? groupNames.map(g => React.createElement(React.Fragment, {
+    })), React.createElement("th", {
+      onClick: () => setSort('when'),
+      style: {
+        cursor: 'pointer',
+        userSelect: 'none'
+      }
+    }, "When", sortCaret('when')), React.createElement("th", {
+      onClick: () => setSort('type'),
+      style: {
+        cursor: 'pointer',
+        userSelect: 'none'
+      }
+    }, "Type", sortCaret('type')), React.createElement("th", {
+      onClick: () => setSort('target'),
+      style: {
+        cursor: 'pointer',
+        userSelect: 'none'
+      }
+    }, "Target", sortCaret('target')), React.createElement("th", null, "Data"), React.createElement("th", null, "Responsible / By"), React.createElement("th", {
+      onClick: () => setSort('status'),
+      style: {
+        cursor: 'pointer',
+        userSelect: 'none'
+      }
+    }, "Status", sortCaret('status')), React.createElement("th", null))), React.createElement("tbody", null, grouped ? groupNames.map(g => React.createElement(React.Fragment, {
       key: g
     }, React.createElement("tr", null, React.createElement("td", {
       colSpan: 8,
@@ -46018,7 +46847,7 @@ window.LockScreen = LockScreen;
         color: 'var(--muted)',
         fontSize: 12
       }
-    }, "\xB7 ", groups[g].length, " submission", groups[g].length > 1 ? 's' : ''))), groups[g].map(submissionRow))) : rows.map(submissionRow)))), detail && React.createElement(SubmissionDetail, {
+    }, "\xB7 ", groups[g].length, " submission", groups[g].length > 1 ? 's' : ''))), groups[g].map(submissionRow))) : filtered.map(submissionRow)))), detail && React.createElement(SubmissionDetail, {
       s: detail,
       canEdit: true,
       onClose: () => setDetail(null),
@@ -46031,7 +46860,185 @@ window.LockScreen = LockScreen;
       busy: busy === 'bulk',
       onCancel: () => setRejectFor(null),
       onConfirm: reason => runAction(rejectFor.ids, 'reject', reason)
-    }));
+    }), dupGroup && (() => {
+      const g = [...dupGroup].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
+      const head = g[0] || {};
+      const tgt = head.type === 'quality' ? head.indicatorName || head.areaName : head.departmentName;
+      return React.createElement("div", {
+        onMouseDown: () => setDupGroup(null),
+        style: {
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(16,32,46,.42)',
+          zIndex: 380,
+          display: 'grid',
+          placeItems: 'center',
+          padding: 'clamp(6px,3vw,20px)'
+        }
+      }, React.createElement("div", {
+        onMouseDown: e => e.stopPropagation(),
+        style: {
+          background: 'var(--panel)',
+          border: '1px solid var(--line)',
+          borderRadius: 12,
+          width: 'min(680px,96vw)',
+          maxHeight: '92vh',
+          overflow: 'auto',
+          boxShadow: 'var(--shadow-pop)'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '14px 16px',
+          borderBottom: '1px solid var(--line-2)',
+          position: 'sticky',
+          top: 0,
+          background: 'var(--panel)',
+          zIndex: 3
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 15,
+          color: '#9a6b00'
+        }
+      }, "\u26A0"), React.createElement("div", {
+        style: {
+          fontWeight: 700,
+          fontSize: 14,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }
+      }, g.length, " duplicate submissions \xB7 ", tgt, " \xB7 ", monthLabel(head.month)), React.createElement("span", {
+        style: {
+          flex: 1
+        }
+      }), React.createElement("button", {
+        className: "icon-btn",
+        style: {
+          width: 30,
+          height: 30,
+          flexShrink: 0
+        },
+        onClick: () => setDupGroup(null)
+      }, React.createElement(Ic, {
+        d: I.x,
+        s: 16
+      }))), React.createElement("div", {
+        style: {
+          padding: '12px 16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 12,
+          color: 'var(--muted)'
+        }
+      }, "Same target and month \u2014 all ", g.length, " responses (incl. the previous / on-record one). Compare below, then keep one (approve) and reject the rest."), g.map((s, i) => React.createElement("div", {
+        key: s.id,
+        style: {
+          border: '1px solid var(--line)',
+          borderRadius: 10,
+          padding: '11px 13px',
+          background: i === 0 ? 'var(--blue-50)' : 'var(--panel-2)'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap',
+          marginBottom: 6
+        }
+      }, s.status === 'approved' ? React.createElement("span", {
+        style: {
+          fontSize: 10,
+          fontWeight: 700,
+          color: 'var(--pos)',
+          background: 'var(--pos-bg)',
+          border: '1px solid #bfe6cf',
+          borderRadius: 999,
+          padding: '1px 7px'
+        }
+      }, "Previous \xB7 on record") : i === 0 ? React.createElement("span", {
+        style: {
+          fontSize: 10,
+          fontWeight: 700,
+          color: 'var(--blue-700,#0b6aa2)',
+          background: '#fff',
+          border: '1px solid var(--blue-100,#cfe6f7)',
+          borderRadius: 999,
+          padding: '1px 7px'
+        }
+      }, "Latest") : null, React.createElement("b", {
+        style: {
+          fontSize: 12.5,
+          color: 'var(--ink)'
+        }
+      }, s.responsible && s.responsible.name || s.submittedBy || '—'), React.createElement("span", {
+        style: {
+          fontSize: 11.5,
+          color: 'var(--muted)'
+        },
+        className: "num"
+      }, (() => {
+        try {
+          return new Date(s.submittedAt).toLocaleString();
+        } catch (e) {
+          return '';
+        }
+      })()), React.createElement("span", {
+        style: {
+          flex: 1
+        }
+      }), statusChip(s.status)), React.createElement("div", {
+        style: {
+          fontSize: 12.5,
+          color: 'var(--ink-2)'
+        }
+      }, valuesSummaryEl(s)), React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 6,
+          marginTop: 9,
+          justifyContent: 'flex-end',
+          flexWrap: 'wrap'
+        }
+      }, React.createElement("button", {
+        className: "btn sm",
+        onClick: () => setDetail(s)
+      }, React.createElement(Ic, {
+        d: I.search,
+        s: 13
+      }), "View / edit"), s.status === 'pending' && React.createElement(React.Fragment, null, React.createElement("button", {
+        className: "btn sm pri",
+        disabled: busy === 'bulk',
+        onClick: async () => {
+          await runAction([s.id], 'approve');
+          setDupGroup(cur => cur && cur.filter(x => x.id !== s.id));
+        }
+      }, React.createElement(Ic, {
+        d: I.check,
+        s: 13
+      }), "Keep (approve)"), React.createElement("button", {
+        className: "btn sm",
+        style: {
+          color: 'var(--rose)'
+        },
+        disabled: busy === 'bulk',
+        onClick: () => setRejectFor({
+          ids: [s.id]
+        })
+      }, React.createElement(Ic, {
+        d: I.x,
+        s: 13
+      }), "Reject"))))))));
+    })());
   }
   function DataShareLinks({
     depts
@@ -46304,6 +47311,21 @@ window.LockScreen = LockScreen;
     const load = () => dcApi.get('/api/submissions?limit=300').then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
     useEffect(() => {
       load();
+    }, []);
+    useEffect(() => {
+      const refresh = () => {
+        if (document.visibilityState !== 'hidden') load();
+      };
+      window.addEventListener('focus', refresh);
+      document.addEventListener('visibilitychange', refresh);
+      window.addEventListener('unico:data-refreshed', refresh);
+      const iv = setInterval(refresh, 30000);
+      return () => {
+        window.removeEventListener('focus', refresh);
+        document.removeEventListener('visibilitychange', refresh);
+        window.removeEventListener('unico:data-refreshed', refresh);
+        clearInterval(iv);
+      };
     }, []);
     const when = ts => {
       try {

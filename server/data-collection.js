@@ -363,7 +363,16 @@ async function buildQualitySpec(payload) {
     if (found) { indId = found.id; indName = found.name; }
     else {
       isNew = true; indName = name;
-      indId = 'ind-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) + '-' + Math.floor(1000 + Math.random() * 9000);
+      // DERIVE the id from the name instead of appending Math.random(): a random suffix
+      // meant the same new indicator submitted for two areas got two unrelated ids, so it
+      // could never be recognised as one indicator across departments (this is where the
+      // stray ind-needle-stick-sharps-injury-6040 / -4594 / -3893 ids came from). Ids only
+      // need to be unique WITHIN this area, so only a real clash gets a numeric suffix.
+      const baseId = 'ind-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+      const taken = new Set(indicators.map((i) => String(i.id)));
+      indId = baseId;
+      for (let n = 2; taken.has(indId); n++) indId = baseId + '-' + n;
     }
   }
   // Single-month entry; the SYSTEM computes the result (the collector never pre-computes):

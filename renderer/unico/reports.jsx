@@ -1730,8 +1730,17 @@ const FULL_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]=[...PERM_ORDER],m),{});
 const NONE_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]=[],m),{});
 const inits=n=>(n||'?').split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase();
 // Which template a perms map matches (for the Role dropdown); 'Custom' if none.
-const detectTemplate=p=>{ for(const r of USER_ROLES){ const pr=ROLE_PRESETS[r]; if(USER_MODS.every(([k])=>sameActs(p[k],pr[k]))) return r; } return 'Custom'; };
-const permSummary=p=>{ if(!p) return 'Full access'; const acts=USER_MODS.map(([k])=>asActions(p[k])); const on=acts.filter(a=>a.length).length; if(!on) return 'No access'; if(acts.every(a=>a.length===4)) return 'Full access'; const ed=acts.filter(a=>a.indexOf('edit')>=0||a.indexOf('add')>=0||a.indexOf('delete')>=0).length; return `${on} module${on!==1?'s':''}${ed?' · '+ed+' editable':''}`; };
+// 'Administrator' is a BACKEND ROLE, not an access template — never infer it from a perms
+// map. It used to be matched here, so a plain 'User' who happened to hold every action on
+// every module opened with Role = Administrator preselected, and the next save (even just
+// a name fix) silently PROMOTED them to a real administrator. Full-access Users now read
+// as 'Custom'; promoting is only ever an explicit pick from the dropdown.
+const detectTemplate=p=>{ for(const r of USER_ROLES){ if(r==='Administrator') continue; const pr=ROLE_PRESETS[r]; if(USER_MODS.every(([k])=>sameActs(p[k],pr[k]))) return r; } return 'Custom'; };
+// A 'User' with NO perms map can do nothing at runtime — unicoUserPerms() (ui.jsx) turns a
+// missing map into {}, so every module is denied. This read 'Full access', so the list
+// claimed the exact opposite of what such an account could actually do. (Administrators and
+// collectors never reach here; summaryOf() short-circuits them.)
+const permSummary=p=>{ if(!p) return 'No access'; const acts=USER_MODS.map(([k])=>asActions(p[k])); const on=acts.filter(a=>a.length).length; if(!on) return 'No access'; if(acts.every(a=>a.length===4)) return 'Full access'; const ed=acts.filter(a=>a.indexOf('edit')>=0||a.indexOf('add')>=0||a.indexOf('delete')>=0).length; return `${on} module${on!==1?'s':''}${ed?' · '+ed+' editable':''}`; };
 
 function usersApi(method,path,body){
   return fetch(path,{method,headers:{'Content-Type':'application/json'},credentials:'same-origin',body:body?JSON.stringify(body):undefined})
@@ -1759,6 +1768,8 @@ function UserModal({initial,onClose,onSaved}){
   // presets) are converted to action arrays via asActions() on load.
   const [perms,setPerms]=useState(()=>{
     if(editing && initial.role==='Administrator') return FULL_PERMS();
+    // A 'User' with no perms map holds NOTHING at runtime (unicoUserPerms() in ui.jsx maps
+    // a missing map to {}), so starting from NONE_PERMS is the honest default here.
     const src=(editing&&initial.perms)?{...NONE_PERMS(),...initial.perms}:NONE_PERMS();
     return USER_MODS.reduce((m,[k])=>(m[k]=asActions(src[k]),m),{});
   });
@@ -1882,6 +1893,11 @@ function UserManagement(){
   const filtered=all.filter(u=>!q||`${u.name} ${u.username} ${u.email||''} ${u.title||u.role}`.toLowerCase().includes(q.toLowerCase()));
   const toggle=async(u)=>{ try{ await usersApi('PATCH','/api/users/'+encodeURIComponent(u.username),{active:u.active===false}); uToast(u.active===false?'Activated':'Deactivated'); load(); }catch(e){ uToast(e.message||'Failed','error'); } };
   const del=async(u)=>{ try{ await usersApi('DELETE','/api/users/'+encodeURIComponent(u.username)); uToast('User removed'); setConfirm(null); load(); }catch(e){ uToast(e.message||'Failed','error'); setConfirm(null); } };
+  // The Administration module can be delegated to a 'User' with a per-action level, and the
+  // API enforces it — so only offer the controls this session can actually use, instead of
+  // showing buttons that come back 403.
+  const may=(a)=>{ try{ return typeof window.unicoCan!=='function' || window.unicoCan('users',a); }catch(e){ return true; } };
+  const mayAdd=may('add'), mayEdit=may('edit'), mayDel=may('delete');
   const roleLabel=u=> u.role==='Administrator'?'Administrator':(u.role==='collector'?'Data Collector':(u.title||'User'));
   const summaryOf=u=> u.role==='Administrator'?'Full access':(u.role==='collector'?'Data collection':permSummary(u.perms));
   return (
@@ -1891,14 +1907,17 @@ function UserManagement(){
         <span className="spacer" style={{flex:1}}/>
         <div style={{display:'flex',alignItems:'center',gap:7,background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:7,padding:'6px 10px',width:190,color:'var(--faint)'}}><Ic d={I.search} s={14}/><input placeholder="Search users…" value={q} onChange={e=>setQ(e.target.value)} style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:12.5,color:'var(--ink)',width:'100%'}}/></div>
         <button className="btn sm" onClick={load}><Ic d={I.search} s={14}/>Refresh</button>
-        <button className="btn pri sm" onClick={()=>setModal({user:null})}><Ic d={I.plus} s={14}/>Add user</button>
+        {mayAdd&&<button className="btn pri sm" onClick={()=>setModal({user:null})}><Ic d={I.plus} s={14}/>Add user</button>}
       </div>
       {err&&<div style={{fontSize:12.5,color:'#b32339',background:'var(--neg-bg)',border:'1px solid var(--line)',borderRadius:9,padding:'11px 13px',marginBottom:12}}>{err}{String(err).toLowerCase().includes('administrator')?'':' · Is the server running with a database connection?'}</div>}
       <div style={{display:'flex',flexDirection:'column',gap:8}}>
         {users===null&&<div style={{textAlign:'center',color:'var(--faint)',padding:'24px',fontSize:13}}>Loading…</div>}
         {users!==null&&filtered.map(u=>{
           const active=u.active!==false; const isMe=me&&u.username===me; const isColl=u.role==='collector';
-          const lastAdmin=u.role==='Administrator'&&admins<=1;
+          // Only an ACTIVE administrator can be the last one. Without the active check an
+          // already-inactive admin was locked out of both buttons, so you could not
+          // re-activate (or remove) them while a single active admin existed.
+          const lastAdmin=u.role==='Administrator'&&u.active!==false&&admins<=1;
           return (
           <div key={u.username} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 13px',border:'1px solid var(--line)',borderRadius:10,opacity:active?1:.6,flexWrap:'wrap'}}>
             <div className="avatar" style={{background:uAvatarColor(u.username),width:38,height:38}}>{inits(u.name)}</div>
@@ -1909,9 +1928,9 @@ function UserManagement(){
             <span className="tag" style={{minWidth:96,justifyContent:'center'}}>{roleLabel(u)}</span>
             <span className="tag" style={{minWidth:96,justifyContent:'center',color:'var(--ink-2)'}}>{summaryOf(u)}</span>
             {active?<span className="chip pos">● Active</span>:<span className="chip flat">○ Inactive</span>}
-            <button className="btn sm" onClick={()=>setModal({user:u})}>Manage</button>
-            <button className="icon-btn" title={active?'Deactivate':'Activate'} onClick={()=>toggle(u)} disabled={isMe||lastAdmin}><Ic d={active?I.x:I.check} s={14}/></button>
-            <button className="icon-btn danger" title="Remove" onClick={()=>setConfirm(u)} disabled={isMe||lastAdmin}><Ic d={I.x} s={14}/></button>
+            {mayEdit&&<button className="btn sm" onClick={()=>setModal({user:u})}>Manage</button>}
+            {mayEdit&&<button className="icon-btn" title={active?'Deactivate':'Activate'} onClick={()=>toggle(u)} disabled={isMe||lastAdmin}><Ic d={active?I.x:I.check} s={14}/></button>}
+            {mayDel&&<button className="icon-btn danger" title="Remove" onClick={()=>setConfirm(u)} disabled={isMe||lastAdmin}><Ic d={I.x} s={14}/></button>}
           </div>
           );
         })}

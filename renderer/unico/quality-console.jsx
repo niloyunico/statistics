@@ -355,9 +355,9 @@ function guideOf(code){
 }
 
 /* Build a blank count-type indicator ready for the store (id via window.qualitySlug). */
-function blankIndicator(name){
+function blankIndicator(name, taken){
   return {
-    id: (window.qualitySlug ? window.qualitySlug(name) : ('ind-'+norm(name).replace(/ /g,'-'))),
+    id: (window.qualitySlug ? window.qualitySlug(name, taken) : ('ind-'+norm(name).replace(/ /g,'-'))),
     name,
     formula:'count', valueType:'Count',
     goalDirection:'lower_is_better',
@@ -4252,11 +4252,15 @@ function QCAdmin({Q,q,onQ,initialDept}){
   // ---- department status label (for the master group pills) ----
   const deptStatus = (d)=>{ const r=deptStat(d).rate; return r>=95?'Excellent':r>=85?'Very Good':r>=70?'Good':r>=55?'Fair':r>=40?'Needs Improvement':'Poor'; };
 
+  // Ids must be unique within ONE department (across departments the same id is what
+  // marks a Common indicator) — so every mint passes the target dept's ids.
+  const deptIndIds = (dk)=> new Set(((((Q.depts||[]).find(d=>d.key===dk))||{}).indicators||[]).map(i=>i.id));
+
   // ---- new indicator ----
   const onNew = ()=>{
     const dk = (scope!=='all' ? scope : (depts[0] && depts[0].key)) || (Q.depts[0] && Q.depts[0].key);
     if(!dk) return;
-    const blank = blankIndicator('New Indicator');
+    const blank = blankIndicator('New Indicator', deptIndIds(dk));
     Q.addIndicator(dk, blank);
     setSel({deptKey:dk,id:blank.id}); setView('manage'); setTab('identity'); setCopyOpen(false); setCopyT({});
   };
@@ -4326,10 +4330,24 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const patchMonthDen = (idx)=> (e)=>{ const v=e.target.value; patch({ mDen:{ [MONTHS[idx][0]]: (v===''?null:Number(v)) } }); };
   const patchMonthRemark = (idx)=> (e)=> patch({ monthRemarks:{ [MONTHS[idx][0]]: e.target.value } });
 
-  const onClone = ()=>{ if(!selInd) return; const copy=Object.assign({},selInd,{ id:window.qualitySlug(selInd.name+' copy'), name:selInd.name+' (copy)' }); Q.addIndicator(sel.deptKey,copy); setSel({deptKey:sel.deptKey,id:copy.id}); };
+  // Does this department already report the selected indicator? Copy/Move both land on the
+  // name-derived id, so without this they would overwrite THAT department's recorded months
+  // with this one's. Used to disable copy targets and to confirm before a move.
+  const deptHasInd = (dk)=>{ if(!selInd) return false; const cid=window.qualitySlug?window.qualitySlug(selInd.name):'';
+    return ((((Q.depts||[]).find(d=>d.key===dk))||{}).indicators||[]).some(i=> String(i.id)===cid || norm(i.name)===norm(selInd.name)); };
+
+  const onClone = ()=>{ if(!selInd) return; const copy=Object.assign({},selInd,{ id:window.qualitySlug(selInd.name+' copy',deptIndIds(sel.deptKey)), name:selInd.name+' (copy)' }); Q.addIndicator(sel.deptKey,copy); setSel({deptKey:sel.deptKey,id:copy.id}); };
   const onDelete = ()=>{ if(!selInd) return; Q.removeIndicator(sel.deptKey,sel.id); setSel({deptKey:null,id:null}); setCopyOpen(false); setCopyT({}); };
-  const onMove = (e)=>{ const nd=e.target.value; if(!selInd||nd===sel.deptKey) return; const moved=Object.assign({},selInd); Q.addIndicator(nd,moved); Q.removeIndicator(sel.deptKey,sel.id); setSel({deptKey:nd,id:moved.id}); };
-  const onDoCopy = ()=>{ if(!selInd) return; Object.keys(copyT).forEach(dk=>{ if(copyT[dk]){ const c=Object.assign({},selInd,{ id:window.qualitySlug(selInd.name) }); Q.addIndicator(dk,c); } }); setCopyOpen(false); setCopyT({}); };
+  // Moving onto a department that already reports this indicator would land on the same
+  // id and overwrite THEIR recorded months with this department's — make that explicit
+  // rather than silent, since the move is otherwise unrecoverable from the UI.
+  const onMove = (e)=>{ const nd=e.target.value; if(!selInd||nd===sel.deptKey) return;
+    if(deptHasInd(nd)){ const t=(allDepts.find(d=>d.key===nd)||{}).name||nd;
+      if(!window.confirm(t+' already reports "'+selInd.name+'".\n\nMoving will overwrite their recorded values for it with this department\'s. Continue?')){ e.target.value=sel.deptKey; return; } }
+    const moved=Object.assign({},selInd); Q.addIndicator(nd,moved); Q.removeIndicator(sel.deptKey,sel.id); setSel({deptKey:nd,id:moved.id}); };
+  // Targets that already report it are disabled in the picker; skipped here too, since
+  // copyT can still hold a tick from before the selection changed.
+  const onDoCopy = ()=>{ if(!selInd) return; Object.keys(copyT).forEach(dk=>{ if(copyT[dk] && !deptHasInd(dk)){ const c=Object.assign({},selInd,{ id:window.qualitySlug(selInd.name) }); Q.addIndicator(dk,c); } }); setCopyOpen(false); setCopyT({}); };
 
   const meas = selInd? measureOf(selInd.formula) : null;
   // every department reporting the SAME indicator id — drives the edit-scope banner
@@ -4577,12 +4595,12 @@ function QCAdmin({Q,q,onQ,initialDept}){
                 <div style={{marginTop:11,border:'1px solid #dceffa',borderRadius:9,background:'#eef8fc',padding:'11px 13px'}}>
                   <div style={{fontSize:11.5,fontWeight:600,marginBottom:8,color:P.ink}}>Copy this indicator (with its values) to:</div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:6}}>
-                    {allDepts.filter(d=>d.key!==sel.deptKey).map(d=>(
-                      <label key={d.key} style={{display:'flex',alignItems:'center',gap:7,fontSize:12,background:'#fff',border:'1px solid #dde3ec',borderRadius:7,padding:'6px 9px',cursor:'pointer'}}>
-                        <input type="checkbox" checked={!!copyT[d.key]} onChange={()=>setCopyT(t=>Object.assign({},t,{[d.key]:!t[d.key]}))}/>
-                        <span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{d.name}</span>
+                    {allDepts.filter(d=>d.key!==sel.deptKey).map(d=>{ const has=deptHasInd(d.key); return (
+                      <label key={d.key} title={has?d.name+' already reports this indicator — copying would overwrite their recorded values':''} style={{display:'flex',alignItems:'center',gap:7,fontSize:12,background:has?'#f2f5f8':'#fff',border:'1px solid #dde3ec',borderRadius:7,padding:'6px 9px',cursor:has?'not-allowed':'pointer',opacity:has?.55:1}}>
+                        <input type="checkbox" disabled={has} checked={!has&&!!copyT[d.key]} onChange={()=>setCopyT(t=>Object.assign({},t,{[d.key]:!t[d.key]}))}/>
+                        <span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{d.name}{has?' · has it':''}</span>
                       </label>
-                    ))}
+                    ); })}
                   </div>
                   <div style={{display:'flex',gap:8,marginTop:9}}>
                     <button onClick={onDoCopy} style={{display:'inline-flex',alignItems:'center',gap:5,border:'1px solid #0090ca',background:'#0090ca',color:'#fff',padding:'6px 12px',borderRadius:7,fontSize:11.5,fontWeight:600,cursor:'pointer'}}>Copy</button>

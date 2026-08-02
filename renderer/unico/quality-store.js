@@ -206,10 +206,28 @@
     } else {
       const removed = new Set(ov.indRemoved || []);
       const patches = ov.indPatches || {};
-      const inds = (seedDept.indicators || [])
-        .filter(i => !removed.has(i.id))
-        .map(i => mergeIndicator(i, patches[i.id]));
-      (ov.indAdded || []).forEach(a => { if (!removed.has(a.id)) inds.push(mergeIndicator(a, patches[a.id])); });
+      const kept = (seedDept.indicators || []).filter(i => !removed.has(i.id));
+      const inds = kept.map(i => mergeIndicator(i, patches[i.id]));
+      // An overlay-added entry whose id ALSO exists in the seed used to be pushed as a
+      // SECOND row: the department rendered the same indicator twice, both rows sharing
+      // one indPatches entry, so editing either moved both. Fold it onto the seed copy
+      // instead — the added definition wins, but the seed's recorded months/incidents
+      // survive underneath, so nothing that was ever entered disappears.
+      const rawById = new Map(kept.map(i => [String(i.id), i]));
+      const idxById = new Map(kept.map((i, ix) => [String(i.id), ix]));
+      (ov.indAdded || []).forEach(a => {
+        if (removed.has(a.id)) return;
+        const key = String(a.id);
+        const base = rawById.get(key);
+        let raw = a;
+        if (base) {
+          raw = Object.assign({}, base, a);
+          NESTED.forEach(k => { if (base[k] || a[k]) raw[k] = Object.assign({}, base[k] || {}, a[k] || {}); });
+        }
+        const merged = mergeIndicator(raw, patches[a.id]);
+        const at = idxById.get(key);
+        if (at == null) { idxById.set(key, inds.length); inds.push(merged); } else { inds[at] = merged; }
+      });
       dept = Object.assign({}, seedDept, { indicators: inds });
       if (ov.executive) dept.executive = Object.assign({}, seedDept.executive || {}, ov.executive);
       if (ov.meta) dept.meta = Object.assign({}, seedDept.meta || {}, ov.meta);
@@ -357,8 +375,14 @@
         return Object.assign({}, cur, { indPatches: all });
       }),
 
-      addIndicator: (deptKey, ind) => patchDept(deptKey, cur => ({
-        ...cur, indAdded: [...(cur.indAdded || []), ind],
+      // Adding is an explicit "this department reports this indicator", so it must also
+      // UN-HIDE the id if a previous unassign put it in indRemoved — otherwise the
+      // freshly added indicator is filtered straight back out by the removed-set when
+      // the dept is merged, and it just never appears. Re-adding the same id replaces
+      // the entry rather than stacking a second twin next to it.
+      addIndicator: (deptKey, ind) => patchDept(deptKey, cur => Object.assign({}, cur, {
+        indAdded: [...(cur.indAdded || []).filter(a => String(a.id) !== String(ind.id)), ind],
+        indRemoved: (cur.indRemoved || []).filter(x => String(x) !== String(ind.id)),
       })),
 
       removeIndicator: (deptKey, indId) => patchDept(deptKey, cur => {
@@ -392,8 +416,23 @@
   }
 
   // helpers used across the Quality screens
-  function qualitySlug(s) {
-    return 'ind-' + String(s || 'indicator').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) + '-' + Math.random().toString(36).slice(2, 6);
+  // The id is the DATA KEY and is also what makes an indicator "the same indicator"
+  // across departments (the console's Common-indicator edit scope, the assignment
+  // matrix and every report group by id). This used to end in Math.random(), so
+  // adding the SAME indicator in two departments always minted two different ids —
+  // that is how needle-stick fragmented into ind-needle-stick-sharps-injury-t6z2 /
+  // -3hww / -f212 / -wzr4 …, one orphan per department. The slug is now DERIVED FROM
+  // THE NAME, so the same indicator lands on the same id everywhere.
+  // Ids only have to be unique WITHIN one department, so pass that department's
+  // existing ids as `taken` and a numeric suffix is added only on a real collision.
+  function qualitySlug(s, taken) {
+    const base = 'ind-' + String(s || 'indicator').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+    const used = taken instanceof Set ? taken : new Set(Array.isArray(taken) ? taken : []);
+    if (!used.has(base)) return base;
+    let n = 2;
+    while (used.has(base + '-' + n)) n++;
+    return base + '-' + n;
   }
 
   window.qualityData = qualityData;

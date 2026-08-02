@@ -1244,10 +1244,19 @@
       </div>
     );
   }
+  // Map a patient submission's raw column keys -> the department's human labels
+  // (falls back to a prettified key when a column no longer exists).
+  const prettyKey = (k) => String(k || '').replace(/^c_/, '').replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  function colLabelMap(s) {
+    if (s.type !== 'patient') return {};
+    const dept = dcAllDepts().find((d) => d.id === s.department);
+    const m = {}; ((dept && dept.cols) || []).forEach((c) => { m[c.id] = c.label || prettyKey(c.id); });
+    return m;
+  }
   function valuesSummary(s) {
     if (s.type === 'quality') return (s.indicatorName || '') + ' · ' + monthLabel(s.month) + (s.value != null ? ' = ' + s.value : '') + (s.remark ? ' (' + s.remark + ')' : '');
-    const v = s.values || {};
-    const parts = Object.keys(v).map((k) => k + ':' + v[k]);
+    const v = s.values || {}; const lm = colLabelMap(s);
+    const parts = Object.keys(v).map((k) => (lm[k] || prettyKey(k)) + ': ' + v[k]);
     return monthLabel(s.month) + ' — ' + (parts.length ? parts.join(', ') : '(no values)');
   }
   // Table-cell version of valuesSummary with the key facts HIGHLIGHTED for fast
@@ -1255,9 +1264,11 @@
   const dcMonthChip = (m) => <span style={{ background: '#fff4e0', color: '#9a6b00', fontWeight: 700, padding: '1px 7px', borderRadius: 6, whiteSpace: 'nowrap' }}>{monthLabel(m)}</span>;
   function valuesSummaryEl(s) {
     if (s.type === 'quality') return <>{(s.indicatorName || '') + ' · '}{dcMonthChip(s.month)}{s.value != null && <> = <b style={{ color: 'var(--ink)' }}>{s.value}</b></>}{s.remark ? ' (' + s.remark + ')' : ''}</>;
-    const v = s.values || {};
-    const parts = Object.keys(v).map((k) => k + ':' + v[k]);
-    return <>{dcMonthChip(s.month)}{' — ' + (parts.length ? parts.join(', ') : '(no values)')}</>;
+    const v = s.values || {}; const lm = colLabelMap(s);
+    const keys = Object.keys(v);
+    return <>{dcMonthChip(s.month)}{' — '}{keys.length
+      ? keys.map((k, i) => <span key={k}>{i ? ', ' : ''}<span style={{ color: 'var(--muted)' }}>{lm[k] || prettyKey(k)}:</span> <b style={{ color: 'var(--ink)' }}>{v[k]}</b></span>)
+      : '(no values)'}</>;
   }
   // Full submission viewer. Admins can correct a PENDING submission's values
   // (PATCH /api/submissions/:id) before approving; collectors see it read-only.
@@ -1584,18 +1595,178 @@
     );
   }
 
+  const dcFilterSel = { padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, fontSize: 12.5, fontFamily: 'inherit', background: '#fff', color: 'var(--ink)', outline: 'none', cursor: 'pointer' };
+
+  /* Monthly collection coverage — which departments (patient) and quality areas have
+     submitted for the chosen month, and which are STILL MISSING (the gap/alert list).
+     Analytics + alerts in one; "Copy gaps" produces a paste-ready reminder list. */
+  function CollectionCoverage() {
+    const [subs, setSubs] = useState(null);
+    const [month, setMonth] = useState('');
+    const [showGaps, setShowGaps] = useState(false);
+    const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([]));
+    useEffect(() => { load(); const h = () => load(); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
+    const depts = React.useMemo(() => dcAllDepts(), []);
+    const areas = React.useMemo(() => (window.qualityData ? window.qualityData() : []), []);
+    const MO = (window.UNICO && window.UNICO.MONTH_ORDER) || [];
+    const rank = (mm) => { const i = MO.indexOf(mm); return i < 0 ? -1 : i; };
+    const months = React.useMemo(() => [...new Set((subs || []).map((s) => s.month).filter(Boolean))].sort((a, b) => rank(b) - rank(a)), [subs]);
+    const m = month || months[0] || '';
+    const subsM = (subs || []).filter((s) => s.month === m);
+    const pDone = new Set(subsM.filter((s) => s.type === 'patient').map((s) => s.department));
+    const qDone = new Set(subsM.filter((s) => s.type === 'quality').map((s) => s.area));
+    const pMissing = depts.filter((d) => !pDone.has(d.id));
+    const qMissing = areas.filter((a) => !qDone.has(a.key));
+    const pPct = depts.length ? Math.round((depts.length - pMissing.length) / depts.length * 100) : 0;
+    const qPct = areas.length ? Math.round((areas.length - qMissing.length) / areas.length * 100) : 0;
+    const gapN = pMissing.length + qMissing.length;
+    const copyGaps = () => {
+      const txt = 'Not yet submitted — ' + monthLabel(m) + '\n\nPatient statistics (' + pMissing.length + '):\n' + (pMissing.length ? pMissing.map((d) => '• ' + d.name).join('\n') : '(all submitted)') + '\n\nQuality indicators (' + qMissing.length + '):\n' + (qMissing.length ? qMissing.map((a) => '• ' + a.name).join('\n') : '(all submitted)');
+      try { navigator.clipboard.writeText(txt); toast('Gap list copied — paste into a reminder', 'success'); } catch (e) { toast('Could not copy', 'error'); }
+    };
+    const Bar = ({ label, done, total, pct, color }) => (
+      <div style={{ flex: '1 1 240px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>{label}</span>
+          <span style={{ fontSize: 11.5, color: 'var(--muted)', marginLeft: 'auto' }}>{done}/{total} · {pct}%</span>
+        </div>
+        <div style={{ height: 10, background: 'var(--panel-2)', borderRadius: 6, overflow: 'hidden' }}><div style={{ height: '100%', width: pct + '%', background: color, borderRadius: 6, transition: 'width .5s' }} /></div>
+      </div>
+    );
+    if (subs === null) return null;
+    return (
+      <Card style={{ padding: '14px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+          <Ic d={I.activity} s={16} c="var(--blue)" /><b style={{ fontSize: 13.5 }}>Collection coverage</b>
+          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>who has submitted this month</span>
+          <span style={{ flex: 1 }} />
+          <select value={m} onChange={(e) => setMonth(e.target.value)} style={dcFilterSel}>{(months.length ? months : [m]).filter(Boolean).map((x) => <option key={x} value={x}>{monthLabel(x)}</option>)}</select>
+          {gapN > 0 && <button className="btn sm" onClick={copyGaps} title="Copy the not-submitted list for a reminder"><Ic d={I.download} s={13} />Copy gaps</button>}
+        </div>
+        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+          <Bar label="Patient statistics" done={depts.length - pMissing.length} total={depts.length} pct={pPct} color="linear-gradient(90deg,#1f9d57,#3ab5a7)" />
+          <Bar label="Quality indicators" done={areas.length - qMissing.length} total={areas.length} pct={qPct} color="linear-gradient(90deg,#0090ca,#27a8db)" />
+        </div>
+        {gapN > 0 ? (
+          <div style={{ marginTop: 12 }}>
+            <button className="btn sm" onClick={() => setShowGaps((v) => !v)} style={{ color: '#9a6b00', borderColor: '#e6c34d' }}><Ic d={I.bell} s={13} />{showGaps ? 'Hide' : 'Show'} {gapN} not submitted</button>
+            {showGaps && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 10 }}>
+                {pMissing.length > 0 && <div style={{ flex: '1 1 260px' }}><div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 6 }}>Patient — {pMissing.length} missing</div><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{pMissing.map((d) => <span key={d.id} style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 9px', borderRadius: 999, background: 'var(--pos-bg)', color: 'var(--pos)' }}>{d.name}</span>)}</div></div>}
+                {qMissing.length > 0 && <div style={{ flex: '1 1 260px' }}><div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 6 }}>Quality — {qMissing.length} missing</div><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{qMissing.map((a) => <span key={a.key} style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700,#0b6aa2)' }}>{a.name}</span>)}</div></div>}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--pos)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}><Ic d={I.check} s={14} />All departments and quality areas have submitted for {monthLabel(m)}.</div>
+        )}
+      </Card>
+    );
+  }
+
+  /* Per-collector progress — activity by responsible/submitter: totals, pending vs
+     approved vs rejected, last-submitted. Collapsed by default (opt-in analytics). */
+  function CollectorProgress() {
+    const [subs, setSubs] = useState(null);
+    const [open, setOpen] = useState(false);
+    const [sortBy, setSortBy] = useState('total');
+    const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([]));
+    useEffect(() => { load(); const h = () => load(); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
+    const respOf = (s) => (s.responsible && s.responsible.name) || s.submittedBy || '—';
+    const byPerson = {};
+    (subs || []).forEach((s) => { const p = respOf(s); const r = byPerson[p] = byPerson[p] || { name: p, total: 0, pending: 0, approved: 0, rejected: 0, patient: 0, quality: 0, last: 0 }; r.total++; r[s.status] = (r[s.status] || 0) + 1; r[s.type] = (r[s.type] || 0) + 1; if ((s.submittedAt || 0) > r.last) r.last = s.submittedAt; });
+    let people = Object.values(byPerson);
+    people.sort((a, b) => sortBy === 'name' ? a.name.localeCompare(b.name) : sortBy === 'pending' ? b.pending - a.pending : sortBy === 'last' ? b.last - a.last : b.total - a.total);
+    const ago = (ts) => { if (!ts) return 'never'; const m = Math.floor((Date.now() - ts) / 60000); if (m < 1) return 'just now'; if (m < 60) return m + 'm ago'; const h = Math.floor(m / 60); if (h < 24) return h + 'h ago'; return Math.floor(h / 24) + 'd ago'; };
+    const ini = (n) => (n || '?').split(' ').map((x) => x[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+    if (subs === null) return null;
+    const th = { textAlign: 'left', fontSize: 10.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4, fontWeight: 700, padding: '6px 8px', cursor: 'pointer' };
+    return (
+      <Card style={{ padding: '12px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', cursor: 'pointer' }} onClick={() => setOpen((v) => !v)}>
+          <Ic d={I.user} s={16} c="var(--blue)" /><b style={{ fontSize: 13.5 }}>Collector progress</b>
+          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>{people.length} people · {(subs || []).length} submissions</span>
+          <span style={{ flex: 1 }} />
+          <Ic d={I.chevR} s={16} style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s', opacity: .6 }} />
+        </div>
+        {open && (
+          <div style={{ overflowX: 'auto', marginTop: 10 }}>
+            <table className="tbl" style={{ width: '100%', fontSize: 12.5 }}>
+              <thead><tr>
+                <th style={th} onClick={() => setSortBy('name')}>Collector</th>
+                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSortBy('total')}>Submissions</th>
+                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSortBy('pending')}>Pending</th>
+                <th style={{ ...th, textAlign: 'center' }}>Approved</th>
+                <th style={{ ...th, textAlign: 'center' }}>Rejected</th>
+                <th style={{ ...th, textAlign: 'left' }}>Mix</th>
+                <th style={{ ...th, textAlign: 'right' }} onClick={() => setSortBy('last')}>Last submitted</th>
+              </tr></thead>
+              <tbody>
+                {people.map((p) => { const appPct = p.total ? Math.round(p.approved / p.total * 100) : 0; return (
+                  <tr key={p.name}>
+                    <td style={{ padding: '7px 8px' }}><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ width: 26, height: 26, borderRadius: '50%', background: 'var(--blue-50)', color: 'var(--blue-700,#0b6aa2)', display: 'grid', placeItems: 'center', fontSize: 10.5, fontWeight: 800, flexShrink: 0 }}>{ini(p.name)}</span><b style={{ color: 'var(--ink)' }}>{p.name}</b></div></td>
+                    <td style={{ textAlign: 'center', fontWeight: 800 }} className="num">{p.total}</td>
+                    <td style={{ textAlign: 'center' }} className="num">{p.pending ? <span style={{ fontWeight: 700, color: '#9a6b00' }}>{p.pending}</span> : <span style={{ color: 'var(--faint)' }}>0</span>}</td>
+                    <td style={{ textAlign: 'center', color: 'var(--pos)', fontWeight: 700 }} className="num">{p.approved}</td>
+                    <td style={{ textAlign: 'center', color: p.rejected ? 'var(--rose)' : 'var(--faint)', fontWeight: 700 }} className="num">{p.rejected}</td>
+                    <td style={{ padding: '7px 8px', minWidth: 120 }}>
+                      <div style={{ display: 'flex', height: 8, borderRadius: 5, overflow: 'hidden', background: 'var(--panel-2)' }} title={`${p.approved} approved · ${p.pending} pending · ${p.rejected} rejected`}>
+                        <span style={{ width: (p.approved / (p.total || 1) * 100) + '%', background: 'var(--pos)' }} />
+                        <span style={{ width: (p.pending / (p.total || 1) * 100) + '%', background: '#e0a81e' }} />
+                        <span style={{ width: (p.rejected / (p.total || 1) * 100) + '%', background: 'var(--rose)' }} />
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>{p.patient}P · {p.quality}Q · {appPct}% approved</div>
+                    </td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--ink-2)' }}>{ago(p.last)}</td>
+                  </tr>
+                ); })}
+                {people.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 18 }}>No submissions yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    );
+  }
+
   function DataReview() {
     const [rows, setRows] = useState(null);
     const [stats, setStats] = useState(null);
     const [filter, setFilter] = useState('pending');
     const [busy, setBusy] = useState('');
     const [detail, setDetail] = useState(null);
+    const [dupGroup, setDupGroup] = useState(null);   // [submissions] for a duplicate target+month
+    // advanced filters (client-side, over the fetched rows)
+    const [fq, setFq] = useState('');       // free-text search
+    const [fType, setFType] = useState(''); // '' | 'patient' | 'quality'
+    const [fDept, setFDept] = useState(''); // department / area (group) name
+    const [fMonth, setFMonth] = useState(''); // reporting period
+    const [fResp, setFResp] = useState('');   // responsible person
+    const [sortBy, setSortBy] = useState('when'); // when | type | target | status
+    const [sortDir, setSortDir] = useState('desc');
     const when = (ts) => { try { return new Date(ts).toLocaleString(); } catch (e) { return ''; } };
     const load = () => {
       dcApi.get('/api/submissions?status=' + filter + '&limit=300').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
       dcApi.get('/api/submissions/stats').then((r) => setStats(r.ok ? r.stats : null)).catch(() => {});
     };
     useEffect(() => { setRows(null); load(); }, [filter]);
+    // Live refresh: a submission made in another tab/device (or by a collector) used to
+    // stay invisible until a manual reload. Refetch silently when the tab regains focus,
+    // on the shared 'unico:data-refreshed' event, and on a light 30s poll while visible.
+    useEffect(() => {
+      const refresh = () => { if (document.visibilityState !== 'hidden') load(); };
+      const onVis = () => { if (document.visibilityState === 'visible') load(); };
+      window.addEventListener('focus', refresh);
+      document.addEventListener('visibilitychange', onVis);
+      window.addEventListener('unico:data-refreshed', refresh);
+      const iv = setInterval(refresh, 30000);
+      return () => {
+        window.removeEventListener('focus', refresh);
+        document.removeEventListener('visibilitychange', onVis);
+        window.removeEventListener('unico:data-refreshed', refresh);
+        clearInterval(iv);
+      };
+    }, [filter]);
 
     const [sel, setSel] = useState({});                 // bulk selection: id -> true
     const [rejectFor, setRejectFor] = useState(null);   // {ids:[...]} -> reject-reason modal
@@ -1616,16 +1787,53 @@
     const act = (id, kind) => { if (kind === 'reject') { setRejectFor({ ids: [id] }); } else { runAction([id], 'approve'); } };
     // Track multiple submissions for the SAME target + month (possible duplicates).
     const dupKey = (s) => s.type + '|' + (s.type === 'quality' ? ((s.area || '') + '|' + (s.indicatorId || s.indicatorName || '')) : (s.department || '')) + '|' + s.month;
-    const dupCount = {}; (rows || []).forEach((s) => { const k = dupKey(s); dupCount[k] = (dupCount[k] || 0) + 1; });
-    const pendingRows = (rows || []).filter((s) => s.status === 'pending');
-    const selIds = pendingRows.filter((s) => sel[s.id]).map((s) => s.id);
-    const allSelected = pendingRows.length > 0 && selIds.length === pendingRows.length;
     // Group submissions by DEPARTMENT (canonical name), so a department's patient + quality
     // submissions sit together; quality rows get a blue fill, patient rows a green fill.
     const groupKey = (s) => (s.type === 'quality'
       ? ((window.DEPTMAP && window.DEPTMAP.nameFromQualityKey(s.area)) || s.areaName)
       : ((window.DEPTMAP && window.DEPTMAP.nameFromId(s.department)) || s.departmentName)) || '—';
-    const groups = {}; (rows || []).forEach((s) => { const k = groupKey(s); (groups[k] = groups[k] || []).push(s); });
+    // Filter option lists derived from the fetched rows.
+    const respOf = (s) => (s.responsible && s.responsible.name) || s.submittedBy || '';
+    const deptOptions = [...new Set((rows || []).map(groupKey))].sort();
+    const monthOptions = [...new Set((rows || []).map((s) => s.month).filter(Boolean))].sort().reverse();
+    const respOptions = [...new Set((rows || []).map(respOf).filter(Boolean))].sort();
+    const matchesFilter = (s) => {
+      if (fType && s.type !== fType) return false;
+      if (fDept && groupKey(s) !== fDept) return false;
+      if (fMonth && s.month !== fMonth) return false;
+      if (fResp && respOf(s) !== fResp) return false;
+      if (fq.trim()) {
+        const hay = [s.areaName, s.departmentName, s.indicatorName, s.month, s.responsible && s.responsible.name, s.submittedBy, groupKey(s)].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(fq.trim().toLowerCase())) return false;
+      }
+      return true;
+    };
+    const anyFilter = !!(fq.trim() || fType || fDept || fMonth || fResp);
+    // Sort key per column; grouped view sorts within each department group.
+    const sortVal = (s) => sortBy === 'when' ? (s.submittedAt || 0)
+      : sortBy === 'type' ? (s.type || '')
+      : sortBy === 'status' ? (s.status || '')
+      : ((s.type === 'quality' ? s.areaName : s.departmentName) || '');
+    const cmp = (a, b) => { const va = sortVal(a), vb = sortVal(b); const r = va < vb ? -1 : va > vb ? 1 : 0; return sortDir === 'asc' ? r : -r; };
+    const filtered = (rows || []).filter(matchesFilter).sort(cmp);
+    const setSort = (k) => { if (sortBy === k) setSortDir((d) => d === 'asc' ? 'desc' : 'asc'); else { setSortBy(k); setSortDir(k === 'when' ? 'desc' : 'asc'); } };
+    const sortCaret = (k) => sortBy === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    // Export the currently filtered rows to a CSV (opens in Excel).
+    const exportCsv = () => {
+      const cols = [['When', (s) => when(s.submittedAt)], ['Type', (s) => s.type], ['Department', groupKey], ['Target', (s) => (s.type === 'quality' ? (s.indicatorName || s.areaName) : s.departmentName)], ['Period', (s) => s.month || ''], ['Responsible', respOf], ['Submitted by', (s) => s.submittedBy || ''], ['Status', (s) => s.status]];
+      const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const lines = [cols.map((c) => esc(c[0])).join(',')].concat(filtered.map((s) => cols.map((c) => esc(c[1](s))).join(',')));
+      const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = 'submissions-' + filter + '.csv'; document.body.appendChild(a); a.click();
+      setTimeout(() => { try { document.body.removeChild(a); } catch (e) {} URL.revokeObjectURL(a.href); }, 0);
+      toast(filtered.length + ' row' + (filtered.length !== 1 ? 's' : '') + ' exported', 'success');
+    };
+    const dupCount = {}; filtered.forEach((s) => { const k = dupKey(s); dupCount[k] = (dupCount[k] || 0) + 1; });
+    const pendingRows = filtered.filter((s) => s.status === 'pending');
+    const selIds = pendingRows.filter((s) => sel[s.id]).map((s) => s.id);
+    const allSelected = pendingRows.length > 0 && selIds.length === pendingRows.length;
+    const groups = {}; filtered.forEach((s) => { const k = groupKey(s); (groups[k] = groups[k] || []).push(s); });
     const groupNames = Object.keys(groups).sort();
     const rowFill = (s) => s.type === 'quality' ? 'rgba(0,144,202,.06)' : 'rgba(31,157,87,.06)';
     const submissionRow = (s) => (
@@ -1633,7 +1841,7 @@
         <td onClick={(e) => e.stopPropagation()}>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
         <td style={{ whiteSpace: 'nowrap' }} className="num">{when(s.submittedAt)}</td>
         <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)', color: s.type === 'quality' ? 'var(--blue-700,#0b6aa2)' : 'var(--pos)', fontWeight: 700 }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
-        <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px' }}>⚠ {dupCount[dupKey(s)]}×</span>}{s.isCorrection && <span title={s.correctionReason || 'Correction / edit request'} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#7c4dd6', background: 'rgba(124,77,214,.12)', borderRadius: 999, padding: '1px 7px' }}>✎ correction</span>}</td>
+        <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month — click to compare (incl. previous / on-record responses)" onClick={(e) => { e.stopPropagation(); const k = dupKey(s); dcApi.get('/api/submissions?status=all&limit=1000').then((r) => setDupGroup(r.ok ? (r.submissions || []).filter((x) => dupKey(x) === k) : filtered.filter((x) => dupKey(x) === k))).catch(() => setDupGroup(filtered.filter((x) => dupKey(x) === k))); }} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px', cursor: 'pointer', border: '1px solid #e6c34d' }}>⚠ {dupCount[dupKey(s)]}× duplicate</span>}{s.isCorrection && <span title={s.correctionReason || 'Correction / edit request'} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#7c4dd6', background: 'rgba(124,77,214,.12)', borderRadius: 999, padding: '1px 7px' }}>✎ correction</span>}</td>
         <td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 320 }}>{valuesSummaryEl(s)}</td>
         {/* ONE person column: responsible and submitter are almost always the same
             name — show it once (bold, eye-catching), with "by …" only when they differ. */}
@@ -1667,8 +1875,12 @@
       <div className="grid" style={{ gap: 14 }}>
         <SectionTitle icon={I.doc} title="Review & History" sub="Every submission with time, data and status. Submissions stay pending until an admin approves — approval applies them to the live dashboard."
           right={<>
+            <button className="btn sm" onClick={exportCsv} disabled={!filtered.length} title="Export the filtered rows to CSV (Excel)"><Ic d={I.download} s={14} />Export</button>
             <button className="btn sm" onClick={load}><Ic d={I.trend} s={14} />Refresh</button>
           </>} />
+
+        <CollectionCoverage />
+        <CollectorProgress />
 
         {stats && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -1696,6 +1908,33 @@
           </span>
         </div>
 
+        {/* ---- advanced filters: search / type / department / period ---- */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 180 }}>
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', pointerEvents: 'none' }}><Ic d={I.search} s={14} /></span>
+            <input value={fq} onChange={(e) => setFq(e.target.value)} placeholder="Search target, indicator, person…"
+              style={{ width: '100%', padding: '8px 10px 8px 30px', border: '1px solid var(--line)', borderRadius: 8, fontSize: 12.5, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
+          </div>
+          <select value={fType} onChange={(e) => setFType(e.target.value)} style={dcFilterSel}>
+            <option value="">All types</option><option value="patient">Patient</option><option value="quality">Quality</option>
+          </select>
+          <select value={fDept} onChange={(e) => setFDept(e.target.value)} style={dcFilterSel}>
+            <option value="">All departments</option>
+            {deptOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <select value={fMonth} onChange={(e) => setFMonth(e.target.value)} style={dcFilterSel}>
+            <option value="">All periods</option>
+            {monthOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <select value={fResp} onChange={(e) => setFResp(e.target.value)} style={dcFilterSel}>
+            <option value="">All people</option>
+            {respOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          {anyFilter && <button className="btn sm" onClick={() => { setFq(''); setFType(''); setFDept(''); setFMonth(''); setFResp(''); }}><Ic d={I.x} s={13} />Clear</button>}
+          {rows && <span style={{ fontSize: 11.5, color: 'var(--muted)', marginLeft: 'auto' }}>{filtered.length} of {rows.length} shown</span>}
+          {pendingRows.length > 0 && <button className="btn sm pri" disabled={busy === 'bulk'} onClick={() => runAction(pendingRows.map((s) => s.id), 'approve')} title="Approve every pending submission currently shown"><Ic d={I.check} s={13} />Approve all {pendingRows.length}</button>}
+        </div>
+
         {selIds.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9 }}>
             <b style={{ fontSize: 12.5 }}>{selIds.length} selected</b>
@@ -1709,8 +1948,9 @@
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           {rows === null ? <div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div>
             : rows.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No {filter === 'all' ? '' : filter} submissions.</div>
+              : filtered.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No submissions match the filters. <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => { setFq(''); setFType(''); setFDept(''); setFMonth(''); }}>Clear filters</button></div>
               : <table className="tbl" style={{ width: '100%' }}>
-                <thead><tr><th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={(e) => { if (e.target.checked) { const m = {}; pendingRows.forEach((s) => { m[s.id] = true; }); setSel(m); } else setSel({}); }} /></th><th>When</th><th>Type</th><th>Target</th><th>Data</th><th>Responsible / By</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={(e) => { if (e.target.checked) { const m = {}; pendingRows.forEach((s) => { m[s.id] = true; }); setSel(m); } else setSel({}); }} /></th><th onClick={() => setSort('when')} style={{ cursor: 'pointer', userSelect: 'none' }}>When{sortCaret('when')}</th><th onClick={() => setSort('type')} style={{ cursor: 'pointer', userSelect: 'none' }}>Type{sortCaret('type')}</th><th onClick={() => setSort('target')} style={{ cursor: 'pointer', userSelect: 'none' }}>Target{sortCaret('target')}</th><th>Data</th><th>Responsible / By</th><th onClick={() => setSort('status')} style={{ cursor: 'pointer', userSelect: 'none' }}>Status{sortCaret('status')}</th><th></th></tr></thead>
                 <tbody>
                   {grouped
                     ? groupNames.map((g) => (
@@ -1719,12 +1959,49 @@
                         {groups[g].map(submissionRow)}
                       </React.Fragment>
                     ))
-                    : rows.map(submissionRow)}
+                    : filtered.map(submissionRow)}
                 </tbody>
               </table>}
         </Card>
         {detail && <SubmissionDetail s={detail} canEdit={true} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}
         {rejectFor && <RejectModal ids={rejectFor.ids} busy={busy === 'bulk'} onCancel={() => setRejectFor(null)} onConfirm={(reason) => runAction(rejectFor.ids, 'reject', reason)} />}
+        {dupGroup && (() => {
+          const g = [...dupGroup].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
+          const head = g[0] || {};
+          const tgt = head.type === 'quality' ? (head.indicatorName || head.areaName) : head.departmentName;
+          return (
+            <div onMouseDown={() => setDupGroup(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.42)', zIndex: 380, display: 'grid', placeItems: 'center', padding: 'clamp(6px,3vw,20px)' }}>
+              <div onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, width: 'min(680px,96vw)', maxHeight: '92vh', overflow: 'auto', boxShadow: 'var(--shadow-pop)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderBottom: '1px solid var(--line-2)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 3 }}>
+                  <span style={{ fontSize: 15, color: '#9a6b00' }}>⚠</span>
+                  <div style={{ fontWeight: 700, fontSize: 14, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.length} duplicate submissions · {tgt} · {monthLabel(head.month)}</div>
+                  <span style={{ flex: 1 }} /><button className="icon-btn" style={{ width: 30, height: 30, flexShrink: 0 }} onClick={() => setDupGroup(null)}><Ic d={I.x} s={16} /></button>
+                </div>
+                <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>Same target and month — all {g.length} responses (incl. the previous / on-record one). Compare below, then keep one (approve) and reject the rest.</div>
+                  {g.map((s, i) => (
+                    <div key={s.id} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '11px 13px', background: i === 0 ? 'var(--blue-50)' : 'var(--panel-2)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                        {s.status === 'approved' ? <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--pos)', background: 'var(--pos-bg)', border: '1px solid #bfe6cf', borderRadius: 999, padding: '1px 7px' }}>Previous · on record</span> : i === 0 ? <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--blue-700,#0b6aa2)', background: '#fff', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 999, padding: '1px 7px' }}>Latest</span> : null}
+                        <b style={{ fontSize: 12.5, color: 'var(--ink)' }}>{(s.responsible && s.responsible.name) || s.submittedBy || '—'}</b>
+                        <span style={{ fontSize: 11.5, color: 'var(--muted)' }} className="num">{(() => { try { return new Date(s.submittedAt).toLocaleString(); } catch (e) { return ''; } })()}</span>
+                        <span style={{ flex: 1 }} />{statusChip(s.status)}
+                      </div>
+                      <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>{valuesSummaryEl(s)}</div>
+                      <div style={{ display: 'flex', gap: 6, marginTop: 9, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                        <button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View / edit</button>
+                        {s.status === 'pending' && <>
+                          <button className="btn sm pri" disabled={busy === 'bulk'} onClick={async () => { await runAction([s.id], 'approve'); setDupGroup((cur) => cur && cur.filter((x) => x.id !== s.id)); }}><Ic d={I.check} s={13} />Keep (approve)</button>
+                          <button className="btn sm" style={{ color: 'var(--rose)' }} disabled={busy === 'bulk'} onClick={() => setRejectFor({ ids: [s.id] })}><Ic d={I.x} s={13} />Reject</button>
+                        </>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }
@@ -1847,6 +2124,15 @@
     const ownsSub = (s) => !!s && s.status === 'pending' && [me.name, me.username].filter(Boolean).some((n) => n === s.submittedBy || (s.responsible && s.responsible.name === n));
     const load = () => dcApi.get('/api/submissions?limit=300').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
     useEffect(() => { load(); }, []);
+    // Live refresh (same as the admin review): refetch on refocus, data-refreshed, and a 30s poll.
+    useEffect(() => {
+      const refresh = () => { if (document.visibilityState !== 'hidden') load(); };
+      window.addEventListener('focus', refresh);
+      document.addEventListener('visibilitychange', refresh);
+      window.addEventListener('unico:data-refreshed', refresh);
+      const iv = setInterval(refresh, 30000);
+      return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); window.removeEventListener('unico:data-refreshed', refresh); clearInterval(iv); };
+    }, []);
     const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
     const statusChip = (st) => {
       const m = { pending: ['Pending', '#fff4e0', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)'], reported: ['On record', 'var(--blue-50)', 'var(--blue-700)'] }[st] || ['—', '#eef1f5', '#789'];
