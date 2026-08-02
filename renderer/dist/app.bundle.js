@@ -45761,8 +45761,16 @@ window.LockScreen = LockScreen;
       const i = MO.indexOf(mm);
       return i < 0 ? -1 : i;
     };
-    const months = React.useMemo(() => [...new Set((subs || []).map(s => s.month).filter(Boolean))].sort((a, b) => rank(b) - rank(a)), [subs]);
-    const m = month || months[0] || '';
+    const monthCounts = React.useMemo(() => {
+      const c = {};
+      (subs || []).forEach(s => {
+        if (s.month) c[s.month] = (c[s.month] || 0) + 1;
+      });
+      return c;
+    }, [subs]);
+    const months = React.useMemo(() => Object.keys(monthCounts).sort((a, b) => rank(b) - rank(a)), [monthCounts]);
+    const busiest = React.useMemo(() => Object.keys(monthCounts).sort((a, b) => monthCounts[b] - monthCounts[a])[0] || '', [monthCounts]);
+    const m = month || busiest || months[0] || '';
     const subsM = (subs || []).filter(s => s.month === m);
     const pDone = new Set(subsM.filter(s => s.type === 'patient').map(s => s.department));
     const qDone = new Set(subsM.filter(s => s.type === 'quality').map(s => s.area));
@@ -45862,7 +45870,7 @@ window.LockScreen = LockScreen;
     }, (months.length ? months : [m]).filter(Boolean).map(x => React.createElement("option", {
       key: x,
       value: x
-    }, monthLabel(x)))), gapN > 0 && React.createElement("button", {
+    }, monthLabel(x), monthCounts[x] ? ' · ' + monthCounts[x] + ' submitted' : ''))), gapN > 0 && React.createElement("button", {
       className: "btn sm",
       onClick: copyGaps,
       title: "Copy the not-submitted list for a reminder"

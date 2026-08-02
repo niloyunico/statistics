@@ -238,7 +238,11 @@ table.tbl tr.tot td{font-weight:700;color:var(--ink);background:var(--panel-2);b
 .tbl.rpt th{letter-spacing:.2px;vertical-align:bottom;line-height:1.15}
 .tbl.rpt th:first-child,.tbl.rpt td:first-child{position:static;background:transparent;width:58px}
 
-.anim-pop{animation:pop .4s cubic-bezier(.2,.7,.3,1) both}
+/* fill 'backwards' (not 'both'): the intro still plays, but the animation stops
+   "filling" afterwards so it no longer establishes a containing block that would trap
+   position:fixed modals inside .content (they'd anchor to the scrolled card, not the
+   viewport). Keyframes end at the element's base state, so there's no visual change. */
+.anim-pop{animation:pop .4s cubic-bezier(.2,.7,.3,1) backwards}
 @keyframes pop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .bar-rise{animation:rise .7s cubic-bezier(.2,.8,.25,1) both}
 @keyframes rise{from{transform:scaleY(0)}to{transform:scaleY(1)}}
@@ -431,7 +435,7 @@ body.qc-pdfcap #pdf-root .pdf-doc{background:transparent}
    ============================================================================ */
 
 /* Every route change remounts the view under .content — fade+rise it in. */
-.content>*{animation:viewin .26s cubic-bezier(.2,.7,.3,1) both}
+.content>*{animation:viewin .26s cubic-bezier(.2,.7,.3,1) backwards}
 @keyframes viewin{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 
 /* Buttons — hover lift, pressed squash, animated focus ring. */

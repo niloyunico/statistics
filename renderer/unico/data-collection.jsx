@@ -1627,8 +1627,12 @@
     const areas = React.useMemo(() => (window.qualityData ? window.qualityData() : []), []);
     const MO = (window.UNICO && window.UNICO.MONTH_ORDER) || [];
     const rank = (mm) => { const i = MO.indexOf(mm); return i < 0 ? -1 : i; };
-    const months = React.useMemo(() => [...new Set((subs || []).map((s) => s.month).filter(Boolean))].sort((a, b) => rank(b) - rank(a)), [subs]);
-    const m = month || months[0] || '';
+    const monthCounts = React.useMemo(() => { const c = {}; (subs || []).forEach((s) => { if (s.month) c[s.month] = (c[s.month] || 0) + 1; }); return c; }, [subs]);
+    const months = React.useMemo(() => Object.keys(monthCounts).sort((a, b) => rank(b) - rank(a)), [monthCounts]);
+    // Default to the BUSIEST month (where the data actually is), not just the latest —
+    // a single stray future-dated entry shouldn't make the panel look empty.
+    const busiest = React.useMemo(() => Object.keys(monthCounts).sort((a, b) => monthCounts[b] - monthCounts[a])[0] || '', [monthCounts]);
+    const m = month || busiest || months[0] || '';
     const subsM = (subs || []).filter((s) => s.month === m);
     const pDone = new Set(subsM.filter((s) => s.type === 'patient').map((s) => s.department));
     const qDone = new Set(subsM.filter((s) => s.type === 'quality').map((s) => s.area));
@@ -1657,7 +1661,7 @@
           <Ic d={I.activity} s={16} c="var(--blue)" /><b style={{ fontSize: 13.5 }}>Collection coverage</b>
           <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>who has submitted this month</span>
           <span style={{ flex: 1 }} />
-          <select value={m} onChange={(e) => setMonth(e.target.value)} style={dcFilterSel}>{(months.length ? months : [m]).filter(Boolean).map((x) => <option key={x} value={x}>{monthLabel(x)}</option>)}</select>
+          <select value={m} onChange={(e) => setMonth(e.target.value)} style={dcFilterSel}>{(months.length ? months : [m]).filter(Boolean).map((x) => <option key={x} value={x}>{monthLabel(x)}{monthCounts[x] ? ' · ' + monthCounts[x] + ' submitted' : ''}</option>)}</select>
           {gapN > 0 && <button className="btn sm" onClick={copyGaps} title="Copy the not-submitted list for a reminder"><Ic d={I.download} s={13} />Copy gaps</button>}
         </div>
         <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
