@@ -22,9 +22,15 @@ async function ensureClient() {
   const { MongoClient } = require('mongodb');
   _client = new MongoClient(process.env.MONGODB_URI, {
     serverSelectionTimeoutMS: 8000,
-    maxPoolSize: 10,
+    // Concurrent collector submissions + the admin Review's panels can fire many
+    // simultaneous queries; a bigger pool avoids "no connection available" stalls.
+    maxPoolSize: 25,
     minPoolSize: 2,        // keep warm sockets so idle drops don't force a re-handshake
     maxIdleTimeMS: 60000,
+    // Transparently retry a read/write that fails on a transient network blip
+    // (Atlas socket drop, primary step-down) instead of surfacing "failed database".
+    retryWrites: true,
+    retryReads: true,
   });
   await _client.connect();
   return _client;

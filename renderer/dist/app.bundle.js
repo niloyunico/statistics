@@ -41498,6 +41498,27 @@ window.LockScreen = LockScreen;
       method: 'DELETE'
     }).then(r => r.json())
   };
+  let _dcAllCache = null,
+    _dcAllAt = 0,
+    _dcAllPromise = null;
+  const dcAllSubmissions = force => {
+    const now = Date.now();
+    if (!force && _dcAllCache && now - _dcAllAt < 8000) return Promise.resolve(_dcAllCache);
+    if (_dcAllPromise) return _dcAllPromise;
+    _dcAllPromise = dcApi.get('/api/submissions?status=all&limit=1000').then(r => {
+      _dcAllCache = r && r.ok ? r.submissions || [] : _dcAllCache || [];
+      _dcAllAt = Date.now();
+      _dcAllPromise = null;
+      return _dcAllCache;
+    }).catch(() => {
+      _dcAllPromise = null;
+      return _dcAllCache || [];
+    });
+    return _dcAllPromise;
+  };
+  if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => {
+    _dcAllCache = null;
+  });
   const dcRefreshLive = () => {
     try {
       window.UNICO && window.UNICO.refreshDepartments && window.UNICO.refreshDepartments();
@@ -45726,7 +45747,7 @@ window.LockScreen = LockScreen;
     const [subs, setSubs] = useState(null);
     const [month, setMonth] = useState('');
     const [showGaps, setShowGaps] = useState(false);
-    const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
+    const load = () => dcAllSubmissions().then(s => setSubs(s)).catch(() => setSubs([]));
     useEffect(() => {
       load();
       const h = () => load();
@@ -45964,7 +45985,7 @@ window.LockScreen = LockScreen;
     const [subs, setSubs] = useState(null);
     const [open, setOpen] = useState(false);
     const [sortBy, setSortBy] = useState('total');
-    const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
+    const load = () => dcAllSubmissions().then(s => setSubs(s)).catch(() => setSubs([]));
     useEffect(() => {
       load();
       const h = () => load();
@@ -46398,7 +46419,7 @@ window.LockScreen = LockScreen;
       onClick: e => {
         e.stopPropagation();
         const k = dupKey(s);
-        dcApi.get('/api/submissions?status=all&limit=1000').then(r => setDupGroup(r.ok ? (r.submissions || []).filter(x => dupKey(x) === k) : filtered.filter(x => dupKey(x) === k))).catch(() => setDupGroup(filtered.filter(x => dupKey(x) === k)));
+        dcAllSubmissions(true).then(subs => setDupGroup((subs && subs.length ? subs : filtered).filter(x => dupKey(x) === k))).catch(() => setDupGroup(filtered.filter(x => dupKey(x) === k)));
       },
       style: {
         marginLeft: 6,

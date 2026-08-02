@@ -19,6 +19,23 @@
     del: (url) => fetch(url, { method: 'DELETE' }).then((r) => r.json()),
   };
 
+  // Shared, de-duped fetch of ALL submissions. The Review's Coverage panel, Collector
+  // Progress panel and the duplicate-compare button all need the full list — without
+  // this they'd each fire their own /api/submissions?status=all query, hammering the
+  // database (a cause of "failed database" errors when several collectors submit at
+  // once). Concurrent callers share one in-flight request; results cache for 8s.
+  let _dcAllCache = null, _dcAllAt = 0, _dcAllPromise = null;
+  const dcAllSubmissions = (force) => {
+    const now = Date.now();
+    if (!force && _dcAllCache && (now - _dcAllAt) < 8000) return Promise.resolve(_dcAllCache);
+    if (_dcAllPromise) return _dcAllPromise;
+    _dcAllPromise = dcApi.get('/api/submissions?status=all&limit=1000')
+      .then((r) => { _dcAllCache = r && r.ok ? (r.submissions || []) : (_dcAllCache || []); _dcAllAt = Date.now(); _dcAllPromise = null; return _dcAllCache; })
+      .catch(() => { _dcAllPromise = null; return _dcAllCache || []; });
+    return _dcAllPromise;
+  };
+  if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => { _dcAllCache = null; });
+
   // ---- shared helpers ----
   // After an approve (or an admin edit of an APPROVED submission) is applied
   // server-side, the page-load snapshots (window.UNICO.DEPARTMENTS /
@@ -1604,7 +1621,7 @@
     const [subs, setSubs] = useState(null);
     const [month, setMonth] = useState('');
     const [showGaps, setShowGaps] = useState(false);
-    const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([]));
+    const load = () => dcAllSubmissions().then((s) => setSubs(s)).catch(() => setSubs([]));
     useEffect(() => { load(); const h = () => load(); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
     const depts = React.useMemo(() => dcAllDepts(), []);
     const areas = React.useMemo(() => (window.qualityData ? window.qualityData() : []), []);
@@ -1670,7 +1687,7 @@
     const [subs, setSubs] = useState(null);
     const [open, setOpen] = useState(false);
     const [sortBy, setSortBy] = useState('total');
-    const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([]));
+    const load = () => dcAllSubmissions().then((s) => setSubs(s)).catch(() => setSubs([]));
     useEffect(() => { load(); const h = () => load(); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
     const respOf = (s) => (s.responsible && s.responsible.name) || s.submittedBy || '—';
     const byPerson = {};
@@ -1841,7 +1858,7 @@
         <td onClick={(e) => e.stopPropagation()}>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
         <td style={{ whiteSpace: 'nowrap' }} className="num">{when(s.submittedAt)}</td>
         <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)', color: s.type === 'quality' ? 'var(--blue-700,#0b6aa2)' : 'var(--pos)', fontWeight: 700 }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
-        <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month — click to compare (incl. previous / on-record responses)" onClick={(e) => { e.stopPropagation(); const k = dupKey(s); dcApi.get('/api/submissions?status=all&limit=1000').then((r) => setDupGroup(r.ok ? (r.submissions || []).filter((x) => dupKey(x) === k) : filtered.filter((x) => dupKey(x) === k))).catch(() => setDupGroup(filtered.filter((x) => dupKey(x) === k))); }} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px', cursor: 'pointer', border: '1px solid #e6c34d' }}>⚠ {dupCount[dupKey(s)]}× duplicate</span>}{s.isCorrection && <span title={s.correctionReason || 'Correction / edit request'} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#7c4dd6', background: 'rgba(124,77,214,.12)', borderRadius: 999, padding: '1px 7px' }}>✎ correction</span>}</td>
+        <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month — click to compare (incl. previous / on-record responses)" onClick={(e) => { e.stopPropagation(); const k = dupKey(s); dcAllSubmissions(true).then((subs) => setDupGroup((subs && subs.length ? subs : filtered).filter((x) => dupKey(x) === k))).catch(() => setDupGroup(filtered.filter((x) => dupKey(x) === k))); }} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px', cursor: 'pointer', border: '1px solid #e6c34d' }}>⚠ {dupCount[dupKey(s)]}× duplicate</span>}{s.isCorrection && <span title={s.correctionReason || 'Correction / edit request'} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#7c4dd6', background: 'rgba(124,77,214,.12)', borderRadius: 999, padding: '1px 7px' }}>✎ correction</span>}</td>
         <td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 320 }}>{valuesSummaryEl(s)}</td>
         {/* ONE person column: responsible and submitter are almost always the same
             name — show it once (bold, eye-catching), with "by …" only when they differ. */}
