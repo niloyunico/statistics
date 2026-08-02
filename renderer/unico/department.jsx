@@ -318,7 +318,10 @@ function DeptCardTile({d, onOpen}){
         <span style={{marginLeft:'auto'}}><Delta v={d.delta}/></span>
       </div>
       <div style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between'}}>
-        <div className="num" style={{fontSize:23,fontWeight:600,color:'var(--ink)',lineHeight:1}}>{fmt(d.latest[d.primary]||0)}</div>
+        <div style={{minWidth:0}}>
+          <div className="num" style={{fontSize:23,fontWeight:600,color:'var(--ink)',lineHeight:1}}>{fmt(d.latest[d.primary]||0)}</div>
+          <div style={{fontSize:10,color:'var(--faint)',fontWeight:600,marginTop:3,whiteSpace:'nowrap'}}>{d.latest.full||d.latest.month||'No data'}</div>
+        </div>
         <Spark values={d.series.map(r=>r[d.primary]||0)} color={tone} w={96} h={34}/>
       </div>
     </div>

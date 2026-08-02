@@ -11550,6 +11550,10 @@ function DeptCardTile({
       justifyContent: 'space-between'
     }
   }, React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
     className: "num",
     style: {
       fontSize: 23,
@@ -11557,7 +11561,15 @@ function DeptCardTile({
       color: 'var(--ink)',
       lineHeight: 1
     }
-  }, fmt(d.latest[d.primary] || 0)), React.createElement(Spark, {
+  }, fmt(d.latest[d.primary] || 0)), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: 'var(--faint)',
+      fontWeight: 600,
+      marginTop: 3,
+      whiteSpace: 'nowrap'
+    }
+  }, d.latest.full || d.latest.month || 'No data')), React.createElement(Spark, {
     values: d.series.map(r => r[d.primary] || 0),
     color: tone,
     w: 96,
