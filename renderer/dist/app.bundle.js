@@ -46064,7 +46064,8 @@ window.LockScreen = LockScreen;
   function CollectionCoverage() {
     const [subs, setSubs] = useState(null);
     const [month, setMonth] = useState('');
-    const [showGaps, setShowGaps] = useState(false);
+    const [showP, setShowP] = useState(false);
+    const [showQ, setShowQ] = useState(false);
     const load = () => dcAllSubmissions().then(s => setSubs(s)).catch(() => setSubs([]));
     useEffect(() => {
       load();
@@ -46198,28 +46199,52 @@ window.LockScreen = LockScreen;
     }), "Copy gaps")), React.createElement("div", {
       style: {
         display: 'flex',
-        gap: 20,
+        gap: 22,
         flexWrap: 'wrap'
       }
-    }, React.createElement(Bar, {
-      label: "Patient statistics",
+    }, [{
+      label: 'Patient statistics',
       done: depts.length - pMissing.length,
       total: depts.length,
       pct: pPct,
-      color: "linear-gradient(90deg,#1f9d57,#3ab5a7)"
-    }), React.createElement(Bar, {
-      label: "Quality indicators",
+      color: 'linear-gradient(90deg,#1f9d57,#3ab5a7)',
+      missing: pMissing,
+      keyOf: x => x.id,
+      chipBg: 'var(--pos-bg)',
+      chipFg: 'var(--pos)',
+      show: showP,
+      setShow: setShowP
+    }, {
+      label: 'Quality indicators',
       done: areas.length - qMissing.length,
       total: areas.length,
       pct: qPct,
-      color: "linear-gradient(90deg,#0090ca,#27a8db)"
-    })), gapN > 0 ? React.createElement("div", {
+      color: 'linear-gradient(90deg,#0090ca,#27a8db)',
+      missing: qMissing,
+      keyOf: x => x.key,
+      chipBg: 'var(--blue-50)',
+      chipFg: 'var(--blue-700,#0b6aa2)',
+      show: showQ,
+      setShow: setShowQ
+    }].map((c, ci) => React.createElement("div", {
+      key: ci,
       style: {
-        marginTop: 12
+        flex: '1 1 280px',
+        minWidth: 0
       }
-    }, React.createElement("button", {
+    }, React.createElement(Bar, {
+      label: c.label,
+      done: c.done,
+      total: c.total,
+      pct: c.pct,
+      color: c.color
+    }), React.createElement("div", {
+      style: {
+        marginTop: 9
+      }
+    }, c.missing.length > 0 ? React.createElement(React.Fragment, null, React.createElement("button", {
       className: "btn sm",
-      onClick: () => setShowGaps(v => !v),
+      onClick: () => c.setShow(v => !v),
       style: {
         color: '#9a6b00',
         borderColor: '#e6c34d'
@@ -46227,85 +46252,36 @@ window.LockScreen = LockScreen;
     }, React.createElement(Ic, {
       d: I.bell,
       s: 13
-    }), showGaps ? 'Hide' : 'Show', " ", gapN, " not submitted"), showGaps && React.createElement("div", {
+    }), c.show ? 'Hide' : 'Show', " ", c.missing.length, " not submitted"), c.show && React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
-        gap: 16,
-        marginTop: 10
+        gap: 6,
+        marginTop: 8
       }
-    }, pMissing.length > 0 && React.createElement("div", {
-      style: {
-        flex: '1 1 260px'
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 11,
-        fontWeight: 700,
-        color: 'var(--muted)',
-        textTransform: 'uppercase',
-        letterSpacing: .4,
-        marginBottom: 6
-      }
-    }, "Patient \u2014 ", pMissing.length, " missing"), React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 6
-      }
-    }, pMissing.map(d => React.createElement("span", {
-      key: d.id,
+    }, c.missing.map(x => React.createElement("span", {
+      key: c.keyOf(x),
       style: {
         fontSize: 11.5,
         fontWeight: 600,
         padding: '3px 9px',
         borderRadius: 999,
-        background: 'var(--pos-bg)',
-        color: 'var(--pos)'
+        background: c.chipBg,
+        color: c.chipFg
       }
-    }, d.name)))), qMissing.length > 0 && React.createElement("div", {
+    }, x.name)))) : React.createElement("span", {
       style: {
-        flex: '1 1 260px'
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 11,
-        fontWeight: 700,
-        color: 'var(--muted)',
-        textTransform: 'uppercase',
-        letterSpacing: .4,
-        marginBottom: 6
-      }
-    }, "Quality \u2014 ", qMissing.length, " missing"), React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 6
-      }
-    }, qMissing.map(a => React.createElement("span", {
-      key: a.key,
-      style: {
-        fontSize: 11.5,
-        fontWeight: 600,
-        padding: '3px 9px',
-        borderRadius: 999,
-        background: 'var(--blue-50)',
-        color: 'var(--blue-700,#0b6aa2)'
-      }
-    }, a.name)))))) : React.createElement("div", {
-      style: {
-        marginTop: 12,
-        fontSize: 12.5,
+        fontSize: 12,
         color: 'var(--pos)',
         fontWeight: 600,
-        display: 'flex',
+        display: 'inline-flex',
         alignItems: 'center',
-        gap: 6
+        gap: 5
       }
     }, React.createElement(Ic, {
       d: I.check,
-      s: 14
-    }), "All departments and quality areas have submitted for ", monthLabel(m), "."));
+      s: 13
+    }), "All submitted"))))));
   }
   function CollectorProgress() {
     const [subs, setSubs] = useState(null);
@@ -46615,17 +46591,26 @@ window.LockScreen = LockScreen;
       if (!ids || !ids.length) return;
       setBusy('bulk');
       let ok = 0;
+      const doneIds = [];
       for (const id of ids) {
         try {
           const r = await dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? {
             reason: reason || ''
           } : {});
-          if (r && r.ok) ok++;
+          if (r && r.ok) {
+            ok++;
+            doneIds.push(id);
+          }
         } catch (e) {}
       }
       setBusy('');
       setSel({});
       setRejectFor(null);
+      if (doneIds.length) setDupGroup(cur => {
+        if (!cur) return cur;
+        const next = cur.filter(x => doneIds.indexOf(x.id) < 0);
+        return next.length > 1 ? next : null;
+      });
       toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
       if (kind === 'approve' && ok) dcRefreshLive();
       load();
@@ -47211,6 +47196,13 @@ window.LockScreen = LockScreen;
       const g = [...dupGroup].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
       const head = g[0] || {};
       const tgt = head.type === 'quality' ? head.indicatorName || head.areaName : head.departmentName;
+      const nameOf = s => s.responsible && s.responsible.name || s.submittedBy || '—';
+      const personCount = {};
+      g.forEach(s => {
+        const p = nameOf(s);
+        personCount[p] = (personCount[p] || 0) + 1;
+      });
+      const repeatPeople = Object.keys(personCount).filter(p => personCount[p] > 1);
       return React.createElement("div", {
         onMouseDown: () => setDupGroup(null),
         style: {
@@ -47286,7 +47278,23 @@ window.LockScreen = LockScreen;
           fontSize: 12,
           color: 'var(--muted)'
         }
-      }, "Same target and month \u2014 all ", g.length, " responses (incl. the previous / on-record one). Compare below, then keep one (approve) and reject the rest."), g.map((s, i) => React.createElement("div", {
+      }, "Same target and month \u2014 all ", g.length, " responses (incl. the previous / on-record one). Compare below, then keep one (approve) and reject the rest."), repeatPeople.length > 0 && React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 8,
+          alignItems: 'flex-start',
+          fontSize: 12.5,
+          color: '#b32339',
+          background: 'var(--neg-bg)',
+          border: '1px solid #f1c6cd',
+          borderRadius: 9,
+          padding: '9px 12px'
+        }
+      }, React.createElement("span", {
+        style: {
+          fontWeight: 700
+        }
+      }, "\u26A0 Same person submitted twice \u2014"), React.createElement("span", null, repeatPeople.map(p => p + ' (' + personCount[p] + '×)').join(', '), ". Likely an accidental double; keep one and reject the extra.")), g.map((s, i) => React.createElement("div", {
         key: s.id,
         style: {
           border: '1px solid var(--line)',
@@ -47327,7 +47335,18 @@ window.LockScreen = LockScreen;
           fontSize: 12.5,
           color: 'var(--ink)'
         }
-      }, s.responsible && s.responsible.name || s.submittedBy || '—'), React.createElement("span", {
+      }, nameOf(s)), personCount[nameOf(s)] > 1 && React.createElement("span", {
+        title: "This person submitted this same target+month more than once",
+        style: {
+          fontSize: 9.5,
+          fontWeight: 700,
+          color: '#b32339',
+          background: 'var(--neg-bg)',
+          border: '1px solid #f1c6cd',
+          borderRadius: 999,
+          padding: '1px 6px'
+        }
+      }, "same person"), React.createElement("span", {
         style: {
           fontSize: 11.5,
           color: 'var(--muted)'
@@ -47365,10 +47384,7 @@ window.LockScreen = LockScreen;
       }), "View / edit"), s.status === 'pending' && React.createElement(React.Fragment, null, React.createElement("button", {
         className: "btn sm pri",
         disabled: busy === 'bulk',
-        onClick: async () => {
-          await runAction([s.id], 'approve');
-          setDupGroup(cur => cur && cur.filter(x => x.id !== s.id));
-        }
+        onClick: () => runAction([s.id], 'approve')
       }, React.createElement(Ic, {
         d: I.check,
         s: 13

@@ -1620,7 +1620,8 @@
   function CollectionCoverage() {
     const [subs, setSubs] = useState(null);
     const [month, setMonth] = useState('');
-    const [showGaps, setShowGaps] = useState(false);
+    const [showP, setShowP] = useState(false);
+    const [showQ, setShowQ] = useState(false);
     const load = () => dcAllSubmissions().then((s) => setSubs(s)).catch(() => setSubs([]));
     useEffect(() => { load(); const h = () => load(); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
     const depts = React.useMemo(() => dcAllDepts(), []);
@@ -1664,23 +1665,28 @@
           <select value={m} onChange={(e) => setMonth(e.target.value)} style={dcFilterSel}>{(months.length ? months : [m]).filter(Boolean).map((x) => <option key={x} value={x}>{monthLabel(x)}{monthCounts[x] ? ' · ' + monthCounts[x] + ' submitted' : ''}</option>)}</select>
           {gapN > 0 && <button className="btn sm" onClick={copyGaps} title="Copy the not-submitted list for a reminder"><Ic d={I.download} s={13} />Copy gaps</button>}
         </div>
-        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-          <Bar label="Patient statistics" done={depts.length - pMissing.length} total={depts.length} pct={pPct} color="linear-gradient(90deg,#1f9d57,#3ab5a7)" />
-          <Bar label="Quality indicators" done={areas.length - qMissing.length} total={areas.length} pct={qPct} color="linear-gradient(90deg,#0090ca,#27a8db)" />
-        </div>
-        {gapN > 0 ? (
-          <div style={{ marginTop: 12 }}>
-            <button className="btn sm" onClick={() => setShowGaps((v) => !v)} style={{ color: '#9a6b00', borderColor: '#e6c34d' }}><Ic d={I.bell} s={13} />{showGaps ? 'Hide' : 'Show'} {gapN} not submitted</button>
-            {showGaps && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 10 }}>
-                {pMissing.length > 0 && <div style={{ flex: '1 1 260px' }}><div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 6 }}>Patient — {pMissing.length} missing</div><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{pMissing.map((d) => <span key={d.id} style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 9px', borderRadius: 999, background: 'var(--pos-bg)', color: 'var(--pos)' }}>{d.name}</span>)}</div></div>}
-                {qMissing.length > 0 && <div style={{ flex: '1 1 260px' }}><div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 6 }}>Quality — {qMissing.length} missing</div><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{qMissing.map((a) => <span key={a.key} style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700,#0b6aa2)' }}>{a.name}</span>)}</div></div>}
+        {/* Symmetric: EACH side (Patient / Quality) shows its own bar + its own
+            "not submitted" toggle and gap chips — quality is no longer left blank. */}
+        <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap' }}>
+          {[
+            { label: 'Patient statistics', done: depts.length - pMissing.length, total: depts.length, pct: pPct, color: 'linear-gradient(90deg,#1f9d57,#3ab5a7)', missing: pMissing, keyOf: (x) => x.id, chipBg: 'var(--pos-bg)', chipFg: 'var(--pos)', show: showP, setShow: setShowP },
+            { label: 'Quality indicators', done: areas.length - qMissing.length, total: areas.length, pct: qPct, color: 'linear-gradient(90deg,#0090ca,#27a8db)', missing: qMissing, keyOf: (x) => x.key, chipBg: 'var(--blue-50)', chipFg: 'var(--blue-700,#0b6aa2)', show: showQ, setShow: setShowQ },
+          ].map((c, ci) => (
+            <div key={ci} style={{ flex: '1 1 280px', minWidth: 0 }}>
+              <Bar label={c.label} done={c.done} total={c.total} pct={c.pct} color={c.color} />
+              <div style={{ marginTop: 9 }}>
+                {c.missing.length > 0 ? (
+                  <>
+                    <button className="btn sm" onClick={() => c.setShow((v) => !v)} style={{ color: '#9a6b00', borderColor: '#e6c34d' }}><Ic d={I.bell} s={13} />{c.show ? 'Hide' : 'Show'} {c.missing.length} not submitted</button>
+                    {c.show && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>{c.missing.map((x) => <span key={c.keyOf(x)} style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 9px', borderRadius: 999, background: c.chipBg, color: c.chipFg }}>{x.name}</span>)}</div>}
+                  </>
+                ) : (
+                  <span style={{ fontSize: 12, color: 'var(--pos)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Ic d={I.check} s={13} />All submitted</span>
+                )}
               </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--pos)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}><Ic d={I.check} s={14} />All departments and quality areas have submitted for {monthLabel(m)}.</div>
-        )}
+            </div>
+          ))}
+        </div>
       </Card>
     );
   }
@@ -2001,6 +2007,12 @@
           const g = [...dupGroup].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
           const head = g[0] || {};
           const tgt = head.type === 'quality' ? (head.indicatorName || head.areaName) : head.departmentName;
+          // Same-person detection: a person submitting the SAME target+month more than once
+          // is almost always an accidental double (vs. two different people = a genuine
+          // hand-off). Flag them so the admin knows which to clean up.
+          const nameOf = (s) => (s.responsible && s.responsible.name) || s.submittedBy || '—';
+          const personCount = {}; g.forEach((s) => { const p = nameOf(s); personCount[p] = (personCount[p] || 0) + 1; });
+          const repeatPeople = Object.keys(personCount).filter((p) => personCount[p] > 1);
           return (
             <div onMouseDown={() => setDupGroup(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.42)', zIndex: 380, display: 'grid', placeItems: 'center', padding: 'clamp(6px,3vw,20px)' }}>
               <div onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, width: 'min(680px,96vw)', maxHeight: '92vh', overflow: 'auto', boxShadow: 'var(--shadow-pop)' }}>
@@ -2011,11 +2023,18 @@
                 </div>
                 <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>Same target and month — all {g.length} responses (incl. the previous / on-record one). Compare below, then keep one (approve) and reject the rest.</div>
+                  {repeatPeople.length > 0 && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, color: '#b32339', background: 'var(--neg-bg)', border: '1px solid #f1c6cd', borderRadius: 9, padding: '9px 12px' }}>
+                      <span style={{ fontWeight: 700 }}>⚠ Same person submitted twice —</span>
+                      <span>{repeatPeople.map((p) => p + ' (' + personCount[p] + '×)').join(', ')}. Likely an accidental double; keep one and reject the extra.</span>
+                    </div>
+                  )}
                   {g.map((s, i) => (
                     <div key={s.id} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '11px 13px', background: i === 0 ? 'var(--blue-50)' : 'var(--panel-2)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
                         {s.status === 'approved' ? <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--pos)', background: 'var(--pos-bg)', border: '1px solid #bfe6cf', borderRadius: 999, padding: '1px 7px' }}>Previous · on record</span> : i === 0 ? <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--blue-700,#0b6aa2)', background: '#fff', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 999, padding: '1px 7px' }}>Latest</span> : null}
-                        <b style={{ fontSize: 12.5, color: 'var(--ink)' }}>{(s.responsible && s.responsible.name) || s.submittedBy || '—'}</b>
+                        <b style={{ fontSize: 12.5, color: 'var(--ink)' }}>{nameOf(s)}</b>
+                        {personCount[nameOf(s)] > 1 && <span title="This person submitted this same target+month more than once" style={{ fontSize: 9.5, fontWeight: 700, color: '#b32339', background: 'var(--neg-bg)', border: '1px solid #f1c6cd', borderRadius: 999, padding: '1px 6px' }}>same person</span>}
                         <span style={{ fontSize: 11.5, color: 'var(--muted)' }} className="num">{(() => { try { return new Date(s.submittedAt).toLocaleString(); } catch (e) { return ''; } })()}</span>
                         <span style={{ flex: 1 }} />{statusChip(s.status)}
                       </div>
