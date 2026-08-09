@@ -333,7 +333,19 @@ function DataEntry({depts, addEntry, entries, initialDept, updateDept, deleteMon
                 </tbody>
               </table>
             </div>
-            <div style={{display:'flex',gap:10}}>
+            <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,padding:'5px 9px',border:'1px solid var(--line)',borderRadius:8,background:'var(--panel-2)'}}>
+                <span style={{fontSize:11.5,fontWeight:600,color:'var(--ink-2)'}}>New row month:</span>
+                <select value={parseKey(month).mi} onChange={e=>setMonth(MONS[+e.target.value]+'-'+String(parseKey(month).yr).slice(-2))}
+                  style={{padding:'5px 7px',border:'1px solid var(--line)',borderRadius:6,fontSize:12.5,fontFamily:'inherit',background:'#fff'}}>
+                  {MONS.map((mn,i)=><option key={mn} value={i}>{mn}</option>)}
+                </select>
+                <select value={parseKey(month).yr} onChange={e=>setMonth(MONS[parseKey(month).mi]+'-'+String(+e.target.value).slice(-2))}
+                  style={{padding:'5px 7px',border:'1px solid var(--line)',borderRadius:6,fontSize:12.5,fontFamily:'inherit',background:'#fff'}}>
+                  {MYEARS.map(y=><option key={y} value={y}>{y}</option>)}
+                </select>
+                {isExisting&&<span className="tag" style={{fontSize:10,background:'#fbeed0',color:'var(--amber)'}}>already exists — edit above</span>}
+              </div>
               <button className="btn pri" onClick={submit} disabled={isExisting} style={{opacity:isExisting?.5:1}} title={isExisting?'This month already exists — edit it in the row above':''}><Ic d={I.check} s={16} sw={2.4}/>Commit New Row</button>
               <button className="btn" onClick={()=>setVals({})}>Reset Row</button>
             </div>

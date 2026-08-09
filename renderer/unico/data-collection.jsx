@@ -1355,8 +1355,7 @@
     const Meta = ({ label, value }) => (
       <div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{label}</div><div style={{ fontWeight: 600, color: 'var(--ink)' }}>{value}</div></div>
     );
-    const save = () => {
-      setBusy(true);
+    const buildBody = () => {
       const body = { note, month };
       if (s.type === 'patient') { body.values = vals; if (target && target !== s.department) { body.department = target; body.departmentName = (deptOpts.find((d) => d.id === target) || {}).name || target; } }
       else {
@@ -1367,7 +1366,11 @@
         if (target && target !== s.area) { body.area = target; body.areaName = (areaOpts.find((a) => a.key === target) || {}).name || target; }
         if (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) body.incidents = incidents;
       }
-      dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), body).then((r) => {
+      return body;
+    };
+    const save = () => {
+      setBusy(true);
+      dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), buildBody()).then((r) => {
         setBusy(false);
         if (r.ok) {
           toast('Submission updated', 'success');
@@ -1377,6 +1380,16 @@
         }
         else toast(r.error || 'Could not save', 'error');
       }).catch(() => { setBusy(false); toast('Could not save', 'error'); });
+    };
+    // Admin: approve straight from the detail modal. Any on-screen edits are saved first
+    // (so approve applies exactly what's shown), then the submission is applied to live data.
+    const approveNow = () => {
+      setBusy(true);
+      const url = '/api/submissions/' + encodeURIComponent(s.id);
+      const finish = (r) => { setBusy(false); if (r && r.ok) { toast('Approved & applied to live data', 'success'); dcRefreshLive(); onSaved && onSaved(r.submission || r); } else toast((r && r.error) || 'Could not approve', 'error'); };
+      const fail = () => { setBusy(false); toast('Could not approve', 'error'); };
+      const doApprove = () => dcApi.post(url + '/approve', {}).then(finish).catch(fail);
+      if (editable && !correcting) dcApi.patch(url, buildBody()).then(doApprove).catch(fail); else doApprove();
     };
     // Collector edit request -> create a NEW pending correction (never touches live data directly).
     const submitCorrection = () => {
@@ -1586,6 +1599,8 @@
               {canRequestEdit && !correcting && <button className="btn sm" onClick={() => setCorrecting(true)}><Ic d={I.edit} s={14} />Request an edit</button>}
               {correcting && <button className="btn pri sm" onClick={submitCorrection} disabled={busy}><Ic d={I.check} s={14} />{busy ? 'Sending…' : 'Submit edit request'}</button>}
               {editable && !correcting && <button className="btn pri sm" onClick={save} disabled={busy}><Ic d={I.check} s={14} />{busy ? 'Saving…' : 'Save changes'}</button>}
+              {canEdit && fullEdit && !correcting && s.status !== 'approved' && <button className="btn sm" onClick={approveNow} disabled={busy} style={{ background: 'var(--pos)', borderColor: 'var(--pos)', color: '#fff' }}><Ic d={I.check} s={14} />{busy ? 'Approving…' : 'Approve'}</button>}
+              {canEdit && fullEdit && !correcting && s.status === 'approved' && <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--pos)', alignSelf: 'center' }}>✓ Approved — edits re-apply live on save</span>}
             </div>
           </div>
         </div>

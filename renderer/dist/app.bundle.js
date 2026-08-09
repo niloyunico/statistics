@@ -18403,9 +18403,62 @@ function DataEntry({
   }, "new"))))), React.createElement("div", {
     style: {
       display: 'flex',
-      gap: 10
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
     }
-  }, React.createElement("button", {
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '5px 9px',
+      border: '1px solid var(--line)',
+      borderRadius: 8,
+      background: 'var(--panel-2)'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: 'var(--ink-2)'
+    }
+  }, "New row month:"), React.createElement("select", {
+    value: parseKey(month).mi,
+    onChange: e => setMonth(MONS[+e.target.value] + '-' + String(parseKey(month).yr).slice(-2)),
+    style: {
+      padding: '5px 7px',
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, MONS.map((mn, i) => React.createElement("option", {
+    key: mn,
+    value: i
+  }, mn))), React.createElement("select", {
+    value: parseKey(month).yr,
+    onChange: e => setMonth(MONS[parseKey(month).mi] + '-' + String(+e.target.value).slice(-2)),
+    style: {
+      padding: '5px 7px',
+      border: '1px solid var(--line)',
+      borderRadius: 6,
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, MYEARS.map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, y))), isExisting && React.createElement("span", {
+    className: "tag",
+    style: {
+      fontSize: 10,
+      background: '#fbeed0',
+      color: 'var(--amber)'
+    }
+  }, "already exists \u2014 edit above")), React.createElement("button", {
     className: "btn pri",
     onClick: submit,
     disabled: isExisting,
@@ -45184,8 +45237,7 @@ window.LockScreen = LockScreen;
         color: 'var(--ink)'
       }
     }, value));
-    const save = () => {
-      setBusy(true);
+    const buildBody = () => {
       const body = {
         note,
         month
@@ -45214,7 +45266,11 @@ window.LockScreen = LockScreen;
         }
         if (incidents.length || Array.isArray(s.incidents) && s.incidents.length) body.incidents = incidents;
       }
-      dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), body).then(r => {
+      return body;
+    };
+    const save = () => {
+      setBusy(true);
+      dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), buildBody()).then(r => {
         setBusy(false);
         if (r.ok) {
           toast('Submission updated', 'success');
@@ -45225,6 +45281,24 @@ window.LockScreen = LockScreen;
         setBusy(false);
         toast('Could not save', 'error');
       });
+    };
+    const approveNow = () => {
+      setBusy(true);
+      const url = '/api/submissions/' + encodeURIComponent(s.id);
+      const finish = r => {
+        setBusy(false);
+        if (r && r.ok) {
+          toast('Approved & applied to live data', 'success');
+          dcRefreshLive();
+          onSaved && onSaved(r.submission || r);
+        } else toast(r && r.error || 'Could not approve', 'error');
+      };
+      const fail = () => {
+        setBusy(false);
+        toast('Could not approve', 'error');
+      };
+      const doApprove = () => dcApi.post(url + '/approve', {}).then(finish).catch(fail);
+      if (editable && !correcting) dcApi.patch(url, buildBody()).then(doApprove).catch(fail);else doApprove();
     };
     const submitCorrection = () => {
       if (!correctReason.trim()) {
@@ -45966,7 +46040,26 @@ window.LockScreen = LockScreen;
     }, React.createElement(Ic, {
       d: I.check,
       s: 14
-    }), busy ? 'Saving…' : 'Save changes')))));
+    }), busy ? 'Saving…' : 'Save changes'), canEdit && fullEdit && !correcting && s.status !== 'approved' && React.createElement("button", {
+      className: "btn sm",
+      onClick: approveNow,
+      disabled: busy,
+      style: {
+        background: 'var(--pos)',
+        borderColor: 'var(--pos)',
+        color: '#fff'
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 14
+    }), busy ? 'Approving…' : 'Approve'), canEdit && fullEdit && !correcting && s.status === 'approved' && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--pos)',
+        alignSelf: 'center'
+      }
+    }, "\u2713 Approved \u2014 edits re-apply live on save")))));
   }
   function RejectModal({
     ids,
