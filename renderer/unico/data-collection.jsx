@@ -904,8 +904,13 @@
       } else if (rawNum != null) {
         setDeptRows([]); setDirectNum(String(rawNum)); setGroups(blankG); setGroupsDen(blankG); setNumMode('direct');
       } else {
-        // Hand Hygiene with no data yet opens straight into the all-departments gateway.
-        setDeptRows([]); setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('dept');
+        // Hand Hygiene with no data for THIS month → open the all-departments gateway
+        // PRE-LISTED with every department. We seed the rows right here (not only via the
+        // sync effect) because when you switch from a month that HAS data to an empty month,
+        // numMode is already 'dept', so that effect's deps don't change and it never re-fires
+        // — which left the grid blank (0/0, no departments) for every non-current month.
+        setDeptRows((isHandHygiene && hhDepartments.length) ? hhDepartments.map((n) => ({ ...blankDeptRow(), dept: n })) : []);
+        setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('dept');
       }
       // Admin-set denominators (e.g. NSI's total healthcare workers) carry forward the last
       // value recorded for ANY month, so the figure is always shown even in a fresh month.

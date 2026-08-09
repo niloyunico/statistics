@@ -43683,7 +43683,10 @@ window.LockScreen = LockScreen;
         setGroupsDen(blankG);
         setNumMode('direct');
       } else {
-        setDeptRows([]);
+        setDeptRows(isHandHygiene && hhDepartments.length ? hhDepartments.map(n => ({
+          ...blankDeptRow(),
+          dept: n
+        })) : []);
         setGroups(blankG);
         setGroupsDen(blankG);
         setDirectNum('');
