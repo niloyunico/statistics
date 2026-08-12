@@ -1386,7 +1386,7 @@
     const approveNow = () => {
       setBusy(true);
       const url = '/api/submissions/' + encodeURIComponent(s.id);
-      const finish = (r) => { setBusy(false); if (r && r.ok) { toast('Approved & applied to live data', 'success'); dcRefreshLive(); onSaved && onSaved(r.submission || r); } else toast((r && r.error) || 'Could not approve', 'error'); };
+      const finish = (r) => { setBusy(false); if (r && r.ok) { const ar = r.autoRejected || 0; toast('Approved & applied to live data' + (ar ? ' · ' + ar + ' duplicate' + (ar !== 1 ? 's' : '') + ' auto-rejected' : ''), 'success'); dcRefreshLive(); onSaved && onSaved(r.submission || r); } else toast((r && r.error) || 'Could not approve', 'error'); };
       const fail = () => { setBusy(false); toast('Could not approve', 'error'); };
       const doApprove = () => dcApi.post(url + '/approve', {}).then(finish).catch(fail);
       if (editable && !correcting) dcApi.patch(url, buildBody()).then(doApprove).catch(fail); else doApprove();
@@ -1831,9 +1831,9 @@
     const runAction = async (ids, kind, reason) => {
       if (!ids || !ids.length) return;
       setBusy('bulk');
-      let ok = 0; const doneIds = [];
+      let ok = 0, autoRej = 0; const doneIds = [];
       for (const id of ids) {
-        try { const r = await dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? { reason: reason || '' } : {}); if (r && r.ok) { ok++; doneIds.push(id); } } catch (e) { }
+        try { const r = await dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? { reason: reason || '' } : {}); if (r && r.ok) { ok++; doneIds.push(id); autoRej += (r.autoRejected || 0); } } catch (e) { }
       }
       setBusy(''); setSel({}); setRejectFor(null);
       // Keep the duplicate-compare dialog in step. dupGroup is a SNAPSHOT taken when the ⚠
@@ -1847,7 +1847,7 @@
         const next = cur.filter((x) => doneIds.indexOf(x.id) < 0);
         return next.length > 1 ? next : null;
       });
-      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
+      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
       if (kind === 'approve' && ok) dcRefreshLive();
       load();
     };

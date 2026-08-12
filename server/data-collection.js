@@ -648,6 +648,31 @@ async function setSubmissionStatus(id, patch) {
   return getSubmissionById(id);
 }
 
+// Identity of a "duplicate" — mirrors the client's dupKey (data-collection.jsx): same
+// type, same target (quality: area + indicator; patient: department), same month.
+function dupKeyOf(s) {
+  return s.type + '|' + (s.type === 'quality' ? ((s.area || '') + '|' + (s.indicatorId || s.indicatorName || '')) : (s.department || '')) + '|' + s.month;
+}
+// When a submission is approved, auto-reject any OTHER still-pending submissions for the
+// exact same target + month (they are duplicates of the one now on record).
+async function autoRejectDuplicates(s, by) {
+  const key = dupKeyOf(s);
+  const patch = { status: 'rejected', reviewedBy: by || 'admin', reviewedAt: Date.now(), rejectReason: 'Duplicate — superseded by an approved submission', autoRejected: true };
+  const c = await col('submissions');
+  if (!c) {
+    let n = 0;
+    mem.submissions.forEach((x) => { if (x.id !== s.id && x.status === 'pending' && dupKeyOf(x) === key) { Object.assign(x, patch); n++; } });
+    return n;
+  }
+  const q = { _id: { $ne: String(s.id) }, status: 'pending', type: s.type, month: s.month };
+  if (s.type === 'patient') q.department = s.department; else q.area = s.area;
+  const cands = await c.find(q).toArray();
+  const ids = cands.filter((x) => dupKeyOf(x) === key).map((x) => x._id);
+  if (!ids.length) return 0;
+  const r = await c.updateMany({ _id: { $in: ids } }, { $set: patch });
+  return (r && r.modifiedCount) || ids.length;
+}
+
 async function approveSubmission(id, by) {
   const s = await getSubmissionById(id);
   if (!s) throw new Error('Submission not found.');
@@ -658,7 +683,9 @@ async function approveSubmission(id, by) {
   else if (s.type === 'quality') await applyQuality(s);
   else throw new Error('Unknown submission type.');
   const upd = await setSubmissionStatus(id, { status: 'approved', reviewedBy: by || 'admin', reviewedAt: Date.now() });
-  return { ok: true, submission: upd };
+  // Keep only one on record: reject any remaining pending duplicates for this target+month.
+  const autoRejected = await autoRejectDuplicates(s, by);
+  return { ok: true, submission: upd, autoRejected };
 }
 async function rejectSubmission(id, by, reason) {
   const s = await getSubmissionById(id);

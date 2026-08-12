@@ -45288,7 +45288,8 @@ window.LockScreen = LockScreen;
       const finish = r => {
         setBusy(false);
         if (r && r.ok) {
-          toast('Approved & applied to live data', 'success');
+          const ar = r.autoRejected || 0;
+          toast('Approved & applied to live data' + (ar ? ' · ' + ar + ' duplicate' + (ar !== 1 ? 's' : '') + ' auto-rejected' : ''), 'success');
           dcRefreshLive();
           onSaved && onSaved(r.submission || r);
         } else toast(r && r.error || 'Could not approve', 'error');
@@ -46702,7 +46703,8 @@ window.LockScreen = LockScreen;
     const runAction = async (ids, kind, reason) => {
       if (!ids || !ids.length) return;
       setBusy('bulk');
-      let ok = 0;
+      let ok = 0,
+        autoRej = 0;
       const doneIds = [];
       for (const id of ids) {
         try {
@@ -46712,6 +46714,7 @@ window.LockScreen = LockScreen;
           if (r && r.ok) {
             ok++;
             doneIds.push(id);
+            autoRej += r.autoRejected || 0;
           }
         } catch (e) {}
       }
@@ -46723,7 +46726,7 @@ window.LockScreen = LockScreen;
         const next = cur.filter(x => doneIds.indexOf(x.id) < 0);
         return next.length > 1 ? next : null;
       });
-      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
+      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
       if (kind === 'approve' && ok) dcRefreshLive();
       load();
     };
