@@ -8132,7 +8132,7 @@ const UNICO_MODULES = [{
 }];
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
-  datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcResponsibles', 'dcShare', 'dcFields'],
+  datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcResponsibles', 'dcShare', 'dcFields', 'dcAnalytics'],
   staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
   supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport'],
@@ -8555,6 +8555,9 @@ function unicoWorkspaceSub(view) {
   }, {
     label: 'Review & History',
     view: 'dcReview'
+  }, {
+    label: 'Performance',
+    view: 'dcAnalytics'
   }, {
     label: 'Patient Statistics',
     view: 'dcPatient'
@@ -44058,7 +44061,51 @@ window.LockScreen = LockScreen;
         fontSize: 12,
         color: 'var(--blue-700)'
       }
-    }, React.createElement("div", {
+    }, (def.name || newInd.name) && React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap',
+        marginBottom: 7,
+        paddingBottom: 7,
+        borderBottom: '1px solid var(--blue-100,#cfe6f7)'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 800,
+        color: '#1d4ed8',
+        textTransform: 'uppercase',
+        letterSpacing: .5,
+        background: '#dbeafe',
+        borderRadius: 20,
+        padding: '2px 8px'
+      }
+    }, "Quality indicator"), React.createElement("span", {
+      style: {
+        fontSize: 14,
+        fontWeight: 800,
+        color: '#0f2a5a'
+      }
+    }, indNameQ), benchmarkQ && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#0b6aa2',
+        background: '#fff',
+        border: '1px solid #cfe6f7',
+        borderRadius: 20,
+        padding: '2px 9px'
+      }
+    }, "Benchmark ", benchmarkQ), !ratePending && React.createElement("span", {
+      style: {
+        marginLeft: 'auto',
+        fontSize: 12,
+        fontWeight: 800,
+        color: 'var(--blue-700)'
+      }
+    }, "= ", result, rateUnit ? ' ' + rateUnit : '')), React.createElement("div", {
       style: {
         fontFamily: 'var(--mono)'
       }
@@ -45428,7 +45475,86 @@ window.LockScreen = LockScreen;
         flexDirection: 'column',
         gap: 13
       }
-    }, React.createElement("div", {
+    }, s.type === 'quality' && (s.indicatorName || isRate) && (() => {
+      const numL = s.numLabel || 'Numerator',
+        denL = s.denLabel || 'Denominator';
+      const labelFormula = isRate ? '(' + numL + ' ÷ ' + denL + ') × ' + rateMult : s.numLabel || s.indicatorName || 'Recorded value';
+      const numeric = isRate ? '(' + (effNum === '' || effNum == null ? '—' : effNum) + ' ÷ ' + (effDen === '' || effDen == null ? '—' : effDen) + ') × ' + rateMult + ' = ' + shownVal + (s.unit ? ' ' + s.unit : '') : (s.value == null ? '—' : s.value) + (s.unit ? ' ' + s.unit : '');
+      return React.createElement("div", {
+        style: {
+          background: 'linear-gradient(120deg,#eef4ff,#f6faff)',
+          border: '1px solid #cfe0fb',
+          borderRadius: 10,
+          padding: '11px 13px'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap'
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 10,
+          fontWeight: 800,
+          color: '#1d4ed8',
+          textTransform: 'uppercase',
+          letterSpacing: .5,
+          background: '#dbeafe',
+          borderRadius: 20,
+          padding: '2px 9px'
+        }
+      }, "Quality indicator"), React.createElement("span", {
+        style: {
+          fontSize: 15,
+          fontWeight: 800,
+          color: '#0f2a5a'
+        }
+      }, s.indicatorName || 'Indicator'), s.benchmark && React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          color: '#0b6aa2',
+          background: '#fff',
+          border: '1px solid #cfe6f7',
+          borderRadius: 20,
+          padding: '2px 9px'
+        }
+      }, "Benchmark ", s.benchmark)), React.createElement("div", {
+        style: {
+          marginTop: 8,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap'
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          color: 'var(--muted)',
+          textTransform: 'uppercase',
+          letterSpacing: .4
+        }
+      }, "Formula"), React.createElement("code", {
+        style: {
+          fontSize: 12.5,
+          fontWeight: 700,
+          color: '#0f2a5a',
+          background: '#fff',
+          border: '1px solid #dbe6f7',
+          borderRadius: 7,
+          padding: '3px 9px'
+        }
+      }, labelFormula), React.createElement("span", {
+        style: {
+          fontSize: 13,
+          fontWeight: 800,
+          color: '#0b6aa2'
+        }
+      }, numeric)));
+    })(), React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
@@ -48375,13 +48501,566 @@ window.LockScreen = LockScreen;
       }
     }), tab === 'history' && React.createElement(CollectorHistory, null)));
   }
+  function SubmissionAnalytics() {
+    const [rows, setRows] = useState(null);
+    const [days, setDays] = useState('90');
+    const [sortBy, setSortBy] = useState('total');
+    const [sortDir, setSortDir] = useState('desc');
+    useEffect(() => {
+      const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+      load();
+      const refresh = () => {
+        if (document.visibilityState !== 'hidden') load();
+      };
+      window.addEventListener('unico:data-refreshed', refresh);
+      return () => window.removeEventListener('unico:data-refreshed', refresh);
+    }, []);
+    const respOf = s => s.responsible && s.responsible.name || s.submittedBy || 'Unknown';
+    const when = ts => {
+      try {
+        return ts ? new Date(ts).toLocaleString() : '—';
+      } catch (e) {
+        return '—';
+      }
+    };
+    const rangeDays = days === 'all' ? Infinity : parseInt(days, 10);
+    const cutoff = rangeDays === Infinity ? 0 : Date.now() - rangeDays * 864e5;
+    const data = useMemo(() => {
+      const all = (rows || []).filter(s => !cutoff || (s.submittedAt || 0) >= cutoff);
+      const perf = {};
+      const statTargets = new Set(),
+        qualTargets = new Set();
+      all.forEach(s => {
+        const r = respOf(s);
+        const p = perf[r] || (perf[r] = {
+          name: r,
+          total: 0,
+          patient: 0,
+          quality: 0,
+          approved: 0,
+          rejected: 0,
+          autoRej: 0,
+          pending: 0,
+          corrections: 0,
+          last: 0
+        });
+        p.total++;
+        if (s.type === 'patient') p.patient++;else p.quality++;
+        if (s.status === 'approved') p.approved++;else if (s.status === 'rejected') {
+          if (s.autoRejected) p.autoRej++;else p.rejected++;
+        } else if (s.status === 'pending') p.pending++;
+        if (s.isCorrection) p.corrections++;
+        if ((s.submittedAt || 0) > p.last) p.last = s.submittedAt;
+        if (s.type === 'patient') statTargets.add((s.department || '') + '|' + s.month);else qualTargets.add((s.area || '') + '|' + (s.indicatorId || s.indicatorName || '') + '|' + s.month);
+      });
+      const list = Object.keys(perf).map(k => {
+        const p = perf[k];
+        const denom = p.approved + p.rejected;
+        p.accuracy = denom ? p.approved / denom * 100 : null;
+        p.errRate = denom ? p.rejected / denom * 100 : null;
+        return p;
+      });
+      const tot = {
+        total: all.length,
+        approved: 0,
+        rejected: 0,
+        autoRej: 0,
+        pending: 0,
+        patient: 0,
+        quality: 0
+      };
+      list.forEach(p => {
+        tot.approved += p.approved;
+        tot.rejected += p.rejected;
+        tot.autoRej += p.autoRej;
+        tot.pending += p.pending;
+        tot.patient += p.patient;
+        tot.quality += p.quality;
+      });
+      const denom = tot.approved + tot.rejected;
+      tot.accuracy = denom ? tot.approved / denom * 100 : null;
+      const monthly = rangeDays > 60;
+      const key = ts => new Date(ts).toISOString().slice(0, monthly ? 7 : 10);
+      const bucket = {};
+      all.forEach(s => {
+        if (!s.submittedAt) return;
+        const kk = key(s.submittedAt);
+        const b = bucket[kk] || (bucket[kk] = {
+          k: kk,
+          total: 0,
+          approved: 0,
+          rejected: 0,
+          pending: 0
+        });
+        b.total++;
+        if (s.status === 'approved') b.approved++;else if (s.status === 'rejected') b.rejected++;else b.pending++;
+      });
+      const timeline = Object.keys(bucket).map(k2 => bucket[k2]).sort((a, b) => a.k < b.k ? -1 : 1).slice(-48);
+      return {
+        list,
+        tot,
+        timeline,
+        monthly,
+        statCount: statTargets.size,
+        qualCount: qualTargets.size,
+        recent: all.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).slice(0, 12)
+      };
+    }, [rows, days]);
+    if (!rows) return React.createElement("div", {
+      style: {
+        padding: 40,
+        textAlign: 'center',
+        color: 'var(--muted)'
+      }
+    }, "Loading analytics\u2026");
+    const sorted = data.list.slice().sort((a, b) => {
+      const val = p => sortBy === 'accuracy' ? p.accuracy == null ? -1 : p.accuracy : sortBy === 'rejected' ? p.rejected : sortBy === 'quality' ? p.quality : sortBy === 'last' ? p.last : p.total;
+      const r = val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0;
+      return sortDir === 'asc' ? r : -r;
+    });
+    const setSort = k => {
+      if (sortBy === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');else {
+        setSortBy(k);
+        setSortDir('desc');
+      }
+    };
+    const caret = k => sortBy === k ? sortDir === 'asc' ? ' ▲' : ' ▼' : '';
+    const accColor = a => a == null ? 'var(--muted)' : a >= 90 ? 'var(--pos)' : a >= 70 ? '#b45309' : 'var(--rose)';
+    const Tile = ({
+      label,
+      value,
+      color,
+      sub
+    }) => React.createElement("div", {
+      style: {
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 12,
+        padding: '13px 15px',
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 25,
+        fontWeight: 800,
+        lineHeight: 1,
+        color: color || 'var(--ink)'
+      }
+    }, value), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginTop: 5,
+        fontWeight: 600
+      }
+    }, label), sub && React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginTop: 2
+      }
+    }, sub));
+    const th = {
+      textAlign: 'left',
+      fontSize: 11,
+      color: 'var(--ink-2)',
+      fontWeight: 700,
+      padding: '8px 9px',
+      borderBottom: '1px solid var(--line)',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap'
+    };
+    const td = {
+      fontSize: 12.5,
+      padding: '8px 9px',
+      borderBottom: '1px solid var(--line-2)'
+    };
+    const tl = data.timeline;
+    const tlMax = Math.max(1, ...tl.map(d => d.total));
+    const bw = 100 / Math.max(1, tl.length);
+    const dayLabel = k => data.monthly ? new Date(k + '-01').toLocaleDateString(undefined, {
+      month: 'short',
+      year: '2-digit'
+    }) : k.slice(8) + '/' + k.slice(5, 7);
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 16
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.trend,
+      title: "Submission Analytics",
+      sub: "Responder performance \xB7 completeness \xB7 accuracy",
+      right: React.createElement("div", {
+        className: "seg"
+      }, [['30', '30d'], ['90', '90d'], ['365', '1y'], ['all', 'All']].map(([k, l]) => React.createElement("button", {
+        key: k,
+        className: days === k ? 'on' : '',
+        onClick: () => setDays(k)
+      }, l)))
+    }), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))',
+        gap: 12
+      }
+    }, React.createElement(Tile, {
+      label: "Total submissions",
+      value: data.tot.total
+    }), React.createElement(Tile, {
+      label: "Responsible people",
+      value: data.list.length
+    }), React.createElement(Tile, {
+      label: "Overall accuracy",
+      value: data.tot.accuracy == null ? '—' : data.tot.accuracy.toFixed(1) + '%',
+      color: accColor(data.tot.accuracy),
+      sub: data.tot.approved + ' approved · ' + data.tot.rejected + ' rejected'
+    }), React.createElement(Tile, {
+      label: "Wrong data (rejected)",
+      value: data.tot.rejected,
+      color: data.tot.rejected ? 'var(--rose)' : 'var(--ink)',
+      sub: data.tot.autoRej ? data.tot.autoRej + ' dup auto-rejected' : ''
+    }), React.createElement(Tile, {
+      label: "Pending review",
+      value: data.tot.pending,
+      color: data.tot.pending ? '#b45309' : 'var(--ink)'
+    }), React.createElement(Tile, {
+      label: "Statistics / Quality",
+      value: data.tot.patient + ' / ' + data.tot.quality,
+      sub: data.statCount + ' stat + ' + data.qualCount + ' quality targets'
+    })), React.createElement("div", {
+      style: {
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 12,
+        padding: '14px 16px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        marginBottom: 8,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 13
+      }
+    }, "Submission timeline"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), [['Approved', '#16a34a'], ['Rejected', '#ef4444'], ['Pending', '#f59e0b']].map(([l, c]) => React.createElement("span", {
+      key: l,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 9,
+        height: 9,
+        borderRadius: 2,
+        background: c
+      }
+    }), l))), tl.length === 0 ? React.createElement("div", {
+      style: {
+        color: 'var(--muted)',
+        fontSize: 12.5,
+        padding: '10px 0'
+      }
+    }, "No submissions in this period.") : React.createElement("div", null, React.createElement("svg", {
+      viewBox: "0 0 100 44",
+      preserveAspectRatio: "none",
+      style: {
+        width: '100%',
+        height: 150
+      }
+    }, tl.map((d, i) => {
+      const x = i * bw + bw * 0.12,
+        w = bw * 0.76;
+      let y = 44;
+      const seg = (v, c) => {
+        const h = v / tlMax * 42;
+        y -= h;
+        return h > 0 ? React.createElement("rect", {
+          key: c,
+          x: x,
+          y: y,
+          width: w,
+          height: h,
+          fill: c
+        }) : null;
+      };
+      return React.createElement("g", {
+        key: i
+      }, seg(d.approved, '#16a34a'), seg(d.rejected, '#ef4444'), seg(d.pending, '#f59e0b'));
+    })), React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        fontSize: 10,
+        color: 'var(--muted)',
+        marginTop: 4
+      }
+    }, React.createElement("span", null, dayLabel(tl[0].k)), tl.length > 2 && React.createElement("span", null, dayLabel(tl[Math.floor(tl.length / 2)].k)), React.createElement("span", null, dayLabel(tl[tl.length - 1].k))))), React.createElement("div", {
+      style: {
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 12,
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        padding: '12px 16px',
+        borderBottom: '1px solid var(--line)',
+        fontWeight: 700,
+        fontSize: 13
+      }
+    }, "Responder Performance"), React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, React.createElement("table", {
+      style: {
+        width: '100%',
+        borderCollapse: 'collapse',
+        minWidth: 720
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th,
+      onClick: () => setSort('name')
+    }, "Responsible"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      },
+      onClick: () => setSort('total')
+    }, "Total", caret('total')), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      }
+    }, "Statistics"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      },
+      onClick: () => setSort('quality')
+    }, "Quality", caret('quality')), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      }
+    }, "Approved"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      },
+      onClick: () => setSort('rejected')
+    }, "Wrong", caret('rejected')), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      }
+    }, "Pending"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      },
+      onClick: () => setSort('accuracy')
+    }, "Accuracy", caret('accuracy')), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'right'
+      },
+      onClick: () => setSort('last')
+    }, "Last submission", caret('last')))), React.createElement("tbody", null, sorted.length === 0 && React.createElement("tr", null, React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: 'center',
+        color: 'var(--muted)'
+      },
+      colSpan: 9
+    }, "No submissions in this period.")), sorted.map(p => React.createElement("tr", {
+      key: p.name
+    }, React.createElement("td", {
+      style: {
+        ...td,
+        fontWeight: 600
+      }
+    }, p.name, p.corrections ? React.createElement("span", {
+      style: {
+        fontSize: 10,
+        color: 'var(--muted)',
+        marginLeft: 6
+      }
+    }, "(", p.corrections, " edit req)") : null), React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: 'center',
+        fontWeight: 700
+      }
+    }, p.total), React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: 'center'
+      }
+    }, p.patient), React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: 'center'
+      }
+    }, p.quality), React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: 'center',
+        color: 'var(--pos)'
+      }
+    }, p.approved), React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: 'center',
+        color: p.rejected ? 'var(--rose)' : 'var(--ink-2)',
+        fontWeight: p.rejected ? 700 : 400
+      }
+    }, p.rejected), React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: 'center',
+        color: p.pending ? '#b45309' : 'var(--ink-2)'
+      }
+    }, p.pending), React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: 'center'
+      }
+    }, p.accuracy == null ? React.createElement("span", {
+      style: {
+        color: 'var(--muted)'
+      }
+    }, "\u2014") : React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 46,
+        height: 6,
+        borderRadius: 6,
+        background: 'var(--line)',
+        overflow: 'hidden',
+        display: 'inline-block'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'block',
+        height: '100%',
+        width: p.accuracy + '%',
+        background: accColor(p.accuracy)
+      }
+    })), React.createElement("b", {
+      style: {
+        color: accColor(p.accuracy)
+      }
+    }, p.accuracy.toFixed(0), "%"))), React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: 'right',
+        color: 'var(--muted)',
+        fontSize: 11.5,
+        whiteSpace: 'nowrap'
+      }
+    }, when(p.last)))))))), React.createElement("div", {
+      style: {
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 12,
+        padding: '12px 16px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 13,
+        marginBottom: 8
+      }
+    }, "Recent activity"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2
+      }
+    }, data.recent.map(s => {
+      const c = s.status === 'approved' ? 'var(--pos)' : s.status === 'rejected' ? 'var(--rose)' : '#b45309';
+      const target = s.type === 'quality' ? s.indicatorName || s.areaName : s.departmentName;
+      return React.createElement("div", {
+        key: s.id,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '6px 0',
+          borderBottom: '1px solid var(--line-2)',
+          fontSize: 12
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: c,
+          flex: '0 0 auto'
+        }
+      }), React.createElement("span", {
+        style: {
+          fontWeight: 600,
+          minWidth: 120
+        }
+      }, respOf(s)), React.createElement("span", {
+        style: {
+          color: 'var(--muted)',
+          textTransform: 'capitalize'
+        }
+      }, s.type), React.createElement("span", {
+        style: {
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          color: 'var(--ink-2)'
+        }
+      }, target, " \xB7 ", monthLabel(s.month)), React.createElement("span", {
+        style: {
+          color: c,
+          fontWeight: 700,
+          textTransform: 'capitalize',
+          fontSize: 11
+        }
+      }, s.status), React.createElement("span", {
+        style: {
+          color: 'var(--muted)',
+          fontSize: 11,
+          whiteSpace: 'nowrap'
+        }
+      }, when(s.submittedAt)));
+    }))));
+  }
   Object.assign(window, {
     DataResponsibles,
     DataPatientForm,
     DataQualityForm,
     DataReview,
     DataShareLinks,
-    CollectorPortal
+    CollectorPortal,
+    SubmissionAnalytics
   });
 })();
 })();
@@ -54300,6 +54979,9 @@ function App() {
   } else if (route.view === 'dcReview') {
     crumbs = ['UNICO', 'Data Collection', 'Review & History'];
     body = React.createElement(DataReview, null);
+  } else if (route.view === 'dcAnalytics') {
+    crumbs = ['UNICO', 'Data Collection', 'Performance'];
+    body = typeof SubmissionAnalytics !== 'undefined' ? React.createElement(SubmissionAnalytics, null) : null;
   } else if (route.view === 'dcShare') {
     crumbs = ['UNICO', 'Data Collection', 'Share Links'];
     body = React.createElement(DataShareLinks, {

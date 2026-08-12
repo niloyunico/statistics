@@ -1031,6 +1031,14 @@
           {showEntry && (
             <>
               <div style={{ background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9, padding: '10px 13px', marginBottom: 13, fontSize: 12, color: 'var(--blue-700)' }}>
+                {(def.name || newInd.name) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 7, paddingBottom: 7, borderBottom: '1px solid var(--blue-100,#cfe6f7)' }}>
+                    <span style={{ fontSize: 9.5, fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase', letterSpacing: .5, background: '#dbeafe', borderRadius: 20, padding: '2px 8px' }}>Quality indicator</span>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: '#0f2a5a' }}>{indNameQ}</span>
+                    {benchmarkQ && <span style={{ fontSize: 11, fontWeight: 700, color: '#0b6aa2', background: '#fff', border: '1px solid #cfe6f7', borderRadius: 20, padding: '2px 9px' }}>Benchmark {benchmarkQ}</span>}
+                    {!ratePending && <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 800, color: 'var(--blue-700)' }}>= {result}{rateUnit ? ' ' + rateUnit : ''}</span>}
+                  </div>
+                )}
                 <div style={{ fontFamily: 'var(--mono)' }}><b style={{ fontStyle: 'italic', marginRight: 6 }}>ƒ</b>{formulaTextQ}</div>
                 {(isRate || numDef) && (
                   <div style={{ marginTop: 7, paddingTop: 7, borderTop: '1px solid var(--blue-100,#cfe6f7)', color: 'var(--ink-2)', display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -1428,6 +1436,27 @@
             <span style={{ flex: 1 }} /><button className="icon-btn" style={{ width: 30, height: 30, flexShrink: 0 }} onClick={onClose}><Ic d={I.x} s={16} /></button>
           </div>
           <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 13 }}>
+            {s.type === 'quality' && (s.indicatorName || isRate) && (() => {
+              const numL = s.numLabel || 'Numerator', denL = s.denLabel || 'Denominator';
+              const labelFormula = isRate ? '(' + numL + ' ÷ ' + denL + ') × ' + rateMult : (s.numLabel || s.indicatorName || 'Recorded value');
+              const numeric = isRate
+                ? '(' + (effNum === '' || effNum == null ? '—' : effNum) + ' ÷ ' + (effDen === '' || effDen == null ? '—' : effDen) + ') × ' + rateMult + ' = ' + shownVal + (s.unit ? ' ' + s.unit : '')
+                : (s.value == null ? '—' : s.value) + (s.unit ? ' ' + s.unit : '');
+              return (
+                <div style={{ background: 'linear-gradient(120deg,#eef4ff,#f6faff)', border: '1px solid #cfe0fb', borderRadius: 10, padding: '11px 13px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase', letterSpacing: .5, background: '#dbeafe', borderRadius: 20, padding: '2px 9px' }}>Quality indicator</span>
+                    <span style={{ fontSize: 15, fontWeight: 800, color: '#0f2a5a' }}>{s.indicatorName || 'Indicator'}</span>
+                    {s.benchmark && <span style={{ fontSize: 11, fontWeight: 700, color: '#0b6aa2', background: '#fff', border: '1px solid #cfe6f7', borderRadius: 20, padding: '2px 9px' }}>Benchmark {s.benchmark}</span>}
+                  </div>
+                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4 }}>Formula</span>
+                    <code style={{ fontSize: 12.5, fontWeight: 700, color: '#0f2a5a', background: '#fff', border: '1px solid #dbe6f7', borderRadius: 7, padding: '3px 9px' }}>{labelFormula}</code>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: '#0b6aa2' }}>{numeric}</span>
+                  </div>
+                </div>
+              );
+            })()}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12.5 }}>
               <Meta label="Type" value={s.type === 'quality' ? 'Quality' : 'Patient'} />
               <Meta label="Reporting month" value={monthLabel(s.month)} />
@@ -2394,5 +2423,174 @@
     );
   }
 
-  Object.assign(window, { DataResponsibles, DataPatientForm, DataQualityForm, DataReview, DataShareLinks, CollectorPortal });
+  /* ===================== Submission Analytics / Responder Performance =====================
+     Who submitted what, when, how completely (statistics + quality), and how accurately
+     (approved vs rejected "wrong data") — so an admin can track each responsible person's
+     performance. All derived client-side from the submissions list. */
+  function SubmissionAnalytics() {
+    const [rows, setRows] = useState(null);
+    const [days, setDays] = useState('90');          // 30 | 90 | 365 | all
+    const [sortBy, setSortBy] = useState('total');   // total | accuracy | rejected | quality | last
+    const [sortDir, setSortDir] = useState('desc');
+    useEffect(() => {
+      const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+      load();
+      const refresh = () => { if (document.visibilityState !== 'hidden') load(); };
+      window.addEventListener('unico:data-refreshed', refresh);
+      return () => window.removeEventListener('unico:data-refreshed', refresh);
+    }, []);
+    const respOf = (s) => (s.responsible && s.responsible.name) || s.submittedBy || 'Unknown';
+    const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
+    const rangeDays = days === 'all' ? Infinity : parseInt(days, 10);
+    const cutoff = rangeDays === Infinity ? 0 : Date.now() - rangeDays * 864e5;
+
+    const data = useMemo(() => {
+      const all = (rows || []).filter((s) => !cutoff || (s.submittedAt || 0) >= cutoff);
+      const perf = {};
+      const statTargets = new Set(), qualTargets = new Set();
+      all.forEach((s) => {
+        const r = respOf(s);
+        const p = perf[r] || (perf[r] = { name: r, total: 0, patient: 0, quality: 0, approved: 0, rejected: 0, autoRej: 0, pending: 0, corrections: 0, last: 0 });
+        p.total++; if (s.type === 'patient') p.patient++; else p.quality++;
+        if (s.status === 'approved') p.approved++;
+        else if (s.status === 'rejected') { if (s.autoRejected) p.autoRej++; else p.rejected++; }
+        else if (s.status === 'pending') p.pending++;
+        if (s.isCorrection) p.corrections++;
+        if ((s.submittedAt || 0) > p.last) p.last = s.submittedAt;
+        if (s.type === 'patient') statTargets.add((s.department || '') + '|' + s.month);
+        else qualTargets.add((s.area || '') + '|' + (s.indicatorId || s.indicatorName || '') + '|' + s.month);
+      });
+      const list = Object.keys(perf).map((k) => { const p = perf[k]; const denom = p.approved + p.rejected; p.accuracy = denom ? (p.approved / denom) * 100 : null; p.errRate = denom ? (p.rejected / denom) * 100 : null; return p; });
+      const tot = { total: all.length, approved: 0, rejected: 0, autoRej: 0, pending: 0, patient: 0, quality: 0 };
+      list.forEach((p) => { tot.approved += p.approved; tot.rejected += p.rejected; tot.autoRej += p.autoRej; tot.pending += p.pending; tot.patient += p.patient; tot.quality += p.quality; });
+      const denom = tot.approved + tot.rejected; tot.accuracy = denom ? (tot.approved / denom) * 100 : null;
+      // Activity timeline: by day (<=60d range) else by month.
+      const monthly = rangeDays > 60;
+      const key = (ts) => new Date(ts).toISOString().slice(0, monthly ? 7 : 10);
+      const bucket = {};
+      all.forEach((s) => { if (!s.submittedAt) return; const kk = key(s.submittedAt); const b = bucket[kk] || (bucket[kk] = { k: kk, total: 0, approved: 0, rejected: 0, pending: 0 }); b.total++; if (s.status === 'approved') b.approved++; else if (s.status === 'rejected') b.rejected++; else b.pending++; });
+      const timeline = Object.keys(bucket).map((k2) => bucket[k2]).sort((a, b) => a.k < b.k ? -1 : 1).slice(-48);
+      return { list, tot, timeline, monthly, statCount: statTargets.size, qualCount: qualTargets.size, recent: all.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).slice(0, 12) };
+    }, [rows, days]);
+
+    if (!rows) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Loading analytics…</div>;
+
+    const sorted = data.list.slice().sort((a, b) => {
+      const val = (p) => sortBy === 'accuracy' ? (p.accuracy == null ? -1 : p.accuracy) : sortBy === 'rejected' ? p.rejected : sortBy === 'quality' ? p.quality : sortBy === 'last' ? p.last : p.total;
+      const r = val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0; return sortDir === 'asc' ? r : -r;
+    });
+    const setSort = (k) => { if (sortBy === k) setSortDir((d) => d === 'asc' ? 'desc' : 'asc'); else { setSortBy(k); setSortDir('desc'); } };
+    const caret = (k) => sortBy === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    const accColor = (a) => a == null ? 'var(--muted)' : a >= 90 ? 'var(--pos)' : a >= 70 ? '#b45309' : 'var(--rose)';
+    const Tile = ({ label, value, color, sub }) => (
+      <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, padding: '13px 15px', minWidth: 0 }}>
+        <div style={{ fontSize: 25, fontWeight: 800, lineHeight: 1, color: color || 'var(--ink)' }}>{value}</div>
+        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 5, fontWeight: 600 }}>{label}</div>
+        {sub && <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 2 }}>{sub}</div>}
+      </div>
+    );
+    const th = { textAlign: 'left', fontSize: 11, color: 'var(--ink-2)', fontWeight: 700, padding: '8px 9px', borderBottom: '1px solid var(--line)', cursor: 'pointer', whiteSpace: 'nowrap' };
+    const td = { fontSize: 12.5, padding: '8px 9px', borderBottom: '1px solid var(--line-2)' };
+    // timeline chart geometry
+    const tl = data.timeline; const tlMax = Math.max(1, ...tl.map((d) => d.total)); const bw = 100 / Math.max(1, tl.length);
+    const dayLabel = (k) => data.monthly ? new Date(k + '-01').toLocaleDateString(undefined, { month: 'short', year: '2-digit' }) : k.slice(8) + '/' + k.slice(5, 7);
+
+    return (
+      <div className="grid" style={{ gap: 16 }}>
+        <SectionTitle icon={I.trend} title="Submission Analytics" sub="Responder performance · completeness · accuracy"
+          right={<div className="seg">{[['30', '30d'], ['90', '90d'], ['365', '1y'], ['all', 'All']].map(([k, l]) => <button key={k} className={days === k ? 'on' : ''} onClick={() => setDays(k)}>{l}</button>)}</div>} />
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
+          <Tile label="Total submissions" value={data.tot.total} />
+          <Tile label="Responsible people" value={data.list.length} />
+          <Tile label="Overall accuracy" value={data.tot.accuracy == null ? '—' : data.tot.accuracy.toFixed(1) + '%'} color={accColor(data.tot.accuracy)} sub={data.tot.approved + ' approved · ' + data.tot.rejected + ' rejected'} />
+          <Tile label="Wrong data (rejected)" value={data.tot.rejected} color={data.tot.rejected ? 'var(--rose)' : 'var(--ink)'} sub={data.tot.autoRej ? data.tot.autoRej + ' dup auto-rejected' : ''} />
+          <Tile label="Pending review" value={data.tot.pending} color={data.tot.pending ? '#b45309' : 'var(--ink)'} />
+          <Tile label="Statistics / Quality" value={data.tot.patient + ' / ' + data.tot.quality} sub={data.statCount + ' stat + ' + data.qualCount + ' quality targets'} />
+        </div>
+
+        <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, padding: '14px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Submission timeline</div>
+            <span style={{ flex: 1 }} />
+            {[['Approved', '#16a34a'], ['Rejected', '#ef4444'], ['Pending', '#f59e0b']].map(([l, c]) => <span key={l} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--muted)' }}><span style={{ width: 9, height: 9, borderRadius: 2, background: c }} />{l}</span>)}
+          </div>
+          {tl.length === 0 ? <div style={{ color: 'var(--muted)', fontSize: 12.5, padding: '10px 0' }}>No submissions in this period.</div> : (
+            <div>
+              <svg viewBox="0 0 100 44" preserveAspectRatio="none" style={{ width: '100%', height: 150 }}>
+                {tl.map((d, i) => { const x = i * bw + bw * 0.12, w = bw * 0.76; let y = 44; const seg = (v, c) => { const h = (v / tlMax) * 42; y -= h; return h > 0 ? <rect key={c} x={x} y={y} width={w} height={h} fill={c} /> : null; }; return <g key={i}>{seg(d.approved, '#16a34a')}{seg(d.rejected, '#ef4444')}{seg(d.pending, '#f59e0b')}</g>; })}
+              </svg>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+                <span>{dayLabel(tl[0].k)}</span>{tl.length > 2 && <span>{dayLabel(tl[Math.floor(tl.length / 2)].k)}</span>}<span>{dayLabel(tl[tl.length - 1].k)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', fontWeight: 700, fontSize: 13 }}>Responder Performance</div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+              <thead><tr>
+                <th style={th} onClick={() => setSort('name')}>Responsible</th>
+                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('total')}>Total{caret('total')}</th>
+                <th style={{ ...th, textAlign: 'center' }}>Statistics</th>
+                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('quality')}>Quality{caret('quality')}</th>
+                <th style={{ ...th, textAlign: 'center' }}>Approved</th>
+                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('rejected')}>Wrong{caret('rejected')}</th>
+                <th style={{ ...th, textAlign: 'center' }}>Pending</th>
+                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('accuracy')}>Accuracy{caret('accuracy')}</th>
+                <th style={{ ...th, textAlign: 'right' }} onClick={() => setSort('last')}>Last submission{caret('last')}</th>
+              </tr></thead>
+              <tbody>
+                {sorted.length === 0 && <tr><td style={{ ...td, textAlign: 'center', color: 'var(--muted)' }} colSpan={9}>No submissions in this period.</td></tr>}
+                {sorted.map((p) => (
+                  <tr key={p.name}>
+                    <td style={{ ...td, fontWeight: 600 }}>{p.name}{p.corrections ? <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 6 }}>({p.corrections} edit req)</span> : null}</td>
+                    <td style={{ ...td, textAlign: 'center', fontWeight: 700 }}>{p.total}</td>
+                    <td style={{ ...td, textAlign: 'center' }}>{p.patient}</td>
+                    <td style={{ ...td, textAlign: 'center' }}>{p.quality}</td>
+                    <td style={{ ...td, textAlign: 'center', color: 'var(--pos)' }}>{p.approved}</td>
+                    <td style={{ ...td, textAlign: 'center', color: p.rejected ? 'var(--rose)' : 'var(--ink-2)', fontWeight: p.rejected ? 700 : 400 }}>{p.rejected}</td>
+                    <td style={{ ...td, textAlign: 'center', color: p.pending ? '#b45309' : 'var(--ink-2)' }}>{p.pending}</td>
+                    <td style={{ ...td, textAlign: 'center' }}>
+                      {p.accuracy == null ? <span style={{ color: 'var(--muted)' }}>—</span> : (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                          <span style={{ width: 46, height: 6, borderRadius: 6, background: 'var(--line)', overflow: 'hidden', display: 'inline-block' }}><span style={{ display: 'block', height: '100%', width: p.accuracy + '%', background: accColor(p.accuracy) }} /></span>
+                          <b style={{ color: accColor(p.accuracy) }}>{p.accuracy.toFixed(0)}%</b>
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ ...td, textAlign: 'right', color: 'var(--muted)', fontSize: 11.5, whiteSpace: 'nowrap' }}>{when(p.last)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, padding: '12px 16px' }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Recent activity</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {data.recent.map((s) => {
+              const c = s.status === 'approved' ? 'var(--pos)' : s.status === 'rejected' ? 'var(--rose)' : '#b45309';
+              const target = s.type === 'quality' ? (s.indicatorName || s.areaName) : s.departmentName;
+              return (
+                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--line-2)', fontSize: 12 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: c, flex: '0 0 auto' }} />
+                  <span style={{ fontWeight: 600, minWidth: 120 }}>{respOf(s)}</span>
+                  <span style={{ color: 'var(--muted)', textTransform: 'capitalize' }}>{s.type}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink-2)' }}>{target} · {monthLabel(s.month)}</span>
+                  <span style={{ color: c, fontWeight: 700, textTransform: 'capitalize', fontSize: 11 }}>{s.status}</span>
+                  <span style={{ color: 'var(--muted)', fontSize: 11, whiteSpace: 'nowrap' }}>{when(s.submittedAt)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  Object.assign(window, { DataResponsibles, DataPatientForm, DataQualityForm, DataReview, DataShareLinks, CollectorPortal, SubmissionAnalytics });
 })();

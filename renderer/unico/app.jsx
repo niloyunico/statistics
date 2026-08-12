@@ -129,6 +129,9 @@ function App(){
   } else if(route.view==='dcReview'){
     crumbs=['UNICO','Data Collection','Review & History'];
     body=<DataReview/>;
+  } else if(route.view==='dcAnalytics'){
+    crumbs=['UNICO','Data Collection','Performance'];
+    body=(typeof SubmissionAnalytics!=='undefined') ? <SubmissionAnalytics/> : null;
   } else if(route.view==='dcShare'){
     crumbs=['UNICO','Data Collection','Share Links'];
     body=<DataShareLinks depts={depts}/>;

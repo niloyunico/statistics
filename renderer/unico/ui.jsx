@@ -56,7 +56,7 @@ const UNICO_MODULES = [
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
-  datacol:['dcReview','dcPatient','dcQuality','input','dcResponsibles','dcShare','dcFields'],
+  datacol:['dcReview','dcPatient','dcQuality','input','dcResponsibles','dcShare','dcFields','dcAnalytics'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
@@ -289,6 +289,7 @@ function unicoWorkspaceSub(view){
   if(mod==='datacol') return [
     { label:'Data Entry',          view:'input' },
     { label:'Review & History',    view:'dcReview' },
+    { label:'Performance',         view:'dcAnalytics' },
     { label:'Patient Statistics',  view:'dcPatient' },
     { label:'Quality Data',        view:'dcQuality' },
     { label:'Share Links',         view:'dcShare' },
