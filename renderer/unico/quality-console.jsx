@@ -235,6 +235,16 @@ function fmtVal(ind, v){
   return isPctInd(ind) ? (num+'%') : num.toLocaleString();
 }
 
+/* ---- Monitoring start / "Not Observed" ----------------------------------------
+   An indicator that only began monitoring at ind.startMonth (a 'Mon-YY' key) was NOT
+   observed in any earlier month — those months are shown as "N/O" in reports (never a
+   gap or a false 0). A month with no value AND no start rule stays a normal gap. */
+const QMONS_ORD = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function monthOrd(mk){ const p=String(mk||'').split('-'); const mi=QMONS_ORD.indexOf(p[0]); const yy=parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return (2000+yy)*12+mi; }
+function qcBeforeStart(ind, mk){ if(!ind||!ind.startMonth) return false; const a=monthOrd(mk), b=monthOrd(ind.startMonth); return a!=null&&b!=null&&a<b; }
+// Report-cell text: the value; else 'N/O' for pre-start months; else '—' (gap).
+function qcReportCell(ind, m){ const mk=Array.isArray(m)?m[0]:m; const mm=Array.isArray(m)?m:[mk]; const v=qcCellVal(ind, mm); const s=qStatus(ind, v); if(s==='na') return qcBeforeStart(ind, mk) ? 'N/O' : '—'; return fmtVal(ind, v); }
+
 // Expose the AUTHORITATIVE quality-compute helpers so the merged Statistics surfaces
 // (Department 360, sidebar breach badge) read the EXACT same numbers as this console —
 // quarter/year-aware, not the legacy fixed month window.
@@ -242,7 +252,7 @@ if (typeof window !== 'undefined') {
   window.UNICO_Q = {
     defaultFy, fyOptions, fyAxis, fyMonthsFor, fyLabelOf, currentFy, fyOfKey,
     deptStat, hasData, countBreaches, qcCellVal, qStatus, monthStatus, monthRaw,
-    qtrRaw, qtrSrc, isPctInd, fmtVal,
+    qtrRaw, qtrSrc, isPctInd, fmtVal, qcBeforeStart, qcReportCell, monthOrd,
   };
 }
 
@@ -1124,7 +1134,7 @@ function qcReportHTML(depts, months, fyIn, opts){
     const th=['Indicator','Benchmark'].concat(MONTHS.map(m=>m[1].split(' ')[0])).map(h=>'<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">'+h+'</th>').join('');
     const trs=(d.indicators||[]).map((ind,i)=>{
       // same shared month resolver the on-screen cells use
-      const cells=[qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m); const s=qStatus(ind,v); const disp=s==='na'?'—':fmtVal(ind,v); const col=s==='breach'?'#d23a52':s==='ok'?'#1f9d57':'#9aa6b4'; return '<span style="color:'+col+';font-weight:600">'+qcEsc(disp)+'</span>'; }));
+      const cells=[qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m); const s=qStatus(ind,v); const disp=qcReportCell(ind,m); const col=s==='breach'?'#d23a52':s==='ok'?'#1f9d57':'#9aa6b4'; return '<span style="color:'+col+';font-weight:600">'+qcEsc(disp)+'</span>'; }));
       return '<tr style="background:'+(i%2?'#eef6fb':'#fff')+'">'+cells.map((c,ci)=>'<td style="border:1px solid #b9c6d2;padding:4px 7px;font-family:Calibri;font-size:10pt;'+(ci>1?'text-align:center':'')+'">'+c+'</td>').join('')+'</tr>';
     }).join('');
     body+='<table border="1" style="border-collapse:collapse"><thead><tr>'+th+'</tr></thead><tbody>'+trs+'</tbody></table>';
@@ -1143,7 +1153,7 @@ function qcExport(depts, fmt){
   const MONTHS=fyAxis(defaultFy(depts));
   if(fmt==='csv'){
     const rows=[['Department','Indicator','Benchmark','Goal'].concat(MONTHS.map(m=>m[1]))];
-    depts.forEach(d=>(d.indicators||[]).forEach(ind=>{ rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection==='higher_is_better'?'higher is better':'lower is better'].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); }))); }));
+    depts.forEach(d=>(d.indicators||[]).forEach(ind=>{ rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection==='higher_is_better'?'higher is better':'lower is better'].concat(MONTHS.map(m=>{ const v=qcCellVal(ind,m); return qStatus(ind,v)==='na'?(qcBeforeStart(ind,m[0])?'Not Observed':''):fmtVal(ind,v); }))); }));
     rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','Date of incident','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
     depts.forEach(d=>qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,MONTHS)).forEach(r=>{ const x=r.x; rows.push([d.name, r.ind, r.month, x.incidentDate||'', x.uhid||'', x.patientName||'', x.age||'', x.gender||'', x.diagnosis||'', x.details||'', x.finding||'', x.corrective||'', x.preventive||'']); }));
     qcDownload('﻿'+rows.map(r=>r.map(c=>'"'+((c==null?'':c)+'').replace(/"/g,'""')+'"').join(',')).join('\r\n'), base+'.csv','text/csv;charset=utf-8'); return;
@@ -2139,9 +2149,10 @@ function QCReportBuilder({depts}){
   const MonthCell=({ind,m})=>{
     const v=qcCellVal(ind,m); // shared resolver: same value the KPIs and chart use
     const s=qStatus(ind,v);
-    const col=s==='breach'?P.rose:s==='ok'?P.green:P.faint;
-    const bg =s==='breach'?'#fbe9ec':s==='ok'?'#e7f6ed':'#f4f6f9';
-    return <td style={{textAlign:'center',padding:'3px 1px'}}><span style={{display:'inline-block',minWidth:20,padding:'2px 2px',borderRadius:5,background:bg,color:col,fontFamily:MONO,fontWeight:600,fontSize:9}}>{s==='na'?'·':fmtVal(ind,v)}</span></td>;
+    const notObs=s==='na'&&qcBeforeStart(ind,m[0]);   // monitoring not started yet
+    const col=s==='breach'?P.rose:s==='ok'?P.green:(notObs?'#7c8aa0':P.faint);
+    const bg =s==='breach'?'#fbe9ec':s==='ok'?'#e7f6ed':(notObs?'#eef1f6':'#f4f6f9');
+    return <td style={{textAlign:'center',padding:'3px 1px'}}><span title={notObs?'Not observed (monitoring started '+ind.startMonth+')':undefined} style={{display:'inline-block',minWidth:20,padding:'2px 2px',borderRadius:5,background:bg,color:col,fontFamily:MONO,fontWeight:600,fontSize:notObs?7.5:9}}>{notObs?'N/O':(s==='na'?'·':fmtVal(ind,v))}</span></td>;
   };
   const thc={textAlign:'center',padding:'5px 1px',fontSize:8.5,color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2};
   const thl={textAlign:'left',padding:'7px 6px',fontSize:10,textTransform:'uppercase',letterSpacing:'.2px',color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2};
@@ -3253,7 +3264,7 @@ function QCReportBuilder({depts}){
       const rows=[['Department','Indicator','Benchmark','Goal'].concat(pMonths.map(m=>m[1]))];
       scope.forEach(d=>(d.indicators||[]).forEach(ind=>rows.push(
         [d.name,ind.name,benchExpr(ind),ind.goalDirection==='higher_is_better'?'higher is better':'lower is better']
-        .concat(pMonths.map(m=>{ const v=qcCellVal(ind,m); return qStatus(ind,v)==='na'?'':fmtVal(ind,v); })))));
+        .concat(pMonths.map(m=>{ const v=qcCellVal(ind,m); return qStatus(ind,v)==='na'?(qcBeforeStart(ind,m[0])?'Not Observed':''):fmtVal(ind,v); })))));
       rows.push([]); rows.push(['INCIDENT DETAILS']); rows.push(['Department','Indicator','Month','Date of incident','UHID','Patient','Age','Sex','Diagnosis','Details','Finding','Corrective','Preventive']);
       // period-scoped like every report page — the CSV used to dump incidents from ANY year
       scope.forEach(d=>qcIncidentsOf(d).filter(r=>qcIncInPeriod(r,pMonths)).forEach(r=>{ const x=r.x; rows.push([d.name,r.ind,r.month,x.incidentDate||'',x.uhid||'',x.patientName||'',x.age||'',x.gender||'',x.diagnosis||'',x.details||'',x.finding||'',x.corrective||'',x.preventive||'']); }));

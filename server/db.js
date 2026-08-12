@@ -20,13 +20,17 @@ let _memUsers = null, _memApp = { data: {}, updatedAt: 0 };
 async function ensureClient() {
   if (_client) return _client;
   const { MongoClient } = require('mongodb');
+  // Pool size MUST differ by runtime. On Vercel (serverless) every warm function instance
+  // keeps its OWN pool and there can be many instances at once — a big pool multiplies out
+  // and exhausts Atlas's connection cap (free tier = 500), which surfaces to users as
+  // "database unreachable". So serverless uses a tiny pool with no idle sockets; a
+  // persistent local server can afford a large warm pool for concurrency.
+  const serverless = !!process.env.VERCEL;
   _client = new MongoClient(process.env.MONGODB_URI, {
     serverSelectionTimeoutMS: 8000,
-    // Concurrent collector submissions + the admin Review's panels can fire many
-    // simultaneous queries; a bigger pool avoids "no connection available" stalls.
-    maxPoolSize: 25,
-    minPoolSize: 2,        // keep warm sockets so idle drops don't force a re-handshake
-    maxIdleTimeMS: 60000,
+    maxPoolSize: serverless ? 5 : 25,
+    minPoolSize: serverless ? 0 : 2,       // serverless: hold no idle connections
+    maxIdleTimeMS: serverless ? 10000 : 60000,
     // Transparently retry a read/write that fails on a transient network blip
     // (Atlas socket drop, primary step-down) instead of surfacing "failed database".
     retryWrites: true,
