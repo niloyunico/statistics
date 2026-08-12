@@ -26024,6 +26024,28 @@ function fmtVal(ind, v) {
   const num = Math.round(Number(v) * 100) / 100;
   return isPctInd(ind) ? num + '%' : num.toLocaleString();
 }
+const QMONS_ORD = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function monthOrd(mk) {
+  const p = String(mk || '').split('-');
+  const mi = QMONS_ORD.indexOf(p[0]);
+  const yy = parseInt(p[1], 10);
+  if (mi < 0 || isNaN(yy)) return null;
+  return (2000 + yy) * 12 + mi;
+}
+function qcBeforeStart(ind, mk) {
+  if (!ind || !ind.startMonth) return false;
+  const a = monthOrd(mk),
+    b = monthOrd(ind.startMonth);
+  return a != null && b != null && a < b;
+}
+function qcReportCell(ind, m) {
+  const mk = Array.isArray(m) ? m[0] : m;
+  const mm = Array.isArray(m) ? m : [mk];
+  const v = qcCellVal(ind, mm);
+  const s = qStatus(ind, v);
+  if (s === 'na') return qcBeforeStart(ind, mk) ? 'N/O' : '—';
+  return fmtVal(ind, v);
+}
 if (typeof window !== 'undefined') {
   window.UNICO_Q = {
     defaultFy,
@@ -26043,7 +26065,10 @@ if (typeof window !== 'undefined') {
     qtrRaw,
     qtrSrc,
     isPctInd,
-    fmtVal
+    fmtVal,
+    qcBeforeStart,
+    qcReportCell,
+    monthOrd
   };
 }
 function measureOf(f) {
@@ -28230,7 +28255,7 @@ function qcReportHTML(depts, months, fyIn, opts) {
       const cells = [qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m => {
         const v = qcCellVal(ind, m);
         const s = qStatus(ind, v);
-        const disp = s === 'na' ? '—' : fmtVal(ind, v);
+        const disp = qcReportCell(ind, m);
         const col = s === 'breach' ? '#d23a52' : s === 'ok' ? '#1f9d57' : '#9aa6b4';
         return '<span style="color:' + col + ';font-weight:600">' + qcEsc(disp) + '</span>';
       }));
@@ -28260,7 +28285,7 @@ function qcExport(depts, fmt) {
     depts.forEach(d => (d.indicators || []).forEach(ind => {
       rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(MONTHS.map(m => {
         const v = qcCellVal(ind, m);
-        return qStatus(ind, v) === 'na' ? '' : fmtVal(ind, v);
+        return qStatus(ind, v) === 'na' ? qcBeforeStart(ind, m[0]) ? 'Not Observed' : '' : fmtVal(ind, v);
       })));
     }));
     rows.push([]);
@@ -30623,14 +30648,16 @@ function QCReportBuilder({
   }) => {
     const v = qcCellVal(ind, m);
     const s = qStatus(ind, v);
-    const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
-    const bg = s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : '#f4f6f9';
+    const notObs = s === 'na' && qcBeforeStart(ind, m[0]);
+    const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : notObs ? '#7c8aa0' : P.faint;
+    const bg = s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : notObs ? '#eef1f6' : '#f4f6f9';
     return React.createElement("td", {
       style: {
         textAlign: 'center',
         padding: '3px 1px'
       }
     }, React.createElement("span", {
+      title: notObs ? 'Not observed (monitoring started ' + ind.startMonth + ')' : undefined,
       style: {
         display: 'inline-block',
         minWidth: 20,
@@ -30640,9 +30667,9 @@ function QCReportBuilder({
         color: col,
         fontFamily: MONO,
         fontWeight: 600,
-        fontSize: 9
+        fontSize: notObs ? 7.5 : 9
       }
-    }, s === 'na' ? '·' : fmtVal(ind, v)));
+    }, notObs ? 'N/O' : s === 'na' ? '·' : fmtVal(ind, v)));
   };
   const thc = {
     textAlign: 'center',
@@ -33610,7 +33637,7 @@ function QCReportBuilder({
       const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(pMonths.map(m => m[1]))];
       scope.forEach(d => (d.indicators || []).forEach(ind => rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(pMonths.map(m => {
         const v = qcCellVal(ind, m);
-        return qStatus(ind, v) === 'na' ? '' : fmtVal(ind, v);
+        return qStatus(ind, v) === 'na' ? qcBeforeStart(ind, m[0]) ? 'Not Observed' : '' : fmtVal(ind, v);
       })))));
       rows.push([]);
       rows.push(['INCIDENT DETAILS']);
@@ -36395,6 +36422,23 @@ function QCAdmin({
   const patchField = f => e => patchDef({
     [f]: e.target.value
   });
+  const START_MON_OPTS = (() => {
+    const out = [];
+    let endYY = 28;
+    try {
+      endYY = new Date().getFullYear() % 100 + 1;
+    } catch (e) {}
+    for (let y = 24; y <= Math.max(28, endYY); y++) {
+      QMONS_ORD.forEach(mo => {
+        const yy = String(y).padStart(2, '0');
+        out.push({
+          k: mo + '-' + yy,
+          label: mo + " '" + yy
+        });
+      });
+    }
+    return out;
+  })();
   const patchMonthVal = idx => e => {
     const v = e.target.value;
     const nv = v === '' ? null : Number(v);
@@ -38256,7 +38300,44 @@ function QCAdmin({
       background: '#fff',
       outline: 'none'
     }
-  })))), tab === 'values' && React.createElement("div", null, React.createElement("div", {
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Monitoring started from ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "months before this show \u201CNot Observed\u201D on reports")), React.createElement("select", {
+    value: selInd.startMonth || '',
+    onChange: e => patchDef({
+      startMonth: e.target.value || null
+    }),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, "Not set \u2014 observed in all months"), START_MON_OPTS.map(o => React.createElement("option", {
+    key: o.k,
+    value: o.k
+  }, o.label)))))), tab === 'values' && React.createElement("div", null, React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
