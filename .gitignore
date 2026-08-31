@@ -25,3 +25,11 @@ Thumbs.db
 .pyenv/
 __pycache__/
 *.pyc
+
+# Medicine drug-data scraper projects (local-only scraping tools/output, not part of the app)
+bd_scraper/
+medex_scraper_project/
+
+# Local UI mockup references and other local-only folders (not part of the deployed app)
+ui/
+pc apps/
