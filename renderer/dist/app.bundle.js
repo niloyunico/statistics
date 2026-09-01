@@ -12586,8 +12586,8 @@ Object.assign(window, {
     const lit = lights == null ? night : lights;
     const dayFrac = night ? ((h >= 20 ? h - 20 : h + 4) + now.getMinutes() / 60) / 9 : (h - 5 + now.getMinutes() / 60) / 15;
     const px = Math.min(1, Math.max(0, dayFrac));
-    const discX = 8 + px * 76,
-      discY = 58 - Math.sin(px * Math.PI) * 40;
+    const discX = 6 + px * 48,
+      discY = 56 - Math.sin(px * Math.PI) * 38;
     const parS = (fx, fy) => 'transform:translate(' + (par.mx * fx).toFixed(1) + 'px,' + (par.my * fy).toFixed(1) + 'px);transition:transform .5s cubic-bezier(.2,.7,.3,1)';
     const disc = night ? 'position:absolute;left:' + discX.toFixed(1) + '%;top:' + discY.toFixed(1) + 'px;width:44px;height:44px;border-radius:50%;background:radial-gradient(circle at 36% 34%,#f4f7ff,#c3cfe6 62%,#9aa8c4);box-shadow:0 0 34px 12px rgba(198,214,255,.28),inset -8px -4px 0 rgba(10,18,36,.35);animation:discGlow 7s ease-in-out infinite' : 'position:absolute;left:' + discX.toFixed(1) + '%;top:' + discY.toFixed(1) + 'px;width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 40% 38%,#fff6d8,#ffd166 52%,#ffa93c);box-shadow:0 0 52px 20px rgba(255,190,90,.4),0 0 120px 50px rgba(255,170,70,.18);animation:discGlow 6s ease-in-out infinite';
     const rays = night ? null : 'position:absolute;inset:-26px;border-radius:50%;background:conic-gradient(from 0deg,rgba(255,214,140,.32) 0 6deg,transparent 6deg 30deg,rgba(255,214,140,.28) 30deg 36deg,transparent 36deg 60deg,rgba(255,214,140,.32) 60deg 66deg,transparent 66deg 90deg,rgba(255,214,140,.28) 90deg 96deg,transparent 96deg 120deg,rgba(255,214,140,.32) 120deg 126deg,transparent 126deg 150deg,rgba(255,214,140,.28) 150deg 156deg,transparent 156deg 180deg,rgba(255,214,140,.32) 180deg 186deg,transparent 186deg 210deg,rgba(255,214,140,.28) 210deg 216deg,transparent 216deg 240deg,rgba(255,214,140,.32) 240deg 246deg,transparent 246deg 270deg,rgba(255,214,140,.28) 270deg 276deg,transparent 276deg 300deg,rgba(255,214,140,.32) 300deg 306deg,transparent 306deg 330deg,rgba(255,214,140,.28) 330deg 336deg,transparent 336deg 360deg);mask:radial-gradient(circle,transparent 30%,#000 34%,transparent 74%);-webkit-mask:radial-gradient(circle,transparent 30%,#000 34%,transparent 74%);animation:rayspin 90s linear infinite;pointer-events:none';
@@ -12921,7 +12921,7 @@ Object.assign(window, {
     }), React.createElement("div", {
       onClick: cycleWeather,
       title: "Click to change the weather",
-      style: Object.assign(fs(disc), sx('pointer-events:auto;cursor:pointer;' + parS(-10, -6)))
+      style: Object.assign(fs(disc), sx('pointer-events:auto;cursor:pointer;z-index:3;' + parS(-10, -6)))
     }, rays && React.createElement("span", {
       style: fs(rays)
     }), moonShadow && React.createElement("span", {

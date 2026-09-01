@@ -289,7 +289,11 @@
     // sun/moon riding its real daily arc
     const dayFrac = night ? ((h >= 20 ? h - 20 : h + 4) + now.getMinutes() / 60) / 9 : ((h - 5) + now.getMinutes() / 60) / 15;
     const px = Math.min(1, Math.max(0, dayFrac));
-    const discX = 8 + px * 76, discY = 58 - Math.sin(px * Math.PI) * 40;
+    // The arc is clamped to the LEFT HALF of the sky (6%..54%). The mockup let it
+    // run to 84%, which carried the disc behind the shift card at certain hours —
+    // a moon you cannot see or click is a broken toy. It also gets z-index above
+    // the wash/scrim layers so the "click me" target stays crisp, not a smudge.
+    const discX = 6 + px * 48, discY = 56 - Math.sin(px * Math.PI) * 38;
     const parS = (fx, fy) => 'transform:translate(' + (par.mx * fx).toFixed(1) + 'px,' + (par.my * fy).toFixed(1) + 'px);transition:transform .5s cubic-bezier(.2,.7,.3,1)';
     const disc = night
       ? 'position:absolute;left:' + discX.toFixed(1) + '%;top:' + discY.toFixed(1) + 'px;width:44px;height:44px;border-radius:50%;background:radial-gradient(circle at 36% 34%,#f4f7ff,#c3cfe6 62%,#9aa8c4);box-shadow:0 0 34px 12px rgba(198,214,255,.28),inset -8px -4px 0 rgba(10,18,36,.35);animation:discGlow 7s ease-in-out infinite'
@@ -466,7 +470,7 @@
 
           {/* sun / moon — click to change the weather */}
           <div onClick={cycleWeather} title="Click to change the weather"
-            style={Object.assign(fs(disc), sx('pointer-events:auto;cursor:pointer;' + parS(-10, -6)))}>
+            style={Object.assign(fs(disc), sx('pointer-events:auto;cursor:pointer;z-index:3;' + parS(-10, -6)))}>
             {rays && <span style={fs(rays)} />}
             {moonShadow && <span style={fs(moonShadow)} />}
           </div>
