@@ -6,7 +6,12 @@ function App(){
   const staff=window.useStaffStore();
   const depts=store.depts;
   const [route,setRoute]=useState(()=>{
-    const init=(typeof window!=='undefined' && window.__UNICO_INITIAL_ROUTE__) || {view:'dashboard'};
+    // HOME IS THE DEFAULT LANDING. Signing in should show a person their own duty,
+    // their own week and their own records first — the hospital-wide Overview is a
+    // management view, and most accounts cannot even open it. Home is ungated, so
+    // this default is safe for every role. (__UNICO_INITIAL_ROUTE__ still wins: a
+    // collector opening /collect must still land on the portal.)
+    const init=(typeof window!=='undefined' && window.__UNICO_INITIAL_ROUTE__) || {view:'home'};
     // Per-module access: if the default landing isn't granted to this user, open the
     // first workspace they CAN access instead (avoids landing on a forbidden view).
     if(window.unicoCanAccessView && !window.unicoCanAccessView(init.view)){
@@ -96,6 +101,16 @@ function App(){
   } else if(route.view==='reportsQuality'){
     crumbs=['UNICO','Reports','Quality Indicators'];
     body= (typeof QualityReportsPanel!=='undefined') ? <QualityReportsPanel/> : null;
+  } else if(route.view==='home'){
+    // Personal home. Ungated like 'profile' — it shows a person their own duty,
+    // their own records and nothing that is not already theirs.
+    crumbs=['UNICO','Home'];
+    body= (typeof HomeView!=='undefined') ? <HomeView setRoute={setRoute}/> : null;
+  } else if(route.view==='profile'){
+    // Ungated on purpose: see unicoCanAccessView(). Every signed-in person reaches
+    // their own profile, whatever their module permissions are.
+    crumbs=['UNICO','My Profile'];
+    body= (typeof ProfileView!=='undefined') ? <ProfileView setRoute={setRoute}/> : null;
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];
     body=<Settings depts={depts} store={store} setRoute={setRoute}/>;

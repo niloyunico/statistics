@@ -49,3 +49,6 @@ scripts/data/*
 # Local scratch/diagnostic files (dot-prefixed, never part of the app)
 scripts/.pdf-shot*.js
 scripts/.fixture-*.json
+
+# Role-migration rollback list (operational state, names real accounts)
+scripts/.collectors-to-incharge.rollback.json

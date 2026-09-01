@@ -9336,6 +9336,7 @@ function unicoCanAccessModule(mid) {
   return unicoCan(mid, 'view');
 }
 function unicoCanAccessView(view) {
+  if (view === 'profile' || view === 'home') return true;
   return unicoCanAccessModule(unicoAccessModuleOf(view));
 }
 function unicoAllowedModules() {
@@ -9585,11 +9586,25 @@ window.unicoSupAlertCount = unicoSupAlertCount;
 const UNICO_WS = [{
   sec: '',
   items: [{
+    id: 'home',
+    label: 'Home',
+    icon: I.pulse,
+    home: 'home',
+    on: v => v === 'home',
+    always: true
+  }, {
     id: 'overview',
     label: 'Overview',
     icon: I.grid,
     home: 'dashboard',
     on: v => v === 'dashboard'
+  }, {
+    id: 'profile',
+    label: 'My Profile',
+    icon: I.user,
+    home: 'profile',
+    on: v => v === 'profile',
+    always: true
   }]
 }, {
   sec: 'Clinical',
@@ -9598,7 +9613,7 @@ const UNICO_WS = [{
     label: 'Departments',
     icon: I.layers,
     home: 'departments',
-    on: v => unicoModuleOf(v) === 'stats' && ['dashboard', 'settings'].indexOf(v) < 0
+    on: v => unicoModuleOf(v) === 'stats' && ['dashboard', 'settings', 'profile', 'home'].indexOf(v) < 0
   }, {
     id: 'quality',
     label: 'Quality',
@@ -9674,6 +9689,8 @@ const UNICO_WS = [{
 }];
 function unicoWorkspaceSub(view) {
   const mod = unicoModuleOf(view);
+  if (view === 'home') return [];
+  if (view === 'profile') return [];
   if (view === 'settings' || mod === 'users') return [];
   if (mod === 'stats' && view !== 'dashboard' && view !== 'settings') return [{
     label: 'Compare',
@@ -9971,7 +9988,7 @@ function MyAccount({
     readOnly: !u,
     onChange: next => {
       setPhoto(next);
-      if (window.__UNICO_USER__) window.__UNICO_USER__.photo = next;
+      window.unicoSetAccountPhoto(next);
     }
   }), React.createElement("div", {
     style: {
@@ -10157,10 +10174,98 @@ function Sidebar({
     className: "sb-logo-img sb-logo-mark",
     src: "unico/logo-mark.svg",
     alt: "UNICO"
-  })), React.createElement("div", {
+  })), (() => {
+    const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    const name = u && u.name || 'Nasif Ahammed Niloy';
+    const sub = u && u.designation || (u ? u.role === 'collector' ? 'Data Collector' : u.role === 'incharge' ? 'In-charge' : u.role : 'Administrator');
+    const initials = String(name).split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'U';
+    const active = route.view === 'profile';
+    return React.createElement("div", {
+      className: "sb-me",
+      onClick: () => setRoute({
+        view: 'profile'
+      }),
+      title: "My profile \u2014 photo, details & password",
+      style: {
+        margin: '2px 12px 8px',
+        padding: '8px 10px',
+        borderRadius: 12,
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        background: active ? 'rgba(0,144,202,.22)' : 'rgba(255,255,255,.06)',
+        border: '1px solid ' + (active ? 'rgba(90,190,240,.45)' : 'rgba(255,255,255,.09)'),
+        transition: 'background .15s,border-color .15s'
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 40,
+        height: 40,
+        flexShrink: 0,
+        borderRadius: '50%',
+        padding: 2,
+        background: 'linear-gradient(135deg,#3ab5a7,#0090ca)'
+      }
+    }, React.createElement("div", {
+      style: {
+        width: '100%',
+        height: '100%',
+        borderRadius: '50%',
+        overflow: 'hidden',
+        background: '#12233a'
+      }
+    }, React.createElement(UnicoAvatar, {
+      size: 36,
+      radius: "50%",
+      initials: initials,
+      style: {
+        width: '100%',
+        height: '100%',
+        display: 'grid',
+        placeItems: 'center',
+        color: '#fff',
+        fontWeight: 800,
+        fontSize: 13.5
+      }
+    }))), React.createElement("div", {
+      className: "who",
+      style: {
+        minWidth: 0,
+        flex: 1,
+        lineHeight: 1.35
+      }
+    }, React.createElement("div", {
+      style: {
+        color: '#fff',
+        fontSize: 12.5,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, name), React.createElement("div", {
+      style: {
+        color: '#8fa6c0',
+        fontSize: 10.5,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, sub, u && u.username ? React.createElement("span", {
+      className: "num",
+      style: {
+        color: '#9ad8f4'
+      }
+    }, ' · ' + u.username) : null)), React.createElement(Ic, {
+      d: I.chevR,
+      s: 13,
+      c: "#7b8ca3"
+    }));
+  })(), React.createElement("div", {
     className: "sb-scroll"
   }, UNICO_WS.map((g, gi) => {
-    const items = g.items.filter(it => unicoCanAccessModule(unicoAccessModuleOf(it.home)));
+    const items = g.items.filter(it => it.always || unicoCanAccessModule(unicoAccessModuleOf(it.home)));
     if (!items.length) return null;
     return React.createElement(React.Fragment, {
       key: gi
@@ -10216,11 +10321,13 @@ function Sidebar({
   }, (() => {
     const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     const name = u && u.name || 'Nasif Ahammed Niloy';
-    const role = u ? u.role === 'collector' ? 'Data Collector' : u.role : 'Administrator';
+    const role = u && u.designation || (u ? u.role === 'collector' ? 'Data Collector' : u.role === 'incharge' ? 'In-charge' : u.role : 'Administrator');
     const initials = String(name).split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'U';
     return React.createElement(React.Fragment, null, React.createElement("div", {
-      onClick: () => setAcct(true),
-      title: "My account \u2014 profile & password",
+      onClick: () => setRoute({
+        view: 'profile'
+      }),
+      title: "My profile \u2014 photo, details & password",
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -10229,9 +10336,10 @@ function Sidebar({
         flex: 1,
         cursor: 'pointer'
       }
-    }, React.createElement("div", {
-      className: "avatar"
-    }, initials), React.createElement("div", {
+    }, React.createElement(UnicoAvatar, {
+      className: "avatar",
+      initials: initials
+    }), React.createElement("div", {
       className: "who",
       style: {
         minWidth: 0,
@@ -10876,9 +10984,9 @@ Object.assign(window, {
     }));
     return _cfg;
   }
-  async function unicoUploadPhoto(file, opts) {
+  async function unicoUploadPhoto(src, opts) {
     const o = opts || {};
-    const image = await unicoResizeImage(file);
+    const image = typeof src === 'string' ? src : await unicoResizeImage(src);
     const r = await fetch('/api/upload', {
       method: 'POST',
       headers: {
@@ -10916,6 +11024,251 @@ Object.assign(window, {
     if (!r.ok || !j.ok) throw new Error(j.error || 'Could not remove the photo.');
     return true;
   }
+  const CROP_BOX = 300;
+  const CROP_OUT = 640;
+  function CropDialog({
+    src,
+    aspect,
+    radius,
+    onCancel,
+    onDone
+  }) {
+    const [img, setImg] = React.useState(null);
+    const [zoom, setZoom] = React.useState(1);
+    const [pan, setPan] = React.useState({
+      x: 0,
+      y: 0
+    });
+    const drag = React.useRef(null);
+    const boxW = aspect >= 1 ? CROP_BOX : Math.round(CROP_BOX * aspect);
+    const boxH = aspect >= 1 ? Math.round(CROP_BOX / aspect) : CROP_BOX;
+    React.useEffect(() => {
+      const i = new Image();
+      i.onload = () => {
+        setImg(i);
+        setZoom(1);
+      };
+      i.src = src;
+    }, [src]);
+    const base = img ? Math.max(boxW / img.width, boxH / img.height) : 1;
+    const eff = base * zoom;
+    const dispW = img ? img.width * eff : 0;
+    const dispH = img ? img.height * eff : 0;
+    function clampTo(p, w, h) {
+      return {
+        x: Math.min(0, Math.max(boxW - w, p.x)),
+        y: Math.min(0, Math.max(boxH - h, p.y))
+      };
+    }
+    const prevEff = React.useRef(null);
+    React.useEffect(() => {
+      if (!img) return;
+      const b = Math.max(boxW / img.width, boxH / img.height);
+      setPan(clampTo({
+        x: (boxW - img.width * b) / 2,
+        y: (boxH - img.height * b) / 2
+      }, img.width * b, img.height * b));
+      prevEff.current = b;
+    }, [img]);
+    React.useEffect(() => {
+      if (!img) return;
+      const before = prevEff.current;
+      prevEff.current = eff;
+      if (!before || before === eff) return;
+      const k = eff / before;
+      setPan(p => clampTo({
+        x: boxW / 2 - (boxW / 2 - p.x) * k,
+        y: boxH / 2 - (boxH / 2 - p.y) * k
+      }, dispW, dispH));
+    }, [zoom]);
+    function down(e) {
+      const pt = e.touches ? e.touches[0] : e;
+      drag.current = {
+        x: pt.clientX,
+        y: pt.clientY,
+        ox: pan.x,
+        oy: pan.y
+      };
+    }
+    function move(e) {
+      if (!drag.current) return;
+      const pt = e.touches ? e.touches[0] : e;
+      if (e.cancelable) e.preventDefault();
+      setPan(clampTo({
+        x: drag.current.ox + (pt.clientX - drag.current.x),
+        y: drag.current.oy + (pt.clientY - drag.current.y)
+      }, dispW, dispH));
+    }
+    const up = () => {
+      drag.current = null;
+    };
+    React.useEffect(() => {
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, {
+        passive: false
+      });
+      window.addEventListener('touchend', up);
+      return () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+      };
+    });
+    function confirm() {
+      if (!img) return;
+      const outW = aspect >= 1 ? CROP_OUT : Math.round(CROP_OUT * aspect);
+      const outH = aspect >= 1 ? Math.round(CROP_OUT / aspect) : CROP_OUT;
+      const c = document.createElement('canvas');
+      c.width = outW;
+      c.height = outH;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, outW, outH);
+      ctx.drawImage(img, -pan.x / eff, -pan.y / eff, boxW / eff, boxH / eff, 0, 0, outW, outH);
+      onDone(c.toDataURL('image/jpeg', PHOTO_QUALITY));
+    }
+    const body = React.createElement("div", {
+      onMouseDown: e => {
+        if (e.target === e.currentTarget) onCancel();
+      },
+      style: {
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(16,32,46,.55)',
+        zIndex: 2000,
+        display: 'grid',
+        placeItems: 'center',
+        padding: 16
+      }
+    }, React.createElement("div", {
+      className: "card",
+      style: {
+        width: 'min(400px,96vw)'
+      }
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Position your photo")), React.createElement("div", {
+      className: "card-b",
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 13
+      }
+    }, React.createElement("div", {
+      onMouseDown: down,
+      onTouchStart: down,
+      onWheel: e => {
+        e.preventDefault();
+        setZoom(z => Math.min(4, Math.max(1, +(z - e.deltaY * 0.0016).toFixed(3))));
+      },
+      style: {
+        position: 'relative',
+        width: boxW,
+        height: boxH,
+        overflow: 'hidden',
+        borderRadius: radius == null ? '50%' : radius,
+        background: '#0e1826',
+        cursor: 'grab',
+        touchAction: 'none',
+        boxShadow: '0 0 0 2px var(--blue,#0090ca), 0 8px 26px rgba(13,27,46,.25)'
+      }
+    }, img ? React.createElement("img", {
+      src: src,
+      alt: "",
+      draggable: false,
+      style: {
+        position: 'absolute',
+        left: pan.x,
+        top: pan.y,
+        width: dispW,
+        height: dispH,
+        maxWidth: 'none',
+        userSelect: 'none',
+        pointerEvents: 'none'
+      }
+    }) : React.createElement("div", {
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        height: '100%',
+        color: '#8fa6c0',
+        fontSize: 12
+      }
+    }, "Loading\u2026")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        width: '100%'
+      }
+    }, React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      title: "Zoom out",
+      onClick: () => setZoom(z => Math.max(1, +(z - 0.25).toFixed(2))),
+      style: {
+        padding: '2px 10px',
+        fontSize: 15,
+        lineHeight: 1.3,
+        fontWeight: 700
+      }
+    }, "\u2212"), React.createElement("input", {
+      type: "range",
+      min: "1",
+      max: "4",
+      step: "0.01",
+      value: zoom,
+      onChange: e => setZoom(parseFloat(e.target.value)),
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      title: "Zoom in",
+      onClick: () => setZoom(z => Math.min(4, +(z + 0.25).toFixed(2))),
+      style: {
+        padding: '2px 10px',
+        fontSize: 15,
+        lineHeight: 1.3,
+        fontWeight: 700
+      }
+    }, "+"), React.createElement("span", {
+      className: "num",
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        width: 34,
+        textAlign: 'right'
+      }
+    }, zoom.toFixed(1), "x")), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        textAlign: 'center',
+        lineHeight: 1.5
+      }
+    }, "Drag to move, scroll or use \u2212 / + to zoom. Only what you see in the frame is saved."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        width: '100%',
+        justifyContent: 'flex-end'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: onCancel
+    }, "Cancel"), React.createElement("button", {
+      className: "btn pri sm",
+      onClick: confirm,
+      disabled: !img
+    }, "Use this photo")))));
+    return window.ReactDOM && window.ReactDOM.createPortal ? window.ReactDOM.createPortal(body, document.body) : body;
+  }
   function PhotoPicker({
     value,
     onChange,
@@ -10932,6 +11285,7 @@ Object.assign(window, {
   }) {
     const [busy, setBusy] = React.useState(false);
     const [cfg, setCfg] = React.useState(null);
+    const [cropSrc, setCropSrc] = React.useState(null);
     const inputRef = React.useRef(null);
     const px = size || 96;
     React.useEffect(() => {
@@ -10948,7 +11302,7 @@ Object.assign(window, {
         window.UI && window.UI.toast && window.UI.toast(m, t);
       } catch (e) {}
     };
-    async function pick(ev) {
+    function pick(ev) {
       const file = ev.target.files && ev.target.files[0];
       ev.target.value = '';
       if (!file) return;
@@ -10956,9 +11310,16 @@ Object.assign(window, {
         toast('That is not an image file', 'error');
         return;
       }
+      const fr = new FileReader();
+      fr.onerror = () => toast('Could not read that file', 'error');
+      fr.onload = () => setCropSrc(String(fr.result || ''));
+      fr.readAsDataURL(file);
+    }
+    async function uploadCropped(dataUri) {
+      setCropSrc(null);
       setBusy(true);
       try {
-        const up = await unicoUploadPhoto(file, {
+        const up = await unicoUploadPhoto(dataUri, {
           kind: kind,
           name: name
         });
@@ -11093,6 +11454,12 @@ Object.assign(window, {
       style: {
         display: 'none'
       }
+    }), cropSrc && React.createElement(CropDialog, {
+      src: cropSrc,
+      aspect: W / H,
+      radius: R,
+      onCancel: () => setCropSrc(null),
+      onDone: uploadCropped
     }), !readOnly && value && value.url && !busy && React.createElement("button", {
       type: "button",
       className: "btn sm",
@@ -11113,13 +11480,2292 @@ Object.assign(window, {
       }
     }, "Photo storage is not set up on this server."));
   }
+  function unicoSetAccountPhoto(next) {
+    if (window.__UNICO_USER__) window.__UNICO_USER__.photo = next || null;
+    try {
+      window.dispatchEvent(new CustomEvent('unico:profile-photo', {
+        detail: next || null
+      }));
+    } catch (e) {}
+  }
+  function UnicoAvatar({
+    photo,
+    initials,
+    size,
+    radius,
+    className,
+    style
+  }) {
+    const [live, setLive] = React.useState(photo === undefined ? (window.__UNICO_USER__ || {}).photo || null : photo);
+    const [dead, setDead] = React.useState(false);
+    React.useEffect(() => {
+      if (photo !== undefined) {
+        setLive(photo);
+        setDead(false);
+      }
+    }, [photo]);
+    React.useEffect(() => {
+      if (photo !== undefined) return;
+      const h = e => {
+        setLive(e.detail || null);
+        setDead(false);
+      };
+      window.addEventListener('unico:profile-photo', h);
+      return () => window.removeEventListener('unico:profile-photo', h);
+    }, [photo]);
+    const px = size || 34;
+    const base = Object.assign({
+      width: px,
+      height: px,
+      borderRadius: radius == null ? 9 : radius
+    }, style || {});
+    if (live && live.url && !dead) {
+      return React.createElement("img", {
+        className: className,
+        src: live.url,
+        alt: initials || '',
+        onError: () => setDead(true),
+        style: Object.assign({}, base, {
+          objectFit: 'cover',
+          padding: 0,
+          display: 'block'
+        })
+      });
+    }
+    return React.createElement("div", {
+      className: className,
+      style: base
+    }, initials || 'U');
+  }
   Object.assign(window, {
     PhotoPicker,
+    UnicoAvatar,
+    unicoSetAccountPhoto,
     unicoUploadPhoto,
     unicoDeletePhoto,
     unicoPhotoStatus,
     unicoResizeImage
   });
+})();
+})();
+;
+/* ===== profile.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect,
+    useMemo
+  } = React;
+  const api = (method, path, body) => fetch(path, {
+    method,
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    credentials: 'same-origin',
+    body: body ? JSON.stringify(body) : undefined
+  }).then(async r => {
+    let j = null;
+    try {
+      j = await r.json();
+    } catch (e) {}
+    if (!r.ok || !j || j.ok === false) {
+      throw new Error(j && j.error || (r.status === 401 ? 'Sign in to manage your account.' : 'Request failed (' + r.status + ').'));
+    }
+    return j;
+  });
+  const initialsOf = n => String(n || 'U').split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'U';
+  const WS_LABEL = {
+    stats: 'Statistics',
+    quality: 'Quality Indicators',
+    supervisor: 'Supervisor Reports',
+    staff: 'Staff Management',
+    datacol: 'Data Collection',
+    reports: 'Reports',
+    users: 'User Management',
+    perf: 'Performance',
+    roster: 'Duty Roster',
+    medicine: 'Medicine & Rx'
+  };
+  const ACTIONS = ['view', 'edit', 'add', 'delete'];
+  const ACTION_LABEL = {
+    view: 'View',
+    edit: 'Edit',
+    add: 'Add',
+    delete: 'Delete'
+  };
+  function Barcode({
+    seed,
+    height
+  }) {
+    const bars = useMemo(() => {
+      const s = String(seed || 'UNICO0000');
+      const out = [];
+      let acc = 7;
+      for (let i = 0; i < 54; i++) {
+        acc = acc * 31 + (s.charCodeAt(i % s.length) || 48) + i * 7 >>> 0;
+        out.push({
+          w: 1 + acc % 4,
+          on: (acc >> 3) % 5 !== 0
+        });
+      }
+      return out;
+    }, [seed]);
+    return React.createElement("div", {
+      "aria-hidden": "true",
+      style: {
+        display: 'flex',
+        alignItems: 'stretch',
+        gap: '1.5px',
+        height: height || 38,
+        justifyContent: 'center'
+      }
+    }, bars.map((b, i) => React.createElement("span", {
+      key: i,
+      style: {
+        width: b.w + 'px',
+        background: b.on ? '#15181c' : 'transparent'
+      }
+    })));
+  }
+  function Field({
+    label,
+    hint,
+    children
+  }) {
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '.7px',
+        color: 'var(--muted)',
+        textTransform: 'uppercase'
+      }
+    }, label), children, hint && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--faint,#9aa6b4)'
+      }
+    }, hint));
+  }
+  function Banner({
+    m
+  }) {
+    if (!m) return null;
+    const ok = m.kind === 'ok';
+    return React.createElement("div", {
+      role: "status",
+      style: {
+        fontSize: 12.5,
+        fontWeight: 600,
+        borderRadius: 8,
+        padding: '9px 12px',
+        color: ok ? '#0f6a39' : '#b4232f',
+        background: ok ? 'rgba(31,157,87,.10)' : 'rgba(210,58,82,.10)',
+        border: '1px solid ' + (ok ? 'rgba(31,157,87,.28)' : 'rgba(210,58,82,.28)')
+      }
+    }, m.text);
+  }
+  function ProfileView() {
+    const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    const [photo, setPhoto] = useState(u && u.photo || null);
+    const [name, setName] = useState(u && u.name || '');
+    const [designation, setDesignation] = useState(u && u.designation || '');
+    const [email, setEmail] = useState(u && u.email || '');
+    const [phone, setPhone] = useState(u && u.phone || '');
+    const [cur, setCur] = useState('');
+    const [nw, setNw] = useState('');
+    const [nw2, setNw2] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [pwBusy, setPwBusy] = useState(false);
+    const [msg, setMsg] = useState(null);
+    const [pwMsg, setPwMsg] = useState(null);
+    useEffect(() => {
+      document.title = 'My Profile · UNICO';
+    }, []);
+    const dirty = u ? name !== (u.name || '') || email !== (u.email || '') || phone !== (u.phone || '') || designation !== (u.designation || '') : false;
+    async function saveProfile() {
+      setMsg(null);
+      setBusy(true);
+      try {
+        const cleanPhone = u && phone && phone.trim().toLowerCase() === String(u.username).toLowerCase() ? '' : phone;
+        if (cleanPhone !== phone) setPhone(cleanPhone);
+        await api('PATCH', '/api/me', {
+          name,
+          email,
+          phone: cleanPhone,
+          designation
+        });
+        if (window.__UNICO_USER__) Object.assign(window.__UNICO_USER__, {
+          name,
+          email,
+          phone: cleanPhone,
+          designation
+        });
+        setMsg({
+          kind: 'ok',
+          text: 'Profile saved.'
+        });
+      } catch (e) {
+        setMsg({
+          kind: 'err',
+          text: String(e && e.message || e)
+        });
+      } finally {
+        setBusy(false);
+      }
+    }
+    async function savePassword() {
+      setPwMsg(null);
+      if (nw.length < 6) return setPwMsg({
+        kind: 'err',
+        text: 'New password must be at least 6 characters.'
+      });
+      if (nw !== nw2) return setPwMsg({
+        kind: 'err',
+        text: 'New passwords do not match.'
+      });
+      setPwBusy(true);
+      try {
+        await api('POST', '/api/me/password', {
+          currentPassword: cur,
+          newPassword: nw
+        });
+        setCur('');
+        setNw('');
+        setNw2('');
+        setPwMsg({
+          kind: 'ok',
+          text: 'Password changed.'
+        });
+      } catch (e) {
+        setPwMsg({
+          kind: 'err',
+          text: String(e && e.message || e)
+        });
+      } finally {
+        setPwBusy(false);
+      }
+    }
+    const roleLabel = !u ? 'Local session' : u.role === 'collector' ? 'Data Collector' : u.role === 'incharge' ? 'In-charge' : u.role || 'User';
+    const idText = u && u.username || '— — — —';
+    const access = useMemo(() => {
+      const perms = window.unicoUserPerms ? window.unicoUserPerms() : null;
+      if (!perms) return {
+        unrestricted: true,
+        rows: []
+      };
+      const ids = Object.keys(WS_LABEL).filter(m => window.unicoCan && window.unicoCan(m, 'view'));
+      return {
+        unrestricted: false,
+        rows: ids.map(m => ({
+          id: m,
+          label: WS_LABEL[m] || m,
+          actions: ACTIONS.filter(a => window.unicoCan(m, a))
+        }))
+      };
+    }, [u]);
+    const deptNames = useMemo(() => {
+      const map = typeof window !== 'undefined' && window.__UNICO_DEPT_MAP__ || null;
+      const ids = u && u.departments || [];
+      if (!ids.length) return [];
+      return ids.map(id => map && map.byId && map.byId[id] && map.byId[id].name || id);
+    }, [u]);
+    const scopeText = !u ? 'All staff' : u.staffScope === 'self' ? 'Own record only' : u.staffScope === 'departments' ? 'Own departments' : 'All staff';
+    const txt = {
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 8,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      width: '100%',
+      outline: 'none',
+      background: '#fff',
+      boxSizing: 'border-box'
+    };
+    const mono = {
+      fontFamily: 'var(--mono)'
+    };
+    return React.createElement("div", {
+      className: "grid unico-profile",
+      style: {
+        gap: 16
+      }
+    }, React.createElement("style", null, `
+          .unico-profile .cred{animation:credIn .5s cubic-bezier(.2,.7,.3,1) both}
+          @keyframes credIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+          @media (prefers-reduced-motion:reduce){.unico-profile .cred{animation:none}}
+          .unico-profile .cols{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:16;align-items:start}
+          @media (max-width:980px){.unico-profile .cols{grid-template-columns:minmax(0,1fr)}}
+          .unico-profile .duo{display:grid;grid-template-columns:1fr 1fr;gap:12}
+          @media (max-width:560px){.unico-profile .duo{grid-template-columns:1fr}}
+          .unico-profile input:focus-visible{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,144,202,.16)}
+          .unico-profile .wsrow{display:flex;align-items:center;gap:10;padding:9px 0;border-top:1px solid var(--line-2)}
+          .unico-profile .wsrow:first-child{border-top:0}
+        `), React.createElement(SectionTitle, {
+      icon: I.user,
+      title: "My Profile",
+      sub: "Your credential, your details, and what your account can open."
+    }), !u && React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: '#9a6b00',
+        background: 'var(--warn-bg,#fff4e0)',
+        border: '1px solid #f0d9a8',
+        borderRadius: 8,
+        padding: '10px 12px'
+      }
+    }, "You are in local admin mode, so there is no account to edit. On the deployed site, where sign-in is required, this page saves to your account."), React.createElement("div", {
+      className: "cols"
+    }, React.createElement("div", {
+      className: "card cred",
+      style: {
+        padding: 0,
+        overflow: 'hidden',
+        background: 'var(--panel)'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'center',
+        paddingTop: 11
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 52,
+        height: 7,
+        borderRadius: 5,
+        background: 'var(--line)'
+      }
+    })), React.createElement("div", {
+      style: {
+        marginTop: 9,
+        padding: '11px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        background: 'var(--panel-2)'
+      }
+    }, React.createElement("img", {
+      src: "unico/logo.svg",
+      alt: "UNICO Hospitals",
+      style: {
+        height: 28,
+        width: 'auto',
+        display: 'block'
+      }
+    }), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontFamily: 'var(--mono)',
+        fontSize: 9,
+        fontWeight: 700,
+        letterSpacing: '.9px',
+        color: '#fff',
+        background: 'linear-gradient(130deg,#0aa0d4,#0072a3)',
+        padding: '4px 9px',
+        borderRadius: 6,
+        whiteSpace: 'nowrap'
+      }
+    }, "STAFF ID")), React.createElement("div", {
+      style: {
+        height: 4,
+        background: 'linear-gradient(90deg,#3ab5a7,#0aa0d4,#0072a3)'
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        padding: '20px 22px 6px'
+      }
+    }, React.createElement(PhotoPicker, {
+      value: photo,
+      size: 132,
+      kind: "profile",
+      initials: initialsOf(name || u && u.username),
+      name: name || 'Account',
+      readOnly: !u,
+      onChange: next => {
+        setPhoto(next);
+        window.unicoSetAccountPhoto(next);
+      }
+    }), React.createElement("h2", {
+      style: {
+        margin: '15px 0 3px',
+        fontSize: 20,
+        fontWeight: 800,
+        letterSpacing: '-.3px',
+        textAlign: 'center',
+        lineHeight: 1.2
+      }
+    }, name || u && u.username || 'Local Administrator'), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--blue-700)',
+        fontWeight: 700,
+        textAlign: 'center'
+      }
+    }, designation || roleLabel)), React.createElement("div", {
+      style: {
+        padding: '10px 22px 0'
+      }
+    }, [['ID No.', idText], ['Role', roleLabel], ['Phone', phone || 'Not recorded'], ['Email', email || 'Not recorded']].map(([l, v], i) => React.createElement("div", {
+      key: l,
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 12,
+        padding: '8px 0',
+        borderTop: i ? '1px solid var(--line-2)' : 'none'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 9.5,
+        textTransform: 'uppercase',
+        letterSpacing: '.7px',
+        color: 'var(--muted)',
+        fontWeight: 700,
+        flex: '0 0 62px'
+      }
+    }, l), React.createElement("span", {
+      style: Object.assign({}, mono, {
+        fontSize: 12,
+        fontWeight: 600,
+        marginLeft: 'auto',
+        textAlign: 'right',
+        wordBreak: 'break-word',
+        color: v === 'Not recorded' || v === '— — — —' ? 'var(--faint)' : 'var(--ink)'
+      })
+    }, v)))), React.createElement("div", {
+      style: {
+        margin: '15px 18px 18px',
+        padding: '11px 10px 7px',
+        borderRadius: 10,
+        background: '#fff',
+        border: '1px solid var(--line-2)'
+      }
+    }, React.createElement(Barcode, {
+      seed: idText
+    }), React.createElement("div", {
+      style: Object.assign({}, mono, {
+        textAlign: 'center',
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: 3,
+        color: '#15181c',
+        marginTop: 6
+      })
+    }, idText))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16
+      }
+    }, React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Details"), React.createElement("span", {
+      className: "sub",
+      style: {
+        marginLeft: 'auto'
+      }
+    }, dirty ? 'Unsaved changes' : 'Everything saved')), React.createElement("form", {
+      className: "card-b",
+      autoComplete: "off",
+      onSubmit: e => {
+        e.preventDefault();
+        if (u && dirty && !busy) saveProfile();
+      },
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 13
+      }
+    }, React.createElement(Banner, {
+      m: msg
+    }), React.createElement(Field, {
+      label: "Full name",
+      hint: "Shown on reports you sign and everywhere your account appears."
+    }, React.createElement("input", {
+      style: txt,
+      name: "fullname",
+      autoComplete: "name",
+      value: name,
+      onChange: e => setName(e.target.value),
+      placeholder: "Your full name",
+      disabled: !u
+    })), React.createElement(Field, {
+      label: "Designation",
+      hint: "Free text, e.g. Nursing Supervisor. Does not affect your access."
+    }, React.createElement("input", {
+      style: txt,
+      name: "designation",
+      autoComplete: "organization-title",
+      value: designation,
+      onChange: e => setDesignation(e.target.value),
+      placeholder: "Your job title",
+      disabled: !u
+    })), React.createElement("div", {
+      className: "duo"
+    }, React.createElement(Field, {
+      label: "Email"
+    }, React.createElement("input", {
+      style: txt,
+      type: "email",
+      name: "email",
+      autoComplete: "email",
+      value: email,
+      onChange: e => setEmail(e.target.value),
+      placeholder: "name@unicohospitals.com",
+      disabled: !u
+    })), React.createElement(Field, {
+      label: "Phone"
+    }, React.createElement("input", {
+      style: Object.assign({}, txt, mono),
+      type: "tel",
+      name: "phone",
+      autoComplete: "tel",
+      inputMode: "tel",
+      value: phone,
+      onChange: e => setPhone(e.target.value),
+      placeholder: "01XXXXXXXXX",
+      disabled: !u
+    }))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'flex-end'
+      }
+    }, React.createElement("button", {
+      className: "btn pri sm",
+      type: "submit",
+      disabled: busy || !u || !dirty
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 14
+    }), busy ? 'Saving…' : 'Save changes')))), React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Access"), React.createElement("span", {
+      className: "sub"
+    }, "what this account can open")), React.createElement("div", {
+      className: "card-b",
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12
+      }
+    }, access.unrestricted ? React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        padding: '10px 12px',
+        borderRadius: 9,
+        background: 'var(--blue-50)',
+        border: '1px solid var(--blue-100)'
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 17,
+      c: "var(--blue-700)"
+    }), React.createElement("div", null, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: 'var(--ink)'
+      }
+    }, "Full access"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "Every workspace, every action."))) : access.rows.length === 0 ? React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--muted)'
+      }
+    }, "No workspaces are assigned to this account yet. An administrator grants them from Settings \u2192 Users & Roles.") : React.createElement("div", null, access.rows.map(r => React.createElement("div", {
+      key: r.id,
+      className: "wsrow"
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: 'var(--ink)',
+        flex: 1,
+        minWidth: 0
+      }
+    }, r.label), React.createElement("span", {
+      style: {
+        display: 'flex',
+        gap: 5,
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end'
+      }
+    }, r.actions.map(a => React.createElement("span", {
+      key: a,
+      style: Object.assign({}, mono, {
+        fontSize: 9.5,
+        fontWeight: 700,
+        letterSpacing: '.4px',
+        padding: '2px 7px',
+        borderRadius: 5,
+        color: a === 'delete' ? '#a92c42' : 'var(--blue-700)',
+        background: a === 'delete' ? 'rgba(210,58,82,.10)' : 'var(--blue-50)'
+      })
+    }, ACTION_LABEL[a])))))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 18,
+        paddingTop: 2
+      }
+    }, React.createElement("div", {
+      style: {
+        minWidth: 150
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        textTransform: 'uppercase',
+        letterSpacing: '.7px',
+        color: 'var(--muted)',
+        fontWeight: 700
+      }
+    }, "Staff visible"), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 600,
+        marginTop: 3
+      }
+    }, scopeText)), React.createElement("div", {
+      style: {
+        minWidth: 150,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        textTransform: 'uppercase',
+        letterSpacing: '.7px',
+        color: 'var(--muted)',
+        fontWeight: 700
+      }
+    }, "Departments"), React.createElement("div", {
+      style: {
+        marginTop: 4,
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 5
+      }
+    }, deptNames.length === 0 ? React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: 'var(--faint)'
+      }
+    }, "Hospital-wide") : deptNames.map(d => React.createElement("span", {
+      key: d,
+      style: {
+        fontSize: 11,
+        fontWeight: 600,
+        padding: '2px 9px',
+        borderRadius: 11,
+        background: 'var(--panel-2)',
+        border: '1px solid var(--line-2)',
+        color: 'var(--ink-2)'
+      }
+    }, d))))), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--faint)',
+        lineHeight: 1.6,
+        borderTop: '1px solid var(--line-2)',
+        paddingTop: 10
+      }
+    }, "Role, workspaces and department scope are set by an administrator. Ask them if anything here is wrong \u2014 this page cannot change them."))), React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Password")), React.createElement("form", {
+      className: "card-b",
+      onSubmit: e => {
+        e.preventDefault();
+        if (u && cur && nw && !pwBusy) savePassword();
+      },
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 13
+      }
+    }, React.createElement(Banner, {
+      m: pwMsg
+    }), React.createElement("input", {
+      type: "text",
+      name: "username",
+      autoComplete: "username",
+      readOnly: true,
+      tabIndex: -1,
+      "aria-hidden": "true",
+      value: u && u.username || '',
+      onChange: () => {},
+      style: {
+        position: 'absolute',
+        width: 1,
+        height: 1,
+        opacity: 0,
+        pointerEvents: 'none'
+      }
+    }), React.createElement(Field, {
+      label: "Current password"
+    }, React.createElement("input", {
+      style: txt,
+      type: "password",
+      autoComplete: "current-password",
+      value: cur,
+      onChange: e => setCur(e.target.value),
+      placeholder: "Enter current password",
+      disabled: !u
+    })), React.createElement("div", {
+      className: "duo"
+    }, React.createElement(Field, {
+      label: "New password"
+    }, React.createElement("input", {
+      style: txt,
+      type: "password",
+      autoComplete: "new-password",
+      value: nw,
+      onChange: e => setNw(e.target.value),
+      placeholder: "At least 6 characters",
+      disabled: !u
+    })), React.createElement(Field, {
+      label: "Confirm new password"
+    }, React.createElement("input", {
+      style: txt,
+      type: "password",
+      autoComplete: "new-password",
+      value: nw2,
+      onChange: e => setNw2(e.target.value),
+      placeholder: "Re-enter new password",
+      disabled: !u
+    }))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'flex-end'
+      }
+    }, React.createElement("button", {
+      className: "btn pri sm",
+      type: "submit",
+      disabled: pwBusy || !u || !cur || !nw
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 14
+    }), pwBusy ? 'Saving…' : 'Change password')))))));
+  }
+  window.ProfileView = ProfileView;
+})();
+})();
+;
+/* ===== home.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect,
+    useMemo,
+    useRef,
+    useCallback
+  } = React;
+  const KEY_MOOD = 'unico_home_mood_v1';
+  const lsGet = (k, d) => {
+    try {
+      const v = JSON.parse(localStorage.getItem(k));
+      return v == null ? d : v;
+    } catch (e) {
+      return d;
+    }
+  };
+  const lsSet = (k, v) => {
+    try {
+      localStorage.setItem(k, JSON.stringify(v));
+    } catch (e) {}
+  };
+  const pad = n => String(n).padStart(2, '0');
+  const to12 = hhmm => {
+    const [H, M] = hhmm.split(':').map(Number);
+    const ap = H < 12 ? 'AM' : 'PM';
+    const hh = H % 12 === 0 ? 12 : H % 12;
+    return pad(hh) + ':' + pad(M) + ' ' + ap;
+  };
+  const initialsOf = n => String(n || 'U').replace('Dr. ', '').split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'U';
+  const sx = css => {
+    const o = {};
+    for (const part of String(css || '').split(';')) {
+      const i = part.indexOf(':');
+      if (i < 0) continue;
+      let k = part.slice(0, i).trim();
+      const v = part.slice(i + 1).trim();
+      if (!k) continue;
+      if (k.startsWith('--')) {
+        o[k] = v;
+        continue;
+      }
+      k = k.replace(/^-webkit-/, 'Webkit-').replace(/^-moz-/, 'Moz-').replace(/-([a-z])/g, (m, c) => c.toUpperCase());
+      o[k] = v;
+    }
+    return o;
+  };
+  const ANIMS = ['orbFloat', 'pop', 'livepulse', 'shiftSweep', 'tick', 'cloudDrift', 'twinkle', 'discGlow', 'birdFly', 'rayspin', 'planeFly', 'trailFade', 'rocketRise', 'flameFlicker', 'balloonUp', 'sway', 'hotAir', 'bob', 'shoot', 'smoke', 'winFlick', 'godray', 'ringGlow', 'riseIn', 'rainFall', 'snowFall', 'flash', 'firefly', 'kiteBob', 'ripple', 'grassSway', 'textGlow', 'sparkle', 'burst', 'trainRun', 'satellite', 'barShine', 'slideDown', 'fadeSwap', 'checkPop'];
+  const fixAnim = css => String(css || '').replace(new RegExp('\\b(' + ANIMS.join('|') + ')\\b', 'g'), 'hd$1');
+  const fs = css => sx(fixAnim(css));
+  const tag = (c, bg) => 'display:inline-flex;align-items:center;font-size:10.5px;font-weight:700;letter-spacing:.4px;padding:3px 9px;border-radius:20px;color:' + c + ';background:' + bg;
+  function parseRange(label) {
+    const m = String(label || '').match(/(\d{1,2}):(\d{2})\s*([AP]M)\s*[-—]\s*(\d{1,2}):(\d{2})\s*([AP]M)/i);
+    if (!m) return null;
+    const to = (h, mi, ap) => (+h % 12 + (/pm/i.test(ap) ? 12 : 0)) * 3600 + +mi * 60;
+    return {
+      start: to(m[1], m[2], m[3]),
+      end: to(m[4], m[5], m[6])
+    };
+  }
+  const BUCKET = {
+    M: {
+      name: 'Morning',
+      accent: '#27a8db',
+      accent2: '#7ac4e8'
+    },
+    E: {
+      name: 'Evening',
+      accent: '#3ab5a7',
+      accent2: '#7fd6cb'
+    },
+    N: {
+      name: 'Night',
+      accent: '#8a72ee',
+      accent2: '#b9a8ff'
+    },
+    G: {
+      name: 'General',
+      accent: '#e08a1e',
+      accent2: '#ffd166'
+    }
+  };
+  const TEAM_COLORS = ['#0072a3', '#3ab5a7', '#6a52d4', '#e08a1e', '#27a8db', '#d23a52'];
+  const KEYFRAMES = fixAnim(`
+@keyframes orbFloat{from{transform:translate(0,0) scale(1)}to{transform:translate(160px,110px) scale(1.18)}}
+@keyframes livepulse{0%{box-shadow:0 0 0 0 rgba(61,220,151,.6)}70%{box-shadow:0 0 0 8px rgba(61,220,151,0)}100%{box-shadow:0 0 0 0 rgba(61,220,151,0)}}
+@keyframes shiftSweep{from{background-position:200% 0}to{background-position:-200% 0}}
+@keyframes tick{from{opacity:.45}to{opacity:1}}
+@keyframes cloudDrift{from{transform:translateX(-120px)}to{transform:translateX(760px)}}
+@keyframes twinkle{0%,100%{opacity:.25}50%{opacity:1}}
+@keyframes discGlow{0%,100%{filter:blur(0);transform:scale(1)}50%{filter:blur(.4px);transform:scale(1.04)}}
+@keyframes birdFly{from{transform:translate(-60px,10px)}to{transform:translate(700px,-30px)}}
+@keyframes rayspin{to{transform:rotate(360deg)}}
+@keyframes planeFly{0%{transform:translate(-140px,26px)}100%{transform:translate(1100px,-16px)}}
+@keyframes trailFade{0%,100%{opacity:0}12%{opacity:.55}80%{opacity:.2}}
+@keyframes rocketRise{0%{transform:translate(0,120px) rotate(28deg);opacity:0}8%{opacity:1}70%{opacity:1}100%{transform:translate(300px,-190px) rotate(28deg);opacity:0}}
+@keyframes flameFlicker{0%,100%{transform:scaleY(1);opacity:.9}50%{transform:scaleY(1.5);opacity:.6}}
+@keyframes balloonUp{0%{transform:translateY(0) scale(.6);opacity:0}8%{opacity:1;transform:translateY(-10px) scale(1)}100%{transform:translateY(-280px) translateX(30px) scale(.85);opacity:0}}
+@keyframes sway{0%,100%{rotate:-4deg}50%{rotate:4deg}}
+@keyframes hotAir{from{transform:translateX(-90px)}to{transform:translateX(1150px)}}
+@keyframes shoot{0%,100%{transform:translate(0,0);opacity:0}3%{opacity:1}14%{transform:translate(-260px,150px);opacity:0}}
+@keyframes smoke{0%{transform:translate(0,0) scale(.5);opacity:.5}100%{transform:translate(14px,-46px) scale(1.6);opacity:0}}
+@keyframes winFlick{0%,92%,100%{opacity:.95}95%{opacity:.4}}
+@keyframes godray{from{transform:rotate(0deg)}to{transform:rotate(-360deg)}}
+@keyframes ringGlow{0%,100%{box-shadow:0 0 0 0 rgba(61,220,151,.0)}50%{box-shadow:0 0 22px 4px rgba(61,220,151,.35)}}
+@keyframes riseIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes rainFall{from{transform:translateY(-40px)}to{transform:translateY(280px)}}
+@keyframes snowFall{from{transform:translate(0,-20px) rotate(0)}to{transform:translate(34px,280px) rotate(180deg)}}
+@keyframes flash{0%,94%,100%{opacity:0}95%{opacity:.75}96%{opacity:0}97.5%{opacity:.5}98.5%{opacity:0}}
+@keyframes firefly{0%,100%{transform:translate(0,0);opacity:0}20%{opacity:1}50%{transform:translate(20px,-26px);opacity:.25}80%{opacity:1}}
+@keyframes kiteBob{0%,100%{transform:translate(0,0) rotate(-10deg)}50%{transform:translate(14px,-16px) rotate(8deg)}}
+@keyframes ripple{from{transform:scale(.15);opacity:.9}to{transform:scale(1);opacity:0}}
+@keyframes grassSway{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(5deg)}}
+@keyframes textGlow{0%,100%{text-shadow:0 0 0 rgba(39,168,219,0)}50%{text-shadow:0 0 18px rgba(39,168,219,.55)}}
+@keyframes sparkle{0%{transform:scale(0) rotate(0);opacity:1}100%{transform:scale(1.5) rotate(120deg);opacity:0}}
+@keyframes burst{0%{transform:translateX(0) scale(1);opacity:1}100%{transform:translateX(120px) scale(.3);opacity:0}}
+@keyframes trainRun{from{transform:translateX(1260px)}to{transform:translateX(-380px)}}
+@keyframes satellite{from{transform:translate(-30px,46px)}to{transform:translate(1000px,6px)}}
+@keyframes barShine{from{transform:translateX(-100%)}to{transform:translateX(300%)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes fadeSwap{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
+@keyframes checkPop{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.15);opacity:1}100%{transform:scale(1)}}
+`) + `
+@media (prefers-reduced-motion:reduce){.unico-home *{animation:none!important;transition:none!important}}`;
+  const GLASS = 'background:linear-gradient(152deg,rgba(255,255,255,.82),rgba(236,247,255,.58));backdrop-filter:blur(22px) saturate(1.6);-webkit-backdrop-filter:blur(22px) saturate(1.6);border:1px solid rgba(255,255,255,.9);border-radius:16px;box-shadow:0 14px 38px rgba(31,59,90,.14),inset 0 1px 0 rgba(255,255,255,.95);padding:16px 17px';
+  const cardH = (title, right) => React.createElement("div", {
+    style: sx('display:flex;align-items:center;gap:10px;margin-bottom:12px')
+  }, React.createElement("div", {
+    style: sx('font-size:14.5px;font-weight:700;color:#16202e')
+  }, title), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), right);
+  const LIVE = {
+    thisWeek: false,
+    dutyToday: false,
+    announcements: false,
+    team: false,
+    offDays: false,
+    records: false
+  };
+  function Soon({
+    live,
+    label,
+    children
+  }) {
+    if (live) return children;
+    return React.createElement("div", {
+      style: {
+        position: 'relative'
+      },
+      "aria-disabled": "true"
+    }, React.createElement("div", {
+      style: {
+        pointerEvents: 'none',
+        userSelect: 'none',
+        filter: 'saturate(.55)',
+        opacity: .55
+      },
+      "aria-hidden": "true"
+    }, children), React.createElement("div", {
+      style: sx('position:absolute;inset:0;border-radius:16px;display:grid;place-items:center;background:linear-gradient(152deg,rgba(244,249,255,.55),rgba(226,239,252,.45));backdrop-filter:blur(3.5px);-webkit-backdrop-filter:blur(3.5px);border:1px dashed rgba(0,144,202,.35)')
+    }, React.createElement("div", {
+      style: {
+        textAlign: 'center',
+        padding: '0 18px'
+      }
+    }, React.createElement("div", {
+      style: sx('display:inline-flex;align-items:center;gap:8px;padding:7px 14px;border-radius:20px;background:linear-gradient(135deg,#27a8db,#0072a3);color:#fff;font-size:11.5px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;box-shadow:0 10px 24px rgba(0,144,202,.35)')
+    }, React.createElement("svg", {
+      width: "13",
+      height: "13",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2.4",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("rect", {
+      x: "4",
+      y: "11",
+      width: "16",
+      height: "10",
+      rx: "2"
+    }), React.createElement("path", {
+      d: "M8 11V7a4 4 0 018 0v4"
+    })), "Coming soon"), React.createElement("div", {
+      style: sx('font-size:11px;color:#3c4e66;margin-top:8px;line-height:1.55;font-weight:600')
+    }, label))));
+  }
+  const MOOD_DEFS = [{
+    label: 'Great',
+    mouth: 'M7.5 14c1.2 2.2 2.7 3.2 4.5 3.2s3.3-1 4.5-3.2',
+    c: '#0f7a5f'
+  }, {
+    label: 'Good',
+    mouth: 'M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8',
+    c: '#0072a3'
+  }, {
+    label: 'Okay',
+    mouth: 'M8.5 15.5h7',
+    c: '#5c6f88'
+  }, {
+    label: 'Tired',
+    mouth: 'M8.5 16.5c1-1.2 2.2-1.8 3.5-1.8s2.5.6 3.5 1.8',
+    c: '#b06a10'
+  }, {
+    label: 'Stressed',
+    mouth: 'M8 17c1.3-2 2.6-3 4-3s2.7 1 4 3',
+    c: '#b2263e'
+  }];
+  function HomeView({
+    setRoute
+  }) {
+    const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    const [now, setNow] = useState(() => new Date());
+    const [roster, setRoster] = useState(null);
+    const [certs, setCerts] = useState(null);
+    const [moodSt, setMoodSt] = useState(() => lsGet(KEY_MOOD, {}));
+    const [selDay, setSelDay] = useState(null);
+    const [annPinned, setAnnPinned] = useState(null);
+    const [openRec, setOpenRec] = useState(null);
+    const [teamSel, setTeamSel] = useState(0);
+    const [weather, setWeather] = useState('Clear');
+    const [lights, setLights] = useState(null);
+    const [par, setPar] = useState({
+      mx: 0,
+      my: 0
+    });
+    const [ripples, setRipples] = useState([]);
+    const [sparkles, setSparkles] = useState([]);
+    const [bursts, setBursts] = useState([]);
+    const [balloonsUp, setBalloonsUp] = useState([]);
+    const raf = useRef(0);
+    const pm = useRef(null);
+    const ls = useRef(0);
+    useEffect(() => {
+      document.title = 'Home · UNICO';
+      const t = setInterval(() => setNow(new Date()), 1000);
+      return () => clearInterval(t);
+    }, []);
+    const me = useMemo(() => {
+      const list = typeof window !== 'undefined' && window.STAFF_SEED || [];
+      if (!u) return list[0] || null;
+      if (u.staffId != null) {
+        const hit = list.find(s => String(s.id) === String(u.staffId));
+        if (hit) return hit;
+      }
+      return list.find(s => String(s.emp_id || '').trim() === String(u.username || '').trim()) || null;
+    }, [u]);
+    const staffName = u && u.name || me && me.name || 'UNICO staff';
+    const designation = u && u.designation || me && me.designation || (u && u.role === 'incharge' ? 'In-charge' : 'Staff');
+    const unit = me && me.current_department || 'Nursing Service';
+    const staffId = me && me.emp_id || u && u.username || '—';
+    const initials = initialsOf(staffName);
+    useEffect(() => {
+      let live = true;
+      const y = now.getFullYear(),
+        mo = now.getMonth() + 1;
+      fetch('/api/rosters', {
+        credentials: 'same-origin'
+      }).then(r => r.json()).then(async j => {
+        const all = j && (j.rosters || j.list) || [];
+        const mine = all.filter(r => !me || String(r.deptName || r.dept || '').toLowerCase().indexOf(String(unit).toLowerCase().slice(0, 6)) >= 0);
+        const pick = mine.find(r => +r.year === y && +r.month === mo) || mine[0] || all.find(r => +r.year === y && +r.month === mo) || all[0];
+        if (!pick) {
+          if (live) setRoster(false);
+          return;
+        }
+        const full = await fetch('/api/rosters/' + encodeURIComponent(pick.dept) + '/' + pick.year + '/' + pick.month, {
+          credentials: 'same-origin'
+        }).then(r => r.json()).catch(() => null);
+        if (live) setRoster(full && (full.roster || full.doc) || pick || false);
+      }).catch(() => {
+        if (live) setRoster(false);
+      });
+      return () => {
+        live = false;
+      };
+    }, [unit]);
+    useEffect(() => {
+      let live = true;
+      fetch('/api/performance', {
+        credentials: 'same-origin'
+      }).then(r => r.json()).then(j => {
+        if (live) setCerts(j && j.certifications || []);
+      }).catch(() => {
+        if (live) setCerts([]);
+      });
+      return () => {
+        live = false;
+      };
+    }, []);
+    const R = typeof window !== 'undefined' && window.UNICO_ROSTER || null;
+    const codeInfo = useCallback(code => {
+      if (!code || !R) return null;
+      const f = R.byCode && R.byCode[code] || R.CODES && R.CODES[code] || (R.list || R.ALL || []).find && (R.list || R.ALL || []).find(c => c.code === code);
+      if (!f) return {
+        code,
+        label: '',
+        bucket: '',
+        hours: 0
+      };
+      return {
+        code,
+        label: f.label || f.time || '',
+        bucket: f.bucket || '',
+        hours: f.hours || 0
+      };
+    }, [R]);
+    const myRow = useMemo(() => {
+      if (!roster || !roster.grid || !me) return null;
+      return roster.grid[String(me.id)] || roster.grid[String(me.emp_id)] || null;
+    }, [roster, me]);
+    const h = now.getHours();
+    const greeting = h >= 23 || h < 5 ? 'Working late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 20 ? 'Good evening' : 'Good night';
+    const dateLine = now.toLocaleDateString('en-GB', {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    const clock = pad(h12) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds()) + ' ' + (h < 12 ? 'AM' : 'PM');
+    const todayCode = roster && +roster.year === now.getFullYear() && +roster.month === now.getMonth() + 1 && myRow ? myRow[now.getDate()] : null;
+    const todayInfo = codeInfo(todayCode);
+    const sh = useMemo(() => {
+      if (!todayInfo || !todayInfo.label) return null;
+      const r = parseRange(todayInfo.label);
+      if (!r) return null;
+      const b = BUCKET[todayInfo.bucket] || BUCKET.M;
+      const fmt = s => to12(pad(Math.floor(s / 3600) % 24) + ':' + pad(Math.floor(s / 60) % 60));
+      return {
+        name: b.name,
+        accent: b.accent,
+        accent2: b.accent2,
+        start: r.start,
+        len: r.end > r.start ? r.end - r.start : 86400 - r.start + r.end,
+        range: fmt(r.start) + ' — ' + fmt(r.end)
+      };
+    }, [todayCode]);
+    const secs = h * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    let on = false,
+      before = false,
+      remain = 0,
+      pct = 0;
+    if (sh) {
+      let s0 = sh.start,
+        s1 = sh.start + sh.len,
+        t = secs;
+      if (s1 > 86400 && t < s1 - 86400) t += 86400;
+      before = t < s0;
+      on = t >= s0 && t < s1;
+      remain = on ? s1 - t : before ? s0 - t : 86400 + s0 - t;
+      pct = on ? (t - s0) / sh.len * 100 : 0;
+    }
+    const hms = v => pad(Math.floor(v / 3600)) + ':' + pad(Math.floor(v / 60) % 60) + ':' + pad(v % 60);
+    const shiftNote = !sh ? roster === null ? 'Looking for your duty roster…' : roster === false ? 'No duty roster has been published for your department yet.' : 'You are not on this month’s roster for ' + (roster && (roster.deptName || roster.dept) || 'your unit') + '.' : on ? sh.name + ' shift in progress — ' + Math.round(pct) + '% elapsed, ends ' + sh.range.split(' — ')[1] + '.' : before ? sh.name + ' shift starts at ' + sh.range.split(' — ')[0] + ' today.' : 'Shift completed. Next duty per the roster.';
+    const theme = h >= 5 && h < 12 ? {
+      a: 'rgba(255,214,140,.55)',
+      b: 'rgba(120,196,240,.5)',
+      sky: 'linear-gradient(170deg,#3f8fd0 0%,#7bc0e8 34%,#bfe1f2 62%,#ffd9a3 88%,#ffc27a 100%)',
+      wash: 'linear-gradient(140deg,rgba(255,196,120,.22),transparent 60%)'
+    } : h >= 12 && h < 17 ? {
+      a: 'rgba(255,255,255,.5)',
+      b: 'rgba(120,206,240,.5)',
+      sky: 'linear-gradient(170deg,#2f7fc4 0%,#66b4e2 38%,#a9d8ef 70%,#dcf0f8 100%)',
+      wash: 'linear-gradient(140deg,rgba(255,255,255,.16),transparent 60%)'
+    } : h >= 17 && h < 20 ? {
+      a: 'rgba(255,158,110,.5)',
+      b: 'rgba(126,96,210,.5)',
+      sky: 'linear-gradient(170deg,#2a3a78 0%,#7a5a9e 32%,#e08a6a 66%,#ffb27a 86%,#ffd9a3 100%)',
+      wash: 'linear-gradient(140deg,rgba(255,150,110,.2),transparent 62%)'
+    } : {
+      a: 'rgba(106,82,212,.42)',
+      b: 'rgba(39,168,219,.28)',
+      sky: 'linear-gradient(170deg,#0a1428 0%,#122448 46%,#1b2f5a 78%,#24406e 100%)',
+      wash: 'linear-gradient(140deg,rgba(88,66,190,.22),rgba(12,26,52,.2) 55%,transparent)'
+    };
+    const night = h >= 20 || h < 5;
+    const ink = night ? {
+      strong: '#ffffff',
+      soft: '#9fb0c4',
+      muted: '#7d8ea8'
+    } : {
+      strong: '#0c1c34',
+      soft: '#3c4e66',
+      muted: '#5c6f88'
+    };
+    const lit = lights == null ? night : lights;
+    const dayFrac = night ? ((h >= 20 ? h - 20 : h + 4) + now.getMinutes() / 60) / 9 : (h - 5 + now.getMinutes() / 60) / 15;
+    const px = Math.min(1, Math.max(0, dayFrac));
+    const discX = 8 + px * 76,
+      discY = 58 - Math.sin(px * Math.PI) * 40;
+    const parS = (fx, fy) => 'transform:translate(' + (par.mx * fx).toFixed(1) + 'px,' + (par.my * fy).toFixed(1) + 'px);transition:transform .5s cubic-bezier(.2,.7,.3,1)';
+    const disc = night ? 'position:absolute;left:' + discX.toFixed(1) + '%;top:' + discY.toFixed(1) + 'px;width:44px;height:44px;border-radius:50%;background:radial-gradient(circle at 36% 34%,#f4f7ff,#c3cfe6 62%,#9aa8c4);box-shadow:0 0 34px 12px rgba(198,214,255,.28),inset -8px -4px 0 rgba(10,18,36,.35);animation:discGlow 7s ease-in-out infinite' : 'position:absolute;left:' + discX.toFixed(1) + '%;top:' + discY.toFixed(1) + 'px;width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 40% 38%,#fff6d8,#ffd166 52%,#ffa93c);box-shadow:0 0 52px 20px rgba(255,190,90,.4),0 0 120px 50px rgba(255,170,70,.18);animation:discGlow 6s ease-in-out infinite';
+    const rays = night ? null : 'position:absolute;inset:-26px;border-radius:50%;background:conic-gradient(from 0deg,rgba(255,214,140,.32) 0 6deg,transparent 6deg 30deg,rgba(255,214,140,.28) 30deg 36deg,transparent 36deg 60deg,rgba(255,214,140,.32) 60deg 66deg,transparent 66deg 90deg,rgba(255,214,140,.28) 90deg 96deg,transparent 96deg 120deg,rgba(255,214,140,.32) 120deg 126deg,transparent 126deg 150deg,rgba(255,214,140,.28) 150deg 156deg,transparent 156deg 180deg,rgba(255,214,140,.32) 180deg 186deg,transparent 186deg 210deg,rgba(255,214,140,.28) 210deg 216deg,transparent 216deg 240deg,rgba(255,214,140,.32) 240deg 246deg,transparent 246deg 270deg,rgba(255,214,140,.28) 270deg 276deg,transparent 276deg 300deg,rgba(255,214,140,.32) 300deg 306deg,transparent 306deg 330deg,rgba(255,214,140,.28) 330deg 336deg,transparent 336deg 360deg);mask:radial-gradient(circle,transparent 30%,#000 34%,transparent 74%);-webkit-mask:radial-gradient(circle,transparent 30%,#000 34%,transparent 74%);animation:rayspin 90s linear infinite;pointer-events:none';
+    const moonPhase = ((now - new Date(2000, 0, 6, 18, 14)) / 86400000 / 29.530588853 % 1 + 1) % 1;
+    const illum = 1 - Math.abs(moonPhase - .5) * 2;
+    const moonShadow = night ? 'position:absolute;inset:0;border-radius:50%;overflow:hidden;pointer-events:none;background:radial-gradient(circle 22px at ' + (50 - (moonPhase < .5 ? 1 : -1) * illum * 100).toFixed(0) + '% 50%,rgba(12,26,52,.85) 20.5px,transparent 22px);transition:background 1s' : null;
+    const cloudTint = night ? 'rgba(160,176,204,.22)' : h >= 17 ? 'rgba(255,214,196,.4)' : 'rgba(255,255,255,.42)';
+    const clouds = [{
+      top: 22,
+      sc: 1,
+      dur: 64,
+      delay: 0
+    }, {
+      top: 58,
+      sc: .72,
+      dur: 92,
+      delay: -22
+    }, {
+      top: 12,
+      sc: .55,
+      dur: 120,
+      delay: -48
+    }];
+    const puff = (w, hh, l, b) => 'position:absolute;left:' + l + 'px;bottom:' + b + 'px;width:' + w + 'px;height:' + hh + 'px;border-radius:50%;background:' + cloudTint + ';filter:blur(6px)';
+    const stars = night ? Array.from({
+      length: 16
+    }, (_, i) => 'position:absolute;left:' + (i * 37 % 97 + 1) + '%;top:' + (i * 23 % 46 + 4) + 'px;width:' + (i % 3 === 0 ? 2.5 : 1.8) + 'px;height:' + (i % 3 === 0 ? 2.5 : 1.8) + 'px;border-radius:50%;background:#eaf1ff;opacity:.6;animation:twinkle ' + (2.4 + i % 5 * .6).toFixed(1) + 's ease-in-out infinite;animation-delay:-' + (i * .37).toFixed(2) + 's') : [];
+    const flocks = [{
+      top: 24,
+      w: 84,
+      hh: 18,
+      dur: 30,
+      delay: 0,
+      op: .5
+    }, {
+      top: 52,
+      w: 58,
+      hh: 13,
+      dur: 44,
+      delay: -12,
+      op: .38
+    }, {
+      top: 14,
+      w: 44,
+      hh: 10,
+      dur: 58,
+      delay: -26,
+      op: .3
+    }, {
+      top: 74,
+      w: 70,
+      hh: 15,
+      dur: 38,
+      delay: -33,
+      op: .32
+    }];
+    const drops = weather === 'Rain' ? Array.from({
+      length: 46
+    }, (_, i) => 'position:absolute;top:0;left:' + i * 53 % 100 + '%;width:1.5px;height:' + (14 + i % 4 * 4) + 'px;border-radius:2px;background:linear-gradient(180deg,transparent,rgba(210,230,255,.75));rotate:12deg;animation:rainFall ' + (.7 + i % 5 * .12).toFixed(2) + 's linear -' + (i * .37 % 1.4).toFixed(2) + 's infinite;pointer-events:none') : [];
+    const flakes = weather === 'Snow' ? Array.from({
+      length: 34
+    }, (_, i) => 'position:absolute;top:0;left:' + i * 41 % 100 + '%;width:' + (3 + i % 3 * 1.5) + 'px;height:' + (3 + i % 3 * 1.5) + 'px;border-radius:50%;background:rgba(255,255,255,.9);filter:blur(' + (i % 3 === 0 ? .8 : 0) + 'px);animation:snowFall ' + (6 + i % 6).toFixed(1) + 's linear -' + (i * .9 % 6).toFixed(2) + 's infinite;pointer-events:none') : [];
+    const fireflies = night ? Array.from({
+      length: 12
+    }, (_, i) => 'position:absolute;left:' + (i * 29 % 96 + 2) + '%;bottom:' + (18 + i * 13 % 50) + 'px;width:4px;height:4px;border-radius:50%;background:#ffe27a;box-shadow:0 0 8px 3px rgba(255,226,122,.55);animation:firefly ' + (4 + i % 4).toFixed(1) + 's ease-in-out -' + (i * .7).toFixed(1) + 's infinite;pointer-events:none') : [];
+    const rainbow = !night && weather === 'Rain' ? 'position:absolute;left:18%;bottom:-300px;width:560px;height:560px;border-radius:50%;pointer-events:none;opacity:.42;filter:blur(1.5px);background:radial-gradient(circle,transparent 61%,#d23a52 61.5% 63.5%,#e08a1e 63.5% 65.5%,#ffd166 65.5% 67.5%,#3ddc97 67.5% 69.5%,#27a8db 69.5% 71.5%,#6a52d4 71.5% 73.5%,transparent 74%);animation:riseIn 1.5s ease-out backwards' : null;
+    const heroMove = e => {
+      const r = e.currentTarget.getBoundingClientRect();
+      pm.current = {
+        mx: ((e.clientX - r.left) / r.width - .5) * 2,
+        my: ((e.clientY - r.top) / r.height - .5) * 2
+      };
+      const t = performance.now();
+      if (e.target === e.currentTarget && t - ls.current > 70) {
+        ls.current = t;
+        const id = t + Math.random();
+        setSparkles(s => [...s, {
+          id,
+          x: e.clientX - r.left,
+          y: e.clientY - r.top,
+          s: 6 + Math.random() * 8
+        }].slice(-24));
+        setTimeout(() => setSparkles(s => s.filter(x => x.id !== id)), 800);
+      }
+      if (!raf.current) raf.current = requestAnimationFrame(() => {
+        raf.current = 0;
+        setPar(pm.current);
+      });
+    };
+    const heroClick = e => {
+      if (e.target !== e.currentTarget) return;
+      const r = e.currentTarget.getBoundingClientRect();
+      const id = Date.now() + Math.random();
+      const x = e.clientX - r.left,
+        y = e.clientY - r.top;
+      setRipples(s => [...s, {
+        id,
+        x,
+        y
+      }]);
+      setTimeout(() => setRipples(s => s.filter(q => q.id !== id)), 900);
+      const colors = ['#d23a52', '#27a8db', '#3ab5a7', '#e08a1e', '#6a52d4', '#ffd166'];
+      setBalloonsUp(s => [...s, {
+        id,
+        x,
+        y,
+        color: colors[Math.floor(Math.random() * colors.length)]
+      }]);
+      setTimeout(() => setBalloonsUp(s => s.filter(q => q.id !== id)), 9000);
+    };
+    const celebrate = e => {
+      e.stopPropagation();
+      const r = e.currentTarget.getBoundingClientRect(),
+        hb = e.currentTarget.parentElement.getBoundingClientRect();
+      const cx = r.left - hb.left + r.width / 2,
+        cy = r.top - hb.top + r.height / 2;
+      const colors = ['#d23a52', '#27a8db', '#3ab5a7', '#e08a1e', '#6a52d4', '#ffd166', '#3ddc97'];
+      const batch = Date.now();
+      const pieces = Array.from({
+        length: 26
+      }, (_, i) => ({
+        id: batch + i / 100,
+        x: cx,
+        y: cy,
+        a: i * (360 / 26) + Math.random() * 10,
+        sc: .6 + Math.random() * .9,
+        c: colors[i % colors.length],
+        w: 5 + Math.random() * 5
+      }));
+      setBursts(s => [...s, ...pieces]);
+      setTimeout(() => setBursts(s => s.filter(x => Math.floor(x.id) !== batch)), 1000);
+    };
+    const cycleWeather = e => {
+      e.stopPropagation();
+      const o = ['Clear', 'Rain', 'Snow'];
+      setWeather(w => o[(o.indexOf(w) + 1) % 3]);
+    };
+    const week = useMemo(() => {
+      const d0 = new Date(now);
+      d0.setDate(now.getDate() - (now.getDay() + 6) % 7);
+      return Array.from({
+        length: 7
+      }, (_, i) => {
+        const d = new Date(d0);
+        d.setDate(d0.getDate() + i);
+        const inMonth = roster && +roster.year === d.getFullYear() && +roster.month === d.getMonth() + 1;
+        const code = inMonth && myRow ? myRow[d.getDate()] : null;
+        const info = codeInfo(code);
+        const off = !code || info && info.bucket === 'O';
+        return {
+          full: d,
+          dow: d.toLocaleDateString('en-GB', {
+            weekday: 'short'
+          }),
+          date: pad(d.getDate()),
+          code,
+          info,
+          off,
+          today: d.toDateString() === now.toDateString()
+        };
+      });
+    }, [roster, myRow, now.toDateString()]);
+    const sel = selDay != null ? selDay : (now.getDay() + 6) % 7;
+    const sd = week[sel];
+    const anns = useMemo(() => {
+      const out = [];
+      if (roster && roster.deptName) {
+        out.push({
+          title: 'Roster published — ' + roster.deptName,
+          body: 'The ' + roster.deptName + ' duty roster for ' + pad(roster.month) + '/' + roster.year + ' is live' + (roster.status ? ' (' + roster.status + ')' : '') + '. Open Duty Roster to see your month.'
+        });
+      }
+      (certs || []).forEach(c => {
+        if (!c.expiry) return;
+        const d = new Date(c.expiry),
+          days = Math.round((d - now) / 86400000);
+        if (days > 0 && days <= 90) out.push({
+          title: (c.name || 'Certification') + ' expiring',
+          body: 'Expires ' + c.expiry + ' (' + days + ' days). Arrange renewal through your supervisor.'
+        });
+      });
+      if (!out.length) out.push({
+        title: 'No announcements yet',
+        body: 'This space carries Nursing Services notices — roster publications and certification reminders appear here on their own.'
+      });
+      return out;
+    }, [roster, certs, now.toDateString()]);
+    const ai = annPinned != null ? Math.min(annPinned, anns.length - 1) : Math.floor(now.getTime() / 7000) % anns.length;
+    const team = useMemo(() => {
+      if (!roster || !roster.grid || !todayCode) return [];
+      const rows = roster.names || roster.rows || [];
+      const staffList = typeof window !== 'undefined' && window.STAFF_SEED || [];
+      return rows.filter(r => {
+        const g = roster.grid[String(r.id)] || roster.grid[String(r.empId)] || roster.grid[String(r.emp_id)] || {};
+        return g[now.getDate()] === todayCode;
+      }).slice(0, 6).map((r, i) => {
+        const nm = r.name || r.staffName || String(r.empId || r.emp_id || r.id);
+        const st = staffList.find(s => s.name === nm || String(s.emp_id) === String(r.empId || r.emp_id));
+        return {
+          name: nm,
+          role: st && st.designation || r.designation || 'Staff',
+          c: TEAM_COLORS[i % TEAM_COLORS.length]
+        };
+      });
+    }, [roster, todayCode, now.toDateString()]);
+    const tp = team[Math.min(teamSel, Math.max(0, team.length - 1))] || null;
+    const offStats = useMemo(() => {
+      if (!myRow || !roster) return null;
+      const daysIn = new Date(roster.year, roster.month, 0).getDate();
+      let total = 0,
+        taken = 0;
+      for (let d = 1; d <= daysIn; d++) {
+        const inf = codeInfo(myRow[d]);
+        if (inf && inf.bucket === 'O') {
+          total++;
+          if (+roster.month === now.getMonth() + 1 && d <= now.getDate()) taken++;
+        }
+      }
+      return {
+        total,
+        taken,
+        left: total - taken
+      };
+    }, [myRow, roster, now.toDateString()]);
+    const records = useMemo(() => {
+      const out = (certs || []).filter(c => me && (String(c.staffId) === String(me.id) || String(c.empId) === String(me.emp_id))).map(c => {
+        const exp = c.expiry ? new Date(c.expiry) : null;
+        const expired = exp && exp < now,
+          soon = exp && !expired && (exp - now) / 86400000 <= 90;
+        return {
+          label: c.name || c.title || 'Certification',
+          meta: c.expiry ? (expired ? 'Expired ' : 'Expires ') + c.expiry : c.issued ? 'Issued ' + c.issued : 'No date recorded',
+          tag: expired ? 'Expired' : soon ? 'Renew soon' : 'Valid',
+          tagStyle: expired ? tag('#b2263e', 'rgba(210,58,82,.14)') : soon ? tag('#b06a10', 'rgba(224,138,30,.16)') : tag('#0f7a5f', 'rgba(61,220,151,.2)'),
+          dotC: expired ? '#d23a52' : soon ? '#e08a1e' : '#3ddc97',
+          detail: [c.issuer && 'Issued by ' + c.issuer, c.issued && 'Issued ' + c.issued, c.note].filter(Boolean).join(' · ') || 'Recorded on the staff register.'
+        };
+      });
+      if (me && me.hepatitis_b_vaccination) {
+        const done = /^completed$/i.test(String(me.hepatitis_b_vaccination).trim());
+        out.push({
+          label: 'Hepatitis B vaccination',
+          meta: String(me.hepatitis_b_vaccination),
+          tag: done ? 'Complete' : 'Incomplete',
+          tagStyle: done ? tag('#0f7a5f', 'rgba(61,220,151,.2)') : tag('#b06a10', 'rgba(224,138,30,.16)'),
+          dotC: done ? '#3ddc97' : '#e08a1e',
+          detail: 'From the staff register. Ask Nursing Services to correct this if it is out of date.'
+        });
+      }
+      return out;
+    }, [certs, me, now.toDateString()]);
+    const dayKey = now.toDateString();
+    const mood = moodSt[dayKey] && moodSt[dayKey].label;
+    const moodAt = moodSt[dayKey] && moodSt[dayKey].at;
+    const pickMood = label => setMoodSt(s => {
+      const n = Object.assign({}, s, {
+        [dayKey]: {
+          label,
+          at: Date.now()
+        }
+      });
+      lsSet(KEY_MOOD, n);
+      return n;
+    });
+    const shiftCard = 'position:relative;flex:1 1 300px;min-width:0;max-width:400px;margin-left:auto;padding:13px 15px;border-radius:14px;overflow:hidden;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid ' + (night ? 'rgba(122,196,232,.4)' : 'rgba(255,255,255,.85)') + ';background:' + (night ? 'linear-gradient(120deg,' + (sh && sh.accent || '#27a8db') + '44,rgba(255,255,255,.06),' + (sh && sh.accent || '#27a8db') + '44) 0 0/220% 100%' : 'linear-gradient(120deg,rgba(255,255,255,.78),rgba(255,255,255,.6),rgba(255,255,255,.78)) 0 0/220% 100%') + ';animation:shiftSweep 7s linear infinite;box-shadow:0 10px 28px rgba(12,28,52,' + (night ? '.22' : '.14') + ')';
+    const miniLabel = 'font-size:9.5px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:' + ink.muted;
+    const rangeStyle = "font-size:10.5px;font-family:'IBM Plex Mono',monospace;color:" + ink.soft;
+    const factChip = i => 'min-width:126px;flex:1 1 120px;padding:9px 12px;border-radius:11px;cursor:default;border:1px solid ' + (night ? 'rgba(255,255,255,.14)' : 'rgba(12,28,52,.12)') + ';background:' + (night ? 'rgba(255,255,255,.07)' : 'rgba(255,255,255,.55)') + ';backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:riseIn .6s cubic-bezier(.2,.7,.3,1) ' + (.15 + i * .08).toFixed(2) + 's backwards';
+    const idFacts = [{
+      label: 'Staff ID',
+      value: staffId
+    }, {
+      label: 'Date of joining',
+      value: me && me.doj || 'Not recorded'
+    }, {
+      label: 'Role',
+      value: designation || (!u ? 'Local session' : u.role === 'incharge' ? 'In-charge' : u.role === 'collector' ? 'Data Collector' : u.role || 'Staff')
+    }, {
+      label: 'Department',
+      value: unit
+    }];
+    const nextOff = week.find(w => w.off && w.code && w.full >= now);
+    const duty = [{
+      label: 'Assigned shift',
+      value: sh ? sh.name : 'None',
+      note: sh ? sh.range : 'Nothing rostered today'
+    }, {
+      label: 'Ward',
+      value: unit,
+      note: roster && roster.deptName || 'From your staff record'
+    }, {
+      label: 'Next off day',
+      value: nextOff ? nextOff.dow + ' ' + nextOff.date : '—',
+      note: nextOff ? 'From this week’s roster' : 'None in the next 7 days'
+    }, {
+      label: 'Off days',
+      value: offStats ? offStats.left + ' left' : '—',
+      note: offStats ? offStats.taken + ' taken of ' + offStats.total + ' this month' : 'Needs a published roster'
+    }];
+    return React.createElement("div", {
+      className: "unico-home",
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16
+      }
+    }, React.createElement("style", null, KEYFRAMES), React.createElement("div", {
+      onMouseMove: heroMove,
+      onMouseLeave: () => setPar({
+        mx: 0,
+        my: 0
+      }),
+      onClick: heroClick,
+      style: sx('position:relative;overflow:hidden;border-radius:18px;padding:20px 22px 88px;display:flex;align-items:center;gap:18px;flex-wrap:wrap;min-height:236px;box-shadow:0 18px 48px rgba(12,28,52,.25)')
+    }, React.createElement("div", {
+      style: sx('position:absolute;inset:0;pointer-events:none;transition:background 1.2s ease;background:' + theme.sky)
+    }), React.createElement("div", {
+      style: fs('position:absolute;top:-100px;right:6%;width:280px;height:250px;border-radius:50%;pointer-events:none;filter:blur(26px);background:radial-gradient(circle,' + theme.a + ',transparent 70%);animation:orbFloat 16s ease-in-out infinite alternate')
+    }), React.createElement("div", {
+      style: fs('position:absolute;bottom:-120px;left:32%;width:300px;height:250px;border-radius:50%;pointer-events:none;filter:blur(30px);background:radial-gradient(circle,' + theme.b + ',transparent 70%);animation:orbFloat 21s ease-in-out infinite alternate-reverse')
+    }), stars.map((st, i) => React.createElement("span", {
+      key: 's' + i,
+      "aria-hidden": "true",
+      style: fs(st)
+    })), night && React.createElement("span", {
+      "aria-hidden": "true",
+      style: fs('position:absolute;top:8px;left:0;width:3px;height:3px;border-radius:50%;background:#cfe0f0;opacity:.8;animation:satellite 26s linear infinite;pointer-events:none')
+    }), night && React.createElement("span", {
+      "aria-hidden": "true",
+      style: fs('position:absolute;top:16%;right:6%;width:78px;height:1.5px;border-radius:2px;background:linear-gradient(270deg,transparent,#fff);animation:shoot 14s linear infinite;pointer-events:none')
+    }), React.createElement("div", {
+      onClick: cycleWeather,
+      title: "Click to change the weather",
+      style: Object.assign(fs(disc), sx('pointer-events:auto;cursor:pointer;' + parS(-10, -6)))
+    }, rays && React.createElement("span", {
+      style: fs(rays)
+    }), moonShadow && React.createElement("span", {
+      style: fs(moonShadow)
+    })), React.createElement("div", {
+      "aria-hidden": "true",
+      style: sx('position:absolute;inset:0;pointer-events:none;' + parS(18, 8))
+    }, clouds.map((c, i) => React.createElement("span", {
+      key: 'c' + i,
+      style: fs('position:absolute;top:' + c.top + 'px;left:0;width:120px;height:34px;transform-origin:left center;scale:' + c.sc + ';opacity:' + (night ? .5 : .85) + ';animation:cloudDrift ' + c.dur + 's linear infinite;animation-delay:' + c.delay + 's')
+    }, React.createElement("span", {
+      style: sx(puff(72, 26, 0, 0))
+    }), React.createElement("span", {
+      style: sx(puff(52, 40, 30, 6))
+    }), React.createElement("span", {
+      style: sx(puff(58, 24, 60, 0))
+    })))), !night && React.createElement("div", {
+      "aria-hidden": "true",
+      style: sx('position:absolute;inset:0;pointer-events:none;' + parS(28, 12))
+    }, flocks.map((b, i) => React.createElement("svg", {
+      key: 'f' + i,
+      viewBox: "0 0 140 30",
+      width: b.w,
+      height: b.hh,
+      style: fs('position:absolute;top:' + b.top + 'px;left:0;opacity:' + b.op + ';animation:birdFly ' + b.dur + 's linear infinite;animation-delay:' + b.delay + 's;pointer-events:none'),
+      fill: "none",
+      stroke: "#12233c",
+      strokeWidth: "2.4",
+      strokeLinecap: "round"
+    }, React.createElement("path", {
+      d: "M6 16c5-7 10-7 15 0M34 9c5-7 10-7 15 0M58 20c5-7 10-7 15 0M86 12c5-7 10-7 15 0"
+    })))), React.createElement("div", {
+      "aria-hidden": "true",
+      style: fs('position:absolute;top:' + (night ? 34 : 18) + 'px;left:0;width:190px;height:14px;opacity:' + (night ? .5 : .9) + ';animation:planeFly 22s linear infinite;pointer-events:none')
+    }, React.createElement("div", {
+      style: fs('position:absolute;right:26px;top:7px;width:150px;height:3px;border-radius:2px;background:linear-gradient(270deg,rgba(255,255,255,.85),transparent);filter:blur(1.4px);animation:trailFade 22s linear infinite')
+    }), React.createElement("svg", {
+      viewBox: "0 0 64 24",
+      width: "34",
+      height: "13",
+      style: sx('position:absolute;right:0;top:0;filter:drop-shadow(0 1px 2px rgba(10,20,40,.35))'),
+      fill: "#eef4fb"
+    }, React.createElement("path", {
+      d: "M63 12l-9 3H36l-9 8h-5l3-8H14l-5 5H5l3-5H2v-6h6L5 4h4l5 5h11l-3-8h5l9 8h18z"
+    }))), React.createElement("div", {
+      "aria-hidden": "true",
+      style: fs('position:absolute;bottom:56px;left:14%;width:16px;animation:rocketRise 17s ease-in ' + (night ? '2s' : '6s') + ' infinite;pointer-events:none')
+    }, React.createElement("svg", {
+      viewBox: "0 0 24 60",
+      width: "15",
+      height: "38",
+      style: sx('display:block;filter:drop-shadow(0 0 8px rgba(255,170,90,.6))')
+    }, React.createElement("path", {
+      d: "M12 0c6 10 8 20 8 30l-4 12H8L4 30C4 20 6 10 12 0z",
+      fill: "#e8eef7"
+    }), React.createElement("path", {
+      d: "M12 0c3 10 4 20 4 30l-2 12h-4z",
+      fill: "#ffffff",
+      opacity: ".55"
+    }), React.createElement("circle", {
+      cx: "12",
+      cy: "20",
+      r: "3.4",
+      fill: "#27a8db"
+    }), React.createElement("path", {
+      d: "M4 30L0 44l6-4zM20 30l4 14-6-4z",
+      fill: "#d23a52"
+    })), React.createElement("div", {
+      style: fs('width:9px;height:26px;margin:-2px auto 0;border-radius:0 0 50% 50%;background:linear-gradient(180deg,#ffd166,#ff7a3c,transparent);filter:blur(2px);transform-origin:top center;animation:flameFlicker .35s linear infinite')
+    })), !night && React.createElement("div", {
+      "aria-hidden": "true",
+      style: sx('position:absolute;right:20%;top:22px;width:80px;height:150px;pointer-events:none;opacity:.9')
+    }, React.createElement("svg", {
+      viewBox: "0 0 80 150",
+      width: "80",
+      height: "150",
+      style: sx('display:block;overflow:visible')
+    }, React.createElement("path", {
+      d: "M40 34c-8 30-22 60-30 116",
+      stroke: "rgba(40,60,90,.55)",
+      strokeWidth: "1",
+      fill: "none"
+    }), React.createElement("g", {
+      style: fs('transform-origin:40px 18px;animation:kiteBob 4s ease-in-out infinite')
+    }, React.createElement("path", {
+      d: "M40 0l16 18-16 22-16-22z",
+      fill: "#d23a52"
+    }), React.createElement("path", {
+      d: "M40 0v40M24 18h32",
+      stroke: "rgba(255,255,255,.6)",
+      strokeWidth: "1.2"
+    }), React.createElement("path", {
+      d: "M40 40q-6 8 0 16q6 8 0 16",
+      stroke: "#e08a1e",
+      strokeWidth: "2",
+      fill: "none"
+    })))), weather === 'Rain' && React.createElement(React.Fragment, null, React.createElement("div", {
+      "aria-hidden": "true",
+      style: sx('position:absolute;inset:0;background:rgba(60,80,110,.28);pointer-events:none')
+    }), drops.map((d, i) => React.createElement("span", {
+      key: 'd' + i,
+      "aria-hidden": "true",
+      style: fs(d)
+    })), React.createElement("div", {
+      "aria-hidden": "true",
+      style: fs('position:absolute;inset:0;background:#fff;pointer-events:none;animation:flash 11s linear infinite')
+    }), rainbow && React.createElement("div", {
+      "aria-hidden": "true",
+      style: fs(rainbow)
+    })), weather === 'Snow' && flakes.map((f, i) => React.createElement("span", {
+      key: 'sn' + i,
+      "aria-hidden": "true",
+      style: fs(f)
+    })), fireflies.map((f, i) => React.createElement("span", {
+      key: 'ff' + i,
+      "aria-hidden": "true",
+      style: fs(f)
+    })), React.createElement("svg", {
+      onClick: e => {
+        e.stopPropagation();
+        setLights(v => !(v == null ? night : v));
+      },
+      viewBox: "0 0 1200 200",
+      preserveAspectRatio: "none",
+      style: sx('position:absolute;left:-12px;right:-12px;bottom:0;width:calc(100% + 24px);height:74px;opacity:' + (night ? .95 : .8) + ';pointer-events:auto;cursor:pointer;' + parS(-8, 2))
+    }, React.createElement("g", {
+      style: fs('animation:trainRun 36s linear 6s infinite')
+    }, React.createElement("g", {
+      fill: "#040a16",
+      opacity: ".92"
+    }, React.createElement("rect", {
+      x: "0",
+      y: "176",
+      width: "70",
+      height: "20",
+      rx: "3"
+    }), React.createElement("rect", {
+      x: "8",
+      y: "166",
+      width: "30",
+      height: "12",
+      rx: "2"
+    }), React.createElement("rect", {
+      x: "76",
+      y: "178",
+      width: "60",
+      height: "18",
+      rx: "2"
+    }), React.createElement("rect", {
+      x: "142",
+      y: "178",
+      width: "60",
+      height: "18",
+      rx: "2"
+    }), React.createElement("rect", {
+      x: "208",
+      y: "178",
+      width: "60",
+      height: "18",
+      rx: "2"
+    })), React.createElement("g", {
+      style: sx('opacity:' + (lit ? 1 : 0) + ';transition:opacity 1.2s ease'),
+      fill: "#ffd98a"
+    }, React.createElement("rect", {
+      x: "14",
+      y: "169",
+      width: "7",
+      height: "6"
+    }), React.createElement("rect", {
+      x: "82",
+      y: "182",
+      width: "8",
+      height: "6"
+    }), React.createElement("rect", {
+      x: "98",
+      y: "182",
+      width: "8",
+      height: "6"
+    }), React.createElement("rect", {
+      x: "114",
+      y: "182",
+      width: "8",
+      height: "6"
+    }), React.createElement("rect", {
+      x: "148",
+      y: "182",
+      width: "8",
+      height: "6"
+    }), React.createElement("rect", {
+      x: "164",
+      y: "182",
+      width: "8",
+      height: "6"
+    }), React.createElement("rect", {
+      x: "180",
+      y: "182",
+      width: "8",
+      height: "6"
+    }), React.createElement("rect", {
+      x: "214",
+      y: "182",
+      width: "8",
+      height: "6"
+    }), React.createElement("rect", {
+      x: "230",
+      y: "182",
+      width: "8",
+      height: "6"
+    }), React.createElement("rect", {
+      x: "246",
+      y: "182",
+      width: "8",
+      height: "6"
+    })), React.createElement("circle", {
+      cx: "60",
+      cy: "170",
+      r: "3",
+      fill: "#ffe9a8"
+    })), React.createElement("path", {
+      d: "M0 150c120-26 210 10 330-6s200-40 320-24 260 44 380 22 170-14 170-14V200H0z",
+      fill: "#050d1c",
+      opacity: ".55"
+    }), React.createElement("path", {
+      d: "M0 200v-28h120l14-16 14 16h52v-34h26v-14l22-16 22 16v14h26v34h74l16-20 16 20h58v-46h30l24-18 24 18h30v46h96l14-18 14 18h64v-30h96v30h108l18-22 18 22h100v28z",
+      fill: "#040a16",
+      opacity: ".9"
+    }), React.createElement("path", {
+      d: "M470 172v-52h8v52zM474 118l-16 10 16 6 16-6z",
+      fill: "#040a16",
+      opacity: ".9"
+    }), React.createElement("g", {
+      fill: "#040a16",
+      opacity: ".9"
+    }, React.createElement("ellipse", {
+      cx: "700",
+      cy: "158",
+      rx: "26",
+      ry: "30"
+    }), React.createElement("rect", {
+      x: "697",
+      y: "158",
+      width: "6",
+      height: "42"
+    }), React.createElement("ellipse", {
+      cx: "1010",
+      cy: "164",
+      rx: "22",
+      ry: "26"
+    }), React.createElement("rect", {
+      x: "1007",
+      y: "164",
+      width: "6",
+      height: "36"
+    })), React.createElement("g", {
+      fill: "#040a16",
+      opacity: ".9"
+    }, React.createElement("path", {
+      d: "M872 200l4-72h8l4 72z"
+    }), React.createElement("g", {
+      style: fs('transform-origin:880px 126px;animation:rayspin 7s linear infinite')
+    }, React.createElement("path", {
+      d: "M880 126l-3-40h6zM880 126l36 18-3 5zM880 126l-36 18 3 5z"
+    }), React.createElement("circle", {
+      cx: "880",
+      cy: "126",
+      r: "4"
+    }))), React.createElement("g", {
+      fill: "none",
+      stroke: "#061020",
+      strokeWidth: "3",
+      strokeLinecap: "round",
+      opacity: ".9"
+    }, React.createElement("g", {
+      style: fs('transform-origin:60px 200px;animation:grassSway 3.2s ease-in-out infinite')
+    }, React.createElement("path", {
+      d: "M50 200q2-12 8-20M62 200q0-14 4-24M74 200q-2-12-8-18"
+    })), React.createElement("g", {
+      style: fs('transform-origin:330px 200px;animation:grassSway 2.8s ease-in-out -1s infinite')
+    }, React.createElement("path", {
+      d: "M320 200q2-12 8-20M332 200q0-14 4-24M344 200q-2-12-8-18"
+    })), React.createElement("g", {
+      style: fs('transform-origin:620px 200px;animation:grassSway 3.6s ease-in-out -2s infinite')
+    }, React.createElement("path", {
+      d: "M610 200q2-12 8-20M622 200q0-14 4-24M634 200q-2-12-8-18"
+    })), React.createElement("g", {
+      style: fs('transform-origin:1130px 200px;animation:grassSway 3s ease-in-out -.5s infinite')
+    }, React.createElement("path", {
+      d: "M1120 200q2-12 8-20M1132 200q0-14 4-24M1144 200q-2-12-8-18"
+    }))), React.createElement("g", {
+      style: sx('opacity:' + (lit ? 1 : 0) + ';transition:opacity 1.2s ease'),
+      fill: "#ffd98a"
+    }, React.createElement("rect", {
+      x: "128",
+      y: "180",
+      width: "7",
+      height: "8"
+    }), React.createElement("rect", {
+      x: "212",
+      y: "150",
+      width: "7",
+      height: "9"
+    }), React.createElement("rect", {
+      x: "232",
+      y: "150",
+      width: "7",
+      height: "9",
+      style: fs('animation:winFlick 6s linear infinite')
+    }), React.createElement("rect", {
+      x: "252",
+      y: "150",
+      width: "7",
+      height: "9"
+    }), React.createElement("rect", {
+      x: "378",
+      y: "180",
+      width: "7",
+      height: "8",
+      style: fs('animation:winFlick 9s linear 2s infinite')
+    }), React.createElement("rect", {
+      x: "443",
+      y: "180",
+      width: "7",
+      height: "8"
+    }), React.createElement("rect", {
+      x: "480",
+      y: "140",
+      width: "7",
+      height: "9"
+    }), React.createElement("rect", {
+      x: "520",
+      y: "140",
+      width: "7",
+      height: "9"
+    }), React.createElement("rect", {
+      x: "546",
+      y: "140",
+      width: "7",
+      height: "9",
+      style: fs('animation:winFlick 7s linear 1s infinite')
+    }), React.createElement("rect", {
+      x: "672",
+      y: "180",
+      width: "7",
+      height: "8"
+    }), React.createElement("rect", {
+      x: "770",
+      y: "152",
+      width: "7",
+      height: "9"
+    }), React.createElement("rect", {
+      x: "800",
+      y: "152",
+      width: "7",
+      height: "9",
+      style: fs('animation:winFlick 11s linear 4s infinite')
+    }), React.createElement("rect", {
+      x: "830",
+      y: "152",
+      width: "7",
+      height: "9"
+    }), React.createElement("rect", {
+      x: "972",
+      y: "180",
+      width: "7",
+      height: "8"
+    }))), React.createElement("div", {
+      "aria-hidden": "true",
+      style: sx('position:absolute;left:23.5%;bottom:22px;width:10px;height:10px;pointer-events:none')
+    }, [0, 1.3, 2.6].map(d => React.createElement("span", {
+      key: d,
+      style: fs('position:absolute;inset:0;border-radius:50%;background:rgba(220,228,240,.55);filter:blur(2px);animation:smoke 4s ease-out ' + d + 's infinite')
+    }))), ripples.map(r => React.createElement("span", {
+      key: r.id,
+      "aria-hidden": "true",
+      style: fs('position:absolute;left:' + (r.x - 60) + 'px;top:' + (r.y - 60) + 'px;width:120px;height:120px;border-radius:50%;border:2px solid ' + (night ? 'rgba(255,255,255,.7)' : 'rgba(0,114,163,.6)') + ';pointer-events:none;animation:ripple .9s ease-out forwards')
+    })), sparkles.map(s => React.createElement("span", {
+      key: s.id,
+      "aria-hidden": "true",
+      style: fs('position:absolute;left:' + (s.x - s.s / 2) + 'px;top:' + (s.y - s.s / 2) + 'px;width:' + s.s + 'px;height:' + s.s + 'px;background:' + (night ? '#fff' : '#ffd166') + ';clip-path:polygon(50% 0,62% 38%,100% 50%,62% 62%,50% 100%,38% 62%,0 50%,38% 38%);pointer-events:none;animation:sparkle .8s ease-out forwards;filter:drop-shadow(0 0 4px rgba(255,220,140,.8))')
+    })), bursts.map(b => React.createElement("span", {
+      key: b.id,
+      "aria-hidden": "true",
+      style: sx('position:absolute;left:' + b.x + 'px;top:' + b.y + 'px;rotate:' + b.a + 'deg;scale:' + b.sc + ';pointer-events:none')
+    }, React.createElement("span", {
+      style: fs('display:block;width:' + b.w + 'px;height:' + b.w * .6 + 'px;border-radius:2px;background:' + b.c + ';animation:burst .9s cubic-bezier(.1,.7,.3,1) forwards')
+    }))), balloonsUp.map(b => React.createElement("div", {
+      key: b.id,
+      "aria-hidden": "true",
+      style: fs('position:absolute;left:' + (b.x - 13) + 'px;top:' + (b.y - 30) + 'px;pointer-events:none;animation:balloonUp 9s cubic-bezier(.3,.6,.4,1) forwards')
+    }, React.createElement("svg", {
+      viewBox: "0 0 24 40",
+      width: "26",
+      height: "42",
+      style: fs('display:block;animation:sway 2.4s ease-in-out infinite;filter:drop-shadow(0 3px 6px rgba(10,20,40,.3))')
+    }, React.createElement("ellipse", {
+      cx: "12",
+      cy: "13",
+      rx: "10",
+      ry: "12",
+      fill: b.color
+    }), React.createElement("ellipse", {
+      cx: "8.5",
+      cy: "9",
+      rx: "3",
+      ry: "4.5",
+      fill: "#fff",
+      opacity: ".35"
+    }), React.createElement("path", {
+      d: "M10 25l2 3 2-3z",
+      fill: b.color
+    }), React.createElement("path", {
+      d: "M12 28c-3 4 3 6 0 11",
+      stroke: "#5a6b84",
+      strokeWidth: "1",
+      fill: "none"
+    })))), React.createElement("div", {
+      "aria-hidden": "true",
+      style: fs('position:absolute;inset:0;pointer-events:none;background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.07) 50%,transparent 70%) 0 0/240% 100%;animation:shiftSweep 9s linear infinite')
+    }), React.createElement("div", {
+      "aria-hidden": "true",
+      style: sx(night ? 'position:absolute;inset:0;pointer-events:none;background:linear-gradient(100deg,rgba(6,16,34,.25),rgba(6,16,34,.1) 60%,transparent)' : 'position:absolute;inset:0;pointer-events:none;background:linear-gradient(100deg,rgba(255,255,255,.5),rgba(255,255,255,.22) 55%,rgba(255,255,255,.06))')
+    }), React.createElement("div", {
+      "aria-hidden": "true",
+      style: sx('position:absolute;inset:0;pointer-events:none;transition:background 1.2s ease;background:' + theme.wash)
+    }), React.createElement("div", {
+      onClick: celebrate,
+      title: "Shift progress \xB7 click me",
+      style: fs('position:relative;width:74px;height:74px;padding:4px;border-radius:20px;flex-shrink:0;display:grid;place-items:center;background:conic-gradient(#3ddc97 ' + pct.toFixed(1) + '%,' + (night ? 'rgba(255,255,255,.18)' : 'rgba(12,28,52,.14)') + ' 0);' + (on ? 'animation:ringGlow 3s ease-in-out infinite;' : '') + 'transition:background .8s,transform .25s;cursor:pointer')
+    }, React.createElement("div", {
+      style: sx('width:66px;height:66px;border-radius:16px;background:linear-gradient(135deg,#3ab5a7,#0090ca);color:#fff;display:grid;place-items:center;font-weight:800;font-size:23px;overflow:hidden')
+    }, u && u.photo && u.photo.url ? React.createElement("img", {
+      src: u.photo.url,
+      alt: "",
+      style: {
+        width: '100%',
+        height: '100%',
+        objectFit: 'cover'
+      }
+    }) : initials)), React.createElement("div", {
+      style: sx('position:relative;min-width:0;flex:1 1 200px')
+    }, React.createElement("div", {
+      style: sx('font-size:10.5px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:' + (night ? '#7ac4e8' : '#0a5f8c'))
+    }, greeting), React.createElement("div", {
+      style: fs('font-size:23px;font-weight:800;letter-spacing:-.3px;margin-top:4px;color:' + ink.strong + ';animation:textGlow 4s ease-in-out infinite')
+    }, staffName), React.createElement("div", {
+      style: sx('font-size:12.5px;margin-top:3px;color:' + ink.soft)
+    }, designation, " \xB7 ", unit)), React.createElement("div", {
+      style: fs(shiftCard)
+    }, sh ? React.createElement(React.Fragment, null, React.createElement("div", {
+      style: sx('display:flex;align-items:center;gap:9px')
+    }, React.createElement("span", {
+      style: fs('width:9px;height:9px;border-radius:50%;flex-shrink:0;background:' + (on ? '#3ddc97' : sh.accent) + ';' + (on ? 'animation:livepulse 2.4s infinite' : ''))
+    }), React.createElement("span", {
+      style: sx('font-size:13.5px;font-weight:700;letter-spacing:.2px;color:' + ink.strong)
+    }, sh.name, " shift"), React.createElement("span", {
+      style: sx(on ? tag('#0b3a2c', 'rgba(61,220,151,.85)') : tag(night ? '#cfe0f0' : '#2b3d55', night ? 'rgba(255,255,255,.14)' : 'rgba(12,28,52,.1)'))
+    }, on ? 'On duty' : before ? 'Upcoming' : 'Completed'), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: sx(rangeStyle)
+    }, sh.range)), React.createElement("div", {
+      style: sx('display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-top:11px')
+    }, React.createElement("div", null, React.createElement("div", {
+      style: sx(miniLabel)
+    }, on ? 'Time left on shift' : before ? 'Starts in' : 'Next shift in'), React.createElement("div", {
+      style: sx("font-family:'IBM Plex Mono',monospace;font-size:27px;font-weight:700;letter-spacing:1px;line-height:1.1;margin-top:2px;color:" + ink.strong)
+    }, hms(remain))), React.createElement("div", {
+      style: sx('margin-left:auto;text-align:right')
+    }, React.createElement("div", {
+      style: sx(miniLabel)
+    }, "Now"), React.createElement("div", {
+      style: fs("font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:700;letter-spacing:.6px;margin-top:3px;color:" + ink.strong + ';animation:tick 1s ease-in-out infinite alternate')
+    }, clock), React.createElement("div", {
+      style: sx(rangeStyle)
+    }, dateLine))), React.createElement("div", {
+      style: sx('position:relative;height:6px;border-radius:4px;overflow:hidden;margin-top:11px;background:' + (night ? 'rgba(255,255,255,.12)' : 'rgba(12,28,52,.16)'))
+    }, React.createElement("div", {
+      style: sx('height:100%;border-radius:4px;width:' + pct.toFixed(2) + '%;background:linear-gradient(90deg,' + sh.accent + ',' + sh.accent2 + ');transition:width 1s linear')
+    }), React.createElement("div", {
+      style: fs('position:absolute;top:0;bottom:0;left:0;width:30%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.6),transparent);animation:barShine 2.8s ease-in-out infinite;pointer-events:none')
+    })), React.createElement("div", {
+      style: sx('font-size:11px;margin-top:8px;color:' + ink.soft)
+    }, shiftNote)) : React.createElement(React.Fragment, null, React.createElement("div", {
+      style: sx('display:flex;align-items:center;gap:9px')
+    }, React.createElement("span", {
+      style: sx('width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#9fb0c4')
+    }), React.createElement("span", {
+      style: sx('font-size:13.5px;font-weight:700;color:' + ink.strong)
+    }, "No shift today"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: sx(rangeStyle)
+    }, dateLine)), React.createElement("div", {
+      style: fs("font-family:'IBM Plex Mono',monospace;font-size:27px;font-weight:700;letter-spacing:1px;margin-top:10px;color:" + ink.strong + ';animation:tick 1s ease-in-out infinite alternate')
+    }, clock), React.createElement("div", {
+      style: sx('font-size:11px;margin-top:8px;color:' + ink.soft)
+    }, shiftNote))), React.createElement("div", {
+      style: sx('position:relative;display:flex;flex-wrap:wrap;gap:10px;flex:1 1 100%')
+    }, idFacts.map((f, i) => React.createElement("div", {
+      key: f.label,
+      style: fs(factChip(i))
+    }, React.createElement("div", {
+      style: sx('font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:' + ink.muted)
+    }, f.label), React.createElement("div", {
+      style: sx("font-size:13.5px;font-weight:700;margin-top:3px;font-family:'IBM Plex Mono',monospace;color:" + ink.strong)
+    }, f.value)))), React.createElement("div", {
+      "aria-hidden": "true",
+      style: sx('position:absolute;right:16px;bottom:9px;font-size:9.5px;letter-spacing:.6px;text-transform:uppercase;font-weight:600;color:' + (night ? 'rgba(199,210,224,.55)' : 'rgba(12,28,52,.45)') + ';pointer-events:none')
+    }, "Click the sky \xB7 the sun changes the weather")), React.createElement("div", {
+      style: Object.assign(sx(GLASS), {
+        padding: '14px 16px'
+      })
+    }, React.createElement("div", {
+      style: sx('display:flex;align-items:center;gap:8px')
+    }, React.createElement("div", {
+      style: sx('font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#7d8ea8')
+    }, "How are you feeling?"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: sx("font-size:10.5px;color:#9aa6b4;font-family:'IBM Plex Mono',monospace")
+    }, mood ? 'Logged ' + to12(pad(new Date(moodAt).getHours()) + ':' + pad(new Date(moodAt).getMinutes())) + ' · this device only' : 'Private to you')), React.createElement("div", {
+      style: sx('display:flex;gap:8px;margin-top:10px;flex-wrap:wrap')
+    }, MOOD_DEFS.map(m => React.createElement("button", {
+      key: m.label,
+      type: "button",
+      onClick: () => pickMood(m.label),
+      title: m.label,
+      style: fs('flex:1;min-width:88px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 4px;border-radius:12px;cursor:pointer;font-family:inherit;transition:transform .25s cubic-bezier(.2,.7,.3,1),border-color .25s;border:1px solid ' + (mood === m.label ? m.c : 'rgba(125,145,180,.22)') + ';background:' + (mood === m.label ? '#fff' : 'rgba(255,255,255,.55)') + ';color:' + (mood === m.label ? m.c : '#7d8ea8') + ';' + (mood === m.label ? 'animation:checkPop .4s cubic-bezier(.2,.7,.3,1);box-shadow:0 10px 22px rgba(31,59,90,.14)' : ''))
+    }, React.createElement("svg", {
+      width: "26",
+      height: "26",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.8",
+      strokeLinecap: "round"
+    }, React.createElement("circle", {
+      cx: "12",
+      cy: "12",
+      r: "9.5"
+    }), React.createElement("path", {
+      d: m.mouth
+    }), React.createElement("path", {
+      d: "M8.5 9.5h.01M15.5 9.5h.01",
+      strokeWidth: "2.4"
+    })), React.createElement("span", {
+      style: sx('font-size:9.5px;font-weight:700;letter-spacing:.3px')
+    }, m.label))))), React.createElement("div", {
+      style: sx('display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px;align-items:start')
+    }, React.createElement("div", {
+      style: sx('display:flex;flex-direction:column;gap:16px;min-width:0')
+    }, React.createElement(Soon, {
+      live: LIVE.thisWeek,
+      label: "Unlocks when the Duty Roster module is rolled out to your ward."
+    }, React.createElement("div", {
+      style: sx(GLASS)
+    }, cardH('This week', React.createElement("span", {
+      style: sx('font-size:11px;color:#9aa6b4')
+    }, "Click a day")), React.createElement("div", {
+      style: sx('display:grid;grid-template-columns:repeat(auto-fit,minmax(58px,1fr));gap:8px')
+    }, week.map((w, i) => {
+      const isSel = i === sel;
+      return React.createElement("button", {
+        key: i,
+        type: "button",
+        onClick: () => setSelDay(i),
+        style: sx('display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;border-radius:12px;cursor:pointer;font-family:inherit;transition:transform .25s cubic-bezier(.2,.7,.3,1),box-shadow .25s;border:1px solid ' + (isSel ? 'rgba(0,144,202,.5)' : w.today ? 'rgba(58,181,167,.5)' : 'rgba(125,145,180,.22)') + ';background:' + (isSel ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(255,255,255,.62)') + ';color:' + (isSel ? '#fff' : w.off ? '#9aa6b4' : '#16202e') + ';box-shadow:' + (isSel ? '0 10px 24px rgba(0,144,202,.35)' : 'none'))
+      }, React.createElement("span", {
+        style: sx('font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;opacity:.75')
+      }, w.dow), React.createElement("span", {
+        style: sx("font-size:19px;font-weight:800;font-family:'IBM Plex Mono',monospace;line-height:1.1")
+      }, w.date), React.createElement("span", {
+        style: sx('font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:10px;background:' + (isSel ? 'rgba(255,255,255,.22)' : w.off ? 'rgba(125,145,180,.14)' : 'rgba(0,144,202,.12)') + ';color:' + (isSel ? '#fff' : w.off ? '#8894a6' : '#0072a3'))
+      }, w.code || (w.off ? 'Off' : '—')));
+    })), React.createElement("div", {
+      key: sel,
+      style: fs('display:flex;align-items:center;gap:12px;margin-top:12px;padding:11px 13px;border-radius:12px;border:1px solid rgba(125,145,180,.22);background:rgba(255,255,255,.62);animation:fadeSwap .3s ease')
+    }, React.createElement("span", {
+      style: sx('width:10px;height:10px;border-radius:50%;flex-shrink:0;background:' + (sd && sd.off ? '#b6c0cc' : '#27a8db'))
+    }), React.createElement("div", {
+      style: sx('flex:1;min-width:0')
+    }, React.createElement("div", {
+      style: sx('font-size:13px;font-weight:700;color:#16202e')
+    }, sd ? sd.full.toLocaleDateString('en-GB', {
+      weekday: 'long',
+      day: '2-digit',
+      month: 'short'
+    }) + (sd.code ? sd.off ? ' · Off' : ' · ' + sd.code : ' · Nothing rostered') : ''), React.createElement("div", {
+      style: sx('font-size:11.5px;color:#6c7a8c;margin-top:1px')
+    }, sd && sd.info && sd.info.label ? sd.info.label + ' · ' + unit : sd && sd.off && sd.code ? 'No duty scheduled. Enjoy your rest day.' : 'Not on the published roster for this day.')), React.createElement("button", {
+      type: "button",
+      title: "Opens the Duty Roster module",
+      onClick: () => setRoute && setRoute({
+        view: 'rosterHome'
+      }),
+      style: sx('font-family:inherit;font-size:11.5px;font-weight:700;padding:7px 12px;border-radius:9px;cursor:pointer;border:1px solid rgba(0,144,202,.35);background:rgba(255,255,255,.7);color:#0072a3;white-space:nowrap')
+    }, "Request swap")))), React.createElement(Soon, {
+      live: LIVE.dutyToday,
+      label: "Unlocks with the Duty Roster rollout."
+    }, React.createElement("div", {
+      style: sx(GLASS)
+    }, cardH('My duty today', React.createElement("span", {
+      style: sx("font-size:11px;color:#9aa6b4;font-family:'IBM Plex Mono',monospace")
+    }, dateLine)), React.createElement("div", {
+      style: sx('display:flex;flex-wrap:wrap;gap:12px')
+    }, duty.map(d => React.createElement("div", {
+      key: d.label,
+      style: sx('flex:1 1 130px;min-width:130px;padding:12px 13px;border-radius:13px;border:1px solid rgba(125,145,180,.22);background:rgba(255,255,255,.62)')
+    }, React.createElement("div", {
+      style: sx('font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#7d8ea8')
+    }, d.label), React.createElement("div", {
+      style: sx('font-size:16px;font-weight:800;color:#16202e;margin-top:5px;letter-spacing:-.2px')
+    }, d.value), React.createElement("div", {
+      style: sx('font-size:11.5px;color:#6c7a8c;margin-top:2px')
+    }, d.note))))))), React.createElement("div", {
+      style: sx('display:flex;flex-direction:column;gap:16px;min-width:0')
+    }, React.createElement(Soon, {
+      live: LIVE.announcements,
+      label: "Unlocks when Nursing Services notices go live."
+    }, React.createElement("div", {
+      style: sx('position:relative;overflow:hidden;border-radius:16px;border:1px solid rgba(122,196,232,.25);background:linear-gradient(135deg,rgba(0,114,163,.96),rgba(58,181,167,.92));color:#fff;box-shadow:0 14px 38px rgba(0,114,163,.3);padding:16px 17px;min-height:118px')
+    }, React.createElement("div", {
+      "aria-hidden": "true",
+      style: fs('position:absolute;right:-40px;top:-50px;width:170px;height:170px;border-radius:50%;background:rgba(255,255,255,.12);animation:orbFloat 12s ease-in-out infinite alternate')
+    }), React.createElement("div", {
+      style: sx('display:flex;align-items:center;gap:8px;position:relative')
+    }, React.createElement("span", {
+      style: sx('font-size:10.5px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:rgba(255,255,255,.8)')
+    }, "Announcements"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("div", {
+      style: sx('display:flex;gap:5px')
+    }, anns.map((_, i) => React.createElement("button", {
+      key: i,
+      type: "button",
+      onClick: () => setAnnPinned(i),
+      style: sx('width:' + (i === ai ? 18 : 7) + 'px;height:7px;border-radius:4px;border:none;padding:0;cursor:pointer;background:rgba(255,255,255,' + (i === ai ? .95 : .45) + ');transition:width .3s,background .3s')
+    })))), React.createElement("div", {
+      key: ai,
+      style: fs('position:relative;margin-top:10px;animation:fadeSwap .35s ease')
+    }, React.createElement("div", {
+      style: sx('font-size:15px;font-weight:800;letter-spacing:-.2px')
+    }, anns[ai].title), React.createElement("div", {
+      style: sx('font-size:12px;color:rgba(255,255,255,.85);margin-top:4px;line-height:1.5')
+    }, anns[ai].body)))), React.createElement(Soon, {
+      live: LIVE.team,
+      label: "Unlocks with the Duty Roster rollout."
+    }, React.createElement("div", {
+      style: sx(GLASS)
+    }, cardH('Team on my shift', React.createElement("span", {
+      style: sx('font-size:11px;color:#9aa6b4')
+    }, team.length ? team.length + ' on this shift' : '')), team.length === 0 ? React.createElement("div", {
+      style: sx('font-size:12.5px;color:#6c7a8c;line-height:1.6')
+    }, todayCode ? 'Nobody else on the published roster carries ' + todayCode + ' today.' : 'This fills in once you are on a published roster for today.') : React.createElement(React.Fragment, null, React.createElement("div", {
+      style: sx('display:flex;align-items:center;gap:0')
+    }, team.map((p, i) => React.createElement("div", {
+      key: i,
+      onClick: () => setTeamSel(i),
+      title: p.name,
+      style: sx('position:relative;width:40px;height:40px;border-radius:12px;margin-left:' + (i ? -8 : 0) + 'px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;cursor:pointer;background:' + p.c + ';border:2.5px solid ' + (teamSel === i ? '#16202e' : '#fff') + ';box-shadow:0 6px 16px rgba(31,59,90,.18);transition:transform .25s cubic-bezier(.2,.7,.3,1),border-color .25s;z-index:' + (teamSel === i ? 4 : 1))
+    }, initialsOf(p.name), React.createElement("span", {
+      style: sx('position:absolute;right:-2px;bottom:-2px;width:10px;height:10px;border-radius:50%;border:2px solid #fff;background:#3ddc97')
+    })))), tp && React.createElement("div", {
+      key: teamSel,
+      style: fs('display:flex;align-items:center;gap:11px;margin-top:12px;padding:10px 12px;border-radius:11px;border:1px solid rgba(125,145,180,.22);background:rgba(255,255,255,.62);animation:fadeSwap .3s ease')
+    }, React.createElement("div", {
+      style: sx('width:36px;height:36px;border-radius:10px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;background:' + tp.c + ';flex-shrink:0')
+    }, initialsOf(tp.name)), React.createElement("div", {
+      style: sx('flex:1;min-width:0')
+    }, React.createElement("div", {
+      style: sx('font-size:12.5px;font-weight:700;color:#16202e')
+    }, tp.name), React.createElement("div", {
+      style: sx('font-size:11px;color:#6c7a8c')
+    }, tp.role)), React.createElement("span", {
+      style: sx(tag('#0f7a5f', 'rgba(61,220,151,.2)'))
+    }, "On duty"))))), React.createElement(Soon, {
+      live: LIVE.offDays,
+      label: "Unlocks with the Duty Roster rollout."
+    }, React.createElement("div", {
+      style: sx(GLASS)
+    }, React.createElement("div", {
+      style: sx('display:flex;align-items:center;gap:14px')
+    }, React.createElement("div", {
+      style: sx('width:70px;height:70px;border-radius:50%;padding:5px;flex-shrink:0;display:grid;place-items:center;background:conic-gradient(#27a8db ' + (offStats && offStats.total ? (offStats.left / offStats.total * 100).toFixed(1) : 0) + '%,rgba(125,145,180,.18) 0);transition:background .6s')
+    }, React.createElement("div", {
+      style: sx('width:60px;height:60px;border-radius:50%;background:#fff;display:grid;place-items:center;text-align:center;line-height:1')
+    }, React.createElement("div", null, React.createElement("div", {
+      style: sx("font-size:18px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#16202e")
+    }, offStats ? offStats.left : '—'), React.createElement("div", {
+      style: sx('font-size:8.5px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7d8ea8;margin-top:2px')
+    }, "days")))), React.createElement("div", {
+      style: sx('flex:1;min-width:0')
+    }, React.createElement("div", {
+      style: sx('font-size:14.5px;font-weight:700;color:#16202e')
+    }, "Off days this month"), React.createElement("div", {
+      style: sx('font-size:11.5px;color:#6c7a8c;margin-top:3px')
+    }, offStats ? offStats.taken + ' taken of ' + offStats.total + ' on the published roster' : 'Counts your O-coded days once a roster is published.'), React.createElement("div", {
+      style: sx('font-size:10.5px;color:#9aa6b4;margin-top:6px')
+    }, "Leave requests still go through your in-charge \u2014 this counts the roster only."))))), React.createElement(Soon, {
+      live: LIVE.records,
+      label: "Unlocks when the certification register is filled in."
+    }, React.createElement("div", {
+      style: sx(GLASS)
+    }, cardH('My records', React.createElement("span", {
+      style: sx('font-size:11px;color:#9aa6b4')
+    }, "Click to expand")), React.createElement("div", {
+      style: sx('display:flex;flex-direction:column;gap:8px')
+    }, certs === null ? React.createElement("div", {
+      style: sx('font-size:12.5px;color:#6c7a8c')
+    }, "Loading your records\u2026") : records.length === 0 ? React.createElement("div", {
+      style: sx('font-size:12.5px;color:#6c7a8c;line-height:1.6')
+    }, "No certifications or vaccination status recorded against your staff record yet.") : records.map((r, i) => {
+      const open = openRec === i;
+      return React.createElement("div", {
+        key: i,
+        onClick: () => setOpenRec(open ? null : i),
+        style: sx('padding:9px 11px;border-radius:11px;cursor:pointer;border:1px solid ' + (open ? 'rgba(0,144,202,.35)' : 'rgba(125,145,180,.2)') + ';background:' + (open ? '#fff' : 'rgba(255,255,255,.6)') + ';transition:transform .25s cubic-bezier(.2,.7,.3,1),box-shadow .25s,border-color .25s')
+      }, React.createElement("div", {
+        style: sx('display:flex;align-items:center;gap:10px')
+      }, React.createElement("span", {
+        style: sx('width:9px;height:9px;border-radius:50%;background:' + r.dotC + ';flex-shrink:0')
+      }), React.createElement("div", {
+        style: sx('min-width:0;flex:1')
+      }, React.createElement("div", {
+        style: sx('font-size:12.5px;font-weight:600;color:#16202e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')
+      }, r.label), React.createElement("div", {
+        style: sx('font-size:11px;color:#9aa6b4')
+      }, r.meta)), React.createElement("span", {
+        style: sx(r.tagStyle)
+      }, r.tag), React.createElement("svg", {
+        width: "14",
+        height: "14",
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "#9aa6b4",
+        strokeWidth: "2.2",
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        style: sx('flex-shrink:0;transition:transform .3s;transform:rotate(' + (open ? 180 : 0) + 'deg)')
+      }, React.createElement("path", {
+        d: "M6 9l6 6 6-6"
+      }))), open && React.createElement("div", {
+        style: fs('margin-top:9px;padding-top:9px;border-top:1px dashed rgba(125,145,180,.3);font-size:11.5px;color:#3c4e66;line-height:1.55;animation:slideDown .25s ease')
+      }, r.detail));
+    })), React.createElement("div", {
+      style: sx('margin-top:12px;font-size:11px;color:#9aa6b4;line-height:1.5;border-top:1px solid rgba(125,145,180,.2);padding-top:10px')
+    }, "Records are maintained by Nursing Services. Contact your supervisor to correct any detail."))))));
+  }
+  window.HomeView = HomeView;
 })();
 })();
 ;
@@ -14508,18 +17154,40 @@ function VaccBadge({
 function Avatar({
   name,
   size = 34,
-  fontSize
+  fontSize,
+  photo
 }) {
+  const [dead, setDead] = React.useState(false);
+  React.useEffect(() => {
+    setDead(false);
+  }, [photo && photo.url]);
   const parts = (name || '?').split(' ');
   const ini = (parts[0][0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '');
   let h = 0;
   for (const ch of name || '') h = (h * 31 + ch.charCodeAt(0)) % 360;
+  const box = {
+    width: size,
+    height: size,
+    borderRadius: '50%',
+    flexShrink: 0
+  };
+  if (photo && photo.url && !dead) {
+    return React.createElement("img", {
+      src: photo.url,
+      alt: ini.toUpperCase(),
+      title: name || '',
+      onError: () => setDead(true),
+      style: {
+        ...box,
+        objectFit: 'cover',
+        display: 'block',
+        background: '#e8eef5'
+      }
+    });
+  }
   return React.createElement("div", {
     style: {
-      width: size,
-      height: size,
-      borderRadius: '50%',
-      flexShrink: 0,
+      ...box,
       display: 'grid',
       placeItems: 'center',
       fontSize: fontSize || size * 0.4,
@@ -15058,6 +17726,7 @@ function StaffDeptChart({
     onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
     onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
   }, React.createElement(Avatar, {
+    photo: e.photo,
     name: e.name,
     size: 26
   }), React.createElement("div", {
@@ -15201,6 +17870,7 @@ function StaffExpChart({
     onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
     onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
   }, React.createElement(Avatar, {
+    photo: e.photo,
     name: e.name,
     size: 26
   }), React.createElement("div", {
@@ -15343,6 +18013,7 @@ function StaffDesigChart({
     onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
     onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
   }, React.createElement(Avatar, {
+    photo: e.photo,
     name: e.name,
     size: 26
   }), React.createElement("div", {
@@ -15588,6 +18259,7 @@ function WorkforceDashboard({
       emp: e.id
     })
   }, React.createElement(Avatar, {
+    photo: e.photo,
     name: e.name,
     size: 32
   }), React.createElement("div", {
@@ -15656,6 +18328,7 @@ function WorkforceDashboard({
       emp: e.id
     })
   }, React.createElement(Avatar, {
+    photo: e.photo,
     name: e.name,
     size: 32
   }), React.createElement("div", {
@@ -15783,6 +18456,7 @@ function StaffHighlight({
     onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
     onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
   }, React.createElement(Avatar, {
+    photo: e.photo,
     name: e.name,
     size: 30
   }), React.createElement("div", {
@@ -16165,6 +18839,7 @@ function StaffDirectory({
       gap: 10
     }
   }, React.createElement(Avatar, {
+    photo: e.photo,
     name: e.name,
     size: 30
   }), React.createElement("div", null, React.createElement("div", {
@@ -16298,6 +18973,7 @@ function StaffCompliance({
       emp: e.id
     })
   }, React.createElement(Avatar, {
+    photo: e.photo,
     name: e.name,
     size: 30
   }), React.createElement("div", {
@@ -16712,6 +19388,7 @@ function ManageStaff({
       gap: 10
     }
   }, React.createElement(Avatar, {
+    photo: e.photo,
     name: e.name,
     size: 28
   }), React.createElement("div", null, React.createElement("div", {
@@ -17512,9 +20189,6 @@ function StaffProfile({
     }
   }, React.createElement(PhotoPicker, {
     value: e.photo || null,
-    onChange: next => store.update(empId, {
-      photo: next
-    }),
     initials: badgeIni,
     name: e.name,
     kind: "staff",
@@ -17523,7 +20197,7 @@ function StaffProfile({
     h: 120,
     radius: 10,
     plain: true,
-    readOnly: !(window.unicoCan ? window.unicoCan('staff', 'edit') : true)
+    readOnly: true
   })), React.createElement("h2", {
     style: {
       margin: '14px 0 3px',
@@ -20423,7 +23097,8 @@ function DeptPrivilegesSettings({
 }
 function StaffFormRail({
   f,
-  editing
+  editing,
+  set
 }) {
   const MK = window.MK,
     S = window.STAFF;
@@ -20472,19 +23147,28 @@ function StaffFormRail({
     }
   }, React.createElement("div", {
     style: {
-      width: 112,
-      height: 112,
-      margin: '0 auto',
-      borderRadius: '50%',
       display: 'grid',
-      placeItems: 'center',
+      placeItems: 'center'
+    }
+  }, React.createElement(PhotoPicker, {
+    value: f.photo || null,
+    onChange: next => set && set('photo', next),
+    initials: name ? initials : '?',
+    name: name || 'New staff member',
+    kind: "staff",
+    size: 112,
+    radius: "50%",
+    readOnly: !(window.unicoCan ? window.unicoCan('staff', 'edit') : true),
+    style: {
       background: name ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'linear-gradient(135deg,#2b8f83,#0072a3)',
       fontSize: 38,
       fontWeight: 700,
       color: '#fff',
-      boxShadow: '0 10px 30px rgba(0,144,202,.35)'
+      boxShadow: '0 10px 30px rgba(0,144,202,.35)',
+      display: 'grid',
+      placeItems: 'center'
     }
-  }, name ? initials : '?'), React.createElement("div", {
+  })), React.createElement("div", {
     style: {
       fontSize: 16,
       fontWeight: 700,
@@ -20541,7 +23225,7 @@ function StaffFormRail({
       fontSize: 10.4,
       color: '#8fa3ba'
     }
-  }, "Avatar is generated from the initials until a photo is on file.")), React.createElement("div", {
+  }, f.photo && f.photo.url ? 'Photo saved with this record.' : 'Tap the camera to add a photo — or leave it and the initials are used.')), React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-h"
@@ -21583,7 +24267,8 @@ function StaffForm({
     })
   }, "Cancel")))))), React.createElement(StaffFormRail, {
     f: f,
-    editing: editing
+    editing: editing,
+    set: set
   })), saved && React.createElement(StaffSavedOverlay, {
     title: saved.title,
     sub: saved.sub,
@@ -55456,6 +58141,131 @@ window.LockScreen = LockScreen;
     user,
     onNav
   }) {
+    const [photo, setPhoto] = useState(user && user.photo || null);
+    const [name, setName] = useState(user && user.name || '');
+    const [designation, setDesignation] = useState(user && user.designation || '');
+    const [email, setEmail] = useState(user && user.email || '');
+    const [phone, setPhone] = useState(user && user.phone || '');
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState(null);
+    const [cur, setCur] = useState('');
+    const [nw, setNw] = useState('');
+    const [nw2, setNw2] = useState('');
+    const [pwBusy, setPwBusy] = useState(false);
+    const [pwMsg, setPwMsg] = useState(null);
+    const roleLabel = user && user.role === 'incharge' ? 'In-charge' : 'Data Collector';
+    const dirty = name !== (user && user.name || '') || designation !== (user && user.designation || '') || email !== (user && user.email || '') || phone !== (user && user.phone || '');
+    const meApi = (method, path, body) => fetch(path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'same-origin',
+      body: body ? JSON.stringify(body) : undefined
+    }).then(async r => {
+      let j = null;
+      try {
+        j = await r.json();
+      } catch (e) {}
+      if (!r.ok || !j || j.ok === false) throw new Error(j && j.error || 'Request failed (' + r.status + ').');
+      return j;
+    });
+    async function saveProfile() {
+      setMsg(null);
+      setBusy(true);
+      try {
+        await meApi('PATCH', '/api/me', {
+          name,
+          email,
+          phone,
+          designation
+        });
+        if (window.__UNICO_USER__) Object.assign(window.__UNICO_USER__, {
+          name,
+          email,
+          phone,
+          designation
+        });
+        setMsg({
+          kind: 'ok',
+          text: 'Profile saved.'
+        });
+      } catch (e) {
+        setMsg({
+          kind: 'err',
+          text: String(e && e.message || e)
+        });
+      } finally {
+        setBusy(false);
+      }
+    }
+    async function savePassword() {
+      setPwMsg(null);
+      if (nw.length < 6) return setPwMsg({
+        kind: 'err',
+        text: 'New password must be at least 6 characters.'
+      });
+      if (nw !== nw2) return setPwMsg({
+        kind: 'err',
+        text: 'New passwords do not match.'
+      });
+      setPwBusy(true);
+      try {
+        await meApi('POST', '/api/me/password', {
+          currentPassword: cur,
+          newPassword: nw
+        });
+        setCur('');
+        setNw('');
+        setNw2('');
+        setPwMsg({
+          kind: 'ok',
+          text: 'Password changed.'
+        });
+      } catch (e) {
+        setPwMsg({
+          kind: 'err',
+          text: String(e && e.message || e)
+        });
+      } finally {
+        setPwBusy(false);
+      }
+    }
+    const cpInput = {
+      padding: '7px 10px',
+      border: '1px solid rgba(125,145,180,.28)',
+      borderRadius: 7,
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      width: '100%',
+      outline: 'none',
+      background: '#fff',
+      boxSizing: 'border-box'
+    };
+    const edit = (label, val, set, placeholder, ac) => React.createElement("div", {
+      key: label,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '7px 0',
+        borderBottom: '1px solid rgba(125,145,180,.12)'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c',
+        width: 130,
+        flexShrink: 0
+      }
+    }, label), React.createElement("input", {
+      style: cpInput,
+      name: ac,
+      autoComplete: ac,
+      value: val,
+      placeholder: placeholder,
+      onChange: e => set(e.target.value)
+    }));
     const dataRev = useDcDataRev();
     const depts = useMemo(() => dcAllDepts(), [dataRev]);
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length), [dataRev]);
@@ -55611,18 +58421,20 @@ window.LockScreen = LockScreen;
     }), React.createElement("div", {
       style: {
         position: 'relative',
-        width: 78,
-        height: 78,
-        borderRadius: 18,
-        background: 'linear-gradient(135deg,#3ab5a7,#0090ca)',
-        display: 'grid',
-        placeItems: 'center',
-        fontSize: 27,
-        fontWeight: 700,
-        flexShrink: 0,
-        boxShadow: '0 0 0 3px rgba(122,196,232,.25)'
+        flexShrink: 0
       }
-    }, cpInitials(user.name)), React.createElement("div", {
+    }, React.createElement(PhotoPicker, {
+      value: photo,
+      size: 78,
+      radius: 18,
+      kind: "profile",
+      initials: cpInitials(user.name),
+      name: user.name || 'My profile',
+      onChange: next => {
+        setPhoto(next);
+        window.unicoSetAccountPhoto(next);
+      }
+    })), React.createElement("div", {
       style: {
         position: 'relative',
         minWidth: 220,
@@ -55651,7 +58463,7 @@ window.LockScreen = LockScreen;
         color: '#8ee6da',
         border: '1px solid rgba(58,181,167,.35)'
       }
-    }, "Data Collector")), React.createElement("div", {
+    }, roleLabel)), React.createElement("div", {
       style: {
         fontSize: 12,
         color: '#a8bdd6',
@@ -55717,14 +58529,116 @@ window.LockScreen = LockScreen;
         fontWeight: 700,
         color: '#16202e'
       }
-    }, "Details")), row('Name', user.name), row('Staff ID', user.username, true), row('Role', 'Data Collector'), row('Departments', depts.map(d => d.name).join(', ')), row('Quality areas', areas.map(a => a.name).join(', ')), React.createElement("div", {
+    }, "Details")), msg && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        borderRadius: 8,
+        padding: '8px 11px',
+        marginBottom: 9,
+        color: msg.kind === 'ok' ? '#0f6a39' : '#b4232f',
+        background: msg.kind === 'ok' ? 'rgba(31,157,87,.10)' : 'rgba(210,58,82,.10)',
+        border: '1px solid ' + (msg.kind === 'ok' ? 'rgba(31,157,87,.28)' : 'rgba(210,58,82,.28)')
+      }
+    }, msg.text), edit('Name', name, setName, 'Your full name', 'name'), edit('Designation', designation, setDesignation, 'e.g. Nursing In-charge', 'organization-title'), edit('Email', email, setEmail, 'name@unicohospitals.com', 'email'), edit('Phone', phone, setPhone, '01XXXXXXXXX', 'tel'), row('Staff ID', user.username, true), row('Role', roleLabel), row('Departments', depts.map(d => d.name).join(', ')), row('Quality areas', areas.map(a => a.name).join(', ')), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        marginTop: 11
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#9aa6b4'
+      }
+    }, dirty ? 'Unsaved changes' : 'Everything saved'), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "btn pri sm",
+      onClick: saveProfile,
+      disabled: busy || !dirty
+    }, busy ? 'Saving…' : 'Save changes')), React.createElement("div", {
       style: {
         fontSize: 11,
         color: '#9aa6b4',
-        marginTop: 11,
+        marginTop: 9,
         lineHeight: 1.6
       }
-    }, "Qualification, joining date and registration are held on the staff register, which this portal is not permitted to read. Ask your administrator to correct anything shown here.")), React.createElement("div", {
+    }, "Your photo and the details above are yours to maintain. Role, departments and quality areas are set by an administrator \u2014 ask them if those are wrong. Qualification, joining date and registration live on the staff register, which this portal is not permitted to read.")), React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: '14px 17px'
+      })
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 6
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 24,
+        height: 24,
+        borderRadius: 7,
+        background: 'rgba(0,144,202,.12)',
+        color: '#0072a3'
+      }
+    }, CP_ICON('M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2zM7 11V7a5 5 0 0110 0v4', 13)), React.createElement("h3", {
+      style: {
+        margin: 0,
+        fontSize: 13,
+        fontWeight: 700,
+        color: '#16202e'
+      }
+    }, "Password")), pwMsg && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        borderRadius: 8,
+        padding: '8px 11px',
+        margin: '6px 0 9px',
+        color: pwMsg.kind === 'ok' ? '#0f6a39' : '#b4232f',
+        background: pwMsg.kind === 'ok' ? 'rgba(31,157,87,.10)' : 'rgba(210,58,82,.10)',
+        border: '1px solid ' + (pwMsg.kind === 'ok' ? 'rgba(31,157,87,.28)' : 'rgba(210,58,82,.28)')
+      }
+    }, pwMsg.text), [['Current password', cur, setCur, 'Enter current password'], ['New password', nw, setNw, 'At least 6 characters'], ['Confirm new', nw2, setNw2, 'Re-enter new password']].map(([l, v, set, ph]) => React.createElement("div", {
+      key: l,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '7px 0',
+        borderBottom: '1px solid rgba(125,145,180,.12)'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c',
+        width: 130,
+        flexShrink: 0
+      }
+    }, l), React.createElement("input", {
+      type: "password",
+      style: cpInput,
+      value: v,
+      placeholder: ph,
+      onChange: e => set(e.target.value)
+    }))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'flex-end',
+        marginTop: 11
+      }
+    }, React.createElement("button", {
+      className: "btn pri sm",
+      onClick: savePassword,
+      disabled: pwBusy || !cur || !nw
+    }, pwBusy ? 'Saving…' : 'Change password'))), React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
         padding: '14px 17px',
         display: 'flex',
@@ -58601,6 +61515,7 @@ window.LockScreen = LockScreen;
         className: "badge alert num"
       }, badgeVal));
     };
+    const [acctOpen, setAcctOpen] = useState(false);
     const crumb = {
       home: 'Dashboard',
       unit: "My unit's staff",
@@ -58732,9 +61647,10 @@ window.LockScreen = LockScreen;
       }
     }, (subCount.total || 0) - (subCount.missing || 0), " of ", subCount.total || 0, " indicators sent")))), React.createElement("div", {
       className: "sb-foot"
-    }, React.createElement("div", {
-      className: "avatar"
-    }, cpInitials(user.name)), React.createElement("div", {
+    }, React.createElement(UnicoAvatar, {
+      className: "avatar",
+      initials: cpInitials(user.name)
+    }), React.createElement("div", {
       onClick: () => go('profile'),
       title: "Open my profile",
       style: {
@@ -58876,18 +61792,104 @@ window.LockScreen = LockScreen;
       }
     }), online ? 'Online' : 'Offline'), React.createElement("div", {
       style: {
+        position: 'relative',
+        flexShrink: 0
+      }
+    }, React.createElement("button", {
+      onClick: () => setAcctOpen(v => !v),
+      title: "My account",
+      style: {
         width: 34,
         height: 34,
         borderRadius: 9,
+        padding: 0,
+        overflow: 'hidden',
+        cursor: 'pointer',
+        border: acctOpen ? '2px solid #0090ca' : '1px solid rgba(255,255,255,.9)',
         background: 'linear-gradient(135deg,#3ab5a7,#0090ca)',
         color: '#fff',
         display: 'grid',
         placeItems: 'center',
         fontWeight: 700,
-        fontSize: 13,
-        flexShrink: 0
+        fontSize: 13
       }
-    }, cpInitials(user.name))), React.createElement("div", {
+    }, React.createElement(UnicoAvatar, {
+      size: 32,
+      radius: 8,
+      initials: cpInitials(user.name)
+    })), acctOpen && React.createElement(React.Fragment, null, React.createElement("div", {
+      onClick: () => setAcctOpen(false),
+      style: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 60
+      }
+    }), React.createElement("div", {
+      style: {
+        position: 'absolute',
+        right: 0,
+        top: 42,
+        zIndex: 61,
+        minWidth: 214,
+        background: '#fff',
+        borderRadius: 11,
+        border: '1px solid rgba(125,145,180,.22)',
+        boxShadow: '0 18px 40px rgba(31,59,90,.20)',
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        padding: '11px 13px',
+        borderBottom: '1px solid rgba(125,145,180,.14)'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: '#16202e',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, user.name || 'My account'), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c'
+      }
+    }, (inCharge ? 'In-charge' : 'Data Collector') + (user.username ? ' · @' + user.username : ''))), React.createElement("button", {
+      onClick: () => {
+        setAcctOpen(false);
+        go('profile');
+      },
+      style: {
+        width: '100%',
+        textAlign: 'left',
+        padding: '10px 13px',
+        border: 0,
+        background: 'transparent',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: '#16202e',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9
+      }
+    }, CP_ICON('M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0', 14, '#0072a3'), "My profile & photo"), React.createElement("a", {
+      href: "/logout",
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '10px 13px',
+        borderTop: '1px solid rgba(125,145,180,.14)',
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: '#a92c42',
+        textDecoration: 'none'
+      }
+    }, CP_ICON('M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9', 14, '#a92c42'), "Sign out"))))), React.createElement("div", {
       style: {
         flex: 1,
         overflowY: 'auto',
@@ -86251,7 +89253,7 @@ function App() {
   const depts = store.depts;
   const [route, setRoute] = useState(() => {
     const init = typeof window !== 'undefined' && window.__UNICO_INITIAL_ROUTE__ || {
-      view: 'dashboard'
+      view: 'home'
     };
     if (window.unicoCanAccessView && !window.unicoCanAccessView(init.view)) {
       const home = window.unicoFirstAllowedHome && window.unicoFirstAllowedHome();
@@ -86423,6 +89425,16 @@ function App() {
   } else if (route.view === 'reportsQuality') {
     crumbs = ['UNICO', 'Reports', 'Quality Indicators'];
     body = typeof QualityReportsPanel !== 'undefined' ? React.createElement(QualityReportsPanel, null) : null;
+  } else if (route.view === 'home') {
+    crumbs = ['UNICO', 'Home'];
+    body = typeof HomeView !== 'undefined' ? React.createElement(HomeView, {
+      setRoute: setRoute
+    }) : null;
+  } else if (route.view === 'profile') {
+    crumbs = ['UNICO', 'My Profile'];
+    body = typeof ProfileView !== 'undefined' ? React.createElement(ProfileView, {
+      setRoute: setRoute
+    }) : null;
   } else if (route.view === 'settings') {
     crumbs = ['UNICO', 'Settings'];
     body = React.createElement(Settings, {
