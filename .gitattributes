@@ -1,0 +1,18 @@
+# Pin line endings. Without this, core.autocrlf=true on Windows rewrites every
+# file to CRLF on checkout and git reports the whole tree as modified.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+
+# Binary — never diff or convert.
+*.png binary
+*.jpg binary
+*.ico binary
+*.docx binary
+*.xlsx binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Generated bundle: committed (Vercel has no build step) but not worth reviewing.
+renderer/dist/app.bundle.js -diff linguist-generated

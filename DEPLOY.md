@@ -5,13 +5,54 @@ This repo contains both the **Electron desktop app** (root `package.json`,
 the same `renderer/` in any browser and persists to MongoDB Atlas. Vercel deploys
 the **web edition** only.
 
+## 0. What actually ships
+
+Three sets of files, and they are not the same set:
+
+| Set | Contents |
+|-----|----------|
+| **In git (GitHub)** | All app source + `renderer/dist/app.bundle.js` + `server/seed/**` + `scripts/data/bdmed/` (the CC0 drug dataset the offline importer reads). |
+| **Uploaded to Vercel** | Everything in git minus `.vercelignore` (drops `scripts/`, `docs/`, `server/test/`, the Electron shell). |
+| **Actually built/served** | Only what `vercel.json` names — see below. |
+
+`vercel.json` builds exactly four things:
+
+1. `server/web.js` → `@vercel/node`. Its `require()` graph is traced and bundled,
+   so **every `server/*.js` it requires must be committed** or the function dies at
+   import with `Cannot find module`. `includeFiles` adds `renderer/index.html` and
+   `server/seed/**`, which are read at runtime and would otherwise be missed.
+2. `api/report_pdf.py` → `@vercel/python` (deps from `api/requirements.txt`).
+3. `renderer/dist/**`, `renderer/vendor/**`, `renderer/unico/**` → `@vercel/static`,
+   served from the CDN edge.
+
+**There is no build step on Vercel.** `scripts/build-renderer.js` never runs there,
+so `renderer/dist/app.bundle.js` must be **rebuilt locally and committed** with any
+`.jsx` change:
+
+```bat
+npm install @babel/standalone --no-save   REM once; it sits under a non-standard "dev" key
+npm --prefix server run web               REM rebuilds the bundle, then serves :8080
+git add renderer/dist/app.bundle.js renderer/index.html
+```
+
+`renderer/index.html` carries the `?v=<hash>` cache-buster, so it must be committed
+alongside the bundle or the CDN keeps serving the old one.
+
+> ⚠️ `.gitignore` has a blanket `dist/` rule. It is cancelled by an explicit
+> `!renderer/dist/` — do not remove that negation, or `git add .` will silently skip
+> the bundle and the live site will serve stale code.
+
+Not deployed, on purpose: `main.js` / `preload.js` / `build/` (the Electron desktop
+shell), `scripts/` (one-off DB maintenance and import tools), `docs/`, `server/test/`.
+
 ## 1. Push to GitHub
 Already wired to `https://github.com/niloyunico/statistics`.
 
 ## 2. Import the project into Vercel
 - Vercel → **Add New… → Project** → import the GitHub repo.
-- **Root Directory:** `pc apps/unico-n` (the folder that contains `vercel.json`,
-  `server/`, and `renderer/`).
+- **Root Directory:** leave it at the repository root — `vercel.json`, `server/`
+  and `renderer/` all live at the top level of this repo. (Do **not** set it to
+  `pc apps/unico-n`; that was the old two-folder layout and no longer exists.)
 - Framework preset: **Other** (no build step — `vercel.json` does the work).
 
 `vercel.json` builds `server/web.js` with `@vercel/node` (so it installs the

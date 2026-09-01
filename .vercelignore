@@ -1,0 +1,27 @@
+# Files uploaded to Vercel but never used by the deployment.
+# vercel.json only builds: server/web.js (@vercel/node), api/report_pdf.py
+# (@vercel/python) and renderer/{dist,vendor,unico} + renderer/index.html
+# (@vercel/static). Everything below is local tooling or documentation.
+
+# One-off DB maintenance / import / diagnostic scripts + the drug dataset.
+# Never required at runtime (server/*.js requires nothing from ../scripts).
+scripts/
+
+# Generated Word manuals and design notes.
+docs/
+
+# Electron desktop shell — the web edition does not use it.
+main.js
+preload.js
+build/
+*.bat
+
+# Server unit tests (run locally with `npm --prefix server test`).
+server/test/
+
+# Noise
+__pycache__/
+*.pyc
+*.png
+!renderer/**/*.png
+.claude/

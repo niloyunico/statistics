@@ -1,8 +1,14 @@
 # dependencies / build output
 node_modules/
 dist/
+# ...but renderer/dist IS the deployed bundle (vercel.json builds it as a
+# @vercel/static asset). It must be committed, so re-include the directory —
+# otherwise `git add .` silently skips it and the live site serves a stale bundle.
+!renderer/dist/
 *.log
 .tmp/
+*.bak
+*.bak[0-9]
 
 # generated migration backups (operational snapshots, not source)
 scripts/backups/
@@ -33,3 +39,13 @@ medex_scraper_project/
 # Local UI mockup references and other local-only folders (not part of the deployed app)
 ui/
 pc apps/
+
+# Medicine drug data (scripts/data): keep ONLY the CC0 source dataset that the
+# offline importer reads (scripts/data/bdmed, ~12 MB). Everything else there is
+# scraper output, image dumps and Mongo backups — regenerable, not source.
+scripts/data/*
+!scripts/data/bdmed/
+
+# Local scratch/diagnostic files (dot-prefixed, never part of the app)
+scripts/.pdf-shot*.js
+scripts/.fixture-*.json
