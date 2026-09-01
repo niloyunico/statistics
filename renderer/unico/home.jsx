@@ -243,6 +243,7 @@
     // ---- the mockup's clock/shift math, fed by the real roster ---------------
     const h = now.getHours();
     const greeting = h >= 23 || h < 5 ? 'Working late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 20 ? 'Good evening' : 'Good night';
+    const greetEmoji = h >= 23 || h < 5 ? '🌙✨' : h < 12 ? '☀️' : h < 17 ? '🌤️' : h < 20 ? '🌆' : '🌙';
     const dateLine = now.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
     const h12 = h % 12 === 0 ? 12 : h % 12;
     const clock = pad(h12) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds()) + ' ' + (h < 12 ? 'AM' : 'PM');
@@ -575,9 +576,12 @@
             </div>
           </div>
           <div style={sx('position:relative;min-width:0;flex:1 1 200px')}>
-            <div style={sx('font-size:10.5px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:' + (night ? '#7ac4e8' : '#0a5f8c'))}>{greeting}</div>
-            <div style={fs('font-size:23px;font-weight:800;letter-spacing:-.3px;margin-top:4px;color:' + ink.strong + ';animation:textGlow 4s ease-in-out infinite')}>{staffName}</div>
-            <div style={sx('font-size:12.5px;margin-top:3px;color:' + ink.soft)}>{designation} · {unit}</div>
+            {/* The greeting IS the headline — a person is welcomed first, filed second. */}
+            <div style={fs('font-size:34px;font-weight:800;letter-spacing:-.8px;line-height:1.1;color:' + ink.strong + ';animation:textGlow 4s ease-in-out infinite')}>
+              {greeting} <span style={sx('font-size:30px;letter-spacing:0')}>{greetEmoji}</span>
+            </div>
+            <div style={sx('font-size:16px;font-weight:700;letter-spacing:-.2px;margin-top:6px;color:' + (night ? '#cfe0f0' : '#12385c'))}>{staffName}</div>
+            <div style={sx('font-size:12.5px;margin-top:2px;color:' + ink.soft)}>{designation} · {unit}</div>
           </div>
 
           {/* the shift card */}

@@ -12597,6 +12597,7 @@ Object.assign(window, {
     }, [roster, me]);
     const h = now.getHours();
     const greeting = h >= 23 || h < 5 ? 'Working late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 20 ? 'Good evening' : 'Good night';
+    const greetEmoji = h >= 23 || h < 5 ? '🌙✨' : h < 12 ? '☀️' : h < 17 ? '🌤️' : h < 20 ? '🌆' : '🌙';
     const dateLine = now.toLocaleDateString('en-GB', {
       weekday: 'short',
       day: '2-digit',
@@ -13450,11 +13451,13 @@ Object.assign(window, {
     }) : initials)), React.createElement("div", {
       style: sx('position:relative;min-width:0;flex:1 1 200px')
     }, React.createElement("div", {
-      style: sx('font-size:10.5px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:' + (night ? '#7ac4e8' : '#0a5f8c'))
-    }, greeting), React.createElement("div", {
-      style: fs('font-size:23px;font-weight:800;letter-spacing:-.3px;margin-top:4px;color:' + ink.strong + ';animation:textGlow 4s ease-in-out infinite')
+      style: fs('font-size:34px;font-weight:800;letter-spacing:-.8px;line-height:1.1;color:' + ink.strong + ';animation:textGlow 4s ease-in-out infinite')
+    }, greeting, " ", React.createElement("span", {
+      style: sx('font-size:30px;letter-spacing:0')
+    }, greetEmoji)), React.createElement("div", {
+      style: sx('font-size:16px;font-weight:700;letter-spacing:-.2px;margin-top:6px;color:' + (night ? '#cfe0f0' : '#12385c'))
     }, staffName), React.createElement("div", {
-      style: sx('font-size:12.5px;margin-top:3px;color:' + ink.soft)
+      style: sx('font-size:12.5px;margin-top:2px;color:' + ink.soft)
     }, designation, " \xB7 ", unit)), React.createElement("div", {
       style: fs(shiftCard)
     }, sh ? React.createElement(React.Fragment, null, React.createElement("div", {
