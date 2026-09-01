@@ -39,7 +39,13 @@ app.use((req, res, next) => {
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",              // inline snapshot inject
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",                     // charts + PDF rasterisation
+    // Photos live on the Cloudinary CDN (server/storage.js uploads them there and the
+    // database only stores the url), so the CDN host MUST be allowed here or every
+    // staff photo and account avatar is blocked by the browser while curl fetches it
+    // happily — and a blocked <img> silently renders its alt text, which reads as
+    // "the wrong picture is showing" rather than "the image was refused".
+    // res.cloudinary.com only: no wildcard, so this opens nothing else.
+    "img-src 'self' data: blob: https://res.cloudinary.com",   // + charts / PDF rasterisation
     "font-src 'self'",
     "connect-src 'self'",
     "worker-src 'self' blob:",                        // html2canvas / jsPDF

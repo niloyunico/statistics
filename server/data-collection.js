@@ -304,7 +304,7 @@ async function getUserScope(username) {
   const users = await getUsers();
   const u = await users.findOne({ username: String(username).toLowerCase() });
   if (!u) return null;
-  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: u.role === 'incharge', departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, photo: u.photo || null };
+  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: u.role === 'incharge', departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, photo: u.photo || null, email: u.email || null, phone: u.phone || null, designation: u.designation || null, title: u.title || null };
 }
 
 async function deleteResponsible(id) {

@@ -317,7 +317,8 @@ async function serveIndex(req, res) {
   const userInject = scopeUser
     ? { username: scopeUser.username, name: scopeUser.name, role: scopeUser.role, departments: scopeUser.departments, qualityAreas: scopeUser.qualityAreas, perms: scopeUser.perms,
         staffScope: restricted ? restricted.staffScope : 'all', staffId: restricted ? restricted.staffId : null,
-        photo: scopeUser.photo || null }
+        photo: scopeUser.photo || null, email: scopeUser.email || null,
+        phone: scopeUser.phone || null, designation: scopeUser.designation || null, title: scopeUser.title || null }
     : (req.user ? { username: req.user.sub, name: req.user.name, role: req.user.role } : null);
 
   // Canonical quality-formula master: the DB catalogue expanded to the
@@ -789,11 +790,20 @@ require('./medicines').mount(app, { requireApi: [session.requireApi, access.requ
 app.use(express.static(RENDERER, {
   index: false,
   setHeaders: function (res, filePath) {
-    // The content-hashed app bundle (dist/app.bundle.js?v=<hash>) is immutable: any
-    // change produces a new hash -> new URL, so cache it hard for a year. THIS is
-    // what makes repeat loads instant (no re-download, and never any re-transpile).
+    // The app bundle is a FIXED path (dist/app.bundle.js) whose content changes on
+    // every build; only a ?v=<hash> query distinguishes versions. `immutable` is
+    // therefore wrong here: it tells the browser never to revalidate this URL for a
+    // year, so any request that reaches the path without the newest query — a
+    // bookmarked/restored tab, a proxy or security suite that normalises the query,
+    // a stale HTML from a back/forward restore — is served a year-old bundle and the
+    // browser will not even ask. That is the "I rebuilt and nothing changed" trap,
+    // and it cost real debugging time.
+    //
+    // `no-cache` does NOT mean "do not cache": the copy is kept and revalidated with
+    // its ETag, so an unchanged bundle costs one 304 and no re-download. Repeat loads
+    // stay fast; a rebuilt one can never be missed.
     if (/[\\/]dist[\\/]/i.test(filePath)) {
-      res.set('Cache-Control', 'public, max-age=31536000, immutable');
+      res.set('Cache-Control', 'public, no-cache');
       return;
     }
     // Vendored libs (react/react-dom) and fonts are stable across deploys -> a week.

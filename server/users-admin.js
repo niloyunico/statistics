@@ -408,6 +408,12 @@ function mount(app, opts) {
       const set = { updatedAt: Date.now() };
       if (b.name != null) set.name = String(b.name).trim() || u.username;
       if (b.email != null) set.email = String(b.email).trim().toLowerCase() || null;
+      // Contact details are the account holder's own to maintain. Role, permissions,
+      // department scope and `title` are deliberately NOT here: those are an admin's
+      // decision, and accepting them from this route would let any account promote
+      // itself. Only ever add self-descriptive fields below.
+      if (b.phone != null) set.phone = String(b.phone).trim().slice(0, 40) || null;
+      if (b.designation != null) set.designation = String(b.designation).trim().slice(0, 80) || null;
       await users.updateOne({ username: uname }, { $set: set });
       res.json({ ok: true, user: safe(Object.assign({}, u, set)) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not update your profile.' }); }
