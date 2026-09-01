@@ -42,6 +42,152 @@
   const PCA_DESIGNATIONS=["Patient Care Assistant","Senior PCA","ICU PCA","Ward Assistant","OT Helper","PCA Trainee"];
   const PCA_QUALIFICATIONS=["SSC","HSC","PCA Certificate","Care Giving Course","Nursing Aide Diploma","Basic First Aid"];
   const PCA_TRAININGS=["BLS","Patient Handling","Hygiene & Bed Care","Infection Control","Vital Signs","Specimen Transport",""];
+
+  // ---------- clinical privileges catalogue ----------
+  // Source: "Clinical Privileges & Activity Checklist" (Nursing Services), imported
+  // from the hospital's privilege-area spreadsheet. Each "group" below is a privilege
+  // AREA (e.g. "Assessment & monitoring", "Airway & respiratory"); each area lists the
+  // specific activities a staff member can be privileged to perform. Nurse and PCA
+  // have separate catalogues because their scopes of practice differ.
+  const NURSE_PRIVILEGE_GROUPS=[
+    {group:'1. Assessment & monitoring',items:['Vital signs monitoring','Head-to-toe assessment','Pain assessment','Neurological / GCS assessment','Fall risk assessment','Pressure injury (Braden) scoring','Nutrition screening','Fluid balance charting','Early warning score (NEWS/MEWS)','Blood glucose monitoring','ECG recording','Pulse oximetry','Cardiac monitor interpretation','Haemodynamic monitoring','Intracranial pressure monitoring','Central venous pressure measurement','Capnography monitoring','Delirium screening (CAM-ICU)','Sedation scoring (RASS)','Sepsis screening bundle','Skin integrity rounds','Peripheral perfusion assessment','Abdominal girth measurement','Bladder scan','Telemetry monitoring','Weaning readiness screening']},
+    {group:'2. Airway & respiratory',items:['Oxygen therapy','Nebulisation','Airway suctioning','Oropharyngeal airway insertion','Bag-mask ventilation','Ventilator care','Ventilator weaning support','Tracheostomy care','Tracheostomy suctioning','Chest physiotherapy assist','Incentive spirometry coaching','ABG sampling','Chest drain management','CPAP / BiPAP setup','HFNC management','Endotracheal tube care','Cuff pressure monitoring','Prone positioning','Ventilator bundle compliance','Inhaler technique teaching','Peak flow measurement','Humidification management','Nitric oxide therapy assist','Underwater seal drain change','Sputum induction']},
+    {group:'3. Vascular access & infusion',items:['Peripheral IV cannulation','Central line care','PICC line dressing','Port-a-cath access','Arterial line care','Blood sampling from lines','Infusion pump handling','Syringe pump handling','Blood transfusion','Platelet / plasma transfusion','Phlebotomy','Fluid resuscitation','Midline catheter care','Dialysis catheter care','Umbilical line care','Intraosseous access assist','Blood component warming','Transfusion reaction management','Line-associated infection prevention','IV site rotation & documentation','Extravasation management','TPN administration']},
+    {group:'4. Medication management',items:['Oral medication administration','IM / SC injection','IV bolus administration','IV drug preparation','Insulin administration & titration','Heparin / anticoagulant management','Inotrope / vasopressor titration','Narcotics handling & count','Chemotherapy handling','Antibiotic stewardship compliance','Vaccination','Medication reconciliation','High-alert drug double-check','Patient-controlled analgesia','Epidural infusion care','Intrathecal drug handling assist','Nebulised drug administration','Eye / ear / nasal drops','Topical & transdermal application','Rectal & vaginal medication','Sublingual administration','Thrombolysis administration','Sedation administration & monitoring','Antidote administration','Drug dilution calculation','Look-alike sound-alike drug segregation','Medication fridge & temperature log','Expiry & recall check']},
+    {group:'5. Emergency & critical care',items:['Basic life support','Advanced cardiac life support','Paediatric advanced life support','Defibrillation','Cardioversion assist','Code team response','Rapid response call','Crash cart checking','Emergency drug preparation','CRRT / dialysis','Peritoneal dialysis','Therapeutic hypothermia care','Massive transfusion protocol','Triage','Disaster / mass casualty response','Post-resuscitation care','Shock management','Stroke code response','STEMI code response','Trauma primary survey assist','Spinal immobilisation','Poisoning & overdose management','Snake bite management','Anaphylaxis management','Seizure management','Obstetric emergency response','Intra-hospital critical transfer','Ambulance handover']},
+    {group:'6. Wound & tissue care',items:['Simple wound dressing','Complex wound dressing','Negative pressure wound therapy','Pressure injury prevention & care','Stoma care','Suture / staple removal','Drain management','Burn dressing','Diabetic foot care','Wound swab collection','Compression bandaging','Fistula & sinus care','Tracheostomy stoma care','Skin graft site care','Debridement assist','Maggot / larval therapy assist','Scar & pressure garment care','Wound photography & measurement','Cast & splint care','Traction care']},
+    {group:'7. Procedures & diagnostics',items:['Urinary catheterisation','Bladder irrigation','NG / RT tube insertion','NG feeding & flushing','Enema administration','Specimen collection','Blood culture collection','Lumbar puncture assist','Paracentesis / thoracentesis assist','Bone marrow aspiration assist','Cath lab assist','Endoscopy assist','Bronchoscopy assist','Radiology procedure escort','Point-of-care testing','Bladder catheter removal','Suprapubic catheter care','Colostomy irrigation','Flatus tube insertion','Gastric lavage','ERCP assist','Biopsy assist','Pleural tap assist','Pacemaker insertion assist','Echocardiography assist','EEG / EMG assist','Swallow assessment assist','Urodynamic study assist','Sample transport & chain of custody']},
+    {group:'8. Maternal & neonatal',items:['Antenatal assessment','Labour support','CTG / fetal monitoring','Second-stage delivery assist','Perineal care','Postpartum haemorrhage response','Newborn resuscitation','Newborn assessment (APGAR)','Umbilical cord care','Breastfeeding counselling','Phototherapy care','Kangaroo mother care','Neonatal incubator care','Surfactant administration assist','Exchange transfusion assist','Neonatal cannulation','Neonatal NG feeding','Neonatal vital monitoring','Retinopathy screening assist','Newborn hearing screening','Immunisation of newborn','Cord blood collection','Family planning counselling','Antenatal class teaching','High-risk pregnancy monitoring','Eclampsia management assist','Caesarean section assist','Vacuum / forceps delivery assist']},
+    {group:'9. Perioperative & procedural',items:['Pre-operative checklist','Surgical site preparation','OT scrub','OT circulating','Instrument & swab count','Anaesthesia assist','Patient positioning for surgery','Specimen labelling & handover','Post-anaesthesia recovery','Extubation monitoring','CSSD / sterilisation','Autoclave load verification','Surgical safety checklist (WHO)','Time-out & site marking verification','Diathermy & tourniquet setup','Laparoscopy stack setup','Implant & prosthesis documentation','Blood loss estimation','Warming device management','Surgical count discrepancy escalation','Endoscope reprocessing','Instrument tray assembly','OT environmental monitoring']},
+    {group:'10. Infection prevention & safety',items:['Hand hygiene compliance','PPE donning & doffing','Isolation precautions','Aseptic non-touch technique','Sharps & waste segregation','Spill management','Device bundle compliance (CLABSI/CAUTI/VAP)','Surveillance & reporting','Antimicrobial resistance flagging','Environmental cleaning audit','Terminal cleaning verification','Needle-stick injury management','Outbreak investigation support','Cohorting & bed spacing','TB / airborne precaution setup','Negative pressure room monitoring','Linen & laundry handling','Biomedical waste documentation','Vaccination of staff (assist)','Hand hygiene audit','Disinfectant preparation & dilution']},
+    {group:'11. Patient care & mobility',items:['Bed bath & hygiene care','Oral & eye care','Positioning & turning schedule','Passive range of motion','Ambulation & transfer assist','Restraint application & monitoring','Fall precaution setup','End-of-life / palliative care','Last offices','Nutrition & feeding support','Bowel & bladder care','Bereavement support','Pain relief non-pharmacological','Sleep & rest promotion','Sensory aid support (glasses / hearing)','Prosthesis & orthosis care','Chest & limb physiotherapy assist','Fall recovery assist','Isolation patient care','Dementia & confusion care','Paediatric play & distraction']},
+    {group:'12. Documentation & coordination',items:['Nursing care plan','SBAR handover','Incident reporting','Medication error reporting','Consent witnessing','Discharge planning & counselling','Referral coordination','Ward round documentation','Duty roster preparation','Indent & inventory recording','Death documentation','Medico-legal case documentation','Electronic health record entry','Handover checklist completion','Care bundle documentation','Consent form verification','Insurance & billing documentation','Transfer summary preparation','Narcotic register maintenance','Equipment fault reporting','Complaint documentation','Statistics & census reporting','Appointment & follow-up scheduling']},
+    {group:'13. Education & leadership',items:['Patient & family education','Student nurse supervision','New joiner orientation','Skills demonstration / in-service teaching','Preceptorship','Audit participation','Quality improvement project','Shift in-charge duty','Team allocation & delegation','Committee representation','Clinical protocol drafting','Policy compliance monitoring','Mentoring junior nurses','Simulation / mock drill facilitation','Root cause analysis participation','Accreditation preparation','Research data collection','Journal club presentation','Infection control link nurse duty','Emergency preparedness training']},
+  ];
+  const PCA_PRIVILEGE_GROUPS=[
+    {group:'1. Personal care',items:['Bed bath & hygiene','Oral care','Hair & nail care','Shaving & grooming','Dressing & undressing','Perineal care','Incontinence & diaper care','Bedpan / urinal assistance','Denture care','Hair wash in bed','Foot care','Eye care assist','Catheter bag emptying','Colostomy bag emptying','Skin moisturising','Pressure area inspection (report)']},
+    {group:'2. Feeding & nutrition support',items:['Feeding assistance','Meal tray service','Fluid offering & recording','Oral intake documentation','Feeding position setup','NG feed observation (report only)','Diet tray labelling','Feeding aid setup','Water & jug refilling','Special diet delivery','Meal-time patient positioning']},
+    {group:'3. Mobility & transfer',items:['Positioning & turning','Bed to trolley transfer','Bed to chair transfer','Wheelchair transport','Ambulation assist','Hoist / lift use','Patient escort to departments','Range of motion assist','Pressure relief schedule','Walker & crutch assist','Log-roll assist','Sitting balance support','Stretcher handling','Lift team participation','Post-fall assistance']},
+    {group:'4. Monitoring support',items:['Temperature check','Pulse & respiration count','Blood pressure (assist)','Height & weight','Blood glucose assist','Intake / output recording','Vitals charting assist','Reporting abnormal findings','Urine output measurement','Drain output measurement','Stool & vomitus observation','Weighing scale calibration check','Pulse oximeter application']},
+    {group:'5. Ward & equipment support',items:['Bed making','Linen change','Equipment cleaning','Wheelchair & trolley upkeep','Oxygen cylinder handling','Specimen transport','Sample dispatch to lab','Stock replenishment','Indent collection from store','Waste segregation','Terminal cleaning assist','Suction machine cleaning','Nebuliser cleaning','Bed alarm & call bell check','Trolley stocking for rounds','Sterile pack transport','Blood sample dispatch','Pharmacy indent pickup','Equipment return to store']},
+    {group:'6. Patient support & comfort',items:['Comfort positioning','Companionship & reassurance','Sleep environment setup','Attendant guidance','Belongings handover','Assisting during rounds','Assisting during procedures','Post-mortem care assist','Wheelchair comfort setup','Privacy screen management','Patient orientation to ward','Discharge belongings check','Visitor guidance','Language / translation support']},
+    {group:'7. Safety & compliance',items:['Hand hygiene','PPE use','Fall precaution','Patient identification','Side rail & bed brake check','Restraint monitoring (assist)','Basic life support awareness','Fire & evacuation drill','Incident escalation to nurse','Choking first response','Spill reporting','Sharps container replacement','Oxygen safety check','Electrical safety reporting','Missing patient escalation']},
+  ];
+  // Admin-created privileges (Settings → Department Privileges → "Create a new
+  // privilege"), layered on top of the imported catalogue above. Shape mirrors the
+  // base groups so privilegeGroupsFor() can merge them transparently: an item is
+  // appended to an existing area by name, or a brand-new area is created for it.
+  const CUSTOM_PRIV_KEY='unico_privilege_custom_v1';
+  function loadCustomPrivileges(){ try{const o=JSON.parse(localStorage.getItem(CUSTOM_PRIV_KEY)); return (o&&typeof o==='object'&&!Array.isArray(o))?o:{}; }catch(e){return {};} }
+  function saveCustomPrivileges(o){ try{localStorage.setItem(CUSTOM_PRIV_KEY,JSON.stringify(o));}catch(e){} }
+  function roleKey(role){ return role==='PCA'?'PCA':'Nurse'; }
+  // Adds one activity to a (possibly new) privilege area for the role. Returns false
+  // if that exact area+activity already exists (built-in or custom) — never a silent dupe.
+  function addCustomPrivilege(role,groupName,item){
+    groupName=String(groupName||'').trim(); item=String(item||'').trim();
+    if(!groupName||!item) return false;
+    const already=privilegeGroupsFor(role).some(g=>g.group===groupName&&g.items.some(x=>x.toLowerCase()===item.toLowerCase()));
+    if(already) return false;
+    const o=loadCustomPrivileges(); const rk=roleKey(role); const arr=o[rk]=o[rk]||[];
+    let g=arr.find(x=>x.group===groupName); if(!g){ g={group:groupName,items:[]}; arr.push(g); }
+    g.items.push(item); saveCustomPrivileges(o); return true;
+  }
+  // Removes a custom activity entirely (from the catalogue, so it also disappears
+  // from every department's assignment). Built-in (imported) activities can't be
+  // removed this way — same rule as the built-in option lists elsewhere in this file.
+  function removeCustomPrivilege(role,groupName,item){
+    const o=loadCustomPrivileges(); const rk=roleKey(role); const arr=o[rk]||[];
+    const g=arr.find(x=>x.group===groupName); if(g) g.items=g.items.filter(x=>x!==item);
+    o[rk]=arr.filter(g=>g.items.length>0); saveCustomPrivileges(o);
+  }
+  function privilegeGroupsFor(role){
+    const base=role==='PCA'?PCA_PRIVILEGE_GROUPS:NURSE_PRIVILEGE_GROUPS;
+    const custom=loadCustomPrivileges()[roleKey(role)]||[];
+    if(!custom.length) return base;
+    const out=base.map(g=>({group:g.group,items:g.items.slice()}));
+    custom.forEach(cg=>{
+      let g=out.find(x=>x.group===cg.group);
+      if(!g){ g={group:cg.group,items:[]}; out.push(g); }
+      cg.items.forEach(it=>{ if(!g.items.includes(it)) g.items.push(it); });
+    });
+    return out;
+  }
+  // Stable key for one activity within one privilege area — used to key the granted map.
+  function privKey(group,item){ return group+'||'+item; }
+  // Roll-up: total activities in the catalogue, how many are granted, and the same
+  // breakdown per privilege area — used by both the form rail and the profile view.
+  function privilegeStats(role,privileges){
+    const groups=privilegeGroupsFor(role); const p=privileges||{};
+    let granted=0,total=0;
+    const byGroup=groups.map(g=>{
+      const gTotal=g.items.length;
+      const gGranted=g.items.filter(it=>p[privKey(g.group,it)]).length;
+      granted+=gGranted; total+=gTotal;
+      return {group:g.group,granted:gGranted,total:gTotal};
+    });
+    return {granted,total,byGroup};
+  }
+  // ---------- department ⇄ privilege assignment (Settings → Department Privileges) ----------
+  // Which catalogue activities apply to which department, per role. This is what the
+  // create/edit staff form filters its Privileges checklist against once a department
+  // is chosen — a staff member can only be granted an activity their department has
+  // been assigned. Shape: { [deptName]: { Nurse:{key:true,...}, PCA:{key:true,...} } }.
+  const DEPT_PRIV_KEY='unico_dept_privileges_v1';
+  function loadDeptPrivileges(){ try{const o=JSON.parse(localStorage.getItem(DEPT_PRIV_KEY)); return (o&&typeof o==='object'&&!Array.isArray(o))?o:{}; }catch(e){return {};} }
+  function saveDeptPrivileges(o){ try{localStorage.setItem(DEPT_PRIV_KEY,JSON.stringify(o));}catch(e){} }
+  function deptPrivilegeMap(dept,role){ const o=loadDeptPrivileges(); const d=o[dept]; return (d&&d[roleKey(role)])?d[roleKey(role)]:{}; }
+  function setDeptPrivilegeMap(dept,role,map){ if(!dept) return; const o=loadDeptPrivileges(); o[dept]=o[dept]||{}; o[dept][roleKey(role)]=map; saveDeptPrivileges(o); }
+  // Union of assigned activity keys across every department in `depts`, for one role —
+  // what the staff form's checklist is allowed to show once department(s) are picked.
+  function deptPrivilegeKeysFor(depts,role){
+    const set=new Set();
+    (depts||[]).forEach(d=>{ const m=deptPrivilegeMap(d,role); Object.keys(m).forEach(k=>{ if(m[k]) set.add(k); }); });
+    return set;
+  }
+  // Activity-centric counterparts of the two above — same store, read/written the
+  // other way round: which departments (out of `deptNames`) have ONE activity, and
+  // toggling that one activity for ONE department. Lets the assignment screen work
+  // either "pick a department, tick its activities" or "pick an activity, tick its
+  // departments" against the exact same underlying data.
+  function privilegeDeptsAssigned(deptNames,role,group,item){
+    const key=privKey(group,item);
+    return (deptNames||[]).filter(d=>!!(deptPrivilegeMap(d,role)||{})[key]);
+  }
+  function setPrivilegeDeptAssignment(dept,role,group,item,on){
+    const key=privKey(group,item);
+    const map={...(deptPrivilegeMap(dept,role)||{})};
+    if(on) map[key]=true; else delete map[key];
+    setDeptPrivilegeMap(dept,role,map);
+  }
+  // ---------- department GROUPS — bulk-assignment presets ("All OPD", "All ICU"...) ----------
+  // Named bundles of departments, purely a shortcut for the assignment screen: pick a
+  // zone instead of hand-picking every department in it. Seeded ONCE from a best-guess
+  // over each department's .group (from the Statistics module) and name, then owned
+  // entirely by the admin — never re-guessed after that, so edits are never silently
+  // clobbered by a later reload.
+  const DEPT_GROUP_KEY='unico_dept_privilege_groups_v1';
+  function loadDeptGroupsRaw(){ try{const a=JSON.parse(localStorage.getItem(DEPT_GROUP_KEY)); return Array.isArray(a)?a:null; }catch(e){return null;} }
+  function saveDeptGroups(arr){ try{localStorage.setItem(DEPT_GROUP_KEY,JSON.stringify(arr||[]));}catch(e){} }
+  function guessDeptGroups(deptObjs){
+    const items=(deptObjs||[]).map(d=>typeof d==='string'?{name:d,group:''}:{name:d.name||'',group:d.group||''});
+    const pick=(re)=>[...new Set(items.filter(d=>re.test(d.group)||re.test(d.name)).map(d=>d.name).filter(Boolean))];
+    return [
+      {name:'All OPD',depts:pick(/out.?patient|\bopd\b|day\s?care|home\s?care/i)},
+      {name:'All IPD / Cabin',depts:pick(/in-?patient|ward|\bipd\b|cabin|\blevel[-\s]?\d+\b|labour|delivery|\bldr\b/i)},
+      {name:'All OT',depts:pick(/operat(ing|ive)|theatre|\bot\b/i)},
+      {name:'All Critical / ICU',depts:pick(/critical|emergency|\bicu\b|\bccu\b|\bhdu\b|\ber\b/i)},
+    ].filter(g=>g.depts.length>0);
+  }
+  // deptObjs: the live department list ([{name,group}] from the Statistics module, or
+  // plain name strings as a fallback) — used only to seed groups the very first time.
+  function deptGroupsFor(deptObjs){
+    const stored=loadDeptGroupsRaw();
+    if(stored) return stored;
+    const guessed=guessDeptGroups(deptObjs);
+    saveDeptGroups(guessed);
+    return guessed;
+  }
+  function setDeptGroups(arr){ saveDeptGroups(arr); }
   // ---------- custom field options (managed in Settings → Staff Fields) ----------
   // Admins can extend the Education (qualification), Designation and Training option
   // lists without a code change. Stored in localStorage, merged on top of the defaults.
@@ -281,6 +427,10 @@
 
   window.STAFF={DEPARTMENTS,DESIGNATIONS,QUALIFICATIONS,VACCINATION_STATES,TRAININGS,VACC_OK,canonVacc,
     ROLES,PCA_DESIGNATIONS,PCA_QUALIFICATIONS,PCA_TRAININGS,designationsFor,qualificationsFor,
+    NURSE_PRIVILEGE_GROUPS,PCA_PRIVILEGE_GROUPS,privilegeGroupsFor,privKey,privilegeStats,
+    loadCustomPrivileges,addCustomPrivilege,removeCustomPrivilege,
+    deptPrivilegeMap,setDeptPrivilegeMap,deptPrivilegeKeysFor,privilegeDeptsAssigned,setPrivilegeDeptAssignment,
+    deptGroupsFor,setDeptGroups,
     fieldOptList,addFieldOpt,removeFieldOpt,
     customFields,addCustomField,removeCustomField,renameCustomField,addCustomFieldOption,removeCustomFieldOption,
     seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,byRole,uniqueVals};

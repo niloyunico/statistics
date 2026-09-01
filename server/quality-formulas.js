@@ -18,7 +18,8 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
-const { getDbHandle } = require('./db');
+const { getDbHandle, dbRead, usingMongo } = require('./db');
+const cache = require('./cache');
 
 const COLLECTION = 'qualityFormulas';
 
@@ -148,9 +149,25 @@ async function ensureSeeded(db) {
 }
 
 // Ordered catalogue as plain objects (id = _id) for the API + page inject.
-async function getFormulas(db) {
-  const docs = await db.collection(COLLECTION).find({}).sort({ order: 1, _id: 1 }).toArray();
-  return docs.map((d) => { const { _id, ...rest } = d; return Object.assign({ id: _id }, rest); });
+// Read on EVERY page load (it is injected as window.QI_CORRECTIONS before the bundle),
+// but written only when an admin edits a formula — so it is cached, keyed to this
+// collection's version. The admin PUT below goes through the instrumented handle, so
+// an edit invalidates it across the whole fleet the moment it lands.
+// Takes no handle: it resolves one itself through dbRead, so the circuit breaker and
+// the load limiter both apply. Callers used to await getDbHandle() first and hand the
+// result in — which meant they had already paid the full server-selection timeout on a
+// dead cluster before this guarded read was reached, defeating the breaker on the
+// app's main render path.
+async function getFormulas(opts) {
+  if (!usingMongo()) return [];
+  return cache.read(
+    'formulas',
+    { coll: COLLECTION, fresh: !!(opts && opts.fresh) },
+    () => dbRead(async (db) => {
+      const docs = await db.collection(COLLECTION).find({}).sort({ order: 1, _id: 1 }).toArray();
+      return docs.map((d) => { const { _id, ...rest } = d; return Object.assign({ id: _id }, rest); });
+    })
+  );
 }
 
 // Expand the catalogue into the window.QI_CORRECTIONS shape: { <normName>: {def} }
@@ -170,7 +187,14 @@ function buildByNameMap(formulas) {
 // --- Admin API ---------------------------------------------------------------
 function mount(app, opts) {
   const guard = (opts && opts.requireApi) || function (req, res, next) { next(); };
+  // Prefer the RESOLVED authority (req.access, read from the live user document by
+  // server/access.js) over req.user.role, which is only a claim inside the token — a
+  // snapshot of who the caller was when they signed in, not who they are now.
   const adminOnly = (req, res, next) => {
+    if (req.access) {
+      if (req.access.unrestricted) return next();
+      return res.status(403).json({ ok: false, error: 'Administrator access required.' });
+    }
     if (req.user && req.user.role && req.user.role !== 'Administrator') {
       return res.status(403).json({ ok: false, error: 'Administrator access required.' });
     }
@@ -179,9 +203,7 @@ function mount(app, opts) {
 
   app.get('/api/quality-formulas', guard, async (req, res) => {
     try {
-      const db = await getDbHandle();
-      if (!db) return res.json({ ok: true, formulas: [] }); // dev in-memory: static fallback drives the app
-      res.json({ ok: true, formulas: await getFormulas(db) });
+      res.json({ ok: true, formulas: await getFormulas() }); // [] in dev: the static fallback drives the app
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load quality formulas.' }); }
   });
 

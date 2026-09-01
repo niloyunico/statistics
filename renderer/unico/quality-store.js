@@ -334,9 +334,19 @@
       [overlay, rev]
     );
 
+    // A missing dept key must never become a write. `depts[key]` string-coerces an
+    // undefined/null key into the literal bucket "undefined", which no department ever
+    // reads back — so the edit silently vanishes AND leaves an orphan slice behind that
+    // accumulates in the overlay forever. Every mutation below funnels through here, so
+    // this one guard covers add/remove/patch/restore/executive/meta.
     const patchDept = (key, fn) => setOverlay(o => {
+      const k = (key == null) ? '' : String(key);
+      if (!k || k === 'undefined' || k === 'null') {
+        try { console.warn('[quality-store] ignored an edit with no department key:', key); } catch (e) {}
+        return o;
+      }
       const depts = Object.assign({}, o.depts);
-      depts[key] = fn(depts[key] ? Object.assign({}, depts[key]) : {});
+      depts[k] = fn(depts[k] ? Object.assign({}, depts[k]) : {});
       return Object.assign({}, o, { depts });
     });
 

@@ -199,8 +199,8 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
       <div className="eyebrow" style={{marginTop:6}}>Quality &amp; Safety</div>
       <div className="grid" style={{gridTemplateColumns:'repeat(3,minmax(0,1fr))'}}>
         {qCard('Zero-Defect Rate', qualityKpis.zero+'%', 'on-benchmark indicator-months', qualityKpis.zero>=90?'#1f9d57':qualityKpis.zero>=70?'#e08a1e':'#d23a52', {view:'quality'})}
-        {qCard('Open Breaches', fmt(qualityKpis.breach), 'indicator-months off benchmark', qualityKpis.breach>0?'#d23a52':'#1f9d57', {view:'quality',qview:'incidents'})}
-        {qCard('Open Action Plans', fmt(qualityKpis.capaOpen), 'breaches not yet closed', qualityKpis.capaOpen>0?'#0090ca':'#1f9d57', {view:'quality',qview:'actionplans'})}
+        {qCard('Off Benchmark', fmt(qualityKpis.breach), 'indicator-months off benchmark', qualityKpis.breach>0?'#d23a52':'#1f9d57', {view:'quality',qview:'incidents'})}
+        {qCard('Open Action Plans', fmt(qualityKpis.capaOpen), 'off-benchmark months not yet closed', qualityKpis.capaOpen>0?'#0090ca':'#1f9d57', {view:'quality',qview:'actionplans'})}
       </div>
     </React.Fragment>
   ) : null;

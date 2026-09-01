@@ -29,7 +29,9 @@ const _INJECTED_DEPTS = (typeof window !== 'undefined' && Array.isArray(window._
 const _FALLBACK_DEPTS = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_DEPARTMENTS_FALLBACK__))
   ? window.__UNICO_DEPARTMENTS_FALLBACK__
   : [];
-const DEPARTMENTS = ((_INJECTED_DEPTS && _INJECTED_DEPTS.length) ? _INJECTED_DEPTS : _FALLBACK_DEPTS).map(d => ({ ...d }));
+// Same rule as the quality seed: an injected list wins even when it is empty. A
+// scoped account with no departments must see none, not the bundled sample data.
+const DEPARTMENTS = (_INJECTED_DEPTS || _FALLBACK_DEPTS).map(d => ({ ...d }));
 
 // Attach the derived fields the app expects (series/total/latest/prev/delta/peak),
 // guarded so a department with no rows can't throw.

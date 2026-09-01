@@ -181,7 +181,7 @@ function DeptDetail({dept, openDept, depts, setRoute}){
       {qkTile('◆ Volume','#0090ca',fmt(d.latest[d.primary]||0),'var(--ink)',<span>Latest {d.primaryLabel} {deltaTxt(d.delta)}</span>)}
       {qkTile('◆ Volume','#0090ca',fmt(d.avg),'var(--ink)','Monthly average')}
       {qkTile('● Quality',qColor,Q?Q.zero+'%':'—',qColor,'Zero-Defect')}
-      {qkTile('● Quality','#d23a52',Q?String(Q.openBreach):'—',Q&&Q.openBreach>0?'#d23a52':'var(--ink)','Open Breach'+(Q&&Q.openBreach===1?'':'es'))}
+      {qkTile('● Quality','#d23a52',Q?String(Q.openBreach):'—',Q&&Q.openBreach>0?'#d23a52':'var(--ink)','Off Benchmark')}
       {qkTile('● Quality','#e08a1e',Q?String(Q.capaOpen):'—',Q&&Q.capaOpen>0?'#e08a1e':'var(--ink)','Action Plan'+(Q&&Q.capaOpen===1?'':'s'))}
     </div>
   );

@@ -63,7 +63,7 @@ function ExportMenu({rows,role}){
     <div style={{position:'relative'}}>
       <button className="btn sm" onClick={()=>setOpen(o=>!o)}><Ic d={I.download} s={14}/>Export ▾</button>
       {open&&(
-        <div onMouseLeave={()=>setOpen(false)} style={{position:'absolute',right:0,top:'112%',zIndex:60,background:'#fff',border:'1px solid var(--line)',borderRadius:9,boxShadow:'var(--shadow-pop)',minWidth:172,overflow:'hidden',padding:4}}>
+        <div onMouseLeave={()=>setOpen(false)} style={{position:'absolute',right:0,top:'112%',zIndex:60,background:'rgba(255,255,255,.88)',backdropFilter:'blur(24px) saturate(1.6)',WebkitBackdropFilter:'blur(24px) saturate(1.6)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 22px 56px rgba(31,59,90,.26)',borderRadius:10,minWidth:172,overflow:'hidden',padding:4}}>
           <div style={{fontSize:10,color:'var(--faint)',textTransform:'uppercase',letterSpacing:.4,padding:'6px 9px 3px',fontWeight:700}}>Export {rows.length} {role}(s)</div>
           {[['pdf','PDF document (.pdf)',I.doc],['excel','Microsoft Excel (.xls)',I.grid],['word','Microsoft Word (.doc)',I.doc],['csv','CSV (.csv)',I.doc]].map(([f,l,ic])=>(
             <div key={f} onClick={()=>{exportStaff(rows,role,f);setOpen(false);}} style={{padding:'8px 10px',fontSize:12.5,cursor:'pointer',display:'flex',gap:9,alignItems:'center',borderRadius:6,color:'var(--ink-2)',fontWeight:500}}
@@ -398,6 +398,7 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
   );
   return (
     <div className="grid" style={{gap:16}}>
+      {window.PerfBands && <window.PerfBands role={role} setRoute={setRoute}/>}
       <SectionTitle icon={role==='PCA'?I.bed:I.steth} title={`${role==='PCA'?'PCA':'Nurse'} Dashboard`} sub={`Live overview of the ${role} roster`}
         right={<><button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#b8860b',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
           <button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>

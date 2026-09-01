@@ -128,7 +128,10 @@
 
   // ---- small UI atoms ----
   function Card(props) {
-    return <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, padding: 18, boxShadow: 'var(--shadow-sm)', ...(props.style || {}) }}>{props.children}</div>;
+    // Every panel in this module goes through here, so this one style is what makes
+    // the Data Collection screens glass. Call sites can still override -- the
+    // caller's style is spread last, which is how sticky headers keep their opacity.
+    return <div style={{ background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))', backdropFilter: 'blur(26px) saturate(1.75)', WebkitBackdropFilter: 'blur(26px) saturate(1.75)', border: '1px solid rgba(255,255,255,.92)', boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)', borderRadius: 16, padding: 18, ...(props.style || {}) }}>{props.children}</div>;
   }
   function Field({ label, hint, children }) {
     return (
@@ -534,6 +537,18 @@
   }
 
   /* ============================ Patient Statistics form ============================ */
+/* Per-person drafts for the monthly statistics form.
+
+   Kept in localStorage rather than a server collection on purpose: a draft is a
+   half-typed form, not a record. It belongs to one person on one machine, it must
+   survive a closed tab, and it must never be visible to an administrator or count as
+   a submission. Keyed by user + department + month so two wards, or two months of the
+   same ward, cannot overwrite each other. */
+  const DC_DRAFT_KEY = (who, dept, month) => 'unico_dc_draft_v1|' + (who || 'local') + '|' + dept + '|' + month;
+  const dcDraftLoad = (k) => { try { const raw = localStorage.getItem(k); return raw ? JSON.parse(raw) : null; } catch (e) { return null; } };
+  const dcDraftSave = (k, v) => { try { localStorage.setItem(k, JSON.stringify({ values: v, at: Date.now() })); return true; } catch (e) { return false; } };
+  const dcDraftClear = (k) => { try { localStorage.removeItem(k); } catch (e) { } };
+
   function DataPatientForm({ depts, prefill }) {
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
     const lockResp = !!(me && me.role === 'collector');
@@ -556,6 +571,7 @@
     const [done, setDone] = useState(null);
     const [resps, setResps] = useState([]);
     const [subs, setSubs] = useState([]);
+    const [draftAt, setDraftAt] = useState(null);   // when the current draft was last saved
 
     useEffect(() => { dcApi.get('/api/responsibles').then((r) => setResps(r.ok ? r.responsibles : [])).catch(() => {}); }, []);
     useEffect(() => { dcApi.get('/api/submissions?limit=300').then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {}); }, [done]);
@@ -576,6 +592,17 @@
         if (assigned.length) setResponsible(assigned[0].name);
       }
     }, [deptId, resps.length]);
+
+    // Restore the draft for whichever department+month is now selected. Runs after the
+    // reset effect above, so switching away and back brings the figures back rather
+    // than silently discarding them.
+    const draftKey = (dept && month) ? DC_DRAFT_KEY(me && (me.username || me.name), dept.id, month) : null;
+    useEffect(() => {
+      if (!draftKey) { setDraftAt(null); return; }
+      const d = dcDraftLoad(draftKey);
+      if (d && d.values && Object.keys(d.values).length) { setValues(d.values); setDraftAt(d.at || null); }
+      else setDraftAt(null);
+    }, [draftKey]);
 
     const assigned = resps.filter((r) => dept && canReportDept(r, dept.id));
     const order = MO();
@@ -614,7 +641,7 @@
         isCorrection: pCorrection, correctionReason: pCorrection ? reason.trim() : '',
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ month, dept: dept.name, correction: pCorrection }); setFlash({ ts: Date.now(), title: pCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: dept.name + ' · ' + monthLabel(month) }); setValues({}); setNote(''); setReason(''); toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success'); }
+        if (r.ok) { setDone({ month, dept: dept.name, correction: pCorrection }); setFlash({ ts: Date.now(), title: pCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: dept.name + ' · ' + monthLabel(month) }); setValues({}); setNote(''); setReason(''); if (draftKey) { dcDraftClear(draftKey); setDraftAt(null); } toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success'); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch((e) => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -650,13 +677,25 @@
             {month && !monthStatus[month] && reported.has(month) && <span className="chip" style={{ background: 'var(--blue-50)', color: 'var(--blue-700)', fontWeight: 700 }}>Already reported · in records</span>}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(170px,1fr))', gap: 12 }}>
-            {cols.map((c) => (
-              <Field key={c.id} label={c.label + (c.pct ? ' (%)' : '')}>
-                <input type="number" step="any" style={inputStyle} value={values[c.id] == null ? '' : values[c.id]}
-                  placeholder={last[c.id] != null ? 'last: ' + last[c.id] : '0'}
-                  onChange={(e) => setValues((v) => ({ ...v, [c.id]: e.target.value }))} />
-              </Field>
-            ))}
+            {cols.map((c) => {
+              const prev = last[c.id];
+              const now = values[c.id];
+              // The administrator queries swings over 30% after the fact. Saying so here,
+              // while the figure is still on screen, is the difference between a typo
+              // caught in five seconds and a correction cycle three days later.
+              const swing = (prev != null && prev !== '' && Number(prev) && now !== '' && now != null && !isNaN(Number(now)))
+                ? Math.round(((Number(now) - Number(prev)) / Math.abs(Number(prev))) * 100) : null;
+              const big = swing != null && Math.abs(swing) > 30;
+              return (
+                <Field key={c.id} label={c.label + (c.pct ? ' (%)' : '')}
+                  hint={prev != null ? ('last month ' + prev) : 'nothing on record for last month'}>
+                  <input type="number" step="any" style={{ ...inputStyle, ...(big ? { borderColor: '#e0a21e' } : {}) }} value={now == null ? '' : now}
+                    placeholder={prev != null ? 'last: ' + prev : '0'}
+                    onChange={(e) => setValues((v) => ({ ...v, [c.id]: e.target.value }))} />
+                  {big && <div style={{ fontSize: 10.5, color: '#9a6b00', fontWeight: 600, marginTop: 3 }}>{swing > 0 ? '+' : ''}{swing}% vs last month — check before sending.</div>}
+                </Field>
+              );
+            })}
           </div>
           {isAdmin && dept && <div style={{ border: '1px dashed var(--line)', borderRadius: 9, padding: '10px 12px', margin: '2px 0 12px', background: 'var(--panel-2)' }}><DeptFieldManager dept={dept} onChange={refreshDepts} /></div>}
           <Field label="Note (optional)"><input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Any comment about this submission" /></Field>
@@ -667,9 +706,18 @@
             </>
           )}
           {monthPending && <Banner>{dept ? dept.name : ''} · {monthLabel(month)} already has a submission pending review — wait for the admin to approve or reject it before editing.</Banner>}
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="btn pri" disabled={busy || monthPending} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Submitting…' : (monthPending ? 'Pending review' : (pCorrection ? 'Submit correction for review' : 'Submit'))}</button>
-            <button className="btn" disabled={busy} onClick={() => { setValues({}); setNote(''); setReason(''); setDone(null); }}>Clear</button>
+          <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button className="btn pri" disabled={busy || monthPending} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Submitting…' : (monthPending ? 'Pending review' : (pCorrection ? 'Submit correction for review' : 'Submit for review'))}</button>
+            <button className="btn" disabled={busy || !draftKey} onClick={() => {
+              if (!draftKey) return;
+              if (dcDraftSave(draftKey, values)) { setDraftAt(Date.now()); toast('Draft saved on this device', 'success'); }
+              else toast('Could not save the draft on this device.', 'error');
+            }}><Ic d={I.doc} s={15} />Save draft</button>
+            <button className="btn" disabled={busy} onClick={() => { setValues({}); setNote(''); setReason(''); setDone(null); if (draftKey) { dcDraftClear(draftKey); setDraftAt(null); } }}>Clear</button>
+            {draftAt && <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>Draft saved {new Date(draftAt).toLocaleString()} — on this device only.</span>}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 10, lineHeight: 1.6 }}>
+            Figures are checked against last month before approval. Swings over 30% are queried by the administrator.
           </div>
         </Card>
       </div>
@@ -707,6 +755,27 @@
       return null;
     } catch (e) { return null; }
   }
+
+/* A benchmark is stored as the free text a clinician wrote on the paper form --
+   "≤ 2.0", "< 1 per 1000 catheter-days", "≥ 90%", "0 (zero defect)". Rather than
+   demand a migration, read it: take the first number and the comparison it carries.
+   `goalDirection` on the indicator wins when it is set, because it is authoritative;
+   the text only supplies the threshold. Returns null when there is nothing to read,
+   and the caller then shows no verdict at all -- an unparsed benchmark must never be
+   guessed into a pass. */
+  function dcBenchmark(ind) {
+    const raw = String((ind && ind.benchmark) || '').trim();
+    if (!raw) return null;
+    const m = raw.match(/-?\d+(?:\.\d+)?/);
+    if (!m) return null;
+    const value = parseFloat(m[0]);
+    if (isNaN(value)) return null;
+    let lowerIsBetter = true;
+    if (ind && ind.goalDirection) lowerIsBetter = ind.goalDirection !== 'higher_is_better';
+    else if (/≥|>=|>|\bat least\b|\bminimum\b|\bmin\b|\babove\b/i.test(raw)) lowerIsBetter = false;
+    return { value: value, lowerIsBetter: lowerIsBetter, text: raw };
+  }
+  const dcMeets = (b, v) => (!b || v == null) ? null : (b.lowerIsBetter ? v <= b.value : v >= b.value);
 
   function DataQualityForm({ prefill }) {
     const dataRev = useDcDataRev();
@@ -1229,6 +1298,82 @@
                   ? <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--rose)' }}>{numLabel} = {numerator} · enter {denLabel} (denominator) to compute the rate</span>
                   : <span style={{ fontSize: 11, color: 'var(--muted)' }}>{computeAsRate ? (numLabel + ' = ' + numerator + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '')) : (numLabel + ' = ' + numerator)}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</span>}
               </div>
+              {(() => {
+                const bench = dcBenchmark(curInd);
+                const val = ratePending ? null : Number(result);
+                const meets = dcMeets(bench, val);
+                // The indicator's own recorded history, newest last. A month with no
+                // reading is left out rather than plotted as zero -- a gap in reporting
+                // is not a month of perfect performance.
+                const order = MO();
+                const mi = Math.max(0, order.indexOf(month));
+                const win = order.slice(Math.max(0, mi - 5), mi);
+                const hist = win.map((m) => {
+                  const g = (o) => (o && o[m] != null && o[m] !== '' && !isNaN(Number(o[m]))) ? Number(o[m]) : null;
+                  const v = curInd ? (g(curInd.months) == null ? g(curInd.mNum) : g(curInd.months)) : null;
+                  return { m: m, v: v };
+                });
+                const known = hist.filter((h) => h.v != null);
+                const prev = known.length ? known[known.length - 1] : null;
+                // Two things worth stopping a nurse for: an identical repeat (usually a
+                // copy-paste of last month) and a swing large enough to be a typo.
+                const dup = prev && val != null && prev.v === val;
+                const swing = (prev && val != null && prev.v) ? Math.round(((val - prev.v) / Math.abs(prev.v)) * 100) : null;
+                const anomaly = swing != null && Math.abs(swing) > 40;
+                const scale = Math.max.apply(null, [1].concat(known.map((h) => h.v)).concat(bench ? [bench.value] : []).concat(val != null ? [val] : []));
+                if (!curInd) return null;
+                return (
+                  <React.Fragment>
+                    {bench && meets !== null && (
+                      <div style={{ marginTop: 11, border: '1px solid ' + (meets ? '#bfe5cf' : '#f1c6cd'), background: meets ? 'rgba(31,157,87,.08)' : 'rgba(210,58,82,.08)', borderRadius: 9, padding: '11px 14px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: meets ? 'var(--pos)' : 'var(--rose)' }}>
+                            {meets ? 'Within benchmark' : 'Outside benchmark'} ({bench.text})
+                          </span>
+                          <span style={{ flex: 1 }} />
+                          {!meets && <span style={{ fontSize: 11, color: 'var(--rose)', fontWeight: 600 }}>A remark is expected when a month is off benchmark.</span>}
+                        </div>
+                        <div style={{ position: 'relative', height: 8, borderRadius: 5, background: 'rgba(125,145,180,.18)', marginTop: 10 }}>
+                          <div style={{ width: Math.max(2, Math.min(100, (val / scale) * 100)) + '%', height: '100%', borderRadius: 5, background: meets ? 'var(--pos)' : 'var(--rose)' }} />
+                          <span title={'Benchmark ' + bench.text} style={{ position: 'absolute', top: -3, left: Math.max(0, Math.min(100, (bench.value / scale) * 100)) + '%', width: 2, height: 14, background: '#16202e', opacity: .55 }} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, color: 'var(--muted)', fontFamily: 'var(--mono)', marginTop: 3 }}>
+                          <span>0</span><span>{Math.round(scale * 100) / 100}</span>
+                        </div>
+                      </div>
+                    )}
+                    {(dup || anomaly) && (
+                      <div style={{ marginTop: 11, border: '1px solid #f0d9a8', background: 'var(--warn-bg,#fff4e0)', borderRadius: 9, padding: '11px 14px', fontSize: 12, color: '#9a6b00', lineHeight: 1.55 }}>
+                        {dup
+                          ? <span><b>Possible duplicate.</b> This is identical to {monthLabel(prev.m)} ({prev.v}). Check you are not re-entering last month\u2019s figure.</span>
+                          : <span><b>Anomaly \u2014 {swing > 0 ? '+' : ''}{swing}% swing.</b> {monthLabel(prev.m)} was {prev.v}. If that is right, say why in the remark.</span>}
+                      </div>
+                    )}
+                    {known.length > 0 && (
+                      <div style={{ marginTop: 11, border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px' }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 10 }}>Last {known.length} month{known.length === 1 ? '' : 's'}</div>
+                        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 8, height: 74 }}>
+                          {bench && <div title={'Benchmark ' + bench.text} style={{ position: 'absolute', left: 0, right: 0, bottom: Math.max(0, Math.min(70, (bench.value / scale) * 70)), borderTop: '1px dashed rgba(22,32,46,.4)' }} />}
+                          {hist.map((h) => (
+                            <div key={h.m} style={{ flex: 1, minWidth: 22, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                              <span className="num" style={{ fontSize: 10, color: 'var(--muted)' }}>{h.v == null ? '' : h.v}</span>
+                              {h.v == null
+                                ? <div title="Nothing recorded" style={{ width: '100%', height: 4, borderRadius: 3, background: 'rgba(125,145,180,.2)' }} />
+                                : <div style={{ width: '100%', height: Math.max(4, (h.v / scale) * 56), borderRadius: '4px 4px 0 0', background: dcMeets(bench, h.v) === false ? 'var(--rose)' : 'var(--blue)' }} />}
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, marginTop: 5 }}>
+                          {hist.map((h) => <span key={h.m} style={{ flex: 1, minWidth: 22, textAlign: 'center', fontSize: 9.5, color: 'var(--faint)', fontFamily: 'var(--mono)' }}>{h.m}</span>)}
+                        </div>
+                        {known.length < hist.length && (
+                          <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 7 }}>{hist.length - known.length} of the last {hist.length} months has no reading on record.</div>
+                        )}
+                      </div>
+                    )}
+                  </React.Fragment>
+                );
+              })()}
               {/hand\s*hygiene/i.test(indNameQ) && (
               <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginTop: 13 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 8 }}>Observation &amp; action <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 11 }}>(optional)</span></div>
@@ -2224,14 +2369,24 @@
     })));
     return out;
   }
-  function CollectorHistory() {
+  /* My submissions.
+     Three things sit above the table, all derived from the SAME /api/submissions read
+     that fills it: an accuracy donut, the month's cycle counts, and a status filter.
+     The mockup's "Unit accuracy ranking" is deliberately absent — see the comment on
+     the header band below. */
+  function CollectorHistory({ month, onFixQuality, onFixPatient }) {
     const [rows, setRows] = useState(null);
     const [detail, setDetail] = useState(null);
     const [view, setView] = useState('patient');
+    const [status, setStatus] = useState('All');   // All | Pending | Approved | Rejected
+    const [mode, setMode] = useState('table');     // Table | Timeline
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
     // A collector may edit only their OWN still-PENDING submission (values only).
     const ownsSub = (s) => !!s && s.status === 'pending' && [me.name, me.username].filter(Boolean).some((n) => n === s.submittedBy || (s.responsible && s.responsible.name === n));
-    const load = () => dcApi.get('/api/submissions?limit=300').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+    // limit=500 is the SAME window CollectorProfile reads. Both screens quote an
+    // accuracy percentage; computing them over different-sized pages would let the
+    // two disagree for a collector with more than 300 submissions.
+    const load = () => dcApi.get('/api/submissions?limit=500').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
     useEffect(() => { load(); }, []);
     // Live refresh (same as the admin review): refetch on refocus, data-refreshed, and a 30s poll.
     useEffect(() => {
@@ -2243,6 +2398,18 @@
       return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); window.removeEventListener('unico:data-refreshed', refresh); clearInterval(iv); };
     }, []);
     const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
+    // Relative "sent" wording for the timeline, in the mockup's phrasing.
+    const ago = (ts) => {
+      if (!ts) return 'not dated';
+      try {
+        const d = new Date(ts), now = new Date();
+        const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (d.toDateString() === now.toDateString()) return 'Today · ' + hm;
+        const y = new Date(now.getTime() - 864e5);
+        if (d.toDateString() === y.toDateString()) return 'Yesterday · ' + hm;
+        return Math.max(2, Math.round((now.getTime() - d.getTime()) / 864e5)) + ' days ago';
+      } catch (e) { return '—'; }
+    };
     const statusChip = (st) => {
       const m = { pending: ['Pending', '#fff4e0', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)'], reported: ['On record', 'var(--blue-50)', 'var(--blue-700)'] }[st] || ['—', '#eef1f5', '#789'];
       return <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: m[1], color: m[2] }}>{m[0]}</span>;
@@ -2265,8 +2432,133 @@
     const isQ = active === 'quality';
     const isEdits = active === 'edits';
     const shown = isEdits ? editRows : (isQ ? qualityRows : patientRows);
+
+    /* ---- Header band ------------------------------------------------------------
+       Accuracy uses CollectorProfile's formula verbatim — approved ÷ decided over the
+       collector's REAL submissions (never the merged on-record rows, which were never
+       reviewed) — so "My profile" and "My submissions" cannot quote different numbers.
+
+       The mockup's third card, a "Unit accuracy ranking" of other wards, is left out
+       on purpose: a portal account is scoped to its own data, no endpoint returns
+       other units' scores, and inventing one would be a privacy decision. */
+    const decided = subs.filter((x) => x.status === 'approved' || x.status === 'rejected');
+    const accPct = decided.length ? Math.round(subs.filter((x) => x.status === 'approved').length * 100 / decided.length) : null;
+    const ACC_C = 144.5;                              // 2πr for the r=23 donut
+    // "This cycle" = the reporting month the portal is currently on. Scoping it to a
+    // month is what makes it a cycle; an all-time total would only repeat the donut.
+    const cycle = subs.filter((x) => x.month === month);
+    const cycleAppr = cycle.filter((x) => x.status === 'approved').length;
+    const cycleRej = cycle.filter((x) => x.status === 'rejected').length;
+    // Response time = how long the ADMIN took to decide (reviewedAt − submittedAt),
+    // measurable only on rows that carry both stamps.
+    const turn = cycle.filter((x) => x.submittedAt && x.reviewedAt && x.reviewedAt >= x.submittedAt);
+    const avgDays = turn.length ? (turn.reduce((a, x) => a + (x.reviewedAt - x.submittedAt), 0) / turn.length / 864e5) : null;
+    const cycleStats = [
+      ['Submitted', String(cycle.length), '#0090ca'],
+      ['Approved', String(cycleAppr), '#1f9d57'],
+      ['Rejected', String(cycleRej), '#d23a52'],
+      ['Avg. response time', avgDays == null ? '—' : (Math.round(avgDays * 10) / 10) + ' d', '#6a52d4'],
+    ];
+
+    /* ---- Filters ---------------------------------------------------------------
+       The status filter narrows whichever type tab is open; it does not replace it.
+       "All" counts every row in the tab, including on-record rows that were never
+       submitted, so All != Pending + Approved + Rejected by design. */
+    const FILTERS = ['All', 'Pending', 'Approved', 'Rejected'];
+    const countFor = (f) => f === 'All' ? shown.length : shown.filter((s) => s.status === f.toLowerCase()).length;
+    const listed = status === 'All' ? shown : shown.filter((s) => s.status === status.toLowerCase());
+    const cpTab = (on) => ({ border: 0, background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent', color: on ? '#fff' : '#6c7a8c', padding: '6px 13px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all .2s', boxShadow: on ? '0 4px 12px rgba(0,144,202,.35)' : 'none' });
+    const segWrap = { display: 'inline-flex', background: 'rgba(255,255,255,.5)', border: '1px solid rgba(255,255,255,.85)', borderRadius: 10, padding: 3, gap: 2 };
+    const cntStyle = (on) => ({ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, background: on ? 'rgba(255,255,255,.22)' : 'rgba(125,145,180,.18)', padding: '1px 6px', borderRadius: 8 });
+
+    /* ---- Fix & resubmit ---------------------------------------------------------
+       Without this a rejected row is a dead end: the reason is readable but there is
+       no way back to the form. Quality rows re-enter through the very same jump
+       CollectorDash's "Fill now" uses; patient rows through its twin. Returns null
+       (button hidden) when the row lacks the ids the form needs in order to prefill. */
+    const fixFor = (s) => {
+      if (!s || s.status !== 'rejected') return null;
+      if (s.type === 'quality') return (onFixQuality && s.area && s.indicatorId && s.month) ? () => onFixQuality(s.area, s.indicatorId, s.month) : null;
+      return (onFixPatient && s.department && s.month) ? () => onFixPatient(s.department, s.month) : null;
+    };
+    const FIX_BTN = { border: '1px solid rgba(210,58,82,.35)', background: 'rgba(255,255,255,.7)', color: '#a92c42', padding: '4px 10px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' };
+    const FixBtn = ({ s }) => { const go = fixFor(s); return go ? <button style={FIX_BTN} onClick={(e) => { e.stopPropagation(); go(); }}>Fix &amp; resubmit</button> : null; };
+    const REASON = { fontSize: 10.5, fontWeight: 400, color: '#a92c42', background: 'rgba(210,58,82,.09)', borderLeft: '2px solid rgba(210,58,82,.4)', borderRadius: 5, padding: '4px 8px', marginTop: 4, lineHeight: 1.45, maxWidth: 420 };
+    const rejNote = (s) => (s.status === 'rejected' && s.rejectReason) ? <div style={REASON}>{s.rejectReason}</div> : null;
+
+    /* ---- Timeline ---------------------------------------------------------------
+       The same rows, grouped by the DAY they were sent. On-record rows carry no
+       submittedAt, so they collect under one honest "Already on record" heading
+       rather than being given an invented date. */
+    const targetOf = (s) => (s.type === 'quality' ? (s.indicatorName || s.areaName) : s.departmentName) || '—';
+    const typeOf = (s) => s.type === 'quality' ? 'Quality' : 'Statistics';
+    const typeChip = (s) => ({ display: 'inline-flex', fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 12, color: s.type === 'quality' ? '#6a52d4' : '#3ab5a7', background: s.type === 'quality' ? 'rgba(106,82,212,.12)' : 'rgba(58,181,167,.14)' });
+    // The synthetic on-record rows have no submission ref, so they show none.
+    const refOf = (s) => (/^rec-/.test(String(s.id)) ? '' : String(s.id).slice(-8).toUpperCase());
+    const dayGroups = (() => {
+      const out = [];
+      listed.forEach((s) => {
+        let label = 'Already on record';
+        if (s.submittedAt) {
+          try {
+            const d = new Date(s.submittedAt), now = new Date(), y = new Date(Date.now() - 864e5);
+            label = d.toDateString() === now.toDateString() ? 'Today'
+              : d.toDateString() === y.toDateString() ? 'Yesterday'
+                : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+          } catch (e) { label = 'Not dated'; }
+        }
+        let g = out.find((x) => x.label === label);
+        if (!g) { g = { label, rows: [] }; out.push(g); }
+        g.rows.push(s);
+      });
+      return out;
+    })();
+
     return (
       <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 14, marginBottom: 14 }}>
+        <div style={Object.assign({}, CP_CARD, { padding: '15px 17px', display: 'flex', alignItems: 'center', gap: 14 })}>
+          <svg viewBox="0 0 56 56" style={{ width: 56, height: 56, flexShrink: 0, transform: 'rotate(-90deg)' }}>
+            <circle cx="28" cy="28" r="23" fill="none" stroke="rgba(125,145,180,.18)" strokeWidth="6" />
+            <circle cx="28" cy="28" r="23" fill="none" stroke="#1f9d57" strokeWidth="6" strokeLinecap="round" strokeDasharray={String(ACC_C)} strokeDashoffset={(ACC_C * (1 - (accPct || 0) / 100)).toFixed(1)} style={{ transition: 'stroke-dashoffset 1s cubic-bezier(.2,.7,.3,1)' }} />
+          </svg>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 22, fontWeight: 700, color: accPct == null ? '#b6c0cc' : '#16202e', lineHeight: 1 }}>{rows === null ? '…' : accPct == null ? '—' : accPct + '%'}</div>
+            <div style={{ fontSize: 11, color: '#6c7a8c', marginTop: 3 }}>
+              {(accPct == null && rows !== null) ? 'Nothing has been reviewed yet, so accuracy cannot be measured.' : 'accuracy — approved vs rejected'}
+            </div>
+            {accPct != null && <div style={{ fontSize: 10.5, color: '#9aa6b4', marginTop: 2 }}>over {decided.length} reviewed submission{decided.length === 1 ? '' : 's'}</div>}
+          </div>
+        </div>
+        <div style={Object.assign({}, CP_CARD, { padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 })}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e' }}>This cycle</div>
+            <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{month ? monthLabel(month) : 'no month selected'}</div>
+          </div>
+          {cycleStats.map((cs) => (
+            <div key={cs[0]} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: '#6c7a8c' }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: cs[2], flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>{cs[0]}</span>
+              <b style={{ fontFamily: "'IBM Plex Mono',monospace", color: '#16202e' }}>{cs[1]}</b>
+            </div>
+          ))}
+          {avgDays == null && cycle.length > 0 && <div style={{ fontSize: 10.5, color: '#9aa6b4', lineHeight: 1.5 }}>Response time appears once a submission for this month has been reviewed.</div>}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={segWrap}>
+          {FILTERS.map((f) => (
+            <button key={f} onClick={() => setStatus(f)} style={cpTab(status === f)}>{f}<span style={cntStyle(status === f)}>{countFor(f)}</span></button>
+          ))}
+        </div>
+        <span style={{ flex: 1 }} />
+        <div style={segWrap}>
+          <button onClick={() => setMode('table')} style={cpTab(mode === 'table')}>Table</button>
+          <button onClick={() => setMode('timeline')} style={cpTab(mode === 'timeline')}>Timeline</button>
+        </div>
+      </div>
+
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--line-2)', flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 700 }}>My data — submissions &amp; what's on record</div>
@@ -2282,21 +2574,61 @@
         </div>
         {rows === null ? <div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div>
           : merged.length === 0 ? <div style={{ padding: 28, color: 'var(--muted)', textAlign: 'center' }}>No data yet for your assigned departments.</div>
-            : <div style={{ overflowX: 'auto' }}><table className="tbl" style={{ width: '100%' }}>
-              <thead><tr><th>Submitted on</th>{isEdits ? <React.Fragment><th>Department</th><th>For</th><th>Reason</th></React.Fragment> : (isQ ? <React.Fragment><th>Area</th><th>Indicator</th><th>Quarter</th></React.Fragment> : <React.Fragment><th>Department</th><th>Month</th></React.Fragment>)}<th>Status</th><th></th></tr></thead>
-              <tbody>{shown.map((s) => (
-                <tr key={s.id} onClick={() => setDetail(s)} title="Tap to view" style={{ cursor: 'pointer' }}>
-                  <td className="num" style={{ whiteSpace: 'nowrap' }}>{when(s.submittedAt)}</td>
-                  {isEdits
-                    ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.type === 'quality' ? s.areaName : s.departmentName}</td><td>{(s.type === 'quality' ? (s.indicatorName || '') + ' · ' : '') + monthLabel(s.month)}</td><td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 260 }}>{s.correctionReason || '—'}{s.status === 'rejected' && s.rejectReason ? <div style={{ color: 'var(--rose)', fontSize: 11, marginTop: 2 }}>Rejected: {s.rejectReason}</div> : null}</td></React.Fragment>
-                    : (isQ
-                      ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.areaName}</td><td>{s.indicatorName}</td><td>{s.quarter}</td></React.Fragment>
-                      : <React.Fragment><td style={{ fontWeight: 600 }}>{s.departmentName}</td><td>{monthLabel(s.month)}</td></React.Fragment>)}
-                  <td>{statusChip(s.status)}</td>
-                  <td style={{ textAlign: 'right' }}><button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View</button></td>
-                </tr>
-              ))}</tbody>
-            </table></div>}
+            : listed.length === 0 ? <div style={{ padding: 28, color: 'var(--muted)', textAlign: 'center' }}>Nothing in this tab is {status.toLowerCase()}.</div>
+              : mode === 'timeline'
+                ? <div style={{ padding: '18px 20px' }}>
+                  {dayGroups.map((g) => (
+                    <div key={g.label}>
+                      <div style={{ fontSize: 10.5, letterSpacing: '.6px', textTransform: 'uppercase', color: '#7d8ea8', fontWeight: 700, margin: '0 0 9px' }}>{g.label}</div>
+                      {g.rows.map((s) => {
+                        const dot = { pending: '#e08a1e', approved: '#1f9d57', rejected: '#d23a52' }[s.status] || '#0090ca';
+                        const halo = { pending: 'rgba(224,138,30,.16)', approved: 'rgba(31,157,87,.16)', rejected: 'rgba(210,58,82,.16)' }[s.status] || 'rgba(0,144,202,.16)';
+                        return (
+                          <div key={s.id} onClick={() => setDetail(s)} title="Tap to view" style={{ display: 'flex', gap: 14, position: 'relative', paddingBottom: 16, cursor: 'pointer' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: 26 }}>
+                              <span style={{ width: 12, height: 12, borderRadius: '50%', flexShrink: 0, marginTop: 3, background: dot, boxShadow: '0 0 0 4px ' + halo }} />
+                              <span style={{ flex: 1, width: 2, background: 'linear-gradient(180deg,rgba(125,145,180,.3),rgba(125,145,180,.08))', borderRadius: 2, marginTop: 4 }} />
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0, paddingBottom: 4 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e' }}>{targetOf(s)}</span>
+                                <span style={typeChip(s)}>{typeOf(s)}</span>
+                                {statusChip(s.status)}
+                                <FixBtn s={s} />
+                              </div>
+                              <div style={{ fontSize: 11, color: '#6c7a8c', marginTop: 3 }}>
+                                {refOf(s) ? <span style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{refOf(s)}{' · '}</span> : null}
+                                {monthLabel(s.month)}
+                                {s.type === 'quality' && s.value != null && s.value !== '' ? <React.Fragment>{' · value '}<b style={{ color: '#3c4858', fontFamily: "'IBM Plex Mono',monospace" }}>{String(s.value)}</b></React.Fragment> : null}
+                                {' · ' + ago(s.submittedAt)}
+                              </div>
+                              {rejNote(s)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 11, color: '#9aa6b4' }}>Rejected submissions show the administrator's reason — correct the figure and resubmit.</div>
+                </div>
+                : <React.Fragment>
+                  <div style={{ overflowX: 'auto' }}><table className="tbl" style={{ width: '100%' }}>
+                    <thead><tr><th>Submitted on</th>{isEdits ? <React.Fragment><th>Department</th><th>For</th><th>Reason</th></React.Fragment> : (isQ ? <React.Fragment><th>Area</th><th>Indicator</th><th>Quarter</th></React.Fragment> : <React.Fragment><th>Department</th><th>Month</th></React.Fragment>)}<th>Status</th><th></th></tr></thead>
+                    <tbody>{listed.map((s) => (
+                      <tr key={s.id} onClick={() => setDetail(s)} title="Tap to view" style={{ cursor: 'pointer' }}>
+                        <td className="num" style={{ whiteSpace: 'nowrap' }}>{when(s.submittedAt)}</td>
+                        {isEdits
+                          ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.type === 'quality' ? s.areaName : s.departmentName}</td><td>{(s.type === 'quality' ? (s.indicatorName || '') + ' · ' : '') + monthLabel(s.month)}</td><td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 260 }}>{s.correctionReason || '—'}{s.status === 'rejected' && s.rejectReason ? <div style={{ color: 'var(--rose)', fontSize: 11, marginTop: 2 }}>Rejected: {s.rejectReason}</div> : null}</td></React.Fragment>
+                          : (isQ
+                            ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.areaName}</td><td style={{ fontWeight: 600 }}>{s.indicatorName}{rejNote(s)}</td><td>{s.quarter}</td></React.Fragment>
+                            : <React.Fragment><td style={{ fontWeight: 600 }}>{s.departmentName}{rejNote(s)}</td><td>{monthLabel(s.month)}</td></React.Fragment>)}
+                        <td>{statusChip(s.status)}</td>
+                        <td style={{ textAlign: 'right' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, justifyContent: 'flex-end' }}><FixBtn s={s} /><button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View</button></div></td>
+                      </tr>
+                    ))}</tbody>
+                  </table></div>
+                  <div style={{ padding: '10px 16px', fontSize: 11, color: '#9aa6b4' }}>Rejected submissions show the administrator's reason — correct the figure and resubmit.</div>
+                </React.Fragment>}
       </Card>
       {detail && <SubmissionDetail s={detail} canEdit={ownsSub(detail)} fullEdit={false} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}
       </>
@@ -2313,7 +2645,6 @@
     const [month, setMonth] = useState(dcDefaultMonth() || (fyMonths.length ? fyMonths[fyMonths.length - 1] : '') || '');
     const [subs, setSubs] = useState(null);
     useEffect(() => { dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
-    const hasData = (ind, m) => { const f = (o) => o && o[m] != null && o[m] !== ''; return f(ind.mNum) || f(ind.mDen) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0); };
     const pendingFor = (areaKey, ind, m) => (subs || []).some((s) => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
     const statusOf = (areaKey, ind, m) => hasData(ind, m) ? 'recorded' : pendingFor(areaKey, ind, m) ? 'pending' : 'none';
     const tone = { recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'], pending: ['#9a6b00', '#fff4e0', 'Pending'], none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted'] };
@@ -2369,55 +2700,1635 @@
     );
   }
 
-  function CollectorPortal() {
-    const user = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
-    // Merged list so a newly-created custom department the collector is assigned to
-    // appears (and so the Patient Statistics tab shows when they only own a custom one).
-    const depts = dcAllDepts();
-    const areas = (window.qualityData ? window.qualityData() : []);
-    const hasPatient = depts.length > 0;
-    const hasQuality = areas.length > 0;
-    const tabs = [];
-    if (hasQuality) tabs.push(['status', 'Submission status', I.grid]);
-    if (hasQuality) tabs.push(['quality', 'Quality Data', I.activity]);
-    if (hasPatient) tabs.push(['patient', 'Patient Statistics', I.input]);
-    tabs.push(['history', 'My Submissions', I.doc]);
-    const [tab, setTab] = useState(tabs[0][0]);
-    // Interactive: clicking an indicator on the status board jumps to the Quality Data
-    // form pre-filled for that area / indicator / month (turns the board into a to-do list).
-    const [jump, setJump] = useState(null);
-    const fillFor = (area, indicatorId, m) => { setJump({ area, indicatorId, month: m }); setTab('quality'); };
+  /* ============================ Data Collector portal ============================
+     The collector's whole application, not a tab strip bolted onto the admin app: its
+     own shell (dark sidebar, glass topbar) and a dashboard that opens on what is still
+     outstanding rather than on an empty form.
 
-    const tabBtn = (id, label, icon) => (
-      <button key={id} onClick={() => setTab(id)} style={{
-        display: 'inline-flex', alignItems: 'center', gap: 7, padding: '9px 15px', borderRadius: 9, cursor: 'pointer',
-        border: '1px solid ' + (tab === id ? 'var(--blue)' : 'var(--line)'), background: tab === id ? 'var(--blue)' : '#fff',
-        color: tab === id ? '#fff' : 'var(--ink-2)', fontWeight: 600, fontSize: 13, fontFamily: 'inherit',
-      }}><Ic d={icon} s={15} />{label}</button>
+     Everything on the dashboard is derived from the same two sources the rest of the
+     module already trusts — the quality store (what is on record) and /api/submissions
+     (what has been sent) — so the portal can never disagree with the admin's review
+     queue. Nothing here is decorative-only: every number is clickable through to the
+     form that changes it.  */
+
+  const CP_CARD = {
+    background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+    backdropFilter: 'blur(26px) saturate(1.75)', WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+    border: '1px solid rgba(255,255,255,.92)', borderRadius: 16,
+    boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+  };
+  // The in-charge nav opens on a ward Dashboard rather than on the submission board:
+  // running a unit starts with who is on duty and what is outstanding, not with a form.
+  const CP_NAV_HOME = ['home', 'Dashboard', 'M3 11l9-8 9 8v9a2 2 0 01-2 2h-4v-7H9v7H5a2 2 0 01-2-2z'];
+  const CP_NAV_STAFFREQ = ['requests', 'Add nurse / PCA', 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M19 8v6M22 11h-6'];
+  const CP_NAV_COLLECT = [
+    ['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'],
+    ['quick', 'Quick entry', 'M13 2L4 14h7l-1 8 9-12h-7z'],
+    ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'],
+    ['patient', 'Patient statistics', 'M4 4h16v16H4zM4 9h16M9 4v16'],
+  ];
+  const CP_NAV_UNIT = [
+    ['history', 'My submissions', 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7'],
+    ['roster', 'Duty roster', 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4M8 13h3M13 13h3'],
+    ['profile', 'My profile', 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0'],
+    ['dept', 'Department & staff', 'M4 4h16v16H4zM4 9h16M9 4v16'],
+  ];
+  const CP_ICON = (d, s, c) => (
+    <svg width={s || 17} height={s || 17} viewBox="0 0 24 24" fill="none" stroke={c || 'currentColor'} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
+  );
+  const cpChipStyle = (label) => {
+    const c = { Missing: '#d23a52', Submitted: '#0090ca', Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52', Recorded: '#1f9d57' }[label] || '#6c7a8c';
+    return { display: 'inline-flex', alignItems: 'center', fontSize: 10.5, fontWeight: 700, padding: '2px 10px', borderRadius: 12, color: c, background: c + '1a', whiteSpace: 'nowrap', flexShrink: 0 };
+  };
+  const cpInitials = (n) => String(n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
+  // The recorded number for one month: a count indicator stores it in `months`, a
+  // rate/percentage indicator stores the numerator in `mNum`. Either way this is the
+  // figure the collector actually typed, which is what the sparkline should show.
+  const cpVal = (ind, m) => {
+    const g = (o) => (o && o[m] != null && o[m] !== '' && !isNaN(Number(o[m]))) ? Number(o[m]) : null;
+    const v = g(ind.months); return v == null ? g(ind.mNum) : v;
+  };
+  // "Is this indicator's month filled in?" -- ONE definition. The dashboard body and
+  // the sidebar's progress ring both count from this; when each kept its own copy the
+  // two silently disagreed for a month logged purely as incident entries.
+  const cpHasData = (ind, m) => {
+    const f = (o) => o && o[m] != null && o[m] !== '';
+    return f(ind.mNum) || f(ind.mDen) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0);
+  };
+  // Most quality indicators are "lower is better", but not all -- hand hygiene,
+  // certification and satisfaction rise when things improve. Colouring by the sign of
+  // the change alone paints a real improvement red, so the direction is read from the
+  // indicator rather than assumed.
+  const cpImproved = (ind, first, last) => (ind && ind.goalDirection === 'higher_is_better') ? (last >= first) : (last <= first);
+  // Monthly data is due by the end of the FOLLOWING month — the same rule the admin
+  // analytics screen uses to decide whether a submission was on time.
+  const cpDeadline = (mk) => {
+    const p = String(mk || '').split('-'); const mi = MONS_ABBR.indexOf(p[0]); const yy = parseInt(p[1], 10);
+    if (mi < 0 || isNaN(yy)) return null;
+    return new Date(2000 + yy, mi + 2, 0, 23, 59, 59);
+  };
+
+  /* Sparkline over the six months ending at `month`. Returns null when there is not
+     enough history to draw a line — an invented flat line would read as "stable". */
+  function CpSpark({ ind, months }) {
+    const vals = months.map((m) => cpVal(ind, m));
+    const known = vals.filter((v) => v != null);
+    if (known.length < 2) return <div style={{ width: 96, height: 28, flexShrink: 0 }} />;
+    const mx = Math.max.apply(null, known), mn = Math.min.apply(null, known), rng = (mx - mn) || 1;
+    const pts = [];
+    vals.forEach((v, i) => { if (v != null) pts.push([4 + i * (88 / Math.max(1, months.length - 1)), 24 - ((v - mn) / rng) * 20]); });
+    const first = known[0], last = known[known.length - 1];
+    const color = cpImproved(ind, first, last) ? '#1f9d57' : '#d23a52';
+    const lastPt = pts[pts.length - 1];
+    return (
+      <svg viewBox="0 0 96 28" style={{ width: 96, height: 28, flexShrink: 0 }}>
+        <polyline points={pts.map((p) => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')} fill="none" stroke={color} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+        <circle cx={lastPt[0].toFixed(1)} cy={lastPt[1].toFixed(1)} r="2.6" fill={color} />
+      </svg>
+    );
+  }
+  function cpTrend(ind, months) {
+    const vals = months.map((m) => cpVal(ind, m)).filter((v) => v != null);
+    if (vals.length < 2) return null;
+    const a = vals[0], b = vals[vals.length - 1];
+    if (!a) return null;
+    return Math.round(((b - a) / Math.abs(a)) * 100);
+  }
+
+  /* ---- Quick entry: the department-statistics sheet, as a spreadsheet -------------
+     Months down, columns across, one department at a time. Typing in the empty row at
+     the top adds a month; typing over an existing month raises a CORRECTION, exactly
+     as the single-month form does — the grid is a faster way in, never a different
+     set of rules. Enter / arrow keys move between cells. */
+  function CollectorQuickGrid({ depts, onDone }) {
+    const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
+    const all = (depts && depts.length) ? depts : dcAllDepts();
+    const [deptId, setDeptId] = useState((all[0] && all[0].id) || '');
+    const dept = all.find((d) => d.id === deptId) || all[0];
+    const [subs, setSubs] = useState([]);
+    const [edits, setEdits] = useState({});          // { "month|colId": value }
+    const [reason, setReason] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [undoStack, setUndoStack] = useState([]);
+    const load = () => dcApi.get('/api/submissions?limit=300').then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {});
+    useEffect(() => { load(); }, []);
+    useEffect(() => { setEdits({}); setReason(''); setUndoStack([]); }, [deptId]);
+
+    const cols = (dept && dept.cols) || [];
+    const order = MO();
+    // The twelve months ending at the current reporting month — a year of context is
+    // what a monthly sheet is checked against, and more than that will not fit.
+    const cur = dcDefaultMonth();
+    const ci = Math.max(0, order.indexOf(cur));
+    const rows = order.slice(Math.max(0, ci - 11), ci + 1).reverse();
+    // A department's rows are POSITIONAL: data[i] belongs to months[i]. They do not
+    // carry their own month, so matching on r.month silently finds nothing and every
+    // month reads as blank. (A row that does carry one still wins.)
+    const byMonth = {};
+    const dMonths = (dept && dept.months) || [], dData = (dept && dept.data) || [];
+    dMonths.forEach((m, i) => { if (dData[i]) byMonth[m] = dData[i]; });
+    dData.forEach((r) => { if (r && r.month) byMonth[r.month] = r; });
+    const subStatus = {};
+    (subs || []).forEach((s) => { if (s.type === 'patient' && s.department === deptId && s.month && !subStatus[s.month]) subStatus[s.month] = s.status; });
+
+    const cellVal = (m, cid) => {
+      const k = m + '|' + cid;
+      if (Object.prototype.hasOwnProperty.call(edits, k)) return edits[k];
+      const r = byMonth[m]; const v = r && r[cid];
+      return v == null ? '' : String(v);
+    };
+    const setCell = (m, cid, v) => {
+      const k = m + '|' + cid;
+      setUndoStack((u) => u.concat([{ k, prev: Object.prototype.hasOwnProperty.call(edits, k) ? edits[k] : undefined }]).slice(-80));
+      setEdits((e) => Object.assign({}, e, { [k]: v }));
+    };
+    const undo = () => {
+      const u = undoStack[undoStack.length - 1];
+      if (!u) return;
+      setUndoStack((s) => s.slice(0, -1));
+      setEdits((e) => { const n = Object.assign({}, e); if (u.prev === undefined) delete n[u.k]; else n[u.k] = u.prev; return n; });
+    };
+    // Enter / arrows walk the grid the way a spreadsheet does.
+    const gridKey = (e) => {
+      const k = e.key;
+      if (k !== 'Enter' && k !== 'ArrowDown' && k !== 'ArrowUp') return;
+      const cell = e.target.closest('td'); if (!cell) return;
+      const row = cell.parentElement, tbody = row.parentElement;
+      const cIdx = Array.prototype.indexOf.call(row.children, cell);
+      const rIdx = Array.prototype.indexOf.call(tbody.children, row);
+      const target = tbody.children[rIdx + (k === 'ArrowUp' ? -1 : 1)];
+      if (!target) return;
+      const inp = target.children[cIdx] && target.children[cIdx].querySelector('input');
+      if (inp) { e.preventDefault(); inp.focus(); inp.select(); }
+    };
+
+    // Which months the collector actually touched, and which of those overwrite data
+    // that is already on record (those need a reason).
+    const touched = Array.from(new Set(Object.keys(edits).filter((k) => String(edits[k]).trim() !== '').map((k) => k.split('|')[0])));
+    const corrections = touched.filter((m) => byMonth[m] || subStatus[m] === 'approved');
+    const blocked = touched.filter((m) => subStatus[m] === 'pending');
+
+    const submit = () => {
+      if (!dept) return;
+      if (!touched.length) { toast('Nothing to submit — type a figure first.', 'error'); return; }
+      if (blocked.length) { toast('A submission for ' + blocked.map(monthLabel).join(', ') + ' is already awaiting review.', 'error'); return; }
+      if (corrections.length && !reason.trim()) { toast('Please say why you are changing months already on record.', 'error'); return; }
+      setBusy(true);
+      // One submission per month, so the admin reviews and applies them exactly as if
+      // they had been sent from the single-month form.
+      const jobs = touched.map((m) => {
+        const values = {};
+        cols.forEach((c) => { const v = cellVal(m, c.id); if (String(v).trim() !== '') values[c.id] = Number(v); });
+        const isCorr = corrections.indexOf(m) >= 0;
+        return dcApi.post('/api/submissions/patient', {
+          department: dept.id, month: m, values,
+          responsible: { name: me.name || '' }, note: '',
+          isCorrection: isCorr, correctionReason: isCorr ? reason.trim() : '',
+        });
+      });
+      Promise.all(jobs).then((rs) => {
+        setBusy(false);
+        const bad = rs.filter((r) => !r || !r.ok);
+        if (bad.length) { toast((bad[0] && bad[0].error) || 'Some months could not be sent.', 'error'); return; }
+        toast(touched.length + ' month' + (touched.length > 1 ? 's' : '') + ' sent for review', 'success');
+        setEdits({}); setReason(''); setUndoStack([]); load(); if (onDone) onDone();
+      }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
+    };
+
+    const selStyle = { padding: '9px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12.5, color: '#16202e', outline: 'none' };
+    const lbl = { fontSize: 10.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: '#7d8ea8' };
+
+    if (!dept) return <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>No department is assigned to you yet — please contact your administrator.</div>;
+
+    return (
+      <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e' }}>Quick entry — spreadsheet mode</div>
+            <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>Tab or Enter moves to the next cell · months already on record are editable and raise a correction.</div>
+          </div>
+          <span style={{ flex: 1 }} />
+          <button onClick={undo} disabled={!undoStack.length} title="Undo last change" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.7)', color: undoStack.length ? '#3c4858' : '#b6c0cc', padding: '7px 13px', borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: undoStack.length ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+            {CP_ICON('M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3', 13)}Undo
+          </button>
+        </div>
+        <div style={Object.assign({}, CP_CARD, { overflow: 'hidden', marginBottom: 14 })}>
+          <div style={{ height: 3, background: 'linear-gradient(90deg,#3ab5a7,#0aa0d4,#0072a3)' }} />
+          <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', borderBottom: '1px solid rgba(125,145,180,.18)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 220 }}>
+              <label style={lbl}>Department</label>
+              <select value={deptId} onChange={(e) => setDeptId(e.target.value)} style={Object.assign({ width: '100%', boxSizing: 'border-box' }, selStyle)}>
+                {all.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+            <span style={{ flex: 1 }} />
+            <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>
+              {touched.length ? <b style={{ color: '#0072a3' }}>{touched.length} month{touched.length > 1 ? 's' : ''} edited</b> : 'No changes yet'}
+              {corrections.length ? <span style={{ color: '#b5670a', fontWeight: 700 }}> · {corrections.length} correction{corrections.length > 1 ? 's' : ''}</span> : null}
+            </div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }} onKeyDown={gridKey}>
+              <thead>
+                <tr>
+                  <th style={{ position: 'sticky', left: 0, background: 'rgba(240,247,255,.96)', textAlign: 'left', padding: '9px 14px', fontSize: 10.5, letterSpacing: '.5px', textTransform: 'uppercase', color: '#7d8ea8', borderBottom: '1px solid rgba(125,145,180,.25)', zIndex: 1 }}>Month</th>
+                  {cols.map((c) => <th key={c.id} style={{ textAlign: 'right', padding: '9px 12px', fontSize: 10.5, letterSpacing: '.5px', textTransform: 'uppercase', color: '#7d8ea8', borderBottom: '1px solid rgba(125,145,180,.25)', whiteSpace: 'nowrap' }}>{c.label}</th>)}
+                  <th style={{ textAlign: 'right', padding: '9px 14px', fontSize: 10.5, letterSpacing: '.5px', textTransform: 'uppercase', color: '#7d8ea8', borderBottom: '1px solid rgba(125,145,180,.25)' }}>State</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((m) => {
+                  const onRecord = !!byMonth[m];
+                  const st = subStatus[m];
+                  const state = st === 'pending' ? 'Pending' : st === 'rejected' ? 'Rejected' : (st === 'approved' || onRecord) ? 'Recorded' : 'Missing';
+                  const rowEdited = cols.some((c) => Object.prototype.hasOwnProperty.call(edits, m + '|' + c.id));
+                  return (
+                    <tr key={m} style={{ background: rowEdited ? 'rgba(0,144,202,.07)' : (state === 'Missing' ? 'rgba(210,58,82,.045)' : 'transparent') }}>
+                      <td style={{ position: 'sticky', left: 0, background: rowEdited ? 'rgba(226,243,252,.98)' : 'rgba(250,252,255,.96)', padding: '6px 14px', fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, color: '#16202e', borderBottom: '1px solid rgba(125,145,180,.12)', whiteSpace: 'nowrap', zIndex: 1 }}>{monthLabel(m)}</td>
+                      {cols.map((c) => (
+                        <td key={c.id} style={{ padding: '4px 6px', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+                          <input type="number" step="any" disabled={st === 'pending'}
+                            value={cellVal(m, c.id)} onChange={(e) => setCell(m, c.id, e.target.value)}
+                            style={{ width: '100%', minWidth: 74, maxWidth: 170, boxSizing: 'border-box', textAlign: 'right', padding: '6px 8px', border: '1px solid transparent', borderRadius: 7, background: st === 'pending' ? 'transparent' : 'rgba(255,255,255,.7)', fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5, color: st === 'pending' ? '#9aa6b4' : '#16202e', outline: 'none' }}
+                            onFocus={(e) => { e.target.style.borderColor = '#27a8db'; e.target.style.background = '#fff'; }}
+                            onBlur={(e) => { e.target.style.borderColor = 'transparent'; e.target.style.background = st === 'pending' ? 'transparent' : 'rgba(255,255,255,.7)'; }} />
+                        </td>
+                      ))}
+                      <td style={{ padding: '6px 14px', textAlign: 'right', borderBottom: '1px solid rgba(125,145,180,.12)' }}><span style={cpChipStyle(state)}>{state}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {corrections.length > 0 && (
+          <div style={Object.assign({}, CP_CARD, { padding: '13px 16px', marginBottom: 14, borderLeft: '4px solid #e08a1e' })}>
+            <div style={{ fontSize: 12, color: '#3c4858', marginBottom: 8, lineHeight: 1.55 }}>
+              <b>{corrections.map(monthLabel).join(', ')}</b> {corrections.length > 1 ? 'are' : 'is'} already on record. Changing {corrections.length > 1 ? 'them' : 'it'} sends a correction to the administrator — live data is not overwritten until it is approved.
+            </div>
+            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this being corrected?"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', background: 'rgba(255,255,255,.85)', fontFamily: 'inherit', fontSize: 12.5, outline: 'none' }} />
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={submit} disabled={busy || !touched.length} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.4)', background: touched.length ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(125,145,180,.25)', color: '#fff', padding: '10px 18px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: touched.length && !busy ? 'pointer' : 'default', fontFamily: 'inherit', boxShadow: touched.length ? '0 8px 22px rgba(0,144,202,.4)' : 'none' }}>
+            {CP_ICON('M20 6L9 17l-5-5', 15)}{busy ? 'Sending…' : 'Submit ' + (touched.length || '') + ' month' + (touched.length === 1 ? '' : 's')}
+          </button>
+          {touched.length > 0 && (
+            <button onClick={() => { setEdits({}); setReason(''); setUndoStack([]); }} style={{ border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.7)', color: '#3c4858', padding: '10px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Discard changes</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- Duty roster, read-only ----------------------------------------------------
+     The collector sees the PUBLISHED sheet for their unit; they never edit it, and the
+     server only ever hands them an approved one.
+
+     The month picker is driven by the roster INDEX rather than by the department list.
+     That is not a stylistic choice: a roster document is keyed by the department NAME
+     the roster module uses (a staff `current_department` string such as "Emergency" or
+     "CT ICU"), while dcAllDepts() yields statistics slugs ("er", "ctvs"). Building the
+     URL from a slug asks for a document that cannot exist, and every month would read
+     as "not drafted yet" even where an approved sheet is sitting in the database. */
+  function CollectorRoster() {
+    const [index, setIndex] = useState(null);       // published rosters visible to me
+    const [pick, setPick] = useState(null);         // { dept, year, month }
+    const [doc, setDoc] = useState(undefined);
+    const R = window.UNICO_ROSTER;
+
+    useEffect(() => {
+      dcApi.get('/api/rosters')
+        .then((r) => {
+          const list = (r && r.ok ? (r.rosters || []) : [])
+            .filter((x) => x && x.status === 'approved')
+            .sort((x, y) => (y.year - x.year) || (y.month - x.month));
+          setIndex(list);
+          if (list.length) setPick({ dept: list[0].dept, year: list[0].year, month: list[0].month });
+        })
+        .catch(() => setIndex([]));
+    }, []);
+
+    useEffect(() => {
+      if (!pick) return;
+      setDoc(undefined);
+      dcApi.get('/api/rosters/' + encodeURIComponent(pick.dept) + '/' + pick.year + '/' + pick.month)
+        .then((r) => setDoc(r && r.ok ? r.roster : null)).catch(() => setDoc(null));
+    }, [pick && pick.dept, pick && pick.year, pick && pick.month]);
+
+    const selStyle = { padding: '8px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12.5, outline: 'none' };
+    const monthName = (m) => (R ? R.MONTHS[m] : String(m + 1));
+    const units = index ? Array.from(new Set(index.map((x) => x.dept))) : [];
+    const monthsFor = (dept) => (index || []).filter((x) => x.dept === dept);
+
+    return (
+      <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+        <div style={Object.assign({}, CP_CARD, { padding: '13px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 })}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e' }}>Duty roster</div>
+            <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>Published sheets only — read only. Drafts stay with the roster office until they are approved.</div>
+          </div>
+          <span style={{ flex: 1 }} />
+          {index && index.length > 0 && pick && (
+            <React.Fragment>
+              <select value={pick.dept} onChange={(e) => { const d = e.target.value; const first = monthsFor(d)[0]; setPick({ dept: d, year: first.year, month: first.month }); }} style={selStyle}>
+                {units.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <select value={pick.year + '|' + pick.month} onChange={(e) => { const p = e.target.value.split('|'); setPick({ dept: pick.dept, year: +p[0], month: +p[1] }); }} style={Object.assign({}, selStyle, { fontFamily: "'IBM Plex Mono',monospace" })}>
+                {monthsFor(pick.dept).map((x) => <option key={x.year + '|' + x.month} value={x.year + '|' + x.month}>{monthName(x.month) + ' ' + x.year}</option>)}
+              </select>
+            </React.Fragment>
+          )}
+        </div>
+        {index === null ? <div style={Object.assign({}, CP_CARD, { padding: 26, textAlign: 'center', color: '#6c7a8c' })}>Loading…</div>
+          : index.length === 0 ? (
+            <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: '#16202e', marginBottom: 5 }}>No published roster yet</div>
+              <div style={{ fontSize: 12 }}>Nothing has been approved for your unit. A roster appears here the moment it is published.</div>
+            </div>
+          ) : doc === undefined ? <div style={Object.assign({}, CP_CARD, { padding: 26, textAlign: 'center', color: '#6c7a8c' })}>Loading the sheet…</div>
+            : !doc ? <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>That sheet is no longer published.</div>
+              : (() => {
+                const days = R ? R.daysIn(doc.year, doc.month) : 31;
+                const dayNums = Array.from({ length: days }, (_, i) => i + 1);
+                const people = (doc.order && doc.order.length ? doc.order : Object.keys(doc.grid || {}));
+                const names = doc.names || {};
+                return (
+                  <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px', borderBottom: '1px solid rgba(125,145,180,.18)', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, color: '#16202e' }}>{doc.deptName || doc.dept}</div>
+                      <span style={{ fontSize: 11.5, color: '#9aa6b4', fontFamily: "'IBM Plex Mono',monospace" }}>{monthName(doc.month) + ' ' + doc.year}</span>
+                      <span style={{ flex: 1 }} />
+                      <span style={cpChipStyle('Approved')}>Published{doc.revision ? ' · rev ' + doc.revision : ''}</span>
+                      {doc.approvedBy ? <span style={{ fontSize: 11, color: '#6c7a8c' }}>Approved by {doc.approvedBy}</span> : null}
+                    </div>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ borderCollapse: 'collapse', fontSize: 11.5 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ position: 'sticky', left: 0, background: 'rgba(240,247,255,.97)', textAlign: 'left', padding: '8px 12px', minWidth: 180, borderBottom: '1px solid rgba(125,145,180,.25)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.5px', color: '#7d8ea8', zIndex: 1 }}>Staff</th>
+                            {dayNums.map((d) => (
+                              <th key={d} style={{ padding: '6px 3px', minWidth: 30, borderBottom: '1px solid rgba(125,145,180,.25)', fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5, color: '#7d8ea8' }}>{d}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {people.map((emp) => (
+                            <tr key={emp}>
+                              <td title={'Emp ID ' + emp} style={{ position: 'sticky', left: 0, background: 'rgba(250,252,255,.97)', padding: '5px 12px', borderBottom: '1px solid rgba(125,145,180,.12)', whiteSpace: 'nowrap', fontWeight: 600, color: '#16202e', zIndex: 1 }}>
+                                {names[emp] || emp}
+                              </td>
+                              {dayNums.map((d) => {
+                                const code = (doc.grid && doc.grid[emp] && doc.grid[emp][d]) || '';
+                                const col = code && R ? (R.BUCKET_COLOR[R.bucketOf(code)] || '#8aa0b8') : null;
+                                return (
+                                  <td key={d} style={{ padding: '3px 2px', textAlign: 'center', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+                                    {code ? <span title={(R && R.BY_CODE[code] ? R.BY_CODE[code].label : code)} style={{ display: 'inline-block', minWidth: 26, padding: '3px 4px', borderRadius: 7, background: col, color: '#fff', fontWeight: 700, fontSize: 10, fontFamily: "'IBM Plex Mono',monospace" }}>{code}</span> : null}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {R && (
+                      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', padding: '10px 14px', borderTop: '1px solid rgba(125,145,180,.18)' }}>
+                        {R.BUCKETS.map((b) => (
+                          <span key={b.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#6c7a8c' }}>
+                            <span style={{ width: 12, height: 12, borderRadius: 4, background: b.color }} />{b.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+      </div>
+    );
+  }
+
+  /* ---- My profile ----------------------------------------------------------------
+     The person's own record, as the In-charge mockup lays it out: a dark identity hero,
+     the details the hospital holds, and what they have actually done in the system.
+
+     The account itself is the only thing the portal can read about them (the staff
+     register is withheld from a collector scope by design), so the performance panel
+     is built from their OWN submission history rather than from an appraisal they are
+     not entitled to fetch. Nothing here is invented: an empty history says so. */
+  function CollectorProfile({ user, onNav }) {
+    const dataRev = useDcDataRev();
+    const depts = useMemo(() => dcAllDepts(), [dataRev]);
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
+    const [subs, setSubs] = useState(null);
+    useEffect(() => { dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
+    const S = subs || [];
+
+    const decided = S.filter((x) => x.status === 'approved' || x.status === 'rejected');
+    const accuracy = decided.length ? Math.round(S.filter((x) => x.status === 'approved').length * 100 / decided.length) : null;
+    const onTime = (() => {
+      let n = 0, ok = 0;
+      S.forEach((x) => { const dl = cpDeadline(x.month); if (!dl || !x.submittedAt) return; n++; if (x.submittedAt <= dl.getTime()) ok++; });
+      return n ? { pct: Math.round(ok * 100 / n), n } : null;
+    })();
+    const indCount = areas.reduce((n, a) => n + a.indicators.length, 0);
+    const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
+    const recent = S.slice().sort((x, y) => (y.submittedAt || 0) - (x.submittedAt || 0)).slice(0, 8);
+
+    const HERO = { position: 'relative', overflow: 'hidden', borderRadius: 16, padding: '20px 22px', marginBottom: 14, color: '#fff', background: 'linear-gradient(160deg,#1b2c45,#0d1b2e 60%,#102138)', boxShadow: '0 18px 46px rgba(13,27,46,.28)', display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' };
+    const row = (label, val, mono) => (
+      <div key={label} style={{ display: 'flex', alignItems: 'baseline', gap: 12, padding: '9px 0', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+        <span style={{ fontSize: 11.5, color: '#6c7a8c', width: 130, flexShrink: 0 }}>{label}</span>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: val ? '#16202e' : '#b6c0cc', fontFamily: mono ? "'IBM Plex Mono',monospace" : 'inherit' }}>{val || 'Not recorded'}</span>
+      </div>
+    );
+    const bar = (label, pct, val, color) => (
+      <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 11.5, color: '#6c7a8c', width: 118, flexShrink: 0 }}>{label}</span>
+        <div style={{ flex: 1, height: 8, borderRadius: 5, background: 'rgba(125,145,180,.16)', overflow: 'hidden' }}>
+          <div style={{ width: Math.max(0, Math.min(100, pct)) + '%', height: '100%', borderRadius: 5, background: color, transition: 'width .9s cubic-bezier(.2,.7,.3,1)' }} />
+        </div>
+        <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, fontWeight: 700, color: '#3c4858', width: 52, textAlign: 'right' }}>{val}</span>
+      </div>
+    );
+    const stat = (v, l) => (
+      <div key={l} style={{ textAlign: 'center', minWidth: 84 }}>
+        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 22, fontWeight: 700, color: '#fff', lineHeight: 1.1 }}>{v}</div>
+        <div style={{ fontSize: 10, color: '#8fa6c0', marginTop: 3, letterSpacing: '.4px' }}>{l}</div>
+      </div>
     );
 
     return (
-      <div style={{ height: '100vh', overflowY: 'auto', background: '#eef2f7' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', height: 58, background: '#0d1b2e', color: '#fff', position: 'sticky', top: 0, zIndex: 10 }}>
-          <img src="unico/logo.svg" alt="UNICO" style={{ height: 24 }} />
-          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Data Collection</div>
-          <span style={{ flex: 1 }} />
-          <div style={{ textAlign: 'right', lineHeight: 1.2, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '40vw' }}>{user.name || 'Collector'}</div>
-            <div style={{ fontSize: 10.5, color: '#83909f' }}>Data Collector</div>
+      <div style={{ maxWidth: 1260, margin: '0 auto' }}>
+        <div style={HERO}>
+          <div style={{ position: 'absolute', right: -70, top: -80, width: 260, height: 260, borderRadius: '50%', background: 'radial-gradient(circle,rgba(0,144,202,.30),transparent 68%)', filter: 'blur(10px)', pointerEvents: 'none' }} />
+          <div style={{ position: 'relative', width: 78, height: 78, borderRadius: 18, background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', display: 'grid', placeItems: 'center', fontSize: 27, fontWeight: 700, flexShrink: 0, boxShadow: '0 0 0 3px rgba(122,196,232,.25)' }}>{cpInitials(user.name)}</div>
+          <div style={{ position: 'relative', minWidth: 220, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: '-.4px' }}>{user.name || 'My profile'}</div>
+              <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 11px', borderRadius: 12, background: 'rgba(58,181,167,.22)', color: '#8ee6da', border: '1px solid rgba(58,181,167,.35)' }}>Data Collector</span>
+            </div>
+            <div style={{ fontSize: 12, color: '#a8bdd6', marginTop: 5, fontFamily: "'IBM Plex Mono',monospace" }}>
+              {[user.username ? 'Staff ID ' + user.username : null, depts.map((d) => d.name).join(' · ') || null].filter(Boolean).join('  ·  ')}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 11 }}>
+              {areas.map((a) => (
+                <span key={a.key} style={{ fontSize: 11, fontWeight: 600, padding: '4px 11px', borderRadius: 12, background: 'rgba(255,255,255,.09)', border: '1px solid rgba(255,255,255,.16)', color: '#cfe0f0' }}>{a.name}</span>
+              ))}
+            </div>
           </div>
-          <a href="/logout" style={{ fontSize: 12, fontWeight: 600, color: '#cfe0f0', textDecoration: 'none', border: '1px solid rgba(255,255,255,.22)', borderRadius: 8, padding: '7px 12px', whiteSpace: 'nowrap' }}>Sign out</a>
+          <div style={{ position: 'relative', display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+            {stat(indCount, 'indicators')}
+            {stat(depts.length, depts.length === 1 ? 'department' : 'departments')}
+            {stat(subs === null ? '—' : S.length, 'submissions')}
+          </div>
         </div>
-        <div style={{ maxWidth: 860, margin: '0 auto', padding: '18px 14px 70px' }}>
-          <div style={{ marginBottom: 14, fontSize: 13, color: 'var(--muted)' }}>
-            Welcome, <b style={{ color: 'var(--ink)' }}>{user.name}</b>. Submit your assigned data below — every submission goes to the administrator for review.
-            {!hasPatient && !hasQuality && <span style={{ color: 'var(--rose)', fontWeight: 600 }}> No departments assigned yet — please contact your administrator.</span>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 14 }}>
+          <div style={Object.assign({}, CP_CARD, { padding: '14px 17px' })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(0,144,202,.12)', color: '#0072a3' }}>{CP_ICON('M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Details</h3>
+            </div>
+            {row('Name', user.name)}
+            {row('Staff ID', user.username, true)}
+            {row('Role', 'Data Collector')}
+            {row('Departments', depts.map((d) => d.name).join(', '))}
+            {row('Quality areas', areas.map((a) => a.name).join(', '))}
+            <div style={{ fontSize: 11, color: '#9aa6b4', marginTop: 11, lineHeight: 1.6 }}>
+              Qualification, joining date and registration are held on the staff register, which this portal is not permitted to read. Ask your administrator to correct anything shown here.
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>{tabs.map((t) => tabBtn(t[0], t[1], t[2]))}</div>
-          {tab === 'patient' && hasPatient && <DataPatientForm depts={depts} prefill={{ responsible: user.name }} />}
-          {tab === 'status' && hasQuality && <CollectorStatus onFill={fillFor} />}
-          {tab === 'quality' && hasQuality && <DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month }} />}
-          {tab === 'history' && <CollectorHistory />}
+
+          <div style={Object.assign({}, CP_CARD, { padding: '14px 17px', display: 'flex', flexDirection: 'column', gap: 13 })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(58,181,167,.16)', color: '#12776c' }}>{CP_ICON('M22 12h-4l-3 8-4-16-3 8H2', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>My reporting record</h3>
+              <span style={{ flex: 1 }} />
+              {accuracy != null && <span style={cpChipStyle(accuracy >= 90 ? 'Approved' : accuracy >= 70 ? 'Submitted' : 'Missing')}>{accuracy >= 90 ? 'Excellent' : accuracy >= 70 ? 'Good' : 'Needs attention'}</span>}
+            </div>
+            {subs === null ? <div style={{ color: '#6c7a8c', fontSize: 12 }}>Loading…</div>
+              : S.length === 0 ? <div style={{ color: '#6c7a8c', fontSize: 12, padding: '10px 0' }}>You have not sent anything yet. Once you do, your accuracy and timeliness appear here.</div>
+                : (
+                  <React.Fragment>
+                    {accuracy != null && bar('Accepted first time', accuracy, accuracy + '%', 'linear-gradient(90deg,#3ab5a7,#1f9d57)')}
+                    {onTime && bar('Sent on time', onTime.pct, onTime.pct + '%', 'linear-gradient(90deg,#27a8db,#0072a3)')}
+                    {bar('Approved', S.length ? S.filter((x) => x.status === 'approved').length * 100 / S.length : 0, String(S.filter((x) => x.status === 'approved').length), 'linear-gradient(90deg,#8f7ce0,#5b45c4)')}
+                    <div style={{ fontSize: 11, color: '#6c7a8c', lineHeight: 1.6, background: 'rgba(0,144,202,.08)', borderRadius: 9, padding: '9px 11px' }}>
+                      {decided.length ? 'Measured over ' + decided.length + ' reviewed submission' + (decided.length === 1 ? '' : 's') + (onTime ? ', and ' + onTime.n + ' with a known deadline.' : '.') : 'Nothing has been reviewed yet, so accuracy cannot be measured.'}
+                    </div>
+                  </React.Fragment>
+                )}
+          </div>
+        </div>
+
+        <div style={Object.assign({}, CP_CARD, { overflow: 'hidden', marginTop: 14 })}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 16px', borderBottom: '1px solid rgba(125,145,180,.18)' }}>
+            <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(224,138,30,.14)', color: '#b5670a' }}>{CP_ICON('M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', 13)}</span>
+            <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Recent activity</h3>
+            <span style={{ flex: 1 }} />
+            <span onClick={() => onNav('history')} style={{ fontSize: 11, fontWeight: 700, color: '#0072a3', cursor: 'pointer' }}>All submissions ›</span>
+          </div>
+          {subs === null ? <div style={{ padding: 20, color: '#6c7a8c' }}>Loading…</div>
+            : recent.length === 0 ? <div style={{ padding: 24, textAlign: 'center', color: '#6c7a8c', fontSize: 12 }}>Nothing yet.</div>
+              : recent.map((x) => {
+                const label = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' }[x.status] || 'Pending';
+                const dot = { Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52' }[label];
+                return (
+                  <div key={x.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 16px', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, marginTop: 5, flexShrink: 0 }} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {(x.type === 'quality' ? (x.indicatorName || x.areaName) : x.departmentName) + ' · ' + monthLabel(x.month)}{x.isCorrection ? ' · correction' : ''}
+                      </div>
+                      <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{when(x.submittedAt)}{x.status === 'rejected' && x.rejectReason ? ' — ' + x.rejectReason : ''}</div>
+                    </div>
+                    <span style={cpChipStyle(label)}>{label}</span>
+                  </div>
+                );
+              })}
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- Department & staff --------------------------------------------------------
+     What the collector reports on, and how much of it is already on record.
+
+     There is deliberately NO staff roster here. The server withholds staff records
+     from collectors by design (GET /api/staff returns an empty list for a collector
+     scope, matching the "/" snapshot), so a staff panel could only ever render empty.
+     Showing the department's own reporting history is both permitted and more use to
+     the person filling the forms. */
+  function CollectorDeptStaff() {
+    const dataRev = useDcDataRev();
+    const all = useMemo(() => dcAllDepts(), [dataRev]);
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
+    const order = MO();
+    const cur = dcDefaultMonth();
+    const ci = Math.max(0, order.indexOf(cur));
+    const win = order.slice(Math.max(0, ci - 11), ci + 1);
+    return (
+      <div style={{ maxWidth: 1240, margin: '0 auto', display: 'grid', gap: 14 }}>
+        <div style={Object.assign({}, CP_CARD, { padding: '14px 16px' })}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e' }}>Department &amp; staff</div>
+          <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>What you report on, and how much of the last twelve months is on record.</div>
+        </div>
+        {all.length === 0 && <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>No department is assigned to you yet.</div>}
+        {all.map((d) => {
+          const ak = window.DEPTMAP ? (window.DEPTMAP.areasFromDepts([d.id]) || []) : [];
+          const mine = areas.filter((a) => ak.indexOf(a.key) >= 0);
+          const inds = mine.reduce((n, a) => n + ((a.indicators || []).length), 0);
+          const have = new Set(d.months || []);
+          const covered = win.filter((m) => have.has(m)).length;
+          return (
+            <div key={d.id} style={Object.assign({}, CP_CARD, { padding: '15px 17px' })}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ display: 'inline-grid', placeItems: 'center', width: 32, height: 32, borderRadius: 10, background: 'rgba(0,144,202,.12)', color: '#0072a3', flexShrink: 0 }}>{CP_ICON('M4 4h16v16H4zM4 9h16M9 4v16', 17)}</span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#16202e' }}>{d.name}</div>
+                  <div style={{ fontSize: 11, color: '#9aa6b4' }}>{(d.cols || []).length} statistics column{(d.cols || []).length === 1 ? '' : 's'} · {inds} quality indicator{inds === 1 ? '' : 's'}{mine.length ? ' · ' + mine.map((a) => a.name).join(', ') : ''}</div>
+                </div>
+                <span style={{ flex: 1 }} />
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 11px', borderRadius: 12, color: covered === win.length ? '#1f9d57' : covered ? '#0072a3' : '#a92c42', background: (covered === win.length ? '#1f9d57' : covered ? '#0090ca' : '#d23a52') + '1a' }}>{covered}/{win.length} months on record</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+                {(d.cols || []).map((c) => <span key={c.id} style={{ fontSize: 10.5, padding: '2px 9px', borderRadius: 12, background: 'rgba(0,144,202,.1)', color: '#0072a3', fontWeight: 600 }}>{c.label}</span>)}
+              </div>
+              <div style={{ display: 'flex', gap: 4, marginTop: 13, flexWrap: 'wrap' }}>
+                {win.map((m) => (
+                  <span key={m} title={monthLabel(m) + (have.has(m) ? ' — on record' : ' — nothing recorded')}
+                    style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 7, whiteSpace: 'nowrap', color: have.has(m) ? '#fff' : '#9aa6b4', background: have.has(m) ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'rgba(125,145,180,.14)' }}>{m}</span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  /* ---- The dashboard the portal opens on ---------------------------------------- */
+  function CollectorDash({ month, setMonth, onNav, onFill, user }) {
+    const dataRev = useDcDataRev();
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
+    const depts = useMemo(() => dcAllDepts(), [dataRev]);
+    const [subs, setSubs] = useState(null);
+    const load = () => dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([]));
+    useEffect(() => { load(); }, []);
+    useEffect(() => {
+      const refresh = () => { if (document.visibilityState !== 'hidden') load(); };
+      window.addEventListener('unico:data-refreshed', refresh);
+      return () => window.removeEventListener('unico:data-refreshed', refresh);
+    }, []);
+
+    const S = subs || [];
+    const hasData = (ind, m) => { const f = (o) => o && o[m] != null && o[m] !== ''; return f(ind.mNum) || f(ind.mDen) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0); };
+    const pendingFor = (areaKey, ind, m) => S.some((s) => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
+    const statusOf = (areaKey, ind, m) => cpHasData(ind, m) ? 'Recorded' : pendingFor(areaKey, ind, m) ? 'Submitted' : 'Missing';
+
+    let totalInd = 0, done = 0;
+    const missing = [];
+    areas.forEach((a) => a.indicators.forEach((ind) => {
+      totalInd++;
+      const st = statusOf(a.key, ind, month);
+      if (st === 'Missing') missing.push({ area: a.key, ind }); else done++;
+    }));
+    const pct = totalInd ? Math.round(done * 100 / totalInd) : 0;
+    const awaiting = S.filter((s) => s.status === 'pending').length;
+    // A rejection is never cleared server-side: resubmitting inserts a NEW row and
+    // leaves the rejected one in place for ever. Counting them raw would make "Needs
+    // correction" a lifetime tally that only grows, so a rejection counts only while
+    // nothing newer has been sent for the same target.
+    const targetKey = (x) => (x.type === 'quality'
+      ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '')
+      : 'p|' + x.department) + '|' + x.month;
+    const newestOk = {};
+    S.forEach((x) => { if (x.status === 'rejected') return; const k = targetKey(x); if (!(k in newestOk) || (x.submittedAt || 0) > newestOk[k]) newestOk[k] = (x.submittedAt || 0); });
+    const rejected = S.filter((x) => x.status === 'rejected' && !(newestOk[targetKey(x)] > (x.submittedAt || 0))).length;
+
+    // Department statistics for the month: on record, or sent and awaiting review.
+    const deptDone = depts.filter((d) => ((d.months || []).indexOf(month) >= 0) || S.some((s) => s.type === 'patient' && s.department === d.id && s.month === month && s.status !== 'rejected')).length;
+    const statGap = Math.max(0, depts.length - deptDone);
+
+    const dl = cpDeadline(month);
+    const overdueDays = dl ? Math.floor((Date.now() - dl.getTime()) / 864e5) : 0;
+    const overdue = overdueDays > 0 && missing.length > 0;
+    const ringColor = pct >= 90 ? '#1f9d57' : pct >= 60 ? '#0090ca' : pct >= 30 ? '#e08a1e' : '#d23a52';
+
+    // Six months of history for the sparklines, ending at the reporting month.
+    const order = MO();
+    const mi = Math.max(0, order.indexOf(month));
+    const win = order.slice(Math.max(0, mi - 5), mi + 1);
+
+    const heroStyle = Object.assign({}, CP_CARD, { position: 'relative', overflow: 'hidden', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 14 });
+    const ic = (bg, c) => ({ display: 'inline-grid', placeItems: 'center', width: 38, height: 38, borderRadius: 11, background: bg, color: c, flexShrink: 0 });
+
+    const KPIS = [
+      { val: totalInd, lbl: 'Assigned indicators', foot: 'across ' + areas.length + ' quality area' + (areas.length === 1 ? '' : 's'), icd: 'M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z', bg: 'rgba(0,144,202,.12)', c: '#0072a3' },
+      { val: done, lbl: 'Sent this month', foot: pct + '% of your workload', icd: 'M20 6L9 17l-5-5', bg: 'rgba(31,157,87,.13)', c: '#1f9d57' },
+      { val: awaiting, lbl: 'Awaiting review', foot: 'with the administrator', icd: 'M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', bg: 'rgba(224,138,30,.14)', c: '#b5670a' },
+      { val: rejected, lbl: 'Needs correction', foot: rejected ? 'rejected — fix and resubmit' : 'nothing rejected', icd: 'M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01', bg: 'rgba(210,58,82,.13)', c: '#a92c42' },
+    ];
+    const QUICK = [
+      { go: 'quick', label: 'Quick entry', sub: 'Spreadsheet grid for department statistics', cta: 'Open grid', tone: '#0072a3', glow: 'rgba(0,144,202,.22)', badge: statGap > 0 ? statGap + ' missing' : '', icd: 'M13 2L4 14h7l-1 8 9-12h-7z', bg: 'rgba(0,144,202,.12)', c: '#0072a3' },
+      { go: 'quality', label: 'Quality data', sub: 'One indicator at a time with the HQI guide', cta: 'Enter data', tone: '#1f9d57', glow: 'rgba(58,181,167,.22)', badge: missing.length ? missing.length + ' missing' : '', icd: 'M22 12h-4l-3 8-4-16-3 8H2', bg: 'rgba(58,181,167,.16)', c: '#12776c' },
+      { go: 'patient', label: 'Patient statistics', sub: 'Monthly figures per department', cta: 'Fill month', tone: '#5b45c4', glow: 'rgba(106,82,212,.2)', badge: statGap > 0 ? statGap + ' left' : '', icd: 'M4 4h16v16H4zM4 9h16M9 4v16', bg: 'rgba(106,82,212,.14)', c: '#5b45c4' },
+      { go: 'history', label: 'My submissions', sub: 'Everything you have sent and its status', cta: 'Open list', tone: '#b5670a', glow: 'rgba(224,138,30,.2)', badge: awaiting ? awaiting + ' pending' : '', icd: 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7', bg: 'rgba(224,138,30,.14)', c: '#b5670a' },
+    ];
+    const CAL = [
+      { lbl: 'Quality indicators', val: done + '/' + totalInd, p: totalInd ? done / totalInd : 0, c: 'linear-gradient(90deg,#3ab5a7,#1f9d57)' },
+      { lbl: 'Department stats', val: deptDone + '/' + depts.length, p: depts.length ? deptDone / depts.length : 0, c: 'linear-gradient(90deg,#27a8db,#0072a3)' },
+      { lbl: 'Awaiting review', val: awaiting + '/' + S.length, p: S.length ? awaiting / S.length : 0, c: 'linear-gradient(90deg,#8f7ce0,#5b45c4)' },
+    ];
+    const activity = S.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).slice(0, 6);
+    const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
+    const stLabel = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' };
+
+    const monthOpts = dcWideMonths();
+    const first = String(user.name || '').trim().split(/\s+/)[0] || 'there';
+
+    return (
+      <div style={{ maxWidth: 1260, margin: '0 auto' }}>
+        <div style={heroStyle}>
+          <div style={{ position: 'absolute', right: -60, top: -70, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle,rgba(0,144,202,.2),transparent 70%)', filter: 'blur(10px)', pointerEvents: 'none' }} />
+          <div style={{ position: 'relative', minWidth: 230, flex: 1 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#16202e', letterSpacing: '-.2px' }}>Welcome back, {first}</div>
+            <div style={{ fontSize: 12, color: '#6c7a8c', marginTop: 3 }}>
+              {subs === null ? 'Loading your workload…'
+                : missing.length === 0 ? 'Everything assigned to you for ' + monthLabel(month) + ' has been sent. Nothing is outstanding.'
+                  : overdue ? 'The ' + monthLabel(month) + ' window closed ' + overdueDays + ' day' + (overdueDays === 1 ? '' : 's') + ' ago — ' + missing.length + ' indicator' + (missing.length === 1 ? ' is' : 's are') + ' still outstanding.'
+                    : missing.length + ' indicator' + (missing.length === 1 ? '' : 's') + ' still to send for ' + monthLabel(month) + '.'}
+            </div>
+          </div>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, transform: 'rotate(-90deg)' }}>
+                <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(125,145,180,.18)" strokeWidth="7" />
+                <circle cx="32" cy="32" r="26" fill="none" stroke={ringColor} strokeWidth="7" strokeLinecap="round" strokeDasharray="163.4" strokeDashoffset={163.4 * (1 - pct / 100)} style={{ transition: 'stroke-dashoffset 1.1s cubic-bezier(.2,.7,.3,1), stroke .3s' }} />
+              </svg>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: '#7d8ea8', marginTop: 4 }}>{pct}% complete</div>
+            </div>
+            <select value={month} onChange={(e) => setMonth(e.target.value)} title="Reporting month"
+              style={{ padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(255,255,255,.85)', background: 'rgba(255,255,255,.65)', fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5, fontWeight: 700, color: '#3c4858', outline: 'none' }}>
+              {monthOpts.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+              <button onClick={() => onNav('quick')} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.4)', background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
+                {CP_ICON('M13 2L4 14h7l-1 8 9-12h-7z', 14)}Quick entry{statGap ? ' (' + statGap + ')' : ''}
+              </button>
+              <button onClick={() => onNav('patient')} style={{ border: '1px solid rgba(255,255,255,.85)', background: 'rgba(255,255,255,.6)', color: '#3c4858', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Patient statistics</button>
+            </div>
+          </div>
+        </div>
+
+        {overdue && (
+          <div style={{ background: 'rgba(255,236,238,.7)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', border: '1px solid rgba(210,58,82,.3)', borderLeft: '4px solid #d23a52', borderRadius: 12, padding: '11px 15px', display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14, boxShadow: '0 8px 24px rgba(210,58,82,.12)', flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-grid', placeItems: 'center', width: 30, height: 30, borderRadius: 9, background: 'rgba(210,58,82,.14)', color: '#a92c42', flexShrink: 0 }}>{CP_ICON('M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01', 15)}</span>
+            <div style={{ flex: 1, minWidth: 200, fontSize: 12, color: '#3c4858', lineHeight: 1.55 }}>
+              <b>{missing.length} indicator{missing.length === 1 ? ' is' : 's are'} past the deadline.</b> The {monthLabel(month)} window closed on {dl.toLocaleDateString()} — submit today to clear the flag.
+            </div>
+            <button onClick={() => onNav('quality')} style={{ border: '1px solid rgba(210,58,82,.35)', background: 'rgba(255,255,255,.7)', color: '#a92c42', padding: '7px 13px', borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>Fix now ›</button>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 14, marginBottom: 14 }}>
+          {KPIS.map((k) => (
+            <div key={k.lbl} style={Object.assign({}, CP_CARD, { padding: '14px 16px' })}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                <div style={ic(k.bg, k.c)}>{CP_ICON(k.icd, 18)}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 21, fontWeight: 700, color: '#16202e', lineHeight: 1.15 }}>{k.val}</div>
+                  <div style={{ fontSize: 11, color: '#6c7a8c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k.lbl}</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 10.5, color: '#9aa6b4', marginTop: 8 }}>{k.foot}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(168px,1fr))', gap: 12, marginBottom: 14 }}>
+          {QUICK.map((n) => (
+            <div key={n.go} onClick={() => onNav(n.go)} style={Object.assign({}, CP_CARD, { position: 'relative', overflow: 'hidden', padding: '14px 16px', cursor: 'pointer' })}>
+              <div style={{ position: 'absolute', right: -30, top: -34, width: 110, height: 100, borderRadius: '50%', background: 'radial-gradient(circle,' + n.glow + ',transparent 70%)', filter: 'blur(8px)', pointerEvents: 'none' }} />
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={ic(n.bg, n.c)}>{CP_ICON(n.icd, 17)}</span>
+                {n.badge ? <span style={{ marginLeft: 'auto', fontSize: 10, fontFamily: "'IBM Plex Mono',monospace", background: 'rgba(224,138,30,.18)', color: '#b5670a', padding: '2px 8px', borderRadius: 10, fontWeight: 700 }}>{n.badge}</span> : null}
+              </div>
+              <div style={{ position: 'relative', marginTop: 11 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#16202e' }}>{n.label}</div>
+                <div style={{ fontSize: 10.5, color: '#6c7a8c', lineHeight: 1.45, marginTop: 2 }}>{n.sub}</div>
+              </div>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 5, marginTop: 10, fontSize: 11, fontWeight: 700, color: n.tone }}>
+                {n.cta}{CP_ICON('M5 12h14M13 6l6 6-6 6', 12)}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 14, marginBottom: 14 }}>
+          <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 16px', borderBottom: '1px solid rgba(125,145,180,.18)' }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(0,144,202,.12)', color: '#0072a3', flexShrink: 0 }}>{CP_ICON('M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Recent activity</h3>
+              <span style={{ flex: 1 }} />
+              <span onClick={() => onNav('history')} style={{ fontSize: 11, fontWeight: 700, color: '#0072a3', cursor: 'pointer' }}>All submissions ›</span>
+            </div>
+            {subs === null ? <div style={{ padding: 20, color: '#6c7a8c' }}>Loading…</div>
+              : activity.length === 0 ? <div style={{ padding: 24, textAlign: 'center', color: '#6c7a8c', fontSize: 12 }}>Nothing submitted yet.</div>
+                : activity.map((a) => {
+                  const label = stLabel[a.status] || 'Pending';
+                  const dot = { Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52' }[label];
+                  return (
+                    <div key={a.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 16px', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, marginTop: 5, flexShrink: 0 }} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {(a.type === 'quality' ? (a.indicatorName || a.areaName) : a.departmentName) + ' · ' + monthLabel(a.month)}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{when(a.submittedAt)}</div>
+                      </div>
+                      <span style={cpChipStyle(label)}>{label}</span>
+                    </div>
+                  );
+                })}
+          </div>
+          <div style={Object.assign({}, CP_CARD, { padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(224,138,30,.14)', color: '#b5670a', flexShrink: 0 }}>{CP_ICON('M3 5h18v16H3zM3 9h18M8 3v4M16 3v4', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Reporting calendar</h3>
+              <span style={{ flex: 1 }} />
+              <span style={cpChipStyle(overdue ? 'Missing' : 'Approved')}>{overdue ? overdueDays + ' day' + (overdueDays === 1 ? '' : 's') + ' overdue' : 'On schedule'}</span>
+            </div>
+            {CAL.map((c) => (
+              <div key={c.lbl} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 11.5, color: '#6c7a8c', width: 116, flexShrink: 0 }}>{c.lbl}</span>
+                <div style={{ flex: 1, height: 8, borderRadius: 5, background: 'rgba(125,145,180,.16)', overflow: 'hidden' }}>
+                  <div style={{ width: Math.round(c.p * 100) + '%', height: '100%', borderRadius: 5, background: c.c, transition: 'width .9s cubic-bezier(.2,.7,.3,1)' }} />
+                </div>
+                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11.5, fontWeight: 700, color: '#3c4858', width: 54, textAlign: 'right' }}>{c.val}</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 11, color: '#3c4858', lineHeight: 1.6, background: 'rgba(0,144,202,.08)', borderRadius: 9, padding: '9px 11px' }}>
+              {dl ? (overdueDays > 0
+                ? monthLabel(month) + ' was due by ' + dl.toLocaleDateString() + ' — clear the backlog before the next window opens.'
+                : monthLabel(month) + ' is due by ' + dl.toLocaleDateString() + ' — ' + Math.max(0, -overdueDays) + ' day' + (Math.abs(overdueDays) === 1 ? '' : 's') + ' left.')
+                : 'Monthly data is due by the end of the following month.'}
+            </div>
+          </div>
+        </div>
+
+        {subs === null ? <div style={Object.assign({}, CP_CARD, { padding: 24, color: '#6c7a8c' })}>Loading indicators…</div>
+          : areas.length === 0 ? <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>No quality indicators are assigned to you yet.</div>
+            : areas.map((a) => {
+              let ok = 0;
+              a.indicators.forEach((ind) => { if (statusOf(a.key, ind, month) !== 'Missing') ok++; });
+              const apct = a.indicators.length ? Math.round(ok * 100 / a.indicators.length) : 0;
+              const tone = apct === 100 ? '#1f9d57' : apct >= 50 ? '#0090ca' : apct > 0 ? '#e08a1e' : '#d23a52';
+              return (
+                <div key={a.key} style={Object.assign({}, CP_CARD, { position: 'relative', marginBottom: 12, overflow: 'hidden' })}>
+                  <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 5, background: tone }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 16px 12px 22px', borderBottom: '1px solid rgba(125,145,180,.18)', flexWrap: 'wrap' }}>
+                    <span style={{ display: 'inline-grid', placeItems: 'center', width: 28, height: 28, borderRadius: 9, background: tone + '1f', color: tone, flexShrink: 0 }}>{CP_ICON('M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z', 15)}</span>
+                    <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 700, color: '#16202e' }}>{a.name}</h3>
+                    <span style={{ fontSize: 11, color: '#9aa6b4' }}>{a.indicators.length} indicator{a.indicators.length === 1 ? '' : 's'}</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 12, color: tone, background: tone + '1a' }}>{apct}% for {monthLabel(month)}</span>
+                  </div>
+                  {a.indicators.map((ind) => {
+                    const st = statusOf(a.key, ind, month);
+                    const tr = cpTrend(ind, win);
+                    return (
+                      <div key={ind.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px 10px 22px', borderBottom: '1px solid rgba(125,145,180,.12)', flexWrap: 'wrap' }}>
+                        <div style={{ minWidth: 190, flex: 1 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16202e' }}>{ind.name}</div>
+                          <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{[ind.formula === 'count' ? 'Count' : ind.formula === 'rate' ? 'Rate' : 'Percentage', ind.benchmark ? 'benchmark ' + ind.benchmark : null].filter(Boolean).join(' · ')}</div>
+                        </div>
+                        <CpSpark ind={ind} months={win} />
+                        {tr != null ? <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 12, fontFamily: "'IBM Plex Mono',monospace", color: cpImproved(ind, 0, tr) ? '#1f9d57' : '#d23a52', background: (cpImproved(ind, 0, tr) ? '#1f9d57' : '#d23a52') + '1a' }}>{(tr > 0 ? '+' : '') + tr}%</span> : <span style={{ width: 46 }} />}
+                        <span style={cpChipStyle(st)}>{st}</span>
+                        {st === 'Missing' && (
+                          <button onClick={() => onFill(a.key, ind.id, month)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid rgba(0,144,202,.3)', background: 'rgba(0,144,202,.08)', color: '#0072a3', padding: '5px 12px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>Fill now ›</button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+      </div>
+    );
+  }
+
+  /* ---- Ward dashboard (in-charge only) --------------------------------------------
+     Where running a unit actually starts: who is on duty right now, how much of the
+     month's reporting is done, and what is waiting on somebody. Every tile is a way
+     into the screen that changes it — a dashboard that cannot be acted on is a poster.
+
+     "On duty right now" is read from the unit's PUBLISHED roster and the wall clock.
+     When there is no published roster it says so rather than showing an empty ward,
+     because "nobody is on duty" and "nobody has published the sheet" are very
+     different things to tell a nurse in charge. */
+  function CollectorHome({ user, month, onNav }) {
+    const dataRev = useDcDataRev();
+    const depts = useMemo(() => dcAllDepts(), [dataRev]);
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
+    const [subs, setSubs] = useState(null);
+    const [staff, setStaff] = useState(null);
+    const [reqs, setReqs] = useState(null);
+    const [duty, setDuty] = useState(undefined);   // undefined = loading, null = none published
+    const R = window.UNICO_ROSTER;
+    const order = MO();
+
+    useEffect(() => {
+      dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([]));
+      dcApi.get('/api/staff').then((r) => setStaff(r.ok ? (r.staff || []) : [])).catch(() => setStaff([]));
+      dcApi.get('/api/staff-requests').then((r) => setReqs(r.ok ? (r.requests || []) : [])).catch(() => setReqs([]));
+      const now = new Date();
+      dcApi.get('/api/rosters').then((r) => {
+        const list = (r && r.ok ? (r.rosters || []) : []).filter((x) => x && x.status === 'approved' && x.year === now.getFullYear() && x.month === now.getMonth());
+        if (!list.length) { setDuty(null); return; }
+        const pick = list[0];
+        return dcApi.get('/api/rosters/' + encodeURIComponent(pick.dept) + '/' + pick.year + '/' + pick.month)
+          .then((rr) => setDuty(rr && rr.ok ? rr.roster : null));
+      }).catch(() => setDuty(null));
+    }, []);
+
+    const S = subs || [];
+    let totalInd = 0, missing = 0;
+    areas.forEach((a) => a.indicators.forEach((ind) => {
+      totalInd++;
+      const sent = cpHasData(ind, month) || S.some((x) => x.type === 'quality' && x.area === a.key && x.month === month && x.status === 'pending' && (x.indicatorId === ind.id || (x.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
+      if (!sent) missing++;
+    }));
+    const pct = totalInd ? Math.round((totalInd - missing) * 100 / totalInd) : 0;
+    const pendingReqs = (reqs || []).filter((r) => r.status === 'pending' || r.status === 'changes').length;
+
+    /* Reporting completeness over the six months ending at the current one.
+
+       The mockup charts a "quality trend". This charts REPORTING COMPLETENESS and says
+       so, because a single number for a unit's clinical quality does not exist in this
+       data: the indicators are measured in different units, in both directions, against
+       benchmarks written as free text. Averaging them would produce a confident-looking
+       figure that means nothing. How much of what the ward owes has actually been filed
+       is a real number, it is the thing this dashboard is for, and the ward can act on it. */
+    const mi = Math.max(0, order.indexOf(month));
+    const trendMonths = order.slice(Math.max(0, mi - 5), mi + 1);
+    const trend = trendMonths.map((m) => {
+      let t = 0, done = 0;
+      areas.forEach((a) => a.indicators.forEach((ind) => {
+        t++;
+        if (cpHasData(ind, m) || S.some((x) => x.type === 'quality' && x.area === a.key && x.month === m && x.status !== 'rejected')) done++;
+      }));
+      return { m: m, pct: t ? Math.round(done * 100 / t) : 0, n: done, of: t };
+    });
+    const trendAvg = trend.length ? Math.round(trend.reduce((n, p) => n + p.pct, 0) / trend.length) : 0;
+
+    // Everything that is waiting on somebody, newest concern first. Each row is a way
+    // into the screen that clears it -- a list you cannot act on is just a worry.
+    const rejectedOpen = (() => {
+      const key = (x) => (x.type === 'quality' ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '') : 'p|' + x.department) + '|' + x.month;
+      const newest = {};
+      S.forEach((x) => { if (x.status === 'rejected') return; const k = key(x); if (!(k in newest) || (x.submittedAt || 0) > newest[k]) newest[k] = (x.submittedAt || 0); });
+      return S.filter((x) => x.status === 'rejected' && !(newest[key(x)] > (x.submittedAt || 0)));
+    })();
+    const attention = [];
+    if (missing) attention.push({ tone: '#b5670a', bg: 'rgba(224,138,30,.14)', title: missing + ' indicator' + (missing === 1 ? '' : 's') + ' outstanding', body: monthLabel(month) + ' is not complete yet.', go: 'status', icd: 'M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z' });
+    if (rejectedOpen.length) attention.push({ tone: '#a92c42', bg: 'rgba(210,58,82,.13)', title: rejectedOpen.length + ' submission' + (rejectedOpen.length === 1 ? '' : 's') + ' sent back', body: 'Rejected and not yet resubmitted.', go: 'history', icd: 'M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01' });
+    if (duty === null) attention.push({ tone: '#5b45c4', bg: 'rgba(106,82,212,.14)', title: 'No roster published this month', body: 'Nobody can see who is on duty until it is approved.', go: 'roster', icd: 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4' });
+    if (pendingReqs) attention.push({ tone: '#0072a3', bg: 'rgba(0,144,202,.12)', title: pendingReqs + ' staff request' + (pendingReqs === 1 ? '' : 's') + ' open', body: 'Waiting on the administrator.', go: 'requests', icd: 'M19 8v6M22 11h-6M9 11a4 4 0 100-8 4 4 0 000 8M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2' });
+
+    // Unit at a glance -- the same compliance facts the staff table shows, summarised.
+    const yrs = (staff || []).map((p) => Number(p.total_experience_years)).filter((n) => !isNaN(n) && n > 0);
+    const glance = [
+      [(staff || []).length, 'staff in unit'],
+      [yrs.length ? (yrs.reduce((x, y) => x + y, 0) / yrs.length).toFixed(1) : '—', 'avg. years experience'],
+      [(staff || []).filter((p) => CP_HEPB_DONE(p.hepatitis_b_vaccination)).length, 'Hep-B complete'],
+      [(staff || []).filter((p) => { const t = String(p.hepatitis_b_vaccination || '').trim().toLowerCase(); return !t || t === 'unknown'; }).length, 'vaccination unknown'],
+    ];
+
+    // What is actually coming up, from the calendar rather than from a fixture.
+    const dl = cpDeadline(month);
+    const now = new Date();
+    const week = [];
+    if (dl) {
+      const days = Math.ceil((dl.getTime() - now.getTime()) / 864e5);
+      week.push(days >= 0
+        ? { day: dl.getDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][dl.getMonth()], title: monthLabel(month) + ' reporting closes', sub: days === 0 ? 'Today' : days + ' day' + (days === 1 ? '' : 's') + ' left', tone: days <= 3 ? '#a92c42' : '#0072a3' }
+        : { day: 'Overdue', title: monthLabel(month) + ' reporting closed', sub: Math.abs(days) + ' day' + (Math.abs(days) === 1 ? '' : 's') + ' ago', tone: '#a92c42' });
+    }
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    week.push({ day: '1 ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][nextMonthStart.getMonth()], title: 'Next roster is due', sub: 'Publish before the month starts', tone: '#5b45c4' });
+    if (rejectedOpen.length) week.push({ day: 'Now', title: 'Resubmit ' + rejectedOpen.length + ' returned item' + (rejectedOpen.length === 1 ? '' : 's'), sub: 'Blocking this cycle', tone: '#a92c42' });
+
+    // Who is on duty now: today's shift code for each person, kept if the current time
+    // falls inside that code's bucket. Buckets, not exact clock times, because the
+    // legend's hours are text and a ward only needs "morning / evening / night".
+    const SHIFT_ROWS = [
+      { id: 'G', label: 'General duty', window: '9 AM – 5 PM', rule: '' },
+      { id: 'M', label: 'Morning', window: '7 AM – 3 PM', rule: 'minMorning' },
+      { id: 'E', label: 'Evening', window: '2 PM – 10 PM', rule: 'minEvening' },
+      { id: 'N', label: 'Night', window: '9 PM – 7 AM', rule: 'minNight' },
+    ];
+    const today = (() => {
+      if (!duty || !R) return null;
+      const day = new Date().getDate();
+      const h = new Date().getHours();
+      const by = { G: [], M: [], E: [], N: [] };
+      const names = duty.names || {};
+      Object.keys(duty.grid || {}).forEach((emp) => {
+        const code = duty.grid[emp][day];
+        if (!code) return;
+        const b = R.bucketOf(code);
+        if (by[b]) by[b].push({ emp, name: names[emp] || emp, code });
+      });
+      return { by, now: h >= 7 && h < 14 ? 'M' : h >= 14 && h < 21 ? 'E' : 'N' };
+    })();
+    const onDutyNow = today ? (today.by[today.now] || []).length + (today.by.G || []).length : null;
+
+    const first = String(user.name || '').trim().split(/\s+/)[0] || 'there';
+    const ic = (bg, c) => ({ display: 'inline-grid', placeItems: 'center', width: 38, height: 38, borderRadius: 11, background: bg, color: c, flexShrink: 0 });
+    const TILES = [
+      { val: (staff || []).length, lbl: 'Staff on my unit', foot: staff === null ? 'loading…' : ((staff || []).filter((p) => (p.role || '') !== 'PCA').length + ' nurses'), go: 'unit', icd: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8', bg: 'rgba(0,144,202,.12)', c: '#0072a3' },
+      { val: onDutyNow == null ? '—' : onDutyNow, lbl: 'On duty right now', foot: today ? ((SHIFT_ROWS.find((x) => x.id === today.now) || {}).label + ' shift') : (duty === undefined ? 'loading…' : 'no published roster'), go: 'roster', icd: 'M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', bg: 'rgba(58,181,167,.16)', c: '#12776c' },
+      { val: missing, lbl: 'Indicators outstanding', foot: pct + '% of ' + monthLabel(month) + ' complete', go: 'status', icd: 'M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z', bg: 'rgba(224,138,30,.14)', c: '#b5670a' },
+      { val: pendingReqs, lbl: 'Staff requests open', foot: pendingReqs ? 'awaiting the administrator' : 'nothing outstanding', go: 'requests', icd: 'M19 8v6M22 11h-6M9 11a4 4 0 100-8 4 4 0 000 8M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2', bg: 'rgba(106,82,212,.14)', c: '#5b45c4' },
+    ];
+
+    return (
+      <div style={{ maxWidth: 1260, margin: '0 auto' }}>
+        <div style={{ position: 'relative', overflow: 'hidden', borderRadius: 16, padding: '20px 22px', marginBottom: 14, color: '#fff', background: 'linear-gradient(160deg,#1b2c45,#0d1b2e 60%,#102138)', boxShadow: '0 18px 46px rgba(13,27,46,.28)', display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+          <div style={{ position: 'absolute', right: -70, top: -80, width: 260, height: 260, borderRadius: '50%', background: 'radial-gradient(circle,rgba(0,144,202,.30),transparent 68%)', filter: 'blur(10px)', pointerEvents: 'none' }} />
+          <div style={{ position: 'relative', minWidth: 240, flex: 1 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '2px', color: '#6fc7ec', marginBottom: 7 }}>NURSE IN-CHARGE</div>
+            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-.3px' }}>Good day, {first}</div>
+            <div style={{ fontSize: 12.5, color: '#a8bdd6', marginTop: 5 }}>
+              {depts.map((d) => d.name).join(' · ') || 'No unit assigned'}
+            </div>
+          </div>
+          <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <svg viewBox="0 0 64 64" style={{ width: 68, height: 68, transform: 'rotate(-90deg)' }}>
+              <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,.16)" strokeWidth="7" />
+              <circle cx="32" cy="32" r="26" fill="none" stroke={pct >= 90 ? '#3ddc97' : pct >= 60 ? '#27a8db' : '#e08a1e'} strokeWidth="7" strokeLinecap="round" strokeDasharray="163.4" strokeDashoffset={163.4 * (1 - pct / 100)} style={{ transition: 'stroke-dashoffset 1.1s cubic-bezier(.2,.7,.3,1)' }} />
+            </svg>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: '#8fa6c0', marginTop: 5 }}>{pct}% reported</div>
+          </div>
+          <div style={{ position: 'relative', display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+            <button onClick={() => onNav('quick')} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.35)', background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
+              {CP_ICON('M13 2L4 14h7l-1 8 9-12h-7z', 14)}Quick entry
+            </button>
+            <button onClick={() => onNav('roster')} style={{ border: '1px solid rgba(255,255,255,.22)', background: 'rgba(255,255,255,.1)', color: '#cfe0f0', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Open duty roster</button>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 14, marginBottom: 14 }}>
+          {TILES.map((t) => (
+            <div key={t.lbl} onClick={() => onNav(t.go)} style={Object.assign({}, CP_CARD, { padding: '14px 16px', cursor: 'pointer' })}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                <div style={ic(t.bg, t.c)}>{CP_ICON(t.icd, 18)}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 21, fontWeight: 700, color: '#16202e', lineHeight: 1.15 }}>{t.val}</div>
+                  <div style={{ fontSize: 11, color: '#6c7a8c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.lbl}</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 10.5, color: '#9aa6b4', marginTop: 8 }}>{t.foot}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 14 }}>
+          <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 16px', borderBottom: '1px solid rgba(125,145,180,.18)' }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(58,181,167,.16)', color: '#12776c' }}>{CP_ICON('M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>On duty right now</h3>
+              <span style={{ flex: 1 }} />
+              <span onClick={() => onNav('roster')} style={{ fontSize: 11, fontWeight: 700, color: '#0072a3', cursor: 'pointer' }}>Duty roster ›</span>
+            </div>
+            {duty === undefined ? <div style={{ padding: 20, color: '#6c7a8c', fontSize: 12 }}>Loading the roster…</div>
+              : !today ? <div style={{ padding: 24, textAlign: 'center', color: '#6c7a8c', fontSize: 12 }}>No roster has been published for this month, so who is on duty cannot be shown.</div>
+                : SHIFT_ROWS.map((sr) => {
+                  const people = today.by[sr.id] || [];
+                  const min = (R && R.DEFAULT_RULES[sr.rule] && R.DEFAULT_RULES[sr.rule].on) ? R.DEFAULT_RULES[sr.rule].value : 0;
+                  const short = min > 0 && people.length < min;
+                  return (
+                    <div key={sr.id} style={{ padding: '10px 16px', borderBottom: '1px solid rgba(125,145,180,.12)', background: sr.id === today.now ? 'rgba(0,144,202,.05)' : 'transparent' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <span style={{ width: 10, height: 10, borderRadius: 3, background: (R && R.BUCKET_COLOR[sr.id]) || '#8aa0b8', flexShrink: 0 }} />
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e' }}>{sr.label}</div>
+                        <span style={{ fontSize: 10.5, color: '#9aa6b4', fontFamily: "'IBM Plex Mono',monospace" }}>{sr.window}</span>
+                        {sr.id === today.now && <span style={cpChipStyle('Submitted')}>on now</span>}
+                        <span style={{ flex: 1 }} />
+                        <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5, fontWeight: 700, color: short ? '#a92c42' : '#3c4858' }}>
+                          {people.length}{min > 0 ? ' / ' + min : ''}
+                        </span>
+                      </div>
+                      {people.length === 0
+                        ? <div style={{ fontSize: 11, color: '#a92c42', marginTop: 5, marginLeft: 20 }}>No one rostered — this shift is uncovered.</div>
+                        : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 7, marginLeft: 20 }}>
+                          {people.slice(0, 10).map((p) => (
+                            <span key={p.emp} title={(R && R.BY_CODE[p.code] ? R.BY_CODE[p.code].label : p.code)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#3c4858', background: 'rgba(255,255,255,.6)', border: '1px solid rgba(255,255,255,.85)', borderRadius: 11, padding: '3px 9px 3px 3px' }}>
+                              <span style={{ width: 19, height: 19, borderRadius: 6, background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 8.5, fontWeight: 700 }}>{cpInitials(p.name)}</span>
+                              {p.name}
+                            </span>
+                          ))}
+                          {people.length > 10 && <span style={{ fontSize: 11, color: '#9aa6b4', alignSelf: 'center' }}>+{people.length - 10} more</span>}
+                        </div>}
+                      {short && <div style={{ fontSize: 11, color: '#a92c42', marginTop: 6, marginLeft: 20, fontWeight: 600 }}>{min - people.length} short of the {min}-person floor.</div>}
+                    </div>
+                  );
+                })}
+          </div>
+
+          <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 16px', borderBottom: '1px solid rgba(125,145,180,.18)' }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(106,82,212,.14)', color: '#5b45c4' }}>{CP_ICON('M19 8v6M22 11h-6M9 11a4 4 0 100-8 4 4 0 000 8M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Staff requests</h3>
+              <span style={{ flex: 1 }} />
+              <span onClick={() => onNav('requests')} style={{ fontSize: 11, fontWeight: 700, color: '#0072a3', cursor: 'pointer' }}>Ask for a nurse ›</span>
+            </div>
+            {reqs === null ? <div style={{ padding: 20, color: '#6c7a8c', fontSize: 12 }}>Loading…</div>
+              : reqs.length === 0 ? <div style={{ padding: 24, textAlign: 'center', color: '#6c7a8c', fontSize: 12 }}>You have not asked for anyone yet.</div>
+                : reqs.slice(0, 6).map((r) => {
+                  const label = CP_REQ_STATUS[r.status] || 'Pending';
+                  const chip = label === 'Approved' ? 'Approved' : label === 'Rejected' ? 'Rejected' : label === 'Changes requested' ? 'Missing' : 'Pending';
+                  return (
+                    <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+                      <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5, color: '#9aa6b4', minWidth: 56 }}>{r.ref || '—'}</span>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</div>
+                        <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{[r.role, r.designation].filter(Boolean).join(' · ')}</div>
+                      </div>
+                      <span style={cpChipStyle(chip)}>{label}</span>
+                    </div>
+                  );
+                })}
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 14, marginTop: 14 }}>
+          <div style={Object.assign({}, CP_CARD, { padding: '14px 16px' })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 12 }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(0,144,202,.12)', color: '#0072a3' }}>{CP_ICON('M22 12h-4l-3 8-4-16-3 8H2', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Reporting completeness — 6 months</h3>
+            </div>
+            {(() => {
+              const W = 300, H = 96, pad = 6;
+              const pts = trend.map((p, i) => [pad + i * ((W - pad * 2) / Math.max(1, trend.length - 1)), H - pad - (p.pct / 100) * (H - pad * 2)]);
+              const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+              return (
+                <React.Fragment>
+                  <svg viewBox={'0 0 ' + W + ' ' + H} style={{ width: '100%', height: 96, display: 'block' }}>
+                    {[0, 50, 100].map((g) => (
+                      <line key={g} x1={pad} x2={W - pad} y1={H - pad - (g / 100) * (H - pad * 2)} y2={H - pad - (g / 100) * (H - pad * 2)} stroke="rgba(125,145,180,.22)" strokeWidth="1" strokeDasharray={g === 100 ? '4 4' : ''} />
+                    ))}
+                    <path d={d} fill="none" stroke="#0090ca" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+                    {pts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={i === pts.length - 1 ? 3.6 : 2.4} fill={i === pts.length - 1 ? '#0072a3' : '#27a8db'} />)}
+                  </svg>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                    {trend.map((p) => <span key={p.m} style={{ fontSize: 9.5, color: '#9aa6b4', fontFamily: "'IBM Plex Mono',monospace" }}>{p.m}</span>)}
+                  </div>
+                  <div style={{ display: 'flex', gap: 16, marginTop: 12, paddingTop: 11, borderTop: '1px solid rgba(125,145,180,.18)', flexWrap: 'wrap' }}>
+                    {[[trend.length ? trend[trend.length - 1].pct + '%' : '—', 'this month'], [trendAvg + '%', '6-month average'], ['100%', 'target']].map((x) => (
+                      <div key={x[1]}>
+                        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 15, fontWeight: 700, color: '#16202e' }}>{x[0]}</div>
+                        <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{x[1]}</div>
+                      </div>
+                    ))}
+                  </div>
+                </React.Fragment>
+              );
+            })()}
+          </div>
+
+          <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 16px', borderBottom: '1px solid rgba(125,145,180,.18)' }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(224,138,30,.14)', color: '#b5670a' }}>{CP_ICON('M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Needs your attention</h3>
+              <span style={{ flex: 1 }} />
+              {attention.length > 0 && <span style={cpChipStyle('Pending')}>{attention.length}</span>}
+            </div>
+            {attention.length === 0
+              ? <div style={{ padding: 26, textAlign: 'center', color: '#1f9d57', fontSize: 12.5, fontWeight: 600 }}>Nothing outstanding — the unit is up to date.</div>
+              : attention.map((a) => (
+                <div key={a.title} onClick={() => onNav(a.go)} style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '11px 16px', borderBottom: '1px solid rgba(125,145,180,.12)', cursor: 'pointer' }}>
+                  <span style={{ display: 'inline-grid', placeItems: 'center', width: 28, height: 28, borderRadius: 9, background: a.bg, color: a.tone, flexShrink: 0 }}>{CP_ICON(a.icd, 14)}</span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16202e' }}>{a.title}</div>
+                    <div style={{ fontSize: 11, color: '#6c7a8c', lineHeight: 1.5 }}>{a.body}</div>
+                  </div>
+                  {CP_ICON('M9 6l6 6-6 6', 13, '#b6c0cc')}
+                </div>
+              ))}
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 14, marginTop: 14 }}>
+          <div style={Object.assign({}, CP_CARD, { padding: '14px 16px' })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 12 }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(58,181,167,.16)', color: '#12776c' }}>{CP_ICON('M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Unit at a glance</h3>
+              <span style={{ flex: 1 }} />
+              <span onClick={() => onNav('unit')} style={{ fontSize: 11, fontWeight: 700, color: '#0072a3', cursor: 'pointer' }}>Staff list ›</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 12 }}>
+              {glance.map((g) => (
+                <div key={g[1]} style={{ background: 'rgba(255,255,255,.55)', border: '1px solid rgba(255,255,255,.8)', borderRadius: 12, padding: '11px 13px' }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 19, fontWeight: 700, color: '#16202e', lineHeight: 1.15 }}>{staff === null ? '—' : g[0]}</div>
+                  <div style={{ fontSize: 10.5, color: '#6c7a8c', marginTop: 2 }}>{g[1]}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 16px', borderBottom: '1px solid rgba(125,145,180,.18)' }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(106,82,212,.14)', color: '#5b45c4' }}>{CP_ICON('M3 5h18v16H3zM3 9h18M8 3v4M16 3v4', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>What is coming up</h3>
+            </div>
+            {week.map((w, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5, fontWeight: 700, color: w.tone, background: w.tone + '18', padding: '4px 9px', borderRadius: 8, minWidth: 62, textAlign: 'center', flexShrink: 0 }}>{w.day}</span>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16202e' }}>{w.title}</div>
+                  <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{w.sub}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- The unit's staff (in-charge only) -----------------------------------------
+     The register for the ward this person runs. The server serves WORK facts only
+     (see access.PORTAL_STAFF_FIELDS) -- qualification, training, experience and Hep-B
+     status, the things a nurse in charge rosters and audits against. Contact details
+     and personal notes are withheld, so there is deliberately no Phone column here
+     even though the paper form has one.
+
+     Read-only on purpose: staff records are maintained in Nurse Management by the CNS.
+
+     "Hep-B complete" is tested for EXACTLY "Completed". The register also contains
+     "Not Completed", which a loose /complete/i match would score as compliant -- the
+     one mistake that turns this panel from a compliance check into a false clean bill. */
+  const CP_HEPB_DONE = (v) => String(v || '').trim().toLowerCase() === 'completed';
+  const CP_HEPB_TONE = (v) => {
+    const t = String(v || '').trim().toLowerCase();
+    if (t === 'completed') return ['#1f9d57', 'Completed'];
+    if (t === 'not completed' || !t) return ['#d23a52', t ? 'Not completed' : 'Not recorded'];
+    if (t === 'unknown') return ['#8aa0b8', 'Unknown'];
+    return ['#e08a1e', String(v).trim()];        // 1st / 2nd / 3rd Dose — in progress
+  };
+  const CP_HAS_TRAINING = (p, what) => new RegExp('(^|[^a-z])' + what + '([^a-z]|$)', 'i').test(String(p.special_training || ''));
+
+  function CollectorUnitStaff() {
+    const [staff, setStaff] = useState(null);
+    const [q, setQ] = useState('');
+    const [tab, setTab] = useState('all');
+    useEffect(() => { dcApi.get('/api/staff').then((r) => setStaff(r.ok ? (r.staff || []) : [])).catch(() => setStaff([])); }, []);
+
+    const all = staff || [];
+    const TABS = [
+      ['all', 'All', all.length],
+      ['acls', 'ACLS', all.filter((p) => CP_HAS_TRAINING(p, 'ACLS')).length],
+      ['bls', 'BLS', all.filter((p) => CP_HAS_TRAINING(p, 'BLS')).length],
+      ['gap', 'Vaccination gap', all.filter((p) => !CP_HEPB_DONE(p.hepatitis_b_vaccination)).length],
+    ];
+    const ql = q.trim().toLowerCase();
+    const rows = all.filter((p) => {
+      if (tab === 'acls' && !CP_HAS_TRAINING(p, 'ACLS')) return false;
+      if (tab === 'bls' && !CP_HAS_TRAINING(p, 'BLS')) return false;
+      if (tab === 'gap' && CP_HEPB_DONE(p.hepatitis_b_vaccination)) return false;
+      if (!ql) return true;
+      return (p.name + ' ' + (p.designation || '') + ' ' + (p.emp_id || '') + ' ' + (p.qualification || '')).toLowerCase().indexOf(ql) >= 0;
+    });
+
+    // Average experience over the people who actually have a figure — averaging a
+    // missing year as zero would quietly report the ward as greener than it is.
+    const yrs = all.map((p) => Number(p.total_experience_years)).filter((n) => !isNaN(n) && n > 0);
+    const avgYrs = yrs.length ? (yrs.reduce((x, y) => x + y, 0) / yrs.length) : null;
+    const hepDone = all.filter((p) => CP_HEPB_DONE(p.hepatitis_b_vaccination)).length;
+    const hepUnknown = all.filter((p) => String(p.hepatitis_b_vaccination || '').trim().toLowerCase() === 'unknown' || !String(p.hepatitis_b_vaccination || '').trim()).length;
+
+    const STATS = [
+      [all.length, 'staff in unit'],
+      [avgYrs == null ? '—' : avgYrs.toFixed(1), 'avg. years experience'],
+      [hepDone, 'Hep-B complete'],
+      [hepUnknown, 'vaccination unknown'],
+    ];
+    const th = { textAlign: 'left', padding: '9px 12px', fontSize: 10.5, letterSpacing: '.5px', textTransform: 'uppercase', color: '#7d8ea8', fontWeight: 700, borderBottom: '1px solid rgba(125,145,180,.25)', whiteSpace: 'nowrap' };
+    const td = { padding: '9px 12px', borderBottom: '1px solid rgba(125,145,180,.12)', verticalAlign: 'middle' };
+
+    return (
+      <div style={{ maxWidth: 1240, margin: '0 auto', display: 'grid', gap: 14 }}>
+        <div style={Object.assign({}, CP_CARD, { padding: '15px 17px' })}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e' }}>My unit&#39;s staff</div>
+              <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>Read-only — staff records are maintained in Nurse Management by the CNS.</div>
+            </div>
+            <span style={{ flex: 1 }} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, ID, designation…"
+              style={{ padding: '8px 12px', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12.5, outline: 'none', minWidth: 220 }} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 12, marginTop: 14 }}>
+            {STATS.map((st) => (
+              <div key={st[1]} style={{ background: 'rgba(255,255,255,.55)', border: '1px solid rgba(255,255,255,.8)', borderRadius: 12, padding: '11px 13px' }}>
+                <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 19, fontWeight: 700, color: '#16202e', lineHeight: 1.15 }}>{staff === null ? '—' : st[0]}</div>
+                <div style={{ fontSize: 10.5, color: '#6c7a8c', marginTop: 2 }}>{st[1]}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 13 }}>
+            {TABS.map((t) => (
+              <button key={t[0]} onClick={() => setTab(t[0])} style={{
+                border: '1px solid ' + (tab === t[0] ? 'transparent' : 'rgba(125,145,180,.32)'),
+                background: tab === t[0] ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(255,255,255,.7)',
+                color: tab === t[0] ? '#fff' : '#3c4858', padding: '6px 13px', borderRadius: 8,
+                fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+              }}>{t[1]} <span style={{ opacity: .7, fontFamily: "'IBM Plex Mono',monospace" }}>{t[2]}</span></button>
+            ))}
+            <span style={{ flex: 1 }} />
+            <span style={{ fontSize: 11.5, color: '#9aa6b4', alignSelf: 'center' }}>{rows.length} shown</span>
+          </div>
+        </div>
+
+        <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
+          {staff === null ? <div style={{ padding: 24, color: '#6c7a8c' }}>Loading…</div>
+            : all.length === 0 ? <div style={{ padding: 28, textAlign: 'center', color: '#6c7a8c', fontSize: 12.5 }}>No staff are recorded against your unit yet. Ask your administrator to set the department on their records.</div>
+              : rows.length === 0 ? <div style={{ padding: 26, textAlign: 'center', color: '#6c7a8c', fontSize: 12.5 }}>Nobody matches that filter.</div>
+                : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                      <thead>
+                        <tr>
+                          <th style={th}>Staff</th>
+                          <th style={th}>Emp ID</th>
+                          <th style={th}>Designation</th>
+                          <th style={th}>Qualification</th>
+                          <th style={Object.assign({}, th, { textAlign: 'right' })}>Experience</th>
+                          <th style={th}>Training</th>
+                          <th style={th}>Hep-B</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((p, i) => {
+                          const hep = CP_HEPB_TONE(p.hepatitis_b_vaccination);
+                          const training = String(p.special_training || '').replace(/^-$/, '').trim();
+                          return (
+                            <tr key={p.id || p.emp_id || i}>
+                              <td style={td}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <span style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{cpInitials(p.name)}</span>
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap' }}>{p.name}</div>
+                                    <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{p.doj ? 'joined ' + p.doj : (p.role || 'Nurse')}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td style={Object.assign({}, td, { fontFamily: "'IBM Plex Mono',monospace", color: '#6c7a8c' })}>{p.emp_id || '—'}</td>
+                              <td style={Object.assign({}, td, { color: '#3c4858' })}>{p.designation || '—'}</td>
+                              <td style={Object.assign({}, td, { color: '#3c4858' })}>{p.qualification || '—'}</td>
+                              <td style={Object.assign({}, td, { textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", color: '#3c4858' })}>{p.total_experience_text || '—'}</td>
+                              <td style={td}>
+                                {training
+                                  ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                                    {training.split(/[,;]/).map((x) => x.trim()).filter(Boolean).slice(0, 3).map((x, k) => (
+                                      <span key={k} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 11, background: 'rgba(0,144,202,.1)', color: '#0072a3', whiteSpace: 'nowrap' }}>{x}</span>
+                                    ))}
+                                  </div>
+                                  : <span style={{ fontSize: 11, color: '#b6c0cc' }}>None recorded</span>}
+                              </td>
+                              <td style={td}><span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 10px', borderRadius: 12, color: hep[0], background: hep[0] + '1a', whiteSpace: 'nowrap' }}>{hep[1]}</span></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- Ask for a nurse or PCA (in-charge only) -------------------------------------
+     A short ward is a request, not a hiring. Everything typed here goes to the
+     administrator; nobody joins the staff register from this screen. The queue below
+     is the ward's own history — including what came back and why. */
+  const CP_REQ_STATUS = { pending: 'Pending', changes: 'Changes requested', approved: 'Approved', rejected: 'Rejected' };
+  function CollectorStaffRequests({ depts }) {
+    const blank = { role: 'Nurse', name: '', designation: '', department: (depts[0] && depts[0].name) || '', joiningDate: '', experience: '', qualification: '', phone: '', hepB: '', note: '' };
+    const [f, setF] = useState(blank);
+    const [rows, setRows] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [editing, setEditing] = useState(null);
+    const load = () => dcApi.get('/api/staff-requests').then((r) => setRows(r.ok ? (r.requests || []) : [])).catch(() => setRows([]));
+    useEffect(() => { load(); }, []);
+    const set = (k) => (e) => setF(Object.assign({}, f, { [k]: e.target.value }));
+
+    const submit = () => {
+      if (!f.name.trim()) { toast('A name is required.', 'error'); return; }
+      if (!f.department.trim()) { toast('Pick a department.', 'error'); return; }
+      setBusy(true);
+      const done = (r) => {
+        setBusy(false);
+        if (!r || !r.ok) { toast((r && r.error) || 'Could not send the request.', 'error'); return; }
+        toast(editing ? 'Request updated and sent back for review' : 'Request sent to the administrator', 'success');
+        setF(blank); setEditing(null); load();
+      };
+      const send = editing
+        ? dcApi.patch('/api/staff-requests/' + editing, f)
+        : dcApi.post('/api/staff-requests', f);
+      send.then(done).catch(() => done(null));
+    };
+
+    const inp = { width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', background: 'rgba(255,255,255,.85)', fontFamily: 'inherit', fontSize: 12.5, outline: 'none' };
+    const lbl = { fontSize: 10.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: '#7d8ea8', marginBottom: 5, display: 'block' };
+    const field = (label, key, type) => (
+      <div key={key}><label style={lbl}>{label}</label><input type={type || 'text'} value={f[key]} onChange={set(key)} style={inp} /></div>
+    );
+
+    return (
+      <div style={{ maxWidth: 1240, margin: '0 auto', display: 'grid', gap: 14 }}>
+        <div style={Object.assign({}, CP_CARD, { padding: '15px 17px' })}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14, flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-grid', placeItems: 'center', width: 34, height: 34, borderRadius: 11, background: 'rgba(0,144,202,.12)', color: '#0072a3', flexShrink: 0 }}>{CP_ICON(CP_NAV_STAFFREQ[2], 18)}</span>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e' }}>{editing ? 'Correct your request' : 'Ask for a new nurse or PCA'}</div>
+              <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>This goes to the administrator for approval — nobody is added to the staff register from here.</div>
+            </div>
+            <span style={{ flex: 1 }} />
+            <div style={{ display: 'flex', gap: 6 }}>
+              {['Nurse', 'PCA'].map((r) => (
+                <button key={r} onClick={() => setF(Object.assign({}, f, { role: r }))} style={{ border: '1px solid ' + (f.role === r ? 'transparent' : 'rgba(125,145,180,.35)'), background: f.role === r ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(255,255,255,.7)', color: f.role === r ? '#fff' : '#3c4858', padding: '7px 16px', borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{r}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 12 }}>
+            {field('Full name', 'name')}
+            {field('Designation', 'designation')}
+            <div><label style={lbl}>Department</label>
+              <select value={f.department} onChange={set('department')} style={inp}>
+                {depts.map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
+              </select>
+            </div>
+            {field('Expected joining date', 'joiningDate', 'date')}
+            {field('Experience', 'experience')}
+            {field('Qualification', 'qualification')}
+            {field('Phone', 'phone')}
+            {field('Hep-B status', 'hepB')}
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <label style={lbl}>Why is this post needed?</label>
+            <textarea value={f.note} onChange={set('note')} rows={3} style={Object.assign({}, inp, { resize: 'vertical' })} placeholder="Cover, vacancy, increased census…" />
+          </div>
+          <div style={{ display: 'flex', gap: 9, marginTop: 13, flexWrap: 'wrap' }}>
+            <button onClick={submit} disabled={busy} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: 0, background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '10px 18px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
+              {busy ? 'Sending…' : (editing ? 'Send the correction' : 'Send request')}
+            </button>
+            {editing && <button onClick={() => { setEditing(null); setF(blank); }} style={{ border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.7)', color: '#3c4858', padding: '10px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>}
+          </div>
+        </div>
+
+        <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(125,145,180,.18)', display: 'flex', alignItems: 'center', gap: 9 }}>
+            <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>My requests</h3>
+            <span style={{ flex: 1 }} />
+            {rows && <span style={{ fontSize: 11.5, color: '#9aa6b4' }}>{rows.length} raised</span>}
+          </div>
+          {rows === null ? <div style={{ padding: 22, color: '#6c7a8c' }}>Loading…</div>
+            : rows.length === 0 ? <div style={{ padding: 26, textAlign: 'center', color: '#6c7a8c', fontSize: 12.5 }}>You have not asked for anyone yet.</div>
+              : rows.map((r) => {
+                const label = CP_REQ_STATUS[r.status] || 'Pending';
+                const chip = label === 'Approved' ? 'Approved' : label === 'Rejected' ? 'Rejected' : label === 'Changes requested' ? 'Missing' : 'Pending';
+                return (
+                  <div key={r.id} style={{ padding: '11px 16px', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 11, flexWrap: 'wrap' }}>
+                      <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11, color: '#6c7a8c', minWidth: 62 }}>{r.ref || '—'}</span>
+                      <div style={{ minWidth: 150, flex: 1 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16202e' }}>{r.name}</div>
+                        <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{[r.role, r.designation, r.department].filter(Boolean).join(' · ')}</div>
+                      </div>
+                      <span style={{ fontSize: 11, color: '#9aa6b4' }}>{r.joiningDate || ''}</span>
+                      <span style={cpChipStyle(chip)}>{label}</span>
+                      {(r.status === 'pending' || r.status === 'changes') && (
+                        <button onClick={() => { setEditing(r.id); setF(Object.assign({}, blank, r)); if (typeof window !== 'undefined') window.scrollTo(0, 0); }}
+                          style={{ border: '1px solid rgba(0,144,202,.3)', background: 'rgba(0,144,202,.08)', color: '#0072a3', padding: '5px 12px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
+                      )}
+                    </div>
+                    {r.reason && (
+                      <div style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.6, color: '#3c4858', background: r.status === 'rejected' ? 'rgba(210,58,82,.09)' : 'rgba(224,138,30,.1)', borderRadius: 9, padding: '8px 11px' }}>
+                        <b>{r.decidedBy || 'Administrator'}:</b> {r.reason}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- The shell ---------------------------------------------------------------- */
+  function CollectorPortal() {
+    const user = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
+    const dataRev = useDcDataRev();
+    const depts = useMemo(() => dcAllDepts(), [dataRev]);
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
+    const hasPatient = depts.length > 0;
+    const hasQuality = areas.some((a) => a && a.indicators && a.indicators.length);
+
+    // An in-charge is a collector who also runs a ward: same data scoping, more of the
+    // ward's own screens. The role decides which, and it is the SERVER's role claim --
+    // the extra screens are all backed by routes that check it again.
+    const inCharge = user.role === 'incharge';
+    const [view, setView] = useState(inCharge ? 'home' : (hasQuality ? 'status' : 'patient'));
+    const [month, setMonth] = useState(dcDefaultMonth());
+    const [jump, setJump] = useState(null);
+    const [q, setQ] = useState('');
+    const [online, setOnline] = useState(typeof navigator === 'undefined' || navigator.onLine !== false);
+    const [subCount, setSubCount] = useState({ pending: 0, missing: 0 });
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+
+    useEffect(() => {
+      const on = () => setOnline(true), off = () => setOnline(false);
+      window.addEventListener('online', on); window.addEventListener('offline', off);
+      return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+    }, []);
+    // The sidebar badges and the progress ring need the same two counts the dashboard
+    // computes; they are recomputed here so they stay right on every view, not just
+    // while the dashboard happens to be mounted.
+    useEffect(() => {
+      let dead = false;
+      dcApi.get('/api/submissions?limit=500').then((r) => {
+        if (dead) return;
+        const S = r.ok ? (r.submissions || []) : [];
+        let total = 0, missing = 0;
+        areas.forEach((a) => (a.indicators || []).forEach((ind) => {
+          total++;
+          const sent = cpHasData(ind, month) || S.some((s) => s.type === 'quality' && s.area === a.key && s.month === month && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
+          if (!sent) missing++;
+        }));
+        const statGap = Math.max(0, depts.length - depts.filter((d) => ((d.months || []).indexOf(month) >= 0) || S.some((x) => x.type === 'patient' && x.department === d.id && x.month === month && x.status !== 'rejected')).length);
+        setSubCount({ pending: S.filter((s) => s.status === 'pending').length, missing, total, statGap });
+      }).catch(() => {});
+      return () => { dead = true; };
+    }, [month, dataRev, view]);
+
+    const donePct = subCount.total ? Math.round((subCount.total - subCount.missing) * 100 / subCount.total) : 0;
+    const fillFor = (area, indicatorId, m) => { setJump({ area, indicatorId, month: m }); setView('quality'); setSidebarOpen(false); };
+    // The patient twin of fillFor. "My submissions" needs it to reopen a REJECTED
+    // statistics sheet at the right department + month; DataPatientForm already
+    // reads prefill.dept / prefill.month, it just had nothing feeding them.
+    const fillStat = (deptId, m) => { setJump({ dept: deptId, month: m }); setView('patient'); setSidebarOpen(false); };
+    const go = (v) => { setView(v); setJump(null); setSidebarOpen(false); };
+
+    const badgeFor = (v) => (v === 'quick' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '');
+    // Same .sb-item / .sb-sec / .badge classes the admin sidebar (Sidebar in ui.jsx)
+    // uses — the Collector Portal used to skin its own glassy/glowing nav instead of
+    // matching the rest of the app; this makes the two visually one system.
+    const NavItem = ([v, label, icd]) => {
+      const on = view === v, badgeVal = badgeFor(v);
+      return (
+        <div key={v} className={'sb-item' + (on ? ' active' : '')} onClick={() => go(v)} title={label}>
+          {CP_ICON(icd, 18)}<span className="lbl">{label}</span>
+          {badgeVal && badgeVal !== '0' && <span className="badge alert num">{badgeVal}</span>}
+        </div>
+      );
+    };
+
+    const crumb = ({ home: 'Dashboard', unit: "My unit's staff", requests: 'Add nurse / PCA', status: 'Submission status', quick: 'Quick entry', quality: 'Quality data', patient: 'Patient statistics', history: 'My submissions', roster: 'Duty roster', profile: 'My profile', dept: 'Department & staff' })[view] || 'Submission status';
+    const collectNav = CP_NAV_COLLECT.filter(([v]) => (v === 'patient' ? hasPatient : v === 'quick' ? hasPatient : hasQuality));
+    const dl = cpDeadline(month);
+    const overdueDays = dl ? Math.floor((Date.now() - dl.getTime()) / 864e5) : 0;
+    const dueTxt = overdueDays > 0 ? overdueDays + ' day' + (overdueDays === 1 ? '' : 's') + ' overdue' : 'On schedule';
+    const dueTone = overdueDays > 0 ? ['#a92c42', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.28)'] : ['#12776c', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.3)'];
+    const pill = (c) => ({ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, padding: '5px 11px', borderRadius: 12, color: c[0], background: c[1], border: '1px solid ' + c[2], whiteSpace: 'nowrap', flexShrink: 0 });
+
+    return (
+      <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'transparent' }}>
+        <style>{'@media (max-width:900px){.cp-aside{position:fixed!important;z-index:200;height:100vh;transform:translateX(-100%);transition:transform .22s ease}.cp-aside.cp-open{transform:none}.cp-burger{display:grid!important}}'}</style>
+        {sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(13,27,46,.4)', zIndex: 150 }} />}
+        <aside className={'sb cp-aside' + (sidebarOpen ? ' cp-open' : '')} style={{ width: 248, flexShrink: 0 }}>
+          <div className="sb-brand">
+            <img src="unico/logo.svg" alt="UNICO Hospitals" style={{ height: 28, width: 'auto', display: 'block', filter: 'brightness(0) invert(1)', opacity: .95 }} />
+          </div>
+          <div className="sb-scroll">
+            <div className="sb-sec">{inCharge ? 'Unit data' : 'Collect'}</div>
+            {inCharge && NavItem(CP_NAV_HOME)}
+            {collectNav.map(NavItem)}
+            <div className="sb-sec">My unit</div>
+            {CP_NAV_UNIT.map(NavItem)}
+            {inCharge && NavItem(['unit', "My unit's staff", 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8'])}
+            {inCharge && NavItem(CP_NAV_STAFFREQ)}
+            <div style={{ margin: '14px 16px 4px', padding: 12, borderRadius: 10, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.08)', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <svg viewBox="0 0 44 44" style={{ width: 44, height: 44, flexShrink: 0, transform: 'rotate(-90deg)' }}>
+                <circle cx="22" cy="22" r="18" fill="none" stroke="rgba(255,255,255,.12)" strokeWidth="5" />
+                <circle cx="22" cy="22" r="18" fill="none" stroke="var(--blue-500,#0b66d0)" strokeWidth="5" strokeLinecap="round" strokeDasharray="113" strokeDashoffset={113 * (1 - donePct / 100)} style={{ transition: 'stroke-dashoffset 1s cubic-bezier(.2,.7,.3,1)' }} />
+              </svg>
+              <div style={{ minWidth: 0 }}>
+                <div className="num" style={{ fontSize: 17, fontWeight: 700, color: '#fff', lineHeight: 1 }}>{donePct}%</div>
+                <div style={{ fontSize: 10.5, color: '#8b98ab', marginTop: 3, lineHeight: 1.4 }}>{(subCount.total || 0) - (subCount.missing || 0)} of {subCount.total || 0} indicators sent</div>
+              </div>
+            </div>
+          </div>
+          <div className="sb-foot">
+            <div className="avatar">{cpInitials(user.name)}</div>
+            <div onClick={() => go('profile')} title="Open my profile" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
+              <div style={{ color: '#fff', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name || 'Collector'}</div>
+              <div style={{ color: '#83909f', fontSize: 10.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{(inCharge ? 'In-charge' : 'Data Collector') + (depts[0] ? ' · ' + depts[0].name : '')}</div>
+            </div>
+            <a href="/logout" title="Sign out" style={{ marginLeft: 'auto', display: 'grid', placeItems: 'center', width: 32, height: 32, borderRadius: 8, color: '#cfe0f0', background: 'rgba(255,255,255,.08)', textDecoration: 'none', flexShrink: 0 }}>
+              {CP_ICON('M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9', 15)}
+            </a>
+          </div>
+        </aside>
+
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, height: '100vh', overflow: 'hidden' }}>
+          <div style={{ height: 60, background: 'linear-gradient(180deg,rgba(255,255,255,.72),rgba(255,255,255,.48))', backdropFilter: 'blur(24px) saturate(1.7)', WebkitBackdropFilter: 'blur(24px) saturate(1.7)', borderBottom: '1px solid rgba(255,255,255,.75)', boxShadow: '0 10px 30px rgba(31,59,90,.09)', display: 'flex', alignItems: 'center', gap: 12, padding: '0 18px', flexShrink: 0, zIndex: 20 }}>
+            <button className="cp-burger" onClick={() => setSidebarOpen(true)} style={{ display: 'none', placeItems: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(255,255,255,.85)', background: 'rgba(255,255,255,.6)', color: '#3c4858', cursor: 'pointer', flexShrink: 0 }}>
+              {CP_ICON('M3 6h18M3 12h18M3 18h18', 17)}
+            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#6c7a8c', fontSize: 12, minWidth: 0, whiteSpace: 'nowrap', flexShrink: 0 }}>
+              <span>{inCharge ? 'In-charge' : 'Data Collection'}</span>
+              {CP_ICON('M9 6l6 6-6 6', 13, '#b6c0cc')}
+              <b style={{ color: '#16202e', fontWeight: 600, fontSize: 14 }}>{crumb}</b>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,.6)', border: '1px solid rgba(255,255,255,.9)', borderRadius: 9, padding: '6px 11px', flex: '0 1 300px', minWidth: 0, boxShadow: 'inset 0 1px 3px rgba(31,59,90,.05)' }}>
+              {CP_ICON('M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12', 15, '#9aa6b4')}
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search indicator, department…" style={{ flex: 1, minWidth: 0, border: 0, background: 'transparent', outline: 'none', fontFamily: 'inherit', fontSize: 12.5, color: '#16202e' }} />
+            </div>
+            <span style={{ flex: 1 }} />
+            <div style={pill(dueTone)} title="Submission deadline">{CP_ICON('M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', 14)}<span>{dueTxt}</span></div>
+            <div style={pill(online ? ['#12776c', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.3)'] : ['#a92c42', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.28)'])} title="Connection">
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: online ? '#3ddc97' : '#d23a52' }} />{online ? 'Online' : 'Offline'}
+            </div>
+            <div style={{ width: 34, height: 34, borderRadius: 9, background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{cpInitials(user.name)}</div>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: '22px 26px 64px' }}>
+            {!hasPatient && !hasQuality && (
+              <div style={Object.assign({}, CP_CARD, { maxWidth: 620, margin: '40px auto', padding: 30, textAlign: 'center' })}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e', marginBottom: 6 }}>Nothing is assigned to you yet</div>
+                <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>Your administrator has not given you a department or quality area to report on. Once they do, it appears here.</div>
+              </div>
+            )}
+            {view === 'status' && hasQuality && <CollectorDash month={month} setMonth={setMonth} onNav={go} onFill={fillFor} user={user} />}
+            {view === 'quick' && hasPatient && <CollectorQuickGrid depts={depts} onDone={() => go('history')} />}
+            {view === 'quality' && hasQuality && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month }} /></div>}
+            {view === 'patient' && hasPatient && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataPatientForm key={jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month : 'p'} depts={depts} prefill={{ responsible: user.name, dept: jump && jump.dept, month: jump && jump.dept ? jump.month : null }} /></div>}
+            {view === 'history' && <div style={{ maxWidth: 1240, margin: '0 auto' }}><CollectorHistory month={month} onFixQuality={fillFor} onFixPatient={fillStat} /></div>}
+            {view === 'roster' && <CollectorRoster />}
+            {view === 'profile' && <CollectorProfile user={user} onNav={go} />}
+            {view === 'home' && inCharge && <CollectorHome user={user} month={month} onNav={go} />}
+            {view === 'unit' && inCharge && <CollectorUnitStaff />}
+            {view === 'requests' && inCharge && <CollectorStaffRequests depts={depts} />}
+            {view === 'dept' && <CollectorDeptStaff />}
+          </div>
         </div>
       </div>
     );
@@ -2430,7 +4341,10 @@
   function SubmissionAnalytics() {
     const [rows, setRows] = useState(null);
     const [days, setDays] = useState('90');          // 30 | 90 | 365 | all
-    const [sortBy, setSortBy] = useState('total');   // total | accuracy | rejected | quality | last
+    const [fType, setFType] = useState('all');       // all | patient | quality
+    const [q, setQ] = useState('');                  // person/target search
+    const [drill, setDrill] = useState(null);        // responder name for the drill-down
+    const [sortBy, setSortBy] = useState('total');
     const [sortDir, setSortDir] = useState('desc');
     useEffect(() => {
       const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
@@ -2440,48 +4354,79 @@
       return () => window.removeEventListener('unico:data-refreshed', refresh);
     }, []);
     const respOf = (s) => (s.responsible && s.responsible.name) || s.submittedBy || 'Unknown';
+    const targetOf = (s) => (s.type === 'quality' ? (s.indicatorName || s.areaName) : s.departmentName) || '—';
     const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
     const rangeDays = days === 'all' ? Infinity : parseInt(days, 10);
     const cutoff = rangeDays === Infinity ? 0 : Date.now() - rangeDays * 864e5;
+    // Reporting lag / on-time: monthly data is due by the end of the NEXT month.
+    const QMONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthEndTs = (mk) => { const p = String(mk || '').split('-'); const mi = QMONS.indexOf(p[0]); const yy = parseInt(p[1], 10); if (mi < 0 || isNaN(yy)) return null; return new Date(2000 + yy, mi + 1, 0, 23, 59, 59).getTime(); };
+    const deadlineTs = (mk) => { const p = String(mk || '').split('-'); const mi = QMONS.indexOf(p[0]); const yy = parseInt(p[1], 10); if (mi < 0 || isNaN(yy)) return null; return new Date(2000 + yy, mi + 2, 0, 23, 59, 59).getTime(); };
 
     const data = useMemo(() => {
-      const all = (rows || []).filter((s) => !cutoff || (s.submittedAt || 0) >= cutoff);
+      const ql = q.trim().toLowerCase();
+      const all = (rows || []).filter((s) => {
+        if (cutoff && (s.submittedAt || 0) < cutoff) return false;
+        if (fType !== 'all' && s.type !== fType) return false;
+        if (ql) { const hay = (respOf(s) + ' ' + targetOf(s) + ' ' + (s.month || '')).toLowerCase(); if (hay.indexOf(ql) < 0) return false; }
+        return true;
+      });
       const perf = {};
       const statTargets = new Set(), qualTargets = new Set();
+      const reasons = {};
       all.forEach((s) => {
         const r = respOf(s);
-        const p = perf[r] || (perf[r] = { name: r, total: 0, patient: 0, quality: 0, approved: 0, rejected: 0, autoRej: 0, pending: 0, corrections: 0, last: 0 });
+        const p = perf[r] || (perf[r] = { name: r, total: 0, patient: 0, quality: 0, approved: 0, rejected: 0, autoRej: 0, pending: 0, corrections: 0, last: 0, lagSum: 0, lagN: 0, onTime: 0, onN: 0, turnSum: 0, turnN: 0 });
         p.total++; if (s.type === 'patient') p.patient++; else p.quality++;
         if (s.status === 'approved') p.approved++;
-        else if (s.status === 'rejected') { if (s.autoRejected) p.autoRej++; else p.rejected++; }
+        else if (s.status === 'rejected') { if (s.autoRejected) p.autoRej++; else { p.rejected++; const rr = (String(s.rejectReason || '').trim()) || 'Unspecified'; reasons[rr] = (reasons[rr] || 0) + 1; } }
         else if (s.status === 'pending') p.pending++;
         if (s.isCorrection) p.corrections++;
         if ((s.submittedAt || 0) > p.last) p.last = s.submittedAt;
+        const me2 = monthEndTs(s.month), dl = deadlineTs(s.month);
+        if (me2 && s.submittedAt) { p.lagSum += (s.submittedAt - me2) / 864e5; p.lagN++; if (dl) { p.onN++; if (s.submittedAt <= dl) p.onTime++; } }
+        if (s.reviewedAt && s.submittedAt && s.reviewedAt >= s.submittedAt) { p.turnSum += (s.reviewedAt - s.submittedAt) / 864e5; p.turnN++; }
         if (s.type === 'patient') statTargets.add((s.department || '') + '|' + s.month);
         else qualTargets.add((s.area || '') + '|' + (s.indicatorId || s.indicatorName || '') + '|' + s.month);
       });
-      const list = Object.keys(perf).map((k) => { const p = perf[k]; const denom = p.approved + p.rejected; p.accuracy = denom ? (p.approved / denom) * 100 : null; p.errRate = denom ? (p.rejected / denom) * 100 : null; return p; });
-      const tot = { total: all.length, approved: 0, rejected: 0, autoRej: 0, pending: 0, patient: 0, quality: 0 };
-      list.forEach((p) => { tot.approved += p.approved; tot.rejected += p.rejected; tot.autoRej += p.autoRej; tot.pending += p.pending; tot.patient += p.patient; tot.quality += p.quality; });
+      const list = Object.keys(perf).map((k) => { const p = perf[k]; const denom = p.approved + p.rejected; p.accuracy = denom ? (p.approved / denom) * 100 : null; p.onPct = p.onN ? (p.onTime / p.onN) * 100 : null; p.avgLag = p.lagN ? p.lagSum / p.lagN : null; p.avgTurn = p.turnN ? p.turnSum / p.turnN : null; return p; });
+      const tot = { total: all.length, approved: 0, rejected: 0, autoRej: 0, pending: 0, patient: 0, quality: 0, onTime: 0, onN: 0, turnSum: 0, turnN: 0 };
+      list.forEach((p) => { tot.approved += p.approved; tot.rejected += p.rejected; tot.autoRej += p.autoRej; tot.pending += p.pending; tot.patient += p.patient; tot.quality += p.quality; tot.onTime += p.onTime; tot.onN += p.onN; tot.turnSum += p.turnSum; tot.turnN += p.turnN; });
       const denom = tot.approved + tot.rejected; tot.accuracy = denom ? (tot.approved / denom) * 100 : null;
+      tot.onPct = tot.onN ? (tot.onTime / tot.onN) * 100 : null; tot.avgTurn = tot.turnN ? tot.turnSum / tot.turnN : null;
+      const reasonList = Object.keys(reasons).map((k) => ({ reason: k, n: reasons[k] })).sort((a, b) => b.n - a.n);
       // Activity timeline: by day (<=60d range) else by month.
       const monthly = rangeDays > 60;
       const key = (ts) => new Date(ts).toISOString().slice(0, monthly ? 7 : 10);
       const bucket = {};
       all.forEach((s) => { if (!s.submittedAt) return; const kk = key(s.submittedAt); const b = bucket[kk] || (bucket[kk] = { k: kk, total: 0, approved: 0, rejected: 0, pending: 0 }); b.total++; if (s.status === 'approved') b.approved++; else if (s.status === 'rejected') b.rejected++; else b.pending++; });
       const timeline = Object.keys(bucket).map((k2) => bucket[k2]).sort((a, b) => a.k < b.k ? -1 : 1).slice(-48);
-      return { list, tot, timeline, monthly, statCount: statTargets.size, qualCount: qualTargets.size, recent: all.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).slice(0, 12) };
-    }, [rows, days]);
+      return { all, list, tot, reasonList, timeline, monthly, statCount: statTargets.size, qualCount: qualTargets.size, recent: all.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).slice(0, 12) };
+    }, [rows, days, fType, q]);
 
     if (!rows) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Loading analytics…</div>;
 
     const sorted = data.list.slice().sort((a, b) => {
-      const val = (p) => sortBy === 'accuracy' ? (p.accuracy == null ? -1 : p.accuracy) : sortBy === 'rejected' ? p.rejected : sortBy === 'quality' ? p.quality : sortBy === 'last' ? p.last : p.total;
+      const val = (p) => sortBy === 'accuracy' ? (p.accuracy == null ? -1 : p.accuracy) : sortBy === 'rejected' ? p.rejected : sortBy === 'quality' ? p.quality : sortBy === 'last' ? p.last : sortBy === 'ontime' ? (p.onPct == null ? -1 : p.onPct) : sortBy === 'lag' ? (p.avgLag == null ? 1e9 : p.avgLag) : sortBy === 'turn' ? (p.avgTurn == null ? 1e9 : p.avgTurn) : p.total;
       const r = val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0; return sortDir === 'asc' ? r : -r;
     });
     const setSort = (k) => { if (sortBy === k) setSortDir((d) => d === 'asc' ? 'desc' : 'asc'); else { setSortBy(k); setSortDir('desc'); } };
     const caret = (k) => sortBy === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
     const accColor = (a) => a == null ? 'var(--muted)' : a >= 90 ? 'var(--pos)' : a >= 70 ? '#b45309' : 'var(--rose)';
+    const onColor = (a) => a == null ? 'var(--muted)' : a >= 90 ? 'var(--pos)' : a >= 60 ? '#b45309' : 'var(--rose)';
+    const num1 = (v) => v == null ? '—' : (Math.round(v * 10) / 10);
+    const lagTxt = (v) => v == null ? '—' : (v <= 0 ? (Math.abs(Math.round(v)) + 'd early') : (Math.round(v) + 'd late'));
+    const exportCsv = () => {
+      const cols = [['Responsible', (p) => p.name], ['Total', (p) => p.total], ['Statistics', (p) => p.patient], ['Quality', (p) => p.quality], ['Approved', (p) => p.approved], ['Wrong', (p) => p.rejected], ['Pending', (p) => p.pending], ['Accuracy %', (p) => p.accuracy == null ? '' : p.accuracy.toFixed(1)], ['On-time %', (p) => p.onPct == null ? '' : p.onPct.toFixed(0)], ['Avg lag (days)', (p) => p.avgLag == null ? '' : (Math.round(p.avgLag * 10) / 10)], ['Avg review turnaround (days)', (p) => p.avgTurn == null ? '' : (Math.round(p.avgTurn * 10) / 10)], ['Edit requests', (p) => p.corrections], ['Last submission', (p) => when(p.last)]];
+      const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const lines = [cols.map((c) => esc(c[0])).join(',')].concat(sorted.map((p) => cols.map((c) => esc(c[1](p))).join(',')));
+      const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'responder-performance.csv'; document.body.appendChild(a); a.click();
+      setTimeout(() => { try { document.body.removeChild(a); } catch (e) {} URL.revokeObjectURL(a.href); }, 0);
+      toast(sorted.length + ' rows exported', 'success');
+    };
+    const drillRows = drill ? data.all.filter((s) => respOf(s) === drill).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)) : [];
+    const drillP = drill ? data.list.find((p) => p.name === drill) : null;
     const Tile = ({ label, value, color, sub }) => (
       <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, padding: '13px 15px', minWidth: 0 }}>
         <div style={{ fontSize: 25, fontWeight: 800, lineHeight: 1, color: color || 'var(--ink)' }}>{value}</div>
@@ -2497,17 +4442,37 @@
 
     return (
       <div className="grid" style={{ gap: 16 }}>
-        <SectionTitle icon={I.trend} title="Submission Analytics" sub="Responder performance · completeness · accuracy"
-          right={<div className="seg">{[['30', '30d'], ['90', '90d'], ['365', '1y'], ['all', 'All']].map(([k, l]) => <button key={k} className={days === k ? 'on' : ''} onClick={() => setDays(k)}>{l}</button>)}</div>} />
+        <SectionTitle icon={I.trend} title="Submission Analytics" sub="Responder performance · completeness · accuracy · timeliness"
+          right={<div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="seg">{[['all', 'All'], ['patient', 'Statistics'], ['quality', 'Quality']].map(([k, l]) => <button key={k} className={fType === k ? 'on' : ''} onClick={() => setFType(k)}>{l}</button>)}</div>
+            <div className="seg">{[['30', '30d'], ['90', '90d'], ['365', '1y'], ['all', 'All']].map(([k, l]) => <button key={k} className={days === k ? 'on' : ''} onClick={() => setDays(k)}>{l}</button>)}</div>
+            <button className="btn sm" onClick={exportCsv}><Ic d={I.download} s={14} />CSV</button>
+          </div>} />
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search person, department, indicator…" style={{ ...inputStyle, maxWidth: 360, flex: 1 }} />
+          {(q || fType !== 'all') && <button className="btn sm" onClick={() => { setQ(''); setFType('all'); }}>Clear</button>}
+        </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
           <Tile label="Total submissions" value={data.tot.total} />
           <Tile label="Responsible people" value={data.list.length} />
           <Tile label="Overall accuracy" value={data.tot.accuracy == null ? '—' : data.tot.accuracy.toFixed(1) + '%'} color={accColor(data.tot.accuracy)} sub={data.tot.approved + ' approved · ' + data.tot.rejected + ' rejected'} />
+          <Tile label="On-time rate" value={data.tot.onPct == null ? '—' : data.tot.onPct.toFixed(0) + '%'} color={onColor(data.tot.onPct)} sub="submitted by month-end + 1" />
+          <Tile label="Avg review turnaround" value={data.tot.avgTurn == null ? '—' : num1(data.tot.avgTurn) + 'd'} sub="submit → approve/reject" />
           <Tile label="Wrong data (rejected)" value={data.tot.rejected} color={data.tot.rejected ? 'var(--rose)' : 'var(--ink)'} sub={data.tot.autoRej ? data.tot.autoRej + ' dup auto-rejected' : ''} />
           <Tile label="Pending review" value={data.tot.pending} color={data.tot.pending ? '#b45309' : 'var(--ink)'} />
           <Tile label="Statistics / Quality" value={data.tot.patient + ' / ' + data.tot.quality} sub={data.statCount + ' stat + ' + data.qualCount + ' quality targets'} />
         </div>
+
+        {data.reasonList.length > 0 && (
+          <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, padding: '12px 16px' }}>
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Why data was rejected <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 11.5 }}>· top reasons</span></div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {data.reasonList.slice(0, 8).map((r) => <span key={r.reason} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, background: 'var(--neg-bg)', color: 'var(--rose)', border: '1px solid #f1c6cd', borderRadius: 20, padding: '4px 11px', fontWeight: 600 }}>{r.reason}<b style={{ background: '#fff', borderRadius: 20, padding: '0 7px' }}>{r.n}</b></span>)}
+            </div>
+          </div>
+        )}
 
         <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -2528,40 +4493,44 @@
         </div>
 
         <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, overflow: 'hidden' }}>
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', fontWeight: 700, fontSize: 13 }}>Responder Performance</div>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', fontWeight: 700, fontSize: 13 }}>Responder Performance <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 11.5 }}>· click a row for details</span></div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
               <thead><tr>
                 <th style={th} onClick={() => setSort('name')}>Responsible</th>
                 <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('total')}>Total{caret('total')}</th>
-                <th style={{ ...th, textAlign: 'center' }}>Statistics</th>
-                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('quality')}>Quality{caret('quality')}</th>
-                <th style={{ ...th, textAlign: 'center' }}>Approved</th>
+                <th style={{ ...th, textAlign: 'center' }}>Stat / Qual</th>
+                <th style={{ ...th, textAlign: 'center' }}>Appr.</th>
                 <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('rejected')}>Wrong{caret('rejected')}</th>
-                <th style={{ ...th, textAlign: 'center' }}>Pending</th>
+                <th style={{ ...th, textAlign: 'center' }}>Pend.</th>
                 <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('accuracy')}>Accuracy{caret('accuracy')}</th>
-                <th style={{ ...th, textAlign: 'right' }} onClick={() => setSort('last')}>Last submission{caret('last')}</th>
+                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('ontime')}>On-time{caret('ontime')}</th>
+                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('lag')}>Avg lag{caret('lag')}</th>
+                <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('turn')}>Review{caret('turn')}</th>
+                <th style={{ ...th, textAlign: 'right' }} onClick={() => setSort('last')}>Last{caret('last')}</th>
               </tr></thead>
               <tbody>
-                {sorted.length === 0 && <tr><td style={{ ...td, textAlign: 'center', color: 'var(--muted)' }} colSpan={9}>No submissions in this period.</td></tr>}
+                {sorted.length === 0 && <tr><td style={{ ...td, textAlign: 'center', color: 'var(--muted)' }} colSpan={11}>No submissions in this period.</td></tr>}
                 {sorted.map((p) => (
-                  <tr key={p.name}>
-                    <td style={{ ...td, fontWeight: 600 }}>{p.name}{p.corrections ? <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 6 }}>({p.corrections} edit req)</span> : null}</td>
+                  <tr key={p.name} onClick={() => setDrill(p.name)} style={{ cursor: 'pointer' }} className="dc-perf-row">
+                    <td style={{ ...td, fontWeight: 600 }}>{p.name}{p.corrections ? <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 6 }}>({p.corrections} edit)</span> : null}</td>
                     <td style={{ ...td, textAlign: 'center', fontWeight: 700 }}>{p.total}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{p.patient}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{p.quality}</td>
+                    <td style={{ ...td, textAlign: 'center', color: 'var(--ink-2)' }}>{p.patient} / {p.quality}</td>
                     <td style={{ ...td, textAlign: 'center', color: 'var(--pos)' }}>{p.approved}</td>
                     <td style={{ ...td, textAlign: 'center', color: p.rejected ? 'var(--rose)' : 'var(--ink-2)', fontWeight: p.rejected ? 700 : 400 }}>{p.rejected}</td>
                     <td style={{ ...td, textAlign: 'center', color: p.pending ? '#b45309' : 'var(--ink-2)' }}>{p.pending}</td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       {p.accuracy == null ? <span style={{ color: 'var(--muted)' }}>—</span> : (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                          <span style={{ width: 46, height: 6, borderRadius: 6, background: 'var(--line)', overflow: 'hidden', display: 'inline-block' }}><span style={{ display: 'block', height: '100%', width: p.accuracy + '%', background: accColor(p.accuracy) }} /></span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ width: 38, height: 6, borderRadius: 6, background: 'var(--line)', overflow: 'hidden', display: 'inline-block' }}><span style={{ display: 'block', height: '100%', width: p.accuracy + '%', background: accColor(p.accuracy) }} /></span>
                           <b style={{ color: accColor(p.accuracy) }}>{p.accuracy.toFixed(0)}%</b>
                         </span>
                       )}
                     </td>
-                    <td style={{ ...td, textAlign: 'right', color: 'var(--muted)', fontSize: 11.5, whiteSpace: 'nowrap' }}>{when(p.last)}</td>
+                    <td style={{ ...td, textAlign: 'center', color: onColor(p.onPct), fontWeight: 700 }}>{p.onPct == null ? '—' : p.onPct.toFixed(0) + '%'}</td>
+                    <td style={{ ...td, textAlign: 'center', fontSize: 11.5, color: 'var(--ink-2)' }}>{lagTxt(p.avgLag)}</td>
+                    <td style={{ ...td, textAlign: 'center', fontSize: 11.5, color: 'var(--ink-2)' }}>{p.avgTurn == null ? '—' : num1(p.avgTurn) + 'd'}</td>
+                    <td style={{ ...td, textAlign: 'right', color: 'var(--muted)', fontSize: 11, whiteSpace: 'nowrap' }}>{when(p.last)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -2588,6 +4557,49 @@
             })}
           </div>
         </div>
+
+        {drill && drillP && (
+          <div onMouseDown={() => setDrill(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.42)', zIndex: 400, display: 'grid', placeItems: 'center', padding: 'clamp(6px,3vw,20px)' }}>
+            <div onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, width: 'min(720px,96vw)', maxHeight: '92vh', overflow: 'auto', boxShadow: 'var(--shadow-pop)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderBottom: '1px solid var(--line-2)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 3 }}>
+                <Ic d={I.user} s={16} /><div style={{ fontWeight: 700, fontSize: 14 }}>{drill}</div>
+                <span style={{ flex: 1 }} /><button className="icon-btn" style={{ width: 30, height: 30 }} onClick={() => setDrill(null)}><Ic d={I.x} s={16} /></button>
+              </div>
+              <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 13 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(110px,1fr))', gap: 10 }}>
+                  <Tile label="Submissions" value={drillP.total} />
+                  <Tile label="Accuracy" value={drillP.accuracy == null ? '—' : drillP.accuracy.toFixed(0) + '%'} color={accColor(drillP.accuracy)} />
+                  <Tile label="Wrong data" value={drillP.rejected} color={drillP.rejected ? 'var(--rose)' : 'var(--ink)'} />
+                  <Tile label="On-time" value={drillP.onPct == null ? '—' : drillP.onPct.toFixed(0) + '%'} color={onColor(drillP.onPct)} />
+                  <Tile label="Avg lag" value={lagTxt(drillP.avgLag)} />
+                  <Tile label="Avg review" value={drillP.avgTurn == null ? '—' : num1(drillP.avgTurn) + 'd'} />
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620, fontSize: 12 }}>
+                    <thead><tr>
+                      <th style={{ ...th, cursor: 'default' }}>Type</th><th style={{ ...th, cursor: 'default' }}>Target</th><th style={{ ...th, cursor: 'default' }}>Month</th><th style={{ ...th, cursor: 'default' }}>Status</th><th style={{ ...th, cursor: 'default' }}>Submitted</th><th style={{ ...th, cursor: 'default' }}>Reason / note</th>
+                    </tr></thead>
+                    <tbody>
+                      {drillRows.map((s) => {
+                        const c = s.status === 'approved' ? 'var(--pos)' : s.status === 'rejected' ? 'var(--rose)' : '#b45309';
+                        return (
+                          <tr key={s.id}>
+                            <td style={{ ...td, textTransform: 'capitalize' }}>{s.type}</td>
+                            <td style={{ ...td }}>{targetOf(s)}</td>
+                            <td style={{ ...td, whiteSpace: 'nowrap' }}>{monthLabel(s.month)}</td>
+                            <td style={{ ...td, color: c, fontWeight: 700, textTransform: 'capitalize' }}>{s.status}{s.autoRejected ? ' (dup)' : ''}</td>
+                            <td style={{ ...td, color: 'var(--muted)', fontSize: 11, whiteSpace: 'nowrap' }}>{when(s.submittedAt)}</td>
+                            <td style={{ ...td, color: 'var(--ink-2)', fontSize: 11.5 }}>{s.rejectReason || s.correctionReason || s.note || (s.isCorrection ? 'Edit request' : '—')}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

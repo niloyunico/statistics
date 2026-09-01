@@ -13,6 +13,7 @@
  * the actively edited web.js only calls mount() once.
  */
 const { getDbHandle, getUsers, getAppData } = require('./db');
+const accessRoles = require('./access');   // PORTAL_ROLES: collector + incharge
 const auth = require('./auth');
 const session = require('./session');
 const deptmap = require('./deptmap');
@@ -303,7 +304,7 @@ async function getUserScope(username) {
   const users = await getUsers();
   const u = await users.findOne({ username: String(username).toLowerCase() });
   if (!u) return null;
-  return { username: u.username, name: u.name || u.username, role: u.role || 'User', departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null };
+  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: u.role === 'incharge', departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null };
 }
 
 async function deleteResponsible(id) {
@@ -924,12 +925,21 @@ function mount(app, opts) {
   const guard = (opts && opts.requireApi) || function (req, res, next) { next(); };
   const who = (req) => (req.user && (req.user.name || req.user.sub)) || 'local';
   // approve/reject require an Administrator when login is on; open local mode allows it.
+  // Prefer the RESOLVED authority (req.access, read from the live user document by
+  // server/access.js) over req.user.role, which is only a claim inside the token — a
+  // snapshot of who the caller was when they signed in, not who they are now.
   const adminOnly = (req, res, next) => {
+    if (req.access) {
+      if (req.access.unrestricted) return next();
+      return res.status(403).json({ ok: false, error: 'Administrator access required.' });
+    }
     if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
     next();
   };
   const filterSubmissionsForUser = async (req, subs) => {
-    if (!req.user || req.user.role !== 'collector') return subs;
+    // EVERY portal role, not just 'collector'. When this named one role, adding a
+    // second (incharge) silently handed that account the whole hospital's submissions.
+    if (!req.user || accessRoles.PORTAL_ROLES.indexOf(req.user.role) < 0) return subs;
     const scope = await getUserScope(req.user.sub);
     const names = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
     let depts = (scope && scope.departments) || [];
@@ -962,7 +972,7 @@ function mount(app, opts) {
   // Collectors may only submit for departments/quality areas they are assigned to. Admins
   // and open local mode (no req.user) are unrestricted. Returns an error string, or null.
   const denyIfOutOfScope = async (req, kind, target) => {
-    if (!req.user || req.user.role !== 'collector') return null;
+    if (!req.user || accessRoles.PORTAL_ROLES.indexOf(req.user.role) < 0) return null;
     const scope = await getUserScope(req.user.sub);
     const what = kind === 'patient' ? 'department' : 'quality area';
     if (!target) return 'A ' + what + ' is required.';
@@ -1000,7 +1010,7 @@ function mount(app, opts) {
   });
   app.get('/api/submissions/stats', guard, async (req, res) => {
     try {
-      if (req.user && req.user.role === 'collector') {
+      if (req.user && accessRoles.PORTAL_ROLES.indexOf(req.user.role) >= 0) {
         const subs = await filterSubmissionsForUser(req, await getSubmissions({ limit: 1000 }));
         return res.json({ ok: true, stats: statsFromSubmissions(subs) });
       }

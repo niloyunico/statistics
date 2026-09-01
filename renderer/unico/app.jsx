@@ -164,20 +164,48 @@ function App(){
   } else if(route.view==='staffPrevious'){
     crumbs=['UNICO','Staff','Previous Staff'];
     body=<PreviousStaff store={staff} setRoute={setRoute}/>;
+  } else if(route.view==='rosterFullReview' && typeof window!=='undefined' && window.RosterReviewFull){
+    // The cross-unit review: queue, workload tree, hospital diagram and what the store
+    // can honestly say about who changed what. Its own route because it is about EVERY
+    // unit's sheet, not the one month RosterView is editing.
+    crumbs=['UNICO','Duty Roster','Full Review'];
+    body=<window.RosterReviewFull setRoute={setRoute}/>;
+  } else if(route.view && route.view.indexOf('roster')===0 && typeof RosterView!=='undefined'){
+    // Duty Roster module — renders INSIDE the global shell.
+    const RV_TITLE={rosterHome:'All Rosters',rosterGrid:'Monthly Grid',rosterReview:'Coverage & Rules',rosterPrint:'Print Sheet'};
+    crumbs=['UNICO','Duty Roster',RV_TITLE[route.view]||'All Rosters'];
+    body=<RosterView view={route.view} dept={route.dept} year={route.year} month={route.month} setRoute={setRoute}/>;
+  } else if(route.view && route.view.indexOf('med')===0 && typeof MedicineView!=='undefined'){
+    // Medicine module — drug index + prescription writer, inside the global shell.
+    const MV_TITLE={medHome:'Overview',medBrowse:'Drug Index',medBrand:'Brand',medGeneric:'Generic',
+      medRxNew:'New Prescription',medRxList:'Prescriptions',medRxPrint:'Print Prescription',
+      medTemplates:'Rx Templates',medCatalog:'Drug Catalogue'};
+    crumbs=['UNICO','Medicine & Rx',MV_TITLE[route.view]||'Overview'];
+    body=<MedicineView view={route.view} id={route.id} rx={route.rx} q={route.q} setRoute={setRoute}/>;
+  } else if(route.view && route.view.indexOf('perf')===0 && typeof PerformanceView!=='undefined'){
+    // Individual Performance module — renders INSIDE the global shell, like QualityView.
+    const PV_TITLE={perfHome:'Dashboard',perfDirectory:'Staff Directory',perfForm:'Appraisal Form',
+      perfPrint:'Printable Form',perfStaff:'Performance Record',perfQueue:'CNS Review Queue',
+      perfAchievements:'Achievements',perfIncidents:'Incidents',perfCompare:'Department Comparison',perfAttrition:'Attrition & Exits',perfRisk:'Retention Risk',perfBoard:'Recognition Board'};
+    crumbs=['UNICO','Performance',PV_TITLE[route.view]||'Dashboard'];
+    body=<PerformanceView view={route.view} emp={route.emp} cycleId={route.cycleId} setRoute={setRoute}/>;
   } else if(route.view==='staffProfile'){
     const emp=staff.get(route.emp);
     crumbs=['UNICO','Staff',emp?emp.name:'Profile'];
     body=<StaffProfile store={staff} empId={route.emp} setRoute={setRoute}/>;
   } else if(route.view==='staffForm'){
     crumbs=['UNICO','Staff',route.emp?'Edit Staff':`Add ${route.role||'Staff'}`];
-    body=<StaffForm store={staff} empId={route.emp} setRoute={setRoute} role={route.role}/>;
+    body=<StaffForm store={staff} empId={route.emp} setRoute={setRoute} role={route.role} depts={depts}/>;
   }
 
   if(window.unicoSession && window.unicoSession.configured() && !authed){ return <CloudLogin onLogin={()=>setAuthed(true)}/>; }
   if(locked){ return <LockScreen onUnlock={()=>setLocked(false)}/>; }
-  // Data collectors get ONLY the data-collection portal (submit forms + their own
-  // history) — every other module (dashboard, statistics, staff, quality…) is hidden.
-  if(typeof window!=='undefined' && window.__UNICO_USER__ && window.__UNICO_USER__.role==='collector' && typeof CollectorPortal!=='undefined'){
+  // The two PORTAL roles get ONLY the data-collection portal — every other module
+  // (dashboard, statistics, staff, quality…) is hidden. A nurse in-charge sees the
+  // same portal with the ward screens turned on; the portal itself decides that from
+  // the role, and every extra screen is backed by a route that checks it again.
+  const PORTAL_ROLES=['collector','incharge'];
+  if(typeof window!=='undefined' && window.__UNICO_USER__ && PORTAL_ROLES.indexOf(window.__UNICO_USER__.role)>=0 && typeof CollectorPortal!=='undefined'){
     return <CollectorPortal/>;
   }
   // Per-module access: a 'User' with no workspaces granted has nothing to show.
@@ -206,8 +234,8 @@ function App(){
 // out; an administrator must assign at least one module (Statistics / Quality / Staff…).
 function NoAccessScreen(){
   return (
-    <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'#eef2f7',fontFamily:'"IBM Plex Sans",system-ui,sans-serif',padding:24}}>
-      <div style={{maxWidth:440,background:'#fff',border:'1px solid #e3e9f1',borderRadius:16,padding:'28px 30px',textAlign:'center',boxShadow:'0 18px 50px rgba(5,12,24,.14)'}}>
+    <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'transparent',fontFamily:'"IBM Plex Sans",system-ui,sans-serif',padding:24}}>
+      <div style={{maxWidth:440,background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',borderRadius:16,padding:'28px 30px',textAlign:'center'}}>
         <div style={{fontSize:34,marginBottom:8}}>🔒</div>
         <div style={{fontSize:16,fontWeight:700,color:'#16202e',marginBottom:6}}>No workspace access</div>
         <div style={{fontSize:12.5,color:'#6c7a8c',lineHeight:1.5,marginBottom:16}}>Your account hasn’t been granted access to any module yet. Please ask an administrator to assign the workspaces you need.</div>
@@ -240,8 +268,8 @@ class AppErrorBoundary extends React.Component{
     if(!this.state.err) return this.props.children;
     const msg = String((this.state.err && this.state.err.message) || this.state.err);
     return (
-      <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'#eef2f7',fontFamily:'"IBM Plex Sans",system-ui,sans-serif',padding:24}}>
-        <div style={{maxWidth:460,background:'#fff',border:'1px solid #e3e9f1',borderRadius:16,padding:'26px 28px',textAlign:'center',boxShadow:'0 18px 50px rgba(5,12,24,.14)'}}>
+      <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'transparent',fontFamily:'"IBM Plex Sans",system-ui,sans-serif',padding:24}}>
+        <div style={{maxWidth:460,background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',borderRadius:16,padding:'26px 28px',textAlign:'center'}}>
           <div style={{fontSize:34,marginBottom:8}}>⚠️</div>
           <div style={{fontSize:16,fontWeight:700,color:'#16202e',marginBottom:6}}>Something went wrong in this view</div>
           <div style={{fontSize:12.5,color:'#6c7a8c',lineHeight:1.5,marginBottom:6}}>Your data is safe — this is a display error. Reload to continue.</div>

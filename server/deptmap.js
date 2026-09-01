@@ -7,7 +7,7 @@
  * (killing the old departments[]/qualityAreas[] two-array drift), and injected to the
  * client as window.__UNICO_DEPT_MAP__ so the UI can show ONE canonical name everywhere.
  */
-const { getDbHandle } = require('./db');
+const { dbRead, usingMongo } = require('./db');
 
 const HOSPITAL = '__hospital__';
 
@@ -41,11 +41,15 @@ const TTL = 30000;
 async function get(force) {
   const now = Date.now();
   if (!force && _cache && (now - _ts) < TTL) return _cache;
-  const db = await getDbHandle();
-  if (!db) { _cache = fromArrays([], []); _ts = now; return _cache; }
+  // usingMongo() is a config check, NOT a connect. Awaiting a handle here would pay
+  // the full server-selection timeout before the guarded read below ever ran, which
+  // is exactly the wait the circuit breaker exists to avoid.
+  if (!usingMongo()) { _cache = fromArrays([], []); _ts = now; return _cache; }
   // Quality lives EMBEDDED in departments (dept.quality) after the Statistics+Quality
   // merge — derive the quality-area link list from departments (single source of truth).
-  const deps = await db.collection('departments').find({}, { projection: { id: 1, name: 1, qualityKey: 1, qualityOnly: 1, quality: 1 } }).toArray();
+  // Through dbRead so the circuit breaker applies: during an outage this fails in
+  // milliseconds instead of waiting out the full server-selection timeout.
+  const deps = await dbRead((db) => db.collection('departments').find({}, { projection: { id: 1, name: 1, qualityKey: 1, qualityOnly: 1, quality: 1 } }).toArray());
   const quals = deps.filter((d) => d.quality && d.quality.key).map((d) => ({ key: d.quality.key, name: d.quality.name || d.name, deptId: d.id }));
   _cache = fromArrays(deps, quals); _ts = now;
   return _cache;

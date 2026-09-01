@@ -14,11 +14,44 @@ if (!process.env.VERCEL) {
   try { require('dns').setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']); } catch (e) { /* ignore */ }
 }
 
-let _client = null, _users = null;
+// Read cache (Redis-backed, with a stale copy kept for outages) and the circuit
+// breaker that makes a cold/unreachable cluster fail in milliseconds instead of
+// eight seconds per query. See cache.js and warmup.js for the reasoning.
+const cache = require('./cache');
+const warmup = require('./warmup');
+const lb = require('./loadbalancer');
+
+// How long each dataset may be served without re-reading Mongo. Reference data that
+// only changes when somebody edits it gets a generous window (a write invalidates it
+// immediately anyway — see cache.instrument). The app-state blob gets a short one
+// because it is the busiest write target in the app.
+const REF_TTL = cache.FRESH_MS;
+const APPDATA_TTL = cache.APPDATA_MS;
+
+let _client = null, _clientPromise = null, _users = null, _db = null;
+// Bumped by closeClient()/close(). A connect that is still in flight when the client
+// is closed must NOT install itself afterwards: it would resurrect a live, unclosed
+// MongoClient after "close" returned — holding pool connections against the Atlas cap
+// forever, and (in the self-test) answering later queries from the OLD connection
+// string, which turns a deterministic assertion into a timing-dependent one.
+let _gen = 0;
 let _memUsers = null, _memApp = { data: {}, updatedAt: 0 };
 
+// Connect ONCE, and remember the in-flight promise rather than the half-built client.
+//
+// The previous version assigned `_client` before awaiting connect(), so:
+//   - a failed connect (SRV/DNS hiccup, network down at boot, Atlas paused) left a DEAD
+//     client cached forever. Every later request took the `if (_client) return` fast path
+//     and failed against it, so one transient blip meant "database error" on every save
+//     until somebody restarted the server. That is the failure people see as
+//     "sometimes it just stops saving".
+//   - concurrent first requests each built their own MongoClient; the extra ones were
+//     orphaned with their sockets still open, quietly eating the Atlas connection cap.
+// Memoising the PROMISE fixes both: everyone awaits the same connect, and a failure
+// clears the cache so the very next request retries cleanly.
 async function ensureClient() {
   if (_client) return _client;
+  if (_clientPromise) return _clientPromise;
   const { MongoClient } = require('mongodb');
   // Pool size MUST differ by runtime. On Vercel (serverless) every warm function instance
   // keeps its OWN pool and there can be many instances at once — a big pool multiplies out
@@ -26,28 +59,98 @@ async function ensureClient() {
   // "database unreachable". So serverless uses a tiny pool with no idle sockets; a
   // persistent local server can afford a large warm pool for concurrency.
   const serverless = !!process.env.VERCEL;
-  _client = new MongoClient(process.env.MONGODB_URI, {
-    serverSelectionTimeoutMS: 8000,
+  const client = new MongoClient(process.env.MONGODB_URI, {
+    serverSelectionTimeoutMS: serverless ? 6000 : 8000,
+    connectTimeoutMS: 8000,
+    socketTimeoutMS: 30000,
     maxPoolSize: serverless ? 5 : 25,
     minPoolSize: serverless ? 0 : 2,       // serverless: hold no idle connections
     maxIdleTimeMS: serverless ? 10000 : 60000,
+    // Do not let a request sit in the pool queue forever when the cluster is slow:
+    // fail fast, let the circuit breaker notice, and answer from cache instead.
+    waitQueueTimeoutMS: serverless ? 5000 : 10000,
     // Transparently retry a read/write that fails on a transient network blip
     // (Atlas socket drop, primary step-down) instead of surfacing "failed database".
     retryWrites: true,
     retryReads: true,
+    // Shows up in the Atlas metrics/profiler, so a spike can be traced to the
+    // deployment that caused it rather than to "some client".
+    appName: 'unico-' + (serverless ? 'vercel' : 'server'),
   });
-  await _client.connect();
-  return _client;
+  const myGen = _gen;
+  _clientPromise = client.connect().then((c) => {
+    if (myGen !== _gen) {                    // closed while we were connecting
+      try { c.close(); } catch (_) { /* nothing to do */ }
+      const e = new Error('Database connection was closed while connecting.');
+      e.name = 'MongoConnectionSupersededError';   // deliberately not a connectivity error
+      throw e;
+    }
+    _client = c;
+    _clientPromise = null;
+    return c;
+  }).catch((e) => {
+    // Don't cache a broken connection — drop it so the next request tries again.
+    if (myGen === _gen) { _clientPromise = null; _client = null; _users = null; _db = null; }
+    try { client.close(); } catch (_) { /* already dead */ }
+    throw e;
+  });
+  return _clientPromise;
 }
-function dbHandle() { return _client.db(process.env.DB_NAME || 'unico'); }
+
+// The live database handle, wrapped by cache.instrument() so that EVERY write made
+// through it — by this file or by any feature module that took getDbHandle() — bumps
+// the version of the collection it touched and invalidates the cached reads derived
+// from it. That is what keeps caching invisible: nobody has to remember to clear it.
+// Memoised per connection; reset wherever _client is.
+function dbHandle() {
+  if (!_db) _db = cache.instrument(_client.db(process.env.DB_NAME || 'unico'));
+  return _db;
+}
+
+// One guarded read: connect if needed, take a slot from the fleet's shared database
+// budget, run the query, and let the circuit breaker judge the outcome.
+//
+// Layering matters. The breaker is OUTSIDE: a cluster already known to be unreachable
+// should be refused in microseconds, not queued for. The limiter is INSIDE, and
+// ensureClient() sits between them on purpose — a cold connect is not database
+// contention, and timing it as though it were would make every cold start look like
+// congestion and shrink the limit for no reason.
+function dbRead(fn) {
+  return warmup.guard(async () => {
+    await ensureClient();
+    return lb.run(() => fn(dbHandle()), { kind: 'read' });
+  });
+}
+// Same, for writes — but NEVER short-circuited and never shed. Somebody's data entry
+// always gets to try; the breaker and the limiter only record what happened.
+function dbWrite(fn) {
+  return warmup.guard(async () => {
+    await ensureClient();
+    return lb.run(() => fn(dbHandle()), { kind: 'write' });
+  }, { shortCircuit: false });
+}
+
+// Drop the pooled connection (graceful shutdown, and lets tests re-point the URI).
+async function closeClient() {
+  _gen++;                                   // disown any connect still in flight
+  const c = _client;
+  _client = null; _clientPromise = null; _users = null; _db = null;
+  if (c) { try { await c.close(); } catch (e) { /* already gone */ } }
+}
 
 /* ---- users ---- */
 async function usersCollection() {
   if (_users) return _users;
-  await ensureClient();
-  _users = dbHandle().collection('users');
-  try { await _users.createIndex({ username: 1 }, { unique: true }); } catch (e) { /* ignore */ }
-  return _users;
+  // Guarded (never short-circuited — login must always be allowed to try) so that the
+  // busiest endpoints in the app finally REPORT to the circuit breaker. /api/health
+  // does a real round trip here, which makes it the natural thing to close a circuit
+  // that has been sitting open; before this it could neither open nor close one.
+  return warmup.guard(async () => {
+    await ensureClient();
+    _users = dbHandle().collection('users');
+    try { await _users.createIndex({ username: 1 }, { unique: true }); } catch (e) { /* ignore */ }
+    return _users;
+  }, { shortCircuit: false });
 }
 function memUsers() {
   if (!_memUsers) {
@@ -66,41 +169,90 @@ function memUsers() {
 }
 async function getUsers() { return process.env.MONGODB_URI ? usersCollection() : memUsers(); }
 
-/* ---- app data (single shared snapshot document) ---- */
-async function getAppData() {
+/* ---- app data (single shared snapshot document) ----
+   IMPORTANT for every caller of the read functions below: the value you get back may
+   be a SHARED cached object. Treat it as immutable — copy before you change anything
+   (access.js already does: it rebuilds rather than edits in place). */
+
+// opts.fresh — skip the cache on the way in. Pass it on read-modify-write paths:
+// PUT /api/data reads the current document to compute the field-level diff, and a
+// baseline that is even a few seconds old could quietly drop somebody else's edit.
+// The stale copy is still kept as an outage rescue either way.
+async function getAppData(opts) {
   if (process.env.MONGODB_URI) {
-    await ensureClient();
-    const doc = await dbHandle().collection('appdata').findOne({ _id: 'shared' });
-    return doc ? { data: doc.data || {}, updatedAt: doc.updatedAt || 0 } : { data: {}, updatedAt: 0 };
+    return cache.read(
+      'appdata',
+      { coll: 'appdata', freshMs: APPDATA_TTL, fresh: !!(opts && opts.fresh), noRescue: !!(opts && opts.noRescue) },
+      () => dbRead(async (d) => {
+        const doc = await d.collection('appdata').findOne({ _id: 'shared' });
+        return doc ? { data: doc.data || {}, updatedAt: doc.updatedAt || 0 } : { data: {}, updatedAt: 0 };
+      })
+    );
   }
   return _memApp;
 }
 // Overlay keys that were retired by the quality rebuild; strip them on every write so a
 // client mirroring its (still-stale) localStorage can't resurrect them into the shared blob.
 const STALE_OVERLAY_KEYS = ['unico_quality_v1', 'unico_qentries_v1'];
-async function setAppData(data) {
+// A key is only safe as a dotted update path if it cannot be read as one.
+const dottablePath = (k) => k.indexOf('.') < 0 && k.indexOf('$') !== 0 && k.length > 0;
+
+// `previous` is the document as it was read a moment ago. When it is supplied, only the
+// keys that actually CHANGED are written.
+//
+// The old behaviour replaced `data` wholesale on every call, which caused two real
+// problems: every keystroke rewrote the entire 130 KB blob (staff alone is 98 KB), and
+// with two tabs or two people open at once, whoever saved last silently overwrote the
+// other's work — edits "disappeared" with no error anywhere. A field-level $set means
+// two people editing different modules no longer collide at all.
+async function setAppData(data, previous) {
   const updatedAt = Date.now();
   if (data && typeof data === 'object') { STALE_OVERLAY_KEYS.forEach((k) => { if (k in data) delete data[k]; }); }
-  if (process.env.MONGODB_URI) {
-    await ensureClient();
-    await dbHandle().collection('appdata').updateOne({ _id: 'shared' }, { $set: { data, updatedAt } }, { upsert: true });
-  } else {
-    _memApp = { data, updatedAt };
+  if (!process.env.MONGODB_URI) { _memApp = { data, updatedAt }; return { updatedAt }; }
+
+  // Writes go through dbWrite: always attempted (never refused because the circuit is
+  // open), and the collection proxy invalidates the cached copy as soon as it lands.
+  return dbWrite(async (d) => {
+  const coll = d.collection('appdata');
+  const keys = Object.keys(data || {});
+  const prevKeys = previous && typeof previous === 'object' ? Object.keys(previous) : null;
+
+  if (prevKeys && keys.every(dottablePath) && prevKeys.every(dottablePath)) {
+    const $set = { updatedAt };
+    const $unset = {};
+    keys.forEach((k) => { if (data[k] !== previous[k]) $set['data.' + k] = data[k]; });
+    // hasOwnProperty, not `in`: `in` walks the prototype chain, so a stored overlay
+    // key called "toString" or "constructor" would read as present on every object and
+    // could never be deleted — an asymmetry with the own-keys loop above.
+    prevKeys.forEach((k) => { if (!Object.prototype.hasOwnProperty.call(data, k)) $unset['data.' + k] = ''; });
+    const update = { $set };
+    if (Object.keys($unset).length) update.$unset = $unset;
+    await coll.updateOne({ _id: 'shared' }, update, { upsert: true });
+    return { updatedAt, changed: Object.keys($set).length - 1, removed: Object.keys($unset).length };
   }
+
+  // No baseline (or a key we cannot express as a path) -> the original whole-doc write.
+  await coll.updateOne({ _id: 'shared' }, { $set: { data, updatedAt } }, { upsert: true });
   return { updatedAt };
+  });
 }
 
 /* ---- departments (the monthly statistics, moved out of the renderer) ---- */
 // Returns the canonical department definitions (metadata + months[] + data[]),
 // ordered, with the Mongo _id stripped (the renderer keys off `id`).
-async function getDepartments() {
+async function getDepartments(opts) {
   if (process.env.MONGODB_URI) {
-    await ensureClient();
-    const docs = await dbHandle().collection('departments').find({}).sort({ order: 1, _id: 1 }).toArray();
-    // Statistics + Quality are now ONE record (dept.quality embedded). For the stats
-    // inject, hide qualityOnly pseudo-depts (Overall Hospital) and strip the embedded
-    // quality blob — it is served separately by getQuality() as __UNICO_QUALITY__.
-    return docs.filter((d) => !d.qualityOnly).map((d) => { const { _id, quality, ...rest } = d; return rest; });
+    return cache.read(
+      'departments',
+      { coll: 'departments', freshMs: REF_TTL, fresh: !!(opts && opts.fresh) },
+      () => dbRead(async (d) => {
+        const docs = await d.collection('departments').find({}).sort({ order: 1, _id: 1 }).toArray();
+        // Statistics + Quality are now ONE record (dept.quality embedded). For the stats
+        // inject, hide qualityOnly pseudo-depts (Overall Hospital) and strip the embedded
+        // quality blob — it is served separately by getQuality() as __UNICO_QUALITY__.
+        return docs.filter((x) => !x.qualityOnly).map((x) => { const { _id, quality, ...rest } = x; return rest; });
+      })
+    );
   }
   // dev/in-memory: serve the on-disk seed directly so the app still has data.
   try { return require('./seed-departments').loadSeed(); } catch (e) { return []; }
@@ -115,27 +267,37 @@ async function ensureDepartmentsSeeded() {
 }
 
 /* ---- staff + quality (also moved out of the renderer; see seed-data.js) ---- */
-async function getRendererData(name) {
+async function getRendererData(name, opts) {
   if (process.env.MONGODB_URI) {
-    await ensureClient();
-    return require('./seed-data').getCollection(dbHandle(), name);
+    return cache.read(
+      name,
+      { coll: name, freshMs: REF_TTL, fresh: !!(opts && opts.fresh) },
+      () => dbRead((d) => require('./seed-data').getCollection(d, name))
+    );
   }
   try { return require('./seed-data').loadSeed(name); } catch (e) { return []; }
 }
-async function getStaff() { return getRendererData('staff'); }
+async function getStaff(opts) { return getRendererData('staff', opts); }
 // Quality now lives EMBEDDED in each department doc (dept.quality) after the
 // Statistics+Quality merge. Derive the quality-area list from departments so the
 // renderer's __UNICO_QUALITY__ keeps the exact shape it had as its own collection.
-async function getQuality() {
+async function getQuality(opts) {
   if (process.env.MONGODB_URI) {
-    await ensureClient();
-    const deps = await dbHandle().collection('departments').find({}).sort({ order: 1, _id: 1 }).toArray();
-    return deps.filter((d) => d.quality && d.quality.key).map((d) => {
-      const q = Object.assign({}, d.quality);
-      q.deptId = q.deptId || d.id;
-      if (q.key == null) q.key = d.qualityKey;
-      return q;
-    });
+    // Derived from `departments`, so it is keyed to THAT collection's version: an edit
+    // to any department (which is where quality now lives) invalidates this too.
+    return cache.read(
+      'quality',
+      { coll: 'departments', freshMs: REF_TTL, fresh: !!(opts && opts.fresh) },
+      () => dbRead(async (db) => {
+        const deps = await db.collection('departments').find({}).sort({ order: 1, _id: 1 }).toArray();
+        return deps.filter((d) => d.quality && d.quality.key).map((d) => {
+          const q = Object.assign({}, d.quality);
+          q.deptId = q.deptId || d.id;
+          if (q.key == null) q.key = d.qualityKey;
+          return q;
+        });
+      })
+    );
   }
   try { return require('./seed-data').loadSeed('quality'); } catch (e) { return []; }
 }
@@ -150,15 +312,44 @@ async function ensureRendererSeeded(name) {
 // the connection logic that lives here.
 async function getDbHandle() {
   if (!process.env.MONGODB_URI) return null;
-  await ensureClient();
-  return dbHandle();
+  // Guarded so the large amount of traffic that takes a raw handle — data collection,
+  // supervisor reports, the activity log, user admin — at least REPORTS its verdict to
+  // the circuit breaker instead of being invisible to it. shortCircuit:false because
+  // this is the entry point for writes too, and a write is never refused on breaker
+  // state. Read paths that want fail-fast should use dbRead().
+  return warmup.guard(async () => { await ensureClient(); return dbHandle(); }, { shortCircuit: false });
 }
 
-async function close() { if (_client) { await _client.close(); _client = null; _users = null; } }
+async function close() { return closeClient(); }
+
+/* ---- warmup -----------------------------------------------------------------
+   Re-read every shared dataset and refresh its cached copy. Called by the keep-alive
+   (timer and cron) so the copy that has to rescue an outage is never itself stale,
+   and so a cluster that has just been resumed is exercised before a real user
+   arrives. Never throws: a warm that fails simply leaves the previous copy in place. */
+async function warmCache() {
+  if (!process.env.MONGODB_URI) return { warmed: [], failed: [] };
+  const jobs = [
+    ['departments', () => getDepartments({ fresh: true })],
+    ['quality', () => getQuality({ fresh: true })],
+    ['staff', () => getStaff({ fresh: true })],
+    ['appdata', () => getAppData({ fresh: true })],
+  ];
+  const warmed = [], failed = [];
+  const results = await Promise.all(jobs.map(([n, f]) => f().then(() => n).catch(() => { failed.push(n); return null; })));
+  results.forEach((n) => { if (n) warmed.push(n); });
+  return { warmed, failed };
+}
+
+// Start the Atlas handshake at module load rather than inside the first request, so
+// on a serverless cold start the TLS + auth round trips overlap with the platform
+// routing that request instead of running after it.
+if (process.env.MONGODB_URI) warmup.prewarm(ensureClient);
 
 module.exports = {
-  getUsers, getAppData, setAppData,
+  getUsers, getAppData, setAppData, closeClient,
   getDepartments, ensureDepartmentsSeeded,
   getStaff, getQuality, ensureRendererSeeded, getDbHandle,
+  warmCache, dbRead, dbWrite,
   close, usingMongo: () => !!process.env.MONGODB_URI,
 };

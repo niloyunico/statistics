@@ -19,14 +19,43 @@ const db = require('./db');
 const auth = require('./auth');
 const deptmap = require('./deptmap');
 const activity = require('./activity-log');
+const access = require('./access');
+const session = require('./session');
+const throttle = require('./login-throttle');
 
-const ROLES = ['Administrator', 'collector', 'User'];
+// 'incharge' is a data collector who also runs a ward: same scoping, more screens.
+const ROLES = ['Administrator', 'incharge', 'collector', 'User'];
+/* The roles that get the scoped PORTAL rather than the admin application. Their
+   assignment fields (departments, quality areas, per-indicator access) must be saved
+   and enforced the same way — an in-charge created without them would be an account
+   with a ward's screens and nobody's scope. */
+const ROLES_PORTAL = ['collector', 'incharge'];
 
 // Grantable workspaces (per-module access for the standard 'User' role). Ids match
 // the renderer's unicoAccessModuleOf() output so a user's `perms` map keys 1:1 to
 // sidebar destinations. Administrators are unrestricted; collectors use their own
 // portal; a 'User' gets exactly the access levels in `perms`.
-const ACCESS_MODULES = ['stats', 'quality', 'staff', 'datacol', 'reports', 'users'];
+// 'supervisor' was missing here while the renderer listed it, so Shift Supervisor
+// Reports could never be granted to anyone: the panel offered no switch for it and
+// cleanPerms() dropped the key. Kept in step with access.ACCESS_MODULES.
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine'];
+
+// How much of the personnel register this account may see. Row-level scope, applied
+// on the server by access.filterStaff(); see server/access.js.
+const cleanStaffScope = access.cleanStaffScope;
+
+// Changing any of these must invalidate every token the account already holds —
+// otherwise a revoked permission stays live for the rest of the 12h token TTL.
+const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId'];
+// Compare only what actually CHANGED. The update object always carries a few scope
+// fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
+// mere presence signed a user out every time an admin fixed a typo in their name.
+const sameVal = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+function stampRevocation(set, before) {
+  const changed = SECURITY_FIELDS.some((k) => (k in set) && !sameVal(set[k], before && before[k]));
+  if (changed) set.sessionEpoch = Date.now();
+  return set;
+}
 
 // Per-module access level, ESCALATING: each level includes every one before it.
 //   none   → module hidden
@@ -82,6 +111,11 @@ function safe(u) {
     perms: role === 'Administrator' ? fullPerms()
       : (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? cleanPerms(u.perms)
       : null,
+    // Row-level staff scope: 'all' | 'departments' | 'self'. Meaningful once the
+    // account has staff access at all; 'all' keeps existing accounts as they were.
+    staffScope: role === 'Administrator' ? 'all' : cleanStaffScope(u.staffScope),
+    staffId: (u.staffId === 0 || u.staffId) ? u.staffId : null,
+    staffEmpId: u.staffEmpId || null,
     createdAt: u.createdAt || null,
     updatedAt: u.updatedAt || null,
   };
@@ -116,17 +150,19 @@ async function activeAdminCount(users) {
 // actions their perms map grants (view / add / edit / delete), including assigning the
 // Administrator role. The login JWT carries only sub/role/name, so perms come from the DB.
 async function usersModuleActions(req) {
-  const claims = req.user;
-  if (!claims) return null;                          // open local mode -> unrestricted
-  if (claims.role === 'Administrator') return null;  // administrators -> unrestricted
-  if (claims.role === 'collector') return [];        // collectors never manage accounts
-  const users = await db.getUsers();
-  if (typeof users.findOne !== 'function') return [];
-  const me = await users.findOne({ username: norm(claims.sub || claims.username) });
-  if (!me || me.active === false) return [];
-  const p = (me.perms && typeof me.perms === 'object' && !Array.isArray(me.perms)) ? me.perms : {};
+  // Authority is resolved by access.forRequest(), which reads the LIVE user document.
+  // This used to branch on req.user.role — the JWT claim — and return "unrestricted"
+  // for anyone whose token SAID Administrator. So demoting or deactivating an
+  // administrator left them with full account-management power (including promoting
+  // themselves back) until their 12h token expired. The claim is a snapshot of who
+  // they were when they signed in; only the database knows who they are now.
+  const a = await access.forRequest(req);
+  if (!a) return [];                                 // deactivated / revoked / unknown
+  if (a.unrestricted) return null;                   // open local mode or a real Administrator
+  if (ROLES_PORTAL.indexOf(a.role) >= 0) return [];  // portal accounts never manage accounts
+  const p = (a.perms && typeof a.perms === 'object' && !Array.isArray(a.perms)) ? a.perms : {};
   const val = p.users;
-  if (Array.isArray(val)) return PERM_ACTIONS.filter((a) => val.indexOf(a) >= 0);
+  if (Array.isArray(val)) return PERM_ACTIONS.filter((x) => val.indexOf(x) >= 0);
   const i = PERM_LEVELS.indexOf(String(val || 'none'));   // legacy escalating level string
   return i <= 0 ? [] : PERM_ACTIONS.slice(0, i);
 }
@@ -170,8 +206,10 @@ function mount(app, opts) {
     try {
       const users = await db.getUsers();
       if (await users.findOne({ username })) return res.status(409).json({ ok: false, error: 'That username already exists.' });
-      const departments = role === 'collector' ? cleanList(b.departments) : [];
-      const allQualityAreas = role === 'collector' ? !!b.allQualityAreas : false;
+      // Collectors: their data-collection assignment. Plain Users: the row-level scope
+      // for the staff register (staffScope 'departments'). Administrators: neither.
+      const departments = (ROLES_PORTAL.indexOf(role) >= 0 || role === 'User') ? cleanList(b.departments) : [];
+      const allQualityAreas = ROLES_PORTAL.indexOf(role) >= 0 ? !!b.allQualityAreas : false;
       const doc = {
         username, name: String(b.name || username).trim(), role,
         email: String(b.email || '').trim().toLowerCase() || null,
@@ -181,12 +219,20 @@ function mount(app, opts) {
         allQualityAreas,
         // Quality areas = departments' auto areas UNION custom/extra areas (b.qualityAreas), or
         // ALL when hospital-wide. Assign once + optional custom access on top.
-        qualityAreas: role === 'collector' ? await deptmap.deriveQualityAreas(departments, allQualityAreas, cleanList(b.qualityAreas)) : [],
-        qualityIndicators: role === 'collector' ? cleanQI(b.qualityIndicators) : {}, // specific-indicator access
+        qualityAreas: ROLES_PORTAL.indexOf(role) >= 0 ? await deptmap.deriveQualityAreas(departments, allQualityAreas, cleanList(b.qualityAreas)) : [],
+        qualityIndicators: ROLES_PORTAL.indexOf(role) >= 0 ? cleanQI(b.qualityIndicators) : {}, // specific-indicator access
         // Per-module access levels — only meaningful for the 'User' role. Admins are
         // full (null => resolved to full in safe()); collectors use the collector portal.
         perms: role === 'User' ? cleanPerms(b.perms) : null,
+        // Row-level staff scope + the personnel record this login belongs to (needed
+        // for scope 'self', where the account may see only its own file).
+        staffScope: role === 'Administrator' ? 'all' : cleanStaffScope(b.staffScope),
+        staffId: (b.staffId === 0 || b.staffId) ? b.staffId : null,
+        staffEmpId: String(b.staffEmpId || '').trim() || null,
         passwordHash: await auth.hash(password),
+        // Bumped whenever access changes; every issued token carries the value it was
+        // signed with, so raising it signs the account out everywhere.
+        sessionEpoch: Date.now(),
         createdAt: Date.now(), updatedAt: Date.now(),
       };
       await users.insertOne(doc);
@@ -211,7 +257,7 @@ function mount(app, opts) {
       if (b.role != null && ROLES.includes(b.role)) set.role = b.role;
       if (b.active != null) set.active = !!b.active;
       const role = set.role || u.role;
-      if (role === 'collector') {
+      if (ROLES_PORTAL.indexOf(role) >= 0) {
         const departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
         const allQualityAreas = (b.allQualityAreas != null) ? !!b.allQualityAreas : !!u.allQualityAreas;
         const customAreas = (b.qualityAreas != null) ? cleanList(b.qualityAreas) : await storedCustomAreas(u);
@@ -220,8 +266,26 @@ function mount(app, opts) {
         // Departments' auto areas UNION custom/extra areas (assign-once + custom access on top).
         set.qualityAreas = await deptmap.deriveQualityAreas(departments, allQualityAreas, customAreas);
         if (b.qualityIndicators != null) set.qualityIndicators = cleanQI(b.qualityIndicators);
-      } else if (set.role && set.role !== 'collector') {
+      } else if (role === 'User') {
+        // A 'User' keeps a department list too — not for data-collection assignment
+        // (that is the collector mechanism) but as the row-level scope for the staff
+        // register: "this in-charge sees Medical ICU staff and no one else". The
+        // quality-area/indicator assignment stays collector-only.
+        if (b.departments != null) set.departments = cleanList(b.departments);
+        set.qualityAreas = []; set.allQualityAreas = false; set.qualityIndicators = {};
+      } else if (set.role && ROLES_PORTAL.indexOf(set.role) < 0) {
+        // Demoted out of a portal role: the assignment fields go with it. Testing a
+        // single role here would have wiped an in-charge's own ward on any edit.
         set.departments = []; set.qualityAreas = []; set.allQualityAreas = false; set.qualityIndicators = {};
+      }
+
+      // Row-level staff scope. Administrators are always unrestricted.
+      if (role === 'Administrator') {
+        set.staffScope = 'all';
+      } else {
+        if (b.staffScope !== undefined) set.staffScope = cleanStaffScope(b.staffScope);
+        if (b.staffId !== undefined) set.staffId = (b.staffId === 0 || b.staffId) ? b.staffId : null;
+        if (b.staffEmpId !== undefined) set.staffEmpId = String(b.staffEmpId || '').trim() || null;
       }
 
       // Per-module access levels. Only the 'User' role carries a perms map; Administrators
@@ -241,7 +305,9 @@ function mount(app, opts) {
       if (demoting && (await activeAdminCount(users)) <= 1) {
         return res.status(400).json({ ok: false, error: 'Cannot demote or deactivate the last active administrator.' });
       }
+      stampRevocation(set, u); // a real access change takes effect now, not in 12h
       await users.updateOne({ username }, { $set: set });
+      access.invalidate(username); // drop the 15s permission cache for this account
       activity.log(req, 'user_updated', { target: username, detail: Object.keys(set).filter((k) => k !== 'updatedAt').join(', ') || 'no changes' });
       res.json({ ok: true, user: safe(Object.assign({}, u, set)) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not update user.' }); }
@@ -255,7 +321,10 @@ function mount(app, opts) {
     try {
       const users = await db.getUsers();
       if (!await users.findOne({ username })) return res.status(404).json({ ok: false, error: 'User not found.' });
-      await users.updateOne({ username }, { $set: { passwordHash: await auth.hash(password), updatedAt: Date.now() } });
+      // A password reset must end every session opened with the OLD password —
+      // otherwise resetting a compromised account leaves the intruder signed in.
+      await users.updateOne({ username }, { $set: { passwordHash: await auth.hash(password), sessionEpoch: Date.now(), updatedAt: Date.now() } });
+      access.invalidate(username);
       activity.log(req, 'password_reset', { target: username });
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not reset password.' }); }
@@ -275,6 +344,7 @@ function mount(app, opts) {
         return res.status(400).json({ ok: false, error: 'Cannot delete the last active administrator.' });
       }
       await users.deleteOne({ username });
+      access.invalidate(username); // a deleted account's token must stop working now
       activity.log(req, 'user_deleted', { target: username, detail: 'role: ' + (u.role || 'User') });
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not delete user.' }); }
@@ -291,13 +361,35 @@ function mount(app, opts) {
     const cur = String((req.body && req.body.currentPassword) || '');
     const nw = String((req.body && req.body.newPassword) || '');
     if (nw.length < 6) return res.status(400).json({ ok: false, error: 'New password must be at least 6 characters.' });
+    // This endpoint verifies a password, so it is a credential-checking endpoint and
+    // belongs behind the same counter as the two login doors. It was not: somebody with
+    // a stolen session cookie (but not the password) could guess `currentPassword` at
+    // unlimited rate against a clean oracle — "incorrect" versus success — and burn a
+    // bcrypt per guess while doing it.
+    const tkey = throttle.keyOf(req, 'pwchange:' + norm(who));
+    const wait = await throttle.blockedFor(tkey);
+    if (wait > 0) {
+      res.set('Retry-After', String(wait));
+      return res.status(429).json({ ok: false, error: 'Too many attempts. Try again in about ' + Math.ceil(wait / 60) + ' minute(s).' });
+    }
     try {
       const users = await db.getUsers();
       const uname = norm(who);
       const u = await users.findOne({ username: uname });
       if (!u) return res.status(404).json({ ok: false, error: 'Account not found.' });
-      if (!(await auth.verify(cur, u.passwordHash))) return res.status(400).json({ ok: false, error: 'Your current password is incorrect.' });
-      await users.updateOne({ username: uname }, { $set: { passwordHash: await auth.hash(nw), updatedAt: Date.now() } });
+      if (!(await auth.verify(cur, u.passwordHash))) {
+        await throttle.noteFail(tkey);
+        return res.status(400).json({ ok: false, error: 'Your current password is incorrect.' });
+      }
+      await throttle.clear(tkey);
+      // Changing your own password must end every OTHER session on the account —
+      // that is the whole point of changing it after a suspected compromise. Bump the
+      // epoch (killing all existing tokens) and immediately re-issue a cookie for THIS
+      // browser, so the person who just changed it stays signed in and nobody else does.
+      const epoch = Date.now();
+      await users.updateOne({ username: uname }, { $set: { passwordHash: await auth.hash(nw), sessionEpoch: epoch, updatedAt: Date.now() } });
+      access.invalidate(uname);
+      try { session.setSession(res, auth.sign(Object.assign({}, u, { sessionEpoch: epoch }))); } catch (e) { /* Bearer clients just re-login */ }
       activity.log(req, 'password_changed_self', { target: uname });
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not change your password.' }); }

@@ -10,23 +10,95 @@ const compression = require('compression');
 const { getUsers, getAppData, setAppData, usingMongo } = require('./db');
 const auth = require('./auth');
 const session = require('./session');
+const access = require('./access');
+const throttle = require('./login-throttle');
+const redis = require('./redis');
+const cache = require('./cache');
+const warmup = require('./warmup');
+const lb = require('./loadbalancer');
 
 const app = express();
 // gzip/brotli every response. Registered FIRST so it wraps the inlined index.html
 // (~157 KB of DB-snapshot JSON), the app bundle, and every /api payload. Transparent
 // Accept-Encoding negotiation; the default 1 KB threshold skips tiny health/login JSON.
 app.use(compression());
+
+// --- Security headers ---------------------------------------------------------
+// Hand-rolled rather than pulling in helmet: it is a dozen static headers and this
+// server ships to Vercel, where a smaller dependency tree is worth more than the
+// abstraction. Every asset the app loads is same-origin (React, jsPDF, fonts and the
+// bundle are all vendored locally), so a tight CSP costs nothing. 'unsafe-inline' for
+// scripts is unavoidable: serveIndex() injects window.__UNICO_SNAPSHOT__ inline.
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');       // no MIME sniffing
+  res.set('X-Frame-Options', 'DENY');                 // legacy clickjacking guard
+  res.set('Referrer-Policy', 'no-referrer');          // never leak patient URLs outward
+  res.set('Cross-Origin-Opener-Policy', 'same-origin');
+  res.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=()');
+  res.set('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",              // inline snapshot inject
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",                     // charts + PDF rasterisation
+    "font-src 'self'",
+    "connect-src 'self'",
+    "worker-src 'self' blob:",                        // html2canvas / jsPDF
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",                         // the modern clickjacking guard
+  ].join('; '));
+  // HSTS only where the site is actually served over TLS, so it can't strand a
+  // plain-http://localhost install (COOKIE_SECURE tracks the same fact).
+  if (String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true') {
+    res.set('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
+
 app.use(express.json({ limit: '12mb' })); // app-state snapshots can be sizable
 
-const origins = (process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-app.use(cors({ origin: origins.includes('*') ? true : origins }));
+// Cross-origin access. The default was '*' — with a Bearer token that let any site's
+// script call this API on a user's behalf. When login is required, default to
+// same-origin only (no CORS header at all) unless ALLOWED_ORIGINS names real origins.
+const origins = String(process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+const openCors = origins.includes('*');
+if (openCors && String(process.env.REQUIRE_AUTH || '').toLowerCase() === 'true') {
+  console.warn('[unico] ALLOWED_ORIGINS=* with REQUIRE_AUTH=true — any website could call this API with a stolen token. Set it to your real origin(s).');
+}
+if (origins.length) {
+  // credentials stays OFF: the session cookie must never be readable cross-origin.
+  app.use(cors({ origin: openCors ? true : origins, credentials: false }));
+}
 
 // Health/diagnostic — lets the app show "server reachable" and which store is active.
+//
+// Also the endpoint to point an external uptime pinger at (see DEPLOY.md): it performs
+// a real database round trip, so a ping every few minutes keeps BOTH the serverless
+// instance and the Atlas cluster warm, and the numbers below make a slow morning
+// diagnosable instead of a mystery — dbMs is the actual query latency, `warmup` says
+// whether the circuit breaker has had to step in, and `cache` shows how many requests
+// were answered without touching Mongo at all (and how many outages it papered over).
 app.get('/api/health', async (req, res) => {
-  let db = 'unknown';
-  try { const u = await getUsers(); await u.countDocuments(); db = usingMongo() ? 'mongodb' : 'in-memory (dev)'; }
-  catch (e) { return res.status(500).json({ ok: false, db: 'error', error: String(e.message || e) }); }
-  res.json({ ok: true, db });
+  const t0 = Date.now();
+  let db = 'unknown', dbMs = null, error = null;
+  try {
+    const u = await getUsers();
+    await u.countDocuments();
+    db = usingMongo() ? 'mongodb' : 'in-memory (dev)';
+    dbMs = Date.now() - t0;
+  } catch (e) {
+    db = 'error';
+    error = String(e.message || e);
+  }
+  const body = {
+    ok: db !== 'error', db, dbMs,
+    redis: redis.status(), warmup: warmup.status(), cache: cache.snapshot(), load: lb.status(),
+  };
+  if (error) body.error = error;
+  res.set('Cache-Control', 'no-store');
+  // Still 500 on a database failure, exactly as before, so existing checks keep working.
+  res.status(body.ok ? 200 : 500).json(body);
 });
 
 // Login: returns a signed token + safe user info on success.
@@ -34,11 +106,23 @@ app.post('/api/login', async (req, res) => {
   const username = String((req.body && req.body.username) || '').trim().toLowerCase();
   const password = String((req.body && req.body.password) || '');
   if (!username || !password) return res.status(400).json({ ok: false, error: 'Username and password are required.' });
+  // Same brute-force counter as the browser portal (see login-throttle.js): this
+  // endpoint used to be unthrottled, so passwords could be guessed here without limit.
+  const key = throttle.keyOf(req, username);
+  const wait = await throttle.blockedFor(key);
+  if (wait > 0) {
+    res.set('Retry-After', String(wait));
+    return res.status(429).json({ ok: false, error: 'Too many failed attempts. Try again in about ' + Math.ceil(wait / 60) + ' minute(s).' });
+  }
   try {
     const users = await getUsers();
     const user = await users.findOne({ username });
     const valid = user && user.active !== false && await auth.verify(password, user.passwordHash);
-    if (!valid) return res.status(401).json({ ok: false, error: 'Invalid username or password.' });
+    if (!valid) {
+      await throttle.noteFail(key);
+      return res.status(401).json({ ok: false, error: 'Invalid username or password.' });
+    }
+    await throttle.clear(key); // success clears the counter
     const token = auth.sign(user);
     // Also drop an httpOnly session cookie so the browser portal is signed in
     // (desktop/Bearer clients simply ignore it and keep using the token).
@@ -50,12 +134,25 @@ app.post('/api/login', async (req, res) => {
 });
 
 // Verify a stored token (the app calls this on startup to resume a session).
-app.get('/api/me', (req, res) => {
+app.get('/api/me', async (req, res) => {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : '';
   const claims = auth.check(token);
   if (!claims) return res.status(401).json({ ok: false });
-  res.json({ ok: true, user: { username: claims.sub, name: claims.name, role: claims.role } });
+  // A valid signature is no longer enough: the account may have been deactivated or
+  // had its sessions revoked since the token was minted. access.forRequest() checks
+  // the live user document, so a resumed desktop session dies with the permission.
+  req.user = claims;
+  const a = await access.forRequest(req).catch(() => null);
+  if (!a) return res.status(401).json({ ok: false });
+  res.json({
+    ok: true,
+    user: { username: claims.sub, name: claims.name, role: claims.role },
+    // The client mirrors these into window.__UNICO_USER__ so the UI hides what the
+    // server would refuse anyway (the server stays the authority either way).
+    perms: a.unrestricted ? null : a.perms,
+    staffScope: a.staffScope || 'all',
+  });
 });
 
 // --- app data sync (the whole app state as one shared document) ---
@@ -66,20 +163,29 @@ app.get('/api/me', (req, res) => {
 // (desktop builds).
 const requireAuth = session.requireApi;
 
-app.get('/api/data', requireAuth, async (req, res) => {
+app.get('/api/data', requireAuth, access.attach, async (req, res) => {
   // Collectors never receive the shared app-state blob (it holds every department's
   // overlay incl. recorded values) — they get a scoped snapshot injected at "/".
-  if (req.user && req.user.role === 'collector') return res.json({ ok: true, data: {}, updatedAt: 0 });
-  try { const d = await getAppData(); res.json({ ok: true, data: d.data, updatedAt: d.updatedAt }); }
+  // No portal account receives the shared app-state blob — it is the whole hospital's
+  // overlay. Naming one role here meant an in-charge was handed all of it.
+  if (req.user && access.PORTAL_ROLES.indexOf(req.user.role) >= 0) return res.json({ ok: true, data: {}, updatedAt: 0 });
+  try {
+    const d = await getAppData();
+    // Everyone else used to receive the ENTIRE blob — every module's overlay in one
+    // response — regardless of their per-module access. Hand back only the keys this
+    // session may read, with the staff roster narrowed to its own rows.
+    const data = await access.scopeSnapshot(req.access, d.data);
+    res.json({ ok: true, data, updatedAt: d.updatedAt });
+  }
   catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }
 });
 
-app.put('/api/data', requireAuth, async (req, res) => {
+app.put('/api/data', requireAuth, access.attach, async (req, res) => {
   // Data COLLECTORS must never write the shared app-state doc. Their session carries
   // only a scoped, value-stripped copy of the quality overlay (see web.js), so
   // mirroring their localStorage back here would clobber the admin's full overlay.
   // Collectors persist real data through /api/submissions — accept and no-op here.
-  if (req.user && req.user.role === 'collector') return res.json({ ok: true, skipped: true });
+  if (req.user && access.PORTAL_ROLES.indexOf(req.user.role) >= 0) return res.json({ ok: true, skipped: true });
   const data = req.body && req.body.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return res.status(400).json({ ok: false, error: 'A data object is required.' });
   // The app state is a mirror of localStorage: a flat map of string->string. Enforce
@@ -89,7 +195,46 @@ app.put('/api/data', requireAuth, async (req, res) => {
   for (const k of keys) {
     if (typeof data[k] !== 'string') return res.status(400).json({ ok: false, error: 'All values must be strings (localStorage snapshot).' });
   }
-  try { const r = await setAppData(data); res.json({ ok: true, updatedAt: r.updatedAt }); }
+  try {
+    // MERGE, never replace. A restricted session only ever received the modules it
+    // may read, so mirroring its localStorage back verbatim would delete everything
+    // else — and a department-scoped roster save would drop every other department's
+    // staff. access.mergeAppData() starts from the stored document and lets this
+    // session overwrite only what it is permitted to write.
+    // Read-modify-write, so this needs BOTH flags:
+    //   fresh    — skip the cache on the way in. A baseline even a few seconds out of
+    //              date could silently discard an edit somebody else just saved.
+    //   noRescue — and if the database cannot be read, do NOT fall back to the cached
+    //              copy either. Merging a save against an outage-era snapshot is how
+    //              an edit becomes a silent no-op (the field-level diff sees the stale
+    //              value and writes nothing) or how a key gets dropped. Refusing is the
+    //              honest answer: the browser keeps its copy and retries.
+    let current;
+    try {
+      current = await getAppData({ fresh: true, noRescue: true });
+    } catch (e) {
+      res.set('Retry-After', '5');
+      return res.status(503).json({ ok: false, error: 'The database is unavailable right now — nothing was saved. Your work is still in this browser; it will be saved automatically when the connection returns.' });
+    }
+
+    // A PARTIAL save carries only the keys that changed — the closing-tab flush sends
+    // one of these, because a full 130 KB body cannot be delivered by a page that is
+    // already going away. Absence must NOT read as deletion here (it does for a full
+    // mirror), so rebuild the complete map first and let the normal merge run on it:
+    // permission checks and row-level staff scoping apply exactly as they always do.
+    let incoming = data;
+    if (req.body && req.body.partial) {
+      const removed = Array.isArray(req.body.removed) ? req.body.removed : [];
+      incoming = Object.assign({}, (current && current.data) || {}, data);
+      removed.forEach((k) => { if (typeof k === 'string') delete incoming[k]; });
+    }
+
+    const merged = await access.mergeAppData(req.access, incoming, current && current.data);
+    // Pass the baseline we just read so only the keys that changed are written — see
+    // setAppData(). Without it every save rewrote the whole blob and the last writer won.
+    const r = await setAppData(merged, current && current.data);
+    res.json({ ok: true, updatedAt: r.updatedAt });
+  }
   catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }
 });
 

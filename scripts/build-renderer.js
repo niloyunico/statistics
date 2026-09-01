@@ -60,6 +60,9 @@ const MANIFEST = [
   { file: 'quality-corrections.js', jsx: false },
   { file: 'quality-corrections-apply.js', jsx: false }, // DB master overrides the static one (must run after corrections, before store)
   { file: 'quality-store.js', jsx: false },
+  { file: 'appraisal-spec.js', jsx: false },   // Form HR-NUR-PA-01 as data (window.UNICO_APPRAISAL)
+  { file: 'roster-spec.js', jsx: false },      // duty-roster shift codes (window.UNICO_ROSTER)
+  { file: 'mockup-ui.js', jsx: false },        // the approved mockup's design tokens (window.MK)
   // --- components (JSX) — app.jsx LAST: it calls ReactDOM.render() ---
   { file: 'charts.jsx', jsx: true },
   { file: 'charts3d.jsx', jsx: true },
@@ -84,6 +87,14 @@ const MANIFEST = [
   { file: 'supervisor.jsx', jsx: true },
   { file: 'user-admin.jsx', jsx: true },
   { file: 'data-fields.jsx', jsx: true },
+  { file: 'performance.jsx', jsx: true },      // publishes window.PerfUI (shared helpers) first
+  { file: 'performance-hr.jsx', jsx: true },   // attrition / retention risk / recognition board
+  { file: 'roster.jsx', jsx: true },
+  // After roster.jsx: the full-review screens read the same domain helpers, and
+  // every file is IIFE-wrapped, so load order is what makes window.RosterReviewFull
+  // available to the shell.
+  { file: 'roster-review.jsx', jsx: true },
+  { file: 'medicine.jsx', jsx: true },   // drug index + prescription pad (window.MedicineView)
   { file: 'app.jsx', jsx: true },
 ];
 

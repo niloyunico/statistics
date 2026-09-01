@@ -53,6 +53,9 @@ const UNICO_MODULES = [
   { id:'supervisor', label:'Supervisor Reports', short:'Supervisor', icon:I.doc, home:'supHome' },
   { id:'reports', label:'Reports',            short:'Reports',    icon:I.doc,   home:'reports' },
   { id:'users',   label:'User Management',    short:'Users',      icon:I.user,  home:'users' },
+  { id:'perf',    label:'Performance',        short:'Performance',icon:I.doc,   home:'perfHome' },
+  { id:'roster',  label:'Duty Roster',        short:'Roster',     icon:I.grid,  home:'rosterHome' },
+  { id:'medicine',label:'Medicine & Rx',      short:'Medicine',   icon:I.heart, home:'medHome' },
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
@@ -62,6 +65,9 @@ const UNICO_MODULE_VIEWS = {
   supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
+  perf:   ['perfHome','perfDirectory','perfForm','perfPrint','perfStaff','perfQueue','perfAchievements','perfIncidents','perfCompare','perfAttrition','perfRisk','perfBoard'],
+  roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview'],
+  medicine:['medHome','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
 function unicoModuleOf(view){
   for(let i=0;i<UNICO_MODULES.length;i++){ const m=UNICO_MODULES[i]; if((UNICO_MODULE_VIEWS[m.id]||[]).indexOf(view)>=0) return m.id; }
@@ -75,7 +81,7 @@ function unicoModuleOf(view){
    open local-PC session are unrestricted; collectors render their own portal, so
    they are never gated here. `modules` null/absent = unrestricted (legacy accounts
    keep full access until an admin assigns modules). ---- */
-const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users'];
+const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','roster','medicine'];
 // The workspace a route.view belongs to for ACCESS purposes. Settings is the admin
 // hub, so it is gated under 'users' rather than 'stats'.
 function unicoAccessModuleOf(view){
@@ -118,7 +124,10 @@ function unicoAllowedModules(){ const p=unicoUserPerms(); if(!p) return null; re
 // The landing view for the first workspace this session can open (sidebar order).
 // Returns null when nothing is granted (=> the app shows a "no access" screen).
 function unicoFirstAllowedHome(){
-  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['staff','nurseHome'],['datacol','dcReview'],['reports','reports'],['users','settings']];
+  // Every grantable workspace must appear here. 'perf' and 'roster' were missing, so an
+  // account granted ONLY one of those landed on the "no workspace access" screen even
+  // though it had access — the list must stay in step with UNICO_ACCESS_MODULES.
+  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['perf','perfHome'],['roster','rosterHome'],['reports','reports'],['users','settings']];
   for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return homes[i][1]; }
   return null;
 }
@@ -244,6 +253,8 @@ const UNICO_WS = [
     { id:'departments', label:'Departments',     icon:I.layers, home:'departments', on:v=>unicoModuleOf(v)==='stats'&&['dashboard','settings'].indexOf(v)<0 },
     { id:'quality',     label:'Quality',         icon:I.heart,  home:'quality',     on:v=>unicoModuleOf(v)==='quality', badge:true },
     { id:'supervisor',  label:'Supervisor Reports', icon:I.doc,  home:'supHome',     on:v=>unicoModuleOf(v)==='supervisor', badge:'sup' },
+    // Drug index (21.7k Bangladeshi brands / 1.7k generic monographs) + prescriptions.
+    { id:'medicine',    label:'Medicine & Rx',   icon:I.syringe,home:'medHome',     on:v=>unicoModuleOf(v)==='medicine', tag:'NEW' },
   ]},
   { sec:'Data', items:[
     { id:'datacol',     label:'Data Collection', icon:I.input,  home:'dcReview',    on:v=>unicoModuleOf(v)==='datacol' },
@@ -255,6 +266,11 @@ const UNICO_WS = [
     // are shared and default to highlighting Nurse Management.
     { id:'nurses',      label:'Nurse Management', icon:I.steth, home:'nurseHome',   on:v=>['nurseHome','nurses','nurseCompliance','staffPrevious','staffProfile','staffForm'].indexOf(v)>=0 },
     { id:'pca',         label:'PCA Management',   icon:I.bed,   home:'pcaHome',     on:v=>['pcaHome','pca','pcaCompliance'].indexOf(v)>=0 },
+    // 6-monthly individual appraisal (Form HR-NUR-PA-01) + the achievement and
+    // incident registers whose points feed into it.
+    { id:'perf',        label:'Performance',      icon:I.doc,   home:'perfHome',    on:v=>unicoModuleOf(v)==='perf', tag:'NEW' },
+    // Duty roster — the monthly shift sheet, one per unit.
+    { id:'roster',      label:'Duty Roster',      icon:I.grid,  home:'rosterHome',  on:v=>unicoModuleOf(v)==='roster', tag:'NEW' },
     // Settings is the admin HUB (Departments config, Users & Roles, Responsible Persons,
     // Form Fields, Data & Export) — the scattered admin submodules fold into its tabs.
     { id:'settings',    label:'Settings',        icon:I.gear,   home:'settings',    on:v=>v==='settings'||unicoModuleOf(v)==='users' },
@@ -281,6 +297,29 @@ function unicoWorkspaceSub(view){
     { label:'New Report',      view:'supNew' },
     { label:'History',         view:'supHistory' },
     { label:'Generate Report', view:'supReport' },
+  ];
+  if(mod==='perf') return [
+    { label:'Staff Directory',   view:'perfDirectory', match:['perfDirectory','perfForm','perfPrint','perfStaff'] },
+    { label:'CNS Review Queue',  view:'perfQueue' },
+    { label:'Achievements',      view:'perfAchievements' },
+    { label:'Incidents',         view:'perfIncidents' },
+    { label:'Recognition Board', view:'perfBoard' },
+    { label:'Attrition & Exits',  view:'perfAttrition', match:['perfAttrition','perfRisk'] },
+    { label:'Department Compare',view:'perfCompare' },
+  ];
+  if(mod==='roster') return [
+    { label:'All Rosters',       view:'rosterHome', match:['rosterHome','rosterGrid','rosterReview','rosterPrint'] },
+    { label:'Full Review',       view:'rosterFullReview' },
+  ];
+  if(mod==='medicine') return [
+    { label:'Drug Index',        view:'medBrowse', match:['medBrowse','medBrand','medGeneric'] },
+    { label:'New Prescription',  view:'medRxNew' },
+    { label:'Prescriptions',     view:'medRxList', match:['medRxList','medRxPrint'] },
+    { label:'Interaction Checker',view:'medInteractions' },
+    { label:'Dose Calculator',   view:'medCalc' },
+    { label:'Rx Templates',      view:'medTemplates' },
+    { label:'Prescribing Stats', view:'medAnalytics' },
+    { label:'Drug Catalogue',    view:'medCatalog' },
   ];
   if(mod==='reports') return [
     { label:'Patient Statistics', view:'reports' },
@@ -403,6 +442,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
                 <React.Fragment key={it.id}>
                   <div className={'sb-item'+(active?' active':'')} onClick={()=>setRoute({view:it.home})} title={it.label}>
                     <Ic d={it.icon} s={18}/><span className="lbl">{it.label}</span>
+                    {it.tag && <span className="lbl" style={{marginLeft:6,fontSize:8.6,fontWeight:800,letterSpacing:.6,padding:'2px 6px',borderRadius:5,color:'#0d1b2e',background:'linear-gradient(135deg,#5fd3c4,#3ab5a7)'}}>{it.tag}</span>}
                     {badge!=null && <span className="badge alert num">{badge}</span>}
                   </div>
                   {/* secondary views nest under the active destination */}
@@ -476,7 +516,7 @@ function PeriodPill({period, setPeriod, depts=[]}){
         <Ic d={I.chevR} s={12} style={{transform:'rotate(90deg)',opacity:.55}}/>
       </button>
       {open&&(
-        <div onMouseLeave={()=>setOpen(false)} style={{position:'absolute',right:0,top:'118%',zIndex:200,width:236,background:'#fff',border:'1px solid var(--line)',borderRadius:11,boxShadow:'var(--shadow-pop)',overflow:'hidden'}}>
+        <div onMouseLeave={()=>setOpen(false)} style={{position:'absolute',right:0,top:'118%',zIndex:200,width:236,background:'rgba(255,255,255,.88)',backdropFilter:'blur(24px) saturate(1.6)',WebkitBackdropFilter:'blur(24px) saturate(1.6)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 22px 56px rgba(31,59,90,.26)',borderRadius:12,overflow:'hidden'}}>
           <div style={{padding:'10px 13px',borderBottom:'1px solid var(--line-2)',fontSize:11,fontWeight:700,color:'var(--ink-2)',textTransform:'uppercase',letterSpacing:.4}}>Reporting period</div>
           <div style={{padding:6}}>
             {presets.map(([m,l])=>(
@@ -540,7 +580,7 @@ function TopBar({route, setRoute, onBurger, crumbs, actions, depts=[], onFill, p
         <div style={{position:'relative'}}>
           <button className="tb-icon" onClick={()=>setNotifOpen(o=>!o)} title="Reminders"><Ic d={I.bell} s={17}/>{missing.length>0&&<span className="tb-dot"/>}</button>
           {notifOpen&&(
-            <div onMouseLeave={()=>setNotifOpen(false)} style={{position:'absolute',right:0,top:'118%',zIndex:200,width:320,background:'#fff',border:'1px solid var(--line)',borderRadius:11,boxShadow:'var(--shadow-pop)',overflow:'hidden'}}>
+            <div onMouseLeave={()=>setNotifOpen(false)} style={{position:'absolute',right:0,top:'118%',zIndex:200,width:320,background:'rgba(255,255,255,.88)',backdropFilter:'blur(24px) saturate(1.6)',WebkitBackdropFilter:'blur(24px) saturate(1.6)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 22px 56px rgba(31,59,90,.26)',borderRadius:12,overflow:'hidden'}}>
               <div style={{padding:'13px 15px',borderBottom:'1px solid var(--line-2)',display:'flex',alignItems:'center',gap:8}}>
                 <Ic d={I.bell} s={16} c="var(--blue)"/><div style={{fontSize:13.5,fontWeight:700}}>Reminders</div>
                 <span className="spacer"/>{missing.length>0&&<span className="chip neg">{missing.length}</span>}

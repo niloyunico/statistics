@@ -14,7 +14,7 @@
      bundle's ?v= token is kept in sync by scripts/build-renderer.js. -->
 <link rel="preload" href="vendor/react.production.min.js" as="script"/>
 <link rel="preload" href="vendor/react-dom.production.min.js" as="script"/>
-<link rel="preload" href="dist/app.bundle.js?v=c2afa1053b" as="script"/>
+<link rel="preload" href="dist/app.bundle.js?v=fb67e79545" as="script"/>
 <style>
 /* Boot splash — visible from the first byte of HTML until React mounts (its first
    render replaces #root's children). Styled inline so it needs no other asset. */
@@ -63,22 +63,73 @@ setTimeout(function(){
   var n = window.unicoNative;
   if(!n){ return; } // opened outside the desktop shell — fall back to plain localStorage
   try{
-    // 1) Hydrate: disk database is the source of truth at startup.
+    // 1) Hydrate: the database is the source of truth at startup.
     var snap = n.snapshot || {};
+    // The server sends each session ONLY the modules it may see, so any unico_* key it
+    // did NOT send must be cleared first. Without this, a shared workstation leaked the
+    // previous user across the sign-out: an admin's quality and statistics overlays
+    // stayed in localStorage and the next, lower-privileged user read them straight
+    // out of the browser. Keys that are purely local client config are kept.
+    var KEEP = { unico_api_base:1, unico_session_token:1, unico_session_user:1 };
+    if(window.__UNICO_SNAPSHOT_AUTHORITATIVE__){
+      try{
+        var stale = [];
+        for(var i=0;i<localStorage.length;i++){
+          var key = localStorage.key(i);
+          if(key && key.indexOf('unico_')===0 && !KEEP[key] && !Object.prototype.hasOwnProperty.call(snap,key)) stale.push(key);
+        }
+        for(var j=0;j<stale.length;j++){ try{ localStorage.removeItem(stale[j]); }catch(e){} }
+      }catch(e){ try{ console.error('[unico-db] purge', e); }catch(_){} }
+    }
     for(var k in snap){ if(Object.prototype.hasOwnProperty.call(snap,k)){ try{ localStorage.setItem(k, snap[k]); }catch(e){} } }
   }catch(e){ try{ console.error('[unico-db] hydrate', e); }catch(_){} }
   try{
     function snapshotAll(){ var all={}; for(var i=0;i<localStorage.length;i++){ var key=localStorage.key(i); all[key]=localStorage.getItem(key); } return all; }
     window.unicoSnapshotAll = snapshotAll;
-    window.unicoFlushNow = function(){ try{ return n.persist(snapshotAll()); }catch(e){ return Promise.resolve(); } };
+    window.unicoFlushNow = function(){ try{ return n.persist(snapshotAll()).then(clearDirty); }catch(e){ return Promise.resolve(); } };
     window.unicoNative = n;
-    // 2) Mirror: persist the full state to disk (debounced) on any write.
+
+    // 2) Mirror: persist the state to the database (debounced) on any write.
+    // Which keys changed since the last successful save — used by the closing-tab
+    // flush below so it can send a small payload instead of the whole 130 KB blob.
+    var dirty = {}, dropped = {}, anyDirty = false;
+    function markDirty(k, isRemoval){ if(k==null) return; anyDirty=true; if(isRemoval){ dropped[k]=1; delete dirty[k]; } else { dirty[k]=1; delete dropped[k]; } }
+    function clearDirty(r){ if(!r || r.ok!==false){ dirty={}; dropped={}; anyDirty=false; } return r; }
+
     var timer=null;
-    function schedule(){ clearTimeout(timer); timer=setTimeout(function(){ try{ n.persist(snapshotAll()); }catch(e){} }, 200); }
+    function flush(){ clearTimeout(timer); try{ return n.persist(snapshotAll()).then(clearDirty); }catch(e){ return Promise.resolve(); } }
+    function schedule(){ clearTimeout(timer); timer=setTimeout(flush, 200); }
     var proto = Object.getPrototypeOf(localStorage) || window.Storage.prototype;
     ['setItem','removeItem','clear'].forEach(function(m){
       var orig = proto[m];
-      proto[m] = function(){ var r = orig.apply(this, arguments); schedule(); return r; };
+      proto[m] = function(){
+        var r = orig.apply(this, arguments);
+        if(m==='clear'){ anyDirty=true; } else { markDirty(arguments[0], m==='removeItem'); }
+        schedule();
+        return r;
+      };
+    });
+
+    // 3) Don't lose the last edit when the page goes away. The save is debounced by
+    // 200ms, so closing the tab, switching apps or letting the laptop sleep within that
+    // window meant the change was never sent and never missed — the single most common
+    // cause of "I entered it but it didn't save".
+    //   - 'hidden' fires while the page is still fully alive: do the normal save, with
+    //     its retries.
+    //   - 'pagehide' is the last moment we get: send just the changed keys with
+    //     keepalive, which the browser is allowed to finish after the tab is gone.
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState==='hidden' && anyDirty) flush();
+    });
+    window.addEventListener('pagehide', function(){
+      if(!anyDirty) return;
+      var payload = { partial:true, data:{}, removed:Object.keys(dropped) };
+      Object.keys(dirty).forEach(function(k){ var v=localStorage.getItem(k); if(v!==null) payload.data[k]=v; });
+      if(!Object.keys(payload.data).length && !payload.removed.length) return;
+      try{
+        fetch('/api/data', { method:'PUT', headers:{'content-type':'application/json'},
+          body: JSON.stringify(payload), keepalive:true, credentials:'same-origin' });
+      }catch(e){ /* nothing more we can do at this point */ }
     });
   }catch(e){ try{ console.error('[unico-db] mirror', e); }catch(_){} }
 })();
@@ -87,6 +138,6 @@ setTimeout(function(){
      concatenated into ONE cacheable bundle by scripts/build-renderer.js, so the
      browser no longer downloads Babel (3.14 MB) or compiles JSX at runtime. Rebuilt
      by `npm run web`; the ?v= token is the bundle's content hash (auto-updated). -->
-<script defer src="dist/app.bundle.js?v=c2afa1053b"></script>
+<script defer src="dist/app.bundle.js?v=fb67e79545"></script>
 </body>
 </html>

@@ -417,13 +417,13 @@ function QCDashboard({ depts, Q }) {
     const dashKpis = [
       { label: 'Departments', val: String(rowDepts.length), foot: 'reporting quality KPIs', color: P.blue },
       { label: 'Indicators', val: String(uniq.size), foot: totalInd + ' across departments', color: P.violet },
-      { label: 'Zero-Defect Rate', val: ((ok + br) ? Math.round(ok * 100 / (ok + br)) : 100) + '%', foot: ok + ' on benchmark · ' + br + ' breaches', color: P.green },
-      { label: 'Breaches', val: String(br), foot: 'indicator-months off benchmark', color: br > 0 ? P.rose : P.green },
+      { label: 'Zero-Defect Rate', val: ((ok + br) ? Math.round(ok * 100 / (ok + br)) : 100) + '%', foot: ok + ' on benchmark · ' + br + ' off benchmark', color: P.green },
+      { label: 'Off Benchmark', val: String(br), foot: 'indicator-months off benchmark', color: br > 0 ? P.rose : P.green },
     ];
 
     const mix = [
       { label: 'On benchmark', v: ok, color: P.green },
-      { label: 'Breach', v: br, color: P.rose },
+      { label: 'Off benchmark', v: br, color: P.rose },
       { label: 'Not reported', v: na, color: '#c4ccd6' },
     ].map(x => Object.assign(x, { pct: Math.round(x.v * 100 / totalCells) }));
 
@@ -500,7 +500,7 @@ function QCDashboard({ depts, Q }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: '13px', marginBottom: '16px' }}>
         {d.dashKpis.map(k => (
-          <div key={k.label} style={{ background: '#fff', border: '1px solid #dde3ec', borderLeft: '4px solid ' + k.color, borderRadius: '11px', boxShadow: '0 1px 2px rgba(20,32,46,.06)', padding: '14px 17px' }}>
+          <div key={k.label} style={{ background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderLeft: '4px solid ' + k.color, borderRadius: '11px', boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)', padding: '14px 17px' }}>
             <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#3c4858', textTransform: 'uppercase', letterSpacing: '.3px' }}>{k.label}</div>
             <div style={{ fontFamily: MONO, fontSize: '27px', fontWeight: 600, color: k.color, lineHeight: 1, margin: '8px 0 5px', letterSpacing: '-.5px' }}>{k.val}</div>
             <div style={{ fontSize: '11px', color: '#9aa6b4' }}>{k.foot}</div>
@@ -509,7 +509,7 @@ function QCDashboard({ depts, Q }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-        <div style={{ background: '#fff', border: '1px solid #dde3ec', borderRadius: '12px', boxShadow: '0 1px 2px rgba(20,32,46,.06)', padding: '15px 17px' }}>
+        <div style={{ background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius: '12px', boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)', padding: '15px 17px' }}>
           <div style={{ fontSize: '13px', fontWeight: 700, color: '#16202e', marginBottom: '13px' }}>Compliance Mix</div>
           <div style={{ display: 'flex', height: '22px', borderRadius: '7px', overflow: 'hidden', marginBottom: '12px' }}>
             {d.mix.map(m => (
@@ -526,8 +526,8 @@ function QCDashboard({ depts, Q }) {
           </div>
         </div>
 
-        <div style={{ background: '#fff', border: '1px solid #dde3ec', borderRadius: '12px', boxShadow: '0 1px 2px rgba(20,32,46,.06)', padding: '15px 17px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 700, color: '#16202e', marginBottom: '13px' }}>Breaches by Month</div>
+        <div style={{ background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius: '12px', boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)', padding: '15px 17px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#16202e', marginBottom: '13px' }}>Off Benchmark by Month</div>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: '5px', height: '110px' }}>
             {d.breachByMonth.map((b, i) => (
               <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px', height: '100%', justifyContent: 'flex-end' }}>
@@ -539,10 +539,10 @@ function QCDashboard({ depts, Q }) {
         </div>
       </div>
 
-      <div style={{ background: '#fff', border: '1px solid #dde3ec', borderRadius: '12px', boxShadow: '0 1px 2px rgba(20,32,46,.06)', overflow: 'hidden' }}>
+      <div style={{ background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius: '12px', boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)', overflow: 'hidden' }}>
         <div style={{ padding: '13px 16px', borderBottom: '1px solid #e8edf3' }}>
           <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#16202e' }}>Department × Month Heatmap <span style={{ fontWeight: 600, color: '#9aa6b4', fontSize: '11.5px' }}>· {fyLabelOf(safeFy)}</span></div>
-          <div style={{ fontSize: '11.5px', color: '#6c7a8c' }}>per assigned indicator — <b style={{ color: '#1f9d57' }}>✓ all submitted</b> · <b style={{ color: '#b26a0f' }}>n/N partially submitted</b> · <b style={{ color: '#d23a52' }}>red = breaches</b> · grey none — click any cell to see what's submitted &amp; missing</div>
+          <div style={{ fontSize: '11.5px', color: '#6c7a8c' }}>per assigned indicator — <b style={{ color: '#1f9d57' }}>✓ all submitted</b> · <b style={{ color: '#b26a0f' }}>n/N partially submitted</b> · <b style={{ color: '#d23a52' }}>red = off benchmark</b> · grey none — click any cell to see what's submitted &amp; missing</div>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ borderCollapse: 'collapse', fontSize: '12.5px', width: '100%' }}>
@@ -659,7 +659,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
       <div key={r.ind.id} style={{ border: '1px solid ' + (isBr ? '#f1c6cd' : '#dde3ec'), borderLeft: '4px solid ' + col, borderRadius: 10, padding: '12px 15px', marginBottom: 11, background: isBr ? '#fef6f7' : '#fff' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13.5, fontWeight: 700, color: P.ink }}>{r.ind.name}</div>
-          <span style={{ fontSize: 10, fontWeight: 700, color: col, background: col + '1c', padding: '2px 9px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: '.3px' }}>{isBr ? 'Breach' : 'On benchmark'}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: col, background: col + '1c', padding: '2px 9px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: '.3px' }}>{isBr ? 'Off benchmark' : 'On benchmark'}</span>
           <div style={{ marginLeft: 'auto', fontFamily: MONO, fontSize: 14, fontWeight: 700, color: col }}>{fmtVal(r.ind, r.v)}</div>
           <div style={{ fontSize: 11.5, color: P.muted }}>vs {benchExpr(r.ind)}</div>
           {canEdit && <button onClick={() => { setAddOpen(false); setEditId(r.ind.id); }} title="Edit this reading & incident report" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid #cfe6f4', background: '#eef8fc', color: '#0090ca', padding: '4px 10px', borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>Edit</button>}
@@ -667,7 +667,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
         {r.remark && <div style={{ fontSize: 12, color: P.ink2, marginTop: 7, fontStyle: 'italic' }}>“{r.remark}”</div>}
         {r.incs.map((x, i) => incidentCard(x, i))}
         {r.incs.length === 0 && r.capa && incidentCard({ details: r.capa.incidentDetails, finding: r.capa.finding, corrective: r.capa.corrective, preventive: r.capa.preventive }, 0)}
-        {isBr && !hasDetail && <div style={{ fontSize: 11.5, color: P.muted, marginTop: 8, padding: '8px 10px', background: '#f7f9fc', borderRadius: 7 }}>No incident report logged for this breach.{canEdit ? ' Click Edit to add one.' : ' Add details in Quality Data Entry.'}</div>}
+        {isBr && !hasDetail && <div style={{ fontSize: 11.5, color: P.muted, marginTop: 8, padding: '8px 10px', background: '#f7f9fc', borderRadius: 7 }}>No incident report logged for this off-benchmark reading.{canEdit ? ' Click Edit to add one.' : ' Add details in Quality Data Entry.'}</div>}
       </div>
     );
   };
@@ -683,7 +683,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
           <div>
             <div style={{ fontSize: 16.5, fontWeight: 700, color: P.ink }}>{dep.name} <span style={{ color: P.muted, fontWeight: 600, fontSize: 13 }}>· {mlabel}</span></div>
             <div style={{ fontSize: 12, color: P.muted, marginTop: 2 }}>
-              <b style={{ color: reported.length === allInds.length ? P.green : P.ink2 }}>{reported.length} of {allInds.length}</b> assigned indicator{allInds.length !== 1 ? 's' : ''} submitted · <b style={{ color: breaches ? P.rose : P.green }}>{breaches} breach{breaches !== 1 ? 'es' : ''}</b>
+              <b style={{ color: reported.length === allInds.length ? P.green : P.ink2 }}>{reported.length} of {allInds.length}</b> assigned indicator{allInds.length !== 1 ? 's' : ''} submitted · <b style={{ color: breaches ? P.rose : P.green }}>{breaches} off benchmark</b>
               {canEdit && <span style={{ marginLeft: 8, color: '#0090ca', fontWeight: 700 }}>· admin edit</span>}
             </div>
           </div>
@@ -950,7 +950,7 @@ function QCScorecard({depts}){
         <span style={{flex:1}}/>
         <QCFyPicker fy={fy} setFy={setFy} depts={depts}/>
       </div>
-      <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:'12px',boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
+      <div style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:'12px',boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',overflow:'hidden'}}>
         <div style={{overflowX:'auto'}}>
           <table style={{borderCollapse:'collapse',fontSize:'12.5px',width:'100%'}}>
             <thead>
@@ -958,7 +958,7 @@ function QCScorecard({depts}){
                 <th style={{...th, textAlign:'left', padding:'10px 16px'}}>Department</th>
                 <th style={{...th, textAlign:'right'}}>Indicators</th>
                 <th style={{...th, textAlign:'right'}}>With data</th>
-                <th style={{...th, textAlign:'right'}}>Breaches</th>
+                <th style={{...th, textAlign:'right'}}>Off Benchmark</th>
                 <th style={{...th, textAlign:'left', width:'200px'}}>Zero-defect rate</th>
                 <th style={{...th, textAlign:'center', padding:'10px 16px'}}>Status</th>
               </tr>
@@ -1055,7 +1055,7 @@ function QCTrends({depts}) {
       </div>
 
       {model && (
-        <div style={{ background: '#fff', border: '1px solid ' + P.line, borderRadius: 12, boxShadow: '0 1px 2px rgba(20,32,46,.06)', padding: '18px 20px' }}>
+        <div style={{ background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius: 12, boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)', padding: '18px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
             <span style={{ fontSize: 16, fontWeight: 700, color: P.ink }}>{model.name}</span>
             <span style={{ fontSize: 11.5, color: P.faint }}>{model.unit}</span>
@@ -1064,7 +1064,7 @@ function QCTrends({depts}) {
           <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', marginBottom: 18 }}>
             <div><div style={statLabel}>Benchmark</div><div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: P.blue700 }}>{model.bench}</div></div>
             <div><div style={statLabel}>Avg</div><div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: P.ink }}>{model.avg}</div></div>
-            <div><div style={statLabel}>Breaches</div><div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: P.rose }}>{model.breaches}</div></div>
+            <div><div style={statLabel}>Off Benchmark</div><div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: P.rose }}>{model.breaches}</div></div>
             <div><div style={statLabel}>Months reported</div><div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: P.ink }}>{model.reported}</div></div>
           </div>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 200, borderBottom: '1px solid ' + P.line2, paddingBottom: 0 }}>
@@ -1130,7 +1130,7 @@ function qcReportHTML(depts, months, fyIn, opts){
   depts.forEach(d=>{
     const st=deptStat(d, MONTHS);
     body+='<h2 style="font-family:Calibri;color:#16202e;margin:16px 0 3px">'+qcEsc(d.name)+'</h2>'
-      +'<div style="font-family:Calibri;color:#555;margin-bottom:6px">Zero-defect: <b>'+st.rate+'%</b> · Breaches: <b style="color:#d23a52">'+st.breach+'</b> · Indicators: '+((d.indicators||[]).length)+'</div>';
+      +'<div style="font-family:Calibri;color:#555;margin-bottom:6px">Zero-defect: <b>'+st.rate+'%</b> · Off benchmark: <b style="color:#d23a52">'+st.breach+'</b> · Indicators: '+((d.indicators||[]).length)+'</div>';
     const th=['Indicator','Benchmark'].concat(MONTHS.map(m=>m[1].split(' ')[0])).map(h=>'<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">'+h+'</th>').join('');
     const trs=(d.indicators||[]).map((ind,i)=>{
       // same shared month resolver the on-screen cells use
@@ -1400,7 +1400,7 @@ function qcStatusComp(d, months){
   const st=deptStat(d, months);
   return [
     {label:'On benchmark', value:st.ok||0, color:'#2fb56a'},
-    {label:'Breaches', value:st.breach||0, color:'#e2445c'},
+    {label:'Off Benchmark', value:st.breach||0, color:'#e2445c'},
     {label:'Not reported', value:st.na||0, color:'#c3ccd8'},
   ].filter(x=>x.value>0);
 }
@@ -1431,7 +1431,7 @@ function qcChartEl(d, style, ind, tone, months, summary){
   if(style==='pct'){ const sr=qcIndSeries(d, months); return sr.length>1 ? W.StackedPctBar({data:qcDeptCompareRows(d, months), x:'mon', series:sr, height:210, flat:true}) : W.BarChart({data:rows, x:'mon', y:'val', height:195, color:tone, flat:true}); }
   if(style==='horizontal') return W.HBar({rows:rows.map(r=>({label:r.mfull, value:r.val, color:tone})), height:Math.max(150,rows.length*22)});
   if(style==='donut'){ const dd=qcDonutData(d, months); const pie=dd.length>1?dd:qcStatusComp(d, months);
-      return <div style={{display:'grid',placeItems:'center',minHeight:205}}>{W.Donut({data:pie, size:188, centerValue:pie.reduce((s,x)=>s+x.value,0), centerLabel:dd.length>1?'Breaches':'Ind-months', flat:true})}</div>; }
+      return <div style={{display:'grid',placeItems:'center',minHeight:205}}>{W.Donut({data:pie, size:188, centerValue:pie.reduce((s,x)=>s+x.value,0), centerLabel:dd.length>1?'Off Benchmark':'Ind-months', flat:true})}</div>; }
   // bar3d + default — multi:true colors each MONTH separately (matches the stats reports)
   return W.Bar3D({data:rows, x:'mon', y:'val', height:205, color:tone, multi:true, flat:true});
 }
@@ -1442,22 +1442,16 @@ function qcDeptKpis(d, months){
   const inds=(d.indicators||[]);
   const breaches=st.breach;
   const reported=(st.ok+st.breach)>0;
-  let latest='—', latestStatus='na';
-  for(let i=months.length-1;i>=0;i--){ const m=months[i];
-    const rep=inds.some(ind=>monthStatus(ind,m[0])!=='na');
-    if(rep){ latest=m[1]; latestStatus=inds.some(ind=>monthStatus(ind,m[0])==='breach')?'breach':'ok'; break; } }
-  // A fully-unreported period must not read as a triumphant "100% · 0 breaches".
+  // A fully-unreported period must not read as a triumphant "100% · 0 off benchmark".
   if(!reported) return [
     ['Zero-Defect %', '—',                 P.faint, 'no data reported this period'],
-    ['Breaches',      '—',                 P.faint, 'no data reported this period'],
+    ['Off Benchmark', '—',                 P.faint, 'no data reported this period'],
     ['Indicators',    String(inds.length), P.violet, 'reporting quality KPIs'],
-    ['Latest',        '—',                 P.faint, 'no reported month in this period'],
   ];
   return [
-    ['Zero-Defect %', st.rate+'%',         st.rate>=90?P.green:st.rate>=70?P.amber:P.rose, st.ok+' on benchmark · '+breaches+' breaches'],
-    ['Breaches',      String(breaches),    breaches>0?P.rose:P.green, 'indicator-months off benchmark'],
+    ['Zero-Defect %', st.rate+'%',         st.rate>=90?P.green:st.rate>=70?P.amber:P.rose, st.ok+' on benchmark · '+breaches+' off benchmark'],
+    ['Off Benchmark', String(breaches),    breaches>0?P.rose:P.green, 'indicator-months off benchmark'],
     ['Indicators',    String(inds.length), P.violet, 'reporting quality KPIs'],
-    ['Latest',        latest.split(' ')[0]+' '+(latestStatus==='breach'?'✕':latestStatus==='ok'?'✓':'·'), statusColorFor(latestStatus==='breach'?'Needs Improvement':latestStatus==='ok'?'Excellent':''), 'most recent reported month'],
   ];
 }
 /* Indicator-level KPI cards (Detailed page) — LATEST / TOTAL|AVG / PEAK|WORST / BREACHES. */
@@ -1494,7 +1488,7 @@ function qcIndKpis(ind, months){
     cards.push(['Peak (worst)', peak==null?'—':fmtVal(ind,peak), P.amber, 'worst month']);
   }
   else     { cards.push(['Average', avg==null?'—':fmtVal(ind,avg), P.blue, 'mean over period']); cards.push(['Worst', peak==null?'—':fmtVal(ind,peak), P.amber, higher?'lowest month':'highest month']); }
-  cards.push(['Breaches', String(countBreaches(ind, months)), countBreaches(ind, months)>0?P.rose:P.green, 'months off benchmark']);
+  cards.push(['Off Benchmark', String(countBreaches(ind, months)), countBreaches(ind, months)>0?P.rose:P.green, 'months off benchmark']);
   return cards;
 }
 
@@ -1701,8 +1695,8 @@ function QCExecSummary({chosen, months, rangeLabel}){
       <div style={{fontSize:11.5,color:P.ink2,lineHeight:1.6}}>
         {!agg.reported
           ? <>Across <b>{agg.depts}</b> department{agg.depts!==1?'s':''} and <b>{agg.inds}</b> quality indicators, <b>no data was reported for {rangeLabel}</b> — the figures below reflect an unreported period, not performance.</>
-          : <>Across <b>{agg.depts}</b> department{agg.depts!==1?'s':''} and <b>{agg.inds}</b> quality indicators for <b>{rangeLabel}</b>, the hospital achieved an aggregate zero-defect rate of <b style={{color:tone}}>{agg.rate}%</b> ({agg.ok} indicator-months on benchmark, <b style={{color:agg.breach?P.rose:P.green}}>{agg.breach}</b> breach{agg.breach!==1?'es':''}), reflecting <b>{verdict}</b>.</>}
-        {best&&(best.breaches<((worst&&worst.breaches)||0)||best.rate>((worst&&worst.rate)||0)||rep.length===1)&&<> The strongest performer was <b>{best.d.name}</b> ({best.rate}% zero-defect{best.breaches?', '+best.breaches+' breach'+(best.breaches!==1?'es':''):''}).</>}
+          : <>Across <b>{agg.depts}</b> department{agg.depts!==1?'s':''} and <b>{agg.inds}</b> quality indicators for <b>{rangeLabel}</b>, the hospital achieved an aggregate zero-defect rate of <b style={{color:tone}}>{agg.rate}%</b> ({agg.ok} indicator-months on benchmark, <b style={{color:agg.breach?P.rose:P.green}}>{agg.breach}</b> off benchmark), reflecting <b>{verdict}</b>.</>}
+        {best&&(best.breaches<((worst&&worst.breaches)||0)||best.rate>((worst&&worst.rate)||0)||rep.length===1)&&<> The strongest performer was <b>{best.d.name}</b> ({best.rate}% zero-defect{best.breaches?', '+best.breaches+' off benchmark':''}).</>}
         {worst&&worst!==best&&(worst.breaches>0||worst.rate<best.rate)&&<> The area needing most attention was <b>{worst.d.name}</b> ({worst.rate}% zero-defect, {worst.breaches} breach{worst.breaches!==1?'es':''}).</>}
         {breaching.length>0
           ? <> {breaching.length} department{breaching.length!==1?'s are':' is'} carrying open breaches, tracked for corrective &amp; preventive action.</>
@@ -1718,7 +1712,7 @@ function QCPeriodCompare({chosen, months, baseMonths, baselineLabel}){
   const cur=qcAggStat(chosen, months), base=qcAggStat(chosen, baseMonths);
   const rows=[
     ['Zero-defect rate', cur.rate, base.rate, '%', true],
-    ['Breaches',         cur.breach, base.breach, '', false],
+    ['Off Benchmark',         cur.breach, base.breach, '', false],
     ['On-benchmark months', cur.ok, base.ok, '', true],
   ];
   return (
@@ -1760,7 +1754,7 @@ function QCRagHeatmap({chosen, months}){
       <div style={{fontSize:9.5,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>RAG status heatmap</div>
       <table style={{borderCollapse:'collapse',width:'100%',fontSize:11}}>
         <thead><tr style={{background:P.panel2}}>
-          {['Department','On benchmark','Breaches','Not reported','Zero-defect','RAG'].map((h,i)=>
+          {['Department','On benchmark','Off Benchmark','Not reported','Zero-defect','RAG'].map((h,i)=>
             <th key={h} style={{textAlign:i?'center':'left',padding:'6px 9px',fontSize:9.5,color:P.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:.3,borderBottom:'1px solid '+P.line}}>{h}</th>)}
         </tr></thead>
         <tbody>{rows.map(r=>{ const c=cell[r.rag];
@@ -1826,7 +1820,7 @@ function QCBenchmarkCompare({chosen, months}){
             <td style={{padding:'4px 8px',fontWeight:600,color:P.ink}}>{r.name} <span style={{color:P.faint,fontWeight:400}}>{r.ind.goalDirection==='higher_is_better'?'↑':'↓'}</span></td>
             <td style={{padding:'4px 8px',textAlign:'center',fontFamily:MONO,color:P.ink2}}>{benchExpr(r.ind)}</td>
             <td style={{padding:'4px 8px',textAlign:'center',fontFamily:MONO,fontWeight:700,color:col}}>{fmtVal(r.ind,r.actual)}</td>
-            <td style={{padding:'4px 8px',textAlign:'center'}}><span style={{color:col,fontWeight:700,fontSize:10}}>{r.status==='breach'?'Breach':r.status==='ok'?'On target':'—'}</span></td>
+            <td style={{padding:'4px 8px',textAlign:'center'}}><span style={{color:col,fontWeight:700,fontSize:10}}>{r.status==='breach'?'Off benchmark':r.status==='ok'?'On target':'—'}</span></td>
           </tr>); })}
           {allRows.length>rows.length&&<tr><td colSpan={5} style={{padding:'6px 8px',textAlign:'center',fontSize:9.5,color:P.faint,fontStyle:'italic'}}>…and {allRows.length-rows.length} more benchmarked indicator{allRows.length-rows.length!==1?'s':''} not shown (first 26 listed)</td></tr>}
         </tbody>
@@ -2282,7 +2276,7 @@ function QCReportBuilder({depts}){
           {sections.breachDonut&&!chartStyles.includes('donut')&&(()=>{ const pie=dd.length>1?dd:qcStatusComp(d, pMonths); if(!pie.length) return null;
             return (
             <div style={{display:'flex',alignItems:'center',gap:10,background:P.panel2,borderRadius:9,padding:'10px 14px',marginTop:6}}>
-              <div style={{fontSize:10.5,color:P.muted,textTransform:'uppercase',letterSpacing:.3,fontWeight:600,width:88}}>{dd.length>1?'Breach composition':'Status mix'}</div>
+              <div style={{fontSize:10.5,color:P.muted,textTransform:'uppercase',letterSpacing:.3,fontWeight:600,width:88}}>{dd.length>1?'Off-benchmark composition':'Status mix'}</div>
               {window.Donut({data:pie, size:104, thickness:20, flat:true})}
             </div>
           );})()}
@@ -2519,7 +2513,7 @@ function QCReportBuilder({depts}){
             : <div style={{marginBottom:16}}>{window.HBar({rows:hbar, height:Math.max(160,rows.length*30)})}</div>}
           <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',fontSize:11.5}}>
             <thead><tr style={{background:P.panel2}}>
-              {['Department','Section / Focus','Indicators','Zero-Defect %','Breaches','Status'].map((h,i)=>
+              {['Department','Section / Focus','Indicators','Zero-Defect %','Off Benchmark','Status'].map((h,i)=>
                 <th key={h} style={{...(i===0?thl:thc),textAlign:i===0?'left':(i>=2?'center':'left'),textTransform:'none',fontSize:10}}>{h}</th>)}
             </tr></thead>
             <tbody>{rows.map(r=>{ const lead=qcLeadIndicator(r.d, pMonths); const code=lead?stdMatch(lead.name):null; const sec=code?(HQI_SECN[code[0]]||code):(lead?catOf(lead.name):'—');
@@ -2557,7 +2551,7 @@ function QCReportBuilder({depts}){
           {hdrSub&&<div style={{fontSize:14,color:P.muted}}>{hdrSub}</div>}
           <div style={{fontSize:14,color:P.ink2,marginTop:10,fontWeight:600}}>{rangeLabel}</div>
           <div style={{display:'flex',gap:26,marginTop:34}}>
-            {[['Departments',String(agg.depts),P.blue],['Indicators',String(agg.inds),P.violet],['Zero-defect',agg.reported?agg.rate+'%':'—',tone],['Breaches',agg.reported?String(agg.breach):'—',!agg.reported?P.faint:agg.breach?P.rose:P.green]].map(c=>(
+            {[['Departments',String(agg.depts),P.blue],['Indicators',String(agg.inds),P.violet],['Zero-defect',agg.reported?agg.rate+'%':'—',tone],['Off Benchmark',agg.reported?String(agg.breach):'—',!agg.reported?P.faint:agg.breach?P.rose:P.green]].map(c=>(
               <div key={c[0]} style={{textAlign:'center'}}>
                 <div style={{fontFamily:MONO,fontSize:26,fontWeight:700,color:c[2]}}>{c[1]}</div>
                 <div style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:.4,marginTop:2}}>{c[0]}</div>
@@ -2630,11 +2624,11 @@ function QCReportBuilder({depts}){
           <div className="qc-band" style={{fontWeight:700,fontSize:16,color:P.ink,marginBottom:12}}>Appendix — Incidents &amp; CAPA · {rangeLabel}</div>
           <div style={{fontSize:9.5,fontWeight:700,color:P.violet,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Corrective &amp; preventive action plans ({plans.length})</div>
           {plans.length===0
-            ? <div style={{fontSize:11,color:P.green,marginBottom:14}}>No indicators in breach — no open action plans.</div>
+            ? <div style={{fontSize:11,color:P.green,marginBottom:14}}>No indicators off benchmark — no open action plans.</div>
             : (
             <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',fontSize:10,marginBottom:16}}>
               <thead><tr style={{background:P.panel2}}>
-                {['Department','Indicator','Breaches','CAPA status'].map((h,i)=>
+                {['Department','Indicator','Off Benchmark','CAPA status'].map((h,i)=>
                   <th key={h} style={{textAlign:i>=2?'center':'left',padding:'5px 8px',fontSize:9,color:P.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:.3,borderBottom:'1px solid '+P.line}}>{h}</th>)}
               </tr></thead>
               <tbody>{plans.map((p,i)=>(
@@ -2993,7 +2987,7 @@ function QCReportBuilder({depts}){
       const rate=anyRep?Math.round(agg.ok*100/(agg.ok+agg.breach)):null;
       y=kpiRow(y+72,[
         {label:'Zero-Defect %',value:anyRep?rate+'%':'—',tone:!anyRep?RGB.muted:rate>=90?RGB.green:rate>=70?RGB.amber:RGB.rose,foot:anyRep?(agg.ok+' on benchmark'):'no data reported this period'},
-        {label:'Breaches',value:anyRep?String(agg.breach):'—',tone:!anyRep?RGB.muted:(agg.breach?RGB.rose:RGB.green),foot:anyRep?'indicator-months off benchmark':'no data reported this period'},
+        {label:'Off Benchmark',value:anyRep?String(agg.breach):'—',tone:!anyRep?RGB.muted:(agg.breach?RGB.rose:RGB.green),foot:anyRep?'indicator-months off benchmark':'no data reported this period'},
         {label:'Departments',value:String(chosen.length),tone:RGB.blue,foot:'in this report'},
         {label:'Indicators',value:String(agg.inds),tone:RGB.violet,foot:'quality KPIs'},
       ]);
@@ -3085,7 +3079,7 @@ function QCReportBuilder({depts}){
           let t;
           if(!agg.reported){ t='Across '+agg.depts+' department'+(agg.depts!==1?'s':'')+' and '+agg.inds+' quality indicators, no data was reported for '+rangeLabel+' — the figures below reflect an unreported period, not performance.'; }
           else { t='Across '+agg.depts+' department'+(agg.depts!==1?'s':'')+' and '+agg.inds+' quality indicators for '+rangeLabel+', the hospital achieved an aggregate zero-defect rate of '+agg.rate+'% ('+agg.ok+' indicator-months on benchmark, '+agg.breach+' breach'+(agg.breach!==1?'es':'')+'), reflecting '+verdict+'.';
-            if(best&&(best.breaches<((worst&&worst.breaches)||0)||best.rate>((worst&&worst.rate)||0)||rep.length===1)) t+=' The strongest performer was '+best.d.name+' ('+best.rate+'% zero-defect'+(best.breaches?', '+best.breaches+' breach'+(best.breaches!==1?'es':''):'')+').';
+            if(best&&(best.breaches<((worst&&worst.breaches)||0)||best.rate>((worst&&worst.rate)||0)||rep.length===1)) t+=' The strongest performer was '+best.d.name+' ('+best.rate+'% zero-defect'+(best.breaches?', '+best.breaches+' off benchmark':'')+').';
             if(worst&&worst!==best&&(worst.breaches>0||worst.rate<best.rate)) t+=' The area needing most attention was '+worst.d.name+' ('+worst.rate+'% zero-defect, '+worst.breaches+' breach'+(worst.breaches!==1?'es':'')+').';
             if(breaching.length>0) t+=' '+breaching.length+' department'+(breaching.length!==1?'s are':' is')+' carrying open breaches, tracked for corrective & preventive action.';
             else t+=' No department is currently carrying a breach for the reporting period.';
@@ -3711,7 +3705,7 @@ function QCIncidents({depts,Q}){
 
       <div style={{display:'flex',flexDirection:'column',gap:9}}>
         {rows.map((x,i)=>(
-          <div key={x.deptKey+'|'+x.ind+'|'+x.month+'|'+i} onClick={()=>setSel(x)} onMouseEnter={e=>{e.currentTarget.style.boxShadow='0 3px 10px rgba(20,32,46,.12)';e.currentTarget.style.borderColor=P.rose;}} onMouseLeave={e=>{e.currentTarget.style.boxShadow='0 1px 2px rgba(20,32,46,.05)';e.currentTarget.style.borderColor=P.line;}} style={{cursor:'pointer',background:'#fff',border:'1px solid '+P.line,borderLeft:'3px solid '+(x.breach?P.rose:'#e0a300'),borderRadius:10,boxShadow:'0 1px 2px rgba(20,32,46,.05)',padding:'12px 15px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',transition:'box-shadow .12s,border-color .12s'}}>
+          <div key={x.deptKey+'|'+x.ind+'|'+x.month+'|'+i} onClick={()=>setSel(x)} onMouseEnter={e=>{e.currentTarget.style.boxShadow='0 22px 54px rgba(31,59,90,.2),0 8px 24px rgba(0,144,202,.16)';e.currentTarget.style.borderColor=P.rose;}} onMouseLeave={e=>{e.currentTarget.style.boxShadow='0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)';e.currentTarget.style.borderColor=P.line;}} style={{cursor:'pointer',background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderLeft:'3px solid '+(x.breach?P.rose:'#e0a300'),borderRadius:10,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',padding:'12px 15px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',transition:'box-shadow .12s,border-color .12s'}}>
             <div style={{width:34,height:34,borderRadius:9,background:'#fbe9ec',color:P.rose,display:'grid',placeItems:'center',flexShrink:0}}>
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>
             </div>
@@ -3764,7 +3758,7 @@ function IncidentReport({rec,onBack,Q}){
     ? ((ind.quarterRemarks && ind.quarterRemarks[rec.quarter]) || '')
     : ((ind.monthRemarks && ind.monthRemarks[rec.monthKey]) || '');
 
-  const card = {background:'#fff',border:'1px solid '+P.line,borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.05)',padding:'16px 18px'};
+  const card = {background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:12,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',padding:'16px 18px'};
   const lbl = {fontSize:10,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'.4px',marginBottom:4};
   const secTitle = {fontSize:14,fontWeight:700,color:P.ink,margin:'0 0 12px',letterSpacing:'-.2px'};
 
@@ -3841,7 +3835,7 @@ function IncidentReport({rec,onBack,Q}){
             <div style={lbl}>Recorded value</div>
             <div style={{fontFamily:MONO,fontSize:30,fontWeight:700,color:isBreachNow?P.rose:P.green,lineHeight:1.1}}>{liveValue}</div>
             <div style={{fontSize:11.5,color:P.ink2,marginTop:4}}>Benchmark <span style={{fontFamily:MONO,fontWeight:600,color:P.blue700}}>{benchExpr(ind)}</span></div>
-            <span style={{display:'inline-block',marginTop:6,fontSize:10.5,fontWeight:700,color:isBreachNow?P.rose:P.green,background:isBreachNow?'#fbe9ec':'#e7f6ed',padding:'3px 10px',borderRadius:20}}>{isBreachNow?'Breach':liveStatus==='na'?'No reading':'On benchmark'}</span>
+            <span style={{display:'inline-block',marginTop:6,fontSize:10.5,fontWeight:700,color:isBreachNow?P.rose:P.green,background:isBreachNow?'#fbe9ec':'#e7f6ed',padding:'3px 10px',borderRadius:20}}>{isBreachNow?'Off benchmark':liveStatus==='na'?'No reading':'On benchmark'}</span>
           </div>
         </div>
       </div>
@@ -4042,13 +4036,13 @@ function QCActionPlans({depts}){
           const statusColor = p.status==='Closed'?P.green : p.status==='In Progress'?P.amber : P.rose;
           const statusBg = statusColor+'1c';
           return (
-            <div key={p.key} style={{background:'#fff',border:'1px solid '+P.line,borderRadius:10,boxShadow:'0 1px 2px rgba(20,32,46,.05)',padding:'12px 15px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+            <div key={p.key} style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:10,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',padding:'12px 15px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
               <div style={{minWidth:0,flex:1}}>
                 <div style={{fontSize:13,fontWeight:600,color:P.ink}}>{p.ind}</div>
                 <div style={{fontSize:11,color:P.faint}}>{p.dept} · {p.cat}</div>
               </div>
               <div style={{textAlign:'center'}}>
-                <div style={{fontSize:10,color:P.faint,textTransform:'uppercase',letterSpacing:'.3px'}}>Breaches</div>
+                <div style={{fontSize:10,color:P.faint,textTransform:'uppercase',letterSpacing:'.3px'}}>Off Benchmark</div>
                 <div style={{fontFamily:MONO,fontSize:14,fontWeight:700,color:P.rose}}>{p.breaches}</div>
               </div>
               <div style={{textAlign:'center'}}>
@@ -4131,7 +4125,7 @@ function QCFormulaMaster(){
   const rows=list.filter(f=> !fl || (f.canonicalName||'').toLowerCase().includes(fl) || ((f.aliases||[]).some(a=>String(a).includes(fl))) || (f.formula||'').includes(fl));
 
   return (
-    <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
+    <div style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:12,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',overflow:'hidden'}}>
       <div style={{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',borderBottom:'1px solid #e8edf3',background:'#f7f9fc',flexWrap:'wrap'}}>
         <div style={{width:30,height:30,borderRadius:8,background:'#0090ca',color:'#fff',display:'grid',placeItems:'center',flexShrink:0}}>
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M4 12h16M4 17h10"></path></svg>
@@ -4313,7 +4307,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
 
   const chip=(active,label,onClick)=>({ label,onClick, bg: active?P.blue:'#fff', color: active?'#fff':P.ink2, border: active?P.blue:'#dde3ec' });
   const measureChips=[ chip(mf==='all','All',()=>setMf('all')), chip(mf==='Count','Count',()=>setMf('Count')), chip(mf==='Rate','Rate',()=>setMf('Rate')), chip(mf==='Percentage','%',()=>setMf('Percentage')) ];
-  const statusChips=[ chip(sf==='all','All',()=>setSf('all')), chip(sf==='data','Has data',()=>setSf('data')), chip(sf==='breach','Breaches',()=>setSf('breach')) ];
+  const statusChips=[ chip(sf==='all','All',()=>setSf('all')), chip(sf==='data','Has data',()=>setSf('data')), chip(sf==='breach','Off Benchmark',()=>setSf('breach')) ];
 
   const scopeOptions=[{key:'all',label:'All departments'}].concat(allDepts.map(d=>({key:d.key,label:d.name+' · '+(d.indicators||[]).length})));
 
@@ -4450,7 +4444,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
     { label:'Departments', val:String(depts.length), foot:'reporting quality KPIs', color:P.blue },
     { label:'Indicators', val:String(uniq.size), foot:uniq.size+' unique · '+totalInd+' across departments', color:P.violet },
     { label:'With data', val:String(withData), foot:'hold ≥ 1 saved value', color:P.green },
-    { label:'Breaches', val:String(totalBreach), foot:'indicator-months off benchmark', color: totalBreach>0?P.rose:P.green }
+    { label:'Off Benchmark', val:String(totalBreach), foot:'indicator-months off benchmark', color: totalBreach>0?P.rose:P.green }
   ];
 
   return (
@@ -4470,7 +4464,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
       </div>
 
       {/* sub-nav */}
-      <div style={{display:'flex',gap:4,background:'#fff',border:'1px solid #dde3ec',borderRadius:11,padding:5,marginBottom:16,width:'max-content',maxWidth:'100%',boxShadow:'0 1px 2px rgba(20,32,46,.05)'}}>
+      <div style={{display:'flex',gap:4,background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:11,padding:5,marginBottom:16,width:'max-content',maxWidth:'100%',boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)'}}>
         {subnav.map(t=>{ const active=view===t.id; return (
           <button key={t.id} onClick={()=>setView(t.id)} style={{display:'inline-flex',alignItems:'center',gap:8,border:0,padding:'8px 16px',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',color:active?P.blue:P.muted,background:active?'#fff':'transparent',boxShadow:active?'0 1px 3px rgba(20,32,46,.12)':'none'}}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={t.d}></path></svg>
@@ -4483,7 +4477,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
       {/* KPI strip */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:13,marginBottom:18}}>
         {kpis.map(k=>(
-          <div key={k.label} style={{background:'#fff',border:'1px solid #dde3ec',borderLeft:'4px solid '+k.color,borderRadius:11,boxShadow:'0 1px 2px rgba(20,32,46,.06)',padding:'14px 17px'}}>
+          <div key={k.label} style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderLeft:'4px solid '+k.color,borderRadius:11,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',padding:'14px 17px'}}>
             <div style={{fontSize:11.5,fontWeight:700,color:P.ink2,textTransform:'uppercase',letterSpacing:'.3px'}}>{k.label}</div>
             <div style={{fontFamily:MONO,fontSize:27,fontWeight:600,color:k.color,lineHeight:1,margin:'8px 0 5px',letterSpacing:'-.5px'}}>{k.val}</div>
             <div style={{fontSize:11,color:P.faint}}>{k.foot}</div>
@@ -4495,7 +4489,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
       {view==='manage' && (
       <div>
         {/* filter toolbar */}
-        <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:11,boxShadow:'0 1px 2px rgba(20,32,46,.06)',padding:'13px 15px',marginBottom:14,display:'flex',flexDirection:'column',gap:11}}>
+        <div style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:11,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',padding:'13px 15px',marginBottom:14,display:'flex',flexDirection:'column',gap:11}}>
           <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
             <select value={scope} onChange={e=>setScope(e.target.value)} style={{padding:'8px 11px',border:'1px solid #dde3ec',borderRadius:8,fontSize:12.5,fontWeight:600,background:'#fff',color:P.ink,minWidth:210,outline:'none'}}>
               {scopeOptions.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}
@@ -4522,7 +4516,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
         <div style={{display:'grid',gridTemplateColumns:'392px 1fr',gap:16,alignItems:'start'}}>
 
           {/* MASTER */}
-          <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden',display:'flex',flexDirection:'column',maxHeight:'calc(100vh - 320px)'}}>
+          <div style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:12,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',overflow:'hidden',display:'flex',flexDirection:'column',maxHeight:'calc(100vh - 320px)'}}>
             <div style={{display:'flex',alignItems:'center',gap:8,padding:'11px 14px',borderBottom:'1px solid #e8edf3',flexShrink:0}}>
               <span style={{fontSize:12.5,fontWeight:700,color:P.ink}}>Indicators</span>
               <span style={{fontSize:11,color:P.faint,fontFamily:MONO}}>{shownCount}</span>
@@ -4565,10 +4559,10 @@ function QCAdmin({Q,q,onQ,initialDept}){
 
           {/* DETAIL */}
           <div style={{minWidth:0}}>
-            {!selInd && <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',padding:'60px 30px',textAlign:'center',color:P.faint}}><div style={{fontSize:14,fontWeight:600,color:P.muted}}>Select an indicator to edit</div><div style={{fontSize:12,marginTop:5}}>Pick one from the list, or create a new indicator.</div></div>}
+            {!selInd && <div style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:12,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',padding:'60px 30px',textAlign:'center',color:P.faint}}><div style={{fontSize:14,fontWeight:600,color:P.muted}}>Select an indicator to edit</div><div style={{fontSize:12,marginTop:5}}>Pick one from the list, or create a new indicator.</div></div>}
 
             {selInd && (
-            <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
+            <div style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:12,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',overflow:'hidden'}}>
 
               {/* detail header */}
               <div style={{padding:'15px 18px',borderBottom:'1px solid #e8edf3',background:'linear-gradient(150deg,#ffffff,#f5fafd)'}}>
@@ -4730,7 +4724,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
                         {MONTHS.map(([key,label,Qn],idx)=>{
                           const v = monthRaw(selInd,key);
                           const s = qStatus(selInd,v);
-                          const smap={ok:['#e7f6ed','#1f9d57','On benchmark'],breach:['#fbe9ec','#d23a52','Breach'],na:['#eef1f5','#9aa6b4','Not reported']};
+                          const smap={ok:['#e7f6ed','#1f9d57','On benchmark'],breach:['#fbe9ec','#d23a52','Off benchmark'],na:['#eef1f5','#9aa6b4','Not reported']};
                           const [sbg,sfg,slab]=smap[s];
                           const qFirst=(idx%3===0);
                           const disp = v==null?'—':(selInd.formula==='pct'?v+'%':v);
@@ -4786,7 +4780,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
 
       {/* ============ ASSIGN ============ */}
       {view==='assign' && (
-      <div style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
+      <div style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:12,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',overflow:'hidden'}}>
         <div style={{padding:'13px 16px',borderBottom:'1px solid #e8edf3',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <div style={{flex:1,minWidth:200}}><div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Assign by Department</div><div style={{fontSize:11.5,color:P.muted}}>Which department reports which indicator — all {assignNames.length} catalog indicators. Tick a cell to assign / unassign.</div></div>
           <input value={assignQ} onChange={e=>setAssignQ(e.target.value)} placeholder="Search indicator..." style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,background:'#fff',outline:'none',minWidth:230}}/>
@@ -4844,7 +4838,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
           <div style={{textAlign:'center',flexShrink:0}}><div style={{fontFamily:MONO,fontSize:26,fontWeight:700,color:'#7fd0f0',lineHeight:1}}>{STD.length}</div><div style={{fontSize:10.5,color:'#9fb0c4',textTransform:'uppercase',letterSpacing:'.4px'}}>indicators</div></div>
         </div>
         {libSections.map(g=>(
-        <div key={g.sec} style={{background:'#fff',border:'1px solid #dde3ec',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
+        <div key={g.sec} style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:12,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',overflow:'hidden'}}>
           <div style={{display:'flex',alignItems:'center',gap:10,padding:'11px 16px',borderBottom:'1px solid #e8edf3',background:'#f7f9fc'}}>
             <span style={{width:26,height:26,borderRadius:7,background:'#0090ca',color:'#fff',display:'grid',placeItems:'center',fontWeight:700,fontSize:12,flexShrink:0}}>{g.sec}</span>
             <span style={{fontSize:13.5,fontWeight:700,color:P.ink}}>{g.name}</span>
@@ -5011,7 +5005,7 @@ function QualityConsole({ onExit, initialView, initialDept, setRoute }){
   ];
 
   return (
-    <div style={{height:'100vh',display:'grid',gridTemplateColumns:'236px 1fr',overflow:'hidden',fontFamily:"'IBM Plex Sans',system-ui,sans-serif",background:'#eef1f5',color:P.ink}}>
+    <div style={{height:'100vh',display:'grid',gridTemplateColumns:'236px 1fr',overflow:'hidden',fontFamily:"'IBM Plex Sans',system-ui,sans-serif",background:'transparent',color:P.ink}}>
 
       {/* ===================== SIDEBAR ===================== */}
       <aside className="qsb" style={{background:P.navy,color:'#c7d2e0',display:'flex',flexDirection:'column',minWidth:0,overflow:'hidden'}}>
@@ -5084,7 +5078,7 @@ function QualityConsole({ onExit, initialView, initialDept, setRoute }){
       <div style={{display:'flex',flexDirection:'column',minWidth:0,height:'100vh',overflow:'hidden'}}>
 
         {/* topbar */}
-        <header style={{height:56,background:'#fff',borderBottom:'1px solid '+P.line,display:'flex',alignItems:'center',gap:14,padding:'0 18px',flexShrink:0,zIndex:5}}>
+        <header style={{height:56,background:'rgba(255,255,255,.62)',backdropFilter:'blur(20px) saturate(1.6)',WebkitBackdropFilter:'blur(20px) saturate(1.6)',borderBottom:'1px solid rgba(255,255,255,.8)',display:'flex',alignItems:'center',gap:14,padding:'0 18px',flexShrink:0,zIndex:5}}>
           <div style={{width:32,height:32,border:'1px solid '+P.line,background:P.panel2,borderRadius:7,display:'grid',placeItems:'center',color:P.ink2}}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M3 12h18M3 18h18"></path></svg>
           </div>

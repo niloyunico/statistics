@@ -34,19 +34,55 @@
     } catch (e) { /* banner is best-effort */ }
   }
 
-  // Persist the full localStorage key->value map to MongoDB (debounced by caller).
-  function persist(data) {
+  // A save that failed used to vanish without trace: the caller fires persist() and
+  // throws the promise away, so a dropped Wi-Fi packet, a 500, or a sleeping laptop
+  // meant the edit was simply never stored and nobody was told. That is the
+  // "sometimes the data doesn't submit" people report. Now: retry with backoff, and
+  // if it still will not go through, say so on screen instead of losing the work.
+  var saveBanner = null;
+  function warnSaveFailed() {
+    if (saveBanner) return;
+    saveBanner = document.createElement('div');
+    saveBanner.setAttribute('role', 'alert');
+    saveBanner.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:99998;'
+      + 'max-width:min(560px,92vw);font:600 13px/1.45 "IBM Plex Sans",system-ui,"Segoe UI",sans-serif;'
+      + 'color:#fff;background:#b4232f;border-radius:12px;padding:12px 16px;'
+      + 'box-shadow:0 10px 30px rgba(5,12,24,.4);text-align:center';
+    saveBanner.innerHTML = 'Cannot reach the database &mdash; your recent changes are '
+      + '<u>not saved yet</u>. Keep this tab open; saving resumes automatically.';
+    try { document.body.appendChild(saveBanner); } catch (e) { saveBanner = null; }
+  }
+  function clearSaveWarning() {
+    if (!saveBanner) return;
+    try { saveBanner.parentNode.removeChild(saveBanner); } catch (e) { /* already gone */ }
+    saveBanner = null;
+  }
+
+  var RETRY_MS = [800, 2500, 6000];   // ~9s of quiet retrying before we bother the user
+  function attemptPersist(data, tries) {
     return fetch(API + '/api/data', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ data: data || {} }),
     }).then(function (r) {
+      // An expired session is not a network problem — retrying cannot fix it.
       if (r.status === 401) { warnSessionExpired(); return { ok: false, error: 'Session expired' }; }
-      return r.json().catch(function () { return { ok: r.ok }; });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      clearSaveWarning();
+      return r.json().catch(function () { return { ok: true }; });
     }).catch(function (e) {
-      return { ok: false, error: String(e) };
+      if (tries >= RETRY_MS.length) { warnSaveFailed(); return { ok: false, error: String(e) }; }
+      return new Promise(function (resolve) { setTimeout(resolve, RETRY_MS[tries]); }).then(function () {
+        // Re-snapshot rather than replaying the old payload: the user has kept typing
+        // during the retry, and sending the stale copy would undo what they just did.
+        var fresh = (typeof window.unicoSnapshotAll === 'function') ? window.unicoSnapshotAll() : data;
+        return attemptPersist(fresh, tries + 1);
+      });
     });
   }
+
+  // Persist the full localStorage key->value map to MongoDB (debounced by caller).
+  function persist(data) { return attemptPersist(data, 0); }
 
   // Back up = download all data as a .unicobak (JSON) file in the browser.
   function backup(data) {

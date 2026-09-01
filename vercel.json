@@ -1,35 +1,72 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
-  "regions": ["bom1"],
+  "regions": [
+    "bom1"
+  ],
   "builds": [
     {
       "src": "server/web.js",
       "use": "@vercel/node",
-      "config": { "includeFiles": ["renderer/index.html", "server/seed/**"] }
+      "config": {
+        "includeFiles": [
+          "renderer/index.html",
+          "server/seed/**"
+        ]
+      }
     },
-    { "src": "api/report_pdf.py", "use": "@vercel/python" },
-    { "src": "renderer/dist/**", "use": "@vercel/static" },
-    { "src": "renderer/vendor/**", "use": "@vercel/static" },
-    { "src": "renderer/unico/**", "use": "@vercel/static" }
+    {
+      "src": "api/report_pdf.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "renderer/dist/**",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "renderer/vendor/**",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "renderer/unico/**",
+      "use": "@vercel/static"
+    }
   ],
   "routes": [
     {
       "src": "/dist/(.*)",
       "dest": "/renderer/dist/$1",
-      "headers": { "Cache-Control": "public, max-age=31536000, immutable" }
+      "headers": {
+        "Cache-Control": "public, max-age=31536000, immutable"
+      }
     },
     {
       "src": "/vendor/(.*)",
       "dest": "/renderer/vendor/$1",
-      "headers": { "Cache-Control": "public, max-age=604800" }
+      "headers": {
+        "Cache-Control": "public, max-age=604800"
+      }
     },
     {
       "src": "/unico/(.*)",
       "dest": "/renderer/unico/$1",
-      "headers": { "Cache-Control": "public, max-age=0, must-revalidate" }
+      "headers": {
+        "Cache-Control": "public, max-age=0, must-revalidate"
+      }
     },
-    { "src": "/api/report-pdf", "dest": "/api/report_pdf" },
-    { "src": "/(.*)", "dest": "server/web.js" }
+    {
+      "src": "/api/report-pdf",
+      "dest": "/api/report_pdf"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "server/web.js"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/keepalive",
+      "schedule": "0 3 * * *"
+    }
   ]
 }

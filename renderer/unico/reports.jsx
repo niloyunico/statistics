@@ -206,7 +206,7 @@ function MonthlyStatsReport({depts}){
   const barData = AX.map((k,i)=>({ month: multiYr ? k.split('-')[0]+" '"+k.split('-')[1] : k.split('-')[0], val: monthTotals[i] }));
 
   const hasCombo = typeof window.ComboChart==='function';
-  const cardBox={background:'#fff',border:'1px solid var(--line)',borderRadius:12,padding:'14px 16px',boxShadow:'0 1px 2px rgba(20,32,46,.06)'};
+  const cardBox={background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',borderRadius:16,padding:'14px 16px'};
   const EXP=[['pdf','PDF'],['excel','Excel'],['word','Word'],['csv','CSV']];
   const expBtn={display:'inline-flex',alignItems:'center',gap:6,padding:'6px 12px',border:'1px solid var(--line)',borderRadius:7,background:'#fff',color:'var(--ink-2)',fontSize:12,fontWeight:600,cursor:'pointer'};
 
@@ -234,7 +234,7 @@ function MonthlyStatsReport({depts}){
   return (
     <div>
       {/* §5 export toolbar — always exports ALL depts (the selector filters the view only) */}
-      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:14,background:'#fff',border:'1px solid var(--line)',borderRadius:10,padding:'10px 13px'}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:14,background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',borderRadius:12,padding:'10px 13px'}}>
         <span style={{fontSize:12,fontWeight:700,color:'var(--ink)'}}>Export full report (all departments, all metrics):</span>
         {EXP.map(([f,l])=>(
           <button key={f} onClick={()=>msExport(depts,f)} style={expBtn}><Ic d={I.download} s={14}/>{l}</button>
@@ -275,7 +275,7 @@ function MonthlyStatsReport({depts}){
       </div>
 
       {/* §4 month-wise table — grouped by department, one row per metric */}
-      <div style={{background:'#fff',border:'1px solid var(--line)',borderRadius:12,boxShadow:'0 1px 2px rgba(20,32,46,.06)',overflow:'hidden'}}>
+      <div style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',borderRadius:16,overflow:'hidden'}}>
         <div style={{padding:'14px 18px',borderBottom:'1px solid var(--line-2)',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',background:'linear-gradient(150deg,#ffffff,#f5fafd)'}}>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:15,fontWeight:700,color:'var(--ink)'}}>UNICO Hospitals — {scopeName}</div>
@@ -1681,7 +1681,7 @@ function Reports({depts}){
 
         {/* live preview */}
         <div className="card" style={{padding:0,overflow:'hidden'}}>
-          <div className="card-h" style={{background:'var(--panel-2)'}}><h3>Live Preview</h3><span className="sub">{pageSize} · {orient}</span><span className="spacer"/>
+          <div className="card-h"><h3>Live Preview</h3><span className="sub">{pageSize} · {orient}</span><span className="spacer"/>
             <div style={{display:'flex',alignItems:'center',gap:6}}>
               <button className="icon-btn" style={{width:28,height:28}} disabled={pi<=0} onClick={()=>setPageIdx(p=>Math.max(0,p-1))}><Ic d={I.chevR} s={15} style={{transform:'rotate(180deg)'}}/></button>
               <span className="tag num">Page {pi+1} of {pages}</span>
@@ -1710,7 +1710,7 @@ function Reports({depts}){
    REQUIRE_AUTH=true they require an Administrator session. ---- */
 const UCOLORS=['#0090ca','#3ab5a7','#6a52d4','#e08a1e','#d23a52','#1f9d57'];
 // Module ids match server ACCESS_MODULES + renderer unicoAccessModuleOf().
-const USER_MODS=[['stats','Hospital Statistics'],['quality','Quality Indicators'],['staff','Staff Management'],['datacol','Data Collection'],['reports','Reports'],['users','Administration']];
+const USER_MODS=[['stats','Hospital Statistics'],['quality','Quality Indicators'],['supervisor','Supervisor Reports'],['staff','Staff Management'],['datacol','Data Collection'],['reports','Reports'],['users','Administration'],['perf','Performance Appraisal'],['roster','Duty Roster']];
 const PERM_LEVELS=[['none','None'],['view','View'],['edit','Edit'],['add','Add'],['delete','Delete']];
 const PERM_RANK={none:0,view:1,edit:2,add:3,delete:4};
 // New model: each module grants an independent SET of actions (View/Edit/Add/Delete),
@@ -1724,11 +1724,11 @@ function sameActs(a,b){ a=asActions(a); b=asActions(b); return a.length===b.leng
 // Access templates → default per-module levels. 'Administrator' maps to the backend
 // Administrator role (unrestricted); the rest store as role 'User' with these presets.
 const ROLE_PRESETS={
-  'Administrator':{stats:'delete',quality:'delete',staff:'delete',datacol:'delete',reports:'delete',users:'delete'},
-  'Manager':{stats:'edit',quality:'edit',staff:'edit',datacol:'edit',reports:'edit',users:'view'},
-  'Department Head':{stats:'view',quality:'add',staff:'edit',datacol:'add',reports:'view',users:'none'},
-  'Data Entry':{stats:'view',quality:'add',staff:'none',datacol:'add',reports:'view',users:'none'},
-  'Read-only':{stats:'view',quality:'view',staff:'view',datacol:'view',reports:'view',users:'none'},
+  'Administrator':{stats:'delete',quality:'delete',supervisor:'delete',staff:'delete',datacol:'delete',reports:'delete',users:'delete'},
+  'Manager':{stats:'edit',quality:'edit',supervisor:'edit',staff:'edit',datacol:'edit',reports:'edit',users:'view'},
+  'Department Head':{stats:'view',quality:'add',supervisor:'add',staff:'edit',datacol:'add',reports:'view',users:'none'},
+  'Data Entry':{stats:'view',quality:'add',supervisor:'add',staff:'none',datacol:'add',reports:'view',users:'none'},
+  'Read-only':{stats:'view',quality:'view',supervisor:'view',staff:'view',datacol:'view',reports:'view',users:'none'},
 };
 const USER_ROLES=Object.keys(ROLE_PRESETS);
 const FULL_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]=[...PERM_ORDER],m),{});
@@ -1778,6 +1778,19 @@ function UserModal({initial,onClose,onSaved}){
     const src=(editing&&initial.perms)?{...NONE_PERMS(),...initial.perms}:NONE_PERMS();
     return USER_MODS.reduce((m,[k])=>(m[k]=asActions(src[k]),m),{});
   });
+  // Row-level staff access (enforced server-side by access.filterStaff — see
+  // server/access.js). Module permissions decide whether they can open Staff at all;
+  // this decides WHOSE records they see once inside.
+  const [staffScope,setStaffScope]=useState(editing?(initial.staffScope||'all'):'all');
+  const [staffDepts,setStaffDepts]=useState(editing&&Array.isArray(initial.departments)?initial.departments:[]);
+  const [staffId,setStaffId]=useState(editing&&(initial.staffId===0||initial.staffId)?initial.staffId:'');
+  const allDepts=React.useMemo(()=>{
+    try{ if(window.buildDepts){ const ov=JSON.parse(localStorage.getItem('unico_store_v3')||'{}')||{}; const m=window.buildDepts(ov);
+      if(Array.isArray(m)&&m.length) return m.map(d=>({id:d.id,name:d.name})); } }catch(e){}
+    return (window.__UNICO_DEPARTMENTS__||[]).map(d=>({id:d.id,name:d.name}));
+  },[]);
+  const allStaff=React.useMemo(()=>{ const s=window.STAFF_SEED||window.__UNICO_STAFF__||[]; return Array.isArray(s)?s.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))):[]; },[]);
+  const toggleDept=(id)=>setStaffDepts(ds=>ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds,id]);
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=role==='Administrator';
   const isColl=role==='Data Collector';   // backend role 'collector' — data-collection portal, scope set in Responsible Persons
@@ -1804,6 +1817,15 @@ function UserModal({initial,onClose,onSaved}){
       const payload={ name:name.trim(), email:email.trim().toLowerCase(), role:backendRole,
         title:(isAdmin||isColl)?null:(role==='Custom'?'Custom access':role), active:status==='active',
         perms:(isAdmin||isColl)?null:perms };
+      if(!isAdmin&&!isColl){
+        // Row-level staff scope. `departments` is only sent for plain Users — for a
+        // collector it is their collection assignment and must not be overwritten here.
+        payload.staffScope=staffScope;
+        payload.departments=staffScope==='departments'?staffDepts:[];
+        payload.staffId=staffScope==='self'&&staffId!==''?Number(staffId):null;
+        const rec=allStaff.find(x=>String(x.id)===String(staffId));
+        payload.staffEmpId=(staffScope==='self'&&rec&&rec.emp_id)?rec.emp_id:'';
+      }
       if(editing){
         await usersApi('PATCH','/api/users/'+encodeURIComponent(initial.username),payload);
         if(password){ if(password.length<6){ setBusy(false); return setErr('New password must be at least 6 characters.'); } await usersApi('POST','/api/users/'+encodeURIComponent(initial.username)+'/password',{password}); }
@@ -1870,6 +1892,48 @@ function UserModal({initial,onClose,onSaved}){
             </div>
           </div>
           )}
+          {!isAdmin&&!isColl&&(
+          <div style={{borderTop:'1px solid var(--line-2)',paddingTop:14}}>
+            <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Staff data access <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· whose personnel records this account may open</span></div>
+            <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Module permissions above decide whether they can open Staff Management at all. This decides <b>which people</b> they see once inside — enforced on the server, so it also applies to the raw data the browser receives.</div>
+            <div style={{display:'flex',gap:7,flexWrap:'wrap',marginBottom:staffScope==='all'?0:11}}>
+              {[['all','All staff','Every record in the register'],
+                ['departments','Only their departments','Just the units picked below'],
+                ['self','Only their own record','A personal view: their file and nobody else’s']].map(([v,l,tip])=>{
+                const on=staffScope===v;
+                return <button key={v} title={tip} onClick={()=>setStaffScope(v)}
+                  style={{display:'inline-flex',alignItems:'center',gap:7,padding:'7px 13px',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff',color:on?'#fff':'var(--ink-2)'}}>
+                  <span style={{width:13,height:13,borderRadius:'50%',display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(on?'#fff':'var(--line)'),background:on?'rgba(255,255,255,.25)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff" sw={3}/>}</span>
+                  {l}
+                </button>;
+              })}
+            </div>
+            {staffScope==='departments'&&(
+              <div>
+                <div style={{fontSize:11,color:'var(--muted)',marginBottom:7}}>Departments this account covers {staffDepts.length?<b style={{color:'var(--ink-2)'}}>· {staffDepts.length} selected</b>:<b style={{color:'var(--rose)'}}>· none selected = they will see no staff at all</b>}</div>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap',maxHeight:150,overflow:'auto',padding:2}}>
+                  {allDepts.map(d=>{ const on=staffDepts.indexOf(d.id)>=0; return (
+                    <button key={d.id} onClick={()=>toggleDept(d.id)}
+                      style={{padding:'5px 11px',borderRadius:7,fontSize:11.5,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?'var(--teal,#3ab5a7)':'var(--line)'),background:on?'var(--teal,#3ab5a7)':'#fff',color:on?'#fff':'var(--ink-2)'}}>{d.name}</button>
+                  );})}
+                  {!allDepts.length&&<span style={{fontSize:11.5,color:'var(--muted)'}}>No departments loaded.</span>}
+                </div>
+              </div>
+            )}
+            {staffScope==='self'&&(
+              <div className="field">
+                <label>Which staff member is this login?</label>
+                <select value={staffId===null?'':String(staffId)} onChange={e=>setStaffId(e.target.value)}>
+                  <option value="">— not linked —</option>
+                  {allStaff.map(x=><option key={x.id} value={x.id}>{x.name}{x.emp_id?' · '+x.emp_id:''}{x.current_department?' · '+x.current_department:''}</option>)}
+                </select>
+                <div style={{fontSize:10.5,color:staffId===''?'var(--rose)':'var(--muted)',marginTop:5}}>
+                  {staffId===''?'Not linked yet — until you pick a person, this account will see no staff records at all.':'They will see this one record and nothing else.'}
+                </div>
+              </div>
+            )}
+          </div>
+          )}
           {err&&<div style={{fontSize:12,color:'var(--rose)',fontWeight:600,background:'var(--neg-bg)',borderRadius:7,padding:'8px 10px'}}>{err}</div>}
           <div style={{display:'flex',gap:10,borderTop:'1px solid var(--line-2)',paddingTop:14}}>
             <span className="spacer" style={{flex:1}}/>
@@ -1904,7 +1968,16 @@ function UserManagement(){
   const may=(a)=>{ try{ return typeof window.unicoCan!=='function' || window.unicoCan('users',a); }catch(e){ return true; } };
   const mayAdd=may('add'), mayEdit=may('edit'), mayDel=may('delete');
   const roleLabel=u=> u.role==='Administrator'?'Administrator':(u.role==='collector'?'Data Collector':(u.title||'User'));
-  const summaryOf=u=> u.role==='Administrator'?'Full access':(u.role==='collector'?'Data collection':permSummary(u.perms));
+  // Surface the row-level staff scope in the list too, so "who can see whose records"
+  // is answerable at a glance instead of only inside the edit modal.
+  const staffScopeLabel=u=>{ const sc=u.staffScope||'all'; if(sc==='self') return 'own record only'; if(sc==='departments') return (u.departments&&u.departments.length?u.departments.length+' dept':'no dept')+' staff'; return ''; };
+  const summaryOf=u=>{
+    if(u.role==='Administrator') return 'Full access';
+    if(u.role==='collector') return 'Data collection';
+    const base=permSummary(u.perms);
+    const sc=staffScopeLabel(u);
+    return sc&&base!=='No access'?base+' · '+sc:base;
+  };
   return (
     <div>
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
@@ -2081,7 +2154,8 @@ function ActivityLog(){
     fetch('/api/activity',{method:'DELETE',credentials:'same-origin'}).then(r=>r.json()).then(()=>{load();window.UI&&window.UI.toast('Activity log cleared','success');}).catch(()=>{}); };
   const META={ login:{l:'Signed in',c:'#1f9d57'}, login_failed:{l:'Failed sign-in',c:'#d23a52'}, logout:{l:'Signed out',c:'#6a52d4'},
     user_created:{l:'User created',c:'#0090ca'}, user_updated:{l:'User updated',c:'#e08a1e'}, user_deleted:{l:'User deleted',c:'#d23a52'},
-    password_reset:{l:'Password reset',c:'#e08a1e'}, activity_cleared:{l:'Log cleared',c:'#8a93a3'} };
+    password_reset:{l:'Password reset',c:'#e08a1e'}, activity_cleared:{l:'Log cleared',c:'#8a93a3'},
+    db_row_updated:{l:'Database row edited',c:'#e08a1e'}, db_row_deleted:{l:'Database row deleted',c:'#d23a52'}, media_deleted:{l:'File deleted',c:'#d23a52'} };
   const meta=a=>META[a]||{l:a,c:'#8a93a3'};
   const fmtTs=ts=>{ try{ return new Date(ts).toLocaleString([],{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } };
   const filtered=(rows||[]).filter(r=>{ if(!q.trim()) return true; const s=(r.username+' '+r.name+' '+meta(r.action).l+' '+r.target+' '+r.detail+' '+r.ip).toLowerCase(); return s.includes(q.trim().toLowerCase()); });
@@ -2123,6 +2197,413 @@ function ActivityLog(){
         </div>
       )}
       {!err&&!rows&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'22px',textAlign:'center'}}>Loading…</div>}
+    </div></div>
+  );
+}
+
+/* Database browser + row editor — the Cloudflare D1 tables behind the Activity Log
+   and Supervisor Reports modules (GET /api/d1/tables, /api/d1/rows, /api/d1/meta;
+   PATCH and DELETE /api/d1/row). Admin only.
+
+   Editing here is the last resort, not the normal way to fix data: it changes one
+   cell at a time, refuses to touch a primary key, keeps a JSON column valid JSON,
+   and records every change in the activity log. Terminal equivalent for reading:
+   `node server/d1-rows.js`. */
+function DatabaseBrowser(){
+  const [info,setInfo]=React.useState(null);
+  const [table,setTable]=React.useState('');
+  const [meta,setMeta]=React.useState(null);
+  const [data,setData]=React.useState(null);
+  const [err,setErr]=React.useState('');
+  const [busy,setBusy]=React.useState(false);
+  const [q,setQ]=React.useState('');
+  const [term,setTerm]=React.useState('');
+  const [offset,setOffset]=React.useState(0);
+  const [open,setOpen]=React.useState(-1);
+  const [edit,setEdit]=React.useState(null);   // {key, column, value, json}
+  const [saving,setSaving]=React.useState(false);
+  const LIMIT=50;
+
+  const loadTables=React.useCallback(()=>{
+    setErr('');
+    fetch('/api/d1/tables',{credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>{
+        if(!j||!j.ok){ setErr((j&&j.error)||'Could not read the database.'); return; }
+        setInfo(j);
+        setTable(t=>t||((j.tables&&j.tables[0]&&j.tables[0].name)||''));
+      }).catch(()=>setErr('Could not reach the server.'));
+  },[]);
+  React.useEffect(()=>{ loadTables(); },[loadTables]);
+
+  React.useEffect(()=>{
+    if(!table){ setMeta(null); return; }
+    fetch('/api/d1/meta?table='+encodeURIComponent(table),{credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>setMeta(j&&j.ok?j:null)).catch(()=>setMeta(null));
+  },[table]);
+
+  const loadRows=React.useCallback(()=>{
+    if(!table) return;
+    setBusy(true); setErr(''); setOpen(-1); setEdit(null);
+    const u='/api/d1/rows?table='+encodeURIComponent(table)+'&limit='+LIMIT+'&offset='+offset+(term?'&q='+encodeURIComponent(term):'');
+    fetch(u,{credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>{ if(j&&j.ok) setData(j); else { setData(null); setErr((j&&j.error)||'Could not read the rows.'); } })
+      .catch(()=>setErr('Could not reach the server.')).finally(()=>setBusy(false));
+  },[table,offset,term]);
+  React.useEffect(()=>{ loadRows(); },[loadRows]);
+
+  const pickTable=(name)=>{ if(name===table) return; setTable(name); setOffset(0); setQ(''); setTerm(''); setData(null); };
+  const search=()=>{ setOffset(0); setTerm(q.trim()); };
+  const refresh=()=>{ loadTables(); loadRows(); };
+
+  const isJson=(v)=>{ if(typeof v!=='string'||v.length<2) return false; const c=v[0]; return (c==='{'||c==='[')&&/[}\]]$/.test(v); };
+  const short=(v)=>{
+    if(v===null||v===undefined) return '';
+    const t=String(v);
+    if(isJson(t)) return '{…} '+(t.length>1024?(t.length/1024).toFixed(1)+' KB':t.length+' B');
+    return t.length>60?t.slice(0,59)+'…':t;
+  };
+  const isTime=(c)=>c==='ts'||c==='created_at'||c==='updated_at';
+  const fmt=(c,v)=>{
+    if(isTime(c)&&v) { try{ return new Date(Number(v)).toLocaleString([],{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}); }catch(e){ return String(v); } }
+    return short(v);
+  };
+  const pretty=(v)=>{ try{ return JSON.stringify(JSON.parse(v),null,2); }catch(e){ return String(v); } };
+
+  const pk=meta&&meta.primaryKey;
+  const canEdit=!!(meta&&meta.editable&&pk);
+  const editableCol=(c)=>canEdit&&c!==pk;
+
+  const beginEdit=(row,col)=>{
+    if(!editableCol(col)) return;
+    const raw=row[col];
+    const json=isJson(String(raw===null||raw===undefined?'':raw));
+    setEdit({key:row[pk],column:col,value:json?pretty(raw):(raw===null||raw===undefined?'':String(raw)),json});
+  };
+
+  const saveEdit=()=>{
+    if(!edit) return;
+    setSaving(true);
+    fetch('/api/d1/row?table='+encodeURIComponent(table),{
+      method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key:edit.key,column:edit.column,value:edit.value}),
+    }).then(r=>r.json()).then(j=>{
+      if(!j||!j.ok){ window.UI&&window.UI.toast((j&&j.error)||'Could not save the change','warn'); return; }
+      setData(d=>d?{...d,rows:d.rows.map(r=>String(r[pk])===String(edit.key)?j.row:r)}:d);
+      setEdit(null);
+      window.UI&&window.UI.toast('Saved','success');
+    }).catch(()=>{ window.UI&&window.UI.toast('Could not reach the server','warn'); })
+      .finally(()=>setSaving(false));
+  };
+
+  const delRow=async(row)=>{
+    const ok=await window.UI.confirm({title:'Delete this row?',message:'Permanently removes '+table+' ['+row[pk]+'] from the database. This cannot be undone.',danger:true,confirmLabel:'Delete row'});
+    if(!ok) return;
+    fetch('/api/d1/row?table='+encodeURIComponent(table)+'&key='+encodeURIComponent(row[pk]),{method:'DELETE',credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>{
+        if(!j||!j.ok){ window.UI&&window.UI.toast((j&&j.error)||'Could not delete the row','warn'); return; }
+        window.UI&&window.UI.toast('Row deleted','success'); refresh();
+      }).catch(()=>{ window.UI&&window.UI.toast('Could not reach the server','warn'); });
+  };
+
+  const cell={padding:'9px 12px',fontSize:12.5,borderBottom:'1px solid var(--line-2)',textAlign:'left',verticalAlign:'top'};
+  const cols=(data&&data.columns)||[];
+  const rows=(data&&data.rows)||[];
+  const total=(data&&data.total)||0;
+  const from=total?offset+1:0, to=Math.min(offset+rows.length,total);
+
+  if(info&&!info.configured) return (
+    <div className="card"><div className="card-b">
+      <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)',marginBottom:4}}>Database</div>
+      <div style={{fontSize:12.5,color:'var(--muted)',lineHeight:1.6}}>
+        Cloudflare D1 is not connected, so the Activity Log and Supervisor Reports are still stored in MongoDB.
+        <div style={{marginTop:10,fontFamily:'IBM Plex Mono',fontSize:11.5,background:'var(--panel-2)',border:'1px solid var(--line-2)',borderRadius:7,padding:'10px 12px',whiteSpace:'pre-wrap'}}>{info.hint}</div>
+      </div>
+    </div></div>
+  );
+
+  return (
+    <div className="card"><div className="card-b">
+      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12}}>
+        <div style={{flex:1,minWidth:160}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)'}}>Database</div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>
+            Cloudflare D1{info&&info.database?' · '+info.database:''}{info&&info.modules&&info.modules.length?' · serving '+info.modules.join(', '):''}
+          </div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,background:'#fff',border:'1px solid var(--line)',borderRadius:7,padding:'7px 10px',minWidth:200,color:'var(--faint)'}}>
+          <Ic d={I.search} s={14}/>
+          <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')search();}} placeholder="Search this table…"
+            style={{border:0,outline:'none',background:'transparent',fontSize:12.5,fontFamily:'inherit',color:'var(--ink)',width:'100%'}}/>
+          {term&&<span onClick={()=>{setQ('');setTerm('');setOffset(0);}} style={{cursor:'pointer',display:'flex'}} title="Clear search"><Ic d={I.x} s={13}/></span>}
+        </div>
+        <button className="btn sm" onClick={search} disabled={busy}>Search</button>
+        <button className="btn sm" onClick={refresh} disabled={busy}><Ic d={I.activity} s={14}/>{busy?'Loading…':'Refresh'}</button>
+      </div>
+
+      {err&&<div style={{fontSize:12.5,color:'var(--rose)',fontWeight:600,background:'var(--neg-bg)',borderRadius:7,padding:'9px 11px',marginBottom:12}}>{err}</div>}
+
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
+        {((info&&info.tables)||[]).map(t=>(
+          <div key={t.name} onClick={()=>pickTable(t.name)} title={t.rows+' row(s)'}
+            style={{display:'flex',alignItems:'center',gap:7,padding:'7px 11px',borderRadius:7,cursor:'pointer',fontSize:12.5,fontWeight:600,border:'1px solid '+(table===t.name?'var(--blue)':'var(--line)'),
+              background:table===t.name?'var(--blue-50)':'#fff',color:table===t.name?'var(--blue-700)':'var(--ink-2)'}}>
+            <Ic d={I.grid} s={14}/>{t.name}
+            <span style={{fontFamily:'IBM Plex Mono',fontSize:11,color:'var(--muted)'}}>{t.rows}</span>
+          </div>
+        ))}
+        {info&&info.tables&&info.tables.length===0&&<div style={{fontSize:12.5,color:'var(--faint)'}}>No tables yet — run <code>node server/d1-migrate.js</code>.</div>}
+      </div>
+
+      {table&&meta&&!canEdit&&<div style={{fontSize:11.5,color:'var(--muted)',background:'var(--panel-2)',border:'1px solid var(--line-2)',borderRadius:7,padding:'8px 11px',marginBottom:12}}>
+        This table has no single-column primary key, so rows here are read-only.
+      </div>}
+
+      {!err&&data&&rows.length===0&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'22px',textAlign:'center'}}>{term?'No rows match “'+term+'”.':'This table is empty.'}</div>}
+
+      {!err&&rows.length>0&&(
+        <div style={{overflowX:'auto',border:'1px solid var(--line-2)',borderRadius:9}}>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr style={{background:'var(--panel-2)'}}>
+              {cols.map(c=><th key={c.name} style={{...cell,fontSize:10.5,textTransform:'uppercase',letterSpacing:.4,color:'var(--muted)',fontWeight:700,borderBottom:'1px solid var(--line)',whiteSpace:'nowrap'}}>{c.name}{c.name===pk?' ·pk':''}</th>)}
+              {canEdit&&<th style={{...cell,borderBottom:'1px solid var(--line)',width:1}}/>}
+            </tr></thead>
+            <tbody>
+              {rows.map((r,i)=>{
+                const big=cols.filter(c=>isJson(String(r[c.name]===null||r[c.name]===undefined?'':r[c.name]))).map(c=>c.name);
+                const rowKey=pk?String(r[pk]):String(i);
+                return (
+                  <React.Fragment key={rowKey}>
+                    <tr style={{background:open===i?'var(--blue-50)':'transparent'}}>
+                      {cols.map(c=>{
+                        const editingThis=edit&&String(edit.key)===rowKey&&edit.column===c.name;
+                        if(editingThis&&!edit.json) return (
+                          <td key={c.name} style={{...cell}}>
+                            <div style={{display:'flex',alignItems:'center',gap:6}}>
+                              <input autoFocus value={edit.value} onChange={e=>setEdit({...edit,value:e.target.value})}
+                                onKeyDown={e=>{if(e.key==='Enter')saveEdit();if(e.key==='Escape')setEdit(null);}}
+                                style={{padding:'6px 9px',border:'1px solid var(--blue)',borderRadius:6,fontFamily:'inherit',fontSize:12.5,minWidth:150}}/>
+                              <button className="btn sm pri" onClick={saveEdit} disabled={saving}><Ic d={I.check} s={13}/></button>
+                              <button className="btn sm" onClick={()=>setEdit(null)}><Ic d={I.x} s={13}/></button>
+                            </div>
+                          </td>
+                        );
+                        const canClick=editableCol(c.name);
+                        const jsonCell=big.indexOf(c.name)>=0;
+                        return (
+                          <td key={c.name} title={canClick?(jsonCell?'Click to expand, then edit':'Click to edit'):(c.name===pk?'Primary key — not editable':'')}
+                            onClick={()=>{ if(jsonCell){ setOpen(open===i?-1:i); } else if(canClick){ beginEdit(r,c.name); } }}
+                            style={{...cell,whiteSpace:'nowrap',cursor:canClick||jsonCell?'pointer':'default',
+                              fontFamily:isTime(c.name)||c.name===pk?'IBM Plex Mono':'inherit',
+                              color:isTime(c.name)?'var(--muted)':'var(--ink-2)'}}>
+                            {fmt(c.name,r[c.name])||<span style={{color:'var(--faint)'}}>—</span>}
+                          </td>
+                        );
+                      })}
+                      {canEdit&&<td style={{...cell,whiteSpace:'nowrap'}}>
+                        <button className="btn sm" style={{color:'var(--rose)',borderColor:'#f1c6cd'}} title="Delete this row" onClick={()=>delRow(r)}><Ic d={I.x} s={13}/></button>
+                      </td>}
+                    </tr>
+                    {open===i&&big.map(cn=>{
+                      const editingJson=edit&&String(edit.key)===rowKey&&edit.column===cn;
+                      return (
+                        <tr key={cn}><td colSpan={cols.length+(canEdit?1:0)} style={{...cell,background:'var(--panel-2)'}}>
+                          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
+                            <div style={{flex:1,fontSize:10.5,textTransform:'uppercase',letterSpacing:.4,color:'var(--muted)',fontWeight:700}}>{cn}</div>
+                            {editingJson
+                              ? <React.Fragment>
+                                  <button className="btn sm pri" onClick={saveEdit} disabled={saving}><Ic d={I.check} s={13}/>{saving?'Saving…':'Save JSON'}</button>
+                                  <button className="btn sm" onClick={()=>setEdit(null)}>Cancel</button>
+                                </React.Fragment>
+                              : editableCol(cn)&&<button className="btn sm" onClick={()=>beginEdit(r,cn)}><Ic d={I.edit} s={13}/>Edit JSON</button>}
+                          </div>
+                          {editingJson
+                            ? <textarea value={edit.value} onChange={e=>setEdit({...edit,value:e.target.value})} spellCheck={false}
+                                style={{width:'100%',minHeight:260,padding:'10px 12px',border:'1px solid var(--blue)',borderRadius:7,fontFamily:'IBM Plex Mono',fontSize:11.5,lineHeight:1.55,color:'var(--ink-2)',resize:'vertical'}}/>
+                            : <pre style={{margin:0,maxHeight:340,overflow:'auto',fontFamily:'IBM Plex Mono',fontSize:11.5,lineHeight:1.55,color:'var(--ink-2)',whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{pretty(r[cn])}</pre>}
+                        </td></tr>
+                      );
+                    })}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!err&&total>0&&(
+        <div style={{display:'flex',alignItems:'center',gap:10,marginTop:12,flexWrap:'wrap'}}>
+          <div style={{flex:1,fontSize:11.5,color:'var(--muted)'}}>
+            Showing {from}–{to} of {total}{term?' matching rows':' rows'}.{canEdit?' Click a cell to edit it; click a {…} cell to expand the document.':''}
+          </div>
+          <button className="btn sm" onClick={()=>setOffset(Math.max(0,offset-LIMIT))} disabled={busy||offset===0}>Previous</button>
+          <button className="btn sm" onClick={()=>setOffset(offset+LIMIT)} disabled={busy||to>=total}>Next</button>
+        </div>
+      )}
+      {!err&&!data&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'22px',textAlign:'center'}}>Loading…</div>}
+    </div></div>
+  );
+}
+
+/* Media browser — the Cloudinary asset store, folder by folder (GET
+   /api/media/folders, /api/media/assets, /api/media/usage; DELETE
+   /api/media/asset). Admin only.
+
+   MongoDB only keeps the CDN url that an upload returned, so this panel is the
+   only place the real files are visible. Deleting is permanent and does NOT
+   remove the record pointing at the asset — use the owning screen for that, and
+   this panel for orphans nothing points at any more. */
+function MediaBrowser(){
+  const [info,setInfo]=React.useState(null);
+  const [path,setPath]=React.useState('');
+  const [folders,setFolders]=React.useState([]);
+  const [assets,setAssets]=React.useState([]);
+  const [cursor,setCursor]=React.useState('');
+  const [type,setType]=React.useState('image');
+  const [usage,setUsage]=React.useState(null);
+  const [err,setErr]=React.useState('');
+  const [busy,setBusy]=React.useState(false);
+  const [zoom,setZoom]=React.useState(null);
+
+  const loadFolders=React.useCallback((p)=>{
+    setErr('');
+    fetch('/api/media/folders?path='+encodeURIComponent(p||''),{credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>{
+        if(!j||!j.ok){ setErr((j&&j.error)||'Could not read the media store.'); return; }
+        setInfo(j); setFolders(j.folders||[]);
+      }).catch(()=>setErr('Could not reach the server.'));
+  },[]);
+
+  const loadAssets=React.useCallback((p,t,cur)=>{
+    setBusy(true); setErr('');
+    const u='/api/media/assets?folder='+encodeURIComponent(p||'')+'&type='+encodeURIComponent(t)+(cur?'&cursor='+encodeURIComponent(cur):'');
+    fetch(u,{credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>{
+        if(!j||!j.ok){ setErr((j&&j.error)||'Could not list the files.'); return; }
+        setAssets(a=>cur?a.concat(j.assets||[]):(j.assets||[]));
+        setCursor(j.cursor||'');
+      }).catch(()=>setErr('Could not reach the server.')).finally(()=>setBusy(false));
+  },[]);
+
+  React.useEffect(()=>{ loadFolders(''); },[loadFolders]);
+  React.useEffect(()=>{ if(info&&info.configured) loadAssets(path,type,''); },[info,path,type,loadAssets]);
+  React.useEffect(()=>{
+    if(!info||!info.configured) return;
+    fetch('/api/media/usage',{credentials:'same-origin'}).then(r=>r.json()).then(j=>{ if(j&&j.ok) setUsage(j.usage); }).catch(()=>{});
+  },[info]);
+
+  const go=(p)=>{ setPath(p); setCursor(''); setAssets([]); loadFolders(p); };
+  const crumbs=path?path.split('/'):[];
+  const kb=(n)=>n>=1048576?(n/1048576).toFixed(1)+' MB':n>=1024?(n/1024).toFixed(0)+' KB':n+' B';
+
+  const del=async(a)=>{
+    const ok=await window.UI.confirm({title:'Delete this file?',message:'Permanently removes “'+a.publicId+'” from Cloudinary. Anything still pointing at it will show a broken image. This cannot be undone.',danger:true,confirmLabel:'Delete file'});
+    if(!ok) return;
+    fetch('/api/media/asset?publicId='+encodeURIComponent(a.publicId),{method:'DELETE',credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>{
+        if(!j||!j.ok){ window.UI&&window.UI.toast((j&&j.error)||'Could not delete the file','warn'); return; }
+        setAssets(list=>list.filter(x=>x.publicId!==a.publicId));
+        window.UI&&window.UI.toast('File deleted','success');
+      }).catch(()=>{ window.UI&&window.UI.toast('Could not reach the server','warn'); });
+  };
+
+  if(info&&!info.configured) return (
+    <div className="card"><div className="card-b">
+      <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)',marginBottom:4}}>Media</div>
+      <div style={{fontSize:12.5,color:'var(--muted)',lineHeight:1.6}}>
+        Cloudinary is not connected, so uploaded photos and files are not stored on the CDN.
+        <div style={{marginTop:10,fontFamily:'IBM Plex Mono',fontSize:11.5,background:'var(--panel-2)',border:'1px solid var(--line-2)',borderRadius:7,padding:'10px 12px',whiteSpace:'pre-wrap'}}>{info.hint}</div>
+      </div>
+    </div></div>
+  );
+
+  return (
+    <div className="card"><div className="card-b">
+      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12}}>
+        <div style={{flex:1,minWidth:160}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)'}}>Media</div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>
+            Cloudinary{info&&info.cloudName?' · '+info.cloudName:''}
+            {usage?' · '+usage.resources+' files · '+kb(usage.storage.usage)+' stored':''}
+            {usage&&usage.credits&&usage.credits.limit?' · '+usage.credits.usage.toFixed(2)+'/'+usage.credits.limit+' credits used':''}
+          </div>
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          {[['image','Images'],['video','Videos'],['raw','Files']].map(([id,l])=>(
+            <button key={id} className={'btn sm'+(type===id?' pri':'')} onClick={()=>{setType(id);setCursor('');setAssets([]);}}>{l}</button>
+          ))}
+        </div>
+        <button className="btn sm" onClick={()=>{loadFolders(path);loadAssets(path,type,'');}} disabled={busy}><Ic d={I.activity} s={14}/>{busy?'Loading…':'Refresh'}</button>
+      </div>
+
+      {err&&<div style={{fontSize:12.5,color:'var(--rose)',fontWeight:600,background:'var(--neg-bg)',borderRadius:7,padding:'9px 11px',marginBottom:12}}>{err}</div>}
+
+      <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:12,fontSize:12.5}}>
+        <span onClick={()=>go('')} style={{cursor:'pointer',fontWeight:700,color:path?'var(--blue-700)':'var(--ink)'}}>All files</span>
+        {crumbs.map((c,i)=>(
+          <React.Fragment key={i}>
+            <Ic d={I.chevR} s={13}/>
+            <span onClick={()=>go(crumbs.slice(0,i+1).join('/'))} style={{cursor:'pointer',fontWeight:700,color:i===crumbs.length-1?'var(--ink)':'var(--blue-700)'}}>{c}</span>
+          </React.Fragment>
+        ))}
+      </div>
+
+      {folders.length>0&&(
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>
+          {folders.map(f=>(
+            <div key={f.path} onClick={()=>go(f.path)}
+              style={{display:'flex',alignItems:'center',gap:7,padding:'8px 12px',borderRadius:7,cursor:'pointer',fontSize:12.5,fontWeight:600,border:'1px solid var(--line)',background:'#fff',color:'var(--ink-2)'}}>
+              <Ic d={I.layers} s={14}/>{f.name}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!err&&assets.length===0&&!busy&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'22px',textAlign:'center'}}>
+        No {type==='image'?'images':type==='video'?'videos':'files'} in {path?'“'+path+'”':'this account'}.
+      </div>}
+
+      {assets.length>0&&(
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:12}}>
+          {assets.map(a=>(
+            <div key={a.publicId} style={{border:'1px solid var(--line-2)',borderRadius:9,overflow:'hidden',background:'#fff'}}>
+              <div onClick={()=>a.thumbUrl&&setZoom(a)} style={{height:120,background:'var(--panel-2)',display:'flex',alignItems:'center',justifyContent:'center',cursor:a.thumbUrl?'zoom-in':'default'}}>
+                {a.thumbUrl
+                  ? <img src={a.thumbUrl} alt={a.name} style={{width:'100%',height:'100%',objectFit:'cover'}}/>
+                  : <div style={{textAlign:'center',color:'var(--faint)'}}><Ic d={I.doc} s={26}/><div style={{fontSize:10.5,marginTop:4,textTransform:'uppercase',fontWeight:700}}>{a.format||a.resourceType}</div></div>}
+              </div>
+              <div style={{padding:'8px 10px'}}>
+                <div title={a.publicId} style={{fontSize:11.5,fontWeight:600,color:'var(--ink)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.name}</div>
+                <div style={{fontSize:10.5,color:'var(--muted)',fontFamily:'IBM Plex Mono'}}>{kb(a.bytes)}{a.width?' · '+a.width+'×'+a.height:''}</div>
+                <div style={{display:'flex',gap:6,marginTop:7}}>
+                  <a className="btn sm" href={a.url} target="_blank" rel="noreferrer" style={{flex:1,textAlign:'center',textDecoration:'none'}}>Open</a>
+                  <button className="btn sm" style={{color:'var(--rose)',borderColor:'#f1c6cd'}} title="Delete from Cloudinary" onClick={()=>del(a)}><Ic d={I.x} s={13}/></button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {cursor&&<div style={{textAlign:'center',marginTop:14}}>
+        <button className="btn sm" onClick={()=>loadAssets(path,type,cursor)} disabled={busy}>{busy?'Loading…':'Load more'}</button>
+      </div>}
+
+      {zoom&&(
+        <div onClick={()=>setZoom(null)} style={{position:'fixed',inset:0,background:'rgba(12,18,28,.72)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:30,cursor:'zoom-out'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:11,overflow:'hidden',maxWidth:'90vw',maxHeight:'90vh',display:'flex',flexDirection:'column'}}>
+            <img src={zoom.url} alt={zoom.name} style={{maxWidth:'90vw',maxHeight:'72vh',objectFit:'contain',background:'var(--panel-2)'}}/>
+            <div style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:12}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)'}}>{zoom.name}</div>
+                <div style={{fontSize:10.5,color:'var(--muted)',fontFamily:'IBM Plex Mono',overflow:'hidden',textOverflow:'ellipsis'}}>{zoom.publicId} · {kb(zoom.bytes)}{zoom.width?' · '+zoom.width+'×'+zoom.height:''}</div>
+              </div>
+              <a className="btn sm" href={zoom.url} target="_blank" rel="noreferrer" style={{textDecoration:'none'}}>Open original</a>
+              <button className="btn sm" onClick={()=>setZoom(null)}><Ic d={I.x} s={13}/>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div></div>
   );
 }
@@ -2200,7 +2681,7 @@ function Settings({depts, store, setRoute}){
       <SectionTitle icon={I.gear} title="Settings" sub="Configure the statistics platform"/>
       <div className="grid" style={{gridTemplateColumns:'200px 1fr',alignItems:'start'}}>
         <div className="card" style={{padding:6}}>
-          {[['general','General',I.gear],['departments','Departments',I.layers],['stafffields','Staff Fields',I.steth],['users','Users & Roles',I.user],['activity','Activity Log',I.activity],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
+          {[['general','General',I.gear],['departments','Departments',I.layers],['stafffields','Staff Fields',I.steth],['deptprivileges','Department Privileges',I.check],['users','Users & Roles',I.user],['activity','Activity Log',I.activity],['database','Database',I.grid],['media','Media',I.doc],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
             <div key={id} onClick={()=>setTab(id)} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:7,cursor:'pointer',fontSize:13,fontWeight:600,
               background:tab===id?'var(--blue-50)':'transparent',color:tab===id?'var(--blue-700)':'var(--ink-2)'}}>
               <Ic d={ic} s={16}/>{l}
@@ -2231,7 +2712,10 @@ function Settings({depts, store, setRoute}){
           </div></div>}
           {tab==='departments'&&(typeof ManageDepts!=='undefined'?<ManageDepts depts={depts} store={store} setRoute={setRoute}/>:null)}
           {tab==='stafffields'&&<StaffFieldsSettings depts={depts} setRoute={setRoute}/>}
+          {tab==='deptprivileges'&&(typeof DeptPrivilegesSettings!=='undefined'?<DeptPrivilegesSettings depts={depts}/>:null)}
           {tab==='activity'&&<ActivityLog/>}
+          {tab==='database'&&<DatabaseBrowser/>}
+          {tab==='media'&&<MediaBrowser/>}
           {tab==='users'&&<div className="card"><div className="card-b"><UserManagement/></div></div>}
           {tab==='responsibles'&&(typeof DataResponsibles!=='undefined'?<DataResponsibles depts={depts}/>:null)}
           {tab==='fields'&&(typeof DataFields!=='undefined'?<DataFields setRoute={setRoute}/>:null)}

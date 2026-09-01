@@ -3,7 +3,12 @@
    Express web server as window.__UNICO_QUALITY__ before this script runs. No hardcoded
    quality data remains here. To edit the seed: server/seed/quality.json then
    npm --prefix server run seed-data -- quality --force */
-window.QUALITY_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_QUALITY__) && window.__UNICO_QUALITY__.length)
+// An INJECTED array wins even when it is EMPTY. The `.length` test that used to be
+// here treated "the server scoped you to nothing" the same as "the server injected
+// nothing", so an account whose quality areas matched none of the real keys fell
+// through to the unscoped bundled seed and was shown the whole hospital. Empty is an
+// answer; only a MISSING inject is a reason to fall back.
+window.QUALITY_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNICO_QUALITY__))
   ? window.__UNICO_QUALITY__
   : ((typeof window !== 'undefined' && Array.isArray(window.__UNICO_QUALITY_FALLBACK__)) ? window.__UNICO_QUALITY_FALLBACK__ : []);
 

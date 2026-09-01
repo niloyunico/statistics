@@ -34,9 +34,11 @@ const {
 const auth = require('./auth');
 const session = require('./session');
 const activity = require('./activity-log');
+const access = require('./access');
 const dataCollection = require('./data-collection');
 const deptmap = require('./deptmap');
 const qualityFormulas = require('./quality-formulas');
+const keepalive = require('./keepalive');
 
 // Parse login-form posts (the portal uses a plain HTML form, no JS required).
 app.use(express.urlencoded({ extended: false }));
@@ -176,6 +178,35 @@ function effectiveDeptIds(scope, deptMap) {
   return out;
 }
 
+// Shown only when the database is unreachable AND no cached copy exists to stand in
+// for it — a cold start against a paused cluster. Deliberately self-contained and
+// self-refreshing: the circuit breaker probes every few seconds, so this normally
+// clears without anybody doing anything.
+function warmingPage() {
+  return '<!DOCTYPE html>'
+    + '<html lang="en"><head><meta charset="UTF-8"/>'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1.0"/>'
+    + '<title>Starting up - UNICO Statistics Suite</title>'
+    + '<meta http-equiv="refresh" content="5"/>'
+    + '<link rel="icon" type="image/svg+xml" href="/unico/logo-mark.svg"/>'
+    + '<style>'
+    + 'body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;'
+    + 'font-family:system-ui,Segoe UI,sans-serif;background:#0d1b2e;color:#e8eef7}'
+    + '.card{max-width:420px;text-align:center;background:#132741;border:1px solid #1e3a5c;'
+    + 'border-radius:16px;padding:32px}'
+    + 'h1{margin:0 0 10px;font-size:19px}p{margin:0 0 6px;font-size:13.5px;line-height:1.6;color:#a8bdd6}'
+    + '.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#27a8db;'
+    + 'margin-right:7px;animation:p 1.2s ease-in-out infinite}'
+    + '@keyframes p{0%,100%{opacity:.35}50%{opacity:1}}'
+    + '</style></head><body><div class="card">'
+    + '<h1><span class="dot"></span>Starting up</h1>'
+    + '<p>The database is waking up. Your data is safe &mdash; this page refreshes itself '
+    + 'every few seconds and will continue automatically.</p>'
+    + '<p style="margin-top:14px;font-size:12px;color:#7d94b0">If this persists for more than '
+    + 'a minute or two, check the cluster status.</p>'
+    + '</div></body></html>';
+}
+
 async function serveIndex(req, res) {
   let html;
   try { html = fs.readFileSync(INDEX_FILE, 'utf8'); }
@@ -185,16 +216,35 @@ async function serveIndex(req, res) {
   // serial ones, so the shell starts streaming sooner. Each query falls back
   // independently (.catch), preserving the per-dataset failure tolerance the previous
   // sequential try/catches had: a slow/unreachable query blanks only its own data.
+  // Each query falls back independently, preserving the per-dataset failure tolerance
+  // the original sequential try/catches had. null means FAILED (as distinct from an
+  // empty result, which is legitimate for a scoped collector) — the difference decides
+  // whether we render the app or the warming-up page below.
   const [appRes, deptRes, staffRes, qualRes, scopeRes, formulaRes] = await Promise.all([
     getAppData().catch(() => null),           // DB unreachable -> empty snapshot
-    getDepartments().catch(() => []),         // /api/departments reports the error
-    getStaff().catch(() => []),
-    getQuality().catch(() => []),
+    getDepartments().catch(() => null),       // /api/departments reports the error
+    getStaff().catch(() => null),
+    getQuality().catch(() => null),
     (req.user && req.user.sub) ? dataCollection.getUserScope(req.user.sub).catch(() => null) : null,
     // Canonical quality-formula catalogue (one row per formula). Reference data —
     // injected for every role so the by-name master drives all departments.
-    (async () => { try { const db = await getDbHandle(); return db ? await qualityFormulas.getFormulas(db) : []; } catch (e) { return []; } })(),
+    // getFormulas() resolves its own guarded handle: awaiting getDbHandle() here would
+    // have paid the full server-selection timeout on a dead cluster BEFORE the circuit
+    // breaker was ever consulted, making the breaker useless on this, the main render
+    // path — the one page load that matters most.
+    qualityFormulas.getFormulas().catch(() => []),
   ]);
+
+  // Every dataset failed AND there was nothing cached to rescue them with. Rendering
+  // the app now would produce a page with zero departments, zero staff and zero
+  // indicators and NO error — which reads as "all my data is gone" and is the worst
+  // possible answer to a database that is merely still waking up. Say so instead, and
+  // come back by itself.
+  if (appRes === null && deptRes === null && qualRes === null) {
+    res.set('Cache-Control', 'no-store');
+    res.set('Retry-After', '5');
+    return res.status(503).type('html').send(warmingPage());
+  }
   let snap = (appRes && appRes.data) || {};
   let depts = deptRes || [], staff = staffRes || [], quality = qualRes || [];
   // Canonical department identity map (id <-> quality key <-> canonical name), built from
@@ -207,7 +257,7 @@ async function serveIndex(req, res) {
   // quality areas are injected (no staff / shared app-state blob), so the SAME app
   // shows each user only their own data.
   let scopeUser = scopeRes || null;
-  if (scopeUser && scopeUser.role === 'collector') {
+  if (scopeUser && access.PORTAL_ROLES.indexOf(scopeUser.role) >= 0) {
     const qa = scopeUser.qualityAreas || [];
     // departments the collector can report = explicit list ∪ areas-mapped-back-to-depts
     // ∪ all (hospital-wide), so a quality-only / hospital-wide person still gets depts.
@@ -235,8 +285,38 @@ async function serveIndex(req, res) {
     const dov = scopeDeptOverlay(appRes && appRes.data && appRes.data['unico_store_v3'], da);
     if (dov) snap['unico_store_v3'] = JSON.stringify(dov);
   }
+
+  // Everyone who is NOT a collector used to be handed the entire database in this
+  // inject — the full app-state blob, all 192 staff records, every department and
+  // every quality area — no matter what their per-module access said. The sidebar
+  // then hid the workspaces they lacked, but the data was already in the page and
+  // one devtools glance away. Apply the same authority the API now applies, so a
+  // restricted account is never SENT what it may not see.
+  let restricted = null;
+  if (!(scopeUser && access.PORTAL_ROLES.indexOf(scopeUser.role) >= 0)) {
+    const a = await access.forRequest(req).catch(() => null);
+    if (req.user && !a) {
+      // Signed in with a token whose account is gone, deactivated, or whose sessions
+      // were revoked since it was issued. Kill the cookie and make them sign in again,
+      // returning them to the page they asked for (a collector bounced off /collect
+      // should land back on /collect, not the admin app).
+      session.clearSession(res);
+      const back = req.unicoLanding ? '/collect' : '/';
+      const portal = back === '/collect' ? '?portal=collect&next=%2Fcollect' : '';
+      return res.redirect(302, '/login' + portal);
+    }
+    if (a && !a.unrestricted) {
+      restricted = a;
+      snap = await access.scopeSnapshot(a, snap);
+      staff = access.can(a, 'staff', 'view') ? await access.filterStaff(a, staff) : [];
+      if (!access.can(a, 'stats', 'view')) depts = [];
+      if (!access.can(a, 'quality', 'view')) quality = [];
+    }
+  }
+
   const userInject = scopeUser
-    ? { username: scopeUser.username, name: scopeUser.name, role: scopeUser.role, departments: scopeUser.departments, qualityAreas: scopeUser.qualityAreas, perms: scopeUser.perms }
+    ? { username: scopeUser.username, name: scopeUser.name, role: scopeUser.role, departments: scopeUser.departments, qualityAreas: scopeUser.qualityAreas, perms: scopeUser.perms,
+        staffScope: restricted ? restricted.staffScope : 'all', staffId: restricted ? restricted.staffId : null }
     : (req.user ? { username: req.user.sub, name: req.user.name, role: req.user.role } : null);
 
   // Canonical quality-formula master: the DB catalogue expanded to the
@@ -250,8 +330,17 @@ async function serveIndex(req, res) {
   // Inject the saved state + DB-backed datasets (scoped per user above). __UNICO_USER__
   // tells the app who is signed in; __UNICO_INITIAL_ROUTE__ lets /collect open the app
   // straight on the Data Collection section.
+  // Tells the hydration bridge in index.html that this snapshot is the COMPLETE set of
+  // app-state keys this session may hold, so it can purge anything left in localStorage
+  // by a previous (possibly higher-privileged) user of the same browser. Only claimed
+  // when the app-state read actually succeeded and access resolution was not degraded —
+  // otherwise an empty snapshot from a database blip would wipe the browser's copy and
+  // then mirror that emptiness back.
+  const authoritative = !!appRes && !(restricted && restricted.degraded);
+
   const inject =
-    '<script>window.__UNICO_SNAPSHOT__=' + safeJSON(snap) + ';' +
+    '<script>window.__UNICO_SNAPSHOT_AUTHORITATIVE__=' + (authoritative ? 'true' : 'false') + ';' +
+    'window.__UNICO_SNAPSHOT__=' + safeJSON(snap) + ';' +
     'window.__UNICO_DEPARTMENTS__=' + safeJSON(depts) + ';' +
     'window.__UNICO_STAFF__=' + safeJSON(staff) + ';' +
     'window.__UNICO_QUALITY__=' + safeJSON(quality) + ';' +
@@ -289,70 +378,163 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// Branded, self-contained login page (no JS required; pure HTML form post).
+// Branded, self-contained sign-in page, matching the approved Login mockup.
+//
+// ONE markup, two layouts, decided by CSS alone:
+//   >= 900px  the SPLIT PANEL — dark brand panel beside the form
+//   <  900px  the CENTERED card — brand panel drops away and the logo/title move
+//             inside the card, which is the mockup's centred variant
+// No JS is involved in choosing between them, so the right layout is painted on the
+// first frame and there is nothing to flash or re-lay-out. The only script on the page
+// is the password reveal toggle, and sign-in works with scripting disabled.
 function loginPage(opts) {
   const o = opts || {};
-  const err = o.error
-    ? '<div class="err">' + escapeHtml(o.error) + '</div>'
-    : '<div class="err-spacer"></div>';
+  const err = o.error ? '<div class="err">' + escapeHtml(o.error) + '</div>' : '';
   const username = escapeHtml(o.username || '');
   const collect = o.portal === 'collect';
+  const idLabel = collect ? 'Staff ID' : 'Username';
+  const idHint = collect ? 'e.g. 11111' : 'Your username';
+  const blurb = collect
+    ? 'Sign in with your Staff ID to submit your unit&#39;s data.'
+    : 'Welcome back. Please sign in to continue to your workspace.';
   const nextField = o.next ? '<input type="hidden" name="next" value="' + escapeHtml(o.next) + '"/>' : '';
-  return '<!DOCTYPE html>\n'
-    + '<html lang="en"><head>\n'
-    + '<meta charset="UTF-8"/>\n'
-    + '<meta name="viewport" content="width=device-width, initial-scale=1.0"/>\n'
-    + '<title>Sign in - UNICO Statistics Suite</title>\n'
-    + '<link rel="icon" type="image/svg+xml" href="/unico/logo-mark.svg"/>\n'
-    + '<link rel="stylesheet" href="/vendor/fonts/ibm-plex.css"/>\n'
-    + '<style>\n'
-    + '*{box-sizing:border-box}\n'
-    + 'body{margin:0;font-family:"IBM Plex Sans",system-ui,Segoe UI,sans-serif;'
-    + 'min-height:100vh;display:grid;place-items:center;padding:24px;'
-    + 'background:#0d1b2e;background-image:radial-gradient(1100px 700px at 18% -10%,rgba(39,168,219,.16),transparent 60%),'
-    + 'radial-gradient(900px 600px at 110% 120%,rgba(58,181,167,.14),transparent 55%);overflow:auto}\n'
-    + '.card{position:relative;width:min(380px,94vw);background:#fff;border:1px solid #e3e9f1;'
-    + 'border-radius:18px;padding:30px 30px 24px;box-shadow:0 24px 60px rgba(5,12,24,.55);'
-    + 'display:flex;flex-direction:column;align-items:center;text-align:center}\n'
-    + '.logo{height:38px;margin-bottom:16px}\n'
-    + '.badge{width:52px;height:52px;border-radius:14px;display:grid;place-items:center;'
-    + 'background:linear-gradient(135deg,#27a8db,#0072a3);box-shadow:0 8px 20px rgba(0,144,202,.45);margin-bottom:14px}\n'
-    + 'h1{margin:0 0 6px;font-size:18px;font-weight:700;color:#16202e}\n'
-    + '.sub{margin:0 0 18px;font-size:12.5px;line-height:1.5;color:#6c7a8c;max-width:300px}\n'
-    + '.grp{width:100%;display:flex;flex-direction:column;gap:5px;margin-bottom:11px;text-align:left}\n'
-    + 'label{font-size:11.5px;font-weight:600;color:#3c4858}\n'
-    + 'input{width:100%;padding:11px 13px;border:1px solid #dde3ec;border-radius:9px;'
-    + 'font-family:inherit;font-size:14px;background:#f7f9fc;color:#16202e;outline:none}\n'
-    + 'input:focus{border-color:#27a8db;background:#fff}\n'
-    + '.btn{width:100%;margin-top:6px;padding:11px 13px;border:0;border-radius:9px;cursor:pointer;'
-    + 'font-family:inherit;font-size:13.5px;font-weight:700;color:#fff;'
-    + 'background:linear-gradient(135deg,#27a8db,#0072a3);box-shadow:0 8px 20px rgba(0,144,202,.35)}\n'
-    + '.btn:hover{filter:brightness(1.05)}\n'
-    + '.err{width:100%;min-height:18px;margin:2px 0 8px;font-size:12px;font-weight:600;color:#b4232f;'
-    + 'background:rgba(210,58,82,.10);border:1px solid rgba(210,58,82,.3);border-radius:8px;padding:7px 10px}\n'
-    + '.err-spacer{min-height:18px;margin:2px 0 8px}\n'
-    + '.legal{margin-top:18px;font-size:10.5px;letter-spacing:.4px;color:#9aa6b4}\n'
-    + '.credit{margin-top:7px;font-size:10.5px;color:#9aa6b4}\n'
-    + '.credit a{color:#27a8db;text-decoration:none;font-weight:600}\n'
-    + '.credit a:hover{text-decoration:underline}\n'
-    + '</style></head><body>\n'
-    + '<form class="card" method="POST" action="/login" autocomplete="on">\n'
-    + '<img class="logo" src="/unico/logo.svg" alt="UNICO Healthcare"/>\n'
-    + '<div class="badge"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" '
-    + 'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
-    + '<path d="M12 12a4 4 0 100-8 4 4 0 000 8z"/><path d="M4 21a8 8 0 0116 0"/></svg></div>\n'
-    + '<h1>' + (collect ? 'Data Collection sign in' : 'Sign in') + '</h1>\n'
-    + '<p class="sub">' + (collect ? 'Sign in with your Emp ID and password to submit your department&#39;s data.' : 'Sign in to the UNICO Statistics Suite.') + '</p>\n'
-    + err + '\n'
+  const credit = 'Design &amp; Developed by <a href="https://nasifahammedniloy.com" target="_blank" rel="noopener">Nasif Ahammed Niloy</a>';
+  const wa = '<span class="help">'
+    + '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 00-8.6 15.1L2 22l5-1.3A10 10 0 1012 2zm0 18a8 8 0 01-4.1-1.1l-.3-.2-3 .8.8-2.9-.2-.3A8 8 0 1112 20zm4.4-5.8c-.2-.1-1.4-.7-1.6-.8-.2-.1-.4-.1-.5.1l-.7.9c-.1.2-.3.2-.5.1a6.6 6.6 0 01-3.2-2.8c-.1-.2 0-.4.1-.5l.4-.5c.1-.2.1-.3 0-.5l-.7-1.6c-.2-.4-.4-.4-.5-.4h-.5a1 1 0 00-.7.3c-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.8 2.8 4.4 3.8 1.6.6 2.2.7 3 .5.5-.1 1.4-.6 1.6-1.2.2-.6.2-1.1.1-1.2z"/></svg>'
+    + 'Help line 01947527775</span> <span class="wa">(WhatsApp)</span>';
+
+  return '<!DOCTYPE html>'
+    + '<html lang="en"><head>'
+    + '<meta charset="UTF-8"/>'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1.0"/>'
+    + '<title>Sign in - UNICO Nursing Management System</title>'
+    + '<link rel="icon" type="image/svg+xml" href="/unico/logo-mark.svg"/>'
+    + '<link rel="stylesheet" href="/vendor/fonts/ibm-plex.css"/>'
+    + '<style>'
+    + '*{box-sizing:border-box}'
+    + 'body{margin:0;font-family:"IBM Plex Sans",system-ui,Segoe UI,sans-serif;color:#16202e;'
+    + 'min-height:100vh;display:grid;place-items:center;padding:22px;background:#eef3fb}'
+    + 'body::before{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;'
+    + 'background:radial-gradient(900px 620px at 10% -10%,rgba(0,144,202,.20),transparent 62%),'
+    + 'radial-gradient(820px 560px at 92% 8%,rgba(58,181,167,.18),transparent 62%),'
+    + 'radial-gradient(950px 720px at 80% 100%,rgba(106,82,212,.18),transparent 62%),'
+    + 'linear-gradient(160deg,#f4f8fd,#e9eefb 55%,#eae9f7)}'
+    + 'body::after{content:"";position:fixed;z-index:-1;pointer-events:none;width:620px;height:620px;'
+    + 'left:12%;top:-210px;border-radius:50%;filter:blur(56px);'
+    + 'background:radial-gradient(circle,rgba(39,168,219,.20),rgba(58,181,167,.10) 52%,transparent 72%);'
+    + 'animation:orb 20s ease-in-out infinite alternate}'
+    + '@keyframes orb{from{transform:translate(0,0) scale(1)}to{transform:translate(150px,120px) scale(1.16)}}'
+
+    // --- the shell: split on desktop, single column on mobile ---
+    + '.shell{width:min(920px,96vw);display:grid;grid-template-columns:1fr 1fr;border-radius:20px;overflow:hidden;'
+    + 'box-shadow:0 26px 70px rgba(31,59,90,.18),0 8px 24px rgba(0,144,202,.10);'
+    + 'border:1px solid rgba(255,255,255,.9)}'
+
+    // --- brand panel (desktop only) ---
+    + '.brand{position:relative;padding:30px 32px;display:flex;flex-direction:column;color:#fff;'
+    + 'background:linear-gradient(160deg,#1b2c45,#0d1b2e 60%,#102138);min-height:490px}'
+    + '.brand::after{content:"";position:absolute;inset:0;pointer-events:none;'
+    + 'background:radial-gradient(520px 380px at 78% 34%,rgba(0,144,202,.30),transparent 66%),'
+    + 'radial-gradient(420px 300px at 12% 92%,rgba(58,181,167,.20),transparent 64%)}'
+    + '.brand>*{position:relative;z-index:1}'
+    + '.brand .mid{margin-top:auto}'
+    + '.eyebrow{font-size:10.5px;font-weight:700;letter-spacing:2px;color:#6fc7ec;margin-bottom:12px}'
+    + '.brand h1{margin:0;font-size:31px;line-height:1.18;font-weight:700;letter-spacing:-.5px}'
+    + '.rule{width:56px;height:3px;border-radius:3px;background:linear-gradient(90deg,#3ab5a7,#27a8db);margin:16px 0 14px}'
+    + '.brand p{margin:0;font-size:13px;line-height:1.6;color:#a8bdd6;max-width:290px}'
+    + '.brand .foot{margin-top:auto;padding-top:18px;border-top:1px solid rgba(255,255,255,.14);'
+    + 'font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:#7e93ab;letter-spacing:.3px}'
+
+    // --- form pane ---
+    + '.pane{padding:34px 34px 26px;background:linear-gradient(152deg,rgba(255,255,255,.92),rgba(240,247,255,.78));'
+    + 'backdrop-filter:blur(24px) saturate(1.6);-webkit-backdrop-filter:blur(24px) saturate(1.6);'
+    + 'display:flex;flex-direction:column;justify-content:center}'
+    + '.pane h2{margin:0 0 6px;font-size:22px;font-weight:700;letter-spacing:-.3px}'
+    + '.pane .lead{margin:0 0 20px;font-size:12.8px;color:#6c7a8c;line-height:1.55}'
+    // the centred header, shown only on small screens
+    + '.mhead{display:none;text-align:center;margin-bottom:20px}'
+    + '.mhead img{height:38px;margin-bottom:14px}'
+    + '.mhead h2{font-size:21px;margin-bottom:7px}'
+
+    + '.grp{display:flex;flex-direction:column;gap:6px;margin-bottom:13px}'
+    + 'label{font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#9aa6b4}'
+    + '.wrap{position:relative;display:flex;align-items:center}'
+    + 'input[type=text],input[type=password]{width:100%;padding:12px 14px;border:1px solid rgba(125,145,180,.3);'
+    + 'border-radius:11px;font-family:inherit;font-size:14px;background:rgba(255,255,255,.9);color:#16202e;outline:none;'
+    + 'transition:border-color .15s,box-shadow .15s}'
+    + 'input:focus{border-color:#27a8db;background:#fff;box-shadow:0 0 0 3px rgba(39,168,219,.14)}'
+    + '.eye{position:absolute;right:6px;display:grid;place-items:center;width:34px;height:34px;border:0;'
+    + 'background:transparent;cursor:pointer;color:#9aa6b4;border-radius:8px}'
+    + '.eye:hover{color:#0090ca;background:rgba(0,144,202,.08)}'
+    + '.btn{width:100%;margin-top:8px;padding:13px;border:0;border-radius:11px;cursor:pointer;'
+    + 'font-family:inherit;font-size:14px;font-weight:700;color:#fff;'
+    + 'display:inline-flex;align-items:center;justify-content:center;gap:9px;'
+    + 'background:linear-gradient(135deg,#27a8db,#0072a3);box-shadow:0 10px 24px rgba(0,144,202,.32);'
+    + 'transition:filter .15s,transform .12s}'
+    + '.btn:hover{filter:brightness(1.06)}.btn:active{transform:translateY(1px)}'
+    + '.note{margin:12px 0 0;font-size:11px;color:#9aa6b4;line-height:1.55;text-align:center}'
+    + '.err{margin:0 0 13px;font-size:12px;font-weight:600;color:#b4232f;'
+    + 'background:rgba(210,58,82,.10);border:1px solid rgba(210,58,82,.28);border-radius:10px;padding:9px 12px}'
+    + '.foot2{margin-top:17px;padding-top:14px;border-top:1px solid rgba(125,145,180,.2);'
+    + 'font-size:11px;color:#9aa6b4;line-height:1.9;text-align:center}'
+    + '.foot2 a{color:#0072a3;text-decoration:none;font-weight:700}'
+    + '.foot2 a:hover{text-decoration:underline}'
+    + '.help{display:inline-flex;align-items:center;gap:6px;font-weight:700;color:#1f9d57}'
+    + '.wa{color:#b9c6d6}'
+
+    // --- MOBILE: centred card ---
+    + '@media (max-width:899px){'
+    + '.shell{grid-template-columns:1fr;width:min(420px,96vw)}'
+    + '.brand{display:none}'
+    + '.pane{padding:32px 28px 24px}'
+    + '.mhead{display:block}'
+    + '.pane>h2.desk,.pane>p.lead.desk{display:none}'
+    + '}'
+    + '</style></head><body>'
+
+    + '<form class="shell" method="POST" action="/login" autocomplete="on">'
+    // brand panel — desktop
+    + '<aside class="brand">'
+    + '<img src="/unico/logo.svg" alt="UNICO Healthcare" style="height:34px;align-self:flex-start;filter:brightness(0) invert(1);opacity:.95"/>'
+    + '<div class="mid">'
+    + '<div class="eyebrow">UNICO HOSPITALS</div>'
+    + '<h1>Nursing Management System</h1>'
+    + '<div class="rule"></div>'
+    + '<p>' + blurb + '</p>'
+    + '</div>'
+    + '<div class="foot">UNICO Hospitals PLC &middot; Nursing Services</div>'
+    + '</aside>'
+    // form pane
+    + '<div class="pane">'
+    + '<div class="mhead">'
+    + '<img src="/unico/logo.svg" alt="UNICO Healthcare"/>'
+    + '<h2>Nursing Management System</h2>'
+    + '<p class="lead">' + blurb + '</p>'
+    + '</div>'
+    + '<h2 class="desk">Welcome back</h2>'
+    + '<p class="lead desk">Sign in with your hospital staff account to continue.</p>'
+    + err
     + nextField
-    + '<div class="grp"><label for="u">' + (collect ? 'Emp ID' : 'Username') + '</label>'
-    + '<input id="u" name="username" value="' + username + '" autocomplete="username" placeholder="' + (collect ? 'Emp ID' : 'Your username') + '" autofocus/></div>\n'
+    + '<div class="grp"><label for="u">' + idLabel + '</label>'
+    + '<input id="u" type="text" name="username" value="' + username + '" autocomplete="username" placeholder="' + idHint + '" autofocus/></div>'
     + '<div class="grp"><label for="p">Password</label>'
-    + '<input id="p" name="password" type="password" autocomplete="current-password" placeholder="Enter your password"/></div>\n'
-    + '<button class="btn" type="submit">Sign in</button>\n'
-    + '<div class="legal">UNICO Healthcare - Statistics Suite - Secure sign-in</div>\n'
-    + '<div class="credit">Design &amp; Development by <a href="https://nasifahammedniloy.com" target="_blank" rel="noopener">Nasif Ahammed Niloy</a></div>\n'
-    + '</form></body></html>';
+    + '<div class="wrap"><input id="p" name="password" type="password" autocomplete="current-password" placeholder="Enter your password"/>'
+    + '<button class="eye" type="button" id="eye" aria-label="Show password" title="Show password">'
+    + '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
+    + '</button></div></div>'
+    + '<button class="btn" type="submit">Sign in <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>'
+    + '<p class="note">Access is limited to authorised UNICO staff. For account issues, contact the help line below.</p>'
+    + '<div class="foot2">' + credit + '<br/>' + wa + '</div>'
+    + '</div>'
+    + '</form>'
+
+    + '<script>(function(){var e=document.getElementById("eye"),p=document.getElementById("p");'
+    + 'if(!e||!p)return;e.addEventListener("click",function(){'
+    + 'var show=p.type==="password";p.type=show?"text":"password";'
+    + 'e.setAttribute("aria-label",show?"Hide password":"Show password");'
+    + 'e.setAttribute("title",show?"Hide password":"Show password");p.focus();});})();<\/script>'
+    + '</body></html>';
 }
 
 // Only allow same-origin relative redirect targets (no open-redirects).
@@ -367,35 +549,14 @@ app.get('/login', function (req, res) {
 });
 
 // --- Brute-force throttle -----------------------------------------------------
-// A signed JWT is only as safe as the password behind it, so cap how fast an
-// attacker can guess. In-memory, per client IP + username, with a sliding window
-// and a temporary lockout — no extra dependency, resets on a successful login.
-const LOGIN_MAX_FAILS = parseInt(process.env.LOGIN_MAX_FAILS || '8', 10);      // failures before lockout
-const LOGIN_WINDOW_MS = (parseInt(process.env.LOGIN_WINDOW_MIN || '15', 10)) * 60 * 1000; // rolling window
-const LOGIN_LOCK_MS   = (parseInt(process.env.LOGIN_LOCK_MIN || '15', 10)) * 60 * 1000;    // lockout duration
-const loginFails = new Map(); // key -> { count, first, until }
-function loginKey(req, username) {
-  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || (req.socket && req.socket.remoteAddress) || 'ip';
-  return ip + '|' + (username || '');
-}
-function loginBlockedFor(key) {
-  const rec = loginFails.get(key);
-  if (!rec) return 0;
-  if (rec.until && rec.until > Date.now()) return Math.ceil((rec.until - Date.now()) / 1000);
-  if (rec.first && Date.now() - rec.first > LOGIN_WINDOW_MS) { loginFails.delete(key); return 0; } // window expired
-  return 0;
-}
-function noteLoginFail(key) {
-  const now = Date.now();
-  const rec = loginFails.get(key) || { count: 0, first: now, until: 0 };
-  if (now - rec.first > LOGIN_WINDOW_MS) { rec.count = 0; rec.first = now; } // reset the rolling window
-  rec.count += 1;
-  if (rec.count >= LOGIN_MAX_FAILS) rec.until = now + LOGIN_LOCK_MS;
-  loginFails.set(key, rec);
-}
-// Occasional cleanup so the map can't grow unbounded on a long-lived server.
-const _loginSweep = setInterval(() => { const now = Date.now(); for (const [k, r] of loginFails) { if ((!r.until || r.until < now) && (now - r.first) > LOGIN_WINDOW_MS) loginFails.delete(k); } }, 10 * 60 * 1000);
-if (_loginSweep.unref) _loginSweep.unref(); // don't keep the process alive just for the sweep
+// Shared with POST /api/login through server/login-throttle.js, so the two doors into
+// the same account cannot be attacked independently: 8 failures at either one locks
+// both. Previously only this portal counted, and the API accepted unlimited guesses.
+const throttle = require('./login-throttle');
+const loginKey = throttle.keyOf;
+const loginBlockedFor = throttle.blockedFor;
+const noteLoginFail = throttle.noteFail;
+const loginFails = { delete: throttle.clear };
 
 app.post('/login', async function (req, res) {
   if (!session.authRequired()) return res.redirect(302, '/');
@@ -407,7 +568,7 @@ app.post('/login', async function (req, res) {
     return res.status(400).type('html').send(loginPage({ error: 'Enter your username and password.', username, next, portal }));
   }
   const key = loginKey(req, username);
-  const wait = loginBlockedFor(key);
+  const wait = await loginBlockedFor(key);
   if (wait > 0) {
     res.set('Retry-After', String(wait));
     const mins = Math.ceil(wait / 60);
@@ -418,15 +579,15 @@ app.post('/login', async function (req, res) {
     const user = await users.findOne({ username });
     const valid = user && user.active !== false && await auth.verify(password, user.passwordHash);
     if (!valid) {
-      noteLoginFail(key);
+      await noteLoginFail(key);
       activity.record({ action: 'login_failed', username, ip: activity.ipOf(req), detail: 'invalid credentials' });
       return res.status(401).type('html').send(loginPage({ error: 'Invalid username or password.', username, next, portal }));
     }
-    loginFails.delete(key); // success clears the counter
+    await loginFails.delete(key); // success clears the counter
     activity.record({ action: 'login', username: user.username, name: user.name || user.username, role: user.role, ip: activity.ipOf(req), detail: portal ? ('portal: ' + portal) : '' });
     session.setSession(res, auth.sign(user));
     // Honor an explicit return target; else collectors land on /collect, admins on the app.
-    res.redirect(302, next || ((user.role === 'collector') ? '/collect' : '/'));
+    res.redirect(302, next || (access.PORTAL_ROLES.indexOf(user.role) >= 0 ? '/collect' : '/'));
   } catch (e) {
     res.status(500).type('html').send(loginPage({ error: 'Server error. Is the database reachable?', username, next, portal }));
   }
@@ -466,7 +627,7 @@ async function collectorScope(req) {
   try {
     if (!(req.user && req.user.sub)) return null;
     const s = await dataCollection.getUserScope(req.user.sub);
-    return (s && s.role === 'collector') ? s : null;
+    return (s && access.PORTAL_ROLES.indexOf(s.role) >= 0) ? s : null;
   } catch (e) { return null; }
 }
 // Area + per-indicator narrowing — same rules as serveIndex's snapshot scoping.
@@ -480,7 +641,7 @@ function scopeQualityList(quality, scope) {
     return Object.assign({}, q, { indicators: (q.indicators || []).filter((i) => allowSet.has(String(i.id))) });
   });
 }
-app.get('/api/departments', session.requireApi, async (req, res) => {
+app.get('/api/departments', session.requireApi, access.requirePerm('stats', 'view', { allowCollector: true }), async (req, res) => {
   try {
     let depts = await getDepartments();
     const scope = await collectorScope(req);
@@ -498,15 +659,32 @@ app.get('/api/departments', session.requireApi, async (req, res) => {
   }
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load departments.' }); }
 });
-app.get('/api/staff', session.requireApi, async (req, res) => {
+// The personnel register is the most sensitive dataset in the app, and this route
+// used to hand all 192 records to ANY signed-in account. It is now gated on the
+// staff module AND filtered row by row to the caller's staff scope (all / their own
+// departments / their own record only).
+app.get('/api/staff', session.requireApi, access.requirePerm('staff', 'view', { allowCollector: true }), async (req, res) => {
   try {
-    // collectors never receive staff records (parity with the "/" snapshot)
+    // A portal account receives its OWN UNIT's staff, and a thin record at that
+    // (access.portalStaff). Its department list is in statistics ids, while a staff
+    // record stores the department NAME, so the ids are resolved through the
+    // canonical map before matching.
     const scope = await collectorScope(req);
-    res.json({ ok: true, staff: scope ? [] : await getStaff() });
+    if (scope) {
+      const map = await deptmap.get();
+      // Match on BOTH vocabularies. A staff record's `current_department` is written by
+      // hand and in practice holds either the unit's short code ("MICU", "CT ICU") or
+      // its full name ("Medical ICU"); the account stores the statistics id ("micu").
+      // Feeding in id AND name catches both without a data migration.
+      const keys = [];
+      (scope.departments || []).forEach((id) => { keys.push(id); const n = map.byId[id] && map.byId[id].name; if (n) keys.push(n); });
+      return res.json({ ok: true, staff: access.portalStaff(keys, await getStaff()), scoped: true });
+    }
+    res.json({ ok: true, staff: await access.filterStaff(req.access, await getStaff()) });
   }
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load staff.' }); }
 });
-app.get('/api/quality', session.requireApi, async (req, res) => {
+app.get('/api/quality', session.requireApi, access.requirePerm('quality', 'view', { allowCollector: true }), async (req, res) => {
   try {
     let quality = await getQuality();
     const scope = await collectorScope(req);
@@ -527,23 +705,76 @@ app.get('/api/quality', session.requireApi, async (req, res) => {
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load quality indicators.' }); }
 });
 
+// Database keep-alive: one tiny write per day so Atlas does not pause the cluster for
+// inactivity. Deliberately NOT behind the login gate — the Vercel cron that calls it
+// carries no session cookie, and the response is only a timestamp. Set CRON_SECRET to
+// require a bearer token (Vercel then sends it automatically).
+keepalive.mount(app);
+
 // Data Collection module: responsible persons + Google-form-style submissions
 // (responsibles / submissions APIs). Self-contained; honors the same auth gate.
-require('./data-collection').mount(app, { requireApi: session.requireApi });
+// Guarded on the 'datacol' module. Collectors keep their own row-level scoping
+// (assigned departments / areas / indicators) inside the module; every other role is
+// checked against its per-module access, with the verb deciding the action needed.
+require('./data-collection').mount(app, { requireApi: [session.requireApi, access.requireModule('datacol')] });
 
 // User Management module: admin-only account CRUD over the `users` collection.
 require('./users-admin').mount(app, { requireApi: session.requireApi });
 
 // Admin activity log: read/clear the auth + user-management audit trail.
-activity.mount(app, { requireApi: session.requireApi });
+// The audit trail names who signed in, from which IP, and what they changed — it was
+// readable by ANY signed-in account. It belongs to the Administration module.
+activity.mount(app, { requireApi: [session.requireApi, access.requireModule('users')] });
 
 // Quality Formula catalogue: list (all roles) + admin-only edit of the ONE
 // canonical formula row per indicator; changes fan out to every department.
-qualityFormulas.mount(app, { requireApi: session.requireApi });
+// Reference data (formula definitions), readable by any signed-in role including
+// collectors, so it is not module-gated. access.attach still resolves the live
+// authority — it rejects revoked/deactivated sessions and gives adminOnly a real
+// answer for the write route instead of a token claim.
+qualityFormulas.mount(app, { requireApi: [session.requireApi, access.attach] });
 
 // Shift Supervisor Reports module: the "Night Supervisor Log Sheet" digitised —
 // one document per shift, stored in its own `supervisorReports` collection.
-require('./supervisor-reports').mount(app, { requireApi: session.requireApi });
+// Shift Supervisor Reports carry patient names and UHIDs — gated on the 'supervisor'
+// module (which, until now, could not be granted at all: see users-admin.js).
+require('./supervisor-reports').mount(app, { requireApi: [session.requireApi, access.requireModule('supervisor')] });
+
+// Settings -> Database: browse and repair the Cloudflare D1 tables (admin only).
+require('./d1-admin').mount(app, { requireApi: [session.requireApi, access.attach] });
+
+// Settings -> Media: browse the Cloudinary asset store folder by folder (admin only).
+require('./media-admin').mount(app, { requireApi: [session.requireApi, access.attach] });
+
+// Individual Performance module: the 6-monthly appraisal (Form HR-NUR-PA-01) plus the
+// achievement and incident registers whose points feed into it. Appraisals are
+// personal-file records, so the whole module is gated on 'perf' and the verb decides
+// the action needed; Part H is admin-only inside the module itself.
+require('./staff-performance').mount(app, { requireApi: [session.requireApi, access.requireModule('perf')] });
+
+// Staff requests: a nurse in-charge asking for a new nurse or PCA. A portal account
+// may raise and correct its OWN request; only an administrator decides one. Guarded
+// on 'staff' with the portal roles let through, because the request queue is the one
+// staff-shaped thing a ward IS allowed to touch.
+require('./staff-requests').mount(app, {
+  requireApi: [session.requireApi, access.requirePerm('staff', 'view', { allowCollector: true })],
+  scopeOf: collectorScope,
+});
+
+// Duty Roster module: one sheet per unit per month, with shift codes, coverage and the
+// sign-off block. Gated on the 'roster' module; approval is admin-only inside it.
+require('./duty-roster').mount(app, {
+  requireApi: [session.requireApi, access.requireModule('roster')],
+  // Reads also open to a data collector, who then only ever receives APPROVED
+  // rosters (server/duty-roster.js publishedOnly). Writes stay on requireApi.
+  requireRead: [session.requireApi, access.requirePerm('roster', 'view', { allowCollector: true })],
+});
+
+// Medicine module: the Bangladesh drug index (21.7k brands / 1.7k generic monographs)
+// and the prescriptions written from it. Prescriptions carry patient names, UHIDs and
+// diagnoses, so the whole module is gated on 'medicine'; editing the shared drug
+// catalogue is admin-only inside it.
+require('./medicines').mount(app, { requireApi: [session.requireApi, access.requireModule('medicine')] });
 
 // All other renderer assets (jsx/js/css/svg/fonts) are static. index:false so our
 // handler owns "/". The /api/* routes were registered by ./index before this.
@@ -599,6 +830,14 @@ function start() {
     console.log('  +---------------------------------------------------------+');
     console.log('     Open:   http://localhost:' + PORT);
     console.log('     Store:  ' + (usingMongo() ? 'MongoDB Atlas (cloud)' : 'in-memory (DEV - NOT saved)'));
+    const d1st = require('./d1').status(), d1Mods = require('./d1-store').activeModules(), stSt = require('./storage').status();
+    console.log('     SQL:    ' + (d1st.configured
+      ? 'Cloudflare D1 (' + d1st.database + ') - '
+        + (d1Mods.length ? 'serving: ' + d1Mods.join(', ') : 'configured but no module routed (set D1_MODULES)')
+      : 'Cloudflare D1 (not configured - set CLOUDFLARE_* in .env)'));
+    console.log('     Files:  ' + (stSt.configured
+      ? 'Cloudinary (' + stSt.cloudName + ')'
+      : 'Cloudinary (not configured - set CLOUDINARY_* in .env)'));
     console.log('     Auth:   ' + authMode);
     console.log('     Stop:   press Ctrl+C in this window');
     console.log('');
@@ -639,6 +878,9 @@ Promise.allSettled([
     });
   })
   .finally(start);
+  // Long-running PC server: keep the cluster awake from here. On Vercel this block
+  // never runs (no require.main) and the daily cron in vercel.json does it instead.
+  keepalive.start();
 }
 
 module.exports = app;
