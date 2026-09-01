@@ -449,50 +449,6 @@ function Sidebar({route, setRoute, collapsed, depts}){
         <img className="sb-logo-img sb-logo-full" src="unico/logo.svg" alt="UNICO — Hands of Care Hospitals"/>
         <img className="sb-logo-img sb-logo-mark" src="unico/logo-mark.svg" alt="UNICO"/>
       </div>
-      {/* WHO IS SIGNED IN — first thing on the page, above the navigation.
-          The footer entry is easy to miss at the bottom of a long sidebar, so the
-          account is stated up front: photo, name, and the role that decides what
-          the rest of this sidebar even shows. The whole card opens My Profile.
-          Hidden when the rail is collapsed (.sb-me follows .sb-name's rule). */}
-      {(()=>{
-        const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
-        const name=(u&&u.name)||'Nasif Ahammed Niloy';
-        const sub=(u&&u.designation)||(u?(u.role==='collector'?'Data Collector':(u.role==='incharge'?'In-charge':u.role)):'Administrator');
-        const initials=String(name).split(/\s+/).map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()||'U';
-        const active=route.view==='profile';
-        // Two lines beside the portrait, not a stacked card: this sits above the
-        // navigation, so every pixel it takes is a menu row pushed off-screen.
-        // Line 2 carries the designation AND the ID, separated by a dot, so the ID
-        // stays visible without costing a third line.
-        return (
-          <div className="sb-me" onClick={()=>setRoute({view:'profile'})} title="My profile — photo, details & password"
-            style={{margin:'2px 12px 8px',padding:'8px 10px',borderRadius:12,cursor:'pointer',
-              display:'flex',alignItems:'center',gap:10,
-              background:active?'rgba(0,144,202,.22)':'rgba(255,255,255,.06)',
-              border:'1px solid '+(active?'rgba(90,190,240,.45)':'rgba(255,255,255,.09)'),
-              transition:'background .15s,border-color .15s'}}>
-            {/* CIRCLE MASK: the ring is a wrapper, so the portrait is clipped to a
-                true circle whatever aspect the file had, and the ring never distorts. */}
-            <div style={{width:40,height:40,flexShrink:0,borderRadius:'50%',padding:2,
-              background:'linear-gradient(135deg,#3ab5a7,#0090ca)'}}>
-              <div style={{width:'100%',height:'100%',borderRadius:'50%',overflow:'hidden',background:'#12233a'}}>
-                <UnicoAvatar size={36} radius="50%" initials={initials}
-                  style={{width:'100%',height:'100%',display:'grid',placeItems:'center',
-                    color:'#fff',fontWeight:800,fontSize:13.5}}/>
-              </div>
-            </div>
-            <div className="who" style={{minWidth:0,flex:1,lineHeight:1.35}}>
-              <div style={{color:'#fff',fontSize:12.5,fontWeight:700,
-                whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{name}</div>
-              <div style={{color:'#8fa6c0',fontSize:10.5,
-                whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                {sub}{u&&u.username?<span className="num" style={{color:'#9ad8f4'}}>{' · '+u.username}</span>:null}
-              </div>
-            </div>
-            <Ic d={I.chevR} s={13} c="#7b8ca3"/>
-          </div>
-        );
-      })()}
       <div className="sb-scroll">
         {UNICO_WS.map((g,gi)=>{
           // Show only the workspaces this session is allowed to open. A section whose

@@ -67,13 +67,6 @@ button{font-family:inherit;cursor:pointer}
 .sb-item .badge{margin-left:auto;font-size:10px;background:rgba(255,255,255,.12);padding:1px 7px;border-radius:10px;font-family:var(--mono)}
 .sb-foot{padding:10px 14px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:9px;flex-shrink:0}
 .collapsed .sb-name,.collapsed .sb-sec,.collapsed .sb-item span.lbl,.collapsed .badge,.collapsed .sb-foot .who{display:none}
-/* The signed-in card at the top of the rail: on a 60px rail there is no room
-   for a name, so it collapses to the avatar alone rather than overflowing. */
-/* On the 60px rail only the portrait survives; the two text lines and the chevron
-   have nowhere to go. */
-.collapsed .sb-me{margin:2px 6px 8px;padding:7px 0;justify-content:center}
-.collapsed .sb-me .who,.collapsed .sb-me>svg{display:none}
-.sb-me:hover{background:rgba(255,255,255,.10)!important}
 .collapsed .sb-item{justify-content:center;padding:9px 0}
 .collapsed .sb-brand{justify-content:center;padding:0}
 
