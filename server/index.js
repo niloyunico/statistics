@@ -64,6 +64,12 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '12mb' })); // app-state snapshots can be sizable
 
+// Record every successful WRITE on /api/* to the Activity Log (see server/audit.js:
+// reads are skipped, bodies are never stored, repeats collapse). Registered before
+// any route so nothing can slip in underneath it; it reads req.user at response
+// time, after the route's own session guard has resolved the caller.
+app.use(require('./audit').middleware);
+
 // Cross-origin access. The default was '*' — with a Bearer token that let any site's
 // script call this API on a user's behalf. When login is required, default to
 // same-origin only (no CORS header at all) unless ALLOWED_ORIGINS names real origins.

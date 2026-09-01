@@ -26,8 +26,11 @@ const d1store = require('./d1-store');
 const activity = require('./activity-log');
 
 const MAX_LIMIT = 200;
-// SQLite's own bookkeeping tables are noise in an admin panel.
-const HIDDEN = /^sqlite_/i;
+// SQLite's own bookkeeping tables are noise in an admin panel — and _cf_KV is
+// Cloudflare's internal store: D1 refuses to even SELECT it ("not authorized:
+// SQLITE_AUTH"). It sorts first alphabetically, so listing it made the panel
+// open straight onto that error.
+const HIDDEN = /^(sqlite_|_cf_)/i;
 
 async function listTables() {
   const rows = await d1.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name");
