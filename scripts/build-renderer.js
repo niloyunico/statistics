@@ -68,6 +68,7 @@ const MANIFEST = [
   { file: 'charts3d.jsx', jsx: true },
   { file: 'charts-extra.jsx', jsx: true },
   { file: 'ui.jsx', jsx: true },
+  { file: 'photo-picker.jsx', jsx: true },     // window.PhotoPicker — Cloudinary uploads (staff photos + account avatars)
   { file: 'feedback.jsx', jsx: true },
   { file: 'dashboard.jsx', jsx: true },
   { file: 'department.jsx', jsx: true },

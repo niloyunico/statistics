@@ -316,7 +316,8 @@ async function serveIndex(req, res) {
 
   const userInject = scopeUser
     ? { username: scopeUser.username, name: scopeUser.name, role: scopeUser.role, departments: scopeUser.departments, qualityAreas: scopeUser.qualityAreas, perms: scopeUser.perms,
-        staffScope: restricted ? restricted.staffScope : 'all', staffId: restricted ? restricted.staffId : null }
+        staffScope: restricted ? restricted.staffScope : 'all', staffId: restricted ? restricted.staffId : null,
+        photo: scopeUser.photo || null }
     : (req.user ? { username: req.user.sub, name: req.user.name, role: req.user.role } : null);
 
   // Canonical quality-formula master: the DB catalogue expanded to the
@@ -745,6 +746,10 @@ require('./d1-admin').mount(app, { requireApi: [session.requireApi, access.attac
 
 // Settings -> Media: browse the Cloudinary asset store folder by folder (admin only).
 require('./media-admin').mount(app, { requireApi: [session.requireApi, access.attach] });
+
+// Photo uploads: staff record photos (needs EDIT on staff) and the caller's own
+// account picture. Bytes go to Cloudinary; only the CDN url is ever stored.
+require('./photos').mount(app, { requireApi: [session.requireApi, access.attach] });
 
 // Individual Performance module: the 6-monthly appraisal (Form HR-NUR-PA-01) plus the
 // achievement and incident registers whose points feed into it. Appraisals are

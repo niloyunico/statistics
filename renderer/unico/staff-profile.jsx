@@ -156,7 +156,13 @@ function StaffProfile({store, empId, setRoute}){
             {/* photo */}
             <div style={{display:'flex',flexDirection:'column',alignItems:'center',padding:'18px 22px 4px'}}>
               <div style={{borderRadius:14,padding:4,background:'var(--panel)',border:'1px solid var(--line)',boxShadow:'0 6px 16px rgba(0,0,0,.13)'}}>
-                <div style={{width:104,height:120,borderRadius:10,display:'grid',placeItems:'center',fontSize:44,fontWeight:800,color:'#fff',letterSpacing:1,background:`linear-gradient(135deg,hsl(${badgeHue} 60% 52%),hsl(${(badgeHue+40)%360} 62% 42%))`}}>{badgeIni}</div>
+                  <PhotoPicker
+                  value={e.photo||null}
+                  onChange={(next)=>store.update(empId,{photo:next})}
+                  initials={badgeIni} name={e.name} kind="staff" hue={badgeHue}
+                  w={104} h={120} radius={10} plain
+                  readOnly={!(window.unicoCan?window.unicoCan('staff','edit'):true)}
+                />
               </div>
               <h2 style={{margin:'14px 0 3px',fontSize:19,fontWeight:800,letterSpacing:'-.2px',textAlign:'center'}}>{e.name}</h2>
               <div style={{fontSize:12.5,color:'var(--blue-700)',fontWeight:700,textAlign:'center'}}>{desig||'—'}</div>

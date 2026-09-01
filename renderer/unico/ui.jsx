@@ -360,6 +360,10 @@ function MyAccount({ onClose }){
   const [email,setEmail] = useState((u&&u.email)||'');
   const [cur,setCur] = useState(''); const [nw,setNw] = useState(''); const [nw2,setNw2] = useState('');
   const [busy,setBusy] = useState(false); const [err,setErr] = useState(''); const [ok,setOk] = useState('');
+  // The account picture is written by the server (POST /api/upload, kind=profile) —
+  // an account document is not something the renderer may patch. This state only
+  // mirrors it so the avatar updates without a reload.
+  const [photo,setPhoto] = useState((u&&u.photo)||null);
   const api = (method,path,body)=>fetch(path,{method,headers:{'Content-Type':'application/json'},credentials:'same-origin',body:body?JSON.stringify(body):undefined}).then(async r=>{ let j=null; try{j=await r.json();}catch(e){} if(!r.ok||!j||j.ok===false) throw new Error((j&&j.error)||(r.status===401?'Sign in to manage your account.':'Request failed ('+r.status+').')); return j; });
   const txt = { padding:'9px 11px', border:'1px solid var(--line)', borderRadius:8, fontSize:13, fontFamily:'inherit', width:'100%', outline:'none', background:'#fff', boxSizing:'border-box' };
   const savePw = async ()=>{ setErr(''); setOk(''); if(nw.length<6) return setErr('New password must be at least 6 characters.'); if(nw!==nw2) return setErr('New passwords do not match.'); setBusy(true);
@@ -374,7 +378,11 @@ function MyAccount({ onClose }){
         <div className="card-h"><h3>My Account</h3><span className="spacer"/><button className="icon-btn" style={{width:28,height:28}} onClick={onClose}><Ic d={I.x} s={14}/></button></div>
         <div className="card-b" style={{display:'flex',flexDirection:'column',gap:14}}>
           <div style={{display:'flex',alignItems:'center',gap:12}}>
-            <div style={{width:46,height:46,borderRadius:'50%',background:'var(--blue-50)',color:'var(--blue-700,#0b6aa2)',display:'grid',placeItems:'center',fontSize:16,fontWeight:800,flexShrink:0}}>{initials}</div>
+            <PhotoPicker
+              value={photo} size={54} kind="profile" initials={initials} name={(u&&u.name)||'Account'}
+              readOnly={!u}
+              onChange={(next)=>{ setPhoto(next); if(window.__UNICO_USER__) window.__UNICO_USER__.photo=next; }}
+            />
             <div style={{minWidth:0}}><div style={{fontSize:14.5,fontWeight:700,color:'var(--ink)'}}>{(u&&u.name)||'Local Administrator'}</div>
               <div style={{fontSize:12,color:'var(--muted)'}}>{u?('@'+u.username+' · '+role):role}</div></div>
           </div>
