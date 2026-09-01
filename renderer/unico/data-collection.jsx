@@ -3119,6 +3119,66 @@
      is built from their OWN submission history rather than from an appraisal they are
      not entitled to fetch. Nothing here is invented: an empty history says so. */
   function CollectorProfile({ user, onNav }) {
+    // Self-service: a portal account maintains its OWN photo and contact details.
+    // Everything that decides ACCESS (role, departments, quality areas) stays
+    // read-only here and is refused by PATCH /api/me regardless of what we send.
+    const [photo, setPhoto] = useState((user && user.photo) || null);
+    const [name, setName] = useState((user && user.name) || '');
+    const [designation, setDesignation] = useState((user && user.designation) || '');
+    const [email, setEmail] = useState((user && user.email) || '');
+    const [phone, setPhone] = useState((user && user.phone) || '');
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState(null);
+    const [cur, setCur] = useState(''); const [nw, setNw] = useState(''); const [nw2, setNw2] = useState('');
+    const [pwBusy, setPwBusy] = useState(false); const [pwMsg, setPwMsg] = useState(null);
+
+    const roleLabel = (user && user.role === 'incharge') ? 'In-charge' : 'Data Collector';
+    const dirty = name !== ((user && user.name) || '') || designation !== ((user && user.designation) || '')
+      || email !== ((user && user.email) || '') || phone !== ((user && user.phone) || '');
+
+    const meApi = (method, path, body) => fetch(path, {
+      method, headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: body ? JSON.stringify(body) : undefined,
+    }).then(async (r) => {
+      let j = null; try { j = await r.json(); } catch (e) { }
+      if (!r.ok || !j || j.ok === false) throw new Error((j && j.error) || ('Request failed (' + r.status + ').'));
+      return j;
+    });
+
+    async function saveProfile() {
+      setMsg(null); setBusy(true);
+      try {
+        await meApi('PATCH', '/api/me', { name, email, phone, designation });
+        if (window.__UNICO_USER__) Object.assign(window.__UNICO_USER__, { name, email, phone, designation });
+        setMsg({ kind: 'ok', text: 'Profile saved.' });
+      } catch (e) { setMsg({ kind: 'err', text: String((e && e.message) || e) }); }
+      finally { setBusy(false); }
+    }
+
+    async function savePassword() {
+      setPwMsg(null);
+      if (nw.length < 6) return setPwMsg({ kind: 'err', text: 'New password must be at least 6 characters.' });
+      if (nw !== nw2) return setPwMsg({ kind: 'err', text: 'New passwords do not match.' });
+      setPwBusy(true);
+      try {
+        await meApi('POST', '/api/me/password', { currentPassword: cur, newPassword: nw });
+        setCur(''); setNw(''); setNw2('');
+        setPwMsg({ kind: 'ok', text: 'Password changed.' });
+      } catch (e) { setPwMsg({ kind: 'err', text: String((e && e.message) || e) }); }
+      finally { setPwBusy(false); }
+    }
+
+    const cpInput = { padding: '7px 10px', border: '1px solid rgba(125,145,180,.28)', borderRadius: 7, fontSize: 12.5, fontFamily: 'inherit', width: '100%', outline: 'none', background: '#fff', boxSizing: 'border-box' };
+    // Same row rhythm as row() above, but the value is an input.
+    // `ac` is the autocomplete token: without one the browser treats a bare text box
+    // beside a password form as a username field and fills the saved login into it.
+    const edit = (label, val, set, placeholder, ac) => (
+      <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '7px 0', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+        <span style={{ fontSize: 11.5, color: '#6c7a8c', width: 130, flexShrink: 0 }}>{label}</span>
+        <input style={cpInput} name={ac} autoComplete={ac} value={val} placeholder={placeholder} onChange={(e) => set(e.target.value)} />
+      </div>
+    );
+
     const dataRev = useDcDataRev();
     const depts = useMemo(() => dcAllDepts(), [dataRev]);
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
@@ -3164,11 +3224,17 @@
       <div style={{ maxWidth: 1260, margin: '0 auto' }}>
         <div style={HERO}>
           <div style={{ position: 'absolute', right: -70, top: -80, width: 260, height: 260, borderRadius: '50%', background: 'radial-gradient(circle,rgba(0,144,202,.30),transparent 68%)', filter: 'blur(10px)', pointerEvents: 'none' }} />
-          <div style={{ position: 'relative', width: 78, height: 78, borderRadius: 18, background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', display: 'grid', placeItems: 'center', fontSize: 27, fontWeight: 700, flexShrink: 0, boxShadow: '0 0 0 3px rgba(122,196,232,.25)' }}>{cpInitials(user.name)}</div>
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <PhotoPicker
+              value={photo} size={78} radius={18} kind="profile"
+              initials={cpInitials(user.name)} name={user.name || 'My profile'}
+              onChange={(next) => { setPhoto(next); window.unicoSetAccountPhoto(next); }}
+            />
+          </div>
           <div style={{ position: 'relative', minWidth: 220, flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: '-.4px' }}>{user.name || 'My profile'}</div>
-              <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 11px', borderRadius: 12, background: 'rgba(58,181,167,.22)', color: '#8ee6da', border: '1px solid rgba(58,181,167,.35)' }}>Data Collector</span>
+              <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 11px', borderRadius: 12, background: 'rgba(58,181,167,.22)', color: '#8ee6da', border: '1px solid rgba(58,181,167,.35)' }}>{roleLabel}</span>
             </div>
             <div style={{ fontSize: 12, color: '#a8bdd6', marginTop: 5, fontFamily: "'IBM Plex Mono',monospace" }}>
               {[user.username ? 'Staff ID ' + user.username : null, depts.map((d) => d.name).join(' · ') || null].filter(Boolean).join('  ·  ')}
@@ -3192,13 +3258,42 @@
               <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(0,144,202,.12)', color: '#0072a3' }}>{CP_ICON('M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0', 13)}</span>
               <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Details</h3>
             </div>
-            {row('Name', user.name)}
+            {msg && <div style={{ fontSize: 12, fontWeight: 600, borderRadius: 8, padding: '8px 11px', marginBottom: 9, color: msg.kind === 'ok' ? '#0f6a39' : '#b4232f', background: msg.kind === 'ok' ? 'rgba(31,157,87,.10)' : 'rgba(210,58,82,.10)', border: '1px solid ' + (msg.kind === 'ok' ? 'rgba(31,157,87,.28)' : 'rgba(210,58,82,.28)') }}>{msg.text}</div>}
+            {edit('Name', name, setName, 'Your full name', 'name')}
+            {edit('Designation', designation, setDesignation, 'e.g. Nursing In-charge', 'organization-title')}
+            {edit('Email', email, setEmail, 'name@unicohospitals.com', 'email')}
+            {edit('Phone', phone, setPhone, '01XXXXXXXXX', 'tel')}
             {row('Staff ID', user.username, true)}
-            {row('Role', 'Data Collector')}
+            {row('Role', roleLabel)}
             {row('Departments', depts.map((d) => d.name).join(', '))}
             {row('Quality areas', areas.map((a) => a.name).join(', '))}
-            <div style={{ fontSize: 11, color: '#9aa6b4', marginTop: 11, lineHeight: 1.6 }}>
-              Qualification, joining date and registration are held on the staff register, which this portal is not permitted to read. Ask your administrator to correct anything shown here.
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 11 }}>
+              <span style={{ fontSize: 11, color: '#9aa6b4' }}>{dirty ? 'Unsaved changes' : 'Everything saved'}</span>
+              <span style={{ flex: 1 }} />
+              <button className="btn pri sm" onClick={saveProfile} disabled={busy || !dirty}>{busy ? 'Saving…' : 'Save changes'}</button>
+            </div>
+            <div style={{ fontSize: 11, color: '#9aa6b4', marginTop: 9, lineHeight: 1.6 }}>
+              Your photo and the details above are yours to maintain. Role, departments and
+              quality areas are set by an administrator — ask them if those are wrong.
+              Qualification, joining date and registration live on the staff register, which
+              this portal is not permitted to read.
+            </div>
+          </div>
+
+          <div style={Object.assign({}, CP_CARD, { padding: '14px 17px' })}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: 7, background: 'rgba(0,144,202,.12)', color: '#0072a3' }}>{CP_ICON('M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2zM7 11V7a5 5 0 0110 0v4', 13)}</span>
+              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#16202e' }}>Password</h3>
+            </div>
+            {pwMsg && <div style={{ fontSize: 12, fontWeight: 600, borderRadius: 8, padding: '8px 11px', margin: '6px 0 9px', color: pwMsg.kind === 'ok' ? '#0f6a39' : '#b4232f', background: pwMsg.kind === 'ok' ? 'rgba(31,157,87,.10)' : 'rgba(210,58,82,.10)', border: '1px solid ' + (pwMsg.kind === 'ok' ? 'rgba(31,157,87,.28)' : 'rgba(210,58,82,.28)') }}>{pwMsg.text}</div>}
+            {[['Current password', cur, setCur, 'Enter current password'], ['New password', nw, setNw, 'At least 6 characters'], ['Confirm new', nw2, setNw2, 'Re-enter new password']].map(([l, v, set, ph]) => (
+              <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '7px 0', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
+                <span style={{ fontSize: 11.5, color: '#6c7a8c', width: 130, flexShrink: 0 }}>{l}</span>
+                <input type="password" style={cpInput} value={v} placeholder={ph} onChange={(e) => set(e.target.value)} />
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 11 }}>
+              <button className="btn pri sm" onClick={savePassword} disabled={pwBusy || !cur || !nw}>{pwBusy ? 'Saving…' : 'Change password'}</button>
             </div>
           </div>
 
@@ -4241,6 +4336,7 @@
       );
     };
 
+    const [acctOpen, setAcctOpen] = useState(false);
     const crumb = ({ home: 'Dashboard', unit: "My unit's staff", requests: 'Add nurse / PCA', status: 'Submission status', quick: 'Quick entry', quality: 'Quality data', patient: 'Patient statistics', history: 'My submissions', roster: 'Duty roster', profile: 'My profile', dept: 'Department & staff' })[view] || 'Submission status';
     const collectNav = CP_NAV_COLLECT.filter(([v]) => (v === 'patient' ? hasPatient : v === 'quick' ? hasPatient : hasQuality));
     const dl = cpDeadline(month);
@@ -4277,7 +4373,7 @@
             </div>
           </div>
           <div className="sb-foot">
-            <div className="avatar">{cpInitials(user.name)}</div>
+            <UnicoAvatar className="avatar" initials={cpInitials(user.name)} />
             <div onClick={() => go('profile')} title="Open my profile" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
               <div style={{ color: '#fff', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name || 'Collector'}</div>
               <div style={{ color: '#83909f', fontSize: 10.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{(inCharge ? 'In-charge' : 'Data Collector') + (depts[0] ? ' · ' + depts[0].name : '')}</div>
@@ -4307,7 +4403,33 @@
             <div style={pill(online ? ['#12776c', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.3)'] : ['#a92c42', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.28)'])} title="Connection">
               <span style={{ width: 7, height: 7, borderRadius: '50%', background: online ? '#3ddc97' : '#d23a52' }} />{online ? 'Online' : 'Offline'}
             </div>
-            <div style={{ width: 34, height: 34, borderRadius: 9, background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{cpInitials(user.name)}</div>
+            {/* Account menu. The portal has no settings screen, so this avatar is the
+                one place a collector or in-charge reaches their own profile, photo and
+                password — and the sign-out that used to hide in the sidebar footer. */}
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <button onClick={() => setAcctOpen((v) => !v)} title="My account"
+                style={{ width: 34, height: 34, borderRadius: 9, padding: 0, overflow: 'hidden', cursor: 'pointer', border: acctOpen ? '2px solid #0090ca' : '1px solid rgba(255,255,255,.9)', background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 13 }}>
+                <UnicoAvatar size={32} radius={8} initials={cpInitials(user.name)} />
+              </button>
+              {acctOpen && (
+                <React.Fragment>
+                  <div onClick={() => setAcctOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
+                  <div style={{ position: 'absolute', right: 0, top: 42, zIndex: 61, minWidth: 214, background: '#fff', borderRadius: 11, border: '1px solid rgba(125,145,180,.22)', boxShadow: '0 18px 40px rgba(31,59,90,.20)', overflow: 'hidden' }}>
+                    <div style={{ padding: '11px 13px', borderBottom: '1px solid rgba(125,145,180,.14)' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name || 'My account'}</div>
+                      <div style={{ fontSize: 11, color: '#6c7a8c' }}>{(inCharge ? 'In-charge' : 'Data Collector') + (user.username ? ' · @' + user.username : '')}</div>
+                    </div>
+                    <button onClick={() => { setAcctOpen(false); go('profile'); }}
+                      style={{ width: '100%', textAlign: 'left', padding: '10px 13px', border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, color: '#16202e', display: 'flex', alignItems: 'center', gap: 9 }}>
+                      {CP_ICON('M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0', 14, '#0072a3')}My profile &amp; photo
+                    </button>
+                    <a href="/logout" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 13px', borderTop: '1px solid rgba(125,145,180,.14)', fontSize: 12.5, fontWeight: 600, color: '#a92c42', textDecoration: 'none' }}>
+                      {CP_ICON('M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9', 14, '#a92c42')}Sign out
+                    </a>
+                  </div>
+                </React.Fragment>
+              )}
+            </div>
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '22px 26px 64px' }}>

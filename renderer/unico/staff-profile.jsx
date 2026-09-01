@@ -156,12 +156,15 @@ function StaffProfile({store, empId, setRoute}){
             {/* photo */}
             <div style={{display:'flex',flexDirection:'column',alignItems:'center',padding:'18px 22px 4px'}}>
               <div style={{borderRadius:14,padding:4,background:'var(--panel)',border:'1px solid var(--line)',boxShadow:'0 6px 16px rgba(0,0,0,.13)'}}>
+                  {/* READ-ONLY on purpose. This is the profile VIEW — the badge shows
+                      the photo, it does not edit it. Changing a personnel record's
+                      picture belongs with the rest of that record, behind "Edit
+                      profile", so a stray click on a page people mostly read cannot
+                      delete someone's photo. */}
                   <PhotoPicker
                   value={e.photo||null}
-                  onChange={(next)=>store.update(empId,{photo:next})}
                   initials={badgeIni} name={e.name} kind="staff" hue={badgeHue}
-                  w={104} h={120} radius={10} plain
-                  readOnly={!(window.unicoCan?window.unicoCan('staff','edit'):true)}
+                  w={104} h={120} radius={10} plain readOnly
                 />
               </div>
               <h2 style={{margin:'14px 0 3px',fontSize:19,fontWeight:800,letterSpacing:'-.2px',textAlign:'center'}}>{e.name}</h2>
@@ -1164,7 +1167,7 @@ function DeptPrivilegesSettings({ depts }){
 // Live preview of the record being typed: the ID card, the experience the register
 // will compute, and where this person can be deployed. Everything here is derived
 // from the form state, so it is a mirror rather than a second source of truth.
-function StaffFormRail({ f, editing }){
+function StaffFormRail({ f, editing, set }){
   const MK = window.MK, S = window.STAFF;
   const name = (f.name || '').trim();
   const isPca = (f.role || 'Nurse') === 'PCA';
@@ -1202,10 +1205,20 @@ function StaffFormRail({ f, editing }){
     <div style={{ display:'flex', flexDirection:'column', gap:14, position:'sticky', top:12 }}>
       {/* ID preview */}
       <div className="card" style={{ background:'linear-gradient(160deg,#16243a,#0d1b2e)', border:'1px solid rgba(255,255,255,.12)', color:'#fff', padding:'22px 18px', textAlign:'center' }}>
-        <div style={{ width:112, height:112, margin:'0 auto', borderRadius:'50%', display:'grid', placeItems:'center',
-          background: name ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'linear-gradient(135deg,#2b8f83,#0072a3)',
-          fontSize:38, fontWeight:700, color:'#fff', boxShadow:'0 10px 30px rgba(0,144,202,.35)' }}>
-          {name ? initials : '?'}
+        {/* The photo is set HERE, while the record is being created — waiting until
+            the profile exists meant every new nurse started life with a placeholder.
+            The upload returns a CDN url which rides along in the form state and is
+            saved with the rest of the record, so there is no second step. */}
+        <div style={{ display:'grid', placeItems:'center' }}>
+          <PhotoPicker
+            value={f.photo || null}
+            onChange={(next) => set && set('photo', next)}
+            initials={name ? initials : '?'} name={name || 'New staff member'}
+            kind="staff" size={112} radius="50%"
+            readOnly={!(window.unicoCan ? window.unicoCan('staff','edit') : true)}
+            style={{ background: name ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'linear-gradient(135deg,#2b8f83,#0072a3)',
+              fontSize:38, fontWeight:700, color:'#fff', boxShadow:'0 10px 30px rgba(0,144,202,.35)',
+              display:'grid', placeItems:'center' }}/>
         </div>
         <div style={{ fontSize:16, fontWeight:700, marginTop:12 }}>{name || ('New ' + (isPca ? 'PCA' : 'nurse'))}</div>
         <div style={{ fontSize:11.6, color:'#a8bdd6', marginTop:2 }}>
@@ -1219,7 +1232,7 @@ function StaffFormRail({ f, editing }){
           ))}
         </div>
         <div style={{ borderTop:'1px solid rgba(255,255,255,.14)', marginTop:14, paddingTop:10, fontSize:10.4, color:'#8fa3ba' }}>
-          Avatar is generated from the initials until a photo is on file.
+          {f.photo && f.photo.url ? 'Photo saved with this record.' : 'Tap the camera to add a photo — or leave it and the initials are used.'}
         </div>
       </div>
 
@@ -1618,7 +1631,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
         </div></div>
       </div>
       </div>
-      <StaffFormRail f={f} editing={editing}/>
+      <StaffFormRail f={f} editing={editing} set={set}/>
       </div>
       {saved&&<StaffSavedOverlay title={saved.title} sub={saved.sub} onClose={leaveAfterSave}/>}
     </div>

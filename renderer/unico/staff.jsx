@@ -8,10 +8,21 @@ function vaccColor(s){const t=VACC_TONE[vaccCanon(s)]||"flat";return t==='pos'?'
 function VaccBadge({status}){
   const cs=vaccCanon(status), c=vaccColor(status); return <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:11,fontWeight:600,padding:'2px 9px',borderRadius:20,color:c,background:c+'1c'}}><i style={{width:6,height:6,borderRadius:'50%',background:c}}/>{cs}</span>;
 }
-function Avatar({name,size=34,fontSize}){
+// Staff avatar for every list and table. Shows the record's PHOTO when one has been
+// uploaded (staff.photo = {url, publicId} from POST /api/upload) and falls back to
+// name-coloured initials otherwise — including when the url is dead or blocked, so a
+// list can never show the browser's broken-image glyph.
+function Avatar({name,size=34,fontSize,photo}){
+  const [dead,setDead]=React.useState(false);
+  React.useEffect(()=>{setDead(false);},[photo&&photo.url]);
   const parts=(name||'?').split(' '); const ini=(parts[0][0]||'')+(parts.length>1?parts[parts.length-1][0]:'');
   let h=0; for(const ch of name||'') h=(h*31+ch.charCodeAt(0))%360;
-  return <div style={{width:size,height:size,borderRadius:'50%',flexShrink:0,display:'grid',placeItems:'center',
+  const box={width:size,height:size,borderRadius:'50%',flexShrink:0};
+  if(photo&&photo.url&&!dead){
+    return <img src={photo.url} alt={ini.toUpperCase()} title={name||''} onError={()=>setDead(true)}
+      style={{...box,objectFit:'cover',display:'block',background:'#e8eef5'}}/>;
+  }
+  return <div style={{...box,display:'grid',placeItems:'center',
     fontSize:fontSize||size*0.4,fontWeight:700,color:'#fff',background:`linear-gradient(135deg,hsl(${h} 60% 52%),hsl(${(h+40)%360} 62% 42%))`}}>{ini.toUpperCase()}</div>;
 }
 function RoleBadge({role}){
@@ -267,7 +278,7 @@ function StaffDeptChart({list, setRoute, tone='#0090ca', role='Nurse'}){
             {[...members[sel]].sort((a,b)=>String(a.name).localeCompare(String(b.name))).map(e=>(
               <div key={e.id} onClick={()=>setRoute&&setRoute({view:'staffProfile',emp:e.id})} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 8px',borderRadius:7,cursor:'pointer',border:'1px solid var(--line-2)'}}
                 onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
-                <Avatar name={e.name} size={26}/>
+                <Avatar photo={e.photo} name={e.name} size={26}/>
                 <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
                   <div style={{fontSize:10.5,color:'var(--muted)'}}>{e.designation||'—'}{e.emp_id?' · '+e.emp_id:''}</div></div>
                 {e.phone&&<span className="num" style={{fontSize:11,color:'var(--ink-2)'}}>{e.phone}</span>}
@@ -310,7 +321,7 @@ function StaffExpChart({list, setRoute, role='Nurse'}){
               {[...cur].sort((a,b)=>S.expYears(b)-S.expYears(a)).map(e=>(
                 <div key={e.id} onClick={()=>setRoute({view:'staffProfile',emp:e.id})} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 8px',borderRadius:7,cursor:'pointer',border:'1px solid var(--line-2)'}}
                   onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
-                  <Avatar name={e.name} size={26}/>
+                  <Avatar photo={e.photo} name={e.name} size={26}/>
                   <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
                     <div style={{fontSize:10.5,color:'var(--muted)'}}>{e.designation||'—'} · {staffDeptShow(e.current_department)}</div></div>
                   <span className="num" style={{fontSize:11.5,color:'var(--ink-2)',fontWeight:600}}>{S.expLabel(e)}</span>
@@ -357,7 +368,7 @@ function StaffDesigChart({list, setRoute, role='Nurse'}){
               {[...curList].sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(e=>(
                 <div key={e.id} onClick={()=>setRoute({view:'staffProfile',emp:e.id})} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 8px',borderRadius:7,cursor:'pointer',border:'1px solid var(--line-2)'}}
                   onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
-                  <Avatar name={e.name} size={26}/>
+                  <Avatar photo={e.photo} name={e.name} size={26}/>
                   <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
                     <div style={{fontSize:10.5,color:'var(--muted)'}}>{canon(e.designation)||'—'} · {staffDeptShow(e.current_department)}</div></div>
                   <span className="num" style={{fontSize:11.5,color:'var(--ink-2)',fontWeight:600}}>{S.expLabel(e)}</span>
@@ -431,7 +442,7 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
           <div className="card-b" style={{display:'flex',flexDirection:'column',gap:2}}>
             {recent.map(e=>(
               <div key={e.id} style={{display:'flex',alignItems:'center',gap:11,padding:'8px 4px',borderBottom:'1px solid var(--line-2)',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-                <Avatar name={e.name} size={32}/>
+                <Avatar photo={e.photo} name={e.name} size={32}/>
                 <div style={{minWidth:0,flex:1}}><div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
                   <div style={{fontSize:11,color:'var(--muted)'}}>{e.designation} · {e.current_department}</div></div>
                 <div className="num" style={{fontSize:11.5,color:'var(--muted)'}}>{e.doj}</div>
@@ -445,7 +456,7 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
             {annv.length===0&&<div style={{color:'var(--faint)',fontSize:12.5,padding:'14px 4px'}}>No anniversaries in the window.</div>}
             {annv.slice(0,6).map(({e,annv,years})=>(
               <div key={e.id} style={{display:'flex',alignItems:'center',gap:11,padding:'8px 4px',borderBottom:'1px solid var(--line-2)',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-                <Avatar name={e.name} size={32}/>
+                <Avatar photo={e.photo} name={e.name} size={32}/>
                 <div style={{minWidth:0,flex:1}}><div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
                   <div style={{fontSize:11,color:'var(--muted)'}}>{e.current_department}</div></div>
                 <span className="tag" style={{background:'var(--blue-50)',color:'var(--blue-700)'}}>{years} yr{years>1?'s':''}</span>
@@ -486,7 +497,7 @@ function StaffHighlight({list, role, tone, setRoute, onClose}){
   const Row=({e,right})=>(
     <div onClick={()=>go(e)} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 6px',borderBottom:'1px solid var(--line-2)',cursor:'pointer',borderRadius:6}}
       onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
-      <Avatar name={e.name} size={30}/>
+      <Avatar photo={e.photo} name={e.name} size={30}/>
       <div style={{minWidth:0,flex:1}}>
         <div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
         <div style={{fontSize:10.5,color:'var(--muted)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.designation||'—'} · {e.current_department||'—'}</div>
@@ -572,7 +583,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
             <tbody>
               {filtered.map(e=>(
                 <tr key={e.id} style={{cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-                  <td style={{textAlign:'left'}}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar name={e.name} size={30}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div><div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification||'—'}</div></div></div></td>
+                  <td style={{textAlign:'left'}}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar photo={e.photo} name={e.name} size={30}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div><div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification||'—'}</div></div></div></td>
                   <td style={{textAlign:'left'}}><RoleBadge role={e.role}/></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDesig(e.designation)||'—'}</td>
@@ -603,7 +614,7 @@ function StaffCompliance({store, setRoute, role='Nurse'}){
         {rows.length===0?<div style={{padding:'24px',textAlign:'center',color:'var(--pos)',fontSize:13}}><Ic d={I.check} s={26} c="#1f9d57"/><div style={{marginTop:6}}>{emptyMsg}</div></div>:
         rows.map(e=>(
           <div key={e.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 14px',borderBottom:'1px solid var(--line-2)',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-            <Avatar name={e.name} size={30}/>
+            <Avatar photo={e.photo} name={e.name} size={30}/>
             <div style={{minWidth:0,flex:1}}><div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
               <div style={{fontSize:11,color:'var(--muted)'}}>{e.designation} · {e.current_department}</div></div>
             <button className="btn sm" onClick={ev=>{ev.stopPropagation();setRoute({view:'staffForm',emp:e.id});}}>Fix</button>
@@ -728,7 +739,7 @@ function ManageStaff({store, setRoute, role}){
                 <tr key={e.id} style={{opacity:e.is_active?1:.55}}>
                   <td style={{textAlign:'center'}}><span onClick={ev=>{ev.stopPropagation();store.toggleFav(e.id);}} style={{cursor:'pointer',fontSize:16,color:e.fav?'#e0a81e':'#c4ccd6'}}>{e.fav?'★':'☆'}</span></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
-                  <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
+                  <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar photo={e.photo} name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDesig(e.designation)||'—'}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
