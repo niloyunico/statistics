@@ -11713,12 +11713,17 @@ Object.assign(window, {
           .unico-profile .cred{animation:credIn .5s cubic-bezier(.2,.7,.3,1) both}
           @keyframes credIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
           @media (prefers-reduced-motion:reduce){.unico-profile .cred{animation:none}}
-          .unico-profile .cols{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:16;align-items:start}
+          /* NB: this is a real stylesheet, not a JSX style object — every length needs
+             its unit. A bare gap:16 is invalid CSS, silently dropped, and the two
+             columns rendered with NO gap: the Details card sat flush over the
+             credential's edge and clipped its values. */
+          .unico-profile .cols{display:grid;grid-template-columns:minmax(280px,360px) minmax(0,1fr);gap:16px;align-items:start}
           @media (max-width:980px){.unico-profile .cols{grid-template-columns:minmax(0,1fr)}}
-          .unico-profile .duo{display:grid;grid-template-columns:1fr 1fr;gap:12}
+          .unico-profile .cred{min-width:0}
+          .unico-profile .duo{display:grid;grid-template-columns:1fr 1fr;gap:12px}
           @media (max-width:560px){.unico-profile .duo{grid-template-columns:1fr}}
           .unico-profile input:focus-visible{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,144,202,.16)}
-          .unico-profile .wsrow{display:flex;align-items:center;gap:10;padding:9px 0;border-top:1px solid var(--line-2)}
+          .unico-profile .wsrow{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line-2)}
           .unico-profile .wsrow:first-child{border-top:0}
         `), React.createElement(SectionTitle, {
       icon: I.user,
@@ -11855,6 +11860,8 @@ Object.assign(window, {
         fontWeight: 600,
         marginLeft: 'auto',
         textAlign: 'right',
+        minWidth: 0,
+        overflowWrap: 'anywhere',
         wordBreak: 'break-word',
         color: v === 'Not recorded' || v === '— — — —' ? 'var(--faint)' : 'var(--ink)'
       })
