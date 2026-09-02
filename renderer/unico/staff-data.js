@@ -36,6 +36,11 @@
   const TRAININGS=["BLS","ACLS","PALS","Neonatal Resuscitation (NRP)","First Aid","CPR",
     "ICU / Critical Care","Ventilator Management","Wound Care","IV Cannulation","Phlebotomy",
     "Dialysis","Cath Lab Assist","OT Scrub","Triage","Infection Control","Medication Safety","Fire Safety"];
+  // Extracurricular activities / talents — the form's chip picker also lets any
+  // custom value be added, so this list is just the common starting set.
+  const EXTRACURRICULARS=["Dancing","Acting","Cooking","Singing","Music / Instrument","Sports",
+    "Painting / Drawing","Writing / Poetry","Photography","Anchoring / Hosting","Debate / Public Speaking",
+    "Handicrafts","Gardening","Volunteering / Social Work"];
 
   // PCA (Patient Care Assistant) role config
   const ROLES=["Nurse","PCA"];
@@ -425,7 +430,7 @@
     return api;
   }
 
-  window.STAFF={DEPARTMENTS,DESIGNATIONS,QUALIFICATIONS,VACCINATION_STATES,TRAININGS,VACC_OK,canonVacc,
+  window.STAFF={DEPARTMENTS,DESIGNATIONS,QUALIFICATIONS,VACCINATION_STATES,TRAININGS,EXTRACURRICULARS,VACC_OK,canonVacc,
     ROLES,PCA_DESIGNATIONS,PCA_QUALIFICATIONS,PCA_TRAININGS,designationsFor,qualificationsFor,
     NURSE_PRIVILEGE_GROUPS,PCA_PRIVILEGE_GROUPS,privilegeGroupsFor,privKey,privilegeStats,
     loadCustomPrivileges,addCustomPrivilege,removeCustomPrivilege,

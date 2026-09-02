@@ -221,6 +221,7 @@ function StaffProfile({store, empId, setRoute}){
               <div style={{gridColumn:'1 / -1'}}>{lbl('Department(s)')}{deptChipRow(e.current_department)}</div>
               <div>{lbl('Qualification')}{chipRow(e.qualification,{bg:'#eef8fc',fg:'#0072a3',br:'#dceffa'})}</div>
               <div>{lbl('Special Training')}{chipRow(e.special_training,{bg:'#fff4e5',fg:'#b5670a',br:'#ffe2b8'})}</div>
+              <div style={{gridColumn:'1 / -1'}}>{lbl('Extracurricular Activities')}{chipRow(e.extracurricular,{bg:'#f1eefb',fg:'#6a52d4',br:'#e3dcf7'})}</div>
             </div>
           </div>
 
@@ -1336,13 +1337,14 @@ function StaffForm({store, empId, setRoute, role, depts}){
   const existing=editing?store.get(empId):null;
   const [f,setF]=React.useState(()=> existing? {...existing, prior_experience_entries:initPriorEntries(existing)} : {
     role:role||'Nurse',emp_id:'',name:'',phone:'',qualification:'',designation:'',current_department:'',doj:'',
-    prior_experience_entries:[],previous_experience:'',special_training:'',hepatitis_b_vaccination:'',remarks:'',privileges:{}
+    prior_experience_entries:[],previous_experience:'',special_training:'',extracurricular:'',hepatitis_b_vaccination:'',remarks:'',privileges:{}
   });
   const [err,setErr]=React.useState('');
   const [saved,setSaved]=React.useState(null);      // {title,sub} once the write succeeded
   const [customQ,setCustomQ]=React.useState('');
   const [customT,setCustomT]=React.useState('');
   const [customD,setCustomD]=React.useState('');
+  const [customX,setCustomX]=React.useState('');   // custom extracurricular activity
   // Direct "previous experience (excl. UNICO)" entry — a simple Years+Months input
   // used when the experience is NOT itemised by organisation below.
   const priorInit0=existing&&existing.prior_experience_years!=null&&existing.prior_experience_years!==''&&!isNaN(existing.prior_experience_years)?+existing.prior_experience_years:0;
@@ -1527,6 +1529,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
             {field('Name *',inp('name','Full name'))}
             {field('Phone',inp('phone','01XXXXXXXXX'))}
             <div style={{gridColumn:'1 / -1'}}>{field('Qualification'+(chipsOf('qualification').length?' · '+chipsOf('qualification').length+' selected':''),multiChk('qualification',S.qualificationsFor(f.role),customQ,setCustomQ))}</div>
+            <div style={{gridColumn:'1 / -1'}}>{field('Extracurricular Activities'+(chipsOf('extracurricular').length?' · '+chipsOf('extracurricular').length+' selected':''),multiChk('extracurricular',S.EXTRACURRICULARS||[],customX,setCustomX,'Add another activity — e.g. Chess…'))}</div>
           </>)}
           {sec('Job',<>
             {field('Designation',<SelectDropdown value={f.designation} onChange={v=>set('designation',v)} options={desigOpts} labelFn={canonDesig} placeholder="Select or type — e.g. Nurse Manager, Supervisor"/>)}

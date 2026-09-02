@@ -1681,6 +1681,11 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   const TRAININGS=["BLS","ACLS","PALS","Neonatal Resuscitation (NRP)","First Aid","CPR",
     "ICU / Critical Care","Ventilator Management","Wound Care","IV Cannulation","Phlebotomy",
     "Dialysis","Cath Lab Assist","OT Scrub","Triage","Infection Control","Medication Safety","Fire Safety"];
+  // Extracurricular activities / talents — the form's chip picker also lets any
+  // custom value be added, so this list is just the common starting set.
+  const EXTRACURRICULARS=["Dancing","Acting","Cooking","Singing","Music / Instrument","Sports",
+    "Painting / Drawing","Writing / Poetry","Photography","Anchoring / Hosting","Debate / Public Speaking",
+    "Handicrafts","Gardening","Volunteering / Social Work"];
 
   // PCA (Patient Care Assistant) role config
   const ROLES=["Nurse","PCA"];
@@ -2070,7 +2075,7 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     return api;
   }
 
-  window.STAFF={DEPARTMENTS,DESIGNATIONS,QUALIFICATIONS,VACCINATION_STATES,TRAININGS,VACC_OK,canonVacc,
+  window.STAFF={DEPARTMENTS,DESIGNATIONS,QUALIFICATIONS,VACCINATION_STATES,TRAININGS,EXTRACURRICULARS,VACC_OK,canonVacc,
     ROLES,PCA_DESIGNATIONS,PCA_QUALIFICATIONS,PCA_TRAININGS,designationsFor,qualificationsFor,
     NURSE_PRIVILEGE_GROUPS,PCA_PRIVILEGE_GROUPS,privilegeGroupsFor,privKey,privilegeStats,
     loadCustomPrivileges,addCustomPrivilege,removeCustomPrivilege,
@@ -17139,7 +17144,7 @@ function RoleBadge({
     }
   }, role || 'Nurse');
 }
-const STAFF_EXPORT_COLS = [['Emp ID', 'emp_id'], ['Name', 'name'], ['Role', 'role'], ['Designation', 'designation'], ['Department', 'current_department'], ['Qualification', 'qualification'], ['DOJ', 'doj'], ['Experience', 'total_experience_text'], ['Special Training', 'special_training'], ['Hep-B Vaccination', 'hepatitis_b_vaccination'], ['Phone', 'phone'], ['Remarks', 'remarks']];
+const STAFF_EXPORT_COLS = [['Emp ID', 'emp_id'], ['Name', 'name'], ['Role', 'role'], ['Designation', 'designation'], ['Department', 'current_department'], ['Qualification', 'qualification'], ['DOJ', 'doj'], ['Experience', 'total_experience_text'], ['Special Training', 'special_training'], ['Extracurricular Activities', 'extracurricular'], ['Hep-B Vaccination', 'hepatitis_b_vaccination'], ['Phone', 'phone'], ['Remarks', 'remarks']];
 function esc(v) {
   return ((v == null ? '' : v) + '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -20314,6 +20319,14 @@ function StaffProfile({
     bg: '#fff4e5',
     fg: '#b5670a',
     br: '#ffe2b8'
+  })), React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1'
+    }
+  }, lbl('Extracurricular Activities'), chipRow(e.extracurricular, {
+    bg: '#f1eefb',
+    fg: '#6a52d4',
+    br: '#e3dcf7'
   })))), React.createElement("div", {
     className: "card",
     style: {
@@ -23413,6 +23426,7 @@ function StaffForm({
     prior_experience_entries: [],
     previous_experience: '',
     special_training: '',
+    extracurricular: '',
     hepatitis_b_vaccination: '',
     remarks: '',
     privileges: {}
@@ -23422,6 +23436,7 @@ function StaffForm({
   const [customQ, setCustomQ] = React.useState('');
   const [customT, setCustomT] = React.useState('');
   const [customD, setCustomD] = React.useState('');
+  const [customX, setCustomX] = React.useState('');
   const priorInit0 = existing && existing.prior_experience_years != null && existing.prior_experience_years !== '' && !isNaN(existing.prior_experience_years) ? +existing.prior_experience_years : 0;
   const [dpY, setDpY] = React.useState(() => {
     const y = Math.floor(priorInit0);
@@ -23854,7 +23869,11 @@ function StaffForm({
     style: {
       gridColumn: '1 / -1'
     }
-  }, field('Qualification' + (chipsOf('qualification').length ? ' · ' + chipsOf('qualification').length + ' selected' : ''), multiChk('qualification', S.qualificationsFor(f.role), customQ, setCustomQ))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', React.createElement(SelectDropdown, {
+  }, field('Qualification' + (chipsOf('qualification').length ? ' · ' + chipsOf('qualification').length + ' selected' : ''), multiChk('qualification', S.qualificationsFor(f.role), customQ, setCustomQ))), React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1'
+    }
+  }, field('Extracurricular Activities' + (chipsOf('extracurricular').length ? ' · ' + chipsOf('extracurricular').length + ' selected' : ''), multiChk('extracurricular', S.EXTRACURRICULARS || [], customX, setCustomX, 'Add another activity — e.g. Chess…'))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', React.createElement(SelectDropdown, {
     value: f.designation,
     onChange: v => set('designation', v),
     options: desigOpts,

@@ -31,7 +31,7 @@ function RoleBadge({role}){
 }
 
 /* ---------------- Export (Excel / Word / CSV / Print) ---------------- */
-const STAFF_EXPORT_COLS=[['Emp ID','emp_id'],['Name','name'],['Role','role'],['Designation','designation'],['Department','current_department'],['Qualification','qualification'],['DOJ','doj'],['Experience','total_experience_text'],['Special Training','special_training'],['Hep-B Vaccination','hepatitis_b_vaccination'],['Phone','phone'],['Remarks','remarks']];
+const STAFF_EXPORT_COLS=[['Emp ID','emp_id'],['Name','name'],['Role','role'],['Designation','designation'],['Department','current_department'],['Qualification','qualification'],['DOJ','doj'],['Experience','total_experience_text'],['Special Training','special_training'],['Extracurricular Activities','extracurricular'],['Hep-B Vaccination','hepatitis_b_vaccination'],['Phone','phone'],['Remarks','remarks']];
 function esc(v){return ((v==null?'':v)+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function downloadBlob(content,filename,mime){
   const blob=new Blob([content],{type:mime}); const url=URL.createObjectURL(blob);
