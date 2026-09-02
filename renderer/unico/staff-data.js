@@ -40,7 +40,9 @@
   // custom value be added, so this list is just the common starting set.
   const EXTRACURRICULARS=["Dancing","Acting","Cooking","Singing","Music / Instrument","Sports",
     "Painting / Drawing","Writing / Poetry","Photography","Anchoring / Hosting","Debate / Public Speaking",
-    "Handicrafts","Gardening","Volunteering / Social Work"];
+    "Handicrafts","Gardening","Volunteering / Social Work",
+    "Communication","Organizing","Planning","Event Management","Leadership","Teamwork",
+    "Teaching / Mentoring","Counselling","Decoration & Design","Fundraising","Sports Coaching","Cultural Programs"];
 
   // PCA (Patient Care Assistant) role config
   const ROLES=["Nurse","PCA"];

@@ -574,12 +574,14 @@
 
           {/* avatar in the shift-progress ring — click for confetti */}
           <div onClick={celebrate} title="Shift progress · click me"
-            style={fs('position:relative;width:74px;height:74px;padding:4px;border-radius:20px;flex-shrink:0;display:grid;place-items:center;background:conic-gradient(#3ddc97 ' + pct.toFixed(1) + '%,' + (night ? 'rgba(255,255,255,.18)' : 'rgba(12,28,52,.14)') + ' 0);' + (on ? 'animation:ringGlow 3s ease-in-out infinite;' : '') + 'transition:background .8s,transform .25s;cursor:pointer')}>
+            style={fs('position:relative;z-index:4;width:74px;height:74px;padding:4px;border-radius:20px;flex-shrink:0;display:grid;place-items:center;background:conic-gradient(#3ddc97 ' + pct.toFixed(1) + '%,' + (night ? 'rgba(255,255,255,.18)' : 'rgba(12,28,52,.14)') + ' 0);' + (on ? 'animation:ringGlow 3s ease-in-out infinite;' : '') + 'transition:background .8s,transform .25s;cursor:pointer')}>
             <div style={sx('width:66px;height:66px;border-radius:16px;background:linear-gradient(135deg,#3ab5a7,#0090ca);color:#fff;display:grid;place-items:center;font-weight:800;font-size:23px;overflow:hidden')}>
               {u && u.photo && u.photo.url ? <img src={u.photo.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials}
             </div>
           </div>
-          <div style={sx('position:relative;min-width:0;flex:1 1 200px')}>
+          {/* z-index above the sun's 3 so the disc can never sit ON the headline;
+              pointer-events:none so a sun passing behind the text stays clickable. */}
+          <div style={sx('position:relative;min-width:0;flex:1 1 200px;z-index:4;pointer-events:none')}>
             {/* The greeting IS the headline — a person is welcomed first, filed second. */}
             <div style={fs('font-size:34px;font-weight:800;letter-spacing:-.8px;line-height:1.1;color:' + ink.strong + ';animation:textGlow 4s ease-in-out infinite')}>
               {greeting} <span style={sx('font-size:30px;letter-spacing:0')}>{greetEmoji}</span>
