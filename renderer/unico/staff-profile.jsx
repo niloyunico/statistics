@@ -161,10 +161,13 @@ function StaffProfile({store, empId, setRoute}){
                       picture belongs with the rest of that record, behind "Edit
                       profile", so a stray click on a page people mostly read cannot
                       delete someone's photo. */}
+                  {/* zoomable: clicking the portrait opens it LARGE in a photo-frame
+                      lightbox — still strictly view-only. */}
                   <PhotoPicker
                   value={e.photo||null}
                   initials={badgeIni} name={e.name} kind="staff" hue={badgeHue}
                   w={104} h={120} radius={10} plain readOnly
+                  zoomable zoomSub={desig||undefined}
                 />
               </div>
               <h2 style={{margin:'14px 0 3px',fontSize:19,fontWeight:800,letterSpacing:'-.2px',textAlign:'center'}}>{e.name}</h2>

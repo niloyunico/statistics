@@ -812,6 +812,12 @@
     // Per-incident reports (adverse-event indicators): each with its own patient + CAPA
     // detail; the month's count auto-derives from how many are logged.
     const [incidents, setIncidents] = useState([]);
+    // "Not observed" — an explicit record that NO observation / data collection was
+    // done this month, so a skipped month is never entered (or read) as a real 0.
+    // The reason is REQUIRED: a month is only allowed to be blank on the record when
+    // someone has said why (staff shortage, unit closed, no eligible cases…).
+    const [notObserved, setNotObserved] = useState(false);
+    const [noReason, setNoReason] = useState('');
     const [remark, setRemark] = useState('');
     const [responsible, setResponsible] = useState(lockResp ? (me.name || '') : ((prefill && prefill.responsible) || ''));
     const [busy, setBusy] = useState(false);
@@ -950,7 +956,12 @@
     useEffect(() => {
       const blankG = { nurse: '', doctor: '', pca: '', other: '' };
       const toG = (o) => ({ nurse: o && o.nurse != null ? String(o.nurse) : '', doctor: o && o.doctor != null ? String(o.doctor) : '', pca: o && o.pca != null ? String(o.pca) : '', other: o && o.other != null ? String(o.other) : '' });
-      if (!curInd) { setGroups(blankG); setGroupsDen(blankG); setDeptRows([]); setDirectNum(''); setNumMode('direct'); setDen(''); setIncidents([]); setCapa({ finding: '', corrective: '', preventive: '' }); return; }
+      if (!curInd) { setGroups(blankG); setGroupsDen(blankG); setDeptRows([]); setDirectNum(''); setNumMode('direct'); setDen(''); setIncidents([]); setCapa({ finding: '', corrective: '', preventive: '' }); setNotObserved(false); setNoReason(''); return; }
+      const wasNO = !!(curInd.mNotObserved && curInd.mNotObserved[month]);
+      setNotObserved(wasNO);
+      // Recover the recorded reason from the month note ("Not observed — <reason>").
+      const noNote = wasNO ? String((curInd.monthRemarks || {})[month] || '') : '';
+      setNoReason(noNote.replace(/^not\s*observed\s*[—–:-]*\s*/i, '').trim());
       const g = curInd.mGroups && curInd.mGroups[month];
       const gd = curInd.mGroupsDen && curInd.mGroupsDen[month];
       const dep = curInd.mDeptBreakdown && curInd.mDeptBreakdown[month];
@@ -1005,6 +1016,7 @@
     // it's flagged as a CORRECTION that goes to an administrator for review (it doesn't
     // overwrite the live value until approved). A fresh "Add a new indicator" is never a correction.
     const qExists = !!(curInd && (
+      (curInd.mNotObserved && curInd.mNotObserved[month]) ||
       (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length) ||
       (curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '') ||
       (curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '') ||
@@ -1018,7 +1030,8 @@
       if (isNew && !newInd.name.trim()) { toast('Enter the new indicator name', 'error'); return; }
       if (!month) { toast('Pick a month', 'error'); return; }
       if (qCorrection && !qReason.trim()) { toast('Please add a reason for the correction.', 'error'); return; }
-      if (isRate && !denLockedForCollector && !(denNum > 0)) {
+      if (notObserved && !noReason.trim()) { toast('Please say WHY it was not observed this month.', 'error'); return; }
+      if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
         // Zero-exposure month (e.g. "no surgical discharges"): 0 events over an EXPLICIT 0
         // denominator is a legitimate report — only refuse when events exist without a base,
         // or the denominator was left blank (a deliberate 0 must be typed).
@@ -1034,19 +1047,24 @@
         valueType: computeAsRate ? (formula === 'pct' ? '%' : 'Rate') : 'Count', entryMode: computeAsRate ? 'rate' : 'count', mult,
         formula: computeAsRate ? (isRate ? formula : 'rate1000') : 'count',
         numLabel: computeAsRate ? numLabel : undefined, denLabel: computeAsRate ? denLabel : undefined, unit: unitQ,
-        value: computeAsRate ? undefined : numerator, num: computeAsRate ? numerator : undefined, den: computeAsRate ? (denLockedForCollector ? undefined : denNum) : undefined,
-        groups: numMode === 'group' ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
-        groupsDen: (numMode === 'group' && computeAsRate) ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
-        deptBreakdown: numMode === 'dept' ? deptRows.map((r) => ({ dept: r.dept || '', g: GROUP_KEYS.reduce((o, [k]) => (o[k] = { n: Number(r.g[k].n) || 0, d: Number(r.g[k].d) || 0 }, o), {}) })) : undefined,
-        capa: (capa.finding || capa.corrective || capa.preventive) ? { finding: capa.finding, corrective: capa.corrective, preventive: capa.preventive } : undefined,
+        // "Not observed" submits the flag ONLY — no value/breakdown, so nothing can be
+        // mistaken for a real reading when the admin approves it.
+        notObserved: notObserved || undefined,
+        value: (notObserved || computeAsRate) ? undefined : numerator, num: (!notObserved && computeAsRate) ? numerator : undefined, den: (!notObserved && computeAsRate) ? (denLockedForCollector ? undefined : denNum) : undefined,
+        groups: (!notObserved && numMode === 'group') ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
+        groupsDen: (!notObserved && numMode === 'group' && computeAsRate) ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
+        deptBreakdown: (!notObserved && numMode === 'dept') ? deptRows.map((r) => ({ dept: r.dept || '', g: GROUP_KEYS.reduce((o, [k]) => (o[k] = { n: Number(r.g[k].n) || 0, d: Number(r.g[k].d) || 0 }, o), {}) })) : undefined,
+        capa: (!notObserved && (capa.finding || capa.corrective || capa.preventive)) ? { finding: capa.finding, corrective: capa.corrective, preventive: capa.preventive } : undefined,
         // Per-incident reports (only those with something filled in). The server stores
         // them on the indicator's month; the count above already reflects how many.
-        incidents: incidents.length ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, incidentDate: x.incidentDate, admissionDate: x.admissionDate, victimName: x.victimName, victimId: x.victimId, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : undefined,
-        remark,
+        incidents: (!notObserved && incidents.length) ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, incidentDate: x.incidentDate, admissionDate: x.admissionDate, victimName: x.victimName, victimId: x.victimId, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : undefined,
+        // The not-observed reason IS the month's note ("Not observed — why"); any general
+        // remark typed below is appended in brackets so nothing the collector wrote is lost.
+        remark: notObserved ? ('Not observed — ' + noReason.trim() + (remark.trim() ? ' (' + remark.trim() + ')' : '')) : remark,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: qCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setDen(''); setRemark(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
+        if (r.ok) { setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: qCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -1116,6 +1134,33 @@
                   </div>
                 )}
               </div>
+              {/* NOT OBSERVED — record that no observation / data collection happened this
+                  month, instead of forcing a number (or worse, a fake 0). Marked RED so it
+                  reads as an exception, and the WHY is a required field of its own. */}
+              <div style={{ border: '1px solid ' + (notObserved ? '#e8a3b0' : 'var(--line)'), background: notObserved ? 'rgba(210,58,82,.07)' : 'transparent', borderRadius: 9, padding: '10px 13px', marginBottom: 13 }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={notObserved} onChange={(e) => setNotObserved(e.target.checked)} style={{ marginTop: 2, flexShrink: 0, accentColor: '#d23a52' }} />
+                  <span style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                    <b style={{ color: '#d23a52' }}>⛔ Not observed this month</b>
+                    <span style={{ display: 'block', fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>
+                      Tick when no observation / data collection was done for {monthLabel(month)} — the month is recorded as <b style={{ color: '#d23a52' }}>Not observed</b> instead of a value, so it can never be mistaken for a real 0.
+                    </span>
+                  </span>
+                </label>
+                {notObserved && (
+                  <div style={{ marginTop: 9, paddingTop: 9, borderTop: '1px solid #e8a3b0' }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: '#d23a52', marginBottom: 5 }}>Why was it not observed? <span style={{ fontWeight: 400 }}>(required)</span></div>
+                    <input
+                      style={{ ...inputStyle, borderColor: noReason.trim() ? undefined : '#d23a52', background: '#fff' }}
+                      value={noReason} onChange={(e) => setNoReason(e.target.value)}
+                      placeholder="e.g. staff shortage / unit closed / no eligible cases / auditor on leave"
+                    />
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5, lineHeight: 1.5 }}>
+                      Value entry is disabled — this reason is saved as the month’s note (“Not observed — …”).
+                    </div>
+                  </div>
+                )}
+              </div>
               {guide && (
                 <div style={{ border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9, marginBottom: 13, overflow: 'hidden' }}>
                   <div onClick={() => setGuideOpen((o) => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 13px', background: 'var(--blue-50)', cursor: 'pointer', userSelect: 'none' }}>
@@ -1144,6 +1189,7 @@
                   )}
                 </div>
               )}
+              {!notObserved && (<>
               {numMode === 'direct' && !isIncidentType && (
                 <Field
                   label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{denLockedForCollector ? '(set by administrator)' : denAdminOnly ? '(admin-set — applies to all months)' : isRate ? '(denominator — required)' : '(denominator — optional, for a rate)'}</span></span>}
@@ -1386,6 +1432,7 @@
                 </div>
               </div>
               )}
+              </>)}
             </>
           )}
           {lockResp
@@ -1403,7 +1450,7 @@
           {qCorrection && <Field label="Reason for the correction"><input style={inputStyle} value={qReason} onChange={(e) => setQReason(e.target.value)} placeholder="e.g. wrong denominator — should be Y not X" /></Field>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>
-            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setDone(null); }}>Clear</button>
+            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); setDone(null); }}>Clear</button>
           </div>
         </Card>
       </div>
@@ -1429,7 +1476,7 @@
     return m;
   }
   function valuesSummary(s) {
-    if (s.type === 'quality') return (s.indicatorName || '') + ' · ' + monthLabel(s.month) + (s.value != null ? ' = ' + s.value : '') + (s.remark ? ' (' + s.remark + ')' : '');
+    if (s.type === 'quality') return (s.indicatorName || '') + ' · ' + monthLabel(s.month) + (s.notObserved ? ' = Not observed' : (s.value != null ? ' = ' + s.value : '')) + (s.remark ? ' (' + s.remark + ')' : '');
     const v = s.values || {}; const lm = colLabelMap(s);
     const parts = Object.keys(v).map((k) => (lm[k] || prettyKey(k)) + ': ' + v[k]);
     return monthLabel(s.month) + ' — ' + (parts.length ? parts.join(', ') : '(no values)');
@@ -1438,7 +1485,9 @@
   // scanning: the reporting month gets an amber chip, the submitted value is bold.
   const dcMonthChip = (m) => <span style={{ background: '#fff4e0', color: '#9a6b00', fontWeight: 700, padding: '1px 7px', borderRadius: 6, whiteSpace: 'nowrap' }}>{monthLabel(m)}</span>;
   function valuesSummaryEl(s) {
-    if (s.type === 'quality') return <>{(s.indicatorName || '') + ' · '}{dcMonthChip(s.month)}{s.value != null && <> = <b style={{ color: 'var(--ink)' }}>{s.value}</b></>}{s.remark ? ' (' + s.remark + ')' : ''}</>;
+    if (s.type === 'quality') return <>{(s.indicatorName || '') + ' · '}{dcMonthChip(s.month)}{s.notObserved
+      ? <> = <b style={{ background: 'rgba(210,58,82,.1)', color: '#d23a52', border: '1px solid #e8a3b0', padding: '1px 7px', borderRadius: 6, whiteSpace: 'nowrap' }}>⛔ Not observed</b></>
+      : s.value != null && <> = <b style={{ color: 'var(--ink)' }}>{s.value}</b></>}{s.remark ? ' (' + s.remark + ')' : ''}</>;
     const v = s.values || {}; const lm = colLabelMap(s);
     const keys = Object.keys(v);
     return <>{dcMonthChip(s.month)}{' — '}{keys.length
@@ -1584,7 +1633,9 @@
             {s.type === 'quality' && (s.indicatorName || isRate) && (() => {
               const numL = s.numLabel || 'Numerator', denL = s.denLabel || 'Denominator';
               const labelFormula = isRate ? '(' + numL + ' ÷ ' + denL + ') × ' + rateMult : (s.numLabel || s.indicatorName || 'Recorded value');
-              const numeric = isRate
+              const numeric = s.notObserved
+                ? 'Not observed — no data was collected this month'
+                : isRate
                 ? '(' + (effNum === '' || effNum == null ? '—' : effNum) + ' ÷ ' + (effDen === '' || effDen == null ? '—' : effDen) + ') × ' + rateMult + ' = ' + shownVal + (s.unit ? ' ' + s.unit : '')
                 : (s.value == null ? '—' : s.value) + (s.unit ? ' ' + s.unit : '');
               return (
@@ -1597,7 +1648,7 @@
                   <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4 }}>Formula</span>
                     <code style={{ fontSize: 12.5, fontWeight: 700, color: '#0f2a5a', background: '#fff', border: '1px solid #dbe6f7', borderRadius: 7, padding: '3px 9px' }}>{labelFormula}</code>
-                    <span style={{ fontSize: 13, fontWeight: 800, color: '#0b6aa2' }}>{numeric}</span>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: s.notObserved ? '#d23a52' : '#0b6aa2' }}>{numeric}</span>
                   </div>
                 </div>
               );
@@ -1612,6 +1663,7 @@
               {s.reviewedBy && <Meta label="Reviewed by" value={s.reviewedBy + (s.reviewedAt ? ' · ' + when(s.reviewedAt) : '')} />}
               {s.editedBy && <Meta label="Last edited by" value={s.editedBy + (s.editedAt ? ' · ' + when(s.editedAt) : '')} />}
               {s.rejectReason && <Meta label="Reject reason" value={s.rejectReason} />}
+              {s.notObserved && <Meta label="Entry" value="Not observed — no observation was done this month" />}
               {s.isCorrection && <Meta label="Edit request" value="Correction — pending approval" />}
               {s.isCorrection && s.correctionReason && <Meta label="Correction reason" value={s.correctionReason} />}
             </div>

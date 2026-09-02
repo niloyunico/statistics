@@ -52,3 +52,6 @@ scripts/.fixture-*.json
 
 # Role-migration rollback list (operational state, names real accounts)
 scripts/.collectors-to-incharge.rollback.json
+
+.vercel
+.env*

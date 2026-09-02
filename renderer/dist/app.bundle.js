@@ -52194,6 +52194,8 @@ window.LockScreen = LockScreen;
       preventive: ''
     });
     const [incidents, setIncidents] = useState([]);
+    const [notObserved, setNotObserved] = useState(false);
+    const [noReason, setNoReason] = useState('');
     const [remark, setRemark] = useState('');
     const [responsible, setResponsible] = useState(lockResp ? me.name || '' : prefill && prefill.responsible || '');
     const [busy, setBusy] = useState(false);
@@ -52387,8 +52389,14 @@ window.LockScreen = LockScreen;
           corrective: '',
           preventive: ''
         });
+        setNotObserved(false);
+        setNoReason('');
         return;
       }
+      const wasNO = !!(curInd.mNotObserved && curInd.mNotObserved[month]);
+      setNotObserved(wasNO);
+      const noNote = wasNO ? String((curInd.monthRemarks || {})[month] || '') : '';
+      setNoReason(noNote.replace(/^not\s*observed\s*[—–:-]*\s*/i, '').trim());
       const g = curInd.mGroups && curInd.mGroups[month];
       const gd = curInd.mGroupsDen && curInd.mGroupsDen[month];
       const dep = curInd.mDeptBreakdown && curInd.mDeptBreakdown[month];
@@ -52485,7 +52493,7 @@ window.LockScreen = LockScreen;
     }, [indId, month]);
     const result = computeAsRate ? denNum > 0 ? Math.round(numerator / denNum * mult * 100) / 100 : 0 : numerator;
     const ratePending = computeAsRate && numerator > 0 && !(denNum > 0);
-    const qExists = !!(curInd && (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
+    const qExists = !!(curInd && (curInd.mNotObserved && curInd.mNotObserved[month] || curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
     const qCorrection = lockResp && !isNew && qExists;
     const [qReason, setQReason] = useState('');
     const submit = () => {
@@ -52509,7 +52517,11 @@ window.LockScreen = LockScreen;
         toast('Please add a reason for the correction.', 'error');
         return;
       }
-      if (isRate && !denLockedForCollector && !(denNum > 0)) {
+      if (notObserved && !noReason.trim()) {
+        toast('Please say WHY it was not observed this month.', 'error');
+        return;
+      }
+      if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
         const explicitZero = !(Number(numerator) > 0) && String(den == null ? '' : den).trim() !== '' && Number(den) === 0;
         if (!explicitZero) {
           toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error');
@@ -52533,24 +52545,25 @@ window.LockScreen = LockScreen;
         numLabel: computeAsRate ? numLabel : undefined,
         denLabel: computeAsRate ? denLabel : undefined,
         unit: unitQ,
-        value: computeAsRate ? undefined : numerator,
-        num: computeAsRate ? numerator : undefined,
-        den: computeAsRate ? denLockedForCollector ? undefined : denNum : undefined,
-        groups: numMode === 'group' ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
-        groupsDen: numMode === 'group' && computeAsRate ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
-        deptBreakdown: numMode === 'dept' ? deptRows.map(r => ({
+        notObserved: notObserved || undefined,
+        value: notObserved || computeAsRate ? undefined : numerator,
+        num: !notObserved && computeAsRate ? numerator : undefined,
+        den: !notObserved && computeAsRate ? denLockedForCollector ? undefined : denNum : undefined,
+        groups: !notObserved && numMode === 'group' ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
+        groupsDen: !notObserved && numMode === 'group' && computeAsRate ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
+        deptBreakdown: !notObserved && numMode === 'dept' ? deptRows.map(r => ({
           dept: r.dept || '',
           g: GROUP_KEYS.reduce((o, [k]) => (o[k] = {
             n: Number(r.g[k].n) || 0,
             d: Number(r.g[k].d) || 0
           }, o), {})
         })) : undefined,
-        capa: capa.finding || capa.corrective || capa.preventive ? {
+        capa: !notObserved && (capa.finding || capa.corrective || capa.preventive) ? {
           finding: capa.finding,
           corrective: capa.corrective,
           preventive: capa.preventive
         } : undefined,
-        incidents: incidents.length ? incidents.map(x => ({
+        incidents: !notObserved && incidents.length ? incidents.map(x => ({
           patientName: x.patientName,
           uhid: x.uhid,
           age: x.age,
@@ -52566,7 +52579,7 @@ window.LockScreen = LockScreen;
           preventive: x.preventive,
           remark: x.remark
         })) : undefined,
-        remark,
+        remark: notObserved ? 'Not observed — ' + noReason.trim() + (remark.trim() ? ' (' + remark.trim() + ')' : '') : remark,
         responsible: lockResp ? {
           name: me.name
         } : matched ? {
@@ -52609,6 +52622,8 @@ window.LockScreen = LockScreen;
           setIncidents([]);
           setDen('');
           setRemark('');
+          setNotObserved(false);
+          setNoReason('');
           if (isNew) {
             setIndId('');
             setNewInd({
@@ -52828,7 +52843,84 @@ window.LockScreen = LockScreen;
         flexDirection: 'column',
         gap: 3
       }
-    }, numDef && React.createElement("div", null, React.createElement("b", null, numLabel, ":"), " ", numDef), isRate && React.createElement("div", null, React.createElement("b", null, "How to count ", denLabel, " (denominator):"), " ", denDef))), guide && React.createElement("div", {
+    }, numDef && React.createElement("div", null, React.createElement("b", null, numLabel, ":"), " ", numDef), isRate && React.createElement("div", null, React.createElement("b", null, "How to count ", denLabel, " (denominator):"), " ", denDef))), React.createElement("div", {
+      style: {
+        border: '1px solid ' + (notObserved ? '#e8a3b0' : 'var(--line)'),
+        background: notObserved ? 'rgba(210,58,82,.07)' : 'transparent',
+        borderRadius: 9,
+        padding: '10px 13px',
+        marginBottom: 13
+      }
+    }, React.createElement("label", {
+      style: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 9,
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: notObserved,
+      onChange: e => setNotObserved(e.target.checked),
+      style: {
+        marginTop: 2,
+        flexShrink: 0,
+        accentColor: '#d23a52'
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        lineHeight: 1.5
+      }
+    }, React.createElement("b", {
+      style: {
+        color: '#d23a52'
+      }
+    }, "\u26D4 Not observed this month"), React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginTop: 1
+      }
+    }, "Tick when no observation / data collection was done for ", monthLabel(month), " \u2014 the month is recorded as ", React.createElement("b", {
+      style: {
+        color: '#d23a52'
+      }
+    }, "Not observed"), " instead of a value, so it can never be mistaken for a real 0."))), notObserved && React.createElement("div", {
+      style: {
+        marginTop: 9,
+        paddingTop: 9,
+        borderTop: '1px solid #e8a3b0'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: '#d23a52',
+        marginBottom: 5
+      }
+    }, "Why was it not observed? ", React.createElement("span", {
+      style: {
+        fontWeight: 400
+      }
+    }, "(required)")), React.createElement("input", {
+      style: {
+        ...inputStyle,
+        borderColor: noReason.trim() ? undefined : '#d23a52',
+        background: '#fff'
+      },
+      value: noReason,
+      onChange: e => setNoReason(e.target.value),
+      placeholder: "e.g. staff shortage / unit closed / no eligible cases / auditor on leave"
+    }), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        marginTop: 5,
+        lineHeight: 1.5
+      }
+    }, "Value entry is disabled \u2014 this reason is saved as the month\u2019s note (\u201CNot observed \u2014 \u2026\u201D)."))), guide && React.createElement("div", {
       style: {
         border: '1px solid var(--blue-100,#cfe6f7)',
         borderRadius: 9,
@@ -53000,7 +53092,7 @@ window.LockScreen = LockScreen;
       style: {
         color: 'var(--ink-2)'
       }
-    }, "Reference:"), " ", guide.reference)))), numMode === 'direct' && !isIncidentType && React.createElement(Field, {
+    }, "Reference:"), " ", guide.reference)))), !notObserved && React.createElement(React.Fragment, null, numMode === 'direct' && !isIncidentType && React.createElement(Field, {
       label: React.createElement("span", null, denLabel, " ", React.createElement("span", {
         style: {
           color: 'var(--muted)',
@@ -53878,7 +53970,7 @@ window.LockScreen = LockScreen;
         preventive: e.target.value
       })),
       placeholder: "Action to prevent recurrence"
-    })))))), lockResp ? React.createElement(Field, {
+    }))))))), lockResp ? React.createElement(Field, {
       label: "Responsible person"
     }, React.createElement("input", {
       style: {
@@ -53968,6 +54060,8 @@ window.LockScreen = LockScreen;
         });
         setDen('');
         setRemark('');
+        setNotObserved(false);
+        setNoReason('');
         setDone(null);
       }
     }, "Clear"))));
@@ -54014,7 +54108,7 @@ window.LockScreen = LockScreen;
     return m;
   }
   function valuesSummary(s) {
-    if (s.type === 'quality') return (s.indicatorName || '') + ' · ' + monthLabel(s.month) + (s.value != null ? ' = ' + s.value : '') + (s.remark ? ' (' + s.remark + ')' : '');
+    if (s.type === 'quality') return (s.indicatorName || '') + ' · ' + monthLabel(s.month) + (s.notObserved ? ' = Not observed' : s.value != null ? ' = ' + s.value : '') + (s.remark ? ' (' + s.remark + ')' : '');
     const v = s.values || {};
     const lm = colLabelMap(s);
     const parts = Object.keys(v).map(k => (lm[k] || prettyKey(k)) + ': ' + v[k]);
@@ -54031,7 +54125,16 @@ window.LockScreen = LockScreen;
     }
   }, monthLabel(m));
   function valuesSummaryEl(s) {
-    if (s.type === 'quality') return React.createElement(React.Fragment, null, (s.indicatorName || '') + ' · ', dcMonthChip(s.month), s.value != null && React.createElement(React.Fragment, null, " = ", React.createElement("b", {
+    if (s.type === 'quality') return React.createElement(React.Fragment, null, (s.indicatorName || '') + ' · ', dcMonthChip(s.month), s.notObserved ? React.createElement(React.Fragment, null, " = ", React.createElement("b", {
+      style: {
+        background: 'rgba(210,58,82,.1)',
+        color: '#d23a52',
+        border: '1px solid #e8a3b0',
+        padding: '1px 7px',
+        borderRadius: 6,
+        whiteSpace: 'nowrap'
+      }
+    }, "\u26D4 Not observed")) : s.value != null && React.createElement(React.Fragment, null, " = ", React.createElement("b", {
       style: {
         color: 'var(--ink)'
       }
@@ -54367,7 +54470,7 @@ window.LockScreen = LockScreen;
       const numL = s.numLabel || 'Numerator',
         denL = s.denLabel || 'Denominator';
       const labelFormula = isRate ? '(' + numL + ' ÷ ' + denL + ') × ' + rateMult : s.numLabel || s.indicatorName || 'Recorded value';
-      const numeric = isRate ? '(' + (effNum === '' || effNum == null ? '—' : effNum) + ' ÷ ' + (effDen === '' || effDen == null ? '—' : effDen) + ') × ' + rateMult + ' = ' + shownVal + (s.unit ? ' ' + s.unit : '') : (s.value == null ? '—' : s.value) + (s.unit ? ' ' + s.unit : '');
+      const numeric = s.notObserved ? 'Not observed — no data was collected this month' : isRate ? '(' + (effNum === '' || effNum == null ? '—' : effNum) + ' ÷ ' + (effDen === '' || effDen == null ? '—' : effDen) + ') × ' + rateMult + ' = ' + shownVal + (s.unit ? ' ' + s.unit : '') : (s.value == null ? '—' : s.value) + (s.unit ? ' ' + s.unit : '');
       return React.createElement("div", {
         style: {
           background: 'linear-gradient(120deg,#eef4ff,#f6faff)',
@@ -54439,7 +54542,7 @@ window.LockScreen = LockScreen;
         style: {
           fontSize: 13,
           fontWeight: 800,
-          color: '#0b6aa2'
+          color: s.notObserved ? '#d23a52' : '#0b6aa2'
         }
       }, numeric)));
     })(), React.createElement("div", {
@@ -54476,6 +54579,9 @@ window.LockScreen = LockScreen;
     }), s.rejectReason && React.createElement(Meta, {
       label: "Reject reason",
       value: s.rejectReason
+    }), s.notObserved && React.createElement(Meta, {
+      label: "Entry",
+      value: "Not observed \u2014 no observation was done this month"
     }), s.isCorrection && React.createElement(Meta, {
       label: "Edit request",
       value: "Correction \u2014 pending approval"

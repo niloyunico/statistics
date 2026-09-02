@@ -382,8 +382,14 @@ async function buildQualitySpec(payload) {
   const rateFormulas = ['pct', 'rate100', 'rate1000', 'avg'];
   const entryMode = ((payload && payload.entryMode === 'rate') || rateFormulas.includes(formulaIn)) ? 'rate' : 'count';
   const mult = (formulaIn === 'rate1000' || Number(payload && payload.mult) === 1000) ? 1000 : (formulaIn === 'avg' ? 1 : 100);
+  // "Not observed" = an explicit no-observation record for the month. Nothing is
+  // computed or stored as a value — the flag itself is the datum, so a skipped
+  // observation can never be mistaken for a real 0.
+  const notObserved = !!(payload && payload.notObserved);
   let value = null, num = null, den = null;
-  if (entryMode === 'rate') {
+  if (notObserved) {
+    // value/num/den stay null on purpose
+  } else if (entryMode === 'rate') {
     const hasNum = payload && payload.num != null && payload.num !== '' && !isNaN(Number(payload.num));
     const hasDen = payload && payload.den != null && payload.den !== '' && !isNaN(Number(payload.den));
     const hasDirectValue = payload && payload.value != null && payload.value !== '' && !isNaN(Number(payload.value));
@@ -447,6 +453,7 @@ async function buildQualitySpec(payload) {
     denLabel: (payload && payload.denLabel) || (found && found.denLabel) || '',
     unit: (payload && payload.unit) || (found && found.unit) || '',
     month, entryMode, mult, value, num, den, remark: String((payload && payload.remark) || ''),
+    notObserved: notObserved || undefined,
   };
 }
 
@@ -507,6 +514,26 @@ async function applyQuality(spec) {
   if (spec.numLabel) ind.numLabel = spec.numLabel;
   if (spec.denLabel) ind.denLabel = spec.denLabel;
   if (spec.unit) ind.unit = spec.unit;
+  // "Not observed" month: no observation was done, so there is no value. Record the
+  // explicit flag and REMOVE any stored value/breakdown for that month — a withdrawn
+  // reading must not linger and read as real data. The month's legacy quarter is
+  // dropped before recompute so it rebuilds from the months that remain (quartersByFy
+  // is rebuilt wholesale inside recomputeQuarters).
+  if (spec.notObserved) {
+    const mo = spec.month;
+    ind.mNotObserved = Object.assign({}, ind.mNotObserved || {}, { [mo]: true });
+    ['months', 'mNum', 'mGroups', 'mGroupsDen', 'mDeptBreakdown', 'incidents', 'capa'].forEach((k) => {
+      if (ind[k] && Object.prototype.hasOwnProperty.call(ind[k], mo)) { ind[k] = Object.assign({}, ind[k]); delete ind[k][mo]; }
+    });
+    ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [mo]: spec.remark || 'Not observed' });
+    const q = Object.keys(QUARTER_MONTHS).find((k) => (QUARTER_MONTHS[k] || []).includes(mo));
+    if (q && ind.quarters) { ind.quarters = Object.assign({}, ind.quarters); delete ind.quarters[q]; }
+    recomputeQuarters(ind);
+    await qSetIndicators(spec.area, indicators);
+    return;
+  }
+  // A real reading supersedes any earlier "Not observed" mark for the month.
+  if (ind.mNotObserved && ind.mNotObserved[spec.month]) { ind.mNotObserved = Object.assign({}, ind.mNotObserved); delete ind.mNotObserved[spec.month]; }
   if (Array.isArray(spec.incidents)) ind.incidents = Object.assign({}, ind.incidents || {}, { [spec.month]: spec.incidents });
   if (spec.groups) ind.mGroups = Object.assign({}, ind.mGroups || {}, { [spec.month]: spec.groups });
   if (spec.groupsDen) ind.mGroupsDen = Object.assign({}, ind.mGroupsDen || {}, { [spec.month]: spec.groupsDen });
@@ -1092,6 +1119,9 @@ function mount(app, opts) {
       } else if (s.type === 'quality') {
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
         if (b.num != null && b.num !== '' && !isNaN(Number(b.num))) patch.num = Number(b.num);   // rate numerator
+        // Typing a real value onto a "Not observed" submission converts it back to a
+        // normal reading — otherwise the flag would discard the edited value at apply.
+        if (s.notObserved && (patch.value != null || patch.num != null)) patch.notObserved = false;
         if (b.den != null && b.den !== '' && !isNaN(Number(b.den))) patch.den = Number(b.den);   // rate denominator
         // Full breakdown edits: department × staff-group matrix, and/or staff-group totals.
         if (Array.isArray(b.deptBreakdown)) { const bd = sanitizeDeptBreakdown(b.deptBreakdown); if (bd) patch.deptBreakdown = bd; }

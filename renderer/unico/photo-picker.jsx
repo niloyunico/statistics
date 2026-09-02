@@ -248,6 +248,57 @@
       : body;
   }
 
+  /* ------------------------------ LIGHTBOX ---------------------------------
+   * Full-screen "photo frame" view of a portrait. The badge photo is 104 px —
+   * far too small to actually look at a face — so clicking it opens the stored
+   * image at its real size inside a framed card. Read-only by design: viewing
+   * must never sit one mis-click away from replacing or deleting a photo.
+   * Portalled to document.body for the same fixed-position reasons as CropDialog.
+   */
+  function PhotoLightbox({ src, name, sub, onClose }) {
+    React.useEffect(() => {
+      const h = (e) => { if (e.key === 'Escape') onClose(); };
+      window.addEventListener('keydown', h);
+      return () => window.removeEventListener('keydown', h);
+    }, [onClose]);
+
+    const body = (
+      <div onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+        style={{
+          position: 'fixed', inset: 0, background: 'rgba(10,22,34,.74)', backdropFilter: 'blur(3px)',
+          zIndex: 2000, display: 'grid', placeItems: 'center', padding: 18,
+        }}>
+        <div style={{
+          position: 'relative', background: '#fff', borderRadius: 18, padding: 12,
+          boxShadow: '0 24px 70px rgba(0,0,0,.45)', width: 'min(440px, 94vw)',
+        }}>
+          <button type="button" title="Close" onClick={onClose}
+            style={{
+              position: 'absolute', top: -13, right: -13, width: 32, height: 32, borderRadius: '50%',
+              border: '2px solid #fff', background: '#132435', color: '#fff', cursor: 'pointer',
+              display: 'grid', placeItems: 'center', fontSize: 15, fontWeight: 700, lineHeight: 1,
+              boxShadow: '0 3px 10px rgba(0,0,0,.35)', padding: 0, zIndex: 1,
+            }}>✕</button>
+          <img src={src} alt={name || 'Photo'}
+            style={{
+              display: 'block', width: '100%', maxHeight: '72vh', objectFit: 'contain',
+              borderRadius: 11, background: '#0e1826',
+            }} />
+          {(name || sub) && (
+            <div style={{ textAlign: 'center', padding: '10px 8px 4px' }}>
+              {name && <div style={{ fontSize: 15, fontWeight: 800, color: '#15181c', letterSpacing: '-.2px' }}>{name}</div>}
+              {sub && <div style={{ fontSize: 11.5, fontWeight: 700, color: '#0072a3', marginTop: 2 }}>{sub}</div>}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+
+    return (window.ReactDOM && window.ReactDOM.createPortal)
+      ? window.ReactDOM.createPortal(body, document.body)
+      : body;
+  }
+
   /* PhotoPicker — the round portrait with a camera button on its corner.
    *   value    {url, publicId} | null
    *   onChange (next|null)  -> the CALLER persists it on its own record
@@ -255,11 +306,14 @@
    *   size     px (default 96) · kind 'staff' | 'profile' · readOnly hides controls
    *   w/h/radius override the default circle for the ID-badge portrait, which is
    *   a 104x120 rounded rectangle and must not be cropped to a round frame.
+   *   zoomable makes an existing photo clickable: it opens large in a lightbox
+   *   (pass zoomSub for the caption line under the name).
    */
-  function PhotoPicker({ value, onChange, initials, name, size, kind, readOnly, hue, w, h, radius, plain }) {
+  function PhotoPicker({ value, onChange, initials, name, size, kind, readOnly, hue, w, h, radius, plain, zoomable, zoomSub }) {
     const [busy, setBusy] = React.useState(false);
     const [cfg, setCfg] = React.useState(null);
     const [cropSrc, setCropSrc] = React.useState(null);   // data URI awaiting framing
+    const [viewing, setViewing] = React.useState(false);  // lightbox open?
     const inputRef = React.useRef(null);
     const px = size || 96;
 
@@ -323,13 +377,17 @@
     return (
       <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
         <div style={{ position: 'relative', width: W, height: H }}>
-          <div style={{
-            width: W, height: H, borderRadius: R, overflow: 'hidden',
-            background: (value && value.url) ? '#fff' : fill,
-            border: plain ? 'none' : ('2px solid ' + ring), display: 'grid', placeItems: 'center',
-            fontSize: Math.round(Math.min(W, H) / 2.6), fontWeight: 800,
-            color: plain ? '#fff' : ring, letterSpacing: '.5px',
-          }}>
+          <div
+            onClick={(zoomable && value && value.url && !busy) ? () => setViewing(true) : undefined}
+            title={(zoomable && value && value.url) ? 'View photo' : undefined}
+            style={{
+              width: W, height: H, borderRadius: R, overflow: 'hidden',
+              background: (value && value.url) ? '#fff' : fill,
+              border: plain ? 'none' : ('2px solid ' + ring), display: 'grid', placeItems: 'center',
+              fontSize: Math.round(Math.min(W, H) / 2.6), fontWeight: 800,
+              color: plain ? '#fff' : ring, letterSpacing: '.5px',
+              cursor: (zoomable && value && value.url && !busy) ? 'zoom-in' : undefined,
+            }}>
             {value && value.url
               ? <img src={value.url} alt={name || 'Photo'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               : <span>{initials || '—'}</span>}
@@ -357,6 +415,10 @@
         </div>
 
         <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={pick} style={{ display: 'none' }} />
+
+        {viewing && value && value.url && (
+          <PhotoLightbox src={value.url} name={name} sub={zoomSub} onClose={() => setViewing(false)} />
+        )}
 
         {/* Framed in the SHAPE it will be shown in, so what you see is what is saved. */}
         {cropSrc && (
@@ -423,7 +485,7 @@
   }
 
   Object.assign(window, {
-    PhotoPicker, UnicoAvatar, unicoSetAccountPhoto,
+    PhotoPicker, PhotoLightbox, UnicoAvatar, unicoSetAccountPhoto,
     unicoUploadPhoto, unicoDeletePhoto, unicoPhotoStatus, unicoResizeImage,
   });
 })();
