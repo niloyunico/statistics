@@ -1687,7 +1687,8 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     "Painting / Drawing","Writing / Poetry","Photography","Anchoring / Hosting","Debate / Public Speaking",
     "Handicrafts","Gardening","Volunteering / Social Work",
     "Communication","Organizing","Planning","Event Management","Leadership","Teamwork",
-    "Teaching / Mentoring","Counselling","Decoration & Design","Fundraising","Sports Coaching","Cultural Programs"];
+    "Teaching / Mentoring","Counselling","Decoration & Design","Fundraising","Sports Coaching","Cultural Programs"
+  ].sort((a,b)=>a.localeCompare(b));
 
   // PCA (Patient Care Assistant) role config
   const ROLES=["Nurse","PCA"];
