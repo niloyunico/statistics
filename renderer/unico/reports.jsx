@@ -2259,6 +2259,12 @@ function CacheStats(){
       {!err&&!d&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'14px',textAlign:'center'}}>Loading…</div>}
       {!err&&d&&(
         <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {d.db&&d.db.failedOver&&<div style={{fontSize:12,fontWeight:600,color:'#8f1d2e',background:'rgba(210,58,82,.1)',border:'1px solid rgba(210,58,82,.3)',borderRadius:7,padding:'9px 12px'}}>
+            ⚠ FAILED OVER — the primary MongoDB cluster is unreachable{d.db.failedOverAt?(' since '+new Date(d.db.failedOverAt).toLocaleTimeString()):''}; serving reads from the standby copy (read-only). Writes are refused with a clear message until the primary returns; it is re-probed every 15 s automatically.{d.db.lastPrimaryError?' Last error: '+String(d.db.lastPrimaryError).slice(0,120):''}
+          </div>}
+          {d.db&&!d.db.failedOver&&d.db.clusters>1&&<div style={{fontSize:11.5,color:'#157a43',background:'rgba(31,157,87,.08)',borderRadius:7,padding:'7px 11px'}}>
+            ✓ Failover armed: {d.db.clusters} clusters configured — primary live; standby takes over reads automatically if it goes down.
+          </div>}
           <div style={{display:'flex',gap:9,flexWrap:'wrap'}}>
             {tile('Hit rate',d.hitRate==null?'—':d.hitRate+'%','of '+((c.hits||0)+(c.l1Hits||0)+(c.misses||0))+' reads',d.hitRate>=70?'#1f9d57':d.hitRate!=null&&d.hitRate<40?'#d23a52':undefined)}
             {tile('Shared hits',c.hits||0,'served from Redis')}

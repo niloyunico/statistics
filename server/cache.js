@@ -496,13 +496,23 @@ const WRITE_OPS = new Set([
   'bulkWrite', 'drop', 'rename', 'findOneAndModify',
 ]);
 
-function wrapCollection(coll, name) {
+// Raised instead of performing a write while the app is failed over to a read-only
+// standby cluster (see db.js) — a write applied to the standby would silently diverge
+// the two clusters, which is strictly worse than a refused save the user can retry.
+function readOnlyError() {
+  const e = new Error('The primary database is unreachable and the app is running on its read-only standby copy. This change was NOT saved — try again in a few minutes.');
+  e.name = 'MongoFailoverReadOnlyError';
+  return e;
+}
+
+function wrapCollection(coll, name, blockWrites) {
   return new Proxy(coll, {
     get(target, prop) {
       const v = target[prop];
       if (typeof v !== 'function') return v;
       if (!WRITE_OPS.has(prop)) return v.bind(target);
       return function (...args) {
+        if (blockWrites && blockWrites()) return Promise.reject(readOnlyError());
         // `rename` moves documents to a DIFFERENT collection, so both sides change.
         const also = (prop === 'rename' && args[0]) ? String(args[0]) : null;
         const invalidate = () => (also ? bump(name).then(() => bump(also)) : bump(name));
@@ -523,23 +533,25 @@ function wrapCollection(coll, name) {
 // Db-level operations that change a collection without going through collection().
 const DB_WRITE_OPS = new Set(['dropCollection', 'renameCollection', 'createCollection']);
 
-function instrument(db) {
+function instrument(db, opts) {
   if (!db || db.__unicoInstrumented) return db;
+  const blockWrites = (opts && opts.blockWrites) || null;
   return new Proxy(db, {
     get(target, prop) {
       if (prop === '__unicoInstrumented') return true;
       const v = target[prop];
       if (typeof v !== 'function') return v;
       if (prop === 'collection') {
-        return function (name, ...rest) { return wrapCollection(v.call(target, name, ...rest), String(name)); };
+        return function (name, ...rest) { return wrapCollection(v.call(target, name, ...rest), String(name), blockWrites); };
       }
       if (DB_WRITE_OPS.has(prop)) {
         // createCollection hands back a Collection — wrap it, or every write made
         // through that reference would escape invalidation entirely.
         return function (name, ...rest) {
+          if (blockWrites && blockWrites()) return Promise.reject(readOnlyError());
           const out = v.call(target, name, ...rest);
           return Promise.resolve(out).then((res) => bump(String(name)).then(
-            () => (prop === 'createCollection' && res ? wrapCollection(res, String(name)) : res)
+            () => (prop === 'createCollection' && res ? wrapCollection(res, String(name), blockWrites) : res)
           ));
         };
       }

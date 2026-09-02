@@ -31459,7 +31459,25 @@ function CacheStats() {
       flexDirection: 'column',
       gap: 10
     }
-  }, React.createElement("div", {
+  }, d.db && d.db.failedOver && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#8f1d2e',
+      background: 'rgba(210,58,82,.1)',
+      border: '1px solid rgba(210,58,82,.3)',
+      borderRadius: 7,
+      padding: '9px 12px'
+    }
+  }, "\u26A0 FAILED OVER \u2014 the primary MongoDB cluster is unreachable", d.db.failedOverAt ? ' since ' + new Date(d.db.failedOverAt).toLocaleTimeString() : '', "; serving reads from the standby copy (read-only). Writes are refused with a clear message until the primary returns; it is re-probed every 15 s automatically.", d.db.lastPrimaryError ? ' Last error: ' + String(d.db.lastPrimaryError).slice(0, 120) : ''), d.db && !d.db.failedOver && d.db.clusters > 1 && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#157a43',
+      background: 'rgba(31,157,87,.08)',
+      borderRadius: 7,
+      padding: '7px 11px'
+    }
+  }, "\u2713 Failover armed: ", d.db.clusters, " clusters configured \u2014 primary live; standby takes over reads automatically if it goes down."), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 9,

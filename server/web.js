@@ -754,7 +754,7 @@ app.get('/api/cache/stats', session.requireApi, access.attach, (req, res) => {
   const redisMod = require('./redis');
   const snap = cacheMod.snapshot();
   const reads = (snap.hits || 0) + (snap.l1Hits || 0) + (snap.misses || 0);
-  res.json({ ok: true, redis: redisMod.status(), cache: snap,
+  res.json({ ok: true, redis: redisMod.status(), cache: snap, db: require('./db').clusterStatus(),
     hitRate: reads ? Math.round(((snap.hits + snap.l1Hits) / reads) * 1000) / 10 : null });
 });
 

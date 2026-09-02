@@ -28,7 +28,20 @@ const lb = require('./loadbalancer');
 const REF_TTL = cache.FRESH_MS;
 const APPDATA_TTL = cache.APPDATA_MS;
 
+/* ---- automatic cluster failover -------------------------------------------
+   MONGODB_URIS=primary,standby[,standby2…] enables it (falls back to the single
+   MONGODB_URI). The FIRST uri is the only cluster the app ever WRITES — while
+   failed over to a standby the instrumented handle refuses writes with a clear
+   error, because a write applied to the standby would silently fork the data.
+   Reads (and logins) keep working from the standby's last-synced copy, and every
+   15s the primary is re-probed and swapped back the moment it answers.
+   Keep the standby fresh with:  node scripts/sync-clusters.js --apply           */
+const URI_LIST = String(process.env.MONGODB_URIS || process.env.MONGODB_URI || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+const PROBE_MS = 15000;
+
 let _client = null, _clientPromise = null, _users = null, _db = null;
+let _activeIdx = 0, _failedOverAt = 0, _lastProbeAt = 0, _lastPrimaryError = '';
 // Bumped by closeClient()/close(). A connect that is still in flight when the client
 // is closed must NOT install itself afterwards: it would resurrect a live, unclosed
 // MongoClient after "close" returned — holding pool connections against the Atlas cap
@@ -49,17 +62,16 @@ let _memUsers = null, _memApp = { data: {}, updatedAt: 0 };
 //     orphaned with their sockets still open, quietly eating the Atlas connection cap.
 // Memoising the PROMISE fixes both: everyone awaits the same connect, and a failure
 // clears the cache so the very next request retries cleanly.
-async function ensureClient() {
-  if (_client) return _client;
-  if (_clientPromise) return _clientPromise;
+// One raw connect to ONE uri, with the pool sizing this runtime needs.
+// Pool size MUST differ by runtime. On Vercel (serverless) every warm function instance
+// keeps its OWN pool and there can be many instances at once — a big pool multiplies out
+// and exhausts Atlas's connection cap (free tier = 500), which surfaces to users as
+// "database unreachable". So serverless uses a tiny pool with no idle sockets; a
+// persistent local server can afford a large warm pool for concurrency.
+function rawConnect(uri) {
   const { MongoClient } = require('mongodb');
-  // Pool size MUST differ by runtime. On Vercel (serverless) every warm function instance
-  // keeps its OWN pool and there can be many instances at once — a big pool multiplies out
-  // and exhausts Atlas's connection cap (free tier = 500), which surfaces to users as
-  // "database unreachable". So serverless uses a tiny pool with no idle sockets; a
-  // persistent local server can afford a large warm pool for concurrency.
   const serverless = !!process.env.VERCEL;
-  const client = new MongoClient(process.env.MONGODB_URI, {
+  const client = new MongoClient(uri, {
     serverSelectionTimeoutMS: serverless ? 6000 : 8000,
     connectTimeoutMS: 8000,
     socketTimeoutMS: 30000,
@@ -77,23 +89,59 @@ async function ensureClient() {
     // deployment that caused it rather than to "some client".
     appName: 'unico-' + (serverless ? 'vercel' : 'server'),
   });
+  return client.connect();
+}
+
+// While failed over, re-try the primary every PROBE_MS in the background and swap
+// back the moment it answers — reads become fresh and writes unblock, no restart.
+function maybeProbePrimary() {
+  if (_activeIdx === 0 || _clientPromise || URI_LIST.length < 2) return;
+  const now = Date.now();
+  if (now - _lastProbeAt < PROBE_MS) return;
+  _lastProbeAt = now;
   const myGen = _gen;
-  _clientPromise = client.connect().then((c) => {
-    if (myGen !== _gen) {                    // closed while we were connecting
-      try { c.close(); } catch (_) { /* nothing to do */ }
-      const e = new Error('Database connection was closed while connecting.');
-      e.name = 'MongoConnectionSupersededError';   // deliberately not a connectivity error
-      throw e;
+  rawConnect(URI_LIST[0]).then((c) => {
+    if (myGen !== _gen || _activeIdx === 0) { try { c.close(); } catch (_) { /* superseded */ } return; }
+    const old = _client;
+    _client = c; _activeIdx = 0; _db = null; _users = null; _failedOverAt = 0; _lastPrimaryError = '';
+    console.warn('[db] FAILBACK: primary cluster is reachable again — writes re-enabled.');
+    if (old) { try { old.close(); } catch (_) { /* draining */ } }
+  }).catch((e) => { _lastPrimaryError = String((e && e.message) || e); });
+}
+
+async function ensureClient() {
+  if (_client) { maybeProbePrimary(); return _client; }
+  if (_clientPromise) return _clientPromise;
+  const myGen = _gen;
+  _clientPromise = (async () => {
+    let lastErr = null;
+    for (let i = 0; i < URI_LIST.length; i++) {
+      let client = null;
+      try {
+        client = await rawConnect(URI_LIST[i]);
+      } catch (e) {
+        lastErr = e;
+        if (i === 0) _lastPrimaryError = String((e && e.message) || e);
+        continue;                            // try the next cluster in the list
+      }
+      if (myGen !== _gen) {                  // closed while we were connecting
+        try { client.close(); } catch (_) { /* nothing to do */ }
+        const e = new Error('Database connection was closed while connecting.');
+        e.name = 'MongoConnectionSupersededError';   // deliberately not a connectivity error
+        throw e;
+      }
+      _client = client; _clientPromise = null; _activeIdx = i;
+      if (i > 0) {
+        if (!_failedOverAt) _failedOverAt = Date.now();
+        _lastProbeAt = Date.now();
+        console.warn('[db] FAILOVER: primary unreachable (' + _lastPrimaryError + ') — serving READ-ONLY from standby cluster #' + i + '.');
+      } else { _failedOverAt = 0; _lastPrimaryError = ''; }
+      return client;
     }
-    _client = c;
-    _clientPromise = null;
-    return c;
-  }).catch((e) => {
-    // Don't cache a broken connection — drop it so the next request tries again.
+    // Every cluster failed — don't cache a broken connection; the next request retries.
     if (myGen === _gen) { _clientPromise = null; _client = null; _users = null; _db = null; }
-    try { client.close(); } catch (_) { /* already dead */ }
-    throw e;
-  });
+    throw lastErr || new Error('No database URI configured.');
+  })();
   return _clientPromise;
 }
 
@@ -103,8 +151,22 @@ async function ensureClient() {
 // from it. That is what keeps caching invisible: nobody has to remember to clear it.
 // Memoised per connection; reset wherever _client is.
 function dbHandle() {
-  if (!_db) _db = cache.instrument(_client.db(process.env.DB_NAME || 'unico'));
+  // blockWrites: while failed over to a standby, every write through this handle
+  // (dbWrite AND every feature module holding getDbHandle()) is refused with a
+  // clear error instead of silently forking the standby's data.
+  if (!_db) _db = cache.instrument(_client.db(process.env.DB_NAME || 'unico'), { blockWrites: () => _activeIdx > 0 });
   return _db;
+}
+
+// For /api/cache/stats and the Settings panel: which cluster is live right now.
+function clusterStatus() {
+  return {
+    clusters: URI_LIST.length,
+    active: _activeIdx,
+    failedOver: _activeIdx > 0,
+    failedOverAt: _failedOverAt || null,
+    lastPrimaryError: _lastPrimaryError || null,
+  };
 }
 
 // One guarded read: connect if needed, take a slot from the fleet's shared database
@@ -351,5 +413,5 @@ module.exports = {
   getDepartments, ensureDepartmentsSeeded,
   getStaff, getQuality, ensureRendererSeeded, getDbHandle,
   warmCache, dbRead, dbWrite,
-  close, usingMongo: () => !!process.env.MONGODB_URI,
+  close, usingMongo: () => !!process.env.MONGODB_URI, clusterStatus,
 };
