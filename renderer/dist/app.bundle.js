@@ -12307,6 +12307,7 @@ Object.assign(window, {
 @keyframes balloonUp{0%{transform:translateY(0) scale(.6);opacity:0}8%{opacity:1;transform:translateY(-10px) scale(1)}100%{transform:translateY(-280px) translateX(30px) scale(.85);opacity:0}}
 @keyframes sway{0%,100%{rotate:-4deg}50%{rotate:4deg}}
 @keyframes hotAir{from{transform:translateX(-90px)}to{transform:translateX(1150px)}}
+@keyframes bob{0%,100%{translate:0 0}50%{translate:0 -9px}}
 @keyframes shoot{0%,100%{transform:translate(0,0);opacity:0}3%{opacity:1}14%{transform:translate(-260px,150px);opacity:0}}
 @keyframes smoke{0%{transform:translate(0,0) scale(.5);opacity:.5}100%{transform:translate(14px,-46px) scale(1.6);opacity:0}}
 @keyframes winFlick{0%,92%,100%{opacity:.95}95%{opacity:.4}}
@@ -12953,7 +12954,36 @@ Object.assign(window, {
       style: sx(puff(52, 40, 30, 6))
     }), React.createElement("span", {
       style: sx(puff(58, 24, 60, 0))
-    })))), !night && React.createElement("div", {
+    })))), React.createElement("div", {
+      "aria-hidden": "true",
+      style: sx('position:absolute;inset:0;pointer-events:none;' + parS(22, 10))
+    }, React.createElement("div", {
+      style: fs('position:absolute;top:' + (night ? 40 : 30) + 'px;left:0;opacity:' + (night ? .75 : 1) + ';animation:hotAir 95s linear infinite;animation-delay:-30s')
+    }, React.createElement("div", {
+      style: fs('animation:bob 5s ease-in-out infinite')
+    }, React.createElement("svg", {
+      viewBox: "0 0 40 60",
+      width: "30",
+      height: "45",
+      style: sx('display:block;filter:drop-shadow(0 2px 4px rgba(10,20,40,.3))')
+    }, React.createElement("path", {
+      d: "M20 2C9 2 2 10 2 20c0 10 10 18 15 26h6c5-8 15-16 15-26C38 10 31 2 20 2z",
+      fill: "#d23a52"
+    }), React.createElement("path", {
+      d: "M20 2c-4 0-7 8-7 18s4 18 7 26c3-8 7-16 7-26S24 2 20 2z",
+      fill: "#ffd166"
+    }), React.createElement("path", {
+      d: "M17 46v6M23 46v6",
+      stroke: "#5a4634",
+      strokeWidth: "1.4"
+    }), React.createElement("rect", {
+      x: "14",
+      y: "52",
+      width: "12",
+      height: "7",
+      rx: "1.5",
+      fill: "#8a5a2b"
+    }))))), !night && React.createElement("div", {
       "aria-hidden": "true",
       style: sx('position:absolute;inset:0;pointer-events:none;' + parS(28, 12))
     }, flocks.map((b, i) => React.createElement("svg", {
