@@ -496,27 +496,20 @@ const WRITE_OPS = new Set([
   'bulkWrite', 'drop', 'rename', 'findOneAndModify',
 ]);
 
-// Raised instead of performing a write while the app is failed over to a read-only
-// standby cluster (see db.js) — a write applied to the standby would silently diverge
-// the two clusters, which is strictly worse than a refused save the user can retry.
-function readOnlyError() {
-  const e = new Error('The primary database is unreachable and the app is running on its read-only standby copy. This change was NOT saved — try again in a few minutes.');
-  e.name = 'MongoFailoverReadOnlyError';
-  return e;
-}
-
-function wrapCollection(coll, name, blockWrites) {
+function wrapCollection(coll, name, writeHook) {
   return new Proxy(coll, {
     get(target, prop) {
       const v = target[prop];
       if (typeof v !== 'function') return v;
       if (!WRITE_OPS.has(prop)) return v.bind(target);
       return function (...args) {
-        if (blockWrites && blockWrites()) return Promise.reject(readOnlyError());
         // `rename` moves documents to a DIFFERENT collection, so both sides change.
         const also = (prop === 'rename' && args[0]) ? String(args[0]) : null;
         const invalidate = () => (also ? bump(name).then(() => bump(also)) : bump(name));
-        const out = v.apply(target, args);
+        // writeHook (db.js failover): mirrors the op to the standby cluster and,
+        // when the primary dies mid-write, re-runs it there so the save SUCCEEDS.
+        const exec = () => v.apply(target, args);
+        const out = writeHook ? writeHook(String(name), prop, args, exec) : exec();
         // Bump BEFORE the caller continues, so a save followed by a re-read never
         // sees the old copy — and bump on FAILURE too: bulkWrite/insertMany/updateMany
         // can apply some documents and then reject, which would otherwise leave the
@@ -535,23 +528,24 @@ const DB_WRITE_OPS = new Set(['dropCollection', 'renameCollection', 'createColle
 
 function instrument(db, opts) {
   if (!db || db.__unicoInstrumented) return db;
-  const blockWrites = (opts && opts.blockWrites) || null;
+  const writeHook = (opts && opts.writeHook) || null;
   return new Proxy(db, {
     get(target, prop) {
       if (prop === '__unicoInstrumented') return true;
       const v = target[prop];
       if (typeof v !== 'function') return v;
       if (prop === 'collection') {
-        return function (name, ...rest) { return wrapCollection(v.call(target, name, ...rest), String(name), blockWrites); };
+        return function (name, ...rest) { return wrapCollection(v.call(target, name, ...rest), String(name), writeHook); };
       }
       if (DB_WRITE_OPS.has(prop)) {
         // createCollection hands back a Collection — wrap it, or every write made
-        // through that reference would escape invalidation entirely.
+        // through that reference would escape invalidation entirely. (Db-level ops
+        // are rare admin actions; they run on the active cluster only and a later
+        // full sync/heal re-converges the pair.)
         return function (name, ...rest) {
-          if (blockWrites && blockWrites()) return Promise.reject(readOnlyError());
           const out = v.call(target, name, ...rest);
           return Promise.resolve(out).then((res) => bump(String(name)).then(
-            () => (prop === 'createCollection' && res ? wrapCollection(res, String(name), blockWrites) : res)
+            () => (prop === 'createCollection' && res ? wrapCollection(res, String(name), writeHook) : res)
           ));
         };
       }

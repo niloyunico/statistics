@@ -11,6 +11,14 @@
  *                                              collection on the standby)
  *     node scripts/sync-clusters.js --apply --skip=medBrands,medSourceDims
  *
+ *     node scripts/sync-clusters.js --heal     AFTER a write-failover (authority
+ *                                              flipped to the standby): copies the
+ *                                              REVERSE way (standby -> primary, the
+ *                                              standby has the newest data), then
+ *                                              hands write authority back to the
+ *                                              primary. Run once the primary is
+ *                                              reachable again.
+ *
  * URIs come from MONGODB_URIS in server/.env.production (primary = first, standby =
  * second), falling back to server/.env. Backup collections (*_bak_*) are skipped.
  */
@@ -26,7 +34,8 @@ const parsed = Object.assign(
   fs.existsSync(envProd) ? dotenv.parse(fs.readFileSync(envProd)) : {}
 );
 
-const APPLY = process.argv.includes('--apply');
+const HEAL = process.argv.includes('--heal');
+const APPLY = process.argv.includes('--apply') || HEAL;
 const SKIP = ((process.argv.find((a) => a.startsWith('--skip=')) || '').split('=')[1] || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -35,10 +44,24 @@ if (uris.length < 2) { console.error('MONGODB_URIS needs at least primary,standb
 const DB = parsed.DB_NAME || 'unico';
 const host = (u) => u.replace(/^.*@/, '').split('/')[0].split('?')[0];
 
+// --heal copies the REVERSE way: after a write-failover the STANDBY holds the
+// newest data, so it is the source and the returning primary is the target.
+const SRC_URI = HEAL ? uris[1] : uris[0];
+const DST_URI = HEAL ? uris[0] : uris[1];
+
+// Hand write authority back to the primary through the same Redis flag db.js reads.
+async function resetAuthority() {
+  ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_URL', 'KV_REST_API_TOKEN'].forEach((k) => { if (parsed[k] && !process.env[k]) process.env[k] = parsed[k]; });
+  const redis = require(path.join(__dirname, '..', 'server', 'redis'));
+  if (!redis.configured()) { console.warn('\n!! Redis credentials missing — could NOT reset write authority. Add UPSTASH_REDIS_REST_URL/TOKEN to server/.env and run --heal again.'); return; }
+  await redis.set('unico:db:authority', '0');
+  console.log('Write authority handed back to the PRIMARY (Redis unico:db:authority=0).');
+}
+
 (async () => {
-  console.log('primary:', host(uris[0]), ' ->  standby:', host(uris[1]), ' (db: ' + DB + ')');
-  const src = new MongoClient(uris[0], { serverSelectionTimeoutMS: 15000 });
-  const dst = new MongoClient(uris[1], { serverSelectionTimeoutMS: 15000 });
+  console.log((HEAL ? 'HEAL  standby' : 'primary') + ': ' + host(SRC_URI) + '  ->  ' + (HEAL ? 'primary' : 'standby') + ': ' + host(DST_URI) + '  (db: ' + DB + ')');
+  const src = new MongoClient(SRC_URI, { serverSelectionTimeoutMS: 15000 });
+  const dst = new MongoClient(DST_URI, { serverSelectionTimeoutMS: 15000 });
   await src.connect();
   try { await dst.connect(); }
   catch (e) { console.error('\nStandby unreachable: ' + e.message + '\n(The cluster must exist and allow this IP in Atlas Network Access.)'); process.exit(1); }
@@ -67,8 +90,9 @@ const host = (u) => u.replace(/^.*@/, '').split('/')[0].split('?')[0];
   }
   if (APPLY) {
     await d.collection('sync_meta').updateOne({ _id: 'lastSync' },
-      { $set: { at: Date.now(), from: host(uris[0]), collections: colls.length, docs: totalDocs } }, { upsert: true });
-    console.log('\nDone — standby now mirrors the primary (' + colls.length + ' collections, ' + totalDocs + ' docs).');
+      { $set: { at: Date.now(), from: host(SRC_URI), heal: HEAL, collections: colls.length, docs: totalDocs } }, { upsert: true });
+    console.log('\nDone — ' + (HEAL ? 'primary restored from the standby' : 'standby now mirrors the primary') + ' (' + colls.length + ' collections, ' + totalDocs + ' docs).');
+    if (HEAL) await resetAuthority();
   } else {
     console.log('\nDry run: ' + colls.length + ' collections, ' + totalDocs + ' docs. Run with --apply to copy.');
   }

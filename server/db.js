@@ -28,20 +28,57 @@ const lb = require('./loadbalancer');
 const REF_TTL = cache.FRESH_MS;
 const APPDATA_TTL = cache.APPDATA_MS;
 
-/* ---- automatic cluster failover -------------------------------------------
-   MONGODB_URIS=primary,standby[,standby2…] enables it (falls back to the single
-   MONGODB_URI). The FIRST uri is the only cluster the app ever WRITES — while
-   failed over to a standby the instrumented handle refuses writes with a clear
-   error, because a write applied to the standby would silently fork the data.
-   Reads (and logins) keep working from the standby's last-synced copy, and every
-   15s the primary is re-probed and swapped back the moment it answers.
-   Keep the standby fresh with:  node scripts/sync-clusters.js --apply           */
+/* ---- automatic cluster failover (reads AND writes) -------------------------
+   MONGODB_URIS=primary,standby enables it (falls back to the single MONGODB_URI).
+
+   AUTHORITY. Exactly ONE cluster is written at any moment — which one is a
+   fleet-wide fact stored in Redis ('0' = primary, '1' = standby), so every
+   serverless instance agrees. Normally it is the primary, and every write is
+   also MIRRORED to the standby in the background so the standby stays current.
+   The moment the primary is unreachable for a write, the write is re-run on the
+   standby and AUTHORITY FLIPS to it: from then on the standby serves reads and
+   writes — users notice nothing.
+
+   Authority does NOT flip back by itself: while flipped, the primary is BEHIND
+   (it missed the failover-window writes), and pointing reads/writes back at it
+   would resurrect old data. Restore it deliberately, when the primary is back:
+
+       node scripts/sync-clusters.js --heal      (copies standby -> primary,
+                                                  then hands authority back)
+
+   Seed / freshen the standby the other way:  node scripts/sync-clusters.js --apply */
+const redisKV = require('./redis');
 const URI_LIST = String(process.env.MONGODB_URIS || process.env.MONGODB_URI || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
 const PROBE_MS = 15000;
+const AUTH_KEY = 'unico:db:authority';
+const AUTH_CACHE_MS = 3000;
 
 let _client = null, _clientPromise = null, _users = null, _db = null;
 let _activeIdx = 0, _failedOverAt = 0, _lastProbeAt = 0, _lastPrimaryError = '';
+let _standbyClient = null, _standbyPromise = null;
+let _auth = { idx: 0, at: 0, flippedAt: 0 };
+let _mirrorFails = 0, _lastMirrorError = '';
+
+// Which cluster holds write authority right now — Redis-backed so the whole fleet
+// agrees; cached briefly; Redis unreachable -> last known local answer.
+async function authorityIdx() {
+  if (URI_LIST.length < 2) return 0;
+  const now = Date.now();
+  if (now - _auth.at < AUTH_CACHE_MS) return _auth.idx;
+  _auth.at = now;
+  try {
+    const v = await redisKV.get(AUTH_KEY);
+    _auth.idx = v === '1' ? 1 : 0;
+  } catch (e) { /* keep last known */ }
+  return _auth.idx;
+}
+async function flipAuthority(idx, cause) {
+  _auth = { idx, at: Date.now(), flippedAt: Date.now() };
+  try { await redisKV.set(AUTH_KEY, String(idx)); } catch (e) { /* local-only flip; logged below */ }
+  console.error('[db] WRITE AUTHORITY -> cluster #' + idx + (cause ? ' (' + String(cause).slice(0, 140) + ')' : '')
+    + (idx === 1 ? ' — the standby now serves reads AND writes. When the primary is back, run: node scripts/sync-clusters.js --heal' : ''));
+}
 // Bumped by closeClient()/close(). A connect that is still in flight when the client
 // is closed must NOT install itself afterwards: it would resurrect a live, unclosed
 // MongoClient after "close" returned — holding pool connections against the Atlas cap
@@ -92,30 +129,94 @@ function rawConnect(uri) {
   return client.connect();
 }
 
-// While failed over, re-try the primary every PROBE_MS in the background and swap
-// back the moment it answers — reads become fresh and writes unblock, no restart.
-function maybeProbePrimary() {
-  if (_activeIdx === 0 || _clientPromise || URI_LIST.length < 2) return;
+// A RAW (un-instrumented) handle on the standby cluster, for write mirroring and
+// write-failover. Un-instrumented on purpose: the cache bump for a write already
+// happens once in the instrumented wrapper — mirroring must not double it.
+async function standbyDbRaw() {
+  if (URI_LIST.length < 2) return null;
+  if (_standbyClient) return _standbyClient.db(process.env.DB_NAME || 'unico');
+  if (!_standbyPromise) {
+    _standbyPromise = rawConnect(URI_LIST[1]).then((c) => { _standbyClient = c; _standbyPromise = null; return c; })
+      .catch((e) => { _standbyPromise = null; throw e; });
+  }
+  const c = await _standbyPromise;
+  return c.db(process.env.DB_NAME || 'unico');
+}
+
+// Fire-and-forget copy of a just-committed primary write onto the standby, so the
+// standby tracks the primary in near-real-time and a failover loses ~nothing.
+function mirrorWrite(name, op, args) {
+  standbyDbRaw().then((sdb) => sdb.collection(name)[op](...args))
+    .catch((e) => { _mirrorFails++; _lastMirrorError = String((e && e.message) || e); });
+}
+
+// Runs around EVERY collection write made through the instrumented handle
+// (cache.instrument -> wrapCollection). This is where write availability lives:
+//   authority=primary & healthy  -> write primary, mirror to standby
+//   primary dies mid-write       -> re-run the SAME op on the standby, flip
+//                                   authority to it, and report SUCCESS
+//   authority=standby            -> the active client IS the standby; just write
+async function writeHook(name, op, args, exec) {
+  if (URI_LIST.length < 2) return exec();
+  const desired = await authorityIdx();
+  if (desired === 1) {
+    // Authority is the standby. If the active connection is still the primary
+    // (stale instance that hasn't probed yet), route the write to the standby
+    // DIRECTLY — writing the primary now would fork the data.
+    if (_activeIdx === 1) return exec();
+    const sdb = await standbyDbRaw();
+    return sdb.collection(name)[op](...args);
+  }
+  // Authority is the primary. On the standby via connect-time read-failover?
+  // Then this write is the moment failover becomes real: take authority, write here.
+  if (_activeIdx > 0) { await flipAuthority(1, 'primary unreachable at write time: ' + _lastPrimaryError); return exec(); }
+  try {
+    const res = await exec();
+    mirrorWrite(name, op, args);
+    return res;
+  } catch (e) {
+    if (warmup.isConnectivityError(e)) {
+      const sdb = await standbyDbRaw();          // throws if the standby is down too
+      const res = await sdb.collection(name)[op](...args);
+      await flipAuthority(1, (e && e.message) || e);
+      return res;
+    }
+    throw e;
+  }
+}
+
+// While the active connection is NOT the authority cluster, re-try the authority
+// every PROBE_MS in the background and swap the moment it answers.
+function maybeProbeAuthority() {
+  if (_clientPromise || URI_LIST.length < 2) return;
   const now = Date.now();
   if (now - _lastProbeAt < PROBE_MS) return;
   _lastProbeAt = now;
-  const myGen = _gen;
-  rawConnect(URI_LIST[0]).then((c) => {
-    if (myGen !== _gen || _activeIdx === 0) { try { c.close(); } catch (_) { /* superseded */ } return; }
-    const old = _client;
-    _client = c; _activeIdx = 0; _db = null; _users = null; _failedOverAt = 0; _lastPrimaryError = '';
-    console.warn('[db] FAILBACK: primary cluster is reachable again — writes re-enabled.');
-    if (old) { try { old.close(); } catch (_) { /* draining */ } }
+  authorityIdx().then((desired) => {
+    if (_activeIdx === desired) return;
+    const myGen = _gen;
+    return rawConnect(URI_LIST[desired]).then((c) => {
+      if (myGen !== _gen || _activeIdx === desired) { try { c.close(); } catch (_) { /* superseded */ } return; }
+      const old = _client;
+      _client = c; _activeIdx = desired; _db = null; _users = null;
+      _failedOverAt = desired === 0 ? 0 : _failedOverAt; _lastPrimaryError = desired === 0 ? '' : _lastPrimaryError;
+      console.warn('[db] switched to authority cluster #' + desired + '.');
+      if (old) { try { old.close(); } catch (_) { /* draining */ } }
+    });
   }).catch((e) => { _lastPrimaryError = String((e && e.message) || e); });
 }
 
 async function ensureClient() {
-  if (_client) { maybeProbePrimary(); return _client; }
+  if (_client) { maybeProbeAuthority(); return _client; }
   if (_clientPromise) return _clientPromise;
   const myGen = _gen;
   _clientPromise = (async () => {
+    // Connect to the AUTHORITY cluster first (normally the primary; the standby
+    // after a write-failover flip), then fall through the rest of the list.
+    const desired = await authorityIdx();
+    const order = [...new Set([desired, ...URI_LIST.map((_, n) => n)])];
     let lastErr = null;
-    for (let i = 0; i < URI_LIST.length; i++) {
+    for (const i of order) {
       let client = null;
       try {
         client = await rawConnect(URI_LIST[i]);
@@ -131,11 +232,11 @@ async function ensureClient() {
         throw e;
       }
       _client = client; _clientPromise = null; _activeIdx = i;
-      if (i > 0) {
+      if (i !== desired) {
         if (!_failedOverAt) _failedOverAt = Date.now();
         _lastProbeAt = Date.now();
-        console.warn('[db] FAILOVER: primary unreachable (' + _lastPrimaryError + ') — serving READ-ONLY from standby cluster #' + i + '.');
-      } else { _failedOverAt = 0; _lastPrimaryError = ''; }
+        console.warn('[db] FAILOVER: authority cluster #' + desired + ' unreachable (' + _lastPrimaryError + ') — serving from cluster #' + i + '; the first write will move authority here.');
+      } else if (i === 0) { _failedOverAt = 0; _lastPrimaryError = ''; }
       return client;
     }
     // Every cluster failed — don't cache a broken connection; the next request retries.
@@ -151,10 +252,10 @@ async function ensureClient() {
 // from it. That is what keeps caching invisible: nobody has to remember to clear it.
 // Memoised per connection; reset wherever _client is.
 function dbHandle() {
-  // blockWrites: while failed over to a standby, every write through this handle
-  // (dbWrite AND every feature module holding getDbHandle()) is refused with a
-  // clear error instead of silently forking the standby's data.
-  if (!_db) _db = cache.instrument(_client.db(process.env.DB_NAME || 'unico'), { blockWrites: () => _activeIdx > 0 });
+  // writeHook: every write through this handle (dbWrite AND every feature module
+  // holding getDbHandle()) is mirrored to the standby and fails over to it with
+  // an authority flip if the primary dies — see writeHook above.
+  if (!_db) _db = cache.instrument(_client.db(process.env.DB_NAME || 'unico'), { writeHook });
   return _db;
 }
 
@@ -163,9 +264,13 @@ function clusterStatus() {
   return {
     clusters: URI_LIST.length,
     active: _activeIdx,
-    failedOver: _activeIdx > 0,
+    authority: _auth.idx,
+    authorityFlippedAt: _auth.flippedAt || null,
+    failedOver: _auth.idx > 0 || _activeIdx !== _auth.idx,
     failedOverAt: _failedOverAt || null,
     lastPrimaryError: _lastPrimaryError || null,
+    mirrorFails: _mirrorFails,
+    lastMirrorError: _lastMirrorError || null,
   };
 }
 
@@ -195,9 +300,11 @@ function dbWrite(fn) {
 // Drop the pooled connection (graceful shutdown, and lets tests re-point the URI).
 async function closeClient() {
   _gen++;                                   // disown any connect still in flight
-  const c = _client;
+  const c = _client, s = _standbyClient;
   _client = null; _clientPromise = null; _users = null; _db = null;
+  _standbyClient = null; _standbyPromise = null;
   if (c) { try { await c.close(); } catch (e) { /* already gone */ } }
+  if (s) { try { await s.close(); } catch (e) { /* already gone */ } }
 }
 
 /* ---- users ---- */

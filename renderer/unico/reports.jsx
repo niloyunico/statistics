@@ -2259,11 +2259,14 @@ function CacheStats(){
       {!err&&!d&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'14px',textAlign:'center'}}>Loading…</div>}
       {!err&&d&&(
         <div style={{display:'flex',flexDirection:'column',gap:10}}>
-          {d.db&&d.db.failedOver&&<div style={{fontSize:12,fontWeight:600,color:'#8f1d2e',background:'rgba(210,58,82,.1)',border:'1px solid rgba(210,58,82,.3)',borderRadius:7,padding:'9px 12px'}}>
-            ⚠ FAILED OVER — the primary MongoDB cluster is unreachable{d.db.failedOverAt?(' since '+new Date(d.db.failedOverAt).toLocaleTimeString()):''}; serving reads from the standby copy (read-only). Writes are refused with a clear message until the primary returns; it is re-probed every 15 s automatically.{d.db.lastPrimaryError?' Last error: '+String(d.db.lastPrimaryError).slice(0,120):''}
+          {d.db&&d.db.authority>0&&<div style={{fontSize:12,fontWeight:600,color:'#8f1d2e',background:'rgba(210,58,82,.1)',border:'1px solid rgba(210,58,82,.3)',borderRadius:7,padding:'9px 12px'}}>
+            ⚠ WRITE-FAILOVER ACTIVE — the primary cluster went down and the standby took over reads AND writes{d.db.authorityFlippedAt?(' at '+new Date(d.db.authorityFlippedAt).toLocaleTimeString()):''}. Everything keeps working. Once the primary is reachable again, run <b>node scripts/sync-clusters.js --heal</b> to copy the new data back and return authority to it.{d.db.lastPrimaryError?' Last primary error: '+String(d.db.lastPrimaryError).slice(0,110):''}
+          </div>}
+          {d.db&&d.db.authority===0&&d.db.failedOver&&<div style={{fontSize:12,fontWeight:600,color:'#7a4d09',background:'rgba(224,138,30,.12)',border:'1px solid rgba(224,138,30,.3)',borderRadius:7,padding:'9px 12px'}}>
+            ⚠ Primary unreachable — reads are being served from the standby; the first save will move write authority over automatically. Primary re-probed every 15 s.{d.db.lastPrimaryError?' Last error: '+String(d.db.lastPrimaryError).slice(0,110):''}
           </div>}
           {d.db&&!d.db.failedOver&&d.db.clusters>1&&<div style={{fontSize:11.5,color:'#157a43',background:'rgba(31,157,87,.08)',borderRadius:7,padding:'7px 11px'}}>
-            ✓ Failover armed: {d.db.clusters} clusters configured — primary live; standby takes over reads automatically if it goes down.
+            ✓ Failover armed: {d.db.clusters} clusters — primary live, every write mirrored to the standby{d.db.mirrorFails?` (${d.db.mirrorFails} mirror failures — standby may be missing recent writes; run sync-clusters.js --apply)`:''}; if the primary dies, the standby takes over reads and writes automatically.
           </div>}
           <div style={{display:'flex',gap:9,flexWrap:'wrap'}}>
             {tile('Hit rate',d.hitRate==null?'—':d.hitRate+'%','of '+((c.hits||0)+(c.l1Hits||0)+(c.misses||0))+' reads',d.hitRate>=70?'#1f9d57':d.hitRate!=null&&d.hitRate<40?'#d23a52':undefined)}

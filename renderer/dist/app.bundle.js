@@ -31459,7 +31459,7 @@ function CacheStats() {
       flexDirection: 'column',
       gap: 10
     }
-  }, d.db && d.db.failedOver && React.createElement("div", {
+  }, d.db && d.db.authority > 0 && React.createElement("div", {
     style: {
       fontSize: 12,
       fontWeight: 600,
@@ -31469,7 +31469,17 @@ function CacheStats() {
       borderRadius: 7,
       padding: '9px 12px'
     }
-  }, "\u26A0 FAILED OVER \u2014 the primary MongoDB cluster is unreachable", d.db.failedOverAt ? ' since ' + new Date(d.db.failedOverAt).toLocaleTimeString() : '', "; serving reads from the standby copy (read-only). Writes are refused with a clear message until the primary returns; it is re-probed every 15 s automatically.", d.db.lastPrimaryError ? ' Last error: ' + String(d.db.lastPrimaryError).slice(0, 120) : ''), d.db && !d.db.failedOver && d.db.clusters > 1 && React.createElement("div", {
+  }, "\u26A0 WRITE-FAILOVER ACTIVE \u2014 the primary cluster went down and the standby took over reads AND writes", d.db.authorityFlippedAt ? ' at ' + new Date(d.db.authorityFlippedAt).toLocaleTimeString() : '', ". Everything keeps working. Once the primary is reachable again, run ", React.createElement("b", null, "node scripts/sync-clusters.js --heal"), " to copy the new data back and return authority to it.", d.db.lastPrimaryError ? ' Last primary error: ' + String(d.db.lastPrimaryError).slice(0, 110) : ''), d.db && d.db.authority === 0 && d.db.failedOver && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#7a4d09',
+      background: 'rgba(224,138,30,.12)',
+      border: '1px solid rgba(224,138,30,.3)',
+      borderRadius: 7,
+      padding: '9px 12px'
+    }
+  }, "\u26A0 Primary unreachable \u2014 reads are being served from the standby; the first save will move write authority over automatically. Primary re-probed every 15 s.", d.db.lastPrimaryError ? ' Last error: ' + String(d.db.lastPrimaryError).slice(0, 110) : ''), d.db && !d.db.failedOver && d.db.clusters > 1 && React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: '#157a43',
@@ -31477,7 +31487,7 @@ function CacheStats() {
       borderRadius: 7,
       padding: '7px 11px'
     }
-  }, "\u2713 Failover armed: ", d.db.clusters, " clusters configured \u2014 primary live; standby takes over reads automatically if it goes down."), React.createElement("div", {
+  }, "\u2713 Failover armed: ", d.db.clusters, " clusters \u2014 primary live, every write mirrored to the standby", d.db.mirrorFails ? ` (${d.db.mirrorFails} mirror failures — standby may be missing recent writes; run sync-clusters.js --apply)` : '', "; if the primary dies, the standby takes over reads and writes automatically."), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 9,
