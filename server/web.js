@@ -745,6 +745,19 @@ require('./supervisor-reports').mount(app, { requireApi: [session.requireApi, ac
 // Settings -> Database: browse and repair the Cloudflare D1 tables (admin only).
 require('./d1-admin').mount(app, { requireApi: [session.requireApi, access.attach] });
 
+// Settings -> Database: shared read-cache health (admin only). Answers "is Redis
+// actually connected in THIS deployment, and is the cache earning its keep" —
+// numbers are per-instance since boot, not fleet-wide totals.
+app.get('/api/cache/stats', session.requireApi, access.attach, (req, res) => {
+  if (!(req.access && req.access.unrestricted)) return res.status(403).json({ ok: false, error: 'Administrator access required.' });
+  const cacheMod = require('./cache');
+  const redisMod = require('./redis');
+  const snap = cacheMod.snapshot();
+  const reads = (snap.hits || 0) + (snap.l1Hits || 0) + (snap.misses || 0);
+  res.json({ ok: true, redis: redisMod.status(), cache: snap,
+    hitRate: reads ? Math.round(((snap.hits + snap.l1Hits) / reads) * 1000) / 10 : null });
+});
+
 // Settings -> Media: browse the Cloudinary asset store folder by folder (admin only).
 require('./media-admin').mount(app, { requireApi: [session.requireApi, access.attach] });
 

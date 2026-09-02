@@ -2217,6 +2217,70 @@ function ActivityLog(){
   );
 }
 
+/* Cache & Redis health — GET /api/cache/stats (admin only). Per-instance counters
+   since boot: whether Redis is really connected in this deployment, the hit rate,
+   and the failure counters that matter (lost bumps = invalidations that never
+   reached the shared store, so other instances may serve pre-write data). */
+function CacheStats(){
+  const [d,setD]=React.useState(null);
+  const [err,setErr]=React.useState('');
+  const [busy,setBusy]=React.useState(false);
+  const load=React.useCallback(()=>{
+    setBusy(true); setErr('');
+    fetch('/api/cache/stats',{credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>{ if(j&&j.ok) setD(j); else setErr((j&&j.error)||'Could not load cache stats.'); })
+      .catch(()=>setErr('Could not reach the server.')).finally(()=>setBusy(false));
+  },[]);
+  React.useEffect(()=>{ load(); },[load]);
+  const tile=(label,val,sub,color)=>(
+    <div key={label} style={{background:'var(--panel-2)',borderRadius:9,padding:'10px 13px',minWidth:110,flex:'1 1 110px'}}>
+      <div style={{fontSize:10,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',color:'var(--muted)'}}>{label}</div>
+      <div className="num" style={{fontSize:21,fontWeight:800,color:color||'var(--ink)',marginTop:2}}>{val}</div>
+      {sub&&<div style={{fontSize:10.5,color:'var(--faint)',marginTop:1}}>{sub}</div>}
+    </div>
+  );
+  const c=d&&d.cache, r=d&&d.redis;
+  const redisLive=r&&r.driver==='rest'&&r.live!=='memory';
+  return (
+    <div className="card" style={{marginBottom:14}}><div className="card-b">
+      <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12}}>
+        <div style={{flex:1,minWidth:160}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)'}}>Cache &amp; Redis</div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>This instance, since it booted — refresh after browsing a few pages to see it work.</div>
+        </div>
+        {d&&<span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11.5,fontWeight:700,padding:'4px 11px',borderRadius:15,
+          color:redisLive?'#157a43':'#b5670a',background:redisLive?'rgba(31,157,87,.12)':'rgba(224,138,30,.13)'}}>
+          <i style={{width:7,height:7,borderRadius:'50%',background:redisLive?'#1f9d57':'#e08a1e'}}/>
+          {redisLive?'Redis connected (REST)':'In-memory fallback — Redis not configured'}
+        </span>}
+        <button className="btn sm" onClick={load} disabled={busy}><Ic d={I.activity} s={14}/>{busy?'Loading…':'Refresh'}</button>
+      </div>
+      {err&&<div style={{fontSize:12.5,color:'var(--rose)',fontWeight:600,background:'var(--neg-bg)',borderRadius:7,padding:'9px 11px'}}>{err}</div>}
+      {!err&&!d&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'14px',textAlign:'center'}}>Loading…</div>}
+      {!err&&d&&(
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          <div style={{display:'flex',gap:9,flexWrap:'wrap'}}>
+            {tile('Hit rate',d.hitRate==null?'—':d.hitRate+'%','of '+((c.hits||0)+(c.l1Hits||0)+(c.misses||0))+' reads',d.hitRate>=70?'#1f9d57':d.hitRate!=null&&d.hitRate<40?'#d23a52':undefined)}
+            {tile('Shared hits',c.hits||0,'served from Redis')}
+            {tile('Local hits',c.l1Hits||0,'in-process L1')}
+            {tile('Misses',c.misses||0,'loaded from MongoDB')}
+            {tile('Stale serves',c.stale||0,'fresh window lapsed')}
+            {tile('Outage rescues',c.rescues||0,c.lastRescue?('last '+String(c.lastRescue).slice(0,16).replace('T',' ')):'DB down, cache stood in',c.rescues?'#e08a1e':undefined)}
+          </div>
+          <div style={{display:'flex',gap:9,flexWrap:'wrap'}}>
+            {tile('Invalidations',c.bumps||0,'writes that bumped a version')}
+            {tile('Lost bumps',c.lostBumps||0,(c.pendingBumps?c.pendingBumps+' pending retry — ':'')+'never reached shared store',c.lostBumps?'#d23a52':undefined)}
+            {tile('Background refresh',c.revalidated||0,(c.revalidateFails||0)+' failed')}
+            {tile('Redis calls',(r.calls==null?'—':r.calls),(r.errors||0)+' errors'+(r.mutedForMs>0?' · MUTED '+Math.ceil(r.mutedForMs/1000)+'s':''),r.mutedForMs>0?'#d23a52':undefined)}
+          </div>
+          {r.lastError&&<div style={{fontSize:11.5,color:'#b5670a',background:'rgba(224,138,30,.1)',borderRadius:7,padding:'8px 11px'}}>Last Redis error: {String(r.lastError).slice(0,180)}</div>}
+          {!redisLive&&<div style={{fontSize:11.5,color:'var(--muted)',background:'var(--panel-2)',borderRadius:7,padding:'8px 11px'}}>Each serverless instance is caching alone and invalidations don't reach the others. Set <b>UPSTASH_REDIS_REST_URL</b> + <b>UPSTASH_REDIS_REST_TOKEN</b> (or connect Upstash from Vercel → Storage) and redeploy to share the cache fleet-wide.</div>}
+        </div>
+      )}
+    </div></div>
+  );
+}
+
 /* Database browser + row editor — the Cloudflare D1 tables behind the Activity Log
    and Supervisor Reports modules (GET /api/d1/tables, /api/d1/rows, /api/d1/meta;
    PATCH and DELETE /api/d1/row). Admin only.
@@ -2730,7 +2794,7 @@ function Settings({depts, store, setRoute}){
           {tab==='stafffields'&&<StaffFieldsSettings depts={depts} setRoute={setRoute}/>}
           {tab==='deptprivileges'&&(typeof DeptPrivilegesSettings!=='undefined'?<DeptPrivilegesSettings depts={depts}/>:null)}
           {tab==='activity'&&<ActivityLog/>}
-          {tab==='database'&&<DatabaseBrowser/>}
+          {tab==='database'&&<React.Fragment><CacheStats/><DatabaseBrowser/></React.Fragment>}
           {tab==='media'&&<MediaBrowser/>}
           {tab==='users'&&<div className="card"><div className="card-b"><UserManagement/></div></div>}
           {tab==='responsibles'&&(typeof DataResponsibles!=='undefined'?<DataResponsibles depts={depts}/>:null)}

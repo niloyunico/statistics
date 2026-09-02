@@ -11189,6 +11189,99 @@ Object.assign(window, {
     }, "Use this photo")))));
     return window.ReactDOM && window.ReactDOM.createPortal ? window.ReactDOM.createPortal(body, document.body) : body;
   }
+  function PhotoLightbox({
+    src,
+    name,
+    sub,
+    onClose
+  }) {
+    React.useEffect(() => {
+      const h = e => {
+        if (e.key === 'Escape') onClose();
+      };
+      window.addEventListener('keydown', h);
+      return () => window.removeEventListener('keydown', h);
+    }, [onClose]);
+    const body = React.createElement("div", {
+      onMouseDown: e => {
+        if (e.target === e.currentTarget) onClose();
+      },
+      style: {
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(10,22,34,.74)',
+        backdropFilter: 'blur(3px)',
+        zIndex: 2000,
+        display: 'grid',
+        placeItems: 'center',
+        padding: 18
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'relative',
+        background: '#fff',
+        borderRadius: 18,
+        padding: 12,
+        boxShadow: '0 24px 70px rgba(0,0,0,.45)',
+        width: 'min(440px, 94vw)'
+      }
+    }, React.createElement("button", {
+      type: "button",
+      title: "Close",
+      onClick: onClose,
+      style: {
+        position: 'absolute',
+        top: -13,
+        right: -13,
+        width: 32,
+        height: 32,
+        borderRadius: '50%',
+        border: '2px solid #fff',
+        background: '#132435',
+        color: '#fff',
+        cursor: 'pointer',
+        display: 'grid',
+        placeItems: 'center',
+        fontSize: 15,
+        fontWeight: 700,
+        lineHeight: 1,
+        boxShadow: '0 3px 10px rgba(0,0,0,.35)',
+        padding: 0,
+        zIndex: 1
+      }
+    }, "\u2715"), React.createElement("img", {
+      src: src,
+      alt: name || 'Photo',
+      style: {
+        display: 'block',
+        width: '100%',
+        maxHeight: '72vh',
+        objectFit: 'contain',
+        borderRadius: 11,
+        background: '#0e1826'
+      }
+    }), (name || sub) && React.createElement("div", {
+      style: {
+        textAlign: 'center',
+        padding: '10px 8px 4px'
+      }
+    }, name && React.createElement("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 800,
+        color: '#15181c',
+        letterSpacing: '-.2px'
+      }
+    }, name), sub && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: '#0072a3',
+        marginTop: 2
+      }
+    }, sub))));
+    return window.ReactDOM && window.ReactDOM.createPortal ? window.ReactDOM.createPortal(body, document.body) : body;
+  }
   function PhotoPicker({
     value,
     onChange,
@@ -11201,11 +11294,14 @@ Object.assign(window, {
     w,
     h,
     radius,
-    plain
+    plain,
+    zoomable,
+    zoomSub
   }) {
     const [busy, setBusy] = React.useState(false);
     const [cfg, setCfg] = React.useState(null);
     const [cropSrc, setCropSrc] = React.useState(null);
+    const [viewing, setViewing] = React.useState(false);
     const inputRef = React.useRef(null);
     const px = size || 96;
     React.useEffect(() => {
@@ -11297,6 +11393,8 @@ Object.assign(window, {
         height: H
       }
     }, React.createElement("div", {
+      onClick: zoomable && value && value.url && !busy ? () => setViewing(true) : undefined,
+      title: zoomable && value && value.url ? 'View photo' : undefined,
       style: {
         width: W,
         height: H,
@@ -11309,7 +11407,8 @@ Object.assign(window, {
         fontSize: Math.round(Math.min(W, H) / 2.6),
         fontWeight: 800,
         color: plain ? '#fff' : ring,
-        letterSpacing: '.5px'
+        letterSpacing: '.5px',
+        cursor: zoomable && value && value.url && !busy ? 'zoom-in' : undefined
       }
     }, value && value.url ? React.createElement("img", {
       src: value.url,
@@ -11374,6 +11473,11 @@ Object.assign(window, {
       style: {
         display: 'none'
       }
+    }), viewing && value && value.url && React.createElement(PhotoLightbox, {
+      src: value.url,
+      name: name,
+      sub: zoomSub,
+      onClose: () => setViewing(false)
     }), cropSrc && React.createElement(CropDialog, {
       src: cropSrc,
       aspect: W / H,
@@ -11459,6 +11563,7 @@ Object.assign(window, {
   }
   Object.assign(window, {
     PhotoPicker,
+    PhotoLightbox,
     UnicoAvatar,
     unicoSetAccountPhoto,
     unicoUploadPhoto,
@@ -20157,7 +20262,9 @@ function StaffProfile({
     h: 120,
     radius: 10,
     plain: true,
-    readOnly: true
+    readOnly: true,
+    zoomable: true,
+    zoomSub: desig || undefined
   })), React.createElement("h2", {
     style: {
       margin: '14px 0 3px',
@@ -31222,6 +31329,166 @@ function ActivityLog() {
     }
   }, "Loading\u2026")));
 }
+function CacheStats() {
+  const [d, setD] = React.useState(null);
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const load = React.useCallback(() => {
+    setBusy(true);
+    setErr('');
+    fetch('/api/cache/stats', {
+      credentials: 'same-origin'
+    }).then(r => r.json()).then(j => {
+      if (j && j.ok) setD(j);else setErr(j && j.error || 'Could not load cache stats.');
+    }).catch(() => setErr('Could not reach the server.')).finally(() => setBusy(false));
+  }, []);
+  React.useEffect(() => {
+    load();
+  }, [load]);
+  const tile = (label, val, sub, color) => React.createElement("div", {
+    key: label,
+    style: {
+      background: 'var(--panel-2)',
+      borderRadius: 9,
+      padding: '10px 13px',
+      minWidth: 110,
+      flex: '1 1 110px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      color: 'var(--muted)'
+    }
+  }, label), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 21,
+      fontWeight: 800,
+      color: color || 'var(--ink)',
+      marginTop: 2
+    }
+  }, val), sub && React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--faint)',
+      marginTop: 1
+    }
+  }, sub));
+  const c = d && d.cache,
+    r = d && d.redis;
+  const redisLive = r && r.driver === 'rest' && r.live !== 'memory';
+  return React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
+    className: "card-b"
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginBottom: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 160
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "Cache & Redis"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "This instance, since it booted \u2014 refresh after browsing a few pages to see it work.")), d && React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 11.5,
+      fontWeight: 700,
+      padding: '4px 11px',
+      borderRadius: 15,
+      color: redisLive ? '#157a43' : '#b5670a',
+      background: redisLive ? 'rgba(31,157,87,.12)' : 'rgba(224,138,30,.13)'
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      background: redisLive ? '#1f9d57' : '#e08a1e'
+    }
+  }), redisLive ? 'Redis connected (REST)' : 'In-memory fallback — Redis not configured'), React.createElement("button", {
+    className: "btn sm",
+    onClick: load,
+    disabled: busy
+  }, React.createElement(Ic, {
+    d: I.activity,
+    s: 14
+  }), busy ? 'Loading…' : 'Refresh')), err && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--rose)',
+      fontWeight: 600,
+      background: 'var(--neg-bg)',
+      borderRadius: 7,
+      padding: '9px 11px'
+    }
+  }, err), !err && !d && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--faint)',
+      padding: '14px',
+      textAlign: 'center'
+    }
+  }, "Loading\u2026"), !err && d && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 9,
+      flexWrap: 'wrap'
+    }
+  }, tile('Hit rate', d.hitRate == null ? '—' : d.hitRate + '%', 'of ' + ((c.hits || 0) + (c.l1Hits || 0) + (c.misses || 0)) + ' reads', d.hitRate >= 70 ? '#1f9d57' : d.hitRate != null && d.hitRate < 40 ? '#d23a52' : undefined), tile('Shared hits', c.hits || 0, 'served from Redis'), tile('Local hits', c.l1Hits || 0, 'in-process L1'), tile('Misses', c.misses || 0, 'loaded from MongoDB'), tile('Stale serves', c.stale || 0, 'fresh window lapsed'), tile('Outage rescues', c.rescues || 0, c.lastRescue ? 'last ' + String(c.lastRescue).slice(0, 16).replace('T', ' ') : 'DB down, cache stood in', c.rescues ? '#e08a1e' : undefined)), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 9,
+      flexWrap: 'wrap'
+    }
+  }, tile('Invalidations', c.bumps || 0, 'writes that bumped a version'), tile('Lost bumps', c.lostBumps || 0, (c.pendingBumps ? c.pendingBumps + ' pending retry — ' : '') + 'never reached shared store', c.lostBumps ? '#d23a52' : undefined), tile('Background refresh', c.revalidated || 0, (c.revalidateFails || 0) + ' failed'), tile('Redis calls', r.calls == null ? '—' : r.calls, (r.errors || 0) + ' errors' + (r.mutedForMs > 0 ? ' · MUTED ' + Math.ceil(r.mutedForMs / 1000) + 's' : ''), r.mutedForMs > 0 ? '#d23a52' : undefined)), r.lastError && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#b5670a',
+      background: 'rgba(224,138,30,.1)',
+      borderRadius: 7,
+      padding: '8px 11px'
+    }
+  }, "Last Redis error: ", String(r.lastError).slice(0, 180)), !redisLive && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      background: 'var(--panel-2)',
+      borderRadius: 7,
+      padding: '8px 11px'
+    }
+  }, "Each serverless instance is caching alone and invalidations don't reach the others. Set ", React.createElement("b", null, "UPSTASH_REDIS_REST_URL"), " + ", React.createElement("b", null, "UPSTASH_REDIS_REST_TOKEN"), " (or connect Upstash from Vercel \u2192 Storage) and redeploy to share the cache fleet-wide."))));
+}
 function DatabaseBrowser() {
   const [info, setInfo] = React.useState(null);
   const [table, setTable] = React.useState('');
@@ -32607,7 +32874,7 @@ function Settings({
     setRoute: setRoute
   }), tab === 'deptprivileges' && (typeof DeptPrivilegesSettings !== 'undefined' ? React.createElement(DeptPrivilegesSettings, {
     depts: depts
-  }) : null), tab === 'activity' && React.createElement(ActivityLog, null), tab === 'database' && React.createElement(DatabaseBrowser, null), tab === 'media' && React.createElement(MediaBrowser, null), tab === 'users' && React.createElement("div", {
+  }) : null), tab === 'activity' && React.createElement(ActivityLog, null), tab === 'database' && React.createElement(React.Fragment, null, React.createElement(CacheStats, null), React.createElement(DatabaseBrowser, null)), tab === 'media' && React.createElement(MediaBrowser, null), tab === 'users' && React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b"
