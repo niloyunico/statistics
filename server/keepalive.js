@@ -24,10 +24,16 @@
  *                     to its own cron invocations automatically once the variable is
  *                     defined in the project, so setting it is all that is required.
  */
-const { getDbHandle, warmCache } = require('./db');
+// When run standalone (node keepalive.js) the env MUST load before ./db, which now
+// reads MONGODB_URIS at module load to build the failover list.
+if (require.main === module) {
+  require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+}
+const { getDbHandle, warmCache, standbyDbRaw } = require('./db');
 
 const COLLECTION = 'keepalive';
 const DOC_ID = 'heartbeat';
+const STANDBY_DOC_ID = 'heartbeat-standby';
 
 // One query. Returns when the previous ping happened so a missed day is visible.
 //
@@ -58,6 +64,21 @@ async function ping(source, opts) {
   if (!opts || opts.warm !== false) {
     try { out.warmed = await warmCache(); } catch (e) { out.warmed = { error: String(e.message || e) }; }
   }
+  // The STANDBY cluster must never be paused for idleness either — a paused standby
+  // is no failover at all. The primary ping above already mirrors across, but the
+  // mirror is best-effort; this direct write is the guarantee, and its own document
+  // records when the standby was last known reachable. Failure never fails the ping.
+  try {
+    const sdb = standbyDbRaw ? await standbyDbRaw() : null;
+    if (sdb) {
+      await sdb.collection(COLLECTION).findOneAndUpdate(
+        { _id: STANDBY_DOC_ID },
+        { $set: { lastPing: now, source: source || 'timer' }, $inc: { pings: 1 } },
+        { upsert: true }
+      );
+      out.standby = { ok: true, at: now.toISOString() };
+    }
+  } catch (e) { out.standby = { ok: false, error: String((e && e.message) || e) }; }
   return out;
 }
 

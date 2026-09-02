@@ -520,5 +520,5 @@ module.exports = {
   getDepartments, ensureDepartmentsSeeded,
   getStaff, getQuality, ensureRendererSeeded, getDbHandle,
   warmCache, dbRead, dbWrite,
-  close, usingMongo: () => !!process.env.MONGODB_URI, clusterStatus,
+  close, usingMongo: () => !!process.env.MONGODB_URI, clusterStatus, standbyDbRaw,
 };
