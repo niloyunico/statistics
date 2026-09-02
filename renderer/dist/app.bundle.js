@@ -30832,7 +30832,7 @@ function ActivityLog() {
   const load = React.useCallback(() => {
     setBusy(true);
     setErr('');
-    fetch('/api/activity?limit=400', {
+    fetch('/api/activity?limit=5000&days=92', {
       credentials: 'same-origin'
     }).then(r => r.json()).then(j => {
       if (j && j.ok) setRows(j.entries || []);else setErr(j && j.error || 'Could not load the activity log.');
@@ -30901,6 +30901,74 @@ function ActivityLog() {
     media_deleted: {
       l: 'File deleted',
       c: '#d23a52'
+    },
+    app_data_saved: {
+      l: 'Data saved',
+      c: '#0090ca'
+    },
+    profile_updated: {
+      l: 'Profile updated',
+      c: '#0090ca'
+    },
+    password_changed: {
+      l: 'Password changed',
+      c: '#e08a1e'
+    },
+    password_changed_self: {
+      l: 'Password changed',
+      c: '#e08a1e'
+    },
+    photo_upload: {
+      l: 'Photo uploaded',
+      c: '#3ab5a7'
+    },
+    photo_delete: {
+      l: 'Photo deleted',
+      c: '#d23a52'
+    },
+    roster_saved: {
+      l: 'Duty roster saved',
+      c: '#1f9d57'
+    },
+    roster_deleted: {
+      l: 'Duty roster deleted',
+      c: '#d23a52'
+    },
+    submission_sent: {
+      l: 'Submission sent',
+      c: '#0090ca'
+    },
+    staff_request: {
+      l: 'Staff change request',
+      c: '#e08a1e'
+    },
+    performance_saved: {
+      l: 'Performance saved',
+      c: '#6a52d4'
+    },
+    quality_saved: {
+      l: 'Quality data saved',
+      c: '#3ab5a7'
+    },
+    user_account_changed: {
+      l: 'User account changed',
+      c: '#e08a1e'
+    },
+    user_account_deleted: {
+      l: 'User account deleted',
+      c: '#d23a52'
+    },
+    departments_changed: {
+      l: 'Departments changed',
+      c: '#e08a1e'
+    },
+    medicine_changed: {
+      l: 'Medicine data changed',
+      c: '#6a52d4'
+    },
+    supervisor_report_saved: {
+      l: 'Supervisor report saved',
+      c: '#0090ca'
     }
   };
   const meta = a => META[a] || {
@@ -30909,10 +30977,7 @@ function ActivityLog() {
   };
   const fmtTs = ts => {
     try {
-      return new Date(ts).toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
+      return new Date(ts).toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit'
       });
@@ -30960,7 +31025,10 @@ function ActivityLog() {
       fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, "Sign-ins and account changes across the platform", rows ? ` · ${rows.length} events` : '', ".")), React.createElement("div", {
+  }, "Every sign-in and change across the platform \xB7 last 3 months", rows && rows.length ? ` · ${rows.length} events since ${new Date(rows[rows.length - 1].ts).toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric'
+  })}` : '', ".")), React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -31049,9 +31117,41 @@ function ActivityLog() {
     }
   }, h)))), React.createElement("tbody", null, filtered.map((r, i) => {
     const m = meta(r.action);
-    return React.createElement("tr", {
+    const day = ts => {
+      try {
+        return new Date(ts).toDateString();
+      } catch (e) {
+        return '';
+      }
+    };
+    const newDay = i === 0 || day(r.ts) !== day(filtered[i - 1].ts);
+    const dayLabel = (() => {
+      try {
+        return new Date(r.ts).toLocaleDateString([], {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric'
+        });
+      } catch (e) {
+        return '';
+      }
+    })();
+    return React.createElement(React.Fragment, {
       key: i
-    }, React.createElement("td", {
+    }, newDay && React.createElement("tr", null, React.createElement("td", {
+      colSpan: 5,
+      style: {
+        ...cell,
+        padding: '7px 12px',
+        background: 'var(--panel-2)',
+        fontSize: 10.5,
+        fontWeight: 700,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: 'var(--muted)'
+      }
+    }, dayLabel)), React.createElement("tr", null, React.createElement("td", {
       style: {
         ...cell,
         whiteSpace: 'nowrap',
@@ -31105,7 +31205,7 @@ function ActivityLog() {
         color: 'var(--muted)',
         fontFamily: 'IBM Plex Mono'
       }
-    }, r.ip || '—'));
+    }, r.ip || '—')));
   }), filtered.length === 0 && React.createElement("tr", null, React.createElement("td", {
     colSpan: 5,
     style: {

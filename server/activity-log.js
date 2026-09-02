@@ -81,18 +81,22 @@ function mount(app, o) {
   };
   const guard = [requireApi, adminOnly];
 
-  // Recent activity, newest first.
+  // Recent activity, newest first. `days` bounds the window (default 92 ≈ 3 months,
+  // 0 = everything); `limit` is a safety cap, not the primary cut — the Settings view
+  // is expected to show the whole window.
   app.get('/api/activity', guard, async (req, res) => {
-    const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit, 10) || 250));
+    const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 250));
+    const days = req.query.days != null ? Math.max(0, parseInt(req.query.days, 10) || 0) : 92;
+    const since = days > 0 ? Date.now() - days * 86400000 : 0;
     try {
       let rows;
       if (d1store.enabled(D1_MOD)) {
         rows = await d1store.withSchema(() => d1.query(
-          'SELECT ts, action, username, name, role, target, detail, ip FROM activity_log ORDER BY ts DESC LIMIT ?', [limit]));
+          'SELECT ts, action, username, name, role, target, detail, ip FROM activity_log WHERE ts >= ? ORDER BY ts DESC LIMIT ?', [since, limit]));
       } else {
         const h = await db.getDbHandle().catch(() => null);
-        if (h) rows = await h.collection(COLL).find({}).sort({ ts: -1 }).limit(limit).toArray();
-        else rows = MEM.slice(-limit).reverse();
+        if (h) rows = await h.collection(COLL).find(since ? { ts: { $gte: since } } : {}).sort({ ts: -1 }).limit(limit).toArray();
+        else rows = MEM.filter((r) => r.ts >= since).slice(-limit).reverse();
       }
       res.json({ ok: true, entries: rows.map((r) => ({ ts: r.ts, action: r.action, username: r.username, name: r.name, role: r.role, target: r.target, detail: r.detail, ip: r.ip })) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the activity log.' }); }

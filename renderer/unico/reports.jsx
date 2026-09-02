@@ -2145,7 +2145,7 @@ function ActivityLog(){
   const [q,setQ]=React.useState('');
   const load=React.useCallback(()=>{
     setBusy(true); setErr('');
-    fetch('/api/activity?limit=400',{credentials:'same-origin'})
+    fetch('/api/activity?limit=5000&days=92',{credentials:'same-origin'})
       .then(r=>r.json()).then(j=>{ if(j&&j.ok) setRows(j.entries||[]); else setErr((j&&j.error)||'Could not load the activity log.'); })
       .catch(()=>setErr('Could not reach the server.')).finally(()=>setBusy(false));
   },[]);
@@ -2155,9 +2155,18 @@ function ActivityLog(){
   const META={ login:{l:'Signed in',c:'#1f9d57'}, login_failed:{l:'Failed sign-in',c:'#d23a52'}, logout:{l:'Signed out',c:'#6a52d4'},
     user_created:{l:'User created',c:'#0090ca'}, user_updated:{l:'User updated',c:'#e08a1e'}, user_deleted:{l:'User deleted',c:'#d23a52'},
     password_reset:{l:'Password reset',c:'#e08a1e'}, activity_cleared:{l:'Log cleared',c:'#8a93a3'},
-    db_row_updated:{l:'Database row edited',c:'#e08a1e'}, db_row_deleted:{l:'Database row deleted',c:'#d23a52'}, media_deleted:{l:'File deleted',c:'#d23a52'} };
+    db_row_updated:{l:'Database row edited',c:'#e08a1e'}, db_row_deleted:{l:'Database row deleted',c:'#d23a52'}, media_deleted:{l:'File deleted',c:'#d23a52'},
+    app_data_saved:{l:'Data saved',c:'#0090ca'}, profile_updated:{l:'Profile updated',c:'#0090ca'},
+    password_changed:{l:'Password changed',c:'#e08a1e'}, password_changed_self:{l:'Password changed',c:'#e08a1e'},
+    photo_upload:{l:'Photo uploaded',c:'#3ab5a7'}, photo_delete:{l:'Photo deleted',c:'#d23a52'},
+    roster_saved:{l:'Duty roster saved',c:'#1f9d57'}, roster_deleted:{l:'Duty roster deleted',c:'#d23a52'},
+    submission_sent:{l:'Submission sent',c:'#0090ca'}, staff_request:{l:'Staff change request',c:'#e08a1e'},
+    performance_saved:{l:'Performance saved',c:'#6a52d4'}, quality_saved:{l:'Quality data saved',c:'#3ab5a7'},
+    user_account_changed:{l:'User account changed',c:'#e08a1e'}, user_account_deleted:{l:'User account deleted',c:'#d23a52'},
+    departments_changed:{l:'Departments changed',c:'#e08a1e'}, medicine_changed:{l:'Medicine data changed',c:'#6a52d4'},
+    supervisor_report_saved:{l:'Supervisor report saved',c:'#0090ca'} };
   const meta=a=>META[a]||{l:a,c:'#8a93a3'};
-  const fmtTs=ts=>{ try{ return new Date(ts).toLocaleString([],{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } };
+  const fmtTs=ts=>{ try{ return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } };
   const filtered=(rows||[]).filter(r=>{ if(!q.trim()) return true; const s=(r.username+' '+r.name+' '+meta(r.action).l+' '+r.target+' '+r.detail+' '+r.ip).toLowerCase(); return s.includes(q.trim().toLowerCase()); });
   const cell={padding:'9px 12px',fontSize:12.5,borderBottom:'1px solid var(--line-2)',textAlign:'left',verticalAlign:'top'};
   return (
@@ -2165,7 +2174,7 @@ function ActivityLog(){
       <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12}}>
         <div style={{flex:1,minWidth:160}}>
           <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)'}}>Activity log</div>
-          <div style={{fontSize:11.5,color:'var(--muted)'}}>Sign-ins and account changes across the platform{rows?` · ${rows.length} events`:''}.</div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>Every sign-in and change across the platform · last 3 months{rows&&rows.length?` · ${rows.length} events since ${new Date(rows[rows.length-1].ts).toLocaleDateString([],{month:'short',day:'numeric'})}`:''}.</div>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8,background:'#fff',border:'1px solid var(--line)',borderRadius:7,padding:'7px 10px',minWidth:200,color:'var(--faint)'}}>
           <Ic d={I.search} s={14}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search user / action / IP…" style={{border:0,outline:'none',background:'transparent',fontSize:12.5,fontFamily:'inherit',color:'var(--ink)',width:'100%'}}/>
@@ -2182,14 +2191,21 @@ function ActivityLog(){
               {['When','User','Action','Details','IP'].map(h=><th key={h} style={{...cell,fontSize:10.5,textTransform:'uppercase',letterSpacing:.4,color:'var(--muted)',fontWeight:700,borderBottom:'1px solid var(--line)'}}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {filtered.map((r,i)=>{ const m=meta(r.action); return (
-                <tr key={i}>
+              {filtered.map((r,i)=>{ const m=meta(r.action);
+                const day=ts=>{ try{ return new Date(ts).toDateString(); }catch(e){ return ''; } };
+                const newDay=i===0||day(r.ts)!==day(filtered[i-1].ts);
+                const dayLabel=(()=>{ try{ return new Date(r.ts).toLocaleDateString([],{weekday:'long',month:'long',day:'numeric',year:'numeric'}); }catch(e){ return ''; } })();
+                return (
+                <React.Fragment key={i}>
+                {newDay&&<tr><td colSpan={5} style={{...cell,padding:'7px 12px',background:'var(--panel-2)',fontSize:10.5,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',color:'var(--muted)'}}>{dayLabel}</td></tr>}
+                <tr>
                   <td style={{...cell,whiteSpace:'nowrap',color:'var(--muted)',fontFamily:'IBM Plex Mono'}}>{fmtTs(r.ts)}</td>
                   <td style={{...cell}}><div style={{fontWeight:600,color:'var(--ink)'}}>{r.name||r.username||'—'}</div>{r.username&&r.name&&<div style={{fontSize:10.5,color:'var(--faint)'}}>@{r.username}</div>}</td>
                   <td style={{...cell,whiteSpace:'nowrap'}}><span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11.5,fontWeight:700,color:m.c}}><i style={{width:7,height:7,borderRadius:'50%',background:m.c}}/>{m.l}</span></td>
                   <td style={{...cell,color:'var(--ink-2)'}}>{r.target?<b>{r.target}</b>:''}{r.target&&r.detail?' — ':''}{r.detail||(!r.target?'—':'')}</td>
                   <td style={{...cell,whiteSpace:'nowrap',color:'var(--muted)',fontFamily:'IBM Plex Mono'}}>{r.ip||'—'}</td>
                 </tr>
+                </React.Fragment>
               );})}
               {filtered.length===0&&<tr><td colSpan={5} style={{...cell,textAlign:'center',color:'var(--faint)'}}>No events match “{q}”.</td></tr>}
             </tbody>

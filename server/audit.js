@@ -59,6 +59,26 @@ function nameFor(method, path) {
   return method.toLowerCase() + ' ' + path;
 }
 
+// What each app-state key actually holds — so an app_data_saved entry reads
+// "Saved: staff register" instead of "PUT /api/data (unico_staff_v3)".
+// Mirrors KEY_MODULE in server/access.js; unknown keys fall through verbatim.
+const KEY_LABELS = {
+  unico_store_v3: 'department statistics workspace',
+  unico_quality_v2: 'quality indicators',
+  unico_capa_v1: 'quality CAPA statuses',
+  unico_lock_v1: 'quality locks',
+  unico_manual_meta: 'quality manual metadata',
+  unico_staff_v3: 'staff register (nurses / PCA)',
+  unico_staff_customfields_v1: 'staff custom fields',
+  unico_staff_fieldopts_v1: 'staff field options',
+  unico_qc_report_presets_v1: 'quality report presets',
+  unico_report_builder_v1: 'report builder layouts',
+  unico_report_sig_v1: 'report sign-off names',
+  unico_users_v1: 'legacy user list',
+  unico_med_fav_v1: 'saved medicines',
+  unico_med_recent_v1: 'recently viewed medicines',
+};
+
 function middleware(req, res, next) {
   const method = req.method.toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
@@ -70,20 +90,22 @@ function middleware(req, res, next) {
       if (res.statusCode < 200 || res.statusCode >= 300) return;   // nothing changed
       const who = activity.actorOf(req);
       const action = nameFor(method, path);
-      const k = (who.username || 'local') + '|' + action;
+      // The one body field worth keeping: WHICH app-state key a save touched —
+      // named in plain words, since "unico_staff_v3" means nothing to an auditor.
+      let detail = method + ' ' + path;
+      if (path === '/api/data' && req.body && typeof req.body === 'object') {
+        const keys = Object.keys(req.body.data || req.body).filter((x) => x !== 'ts').slice(0, 4);
+        if (keys.length) detail = 'Saved: ' + keys.map((x) => KEY_LABELS[x] || x).join(', ') + ' · ' + method + ' ' + path;
+      }
+      // Dedupe on the full detail, not just the action: a staff save and a quality
+      // save minutes apart are DIFFERENT activity, only true repeats collapse.
+      const k = (who.username || 'local') + '|' + action + '|' + detail;
       const now = Date.now();
       const last = recent.get(k) || 0;
       if (now - last < QUIET_MS) return;
       recent.set(k, now);
       if (recent.size > 2000) {                                   // never grow unbounded
         for (const [key, ts] of recent) if (now - ts > QUIET_MS) recent.delete(key);
-      }
-      // The one body field worth keeping: WHICH app-state key a save touched —
-      // "unico_staff_v3" tells an auditor far more than "PUT /api/data".
-      let detail = method + ' ' + path;
-      if (path === '/api/data' && req.body && typeof req.body === 'object') {
-        const keys = Object.keys(req.body.data || req.body).filter((x) => x !== 'ts').slice(0, 4);
-        if (keys.length) detail += ' (' + keys.join(', ') + ')';
       }
       activity.record(Object.assign({}, who, { action, detail, ip: activity.ipOf(req) }));
     } catch (e) { /* auditing must never break the request path */ }
