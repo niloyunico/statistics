@@ -63,12 +63,15 @@ const Monograph = ({ html }) => <div className="mono-body" dangerouslySetInnerHT
 
 const SECTION_LABEL = {
   indication: 'Indications', therapeuticClass: 'Therapeutic class', pharmacology: 'Pharmacology',
-  dosage: 'Dosage & administration', administration: 'Administration', interaction: 'Interactions',
+  dosage: 'Dosage & administration', adultDose: 'Adult dose', childDose: 'Child dose', renalDose: 'Renal dose',
+  administration: 'Administration', interaction: 'Interactions',
   contraindications: 'Contraindications', sideEffects: 'Side effects', pregnancy: 'Pregnancy & lactation',
-  precautions: 'Precautions', pediatric: 'Paediatric use', overdose: 'Overdose', duration: 'Duration of treatment',
+  precautions: 'Precautions',
+  nursingConsiderations: 'Nursing considerations', prescriberConsiderations: 'Prescriber considerations',
+  pediatric: 'Paediatric use', overdose: 'Overdose', duration: 'Duration of treatment',
   reconstitution: 'Reconstitution', storage: 'Storage',
 };
-const SECTION_ORDER = ['indication', 'therapeuticClass', 'pharmacology', 'dosage', 'administration', 'interaction', 'contraindications', 'sideEffects', 'pregnancy', 'precautions', 'pediatric', 'overdose', 'duration', 'reconstitution', 'storage'];
+const SECTION_ORDER = ['indication', 'therapeuticClass', 'pharmacology', 'dosage', 'adultDose', 'childDose', 'renalDose', 'administration', 'interaction', 'contraindications', 'sideEffects', 'pregnancy', 'precautions', 'nursingConsiderations', 'prescriberConsiderations', 'pediatric', 'overdose', 'duration', 'reconstitution', 'storage'];
 
 // Bangladeshi prescribing shorthand. The "1+0+1" form is what is actually written on
 // pads here, so it leads; the Latin abbreviations follow for anyone who prefers them.
@@ -1860,6 +1863,7 @@ function MedAnalytics({ setRoute }) {
 /* ================= router ================= */
 function MedicineView({ view, id, rx, q, setRoute }) {
   useEffect(() => { medInjectStyle(); }, []);
+  if (view === 'medInfo' && window.MedicineInfoV2) return <window.MedicineInfoV2 setRoute={setRoute} />;
   if (view === 'medBrowse') return <MedBrowse setRoute={setRoute} initialQ={q} />;
   if (view === 'medBrand') return <MedBrand id={id} setRoute={setRoute} />;
   if (view === 'medGeneric') return <MedGeneric id={id} setRoute={setRoute} />;

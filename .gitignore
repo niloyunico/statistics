@@ -14,6 +14,11 @@ dist/
 scripts/backups/
 **/_backup_*
 
+# Medicine pipeline build artifacts: ~218 MB of ndjson/gz regenerated from the
+# source SQLite by scripts/meds-d1/build.py. The SHIPPED copies live on Cloudinary
+# (index-*.json.gz) and in Cloudflare D1, so these are scratch, not source.
+scripts/meds-d1/out/
+
 # Secrets & local env — NEVER commit real values
 .env
 .env.*

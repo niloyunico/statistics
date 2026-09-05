@@ -19,7 +19,10 @@ function Avatar({name,size=34,fontSize,photo}){
   let h=0; for(const ch of name||'') h=(h*31+ch.charCodeAt(0))%360;
   const box={width:size,height:size,borderRadius:'50%',flexShrink:0};
   if(photo&&photo.url&&!dead){
-    return <img src={photo.url} alt={ini.toUpperCase()} title={name||''} onError={()=>setDead(true)}
+    // Small CDN derivative + lazy load: a 26px avatar must not pull the 640px original.
+    const src=(window.MK&&window.MK.cdnPhoto)?window.MK.cdnPhoto(photo.url,size):photo.url;
+    return <img src={src} alt={ini.toUpperCase()} title={name||''} onError={()=>setDead(true)}
+      loading="lazy" decoding="async"
       style={{...box,objectFit:'cover',display:'block',background:'#e8eef5'}}/>;
   }
   return <div style={{...box,display:'grid',placeItems:'center',
@@ -636,18 +639,36 @@ function StaffCompliance({store, setRoute, role='Nurse'}){
 }
 
 /* ---------------- Role-scoped management (Nurses / PCA, NEMS Employees style) ---------------- */
+// The directory must come back EXACTLY as you left it. Opening a profile swaps the
+// view, so this component UNMOUNTS — every filter and the scroll position died with
+// it, and "back" dumped you at the top of an unfiltered list. Filters + scroll are
+// remembered here (per role, module scope: survives navigation, resets on reload).
+const DIR_MEMO = {};
 function ManageStaff({store, setRoute, role}){
   const S=window.STAFF;
-  const [q,setQ]=React.useState('');
-  const [chip,setChip]=React.useState('all');
-  const [dept,setDept]=React.useState('');
-  const [desig,setDesig]=React.useState('');
-  const [vacc,setVacc]=React.useState('');
-  const [qual,setQual]=React.useState('');
-  const [expB,setExpB]=React.useState('');
-  const [training,setTraining]=React.useState('');
-  const [sortBy,setSortBy]=React.useState('name');
-  const [showInactive,setShowInactive]=React.useState(false);
+  const M=DIR_MEMO[role]||{};
+  const [q,setQ]=React.useState(M.q||'');
+  const [chip,setChip]=React.useState(M.chip||'all');
+  const [dept,setDept]=React.useState(M.dept||'');
+  const [desig,setDesig]=React.useState(M.desig||'');
+  const [vacc,setVacc]=React.useState(M.vacc||'');
+  const [qual,setQual]=React.useState(M.qual||'');
+  const [expB,setExpB]=React.useState(M.expB||'');
+  const [training,setTraining]=React.useState(M.training||'');
+  const [sortBy,setSortBy]=React.useState(M.sortBy||'name');
+  const [showInactive,setShowInactive]=React.useState(!!M.showInactive);
+  // Remember the filters as they change…
+  React.useEffect(()=>{ DIR_MEMO[role]=Object.assign({},DIR_MEMO[role],{q,chip,dept,desig,vacc,qual,expB,training,sortBy,showInactive}); });
+  // …and the scroll position, tracked live (an unmount-time read is too late: the
+  // list is gone and .content has already collapsed by the time cleanup runs).
+  React.useEffect(()=>{
+    const el=document.querySelector('.content'); if(!el) return;
+    const saved=(DIR_MEMO[role]||{}).scroll||0;
+    if(saved){ let tries=0; const restore=()=>{ el.scrollTop=saved; if(Math.abs(el.scrollTop-saved)>4&&++tries<12) requestAnimationFrame(restore); }; requestAnimationFrame(restore); }
+    const onScroll=()=>{ DIR_MEMO[role]=Object.assign({},DIR_MEMO[role],{scroll:el.scrollTop}); };
+    el.addEventListener('scroll',onScroll,{passive:true});
+    return ()=>el.removeEventListener('scroll',onScroll);
+  },[]);  // eslint-disable-line
   const tone= role==='PCA'?'#6a52d4':'#0090ca';
   const all=store.staff.filter(e=>(e.role||'Nurse')===role);
   const active=all.filter(e=>e.is_active);

@@ -77,6 +77,62 @@
     if (!p.length) return '?';
     return ((p[0][0] || '') + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase();
   }
+
+  /* ---- photo-aware avatar -------------------------------------------------
+     Staff photos are stored on the staff record as {url, publicId} (Cloudinary,
+     via PhotoPicker). Every module that draws an initials circle should show the
+     REAL photo when one exists — this is the one component that does it, so the
+     fallback logic isn't re-invented (wrongly) per module.
+       <MK.Av name={r.name} emp={r.emp} empId={r.empId} size={28}/>
+     Resolution: the record passed as `emp` -> the global lookup published by the
+     staff store (window.__STAFF_PHOTOS__, by emp id then by name). A dead URL
+     falls back to initials instead of the browser's broken-image glyph. */
+  function photoUrlOf(rec) {
+    if (!rec) return '';
+    var p = rec.photo || rec.photo_url;
+    if (!p) return '';
+    return typeof p === 'string' ? p : (p.url || '');
+  }
+  /* CREDIT SAVER. Every avatar used to download the 640px ORIGINAL (~180 KB) even at
+     26px — pure Cloudinary bandwidth waste. This rewrites a Cloudinary URL to a small
+     auto-format derivative (~5-15 KB). Only TWO standard sizes exist on purpose
+     (96px for list avatars, 320px for portraits): each DISTINCT transformation is
+     billed once ever, so two buckets cost at most 2 per image, then every view is a
+     CDN cache hit. Cloudinary URLs are versioned + immutable, so the browser cache
+     holds them for a year too. Non-Cloudinary URLs pass through untouched.
+       mode 'fill' (default) — square centre-crop, matches objectFit:cover
+       mode 'fit'            — scale down only, keeps the uploaded aspect ratio */
+  function cdnPhoto(url, px, mode) {
+    try {
+      if (!url || url.indexOf('res.cloudinary.com') < 0 || url.indexOf('/upload/') < 0) return url;
+      if (/\/upload\/[a-z]+_[^/]*\//.test(url)) return url;          // already a derivative
+      var w = (px || 32) <= 48 ? 96 : 320;                            // 2x for retina, 2 buckets only
+      var t = mode === 'fit' ? ('c_limit,w_' + w) : ('c_fill,w_' + w + ',h_' + w);
+      return url.replace('/upload/', '/upload/' + t + ',q_auto,f_auto/');
+    } catch (e) { return url; }
+  }
+  function photoLookup(empId, name) {
+    var m = (typeof window !== 'undefined') && window.__STAFF_PHOTOS__;
+    if (!m) return '';
+    return (empId != null && m['id:' + String(empId).trim()]) || (name && m['nm:' + String(name).trim().toLowerCase()]) || '';
+  }
+  function Av(props) {
+    var name = props.name, size = props.size || 28;
+    var url = photoUrlOf(props.emp) || photoUrlOf(props) || photoLookup(props.empId, name);
+    var st = React.useState(false); var dead = st[0], setDead = st[1];
+    React.useEffect(function () { setDead(false); }, [url]);   // eslint-disable-line
+    var radius = props.radius == null ? '50%' : props.radius;
+    if (url && !dead) {
+      return React.createElement('img', {
+        src: cdnPhoto(url, size), alt: name || '', onError: function () { setDead(true); },
+        loading: 'lazy', decoding: 'async',
+        style: Object.assign({ width: size, height: size, borderRadius: radius, objectFit: 'cover', flexShrink: 0, display: 'block' }, props.style || {}),
+      });
+    }
+    var base = av(name, size);
+    if (props.radius != null) base = Object.assign({}, base, { borderRadius: props.radius });
+    return React.createElement('div', { style: Object.assign(base, props.style || {}) }, initials(name));
+  }
   function roleChip(role) {
     var c = role === 'PCA' ? '#6a52d4' : '#0090ca';
     return { display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 5, color: c, background: c + '16', letterSpacing: '.3px', flexShrink: 0 };
@@ -130,7 +186,7 @@
     MONO: MONO, ANIM: ANIM, INK: INK, BODY: BODY, MUTED: MUTED, FAINT: FAINT, LINE: LINE,
     GC: GC, RT: RT, ST: ST, TINT: TINT,
     card: card, cardHead: cardHead, cardBody: cardBody, h3: h3, sub: sub, page: page,
-    hue: hue, av: av, ini: ini, initials: initials, roleChip: roleChip, gchip: gchip, stChip: stChip,
+    hue: hue, av: av, ini: ini, initials: initials, Av: Av, photoUrlOf: photoUrlOf, cdnPhoto: cdnPhoto, roleChip: roleChip, gchip: gchip, stChip: stChip,
     ratingPill: ratingPill, iconBadge: iconBadge, barColor: barColor, progColor: progColor,
     track: track, fill: fill, btnPri: btnPri, btnGhost: btnGhost, btnTone: btnTone,
   };

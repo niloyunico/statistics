@@ -444,7 +444,7 @@ function RRTree({ divisions, open, setOpen, q, setQ, matchLabel, sel, setSel, se
                                 <div key={s.empId} onClick={() => setSel(isSel ? null : s.empId)}
                                   title={s.name + ' — ' + (s.desig || 'designation not recorded') + ' · ' + s.duty + ' duty days · ' + s.hours + ' h this month' + (s.over ? ' (over the overtime limit)' : '')}
                                   style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 8px', borderRadius: 9, cursor: 'pointer', border: '1px solid ' + (isSel ? 'rgba(0,144,202,.55)' : 'rgba(125,145,180,.22)'), background: isSel ? 'rgba(0,144,202,.12)' : 'rgba(255,255,255,.72)' }}>
-                                  <span style={{ ...MK.av(s.name, 22), borderRadius: 7 }}>{MK.initials(s.name)}</span>
+                                  <MK.Av name={s.name} empId={s.empId} size={22} radius={7} />
                                   <div style={{ minWidth: 0, flex: 1 }}>
                                     <div style={{ fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: MK.INK }}>{s.name}</div>
                                     <div style={{ fontSize: 9.5, color: MK.FAINT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -652,7 +652,7 @@ function RRUnitDetail({ u, bucket, day, month, year, setRoute }) {
                 const s = nameOf[id]; if (!s) return null;
                 return (
                   <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.4 }}>
-                    <span style={{ ...MK.av(s.name, 20), borderRadius: 6 }}>{MK.initials(s.name)}</span>
+                    <MK.Av name={s.name} empId={s.empId} size={20} radius={6} />
                     <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: MK.INK }}>{s.name}</span>
                     <span className="num" style={{ fontSize: 10, fontWeight: 700, color: R.BUCKET_COLOR[bucket.id] }}>{(u.grid[id] || {})[day]}</span>
                     <span className="num" style={{ fontSize: 10, color: s.over ? '#a92c42' : MK.FAINT }}>{s.hours}h</span>

@@ -338,7 +338,7 @@ function PerfDashboard({ roster, perf, setRoute }) {
           <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {overdue.slice(0, 6).map((r) => (
               <div key={r.empId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: '1px solid var(--line,#eef2f7)' }}>
-                <div style={MK.av(r.name, 28)}>{initials(r.name)}</div>
+                <MK.Av name={r.name} emp={r.emp} empId={r.empId} size={28} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 12.5 }}>{r.name}</div>
                   <div className="sub" style={{ fontSize: 11 }}>
@@ -538,7 +538,7 @@ function PerfDirectory({ roster, staffStore, setRoute }) {
                   </td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={MK.av(r.name, 26)}>{initials(r.name)}</div>
+                      <MK.Av name={r.name} emp={r.emp} empId={r.empId} size={26} />
                       <span style={{ fontWeight: 600, cursor: 'pointer' }} onClick={() => setRoute({ view: 'perfStaff', emp: r.empId })}>{r.name}</span>
                       {r.emp && r.emp.role === 'PCA' && <span style={MK.roleChip('PCA')}>PCA</span>}
                       {r.overdue && <span className="tag" style={{ color: '#d23a52', borderColor: '#d23a5255', background: '#d23a5214' }}>overdue</span>}
@@ -684,7 +684,7 @@ function PerfForm({ roster, perf, empId, setRoute }) {
       {/* identity card */}
       <div className="card" style={{ borderTop: '3px solid #0090ca' }}>
         <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', padding: '15px 18px' }}>
-          <div style={MK.av(row.name, 56)}>{MK.initials(row.name)}</div>
+          <MK.Av name={row.name} emp={row.emp} empId={row.empId} size={56} />
           <div style={{ flex: 1, minWidth: 240 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 19, fontWeight: 700, color: MK.INK }}>{row.name}</span>
@@ -1137,13 +1137,6 @@ function PerfStaffRecord({ roster, perf, empId, setRoute }) {
   const hist = row.history.slice().reverse();
   const latest = row.last;
   const isPca = row.emp && row.emp.role === 'PCA';
-  /* No staff record carries a photograph, and the bundle ships exactly two stock
-     portraits. Printing one on a card headed NURSE ID, beside this person's real
-     name, employee number and barcode, presents a stranger's face as their identity
-     photo -- and picks which stranger from their ROLE, which is not their gender.
-     Use a real photo if one is ever stored; otherwise the initials avatar the rest
-     of the module already uses. */
-  const photo = (row.emp && (row.emp.photo || row.emp.photo_url)) || '';
   const idRow = (k, v) => (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 0', borderBottom: '1px solid rgba(125,145,180,.14)' }}>
       <span style={{ flex: 1, fontSize: 9.6, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: MK.FAINT }}>{k}</span>
@@ -1175,10 +1168,7 @@ function PerfStaffRecord({ roster, perf, empId, setRoute }) {
 
           <div style={{ padding: '16px 18px 14px', textAlign: 'center' }}>
             <div style={{ width: 132, height: 132, margin: '0 auto', borderRadius: '50%', overflow: 'hidden', border: '4px solid #fff', boxShadow: '0 8px 24px rgba(31,59,90,.16)', background: 'linear-gradient(160deg,#eaf4fb,#dceaf5)' }}>
-              {photo
-                ? <img src={photo} alt={row.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  onError={(e) => { e.target.style.display = 'none'; }} />
-                : <div style={Object.assign({}, MK.av(row.name, 132), { width: '100%', height: '100%', borderRadius: 0, fontSize: 44 })}>{initials(row.name)}</div>}
+              <MK.Av name={row.name} emp={row.emp} empId={row.empId} size={132} radius={0} style={{ width: '100%', height: '100%', fontSize: 44 }} />
             </div>
             <div style={{ fontSize: 17, fontWeight: 700, color: MK.INK, marginTop: 11 }}>{row.name}</div>
             <div style={{ fontSize: 12.4, fontWeight: 600, color: '#0090ca', marginTop: 1 }}>{row.designation || '—'}</div>
@@ -1421,7 +1411,7 @@ function PerfQueue({ roster, perf, setRoute }) {
                       }}>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                            <div style={MK.av(r.name, 30)}>{MK.initials(r.name)}</div>
+                            <MK.Av name={r.name} emp={r.emp} empId={r.empId} size={30} />
                             <div style={{ minWidth: 0 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <span style={{ fontWeight: 600, color: MK.INK }}>{r.name}</span>
@@ -1481,7 +1471,7 @@ function QueueDetail({ row, perf, setRoute }) {
       <div className="card-h"><h3>Appraisal review</h3><div style={{ flex: 1 }} /><span style={MK.stChip(stLabel)}>{stLabel}</span></div>
       <div className="card-b">
         <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-          <div style={MK.av(row.name, 42)}>{MK.initials(row.name)}</div>
+          <MK.Av name={row.name} emp={row.emp} empId={row.empId} size={42} />
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: MK.INK }}>{row.name}</div>
             <div style={{ fontSize: 11.4, color: MK.MUTED }}>{row.dept} · {row.designation} · {row.emp && row.emp.role === 'PCA' ? 'PCA' : 'Nurse'}</div>
@@ -1937,7 +1927,7 @@ function PerfRegister({ kind, roster, perf, setRoute, focusEmp }) {
                       <tr key={r.id} style={!isAch ? { boxShadow: 'inset 4px 0 0 ' + sevTone(r.severity) } : null}>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <div style={MK.av(r.staffName, 26)}>{MK.initials(r.staffName)}</div>
+                            <MK.Av name={r.staffName} empId={r.empId} size={26} />
                             <div style={{ minWidth: 0 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <span style={{ fontWeight: 600, color: MK.INK, cursor: 'pointer' }} onClick={() => openStaff(r.empId)}>{r.staffName}</span>
@@ -1976,7 +1966,7 @@ function PerfRegister({ kind, roster, perf, setRoute, focusEmp }) {
                   {leaders.map((l, k) => (
                     <div key={l.empId} style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer' }} onClick={() => openStaff(l.empId)}>
                       <span className="num" style={{ width: 14, opacity: .5, fontSize: 11 }}>{k + 1}</span>
-                      <div style={MK.av(l.name, 26)}>{MK.initials(l.name)}</div>
+                      <MK.Av name={l.name} empId={l.empId} size={26} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 600, color: MK.INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name}</div>
                         <div style={{ fontSize: 10.4, color: MK.FAINT }}>{l.dept} · {l.n} entr{l.n === 1 ? 'y' : 'ies'}</div>
@@ -2081,7 +2071,7 @@ function PerfEntryHistory({ kind, roster, perf, empId, caps, onBack, onCert, set
 
       {/* identity header */}
       <div className="card" style={{ padding: '18px 22px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <div style={MK.av(row.name, 56)}>{MK.initials(row.name)}</div>
+        <MK.Av name={row.name} emp={row.emp} empId={row.empId} size={56} />
         <div style={{ minWidth: 200 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 19, fontWeight: 700, color: MK.INK }}>{row.name}</span>
@@ -2566,7 +2556,7 @@ function PerfDeptAttrition({ unit, units, flagged, onFlag, onBack, onLeaver }) {
         ) : u.list.map((l) => (
           <div key={l.empId} onClick={() => onLeaver(l.empId)}
             style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 16px', borderTop: '1px solid rgba(125,145,180,.14)', cursor: 'pointer' }}>
-            <div style={MK.av(l.name, 30)}>{MK.initials(l.name)}</div>
+            <MK.Av name={l.name} empId={l.empId} size={30} />
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <span style={{ fontSize: 12.5, fontWeight: 600, color: MK.INK }}>{l.name}</span>
@@ -2627,7 +2617,7 @@ function PerfLeaverRecord({ empId, leavers, onBack }) {
       </div>
 
       <div className="card" style={{ padding: '18px 22px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <div style={MK.av(l.name, 56)}>{MK.initials(l.name)}</div>
+        <MK.Av name={l.name} empId={l.empId} size={56} />
         <div style={{ minWidth: 200 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 19, fontWeight: 700, color: MK.INK }}>{l.name}</span>

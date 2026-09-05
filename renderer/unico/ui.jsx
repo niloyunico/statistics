@@ -66,8 +66,8 @@ const UNICO_MODULE_VIEWS = {
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
   perf:   ['perfHome','perfDirectory','perfForm','perfPrint','perfStaff','perfQueue','perfAchievements','perfIncidents','perfCompare','perfAttrition','perfRisk','perfBoard'],
-  roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview'],
-  medicine:['medHome','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
+  roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','manpower'],
+  medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
 function unicoModuleOf(view){
   for(let i=0;i<UNICO_MODULES.length;i++){ const m=UNICO_MODULES[i]; if((UNICO_MODULE_VIEWS[m.id]||[]).indexOf(view)>=0) return m.id; }
@@ -325,9 +325,11 @@ function unicoWorkspaceSub(view){
   ];
   if(mod==='roster') return [
     { label:'All Rosters',       view:'rosterHome', match:['rosterHome','rosterGrid','rosterReview','rosterPrint'] },
+    { label:'Manpower Overview', view:'manpower' },
     { label:'Full Review',       view:'rosterFullReview' },
   ];
   if(mod==='medicine') return [
+    { label:'Medicine Info',     view:'medInfo' },
     { label:'Drug Index',        view:'medBrowse', match:['medBrowse','medBrand','medGeneric'] },
     { label:'New Prescription',  view:'medRxNew' },
     { label:'Prescriptions',     view:'medRxList', match:['medRxList','medRxPrint'] },

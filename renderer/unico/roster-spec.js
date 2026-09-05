@@ -68,7 +68,7 @@
     { id: 'M', label: 'Morning', color: '#e08a1e' },
     { id: 'E', label: 'Evening', color: '#0090ca' },
     { id: 'N', label: 'Night', color: '#5b45c4' },
-    { id: 'O', label: 'Leave / off', color: '#8aa0b8' },
+    { id: 'O', label: 'Leave / off', color: '#8b98ab' },
   ];
   var BUCKET_COLOR = {};
   BUCKETS.forEach(function (b) { BUCKET_COLOR[b.id] = b.color; });

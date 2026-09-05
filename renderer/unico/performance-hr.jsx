@@ -353,7 +353,7 @@ function PerfAttrition({ roster, perf, staffStore, setRoute }) {
                   <tr key={l.empId}>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={MK.av(l.name, 26)}>{MK.initials(l.name)}</div>
+                        <MK.Av name={l.name} empId={l.empId} size={26} />
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontWeight: 600, color: MK.INK }}>{l.name}</div>
                           <div style={{ fontSize: 10.6, color: MK.FAINT }}>{l.empId} · {l.designation}</div>
@@ -563,7 +563,7 @@ function PerfRisk({ roster, perf, staffStore, setRoute }) {
             ) : scored.slice(0, 40).map((r) => (
               <div key={r.empId} onClick={() => setRoute({ view: 'perfStaff', emp: r.empId })}
                 style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid rgba(125,145,180,.12)', cursor: 'pointer' }}>
-                <div style={MK.av(r.name, 34)}>{MK.initials(r.name)}</div>
+                <MK.Av name={r.name} emp={r.emp} empId={r.empId} size={34} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 700, fontSize: 13, color: MK.INK }}>{r.name}</span>
@@ -726,7 +726,7 @@ function PerfBoard({ roster, perf, staffStore, setRoute }) {
                 style={{ padding: '11px 16px', borderBottom: '1px solid rgba(125,145,180,.12)', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span className="num" style={{ width: 22, fontSize: 11.5, fontWeight: 700, color: '#e08a1e' }}>#{k + 1}</span>
-                  <div style={MK.av(l.name, 32)}>{MK.initials(l.name)}</div>
+                  <MK.Av name={l.name} empId={l.empId} size={32} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12.8, fontWeight: 700, color: MK.INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name}</div>
                     <div style={{ fontSize: 10.6, color: MK.FAINT }}>{[l.desig, l.dept].filter(Boolean).join(' · ')}</div>
@@ -759,7 +759,7 @@ function PerfBoard({ roster, perf, staffStore, setRoute }) {
                     <div key={e.id} onClick={() => setRoute({ view: 'perfStaff', emp: e.empId })}
                       style={{ padding: '13px 14px', borderRadius: 12, background: 'rgba(255,255,255,.62)', border: '1px solid rgba(125,145,180,.2)', cursor: 'pointer' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
-                        <div style={MK.av(e.staffName, 32)}>{MK.initials(e.staffName)}</div>
+                        <MK.Av name={e.staffName} empId={e.empId} size={32} />
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: 12.8, fontWeight: 700, color: MK.INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.staffName}</div>
                           <div style={{ fontSize: 10.4, color: MK.FAINT }}>{[(roster.byEmp[e.empId] || {}).designation, e.department].filter(Boolean).join(' · ')}</div>
@@ -790,7 +790,7 @@ function PerfBoard({ roster, perf, staffStore, setRoute }) {
                 <span className="num" style={{ width: 76, fontSize: 10.8, color: MK.FAINT }}>{m.label}</span>
                 {m.winner ? (
                   <>
-                    <div style={MK.av(m.winner.name, 24)}>{MK.initials(m.winner.name)}</div>
+                    <MK.Av name={m.winner.name} empId={m.winner.empId} size={24} />
                     <span style={{ flex: 1, fontWeight: 600, color: MK.INK }}>{m.winner.name}</span>
                     <span className="num" style={{ fontWeight: 700, padding: '2px 9px', borderRadius: 12, color: '#e08a1e', background: 'rgba(224,138,30,.16)' }}>+{m.winner.pts}</span>
                   </>

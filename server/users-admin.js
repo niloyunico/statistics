@@ -116,6 +116,9 @@ function safe(u) {
     staffScope: role === 'Administrator' ? 'all' : cleanStaffScope(u.staffScope),
     staffId: (u.staffId === 0 || u.staffId) ? u.staffId : null,
     staffEmpId: u.staffEmpId || null,
+    // Profile picture (set by the account owner via /api/upload kind=profile).
+    // Only the CDN url is exposed — publicId stays server-side.
+    photo: (u.photo && u.photo.url) ? { url: u.photo.url } : null,
     createdAt: u.createdAt || null,
     updatedAt: u.updatedAt || null,
   };

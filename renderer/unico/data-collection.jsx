@@ -245,7 +245,9 @@
     const chip = (r, a, ind) => (
       <span key={r.id} title={tipOf(r, a.key)}
         style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 4px 3px 3px', borderRadius: 999, background: 'var(--blue-50)', border: '1px solid var(--blue)', fontSize: 11.5, fontWeight: 600, color: 'var(--blue-700)', opacity: r.active === false ? 0.55 : 1 }}>
-        <span style={{ width: 18, height: 18, borderRadius: '50%', background: 'var(--blue)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{initials(r.name)}</span>
+        {(window.MK && window.MK.Av)
+          ? <window.MK.Av name={r.name} empId={r.empId} size={18} style={{ fontSize: 9 }} />
+          : <span style={{ width: 18, height: 18, borderRadius: '50%', background: 'var(--blue)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{initials(r.name)}</span>}
         <span style={{ cursor: onEditPerson ? 'pointer' : 'default' }} onClick={() => onEditPerson && onEditPerson(r)}>{r.name}</span>
         <button title={'Remove ' + ind.name + ' access from ' + r.name} disabled={busy}
           onClick={() => revoke(r, a.key, ind, a.name)}
@@ -300,7 +302,9 @@
                                 <div key={r.id} onClick={() => give(r, a.key, ind)}
                                   style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, cursor: 'pointer', opacity: r.active === false ? 0.55 : 1 }}
                                   onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--blue-50)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-                                  <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--blue)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{initials(r.name)}</span>
+                                  {(window.MK && window.MK.Av)
+                                    ? <window.MK.Av name={r.name} empId={r.empId} size={22} style={{ fontSize: 10 }} />
+                                    : <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--blue)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{initials(r.name)}</span>}
                                   <span style={{ minWidth: 0, flex: 1 }}>
                                     <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}{r.active === false ? ' (inactive)' : ''}</div>
                                     <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>{hasArea(r, a.key) ? 'Adds this indicator to their list' : 'Grants ' + a.name + ' · only this indicator'}</div>

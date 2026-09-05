@@ -49,10 +49,82 @@ function useStaffPerf(perfId){
   return d;
 }
 
+/* DISCONTINUE — a proper exit, not a bare "mark inactive". Collects the separation
+   type, last working day and the stated reason, files the exit in the Performance
+   module's Attrition & Exits register (POST /api/performance/exits — the attrition
+   rate is computed from it), THEN archives the person to Previous Staff with the
+   same reason. Order matters: if the register write fails, nothing is archived, so
+   the roster and the attrition figures can never disagree. */
+const SEPARATIONS=['Resignation','End of contract','Retirement','Termination','Absconded','Transfer','Other'];
+function DiscontinueDialog({e,onClose,onDone}){
+  const today=(()=>{try{const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);}catch(err){return '';}})();
+  const [sep,setSep]=React.useState('Resignation');
+  const [lastDay,setLastDay]=React.useState(today);
+  const [noticeDate,setNoticeDate]=React.useState('');
+  const [reason,setReason]=React.useState('');
+  const [rehire,setRehire]=React.useState(true);
+  const [note,setNote]=React.useState('');
+  const [busy,setBusy]=React.useState(false);
+  const [err,setErr]=React.useState('');
+  const inp={padding:'9px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:13,fontFamily:'inherit',outline:'none',width:'100%',background:'#fff'};
+  const lab=(t)=><label style={{fontSize:11,fontWeight:700,color:'var(--ink-2)'}}>{t}</label>;
+  const confirm=async()=>{
+    if(!lastDay){setErr('Last working day is required — the attrition month is taken from it.');return;}
+    if(!reason.trim()){setErr('Please state the discontinue reason.');return;}
+    setBusy(true);setErr('');
+    try{
+      const r=await fetch('/api/performance/exits',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',
+        body:JSON.stringify({empId:e.emp_id||String(e.id),staffName:e.name,department:e.current_department||'',designation:e.designation||'',
+          doj:e.doj||'',noticeDate,lastDay,separation:sep,reason:reason.trim(),rehire,note})});
+      const j=await r.json().catch(()=>({ok:false}));
+      if(!r.ok||!j.ok) throw new Error((j&&j.error)||'Could not record the exit.');
+    }catch(ex){ setBusy(false); setErr(String((ex&&ex.message)||ex)+' Nothing was changed — the person is still on the active roster.'); return; }
+    onDone(sep+' — '+reason.trim());
+  };
+  const body=(
+    <div onMouseDown={(ev)=>{if(ev.target===ev.currentTarget&&!busy)onClose();}} style={{position:'fixed',inset:0,background:'rgba(16,32,46,.5)',zIndex:600,display:'grid',placeItems:'center',padding:16}}>
+      <div className="card" style={{width:'min(500px,96vw)',maxHeight:'92vh',overflow:'auto',border:'1px solid #f1c6cd'}}>
+        <div className="card-h" style={{background:'rgba(210,58,82,.06)'}}>
+          <span style={{display:'inline-grid',placeItems:'center',width:30,height:30,borderRadius:9,background:'rgba(210,58,82,.12)',color:'#d23a52',marginRight:7,fontSize:15}}>⚠</span>
+          <h3 style={{color:'#d23a52'}}>Discontinue {e.name}</h3><span className="spacer"/>
+          <button className="icon-btn" onClick={onClose}><Ic d={I.x} s={15}/></button>
+        </div>
+        <div className="card-b" style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div style={{fontSize:12,color:'var(--ink-2)',lineHeight:1.55,background:'var(--warn-bg,#fff4e0)',border:'1px solid #f0d9a8',borderRadius:9,padding:'10px 12px'}}>
+            {e.name} is moved off the active roster to <b>Previous Staff</b>, and the exit is filed in the <b>Attrition &amp; Exits</b> register — the attrition rate updates immediately. The record is kept and they can be restored anytime.
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Separation type')}
+              <select style={inp} value={sep} onChange={ev=>setSep(ev.target.value)}>{SEPARATIONS.map(x=><option key={x}>{x}</option>)}</select></div>
+            <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Last working day *')}
+              <input type="date" style={{...inp,borderColor:lastDay?undefined:'#d23a52'}} value={lastDay} onChange={ev=>setLastDay(ev.target.value)}/></div>
+            <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Notice / resignation date')}
+              <input type="date" style={inp} value={noticeDate} onChange={ev=>setNoticeDate(ev.target.value)}/></div>
+            <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Eligible for rehire?')}
+              <label style={{display:'flex',alignItems:'center',gap:8,fontSize:12.5,padding:'9px 0',cursor:'pointer',color:'var(--ink-2)'}}>
+                <input type="checkbox" checked={rehire} onChange={ev=>setRehire(ev.target.checked)}/>Yes — may be rehired</label></div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Discontinue reason *')}
+            <input style={{...inp,borderColor:reason.trim()?undefined:'#d23a52'}} value={reason} onChange={ev=>setReason(ev.target.value)} placeholder="e.g. Better opportunity abroad / family relocation / contract ended"/></div>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Note (optional)')}
+            <textarea style={{...inp,minHeight:52}} value={note} onChange={ev=>setNote(ev.target.value)} placeholder="Exit interview points, clearance status, anything worth keeping"/></div>
+          {err&&<div style={{fontSize:12.5,color:'#d23a52',fontWeight:600}}>{err}</div>}
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+            <button className="btn" disabled={busy} onClick={confirm} style={{background:'#d23a52',borderColor:'#d23a52',color:'#fff',fontWeight:700}}>⚠ {busy?'Recording…':'Discontinue & move to Previous Staff'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+  return (window.ReactDOM&&window.ReactDOM.createPortal)?window.ReactDOM.createPortal(body,document.body):body;
+}
+
 function StaffProfile({store, empId, setRoute}){
   const S=window.STAFF;
   const e=store.get(empId);
   const [note,setNote]=React.useState('');
+  const [discontinuing,setDiscontinuing]=React.useState(false);
   // Resolved before the early return below, so the hook order never changes.
   const perfId=e?(e.emp_id||String(e.id)):null;
   const perf=useStaffPerf(perfId);
@@ -128,6 +200,9 @@ function StaffProfile({store, empId, setRoute}){
       <div style={{display:'flex',alignItems:'center',gap:10}}>
         <button className="btn sm" onClick={()=>setRoute({view:backView})}><Ic d={I.chevR} s={14} style={{transform:'rotate(180deg)'}}/>{e.role==='PCA'?'PCA':'Nurses'}</button>
         <span className="spacer" style={{flex:1}}/>
+        {e.is_active&&(!window.unicoCan||window.unicoCan('staff','edit'))&&
+          <button className="btn sm" title="Discontinue — record the exit reason & move to Previous Staff (feeds the attrition rate)"
+            style={{color:'#d23a52',borderColor:'#f1c6cd',fontWeight:700}} onClick={()=>setDiscontinuing(true)}>⚠ Discontinue</button>}
         <button className="btn sm" title="Print / Save as PDF" onClick={()=>window.print()}><Ic d={I.print} s={15}/>Print</button>
         <button className="btn sm" title="Delete permanently" style={{color:'#d23a52',borderColor:'#f1c6cd'}} onClick={async()=>{
           const ok=await window.UI.confirm({title:`Permanently delete ${e.name}?`,message:'This removes the record entirely and cannot be undone. (Use Deactivate to keep the record.)',danger:true,confirmLabel:'Delete permanently'});
@@ -135,6 +210,10 @@ function StaffProfile({store, empId, setRoute}){
         }}><Ic d={I.x} s={15} sw={2.4}/>Delete</button>
         <button className="btn pri sm" onClick={()=>setRoute({view:'staffForm',emp:e.id})}><Ic d={I.edit} s={15}/>Edit profile</button>
       </div>
+      {discontinuing&&<DiscontinueDialog e={e} onClose={()=>setDiscontinuing(false)}
+        onDone={(reasonText)=>{ setDiscontinuing(false); store.remove(empId,reasonText);
+          window.UI&&window.UI.toast&&window.UI.toast(e.name+' discontinued — moved to Previous Staff & filed in Attrition & Exits','success');
+          setRoute({view:backView}); }}/>}
 
       {/* ===== portfolio ===== */}
       <div className="grid staff-portfolio" style={{gridTemplateColumns:'320px minmax(0,1fr)',gap:14,alignItems:'start'}}>
@@ -1453,8 +1532,11 @@ function StaffForm({store, empId, setRoute, role, depts}){
   const rowInp={padding:'8px 10px',border:'1px solid var(--line)',borderRadius:7,fontSize:12.5,fontFamily:'inherit',outline:'none',width:'100%'};
 
   const save=()=>{
-    if(!f.name||!f.name.trim()){ setErr('Name is required'); return; }
-    if(f.doj && isNaN(new Date(f.doj))){ setErr('Date of Joining must be YYYY-MM-DD'); return; }
+    // Validation failures must be VISIBLE from the sticky header's Save too — the
+    // inline error line lives at the bottom of a long form, so toast it as well.
+    const fail=(m)=>{ setErr(m); try{ window.UI&&window.UI.toast&&window.UI.toast(m,'error'); }catch(e){} };
+    if(!f.name||!f.name.trim()){ fail('Name is required'); return; }
+    if(f.doj && isNaN(new Date(f.doj))){ fail('Date of Joining must be YYYY-MM-DD'); return; }
     const cleanEntries=entries.filter(x=>entYears(x)>0||(x.org&&x.org.trim())||(x.dept&&x.dept.trim()));
     const rowsHave=cleanEntries.some(x=>entYears(x)>0);
     const pSum=rowsHave?cleanEntries.reduce((s,x)=>s+entYears(x),0):directPrior;
@@ -1497,12 +1579,19 @@ function StaffForm({store, empId, setRoute, role, depts}){
   const MK=window.MK;
   return (
     <div className="mk-scope grid" style={{gap:14}}>
-      {/* header — matches the Add Staff mockup: icon badge, title, role toggle */}
-      <div className="card" style={{padding:'15px 18px',display:'flex',gap:13,alignItems:'center',flexWrap:'wrap'}}>
+      {/* header — matches the Add Staff mockup: icon badge, title, role toggle.
+          STICKY, with its own Save/Cancel: the form is long, and scrolling all the
+          way down just to save one edited field was a real complaint. */}
+      <div className="card" style={{padding:'12px 18px',display:'flex',gap:13,alignItems:'center',flexWrap:'wrap',
+        position:'sticky',top:0,zIndex:60,boxShadow:'0 8px 22px rgba(13,27,46,.12)'}}>
         <div style={MK?MK.iconBadge('blue',38):{}}><Ic d={editing?I.edit:I.plus} s={18}/></div>
-        <div style={{flex:1,minWidth:230}}>
+        <div style={{flex:1,minWidth:200}}>
           <div style={{fontSize:16,fontWeight:700,color:'var(--ink)'}}>{editing?'Edit staff record':`Add new ${f.role==='PCA'?'PCA':'Nurse'}`}</div>
           <div style={{fontSize:11.6,color:'var(--muted)'}}>Role sets the designation and qualification options · total experience is calculated for you</div>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button className="btn sm" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
+          <button className="btn pri sm" onClick={save}><Ic d={I.check} s={15} sw={2.4}/>{editing?'Save changes':'Create staff'}</button>
         </div>
         {!editing && (
           <div style={{textAlign:'right'}}>

@@ -97,6 +97,13 @@ const MANIFEST = [
   // every file is IIFE-wrapped, so load order is what makes window.RosterReviewFull
   // available to the shell.
   { file: 'roster-review.jsx', jsx: true },
+  // Manpower Overview — the live staffing command view (window.ManpowerOverview),
+  // ported from the approved "Manpower Overview v2" design canvas.
+  { file: 'manpower.jsx', jsx: true },
+  // Medicine Info v2 — the three-pane drug reference (window.MedicineInfoV2),
+  // ported from the approved "Medicine Info v2" design canvas. Must load before
+  // medicine.jsx? No — medicine.jsx only reads window.MedicineInfoV2 at render time.
+  { file: 'medicine-info.jsx', jsx: true },
   { file: 'medicine.jsx', jsx: true },   // drug index + prescription pad (window.MedicineView)
   { file: 'app.jsx', jsx: true },
 ];

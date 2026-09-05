@@ -411,9 +411,27 @@
     ? window.STAFF_SEED.map(e=>({...e,fav:!!e.fav,notes:e.notes||[]}))
     : seedStaff(); }
   function load(){ try{const s=JSON.parse(localStorage.getItem(KEY)); return Array.isArray(s)?s:null;}catch(e){return null;} }
+  // Publish a photo lookup for every module that shows a staff avatar (Performance,
+  // Duty Roster, HR…) but doesn't hold the staff record itself. Keyed by emp id and
+  // by lowercase name; the value is the CDN url. Includes former staff — an exits
+  // register still shows the person's face.
+  function publishPhotos(list){
+    try{
+      const m={};
+      (list||[]).forEach(e=>{
+        const p=e.photo||e.photo_url; const u=p?(typeof p==='string'?p:(p.url||'')):'';
+        if(!u)return;
+        if(e.emp_id)m['id:'+String(e.emp_id).trim()]=u;
+        if(e.id!=null)m['id:'+String(e.id)]=u;
+        if(e.name)m['nm:'+String(e.name).trim().toLowerCase()]=u;
+      });
+      window.__STAFF_PHOTOS__=m;
+    }catch(err){}
+  }
+  publishPhotos(load()||[]);   // modules can render before any staff view mounts
   function useStaffStore(){
     const [staff,setStaff]=React.useState(()=>load()||realSeed());
-    React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(staff)); },[staff]);
+    React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(staff)); publishPhotos(staff); },[staff]);
     const api={
       staff,
       get:(id)=>staff.find(e=>e.id===id),

@@ -389,7 +389,10 @@
               cursor: (zoomable && value && value.url && !busy) ? 'zoom-in' : undefined,
             }}>
             {value && value.url
-              ? <img src={value.url} alt={name || 'Photo'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              // 'fit' derivative: scaled to the display bucket but keeps the aspect
+              // ratio the person framed at upload — the badge is not a square crop.
+              ? <img src={(window.MK && window.MK.cdnPhoto) ? window.MK.cdnPhoto(value.url, Math.max(W, H), 'fit') : value.url}
+                  alt={name || 'Photo'} decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               : <span>{initials || '—'}</span>}
           </div>
           {busy && (
@@ -478,7 +481,9 @@
     const px = size || 34;
     const base = Object.assign({ width: px, height: px, borderRadius: radius == null ? 9 : radius }, style || {});
     if (live && live.url && !dead) {
-      return <img className={className} src={live.url} alt={initials || ''} onError={() => setDead(true)}
+      const src = (window.MK && window.MK.cdnPhoto) ? window.MK.cdnPhoto(live.url, px) : live.url;
+      return <img className={className} src={src} alt={initials || ''} onError={() => setDead(true)}
+        loading="lazy" decoding="async"
         style={Object.assign({}, base, { objectFit: 'cover', padding: 0, display: 'block' })} />;
     }
     return <div className={className} style={base}>{initials || 'U'}</div>;

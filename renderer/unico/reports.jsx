@@ -1842,7 +1842,9 @@ function UserModal({initial,onClose,onSaved}){
     <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div className="modal" style={{width:'min(560px,94vw)',maxHeight:'92vh',overflow:'auto'}}>
         <div className="modal-h">
-          <div style={{width:30,height:30,borderRadius:8,background:'var(--blue-50)',color:'var(--blue)',display:'grid',placeItems:'center'}}><Ic d={editing?I.edit:I.plus} s={17}/></div>
+          {editing&&(window.MK&&window.MK.Av)
+            ? <window.MK.Av name={initial.name||initial.username} emp={initial} empId={initial.staffEmpId} size={30} radius={8} style={{fontSize:12}}/>
+            : <div style={{width:30,height:30,borderRadius:8,background:'var(--blue-50)',color:'var(--blue)',display:'grid',placeItems:'center'}}><Ic d={editing?I.edit:I.plus} s={17}/></div>}
           <h3>{editing?'Manage user':'Add user'}</h3><span className="spacer"/>
           <button className="icon-btn" onClick={onClose}><Ic d={I.x} s={16}/></button>
         </div>
@@ -1998,7 +2000,11 @@ function UserManagement(){
           const lastAdmin=u.role==='Administrator'&&u.active!==false&&admins<=1;
           return (
           <div key={u.username} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 13px',border:'1px solid var(--line)',borderRadius:10,opacity:active?1:.6,flexWrap:'wrap'}}>
-            <div className="avatar" style={{background:uAvatarColor(u.username),width:38,height:38}}>{inits(u.name)}</div>
+            {(window.MK&&window.MK.Av)
+              // Account photo first (users.photo via /api/users), else the LINKED staff
+              // record's photo (staffEmpId / name lookup), else initials.
+              ? <window.MK.Av name={u.name} emp={u} empId={u.staffEmpId} size={38} radius={9} style={{fontSize:14}}/>
+              : <div className="avatar" style={{background:uAvatarColor(u.username),width:38,height:38}}>{inits(u.name)}</div>}
             <div style={{minWidth:0,flex:'1 1 180px'}}>
               <div style={{display:'flex',alignItems:'center',gap:8}}><span style={{fontSize:13.5,fontWeight:700}}>{u.name}</span>{isMe&&<span className="tag" style={{background:'var(--pos-bg)',color:'var(--pos)'}}>You</span>}</div>
               <div style={{fontSize:11.5,color:'var(--muted)'}}>@{u.username}{u.email?' · '+u.email:''}</div>

@@ -2056,9 +2056,27 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     ? window.STAFF_SEED.map(e=>({...e,fav:!!e.fav,notes:e.notes||[]}))
     : seedStaff(); }
   function load(){ try{const s=JSON.parse(localStorage.getItem(KEY)); return Array.isArray(s)?s:null;}catch(e){return null;} }
+  // Publish a photo lookup for every module that shows a staff avatar (Performance,
+  // Duty Roster, HR…) but doesn't hold the staff record itself. Keyed by emp id and
+  // by lowercase name; the value is the CDN url. Includes former staff — an exits
+  // register still shows the person's face.
+  function publishPhotos(list){
+    try{
+      const m={};
+      (list||[]).forEach(e=>{
+        const p=e.photo||e.photo_url; const u=p?(typeof p==='string'?p:(p.url||'')):'';
+        if(!u)return;
+        if(e.emp_id)m['id:'+String(e.emp_id).trim()]=u;
+        if(e.id!=null)m['id:'+String(e.id)]=u;
+        if(e.name)m['nm:'+String(e.name).trim().toLowerCase()]=u;
+      });
+      window.__STAFF_PHOTOS__=m;
+    }catch(err){}
+  }
+  publishPhotos(load()||[]);   // modules can render before any staff view mounts
   function useStaffStore(){
     const [staff,setStaff]=React.useState(()=>load()||realSeed());
-    React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(staff)); },[staff]);
+    React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(staff)); publishPhotos(staff); },[staff]);
     const api={
       staff,
       get:(id)=>staff.find(e=>e.id===id),
@@ -6993,7 +7011,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     { id: 'M', label: 'Morning', color: '#e08a1e' },
     { id: 'E', label: 'Evening', color: '#0090ca' },
     { id: 'N', label: 'Night', color: '#5b45c4' },
-    { id: 'O', label: 'Leave / off', color: '#8aa0b8' },
+    { id: 'O', label: 'Leave / off', color: '#8b98ab' },
   ];
   var BUCKET_COLOR = {};
   BUCKETS.forEach(function (b) { BUCKET_COLOR[b.id] = b.color; });
@@ -7208,6 +7226,62 @@ window.QI_CORRECTIONS_BY_DEFID = {
     if (!p.length) return '?';
     return ((p[0][0] || '') + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase();
   }
+
+  /* ---- photo-aware avatar -------------------------------------------------
+     Staff photos are stored on the staff record as {url, publicId} (Cloudinary,
+     via PhotoPicker). Every module that draws an initials circle should show the
+     REAL photo when one exists — this is the one component that does it, so the
+     fallback logic isn't re-invented (wrongly) per module.
+       <MK.Av name={r.name} emp={r.emp} empId={r.empId} size={28}/>
+     Resolution: the record passed as `emp` -> the global lookup published by the
+     staff store (window.__STAFF_PHOTOS__, by emp id then by name). A dead URL
+     falls back to initials instead of the browser's broken-image glyph. */
+  function photoUrlOf(rec) {
+    if (!rec) return '';
+    var p = rec.photo || rec.photo_url;
+    if (!p) return '';
+    return typeof p === 'string' ? p : (p.url || '');
+  }
+  /* CREDIT SAVER. Every avatar used to download the 640px ORIGINAL (~180 KB) even at
+     26px — pure Cloudinary bandwidth waste. This rewrites a Cloudinary URL to a small
+     auto-format derivative (~5-15 KB). Only TWO standard sizes exist on purpose
+     (96px for list avatars, 320px for portraits): each DISTINCT transformation is
+     billed once ever, so two buckets cost at most 2 per image, then every view is a
+     CDN cache hit. Cloudinary URLs are versioned + immutable, so the browser cache
+     holds them for a year too. Non-Cloudinary URLs pass through untouched.
+       mode 'fill' (default) — square centre-crop, matches objectFit:cover
+       mode 'fit'            — scale down only, keeps the uploaded aspect ratio */
+  function cdnPhoto(url, px, mode) {
+    try {
+      if (!url || url.indexOf('res.cloudinary.com') < 0 || url.indexOf('/upload/') < 0) return url;
+      if (/\/upload\/[a-z]+_[^/]*\//.test(url)) return url;          // already a derivative
+      var w = (px || 32) <= 48 ? 96 : 320;                            // 2x for retina, 2 buckets only
+      var t = mode === 'fit' ? ('c_limit,w_' + w) : ('c_fill,w_' + w + ',h_' + w);
+      return url.replace('/upload/', '/upload/' + t + ',q_auto,f_auto/');
+    } catch (e) { return url; }
+  }
+  function photoLookup(empId, name) {
+    var m = (typeof window !== 'undefined') && window.__STAFF_PHOTOS__;
+    if (!m) return '';
+    return (empId != null && m['id:' + String(empId).trim()]) || (name && m['nm:' + String(name).trim().toLowerCase()]) || '';
+  }
+  function Av(props) {
+    var name = props.name, size = props.size || 28;
+    var url = photoUrlOf(props.emp) || photoUrlOf(props) || photoLookup(props.empId, name);
+    var st = React.useState(false); var dead = st[0], setDead = st[1];
+    React.useEffect(function () { setDead(false); }, [url]);   // eslint-disable-line
+    var radius = props.radius == null ? '50%' : props.radius;
+    if (url && !dead) {
+      return React.createElement('img', {
+        src: cdnPhoto(url, size), alt: name || '', onError: function () { setDead(true); },
+        loading: 'lazy', decoding: 'async',
+        style: Object.assign({ width: size, height: size, borderRadius: radius, objectFit: 'cover', flexShrink: 0, display: 'block' }, props.style || {}),
+      });
+    }
+    var base = av(name, size);
+    if (props.radius != null) base = Object.assign({}, base, { borderRadius: props.radius });
+    return React.createElement('div', { style: Object.assign(base, props.style || {}) }, initials(name));
+  }
   function roleChip(role) {
     var c = role === 'PCA' ? '#6a52d4' : '#0090ca';
     return { display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 5, color: c, background: c + '16', letterSpacing: '.3px', flexShrink: 0 };
@@ -7261,7 +7335,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     MONO: MONO, ANIM: ANIM, INK: INK, BODY: BODY, MUTED: MUTED, FAINT: FAINT, LINE: LINE,
     GC: GC, RT: RT, ST: ST, TINT: TINT,
     card: card, cardHead: cardHead, cardBody: cardBody, h3: h3, sub: sub, page: page,
-    hue: hue, av: av, ini: ini, initials: initials, roleChip: roleChip, gchip: gchip, stChip: stChip,
+    hue: hue, av: av, ini: ini, initials: initials, Av: Av, photoUrlOf: photoUrlOf, cdnPhoto: cdnPhoto, roleChip: roleChip, gchip: gchip, stChip: stChip,
     ratingPill: ratingPill, iconBadge: iconBadge, barColor: barColor, progColor: progColor,
     track: track, fill: fill, btnPri: btnPri, btnGhost: btnGhost, btnTone: btnTone,
   };
@@ -9296,8 +9370,8 @@ const UNICO_MODULE_VIEWS = {
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
   users: ['users'],
   perf: ['perfHome', 'perfDirectory', 'perfForm', 'perfPrint', 'perfStaff', 'perfQueue', 'perfAchievements', 'perfIncidents', 'perfCompare', 'perfAttrition', 'perfRisk', 'perfBoard'],
-  roster: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint', 'rosterFullReview'],
-  medicine: ['medHome', 'medBrowse', 'medBrand', 'medGeneric', 'medRxNew', 'medRxList', 'medRxPrint', 'medTemplates', 'medCatalog', 'medInteractions', 'medCalc', 'medAnalytics']
+  roster: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint', 'rosterFullReview', 'manpower'],
+  medicine: ['medHome', 'medInfo', 'medBrowse', 'medBrand', 'medGeneric', 'medRxNew', 'medRxList', 'medRxPrint', 'medTemplates', 'medCatalog', 'medInteractions', 'medCalc', 'medAnalytics']
 };
 function unicoModuleOf(view) {
   for (let i = 0; i < UNICO_MODULES.length; i++) {
@@ -9769,10 +9843,16 @@ function unicoWorkspaceSub(view) {
     view: 'rosterHome',
     match: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint']
   }, {
+    label: 'Manpower Overview',
+    view: 'manpower'
+  }, {
     label: 'Full Review',
     view: 'rosterFullReview'
   }];
   if (mod === 'medicine') return [{
+    label: 'Medicine Info',
+    view: 'medInfo'
+  }, {
     label: 'Drug Index',
     view: 'medBrowse',
     match: ['medBrowse', 'medBrand', 'medGeneric']
@@ -11411,8 +11491,9 @@ Object.assign(window, {
         cursor: zoomable && value && value.url && !busy ? 'zoom-in' : undefined
       }
     }, value && value.url ? React.createElement("img", {
-      src: value.url,
+      src: window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(value.url, Math.max(W, H), 'fit') : value.url,
       alt: name || 'Photo',
+      decoding: "async",
       style: {
         width: '100%',
         height: '100%',
@@ -11544,11 +11625,14 @@ Object.assign(window, {
       borderRadius: radius == null ? 9 : radius
     }, style || {});
     if (live && live.url && !dead) {
+      const src = window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(live.url, px) : live.url;
       return React.createElement("img", {
         className: className,
-        src: live.url,
+        src: src,
         alt: initials || '',
         onError: () => setDead(true),
+        loading: "lazy",
+        decoding: "async",
         style: Object.assign({}, base, {
           objectFit: 'cover',
           padding: 0,
@@ -17237,11 +17321,14 @@ function Avatar({
     flexShrink: 0
   };
   if (photo && photo.url && !dead) {
+    const src = window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(photo.url, size) : photo.url;
     return React.createElement("img", {
-      src: photo.url,
+      src: src,
       alt: ini.toUpperCase(),
       title: name || '',
       onError: () => setDead(true),
+      loading: "lazy",
+      decoding: "async",
       style: {
         ...box,
         objectFit: 'cover',
@@ -19085,22 +19172,60 @@ function StaffCompliance({
     }
   }, card('Missing Hep-B Vaccination', I.heart, '#d23a52', comp.missing_vaccination, 'All staff vaccinated', 'vacc'), card('No Special Training', I.activity, '#e08a1e', comp.missing_training, 'All staff have training', 'training'), card('No Phone on File', I.user, '#6a52d4', comp.missing_phone, 'All staff have phone numbers', 'phone')));
 }
+const DIR_MEMO = {};
 function ManageStaff({
   store,
   setRoute,
   role
 }) {
   const S = window.STAFF;
-  const [q, setQ] = React.useState('');
-  const [chip, setChip] = React.useState('all');
-  const [dept, setDept] = React.useState('');
-  const [desig, setDesig] = React.useState('');
-  const [vacc, setVacc] = React.useState('');
-  const [qual, setQual] = React.useState('');
-  const [expB, setExpB] = React.useState('');
-  const [training, setTraining] = React.useState('');
-  const [sortBy, setSortBy] = React.useState('name');
-  const [showInactive, setShowInactive] = React.useState(false);
+  const M = DIR_MEMO[role] || {};
+  const [q, setQ] = React.useState(M.q || '');
+  const [chip, setChip] = React.useState(M.chip || 'all');
+  const [dept, setDept] = React.useState(M.dept || '');
+  const [desig, setDesig] = React.useState(M.desig || '');
+  const [vacc, setVacc] = React.useState(M.vacc || '');
+  const [qual, setQual] = React.useState(M.qual || '');
+  const [expB, setExpB] = React.useState(M.expB || '');
+  const [training, setTraining] = React.useState(M.training || '');
+  const [sortBy, setSortBy] = React.useState(M.sortBy || 'name');
+  const [showInactive, setShowInactive] = React.useState(!!M.showInactive);
+  React.useEffect(() => {
+    DIR_MEMO[role] = Object.assign({}, DIR_MEMO[role], {
+      q,
+      chip,
+      dept,
+      desig,
+      vacc,
+      qual,
+      expB,
+      training,
+      sortBy,
+      showInactive
+    });
+  });
+  React.useEffect(() => {
+    const el = document.querySelector('.content');
+    if (!el) return;
+    const saved = (DIR_MEMO[role] || {}).scroll || 0;
+    if (saved) {
+      let tries = 0;
+      const restore = () => {
+        el.scrollTop = saved;
+        if (Math.abs(el.scrollTop - saved) > 4 && ++tries < 12) requestAnimationFrame(restore);
+      };
+      requestAnimationFrame(restore);
+    }
+    const onScroll = () => {
+      DIR_MEMO[role] = Object.assign({}, DIR_MEMO[role], {
+        scroll: el.scrollTop
+      });
+    };
+    el.addEventListener('scroll', onScroll, {
+      passive: true
+    });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
   const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
   const all = store.staff.filter(e => (e.role || 'Nurse') === role);
   const active = all.filter(e => e.is_active);
@@ -19831,6 +19956,275 @@ function useStaffPerf(perfId) {
   }, [perfId]);
   return d;
 }
+const SEPARATIONS = ['Resignation', 'End of contract', 'Retirement', 'Termination', 'Absconded', 'Transfer', 'Other'];
+function DiscontinueDialog({
+  e,
+  onClose,
+  onDone
+}) {
+  const today = (() => {
+    try {
+      const d = new Date();
+      return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    } catch (err) {
+      return '';
+    }
+  })();
+  const [sep, setSep] = React.useState('Resignation');
+  const [lastDay, setLastDay] = React.useState(today);
+  const [noticeDate, setNoticeDate] = React.useState('');
+  const [reason, setReason] = React.useState('');
+  const [rehire, setRehire] = React.useState(true);
+  const [note, setNote] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const inp = {
+    padding: '9px 11px',
+    border: '1px solid var(--line)',
+    borderRadius: 8,
+    fontSize: 13,
+    fontFamily: 'inherit',
+    outline: 'none',
+    width: '100%',
+    background: '#fff'
+  };
+  const lab = t => React.createElement("label", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--ink-2)'
+    }
+  }, t);
+  const confirm = async () => {
+    if (!lastDay) {
+      setErr('Last working day is required — the attrition month is taken from it.');
+      return;
+    }
+    if (!reason.trim()) {
+      setErr('Please state the discontinue reason.');
+      return;
+    }
+    setBusy(true);
+    setErr('');
+    try {
+      const r = await fetch('/api/performance/exits', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          empId: e.emp_id || String(e.id),
+          staffName: e.name,
+          department: e.current_department || '',
+          designation: e.designation || '',
+          doj: e.doj || '',
+          noticeDate,
+          lastDay,
+          separation: sep,
+          reason: reason.trim(),
+          rehire,
+          note
+        })
+      });
+      const j = await r.json().catch(() => ({
+        ok: false
+      }));
+      if (!r.ok || !j.ok) throw new Error(j && j.error || 'Could not record the exit.');
+    } catch (ex) {
+      setBusy(false);
+      setErr(String(ex && ex.message || ex) + ' Nothing was changed — the person is still on the active roster.');
+      return;
+    }
+    onDone(sep + ' — ' + reason.trim());
+  };
+  const body = React.createElement("div", {
+    onMouseDown: ev => {
+      if (ev.target === ev.currentTarget && !busy) onClose();
+    },
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(16,32,46,.5)',
+      zIndex: 600,
+      display: 'grid',
+      placeItems: 'center',
+      padding: 16
+    }
+  }, React.createElement("div", {
+    className: "card",
+    style: {
+      width: 'min(500px,96vw)',
+      maxHeight: '92vh',
+      overflow: 'auto',
+      border: '1px solid #f1c6cd'
+    }
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      background: 'rgba(210,58,82,.06)'
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 30,
+      height: 30,
+      borderRadius: 9,
+      background: 'rgba(210,58,82,.12)',
+      color: '#d23a52',
+      marginRight: 7,
+      fontSize: 15
+    }
+  }, "\u26A0"), React.createElement("h3", {
+    style: {
+      color: '#d23a52'
+    }
+  }, "Discontinue ", e.name), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "icon-btn",
+    onClick: onClose
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 15
+  }))), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--ink-2)',
+      lineHeight: 1.55,
+      background: 'var(--warn-bg,#fff4e0)',
+      border: '1px solid #f0d9a8',
+      borderRadius: 9,
+      padding: '10px 12px'
+    }
+  }, e.name, " is moved off the active roster to ", React.createElement("b", null, "Previous Staff"), ", and the exit is filed in the ", React.createElement("b", null, "Attrition & Exits"), " register \u2014 the attrition rate updates immediately. The record is kept and they can be restored anytime."), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, lab('Separation type'), React.createElement("select", {
+    style: inp,
+    value: sep,
+    onChange: ev => setSep(ev.target.value)
+  }, SEPARATIONS.map(x => React.createElement("option", {
+    key: x
+  }, x)))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, lab('Last working day *'), React.createElement("input", {
+    type: "date",
+    style: {
+      ...inp,
+      borderColor: lastDay ? undefined : '#d23a52'
+    },
+    value: lastDay,
+    onChange: ev => setLastDay(ev.target.value)
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, lab('Notice / resignation date'), React.createElement("input", {
+    type: "date",
+    style: inp,
+    value: noticeDate,
+    onChange: ev => setNoticeDate(ev.target.value)
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, lab('Eligible for rehire?'), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 12.5,
+      padding: '9px 0',
+      cursor: 'pointer',
+      color: 'var(--ink-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: rehire,
+    onChange: ev => setRehire(ev.target.checked)
+  }), "Yes \u2014 may be rehired"))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, lab('Discontinue reason *'), React.createElement("input", {
+    style: {
+      ...inp,
+      borderColor: reason.trim() ? undefined : '#d23a52'
+    },
+    value: reason,
+    onChange: ev => setReason(ev.target.value),
+    placeholder: "e.g. Better opportunity abroad / family relocation / contract ended"
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, lab('Note (optional)'), React.createElement("textarea", {
+    style: {
+      ...inp,
+      minHeight: 52
+    },
+    value: note,
+    onChange: ev => setNote(ev.target.value),
+    placeholder: "Exit interview points, clearance status, anything worth keeping"
+  })), err && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#d23a52',
+      fontWeight: 600
+    }
+  }, err), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    disabled: busy,
+    onClick: onClose
+  }, "Cancel"), React.createElement("button", {
+    className: "btn",
+    disabled: busy,
+    onClick: confirm,
+    style: {
+      background: '#d23a52',
+      borderColor: '#d23a52',
+      color: '#fff',
+      fontWeight: 700
+    }
+  }, "\u26A0 ", busy ? 'Recording…' : 'Discontinue & move to Previous Staff')))));
+  return window.ReactDOM && window.ReactDOM.createPortal ? window.ReactDOM.createPortal(body, document.body) : body;
+}
 function StaffProfile({
   store,
   empId,
@@ -19839,6 +20233,7 @@ function StaffProfile({
   const S = window.STAFF;
   const e = store.get(empId);
   const [note, setNote] = React.useState('');
+  const [discontinuing, setDiscontinuing] = React.useState(false);
   const perfId = e ? e.emp_id || String(e.id) : null;
   const perf = useStaffPerf(perfId);
   if (!e) return React.createElement("div", {
@@ -20118,7 +20513,16 @@ function StaffProfile({
     style: {
       flex: 1
     }
-  }), React.createElement("button", {
+  }), e.is_active && (!window.unicoCan || window.unicoCan('staff', 'edit')) && React.createElement("button", {
+    className: "btn sm",
+    title: "Discontinue \u2014 record the exit reason & move to Previous Staff (feeds the attrition rate)",
+    style: {
+      color: '#d23a52',
+      borderColor: '#f1c6cd',
+      fontWeight: 700
+    },
+    onClick: () => setDiscontinuing(true)
+  }, "\u26A0 Discontinue"), React.createElement("button", {
     className: "btn sm",
     title: "Print / Save as PDF",
     onClick: () => window.print()
@@ -20160,7 +20564,18 @@ function StaffProfile({
   }, React.createElement(Ic, {
     d: I.edit,
     s: 15
-  }), "Edit profile")), React.createElement("div", {
+  }), "Edit profile")), discontinuing && React.createElement(DiscontinueDialog, {
+    e: e,
+    onClose: () => setDiscontinuing(false),
+    onDone: reasonText => {
+      setDiscontinuing(false);
+      store.remove(empId, reasonText);
+      window.UI && window.UI.toast && window.UI.toast(e.name + ' discontinued — moved to Previous Staff & filed in Attrition & Exits', 'success');
+      setRoute({
+        view: backView
+      });
+    }
+  }), React.createElement("div", {
     className: "grid staff-portfolio",
     style: {
       gridTemplateColumns: '320px minmax(0,1fr)',
@@ -23812,12 +24227,18 @@ function StaffForm({
     width: '100%'
   };
   const save = () => {
+    const fail = m => {
+      setErr(m);
+      try {
+        window.UI && window.UI.toast && window.UI.toast(m, 'error');
+      } catch (e) {}
+    };
     if (!f.name || !f.name.trim()) {
-      setErr('Name is required');
+      fail('Name is required');
       return;
     }
     if (f.doj && isNaN(new Date(f.doj))) {
-      setErr('Date of Joining must be YYYY-MM-DD');
+      fail('Date of Joining must be YYYY-MM-DD');
       return;
     }
     const cleanEntries = entries.filter(x => entYears(x) > 0 || x.org && x.org.trim() || x.dept && x.dept.trim());
@@ -23888,11 +24309,15 @@ function StaffForm({
   }, React.createElement("div", {
     className: "card",
     style: {
-      padding: '15px 18px',
+      padding: '12px 18px',
       display: 'flex',
       gap: 13,
       alignItems: 'center',
-      flexWrap: 'wrap'
+      flexWrap: 'wrap',
+      position: 'sticky',
+      top: 0,
+      zIndex: 60,
+      boxShadow: '0 8px 22px rgba(13,27,46,.12)'
     }
   }, React.createElement("div", {
     style: MK ? MK.iconBadge('blue', 38) : {}
@@ -23902,7 +24327,7 @@ function StaffForm({
   })), React.createElement("div", {
     style: {
       flex: 1,
-      minWidth: 230
+      minWidth: 200
     }
   }, React.createElement("div", {
     style: {
@@ -23915,7 +24340,28 @@ function StaffForm({
       fontSize: 11.6,
       color: 'var(--muted)'
     }
-  }, "Role sets the designation and qualification options \xB7 total experience is calculated for you")), !editing && React.createElement("div", {
+  }, "Role sets the designation and qualification options \xB7 total experience is calculated for you")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center'
+    }
+  }, React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setRoute(editing ? {
+      view: 'staffProfile',
+      emp: empId
+    } : {
+      view: (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
+    })
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: save
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 15,
+    sw: 2.4
+  }), editing ? 'Save changes' : 'Create staff')), !editing && React.createElement("div", {
     style: {
       textAlign: 'right'
     }
@@ -29783,7 +30229,16 @@ function UserModal({
     }
   }, React.createElement("div", {
     className: "modal-h"
-  }, React.createElement("div", {
+  }, editing && window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
+    name: initial.name || initial.username,
+    emp: initial,
+    empId: initial.staffEmpId,
+    size: 30,
+    radius: 8,
+    style: {
+      fontSize: 12
+    }
+  }) : React.createElement("div", {
     style: {
       width: 30,
       height: 30,
@@ -30361,7 +30816,16 @@ function UserManagement() {
         opacity: active ? 1 : .6,
         flexWrap: 'wrap'
       }
-    }, React.createElement("div", {
+    }, window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
+      name: u.name,
+      emp: u,
+      empId: u.staffEmpId,
+      size: 38,
+      radius: 9,
+      style: {
+        fontSize: 14
+      }
+    }) : React.createElement("div", {
       className: "avatar",
       style: {
         background: uAvatarColor(u.username),
@@ -50397,7 +50861,14 @@ window.LockScreen = LockScreen;
           e.preventDefault();
           activate(it);
         }
-      }, it.avatar ? React.createElement("div", {
+      }, it.avatar ? window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
+        name: it.avatar,
+        size: 34,
+        radius: 9,
+        style: {
+          fontSize: 12.5
+        }
+      }) : React.createElement("div", {
         className: "avatar gs-av",
         style: {
           background: `linear-gradient(135deg,${col[0]},${col[1]})`
@@ -50872,7 +51343,14 @@ window.LockScreen = LockScreen;
         color: 'var(--blue-700)',
         opacity: r.active === false ? 0.55 : 1
       }
-    }, React.createElement("span", {
+    }, window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
+      name: r.name,
+      empId: r.empId,
+      size: 18,
+      style: {
+        fontSize: 9
+      }
+    }) : React.createElement("span", {
       style: {
         width: 18,
         height: 18,
@@ -51092,7 +51570,14 @@ window.LockScreen = LockScreen;
           onMouseLeave: e => {
             e.currentTarget.style.background = 'transparent';
           }
-        }, React.createElement("span", {
+        }, window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
+          name: r.name,
+          empId: r.empId,
+          size: 22,
+          style: {
+            fontSize: 10
+          }
+        }) : React.createElement("span", {
           style: {
             width: 22,
             height: 22,
@@ -69796,9 +70281,12 @@ function PerfDashboard({
       padding: '7px 0',
       borderBottom: '1px solid var(--line,#eef2f7)'
     }
-  }, React.createElement("div", {
-    style: MK.av(r.name, 28)
-  }, initials(r.name)), React.createElement("div", {
+  }, React.createElement(MK.Av, {
+    name: r.name,
+    emp: r.emp,
+    empId: r.empId,
+    size: 28
+  }), React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 0
@@ -70230,9 +70718,12 @@ function PerfDirectory({
       alignItems: 'center',
       gap: 8
     }
-  }, React.createElement("div", {
-    style: MK.av(r.name, 26)
-  }, initials(r.name)), React.createElement("span", {
+  }, React.createElement(MK.Av, {
+    name: r.name,
+    emp: r.emp,
+    empId: r.empId,
+    size: 26
+  }), React.createElement("span", {
     style: {
       fontWeight: 600,
       cursor: 'pointer'
@@ -70544,9 +71035,12 @@ function PerfForm({
       flexWrap: 'wrap',
       padding: '15px 18px'
     }
-  }, React.createElement("div", {
-    style: MK.av(row.name, 56)
-  }, MK.initials(row.name)), React.createElement("div", {
+  }, React.createElement(MK.Av, {
+    name: row.name,
+    emp: row.emp,
+    empId: row.empId,
+    size: 56
+  }), React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 240
@@ -71786,7 +72280,6 @@ function PerfStaffRecord({
   const hist = row.history.slice().reverse();
   const latest = row.last;
   const isPca = row.emp && row.emp.role === 'PCA';
-  const photo = row.emp && (row.emp.photo || row.emp.photo_url) || '';
   const idRow = (k, v) => React.createElement("div", {
     style: {
       display: 'flex',
@@ -71915,25 +72408,18 @@ function PerfStaffRecord({
       boxShadow: '0 8px 24px rgba(31,59,90,.16)',
       background: 'linear-gradient(160deg,#eaf4fb,#dceaf5)'
     }
-  }, photo ? React.createElement("img", {
-    src: photo,
-    alt: row.name,
+  }, React.createElement(MK.Av, {
+    name: row.name,
+    emp: row.emp,
+    empId: row.empId,
+    size: 132,
+    radius: 0,
     style: {
       width: '100%',
       height: '100%',
-      objectFit: 'cover'
-    },
-    onError: e => {
-      e.target.style.display = 'none';
-    }
-  }) : React.createElement("div", {
-    style: Object.assign({}, MK.av(row.name, 132), {
-      width: '100%',
-      height: '100%',
-      borderRadius: 0,
       fontSize: 44
-    })
-  }, initials(row.name))), React.createElement("div", {
+    }
+  })), React.createElement("div", {
     style: {
       fontSize: 17,
       fontWeight: 700,
@@ -72509,9 +72995,12 @@ function PerfQueue({
         alignItems: 'center',
         gap: 9
       }
-    }, React.createElement("div", {
-      style: MK.av(r.name, 30)
-    }, MK.initials(r.name)), React.createElement("div", {
+    }, React.createElement(MK.Av, {
+      name: r.name,
+      emp: r.emp,
+      empId: r.empId,
+      size: 30
+    }), React.createElement("div", {
       style: {
         minWidth: 0
       }
@@ -72614,9 +73103,12 @@ function QueueDetail({
       alignItems: 'center',
       gap: 11
     }
-  }, React.createElement("div", {
-    style: MK.av(row.name, 42)
-  }, MK.initials(row.name)), React.createElement("div", {
+  }, React.createElement(MK.Av, {
+    name: row.name,
+    emp: row.emp,
+    empId: row.empId,
+    size: 42
+  }), React.createElement("div", {
     style: {
       minWidth: 0
     }
@@ -73605,9 +74097,11 @@ function PerfRegister({
         alignItems: 'center',
         gap: 8
       }
-    }, React.createElement("div", {
-      style: MK.av(r.staffName, 26)
-    }, MK.initials(r.staffName)), React.createElement("div", {
+    }, React.createElement(MK.Av, {
+      name: r.staffName,
+      empId: r.empId,
+      size: 26
+    }), React.createElement("div", {
       style: {
         minWidth: 0
       }
@@ -73718,9 +74212,11 @@ function PerfRegister({
       opacity: .5,
       fontSize: 11
     }
-  }, k + 1), React.createElement("div", {
-    style: MK.av(l.name, 26)
-  }, MK.initials(l.name)), React.createElement("div", {
+  }, k + 1), React.createElement(MK.Av, {
+    name: l.name,
+    empId: l.empId,
+    size: 26
+  }), React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 0
@@ -73859,9 +74355,12 @@ function PerfEntryHistory({
       gap: 16,
       flexWrap: 'wrap'
     }
-  }, React.createElement("div", {
-    style: MK.av(row.name, 56)
-  }, MK.initials(row.name)), React.createElement("div", {
+  }, React.createElement(MK.Av, {
+    name: row.name,
+    emp: row.emp,
+    empId: row.empId,
+    size: 56
+  }), React.createElement("div", {
     style: {
       minWidth: 200
     }
@@ -74941,9 +75440,11 @@ function PerfDeptAttrition({
       borderTop: '1px solid rgba(125,145,180,.14)',
       cursor: 'pointer'
     }
-  }, React.createElement("div", {
-    style: MK.av(l.name, 30)
-  }, MK.initials(l.name)), React.createElement("div", {
+  }, React.createElement(MK.Av, {
+    name: l.name,
+    empId: l.empId,
+    size: 30
+  }), React.createElement("div", {
     style: {
       minWidth: 0,
       flex: 1
@@ -75045,9 +75546,11 @@ function PerfLeaverRecord({
       gap: 16,
       flexWrap: 'wrap'
     }
-  }, React.createElement("div", {
-    style: MK.av(l.name, 56)
-  }, MK.initials(l.name)), React.createElement("div", {
+  }, React.createElement(MK.Av, {
+    name: l.name,
+    empId: l.empId,
+    size: 56
+  }), React.createElement("div", {
     style: {
       minWidth: 200
     }
@@ -76487,9 +76990,11 @@ function PerfAttrition({
       alignItems: 'center',
       gap: 8
     }
-  }, React.createElement("div", {
-    style: MK.av(l.name, 26)
-  }, MK.initials(l.name)), React.createElement("div", {
+  }, React.createElement(MK.Av, {
+    name: l.name,
+    empId: l.empId,
+    size: 26
+  }), React.createElement("div", {
     style: {
       minWidth: 0
     }
@@ -76982,9 +77487,12 @@ function PerfRisk({
       borderBottom: '1px solid rgba(125,145,180,.12)',
       cursor: 'pointer'
     }
-  }, React.createElement("div", {
-    style: MK.av(r.name, 34)
-  }, MK.initials(r.name)), React.createElement("div", {
+  }, React.createElement(MK.Av, {
+    name: r.name,
+    emp: r.emp,
+    empId: r.empId,
+    size: 34
+  }), React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 0
@@ -77390,9 +77898,11 @@ function PerfBoard({
       fontWeight: 700,
       color: '#e08a1e'
     }
-  }, "#", k + 1), React.createElement("div", {
-    style: MK.av(l.name, 32)
-  }, MK.initials(l.name)), React.createElement("div", {
+  }, "#", k + 1), React.createElement(MK.Av, {
+    name: l.name,
+    empId: l.empId,
+    size: 32
+  }), React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 0
@@ -77480,9 +77990,11 @@ function PerfBoard({
         gap: 9,
         marginBottom: 8
       }
-    }, React.createElement("div", {
-      style: MK.av(e.staffName, 32)
-    }, MK.initials(e.staffName)), React.createElement("div", {
+    }, React.createElement(MK.Av, {
+      name: e.staffName,
+      empId: e.empId,
+      size: 32
+    }), React.createElement("div", {
       style: {
         minWidth: 0
       }
@@ -77579,9 +78091,11 @@ function PerfBoard({
       fontSize: 10.8,
       color: MK.FAINT
     }
-  }, m.label), m.winner ? React.createElement(React.Fragment, null, React.createElement("div", {
-    style: MK.av(m.winner.name, 24)
-  }, MK.initials(m.winner.name)), React.createElement("span", {
+  }, m.label), m.winner ? React.createElement(React.Fragment, null, React.createElement(MK.Av, {
+    name: m.winner.name,
+    empId: m.winner.empId,
+    size: 24
+  }), React.createElement("span", {
     style: {
       flex: 1,
       fontWeight: 600,
@@ -77724,7 +78238,6 @@ window.PerfBoard = PerfBoard;
 ;
 /* ===== roster.jsx ===== */
 (function(){
-function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 const {
   useState,
   useEffect,
@@ -77779,7 +78292,6 @@ const rosIsAdmin = () => {
     return true;
   }
 };
-const rosInitials = n => String(n || '').split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || '?';
 const ROS_STATUS = {
   draft: {
     label: 'Draft',
@@ -77794,6 +78306,323 @@ const ROS_STATUS = {
     color: '#1f9d63'
   }
 };
+const rosKey = e => 'S' + String(e.id);
+const rosMigrateGrid = (grid, rows) => {
+  const g = grid || {};
+  const keys = Object.keys(g);
+  if (!keys.length) return g;
+  const current = new Set(rows.map(r => r.empId));
+  if (keys.every(k => current.has(k))) return g;
+  const byEmpNo = {};
+  rows.forEach(r => {
+    if (r.empIdShown) byEmpNo[String(r.empIdShown)] = r.empId;
+  });
+  const out = {};
+  keys.forEach(k => {
+    out[byEmpNo[k] || k] = g[k];
+  });
+  return out;
+};
+const ROS_MONO = "'IBM Plex Mono',monospace";
+const ROS_BCOLOR = {
+  G: '#6a52d4',
+  M: '#e08a1e',
+  E: '#0090ca',
+  N: '#5b45c4',
+  O: '#8b98ab'
+};
+const rosBColor = b => ROS_BCOLOR[b] || '#8b98ab';
+const ROS_BUCKETS = [['G', 'General', '#6a52d4', 'M3 5h18v16H3zM3 9h18'], ['M', 'Morning', '#e08a1e', 'M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4M12 8a4 4 0 100 8 4 4 0 000-8z'], ['E', 'Evening', '#0090ca', 'M12 3a9 9 0 109 9 7 7 0 01-9-9z'], ['N', 'Night', '#5b45c4', 'M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z']];
+const ROS_CODE_ORDER = ['G1', 'G2', 'G3', 'G4', 'M1', 'M2', 'M3', 'M4', 'M6', 'M7', 'M8', 'M11', 'E1', 'E2', 'E3', 'E4', 'E6', 'E10', 'E11', 'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N11', 'DN1', 'OFF', 'DO', 'PH', 'AL', 'CL', 'EL', 'ML', 'FL'];
+const ROS_QUICK_BRUSH = ['M4', 'E4', 'N2', 'G1', 'OFF', 'DO', 'AL', 'CL'];
+const ROS_WINDOWS = {
+  G: '8 AM – 5 PM',
+  M: '6 AM – 3 PM',
+  E: '12 PM – 10 PM',
+  N: '7 PM – 8 AM'
+};
+const ROS_TONE = {
+  G: '#6a52d4',
+  M: '#b5670a',
+  E: '#0072a3',
+  N: '#5b45c4',
+  O: '#7d8ea8'
+};
+const ROS_LEAVE_TONE = {
+  OFF: '#8b98ab',
+  DO: '#8b98ab',
+  AL: '#b5670a',
+  EL: '#b5670a',
+  CL: '#0072a3',
+  ML: '#5b45c4',
+  FL: '#5b45c4',
+  PH: '#157a43'
+};
+const ROS_LEAVE_CODES = ['AL', 'CL', 'EL', 'ML', 'FL'];
+const ROS_PATTERNS = [['p_mmeenno', '2M · 2E · 2N · 1 off', ['M4', 'M4', 'E4', 'E4', 'N2', 'N2', 'OFF']], ['p_mmmoff', '3 mornings · 1 off', ['M4', 'M4', 'M4', 'OFF']], ['p_nnnoff', '3 nights · 2 off', ['N2', 'N2', 'N2', 'OFF', 'DO']], ['p_gen', 'General duty · Fri off', ['G1', 'G1', 'G1', 'G1', 'OFF', 'G1', 'DO']]];
+const ROS_METRIC_LABEL = {
+  onDuty: 'staff on duty',
+  morning: 'morning staff',
+  evening: 'evening staff',
+  night: 'night staff',
+  general: 'general-duty staff',
+  onLeave: 'staff on leave',
+  nights: 'night shifts',
+  hours: 'total hours',
+  offDays: 'rest days',
+  shifts: 'shifts worked',
+  fridaysWorked: 'Fridays worked'
+};
+const ROS_DEF_CFG = {
+  minM: 2,
+  minE: 2,
+  minN: 2,
+  maxNights: 3,
+  minOff: 4,
+  maxLeavePerDay: 1,
+  minOnDuty: 3,
+  ratio: '1 : 2',
+  fridayOff: true
+};
+const ROS_DEF_OFF = {
+  min: true,
+  nm: true,
+  nights: true,
+  offdays: true,
+  senior: true,
+  leave: true,
+  ratio: true,
+  friday: true
+};
+const ROS_VIEW_TABS = [['month', 'Monthly grid', 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4'], ['week', 'Weekly board', 'M4 4h16v16H4zM9 4v16M15 4v16'], ['day', 'Day view', 'M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M2 12h2M20 12h2'], ['staff', 'Staff timeline', 'M4 6h16M4 12h10M4 18h7'], ['calendar', 'Calendar', 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4'], ['leave', 'Leave calendar', 'M8 2v4M16 2v4M3 8h18M5 8v13h14V8'], ['tree', 'Tree view', 'M4 12h5M14 6h6M14 12h6M14 18h6M9 6v12M9 6h5M9 18h5'], ['swap', 'Shift swaps', 'M7 16H3l4-4M17 8h4l-4 4M3 16h14M21 8H7'], ['rules', 'Rules & policy', 'M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6zM9 12l2 2 4-4']];
+const rosTab = on => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  border: 0,
+  background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent',
+  color: on ? '#fff' : '#6c7a8c',
+  padding: '7px 13px',
+  borderRadius: 9,
+  fontSize: 11.5,
+  fontWeight: 700,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  transition: 'all .2s',
+  boxShadow: on ? '0 5px 14px rgba(0,144,202,.35)' : 'none'
+});
+const rosChipS = (c, bg) => ({
+  fontSize: 10,
+  fontWeight: 700,
+  padding: '2px 9px',
+  borderRadius: 10,
+  color: c,
+  background: bg,
+  whiteSpace: 'nowrap'
+});
+const rosAvRadius = s => Math.round(s / 3);
+const ROS_CARD = {
+  background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+  backdropFilter: 'blur(24px) saturate(1.7)',
+  WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+  border: '1px solid rgba(255,255,255,.92)',
+  borderRadius: 16,
+  boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+  overflow: 'hidden'
+};
+const ROS_CARD15 = {
+  ...ROS_CARD,
+  borderRadius: 15,
+  boxShadow: '0 12px 36px rgba(31,59,90,.12),inset 0 1px 0 rgba(255,255,255,.95)'
+};
+const ROS_CARD_HEAD = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '12px 16px',
+  borderBottom: '1px solid rgba(125,145,180,.18)'
+};
+const ROS_H3 = {
+  margin: 0,
+  fontSize: 13.5,
+  fontWeight: 700,
+  color: '#16202e'
+};
+const rosBadge = (bg, c, n, r) => ({
+  display: 'inline-grid',
+  placeItems: 'center',
+  width: n,
+  height: n,
+  borderRadius: r == null ? 8 : r,
+  background: bg,
+  color: c,
+  flexShrink: 0
+});
+const rosDow = (y, m, d) => R.DOW[new Date(y, m, d).getDay()];
+const rosIsFri = (y, m, d) => new Date(y, m, d).getDay() === 5;
+const rosCol = (y, m, d) => (new Date(y, m, d).getDay() + 1) % 7;
+function rosInjectCss() {
+  if (typeof document === 'undefined' || document.getElementById('ros-style')) return;
+  const el = document.createElement('style');
+  el.id = 'ros-style';
+  el.textContent = ['@keyframes rosPop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}', '@keyframes rosOrbFloat{from{transform:translate(0,0) scale(1)}to{transform:translate(160px,110px) scale(1.18)}}', '@keyframes rosGrowW{from{width:0}}', '@keyframes rosSlideIn{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:none}}', '@keyframes rosSlideInY{from{opacity:0;transform:translate(26px,-50%)}to{opacity:1;transform:translate(0,-50%)}}', '@keyframes rosPopCard{0%{opacity:0;transform:scale(.9) translateY(10px)}100%{opacity:1;transform:none}}', '.ros-kpi:hover{transform:translateY(-3px)!important;box-shadow:0 20px 46px rgba(31,59,90,.18)!important}', '.ros-trow:hover{background:rgba(39,168,219,.07)!important}', '.ros-vio:hover{background:rgba(210,58,82,.2)!important}', '.ros-auto:hover{background:rgba(106,82,212,.18)!important}', '.ros-treerow:hover{background:rgba(0,144,202,.08)!important}', '.ros-navbtn:hover{background:#fff!important}', '.ros-goday:hover{background:rgba(0,144,202,.18)!important}', '.ros-lift:hover{transform:translateY(-1px)}', '.ros-x:hover{background:rgba(125,145,180,.16)!important;color:#16202e!important}', '.ros-xred:hover{background:rgba(210,58,82,.12)!important;color:#a92c42!important}', '.ros-decl:hover{background:rgba(210,58,82,.1)!important}'].join('\n');
+  document.head.appendChild(el);
+}
+function rosEval(grid, rows, days, year, month, cfg, en, custom) {
+  const N = rows.length;
+  const code = (i, d) => (grid[rows[i].empId] || {})[d] || '';
+  const bOf = c => R.bucketOf(c) || '';
+  const dayBucketCount = (d, b) => {
+    let n = 0;
+    for (let i = 0; i < N; i++) if (bOf(code(i, d)) === b) n++;
+    return n;
+  };
+  const dayMetric = (d, m) => {
+    if (m === 'onDuty') {
+      let n = 0;
+      for (let i = 0; i < N; i++) {
+        const b = bOf(code(i, d));
+        if (b && b !== 'O') n++;
+      }
+      return n;
+    }
+    if (m === 'onLeave') {
+      let n = 0;
+      for (let i = 0; i < N; i++) if (ROS_LEAVE_CODES.indexOf(code(i, d)) >= 0) n++;
+      return n;
+    }
+    return dayBucketCount(d, {
+      general: 'G',
+      morning: 'M',
+      evening: 'E',
+      night: 'N'
+    }[m] || 'M');
+  };
+  const staffMetric = (i, m) => {
+    let nights = 0,
+      hours = 0,
+      offs = 0,
+      shifts = 0,
+      friWork = 0;
+    for (let d = 1; d <= days; d++) {
+      const c = code(i, d),
+        b = bOf(c);
+      if (b === 'N') nights++;
+      if (b === 'O') offs++;else if (b) shifts++;
+      hours += R.hoursOf(c);
+      if (rosIsFri(year, month, d) && b && b !== 'O') friWork++;
+    }
+    return {
+      nights,
+      hours,
+      offDays: offs,
+      shifts,
+      fridaysWorked: friWork
+    }[m] || 0;
+  };
+  const closedDays = {};
+  for (let d = 1; d <= days; d++) {
+    let written = 0,
+      on = 0;
+    for (let i = 0; i < N; i++) {
+      const b = bOf(code(i, d));
+      if (b) {
+        written++;
+        if (b !== 'O') on++;
+      }
+    }
+    if (N > 0 && written === N && on === 0) closedDays[d] = true;
+  }
+  const viol = {
+    ratio: [],
+    min: [],
+    nm: [],
+    nights: [],
+    off: [],
+    senior: [],
+    leave: [],
+    friday: []
+  };
+  for (let d = 1; d <= days; d++) {
+    if (!closedDays[d]) {
+      if (en.min !== false) [['M', cfg.minM], ['E', cfg.minE], ['N', cfg.minN]].forEach(([b, mn]) => {
+        const n = dayBucketCount(d, b);
+        if (n < mn) viol.min.push('Day ' + d + ' ' + b + ' has ' + n);
+      });
+      if (en.senior !== false) {
+        let night = 0,
+          sen = false;
+        for (let i = 0; i < N; i++) {
+          if (bOf(code(i, d)) === 'N') {
+            night++;
+            if (/Senior|Team|Charge/.test(rows[i].desig || '')) sen = true;
+          }
+        }
+        if (night && !sen) viol.senior.push('Day ' + d + ' night');
+      }
+      if (en.ratio !== false) {
+        const on = dayMetric(d, 'onDuty');
+        if (on < cfg.minOnDuty) viol.ratio.push('Day ' + d + ' only ' + on + ' on duty');
+      }
+    }
+    if (en.leave !== false) {
+      const away = [];
+      for (let i = 0; i < N; i++) if (ROS_LEAVE_CODES.indexOf(code(i, d)) >= 0) away.push(rows[i].name);
+      if (away.length > cfg.maxLeavePerDay) viol.leave.push('Day ' + d + ': ' + away.join(', '));
+    }
+  }
+  for (let i = 0; i < N; i++) {
+    let run = 0,
+      offs = 0,
+      fri = 0;
+    for (let d = 1; d <= days; d++) {
+      const c = code(i, d),
+        b = bOf(c);
+      if (b === 'N') {
+        run++;
+        if (en.nights !== false && run > cfg.maxNights) viol.nights.push(rows[i].name + ' day ' + d);
+      } else run = 0;
+      if (b === 'O') offs++;
+      if (en.nm !== false && d > 1 && bOf(code(i, d - 1)) === 'N' && b === 'M') viol.nm.push(rows[i].name + ' day ' + d);
+      if (rosIsFri(year, month, d) && b === 'O') fri++;
+    }
+    if (en.offdays !== false && offs < cfg.minOff) viol.off.push(rows[i].name + ' has ' + offs + ' rest days');
+    if (en.friday !== false && cfg.fridayOff && fri === 0) viol.friday.push(rows[i].name + ' worked every Friday');
+  }
+  const customResults = (custom || []).map(r => {
+    const hits = [];
+    const bad = v => r.op === '<' ? v < r.val : r.op === '>' ? v > r.val : v === r.val;
+    if (r.scope === 'day') {
+      for (let d = 1; d <= days; d++) {
+        const v = dayMetric(d, r.metric);
+        if (bad(v)) hits.push('Day ' + d + ' = ' + v);
+      }
+    } else {
+      for (let i = 0; i < N; i++) {
+        const v = staffMetric(i, r.metric);
+        if (bad(v)) hits.push(rows[i].name + ' = ' + v);
+      }
+    }
+    return {
+      rule: r,
+      hits
+    };
+  });
+  const rules = [['Nurse-to-patient ratio per shift', cfg.ratio + ' · at least ' + cfg.minOnDuty + ' on duty', viol.ratio, 'ratio'], ['Minimum staff per shift', 'M ≥ ' + cfg.minM + ' · E ≥ ' + cfg.minE + ' · N ≥ ' + cfg.minN, viol.min, 'min'], ['No night → morning back-to-back', 'at least one rest between', viol.nm, 'nm'], ['Max consecutive nights', 'no more than ' + cfg.maxNights + ' in a row', viol.nights, 'nights'], ['Weekly off entitlement', cfg.minOff + ' rest days per month minimum', viol.off, 'offdays'], ['Senior nurse on every shift', 'senior / team leader / charge on nights', viol.senior, 'senior'], ['Leave clash warnings', 'no more than ' + cfg.maxLeavePerDay + ' on leave per day', viol.leave, 'leave'], ['Friday off entitlement (BD)', 'every nurse gets at least one Friday off', viol.friday, 'friday']].filter(r => en[r[3]] !== false).concat(customResults.map(cr => [cr.rule.name, 'custom · ' + cr.rule.scope + ' ' + cr.rule.metric + ' ' + cr.rule.op + ' ' + cr.rule.val, cr.hits, 'custom']));
+  const totalViol = rules.reduce((a, r) => a + r[2].length, 0);
+  const okRules = rules.filter(r => !r[2].length).length;
+  return {
+    viol,
+    customResults,
+    rules,
+    totalViol,
+    okRules,
+    dayMetric,
+    staffMetric,
+    dayBucketCount,
+    closedDays
+  };
+}
 function useRosterIndex() {
   const [state, setState] = useState({
     rosters: [],
@@ -77823,18 +78652,81 @@ function useRosterIndex() {
     reload: load
   };
 }
-function RosStatusChip({
-  st
-}) {
-  const map = {
-    draft: 'In progress',
-    submitted: 'Awaiting discussion',
-    approved: 'Actioned'
-  };
-  const label = (ROS_STATUS[st || 'draft'] || ROS_STATUS.draft).label;
-  return React.createElement("span", {
-    style: MK.stChip(map[st] || 'Not started')
-  }, label);
+function RosLegendPanel() {
+  return React.createElement("div", {
+    style: {
+      padding: '10px 16px 12px',
+      borderBottom: '1px solid rgba(125,145,180,.18)',
+      background: 'rgba(247,251,255,.6)',
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))',
+      gap: 9
+    }
+  }, [['G', 'General', '#6a52d4'], ['M', 'Morning', '#e08a1e'], ['E', 'Evening', '#0090ca'], ['N', 'Night', '#5b45c4'], ['O', 'Leave / off', '#8b98ab']].map(([b, label, c]) => React.createElement("div", {
+    key: b,
+    style: {
+      background: 'rgba(255,255,255,.7)',
+      border: '1px solid ' + c + '2e',
+      borderLeft: '3px solid ' + c,
+      borderRadius: 10,
+      padding: '9px 11px',
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      marginBottom: 6
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: 2,
+      background: c,
+      flexShrink: 0
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 800,
+      letterSpacing: .7,
+      textTransform: 'uppercase',
+      color: c
+    }
+  }, label)), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2
+    }
+  }, R.SHIFTS.filter(s => s.bucket === b).map(s => React.createElement("div", {
+    key: s.code,
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 7,
+      fontSize: 10.5,
+      color: '#6c7a8c',
+      lineHeight: 1.5
+    }
+  }, React.createElement("b", {
+    style: {
+      fontFamily: ROS_MONO,
+      fontSize: 10,
+      fontWeight: 700,
+      color: c,
+      minWidth: 26,
+      flexShrink: 0
+    }
+  }, s.code), React.createElement("span", {
+    style: {
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, s.label)))))));
 }
 function ShiftLegend({
   compact
@@ -77870,285 +78762,18 @@ function ShiftLegend({
     }, codes.map(c => c.code + ': ' + c.label).join('  |  ')));
   }));
 }
-const ROS_TABS = [['Monthly grid', 'rosterGrid', ''], ['Weekly board', 'rosterGrid', 'week'], ['Day view', 'rosterGrid', 'day'], ['Staff timeline', 'rosterGrid', 'staff'], ['Leave calendar', 'rosterGrid', 'leave'], ['Calendar', 'rosterGrid', 'calendar'], ['Tree view', 'rosterGrid', 'tree'], ['Rules & policy', 'rosterReview', ''], ['Print sheet', 'rosterPrint', '']];
-function RosterTabs({
-  view,
-  sub,
-  dept,
-  year,
-  month,
-  setRoute,
-  setSub
+function RosStatusChip({
+  st
 }) {
-  return React.createElement("div", {
-    className: "card",
-    style: {
-      display: 'inline-flex',
-      gap: 3,
-      padding: 4,
-      borderRadius: 12,
-      flexWrap: 'wrap'
-    }
-  }, ROS_TABS.map(([label, v, s]) => {
-    const on = view === v && (sub || '') === s;
-    return React.createElement("button", {
-      key: label,
-      onClick: () => {
-        if (on) return;
-        setSub(s);
-        if (v !== view) setRoute({
-          view: v,
-          dept,
-          year,
-          month
-        });
-      },
-      style: {
-        border: 0,
-        cursor: 'pointer',
-        font: 'inherit',
-        fontSize: 11.6,
-        fontWeight: 600,
-        padding: '6px 14px',
-        borderRadius: 9,
-        color: on ? '#fff' : MK.MUTED,
-        background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent'
-      }
-    }, label);
-  }));
-}
-const ROS_WEEK_ORDER = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-const rosDow = (y, m, d) => R.DOW[new Date(y, m, d).getDay()];
-const rosIsHoliday = (y, m, d) => new Date(y, m, d).getDay() === 5;
-const rosCol = (y, m, d) => (new Date(y, m, d).getDay() + 1) % 7;
-const ROS_DUTY = R.BUCKETS.filter(b => b.id !== 'O');
-const ROS_BUCKET_ICON = {
-  G: 'M3 5h18v16H3zM3 9h18',
-  M: 'M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4M12 8a4 4 0 100 8 4 4 0 000-8z',
-  E: 'M12 3a9 9 0 109 9 7 7 0 01-9-9z',
-  N: 'M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z'
-};
-const ROS_TONE = {
-  G: '#6a52d4',
-  M: '#b5670a',
-  E: '#0072a3',
-  N: '#5b45c4'
-};
-const ROS_LEAVE_TONE = {
-  OFF: '#8b98ab',
-  DO: '#8b98ab',
-  AL: '#b5670a',
-  EL: '#b5670a',
-  CL: '#0072a3',
-  ML: '#5b45c4',
-  FL: '#5b45c4',
-  PH: '#157a43'
-};
-function rosMins(t) {
-  const m = /(\d{1,2}):(\d{2})\s*(AM|PM)/i.exec(t || '');
-  if (!m) return null;
-  let h = Number(m[1]) % 12;
-  if (/pm/i.test(m[3])) h += 12;
-  return h * 60 + Number(m[2]) + (/next/i.test(t) ? 1440 : 0);
-}
-function rosClock(mins) {
-  const v = (mins % 1440 + 1440) % 1440;
-  const h = Math.floor(v / 60),
-    mm = v % 60;
-  const hh = h % 12 === 0 ? 12 : h % 12;
-  return hh + (mm ? ':' + String(mm).padStart(2, '0') : '') + ' ' + (h >= 12 ? 'PM' : 'AM');
-}
-function rosSpan(codes) {
-  let lo = null,
-    hi = null;
-  codes.forEach(c => {
-    const parts = String((R.BY_CODE[c] || {}).label || '').split('-');
-    if (parts.length < 2) return;
-    const a = rosMins(parts[0]);
-    let b = rosMins(parts[1]);
-    if (a == null || b == null) return;
-    if (b <= a) b += 1440;
-    if (lo == null || a < lo) lo = a;
-    if (hi == null || b > hi) hi = b;
-  });
-  return lo == null ? '' : rosClock(lo) + ' – ' + rosClock(hi);
-}
-function rosWindow(bucketId, codes) {
-  return rosSpan(codes) || rosSpan(R.SHIFTS.filter(s => s.bucket === bucketId).map(s => s.code));
-}
-function useRosterSheet(staffStore, dept, year, month) {
-  const [doc, setDoc] = useState(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    setLoading(true);
-    rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
-      setDoc(r && r.ok ? r.roster : null);
-      setLoading(false);
-    }).catch(() => {
-      setDoc(null);
-      setLoading(false);
-    });
-  }, [dept, year, month]);
-  const staff = useMemo(() => (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => ({
-    empId: rosKey(e),
-    empIdShown: e.emp_id || '',
-    name: e.name,
-    desig: e.designation
-  })).sort((a, b) => String(a.name).localeCompare(String(b.name))), [staffStore.staff, dept]);
-  const rows = useMemo(() => {
-    const order = doc && doc.order || [];
-    if (!order.length) return staff;
-    const by = {};
-    staff.forEach(s => {
-      by[s.empId] = s;
-    });
-    const out = [];
-    const seen = {};
-    order.forEach(id => {
-      if (by[id] && !seen[id]) {
-        out.push(by[id]);
-        seen[id] = 1;
-      }
-    });
-    staff.forEach(s => {
-      if (!seen[s.empId]) out.push(s);
-    });
-    return out;
-  }, [staff, doc]);
-  return {
-    loading,
-    doc,
-    rows,
-    grid: rosMigrateGrid(doc && doc.grid, staff),
-    days: R.daysIn(year, month),
-    rules: Object.assign({}, R.DEFAULT_RULES, doc && doc.rules || {})
+  const map = {
+    draft: 'In progress',
+    submitted: 'Awaiting discussion',
+    approved: 'Actioned'
   };
-}
-const rosKey = e => 'S' + String(e.id);
-const rosMigrateGrid = (grid, rows) => {
-  const g = grid || {};
-  const keys = Object.keys(g);
-  if (!keys.length) return g;
-  const current = new Set(rows.map(r => r.empId));
-  if (keys.every(k => current.has(k))) return g;
-  const byEmpNo = {};
-  rows.forEach(r => {
-    if (r.empIdShown) byEmpNo[String(r.empIdShown)] = r.empId;
-  });
-  const out = {};
-  keys.forEach(k => {
-    out[byEmpNo[k] || k] = g[k];
-  });
-  return out;
-};
-const rosNeed = (rules, b) => {
-  const r = rules[b === 'M' ? 'minMorning' : b === 'E' ? 'minEvening' : b === 'N' ? 'minNight' : ''];
-  return r && r.on && r.value || 0;
-};
-const rosDayOk = (cov, rules) => ['M', 'E', 'N'].every(b => cov[b] >= rosNeed(rules, b));
-function RosSubShell({
-  title,
-  sub,
-  subName,
-  dept,
-  year,
-  month,
-  setRoute,
-  setSub,
-  right,
-  children
-}) {
-  return React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12
-    }
-  }, React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '13px 16px',
-      display: 'flex',
-      gap: 12,
-      alignItems: 'center',
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("div", {
-    style: MK.iconBadge('blue', 36)
-  }, React.createElement(Ic, {
-    d: I.cal,
-    s: 17
-  })), React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 230
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 16,
-      fontWeight: 700,
-      color: MK.INK
-    }
-  }, title), React.createElement("div", {
-    style: {
-      fontSize: 11.4,
-      color: MK.MUTED
-    }
-  }, sub)), right, React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'rosterHome'
-    })
-  }, "All rosters")), React.createElement("div", null, React.createElement(RosterTabs, {
-    view: "rosterGrid",
-    sub: subName,
-    dept: dept,
-    year: year,
-    month: month,
-    setRoute: setRoute,
-    setSub: setSub
-  })), children);
-}
-function RosNotDrafted({
-  dept,
-  year,
-  month,
-  setSub
-}) {
-  return React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'grid',
-      placeItems: 'center',
-      padding: 36,
-      textAlign: 'center',
-      gap: 7
-    }
-  }, React.createElement("div", {
-    style: {
-      opacity: .35
-    }
-  }, React.createElement(Ic, {
-    d: I.grid,
-    s: 32
-  })), React.createElement("div", {
-    style: {
-      fontWeight: 600
-    }
-  }, "No roster drafted for ", R.MONTHS[month], " ", year), React.createElement("div", {
-    className: "sub",
-    style: {
-      maxWidth: 420
-    }
-  }, "Nothing has been saved for ", dept, " yet, so there is no duty to show on this screen."), React.createElement("button", {
-    className: "btn pri",
-    style: {
-      marginTop: 4
-    },
-    onClick: () => setSub('')
-  }, "Open the monthly grid")));
+  const label = (ROS_STATUS[st || 'draft'] || ROS_STATUS.draft).label;
+  return React.createElement("span", {
+    style: MK.stChip(map[st] || 'Not started')
+  }, label);
 }
 function RosterHome({
   index,
@@ -78366,109 +78991,7 @@ function RosterHome({
     className: "card-h"
   }, React.createElement("h3", null, "Shift legend"), React.createElement("div", {
     className: "sub"
-  }, "the unit's own codes \u2014 used everywhere in this module")), React.createElement("div", {
-    className: "card-b"
-  }, React.createElement(ShiftLegend, null))));
-}
-const QUICK_BRUSH = ['M4', 'E4', 'N2', 'G1', 'OFF', 'DO', 'AL', 'CL'];
-const ROS_PATTERNS = [{
-  id: 'p_mmeenno',
-  label: '2M · 2E · 2N · 1 off',
-  cycle: ['M4', 'M4', 'E4', 'E4', 'N2', 'N2', 'OFF']
-}, {
-  id: 'p_mmmoff',
-  label: '3 mornings · 1 off',
-  cycle: ['M4', 'M4', 'M4', 'OFF']
-}, {
-  id: 'p_nnnoff',
-  label: '3 nights · 2 off',
-  cycle: ['N2', 'N2', 'N2', 'OFF', 'DO']
-}, {
-  id: 'p_gen',
-  label: 'General duty · Fri off',
-  cycle: ['G1', 'G1', 'G1', 'G1', 'OFF', 'G1', 'DO']
-}];
-const ROS_AUTO_PATTERN = ROS_PATTERNS[0].cycle;
-function RosKpi({
-  icon,
-  tint,
-  value,
-  label,
-  tone
-}) {
-  return React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '13px 15px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 11
-    }
-  }, React.createElement("div", {
-    style: MK.iconBadge(tint, 34)
-  }, React.createElement(Ic, {
-    d: icon,
-    s: 16
-  })), React.createElement("div", {
-    style: {
-      minWidth: 0
-    }
-  }, React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 22,
-      fontWeight: 700,
-      color: tone || MK.INK,
-      lineHeight: 1.1
-    }
-  }, value), React.createElement("div", {
-    style: {
-      fontSize: 10.8,
-      color: MK.FAINT
-    }
-  }, label)));
-}
-function ShiftCell({
-  code,
-  onClick,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  draggable,
-  dim,
-  title
-}) {
-  const b = R.bucketOf(code);
-  const c = b ? R.BUCKET_COLOR[b] : null;
-  const off = b === 'O';
-  return React.createElement("td", {
-    onClick: onClick,
-    draggable: draggable,
-    onDragStart: onDragStart,
-    onDragOver: onDragOver,
-    onDrop: onDrop,
-    title: title,
-    style: {
-      padding: '2px 1.5px',
-      textAlign: 'center',
-      cursor: onClick ? 'pointer' : 'default'
-    }
-  }, React.createElement("div", {
-    style: {
-      height: 24,
-      borderRadius: 7,
-      display: 'grid',
-      placeItems: 'center',
-      fontSize: 9.8,
-      fontWeight: 700,
-      letterSpacing: .2,
-      background: code ? off ? 'rgba(125,145,180,.2)' : c : 'rgba(125,145,180,.07)',
-      color: code ? off ? '#5b6b80' : '#fff' : 'transparent',
-      boxShadow: code && !off ? '0 1px 3px ' + c + '55' : 'none',
-      opacity: dim ? .35 : 1,
-      transition: 'background .15s'
-    }
-  }, code || '·'));
+  }, "the unit's own codes \u2014 used everywhere in this module")), React.createElement(RosLegendPanel, null)));
 }
 function RosterGrid({
   staffStore,
@@ -78476,31 +78999,58 @@ function RosterGrid({
   year,
   month,
   setRoute,
-  setSub,
-  onSaved
+  onSaved,
+  initialView
 }) {
+  rosInjectCss();
   const days = R.daysIn(year, month);
+  const [view, setView] = useState(initialView || 'month');
   const [grid, setGrid] = useState({});
   const [order, setOrder] = useState([]);
   const [status, setStatus] = useState('draft');
-  const [rules, setRules] = useState({});
   const [rev, setRev] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [brush, setBrush] = useState('');
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [pick, setPick] = useState(null);
+  const [brush, setBrush] = useState('');
+  const [brushAll, setBrushAll] = useState(false);
+  const [painting, setPainting] = useState(false);
   const [drag, setDrag] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
   const [dragMode, setDragMode] = useState('swap');
-  const [focusBucket, setFocusBucket] = useState('');
-  const [showLegend, setShowLegend] = useState(false);
+  const [pick, setPick] = useState(null);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const [queue, setQueue] = useState([]);
+  const [savedBatch, setSavedBatch] = useState(null);
+  const [swapLog, setSwapLog] = useState([]);
+  const [week, setWeek] = useState(0);
+  const now = new Date();
+  const [day, setDay] = useState(() => now.getFullYear() === year && now.getMonth() === month ? now.getDate() : 1);
+  const [treeDay, setTreeDay] = useState(null);
+  const [treeB, setTreeB] = useState(null);
+  const [treeD, setTreeD] = useState(null);
+  const [dayPop, setDayPop] = useState(null);
+  const [cfg, setCfg] = useState(ROS_DEF_CFG);
+  const [en, setEn] = useState(ROS_DEF_OFF);
+  const [custom, setCustom] = useState([]);
+  const [draft, setDraft] = useState({
+    name: '',
+    scope: 'day',
+    metric: 'onDuty',
+    op: '<',
+    val: 4,
+    sev: 'warning'
+  });
+  const [sign, setSign] = useState({});
+  const [approvedAt, setApprovedAt] = useState(null);
   const history = useRef([]);
+  const saveTimer = useRef(null);
+  const toastTimer = useRef(null);
   const staff = useMemo(() => (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => ({
     empId: rosKey(e),
     empIdShown: e.emp_id || '',
     name: e.name,
-    desig: e.designation,
-    role: e.role
+    desig: e.designation
   })).sort((a, b) => String(a.name).localeCompare(String(b.name))), [staffStore.staff, dept]);
   const rows = useMemo(() => {
     if (!order.length) return staff;
@@ -78529,72 +79079,94 @@ function RosterGrid({
       setGrid(rosMigrateGrid(d && d.grid, staff));
       setOrder(d && d.order || []);
       setStatus(d && d.status || 'draft');
-      setRules(d && d.rules || {});
       setRev(d && d.revision || 0);
+      const ru = d && d.rules || {};
+      setCfg({
+        ...ROS_DEF_CFG,
+        ...(ru.cfg || {})
+      });
+      setEn({
+        ...ROS_DEF_OFF,
+        ...(ru.off || {})
+      });
+      setCustom(Array.isArray(ru.custom) ? ru.custom : []);
+      if (!ru.cfg && ru.minMorning) {
+        setCfg(c => ({
+          ...c,
+          minM: ru.minMorning && ru.minMorning.value || c.minM,
+          minE: ru.minEvening && ru.minEvening.value || c.minE,
+          minN: ru.minNight && ru.minNight.value || c.minN,
+          maxNights: ru.maxConsecNight && ru.maxConsecNight.value || c.maxNights,
+          maxLeavePerDay: ru.leaveClash && ru.leaveClash.value || c.maxLeavePerDay
+        }));
+      }
+      setSign({
+        'Prepared by': d && d.preparedBy || '—',
+        'Checked by': d && d.checkedBy || '—',
+        'Approved by': d && d.approvedBy || '—'
+      });
+      setApprovedAt(d && d.approvedAt ? new Date(d.approvedAt).toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      }) : null);
       setLoading(false);
       setDirty(false);
+      setQueue([]);
       history.current = [];
     }).catch(() => setLoading(false));
   }, [dept, year, month]);
+  useEffect(() => {
+    const up = () => {
+      setPainting(false);
+      setDrag(null);
+      setDragOver(null);
+    };
+    window.addEventListener('mouseup', up);
+    return () => window.removeEventListener('mouseup', up);
+  }, []);
   const locked = status === 'approved';
+  const canEdit = !locked && rosCan('edit');
+  const editBlocked = () => {
+    rosToast(locked ? 'Approved and locked — reopen it to edit.' : 'You do not have edit rights on the roster.', 'info');
+  };
   const push = () => {
     history.current.push(JSON.stringify(grid));
-    if (history.current.length > 40) history.current.shift();
+    if (history.current.length > 25) history.current.shift();
   };
   const undo = () => {
+    if (!canEdit) return editBlocked();
     const p = history.current.pop();
     if (p == null) return;
     setGrid(JSON.parse(p));
     setDirty(true);
   };
-  const setCell = (empId, day, code) => {
-    if (locked) return;
-    push();
-    setGrid(g => {
-      const row = {
-        ...(g[empId] || {})
-      };
-      if (code) row[day] = code;else delete row[day];
-      return {
-        ...g,
-        [empId]: row
-      };
-    });
+  const cellCode = (empId, d) => (grid[empId] || {})[d] || '';
+  const setCells = fn => {
+    setGrid(g => fn(g));
     setDirty(true);
   };
-  const applyDrag = (from, to) => {
-    if (locked || !from || !to) return;
-    push();
-    setGrid(g => {
-      const out = {
-        ...g
-      };
-      const ra = {
-        ...(out[from.empId] || {})
-      };
-      const rb = from.empId === to.empId ? ra : {
-        ...(out[to.empId] || {})
-      };
-      const va = ra[from.day],
-        vb = rb[to.day];
-      if (dragMode === 'move') {
-        delete ra[from.day];
-        if (va) rb[to.day] = va;else delete rb[to.day];
-      } else {
-        if (vb) ra[from.day] = vb;else delete ra[from.day];
-        if (va) rb[to.day] = va;else delete rb[to.day];
-      }
-      out[from.empId] = ra;
-      out[to.empId] = rb;
-      return out;
-    });
-    setDirty(true);
+  const writeCell = (g, empId, d, code) => {
+    const row = {
+      ...(g[empId] || {})
+    };
+    if (code) row[d] = code;else delete row[d];
+    return {
+      ...g,
+      [empId]: row
+    };
   };
-  const repeatWeek = () => {
-    if (locked) return;
+  const setCell = (empId, d, code) => {
+    if (!canEdit) return editBlocked();
     push();
-    setGrid(g => {
-      const out = {
+    setCells(g => writeCell(g, empId, d, code));
+  };
+  const copyWeek = () => {
+    if (!canEdit) return editBlocked();
+    push();
+    const snap = grid;
+    setCells(g => {
+      let out = {
         ...g
       };
       rows.forEach(x => {
@@ -78602,84 +79174,78 @@ function RosterGrid({
           ...(out[x.empId] || {})
         };
         for (let d = 8; d <= days; d++) {
-          const src = row[d - 7];
-          if (src && !row[d]) row[d] = src;
+          const src = (snap[x.empId] || {})[d - 7];
+          if (src) row[d] = src;else delete row[d];
         }
         out[x.empId] = row;
       });
       return out;
     });
-    setDirty(true);
-    rosToast('Week 1 repeated into the blank days that follow.');
   };
-  const fillBlanks = code => {
-    if (locked) return;
+  const fillBlanks = () => {
+    if (!canEdit) return editBlocked();
     push();
-    setGrid(g => {
-      const out = {
+    setCells(g => {
+      let out = {
         ...g
       };
       rows.forEach(x => {
         const row = {
           ...(out[x.empId] || {})
         };
-        for (let d = 1; d <= days; d++) if (!row[d]) row[d] = code;
+        for (let d = 1; d <= days; d++) if (!row[d]) row[d] = 'OFF';
         out[x.empId] = row;
       });
       return out;
     });
-    setDirty(true);
-    rosToast('Every blank day filled with ' + code + '.');
   };
-  const rowTool = (empId, v, who) => {
-    if (locked || !v) return;
-    const pat = ROS_PATTERNS.find(p => p.id === v);
+  const rowTool = (empId, v) => {
+    if (!canEdit || !v) {
+      if (v) editBlocked();
+      return;
+    }
+    const pat = ROS_PATTERNS.find(p => p[0] === v);
     push();
-    setGrid(g => {
+    setCells(g => {
       const row = {
         ...(g[empId] || {})
       };
       for (let d = 1; d <= days; d++) {
-        if (pat) row[d] = pat.cycle[(d - 1) % pat.cycle.length];else if (v === 'clear') delete row[d];else if (v === 'blanks' && !row[d]) row[d] = 'OFF';
+        if (pat) row[d] = pat[2][(d - 1) % pat[2].length];else if (v === 'clear') delete row[d];else if (v === 'blanks' && !row[d]) row[d] = 'OFF';
       }
       return {
         ...g,
         [empId]: row
       };
     });
-    setDirty(true);
-    rosToast(pat ? who + ' put on ' + pat.label + '.' : v === 'clear' ? who + '’s row cleared.' : who + '’s blank days filled with OFF.');
   };
   const autoFill = () => {
-    if (locked) return;
+    if (!canEdit) return editBlocked();
     const anything = rows.some(x => Object.keys(grid[x.empId] || {}).length);
     if (anything && !window.confirm('Auto-draft replaces every shift already typed in ' + R.MONTHS[month] + '. Continue?')) return;
     push();
-    setGrid(g => {
-      const out = {
+    const pat = ['M4', 'M4', 'E4', 'E4', 'N2', 'N2', 'OFF'];
+    setCells(g => {
+      let out = {
         ...g
       };
       rows.forEach((x, i) => {
-        const row = {
-          ...(out[x.empId] || {})
-        };
-        for (let d = 1; d <= days; d++) row[d] = ROS_AUTO_PATTERN[(d - 1 + i * 2) % ROS_AUTO_PATTERN.length];
+        const row = {};
+        for (let d = 1; d <= days; d++) row[d] = pat[(d - 1 + i * 2) % 7];
         out[x.empId] = row;
       });
       return out;
     });
-    setDirty(true);
-    rosToast('Auto-drafted — every nurse on ' + ROS_PATTERNS[0].label + ', staggered. Check the rule alerts.');
   };
   const fillCol = d => {
-    if (locked || !rosCan('edit')) return;
+    if (!canEdit) return editBlocked();
     if (!brush) {
       rosToast('Pick a brush code first — then click a day heading to fill that column.', 'info');
       return;
     }
     push();
-    setGrid(g => {
-      const out = {
+    setCells(g => {
+      let out = {
         ...g
       };
       rows.forEach(x => {
@@ -78690,10 +79256,38 @@ function RosterGrid({
       });
       return out;
     });
-    setDirty(true);
-    rosToast(R.MONTHS[month] + ' ' + d + ' filled with ' + brush + ' for all ' + rows.length + ' staff.');
   };
-  const save = nextStatus => {
+  const saveQueue = () => {
+    const q = queue;
+    if (!q.length) return;
+    push();
+    setCells(g => {
+      let out = {
+        ...g
+      };
+      q.forEach(x => {
+        out = writeCell(out, x.bId, x.bDi, x.aCode);
+        out = writeCell(out, x.aId, x.aDi, x.mode === 'swap' ? x.bCode : '');
+      });
+      return out;
+    });
+    const nameOf = id => (rows.find(r => r.empId === id) || {}).name || id;
+    setSwapLog(log => q.filter(x => x.aId !== x.bId).map((x, i) => ({
+      id: 'SW-' + (900 + log.length + i),
+      aName: nameOf(x.aId),
+      aDay: x.aDi,
+      aCode: x.aCode,
+      bName: nameOf(x.bId),
+      bDay: x.bDi,
+      bCode: x.bCode,
+      mode: x.mode
+    })).concat(log));
+    setQueue([]);
+    setSavedBatch(q.length + (q.length === 1 ? ' change saved' : ' changes saved'));
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setSavedBatch(null), 4200);
+  };
+  const save = (nextStatus, quiet) => {
     setBusy(true);
     return rosApi.put('/api/rosters', {
       dept,
@@ -78702,21 +79296,55 @@ function RosterGrid({
       month,
       grid,
       order: rows.map(r => r.empId),
-      rules,
+      rules: {
+        cfg,
+        off: en,
+        custom,
+        minMorning: {
+          on: en.min !== false,
+          value: cfg.minM,
+          label: 'Minimum staff on morning duty',
+          unit: 'per day'
+        },
+        minEvening: {
+          on: en.min !== false,
+          value: cfg.minE,
+          label: 'Minimum staff on evening duty',
+          unit: 'per day'
+        },
+        minNight: {
+          on: en.min !== false,
+          value: cfg.minN,
+          label: 'Minimum staff on night duty',
+          unit: 'per day'
+        },
+        maxConsecNight: {
+          on: en.nights !== false,
+          value: cfg.maxNights,
+          label: 'Maximum consecutive night shifts',
+          unit: 'per person'
+        },
+        leaveClash: {
+          on: en.leave !== false,
+          value: cfg.maxLeavePerDay,
+          label: 'Maximum staff away on the same day',
+          unit: 'per day'
+        }
+      },
       names: rows.reduce((m, r) => {
         if (r.empId) m[r.empId] = r.name || '';
         return m;
       }, {}),
       status: nextStatus || status,
-      preparedBy: window.unicoSig && window.unicoSig.get && window.unicoSig.get().prepared || '',
-      checkedBy: window.unicoSig && window.unicoSig.get && window.unicoSig.get().checked || ''
+      preparedBy: sign['Prepared by'] !== '—' ? sign['Prepared by'] || '' : '',
+      checkedBy: sign['Checked by'] !== '—' ? sign['Checked by'] || '' : ''
     }).then(r => {
       setBusy(false);
       if (r && r.ok) {
         setRev(r.roster && r.roster.revision || rev + 1);
         setStatus(r.roster && r.roster.status || nextStatus || status);
         setDirty(false);
-        rosToast(nextStatus === 'submitted' ? 'Roster submitted for approval.' : 'Roster saved.');
+        if (!quiet) rosToast(nextStatus === 'submitted' ? 'Roster submitted for approval.' : 'Roster saved.');
         if (onSaved) onSaved();
         return true;
       }
@@ -78728,41 +79356,73 @@ function RosterGrid({
       return false;
     });
   };
-  const setStatusRemote = st => {
+  useEffect(() => {
+    if (!dirty || loading || !canEdit) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      save(null, true);
+    }, 1600);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [grid, cfg, en, custom, sign, dirty]);
+  const setStatusRemote = (st, extra) => {
     const id = 'ros-' + dept + '-' + year + '-' + String(month).padStart(2, '0');
     setBusy(true);
-    rosApi.post('/api/rosters/' + encodeURIComponent(id) + '/status', {
+    return rosApi.post('/api/rosters/' + encodeURIComponent(id) + '/status', Object.assign({
       status: st
-    }).then(r => {
+    }, extra || {})).then(r => {
       setBusy(false);
       if (r && r.ok) {
         setStatus(st);
+        if (st === 'approved') setApprovedAt(new Date().toLocaleDateString('en-GB', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric'
+        }));else setApprovedAt(null);
         rosToast(st === 'approved' ? 'Roster published and locked.' : 'Roster reopened for editing.');
         if (onSaved) onSaved();
-      } else rosToast(r && r.error || 'Could not change the status.', 'error');
-    }).catch(() => setBusy(false));
-  };
-  const findings = useMemo(() => R.checkRules(grid, rows, year, month, rules), [grid, rows, year, month, rules]);
-  const findingsByDay = useMemo(() => {
-    const m = {};
-    findings.forEach(f => {
-      (m[f.day] = m[f.day] || []).push(f);
+        return true;
+      }
+      rosToast(r && r.error || 'Could not change the status.', 'error');
+      return false;
+    }).catch(() => {
+      setBusy(false);
+      return false;
     });
-    return m;
-  }, [findings]);
-  const dutyNeed = useMemo(() => {
-    const merged = Object.assign({}, R.DEFAULT_RULES, rules || {});
-    return ['M', 'E', 'N'].reduce((a, b) => a + rosNeed(merged, b), 0);
-  }, [rules]);
-  const totals = useMemo(() => {
+  };
+  const publish = () => {
+    if (!rosIsAdmin()) {
+      rosToast('Only an administrator can publish the roster.', 'info');
+      return;
+    }
+    if (locked) {
+      setStatusRemote('draft');
+      return;
+    }
+    Promise.resolve(save('submitted', true)).then(ok => {
+      if (ok !== false) setStatusRemote('approved');
+    });
+  };
+  const ev = useMemo(() => rosEval(grid, rows, days, year, month, cfg, en, custom), [grid, rows, days, year, month, cfg, en, custom]);
+  const totalViol = ev.totalViol;
+  const monthLabel = R.MONTHS[month] + ' ' + year;
+  const monShort = R.MONTHS[month].slice(0, 3);
+  const dowOf = d => rosDow(year, month, d);
+  const kpiVals = useMemo(() => {
     let shifts = 0,
       hours = 0,
       leave = 0;
     rows.forEach(x => {
-      const t = R.totalsFor(grid[x.empId] || {}, days);
-      shifts += t.G + t.M + t.E + t.N;
-      hours += t.hours;
-      leave += t.leave;
+      const row = grid[x.empId] || {};
+      for (let d = 1; d <= days; d++) {
+        const c = row[d];
+        if (!c) continue;
+        const b = R.bucketOf(c);
+        if (b && b !== 'O') shifts++;
+        hours += R.hoursOf(c);
+        if (ROS_LEAVE_CODES.indexOf(c) >= 0 || c === 'PH') leave++;
+      }
     });
     return {
       shifts,
@@ -78776,205 +79436,464 @@ function RosterGrid({
       const row = grid[x.empId] || {};
       for (let d = 1; d <= days; d++) if (row[d]) set[row[d]] = 1;
     });
-    const order2 = {
-      G: 0,
-      M: 1,
-      E: 2,
-      N: 3,
-      O: 4
-    };
-    return Object.keys(set).sort((a, b) => {
-      const ba = order2[R.bucketOf(a)] != null ? order2[R.bucketOf(a)] : 9;
-      const bb = order2[R.bucketOf(b)] != null ? order2[R.bucketOf(b)] : 9;
-      return ba - bb || a.localeCompare(b);
+    const known = ROS_CODE_ORDER.filter(c => set[c]);
+    Object.keys(set).forEach(c => {
+      if (ROS_CODE_ORDER.indexOf(c) < 0) known.push(c);
     });
+    return known;
   }, [grid, rows, days]);
-  const dayHead = d => {
-    const dt = new Date(year, month, d);
+  const onDutyOf = d => {
+    let on = 0;
+    rows.forEach(x => {
+      const b = R.bucketOf(cellCode(x.empId, d));
+      if (b && b !== 'O') on++;
+    });
+    return on;
+  };
+  const cellDown = (empId, d) => evn => {
+    if (!canEdit) return;
+    if (brush) {
+      evn.preventDefault();
+      push();
+      setPainting(true);
+      setCells(g => writeCell(g, empId, d, brush));
+      return;
+    }
+    evn.preventDefault();
+    setDrag({
+      empId,
+      d
+    });
+    setDragOver(null);
+  };
+  const cellOver = (empId, d) => () => {
+    if (painting && brush) {
+      setCells(g => writeCell(g, empId, d, brush));
+      return;
+    }
+    if (drag) {
+      const k = empId + '|' + d;
+      if (dragOver !== k) setDragOver(k);
+    }
+  };
+  const cellUp = (empId, name, d) => evn => {
+    if (brush) return;
+    if (!canEdit) {
+      editBlocked();
+      return;
+    }
+    if (drag && (drag.empId !== empId || drag.d !== d)) {
+      const a = cellCode(drag.empId, drag.d),
+        b2 = cellCode(empId, d);
+      const src = drag;
+      setQueue(q => [...q, {
+        key: src.empId + '|' + src.d + '>' + empId + '|' + d + '|' + q.length,
+        aId: src.empId,
+        aDi: src.d,
+        aCode: a,
+        bId: empId,
+        bDi: d,
+        bCode: b2,
+        mode: dragMode
+      }]);
+      setDrag(null);
+      setDragOver(null);
+      return;
+    }
+    const r = evn.currentTarget.getBoundingClientRect();
+    setDrag(null);
+    setDragOver(null);
+    setPick({
+      empId,
+      name,
+      d,
+      x: r.left + r.width / 2,
+      cellTop: r.top,
+      cellBottom: r.bottom
+    });
+  };
+  const paintStyle = (empId, d, c) => {
+    const b = R.bucketOf(c) || '',
+      col = rosBColor(b);
+    const queued = queue.some(q => q.aId === empId && q.aDi === d || q.bId === empId && q.bDi === d);
     return {
-      dow: R.DOW[dt.getDay()],
-      weekend: dt.getDay() === 5 || dt.getDay() === 6
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 40,
+      minWidth: 40,
+      padding: '4px 2px',
+      borderRadius: 6,
+      cursor: brush ? 'crosshair' : 'pointer',
+      userSelect: 'none',
+      border: '1px solid ' + (c ? b === 'O' ? 'rgba(125,145,180,.3)' : col : 'rgba(125,145,180,.22)'),
+      fontFamily: ROS_MONO,
+      fontSize: 10,
+      fontWeight: 700,
+      color: c ? b === 'O' ? '#6c7a8c' : '#fff' : '#c4ccd6',
+      background: c ? b === 'O' ? 'rgba(125,145,180,.16)' : 'linear-gradient(140deg,' + col + ',' + col + 'c4)' : 'rgba(255,255,255,.55)',
+      outline: queued ? '2px dashed #0090ca' : 'none',
+      outlineOffset: 1,
+      boxShadow: dragOver === empId + '|' + d ? '0 0 0 2px #0090ca, 0 4px 14px rgba(0,144,202,.5)' : c && b !== 'O' ? '0 2px 7px ' + col + '4d, inset 0 1px 0 rgba(255,255,255,.28)' : 'none',
+      opacity: drag && drag.empId === empId && drag.d === d ? .4 : 1,
+      letterSpacing: .2
     };
+  };
+  const goRules = () => {
+    if (view === 'month' || view === 'rules') {
+      const el = document.querySelector('[data-rules]');
+      if (el) el.scrollIntoView({
+        block: 'center',
+        behavior: 'smooth'
+      });
+    } else setView('rules');
   };
   if (loading) return React.createElement("div", {
     style: {
       display: 'grid',
       placeItems: 'center',
       height: '40vh',
-      color: MK.MUTED
+      color: '#6c7a8c'
     }
   }, "Loading the roster\u2026");
-  const stColor = (ROS_STATUS[status] || ROS_STATUS.draft).color;
+  const published = status === 'approved';
+  const showGrid = view === 'month' || view === 'swap';
+  const showFooter = view === 'month' || view === 'rules';
+  const toolBtnStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    border: '1px solid rgba(255,255,255,.9)',
+    background: 'rgba(255,255,255,.78)',
+    color: '#3c4858',
+    padding: '6px 12px',
+    borderRadius: 9,
+    fontSize: 10.5,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    boxShadow: '0 3px 10px rgba(31,59,90,.08)'
+  };
+  const brushPill = code => {
+    const on = brush === code,
+      col = rosBColor(R.bucketOf(code));
+    return React.createElement("button", {
+      key: code,
+      onClick: () => setBrush(brush === code ? '' : code),
+      title: code + ((R.BY_CODE[code] || {}).label ? ' — ' + R.BY_CODE[code].label : ''),
+      style: {
+        fontFamily: ROS_MONO,
+        fontSize: 10.5,
+        fontWeight: 700,
+        padding: '5px 12px',
+        borderRadius: 9,
+        cursor: 'pointer',
+        border: '1px solid ' + (on ? col : col + '40'),
+        color: on ? '#fff' : col,
+        background: on ? 'linear-gradient(135deg,' + col + ',' + col + 'cc)' : col + '14',
+        boxShadow: on ? '0 6px 16px ' + col + '66, inset 0 1px 0 rgba(255,255,255,.3)' : 'none',
+        transform: on ? 'translateY(-1px)' : 'none',
+        transition: 'all .18s'
+      }
+    }, code);
+  };
   return React.createElement("div", {
     style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12
+      maxWidth: 1440,
+      margin: '0 auto'
     }
   }, React.createElement("div", {
-    className: "card",
     style: {
-      padding: '15px 18px',
+      position: 'relative',
+      overflow: 'hidden',
+      background: 'linear-gradient(140deg,rgba(255,255,255,.8),rgba(230,244,253,.52))',
+      backdropFilter: 'blur(24px) saturate(1.7)',
+      WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 18,
+      boxShadow: '0 16px 44px rgba(31,59,90,.15),0 5px 18px rgba(0,144,202,.12),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '18px 22px',
       display: 'flex',
-      gap: 14,
       alignItems: 'center',
-      flexWrap: 'wrap'
+      gap: 16,
+      flexWrap: 'wrap',
+      marginBottom: 14
     }
   }, React.createElement("div", {
-    style: MK.iconBadge('blue', 40)
+    style: {
+      position: 'absolute',
+      right: -70,
+      top: -80,
+      width: 250,
+      height: 230,
+      borderRadius: '50%',
+      background: 'radial-gradient(circle,rgba(0,144,202,.2),transparent 70%)',
+      filter: 'blur(12px)',
+      pointerEvents: 'none',
+      animation: 'rosOrbFloat 18s ease-in-out infinite alternate'
+    }
+  }), React.createElement("span", {
+    style: {
+      position: 'relative',
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 44,
+      height: 44,
+      borderRadius: 13,
+      background: 'rgba(0,144,202,.16)',
+      color: '#0072a3',
+      flexShrink: 0,
+      boxShadow: '0 0 20px rgba(0,144,202,.28)'
+    }
   }, React.createElement(Ic, {
-    d: I.grid,
-    s: 19
+    d: "M3 5h18v16H3zM3 9h18M8 3v4M16 3v4M8 13h3M13 13h3M8 17h3M13 17h3",
+    s: 21,
+    sw: 1.9
   })), React.createElement("div", {
     style: {
-      flex: 1,
-      minWidth: 250
+      position: 'relative',
+      minWidth: 210
     }
   }, React.createElement("div", {
     style: {
-      fontSize: 18,
-      fontWeight: 700,
-      color: MK.INK
+      fontSize: 17,
+      fontWeight: 800,
+      color: '#16202e',
+      letterSpacing: -.2
     }
   }, "Duty roster \u2014 ", dept), React.createElement("div", {
     style: {
-      fontSize: 11.6,
-      color: MK.MUTED
+      fontSize: 12,
+      color: '#6c7a8c',
+      marginTop: 2
     }
-  }, R.MONTHS[month], " ", year, " \xB7 ", days, " days \xB7 ", rows.length, " staff \xB7 prepared by the nurse in-charge, approved by the CNS")), React.createElement("select", {
+  }, monthLabel, " \xB7 ", days, " days \xB7 ", rows.length, " staff \xB7 prepared by the nurse in-charge, approved by the CNS")), React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    style: {
+      position: 'relative',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("select", {
     value: dept,
     onChange: e => setRoute({
       view: 'rosterGrid',
       dept: e.target.value,
       year,
       month
-    })
+    }),
+    style: {
+      boxSizing: 'border-box',
+      padding: '8px 11px',
+      borderRadius: 9,
+      border: '1px solid rgba(125,145,180,.35)',
+      background: 'rgba(255,255,255,.8)',
+      fontFamily: 'inherit',
+      fontSize: 12,
+      color: '#16202e',
+      outline: 'none'
+    }
   }, depts.map(d => React.createElement("option", {
-    key: d
+    key: d,
+    value: d
   }, d))), React.createElement("span", {
     style: {
       fontSize: 11,
       fontWeight: 700,
-      padding: '5px 12px',
-      borderRadius: 14,
-      color: stColor,
-      background: stColor + '18'
+      padding: '6px 12px',
+      borderRadius: 16,
+      whiteSpace: 'nowrap',
+      color: published ? '#157a43' : '#b5670a',
+      background: published ? 'rgba(31,157,87,.13)' : 'rgba(224,138,30,.14)',
+      border: '1px solid ' + (published ? 'rgba(31,157,87,.28)' : 'rgba(224,138,30,.3)')
     }
-  }, (ROS_STATUS[status] || ROS_STATUS.draft).label), React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'rosterHome'
-    })
-  }, "All rosters"), !locked && rosCan('edit') && React.createElement("button", {
+  }, published ? 'Published' : 'Draft'), React.createElement("button", {
+    className: "ros-auto",
     onClick: autoFill,
-    title: 'Lay ' + ROS_PATTERNS[0].label + ' across the whole month, staggered nurse by nurse',
+    title: 'Lay ' + ROS_PATTERNS[0][1] + ' across the whole month, staggered nurse by nurse',
     style: {
       display: 'inline-flex',
       alignItems: 'center',
       gap: 7,
-      cursor: 'pointer',
-      fontFamily: 'inherit',
+      border: '1px solid rgba(106,82,212,.32)',
+      background: 'rgba(106,82,212,.1)',
+      color: '#5b45c4',
+      padding: '9px 14px',
+      borderRadius: 10,
       fontSize: 12,
       fontWeight: 700,
-      padding: '7px 13px',
-      borderRadius: 10,
-      color: '#5b45c4',
-      background: 'rgba(106,82,212,.1)',
-      border: '1px solid rgba(106,82,212,.32)'
+      cursor: 'pointer',
+      fontFamily: 'inherit'
     }
   }, React.createElement(Ic, {
     d: "M13 2L4 14h7l-1 8 9-12h-7z",
     s: 14,
     sw: 2
-  }), "Auto-draft"), !locked && rosCan('edit') && React.createElement("button", {
-    className: "btn",
+  }), "Auto-draft"), React.createElement("button", {
+    onClick: publish,
     disabled: busy,
-    onClick: () => save()
-  }, busy ? 'Saving…' : 'Save draft'), !locked && rosIsAdmin() && React.createElement("button", {
-    className: "btn pri",
-    disabled: busy,
-    onClick: () => {
-      if (!dirty) {
-        setStatusRemote('approved');
-        return;
-      }
-      Promise.resolve(save('submitted')).then(ok => {
-        if (ok !== false) setStatusRemote('approved');
-      });
-    }
-  }, "\u2713 Publish ", findings.length ? 'anyway' : ''), locked && rosIsAdmin() && React.createElement("button", {
-    className: "btn",
-    disabled: busy,
-    onClick: () => setStatusRemote('draft')
-  }, "Reopen")), React.createElement("div", {
     style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))',
-      gap: 12
-    }
-  }, React.createElement(RosKpi, {
-    icon: I.user,
-    tint: "blue",
-    value: rows.length,
-    label: "Staff rostered"
-  }), React.createElement(RosKpi, {
-    icon: I.grid,
-    tint: "teal",
-    value: totals.shifts,
-    label: "Shifts assigned"
-  }), React.createElement(RosKpi, {
-    icon: I.doc,
-    tint: "violet",
-    value: totals.hours,
-    label: "Total hours"
-  }), React.createElement(RosKpi, {
-    icon: I.heart,
-    tint: "amber",
-    value: totals.leave,
-    label: "Leave days"
-  }), React.createElement(RosKpi, {
-    icon: I.alert || I.pulse,
-    tint: findings.length ? 'red' : 'slate',
-    value: findings.length,
-    label: "Rule warnings",
-    tone: findings.length ? '#d23a52' : undefined
-  })), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      alignItems: 'center',
-      flexWrap: 'wrap'
-    }
-  }, React.createElement(RosterTabs, {
-    view: "rosterGrid",
-    sub: "",
-    dept: dept,
-    year: year,
-    month: month,
-    setRoute: setRoute,
-    setSub: setSub
-  }), React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }), findings.length > 0 && React.createElement("span", {
-    onClick: () => setRoute({
-      view: 'rosterReview',
-      dept,
-      year,
-      month
-    }),
-    style: {
-      cursor: 'pointer',
       display: 'inline-flex',
       alignItems: 'center',
       gap: 7,
-      fontSize: 11.4,
+      border: '1px solid rgba(255,255,255,.4)',
+      background: published ? 'linear-gradient(135deg,#2fbf7f,#157a43)' : 'linear-gradient(135deg,#27a8db,#0072a3)',
+      color: '#fff',
+      padding: '9px 15px',
+      borderRadius: 10,
+      fontSize: 12,
       fontWeight: 700,
-      padding: '6px 13px',
-      borderRadius: 14,
-      color: '#d23a52',
-      background: 'rgba(210,58,82,.12)'
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      boxShadow: '0 8px 22px rgba(0,144,202,.4)'
+    }
+  }, React.createElement(Ic, {
+    d: "M4 12l5 5L20 6",
+    s: 14,
+    sw: 2.2
+  }), published ? 'Published' : totalViol ? 'Publish anyway' : 'Send for approval'))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))',
+      gap: 12,
+      marginBottom: 14
+    }
+  }, [{
+    lbl: 'Staff rostered',
+    val: String(rows.length),
+    icd: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z',
+    bg: 'rgba(0,144,202,.1)',
+    c: '#0090ca'
+  }, {
+    lbl: 'Shifts assigned',
+    val: String(kpiVals.shifts),
+    icd: 'M3 5h18v16H3zM3 9h18',
+    bg: 'rgba(58,181,167,.14)',
+    c: '#2b9488'
+  }, {
+    lbl: 'Total hours',
+    val: String(kpiVals.hours),
+    icd: 'M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z',
+    bg: 'rgba(106,82,212,.12)',
+    c: '#5b45c4'
+  }, {
+    lbl: 'Leave days',
+    val: String(kpiVals.leave),
+    icd: 'M8 2v4M16 2v4M3 8h18M5 8v13h14V8',
+    bg: 'rgba(224,138,30,.14)',
+    c: '#b5670a'
+  }, {
+    lbl: 'Rule warnings',
+    val: String(totalViol),
+    icd: 'M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01',
+    bg: totalViol ? 'rgba(210,58,82,.12)' : 'rgba(31,157,87,.13)',
+    c: totalViol ? '#d23a52' : '#1f9d57'
+  }].map(k => React.createElement("div", {
+    key: k.lbl,
+    className: "ros-kpi",
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 15,
+      boxShadow: '0 12px 36px rgba(31,59,90,.12),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '13px 15px',
+      transition: 'transform .2s,box-shadow .25s'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      background: k.bg,
+      color: k.c,
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: k.icd,
+    s: 16,
+    sw: 1.9
+  })), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontFamily: ROS_MONO,
+      fontSize: 19,
+      fontWeight: 700,
+      color: '#16202e',
+      lineHeight: 1.15
+    }
+  }, k.val), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#6c7a8c',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, k.lbl)))))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: 14,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'inline-flex',
+      background: 'rgba(255,255,255,.55)',
+      border: '1px solid rgba(255,255,255,.9)',
+      borderRadius: 11,
+      padding: 3,
+      gap: 2,
+      boxShadow: '0 6px 18px rgba(31,59,90,.1)',
+      flexWrap: 'wrap'
+    }
+  }, ROS_VIEW_TABS.map(([v, label, icd]) => React.createElement("button", {
+    key: v,
+    onClick: () => setView(v),
+    style: rosTab(view === v)
+  }, React.createElement(Ic, {
+    d: icd,
+    s: 13,
+    sw: 2
+  }), label))), React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), totalViol > 0 && React.createElement("span", {
+    className: "ros-vio",
+    onClick: goRules,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#a92c42',
+      background: 'rgba(210,58,82,.12)',
+      border: '1px solid rgba(210,58,82,.28)',
+      padding: '6px 12px',
+      borderRadius: 16,
+      cursor: 'pointer'
     }
   }, React.createElement("span", {
     style: {
@@ -78983,261 +79902,424 @@ function RosterGrid({
       borderRadius: '50%',
       background: '#d23a52'
     }
-  }), findings.length, " rule warnings")), React.createElement("div", {
-    className: "card"
+  }), totalViol, " rule warnings")), showGrid && React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 16,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),inset 0 1px 0 rgba(255,255,255,.95)',
+      overflow: 'hidden',
+      marginBottom: 14
+    }
   }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Monthly grid"), React.createElement("span", {
-    className: "sub"
-  }, "click a cell to pick \xB7 drag a shift onto another to swap \xB7 paint with a brush \xB7 click a day heading to fill that column \xB7 \u22EF for row tools"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 11,
+      padding: '12px 16px',
+      borderBottom: '1px solid rgba(125,145,180,.18)',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("h3", {
+    style: ROS_H3
+  }, "Monthly grid"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: '#9aa6b4'
+    }
+  }, "click a cell to pick \xB7 drag a shift onto another to swap \xB7 paint with a brush"), React.createElement("span", {
     style: {
       flex: 1
     }
-  }), R.BUCKETS.map(b => React.createElement("span", {
-    key: b.id,
-    onClick: () => setFocusBucket(focusBucket === b.id ? '' : b.id),
-    style: {
-      cursor: 'pointer',
-      fontSize: 10.6,
-      fontWeight: 700,
-      padding: '3px 10px',
-      borderRadius: 12,
-      color: focusBucket === b.id ? '#fff' : b.color,
-      background: focusBucket === b.id ? b.color : b.color + '18'
-    }
-  }, b.label)), React.createElement("button", {
-    className: "btn",
-    onClick: () => setShowLegend(v => !v)
-  }, "Shift legend")), showLegend && React.createElement("div", {
-    className: "card-b",
-    style: {
-      borderBottom: '1px solid ' + MK.LINE
-    }
-  }, React.createElement(ShiftLegend, null)), !locked && rosCan('edit') && React.createElement("div", {
-    className: "card-b",
+  }), React.createElement("div", {
     style: {
       display: 'flex',
-      gap: 7,
+      gap: 6,
       flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, ROS_BUCKETS.concat([['O', 'Leave / off', '#8b98ab', '']]).map(([b, label, c]) => React.createElement("span", {
+    key: b,
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      padding: '2px 9px',
+      borderRadius: 10,
+      color: c,
+      background: c + '18',
+      whiteSpace: 'nowrap'
+    }
+  }, label)), React.createElement("button", {
+    onClick: () => setLegendOpen(v => !v),
+    style: {
+      display: 'inline-flex',
       alignItems: 'center',
-      borderBottom: '1px solid ' + MK.LINE,
-      paddingTop: 10,
-      paddingBottom: 10
+      gap: 6,
+      border: '1px solid ' + (legendOpen ? 'rgba(0,144,202,.35)' : 'rgba(125,145,180,.3)'),
+      background: legendOpen ? 'rgba(0,144,202,.1)' : 'rgba(255,255,255,.65)',
+      color: legendOpen ? '#0072a3' : '#3c4858',
+      padding: '5px 11px',
+      borderRadius: 9,
+      fontSize: 10.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      whiteSpace: 'nowrap',
+      transition: 'all .2s'
+    }
+  }, React.createElement(Ic, {
+    d: "M4 19V5a2 2 0 012-2h13v18H6a2 2 0 01-2-2zM8 7h8M8 11h8",
+    s: 12,
+    sw: 2
+  }), legendOpen ? 'Hide legend' : 'Shift legend'))), React.createElement("div", {
+    style: {
+      padding: '10px 16px',
+      borderBottom: '1px solid rgba(125,145,180,.18)',
+      background: 'linear-gradient(180deg,rgba(233,243,252,.7),rgba(255,255,255,.45))',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      flexWrap: 'wrap'
     }
   }, React.createElement("span", {
     style: {
-      fontSize: 9.6,
-      fontWeight: 700,
-      letterSpacing: .6,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 9.5,
+      fontWeight: 800,
+      letterSpacing: .8,
       textTransform: 'uppercase',
-      color: MK.FAINT
+      color: '#7d8ea8',
+      flexShrink: 0
     }
-  }, "Brush"), QUICK_BRUSH.map(code => {
-    const b = R.bucketOf(code);
-    const c = R.BUCKET_COLOR[b] || '#8aa0b8';
-    const on = brush === code;
-    return React.createElement("button", {
-      key: code,
-      onClick: () => setBrush(on ? '' : code),
-      title: (R.BY_CODE[code] || {}).label,
-      style: {
-        cursor: 'pointer',
-        font: 'inherit',
-        fontSize: 10.6,
-        fontWeight: 700,
-        padding: '4px 12px',
-        borderRadius: 9,
-        color: on ? '#fff' : c,
-        background: on ? c : c + '16',
-        border: '1px solid ' + (on ? c : 'transparent')
-      }
-    }, code);
-  }), React.createElement("span", {
+  }, React.createElement(Ic, {
+    d: "M18 3l3 3-9 9-3-3zM6 15l-3 6 6-3M9 12l3 3",
+    s: 13,
+    sw: 1.9
+  }), "Brush"), React.createElement("div", {
     style: {
-      fontSize: 11,
-      color: MK.FAINT
+      display: 'flex',
+      gap: 5,
+      flexWrap: 'wrap'
     }
-  }, brush ? 'Painting ' + brush + ' — click cells' : 'Pick a code to paint, or click a cell to choose'), React.createElement("div", {
+  }, ROS_QUICK_BRUSH.map(brushPill), brush && ROS_QUICK_BRUSH.indexOf(brush) < 0 && brushPill(brush)), React.createElement("button", {
+    onClick: () => setBrushAll(v => !v),
+    title: "Every shift & leave code in the legend, grouped by shift type",
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid ' + (brushAll ? 'rgba(0,144,202,.35)' : 'rgba(125,145,180,.3)'),
+      background: brushAll ? 'rgba(0,144,202,.1)' : 'rgba(255,255,255,.65)',
+      color: brushAll ? '#0072a3' : '#3c4858',
+      padding: '5px 11px',
+      borderRadius: 9,
+      fontSize: 10.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      whiteSpace: 'nowrap',
+      transition: 'all .2s'
+    }
+  }, "All codes ", brushAll ? '▴' : '▾'), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: brush ? '#0072a3' : '#9aa6b4',
+      background: brush ? 'rgba(0,144,202,.1)' : 'transparent',
+      border: '1px solid ' + (brush ? 'rgba(0,144,202,.24)' : 'transparent'),
+      padding: brush ? '4px 11px' : 0,
+      borderRadius: 12,
+      whiteSpace: 'nowrap'
+    }
+  }, brush ? 'Click or drag across cells to paint ' + brush : 'Pick a code to paint, or click a cell to choose'), React.createElement("span", {
     style: {
       flex: 1
     }
-  }), React.createElement("span", {
+  }), React.createElement("div", {
     style: {
-      fontSize: 9.6,
-      fontWeight: 700,
-      letterSpacing: .6,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      flexShrink: 0
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 800,
+      letterSpacing: .8,
       textTransform: 'uppercase',
-      color: MK.FAINT
+      color: '#7d8ea8'
     }
   }, "Drag"), React.createElement("div", {
     style: {
       display: 'inline-flex',
-      gap: 2,
+      background: 'rgba(255,255,255,.65)',
+      border: '1px solid rgba(255,255,255,.95)',
+      borderRadius: 9,
       padding: 3,
-      borderRadius: 10,
-      background: 'rgba(125,145,180,.14)'
+      gap: 2
     }
-  }, ['swap', 'move'].map(m => React.createElement("button", {
-    key: m,
-    onClick: () => setDragMode(m),
-    style: {
-      border: 0,
-      cursor: 'pointer',
-      font: 'inherit',
-      fontSize: 10.8,
-      fontWeight: 600,
-      padding: '4px 12px',
-      borderRadius: 8,
-      color: dragMode === m ? MK.INK : MK.MUTED,
-      background: dragMode === m ? '#fff' : 'transparent'
-    }
-  }, m === 'swap' ? 'Swap' : 'Move'))), React.createElement("button", {
-    className: "btn",
-    onClick: repeatWeek
-  }, "Repeat last week"), React.createElement("button", {
-    className: "btn",
-    onClick: () => fillBlanks('OFF')
-  }, "Fill blanks OFF"), React.createElement("button", {
-    className: "btn",
+  }, [['swap', 'Swap', 'Exchange the two shifts'], ['move', 'Move', 'Move the shift and clear the original']].map(([v, label, title]) => {
+    const on = dragMode === v;
+    return React.createElement("button", {
+      key: v,
+      onClick: () => setDragMode(v),
+      title: title,
+      style: {
+        border: 0,
+        background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent',
+        color: on ? '#fff' : '#6c7a8c',
+        padding: '5px 12px',
+        borderRadius: 7,
+        fontSize: 10.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        transition: 'all .18s',
+        boxShadow: on ? '0 4px 11px rgba(0,144,202,.35)' : 'none'
+      }
+    }, label);
+  }))), React.createElement("button", {
+    onClick: copyWeek,
+    title: "Copy the previous week into this one",
+    style: toolBtnStyle
+  }, React.createElement(Ic, {
+    d: "M8 4h10v12M4 8h10v12H4z",
+    s: 12,
+    sw: 2
+  }), "Repeat last week"), React.createElement("button", {
+    onClick: fillBlanks,
+    title: "Fill every empty cell with OFF",
+    style: toolBtnStyle
+  }, React.createElement(Ic, {
+    d: "M4 12l5 5L20 6",
+    s: 12,
+    sw: 2
+  }), "Fill blanks OFF"), React.createElement("button", {
     onClick: undo,
-    disabled: !history.current.length
-  }, "Undo")), React.createElement("div", {
-    className: "card-b",
+    title: "Undo last change",
     style: {
-      overflow: 'auto',
-      padding: 0
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid ' + (history.current.length ? 'rgba(0,144,202,.32)' : 'rgba(125,145,180,.24)'),
+      background: history.current.length ? 'rgba(0,144,202,.1)' : 'rgba(255,255,255,.5)',
+      color: history.current.length ? '#0072a3' : '#b6c0cc',
+      padding: '6px 12px',
+      borderRadius: 9,
+      fontSize: 10.5,
+      fontWeight: 700,
+      cursor: history.current.length ? 'pointer' : 'default',
+      fontFamily: 'inherit',
+      whiteSpace: 'nowrap',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: "M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3",
+    s: 12,
+    sw: 2.2
+  }), "Undo")), brushAll && React.createElement("div", {
+    style: {
+      padding: '10px 16px 12px',
+      borderBottom: '1px solid rgba(125,145,180,.18)',
+      background: 'rgba(247,251,255,.6)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, [['G', 'General', '#6a52d4'], ['M', 'Morning', '#e08a1e'], ['E', 'Evening', '#0090ca'], ['N', 'Night', '#5b45c4'], ['O', 'Leave / off', '#8b98ab']].map(([b, label, c]) => {
+    const codes = R.SHIFTS.filter(s => s.bucket === b).map(s => s.code);
+    if (!codes.length) return null;
+    return React.createElement("div", {
+      key: b,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 800,
+        letterSpacing: .8,
+        textTransform: 'uppercase',
+        color: c,
+        width: 78,
+        flexShrink: 0
+      }
+    }, label), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 5,
+        flexWrap: 'wrap'
+      }
+    }, codes.map(brushPill)));
+  }), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#9aa6b4'
+    }
+  }, "Hover a code for its hours \xB7 picking one makes it the active brush \u2014 then click or drag across cells, or click a day heading to paint the whole column.")), legendOpen && React.createElement(RosLegendPanel, null), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
     }
   }, rows.length === 0 ? React.createElement("div", {
     style: {
       padding: 34,
       textAlign: 'center',
-      color: MK.MUTED
+      color: '#6c7a8c'
     }
   }, "No active staff are assigned to ", dept, ".") : React.createElement("table", {
     style: {
       borderCollapse: 'collapse',
-      width: '100%'
+      fontSize: 11.5,
+      minWidth: 1180
     }
   }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
     style: {
       position: 'sticky',
       left: 0,
-      zIndex: 3,
-      background: '#fff',
+      zIndex: 2,
+      background: 'linear-gradient(180deg,#f6fafe,#e9f1fa)',
       textAlign: 'left',
-      padding: '8px 12px',
-      borderBottom: '1px solid ' + MK.LINE,
-      minWidth: 210,
-      fontSize: 9.4,
-      fontWeight: 700,
+      padding: '8px 10px',
+      fontSize: 9.5,
       letterSpacing: .5,
       textTransform: 'uppercase',
-      color: MK.FAINT
+      color: '#7d8ea8',
+      borderBottom: '1px solid rgba(125,145,180,.28)',
+      borderRight: '1px solid rgba(125,145,180,.2)',
+      minWidth: 190
     }
   }, "S/N \xB7 Emp-ID \xB7 Staff name \xB7 Designation"), Array.from({
     length: days
   }, (_, k) => k + 1).map(d => {
-    const h = dayHead(d);
-    const bad = (findingsByDay[d] || []).some(f => f.severity === 'high');
-    const canFill = !locked && rosCan('edit');
+    const fri = rosIsFri(year, month, d);
     return React.createElement("th", {
       key: d,
-      onClick: canFill ? () => fillCol(d) : null,
-      title: !canFill ? '' : brush ? 'Fill ' + R.MONTHS[month] + ' ' + d + ' with ' + brush + ' for every nurse' : 'Pick a brush code, then click a day heading to fill that whole column',
+      onClick: () => fillCol(d),
+      title: canEdit ? brush ? 'Fill ' + R.MONTHS[month] + ' ' + d + ' with ' + brush + ' for every nurse' : 'Pick a brush code, then click a day heading to fill that whole column' : '',
       style: {
-        padding: '4px 0',
-        width: 30,
-        borderBottom: '1px solid ' + MK.LINE,
-        cursor: canFill ? 'pointer' : 'default',
-        background: bad ? 'rgba(210,58,82,.08)' : h.weekend ? 'rgba(0,144,202,.06)' : undefined
+        padding: '6px 3px',
+        textAlign: 'center',
+        minWidth: 42,
+        borderBottom: '1px solid rgba(125,145,180,.28)',
+        background: fri ? 'rgba(0,144,202,.07)' : 'rgba(240,246,252,.9)',
+        cursor: canEdit ? 'pointer' : 'default'
       }
     }, React.createElement("div", {
       style: {
-        fontSize: 8.8,
-        color: MK.FAINT
+        fontSize: 8.5,
+        color: '#9aa6b4'
       }
-    }, h.dow), React.createElement("div", {
-      className: "num",
+    }, dowOf(d)), React.createElement("div", {
       style: {
-        fontSize: 10.4,
+        fontFamily: ROS_MONO,
+        fontSize: 10.5,
         fontWeight: 700,
-        color: MK.INK
+        color: '#3c4858'
       }
-    }, d));
-  }), ['G', 'M', 'E', 'N', 'O'].map(b => React.createElement("th", {
-    key: b,
-    style: {
-      width: 26,
-      fontSize: 9.6,
-      fontWeight: 700,
-      borderBottom: '1px solid ' + MK.LINE,
-      color: R.BUCKET_COLOR[b]
+    }, d, "-", monShort));
+  }), [['G', 26], ['M', 26], ['E', 26], ['N', 26], ['O', 26], ['Hours', 44]].map(([label, w], i, arr) => {
+    const right = arr.slice(i + 1).reduce((a, x) => a + x[1], 0);
+    return React.createElement("th", {
+      key: label,
+      style: {
+        position: 'sticky',
+        right,
+        zIndex: 3,
+        width: w,
+        minWidth: w,
+        padding: '5px 2px',
+        textAlign: 'center',
+        fontSize: 9,
+        fontWeight: 800,
+        color: '#7d8ea8',
+        borderBottom: '1px solid rgba(125,145,180,.28)',
+        borderLeft: label === 'G' ? '1px solid rgba(125,145,180,.25)' : 'none',
+        background: 'linear-gradient(180deg,#f6fafe,#e9f1fa)',
+        whiteSpace: 'nowrap'
+      }
+    }, label);
+  }))), React.createElement("tbody", null, rows.map((x, si) => {
+    const rowG = grid[x.empId] || {};
+    const counts = {
+      G: 0,
+      M: 0,
+      E: 0,
+      N: 0,
+      O: 0
+    };
+    let hrs = 0;
+    for (let d = 1; d <= days; d++) {
+      const c = rowG[d];
+      const b = R.bucketOf(c);
+      if (b) counts[b]++;
+      hrs += R.hoursOf(c);
     }
-  }, b)), React.createElement("th", {
-    style: {
-      width: 46,
-      fontSize: 9.4,
-      fontWeight: 700,
-      borderBottom: '1px solid ' + MK.LINE,
-      color: MK.FAINT
-    }
-  }, "HOURS"))), React.createElement("tbody", null, rows.map((x, k) => {
-    const row = grid[x.empId] || {};
-    const t = R.totalsFor(row, days);
     return React.createElement("tr", {
-      key: x.empId
+      key: x.empId,
+      className: "ros-trow",
+      style: {
+        background: si % 2 ? 'rgba(244,249,254,.5)' : 'transparent',
+        transition: 'background .15s'
+      }
     }, React.createElement("td", {
       style: {
         position: 'sticky',
         left: 0,
-        zIndex: 2,
-        background: '#fff',
-        padding: '4px 12px',
-        borderBottom: '1px solid rgba(125,145,180,.1)'
+        zIndex: 1,
+        background: 'rgba(250,252,255,.98)',
+        padding: '4px 9px',
+        borderBottom: '1px solid rgba(125,145,180,.14)',
+        borderRight: '1px solid rgba(125,145,180,.2)'
       }
     }, React.createElement("div", {
       style: {
         display: 'flex',
-        gap: 8,
-        alignItems: 'center'
+        alignItems: 'center',
+        gap: 8
       }
-    }, React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 9.6,
-        color: MK.FAINT,
-        minWidth: 14
-      }
-    }, k + 1), React.createElement("div", {
-      style: MK.av(x.name, 28)
-    }, MK.initials(x.name)), React.createElement("div", {
+    }, React.createElement(MK.Av, {
+      name: x.name,
+      empId: x.empId,
+      size: 28,
+      radius: rosAvRadius(28)
+    }), React.createElement("div", {
       style: {
         minWidth: 0,
         flex: 1
       }
     }, React.createElement("div", {
       style: {
-        fontWeight: 700,
-        fontSize: 11.8,
-        color: MK.INK,
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis'
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#16202e',
+        whiteSpace: 'nowrap'
       }
     }, x.name), React.createElement("div", {
       style: {
-        fontSize: 9.6,
-        color: MK.FAINT
+        fontSize: 9.5,
+        color: '#9aa6b4',
+        whiteSpace: 'nowrap'
       }
-    }, (x.empIdShown || '—') + ' · ' + (x.desig || '—'))), !locked && rosCan('edit') && React.createElement("select", {
-      title: "Row tools",
+    }, React.createElement("span", {
+      style: {
+        fontFamily: ROS_MONO
+      }
+    }, x.empIdShown || '—'), " \xB7 ", x.desig || '—')), React.createElement("select", {
       value: "",
+      title: "Row tools",
       onChange: e => {
         const v = e.target.value;
         e.target.value = '';
-        rowTool(x.empId, v, x.name);
+        rowTool(x.empId, v);
       },
-      onClick: e => e.stopPropagation(),
       style: {
         width: 26,
         height: 24,
@@ -79249,7 +80331,7 @@ function RosterGrid({
         background: 'rgba(255,255,255,.7)',
         fontFamily: 'inherit',
         fontSize: 10,
-        color: MK.MUTED,
+        color: '#6c7a8c',
         cursor: 'pointer',
         appearance: 'none',
         WebkitAppearance: 'none',
@@ -79259,780 +80341,526 @@ function RosterGrid({
     }, React.createElement("option", {
       value: ""
     }, "\u22EF"), ROS_PATTERNS.map(p => React.createElement("option", {
-      key: p.id,
-      value: p.id
-    }, p.label)), React.createElement("option", {
+      key: p[0],
+      value: p[0]
+    }, p[1])), React.createElement("option", {
       value: "blanks"
     }, "Fill blanks OFF"), React.createElement("option", {
       value: "clear"
     }, "Clear row")))), Array.from({
       length: days
-    }, (_, q) => q + 1).map(d => {
-      const code = row[d] || '';
-      return React.createElement(ShiftCell, {
+    }, (_, k) => k + 1).map(d => {
+      const c = rowG[d] || '';
+      const sh = R.BY_CODE[c];
+      return React.createElement("td", {
         key: d,
-        code: code,
-        dim: !!focusBucket && !!code && R.bucketOf(code) !== focusBucket,
-        draggable: !locked && !!code,
-        title: code ? code + ' · ' + ((R.BY_CODE[code] || {}).label || '') : 'blank',
-        onDragStart: () => setDrag({
-          empId: x.empId,
-          day: d
-        }),
-        onDragOver: e => {
-          if (drag) e.preventDefault();
-        },
-        onDrop: e => {
-          e.preventDefault();
-          applyDrag(drag, {
-            empId: x.empId,
-            day: d
-          });
-          setDrag(null);
-        },
-        onClick: locked ? null : () => {
-          if (brush) setCell(x.empId, d, brush === code ? '' : brush);else setPick({
-            empId: x.empId,
-            day: d,
-            name: x.name
-          });
+        style: {
+          padding: 2,
+          textAlign: 'center',
+          borderBottom: '1px solid rgba(125,145,180,.14)',
+          background: rosIsFri(year, month, d) ? 'rgba(224,138,30,.09)' : 'transparent'
         }
-      });
-    }), ['G', 'M', 'E', 'N', 'O'].map(b => React.createElement("td", {
+      }, React.createElement("span", {
+        onMouseDown: cellDown(x.empId, d),
+        onMouseEnter: cellOver(x.empId, d),
+        onMouseUp: cellUp(x.empId, x.name, d),
+        title: c ? c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') : 'Click to assign a shift',
+        style: paintStyle(x.empId, d, c)
+      }, c || '·'));
+    }), ['G', 'M', 'E', 'N', 'O'].map((b, i) => React.createElement("td", {
       key: b,
-      className: "num",
       style: {
+        position: 'sticky',
+        right: (4 - i) * 26 + 44,
+        zIndex: 1,
+        width: 26,
+        minWidth: 26,
+        padding: '3px 2px',
         textAlign: 'center',
-        fontSize: 10,
-        borderBottom: '1px solid rgba(125,145,180,.1)',
-        color: t[b] ? R.BUCKET_COLOR[b] : '#c3ceda',
-        fontWeight: 700
-      }
-    }, t[b] || '')), React.createElement("td", {
-      className: "num",
-      style: {
-        textAlign: 'center',
-        fontSize: 10.6,
+        fontFamily: ROS_MONO,
+        fontSize: 10.5,
         fontWeight: 700,
-        color: MK.INK,
-        borderBottom: '1px solid rgba(125,145,180,.1)'
+        color: counts[b] ? rosBColor(b) : '#c4ccd6',
+        borderBottom: '1px solid rgba(125,145,180,.14)',
+        borderLeft: b === 'G' ? '1px solid rgba(125,145,180,.25)' : 'none',
+        background: 'rgba(247,250,254,.98)'
       }
-    }, t.hours || ''));
+    }, counts[b])), React.createElement("td", {
+      style: {
+        position: 'sticky',
+        right: 0,
+        zIndex: 1,
+        width: 44,
+        minWidth: 44,
+        padding: '3px 6px',
+        textAlign: 'right',
+        fontFamily: ROS_MONO,
+        fontSize: 10.5,
+        fontWeight: 800,
+        color: hrs > 200 ? '#a92c42' : '#16202e',
+        borderBottom: '1px solid rgba(125,145,180,.14)',
+        background: 'rgba(247,250,254,.98)',
+        whiteSpace: 'nowrap'
+      }
+    }, hrs));
   }), React.createElement("tr", null, React.createElement("td", {
-    colSpan: days + 7,
+    colSpan: 99,
     style: {
-      padding: '9px 12px',
-      background: 'rgba(125,145,180,.07)',
-      fontSize: 9.4,
-      fontWeight: 700,
-      letterSpacing: .5,
+      padding: '8px 12px',
+      background: 'linear-gradient(90deg,rgba(0,144,202,.12),rgba(58,181,167,.06))',
+      borderTop: '2px solid rgba(0,144,202,.28)',
+      borderBottom: '1px solid rgba(125,145,180,.2)',
+      fontSize: 9.5,
+      fontWeight: 800,
+      letterSpacing: .7,
       textTransform: 'uppercase',
-      color: MK.FAINT
+      color: '#7d8ea8'
     }
   }, "Staff on each shift, per day")), usedCodes.map(code => {
-    const b = R.bucketOf(code);
-    const c = R.BUCKET_COLOR[b] || '#8aa0b8';
-    let total = 0;
+    const b = R.bucketOf(code),
+      col = rosBColor(b);
+    let tot = 0;
+    const cells = Array.from({
+      length: days
+    }, (_, k) => {
+      const d = k + 1;
+      let n = 0;
+      rows.forEach(x => {
+        if ((grid[x.empId] || {})[d] === code) n++;
+      });
+      tot += n;
+      return {
+        d,
+        n
+      };
+    });
+    const sh = R.BY_CODE[code];
     return React.createElement("tr", {
-      key: code,
-      style: {
-        background: 'rgba(125,145,180,.035)'
-      }
+      key: code
     }, React.createElement("td", {
       style: {
         position: 'sticky',
         left: 0,
-        zIndex: 2,
-        background: '#f8fafc',
-        padding: '3px 12px',
-        fontSize: 10.4,
+        zIndex: 1,
+        whiteSpace: 'nowrap',
+        padding: '5px 10px',
+        textAlign: 'right',
+        fontSize: 10.5,
         fontWeight: 700,
-        color: c
+        color: col,
+        background: '#f2f7fc',
+        borderRight: '1px solid rgba(125,145,180,.2)',
+        borderBottom: '1px solid rgba(125,145,180,.1)'
       }
-    }, code, " ", React.createElement("span", {
+    }, code, sh ? ' (' + sh.label.replace(/:00/g, '').replace(/ - /g, '-').replace(/ /g, '') + ')' : ''), cells.map(c2 => React.createElement("td", {
+      key: c2.d,
       style: {
-        fontWeight: 500,
-        color: MK.FAINT
-      }
-    }, "(", (R.BY_CODE[code] || {}).label, ")")), Array.from({
-      length: days
-    }, (_, q) => q + 1).map(d => {
-      const n = rows.filter(x => (grid[x.empId] || {})[d] === code).length;
-      total += n;
-      return React.createElement("td", {
-        key: d,
-        className: "num",
-        style: {
-          textAlign: 'center',
-          fontSize: 9.6,
-          fontWeight: 700,
-          color: n ? c : '#d5dee8'
-        }
-      }, n || '·');
-    }), React.createElement("td", {
-      colSpan: "5"
-    }), React.createElement("td", {
-      className: "num",
-      style: {
+        padding: '5px 3px',
         textAlign: 'center',
-        fontSize: 10,
+        fontFamily: ROS_MONO,
+        fontSize: 10.5,
         fontWeight: 700,
-        color: c
+        color: c2.n ? col : '#dbe2ea',
+        background: c2.n ? col + '14' : 'transparent',
+        borderBottom: '1px solid rgba(125,145,180,.1)'
       }
-    }, total));
+    }, c2.n || '')), React.createElement("td", {
+      colSpan: 6,
+      style: {
+        position: 'sticky',
+        right: 0,
+        zIndex: 2,
+        width: 174,
+        minWidth: 174,
+        padding: '5px 8px',
+        textAlign: 'right',
+        fontFamily: ROS_MONO,
+        fontSize: 10.5,
+        fontWeight: 800,
+        color: col,
+        background: '#f2f7fc',
+        borderLeft: '1px solid rgba(125,145,180,.25)',
+        borderBottom: '1px solid rgba(125,145,180,.1)'
+      }
+    }, tot));
   }), React.createElement("tr", {
     style: {
-      background: 'rgba(13,28,50,.05)'
+      background: 'linear-gradient(90deg,rgba(13,28,50,.06),rgba(13,28,50,.03))'
     }
   }, React.createElement("td", {
     style: {
       position: 'sticky',
       left: 0,
-      zIndex: 2,
-      background: '#eef3fa',
-      padding: '8px 12px',
-      fontSize: 9.4,
-      fontWeight: 700,
+      zIndex: 1,
+      background: 'rgba(238,243,250,.98)',
+      padding: '8px 10px',
+      fontSize: 9.5,
+      fontWeight: 800,
       letterSpacing: .5,
       textTransform: 'uppercase',
-      color: MK.FAINT
+      color: '#7d8ea8',
+      borderRight: '1px solid rgba(125,145,180,.2)'
     }
   }, "On duty / day"), Array.from({
     length: days
-  }, (_, q) => q + 1).map(d => {
-    const on = rows.filter(x => R.isDuty((grid[x.empId] || {})[d])).length;
-    const c = !dutyNeed ? MK.MUTED : on < dutyNeed ? '#a92c42' : on === dutyNeed ? '#b5670a' : '#157a43';
+  }, (_, k) => k + 1).map(d => {
+    const on = onDutyOf(d);
+    const closed = !!ev.closedDays[d];
+    const c = closed ? '#8b98ab' : on >= 5 ? '#157a43' : on >= 4 ? '#0072a3' : on >= 3 ? '#b5670a' : '#a92c42';
     return React.createElement("td", {
       key: d,
-      className: "num",
-      title: on + ' on duty on day ' + d + (dutyNeed ? ' · unit minimum ' + dutyNeed : ''),
+      title: closed ? 'Unit off day — everyone rostered off' : on + ' on duty on day ' + d,
       style: {
         padding: '7px 3px',
         textAlign: 'center',
-        fontSize: 10.4,
+        fontFamily: ROS_MONO,
+        fontSize: 11,
         fontWeight: 800,
         color: c,
-        background: dutyNeed ? c + '1f' : 'transparent'
+        background: c + '1f'
       }
-    }, on);
+    }, closed ? 'off' : on);
   }), React.createElement("td", {
-    colSpan: "6",
+    colSpan: 6,
     style: {
-      padding: '5px 8px',
-      textAlign: 'right',
+      position: 'sticky',
+      right: 0,
+      zIndex: 2,
+      width: 174,
+      minWidth: 174,
+      padding: '5px 6px',
       fontSize: 9,
-      color: MK.FAINT,
-      background: '#eef3fa'
+      color: '#9aa6b4',
+      textAlign: 'right',
+      background: 'rgba(238,243,250,.98)',
+      borderLeft: '1px solid rgba(125,145,180,.25)'
     }
-  }, "low = red")))))), findings.length > 0 && React.createElement("div", {
-    className: "card",
-    style: {
-      borderLeft: '3px solid ' + (findings.some(f => f.severity === 'high') ? '#d23a52' : '#e08a1e')
-    }
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("div", {
-    style: MK.iconBadge(findings.some(f => f.severity === 'high') ? 'red' : 'amber', 30)
-  }, React.createElement(Ic, {
-    d: I.alert || I.pulse,
-    s: 15
-  })), React.createElement("h3", null, "Rule alerts"), React.createElement("span", {
-    className: "sub"
-  }, "checked live as you edit"), React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'rosterReview',
-      dept,
-      year,
-      month
-    })
-  }, "All findings \u203A")), React.createElement("div", {
-    className: "card-b",
-    style: {
-      maxHeight: 180,
-      overflow: 'auto',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 5
-    }
-  }, findings.slice(0, 25).map((f, k) => React.createElement("div", {
-    key: k,
-    style: {
-      display: 'flex',
-      gap: 9,
-      alignItems: 'baseline',
-      fontSize: 11.6
-    }
-  }, React.createElement("span", {
-    className: "num",
-    style: {
-      minWidth: 42,
-      textAlign: 'center',
-      fontSize: 10.4,
-      padding: '2px 0',
-      borderRadius: 11,
-      color: MK.MUTED,
-      background: 'rgba(125,145,180,.16)'
-    }
-  }, R.MONTHS[month].slice(0, 3), " ", f.day), React.createElement("span", {
-    style: {
-      color: f.severity === 'high' ? '#d23a52' : f.severity === 'medium' ? '#e08a1e' : MK.MUTED
-    }
-  }, f.text))), findings.length > 25 && React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: MK.FAINT
-    }
-  }, "\u2026and ", findings.length - 25, " more."))), React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'flex',
-      gap: 9,
-      alignItems: 'center',
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("span", {
-    style: {
-      flex: 1,
-      minWidth: 200,
-      fontSize: 11.5,
-      color: MK.MUTED
-    }
-  }, locked ? 'Published and locked — reopen it to make changes.' : dirty ? 'Unsaved changes.' : 'All changes saved.', " \xB7 revision v", rev || 1), !locked && rosCan('edit') && React.createElement("button", {
-    className: "btn",
-    disabled: busy,
-    onClick: () => save('submitted')
-  }, "Submit for approval"))), pick && React.createElement(CellPicker, {
-    pick: pick,
-    current: (grid[pick.empId] || {})[pick.day],
-    month: month,
-    year: year,
-    onPick: code => {
-      setCell(pick.empId, pick.day, code);
-      setPick(null);
-    },
-    onClose: () => setPick(null)
-  }));
-}
-function CellPicker({
-  pick,
-  current,
-  month,
-  year,
-  onPick,
-  onClose
-}) {
-  useEffect(() => {
-    const k = e => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', k);
-    return () => document.removeEventListener('keydown', k);
-  }, [onClose]);
-  const node = React.createElement("div", {
-    onClick: onClose,
-    style: {
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(9,17,28,.5)',
-      zIndex: 9000,
-      display: 'grid',
-      placeItems: 'center',
-      padding: 20
-    }
-  }, React.createElement("div", {
-    onClick: e => e.stopPropagation(),
-    className: "card",
-    style: {
-      width: 'min(640px,96vw)',
-      maxHeight: '86vh',
-      overflow: 'auto'
-    }
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("div", {
-    style: {
-      fontWeight: 700
-    }
-  }, pick.name, " \u2014 ", R.MONTHS[month], " ", pick.day, ", ", year), React.createElement("div", {
-    className: "sub"
-  }, "Pick a shift code, or clear the cell")), React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12
-    }
-  }, R.BUCKETS.map(b => React.createElement("div", {
-    key: b.id
-  }, React.createElement("div", {
-    style: {
-      fontSize: 11,
-      fontWeight: 700,
-      color: b.color,
-      marginBottom: 5
-    }
-  }, b.label), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill,minmax(128px,1fr))',
-      gap: 5
-    }
-  }, R.SHIFTS.filter(s => s.bucket === b.id).map(s => React.createElement("button", {
-    key: s.code,
-    onClick: () => onPick(s.code),
-    style: {
-      textAlign: 'left',
-      padding: '6px 8px',
-      borderRadius: 7,
-      cursor: 'pointer',
-      font: 'inherit',
-      color: 'inherit',
-      border: '1px solid ' + (current === s.code ? b.color : 'var(--line,#dde3ec)'),
-      background: current === s.code ? b.color + '18' : 'transparent'
-    }
-  }, React.createElement("div", {
-    style: {
-      fontWeight: 700,
-      fontSize: 11.6,
-      color: b.color
-    }
-  }, s.code), React.createElement("div", {
-    style: {
-      fontSize: 9.6,
-      opacity: .72
-    }
-  }, s.label))))))), React.createElement("div", {
-    className: "card-h",
-    style: {
-      borderTop: '1px solid var(--line,#e3e9f1)',
-      borderBottom: 0,
-      display: 'flex',
-      gap: 8,
-      justifyContent: 'flex-end'
-    }
-  }, React.createElement("button", {
-    className: "btn",
-    onClick: () => onPick('')
-  }, "Clear cell"), React.createElement("button", {
-    className: "btn",
-    onClick: onClose
-  }, "Cancel"))));
-  try {
-    if (ReactDOM.createPortal) return ReactDOM.createPortal(node, document.body);
-  } catch (e) {}
-  return node;
-}
-function RosterWeek({
-  staffStore,
-  dept,
-  year,
-  month,
-  setRoute,
-  setSub
-}) {
-  const sheet = useRosterSheet(staffStore, dept, year, month);
-  const [week, setWeek] = useState(0);
-  const {
-    days,
-    rows,
-    grid
-  } = sheet;
-  const weeks = Math.max(1, Math.ceil(days / 7));
-  const w = Math.min(week, weeks - 1);
-  const first = w * 7 + 1;
-  const last = Math.min(days, first + 6);
-  if (sheet.loading) return React.createElement("div", {
-    style: {
-      display: 'grid',
-      placeItems: 'center',
-      height: '40vh',
-      color: MK.MUTED
-    }
-  }, "Loading the roster\u2026");
-  const tabStyle = on => ({
-    border: 0,
-    cursor: 'pointer',
-    font: 'inherit',
-    fontSize: 11.4,
-    fontWeight: 700,
-    padding: '6px 14px',
-    borderRadius: 9,
-    color: on ? '#fff' : MK.MUTED,
-    background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent'
-  });
-  return React.createElement(RosSubShell, {
-    title: 'Weekly board — ' + dept,
-    subName: "week",
-    dept: dept,
-    year: year,
-    month: month,
-    setRoute: setRoute,
-    setSub: setSub,
-    sub: R.MONTHS[month] + ' ' + year + ' · one column per day, stacked by shift'
-  }, !sheet.doc ? React.createElement(RosNotDrafted, {
-    dept: dept,
-    year: year,
-    month: month,
-    setSub: setSub
-  }) : React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("div", {
-    className: "card",
-    style: {
-      display: 'inline-flex',
-      gap: 2,
-      padding: 3,
-      borderRadius: 10
-    }
-  }, Array.from({
-    length: weeks
-  }, (_, i) => React.createElement("button", {
-    key: i,
-    onClick: () => setWeek(i),
-    style: tabStyle(i === w)
-  }, "Week ", i + 1))), React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      color: MK.MUTED
-    }
-  }, "Days ", first, "\u2013", last, " of ", R.MONTHS[month], " ", year)), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
-      gap: 12
-    }
-  }, Array.from({
-    length: last - first + 1
-  }, (_, i) => first + i).map(d => {
-    const cov = R.coverageFor(grid, rows.map(r => r.empId), d);
-    const holiday = rosIsHoliday(year, month, d);
+  }, "low = red")))))), view === 'week' && (() => {
+    const weeks = Math.max(1, Math.ceil(days / 7));
+    const w = Math.min(week, weeks - 1);
+    const first = w * 7 + 1,
+      last = Math.min(days, first + 6);
     return React.createElement("div", {
-      key: d,
-      className: "card",
       style: {
-        borderRadius: 14
-      }
-    }, React.createElement("div", {
-      style: {
-        padding: '9px 11px',
-        color: '#fff',
-        background: holiday ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,rgba(13,28,50,.92),rgba(8,17,32,.88))'
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: .6,
-        textTransform: 'uppercase',
-        opacity: .85
-      }
-    }, rosDow(year, month, d)), React.createElement("div", {
-      className: "num",
-      style: {
-        fontSize: 16,
-        fontWeight: 800
-      }
-    }, d)), React.createElement("div", {
-      style: {
-        padding: '9px 10px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8
-      }
-    }, ROS_DUTY.map(b => {
-      const ids = cov.names[b.id];
-      const short = ids.length < rosNeed(sheet.rules, b.id);
-      return React.createElement("div", {
-        key: b.id
-      }, React.createElement("div", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          marginBottom: 4
-        }
-      }, React.createElement("span", {
-        style: {
-          width: 8,
-          height: 8,
-          borderRadius: 3,
-          background: b.color,
-          flexShrink: 0
-        }
-      }), React.createElement("span", {
-        style: {
-          fontSize: 9.5,
-          fontWeight: 800,
-          letterSpacing: .5,
-          textTransform: 'uppercase',
-          color: '#7d8ea8'
-        }
-      }, b.label), React.createElement("span", {
-        style: {
-          flex: 1
-        }
-      }), React.createElement("span", {
-        className: "num",
-        style: {
-          fontSize: 9.5,
-          fontWeight: 700,
-          padding: '1px 6px',
-          borderRadius: 8,
-          color: short ? '#a92c42' : MK.MUTED,
-          background: short ? 'rgba(210,58,82,.12)' : 'rgba(125,145,180,.14)'
-        }
-      }, ids.length)), React.createElement("div", {
-        style: {
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 3
-        }
-      }, ids.map(id => {
-        const p = rows.find(r => r.empId === id) || {};
-        const code = (grid[id] || {})[d];
-        return React.createElement("div", {
-          key: id,
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 11,
-            color: MK.BODY
-          }
-        }, React.createElement("span", {
-          className: "num",
-          style: {
-            fontSize: 9.5,
-            fontWeight: 700,
-            color: '#fff',
-            background: b.color,
-            padding: '1px 5px',
-            borderRadius: 5,
-            flexShrink: 0
-          }
-        }, code), React.createElement("span", {
-          style: {
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis'
-          }
-        }, p.name || id));
-      })));
-    })));
-  }))));
-}
-function RosterDay({
-  staffStore,
-  dept,
-  year,
-  month,
-  setRoute,
-  setSub,
-  focusDay
-}) {
-  const sheet = useRosterSheet(staffStore, dept, year, month);
-  const now = new Date();
-  const [day, setDay] = useState(() => focusDay || (now.getFullYear() === year && now.getMonth() === month ? now.getDate() : 1));
-  const {
-    days,
-    rows,
-    grid
-  } = sheet;
-  const d = Math.min(Math.max(1, day), days);
-  if (sheet.loading) return React.createElement("div", {
-    style: {
-      display: 'grid',
-      placeItems: 'center',
-      height: '40vh',
-      color: MK.MUTED
-    }
-  }, "Loading the roster\u2026");
-  const ids = rows.map(r => r.empId);
-  const cov = R.coverageFor(grid, ids, d);
-  const on = cov.G + cov.M + cov.E + cov.N;
-  const covC = rosDayOk(cov, sheet.rules) ? '#157a43' : '#a92c42';
-  const arrow = {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    border: '1px solid rgba(125,145,180,.3)',
-    background: 'rgba(255,255,255,.7)',
-    color: MK.BODY,
-    cursor: 'pointer',
-    display: 'grid',
-    placeItems: 'center'
-  };
-  return React.createElement(RosSubShell, {
-    title: 'Day view — ' + dept,
-    subName: "day",
-    dept: dept,
-    year: year,
-    month: month,
-    setRoute: setRoute,
-    setSub: setSub,
-    sub: R.MONTHS[month] + ' ' + year + ' · who is on each shift, and what is uncovered'
-  }, !sheet.doc ? React.createElement(RosNotDrafted, {
-    dept: dept,
-    year: year,
-    month: month,
-    setSub: setSub
-  }) : React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 11,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("button", {
-    style: {
-      ...arrow,
-      opacity: d <= 1 ? .4 : 1
-    },
-    disabled: d <= 1,
-    onClick: () => setDay(Math.max(1, d - 1)),
-    title: "Previous day"
-  }, React.createElement(Ic, {
-    d: I.chevR,
-    s: 14,
-    style: {
-      transform: 'rotate(180deg)'
-    }
-  })), React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 800,
-      color: MK.INK
-    }
-  }, d, " ", R.MONTHS[month], " ", year, " \xB7 ", rosDow(year, month, d)), React.createElement("button", {
-    style: {
-      ...arrow,
-      opacity: d >= days ? .4 : 1
-    },
-    disabled: d >= days,
-    onClick: () => setDay(Math.min(days, d + 1)),
-    title: "Next day"
-  }, React.createElement(Ic, {
-    d: I.chevR,
-    s: 14
-  })), React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      fontWeight: 700,
-      color: covC,
-      background: covC + '16',
-      padding: '6px 12px',
-      borderRadius: 16,
-      whiteSpace: 'nowrap'
-    }
-  }, on, " of ", rows.length, " on duty")), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))',
-      gap: 13
-    }
-  }, ROS_DUTY.map(b => {
-    const list = cov.names[b.id];
-    const codes = list.map(id => (grid[id] || {})[d]);
-    return React.createElement("div", {
-      key: b.id,
-      className: "card",
-      style: {
-        position: 'relative',
-        borderRadius: 15
-      }
-    }, React.createElement("div", {
-      style: {
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        bottom: 0,
-        width: 5,
-        background: 'linear-gradient(180deg,' + b.color + ',' + b.color + '55)'
-      }
-    }), React.createElement("div", {
-      style: {
-        padding: '13px 15px 13px 20px'
+        marginBottom: 14
       }
     }, React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 9,
-        marginBottom: 10
+        gap: 10,
+        marginBottom: 12,
+        flexWrap: 'wrap'
       }
-    }, React.createElement("span", {
+    }, React.createElement("div", {
       style: {
-        display: 'inline-grid',
-        placeItems: 'center',
-        width: 30,
-        height: 30,
-        borderRadius: 9,
-        background: b.color + '18',
-        color: b.color,
-        flexShrink: 0
-      }
-    }, React.createElement(Ic, {
-      d: ROS_BUCKET_ICON[b.id],
-      s: 15
-    })), React.createElement("div", null, React.createElement("div", {
-      style: {
-        fontSize: 13,
-        fontWeight: 700,
-        color: MK.INK
-      }
-    }, b.label), React.createElement("div", {
-      style: {
-        fontSize: 10.5,
-        color: MK.FAINT
-      }
-    }, rosWindow(b.id, codes))), React.createElement("span", {
-      style: {
-        flex: 1
-      }
-    }), React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 12,
-        fontWeight: 800,
-        padding: '2px 9px',
+        display: 'inline-flex',
+        background: 'rgba(255,255,255,.55)',
+        border: '1px solid rgba(255,255,255,.9)',
         borderRadius: 10,
-        color: list.length ? b.color : '#a92c42',
-        background: list.length ? b.color + '16' : 'rgba(210,58,82,.12)'
+        padding: 3,
+        gap: 2
       }
-    }, list.length)), React.createElement("div", {
+    }, Array.from({
+      length: weeks
+    }, (_, i) => React.createElement("button", {
+      key: i,
+      onClick: () => setWeek(i),
+      style: rosTab(i === w)
+    }, "Week ", i + 1))), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, "Days ", first, "\u2013", last, " of ", monthLabel)), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+        gap: 12
+      }
+    }, Array.from({
+      length: last - first + 1
+    }, (_, i) => first + i).map(d => {
+      const fri = rosIsFri(year, month, d);
+      return React.createElement("div", {
+        key: d,
+        style: {
+          background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+          backdropFilter: 'blur(24px) saturate(1.7)',
+          WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+          border: '1px solid rgba(255,255,255,.92)',
+          borderRadius: 14,
+          boxShadow: '0 12px 34px rgba(31,59,90,.12),inset 0 1px 0 rgba(255,255,255,.95)',
+          overflow: 'hidden'
+        }
+      }, React.createElement("div", {
+        style: {
+          padding: '9px 11px',
+          background: fri ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,rgba(13,28,50,.92),rgba(8,17,32,.88))',
+          color: '#fff'
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: .6,
+          textTransform: 'uppercase',
+          opacity: .85
+        }
+      }, dowOf(d)), React.createElement("div", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 16,
+          fontWeight: 800
+        }
+      }, d)), React.createElement("div", {
+        style: {
+          padding: '9px 10px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8
+        }
+      }, ROS_BUCKETS.map(([b, label, col]) => {
+        const people = [];
+        rows.forEach(x => {
+          const c = cellCode(x.empId, d);
+          if (R.bucketOf(c) === b) people.push({
+            name: x.name,
+            code: c
+          });
+        });
+        const short = people.length < 2 && b !== 'G';
+        return React.createElement("div", {
+          key: b
+        }, React.createElement("div", {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            marginBottom: 4
+          }
+        }, React.createElement("span", {
+          style: {
+            width: 8,
+            height: 8,
+            borderRadius: 3,
+            background: col,
+            flexShrink: 0
+          }
+        }), React.createElement("span", {
+          style: {
+            fontSize: 9.5,
+            fontWeight: 800,
+            letterSpacing: .5,
+            textTransform: 'uppercase',
+            color: '#7d8ea8'
+          }
+        }, label), React.createElement("span", {
+          style: {
+            flex: 1
+          }
+        }), React.createElement("span", {
+          style: {
+            fontFamily: ROS_MONO,
+            fontSize: 9.5,
+            fontWeight: 700,
+            color: short ? '#a92c42' : '#6c7a8c',
+            background: short ? 'rgba(210,58,82,.12)' : 'rgba(125,145,180,.14)',
+            padding: '1px 6px',
+            borderRadius: 8
+          }
+        }, people.length)), React.createElement("div", {
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 3
+          }
+        }, people.map((p, i) => React.createElement("div", {
+          key: i,
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 11,
+            color: '#3c4858'
+          }
+        }, React.createElement("span", {
+          style: {
+            fontFamily: ROS_MONO,
+            fontSize: 9.5,
+            fontWeight: 700,
+            color: '#fff',
+            background: col,
+            padding: '1px 5px',
+            borderRadius: 5,
+            flexShrink: 0
+          }
+        }, p.code), React.createElement("span", {
+          style: {
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }
+        }, p.name)))));
+      })));
+    })));
+  })(), view === 'day' && (() => {
+    const d = Math.min(Math.max(1, day), days);
+    const on = onDutyOf(d);
+    const covC = on >= 4 ? '#157a43' : '#a92c42';
+    const arrow = {
+      width: 32,
+      height: 32,
+      borderRadius: 9,
+      border: '1px solid rgba(125,145,180,.3)',
+      background: 'rgba(255,255,255,.7)',
+      color: '#3c4858',
+      cursor: 'pointer',
+      display: 'grid',
+      placeItems: 'center'
+    };
+    return React.createElement("div", {
+      style: {
+        marginBottom: 14
+      }
+    }, React.createElement("div", {
       style: {
         display: 'flex',
-        flexDirection: 'column',
-        gap: 6
+        alignItems: 'center',
+        gap: 11,
+        marginBottom: 12,
+        flexWrap: 'wrap'
       }
-    }, list.map(id => {
-      const p = rows.find(r => r.empId === id) || {};
+    }, React.createElement("button", {
+      className: "ros-navbtn",
+      onClick: () => setDay(Math.max(1, d - 1)),
+      style: arrow
+    }, React.createElement(Ic, {
+      d: "M9 6l6 6-6 6",
+      s: 14,
+      sw: 2.2,
+      style: {
+        transform: 'rotate(180deg)'
+      }
+    })), React.createElement("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 800,
+        color: '#16202e'
+      }
+    }, "Day ", d, " \xB7 ", dowOf(d), " \xB7 ", monthLabel), React.createElement("button", {
+      className: "ros-navbtn",
+      onClick: () => setDay(Math.min(days, d + 1)),
+      style: arrow
+    }, React.createElement(Ic, {
+      d: "M9 6l6 6-6 6",
+      s: 14,
+      sw: 2.2
+    })), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: covC,
+        background: covC + '16',
+        padding: '6px 12px',
+        borderRadius: 16,
+        whiteSpace: 'nowrap'
+      }
+    }, on, " of ", rows.length, " on duty")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))',
+        gap: 13
+      }
+    }, ROS_BUCKETS.map(([b, label, col, icd]) => {
+      const people = [];
+      rows.forEach(x => {
+        const c = cellCode(x.empId, d);
+        if (R.bucketOf(c) === b) people.push({
+          x,
+          c
+        });
+      });
       return React.createElement("div", {
-        key: id,
+        key: b,
+        style: {
+          position: 'relative',
+          overflow: 'hidden',
+          background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+          backdropFilter: 'blur(24px) saturate(1.7)',
+          WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+          border: '1px solid rgba(255,255,255,.92)',
+          borderRadius: 15,
+          boxShadow: '0 12px 36px rgba(31,59,90,.12),inset 0 1px 0 rgba(255,255,255,.95)'
+        }
+      }, React.createElement("div", {
+        style: {
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 5,
+          background: 'linear-gradient(180deg,' + col + ',' + col + '55)'
+        }
+      }), React.createElement("div", {
+        style: {
+          padding: '13px 15px 13px 20px'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+          marginBottom: 10
+        }
+      }, React.createElement("span", {
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          width: 30,
+          height: 30,
+          borderRadius: 9,
+          background: col + '18',
+          color: col,
+          flexShrink: 0
+        }
+      }, React.createElement(Ic, {
+        d: icd,
+        s: 15,
+        sw: 1.9
+      })), React.createElement("div", null, React.createElement("div", {
+        style: {
+          fontSize: 13,
+          fontWeight: 700,
+          color: '#16202e'
+        }
+      }, label), React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          color: '#9aa6b4'
+        }
+      }, ROS_WINDOWS[b])), React.createElement("span", {
+        style: {
+          flex: 1
+        }
+      }), React.createElement("span", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 12,
+          fontWeight: 800,
+          color: people.length ? col : '#a92c42',
+          background: people.length ? col + '16' : 'rgba(210,58,82,.12)',
+          padding: '2px 9px',
+          borderRadius: 10
+        }
+      }, people.length)), React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6
+        }
+      }, people.map(p => React.createElement("div", {
+        key: p.x.empId,
         style: {
           display: 'flex',
           alignItems: 'center',
@@ -80042,9 +80870,12 @@ function RosterDay({
           borderRadius: 10,
           padding: '7px 10px'
         }
-      }, React.createElement("div", {
-        style: MK.av(p.name, 30)
-      }, MK.initials(p.name)), React.createElement("div", {
+      }, React.createElement(MK.Av, {
+        name: p.x.name,
+        empId: p.x.empId,
+        size: 30,
+        radius: rosAvRadius(30)
+      }), React.createElement("div", {
         style: {
           minWidth: 0,
           flex: 1
@@ -80053,100 +80884,70 @@ function RosterDay({
         style: {
           fontSize: 12,
           fontWeight: 600,
-          color: MK.INK,
+          color: '#16202e',
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis'
         }
-      }, p.name || id), React.createElement("div", {
+      }, p.x.name), React.createElement("div", {
         style: {
           fontSize: 10,
-          color: MK.FAINT
+          color: '#9aa6b4'
         }
-      }, p.desig || '—')), React.createElement("span", {
-        className: "num",
+      }, p.x.desig || '—')), React.createElement("span", {
         style: {
+          fontFamily: ROS_MONO,
           fontSize: 10,
           fontWeight: 700,
           color: '#fff',
-          background: b.color,
+          background: col,
           padding: '2px 7px',
           borderRadius: 6,
           flexShrink: 0
         }
-      }, (grid[id] || {})[d]));
-    }), list.length === 0 && React.createElement("div", {
-      style: {
-        fontSize: 11.5,
-        color: '#a92c42',
-        background: 'rgba(210,58,82,.09)',
-        borderRadius: 9,
-        padding: '8px 10px'
-      }
-    }, "No one rostered \u2014 this shift is uncovered."))));
-  }))));
-}
-function RosterStaff({
-  staffStore,
-  dept,
-  year,
-  month,
-  setRoute,
-  setSub
-}) {
-  const sheet = useRosterSheet(staffStore, dept, year, month);
-  const {
-    days,
-    rows,
-    grid
-  } = sheet;
-  if (sheet.loading) return React.createElement("div", {
+      }, p.c))), people.length === 0 && React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          color: '#a92c42',
+          background: 'rgba(210,58,82,.09)',
+          borderRadius: 9,
+          padding: '8px 10px'
+        }
+      }, "No one rostered \u2014 this shift is uncovered."))));
+    })));
+  })(), view === 'staff' && React.createElement("div", {
     style: {
-      display: 'grid',
-      placeItems: 'center',
-      height: '40vh',
-      color: MK.MUTED
-    }
-  }, "Loading the roster\u2026");
-  const chip = (label, c) => ({
-    fontFamily: "'IBM Plex Mono',monospace",
-    fontSize: 10,
-    fontWeight: 700,
-    color: c,
-    background: c + '16',
-    padding: '3px 9px',
-    borderRadius: 10,
-    whiteSpace: 'nowrap'
-  });
-  return React.createElement(RosSubShell, {
-    title: 'Staff timeline — ' + dept,
-    subName: "staff",
-    dept: dept,
-    year: year,
-    month: month,
-    setRoute: setRoute,
-    setSub: setSub,
-    sub: R.MONTHS[month] + ' ' + year + ' · one month of duty per nurse, with the month’s totals'
-  }, !sheet.doc ? React.createElement(RosNotDrafted, {
-    dept: dept,
-    year: year,
-    month: month,
-    setSub: setSub
-  }) : React.createElement("div", {
-    style: {
+      marginBottom: 14,
       display: 'flex',
       flexDirection: 'column',
       gap: 12
     }
-  }, rows.map(s => {
-    const row = grid[s.empId] || {};
-    const t = R.totalsFor(row, days);
-    const chips = [['G ' + t.G, '#6a52d4'], ['M ' + t.M, '#e08a1e'], ['E ' + t.E, '#0090ca'], ['N ' + t.N, '#5b45c4'], ['Off ' + t.O, '#8b98ab'], [t.hours + ' h', t.hours > 200 ? '#a92c42' : '#157a43']];
+  }, rows.map(x => {
+    const rowG = grid[x.empId] || {};
+    const counts = {
+      G: 0,
+      M: 0,
+      E: 0,
+      N: 0,
+      O: 0
+    };
+    let hrs = 0;
+    for (let d = 1; d <= days; d++) {
+      const c = rowG[d];
+      const b = R.bucketOf(c);
+      if (b) counts[b]++;
+      hrs += R.hoursOf(c);
+    }
+    const chips = [['G ' + counts.G, '#6a52d4'], ['M ' + counts.M, '#e08a1e'], ['E ' + counts.E, '#0090ca'], ['N ' + counts.N, '#5b45c4'], ['Off ' + counts.O, '#8b98ab'], [hrs + ' h', hrs > 200 ? '#a92c42' : '#157a43']];
     return React.createElement("div", {
-      key: s.empId,
-      className: "card",
+      key: x.empId,
       style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
         borderRadius: 15,
+        boxShadow: '0 12px 36px rgba(31,59,90,.12),inset 0 1px 0 rgba(255,255,255,.95)',
         padding: '13px 16px'
       }
     }, React.createElement("div", {
@@ -80157,9 +80958,12 @@ function RosterStaff({
         flexWrap: 'wrap',
         marginBottom: 10
       }
-    }, React.createElement("div", {
-      style: MK.av(s.name, 34)
-    }, MK.initials(s.name)), React.createElement("div", {
+    }, React.createElement(MK.Av, {
+      name: x.name,
+      empId: x.empId,
+      size: 34,
+      radius: rosAvRadius(34)
+    }), React.createElement("div", {
       style: {
         minWidth: 0
       }
@@ -80167,22 +80971,33 @@ function RosterStaff({
       style: {
         fontSize: 13,
         fontWeight: 700,
-        color: MK.INK
+        color: '#16202e'
       }
-    }, s.name), React.createElement("div", {
+    }, x.name), React.createElement("div", {
       style: {
         fontSize: 10.5,
-        color: MK.FAINT
+        color: '#9aa6b4'
       }
     }, React.createElement("span", {
-      className: "num"
-    }, s.empIdShown || '—'), " \xB7 ", s.desig || '—')), React.createElement("span", {
+      style: {
+        fontFamily: ROS_MONO
+      }
+    }, x.empIdShown || '—'), " \xB7 ", x.desig || '—')), React.createElement("span", {
       style: {
         flex: 1
       }
     }), chips.map(([label, c]) => React.createElement("span", {
       key: label,
-      style: chip(label, c)
+      style: {
+        fontFamily: ROS_MONO,
+        fontSize: 10,
+        fontWeight: 700,
+        color: c,
+        background: c + '16',
+        padding: '3px 9px',
+        borderRadius: 10,
+        whiteSpace: 'nowrap'
+      }
     }, label))), React.createElement("div", {
       style: {
         display: 'flex',
@@ -80192,855 +81007,564 @@ function RosterStaff({
     }, Array.from({
       length: days
     }, (_, k) => k + 1).map(d => {
-      const code = row[d] || '';
-      const b = R.bucketOf(code);
-      const col = b ? R.BUCKET_COLOR[b] : 'rgba(125,145,180,.2)';
+      const c = rowG[d] || '';
+      const b = R.bucketOf(c),
+        col = rosBColor(b);
       return React.createElement("span", {
         key: d,
-        title: R.MONTHS[month] + ' ' + d + ' · ' + (code ? code + ' — ' + ((R.BY_CODE[code] || {}).label || '') : 'not assigned'),
+        title: 'Day ' + d + ' · ' + (c || 'not assigned'),
         style: {
           display: 'inline-grid',
           placeItems: 'center',
           width: 22,
           height: 24,
           borderRadius: 5,
-          fontFamily: "'IBM Plex Mono',monospace",
+          fontFamily: ROS_MONO,
           fontSize: 9.5,
           fontWeight: 700,
-          color: b === 'O' ? MK.MUTED : '#fff',
+          color: b === 'O' ? '#6c7a8c' : '#fff',
           background: b === 'O' ? 'rgba(125,145,180,.2)' : col,
           opacity: b ? 1 : .3
         }
-      }, code ? code[0] : '·');
+      }, c ? c.replace(/[^A-Z]/g, '').slice(0, 1) || c[0] : '·');
     })));
   }), rows.length === 0 && React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-b",
     style: {
+      ...ROS_CARD15,
+      padding: 30,
       textAlign: 'center',
-      color: MK.MUTED,
-      padding: 30
+      color: '#6c7a8c'
     }
-  }, "No active staff are assigned to ", dept, "."))));
-}
-const ROS_PAID_LEAVE = R.LEAVE_CODES.filter(c => c !== 'PH');
-function RosterLeave({
-  staffStore,
-  dept,
-  year,
-  month,
-  setRoute,
-  setSub
-}) {
-  const sheet = useRosterSheet(staffStore, dept, year, month);
-  const {
-    days,
-    rows,
-    grid,
-    rules
-  } = sheet;
-  if (sheet.loading) return React.createElement("div", {
-    style: {
-      display: 'grid',
+  }, "No active staff are assigned to ", dept, ".")), view === 'leave' && (() => {
+    let off = 0,
+      paid = 0,
+      ph = 0;
+    const perNurse = [];
+    rows.forEach(x => {
+      let n = 0;
+      for (let d = 1; d <= days; d++) {
+        const c = cellCode(x.empId, d);
+        if (c === 'OFF' || c === 'DO') {
+          off++;
+          n++;
+        } else if (ROS_LEAVE_CODES.indexOf(c) >= 0) {
+          paid++;
+          n++;
+        } else if (c === 'PH') {
+          ph++;
+          n++;
+        }
+      }
+      perNurse.push(n);
+    });
+    const lowest = perNurse.length ? Math.min.apply(null, perNurse) : 0;
+    let leaveTotal = 0;
+    rows.forEach(x => {
+      for (let d = 1; d <= days; d++) if (R.bucketOf(cellCode(x.empId, d)) === 'O') leaveTotal++;
+    });
+    const ic = (bg, c) => ({
+      display: 'inline-grid',
       placeItems: 'center',
-      height: '40vh',
-      color: MK.MUTED
-    }
-  }, "Loading the roster\u2026");
-  const minOff = ((rules.weeklyOff || {}).on ? rules.weeklyOff.value || 0 : 0) * Math.ceil(days / 7);
-  const leaveLimit = (rules.leaveClash || {}).on ? rules.leaveClash.value : null;
-  let off = 0,
-    paid = 0,
-    ph = 0,
-    total = 0;
-  const awayPer = [];
-  rows.forEach(s => {
-    const row = grid[s.empId] || {};
-    let n = 0;
-    for (let d = 1; d <= days; d++) {
-      const c = row[d];
-      if (!c) continue;
-      if (R.OFF_CODES.indexOf(c) >= 0) {
-        off++;
-        n++;
-      } else if (c === 'PH') {
-        ph++;
-        n++;
-      } else if (ROS_PAID_LEAVE.indexOf(c) >= 0) {
-        paid++;
-        n++;
-      }
-      if (R.bucketOf(c) === 'O') total++;
-    }
-    awayPer.push(n);
-  });
-  const lowest = awayPer.length ? Math.min.apply(null, awayPer) : 0;
-  const kpis = [{
-    lbl: 'rest days (OFF/DO)',
-    val: off,
-    tint: 'slate',
-    icd: I.cal
-  }, {
-    lbl: 'paid leave days',
-    val: paid,
-    tint: 'amber',
-    icd: I.check
-  }, {
-    lbl: 'public holidays',
-    val: ph,
-    tint: 'violet',
-    icd: I.star
-  }, {
-    lbl: 'fewest days off',
-    val: lowest,
-    tint: lowest < minOff ? 'red' : 'green',
-    icd: I.heart
-  }];
-  const legend = [['OFF / DO', '#8b98ab'], ['AL / EL', '#b5670a'], ['CL', '#0072a3'], ['ML / FL', '#5b45c4'], ['PH', '#157a43']];
-  const mix = [['OFF', 'Off day'], ['DO', 'Day off'], ['AL', 'Annual leave'], ['CL', 'Casual leave'], ['EL', 'Earned leave'], ['ML', 'Maternity leave'], ['FL', 'Paternity leave'], ['PH', 'Public holiday']].map(([code, label]) => {
-    let n = 0;
-    rows.forEach(s => {
-      const row = grid[s.empId] || {};
-      for (let d = 1; d <= days; d++) if (row[d] === code) n++;
-    });
-    return {
-      code,
-      label,
-      n
-    };
-  });
-  const mixMax = Math.max(1, ...mix.map(m => m.n));
-  const clashes = [];
-  if (leaveLimit != null) {
-    for (let d = 1; d <= days; d++) {
-      const who = rows.filter(s => R.isLeave((grid[s.empId] || {})[d]));
-      if (who.length > leaveLimit) clashes.push({
-        day: d,
-        who
-      });
-    }
-  }
-  return React.createElement(RosSubShell, {
-    title: 'Leave calendar — ' + dept,
-    subName: "leave",
-    dept: dept,
-    year: year,
-    month: month,
-    setRoute: setRoute,
-    setSub: setSub,
-    sub: R.MONTHS[month] + ' ' + year + ' · rest, leave and the days they collide'
-  }, !sheet.doc ? React.createElement(RosNotDrafted, {
-    dept: dept,
-    year: year,
-    month: month,
-    setSub: setSub
-  }) : React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 14
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
-      gap: 12
-    }
-  }, kpis.map(k => React.createElement("div", {
-    key: k.lbl,
-    className: "card",
-    style: {
-      padding: '13px 15px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10
-    }
-  }, React.createElement("div", {
-    style: MK.iconBadge(k.tint, 32)
-  }, React.createElement(Ic, {
-    d: k.icd,
-    s: 15
-  })), React.createElement("div", {
-    style: {
-      minWidth: 0
-    }
-  }, React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 19,
-      fontWeight: 800,
-      color: MK.INK,
-      lineHeight: 1.15
-    }
-  }, k.val), React.createElement("div", {
-    style: {
-      fontSize: 10.5,
-      color: MK.MUTED,
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis'
-    }
-  }, k.lbl))))), React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h",
-    style: {
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("div", {
-    style: MK.iconBadge('amber', 26)
-  }, React.createElement(Ic, {
-    d: I.cal,
-    s: 14
-  })), React.createElement("h3", null, "Who is away \u2014 ", R.MONTHS[month], " ", year), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 5,
-      flexWrap: 'wrap'
-    }
-  }, legend.map(([label, c]) => React.createElement("span", {
-    key: label,
-    style: {
-      fontSize: 9.5,
-      fontWeight: 700,
+      width: 32,
+      height: 32,
+      borderRadius: 10,
+      background: bg,
       color: c,
-      background: c + '16',
-      border: '1px solid ' + c + '2e',
-      padding: '2px 8px',
-      borderRadius: 8,
-      whiteSpace: 'nowrap'
-    }
-  }, label)))), React.createElement("div", {
-    className: "card-b",
-    style: {
-      overflowX: 'auto'
-    }
-  }, React.createElement("table", {
-    style: {
-      borderCollapse: 'separate',
-      borderSpacing: 2,
-      fontSize: 10.5
-    }
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
-    style: {
-      textAlign: 'left',
-      padding: '3px 8px 3px 2px',
-      fontSize: 9,
-      letterSpacing: .5,
-      textTransform: 'uppercase',
-      color: '#7d8ea8',
-      minWidth: 150
-    }
-  }, "Nurse"), Array.from({
-    length: days
-  }, (_, k) => k + 1).map(d => React.createElement("th", {
-    key: d,
-    className: "num",
-    style: {
-      padding: '3px 0',
-      textAlign: 'center',
-      minWidth: 19,
-      fontSize: 9,
-      fontWeight: 700,
-      color: rosIsHoliday(year, month, d) ? '#b5670a' : MK.FAINT
-    }
-  }, d)), React.createElement("th", {
-    style: {
-      padding: '3px 4px',
-      fontSize: 9,
-      letterSpacing: .5,
-      textTransform: 'uppercase',
-      color: '#7d8ea8'
-    }
-  }, "Off"))), React.createElement("tbody", null, rows.map(s => {
-    const row = grid[s.empId] || {};
-    let offN = 0;
-    const cells = Array.from({
-      length: days
-    }, (_, k) => k + 1).map(d => {
-      const c = row[d];
-      const col = ROS_LEAVE_TONE[c] || '';
-      if (col) offN++;
-      return {
-        d,
-        c,
-        col
-      };
+      flexShrink: 0
     });
-    return React.createElement("tr", {
-      key: s.empId
-    }, React.createElement("td", {
-      style: {
-        padding: '2px 8px 2px 2px'
-      }
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 7
-      }
-    }, React.createElement("div", {
-      style: MK.av(s.name, 22)
-    }, MK.initials(s.name)), React.createElement("span", {
-      style: {
-        fontSize: 11,
-        fontWeight: 600,
-        color: MK.INK,
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis'
-      }
-    }, s.name))), cells.map(x => React.createElement("td", {
-      key: x.d,
-      style: {
-        padding: 0
-      }
-    }, React.createElement("span", {
-      title: R.MONTHS[month] + ' ' + x.d + ' · ' + (x.c || 'on duty'),
-      style: x.col ? {
-        display: 'grid',
-        placeItems: 'center',
-        width: 19,
-        height: 19,
-        borderRadius: 5,
-        fontFamily: "'IBM Plex Mono',monospace",
-        fontSize: 7.5,
-        fontWeight: 800,
-        color: '#fff',
-        background: 'linear-gradient(140deg,' + x.col + ',' + x.col + 'c4)',
-        boxShadow: '0 1px 4px ' + x.col + '55'
-      } : {
-        display: 'grid',
-        placeItems: 'center',
-        width: 19,
-        height: 19,
-        borderRadius: 5,
-        background: rosIsHoliday(year, month, x.d) ? 'rgba(224,138,30,.1)' : 'rgba(125,145,180,.09)'
-      }
-    }, x.col ? String(x.c).slice(0, 2) : ''))), React.createElement("td", {
-      className: "num",
-      style: {
-        padding: '2px 4px',
-        textAlign: 'center',
-        fontSize: 11,
-        fontWeight: 800,
-        color: offN < minOff ? '#a92c42' : '#157a43'
-      }
-    }, offN));
-  }))))), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))',
-      gap: 14,
-      alignItems: 'start'
-    }
-  }, React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Leave mix"), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("span", {
-    className: "sub"
-  }, total, " days total")), React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 10
-    }
-  }, mix.map(l => {
-    const c = ROS_LEAVE_TONE[l.code] || '#8b98ab';
+    const kpis = [{
+      lbl: 'rest days (OFF/DO)',
+      val: String(off),
+      icd: 'M8 2v4M16 2v4M3 8h18M5 8v13h14V8',
+      icStyle: ic('rgba(125,145,180,.16)', '#6c7a8c'),
+      glow: 'rgba(125,145,180,.2)'
+    }, {
+      lbl: 'paid leave days',
+      val: String(paid),
+      icd: 'M20 6L9 17l-5-5',
+      icStyle: ic('rgba(224,138,30,.14)', '#b5670a'),
+      glow: 'rgba(224,138,30,.25)'
+    }, {
+      lbl: 'public holidays',
+      val: String(ph),
+      icd: 'M12 2l2.9 6.3 6.9.8-5 4.8 1.3 6.9L12 17.5 5.9 20.8 7.2 13.9 2.2 9.1l6.9-.8z',
+      icStyle: ic('rgba(106,82,212,.12)', '#5b45c4'),
+      glow: 'rgba(106,82,212,.22)'
+    }, {
+      lbl: 'fewest days off',
+      val: String(lowest),
+      icd: 'M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01',
+      icStyle: ic(lowest < cfg.minOff ? 'rgba(210,58,82,.12)' : 'rgba(31,157,87,.13)', lowest < cfg.minOff ? '#a92c42' : '#157a43'),
+      glow: lowest < cfg.minOff ? 'rgba(210,58,82,.2)' : 'rgba(31,157,87,.2)'
+    }];
     return React.createElement("div", {
-      key: l.code,
       style: {
+        marginBottom: 14,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+        gap: 12
+      }
+    }, kpis.map(k => React.createElement("div", {
+      key: k.lbl,
+      style: {
+        position: 'relative',
+        overflow: 'hidden',
+        background: 'linear-gradient(152deg,rgba(255,255,255,.8),rgba(236,247,255,.5))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 15,
+        boxShadow: '0 12px 36px rgba(31,59,90,.12),inset 0 1px 0 rgba(255,255,255,.95)',
+        padding: '13px 15px'
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'absolute',
+        right: -26,
+        top: -30,
+        width: 96,
+        height: 88,
+        borderRadius: '50%',
+        background: 'radial-gradient(circle,' + k.glow + ',transparent 70%)',
+        filter: 'blur(8px)',
+        pointerEvents: 'none'
+      }
+    }), React.createElement("div", {
+      style: {
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
         gap: 10
       }
     }, React.createElement("span", {
-      className: "num",
+      style: k.icStyle
+    }, React.createElement(Ic, {
+      d: k.icd,
+      s: 15,
+      sw: 1.9
+    })), React.createElement("div", {
       style: {
-        fontSize: 10,
-        fontWeight: 700,
-        color: '#fff',
-        background: c,
-        padding: '2px 7px',
-        borderRadius: 6,
-        flexShrink: 0,
-        minWidth: 30,
-        textAlign: 'center'
+        minWidth: 0
       }
-    }, l.code), React.createElement("span", {
+    }, React.createElement("div", {
       style: {
-        fontSize: 11.5,
-        color: MK.BODY,
-        width: 104,
-        flexShrink: 0
+        fontFamily: ROS_MONO,
+        fontSize: 19,
+        fontWeight: 800,
+        color: '#16202e',
+        lineHeight: 1.15
       }
-    }, l.label), React.createElement("div", {
+    }, k.val), React.createElement("div", {
       style: {
-        flex: 1,
-        height: 10,
-        borderRadius: 6,
-        background: 'rgba(125,145,180,.14)',
+        fontSize: 10.5,
+        color: '#6c7a8c',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, k.lbl)))))), React.createElement("div", {
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.8),rgba(236,247,255,.5))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
         overflow: 'hidden'
       }
     }, React.createElement("div", {
       style: {
-        width: l.n / mixMax * 100 + '%',
-        height: '100%',
-        borderRadius: 5,
-        background: 'linear-gradient(90deg,' + c + ',' + c + '99)'
-      }
-    })), React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 11.5,
-        fontWeight: 800,
-        color: MK.BODY,
-        width: 26,
-        textAlign: 'right'
-      }
-    }, l.n));
-  }))), React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("div", {
-    style: MK.iconBadge('red', 26)
-  }, React.createElement(Ic, {
-    d: I.pulse,
-    s: 14
-  })), React.createElement("h3", null, "Clash days"), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("span", {
-    className: "sub"
-  }, leaveLimit == null ? 'the clash rule is switched off' : 'more than ' + leaveLimit + ' away')), React.createElement("div", null, clashes.map(c => React.createElement("div", {
-    key: c.day,
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      padding: '10px 16px',
-      borderBottom: '1px solid rgba(125,145,180,.12)'
-    }
-  }, React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 11,
-      fontWeight: 800,
-      color: '#a92c42',
-      background: 'rgba(210,58,82,.12)',
-      padding: '4px 9px',
-      borderRadius: 8,
-      flexShrink: 0,
-      minWidth: 26,
-      textAlign: 'center'
-    }
-  }, c.day), React.createElement("div", {
-    style: {
-      minWidth: 0,
-      flex: 1,
-      fontSize: 11.5,
-      color: MK.BODY
-    }
-  }, c.who.map(s => s.name).join(', ')), React.createElement("span", {
-    style: {
-      fontSize: 10.5,
-      fontWeight: 700,
-      color: '#a92c42',
-      background: 'rgba(210,58,82,.12)',
-      padding: '2px 9px',
-      borderRadius: 14
-    }
-  }, "clash"))), clashes.length === 0 && React.createElement("div", {
-    style: {
-      padding: 16,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10
-    }
-  }, React.createElement("span", {
-    style: {
-      display: 'inline-grid',
-      placeItems: 'center',
-      width: 30,
-      height: 30,
-      borderRadius: '50%',
-      background: 'rgba(31,157,87,.14)',
-      color: '#157a43',
-      flexShrink: 0
-    }
-  }, React.createElement(Ic, {
-    d: I.check,
-    s: 15,
-    sw: 3
-  })), React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: MK.BODY,
-      lineHeight: 1.5
-    }
-  }, leaveLimit == null ? 'No clash limit is set, so nothing is flagged. Turn the leave-clash rule on under Rules & policy.' : 'Leave is spread evenly — no day has more than ' + leaveLimit + ' nurse away.')))))));
-}
-function RosDayPop({
-  day,
-  rows,
-  grid,
-  dept,
-  year,
-  month,
-  rules,
-  onClose,
-  onOpenDay
-}) {
-  useEffect(() => {
-    const k = e => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', k);
-    return () => document.removeEventListener('keydown', k);
-  }, [onClose]);
-  const ids = rows.map(r => r.empId);
-  const cov = R.coverageFor(grid, ids, day);
-  const on = cov.G + cov.M + cov.E + cov.N;
-  const covC = rosDayOk(cov, rules) ? '#157a43' : '#a92c42';
-  const byId = {};
-  rows.forEach(r => {
-    byId[r.empId] = r;
-  });
-  const node = React.createElement("div", {
-    onClick: onClose,
-    style: {
-      position: 'fixed',
-      inset: 0,
-      zIndex: 4200,
-      display: 'grid',
-      placeItems: 'center',
-      background: 'rgba(31,59,90,.32)',
-      backdropFilter: 'blur(4px)',
-      WebkitBackdropFilter: 'blur(4px)',
-      padding: 18
-    }
-  }, React.createElement("div", {
-    onClick: e => e.stopPropagation(),
-    style: {
-      width: 'min(580px,92vw)',
-      maxHeight: '86vh',
-      overflowY: 'auto',
-      background: 'linear-gradient(158deg,rgba(255,255,255,.98),rgba(238,246,254,.96))',
-      border: '1px solid rgba(255,255,255,.95)',
-      borderRadius: 18,
-      boxShadow: '0 30px 80px rgba(31,59,90,.3)'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 11,
-      padding: '15px 18px',
-      borderBottom: '1px solid ' + MK.LINE,
-      background: 'linear-gradient(180deg,rgba(233,243,252,.7),rgba(255,255,255,.4))'
-    }
-  }, React.createElement("span", {
-    style: {
-      display: 'inline-grid',
-      placeItems: 'center',
-      width: 36,
-      height: 36,
-      borderRadius: 11,
-      background: 'rgba(0,144,202,.12)',
-      color: '#0072a3',
-      flexShrink: 0
-    }
-  }, React.createElement(Ic, {
-    d: I.cal,
-    s: 17
-  })), React.createElement("div", {
-    style: {
-      minWidth: 0
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 800,
-      color: MK.INK
-    }
-  }, day, " ", R.MONTHS[month], " \xB7 ", rosDow(year, month, day)), React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: MK.MUTED,
-      marginTop: 1
-    }
-  }, dept, " \xB7 ", rosIsHoliday(year, month, day) ? 'weekly holiday' : 'working day')), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("span", {
-    style: {
-      fontSize: 11,
-      fontWeight: 700,
-      color: covC,
-      background: covC + '16',
-      border: '1px solid ' + covC + '33',
-      padding: '5px 11px',
-      borderRadius: 14,
-      whiteSpace: 'nowrap',
-      flexShrink: 0
-    }
-  }, on, " of ", rows.length, " on duty"), React.createElement("span", {
-    onClick: onClose,
-    style: {
-      cursor: 'pointer',
-      color: MK.FAINT,
-      display: 'grid',
-      placeItems: 'center',
-      width: 26,
-      height: 26,
-      borderRadius: 8,
-      flexShrink: 0
-    }
-  }, React.createElement(Ic, {
-    d: I.x,
-    s: 14
-  }))), React.createElement("div", {
-    style: {
-      padding: '14px 18px',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 13
-    }
-  }, ROS_DUTY.map(b => {
-    const list = cov.names[b.id];
-    const tone = ROS_TONE[b.id];
-    return React.createElement("div", {
-      key: b.id
-    }, React.createElement("div", {
-      style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
-        marginBottom: 7
+        gap: 11,
+        padding: '12px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.18)',
+        flexWrap: 'wrap'
       }
     }, React.createElement("span", {
-      style: {
-        width: 8,
-        height: 8,
-        borderRadius: 3,
-        background: tone,
-        flexShrink: 0
-      }
-    }), React.createElement("span", {
-      style: {
-        fontSize: 10,
-        fontWeight: 800,
-        letterSpacing: .8,
-        textTransform: 'uppercase',
-        color: tone
-      }
-    }, b.label), React.createElement("span", {
-      style: {
-        fontSize: 10,
-        color: '#7d8ea8'
-      }
-    }, rosWindow(b.id, list.map(id => (grid[id] || {})[day]))), React.createElement("span", {
+      style: rosBadge('rgba(224,138,30,.14)', '#b5670a', 26)
+    }, React.createElement(Ic, {
+      d: "M3 5h18v16H3zM3 9h18M8 3v4M16 3v4",
+      s: 14,
+      sw: 1.9
+    })), React.createElement("h3", {
+      style: ROS_H3
+    }, "Who is away \u2014 ", monthLabel), React.createElement("span", {
       style: {
         flex: 1
       }
-    }), React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 11,
-        fontWeight: 800,
-        padding: '2px 8px',
-        borderRadius: 9,
-        color: list.length ? tone : '#a92c42',
-        background: list.length ? tone + '16' : 'rgba(210,58,82,.1)'
-      }
-    }, list.length)), React.createElement("div", {
+    }), React.createElement("div", {
       style: {
         display: 'flex',
-        flexDirection: 'column',
-        gap: 5
+        gap: 5,
+        flexWrap: 'wrap'
       }
-    }, list.map(id => {
-      const p = byId[id] || {};
-      const code = (grid[id] || {})[day];
-      return React.createElement("div", {
-        key: id,
+    }, [['OFF / DO', '#8b98ab'], ['AL / EL', '#b5670a'], ['CL', '#0072a3'], ['ML / FL', '#5b45c4'], ['PH', '#157a43']].map(([label, c]) => React.createElement("span", {
+      key: label,
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: c,
+        background: c + '16',
+        border: '1px solid ' + c + '2e',
+        padding: '2px 8px',
+        borderRadius: 8,
+        whiteSpace: 'nowrap'
+      }
+    }, label)))), React.createElement("div", {
+      style: {
+        overflowX: 'auto',
+        padding: '12px 16px 14px'
+      }
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'separate',
+        borderSpacing: 2,
+        fontSize: 10.5,
+        minWidth: 820
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: {
+        textAlign: 'left',
+        padding: '3px 8px 3px 2px',
+        fontSize: 9,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: '#7d8ea8',
+        minWidth: 150
+      }
+    }, "Nurse"), Array.from({
+      length: days
+    }, (_, k) => k + 1).map(d => React.createElement("th", {
+      key: d,
+      style: {
+        padding: '3px 0',
+        textAlign: 'center',
+        minWidth: 19,
+        fontFamily: ROS_MONO,
+        fontSize: 9,
+        fontWeight: 700,
+        color: rosIsFri(year, month, d) ? '#b5670a' : '#9aa6b4'
+      }
+    }, d)), React.createElement("th", {
+      style: {
+        padding: '3px 4px',
+        fontSize: 9,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: '#7d8ea8'
+      }
+    }, "Off"))), React.createElement("tbody", null, rows.map(x => {
+      let offN = 0;
+      const cells = Array.from({
+        length: days
+      }, (_, k) => {
+        const d = k + 1,
+          c = cellCode(x.empId, d);
+        const col = ROS_LEAVE_TONE[c] || '';
+        if (col) offN++;
+        return {
+          d,
+          c,
+          col
+        };
+      });
+      return React.createElement("tr", {
+        key: x.empId
+      }, React.createElement("td", {
+        style: {
+          padding: '2px 8px 2px 2px'
+        }
+      }, React.createElement("div", {
         style: {
           display: 'flex',
           alignItems: 'center',
-          gap: 9,
-          background: 'rgba(255,255,255,.85)',
-          border: '1px solid rgba(125,145,180,.2)',
-          borderRadius: 10,
-          padding: '7px 10px',
-          boxShadow: '0 2px 6px rgba(31,59,90,.05)'
+          gap: 7
         }
-      }, React.createElement("div", {
-        style: MK.av(p.name, 28)
-      }, MK.initials(p.name)), React.createElement("div", {
+      }, React.createElement(MK.Av, {
+        name: x.name,
+        empId: x.empId,
+        size: 22,
+        radius: rosAvRadius(22)
+      }), React.createElement("span", {
         style: {
-          minWidth: 0,
-          flex: 1
-        }
-      }, React.createElement("div", {
-        style: {
-          fontSize: 12,
+          fontSize: 11,
           fontWeight: 600,
-          color: MK.INK,
+          color: '#16202e',
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis'
         }
-      }, p.name || id), React.createElement("div", {
+      }, x.name))), cells.map(c2 => React.createElement("td", {
+        key: c2.d,
         style: {
-          fontSize: 10,
-          color: MK.FAINT
+          padding: 0
         }
-      }, p.desig || '—')), React.createElement("span", {
-        className: "num",
+      }, React.createElement("span", {
+        title: 'Day ' + c2.d + ' · ' + (c2.c || 'on duty'),
+        style: c2.col ? {
+          display: 'grid',
+          placeItems: 'center',
+          width: 19,
+          height: 19,
+          borderRadius: 5,
+          fontFamily: ROS_MONO,
+          fontSize: 7.5,
+          fontWeight: 800,
+          color: '#fff',
+          background: 'linear-gradient(140deg,' + c2.col + ',' + c2.col + 'c4)',
+          boxShadow: '0 1px 4px ' + c2.col + '55'
+        } : {
+          display: 'grid',
+          placeItems: 'center',
+          width: 19,
+          height: 19,
+          borderRadius: 5,
+          background: rosIsFri(year, month, c2.d) ? 'rgba(224,138,30,.1)' : 'rgba(125,145,180,.09)'
+        }
+      }, c2.col ? c2.c.slice(0, 2) : ''))), React.createElement("td", {
         style: {
+          padding: '2px 4px',
+          textAlign: 'center',
+          fontFamily: ROS_MONO,
+          fontSize: 11,
+          fontWeight: 800,
+          color: offN < cfg.minOff ? '#a92c42' : '#157a43'
+        }
+      }, offN));
+    }))))), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))',
+        gap: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.8),rgba(236,247,255,.5))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '12px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.18)'
+      }
+    }, React.createElement("h3", {
+      style: ROS_H3
+    }, "Leave mix"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#9aa6b4'
+      }
+    }, leaveTotal, " days total")), React.createElement("div", {
+      style: {
+        padding: '13px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10
+      }
+    }, [['OFF', 'Off day'], ['DO', 'Day off'], ['AL', 'Annual leave'], ['CL', 'Casual leave'], ['EL', 'Earned leave'], ['ML', 'Maternity leave'], ['PH', 'Public holiday']].map(([code, label]) => {
+      let n = 0;
+      rows.forEach(x => {
+        for (let d = 1; d <= days; d++) if (cellCode(x.empId, d) === code) n++;
+      });
+      const c = code === 'OFF' || code === 'DO' ? '#8b98ab' : '#b5670a';
+      return React.createElement("div", {
+        key: code,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: ROS_MONO,
           fontSize: 10,
           fontWeight: 700,
           color: '#fff',
-          background: R.BUCKET_COLOR[b.id],
+          background: c,
           padding: '2px 7px',
           borderRadius: 6,
-          flexShrink: 0
+          flexShrink: 0,
+          minWidth: 30,
+          textAlign: 'center'
         }
       }, code), React.createElement("span", {
-        className: "num",
         style: {
-          fontSize: 10,
-          color: MK.MUTED,
-          whiteSpace: 'nowrap'
+          fontSize: 11.5,
+          color: '#3c4858',
+          width: 104,
+          flexShrink: 0
         }
-      }, (R.BY_CODE[code] || {}).label || ''));
-    }), list.length === 0 && React.createElement("div", {
+      }, label), React.createElement("div", {
+        style: {
+          flex: 1,
+          height: 10,
+          borderRadius: 6,
+          background: 'rgba(125,145,180,.14)',
+          overflow: 'hidden'
+        }
+      }, React.createElement("div", {
+        style: {
+          width: Math.min(100, n / Math.max(1, rows.length * 2) * 100) + '%',
+          height: '100%',
+          borderRadius: 5,
+          background: 'linear-gradient(90deg,' + c + ',' + c + '99)',
+          animation: 'rosGrowW .7s cubic-bezier(.2,.7,.3,1)'
+        }
+      })), React.createElement("span", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 11.5,
+          fontWeight: 800,
+          color: '#3c4858',
+          width: 26,
+          textAlign: 'right'
+        }
+      }, n));
+    }))), React.createElement("div", {
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.8),rgba(236,247,255,.5))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '12px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.18)'
+      }
+    }, React.createElement("span", {
+      style: rosBadge('rgba(210,58,82,.12)', '#a92c42', 26)
+    }, React.createElement(Ic, {
+      d: "M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01",
+      s: 14,
+      sw: 2
+    })), React.createElement("h3", {
+      style: ROS_H3
+    }, "Clash days"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
       style: {
         fontSize: 11,
-        fontWeight: 600,
-        color: '#a92c42',
-        background: 'rgba(210,58,82,.09)',
-        border: '1px solid rgba(210,58,82,.22)',
-        borderRadius: 9,
-        padding: '7px 10px'
+        color: '#9aa6b4'
       }
-    }, "Uncovered \u2014 no one rostered.")));
-  }), React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 9,
-      flexWrap: 'wrap',
-      borderTop: '1px solid ' + MK.LINE,
-      paddingTop: 12
-    }
-  }, React.createElement("span", {
-    style: {
-      fontSize: 10,
-      fontWeight: 800,
-      letterSpacing: .8,
-      textTransform: 'uppercase',
-      color: '#7d8ea8'
-    }
-  }, "Off / leave"), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 5,
-      flexWrap: 'wrap',
-      flex: 1
-    }
-  }, cov.names.O.map(id => React.createElement("span", {
-    key: id,
-    style: {
-      fontSize: 10,
-      fontWeight: 600,
-      color: MK.MUTED,
-      background: 'rgba(255,255,255,.8)',
-      border: '1px solid rgba(125,145,180,.25)',
-      padding: '3px 9px',
-      borderRadius: 10,
-      whiteSpace: 'nowrap'
-    }
-  }, String((byId[id] || {}).name || id).split(' ')[0], " \xB7 ", (grid[id] || {})[day])), cov.names.O.length === 0 && React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: MK.FAINT
-    }
-  }, "Everyone on duty")), React.createElement("button", {
-    onClick: onOpenDay,
-    style: {
-      border: '1px solid rgba(0,144,202,.3)',
-      background: 'rgba(0,144,202,.09)',
-      color: '#0072a3',
-      padding: '7px 13px',
-      borderRadius: 9,
-      fontSize: 11.5,
-      fontWeight: 700,
-      cursor: 'pointer',
-      font: 'inherit',
-      flexShrink: 0
-    }
-  }, "Open day view \u203A")))));
-  try {
-    if (ReactDOM.createPortal) return ReactDOM.createPortal(node, document.body);
-  } catch (e) {}
-  return node;
-}
-function RosterCalendar({
-  staffStore,
-  dept,
-  year,
-  month,
-  setRoute,
-  setSub,
-  setFocusDay
-}) {
-  const sheet = useRosterSheet(staffStore, dept, year, month);
-  const [pop, setPop] = useState(0);
-  const {
-    days,
-    rows,
-    grid,
-    rules
-  } = sheet;
-  if (sheet.loading) return React.createElement("div", {
-    style: {
-      display: 'grid',
-      placeItems: 'center',
-      height: '40vh',
-      color: MK.MUTED
-    }
-  }, "Loading the roster\u2026");
-  const ids = rows.map(r => r.empId);
-  const cells = [];
-  for (let i = 0; i < rosCol(year, month, 1); i++) cells.push(null);
-  for (let d = 1; d <= days; d++) cells.push(d);
-  while (cells.length % 7) cells.push(null);
-  const need = rosNeed(rules, 'M') + rosNeed(rules, 'E') + rosNeed(rules, 'N');
-  return React.createElement(RosSubShell, {
-    title: 'Calendar — ' + dept,
-    subName: "calendar",
-    dept: dept,
-    year: year,
-    month: month,
-    setRoute: setRoute,
-    setSub: setSub,
-    sub: R.MONTHS[month] + ' ' + year + ' · click a day for who is on it',
-    right: React.createElement("span", {
+    }, "more than ", cfg.maxLeavePerDay, " away")), React.createElement("div", null, ev.viol.leave.slice(0, 8).map((t, i) => {
+      const dayN = t.split(':')[0].replace('Day ', '');
+      return React.createElement("div", {
+        key: i,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 16px',
+          borderBottom: '1px solid rgba(125,145,180,.12)'
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 11,
+          fontWeight: 800,
+          color: '#a92c42',
+          background: 'rgba(210,58,82,.12)',
+          padding: '4px 9px',
+          borderRadius: 8,
+          flexShrink: 0,
+          minWidth: 26,
+          textAlign: 'center'
+        }
+      }, dayN), React.createElement("div", {
+        style: {
+          minWidth: 0,
+          flex: 1,
+          fontSize: 11.5,
+          color: '#3c4858'
+        }
+      }, t.split(': ')[1] || ''), React.createElement("span", {
+        style: rosChipS('#a92c42', 'rgba(210,58,82,.12)')
+      }, "clash"));
+    }), ev.viol.leave.length === 0 && React.createElement("div", {
+      style: {
+        padding: 16,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10
+      }
+    }, React.createElement("span", {
+      style: rosBadge('rgba(31,157,87,.14)', '#157a43', 30, '50%')
+    }, React.createElement(Ic, {
+      d: "M4 12l5 5L20 6",
+      s: 15,
+      sw: 3
+    })), React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: '#3c4858',
+        lineHeight: 1.5
+      }
+    }, "Leave is spread evenly \u2014 no day has more than ", cfg.maxLeavePerDay, " nurse away."))))));
+  })(), view === 'calendar' && (() => {
+    const cells = [];
+    for (let i = 0; i < rosCol(year, month, 1); i++) cells.push(null);
+    for (let d = 1; d <= days; d++) cells.push(d);
+    while (cells.length % 7) cells.push(null);
+    return React.createElement("div", {
+      style: {
+        marginBottom: 14,
+        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        padding: '12px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.18)',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("h3", {
+      style: ROS_H3
+    }, monthLabel), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#9aa6b4'
+      }
+    }, "week starts Saturday \xB7 Friday is the weekly holiday"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
       style: {
         display: 'inline-flex',
         alignItems: 'center',
@@ -81053,1057 +81577,2712 @@ function RosterCalendar({
         padding: '4px 11px',
         borderRadius: 12
       }
-    }, "Friday off")
-  }, !sheet.doc ? React.createElement(RosNotDrafted, {
-    dept: dept,
-    year: year,
-    month: month,
-    setSub: setSub
-  }) : React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h",
-    style: {
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("h3", null, R.MONTHS[month], " ", year), React.createElement("span", {
-    className: "sub"
-  }, "week starts Saturday \xB7 Friday is the weekly holiday")), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(7,minmax(0,1fr))',
-      gap: 1,
-      background: 'rgba(125,145,180,.16)',
-      padding: 1
-    }
-  }, ROS_WEEK_ORDER.map(h => React.createElement("div", {
-    key: h,
-    style: {
-      padding: '8px 6px',
-      textAlign: 'center',
-      fontSize: 9.5,
-      fontWeight: 800,
-      letterSpacing: .7,
-      textTransform: 'uppercase',
-      color: h === 'Fri' ? '#b5670a' : '#7d8ea8',
-      background: h === 'Fri' ? 'rgba(224,138,30,.14)' : 'linear-gradient(180deg,#f6fafe,#e9f1fa)'
-    }
-  }, h)), cells.map((d, k) => {
-    if (!d) return React.createElement("div", {
-      key: 'b' + k,
+    }, "Friday off")), React.createElement("div", {
       style: {
-        minHeight: 92,
-        background: 'rgba(244,248,252,.5)'
+        display: 'grid',
+        gridTemplateColumns: 'repeat(7,minmax(0,1fr))',
+        gap: 1,
+        background: 'rgba(125,145,180,.16)',
+        padding: 1
       }
-    });
-    const cov = R.coverageFor(grid, ids, d);
-    const on = cov.G + cov.M + cov.E + cov.N;
-    const short = ['M', 'E', 'N'].filter(b => cov[b] < rosNeed(rules, b) && rosNeed(rules, b) > 0);
-    const cc = need === 0 ? '#5b6b80' : short.length === 0 ? '#157a43' : short.length < 3 ? '#b5670a' : '#a92c42';
-    const holiday = rosIsHoliday(year, month, d);
-    const offNames = cov.names.O.map(id => String((rows.find(r => r.empId === id) || {}).name || id).split(' ')[0]);
-    return React.createElement("div", {
-      key: d,
-      onClick: () => setPop(d),
+    }, ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(label => React.createElement("div", {
+      key: label,
       style: {
-        minHeight: 92,
-        padding: '8px 9px',
-        cursor: 'pointer',
-        transition: 'background .15s',
-        background: holiday ? 'linear-gradient(160deg,rgba(255,247,235,.95),rgba(255,241,222,.8))' : 'rgba(255,255,255,.82)'
+        padding: '8px 6px',
+        textAlign: 'center',
+        fontSize: 9.5,
+        fontWeight: 800,
+        letterSpacing: .7,
+        textTransform: 'uppercase',
+        color: label === 'Fri' ? '#b5670a' : '#7d8ea8',
+        background: label === 'Fri' ? 'rgba(224,138,30,.14)' : 'linear-gradient(180deg,#f6fafe,#e9f1fa)'
+      }
+    }, label)), cells.map((d, k) => {
+      if (!d) return React.createElement("div", {
+        key: 'b' + k,
+        style: {
+          minHeight: 92,
+          background: 'rgba(244,248,252,.5)'
+        }
+      });
+      const isFri = rosIsFri(year, month, d);
+      let on = 0;
+      const offNames = [];
+      rows.forEach(x => {
+        const b = R.bucketOf(cellCode(x.empId, d));
+        if (b && b !== 'O') on++;else if (b === 'O') offNames.push(String(x.name).split(' ')[0]);
+      });
+      const closed = !!ev.closedDays[d];
+      const cc = closed ? '#8b98ab' : on >= 5 ? '#157a43' : on >= 4 ? '#0072a3' : on >= 3 ? '#b5670a' : '#a92c42';
+      return React.createElement("div", {
+        key: d,
+        onClick: () => setDayPop(d),
+        style: {
+          minHeight: 92,
+          padding: '8px 9px',
+          cursor: 'pointer',
+          background: isFri ? 'linear-gradient(160deg,rgba(255,247,235,.95),rgba(255,241,222,.8))' : 'rgba(255,255,255,.82)',
+          transition: 'background .15s'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          marginBottom: 6
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 13,
+          fontWeight: 800,
+          color: isFri ? '#b5670a' : '#16202e'
+        }
+      }, d), React.createElement("span", {
+        style: {
+          flex: 1
+        }
+      }), React.createElement("span", {
+        style: {
+          fontSize: 9.5,
+          fontWeight: 700,
+          color: cc,
+          background: cc + '18',
+          padding: '1px 7px',
+          borderRadius: 9,
+          whiteSpace: 'nowrap'
+        }
+      }, closed ? 'off' : on + ' on')), React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 3
+        }
+      }, [['M', '#e08a1e'], ['E', '#0090ca'], ['N', '#5b45c4'], ['G', '#6a52d4']].map(([b, col]) => {
+        const n = ev.dayBucketCount(d, b);
+        return React.createElement("div", {
+          key: b,
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5
+          }
+        }, React.createElement("span", {
+          style: {
+            fontFamily: ROS_MONO,
+            fontSize: 8.5,
+            fontWeight: 800,
+            color: col,
+            width: 9,
+            flexShrink: 0
+          }
+        }, b), React.createElement("div", {
+          style: {
+            flex: 1,
+            height: 5,
+            borderRadius: 3,
+            background: 'rgba(125,145,180,.14)',
+            overflow: 'hidden'
+          }
+        }, React.createElement("div", {
+          style: {
+            width: Math.min(100, n / Math.max(1, rows.length) * 100) + '%',
+            height: '100%',
+            borderRadius: 3,
+            background: col
+          }
+        })), React.createElement("span", {
+          style: {
+            fontFamily: ROS_MONO,
+            fontSize: 9,
+            fontWeight: 700,
+            color: '#6c7a8c',
+            width: 9,
+            textAlign: 'right'
+          }
+        }, n));
+      })), offNames.length > 0 && React.createElement("div", {
+        style: {
+          marginTop: 6,
+          fontSize: 9,
+          color: '#9aa6b4',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, "off: ", offNames.slice(0, 3).join(', '), offNames.length > 3 ? ' +' + (offNames.length - 3) : ''));
+    })));
+  })(), view === 'tree' && (() => {
+    const tDay = Math.min(Math.max(1, treeDay == null ? day : treeDay), days);
+    const GROUPS = [['M', 'MORNING'], ['E', 'EVENING'], ['N', 'NIGHT'], ['G', 'GENERAL DUTY'], ['O', 'OFF / LEAVE']];
+    const tierRank = desig => {
+      const S = window.STAFF || {};
+      const nurse = S.DESIGNATIONS || [],
+        pca = S.PCA_DESIGNATIONS || [];
+      const i = nurse.indexOf(desig);
+      if (i >= 0) return nurse.length - i;
+      const j = pca.indexOf(desig);
+      if (j >= 0) return 1000 + (pca.length - j);
+      return 9000;
+    };
+    const people = rows.map(x => ({
+      x,
+      c: cellCode(x.empId, tDay),
+      b: R.bucketOf(cellCode(x.empId, tDay)) || '',
+      tier: x.desig || 'No designation recorded'
+    }));
+    const inB = b => people.filter(p => p.b === b);
+    const present = GROUPS.filter(([b]) => inB(b).length);
+    const selB = treeB && present.some(([b]) => b === treeB) ? treeB : present[0] ? present[0][0] : 'M';
+    const tiersIn = [...new Set(inB(selB).map(p => p.tier))].sort((a, b) => tierRank(a) - tierRank(b) || a.localeCompare(b));
+    const selD = treeD && tiersIn.indexOf(treeD) >= 0 ? treeD : tiersIn[0] || null;
+    const selColor = rosBColor(selB);
+    const X = [190, 470, 730, 1000],
+      W = 1360,
+      PITCH = 30,
+      LEAF_PITCH = 30;
+    const paths = [],
+      L1 = [],
+      L2 = [],
+      L3 = [];
+    const h1 = present.length * PITCH;
+    let y1 = 0;
+    const rootY0 = h1 / 2;
+    present.forEach(([b, label]) => {
+      const n = inB(b).length,
+        color = rosBColor(b),
+        on = b === selB;
+      const y = y1 + PITCH / 2;
+      y1 += PITCH;
+      L1.push({
+        b,
+        label,
+        y,
+        color,
+        on,
+        sub: n + (n === 1 ? ' nurse' : ' nurses')
+      });
+      const mx = (X[0] + X[1]) / 2;
+      paths.push({
+        d: 'M' + (X[0] + 6) + ',' + rootY0 + ' C' + mx + ',' + rootY0 + ' ' + mx + ',' + y + ' ' + (X[1] - 6) + ',' + y,
+        stroke: on ? color + 'b0' : 'rgba(125,145,180,.4)',
+        w: on ? 1.7 : 1
+      });
+    });
+    const bNode = L1.find(n => n.on) || {
+      y: rootY0
+    };
+    const h2 = tiersIn.length * PITCH;
+    let y2 = bNode.y - h2 / 2;
+    tiersIn.forEach(t => {
+      const n = inB(selB).filter(p => p.tier === t).length,
+        on = t === selD;
+      const y = y2 + PITCH / 2;
+      y2 += PITCH;
+      L2.push({
+        t,
+        y,
+        on,
+        sub: String(n)
+      });
+      const mx = (X[1] + X[2]) / 2;
+      paths.push({
+        d: 'M' + (X[1] + 6) + ',' + bNode.y + ' C' + mx + ',' + bNode.y + ' ' + mx + ',' + y + ' ' + (X[2] - 6) + ',' + y,
+        stroke: on ? selColor + 'b0' : 'rgba(125,145,180,.4)',
+        w: on ? 1.7 : 1
+      });
+    });
+    const dNode = L2.find(n => n.on) || bNode;
+    const leafRows = inB(selB).filter(p => p.tier === selD);
+    let y3 = dNode.y - leafRows.length * LEAF_PITCH / 2;
+    leafRows.forEach(p => {
+      const y = y3 + LEAF_PITCH / 2;
+      y3 += LEAF_PITCH;
+      const sh = R.BY_CODE[p.c] || {};
+      L3.push({
+        p,
+        y,
+        time: sh.label || ''
+      });
+      const mx = (X[2] + X[3]) / 2;
+      paths.push({
+        d: 'M' + (X[2] + 6) + ',' + dNode.y + ' C' + mx + ',' + dNode.y + ' ' + mx + ',' + y + ' ' + (X[3] - 5) + ',' + y,
+        stroke: 'rgba(125,145,180,.5)',
+        w: 1
+      });
+    });
+    const allY = [rootY0].concat(L1.map(n => n.y), L2.map(n => n.y), L3.map(n => n.y));
+    const shift = 34 - Math.min.apply(null, allY);
+    const H = Math.max.apply(null, allY) + shift + 34;
+    L1.forEach(n => {
+      n.y += shift;
+    });
+    L2.forEach(n => {
+      n.y += shift;
+    });
+    L3.forEach(n => {
+      n.y += shift;
+    });
+    paths.forEach(p => {
+      p.d = p.d.replace(/,(-?[\d.]+)/g, (m, v) => ',' + (Number(v) + shift).toFixed(1));
+    });
+    const rY = rootY0 + shift;
+    const onDuty = people.filter(p => p.b && p.b !== 'O').length;
+    const navBtn = {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 28,
+      height: 28,
+      borderRadius: 8,
+      border: '1px solid rgba(125,145,180,.35)',
+      background: 'rgba(255,255,255,.7)',
+      color: '#3c4858',
+      cursor: 'pointer',
+      flexShrink: 0
+    };
+    const crumb = [[dept + ' roster', true], [(GROUPS.find(g => g[0] === selB) || ['', ''])[1], true], [selD || '', !!selD]].filter(c => c[1] && c[0]);
+    return React.createElement("div", {
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+        backdropFilter: 'blur(26px) saturate(1.75)',
+        WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 42px rgba(31,59,90,.14),inset 0 1px 0 rgba(255,255,255,.95)',
+        overflow: 'hidden',
+        marginBottom: 14
       }
     }, React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
-        marginBottom: 6
+        gap: 11,
+        padding: '12px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.18)',
+        flexWrap: 'wrap'
       }
     }, React.createElement("span", {
-      className: "num",
+      style: rosBadge('rgba(0,144,202,.12)', '#0072a3', 32, 10)
+    }, React.createElement(Ic, {
+      d: "M4 12h5M14 6h6M14 12h6M14 18h6M9 6v12M9 6h5M9 18h5",
+      s: 16,
+      sw: 1.9
+    })), React.createElement("div", {
       style: {
-        fontSize: 13,
-        fontWeight: 800,
-        color: holiday ? '#b5670a' : MK.INK
+        minWidth: 0
       }
-    }, d), React.createElement("span", {
+    }, React.createElement("h3", {
+      style: ROS_H3
+    }, "Tree view \u2014 ", tDay, " ", monthLabel, " \xB7 ", dowOf(tDay)), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 11,
+        color: '#6c7a8c',
+        flexWrap: 'wrap'
+      }
+    }, crumb.map(([label], i) => React.createElement(React.Fragment, {
+      key: label + i
+    }, React.createElement("span", null, label), i < crumb.length - 1 && React.createElement("span", {
+      style: {
+        color: '#b6c0cc'
+      }
+    }, "\u203A"))))), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6
+      }
+    }, React.createElement("button", {
+      style: navBtn,
+      title: "Previous day",
+      onClick: () => setTreeDay((tDay - 2 + days) % days + 1)
+    }, React.createElement(Ic, {
+      d: "M15 6l-6 6 6 6",
+      s: 13,
+      sw: 2.2
+    })), React.createElement("select", {
+      value: String(tDay),
+      onChange: e => setTreeDay(Number(e.target.value)),
+      style: {
+        boxSizing: 'border-box',
+        padding: '7px 10px',
+        borderRadius: 9,
+        border: '1px solid rgba(125,145,180,.35)',
+        background: 'rgba(255,255,255,.8)',
+        fontFamily: 'inherit',
+        fontSize: 12,
+        color: '#16202e',
+        outline: 'none'
+      }
+    }, Array.from({
+      length: days
+    }, (_, i) => i + 1).map(n => React.createElement("option", {
+      key: n,
+      value: String(n)
+    }, n, " ", monShort, " \xB7 ", dowOf(n)))), React.createElement("button", {
+      style: navBtn,
+      title: "Next day",
+      onClick: () => setTreeDay(tDay % days + 1)
+    }, React.createElement(Ic, {
+      d: "M9 6l6 6-6 6",
+      s: 13,
+      sw: 2.2
+    })), React.createElement("button", {
+      onClick: () => {
+        setTreeB(null);
+        setTreeD(null);
+      },
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        border: '1px solid rgba(125,145,180,.35)',
+        background: 'rgba(255,255,255,.7)',
+        color: '#3c4858',
+        padding: '6px 11px',
+        borderRadius: 9,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit'
+      }
+    }, "Reset branch"))), present.length === 0 ? React.createElement("div", {
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        padding: 34,
+        textAlign: 'center',
+        gap: 6
+      }
+    }, React.createElement("div", {
+      style: {
+        opacity: .35
+      }
+    }, React.createElement(Ic, {
+      d: "M3 5h18v16H3zM3 9h18M8 3v4M16 3v4",
+      s: 30
+    })), React.createElement("div", {
+      style: {
+        fontWeight: 600
+      }
+    }, "Nothing is written against ", tDay, " ", R.MONTHS[month]), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c',
+        maxWidth: 400
+      }
+    }, "No shift code is recorded for anyone in ", dept, " on this day, so the tree has no branches to draw. Pick another day, or fill the column in on the monthly grid.")) : React.createElement("div", {
+      style: {
+        padding: '8px 12px 16px',
+        overflowX: 'auto',
+        display: 'flex'
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'relative',
+        width: W,
+        height: H,
+        flexShrink: 0
+      }
+    }, React.createElement("svg", {
+      viewBox: '0 0 ' + W + ' ' + H,
+      style: {
+        position: 'absolute',
+        inset: 0,
+        width: W,
+        height: H,
+        pointerEvents: 'none'
+      }
+    }, paths.map((p, i) => React.createElement("path", {
+      key: i,
+      d: p.d,
+      fill: "none",
+      stroke: p.stroke,
+      strokeWidth: p.w
+    }))), React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: 0,
+        top: rY - 20 + 'px',
+        width: X[0] - 16 + 'px',
+        height: 40,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: 8,
+        padding: '0 10px',
+        boxSizing: 'border-box'
+      }
+    }, React.createElement("div", {
+      style: {
+        textAlign: 'right'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 800,
+        color: '#16202e',
+        whiteSpace: 'nowrap'
+      }
+    }, dept), React.createElement("div", {
+      style: {
+        fontFamily: ROS_MONO,
+        fontSize: 10,
+        color: '#8a97a8',
+        whiteSpace: 'nowrap'
+      }
+    }, onDuty, " / ", people.length, " on duty"))), React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: X[0] - 7 + 'px',
+        top: rY - 7 + 'px',
+        width: 14,
+        height: 14,
+        borderRadius: '50%',
+        background: '#0072a3',
+        border: '2px solid #fff',
+        boxShadow: '0 0 0 4px rgba(0,114,163,.18)',
+        boxSizing: 'border-box'
+      }
+    }), L1.map(n => React.createElement(React.Fragment, {
+      key: n.b
+    }, React.createElement("div", {
+      className: "ros-treerow",
+      onClick: () => {
+        setTreeB(n.b);
+        setTreeD(null);
+      },
+      style: {
+        position: 'absolute',
+        left: 0,
+        top: n.y - 17 + 'px',
+        width: X[1] - 16 + 'px',
+        height: 34,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: 8,
+        padding: '0 12px',
+        boxSizing: 'border-box',
+        borderRadius: 10,
+        cursor: 'pointer',
+        background: n.on ? 'linear-gradient(90deg,transparent,' + n.color + '1f)' : 'transparent',
+        border: '1px solid ' + (n.on ? n.color + '3d' : 'transparent'),
+        transition: 'all .15s'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: n.on ? 800 : 600,
+        color: n.on ? n.color : '#3c4858',
+        letterSpacing: .4,
+        whiteSpace: 'nowrap'
+      }
+    }, n.label), React.createElement("span", {
+      style: {
+        fontFamily: ROS_MONO,
+        fontSize: 10,
+        fontWeight: 700,
+        color: n.color,
+        background: n.color + '1a',
+        padding: '2px 7px',
+        borderRadius: 10,
+        whiteSpace: 'nowrap'
+      }
+    }, n.sub)), React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: X[1] - 6 + 'px',
+        top: n.y - 6 + 'px',
+        width: 12,
+        height: 12,
+        borderRadius: '50%',
+        background: n.on ? n.color : '#fff',
+        border: '2px solid ' + n.color,
+        boxShadow: n.on ? '0 0 0 4px ' + n.color + '24' : 'none',
+        boxSizing: 'border-box'
+      }
+    }))), L2.map(n => React.createElement(React.Fragment, {
+      key: n.t
+    }, React.createElement("div", {
+      className: "ros-treerow",
+      onClick: () => setTreeD(n.t),
+      style: {
+        position: 'absolute',
+        left: X[1] + 20 + 'px',
+        top: n.y - 17 + 'px',
+        width: X[2] - X[1] - 36 + 'px',
+        height: 34,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: 8,
+        padding: '0 12px',
+        boxSizing: 'border-box',
+        borderRadius: 10,
+        cursor: 'pointer',
+        background: n.on ? 'linear-gradient(90deg,transparent,' + selColor + '1f)' : 'transparent',
+        border: '1px solid ' + (n.on ? selColor + '3d' : 'transparent'),
+        transition: 'all .15s'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12,
+        fontWeight: n.on ? 800 : 600,
+        color: n.on ? selColor : '#3c4858',
+        whiteSpace: 'nowrap'
+      }
+    }, n.t), React.createElement("span", {
+      style: {
+        fontFamily: ROS_MONO,
+        fontSize: 10,
+        fontWeight: 700,
+        color: selColor,
+        background: selColor + '1a',
+        padding: '2px 7px',
+        borderRadius: 10
+      }
+    }, n.sub)), React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: X[2] - 6 + 'px',
+        top: n.y - 6 + 'px',
+        width: 12,
+        height: 12,
+        borderRadius: '50%',
+        background: n.on ? selColor : '#fff',
+        border: '2px solid ' + selColor,
+        boxShadow: n.on ? '0 0 0 4px ' + selColor + '24' : 'none',
+        boxSizing: 'border-box'
+      }
+    }))), L3.map(n => React.createElement(React.Fragment, {
+      key: n.p.x.empId
+    }, React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: X[3] + 16 + 'px',
+        top: n.y - 15 + 'px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '5px 12px',
+        borderRadius: 10,
+        background: 'rgba(255,255,255,.72)',
+        border: '1px solid ' + selColor + '2e',
+        boxShadow: '0 3px 10px rgba(31,59,90,.07)',
+        whiteSpace: 'nowrap'
+      }
+    }, React.createElement(MK.Av, {
+      name: n.p.x.name,
+      empId: n.p.x.empId,
+      size: 22,
+      radius: rosAvRadius(22)
+    }), React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: '#16202e'
+      }
+    }, n.p.x.name), React.createElement("span", {
+      style: {
+        fontFamily: ROS_MONO,
+        fontSize: 10,
+        color: '#0072a3'
+      }
+    }, n.p.x.empIdShown ? 'ID ' + n.p.x.empIdShown : 'no Emp-ID'), React.createElement("span", {
+      style: {
+        fontFamily: ROS_MONO,
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: '#fff',
+        background: selColor,
+        padding: '2px 8px',
+        borderRadius: 7
+      }
+    }, n.p.c), React.createElement("span", {
+      style: {
+        fontFamily: ROS_MONO,
+        fontSize: 10.5,
+        color: '#6c7a8c'
+      }
+    }, n.time)), React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: X[3] - 5 + 'px',
+        top: n.y - 5 + 'px',
+        width: 10,
+        height: 10,
+        borderRadius: '50%',
+        background: '#fff',
+        border: '2px solid ' + selColor,
+        boxSizing: 'border-box'
+      }
+    }))))), React.createElement("div", {
+      style: {
+        padding: '10px 16px',
+        borderTop: '1px solid rgba(125,145,180,.18)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        flexWrap: 'wrap',
+        background: 'rgba(247,251,255,.55)'
+      }
+    }, ROS_BUCKETS.concat([['O', 'Off / leave', '#8b98ab', '']]).map(([b, label, c]) => React.createElement("span", {
+      key: b,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: c,
+        background: c + '18',
+        border: '1px solid ' + c + '33',
+        padding: '4px 10px',
+        borderRadius: 12,
+        whiteSpace: 'nowrap'
+      }
+    }, label)), React.createElement("span", {
       style: {
         flex: 1
       }
     }), React.createElement("span", {
       style: {
-        fontSize: 9.5,
-        fontWeight: 700,
-        color: cc,
-        background: cc + '18',
-        padding: '1px 7px',
-        borderRadius: 9,
-        whiteSpace: 'nowrap'
+        fontSize: 10.5,
+        color: '#8a97a8'
       }
-    }, on, " on")), React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 3
-      }
-    }, ['M', 'E', 'N', 'G'].map(b => React.createElement("div", {
-      key: b,
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 5
-      }
-    }, React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 8.5,
-        fontWeight: 800,
-        color: R.BUCKET_COLOR[b],
-        width: 9,
-        flexShrink: 0
-      }
-    }, b), React.createElement("div", {
-      style: {
-        flex: 1,
-        height: 5,
-        borderRadius: 3,
-        background: 'rgba(125,145,180,.14)',
-        overflow: 'hidden'
-      }
-    }, React.createElement("div", {
-      style: {
-        width: Math.min(100, cov[b] / Math.max(1, rows.length) * 100) + '%',
-        height: '100%',
-        borderRadius: 3,
-        background: R.BUCKET_COLOR[b]
-      }
-    })), React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 9,
-        fontWeight: 700,
-        color: MK.MUTED,
-        width: 9,
-        textAlign: 'right'
-      }
-    }, cov[b])))), offNames.length > 0 && React.createElement("div", {
-      style: {
-        marginTop: 6,
-        fontSize: 9,
-        color: MK.FAINT,
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis'
-      }
-    }, "off: ", offNames.slice(0, 3).join(', '), offNames.length > 3 ? ' +' + (offNames.length - 3) : ''));
-  }))), !!pop && React.createElement(RosDayPop, {
-    day: pop,
-    rows: rows,
-    grid: grid,
-    dept: dept,
-    year: year,
-    month: month,
-    rules: rules,
-    onClose: () => setPop(0),
-    onOpenDay: () => {
-      setFocusDay(pop);
-      setPop(0);
-      setSub('day');
-    }
-  }));
-}
-const ROS_TREE_GROUPS = [['M', 'MORNING'], ['E', 'EVENING'], ['N', 'NIGHT'], ['G', 'GENERAL DUTY'], ['O', 'OFF / LEAVE']];
-function rosTierRank(desig) {
-  const S = window.STAFF || {};
-  const nurse = S.DESIGNATIONS || [];
-  const pca = S.PCA_DESIGNATIONS || [];
-  const i = nurse.indexOf(desig);
-  if (i >= 0) return nurse.length - i;
-  const j = pca.indexOf(desig);
-  if (j >= 0) return 1000 + (pca.length - j);
-  return 9000;
-}
-function RosterTree({
-  staffStore,
-  dept,
-  year,
-  month,
-  setRoute,
-  setSub
-}) {
-  const sheet = useRosterSheet(staffStore, dept, year, month);
-  const now = new Date();
-  const [day, setDay] = useState(() => now.getFullYear() === year && now.getMonth() === month ? now.getDate() : 1);
-  const [openB, setOpenB] = useState('');
-  const [openD, setOpenD] = useState('');
-  const {
-    days,
-    rows,
-    grid
-  } = sheet;
-  if (sheet.loading) return React.createElement("div", {
+    }, "Click a shift, then a designation \u2014 the branch drills down one level at a time.")));
+  })(), view === 'swap' && React.createElement("div", {
     style: {
-      display: 'grid',
-      placeItems: 'center',
-      height: '40vh',
-      color: MK.MUTED
+      marginBottom: 14,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
     }
-  }, "Loading the roster\u2026");
-  const d = Math.min(Math.max(1, day), days);
-  const people = rows.map(x => ({
-    key: x.empId,
-    name: x.name,
-    empIdShown: x.empIdShown,
-    tier: x.desig || 'No designation recorded',
-    code: (grid[x.empId] || {})[d] || '',
-    bucket: R.bucketOf((grid[x.empId] || {})[d]) || ''
-  }));
-  const inB = b => people.filter(p => p.bucket === b);
-  const present = ROS_TREE_GROUPS.filter(([b]) => inB(b).length);
-  const selB = present.some(([b]) => b === openB) ? openB : present.length ? present[0][0] : '';
-  const branch = selB ? inB(selB) : [];
-  const tiers = [...new Set(branch.map(p => p.tier))].sort((a, b) => rosTierRank(a) - rosTierRank(b) || a.localeCompare(b));
-  const selD = tiers.indexOf(openD) >= 0 ? openD : tiers[0] || '';
-  const leaves = branch.filter(p => p.tier === selD);
-  const onDuty = people.filter(p => p.bucket && p.bucket !== 'O').length;
-  const tone = R.BUCKET_COLOR[selB] || ROS_LEAVE_TONE.OFF;
-  const X = [190, 470, 730, 1000],
-    W = 1360,
-    PITCH = 30;
-  const L1 = present.map(([b, label], i) => ({
-    b,
-    label,
-    y: i * PITCH + PITCH / 2,
-    color: R.BUCKET_COLOR[b] || ROS_LEAVE_TONE.OFF,
-    on: b === selB,
-    n: inB(b).length
-  }));
-  let rootY = present.length * PITCH / 2;
-  const bNode = L1.find(n => n.on) || {
-    y: rootY
-  };
-  const L2 = tiers.map((t, i) => ({
-    t,
-    y: bNode.y - tiers.length * PITCH / 2 + i * PITCH + PITCH / 2,
-    on: t === selD,
-    n: branch.filter(p => p.tier === t).length
-  }));
-  const dNode = L2.find(n => n.on) || bNode;
-  const L3 = leaves.map((p, i) => ({
-    p,
-    y: dNode.y - leaves.length * PITCH / 2 + i * PITCH + PITCH / 2
-  }));
-  const allY = [rootY].concat(L1.map(n => n.y), L2.map(n => n.y), L3.map(n => n.y));
-  const slide = 34 - Math.min.apply(null, allY);
-  const H = Math.max.apply(null, allY) + slide + 34;
-  rootY += slide;
-  [L1, L2, L3].forEach(L => L.forEach(n => {
-    n.y += slide;
-  }));
-  const bY = (L1.find(n => n.on) || {
-    y: rootY
-  }).y;
-  const dY = (L2.find(n => n.on) || {
-    y: bY
-  }).y;
-  const curve = (x1, y1, x2, y2) => {
-    const mx = (x1 + x2) / 2;
-    return 'M' + x1 + ',' + y1 + ' C' + mx + ',' + y1 + ' ' + mx + ',' + y2 + ' ' + x2 + ',' + y2;
-  };
-  const paths = [];
-  L1.forEach(n => paths.push({
-    d: curve(X[0] + 6, rootY, X[1] - 6, n.y),
-    stroke: n.on ? n.color + 'b0' : 'rgba(125,145,180,.4)',
-    w: n.on ? 1.7 : 1
-  }));
-  L2.forEach(n => paths.push({
-    d: curve(X[1] + 6, bY, X[2] - 6, n.y),
-    stroke: n.on ? tone + 'b0' : 'rgba(125,145,180,.4)',
-    w: n.on ? 1.7 : 1
-  }));
-  L3.forEach(n => paths.push({
-    d: curve(X[2] + 6, dY, X[3] - 5, n.y),
-    stroke: 'rgba(125,145,180,.5)',
-    w: 1
-  }));
-  const crumbs = [dept + ' roster', (ROS_TREE_GROUPS.find(g => g[0] === selB) || ['', ''])[1], selD].filter(Boolean);
-  const navBtn = {
-    display: 'inline-grid',
-    placeItems: 'center',
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    border: '1px solid rgba(125,145,180,.35)',
-    background: 'rgba(255,255,255,.7)',
-    color: MK.BODY,
-    cursor: 'pointer',
-    flexShrink: 0
-  };
-  const toolBtn = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 5,
-    border: '1px solid rgba(125,145,180,.35)',
-    background: 'rgba(255,255,255,.7)',
-    color: MK.BODY,
-    padding: '6px 11px',
-    borderRadius: 9,
-    fontSize: 11.5,
-    fontWeight: 700,
-    cursor: 'pointer',
-    fontFamily: 'inherit'
-  };
-  const rowStyle = (left, right, y, on, c) => ({
-    position: 'absolute',
-    left: left + 'px',
-    top: y - 17 + 'px',
-    width: right - left + 'px',
-    height: 34,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 8,
-    padding: '0 12px',
-    boxSizing: 'border-box',
-    borderRadius: 10,
-    cursor: 'pointer',
-    transition: 'all .15s',
-    background: on ? 'linear-gradient(90deg,transparent,' + c + '1f)' : 'transparent',
-    border: '1px solid ' + (on ? c + '3d' : 'transparent')
-  });
-  const dotStyle = (x, y, on, c, size) => ({
-    position: 'absolute',
-    left: x - size / 2 + 'px',
-    top: y - size / 2 + 'px',
-    width: size,
-    height: size,
-    borderRadius: '50%',
-    boxSizing: 'border-box',
-    background: on ? c : '#fff',
-    border: '2px solid ' + c,
-    boxShadow: on ? '0 0 0 4px ' + c + '24' : 'none'
-  });
-  const countPill = c => ({
-    fontFamily: MK.MONO,
-    fontSize: 10,
-    fontWeight: 700,
-    color: c,
-    background: c + '1a',
-    padding: '2px 7px',
-    borderRadius: 10,
-    whiteSpace: 'nowrap'
-  });
-  return React.createElement(RosSubShell, {
-    title: 'Tree view — ' + dept,
-    subName: "tree",
-    dept: dept,
-    year: year,
-    month: month,
-    setRoute: setRoute,
-    setSub: setSub,
-    sub: R.MONTHS[month] + ' ' + year + ' · one day as a branch — shift, then designation, then nurse'
-  }, !sheet.doc ? React.createElement(RosNotDrafted, {
-    dept: dept,
-    year: year,
-    month: month,
-    setSub: setSub
-  }) : React.createElement("div", {
-    className: "card"
   }, React.createElement("div", {
-    className: "card-h",
     style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.8),rgba(236,247,255,.5))',
+      backdropFilter: 'blur(24px) saturate(1.7)',
+      WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 15,
+      boxShadow: '0 12px 36px rgba(31,59,90,.12),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '13px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
       flexWrap: 'wrap'
     }
-  }, React.createElement("div", {
-    style: MK.iconBadge('blue', 32)
+  }, React.createElement("span", {
+    style: rosBadge('rgba(0,144,202,.12)', '#0072a3', 32, 10)
   }, React.createElement(Ic, {
-    d: "M4 12h5M14 6h6M14 12h6M14 18h6M9 6v12M9 6h5M9 18h5",
-    s: 16
+    d: "M7 16H3l4-4M17 8h4l-4 4M3 16h14M21 8H7",
+    s: 16,
+    sw: 1.9
   })), React.createElement("div", {
+    style: {
+      minWidth: 200,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: '#16202e'
+    }
+  }, "Drag shifts in the grid above to swap"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: '#6c7a8c',
+      lineHeight: 1.5
+    }
+  }, "Drop onto another cell \u2014 same nurse or a different one. Cross-nurse drops are logged below."))), swapLog.map(l => React.createElement("div", {
+    key: l.id,
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+      backdropFilter: 'blur(24px) saturate(1.7)',
+      WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 15,
+      boxShadow: '0 12px 36px rgba(31,59,90,.12),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '14px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontFamily: ROS_MONO,
+      fontSize: 11,
+      color: '#9aa6b4'
+    }
+  }, l.id), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      minWidth: 250,
+      flex: 1
+    }
+  }, React.createElement(MK.Av, {
+    name: l.aName,
+    size: 30,
+    radius: rosAvRadius(30)
+  }), React.createElement("div", {
     style: {
       minWidth: 0
     }
-  }, React.createElement("h3", null, "Tree view \u2014 ", d, " ", R.MONTHS[month], " ", year, " \xB7 ", rosDow(year, month, d)), React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      fontSize: 11,
-      color: MK.MUTED,
-      flexWrap: 'wrap'
-    }
-  }, crumbs.map((c, i) => React.createElement(React.Fragment, {
-    key: c + i
-  }, React.createElement("span", null, c), i < crumbs.length - 1 && React.createElement("span", {
-    style: {
-      color: '#b6c0cc'
-    }
-  }, "\u203A"))))), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("div", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6
-    }
-  }, React.createElement("button", {
-    style: {
-      ...navBtn,
-      opacity: d <= 1 ? .4 : 1
-    },
-    disabled: d <= 1,
-    title: "Previous day",
-    onClick: () => setDay(Math.max(1, d - 1))
-  }, React.createElement(Ic, {
-    d: I.chevR,
-    s: 13,
-    sw: 2.2,
-    style: {
-      transform: 'rotate(180deg)'
-    }
-  })), React.createElement("select", {
-    value: d,
-    onChange: e => setDay(Number(e.target.value))
-  }, Array.from({
-    length: days
-  }, (_, i) => i + 1).map(n => React.createElement("option", {
-    key: n,
-    value: n
-  }, n, " ", R.MONTHS[month].slice(0, 3), " \xB7 ", rosDow(year, month, n)))), React.createElement("button", {
-    style: {
-      ...navBtn,
-      opacity: d >= days ? .4 : 1
-    },
-    disabled: d >= days,
-    title: "Next day",
-    onClick: () => setDay(Math.min(days, d + 1))
-  }, React.createElement(Ic, {
-    d: I.chevR,
-    s: 13,
-    sw: 2.2
-  })), React.createElement("button", {
-    style: toolBtn,
-    onClick: () => {
-      setOpenB('');
-      setOpenD('');
-    }
-  }, "Reset branch"))), present.length === 0 ? React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'grid',
-      placeItems: 'center',
-      padding: 34,
-      textAlign: 'center',
-      gap: 6
-    }
   }, React.createElement("div", {
-    style: {
-      opacity: .35
-    }
-  }, React.createElement(Ic, {
-    d: I.cal,
-    s: 30
-  })), React.createElement("div", {
-    style: {
-      fontWeight: 600
-    }
-  }, "Nothing is written against ", d, " ", R.MONTHS[month]), React.createElement("div", {
-    className: "sub",
-    style: {
-      maxWidth: 400
-    }
-  }, "No shift code is recorded for anyone in ", dept, " on this day, so the tree has no branches to draw. Pick another day, or fill the column in on the monthly grid.")) : React.createElement("div", {
-    style: {
-      padding: '8px 12px 16px',
-      overflowX: 'auto',
-      display: 'flex'
-    }
-  }, React.createElement("div", {
-    style: {
-      position: 'relative',
-      width: W,
-      height: H,
-      flexShrink: 0
-    }
-  }, React.createElement("svg", {
-    viewBox: '0 0 ' + W + ' ' + H,
-    style: {
-      position: 'absolute',
-      inset: 0,
-      width: W,
-      height: H,
-      pointerEvents: 'none'
-    }
-  }, paths.map((p, i) => React.createElement("path", {
-    key: i,
-    d: p.d,
-    fill: "none",
-    stroke: p.stroke,
-    strokeWidth: p.w
-  }))), React.createElement("div", {
-    style: {
-      position: 'absolute',
-      left: 0,
-      top: rootY - 20 + 'px',
-      width: X[0] - 16 + 'px',
-      height: 40,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'flex-end',
-      gap: 8,
-      padding: '0 10px',
-      boxSizing: 'border-box'
-    }
-  }, React.createElement("div", {
-    style: {
-      textAlign: 'right'
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 13.5,
-      fontWeight: 800,
-      color: MK.INK,
-      whiteSpace: 'nowrap'
-    }
-  }, dept), React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 10,
-      color: '#8a97a8',
-      whiteSpace: 'nowrap'
-    }
-  }, onDuty, " / ", people.length, " on duty"))), React.createElement("div", {
-    style: {
-      position: 'absolute',
-      left: X[0] - 7 + 'px',
-      top: rootY - 7 + 'px',
-      width: 14,
-      height: 14,
-      borderRadius: '50%',
-      boxSizing: 'border-box',
-      background: '#0072a3',
-      border: '2px solid #fff',
-      boxShadow: '0 0 0 4px rgba(0,114,163,.18)'
-    }
-  }), L1.map(n => React.createElement(React.Fragment, {
-    key: n.b
-  }, React.createElement("div", {
-    onClick: () => {
-      setOpenB(n.b);
-      setOpenD('');
-    },
-    style: rowStyle(0, X[1] - 16, n.y, n.on, n.color)
-  }, React.createElement("span", {
-    style: {
-      fontSize: 12.5,
-      fontWeight: n.on ? 800 : 600,
-      color: n.on ? n.color : MK.BODY,
-      letterSpacing: .4,
-      whiteSpace: 'nowrap'
-    }
-  }, n.label), React.createElement("span", {
-    style: countPill(n.color)
-  }, n.n, " ", n.n === 1 ? 'nurse' : 'nurses')), React.createElement("div", {
-    style: dotStyle(X[1], n.y, n.on, n.color, 12)
-  }))), L2.map(n => React.createElement(React.Fragment, {
-    key: n.t
-  }, React.createElement("div", {
-    onClick: () => setOpenD(n.t),
-    style: rowStyle(X[1] + 20, X[2] - 16, n.y, n.on, tone)
-  }, React.createElement("span", {
     style: {
       fontSize: 12,
-      fontWeight: n.on ? 800 : 600,
-      color: n.on ? tone : MK.BODY,
-      whiteSpace: 'nowrap'
+      fontWeight: 600,
+      color: '#16202e'
     }
-  }, n.t), React.createElement("span", {
-    style: countPill(tone)
-  }, n.n)), React.createElement("div", {
-    style: dotStyle(X[2], n.y, n.on, tone, 12)
-  }))), L3.map(n => React.createElement(React.Fragment, {
-    key: n.p.key
+  }, l.aName), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#9aa6b4'
+    }
+  }, "Day ", l.aDay, " \xB7 ", React.createElement("span", {
+    style: {
+      fontFamily: ROS_MONO
+    }
+  }, l.aCode || '—'))), React.createElement("svg", {
+    width: "18",
+    height: "18",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "#0090ca",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    style: {
+      flexShrink: 0
+    }
+  }, React.createElement("path", {
+    d: "M7 16H3l4-4M17 8h4l-4 4M3 16h14M21 8H7"
+  })), React.createElement(MK.Av, {
+    name: l.bName,
+    size: 30,
+    radius: rosAvRadius(30)
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
   }, React.createElement("div", {
     style: {
-      position: 'absolute',
-      left: X[3] + 16 + 'px',
-      top: n.y - 15 + 'px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 9,
-      padding: '5px 12px',
-      borderRadius: 10,
-      background: 'rgba(255,255,255,.72)',
-      border: '1px solid ' + tone + '2e',
-      boxShadow: '0 3px 10px rgba(31,59,90,.07)',
-      whiteSpace: 'nowrap'
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#16202e'
     }
-  }, React.createElement("div", {
-    style: MK.av(n.p.name, 22)
-  }, MK.initials(n.p.name)), React.createElement("span", {
+  }, l.bName), React.createElement("div", {
     style: {
-      fontSize: 12.5,
+      fontSize: 10.5,
+      color: '#9aa6b4'
+    }
+  }, "Day ", l.bDay, " \xB7 ", React.createElement("span", {
+    style: {
+      fontFamily: ROS_MONO
+    }
+  }, l.bCode || '—')))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: '#6c7a8c',
+      maxWidth: 230,
+      lineHeight: 1.5
+    }
+  }, l.mode === 'swap' ? 'Created by drag — shifts exchanged in the grid.' : 'Created by drag — shift moved across.'), React.createElement("span", {
+    style: rosChipS('#0072a3', 'rgba(0,144,202,.12)')
+  }, "Applied"))), swapLog.length === 0 && React.createElement("div", {
+    style: {
+      ...ROS_CARD15,
+      padding: '16px 18px',
+      fontSize: 12,
+      color: '#9aa6b4'
+    }
+  }, "No swaps logged yet this session \u2014 drag one shift onto another in the grid, then confirm the change.")), view === 'rules' && (() => {
+    const selStyle = {
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '9px 10px',
+      borderRadius: 9,
+      border: '1px solid rgba(125,145,180,.35)',
+      background: 'rgba(255,255,255,.85)',
+      fontFamily: 'inherit',
+      fontSize: 12,
+      color: '#16202e',
+      outline: 'none'
+    };
+    const stepStyle = {
+      width: 22,
+      height: 22,
+      borderRadius: 7,
+      border: '1px solid rgba(125,145,180,.3)',
+      background: 'rgba(255,255,255,.8)',
+      color: '#3c4858',
+      fontSize: 13,
       fontWeight: 700,
-      color: MK.INK
-    }
-  }, n.p.name), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 10,
-      color: '#0072a3'
-    }
-  }, n.p.empIdShown ? 'ID ' + n.p.empIdShown : 'no Emp-ID'), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 10.5,
-      fontWeight: 700,
-      color: '#fff',
-      background: tone,
-      padding: '2px 8px',
-      borderRadius: 7
-    }
-  }, n.p.code), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 10.5,
-      color: MK.MUTED
-    }
-  }, (R.BY_CODE[n.p.code] || {}).label || '')), React.createElement("div", {
-    style: dotStyle(X[3], n.y, false, tone, 10)
-  }))))), React.createElement("div", {
-    style: {
-      padding: '10px 16px',
-      borderTop: '1px solid ' + MK.LINE,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 9,
-      flexWrap: 'wrap',
-      background: 'rgba(247,251,255,.55)'
-    }
-  }, ROS_DUTY.concat([{
-    id: 'O',
-    label: 'Off / leave',
-    color: ROS_LEAVE_TONE.OFF
-  }]).map(b => React.createElement("span", {
-    key: b.id,
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6,
-      fontSize: 10.5,
-      fontWeight: 700,
-      color: b.color,
-      background: b.color + '18',
-      border: '1px solid ' + b.color + '33',
-      padding: '4px 10px',
-      borderRadius: 12,
-      whiteSpace: 'nowrap'
-    }
-  }, b.label)), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("span", {
-    style: {
-      fontSize: 10.5,
-      color: '#8a97a8'
-    }
-  }, "Click a shift, then a designation \u2014 the branch drills down one level at a time."))));
-}
-function RosterReview({
-  staffStore,
-  dept,
-  year,
-  month,
-  setRoute
-}) {
-  const days = R.daysIn(year, month);
-  const [doc, setDoc] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [rules, setRules] = useState(R.DEFAULT_RULES);
-  const staff = useMemo(() => (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => ({
-    empId: rosKey(e),
-    empIdShown: e.emp_id || '',
-    name: e.name,
-    desig: e.designation
-  })), [staffStore.staff, dept]);
-  useEffect(() => {
-    rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
-      const d = r && r.ok ? r.roster : null;
-      setDoc(d);
-      setRules(Object.assign({}, R.DEFAULT_RULES, d && d.rules || {}));
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  }, [dept, year, month]);
-  const grid = rosMigrateGrid(doc && doc.grid, staff);
-  const findings = useMemo(() => R.checkRules(grid, staff, year, month, rules), [grid, staff, year, month, rules]);
-  const ids = staff.map(s => s.empId);
-  const away = useMemo(() => {
-    const out = [];
-    for (let d = 1; d <= days; d++) {
-      const list = ids.filter(id => R.isLeave(grid[id] && grid[id][d]));
-      if (list.length) out.push({
-        day: d,
-        list
-      });
-    }
-    return out;
-  }, [grid, ids, days]);
-  if (loading) return React.createElement("div", {
-    style: {
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      lineHeight: 1,
       display: 'grid',
-      placeItems: 'center',
-      height: '40vh',
-      color: 'var(--muted,#8aa0b8)'
-    }
-  }, "Loading\u2026");
-  if (!doc) {
+      placeItems: 'center'
+    };
+    const metricOpts = draft.scope === 'day' ? [['onDuty', 'staff on duty'], ['morning', 'morning staff'], ['evening', 'evening staff'], ['night', 'night staff'], ['general', 'general-duty staff'], ['onLeave', 'staff on leave']] : [['nights', 'night shifts'], ['hours', 'total hours'], ['offDays', 'rest days'], ['shifts', 'shifts worked'], ['fridaysWorked', 'Fridays worked']];
+    const canAdd = !!draft.name.trim();
     return React.createElement("div", {
+      style: {
+        marginBottom: 14,
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(330px,1fr))',
+        gap: 14,
+        alignItems: 'start'
+      }
+    }, React.createElement("div", {
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: ROS_CARD_HEAD
+    }, React.createElement("span", {
+      style: rosBadge('rgba(0,144,202,.12)', '#0072a3', 26)
+    }, React.createElement(Ic, {
+      d: "M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6zM9 12l2 2 4-4",
+      s: 14,
+      sw: 1.9
+    })), React.createElement("h3", {
+      style: ROS_H3
+    }, "Rule set"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#9aa6b4'
+      }
+    }, "switch off or retune any rule")), React.createElement("div", null, [['ratio', 'Nurse-to-patient ratio', 'minimum on duty per day', 'minOnDuty'], ['min', 'Minimum morning staff', 'M shift floor', 'minM'], ['min2', 'Minimum evening staff', 'E shift floor', 'minE'], ['min3', 'Minimum night staff', 'N shift floor', 'minN'], ['nights', 'Max consecutive nights', 'nights in a row before a warning', 'maxNights'], ['offdays', 'Weekly off entitlement', 'rest days per month', 'minOff'], ['leave', 'Leave clash limit', 'staff allowed on leave per day', 'maxLeavePerDay'], ['nm', 'No night → morning', 'block back-to-back turnaround', ''], ['senior', 'Senior nurse on nights', 'senior / team leader / charge', ''], ['friday', 'Friday off entitlement (BD)', 'at least one Friday off per nurse', '']].map(([key, label, hint, num]) => {
+      const enKey = key === 'min2' || key === 'min3' ? 'min' : key;
+      const on = en[enKey] !== false;
+      return React.createElement("div", {
+        key: key,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 11,
+          padding: '10px 16px',
+          borderBottom: '1px solid rgba(125,145,180,.12)',
+          background: on ? 'transparent' : 'rgba(244,246,249,.6)',
+          opacity: on ? 1 : .62
+        }
+      }, React.createElement("span", {
+        onClick: () => {
+          setEn(s => ({
+            ...s,
+            [enKey]: s[enKey] === false
+          }));
+          setDirty(true);
+        },
+        style: {
+          width: 34,
+          height: 19,
+          borderRadius: 12,
+          flexShrink: 0,
+          cursor: 'pointer',
+          padding: 2,
+          boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: on ? 'flex-end' : 'flex-start',
+          background: on ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'rgba(125,145,180,.35)',
+          transition: 'all .2s'
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 15,
+          height: 15,
+          borderRadius: '50%',
+          background: '#fff',
+          boxShadow: '0 1px 3px rgba(0,0,0,.25)'
+        }
+      })), React.createElement("div", {
+        style: {
+          minWidth: 0,
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 12,
+          fontWeight: 600,
+          color: '#16202e'
+        }
+      }, label), React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          color: '#9aa6b4',
+          lineHeight: 1.45
+        }
+      }, hint)), !!num && React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          flexShrink: 0
+        }
+      }, React.createElement("button", {
+        onClick: () => {
+          setCfg(c => ({
+            ...c,
+            [num]: Math.max(0, c[num] - 1)
+          }));
+          setDirty(true);
+        },
+        style: stepStyle
+      }, "\u2212"), React.createElement("span", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 12.5,
+          fontWeight: 800,
+          color: '#16202e',
+          minWidth: 20,
+          textAlign: 'center'
+        }
+      }, cfg[num]), React.createElement("button", {
+        onClick: () => {
+          setCfg(c => ({
+            ...c,
+            [num]: c[num] + 1
+          }));
+          setDirty(true);
+        },
+        style: stepStyle
+      }, "+")), React.createElement("span", {
+        style: {
+          fontSize: 9.5,
+          fontWeight: 800,
+          letterSpacing: .5,
+          textTransform: 'uppercase',
+          color: on ? '#157a43' : '#9aa6b4',
+          background: on ? 'rgba(31,157,87,.13)' : 'rgba(125,145,180,.14)',
+          padding: '2px 8px',
+          borderRadius: 9,
+          flexShrink: 0,
+          minWidth: 26,
+          textAlign: 'center'
+        }
+      }, on ? 'on' : 'off'));
+    }))), React.createElement("div", {
       style: {
         display: 'flex',
         flexDirection: 'column',
         gap: 14
       }
     }, React.createElement("div", {
-      className: "card"
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+        overflow: 'hidden'
+      }
     }, React.createElement("div", {
-      className: "card-h",
+      style: ROS_CARD_HEAD
+    }, React.createElement("span", {
+      style: rosBadge('rgba(106,82,212,.12)', '#5b45c4', 26)
+    }, React.createElement(Ic, {
+      d: "M12 5v14M5 12h14",
+      s: 14,
+      sw: 2
+    })), React.createElement("h3", {
+      style: ROS_H3
+    }, "Create a custom rule")), React.createElement("div", {
+      style: {
+        padding: '14px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 11
+      }
+    }, React.createElement("div", {
       style: {
         display: 'flex',
-        gap: 10,
+        flexDirection: 'column',
+        gap: 5
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: '#7d8ea8'
+      }
+    }, "Rule name"), React.createElement("input", {
+      value: draft.name,
+      onChange: e => {
+        const v = e.target.value;
+        setDraft(s => ({
+          ...s,
+          name: v
+        }));
+      },
+      placeholder: "e.g. At least 2 seniors on every evening",
+      style: {
+        width: '100%',
+        boxSizing: 'border-box',
+        padding: '9px 11px',
+        borderRadius: 9,
+        border: '1px solid rgba(125,145,180,.35)',
+        background: 'rgba(255,255,255,.85)',
+        fontFamily: 'inherit',
+        fontSize: 12.5,
+        color: '#16202e',
+        outline: 'none'
+      }
+    })), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))',
+        gap: 9
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: '#7d8ea8'
+      }
+    }, "Applies to"), React.createElement("select", {
+      value: draft.scope,
+      onChange: e => {
+        const v = e.target.value;
+        setDraft(s => ({
+          ...s,
+          scope: v,
+          metric: v === 'day' ? 'onDuty' : 'nights'
+        }));
+      },
+      style: selStyle
+    }, [['day', 'Each day'], ['staff', 'Each nurse']].map(([v, label]) => React.createElement("option", {
+      key: v,
+      value: v
+    }, label)))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: '#7d8ea8'
+      }
+    }, "Count of"), React.createElement("select", {
+      value: draft.metric,
+      onChange: e => {
+        const v = e.target.value;
+        setDraft(s => ({
+          ...s,
+          metric: v
+        }));
+      },
+      style: selStyle
+    }, metricOpts.map(([v, label]) => React.createElement("option", {
+      key: v,
+      value: v
+    }, label)))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: '#7d8ea8'
+      }
+    }, "Flag when"), React.createElement("select", {
+      value: draft.op,
+      onChange: e => {
+        const v = e.target.value;
+        setDraft(s => ({
+          ...s,
+          op: v
+        }));
+      },
+      style: selStyle
+    }, [['<', 'is below'], ['>', 'is above'], ['=', 'equals']].map(([v, label]) => React.createElement("option", {
+      key: v,
+      value: v
+    }, label)))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: '#7d8ea8'
+      }
+    }, "Value"), React.createElement("input", {
+      value: String(draft.val),
+      onChange: e => {
+        const v = parseInt(e.target.value.replace(/[^0-9]/g, '') || '0', 10);
+        setDraft(s => ({
+          ...s,
+          val: v
+        }));
+      },
+      style: selStyle
+    }))), React.createElement("div", {
+      style: {
+        display: 'flex',
         alignItems: 'center',
+        gap: 9,
         flexWrap: 'wrap'
       }
-    }, React.createElement("button", {
-      className: "btn",
-      onClick: () => setRoute({
-        view: 'rosterGrid',
-        dept,
-        year,
-        month
-      })
-    }, "\u2039 Back to the grid"), React.createElement("div", {
+    }, React.createElement("div", {
       style: {
-        flex: 1,
-        minWidth: 200
+        display: 'inline-flex',
+        background: 'rgba(255,255,255,.6)',
+        border: '1px solid rgba(255,255,255,.9)',
+        borderRadius: 9,
+        padding: 3,
+        gap: 2
+      }
+    }, [['warning', 'Warning'], ['blocker', 'Blocker']].map(([v, label]) => React.createElement("button", {
+      key: v,
+      onClick: () => setDraft(s => ({
+        ...s,
+        sev: v
+      })),
+      style: {
+        border: 0,
+        background: draft.sev === v ? v === 'blocker' ? 'linear-gradient(135deg,#e8697f,#a92c42)' : 'linear-gradient(135deg,#f0a94a,#b5670a)' : 'transparent',
+        color: draft.sev === v ? '#fff' : '#6c7a8c',
+        padding: '6px 13px',
+        borderRadius: 8,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        transition: 'all .2s'
+      }
+    }, label))), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      onClick: () => {
+        if (!canAdd) return;
+        setCustom(s => [...s, {
+          ...draft,
+          id: 'c' + Date.now()
+        }]);
+        setDraft({
+          name: '',
+          scope: 'day',
+          metric: 'onDuty',
+          op: '<',
+          val: 4,
+          sev: 'warning'
+        });
+        setDirty(true);
+      },
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        border: '1px solid rgba(255,255,255,.4)',
+        background: canAdd ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,#9fb3c8,#7d8ea8)',
+        color: '#fff',
+        padding: '8px 14px',
+        borderRadius: 9,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: canAdd ? 'pointer' : 'default',
+        fontFamily: 'inherit',
+        boxShadow: canAdd ? '0 7px 18px rgba(0,144,202,.35)' : 'none',
+        flexShrink: 0
+      }
+    }, React.createElement(Ic, {
+      d: "M12 5v14M5 12h14",
+      s: 13,
+      sw: 2.4
+    }), "Add rule")), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c',
+        lineHeight: 1.55,
+        background: 'rgba(0,144,202,.08)',
+        borderRadius: 9,
+        padding: '9px 11px'
+      }
+    }, React.createElement("b", null, "Preview:"), " Flag every ", draft.scope === 'day' ? 'day' : 'nurse', " where ", ROS_METRIC_LABEL[draft.metric] || draft.metric, " ", {
+      '<': 'is below',
+      '>': 'is above',
+      '=': 'equals'
+    }[draft.op], " ", draft.val, " \u2014 as a ", draft.sev, "."))), React.createElement("div", {
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: ROS_CARD_HEAD
+    }, React.createElement("h3", {
+      style: ROS_H3
+    }, "Custom rules"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#9aa6b4'
+      }
+    }, custom.length, " active")), React.createElement("div", null, ev.customResults.map(cr => React.createElement("div", {
+      key: cr.rule.id,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.12)'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 9,
+        fontWeight: 800,
+        letterSpacing: .5,
+        color: '#fff',
+        background: cr.rule.sev === 'blocker' ? 'linear-gradient(135deg,#e8697f,#a92c42)' : 'linear-gradient(135deg,#f0a94a,#b5670a)',
+        padding: '3px 7px',
+        borderRadius: 6,
+        flexShrink: 0
+      }
+    }, cr.rule.sev === 'blocker' ? 'BLOCK' : 'WARN'), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
       }
     }, React.createElement("div", {
       style: {
-        fontWeight: 700
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#16202e'
       }
-    }, "Coverage & rules \u2014 ", dept), React.createElement("div", {
-      className: "sub"
-    }, R.MONTHS[month], " ", year)))), React.createElement(RosNotDrafted, {
-      dept: dept,
-      year: year,
-      month: month
-    }));
-  }
-  return React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 14
-    }
-  }, React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h",
-    style: {
-      display: 'flex',
-      gap: 10,
-      alignItems: 'center',
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'rosterGrid',
-      dept,
-      year,
-      month
-    })
-  }, "\u2039 Back to the grid"), React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 200
-    }
-  }, React.createElement("div", {
-    style: {
-      fontWeight: 700
-    }
-  }, "Coverage & rules \u2014 ", dept), React.createElement("div", {
-    className: "sub"
-  }, R.MONTHS[month], " ", year, " \xB7 ", staff.length, " staff")), React.createElement("span", {
-    className: "tag num",
-    style: {
-      color: findings.length ? '#e07a2a' : '#1f9d63'
-    }
-  }, findings.length, " finding(s)"))), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'minmax(0,2fr) minmax(280px,1fr)',
-      gap: 14,
-      alignItems: 'start'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 14
-    }
-  }, React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Staff on each shift, per day"), React.createElement("div", {
-    className: "sub"
-  }, "red = uncovered \xB7 amber = below the minimum")), React.createElement("div", {
-    className: "card-b",
-    style: {
-      overflow: 'auto'
-    }
-  }, React.createElement("table", {
-    style: {
-      borderCollapse: 'collapse',
-      fontSize: 11,
-      width: '100%'
-    }
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
-    style: {
-      textAlign: 'left',
-      padding: '4px 6px'
-    }
-  }, "Shift"), Array.from({
-    length: days
-  }, (_, i) => i + 1).map(d => React.createElement("th", {
-    key: d,
-    style: {
-      width: 22,
-      fontSize: 9.6
-    }
-  }, d)))), React.createElement("tbody", null, ['G', 'M', 'E', 'N'].map(b => {
-    const key = b === 'M' ? 'minMorning' : b === 'E' ? 'minEvening' : b === 'N' ? 'minNight' : null;
-    const need = key ? (rules[key] || {}).value || 0 : 0;
-    return React.createElement("tr", {
-      key: b
-    }, React.createElement("td", {
+    }, cr.rule.name), React.createElement("div", {
       style: {
-        padding: '4px 6px',
-        fontWeight: 700,
-        color: R.BUCKET_COLOR[b],
-        whiteSpace: 'nowrap'
+        fontSize: 10.5,
+        color: '#9aa6b4',
+        fontFamily: ROS_MONO
       }
-    }, (R.BUCKETS.find(x => x.id === b) || {}).label, need ? ' (min ' + need + ')' : ''), Array.from({
-      length: days
-    }, (_, k) => k + 1).map(d => {
-      const n = R.coverageFor(grid, ids, d)[b];
-      const bad = key && n === 0,
-        low = key && n > 0 && n < need;
-      return React.createElement("td", {
-        key: d,
-        style: {
-          textAlign: 'center',
-          fontSize: 9.8,
-          fontWeight: 700,
-          padding: '2px 0',
-          color: bad ? '#d23a52' : low ? '#e07a2a' : 'var(--muted,#8aa0b8)',
-          background: bad ? 'rgba(210,58,82,.14)' : low ? 'rgba(224,122,42,.12)' : undefined
-        }
-      }, n);
-    }));
-  }))))), React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Rule checks"), React.createElement("div", {
-    className: "sub"
-  }, findings.length ? 'every finding, in date order' : 'nothing to flag')), React.createElement("div", {
-    className: "card-b",
-    style: {
-      maxHeight: 320,
-      overflow: 'auto'
-    }
-  }, findings.length === 0 ? React.createElement("div", {
-    style: {
-      display: 'grid',
-      placeItems: 'center',
-      padding: 26,
-      gap: 6,
-      textAlign: 'center'
-    }
-  }, React.createElement("div", {
-    style: {
-      color: '#1f9d63'
-    }
-  }, React.createElement(Ic, {
-    d: I.check || I.doc,
-    s: 28
-  })), React.createElement("div", {
-    style: {
-      fontWeight: 600
-    }
-  }, "Every rule passes"), React.createElement("div", {
-    className: "sub"
-  }, "Coverage minimums, consecutive-duty limits and weekly rest are all satisfied.")) : React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 5
-    }
-  }, findings.map((f, i) => React.createElement("div", {
-    key: i,
-    style: {
-      display: 'flex',
-      gap: 8,
-      alignItems: 'baseline',
-      fontSize: 11.8,
-      paddingBottom: 4,
-      borderBottom: '1px solid var(--line,#f1f5f9)'
-    }
-  }, React.createElement("span", {
-    className: "tag num",
-    style: {
-      minWidth: 38,
-      textAlign: 'center'
-    }
-  }, R.MONTHS[month].slice(0, 3), " ", f.day), React.createElement("span", {
-    style: {
-      color: f.severity === 'high' ? '#d23a52' : f.severity === 'medium' ? '#e07a2a' : 'var(--muted,#8aa0b8)'
-    }
-  }, f.text))))))), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 14
-    }
-  }, React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Rule set"), React.createElement("div", {
-    className: "sub"
-  }, "switch off or retune any rule")), React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 9
-    }
-  }, Object.keys(R.DEFAULT_RULES).map(k => {
-    const r = rules[k] || R.DEFAULT_RULES[k];
+    }, cr.rule.scope, " \xB7 ", ROS_METRIC_LABEL[cr.rule.metric] || cr.rule.metric, " ", cr.rule.op, " ", cr.rule.val)), React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: cr.hits.length ? '#a92c42' : '#157a43',
+        background: cr.hits.length ? 'rgba(210,58,82,.12)' : 'rgba(31,157,87,.13)',
+        padding: '2px 8px',
+        borderRadius: 9,
+        whiteSpace: 'nowrap',
+        flexShrink: 0
+      }
+    }, cr.hits.length ? cr.hits.length + ' hits' : 'clear'), React.createElement("button", {
+      onClick: () => {
+        setCustom(s => s.filter(x => x.id !== cr.rule.id));
+        setDirty(true);
+      },
+      title: "Delete rule",
+      className: "ros-decl",
+      style: {
+        width: 26,
+        height: 26,
+        borderRadius: 7,
+        border: '1px solid rgba(210,58,82,.3)',
+        background: 'rgba(255,255,255,.7)',
+        color: '#a92c42',
+        cursor: 'pointer',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, React.createElement(Ic, {
+      d: "M18 6L6 18M6 6l12 12",
+      s: 12,
+      sw: 2.4
+    })))), custom.length === 0 && React.createElement("div", {
+      style: {
+        padding: '14px 16px',
+        fontSize: 12,
+        color: '#9aa6b4'
+      }
+    }, "No custom rules yet \u2014 build one above.")))));
+  })(), showFooter && (() => {
+    const floatPool = (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') !== dept).sort((a, b) => String(a.name).localeCompare(String(b.name))).slice(0, 3).map(e => {
+      const ind = /Senior|Team|Charge|In-charge/i.test(e.designation || '');
+      return {
+        name: e.name,
+        empId: rosKey(e),
+        home: e.current_department || 'Unassigned',
+        level: ind ? 'Independent' : 'Supervised',
+        lvlShort: ind ? 'IND' : 'SUP',
+        c: ind ? '#157a43' : '#b5670a',
+        bg: ind ? 'rgba(31,157,87,.13)' : 'rgba(224,138,30,.14)'
+      };
+    });
+    const allNames = [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => e.name).filter(Boolean))].sort();
+    const approver = sign['Approved by'];
+    const ready = approver && approver !== '—';
     return React.createElement("div", {
-      key: k,
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))',
+        gap: 14
+      }
+    }, React.createElement("div", {
+      "data-rules": "1",
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: ROS_CARD_HEAD
+    }, React.createElement("span", {
+      style: rosBadge('rgba(210,58,82,.12)', '#a92c42', 26)
+    }, React.createElement(Ic, {
+      d: "M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6zM12 8v4M12 16h.01",
+      s: 14,
+      sw: 2
+    })), React.createElement("h3", {
+      style: ROS_H3
+    }, "Rule checks"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: rosChipS(ev.okRules === ev.rules.length ? '#157a43' : '#b5670a', ev.okRules === ev.rules.length ? 'rgba(31,157,87,.13)' : 'rgba(224,138,30,.14)')
+    }, ev.okRules, " of ", ev.rules.length, " clear")), React.createElement("div", null, ev.rules.map(([rule, base, list], i) => React.createElement("div", {
+      key: rule + i,
       style: {
         display: 'flex',
-        gap: 8,
-        alignItems: 'center'
+        alignItems: 'flex-start',
+        gap: 10,
+        padding: '10px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.12)'
       }
-    }, React.createElement("input", {
-      type: "checkbox",
-      checked: !!r.on,
-      onChange: e => setRules(s => ({
-        ...s,
-        [k]: {
-          ...r,
-          on: e.target.checked
-        }
-      }))
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 18,
+        height: 18,
+        borderRadius: '50%',
+        flexShrink: 0,
+        marginTop: 1,
+        color: '#fff',
+        background: list.length ? 'linear-gradient(135deg,#e8697f,#a92c42)' : 'linear-gradient(135deg,#2fbf7f,#157a43)'
+      }
+    }, React.createElement(Ic, {
+      d: list.length ? 'M18 6L6 18M6 6l12 12' : 'M4 12l5 5L20 6',
+      s: 10,
+      sw: 3.4
+    })), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#16202e'
+      }
+    }, rule), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c',
+        lineHeight: 1.5
+      }
+    }, list.length ? list.slice(0, 3).join(' · ') + (list.length > 3 ? ' +' + (list.length - 3) + ' more' : '') : base)), React.createElement("span", {
+      style: rosChipS(list.length ? '#a92c42' : '#157a43', list.length ? 'rgba(210,58,82,.12)' : 'rgba(31,157,87,.13)')
+    }, list.length ? String(list.length) : 'ok'))))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+        padding: '14px 16px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 11
+      }
+    }, React.createElement("span", {
+      style: rosBadge('rgba(106,82,212,.12)', '#5b45c4', 26)
+    }, React.createElement(Ic, {
+      d: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM19 8v6M22 11h-6",
+      s: 14,
+      sw: 1.9
+    })), React.createElement("h3", {
+      style: ROS_H3
+    }, "Float pool suggestions")), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c',
+        lineHeight: 1.6,
+        marginBottom: 10
+      }
+    }, "Staff from other units marked ", React.createElement("b", null, "available for redeployment"), " and competent in ", dept, "."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8
+      }
+    }, floatPool.map(f => React.createElement("div", {
+      key: f.empId,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        background: 'rgba(255,255,255,.6)',
+        border: '1px solid rgba(255,255,255,.9)',
+        borderRadius: 10,
+        padding: '8px 10px'
+      }
+    }, React.createElement(MK.Av, {
+      name: f.name,
+      empId: f.empId,
+      size: 30,
+      radius: rosAvRadius(30)
     }), React.createElement("div", {
       style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#16202e',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, f.name), React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: '#9aa6b4'
+      }
+    }, f.home, " \xB7 ", f.level, " in ", dept)), React.createElement("span", {
+      style: rosChipS(f.c, f.bg)
+    }, f.lvlShort))), floatPool.length === 0 && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#9aa6b4'
+      }
+    }, "No other units have staff on the register yet."))), React.createElement("div", {
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+        padding: '14px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 22,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 4
+      }
+    }, React.createElement("span", {
+      style: rosBadge('rgba(0,144,202,.12)', '#0072a3', 24, 7)
+    }, React.createElement(Ic, {
+      d: "M4 20h16M6 16l10-10 3 3-10 10H6z",
+      s: 13,
+      sw: 1.9
+    })), React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: '#16202e'
+      }
+    }, "Sign-off"), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        color: '#9aa6b4'
+      }
+    }, "pick the names, then approve")), [['Prepared by', 'Nurse In-charge, ' + dept], ['Checked by', 'CNS'], ['Approved by', 'Chief of Nursing Services']].map(([role, title]) => {
+      const val = sign[role] !== undefined && sign[role] !== '' ? sign[role] : '—';
+      const pool = role === 'Prepared by' ? ['—'].concat(rows.map(r => r.name)) : ['—'].concat(allNames);
+      const opts = pool.indexOf(val) >= 0 ? pool : [val].concat(pool);
+      const stamped = role === 'Approved by' ? !!approvedAt : val !== '—';
+      return React.createElement("div", {
+        key: role,
+        style: {
+          minWidth: 186,
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: .6,
+          textTransform: 'uppercase',
+          color: '#7d8ea8'
+        }
+      }, role), React.createElement("select", {
+        value: val,
+        onChange: e => {
+          const v = e.target.value;
+          setSign(s => ({
+            ...s,
+            [role]: v
+          }));
+          setDirty(true);
+        },
+        style: {
+          width: '100%',
+          boxSizing: 'border-box',
+          marginTop: 4,
+          padding: '7px 9px',
+          borderRadius: 8,
+          border: '1px solid ' + (val === '—' ? 'rgba(125,145,180,.3)' : 'rgba(0,144,202,.32)'),
+          background: val === '—' ? 'rgba(255,255,255,.6)' : 'rgba(0,144,202,.07)',
+          fontFamily: 'inherit',
+          fontSize: 12,
+          fontWeight: 600,
+          color: val === '—' ? '#9aa6b4' : '#16202e',
+          outline: 'none'
+        }
+      }, opts.map(v => React.createElement("option", {
+        key: v,
+        value: v
+      }, v))), React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          marginTop: 4
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          color: '#9aa6b4'
+        }
+      }, title), React.createElement("span", {
+        style: {
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: .4,
+          textTransform: 'uppercase',
+          color: stamped ? '#157a43' : '#b6c0cc',
+          background: stamped ? 'rgba(31,157,87,.13)' : 'rgba(125,145,180,.12)',
+          padding: '2px 7px',
+          borderRadius: 8,
+          whiteSpace: 'nowrap'
+        }
+      }, role === 'Approved by' && approvedAt ? 'signed ' + approvedAt : stamped ? 'set' : 'not set')));
+    }), React.createElement("div", {
+      style: {
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        flexWrap: 'wrap',
+        borderTop: '1px solid rgba(125,145,180,.18)',
+        paddingTop: 11,
+        marginTop: 4
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: '#9aa6b4',
         flex: 1,
+        minWidth: 180
+      }
+    }, approvedAt ? 'Approved on ' + approvedAt + ' — the roster is locked for publication.' : ready ? 'Ready for the CNS to sign.' : 'Choose an approver above to enable signing.'), React.createElement("button", {
+      onClick: () => {
+        if (!ready || approvedAt) return;
+        Promise.resolve(save('submitted', true)).then(ok => {
+          if (ok !== false) setStatusRemote('approved', {
+            approvedBy: approver
+          });
+        });
+      },
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        border: '1px solid rgba(255,255,255,.4)',
+        background: approvedAt ? 'linear-gradient(135deg,#2fbf7f,#157a43)' : ready ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,#9fb3c8,#7d8ea8)',
+        color: '#fff',
+        padding: '8px 14px',
+        borderRadius: 9,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: ready ? 'pointer' : 'default',
+        fontFamily: 'inherit',
+        boxShadow: ready && !approvedAt ? '0 7px 18px rgba(0,144,202,.35)' : 'none',
+        opacity: ready || approvedAt ? 1 : .6,
+        flexShrink: 0
+      }
+    }, React.createElement(Ic, {
+      d: "M4 12l5 5L20 6",
+      s: 13,
+      sw: 2.4
+    }), approvedAt ? 'Approved' : 'Sign & approve')))));
+  })(), pick && (() => {
+    const vh = window.innerHeight,
+      vw = window.innerWidth;
+    const below = vh - pick.cellBottom - 14,
+      above = pick.cellTop - 14;
+    const flip = below < 260 && above > below;
+    const room = Math.max(180, Math.min(Math.round(vh * 0.7), flip ? above : below));
+    const pickStyle = {
+      position: 'fixed',
+      left: Math.min(Math.max(124, pick.x), vw - 130),
+      transform: 'translateX(-50%)',
+      top: flip ? 'auto' : pick.cellBottom + 6,
+      bottom: flip ? vh - pick.cellTop + 6 : 'auto',
+      maxHeight: room,
+      overflowY: 'auto',
+      zIndex: 4000,
+      width: 240,
+      background: 'linear-gradient(158deg,rgba(255,255,255,.99),rgba(240,247,254,.97))',
+      border: '1px solid rgba(125,145,180,.28)',
+      borderRadius: 13,
+      boxShadow: '0 22px 56px rgba(31,59,90,.28)',
+      animation: 'rosPop .16s cubic-bezier(.2,.7,.3,1) both'
+    };
+    const current = cellCode(pick.empId, pick.d);
+    const doPick = k => {
+      push();
+      setCells(g => writeCell(g, pick.empId, pick.d, k));
+      setPick(null);
+    };
+    return React.createElement(React.Fragment, null, React.createElement("div", {
+      onClick: () => setPick(null),
+      style: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 3900
+      }
+    }), React.createElement("div", {
+      style: pickStyle
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '9px 12px',
+        borderBottom: '1px solid rgba(125,145,180,.2)',
+        background: 'rgba(233,243,252,.6)'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: '#16202e',
+        whiteSpace: 'nowrap'
+      }
+    }, pick.name), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        color: '#6c7a8c',
+        whiteSpace: 'nowrap'
+      }
+    }, "Day ", pick.d, " \xB7 ", dowOf(pick.d)), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      className: "ros-x",
+      onClick: () => setPick(null),
+      style: {
+        cursor: 'pointer',
+        color: '#9aa6b4',
+        display: 'grid',
+        placeItems: 'center',
+        width: 20,
+        height: 20,
+        borderRadius: 6
+      }
+    }, React.createElement(Ic, {
+      d: "M18 6L6 18M6 6l12 12",
+      s: 12,
+      sw: 2.4
+    }))), React.createElement("div", {
+      style: {
+        padding: '9px 11px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8
+      }
+    }, [['G', 'General', '#6a52d4'], ['M', 'Morning', '#b5670a'], ['E', 'Evening', '#0072a3'], ['N', 'Night', '#5b45c4'], ['O', 'Leave / off', '#7d8ea8']].map(([b, label, color]) => React.createElement("div", {
+      key: b
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9,
+        fontWeight: 800,
+        letterSpacing: .8,
+        textTransform: 'uppercase',
+        color,
+        marginBottom: 5
+      }
+    }, label), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3
+      }
+    }, R.SHIFTS.filter(s => s.bucket === b).map(s => {
+      const on = current === s.code;
+      return React.createElement("div", {
+        key: s.code,
+        onClick: () => doPick(s.code),
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '5px 9px',
+          borderRadius: 8,
+          cursor: 'pointer',
+          color: on ? color : '#3c4858',
+          background: on ? color + '16' : 'transparent',
+          border: '1px solid ' + (on ? color + '4d' : 'transparent'),
+          fontWeight: on ? 700 : 500
+        }
+      }, React.createElement("b", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 10,
+          minWidth: 30,
+          flexShrink: 0
+        }
+      }, s.code), React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, s.label));
+    })))), React.createElement("div", null, React.createElement("div", {
+      style: {
+        fontSize: 9,
+        fontWeight: 800,
+        letterSpacing: .8,
+        textTransform: 'uppercase',
+        color: '#9fb0c4',
+        marginBottom: 5
+      }
+    }, "Clear"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3
+      }
+    }, React.createElement("div", {
+      onClick: () => doPick(''),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '5px 9px',
+        borderRadius: 8,
+        cursor: 'pointer',
+        color: '#a92c42',
+        background: 'rgba(210,58,82,.08)',
+        border: '1px solid rgba(210,58,82,.24)'
+      }
+    }, React.createElement("b", {
+      style: {
+        fontFamily: ROS_MONO,
+        fontSize: 10,
+        minWidth: 30,
+        flexShrink: 0
+      }
+    }, "\u2014"), React.createElement("span", {
+      style: {
+        fontSize: 10.5
+      }
+    }, "Not assigned")))))));
+  })(), queue.length > 0 && (() => {
+    const nameOf = id => (rows.find(r => r.empId === id) || {}).name || id;
+    const firstOf = id => String(nameOf(id)).split(' ')[0];
+    const BN = {
+      G: 'General',
+      M: 'Morning',
+      E: 'Evening',
+      N: 'Night',
+      O: 'Leave / off'
+    };
+    const chip = (label, c) => ({
+      label,
+      style: {
+        fontSize: 9,
+        fontWeight: 700,
+        color: c,
+        background: c + '16',
+        border: '1px solid ' + c + '33',
+        padding: '2px 7px',
+        borderRadius: 8,
+        whiteSpace: 'nowrap'
+      }
+    });
+    const qRows = queue.map(q => {
+      const aB = R.bucketOf(q.aCode) || '',
+        bB = R.bucketOf(q.bCode) || '';
+      const warns = [];
+      const after = (id, d) => {
+        if (id === q.bId && d === q.bDi) return q.aCode;
+        if (id === q.aId && d === q.aDi) return q.mode === 'swap' ? q.bCode : '';
+        return cellCode(id, d);
+      };
+      const bAt = (id, d) => R.bucketOf(after(id, d)) || '';
+      if (bAt(q.bId, q.bDi - 1) === 'N' && bAt(q.bId, q.bDi) === 'M') warns.push(firstOf(q.bId) + ' would work night → morning.');
+      if (bAt(q.bId, q.bDi) === 'N' && bAt(q.bId, q.bDi + 1) === 'M') warns.push(firstOf(q.bId) + ' has a morning right after this night.');
+      [q.aDi, q.bDi].filter((v, i, arr) => arr.indexOf(v) === i).forEach(d => {
+        ['M', 'E', 'N'].forEach(bk => {
+          let n = 0;
+          rows.forEach(x => {
+            if (bAt(x.empId, d) === bk) n++;
+          });
+          const floor = bk === 'M' ? cfg.minM : bk === 'E' ? cfg.minE : cfg.minN;
+          if (n < floor) warns.push('Day ' + d + ' ' + BN[bk].toLowerCase() + ' drops to ' + n + ' (floor ' + floor + ').');
+        });
+        let sen = false;
+        rows.forEach(x => {
+          if (bAt(x.empId, d) === 'N' && /Senior|Team|Charge/.test(x.desig || '')) sen = true;
+        });
+        if (!sen) warns.push('Day ' + d + ' night would have no senior nurse.');
+      });
+      let run = 0,
+        maxRun = 0;
+      for (let d = 1; d <= days; d++) {
+        if (bAt(q.bId, d) === 'N') {
+          run++;
+          maxRun = Math.max(maxRun, run);
+        } else run = 0;
+      }
+      if (maxRun > cfg.maxNights) warns.push(firstOf(q.bId) + ' would hit ' + maxRun + ' nights in a row (max ' + cfg.maxNights + ').');
+      const sameKind = aB === bB;
+      const aCol = rosBColor(aB),
+        bCol = rosBColor(bB);
+      const aH = R.hoursOf(q.aCode),
+        bH = R.hoursOf(q.bCode);
+      const deltas = [];
+      const aDelta = q.mode === 'swap' ? bH - aH : -aH;
+      const bDelta = aH - bH;
+      deltas.push(chip(firstOf(q.aId) + ' ' + (aDelta >= 0 ? '+' : '') + aDelta + ' h', aDelta === 0 ? '#6c7a8c' : aDelta > 0 ? '#b5670a' : '#157a43'));
+      if (q.aId !== q.bId) deltas.push(chip(firstOf(q.bId) + ' ' + (bDelta >= 0 ? '+' : '') + bDelta + ' h', bDelta === 0 ? '#6c7a8c' : bDelta > 0 ? '#b5670a' : '#157a43'));
+      [q.aDi, q.bDi].filter((v, i, arr) => arr.indexOf(v) === i).forEach(d => {
+        const before = onDutyOf(d);
+        let aft = 0;
+        rows.forEach(x => {
+          const bb = bAt(x.empId, d);
+          if (bb && bb !== 'O') aft++;
+        });
+        const dd = aft - before;
+        deltas.push(chip('Day ' + d + ' cover ' + before + '→' + aft, dd === 0 ? '#0072a3' : dd > 0 ? '#157a43' : '#a92c42'));
+      });
+      return {
+        q,
+        warns,
+        deltas,
+        mode: q.mode === 'swap' ? 'SWAP' : 'MOVE',
+        variation: (BN[aB] || '—') + ' → ' + (BN[bB] || '—'),
+        varStyle: {
+          fontSize: 9.5,
+          fontWeight: 700,
+          color: sameKind ? '#6c7a8c' : '#5b45c4',
+          background: sameKind ? 'rgba(125,145,180,.14)' : 'rgba(106,82,212,.12)',
+          border: '1px solid ' + (sameKind ? 'rgba(125,145,180,.24)' : 'rgba(106,82,212,.26)'),
+          padding: '2px 8px',
+          borderRadius: 8,
+          whiteSpace: 'nowrap'
+        },
+        cardStyle: {
+          background: warns.length ? 'linear-gradient(150deg,rgba(255,241,243,.95),rgba(255,255,255,.9))' : 'rgba(255,255,255,.85)',
+          border: '1px solid ' + (warns.length ? 'rgba(210,58,82,.3)' : 'rgba(125,145,180,.22)'),
+          borderLeft: '3px solid ' + (warns.length ? '#d23a52' : 'rgba(0,144,202,.5)'),
+          borderRadius: 11,
+          padding: '9px 10px',
+          boxShadow: warns.length ? '0 3px 12px rgba(210,58,82,.12)' : '0 2px 8px rgba(31,59,90,.06)'
+        },
+        aTime: R.BY_CODE[q.aCode] ? R.BY_CODE[q.aCode].label + ' · ' + aH + ' h' : 'unassigned',
+        bTime: R.BY_CODE[q.bCode] ? R.BY_CODE[q.bCode].label + ' · ' + bH + ' h' : 'unassigned',
+        aCodeStyle: {
+          fontFamily: ROS_MONO,
+          fontSize: 9.5,
+          fontWeight: 700,
+          color: q.aCode ? aB === 'O' ? '#6c7a8c' : '#fff' : '#9aa6b4',
+          background: q.aCode ? aB === 'O' ? 'rgba(125,145,180,.2)' : aCol : 'rgba(125,145,180,.12)',
+          padding: '1px 6px',
+          borderRadius: 5,
+          flexShrink: 0
+        },
+        bCodeStyle: {
+          fontFamily: ROS_MONO,
+          fontSize: 9.5,
+          fontWeight: 700,
+          color: q.bCode ? bB === 'O' ? '#6c7a8c' : '#fff' : '#9aa6b4',
+          background: q.bCode ? bB === 'O' ? 'rgba(125,145,180,.2)' : bCol : 'rgba(125,145,180,.12)',
+          padding: '1px 6px',
+          borderRadius: 5,
+          flexShrink: 0
+        },
+        modeStyle: {
+          fontSize: 9,
+          fontWeight: 800,
+          letterSpacing: .6,
+          color: '#fff',
+          background: q.mode === 'swap' ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,#8a74e8,#5b45c4)',
+          padding: '2px 7px',
+          borderRadius: 6,
+          flexShrink: 0
+        }
+      };
+    });
+    const cross = queue.filter(q => q.aId !== q.bId).length;
+    return React.createElement("div", {
+      style: {
+        position: 'fixed',
+        right: 18,
+        top: '50%',
+        transform: 'translateY(-50%)',
+        zIndex: 4300,
+        width: 296,
+        maxHeight: '76vh',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'linear-gradient(158deg,rgba(255,255,255,.98),rgba(238,246,254,.96))',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderRadius: 16,
+        boxShadow: '0 26px 64px rgba(31,59,90,.28)',
+        animation: 'rosSlideInY .26s cubic-bezier(.2,.75,.3,1) both'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '13px 15px',
+        borderBottom: '1px solid rgba(125,145,180,.2)',
+        background: 'linear-gradient(180deg,rgba(233,243,252,.75),rgba(255,255,255,.4))',
+        borderRadius: '16px 16px 0 0'
+      }
+    }, React.createElement("span", {
+      style: rosBadge('rgba(0,144,202,.13)', '#0072a3', 30, 9)
+    }, React.createElement(Ic, {
+      d: "M7 16H3l4-4M17 8h4l-4 4M3 16h14M21 8H7",
+      s: 15,
+      sw: 1.9
+    })), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: '#16202e'
+      }
+    }, "Pending changes"), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: '#6c7a8c'
+      }
+    }, queue.length + (queue.length === 1 ? ' change' : ' changes'), " \xB7 not saved yet")), React.createElement("span", {
+      className: "ros-xred",
+      onClick: () => setQueue([]),
+      title: "Discard all",
+      style: {
+        cursor: 'pointer',
+        color: '#9aa6b4',
+        display: 'grid',
+        placeItems: 'center',
+        width: 24,
+        height: 24,
+        borderRadius: 7,
+        flexShrink: 0
+      }
+    }, React.createElement(Ic, {
+      d: "M18 6L6 18M6 6l12 12",
+      s: 13,
+      sw: 2.4
+    }))), React.createElement("div", {
+      style: {
+        flex: 1,
+        overflowY: 'auto',
+        padding: '11px 13px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8
+      }
+    }, qRows.map(r => React.createElement("div", {
+      key: r.q.key,
+      style: r.cardStyle
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        marginBottom: 7,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: r.modeStyle
+    }, r.mode), React.createElement("span", {
+      style: r.varStyle
+    }, r.variation), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      className: "ros-xred",
+      onClick: () => setQueue(s => s.filter(x => x.key !== r.q.key)),
+      title: "Remove",
+      style: {
+        cursor: 'pointer',
+        color: '#b6c0cc',
+        display: 'grid',
+        placeItems: 'center',
+        width: 18,
+        height: 18,
+        borderRadius: 5,
+        flexShrink: 0
+      }
+    }, React.createElement(Ic, {
+      d: "M18 6L6 18M6 6l12 12",
+      s: 10,
+      sw: 3
+    }))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7
+      }
+    }, React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 600,
+        color: '#16202e',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, nameOf(r.q.aId)), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 5,
+        marginTop: 2
+      }
+    }, React.createElement("span", {
+      style: r.aCodeStyle
+    }, r.q.aCode || '—'), React.createElement("span", {
+      style: {
+        fontSize: 9.5,
+        color: '#9aa6b4'
+      }
+    }, "Day ", r.q.aDi)), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: '#6c7a8c',
+        fontFamily: ROS_MONO,
+        marginTop: 2,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, r.aTime)), React.createElement("svg", {
+      width: "15",
+      height: "15",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "#0090ca",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      style: {
+        flexShrink: 0
+      }
+    }, React.createElement("path", {
+      d: "M7 16H3l4-4M17 8h4l-4 4M3 16h14M21 8H7"
+    })), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 600,
+        color: '#16202e',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, nameOf(r.q.bId)), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 5,
+        marginTop: 2
+      }
+    }, React.createElement("span", {
+      style: r.bCodeStyle
+    }, r.q.bCode || '—'), React.createElement("span", {
+      style: {
+        fontSize: 9.5,
+        color: '#9aa6b4'
+      }
+    }, "Day ", r.q.bDi)), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: '#6c7a8c',
+        fontFamily: ROS_MONO,
+        marginTop: 2,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, r.bTime))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 5,
+        flexWrap: 'wrap',
+        marginTop: 7,
+        paddingTop: 7,
+        borderTop: '1px solid rgba(125,145,180,.16)'
+      }
+    }, r.deltas.map((d2, i) => React.createElement("span", {
+      key: i,
+      style: d2.style
+    }, d2.label))), r.warns.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 7,
+        background: 'rgba(210,58,82,.09)',
+        border: '1px solid rgba(210,58,82,.22)',
+        borderRadius: 8,
+        padding: '7px 9px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        marginBottom: 4
+      }
+    }, React.createElement("svg", {
+      width: "12",
+      height: "12",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "#a92c42",
+      strokeWidth: "2.2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      style: {
+        flexShrink: 0
+      }
+    }, React.createElement("path", {
+      d: "M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01"
+    })), React.createElement("span", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 800,
+        letterSpacing: .6,
+        textTransform: 'uppercase',
+        color: '#a92c42'
+      }
+    }, "Rule alert"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 9,
+        fontWeight: 700,
+        color: '#a92c42'
+      }
+    }, r.warns.length > 3 ? '+' + (r.warns.length - 3) + ' more' : '')), r.warns.slice(0, 3).map((a, i) => React.createElement("div", {
+      key: i,
+      style: {
+        fontSize: 10,
+        color: '#7a1f30',
+        lineHeight: 1.5
+      }
+    }, "\xB7 ", a)))))), React.createElement("div", {
+      style: {
+        padding: '11px 13px',
+        borderTop: '1px solid rgba(125,145,180,.2)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: '#6c7a8c',
+        background: 'rgba(0,144,202,.08)',
+        borderRadius: 8,
+        padding: '7px 9px',
+        lineHeight: 1.45
+      }
+    }, cross ? cross + ' cross-nurse ' + (cross === 1 ? 'swap' : 'swaps') + ' will be logged for the CNS' : 'Same-nurse moves only — no approval needed'), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8
+      }
+    }, React.createElement("button", {
+      onClick: () => setQueue([]),
+      style: {
+        flex: 1,
+        border: '1px solid rgba(125,145,180,.32)',
+        background: 'rgba(255,255,255,.8)',
+        color: '#3c4858',
+        padding: '9px 12px',
+        borderRadius: 9,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit'
+      }
+    }, "Discard"), React.createElement("button", {
+      className: "ros-lift",
+      onClick: saveQueue,
+      style: {
+        flex: 1.4,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        border: '1px solid rgba(255,255,255,.4)',
+        background: 'linear-gradient(135deg,#2fbf7f,#157a43)',
+        color: '#fff',
+        padding: '9px 12px',
+        borderRadius: 9,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        boxShadow: '0 8px 20px rgba(31,157,87,.35)'
+      }
+    }, React.createElement(Ic, {
+      d: "M4 12l5 5L20 6",
+      s: 13,
+      sw: 2.4
+    }), "Confirm & save"))));
+  })(), !!savedBatch && React.createElement("div", {
+    style: {
+      position: 'fixed',
+      right: 18,
+      bottom: 20,
+      zIndex: 4400,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      background: 'linear-gradient(158deg,rgba(255,255,255,.98),rgba(236,252,244,.96))',
+      border: '1px solid rgba(31,157,87,.3)',
+      borderRadius: 13,
+      padding: '12px 15px',
+      boxShadow: '0 20px 48px rgba(31,59,90,.24)',
+      animation: 'rosSlideIn .24s cubic-bezier(.2,.75,.3,1) both'
+    }
+  }, React.createElement("span", {
+    style: rosBadge('rgba(31,157,87,.15)', '#157a43', 28, '50%')
+  }, React.createElement(Ic, {
+    d: "M4 12l5 5L20 6",
+    s: 15,
+    sw: 3
+  })), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: '#16202e'
+    }
+  }, savedBatch), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#6c7a8c'
+    }
+  }, "Logged in Shift swaps \xB7 Undo is still available")), React.createElement("span", {
+    className: "ros-x",
+    onClick: () => setSavedBatch(null),
+    style: {
+      cursor: 'pointer',
+      color: '#9aa6b4',
+      display: 'grid',
+      placeItems: 'center',
+      width: 22,
+      height: 22,
+      borderRadius: 6,
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: "M18 6L6 18M6 6l12 12",
+    s: 12,
+    sw: 2.4
+  }))), dayPop != null && (() => {
+    const d = dayPop;
+    const on = onDutyOf(d);
+    const covC = on >= 4 ? '#157a43' : '#a92c42';
+    const offOut = [];
+    rows.forEach(x => {
+      const c = cellCode(x.empId, d);
+      if (R.bucketOf(c) === 'O') offOut.push(String(x.name).split(' ')[0] + ' · ' + c);
+    });
+    return React.createElement("div", {
+      onClick: () => setDayPop(null),
+      style: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 4200,
+        display: 'grid',
+        placeItems: 'center',
+        background: 'rgba(31,59,90,.32)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)'
+      }
+    }, React.createElement("div", {
+      onClick: e2 => e2.stopPropagation(),
+      style: {
+        width: 'min(580px,92vw)',
+        maxHeight: '86vh',
+        overflowY: 'auto',
+        background: 'linear-gradient(158deg,rgba(255,255,255,.98),rgba(238,246,254,.96))',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderRadius: 18,
+        boxShadow: '0 30px 80px rgba(31,59,90,.3)',
+        animation: 'rosPopCard .28s cubic-bezier(.2,.85,.3,1.1) both'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        padding: '15px 18px',
+        borderBottom: '1px solid rgba(125,145,180,.2)',
+        background: 'linear-gradient(180deg,rgba(233,243,252,.7),rgba(255,255,255,.4))'
+      }
+    }, React.createElement("span", {
+      style: rosBadge('rgba(0,144,202,.12)', '#0072a3', 36, 11)
+    }, React.createElement(Ic, {
+      d: "M3 5h18v16H3zM3 9h18M8 3v4M16 3v4",
+      s: 17,
+      sw: 1.9
+    })), React.createElement("div", {
+      style: {
         minWidth: 0
       }
     }, React.createElement("div", {
       style: {
-        fontSize: 11.6,
-        fontWeight: 600
+        fontSize: 15,
+        fontWeight: 800,
+        color: '#16202e'
       }
-    }, R.DEFAULT_RULES[k].label), React.createElement("div", {
-      className: "sub",
+    }, d, " ", R.MONTHS[month], " \xB7 ", dowOf(d)), React.createElement("div", {
       style: {
-        fontSize: 10.4
+        fontSize: 11,
+        color: '#6c7a8c',
+        marginTop: 1
       }
-    }, R.DEFAULT_RULES[k].unit)), React.createElement("button", {
-      className: "icon-btn",
-      onClick: () => setRules(s => ({
-        ...s,
-        [k]: {
-          ...r,
-          value: Math.max(0, r.value - 1)
-        }
-      }))
-    }, "\u2212"), React.createElement("span", {
-      className: "num",
+    }, dept, " \xB7 ", rosIsFri(year, month, d) ? 'weekly holiday' : 'working day')), React.createElement("span", {
       style: {
-        minWidth: 18,
-        textAlign: 'center',
-        fontWeight: 700
+        flex: 1
       }
-    }, r.value), React.createElement("button", {
-      className: "icon-btn",
-      onClick: () => setRules(s => ({
-        ...s,
-        [k]: {
-          ...r,
-          value: r.value + 1
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: covC,
+        background: covC + '16',
+        border: '1px solid ' + covC + '33',
+        padding: '5px 11px',
+        borderRadius: 14,
+        whiteSpace: 'nowrap',
+        flexShrink: 0
+      }
+    }, on, " of ", rows.length, " on duty"), React.createElement("span", {
+      className: "ros-x",
+      onClick: () => setDayPop(null),
+      style: {
+        cursor: 'pointer',
+        color: '#9aa6b4',
+        display: 'grid',
+        placeItems: 'center',
+        width: 26,
+        height: 26,
+        borderRadius: 8,
+        flexShrink: 0
+      }
+    }, React.createElement(Ic, {
+      d: "M18 6L6 18M6 6l12 12",
+      s: 14,
+      sw: 2.4
+    }))), React.createElement("div", {
+      style: {
+        padding: '14px 18px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 13
+      }
+    }, ROS_BUCKETS.map(([b, label]) => {
+      const col = ROS_TONE[b];
+      const people = [];
+      rows.forEach(x => {
+        const c = cellCode(x.empId, d);
+        if (R.bucketOf(c) === b) people.push({
+          x,
+          c
+        });
+      });
+      return React.createElement("div", {
+        key: b
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 7
         }
-      }))
-    }, "+"));
-  }), React.createElement("div", {
-    className: "sub",
-    style: {
-      fontSize: 10.6,
-      borderTop: '1px solid var(--line,#eef2f7)',
-      paddingTop: 7
-    }
-  }, "Changes here apply immediately to the checks above. Save the roster from the grid to keep them with this unit's sheet."))), React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Who is away"), React.createElement("div", {
-    className: "sub"
-  }, R.MONTHS[month], " ", year, " \xB7 leave only, not days off")), React.createElement("div", {
-    className: "card-b",
-    style: {
-      maxHeight: 280,
-      overflow: 'auto'
-    }
-  }, away.length === 0 ? React.createElement("div", {
-    className: "sub",
-    style: {
-      textAlign: 'center',
-      padding: 14
-    }
-  }, "Nobody is on leave this month.") : React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 6
-    }
-  }, away.map(a => {
-    const over = a.list.length > ((rules.leaveClash || {}).value || 99);
-    return React.createElement("div", {
-      key: a.day,
+      }, React.createElement("span", {
+        style: {
+          width: 8,
+          height: 8,
+          borderRadius: 3,
+          background: col,
+          flexShrink: 0
+        }
+      }), React.createElement("span", {
+        style: {
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: .8,
+          textTransform: 'uppercase',
+          color: col
+        }
+      }, label), React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: '#7d8ea8'
+        }
+      }, ROS_WINDOWS[b]), React.createElement("span", {
+        style: {
+          flex: 1
+        }
+      }), React.createElement("span", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 11,
+          fontWeight: 800,
+          color: people.length ? col : '#a92c42',
+          background: people.length ? col + '16' : 'rgba(210,58,82,.1)',
+          padding: '2px 8px',
+          borderRadius: 9
+        }
+      }, people.length)), React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 5
+        }
+      }, people.map(p => React.createElement("div", {
+        key: p.x.empId,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+          background: 'rgba(255,255,255,.85)',
+          border: '1px solid rgba(125,145,180,.2)',
+          borderRadius: 10,
+          padding: '7px 10px',
+          boxShadow: '0 2px 6px rgba(31,59,90,.05)'
+        }
+      }, React.createElement(MK.Av, {
+        name: p.x.name,
+        empId: p.x.empId,
+        size: 28,
+        radius: rosAvRadius(28)
+      }), React.createElement("div", {
+        style: {
+          minWidth: 0,
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 12,
+          fontWeight: 600,
+          color: '#16202e',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, p.x.name), React.createElement("div", {
+        style: {
+          fontSize: 10,
+          color: '#9aa6b4'
+        }
+      }, p.x.desig || '—')), React.createElement("span", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 10,
+          fontWeight: 700,
+          color: '#fff',
+          background: rosBColor(b),
+          padding: '2px 7px',
+          borderRadius: 6,
+          flexShrink: 0
+        }
+      }, p.c), React.createElement("span", {
+        style: {
+          fontFamily: ROS_MONO,
+          fontSize: 10,
+          color: '#6c7a8c',
+          whiteSpace: 'nowrap'
+        }
+      }, (R.BY_CODE[p.c] || {}).label || ''))), people.length === 0 && React.createElement("div", {
+        style: {
+          fontSize: 11,
+          fontWeight: 600,
+          color: '#a92c42',
+          background: 'rgba(210,58,82,.09)',
+          border: '1px solid rgba(210,58,82,.22)',
+          borderRadius: 9,
+          padding: '7px 10px'
+        }
+      }, "Uncovered \u2014 no one rostered.")));
+    }), React.createElement("div", {
       style: {
         display: 'flex',
-        gap: 8,
-        alignItems: 'baseline',
-        fontSize: 11.5
+        alignItems: 'center',
+        gap: 9,
+        flexWrap: 'wrap',
+        borderTop: '1px solid rgba(125,145,180,.2)',
+        paddingTop: 12
       }
     }, React.createElement("span", {
-      className: "tag num",
       style: {
-        minWidth: 38,
-        textAlign: 'center',
-        color: over ? '#d23a52' : undefined
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: .8,
+        textTransform: 'uppercase',
+        color: '#7d8ea8'
       }
-    }, R.MONTHS[month].slice(0, 3), " ", a.day), React.createElement("span", {
-      className: "sub"
-    }, a.list.map(id => (staff.find(s => s.empId === id) || {}).name).filter(Boolean).join(', ')));
-  })))))));
+    }, "Off / leave"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 5,
+        flexWrap: 'wrap',
+        flex: 1
+      }
+    }, offOut.map((label, i) => React.createElement("span", {
+      key: i,
+      style: {
+        fontSize: 10,
+        fontWeight: 600,
+        color: '#6c7a8c',
+        background: 'rgba(255,255,255,.8)',
+        border: '1px solid rgba(125,145,180,.25)',
+        padding: '3px 9px',
+        borderRadius: 10,
+        whiteSpace: 'nowrap'
+      }
+    }, label)), offOut.length === 0 && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#9aa6b4'
+      }
+    }, "Everyone on duty")), React.createElement("button", {
+      className: "ros-goday",
+      onClick: () => {
+        setView('day');
+        setDay(d);
+        setDayPop(null);
+      },
+      style: {
+        border: '1px solid rgba(0,144,202,.3)',
+        background: 'rgba(0,144,202,.09)',
+        color: '#0072a3',
+        padding: '7px 13px',
+        borderRadius: 9,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        flexShrink: 0
+      }
+    }, "Open day view \u203A")))));
+  })());
 }
 function RosterPrint({
   staffStore,
@@ -82349,65 +84528,33 @@ function RosterView({
   const now = new Date();
   const y = Number(year) || now.getFullYear();
   const m = Number.isInteger(Number(month)) ? Number(month) : now.getMonth();
-  const [sub, setSub] = useState('');
-  const [focusDay, setFocusDay] = useState(0);
-  useEffect(() => {
-    if (view !== 'rosterGrid') setSub('');
-  }, [view]);
   const inner = (() => {
     if (view !== 'rosterHome' && !dept) return React.createElement(RosterHome, {
       index: index,
       staffStore: staffStore,
       setRoute: setRoute
     });
-    if (view === 'rosterGrid' && sub) {
-      const p = {
-        staffStore,
-        dept,
-        year: y,
-        month: m,
-        setRoute,
-        setSub
-      };
-      switch (sub) {
-        case 'week':
-          return React.createElement(RosterWeek, p);
-        case 'day':
-          return React.createElement(RosterDay, _extends({}, p, {
-            focusDay: focusDay
-          }));
-        case 'staff':
-          return React.createElement(RosterStaff, p);
-        case 'leave':
-          return React.createElement(RosterLeave, p);
-        case 'calendar':
-          return React.createElement(RosterCalendar, _extends({}, p, {
-            setFocusDay: setFocusDay
-          }));
-        case 'tree':
-          return React.createElement(RosterTree, p);
-        default:
-          break;
-      }
-    }
     switch (view) {
       case 'rosterGrid':
         return React.createElement(RosterGrid, {
+          key: dept + '|' + y + '|' + m,
           staffStore: staffStore,
           dept: dept,
           year: y,
           month: m,
           setRoute: setRoute,
-          setSub: setSub,
           onSaved: index.reload
         });
       case 'rosterReview':
-        return React.createElement(RosterReview, {
+        return React.createElement(RosterGrid, {
+          key: dept + '|' + y + '|' + m + '|rules',
           staffStore: staffStore,
           dept: dept,
           year: y,
           month: m,
-          setRoute: setRoute
+          setRoute: setRoute,
+          onSaved: index.reload,
+          initialView: "rules"
         });
       case 'rosterPrint':
         return React.createElement(RosterPrint, {
@@ -83298,12 +85445,12 @@ function RRTree({
             border: '1px solid ' + (isSel ? 'rgba(0,144,202,.55)' : 'rgba(125,145,180,.22)'),
             background: isSel ? 'rgba(0,144,202,.12)' : 'rgba(255,255,255,.72)'
           }
-        }, React.createElement("span", {
-          style: {
-            ...MK.av(s.name, 22),
-            borderRadius: 7
-          }
-        }, MK.initials(s.name)), React.createElement("div", {
+        }, React.createElement(MK.Av, {
+          name: s.name,
+          empId: s.empId,
+          size: 22,
+          radius: 7
+        }), React.createElement("div", {
           style: {
             minWidth: 0,
             flex: 1
@@ -83926,12 +86073,12 @@ function RRUnitDetail({
         gap: 7,
         fontSize: 11.4
       }
-    }, React.createElement("span", {
-      style: {
-        ...MK.av(s.name, 20),
-        borderRadius: 6
-      }
-    }, MK.initials(s.name)), React.createElement("span", {
+    }, React.createElement(MK.Av, {
+      name: s.name,
+      empId: s.empId,
+      size: 20,
+      radius: 6
+    }), React.createElement("span", {
       style: {
         flex: 1,
         minWidth: 0,
@@ -85034,6 +87181,4668 @@ function RosterReviewFull({
 window.RosterReviewFull = RosterReviewFull;
 })();
 ;
+/* ===== manpower.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect,
+    useRef,
+    useMemo
+  } = React;
+  const R = window.UNICO_ROSTER;
+  const DIVS = [['ce', 'Critical & Emergency', '#0090ca'], ['pr', 'Procedural', '#6a52d4'], ['ip', 'In-Patient Wards', '#3ab5a7'], ['op', 'Out-Patient', '#e08a1e']];
+  const SHIFTS = [['M', 'Morning', '08–14'], ['E', 'Evening', '14–20'], ['N', 'Night', '20–08']];
+  const DESIG = [['CN', 'Charge Nurse', '#0d1b2e'], ['SSN', 'Senior Staff Nurse', '#6a52d4'], ['SN', 'Staff Nurse', '#0090ca'], ['PCA', 'PCA', '#3ab5a7']];
+  const MONO = "'IBM Plex Mono',monospace";
+  const BUCKET_CHIP = {
+    M: '#e08a1e',
+    E: '#6a52d4',
+    N: '#0d1b2e',
+    G: '#0090ca'
+  };
+  const OFF_CHIP = '#7d8ea8',
+    LEAVE_CHIP = '#b5670a';
+  const divOf = name => {
+    const n = String(name || '').toLowerCase();
+    if (/icu|ccu|emerg|\ber\b|casualty/.test(n)) return 'ce';
+    if (/\bot\b|theatre|theater|cath|endo|dialysis|ctvs/.test(n)) return 'pr';
+    if (/opd|out.?patient|home|clinic|physio/.test(n)) return 'op';
+    return 'ip';
+  };
+  const desigBucket = e => {
+    if ((e.role || 'Nurse') === 'PCA') return 3;
+    const d = String(e.designation || '').toLowerCase();
+    if (/in.?charge|manager|charge|supervisor|superintendent/.test(d)) return 0;
+    if (/senior/.test(d)) return 1;
+    return 2;
+  };
+  const codeChip = code => {
+    if (!code || code === '—') return [OFF_CHIP, 'Not on the sheet'];
+    if (R.isLeave(code)) return [LEAVE_CHIP, (R.BY_CODE[code] || {}).label || 'Leave'];
+    if (R.isOff(code)) return [OFF_CHIP, (R.BY_CODE[code] || {}).label || 'Day off'];
+    const b = R.bucketOf(code);
+    return [BUCKET_CHIP[b] || OFF_CHIP, ((R.BY_CODE[code] || {}).label || '') + (R.BY_CODE[code] ? ' · ' + (R.BY_CODE[code].hours || 0) + ' h' : '')];
+  };
+  const covers = (code, i) => {
+    const b = R.bucketOf(code);
+    if (!b || b === 'O') return false;
+    if (b === 'G') return i === 0 || i === 1;
+    return b === 'MEN'[i];
+  };
+  const needOf = sheet => {
+    const ru = sheet && sheet.rules || {};
+    if (ru.cfg) return [Number(ru.cfg.minM) || 0, Number(ru.cfg.minE) || 0, Number(ru.cfg.minN) || 0];
+    if (ru.minMorning) return [Number(ru.minMorning.value) || 2, Number(ru.minEvening && ru.minEvening.value) || 2, Number(ru.minNight && ru.minNight.value) || 2];
+    return [2, 2, 2];
+  };
+  const statusWord = sheet => !sheet ? 'No roster' : sheet.status === 'approved' ? 'Published' : sheet.status === 'submitted' ? 'Submitted' : 'Draft';
+  (function () {
+    if (typeof document === 'undefined' || document.getElementById('mp-style')) return;
+    const el = document.createElement('style');
+    el.id = 'mp-style';
+    el.textContent = ['@keyframes mpOrbFloat{from{transform:translate(0,0) scale(1)}to{transform:translate(160px,110px) scale(1.18)}}', '@keyframes mpPop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}', '@keyframes mpLivepulse{0%{box-shadow:0 0 0 0 rgba(61,220,151,.6)}70%{box-shadow:0 0 0 8px rgba(61,220,151,0)}100%{box-shadow:0 0 0 0 rgba(61,220,151,0)}}', '@keyframes mpShortPulse{0%,100%{box-shadow:0 0 0 0 rgba(210,58,82,.0)}50%{box-shadow:0 0 0 5px rgba(210,58,82,.22)}}', '@keyframes mpBarIn{from{transform:scaleX(0)}}', '.mp-lift:hover{transform:translateY(-2px)}', '.mp-bright:hover{filter:brightness(1.04)}', '.mp-bright2:hover{filter:brightness(1.06)}', '.mp-hbtn:hover{background:rgba(0,144,202,.12)!important;color:#0072a3!important}', '.mp-hbg:hover{background:rgba(0,144,202,.08)}', '.mp-hbg2:hover{background:rgba(0,144,202,.18)!important}', '.mp-hwhite:hover{background:rgba(255,255,255,.9)!important}', '.mp-hclose:hover{background:#fff!important;color:#16202e!important}'].join('\n');
+    document.head.appendChild(el);
+  })();
+  const svgIc = (d, size, extra) => React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: extra && extra.sw || 2,
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: d
+  }));
+  function ManpowerOverview({
+    setRoute
+  }) {
+    const staffStore = window.useStaffStore();
+    const [S, setS] = useState(() => ({
+      pop: null,
+      view: 'day',
+      date: new Date().toISOString().slice(0, 10),
+      shift: 0,
+      sel: null,
+      hot: null,
+      staffTab: 'on',
+      narrow: typeof window !== 'undefined' && window.innerWidth < 1240
+    }));
+    const set = patch => setS(s => ({
+      ...s,
+      ...(typeof patch === 'function' ? patch(s) : patch)
+    }));
+    const dateRef = useRef(null);
+    useEffect(() => {
+      const rs = () => set({
+        narrow: window.innerWidth < 1240
+      });
+      window.addEventListener('resize', rs);
+      return () => window.removeEventListener('resize', rs);
+    }, []);
+    const today = () => new Date().toISOString().slice(0, 10);
+    const ini = n => {
+      const p = String(n || '—').split(' ').filter(Boolean);
+      return ((p[0] && p[0][0] || '—') + (p[1] ? p[1][0] : '')).toUpperCase();
+    };
+    const tone = (on, need) => !need ? '#7d8ea8' : on < need ? '#d23a52' : on > need ? '#0090ca' : '#157a43';
+    const stateWord = (on, need) => !need ? 'Closed' : on < need ? need - on + ' short' : on > need ? '+' + (on - need) : 'OK';
+    const shiftDate = (iso, n) => {
+      const d = new Date(iso + 'T12:00:00');
+      d.setDate(d.getDate() + n);
+      return d.toISOString().slice(0, 10);
+    };
+    const weekStart = iso => {
+      const d = new Date(iso + 'T12:00:00');
+      const dow = (d.getDay() + 6) % 7;
+      return shiftDate(iso, -dow);
+    };
+    const ymOf = iso => [Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1];
+    const dayNo = iso => Number(iso.slice(8, 10));
+    const baseUnits = useMemo(() => {
+      const by = {};
+      (staffStore.staff || []).filter(e => e.is_active !== false && !e.former).forEach(e => {
+        const dept = e.current_department || 'Unassigned';
+        (by[dept] = by[dept] || []).push(e);
+      });
+      const units = Object.keys(by).sort((a, b) => a.localeCompare(b)).map(dept => {
+        const people = by[dept];
+        const hc = [0, 0, 0, 0];
+        people.forEach(e => {
+          hc[desigBucket(e)]++;
+        });
+        const chief = people.find(e => desigBucket(e) === 0) || people.find(e => desigBucket(e) === 1) || people[0];
+        return {
+          dept,
+          div: divOf(dept),
+          people,
+          hc,
+          incharge: chief ? chief.name : '—'
+        };
+      });
+      const ordered = [].concat(units.filter(u => u.div === 'ip'), units.filter(u => u.div === 'pr'), units.filter(u => u.div === 'ce'), units.filter(u => u.div === 'op'));
+      const per = Math.max(1, Math.ceil(ordered.length / 3));
+      ordered.forEach((u, i) => {
+        const row = Math.min(2, Math.floor(i / per)),
+          pos = i - row * per,
+          n = Math.min(per, ordered.length - row * per);
+        const span = Math.max(1, Math.floor(12 / n)),
+          extra = 12 - span * n;
+        u.grid = [1 + pos * span + Math.min(pos, extra), span + (pos < extra ? 1 : 0), row + 1];
+      });
+      return units;
+    }, [staffStore.staff]);
+    const [index, setIndex] = useState(null);
+    const [sheets, setSheets] = useState({});
+    useEffect(() => {
+      let live = true;
+      fetch('/api/rosters', {
+        headers: {
+          accept: 'application/json'
+        }
+      }).then(r => r.json()).then(r => {
+        if (live) setIndex(r && r.ok && r.rosters || []);
+      }).catch(() => {
+        if (live) setIndex([]);
+      });
+      return () => {
+        live = false;
+      };
+    }, []);
+    const wk0 = weekStart(S.date);
+    const monthsNeeded = useMemo(() => {
+      const out = {};
+      [S.date, wk0, shiftDate(wk0, 6), S.pop && S.pop.date].filter(Boolean).forEach(d => {
+        const [y, m] = ymOf(d);
+        out[y + '|' + m] = [y, m];
+      });
+      return Object.values(out);
+    }, [S.date, wk0, S.pop]);
+    useEffect(() => {
+      if (!index) return;
+      let live = true;
+      const want = [];
+      baseUnits.forEach(u => monthsNeeded.forEach(([y, m]) => {
+        const k = u.dept + '|' + y + '|' + m;
+        if (sheets[k] !== undefined) return;
+        const has = index.some(r => r.dept === u.dept && Number(r.year) === y && Number(r.month) === m);
+        want.push({
+          k,
+          u,
+          y,
+          m,
+          has
+        });
+      }));
+      if (!want.length) return;
+      const absent = {};
+      want.filter(w => !w.has).forEach(w => {
+        absent[w.k] = null;
+      });
+      if (Object.keys(absent).length) setSheets(s => ({
+        ...s,
+        ...absent
+      }));
+      want.filter(w => w.has).forEach(w => {
+        fetch('/api/rosters/' + encodeURIComponent(w.u.dept) + '/' + w.y + '/' + w.m, {
+          headers: {
+            accept: 'application/json'
+          }
+        }).then(r => r.json()).then(r => {
+          if (live) setSheets(s => ({
+            ...s,
+            [w.k]: r && r.ok && r.roster || null
+          }));
+        }).catch(() => {
+          if (live) setSheets(s => ({
+            ...s,
+            [w.k]: null
+          }));
+        });
+      });
+      return () => {
+        live = false;
+      };
+    }, [index, baseUnits, monthsNeeded]);
+    const sheetFor = (u, iso) => {
+      const [y, m] = ymOf(iso);
+      return sheets[u.dept + '|' + y + '|' + m] || null;
+    };
+    const loading = index === null;
+    const staffOf = (u, iso) => {
+      const sheet = sheetFor(u, iso),
+        d = dayNo(iso);
+      return u.people.map(e => {
+        const key = 'S' + String(e.id);
+        const code = sheet && sheet.grid && sheet.grid[key] && sheet.grid[key][d] || '';
+        const bi = desigBucket(e);
+        return {
+          name: e.name,
+          emp: e.emp_id || key,
+          desig: DESIG[bi][1],
+          dcol: DESIG[bi][2],
+          code: code || '—',
+          staffId: e.id
+        };
+      });
+    };
+    const unitDay = (u, iso) => {
+      const sheet = sheetFor(u, iso),
+        st = staffOf(u, iso);
+      const on = [0, 1, 2].map(i => st.filter(p => covers(p.code, i)).length);
+      const lv = st.filter(p => R.isLeave(p.code)).length;
+      const off = st.filter(p => p.code === '—' || R.isOff(p.code)).length;
+      return {
+        u,
+        sheet,
+        on,
+        need: needOf(sheet),
+        leave: lv,
+        off,
+        status: statusWord(sheet)
+      };
+    };
+    const dayUnits = iso => baseUnits.map(u => unitDay(u, iso));
+    const sh = S.shift,
+      U = dayUnits(S.date);
+    const need = U.reduce((a, x) => a + x.need[sh], 0),
+      on = U.reduce((a, x) => a + x.on[sh], 0);
+    const staffTotal = baseUnits.reduce((a, u) => a + u.people.length, 0);
+    const short = U.filter(x => x.on[sh] < x.need[sh]);
+    const leave = U.reduce((a, x) => a + x.leave, 0),
+      offToday = U.reduce((a, x) => a + x.off, 0);
+    const pct = need ? Math.round(on / need * 100) : 100;
+    const coverC = pct < 90 ? '#d23a52' : pct < 100 ? '#e08a1e' : '#157a43';
+    const night = sh === 2;
+    const T = night ? {
+      glass: 'linear-gradient(152deg,rgba(236,242,252,.9),rgba(214,226,246,.72))',
+      glassBorder: 'rgba(255,255,255,.7)',
+      inner: 'rgba(255,255,255,.5)',
+      innerBorder: 'rgba(255,255,255,.8)',
+      ink: '#16202e',
+      inkMid: '#3c4858',
+      inkSoft: '#66748a',
+      inkFaint: '#9aa6b4',
+      inkLabel: '#7d8ea8',
+      rule: 'rgba(90,110,150,.2)',
+      shadow: '0 16px 40px rgba(2,8,22,.45),0 0 24px rgba(122,196,232,.18),inset 0 1px 0 rgba(255,255,255,.9)'
+    } : {
+      glass: 'linear-gradient(152deg,rgba(255,255,255,.8),rgba(236,247,255,.5))',
+      glassBorder: 'rgba(255,255,255,.92)',
+      inner: 'rgba(255,255,255,.58)',
+      innerBorder: 'rgba(255,255,255,.92)',
+      ink: '#16202e',
+      inkMid: '#3c4858',
+      inkSoft: '#6c7a8c',
+      inkFaint: '#9aa6b4',
+      inkLabel: '#7d8ea8',
+      rule: 'rgba(125,145,180,.18)',
+      shadow: '0 10px 30px rgba(31,59,90,.1),inset 0 1px 0 rgba(255,255,255,.95)'
+    };
+    const chip = c => ({
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: c,
+      background: c + '1f',
+      border: '1px solid ' + c + '44',
+      padding: '1px 7px',
+      borderRadius: 10,
+      whiteSpace: 'nowrap',
+      flexShrink: 0
+    });
+    const tabStyle = a => ({
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      border: 'none',
+      padding: '6px 10px',
+      borderRadius: 8,
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      color: a ? '#fff' : T.inkMid,
+      background: a ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent',
+      boxShadow: a ? '0 6px 16px rgba(0,144,202,.3)' : 'none',
+      transition: 'all .18s'
+    });
+    const ring = (r, p) => {
+      const c = 2 * Math.PI * r;
+      return Math.min(1, p / 100) * c + ' ' + c;
+    };
+    const active = id => S.sel === id || S.hot === id;
+    const statusChipColor = w => w === 'Published' ? '#157a43' : w === 'No roster' ? '#a92c42' : '#b5670a';
+    const week = Array.from({
+      length: 7
+    }, (_, i) => {
+      const date = shiftDate(wk0, i),
+        units = dayUnits(date);
+      const wNeed = units.reduce((a, x) => a + x.need[sh], 0),
+        wOn = units.reduce((a, x) => a + x.on[sh], 0);
+      return {
+        date,
+        units,
+        need: wNeed,
+        on: wOn,
+        pct: wNeed ? Math.round(wOn / wNeed * 100) : 100
+      };
+    });
+    const pop = S.pop,
+      popU = pop ? baseUnits.find(u => u.dept === pop.uid) : null;
+    const popDay = popU ? unitDay(popU, pop.date) : null,
+      popStaff = popU ? staffOf(popU, pop.date) : [];
+    const pd = popU ? DIVS.find(d => d[0] === popU.div) : null;
+    const selU = S.sel ? baseUnits.find(u => u.dept === S.sel) : null;
+    const selD = selU ? unitDay(selU, S.date) : null;
+    const sd = selU ? DIVS.find(d => d[0] === selU.div) : null;
+    const selHead = selU ? selU.people.length : 1;
+    const roster = selU ? staffOf(selU, S.date) : [];
+    const groups = {
+      on: roster.filter(p => covers(p.code, sh)),
+      off: roster.filter(p => !covers(p.code, sh) && !R.isLeave(p.code)),
+      away: roster.filter(p => R.isLeave(p.code))
+    };
+    const SKY = [{
+      bg: 'linear-gradient(180deg,#f3f6fb 0%,#e6eef9 55%,#f6efe2 100%)',
+      a: 'rgba(255,196,110,.5)',
+      b: 'rgba(39,168,219,.32)',
+      sun: {
+        top: 60,
+        right: '12%',
+        size: 140,
+        color: 'radial-gradient(circle,rgba(255,224,150,.95),rgba(255,190,90,.55) 45%,transparent 70%)'
+      }
+    }, {
+      bg: 'linear-gradient(180deg,#e9e3f6 0%,#f3dbe0 45%,#f7e2cf 100%)',
+      a: 'rgba(255,140,90,.5)',
+      b: 'rgba(106,82,212,.38)',
+      sun: {
+        top: 200,
+        right: '8%',
+        size: 180,
+        color: 'radial-gradient(circle,rgba(255,170,110,.95),rgba(232,96,120,.5) 45%,transparent 70%)'
+      }
+    }, {
+      bg: 'linear-gradient(180deg,#0b1730 0%,#12264a 55%,#1a2f56 100%)',
+      a: 'rgba(39,168,219,.28)',
+      b: 'rgba(106,82,212,.3)',
+      sun: {
+        top: 50,
+        right: '10%',
+        size: 90,
+        color: 'radial-gradient(circle,#f4f7fb 0 44%,rgba(244,247,251,.35) 52%,transparent 70%)'
+      }
+    }][sh];
+    const rnd = n => {
+      let x = 12345 + n * 7919;
+      x = (x * 9301 + 49297) % 233280;
+      return x / 233280;
+    };
+    const openRoster = (dept, iso) => {
+      const [y, m] = ymOf(iso || S.date);
+      setRoute && setRoute(dept ? {
+        view: 'rosterGrid',
+        dept,
+        year: y,
+        month: m
+      } : {
+        view: 'rosterHome'
+      });
+    };
+    const tileCard = x => {
+      const u = x.u,
+        d = DIVS.find(v => v[0] === u.div),
+        n = x.need[sh],
+        o = x.on[sh],
+        c = tone(o, n),
+        p = n ? Math.round(o / n * 100) : 100,
+        hc = u.people.length,
+        act = active(u.dept);
+      const sw = stateWord(o, n);
+      const gapText = sw === 'OK' ? 'adequate' : sw === 'Closed' ? 'closed this shift' : sw.replace('+', 'surplus +');
+      const mix = DESIG.map((dg, i) => ({
+        code: dg[0],
+        n: u.hc[i],
+        title: dg[1] + ': ' + u.hc[i],
+        w: hc ? u.hc[i] / hc * 100 : 0,
+        col: dg[2]
+      }));
+      return React.createElement("div", {
+        key: u.dept,
+        className: "mp-lift",
+        onClick: () => set({
+          sel: S.sel === u.dept ? null : u.dept
+        }),
+        onMouseEnter: () => set({
+          hot: u.dept
+        }),
+        onMouseLeave: () => set({
+          hot: null
+        }),
+        style: {
+          position: 'relative',
+          overflow: 'hidden',
+          cursor: 'pointer',
+          background: T.glass,
+          backdropFilter: 'blur(24px) saturate(1.7)',
+          WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+          border: '1px solid ' + (act ? d[2] + '99' : T.glassBorder),
+          borderRadius: 13,
+          boxShadow: act ? '0 0 0 3px ' + d[2] + '2e,0 12px 34px rgba(31,59,90,.16)' : T.shadow,
+          padding: '10px 11px 9px 14px',
+          transition: 'transform .2s,box-shadow .25s,border-color .2s'
+        }
+      }, React.createElement("div", {
+        style: {
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 4,
+          background: d[2]
+        }
+      }), React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8
+        }
+      }, React.createElement("div", {
+        style: {
+          position: 'relative',
+          width: 42,
+          height: 42,
+          flexShrink: 0
+        }
+      }, React.createElement("svg", {
+        viewBox: "0 0 42 42",
+        width: "42",
+        height: "42",
+        style: {
+          display: 'block'
+        }
+      }, React.createElement("circle", {
+        cx: "21",
+        cy: "21",
+        r: "17",
+        fill: "none",
+        stroke: "rgba(125,145,180,.18)",
+        strokeWidth: "5"
+      }), React.createElement("circle", {
+        cx: "21",
+        cy: "21",
+        r: "17",
+        fill: "none",
+        stroke: c,
+        strokeWidth: "5",
+        strokeLinecap: "round",
+        strokeDasharray: ring(17, p),
+        transform: "rotate(-90 21 21)",
+        style: {
+          transition: 'stroke-dasharray .5s ease'
+        }
+      })), React.createElement("div", {
+        style: {
+          position: 'absolute',
+          inset: 0,
+          display: 'grid',
+          placeItems: 'center',
+          fontFamily: MONO,
+          fontSize: 9.5,
+          fontWeight: 700
+        }
+      }, p + '%')), React.createElement("div", {
+        style: {
+          minWidth: 0,
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 12.5,
+          fontWeight: 700,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, u.dept), React.createElement("span", {
+        style: chip(statusChipColor(x.status))
+      }, x.status)), React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 5,
+          marginTop: 1
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 14,
+          fontWeight: 700,
+          color: c
+        }
+      }, o + '/' + n), React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: T.inkSoft
+        }
+      }, "on duty \xB7 ", gapText)), React.createElement("div", {
+        style: {
+          fontSize: 10,
+          color: T.inkFaint
+        }
+      }, "on register ", React.createElement("b", {
+        style: {
+          fontFamily: MONO,
+          color: T.inkMid,
+          fontWeight: 600
+        }
+      }, hc), " staff"))), React.createElement("div", {
+        style: {
+          marginTop: 8,
+          display: 'flex',
+          height: 6,
+          borderRadius: 4,
+          overflow: 'hidden',
+          gap: 1
+        }
+      }, mix.map(m => React.createElement("span", {
+        key: m.code,
+        title: m.title,
+        style: {
+          display: 'block',
+          width: m.w + '%',
+          background: m.col,
+          transition: 'width .3s'
+        }
+      }))), React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 7,
+          marginTop: 4,
+          fontSize: 9.5,
+          color: T.inkLabel,
+          fontFamily: MONO
+        }
+      }, mix.map(m => React.createElement("span", {
+        key: m.code,
+        style: {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 3
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 6,
+          height: 6,
+          borderRadius: 2,
+          background: m.col,
+          display: 'inline-block'
+        }
+      }), m.code, " ", m.n))), React.createElement("div", {
+        style: {
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3,1fr)',
+          gap: 4,
+          marginTop: 8
+        }
+      }, SHIFTS.map((s, i) => {
+        const tc = tone(x.on[i], x.need[i]);
+        return React.createElement("span", {
+          key: s[0],
+          title: s[1] + ' ' + s[2] + ': ' + x.on[i] + ' on duty, ' + x.need[i] + ' required',
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 3,
+            fontFamily: MONO,
+            fontSize: 10,
+            color: i === sh ? '#fff' : tc,
+            background: i === sh ? tc : tc + '1a',
+            border: '1px solid ' + tc + (i === sh ? '' : '44'),
+            borderRadius: 7,
+            padding: '3px 0',
+            transition: 'all .2s'
+          }
+        }, s[0], " ", React.createElement("b", {
+          style: {
+            fontWeight: 700
+          }
+        }, x.on[i] + '/' + x.need[i]));
+      })), React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          marginTop: 8,
+          paddingTop: 7,
+          borderTop: '1px solid ' + T.rule
+        }
+      }, React.createElement("span", {
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          width: 22,
+          height: 22,
+          borderRadius: 7,
+          fontSize: 9,
+          fontWeight: 800,
+          color: '#fff',
+          background: 'linear-gradient(135deg,' + d[2] + ',#0d1b2e)',
+          flexShrink: 0
+        }
+      }, ini(u.incharge)), React.createElement("div", {
+        style: {
+          minWidth: 0,
+          flex: 1,
+          fontSize: 10.5,
+          color: T.inkMid,
+          fontWeight: 600,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, u.incharge), React.createElement("span", {
+        style: {
+          fontSize: 9.5,
+          fontWeight: 600,
+          color: x.leave ? '#b5670a' : '#157a43',
+          whiteSpace: 'nowrap'
+        }
+      }, x.leave ? x.leave + ' leave · ' + x.off + ' off' : 'all present')));
+    };
+    const legendRow = React.createElement(React.Fragment, null, React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 10,
+        color: T.inkSoft
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 10,
+        height: 10,
+        borderRadius: 3,
+        background: '#d23a52'
+      }
+    }), "Short"), React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 10,
+        color: T.inkSoft
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 10,
+        height: 10,
+        borderRadius: 3,
+        background: '#157a43'
+      }
+    }), "Adequate"), React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 10,
+        color: T.inkSoft
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 10,
+        height: 10,
+        borderRadius: 3,
+        background: '#0090ca'
+      }
+    }), "Surplus"), React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 10,
+        color: T.inkSoft
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 10,
+        height: 10,
+        borderRadius: 3,
+        background: 'rgba(125,145,180,.35)'
+      }
+    }), "Closed"));
+    const glassCard = {
+      background: T.glass,
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid ' + T.glassBorder,
+      borderRadius: 16,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),inset 0 1px 0 rgba(255,255,255,.95)',
+      overflow: 'hidden'
+    };
+    const secLabel = {
+      fontSize: 9.5,
+      fontWeight: 800,
+      letterSpacing: '.7px',
+      textTransform: 'uppercase',
+      color: T.inkLabel,
+      marginBottom: 7
+    };
+    const half = Math.ceil(U.length / 2);
+    return React.createElement("div", {
+      style: {
+        position: 'relative',
+        overflow: 'hidden',
+        borderRadius: 18,
+        margin: '-8px -10px',
+        color: T.ink
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'absolute',
+        inset: 0,
+        zIndex: 0,
+        pointerEvents: 'none',
+        overflow: 'hidden',
+        background: SKY.bg,
+        transition: 'background 1s ease'
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'absolute',
+        width: 720,
+        height: 720,
+        left: '-8%',
+        top: '-30%',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle,' + SKY.a + ',transparent 70%)',
+        filter: 'blur(50px)',
+        animation: 'mpOrbFloat 18s ease-in-out infinite alternate',
+        transition: 'background 1s ease'
+      }
+    }), React.createElement("div", {
+      style: {
+        position: 'absolute',
+        width: 800,
+        height: 800,
+        right: '-12%',
+        bottom: '-35%',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle,' + SKY.b + ',transparent 70%)',
+        filter: 'blur(60px)',
+        animation: 'mpOrbFloat 22s ease-in-out infinite alternate-reverse',
+        transition: 'background 1s ease'
+      }
+    }), React.createElement("div", {
+      style: {
+        position: 'absolute',
+        top: SKY.sun.top,
+        right: SKY.sun.right,
+        width: SKY.sun.size,
+        height: SKY.sun.size,
+        borderRadius: '50%',
+        background: SKY.sun.color,
+        filter: night ? 'drop-shadow(0 0 30px rgba(220,230,255,.6))' : 'blur(6px)',
+        transition: 'all 1s ease'
+      }
+    }), night && React.createElement("div", null, Array.from({
+      length: 70
+    }, (_, i) => React.createElement("span", {
+      key: i,
+      style: {
+        position: 'absolute',
+        left: rnd(i) * 100 + '%',
+        top: rnd(i + 200) * 70 + '%',
+        width: 1 + rnd(i + 400) * 2,
+        height: 1 + rnd(i + 400) * 2,
+        borderRadius: '50%',
+        background: '#fff',
+        opacity: .3 + rnd(i + 600) * .7,
+        animation: 'mpLivepulse ' + (2 + rnd(i + 800) * 4) + 's ease-in-out ' + rnd(i) * 3 + 's infinite'
+      }
+    })))), React.createElement("div", {
+      style: {
+        position: 'relative',
+        minHeight: 'calc(100vh - 130px)',
+        padding: '16px 18px 40px',
+        boxSizing: 'border-box'
+      }
+    }, React.createElement("div", {
+      style: {
+        maxWidth: 1500,
+        margin: '0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'relative',
+        overflow: 'hidden',
+        background: T.glass,
+        backdropFilter: 'blur(24px) saturate(1.7)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
+        border: '1px solid ' + T.glassBorder,
+        borderRadius: 16,
+        boxShadow: '0 14px 40px rgba(31,59,90,.14),inset 0 1px 0 rgba(255,255,255,.95)',
+        padding: '12px 18px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'absolute',
+        right: -70,
+        top: -80,
+        width: 250,
+        height: 230,
+        borderRadius: '50%',
+        background: 'radial-gradient(circle,rgba(0,144,202,.2),transparent 70%)',
+        filter: 'blur(12px)',
+        pointerEvents: 'none',
+        animation: 'mpOrbFloat 18s ease-in-out infinite alternate'
+      }
+    }), React.createElement("span", {
+      style: {
+        position: 'relative',
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 38,
+        height: 38,
+        borderRadius: 11,
+        background: 'rgba(0,144,202,.16)',
+        color: '#0072a3',
+        flexShrink: 0,
+        boxShadow: '0 0 20px rgba(0,144,202,.28)'
+      }
+    }, React.createElement("svg", {
+      width: "19",
+      height: "19",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"
+    }))), React.createElement("div", {
+      style: {
+        position: 'relative',
+        minWidth: 200
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 15.5,
+        fontWeight: 800,
+        letterSpacing: '-.2px'
+      }
+    }, "Manpower at a glance"), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: T.inkSoft
+      }
+    }, U.length, " departments \xB7 ", staffTotal, " nursing staff", loading ? ' · loading rosters…' : '')), React.createElement("div", {
+      style: {
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        background: T.inner,
+        border: '1px solid ' + T.innerBorder,
+        borderRadius: 10,
+        padding: 3
+      }
+    }, React.createElement("button", {
+      className: "mp-hbtn",
+      onClick: () => set({
+        date: shiftDate(S.date, -1)
+      }),
+      title: "Previous day",
+      style: {
+        width: 26,
+        height: 26,
+        borderRadius: 7,
+        border: 'none',
+        background: 'transparent',
+        color: T.inkMid,
+        cursor: 'pointer',
+        display: 'grid',
+        placeItems: 'center'
+      }
+    }, svgIc('M15 6l-6 6 6 6', 13, {
+      sw: 2.2
+    })), React.createElement("div", {
+      className: "mp-hbg",
+      onClick: () => {
+        const el = dateRef.current;
+        if (el && el.showPicker) {
+          try {
+            el.showPicker();
+          } catch (e) {}
+        }
+      },
+      title: "Pick a date",
+      style: {
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '0 6px',
+        cursor: 'pointer',
+        borderRadius: 7
+      }
+    }, React.createElement("svg", {
+      width: "13",
+      height: "13",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "#0072a3",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: "M3 5h18v16H3zM3 9h18M8 3v4M16 3v4"
+    })), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: T.ink,
+        whiteSpace: 'nowrap'
+      }
+    }, new Date(S.date + 'T12:00:00').toLocaleDateString('en-GB', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    })), React.createElement("input", {
+      ref: dateRef,
+      type: "date",
+      value: S.date,
+      onChange: e => {
+        if (e.target.value) set({
+          date: e.target.value
+        });
+      },
+      style: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: '100%',
+        height: '100%',
+        opacity: 0,
+        cursor: 'pointer',
+        border: 0,
+        padding: 0,
+        margin: 0
+      }
+    })), React.createElement("button", {
+      className: "mp-hbtn",
+      onClick: () => set({
+        date: shiftDate(S.date, 1)
+      }),
+      title: "Next day",
+      style: {
+        width: 26,
+        height: 26,
+        borderRadius: 7,
+        border: 'none',
+        background: 'transparent',
+        color: T.inkMid,
+        cursor: 'pointer',
+        display: 'grid',
+        placeItems: 'center'
+      }
+    }, svgIc('M9 6l6 6-6 6', 13, {
+      sw: 2.2
+    })), S.date !== today() && React.createElement("button", {
+      className: "mp-hbg2",
+      onClick: () => set({
+        date: today()
+      }),
+      style: {
+        border: 'none',
+        background: 'rgba(0,144,202,.12)',
+        color: '#0072a3',
+        fontFamily: 'inherit',
+        fontSize: 10.5,
+        fontWeight: 700,
+        padding: '5px 9px',
+        borderRadius: 7,
+        cursor: 'pointer'
+      }
+    }, "Today")), React.createElement("div", {
+      style: {
+        position: 'relative',
+        display: 'inline-flex',
+        background: T.inner,
+        border: '1px solid ' + T.innerBorder,
+        borderRadius: 10,
+        padding: 3,
+        gap: 2
+      }
+    }, [['day', 'Day', 'M3 3h18v18H3zM3 9h18M9 9v12M15 3v6'], ['week', 'Week', 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4M3 15h18M9 9v12M15 9v12']].map(v => React.createElement("button", {
+      key: v[0],
+      onClick: () => set({
+        view: v[0]
+      }),
+      style: Object.assign(tabStyle(S.view === v[0]), {
+        padding: '5px 10px',
+        fontSize: 11
+      })
+    }, React.createElement("svg", {
+      width: "12",
+      height: "12",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: v[2]
+    })), v[1]))), React.createElement("div", {
+      style: {
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+        marginLeft: 6
+      }
+    }, [{
+      val: on + '/' + need,
+      lbl: 'on duty vs required',
+      c: coverC
+    }, {
+      val: pct + '%',
+      lbl: 'hospital cover',
+      c: coverC
+    }, {
+      val: String(short.length),
+      lbl: 'depts short',
+      c: short.length ? '#d23a52' : '#157a43'
+    }, {
+      val: String(leave),
+      lbl: 'on leave',
+      c: '#e08a1e'
+    }, {
+      val: String(offToday),
+      lbl: 'off today',
+      c: '#9aa6b4'
+    }].map((k, i) => React.createElement("div", {
+      key: i,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        background: T.inner,
+        border: '1px solid ' + T.innerBorder,
+        borderRadius: 10,
+        padding: '6px 10px 6px 8px'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        background: k.c,
+        boxShadow: '0 0 0 3px ' + k.c + '26',
+        flexShrink: 0
+      }
+    }), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 15,
+        fontWeight: 700,
+        lineHeight: 1
+      }
+    }, k.val), React.createElement("span", {
+      style: {
+        fontSize: 10,
+        color: T.inkSoft,
+        lineHeight: 1.15,
+        maxWidth: 78
+      }
+    }, k.lbl)))), React.createElement("div", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("div", {
+      style: {
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'inline-flex',
+        background: T.inner,
+        border: '1px solid ' + T.innerBorder,
+        borderRadius: 10,
+        padding: 3,
+        gap: 2,
+        boxShadow: '0 6px 18px rgba(31,59,90,.1)'
+      }
+    }, SHIFTS.map((s, i) => React.createElement("button", {
+      key: s[0],
+      onClick: () => set({
+        shift: i
+      }),
+      style: tabStyle(i === sh)
+    }, s[1], React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 9.5,
+        opacity: .7
+      }
+    }, s[2])))), React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        borderRadius: 20,
+        padding: '6px 12px',
+        fontSize: 11,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+        color: ['#8a4b00', '#4a2f9e', '#dbe7ff'][sh],
+        background: ['rgba(255,196,110,.28)', 'rgba(106,82,212,.16)', 'rgba(13,27,48,.85)'][sh],
+        border: '1px solid ' + ['rgba(224,138,30,.4)', 'rgba(106,82,212,.35)', 'rgba(122,196,232,.35)'][sh],
+        transition: 'all .6s ease'
+      }
+    }, React.createElement("svg", {
+      width: "14",
+      height: "14",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: ['M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4M12 8a4 4 0 100 8 4 4 0 000-8z', 'M17 18a5 5 0 00-10 0M12 2v7M4.2 10.2l1.4 1.4M1 18h2M21 18h2M18.4 11.6l1.4-1.4M22 22H2M16 6l-4 3-4-3', 'M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z'][sh]
+    })), SHIFTS[sh][1] + ' shift · ' + SHIFTS[sh][2], React.createElement("span", {
+      style: {
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: '#3ddc97',
+        animation: 'mpLivepulse 2.4s infinite',
+        marginLeft: 2
+      }
+    })))), React.createElement("div", {
+      style: S.narrow ? {
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)',
+        gap: 12,
+        alignItems: 'start'
+      } : {
+        display: 'grid',
+        gridTemplateColumns: '262px minmax(0,1fr) 262px',
+        gap: 12,
+        alignItems: 'start'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 9
+      }
+    }, U.slice(0, half).map(tileCard)), React.createElement("div", {
+      style: S.narrow ? {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        minWidth: 0,
+        gridColumn: '1 / span 2',
+        gridRow: 1
+      } : {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        minWidth: 0
+      }
+    }, S.view !== 'week' && React.createElement("div", {
+      style: glassCard
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 14px',
+        borderBottom: '1px solid ' + T.rule,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 26,
+        height: 26,
+        borderRadius: 8,
+        background: 'rgba(0,144,202,.12)',
+        color: '#0072a3',
+        flexShrink: 0
+      }
+    }, React.createElement("svg", {
+      width: "14",
+      height: "14",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: "M3 3h18v18H3zM3 9h18M9 9v12M15 3v6"
+    }))), React.createElement("h3", {
+      style: {
+        margin: 0,
+        fontSize: 13,
+        fontWeight: 700
+      }
+    }, "Hospital floor map \u2014 ", SHIFTS[sh][1], " shift"), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        color: T.inkFaint
+      }
+    }, "rooms coloured by staffing \xB7 click a room"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 5,
+        flexWrap: 'wrap'
+      }
+    }, legendRow)), React.createElement("div", {
+      style: {
+        padding: 12,
+        background: 'repeating-linear-gradient(0deg,rgba(125,145,180,.07) 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,rgba(125,145,180,.07) 0 1px,transparent 1px 22px)'
+      }
+    }, React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 5,
+        marginBottom: 6,
+        flexWrap: 'wrap'
+      }
+    }, DIVS.map(d => {
+      const us = U.filter(x => x.u.div === d[0]);
+      if (!us.length) return null;
+      const wN = us.reduce((a, x) => a + x.need[sh], 0),
+        wO = us.reduce((a, x) => a + x.on[sh], 0);
+      return React.createElement("div", {
+        key: d[0],
+        style: {
+          flex: '1 1 0',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: '.5px',
+          textTransform: 'uppercase',
+          color: d[2],
+          background: d[2] + '14',
+          border: '1px solid ' + d[2] + '33',
+          borderRadius: 7,
+          padding: '3px 8px',
+          minWidth: 0,
+          whiteSpace: 'nowrap'
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 7,
+          height: 7,
+          borderRadius: 2,
+          background: d[2]
+        }
+      }), React.createElement("span", {
+        style: {
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }
+      }, {
+        ce: 'Critical & ER',
+        pr: 'Procedural',
+        ip: 'In-patient',
+        op: 'Out-patient'
+      }[d[0]]), React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontWeight: 600,
+          opacity: .8,
+          marginLeft: 'auto',
+          flexShrink: 0
+        }
+      }, wO + '/' + wN));
+    })), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(12,minmax(0,1fr))',
+        gridTemplateRows: '78px 22px 78px 22px 78px',
+        gap: 5
+      }
+    }, U.map(x => {
+      const u = x.u,
+        d = DIVS.find(v => v[0] === u.div),
+        n = x.need[sh],
+        o = x.on[sh],
+        c = tone(o, n),
+        g = u.grid,
+        act = active(u.dept),
+        closed = !n;
+      return React.createElement("div", {
+        key: u.dept,
+        className: "mp-bright",
+        onClick: () => set({
+          sel: S.sel === u.dept ? null : u.dept
+        }),
+        onMouseEnter: () => set({
+          hot: u.dept
+        }),
+        onMouseLeave: () => set({
+          hot: null
+        }),
+        title: u.dept + ' · ' + d[1] + ' · ' + o + ' on duty / ' + n + ' required',
+        style: {
+          gridColumn: g[0] + ' / span ' + g[1],
+          gridRow: g[2] * 2 - 1 + ' / span 1',
+          display: 'flex',
+          flexDirection: 'column',
+          padding: '6px 7px 5px',
+          borderRadius: 9,
+          cursor: 'pointer',
+          minWidth: 0,
+          color: closed ? T.inkLabel : T.ink,
+          background: closed ? T.inner : 'linear-gradient(160deg,' + c + (night ? '3a' : '2e') + ',' + c + (night ? '18' : '14') + ')',
+          border: '1.5px solid ' + (act ? c : c + '66'),
+          borderTop: '4px solid ' + d[2],
+          boxShadow: act ? '0 0 0 3px ' + c + '33,0 10px 24px rgba(31,59,90,.18)' : 'inset 0 1px 0 rgba(255,255,255,.7)',
+          animation: o < n && n ? 'mpShortPulse 2.6s ease-in-out infinite' : 'none',
+          transition: 'box-shadow .2s,border-color .2s'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 4
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          lineHeight: 1.2,
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }
+      }, u.dept), React.createElement("span", {
+        style: {
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: c,
+          flexShrink: 0,
+          marginTop: 3
+        }
+      })), React.createElement("div", {
+        style: {
+          marginTop: 'auto',
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 4
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 16,
+          fontWeight: 700,
+          lineHeight: 1
+        }
+      }, o), React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 10,
+          opacity: .75,
+          whiteSpace: 'nowrap'
+        }
+      }, "/", n), React.createElement("span", {
+        style: {
+          marginLeft: 'auto',
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: '.3px',
+          opacity: .9,
+          whiteSpace: 'nowrap',
+          display: g[1] < 2 ? 'none' : 'inline'
+        }
+      }, stateWord(o, n))));
+    }), React.createElement("div", {
+      style: {
+        gridColumn: '1 / span 12',
+        gridRow: 2,
+        borderRadius: 6,
+        background: 'linear-gradient(90deg,rgba(125,145,180,.16),rgba(125,145,180,.26),rgba(125,145,180,.16))',
+        border: '1px dashed rgba(125,145,180,.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 16,
+        fontSize: 9.5,
+        fontWeight: 700,
+        letterSpacing: '.9px',
+        textTransform: 'uppercase',
+        color: T.inkLabel
+      }
+    }, React.createElement("span", null, "Lifts"), React.createElement("span", {
+      style: {
+        opacity: .5
+      }
+    }, "\xB7"), React.createElement("span", null, "In-patient wards"), React.createElement("span", {
+      style: {
+        opacity: .5
+      }
+    }, "\xB7"), React.createElement("span", null, "Nurses' station")), React.createElement("div", {
+      style: {
+        gridColumn: '1 / span 12',
+        gridRow: 4,
+        borderRadius: 6,
+        background: 'linear-gradient(90deg,rgba(125,145,180,.16),rgba(125,145,180,.26),rgba(125,145,180,.16))',
+        border: '1px dashed rgba(125,145,180,.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 16,
+        fontSize: 9.5,
+        fontWeight: 700,
+        letterSpacing: '.9px',
+        textTransform: 'uppercase',
+        color: T.inkLabel
+      }
+    }, React.createElement("span", null, "Lifts"), React.createElement("span", {
+      style: {
+        opacity: .5
+      }
+    }, "\xB7"), React.createElement("span", null, "Procedural floor above \xB7 Critical care & out-patient below"), React.createElement("span", {
+      style: {
+        opacity: .5
+      }
+    }, "\xB7"), React.createElement("span", null, "Lifts")))))), S.view === 'week' && React.createElement("div", {
+      style: glassCard
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 14px',
+        borderBottom: '1px solid ' + T.rule,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 26,
+        height: 26,
+        borderRadius: 8,
+        background: 'rgba(0,144,202,.12)',
+        color: '#0072a3',
+        flexShrink: 0
+      }
+    }, React.createElement("svg", {
+      width: "14",
+      height: "14",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: "M3 5h18v16H3zM3 9h18M8 3v4M16 3v4M3 15h18M9 9v12M15 9v12"
+    }))), React.createElement("h3", {
+      style: {
+        margin: 0,
+        fontSize: 13,
+        fontWeight: 700
+      }
+    }, "Week of ", new Date(wk0 + 'T12:00:00').toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    }), " \u2014 ", SHIFTS[sh][1], " shift"), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        color: T.inkFaint
+      }
+    }, "on duty / required \xB7 click a cell for that unit's day"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 2,
+        background: T.inner,
+        border: '1px solid ' + T.innerBorder,
+        borderRadius: 9,
+        padding: 2
+      }
+    }, React.createElement("button", {
+      className: "mp-hbtn",
+      onClick: () => set({
+        date: shiftDate(S.date, -7)
+      }),
+      title: "Previous week",
+      style: {
+        width: 24,
+        height: 24,
+        borderRadius: 6,
+        border: 'none',
+        background: 'transparent',
+        color: T.inkMid,
+        cursor: 'pointer',
+        display: 'grid',
+        placeItems: 'center'
+      }
+    }, svgIc('M15 6l-6 6 6 6', 12, {
+      sw: 2.2
+    })), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        padding: '0 6px',
+        whiteSpace: 'nowrap'
+      }
+    }, new Date(wk0 + 'T12:00:00').toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short'
+    }), " \u2013 ", new Date(shiftDate(wk0, 6) + 'T12:00:00').toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short'
+    })), React.createElement("button", {
+      className: "mp-hbtn",
+      onClick: () => set({
+        date: shiftDate(S.date, 7)
+      }),
+      title: "Next week",
+      style: {
+        width: 24,
+        height: 24,
+        borderRadius: 6,
+        border: 'none',
+        background: 'transparent',
+        color: T.inkMid,
+        cursor: 'pointer',
+        display: 'grid',
+        placeItems: 'center'
+      }
+    }, svgIc('M9 6l6 6-6 6', 12, {
+      sw: 2.2
+    })))), React.createElement("div", {
+      style: {
+        padding: '10px 12px 12px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '150px repeat(7,minmax(0,1fr))',
+        gap: 4,
+        alignItems: 'stretch'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'flex-end',
+        padding: '0 6px 4px',
+        fontSize: 9.5,
+        fontWeight: 800,
+        letterSpacing: '.7px',
+        textTransform: 'uppercase',
+        color: T.inkLabel
+      }
+    }, "Department"), week.map(w => {
+      const c = w.need ? w.pct < 90 ? '#d23a52' : w.pct < 100 ? '#e08a1e' : w.on > w.need ? '#0090ca' : '#157a43' : T.inkLabel;
+      const cur = w.date === S.date,
+        td = w.date === today();
+      return React.createElement("div", {
+        key: w.date,
+        className: "mp-bright",
+        onClick: () => set({
+          date: w.date,
+          view: 'day'
+        }),
+        style: {
+          padding: '6px 8px',
+          borderRadius: 9,
+          cursor: 'pointer',
+          background: cur ? 'rgba(0,144,202,.14)' : T.inner,
+          border: '1px solid ' + (cur ? 'rgba(0,144,202,.5)' : T.innerBorder),
+          minWidth: 0
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: '.5px',
+          textTransform: 'uppercase',
+          opacity: .75
+        }
+      }, new Date(w.date + 'T12:00:00').toLocaleDateString('en-GB', {
+        weekday: 'short'
+      }) + (td ? ' · today' : '')), React.createElement("div", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 15,
+          fontWeight: 800,
+          lineHeight: 1.1
+        }
+      }, new Date(w.date + 'T12:00:00').getDate()), React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 4,
+          marginTop: 3
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 11,
+          fontWeight: 700,
+          color: c
+        }
+      }, w.on + '/' + w.need), React.createElement("span", {
+        style: {
+          fontSize: 9.5,
+          opacity: .7
+        }
+      }, w.pct + '%')), React.createElement("div", {
+        style: {
+          marginTop: 4,
+          height: 4,
+          borderRadius: 2,
+          background: 'rgba(125,145,180,.18)',
+          overflow: 'hidden'
+        }
+      }, React.createElement("div", {
+        style: {
+          height: '100%',
+          width: Math.min(100, w.pct) + '%',
+          background: c,
+          borderRadius: 2
+        }
+      })));
+    }), baseUnits.map(u => {
+      const d = DIVS.find(v => v[0] === u.div);
+      return React.createElement(React.Fragment, {
+        key: u.dept
+      }, React.createElement("div", {
+        className: "mp-hbg",
+        onClick: () => set({
+          sel: u.dept
+        }),
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          padding: '0 8px',
+          borderRadius: 8,
+          cursor: 'pointer',
+          minWidth: 0,
+          background: S.sel === u.dept ? 'rgba(0,144,202,.1)' : 'transparent'
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 8,
+          height: 8,
+          borderRadius: 2,
+          background: d[2],
+          flexShrink: 0
+        }
+      }), React.createElement("span", {
+        style: {
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          fontSize: 11,
+          fontWeight: 600
+        }
+      }, u.dept)), week.map(w => {
+        const v = w.units.find(x => x.u.dept === u.dept),
+          n = v.need[sh],
+          o = v.on[sh],
+          c = tone(o, n),
+          closed = !n,
+          cur = w.date === S.date;
+        return React.createElement("div", {
+          key: w.date,
+          className: "mp-bright2",
+          onClick: () => set({
+            pop: {
+              uid: u.dept,
+              date: w.date
+            }
+          }),
+          title: u.dept + ' · ' + w.date + ' · ' + o + ' on duty / ' + n + ' required',
+          style: {
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'center',
+            gap: 1,
+            padding: '7px 4px',
+            borderRadius: 7,
+            cursor: 'pointer',
+            minWidth: 0,
+            color: closed ? T.inkLabel : night ? T.ink : c,
+            background: closed ? T.inner : c + (night ? '3a' : '1f'),
+            border: '1px solid ' + (cur ? c + 'aa' : c + (closed ? '22' : '44')),
+            boxShadow: cur ? 'inset 0 0 0 1px ' + c + '55' : 'none'
+          }
+        }, React.createElement("span", {
+          style: {
+            fontFamily: MONO,
+            fontSize: 12.5,
+            fontWeight: 700
+          }
+        }, o), React.createElement("span", {
+          style: {
+            fontFamily: MONO,
+            fontSize: 9.5,
+            opacity: .7
+          }
+        }, "/", n));
+      }));
+    })), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        marginTop: 10,
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }
+    }, legendRow, React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        color: T.inkSoft
+      }
+    }, "Week total ", React.createElement("b", {
+      style: {
+        fontFamily: MONO,
+        color: T.ink
+      }
+    }, week.reduce((a, w) => a + w.on, 0) + '/' + week.reduce((a, w) => a + w.need, 0)), " \xB7 ", React.createElement("b", {
+      style: {
+        fontFamily: MONO,
+        color: '#a92c42'
+      }
+    }, week.reduce((a, w) => a + w.units.filter(v => v.on[sh] < v.need[sh]).length, 0)), " short slots")))), !!selU && React.createElement("div", {
+      style: {
+        ...glassCard,
+        position: 'relative',
+        animation: 'mpPop .3s ease'
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        bottom: 0,
+        width: 5,
+        background: sd ? sd[2] : '#0090ca'
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 14px 10px 18px',
+        borderBottom: '1px solid ' + T.rule,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        fontSize: 11.5,
+        fontWeight: 800,
+        color: '#fff',
+        background: 'linear-gradient(135deg,' + (sd ? sd[2] : '#0090ca') + ',#0d1b2e)',
+        flexShrink: 0
+      }
+    }, ini(selU.incharge)), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("h3", {
+      style: {
+        margin: 0,
+        fontSize: 13,
+        fontWeight: 700
+      }
+    }, selU.dept, " ", React.createElement("span", {
+      style: {
+        fontWeight: 500,
+        color: T.inkSoft
+      }
+    }, "\xB7 ", sd ? sd[1] : '')), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: T.inkSoft
+      }
+    }, "In-charge ", selU.incharge, " \xB7 ", selHead, " staff \xB7 roster ", selD.status.toLowerCase())), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: Object.assign(chip(tone(selD.on[sh], selD.need[sh])), {
+        fontSize: 10.5,
+        padding: '3px 9px'
+      })
+    }, stateWord(selD.on[sh], selD.need[sh]).replace('OK', 'Adequate') + ' · ' + SHIFTS[sh][1]), React.createElement("button", {
+      className: "mp-hbg2",
+      onClick: () => openRoster(selU.dept, S.date),
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        border: '1px solid rgba(0,144,202,.3)',
+        background: 'rgba(0,144,202,.1)',
+        color: '#0072a3',
+        padding: '6px 11px',
+        borderRadius: 9,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit'
+      }
+    }, "Open roster", svgIc('M9 6l6 6-6 6', 11, {
+      sw: 2.2
+    }))), React.createElement("div", {
+      style: {
+        padding: '12px 14px 12px 18px',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))',
+        gap: 14
+      }
+    }, React.createElement("div", null, React.createElement("div", {
+      style: secLabel
+    }, "Cover per shift"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5
+      }
+    }, SHIFTS.map((s, i) => {
+      const mx = Math.max.apply(null, selD.need.concat(selD.on)) || 1,
+        c = tone(selD.on[i], selD.need[i]);
+      return React.createElement("div", {
+        key: s[0],
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: T.inkMid,
+          width: 56,
+          flexShrink: 0
+        }
+      }, s[1]), React.createElement("div", {
+        style: {
+          flex: 1,
+          height: 9,
+          borderRadius: 5,
+          background: 'rgba(125,145,180,.14)',
+          overflow: 'hidden',
+          position: 'relative'
+        }
+      }, React.createElement("div", {
+        style: {
+          height: '100%',
+          width: selD.on[i] / mx * 100 + '%',
+          background: c,
+          borderRadius: 5,
+          transformOrigin: 'left',
+          animation: 'mpBarIn .5s ease'
+        }
+      }), React.createElement("div", {
+        style: {
+          position: 'absolute',
+          top: -2,
+          bottom: -2,
+          left: selD.need[i] / mx * 100 + '%',
+          width: 2,
+          background: '#3c4858',
+          transform: 'translateX(-50%)'
+        }
+      })), React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 11,
+          fontWeight: 700,
+          color: c,
+          width: 36,
+          textAlign: 'right'
+        }
+      }, selD.on[i], "/", selD.need[i]));
+    }))), React.createElement("div", null, React.createElement("div", {
+      style: secLabel
+    }, "Designation mix"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5
+      }
+    }, DESIG.map((dg, i) => React.createElement("div", {
+      key: dg[0],
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: T.inkMid,
+        width: 112,
+        flexShrink: 0,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, dg[1]), React.createElement("div", {
+      style: {
+        flex: 1,
+        height: 9,
+        borderRadius: 5,
+        background: 'rgba(125,145,180,.14)',
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        height: '100%',
+        width: selU.hc[i] / selHead * 100 + '%',
+        background: dg[2],
+        borderRadius: 5
+      }
+    })), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 11,
+        fontWeight: 700,
+        width: 18,
+        textAlign: 'right'
+      }
+    }, selU.hc[i]))))), React.createElement("div", null, React.createElement("div", {
+      style: secLabel
+    }, "This day"), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 5
+      }
+    }, [{
+      v: String(selHead - selD.leave),
+      l: 'available',
+      c: '#157a43'
+    }, {
+      v: String(selD.leave),
+      l: 'on leave',
+      c: selD.leave ? '#b5670a' : '#9aa6b4'
+    }, {
+      v: String(selD.off),
+      l: 'off / unrostered',
+      c: '#9aa6b4'
+    }, {
+      v: String(selD.on[0] + selD.on[1] + selD.on[2]),
+      l: 'duty slots filled',
+      c: '#0072a3'
+    }].map((a, i) => React.createElement("div", {
+      key: i,
+      style: {
+        background: T.inner,
+        border: '1px solid ' + T.innerBorder,
+        borderRadius: 9,
+        padding: '6px 9px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 15,
+        fontWeight: 700,
+        lineHeight: 1.1,
+        color: a.c
+      }
+    }, a.v), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: T.inkSoft
+      }
+    }, a.l)))))), React.createElement("div", {
+      style: {
+        padding: '0 14px 14px 18px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 8,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        ...secLabel,
+        marginBottom: 0
+      }
+    }, "Staff list \xB7 ", selU.dept), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'inline-flex',
+        background: T.inner,
+        border: '1px solid ' + T.innerBorder,
+        borderRadius: 9,
+        padding: 2,
+        gap: 2
+      }
+    }, [['on', 'On duty'], ['off', 'Off / other shift'], ['away', 'On leave']].map(t => React.createElement("button", {
+      key: t[0],
+      onClick: () => set({
+        staffTab: t[0]
+      }),
+      style: Object.assign(tabStyle(S.staffTab === t[0]), {
+        padding: '4px 9px',
+        fontSize: 10.5
+      })
+    }, t[1], React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 9.5,
+        opacity: .75
+      }
+    }, groups[t[0]].length))))), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill,minmax(210px,1fr))',
+        gap: 6
+      }
+    }, (groups[S.staffTab] || []).map(p => {
+      const m = codeChip(p.code);
+      return React.createElement("div", {
+        key: p.emp,
+        className: "mp-hwhite",
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          background: T.inner,
+          border: '1px solid ' + T.innerBorder,
+          borderRadius: 10,
+          padding: '6px 9px',
+          animation: 'mpPop .25s ease backwards'
+        }
+      }, window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
+        name: p.name,
+        empId: p.emp,
+        size: 26,
+        radius: 8,
+        style: {
+          fontSize: 9.5
+        }
+      }) : React.createElement("span", {
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          width: 26,
+          height: 26,
+          borderRadius: 8,
+          fontSize: 9.5,
+          fontWeight: 800,
+          color: '#fff',
+          background: 'linear-gradient(135deg,' + p.dcol + ',' + (sd ? sd[2] : '#0090ca') + ')',
+          flexShrink: 0
+        }
+      }, ini(p.name)), React.createElement("div", {
+        style: {
+          minWidth: 0,
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          fontWeight: 600,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, p.name), React.createElement("div", {
+        style: {
+          fontSize: 9.5,
+          color: T.inkFaint,
+          whiteSpace: 'nowrap'
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: MONO
+        }
+      }, p.emp), " \xB7 ", p.desig)), React.createElement("span", {
+        title: m[1],
+        style: {
+          fontFamily: MONO,
+          fontSize: 10,
+          fontWeight: 700,
+          color: R.bucketOf(p.code) === 'N' ? '#fff' : m[0],
+          background: R.bucketOf(p.code) === 'N' ? m[0] : m[0] + '1f',
+          border: '1px solid ' + m[0] + '55',
+          padding: '2px 7px',
+          borderRadius: 7,
+          flexShrink: 0
+        }
+      }, p.code));
+    }), !(groups[S.staffTab] || []).length && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: T.inkSoft,
+        padding: '8px 10px',
+        background: 'rgba(255,255,255,.5)',
+        borderRadius: 9
+      }
+    }, "Nobody in this group.")))), React.createElement("div", {
+      style: {
+        ...glassCard,
+        padding: '11px 14px',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))',
+        gap: 10
+      }
+    }, DIVS.map(d => {
+      const us = U.filter(x => x.u.div === d[0]);
+      if (!us.length) return null;
+      const dN = us.reduce((a, x) => a + x.need[sh], 0),
+        dO = us.reduce((a, x) => a + x.on[sh], 0),
+        sh2 = us.filter(x => x.on[sh] < x.need[sh]),
+        p = dN ? Math.round(dO / dN * 100) : 100;
+      return React.createElement("div", {
+        key: d[0],
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '8px 10px',
+          borderRadius: 11,
+          background: T.inner,
+          border: '1px solid ' + T.innerBorder
+        }
+      }, React.createElement("div", {
+        style: {
+          position: 'relative',
+          width: 44,
+          height: 44,
+          flexShrink: 0
+        }
+      }, React.createElement("svg", {
+        viewBox: "0 0 44 44",
+        width: "44",
+        height: "44",
+        style: {
+          display: 'block'
+        }
+      }, React.createElement("circle", {
+        cx: "22",
+        cy: "22",
+        r: "18",
+        fill: "none",
+        stroke: "rgba(125,145,180,.18)",
+        strokeWidth: "5"
+      }), React.createElement("circle", {
+        cx: "22",
+        cy: "22",
+        r: "18",
+        fill: "none",
+        stroke: d[2],
+        strokeWidth: "5",
+        strokeLinecap: "round",
+        strokeDasharray: ring(18, p),
+        transform: "rotate(-90 22 22)",
+        style: {
+          transition: 'stroke-dasharray .5s ease'
+        }
+      })), React.createElement("div", {
+        style: {
+          position: 'absolute',
+          inset: 0,
+          display: 'grid',
+          placeItems: 'center',
+          fontFamily: MONO,
+          fontSize: 10,
+          fontWeight: 700
+        }
+      }, p + '%')), React.createElement("div", {
+        style: {
+          minWidth: 0,
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 12,
+          fontWeight: 700,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, d[1]), React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          color: T.inkSoft
+        }
+      }, us.length, " depts \xB7 ", us.reduce((a, x) => a + x.u.people.length, 0), " staff"), React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          color: sh2.length ? '#a92c42' : '#157a43',
+          fontWeight: 600
+        }
+      }, sh2.length ? sh2.map(x => x.u.dept).join(', ') + ' short' : 'All departments covered')));
+    }))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 9
+      }
+    }, U.slice(half).map(tileCard)))), !!pop && popU && React.createElement("div", {
+      onClick: () => set({
+        pop: null
+      }),
+      style: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 400,
+        background: 'rgba(8,17,32,.45)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
+        display: 'grid',
+        placeItems: 'center',
+        padding: 20,
+        animation: 'mpPop .2s ease'
+      }
+    }, React.createElement("div", {
+      onClick: e => e.stopPropagation(),
+      style: {
+        position: 'relative',
+        overflow: 'hidden',
+        width: 'min(860px,100%)',
+        maxHeight: 'calc(100vh - 40px)',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'linear-gradient(152deg,rgba(255,255,255,.96),rgba(236,247,255,.92))',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderRadius: 18,
+        boxShadow: '0 30px 80px rgba(2,8,22,.45)',
+        animation: 'mpPop .25s cubic-bezier(.2,.7,.3,1)',
+        color: '#16202e'
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        bottom: 0,
+        width: 5,
+        background: pd ? pd[2] : '#0090ca'
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        padding: '14px 16px 12px 20px',
+        borderBottom: '1px solid rgba(125,145,180,.18)',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 38,
+        height: 38,
+        borderRadius: 12,
+        fontSize: 13,
+        fontWeight: 800,
+        color: '#fff',
+        background: 'linear-gradient(135deg,' + (pd ? pd[2] : '#0090ca') + ',#0d1b2e)',
+        flexShrink: 0
+      }
+    }, ini(popU.incharge)), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("h3", {
+      style: {
+        margin: 0,
+        fontSize: 15,
+        fontWeight: 800
+      }
+    }, popU.dept), React.createElement("span", {
+      style: Object.assign(chip(statusChipColor(popDay.status)), {
+        fontSize: 10.5,
+        padding: '2px 9px'
+      })
+    }, "Roster ", popDay.status.toLowerCase())), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, new Date(pop.date + 'T12:00:00').toLocaleDateString('en-GB', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    }), " \xB7 ", pd ? pd[1] : '', " \xB7 in-charge ", popU.incharge, " \xB7 ", popU.people.length, " staff")), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      className: "mp-hbg2",
+      onClick: () => set({
+        pop: null,
+        date: pop.date,
+        sel: pop.uid,
+        view: 'day'
+      }),
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        border: '1px solid rgba(0,144,202,.3)',
+        background: 'rgba(0,144,202,.1)',
+        color: '#0072a3',
+        padding: '7px 12px',
+        borderRadius: 9,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit'
+      }
+    }, "Open day view"), React.createElement("button", {
+      onClick: () => openRoster(popU.dept, pop.date),
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        border: '1px solid rgba(21,122,67,.3)',
+        background: 'linear-gradient(160deg,#1c8f52,#157a43)',
+        color: '#fff',
+        padding: '7px 12px',
+        borderRadius: 9,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        boxShadow: '0 6px 16px rgba(21,122,67,.25)'
+      }
+    }, "Full roster", svgIc('M9 6l6 6-6 6', 11, {
+      sw: 2.2
+    })), React.createElement("button", {
+      className: "mp-hclose",
+      onClick: () => set({
+        pop: null
+      }),
+      title: "Close",
+      style: {
+        width: 30,
+        height: 30,
+        borderRadius: 9,
+        border: '1px solid rgba(125,145,180,.3)',
+        background: 'rgba(255,255,255,.8)',
+        color: '#6c7a8c',
+        cursor: 'pointer',
+        display: 'grid',
+        placeItems: 'center'
+      }
+    }, React.createElement("svg", {
+      width: "13",
+      height: "13",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2.4",
+      strokeLinecap: "round"
+    }, React.createElement("path", {
+      d: "M6 6l12 12M18 6L6 18"
+    })))), React.createElement("div", {
+      style: {
+        overflowY: 'auto',
+        padding: '14px 16px 16px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3,minmax(0,1fr))',
+        gap: 10
+      }
+    }, SHIFTS.map((s, i) => {
+      const n = popDay.need[i],
+        o = popDay.on[i],
+        c = tone(o, n);
+      const hcol = BUCKET_CHIP['MEN'[i]];
+      const people = popStaff.filter(p => covers(p.code, i));
+      return React.createElement("div", {
+        key: s[0],
+        style: {
+          background: 'rgba(255,255,255,.55)',
+          border: '1px solid ' + c + (n ? '55' : '22'),
+          borderTop: '3px solid ' + hcol,
+          borderRadius: 12,
+          overflow: 'hidden',
+          minWidth: 0
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '9px 11px',
+          borderBottom: '1px solid rgba(125,145,180,.16)'
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 10.5,
+          fontWeight: 800,
+          color: i === 2 ? '#fff' : hcol,
+          background: i === 2 ? hcol : hcol + '22',
+          padding: '3px 7px',
+          borderRadius: 7,
+          flexShrink: 0
+        }
+      }, s[0]), React.createElement("div", {
+        style: {
+          minWidth: 0,
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 12,
+          fontWeight: 700
+        }
+      }, s[1]), React.createElement("div", {
+        style: {
+          fontSize: 10,
+          color: '#9aa6b4'
+        }
+      }, s[2])), React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 14,
+          fontWeight: 800,
+          color: c
+        }
+      }, o, React.createElement("span", {
+        style: {
+          fontSize: 10,
+          color: '#9aa6b4',
+          fontWeight: 500
+        }
+      }, "/", n))), React.createElement("div", {
+        style: {
+          padding: '8px 9px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4
+        }
+      }, people.map(p => React.createElement("div", {
+        key: p.emp,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          background: 'rgba(255,255,255,.7)',
+          border: '1px solid rgba(255,255,255,.95)',
+          borderRadius: 9,
+          padding: '5px 8px'
+        }
+      }, window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
+        name: p.name,
+        empId: p.emp,
+        size: 24,
+        radius: 7,
+        style: {
+          fontSize: 9
+        }
+      }) : React.createElement("span", {
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          width: 24,
+          height: 24,
+          borderRadius: 7,
+          fontSize: 9,
+          fontWeight: 800,
+          color: '#fff',
+          background: 'linear-gradient(135deg,' + p.dcol + ',' + (pd ? pd[2] : '#0090ca') + ')',
+          flexShrink: 0
+        }
+      }, ini(p.name)), React.createElement("div", {
+        style: {
+          minWidth: 0,
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          fontWeight: 600,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, p.name), React.createElement("div", {
+        style: {
+          fontSize: 9.5,
+          color: '#9aa6b4',
+          whiteSpace: 'nowrap'
+        }
+      }, React.createElement("span", {
+        style: {
+          fontFamily: MONO
+        }
+      }, p.emp), " \xB7 ", p.desig)), React.createElement("span", {
+        title: codeChip(p.code)[1],
+        style: {
+          fontFamily: MONO,
+          fontSize: 10.5,
+          fontWeight: 700,
+          color: '#3c4858',
+          background: 'rgba(125,145,180,.14)',
+          border: '1px solid rgba(125,145,180,.3)',
+          padding: '2px 7px',
+          borderRadius: 7,
+          flexShrink: 0
+        }
+      }, p.code))), o !== n && React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          color: c,
+          background: c + '14',
+          border: '1px dashed ' + c + '66',
+          borderRadius: 8,
+          padding: '6px 8px',
+          textAlign: 'center'
+        }
+      }, !n ? 'Closed this shift' : o < n ? n - o + ' more needed' : '+' + (o - n) + ' above requirement')));
+    })), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))',
+        gap: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        background: 'rgba(255,255,255,.6)',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderRadius: 12,
+        padding: '10px 12px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 800,
+        letterSpacing: '.7px',
+        textTransform: 'uppercase',
+        color: '#7d8ea8',
+        marginBottom: 7
+      }
+    }, "On leave this day"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 5
+      }
+    }, popStaff.filter(p => R.isLeave(p.code)).map(p => React.createElement("span", {
+      key: p.emp,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 10.5,
+        color: LEAVE_CHIP,
+        background: LEAVE_CHIP + '1a',
+        border: '1px solid ' + LEAVE_CHIP + '44',
+        padding: '3px 8px',
+        borderRadius: 12
+      }
+    }, p.name, React.createElement("b", {
+      style: {
+        fontFamily: MONO
+      }
+    }, p.code))), !popStaff.filter(p => R.isLeave(p.code)).length && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#157a43',
+        fontWeight: 600
+      }
+    }, "Everyone available \u2014 no leave on the sheet."))), React.createElement("div", {
+      style: {
+        background: 'rgba(255,255,255,.6)',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderRadius: 12,
+        padding: '10px 12px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 800,
+        letterSpacing: '.7px',
+        textTransform: 'uppercase',
+        color: '#7d8ea8',
+        marginBottom: 7
+      }
+    }, "Day off / not rostered"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 5
+      }
+    }, popStaff.filter(p => p.code === '—' || R.isOff(p.code)).map(p => React.createElement("span", {
+      key: p.emp,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 10.5,
+        color: '#3c4858',
+        background: 'rgba(125,145,180,.12)',
+        border: '1px solid rgba(125,145,180,.25)',
+        padding: '3px 8px',
+        borderRadius: 12
+      }
+    }, p.name, React.createElement("b", {
+      style: {
+        fontFamily: MONO
+      }
+    }, p.code))), !popStaff.filter(p => p.code === '—' || R.isOff(p.code)).length && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c'
+      }
+    }, "Nobody \u2014 the whole register is rostered or away.")))))))));
+  }
+  window.ManpowerOverview = ManpowerOverview;
+})();
+})();
+;
+/* ===== medicine-info.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect,
+    useMemo,
+    useRef
+  } = React;
+  const api = u => fetch(u, {
+    headers: {
+      accept: 'application/json'
+    },
+    credentials: 'same-origin'
+  }).then(r => r.json());
+  const post = (u, b) => fetch(u, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json'
+    },
+    credentials: 'same-origin',
+    body: JSON.stringify(b || {})
+  }).then(r => r.json());
+  const MONO = "'IBM Plex Mono','Noto Sans Bengali',monospace";
+  const qs = o => Object.keys(o).filter(k => o[k] !== '' && o[k] != null).map(k => k + '=' + encodeURIComponent(o[k])).join('&');
+  const FAV_KEY = 'unico-medinfo-favs-v1';
+  const plain = v => String(v || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const SECTION_LABELS = ['Assessment before administration', 'Assessment', 'Administration', 'Monitoring and duration', 'Monitoring', 'Patient\\/caregiver education', 'Patient education', 'Education', 'Patient selection', 'Selection', 'Dose adjustment', 'Dosing', 'Dose', 'Interactions', 'Red flags', 'Stop\\/switch', 'Duration', 'Contraindications', 'Precautions', 'Storage', 'Cautions', 'Review'];
+  const SECTION_RE = () => new RegExp('(?:^|\\s)(' + SECTION_LABELS.join('|') + ')\\s*:\\s*', 'gi');
+  const splitSentences = text => String(text || '').split(/(?<=[.;])\s+(?=[A-Z0-9“"(])/).map(x => x.trim().replace(/^[-–•]\s*/, '')).filter(x => x.length > 2);
+  function parseGuidance(raw) {
+    const t = plain(raw);
+    if (!t) return [];
+    const re = SECTION_RE();
+    const marks = [];
+    let m;
+    while ((m = re.exec(t)) !== null) marks.push({
+      label: m[1],
+      start: m.index,
+      from: m.index + m[0].length
+    });
+    if (marks.length >= 2) {
+      const out = [];
+      marks.forEach((mk, i) => {
+        const body = t.slice(mk.from, i + 1 < marks.length ? marks[i + 1].start : t.length).trim();
+        if (body) out.push({
+          label: mk.label,
+          items: splitSentences(body)
+        });
+      });
+      if (out.length) return out;
+    }
+    const items = splitSentences(t);
+    return [{
+      label: null,
+      items: items.length > 1 ? items : [t]
+    }];
+  }
+  const Bulleted = ({
+    text,
+    tone
+  }) => {
+    const blocks = parseGuidance(text);
+    if (!blocks.length) return null;
+    const c = tone || '#0072a3';
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 9
+      }
+    }, blocks.map((b, i) => React.createElement("div", {
+      key: i
+    }, b.label && React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 800,
+        letterSpacing: '.7px',
+        textTransform: 'uppercase',
+        color: c,
+        marginBottom: 3
+      }
+    }, b.label), b.items.length > 1 || b.label ? React.createElement("ul", {
+      style: {
+        margin: 0,
+        paddingLeft: 17,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }
+    }, b.items.map((s2, j) => React.createElement("li", {
+      key: j,
+      style: {
+        fontSize: 12,
+        color: '#2b3a4d',
+        lineHeight: 1.55
+      }
+    }, s2))) : React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: '#2b3a4d',
+        lineHeight: 1.6
+      }
+    }, b.items[0]))));
+  };
+  const PAL = ['#0090ca', '#d23a52', '#1c9c8d', '#e0631e', '#6a52d4', '#0b66d0', '#8a5a10', '#0072a3'];
+  const CATICONS = ['M4 6h16M4 12h16M4 18h16', 'M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z', 'M12 21s-8-5-10-10a5 5 0 019-3 5 5 0 019 3c-2 5-10 10-10 10z', 'M12 3s6 7 6 11a6 6 0 01-12 0c0-4 6-11 6-11z', 'M5 12.5l7.5-7.5a4.6 4.6 0 016.5 6.5L11.5 19A4.6 4.6 0 015 12.5zM8.7 8.7l6.6 6.6', 'M12 4v7M9 21c-3 0-4-2-4-5 0-4 2-7 4-7v12zM15 21c3 0 4-2 4-5 0-4-2-7-4-7v12z', 'M12 3s6 7 6 11a6 6 0 01-12 0c0-4 6-11 6-11zM12 14v3', 'M12 2l8 5v10l-8 5-8-5V7z'];
+  const ROUTE_PILLS = [['', 'All forms', 'M4 6h16M4 12h16M4 18h16'], ['Tablet', 'Tablet', 'M12 3a9 9 0 100 18 9 9 0 000-18zM5.6 5.6l12.8 12.8'], ['Capsule', 'Capsule', 'M5 12.5l7.5-7.5a4.6 4.6 0 016.5 6.5L11.5 19A4.6 4.6 0 015 12.5zM8.7 8.7l6.6 6.6'], ['Injection', 'Injection', 'M14 4l6 6M15.5 5.5l3-3M12 6l6 6-7 7H6v-5zM6 14l-3 3'], ['Syrup', 'Syrup', 'M9 2h6M10 2v4l-4 5v9a2 2 0 002 2h8a2 2 0 002-2v-9l-4-5V2']];
+  const routeOf = form => {
+    const f = String(form || '').toLowerCase();
+    return /injection|infusion|iv|im\b/.test(f) ? 'Injection' : /capsule/.test(f) ? 'Capsule' : /syrup|suspension|solution|drops/.test(f) ? 'Syrup' : 'Tablet';
+  };
+  const RCOL = {
+    Tablet: '#0072a3',
+    Capsule: '#6a52d4',
+    Injection: '#b3541e',
+    Syrup: '#1c9c8d'
+  };
+  const RBRIGHT = {
+    Tablet: '#7ac4e8',
+    Capsule: '#b3a1ff',
+    Injection: '#ffb26b',
+    Syrup: '#7fd6cb'
+  };
+  const classColor = cls => {
+    let h = 0;
+    const s2 = String(cls || '');
+    for (let i = 0; i < s2.length; i++) h = h * 31 + s2.charCodeAt(i) >>> 0;
+    return PAL[h % PAL.length];
+  };
+  const taka = v => v == null ? '' : '৳ ' + Math.round(v * 100) / 100;
+  const bnNum = t => String(t).replace(/\d/g, d => '০১২৩৪৫৬৭৮৯'[d]);
+  const TABSEC = {
+    overview: [['indication', 'Indications', 'নির্দেশনা', 'indications'], ['therapeuticClass', 'Therapeutic class', 'থেরাপিউটিক শ্রেণি', null], ['pharmacology', 'Pharmacology', 'ফার্মাকোলজি', 'pharmacology'], ['mechanism', 'Mechanism of action', 'কার্যপ্রণালি', null]],
+    dosage: [['dosage', 'Dosage & administration', 'মাত্রা ও সেবনবিধি', 'dosage_text'], ['adultDose', 'Adult dose', 'প্রাপ্তবয়স্ক মাত্রা', null], ['childDose', 'Child dose', 'শিশুদের মাত্রা', null], ['renalDose', 'Renal dose', 'রেনাল মাত্রা', null], ['administration', 'Administration', 'প্রয়োগবিধি', null]],
+    safety: [['sideEffects', 'Side effects', 'পার্শ্বপ্রতিক্রিয়া', 'side_effects'], ['contraindications', 'Contraindications', 'প্রতিনির্দেশনা', 'contraindications'], ['interaction', 'Drug interactions', 'ওষুধের মিথস্ক্রিয়া', null], ['pregnancy', 'Pregnancy & lactation', 'গর্ভাবস্থা ও স্তন্যদান', null], ['precautions', 'Precautions', 'সতর্কতা', 'precautions'], ['overdose', 'Overdose', 'অতিরিক্ত মাত্রা', null]],
+    more: [['storage', 'Storage', 'সংরক্ষণ', 'storage_conditions'], ['packaging', 'Packaging', 'প্যাকেজিং', null], ['description', 'Description', 'বিবরণ', null]]
+  };
+  const PREGC = {
+    A: ['#1c7d70', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.4)'],
+    B: ['#1c7d70', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.4)'],
+    C: ['#8a5a10', 'rgba(224,158,30,.16)', 'rgba(224,158,30,.45)'],
+    D: ['#8c2237', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.4)'],
+    X: ['#8c2237', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.4)']
+  };
+  const loadFavs = () => {
+    try {
+      const f = JSON.parse(localStorage.getItem(FAV_KEY) || '[]');
+      return Array.isArray(f) ? f : [];
+    } catch (e) {
+      return [];
+    }
+  };
+  const Thumb = ({
+    row,
+    size,
+    radius
+  }) => row.hasImage ? React.createElement("img", {
+    src: '/api/med/image/' + row.id,
+    alt: "",
+    loading: "lazy",
+    decoding: "async",
+    onError: e => {
+      e.target.style.display = 'none';
+    },
+    style: {
+      width: size,
+      height: size,
+      objectFit: 'contain',
+      borderRadius: radius || 8
+    }
+  }) : React.createElement("svg", {
+    width: Math.round(size * .58),
+    height: Math.round(size * .58),
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: RCOL[routeOf(row.form)],
+    strokeWidth: "1.8",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: ROUTE_PILLS.find(r => r[0] === routeOf(row.form) || r[0] === 'Tablet' && routeOf(row.form) === 'Tablet')[2]
+  }));
+  function MedicineInfoV2({
+    setRoute
+  }) {
+    const [q, setQ] = useState('');
+    const [searchMode, setSearchMode] = useState('all');
+    const [cat, setCat] = useState('');
+    const [form, setForm] = useState('');
+    const [sortBy, setSortBy] = useState('name');
+    const [favs, setFavs] = useState(loadFavs);
+    const [favOnly, setFavOnly] = useState(false);
+    const [lang, setLang] = useState('en');
+    const [rows, setRows] = useState([]);
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const [loading, setLoading] = useState(true);
+    const [status, setStatus] = useState(null);
+    const [classes, setClasses] = useState([]);
+    const [sel, setSel] = useState(null);
+    const [tab, setTab] = useState('overview');
+    const [checkMode, setCheckMode] = useState(false);
+    const [picks, setPicks] = useState([]);
+    const [checkRes, setCheckRes] = useState(null);
+    const [copied, setCopied] = useState(false);
+    const seq = useRef(0);
+    const paneRef = useRef(null);
+    const [paneH, setPaneH] = useState(560);
+    useEffect(() => {
+      const fit = () => {
+        const el = paneRef.current;
+        if (!el) return;
+        setPaneH(Math.max(420, window.innerHeight - el.getBoundingClientRect().top - 16));
+      };
+      fit();
+      const t = setTimeout(fit, 250);
+      window.addEventListener('resize', fit);
+      return () => {
+        clearTimeout(t);
+        window.removeEventListener('resize', fit);
+      };
+    }, []);
+    const bn = lang === 'bn';
+    const nb = t => bn ? bnNum(String(t)) : String(t);
+    useEffect(() => {
+      api('/api/med/status').then(setStatus).catch(() => {});
+      api('/api/med/refs?kind=class').then(r => {
+        if (r.ok) setClasses(r.refs || []);
+      }).catch(() => {});
+    }, []);
+    const respCache = useRef(new Map());
+    const cachedGet = url => {
+      const c = respCache.current;
+      if (c.has(url)) return {
+        hit: true,
+        data: c.get(url)
+      };
+      return {
+        hit: false,
+        p: api(url).then(r => {
+          if (r && r.ok) {
+            c.set(url, r);
+            if (c.size > 250) c.delete(c.keys().next().value);
+          }
+          return r;
+        })
+      };
+    };
+    useEffect(() => {
+      const mine = ++seq.current;
+      const term = q.trim();
+      const wantGenerics = searchMode === 'generic';
+      const url = term ? '/api/med/search?' + qs({
+        q: term,
+        kind: wantGenerics ? 'generic' : 'brand',
+        field: searchMode === 'brand' ? 'name' : '',
+        limit: 40,
+        form: wantGenerics ? '' : form
+      }) : '/api/med/browse?' + qs({
+        per: 40,
+        page,
+        class: cat,
+        form: wantGenerics ? '' : form,
+        kind: wantGenerics ? 'generic' : ''
+      });
+      const take = r => {
+        if (mine !== seq.current || !r || !r.ok) return;
+        const list = term ? wantGenerics ? r.generics || [] : r.brands || [] : r.rows || [];
+        setRows(old => !term && page > 1 ? old.concat(list) : list);
+        setTotal(term ? list.length : r.total || list.length);
+        setLoading(false);
+        if (list.length && (!sel || term)) (wantGenerics ? openGeneric : openBrand)(list[0].id, true);
+      };
+      const got = cachedGet(url);
+      if (got.hit) {
+        take(got.data);
+        return;
+      }
+      setLoading(true);
+      const t = setTimeout(() => {
+        const g = cachedGet(url);
+        (g.hit ? Promise.resolve(g.data) : g.p).then(take).catch(() => {
+          if (mine === seq.current) setLoading(false);
+        });
+      }, term ? 90 : 0);
+      return () => clearTimeout(t);
+    }, [q, cat, form, page, searchMode]);
+    useEffect(() => {
+      setPage(1);
+    }, [q, cat, form, searchMode]);
+    const openBrand = (id, quiet) => {
+      const got = cachedGet('/api/med/brand/' + encodeURIComponent(id));
+      const use = r => {
+        if (r && r.ok) {
+          setSel(r);
+          if (!quiet) setTab('overview');
+        }
+      };
+      if (got.hit) use(got.data);else got.p.then(use).catch(() => {});
+    };
+    const openGeneric = (id, quiet) => {
+      const got = cachedGet('/api/med/generic/' + encodeURIComponent(id));
+      const use = r => {
+        if (r && r.ok) {
+          setSel({
+            ok: true,
+            brand: null,
+            generic: r.generic,
+            alternatives: r.brands || [],
+            interactions: r.interactions || [],
+            foodWarnings: r.foodWarnings || []
+          });
+          if (!quiet) setTab('overview');
+        }
+      };
+      if (got.hit) use(got.data);else got.p.then(use).catch(() => {});
+    };
+    const toggleFav = row => {
+      setFavs(f => {
+        const has = f.some(x => x.id === row.id);
+        const next = has ? f.filter(x => x.id !== row.id) : f.concat([{
+          id: row.id,
+          name: row.name,
+          strength: row.strength,
+          form: row.form,
+          generic: row.generic,
+          price: row.price,
+          hasImage: row.hasImage,
+          drugClass: row.drugClass
+        }]);
+        try {
+          localStorage.setItem(FAV_KEY, JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
+    };
+    const isFav = id => favs.some(x => x.id === id);
+    const clickRow = row => {
+      if (!checkMode) return searchMode === 'generic' ? openGeneric(row.id) : openBrand(row.id);
+      setPicks(p => {
+        const has = p.some(x => x.id === row.id);
+        const next = has ? p.filter(x => x.id !== row.id) : p.length < 2 ? p.concat([row]) : [p[1], row];
+        return next;
+      });
+    };
+    useEffect(() => {
+      if (picks.length !== 2) {
+        setCheckRes(null);
+        return;
+      }
+      post('/api/med/check', {
+        genericIds: picks.map(p => p.genericId).filter(Boolean)
+      }).then(r => setCheckRes(r.ok ? r.warnings || [] : null)).catch(() => setCheckRes(null));
+    }, [picks]);
+    const shown = useMemo(() => {
+      let list = favOnly ? favs.slice() : rows;
+      if (favOnly && q.trim()) {
+        const ql = q.trim().toLowerCase();
+        list = list.filter(r => (r.name + ' ' + (r.generic || '')).toLowerCase().includes(ql));
+      }
+      if (sortBy === 'price') list = list.slice().sort((a, b) => ((a.price && a.price.unit) == null) - ((b.price && b.price.unit) == null) || (a.price && a.price.unit || 0) - (b.price && b.price.unit || 0));
+      return list;
+    }, [rows, favs, favOnly, sortBy, q]);
+    const gen = sel && sel.generic;
+    const brand = sel && sel.brand || (gen ? {
+      id: gen.id,
+      name: gen.name,
+      strength: '',
+      generic: (gen.forms || []).join(' · '),
+      form: (gen.forms || [])[0] || '',
+      manufacturer: '',
+      drugClass: gen.drugClass,
+      price: null,
+      hasImage: false,
+      abx: gen.abx,
+      confidence: gen.confidence,
+      pregnancyCategory: gen.pregnancyCategory,
+      isGeneric: true,
+      brandCount: sel && sel.alternatives ? sel.alternatives.length : gen.brands
+    } : null);
+    const ac = brand ? classColor(brand.drugClass) : '#0090ca';
+    const mono = gen && gen.monograph || {};
+    const bnSec = mono.bn || {};
+    const route = brand ? routeOf(brand.form) : 'Tablet';
+    const nursing = mono.nursingConsiderations ? plain(mono.nursingConsiderations) : '';
+    const prescriberG = mono.prescriberConsiderations ? plain(mono.prescriberConsiderations) : '';
+    const lowConf = (brand && brand.confidence) === 'low';
+    const preg = gen && gen.pregnancyCategory || brand && brand.pregnancyCategory || '';
+    const sections = (TABSEC[tab] || []).map(([key, en, bnl, bnKey]) => {
+      const enBody = mono[key] ? plain(mono[key]) : '';
+      const bnBody = bnKey && bnSec[bnKey] ? plain(bnSec[bnKey]) : '';
+      const body = bn ? bnBody || enBody : enBody;
+      return body ? {
+        key,
+        t: bn ? bnl : en,
+        body
+      } : null;
+    }).filter(Boolean);
+    const L = bn ? {
+      title: 'ঔষধের তথ্যভাণ্ডার',
+      search: searchMode === 'brand' ? 'ব্র্যান্ডের নাম খুঁজুন — Napa, Seclo…' : searchMode === 'generic' ? 'জেনেরিক নাম খুঁজুন — Paracetamol…' : 'ব্র্যান্ড, জেনেরিক বা শ্রেণি খুঁজুন…',
+      mAll: 'সব',
+      mBrand: 'ব্র্যান্ড',
+      mGeneric: 'জেনেরিক',
+      mTip_all: 'ব্র্যান্ড ও জেনেরিক — দুটোতেই খোঁজে',
+      mTip_brand: 'শুধু ব্র্যান্ডের নামে খোঁজে',
+      mTip_generic: 'জেনেরিক তালিকায় খোঁজে',
+      brandsOf: 'ব্র্যান্ড',
+      cats: 'শ্রেণিসমূহ',
+      forms: 'ডোজ ফর্ম',
+      all: 'সব',
+      favs: 'প্রিয়',
+      sortName: 'নাম (A–Z)',
+      sortPrice: 'দাম',
+      check: 'ইন্টারঅ্যাকশন যাচাই',
+      checkHint: 'তালিকা থেকে দুটি ওষুধে ক্লিক করে পরস্পরের সাথে যাচাই করুন।',
+      clear: 'মুছুন',
+      picked: 'নির্বাচিত',
+      mfr: 'প্রস্তুতকারক',
+      nursing: 'নার্সিং নির্দেশনা',
+      prescriber: 'প্রেসক্রাইবার নির্দেশনা',
+      clinicalGuidance: 'ক্লিনিক্যাল নির্দেশনা',
+      aiWritten: 'AI-লিখিত',
+      lowConf: 'এই ওষুধটি ফার্মাকোলজি সাহিত্যে ভালোভাবে নথিভুক্ত নয় — নিচের নির্দেশনা শুধু ইঙ্গিত হিসেবে নিন, চূড়ান্ত নয়।',
+      tabs: {
+        overview: 'ওভারভিউ',
+        dosage: 'মাত্রা',
+        safety: 'নিরাপত্তা',
+        alts: 'বিকল্প',
+        more: 'আরও'
+      },
+      statMeds: 'ওষুধ',
+      statGen: 'জেনেরিক',
+      statCls: 'শ্রেণি',
+      empty1: 'কোনো ওষুধ পাওয়া যায়নি',
+      empty2: 'অন্য ব্র্যান্ড বা জেনেরিক নাম লিখুন, অথবা ফিল্টার মুছে দিন।',
+      similar: 'একই জেনেরিকের অন্য ব্র্যান্ড',
+      disclaimer: 'নার্সিং স্টাফদের জন্য রেফারেন্স তথ্য। ওষুধ প্রয়োগের আগে সবসময় চলতি প্রেসক্রিপশন ও হাসপাতাল ফর্মুলারির সাথে মিলিয়ে নিন।',
+      preg: 'গর্ভাবস্থা',
+      formT: 'ডোজ ফর্ম',
+      priceT: 'দাম',
+      confT: 'তথ্যের মান',
+      loadMore: 'আরও দেখুন',
+      copyT: 'সারসংক্ষেপ কপি',
+      noPair: 'ফর্মুলারি ডেটায় বড় কোনো মিথস্ক্রিয়া নেই। তবু সম্পূর্ণ প্রেসক্রিপশনের সাথে মিলিয়ে নিন।'
+    } : {
+      title: 'Medicine Information',
+      search: searchMode === 'brand' ? 'Search a brand name — Napa, Seclo…' : searchMode === 'generic' ? 'Search a generic name — Paracetamol…' : 'Search brand, generic or class…',
+      mAll: 'All',
+      mBrand: 'Brand',
+      mGeneric: 'Generic',
+      mTip_all: 'Match either a brand name or its generic',
+      mTip_brand: 'Match the brand name only',
+      mTip_generic: 'Search the generic index',
+      brandsOf: 'brands',
+      cats: 'Categories',
+      forms: 'Dosage form',
+      all: 'All',
+      favs: 'Favorites',
+      sortName: 'A–Z',
+      sortPrice: 'Price',
+      check: 'Interaction check',
+      checkHint: 'Tap two medicines in the list to check them against each other.',
+      clear: 'Clear',
+      picked: 'SELECTED',
+      mfr: 'Manufacturer',
+      nursing: 'Nursing considerations',
+      prescriber: 'Prescriber considerations',
+      clinicalGuidance: 'Clinical guidance',
+      aiWritten: 'AI-written',
+      lowConf: 'Low confidence — this preparation is not well documented in pharmacological literature. Treat the guidance below as indicative only, not authoritative.',
+      tabs: {
+        overview: 'Overview',
+        dosage: 'Dosage',
+        safety: 'Safety',
+        alts: 'Alternatives',
+        more: 'More'
+      },
+      statMeds: 'medicines',
+      statGen: 'generics',
+      statCls: 'classes',
+      empty1: 'No medicines match your search',
+      empty2: 'Try a different brand, generic name or clear the filters.',
+      similar: 'Other brands of this generic',
+      disclaimer: 'Reference information for nursing staff. Always confirm against the current prescription and hospital formulary before administration.',
+      preg: 'Pregnancy',
+      formT: 'Dosage form',
+      priceT: 'Price',
+      confT: 'Data confidence',
+      loadMore: 'Load more',
+      copyT: 'Copy summary',
+      noPair: 'No major interaction recorded in the formulary data. Always verify against the full prescription.'
+    };
+    const cats = useMemo(() => {
+      const top = classes.slice(0, 8);
+      return [{
+        name: '',
+        label: L.all,
+        count: status ? status.brands : 0,
+        c: '#0072a3',
+        icon: CATICONS[0]
+      }].concat(top.map((r, i) => ({
+        name: r.name,
+        label: r.name,
+        count: r.count,
+        c: PAL[(i + 1) % PAL.length],
+        icon: CATICONS[(i + 1) % CATICONS.length]
+      })));
+    }, [classes, status, lang]);
+    const sevMeta = w => w.severity === 'critical' || w.severity === 'high' ? [bn ? 'গুরুতর' : 'Major', '#8c2237', 'rgba(210,58,82,.14)', 'rgba(210,58,82,.4)'] : [bn ? 'মাঝারি' : 'Moderate', '#8a5a10', 'rgba(224,158,30,.16)', 'rgba(224,158,30,.45)'];
+    const copySummary = () => {
+      if (!brand) return;
+      const t = brand.name + ' (' + (brand.generic || '') + ') ' + (brand.strength || '') + (mono.dosage ? ' — ' + plain(mono.dosage).slice(0, 300) : '');
+      try {
+        navigator.clipboard.writeText(t);
+      } catch (e) {}
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    };
+    const glass = {
+      background: 'rgba(255,255,255,.62)',
+      border: '1px solid rgba(255,255,255,.92)',
+      backdropFilter: 'blur(12px)',
+      WebkitBackdropFilter: 'blur(12px)',
+      boxShadow: '0 8px 20px rgba(31,59,90,.08)'
+    };
+    const secLbl = {
+      fontSize: 9.5,
+      fontWeight: 700,
+      letterSpacing: '.9px',
+      textTransform: 'uppercase',
+      color: '#7d8ea8',
+      padding: '2px 6px 5px'
+    };
+    const langBtn = on => ({
+      fontSize: 11,
+      fontWeight: 700,
+      padding: '4px 11px',
+      borderRadius: 16,
+      cursor: 'pointer',
+      transition: 'all .15s',
+      ...(on ? {
+        background: 'linear-gradient(90deg,#0090ca,#3ab5a7)',
+        color: '#fff',
+        boxShadow: '0 3px 10px rgba(0,144,202,.35)'
+      } : {
+        color: '#55677d'
+      })
+    });
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        minHeight: 0,
+        fontFamily: "'IBM Plex Sans','Noto Sans Bengali',system-ui,sans-serif"
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 20,
+        fontWeight: 700,
+        letterSpacing: '-.3px',
+        whiteSpace: 'nowrap'
+      }
+    }, L.title), React.createElement("div", {
+      style: {
+        color: '#6c7a8c',
+        fontSize: 11.5,
+        marginTop: 1,
+        whiteSpace: 'nowrap'
+      }
+    }, status ? nb(status.brands.toLocaleString()) + ' ' + L.statMeds + ' · ' + nb(status.generics.toLocaleString()) + ' ' + L.statGen : '…')), React.createElement("div", {
+      style: {
+        ...glass,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        borderRadius: 12,
+        padding: '10px 14px',
+        flex: '1 1 260px',
+        maxWidth: 520
+      }
+    }, React.createElement("svg", {
+      width: "17",
+      height: "17",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "#7d8ea8",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      style: {
+        flexShrink: 0
+      }
+    }, React.createElement("path", {
+      d: "M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12"
+    })), React.createElement("input", {
+      value: q,
+      onChange: e => setQ(e.target.value),
+      placeholder: L.search,
+      style: {
+        flex: 1,
+        border: 'none',
+        outline: 'none',
+        background: 'transparent',
+        fontFamily: 'inherit',
+        fontSize: 13.5,
+        color: '#16202e',
+        minWidth: 0
+      }
+    }), !!q.trim() && React.createElement("span", {
+      onClick: () => setQ(''),
+      style: {
+        cursor: 'pointer',
+        color: '#9aa6b4',
+        display: 'grid',
+        placeItems: 'center'
+      }
+    }, React.createElement("svg", {
+      width: "14",
+      height: "14",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2.2",
+      strokeLinecap: "round"
+    }, React.createElement("path", {
+      d: "M6 6l12 12M18 6L6 18"
+    }))), React.createElement("div", {
+      style: {
+        display: 'inline-flex',
+        gap: 2,
+        background: 'rgba(31,59,90,.06)',
+        borderRadius: 9,
+        padding: 2,
+        flexShrink: 0
+      }
+    }, [['all', L.mAll], ['brand', L.mBrand], ['generic', L.mGeneric]].map(([k, lab]) => React.createElement("span", {
+      key: k,
+      onClick: () => setSearchMode(k),
+      title: L['mTip_' + k],
+      style: {
+        fontSize: 10.5,
+        fontWeight: searchMode === k ? 700 : 500,
+        padding: '4px 9px',
+        borderRadius: 7,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        transition: 'all .15s',
+        ...(searchMode === k ? {
+          background: '#fff',
+          color: '#0072a3',
+          boxShadow: '0 2px 6px rgba(31,59,90,.12)'
+        } : {
+          color: '#7d8ea8'
+        })
+      }
+    }, lab)))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        flexWrap: 'wrap'
+      }
+    }, [[status ? status.brands.toLocaleString() : '—', L.statMeds, '#0072a3'], [status ? status.generics.toLocaleString() : '—', L.statGen, '#1c7d70'], [classes.length ? classes.length.toLocaleString() : '—', L.statCls, '#6a52d4']].map(([n, lab, c], i) => React.createElement("div", {
+      key: i,
+      style: {
+        ...glass,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        padding: '6px 14px',
+        borderRadius: 11,
+        color: c
+      }
+    }, React.createElement("b", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 15.5
+      }
+    }, nb(n)), React.createElement("span", {
+      style: {
+        fontSize: 10,
+        opacity: .8
+      }
+    }, lab))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        background: 'rgba(255,255,255,.55)',
+        border: '1px solid rgba(255,255,255,.85)',
+        borderRadius: 20,
+        padding: 3,
+        gap: 2
+      }
+    }, React.createElement("span", {
+      onClick: () => setLang('en'),
+      style: langBtn(!bn)
+    }, "EN"), React.createElement("span", {
+      onClick: () => setLang('bn'),
+      style: langBtn(bn)
+    }, "\u09AC\u09BE\u0982\u09B2\u09BE")))), React.createElement("div", {
+      ref: paneRef,
+      style: {
+        display: 'flex',
+        gap: 13,
+        minHeight: 0,
+        height: paneH
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 'clamp(132px,13vw,192px)',
+        flexShrink: 0,
+        overflowY: 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3,
+        paddingRight: 2
+      }
+    }, React.createElement("div", {
+      style: secLbl
+    }, L.cats), cats.map(c => {
+      const on = cat === c.name;
+      return React.createElement("div", {
+        key: c.name || 'all',
+        onClick: () => setCat(on ? '' : c.name),
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 12,
+          fontWeight: on ? 600 : 500,
+          padding: '7px 9px',
+          borderRadius: 10,
+          cursor: 'pointer',
+          transition: 'all .15s',
+          ...(on ? {
+            background: 'rgba(255,255,255,.75)',
+            border: '1px solid ' + c.c + '55',
+            boxShadow: '0 6px 16px rgba(31,59,90,.1)',
+            color: '#16202e'
+          } : {
+            background: 'transparent',
+            border: '1px solid transparent',
+            color: '#55677d'
+          })
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 24,
+          height: 24,
+          borderRadius: 8,
+          display: 'grid',
+          placeItems: 'center',
+          flexShrink: 0,
+          color: on ? '#fff' : c.c,
+          background: on ? c.c : c.c + '1f',
+          transition: 'all .15s'
+        }
+      }, React.createElement("svg", {
+        width: "13",
+        height: "13",
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: "2",
+        strokeLinecap: "round",
+        strokeLinejoin: "round"
+      }, React.createElement("path", {
+        d: c.icon
+      }))), React.createElement("span", {
+        style: {
+          flex: 1,
+          minWidth: 0,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, c.label), React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 9.5,
+          padding: '0 6px',
+          borderRadius: 8,
+          background: on ? c.c + '22' : 'rgba(31,59,90,.07)',
+          color: on ? c.c : '#7d8ea8'
+        }
+      }, nb((c.count || 0).toLocaleString())));
+    }), React.createElement("div", {
+      style: {
+        height: 1,
+        background: 'rgba(31,59,90,.12)',
+        margin: '8px 4px'
+      }
+    }), React.createElement("div", {
+      onClick: () => setFavOnly(v => !v),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 12,
+        fontWeight: favOnly ? 600 : 500,
+        padding: '7px 10px',
+        borderRadius: 10,
+        cursor: 'pointer',
+        transition: 'all .15s',
+        ...(favOnly ? {
+          background: 'linear-gradient(90deg,#e09e1e,#d2691e)',
+          color: '#fff',
+          border: '1px solid transparent',
+          boxShadow: '0 4px 12px rgba(224,158,30,.35)'
+        } : {
+          background: 'transparent',
+          color: '#8a5a10',
+          border: '1px solid rgba(224,158,30,.3)'
+        })
+      }
+    }, "\u2605", React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }, L.favs, favs.length ? ' (' + nb(favs.length) + ')' : '')), React.createElement("div", {
+      style: {
+        ...secLbl,
+        padding: '10px 6px 5px'
+      }
+    }, L.forms), ROUTE_PILLS.map(([f, lab, icon]) => {
+      const on = form === f;
+      return React.createElement("div", {
+        key: f || 'all',
+        onClick: () => setForm(f),
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 11.5,
+          fontWeight: on ? 600 : 500,
+          padding: '6px 10px',
+          borderRadius: 9,
+          cursor: 'pointer',
+          transition: 'all .15s',
+          ...(on ? {
+            background: 'rgba(13,28,50,.9)',
+            color: '#fff',
+            border: '1px solid rgba(13,28,50,.9)'
+          } : {
+            background: 'transparent',
+            color: '#55677d',
+            border: '1px solid transparent'
+          })
+        }
+      }, React.createElement("svg", {
+        width: "12",
+        height: "12",
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: "2",
+        strokeLinecap: "round",
+        strokeLinejoin: "round"
+      }, React.createElement("path", {
+        d: icon
+      })), React.createElement("span", {
+        style: {
+          flex: 1
+        }
+      }, f ? lab : L.all));
+    })), React.createElement("div", {
+      style: {
+        width: 'clamp(230px,25vw,328px)',
+        flexShrink: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        gap: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+        flexShrink: 0
+      }
+    }, [['name', L.sortName], ['price', L.sortPrice]].map(([k, lab]) => React.createElement("div", {
+      key: k,
+      onClick: () => setSortBy(k),
+      style: {
+        fontSize: 10.5,
+        fontWeight: sortBy === k ? 600 : 500,
+        padding: '4px 10px',
+        borderRadius: 8,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        transition: 'all .15s',
+        ...(sortBy === k ? {
+          background: 'rgba(0,114,163,.14)',
+          color: '#0072a3',
+          border: '1px solid rgba(0,144,202,.35)'
+        } : {
+          background: 'rgba(255,255,255,.55)',
+          color: '#7d8ea8',
+          border: '1px solid rgba(255,255,255,.9)'
+        })
+      }
+    }, lab)), React.createElement("div", {
+      onClick: () => {
+        setCheckMode(v => !v);
+        setPicks([]);
+      },
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 10.5,
+        fontWeight: checkMode ? 600 : 500,
+        padding: '4px 10px',
+        borderRadius: 8,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        transition: 'all .15s',
+        ...(checkMode ? {
+          background: 'linear-gradient(90deg,#6a52d4,#0090ca)',
+          color: '#fff',
+          border: '1px solid transparent',
+          boxShadow: '0 4px 12px rgba(106,82,212,.35)'
+        } : {
+          background: 'rgba(255,255,255,.55)',
+          color: '#5a44b8',
+          border: '1px solid rgba(106,82,212,.3)'
+        })
+      }
+    }, React.createElement("svg", {
+      width: "12",
+      height: "12",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: "M13 2 3 14h7l-1 8 11-13h-8l1-7"
+    })), L.check), React.createElement("span", {
+      style: {
+        marginLeft: 'auto',
+        fontSize: 11,
+        color: '#7d8ea8',
+        fontFamily: MONO
+      }
+    }, nb(favOnly ? shown.length : total.toLocaleString()))), checkMode && React.createElement("div", {
+      style: {
+        background: 'linear-gradient(90deg,rgba(106,82,212,.12),rgba(0,144,202,.07))',
+        border: '1px solid rgba(106,82,212,.32)',
+        borderRadius: 12,
+        padding: '10px 12px',
+        flexShrink: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 11.5,
+        color: '#3a2d80'
+      }
+    }, L.check), React.createElement("span", {
+      onClick: () => setPicks([]),
+      style: {
+        marginLeft: 'auto',
+        fontSize: 10.5,
+        fontWeight: 600,
+        color: '#0072a3',
+        cursor: 'pointer'
+      }
+    }, L.clear)), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#55677d',
+        marginTop: 2
+      }
+    }, picks.length ? picks.map(p => p.name).join('  +  ') : L.checkHint), picks.length === 2 && checkRes != null && React.createElement("div", {
+      style: {
+        marginTop: 7,
+        display: 'flex',
+        gap: 8,
+        alignItems: 'flex-start'
+      }
+    }, checkRes.length ? (() => {
+      const w = checkRes[0],
+        m = sevMeta(w);
+      return React.createElement(React.Fragment, null, React.createElement("span", {
+        style: {
+          flexShrink: 0,
+          fontSize: 9.5,
+          fontWeight: 700,
+          letterSpacing: '.5px',
+          textTransform: 'uppercase',
+          color: m[1],
+          background: m[2],
+          border: '1px solid ' + m[3],
+          borderRadius: 6,
+          padding: '3px 8px'
+        }
+      }, m[0]), React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          lineHeight: 1.5,
+          color: '#2b3a4d',
+          flex: 1
+        }
+      }, w.detail || w.title));
+    })() : React.createElement(React.Fragment, null, React.createElement("span", {
+      style: {
+        flexShrink: 0,
+        fontSize: 9.5,
+        fontWeight: 700,
+        letterSpacing: '.5px',
+        textTransform: 'uppercase',
+        color: '#1c7d70',
+        background: 'rgba(58,181,167,.15)',
+        border: '1px solid rgba(58,181,167,.4)',
+        borderRadius: 6,
+        padding: '3px 8px'
+      }
+    }, bn ? 'ক্ষতিকর নয়' : 'No known harm'), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        lineHeight: 1.5,
+        color: '#2b3a4d',
+        flex: 1
+      }
+    }, L.noPair)))), React.createElement("div", {
+      style: {
+        flex: 1,
+        overflowY: 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 7,
+        minHeight: 0,
+        padding: '2px 2px 8px'
+      }
+    }, shown.map(m => {
+      const isGenRow = searchMode === 'generic' && !favOnly;
+      const on = !checkMode && brand && brand.id === m.id;
+      const mc = classColor(m.drugClass);
+      const picked = picks.some(x => x.id === m.id);
+      return React.createElement("div", {
+        key: m.id,
+        onClick: () => clickRow(m),
+        style: {
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '9px 11px 9px 14px',
+          borderRadius: 13,
+          cursor: 'pointer',
+          transition: 'all .16s',
+          flexShrink: 0,
+          ...(on ? {
+            background: 'rgba(255,255,255,.85)',
+            border: '1px solid ' + mc + '77',
+            boxShadow: '0 12px 28px ' + mc + '2e,0 4px 12px rgba(31,59,90,.1)'
+          } : {
+            background: 'rgba(255,255,255,.5)',
+            border: '1px solid rgba(255,255,255,.85)'
+          })
+        }
+      }, React.createElement("span", {
+        style: {
+          position: 'absolute',
+          left: 0,
+          top: 8,
+          bottom: 8,
+          width: 3.5,
+          borderRadius: '0 4px 4px 0',
+          background: mc + (on ? '' : '66')
+        }
+      }), React.createElement("div", {
+        style: {
+          width: 46,
+          height: 46,
+          background: '#fff',
+          borderRadius: 10,
+          flexShrink: 0,
+          display: 'grid',
+          placeItems: 'center',
+          border: '1px solid rgba(31,59,90,.07)',
+          overflow: 'hidden'
+        }
+      }, React.createElement(Thumb, {
+        row: m,
+        size: 38
+      })), React.createElement("div", {
+        style: {
+          flex: 1,
+          minWidth: 0
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 6,
+          minWidth: 0
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 13,
+          fontWeight: 700,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          flex: '0 1 auto',
+          minWidth: 52
+        }
+      }, m.name), !isGenRow && React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 10,
+          color: '#0072a3',
+          fontWeight: 600,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          minWidth: 0,
+          flex: '0 1 auto'
+        }
+      }, m.strength), picked && React.createElement("span", {
+        style: {
+          fontSize: 8.5,
+          fontWeight: 700,
+          background: 'linear-gradient(90deg,#6a52d4,#0090ca)',
+          color: '#fff',
+          padding: '1px 6px',
+          borderRadius: 5,
+          flexShrink: 0
+        }
+      }, L.picked)), React.createElement("div", {
+        style: {
+          fontSize: 11,
+          color: '#55677d',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          marginTop: 1
+        }
+      }, isGenRow ? m.drugClass || '—' : m.generic + (m.manufacturer ? ' · ' + m.manufacturer : ''))), React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          gap: 3,
+          flexShrink: 0
+        }
+      }, !isGenRow && React.createElement("span", {
+        onClick: e => {
+          e.stopPropagation();
+          toggleFav(m);
+        },
+        style: {
+          fontSize: 13,
+          cursor: 'pointer',
+          lineHeight: 1,
+          userSelect: 'none',
+          color: isFav(m.id) ? '#e09e1e' : 'rgba(31,59,90,.2)'
+        }
+      }, "\u2605"), isGenRow ? React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 10.5,
+          fontWeight: 700,
+          color: '#0072a3',
+          whiteSpace: 'nowrap'
+        }
+      }, nb(m.brands || 0), " ", React.createElement("span", {
+        style: {
+          fontFamily: 'inherit',
+          fontWeight: 500,
+          color: '#7d8ea8'
+        }
+      }, L.brandsOf)) : m.price && m.price.unit != null && React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 10.5,
+          fontWeight: 600,
+          color: '#3c4858',
+          whiteSpace: 'nowrap'
+        }
+      }, nb(taka(m.price.unit)))));
+    }), !loading && !shown.length && React.createElement("div", {
+      style: {
+        textAlign: 'center',
+        padding: '44px 16px',
+        color: '#7d8ea8'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 600,
+        color: '#55677d'
+      }
+    }, L.empty1), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        marginTop: 3
+      }
+    }, L.empty2)), !favOnly && !q.trim() && rows.length < total && React.createElement("button", {
+      onClick: () => setPage(p => p + 1),
+      style: {
+        ...glass,
+        border: '1px solid rgba(0,144,202,.3)',
+        color: '#0072a3',
+        borderRadius: 10,
+        padding: '8px 10px',
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit'
+      }
+    }, loading ? '…' : L.loadMore))), React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 340,
+        background: 'rgba(255,255,255,.55)',
+        border: '1px solid rgba(255,255,255,.9)',
+        backdropFilter: 'blur(24px) saturate(1.5)',
+        WebkitBackdropFilter: 'blur(24px) saturate(1.5)',
+        borderRadius: 18,
+        boxShadow: '0 16px 44px rgba(31,59,90,.12)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden'
+      }
+    }, !brand ? React.createElement("div", {
+      style: {
+        flex: 1,
+        display: 'grid',
+        placeItems: 'center',
+        color: '#7d8ea8',
+        fontSize: 13
+      }
+    }, loading ? '…' : L.empty1) : React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        position: 'relative',
+        overflow: 'hidden',
+        display: 'flex',
+        gap: 18,
+        alignItems: 'center',
+        padding: '22px 20px 20px',
+        flexShrink: 0,
+        color: '#fff',
+        background: 'radial-gradient(460px 200px at 15% -20%,' + ac + '59,transparent 65%),radial-gradient(420px 220px at 100% 120%,' + ac + '33,transparent 70%),linear-gradient(120deg,rgba(13,28,50,.97),rgba(10,22,42,.93))'
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'absolute',
+        right: -14,
+        top: -44,
+        fontSize: 140,
+        fontWeight: 700,
+        color: 'rgba(255,255,255,.045)',
+        pointerEvents: 'none',
+        fontFamily: MONO,
+        lineHeight: 1
+      }
+    }, "Rx"), React.createElement("div", {
+      style: {
+        position: 'relative',
+        width: 'clamp(88px,9vw,132px)',
+        aspectRatio: '1',
+        background: 'rgba(255,255,255,.97)',
+        borderRadius: 16,
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0,
+        boxShadow: '0 22px 48px ' + ac + '66,0 4px 12px rgba(0,0,0,.35)',
+        overflow: 'hidden'
+      }
+    }, brand.hasImage ? React.createElement("img", {
+      src: '/api/med/image/' + brand.id,
+      alt: brand.name,
+      loading: "lazy",
+      style: {
+        width: '84%',
+        height: '84%',
+        objectFit: 'contain'
+      },
+      onError: e => {
+        e.target.style.display = 'none';
+      }
+    }) : React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 34,
+        fontWeight: 700,
+        color: ac
+      }
+    }, "Rx")), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 24,
+        fontWeight: 700,
+        letterSpacing: '-.4px',
+        color: '#fff'
+      }
+    }, brand.name), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 13,
+        color: '#7ac4e8',
+        fontWeight: 600
+      }
+    }, brand.strength)), React.createElement("div", {
+      style: {
+        color: '#c7d2e0',
+        fontSize: 13.5,
+        marginTop: 2,
+        fontWeight: 500
+      }
+    }, brand.isGeneric ? nb(brand.brandCount || 0) + ' ' + L.brandsOf + (brand.generic ? ' · ' + brand.generic : '') : brand.generic), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap',
+        marginTop: 9
+      }
+    }, React.createElement("span", {
+      title: brand.form || route,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        fontSize: 10.5,
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        color: RBRIGHT[route],
+        background: 'rgba(255,255,255,.09)',
+        border: '1px solid ' + RBRIGHT[route] + '55',
+        padding: '2px 8px',
+        borderRadius: 6,
+        maxWidth: 200,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, brand.form || route), brand.drugClass && React.createElement("span", {
+      title: brand.drugClass,
+      style: {
+        fontSize: 10.5,
+        color: '#7ac4e8',
+        background: 'rgba(255,255,255,.08)',
+        border: '1px solid rgba(122,196,232,.35)',
+        borderRadius: 6,
+        padding: '2px 8px',
+        maxWidth: 260,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, brand.drugClass), brand.price && brand.price.unit != null && React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        fontFamily: MONO,
+        fontWeight: 600,
+        color: '#fff',
+        background: 'rgba(255,255,255,.12)',
+        border: '1px solid rgba(255,255,255,.22)',
+        borderRadius: 6,
+        padding: '2px 8px'
+      }
+    }, nb(taka(brand.price.unit))), brand.abx && React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        letterSpacing: '.4px',
+        textTransform: 'uppercase',
+        borderRadius: 6,
+        padding: '2px 8px',
+        color: '#ffd28a',
+        background: 'rgba(224,158,30,.18)',
+        border: '1px solid rgba(255,210,138,.4)'
+      }
+    }, bn ? 'অ্যান্টিবায়োটিক' : 'Antibiotic')), !brand.isGeneric && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#93a5bb',
+        marginTop: 8
+      }
+    }, L.mfr, " \u2014 ", React.createElement("b", {
+      style: {
+        color: '#fff'
+      }
+    }, brand.manufacturer || '—'))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 7,
+        flexShrink: 0,
+        alignSelf: 'flex-start'
+      }
+    }, React.createElement("button", {
+      onClick: () => toggleFav({
+        id: brand.id,
+        name: brand.name,
+        strength: brand.strength,
+        form: brand.form,
+        generic: brand.generic,
+        price: brand.price,
+        hasImage: brand.hasImage,
+        drugClass: brand.drugClass
+      }),
+      title: "Favorite",
+      style: {
+        width: 34,
+        height: 34,
+        borderRadius: 9,
+        border: '1px solid ' + (isFav(brand.id) ? 'rgba(224,158,30,.6)' : 'rgba(255,255,255,.22)'),
+        background: isFav(brand.id) ? 'rgba(224,158,30,.25)' : 'rgba(255,255,255,.1)',
+        display: 'grid',
+        placeItems: 'center',
+        color: isFav(brand.id) ? '#ffd28a' : 'rgba(255,255,255,.6)',
+        cursor: 'pointer',
+        fontSize: 16
+      }
+    }, "\u2605"), React.createElement("button", {
+      onClick: copySummary,
+      title: L.copyT,
+      style: {
+        width: 34,
+        height: 34,
+        borderRadius: 9,
+        border: '1px solid ' + (copied ? 'rgba(127,214,203,.6)' : 'rgba(255,255,255,.22)'),
+        background: copied ? 'rgba(58,181,167,.3)' : 'rgba(255,255,255,.1)',
+        display: 'grid',
+        placeItems: 'center',
+        color: copied ? '#7fd6cb' : 'rgba(255,255,255,.65)',
+        cursor: 'pointer',
+        transition: 'all .15s'
+      }
+    }, React.createElement("svg", {
+      width: "14",
+      height: "14",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: "M9 9h11v11H9zM5 15H4V4h11v1"
+    }))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 2,
+        marginTop: 4
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 64,
+        height: 22,
+        opacity: .75,
+        background: 'repeating-linear-gradient(90deg,#fff 0 1.5px,transparent 1.5px 3px,#fff 3px 5.5px,transparent 5.5px 7px,#fff 7px 8px,transparent 8px 10.5px)'
+      }
+    }), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 7.5,
+        letterSpacing: '.8px',
+        color: 'rgba(255,255,255,.55)'
+      }
+    }, ('UNC-' + brand.id).toUpperCase().slice(0, 18))))), React.createElement("div", {
+      style: {
+        flex: 1,
+        overflowY: 'auto',
+        padding: '14px 18px 22px',
+        minHeight: 0
+      }
+    }, tab === 'overview' && (nursing || prescriberG) && React.createElement("div", {
+      style: {
+        marginBottom: 12
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: '.8px',
+        textTransform: 'uppercase',
+        color: '#55677d',
+        marginBottom: 7
+      }
+    }, L.clinicalGuidance), lowConf && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        lineHeight: 1.5,
+        color: '#8a5a10',
+        background: 'rgba(224,158,30,.12)',
+        border: '1px solid rgba(224,158,30,.4)',
+        borderRadius: 10,
+        padding: '8px 11px',
+        marginBottom: 9
+      }
+    }, "\u26A0\uFE0F ", L.lowConf), nursing && React.createElement("div", {
+      style: {
+        background: 'linear-gradient(90deg,rgba(58,181,167,.12),rgba(0,144,202,.06))',
+        border: '1px solid rgba(58,181,167,.35)',
+        borderLeft: '3px solid #1c7d70',
+        borderRadius: 12,
+        padding: '11px 14px',
+        marginBottom: 9
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        marginBottom: 7,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 13
+      }
+    }, "\uD83D\uDC69\u200D\u2695\uFE0F"), React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: '#123f38'
+      }
+    }, L.nursing), React.createElement("span", {
+      style: {
+        fontSize: 8.5,
+        fontWeight: 700,
+        letterSpacing: '.4px',
+        textTransform: 'uppercase',
+        color: '#8a5a10',
+        background: 'rgba(224,158,30,.16)',
+        border: '1px solid rgba(224,158,30,.4)',
+        borderRadius: 5,
+        padding: '2px 6px'
+      }
+    }, L.aiWritten)), React.createElement(Bulleted, {
+      text: nursing,
+      tone: "#1c7d70"
+    })), prescriberG && React.createElement("div", {
+      style: {
+        background: 'rgba(255,255,255,.66)',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderLeft: '3px solid #0072a3',
+        borderRadius: 12,
+        padding: '11px 14px',
+        boxShadow: '0 4px 14px rgba(31,59,90,.05)'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        marginBottom: 7,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 13
+      }
+    }, "\uD83E\uDE7A"), React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: '#16202e'
+      }
+    }, L.prescriber), React.createElement("span", {
+      style: {
+        fontSize: 8.5,
+        fontWeight: 700,
+        letterSpacing: '.4px',
+        textTransform: 'uppercase',
+        color: '#8a5a10',
+        background: 'rgba(224,158,30,.16)',
+        border: '1px solid rgba(224,158,30,.4)',
+        borderRadius: 5,
+        padding: '2px 6px'
+      }
+    }, L.aiWritten)), React.createElement(Bulleted, {
+      text: prescriberG,
+      tone: "#0072a3"
+    }))), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(122px,1fr))',
+        gap: 8,
+        marginBottom: 13
+      }
+    }, [{
+      k: L.preg,
+      v: preg ? (bn ? 'ক্যাটাগরি ' : 'Category ') + preg : '—',
+      c: PREGC[preg]
+    }, {
+      k: L.formT,
+      v: (brand.form || '—') + (brand.strength ? ' · ' + brand.strength : '')
+    }, {
+      k: L.priceT,
+      v: brand.price && brand.price.unit != null ? nb(taka(brand.price.unit)) + (brand.priceMax && brand.priceMax !== brand.price.unit ? ' – ' + nb(taka(brand.priceMax)) : '') : '—'
+    }, {
+      k: L.confT,
+      v: brand.confidence ? brand.confidence : '—',
+      c: brand.confidence === 'low' ? PREGC.C : null
+    }].map((t, i) => React.createElement("div", {
+      key: i,
+      style: {
+        background: t.c ? t.c[1] : 'rgba(255,255,255,.66)',
+        border: '1px solid ' + (t.c ? t.c[2] : 'rgba(255,255,255,.95)'),
+        borderRadius: 10,
+        padding: '8px 10px',
+        color: t.c ? t.c[0] : '#2b3a4d'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9,
+        fontWeight: 700,
+        letterSpacing: '.6px',
+        textTransform: 'uppercase',
+        opacity: .75,
+        marginBottom: 2
+      }
+    }, t.k), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 600,
+        lineHeight: 1.35
+      }
+    }, t.v)))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 4,
+        background: 'rgba(31,59,90,.06)',
+        borderRadius: 11,
+        padding: 4,
+        marginBottom: 13
+      }
+    }, ['overview', 'dosage', 'safety', 'alts', 'more'].map(k => React.createElement("div", {
+      key: k,
+      onClick: () => setTab(k),
+      style: {
+        flex: 1,
+        textAlign: 'center',
+        fontSize: 11.5,
+        fontWeight: tab === k ? 700 : 500,
+        padding: '7px 6px',
+        borderRadius: 8,
+        cursor: 'pointer',
+        transition: 'all .15s',
+        whiteSpace: 'nowrap',
+        ...(tab === k ? {
+          background: 'linear-gradient(90deg,#0090ca,#3ab5a7)',
+          color: '#fff',
+          boxShadow: '0 6px 16px rgba(0,144,202,.35)'
+        } : {
+          color: '#55677d'
+        })
+      }
+    }, L.tabs[k]))), tab === 'safety' && (sel.interactions || []).length > 0 && React.createElement("div", {
+      style: {
+        marginBottom: 11,
+        background: 'rgba(255,255,255,.66)',
+        border: '1px solid rgba(210,58,82,.25)',
+        borderRadius: 12,
+        padding: '11px 14px',
+        boxShadow: '0 4px 14px rgba(31,59,90,.05)'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '.7px',
+        textTransform: 'uppercase',
+        color: '#8c2237',
+        marginBottom: 7
+      }
+    }, bn ? 'নথিভুক্ত মিথস্ক্রিয়া' : 'Documented interactions', " \xB7 ", nb((sel.interactions || []).length)), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 7
+      }
+    }, (sel.interactions || []).map((w, i) => {
+      const major = w.severity === 'major';
+      const c = major ? ['#8c2237', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.4)'] : ['#8a5a10', 'rgba(224,158,30,.16)', 'rgba(224,158,30,.45)'];
+      return React.createElement("div", {
+        key: i,
+        style: {
+          display: 'flex',
+          gap: 8,
+          alignItems: 'flex-start'
+        }
+      }, React.createElement("span", {
+        style: {
+          flexShrink: 0,
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: '.5px',
+          textTransform: 'uppercase',
+          color: c[0],
+          background: c[1],
+          border: '1px solid ' + c[2],
+          borderRadius: 6,
+          padding: '2px 7px',
+          marginTop: 1
+        }
+      }, major ? bn ? 'গুরুতর' : 'Major' : bn ? 'মাঝারি' : 'Moderate'), React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          lineHeight: 1.5,
+          color: '#2b3a4d',
+          minWidth: 0
+        }
+      }, React.createElement("b", null, w.with), " \u2014 ", w.reason, w.advice && React.createElement("div", {
+        style: {
+          color: '#55677d',
+          marginTop: 1
+        }
+      }, React.createElement("b", {
+        style: {
+          color: c[0]
+        }
+      }, bn ? 'করণীয়: ' : 'Advice: '), w.advice)));
+    }))), tab === 'safety' && (sel.foodWarnings || []).length > 0 && React.createElement("div", {
+      style: {
+        marginBottom: 11,
+        background: 'linear-gradient(90deg,rgba(224,158,30,.1),rgba(224,99,30,.06))',
+        border: '1px solid rgba(224,158,30,.35)',
+        borderRadius: 12,
+        padding: '11px 14px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '.7px',
+        textTransform: 'uppercase',
+        color: '#8a5a10',
+        marginBottom: 5
+      }
+    }, bn ? 'খাবার ও পানীয় সতর্কতা' : 'Food & drink warnings'), (sel.foodWarnings || []).map((w, i) => React.createElement("div", {
+      key: i,
+      style: {
+        fontSize: 11.5,
+        lineHeight: 1.55,
+        color: '#5a3d10',
+        marginBottom: 3
+      }
+    }, "\u2022 ", w.warning))), sections.map(s2 => React.createElement("div", {
+      key: s2.key,
+      style: {
+        marginBottom: 11,
+        background: 'rgba(255,255,255,.66)',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderRadius: 12,
+        padding: '11px 14px',
+        boxShadow: '0 4px 14px rgba(31,59,90,.05)'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '.7px',
+        textTransform: 'uppercase',
+        color: '#0072a3',
+        marginBottom: 6
+      }
+    }, s2.t), React.createElement(Bulleted, {
+      text: s2.body
+    }))), TABSEC[tab] && !sections.length && React.createElement("div", {
+      style: {
+        textAlign: 'center',
+        color: '#9aa6b4',
+        fontSize: 12,
+        padding: '20px 0 8px'
+      }
+    }, "\u2014"), tab === 'alts' && ((sel.alternatives || []).length ? React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 7
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '.7px',
+        textTransform: 'uppercase',
+        color: '#6c7a8c'
+      }
+    }, L.similar, " \xB7 ", nb((sel.alternatives || []).length)), (sel.alternatives || []).map(a => React.createElement("div", {
+      key: a.id,
+      onClick: () => openBrand(a.id),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        background: 'rgba(255,255,255,.66)',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderRadius: 12,
+        padding: '8px 11px',
+        cursor: 'pointer',
+        boxShadow: '0 4px 14px rgba(31,59,90,.05)'
+      }
+    }, React.createElement("div", {
+      style: {
+        width: 40,
+        height: 40,
+        background: '#fff',
+        borderRadius: 9,
+        flexShrink: 0,
+        display: 'grid',
+        placeItems: 'center',
+        border: '1px solid rgba(31,59,90,.07)',
+        overflow: 'hidden'
+      }
+    }, React.createElement(Thumb, {
+      row: a,
+      size: 32
+    })), React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 6
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, a.name), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 10,
+        color: '#0072a3',
+        fontWeight: 600,
+        whiteSpace: 'nowrap'
+      }
+    }, a.strength)), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: '#55677d',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, a.form, a.manufacturer ? ' · ' + a.manufacturer : '')), a.price && a.price.unit != null && React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#157a43',
+        whiteSpace: 'nowrap'
+      }
+    }, nb(taka(a.price.unit))))), React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: '#9aa6b4'
+      }
+    }, bn ? 'সস্তা আগে সাজানো — একই জেনেরিক বহনকারী ব্র্যান্ড।' : 'Cheapest first — brands carrying the same generic.')) : React.createElement("div", {
+      style: {
+        textAlign: 'center',
+        color: '#9aa6b4',
+        fontSize: 12,
+        padding: '20px 0 8px'
+      }
+    }, bn ? 'এই জেনেরিকের অন্য কোনো ব্র্যান্ড নেই।' : 'No other brand carries this generic.')), tab === 'more' && React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: '#9aa6b4',
+        lineHeight: 1.5,
+        marginTop: 4
+      }
+    }, L.disclaimer))))));
+  }
+  window.MedicineInfoV2 = MedicineInfoV2;
+})();
+})();
+;
 /* ===== medicine.jsx ===== */
 (function(){
 const {
@@ -85112,19 +91921,24 @@ const SECTION_LABEL = {
   therapeuticClass: 'Therapeutic class',
   pharmacology: 'Pharmacology',
   dosage: 'Dosage & administration',
+  adultDose: 'Adult dose',
+  childDose: 'Child dose',
+  renalDose: 'Renal dose',
   administration: 'Administration',
   interaction: 'Interactions',
   contraindications: 'Contraindications',
   sideEffects: 'Side effects',
   pregnancy: 'Pregnancy & lactation',
   precautions: 'Precautions',
+  nursingConsiderations: 'Nursing considerations',
+  prescriberConsiderations: 'Prescriber considerations',
   pediatric: 'Paediatric use',
   overdose: 'Overdose',
   duration: 'Duration of treatment',
   reconstitution: 'Reconstitution',
   storage: 'Storage'
 };
-const SECTION_ORDER = ['indication', 'therapeuticClass', 'pharmacology', 'dosage', 'administration', 'interaction', 'contraindications', 'sideEffects', 'pregnancy', 'precautions', 'pediatric', 'overdose', 'duration', 'reconstitution', 'storage'];
+const SECTION_ORDER = ['indication', 'therapeuticClass', 'pharmacology', 'dosage', 'adultDose', 'childDose', 'renalDose', 'administration', 'interaction', 'contraindications', 'sideEffects', 'pregnancy', 'precautions', 'nursingConsiderations', 'prescriberConsiderations', 'pediatric', 'overdose', 'duration', 'reconstitution', 'storage'];
 const FREQ = ['1+0+0', '0+0+1', '1+0+1', '1+1+1', '0+1+0', '1+1+1+1', '½+0+½', 'OD', 'BD', 'TDS', 'QDS', 'SOS', 'STAT', 'Weekly'];
 const TIMING = ['After meal', 'Before meal', 'With meal', 'Empty stomach', 'At bedtime', 'As directed'];
 const DURATION = ['3 days', '5 days', '7 days', '10 days', '14 days', '1 month', '2 months', '3 months', 'Continue'];
@@ -89660,6 +96474,9 @@ function MedicineView({
   useEffect(() => {
     medInjectStyle();
   }, []);
+  if (view === 'medInfo' && window.MedicineInfoV2) return React.createElement(window.MedicineInfoV2, {
+    setRoute: setRoute
+  });
   if (view === 'medBrowse') return React.createElement(MedBrowse, {
     setRoute: setRoute,
     initialQ: q
@@ -90071,6 +96888,11 @@ function App() {
       store: staff,
       setRoute: setRoute
     });
+  } else if (route.view === 'manpower' && typeof window !== 'undefined' && window.ManpowerOverview) {
+    crumbs = ['UNICO', 'Duty Roster', 'Manpower Overview'];
+    body = React.createElement(window.ManpowerOverview, {
+      setRoute: setRoute
+    });
   } else if (route.view === 'rosterFullReview' && typeof window !== 'undefined' && window.RosterReviewFull) {
     crumbs = ['UNICO', 'Duty Roster', 'Full Review'];
     body = React.createElement(window.RosterReviewFull, {
@@ -90094,6 +96916,7 @@ function App() {
   } else if (route.view && route.view.indexOf('med') === 0 && typeof MedicineView !== 'undefined') {
     const MV_TITLE = {
       medHome: 'Overview',
+      medInfo: 'Medicine Info',
       medBrowse: 'Drug Index',
       medBrand: 'Brand',
       medGeneric: 'Generic',

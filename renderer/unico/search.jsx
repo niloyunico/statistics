@@ -148,7 +148,11 @@ function GlobalSearch({setRoute, depts}){
                   <div key={it.id} data-idx={i} className={'gs-row'+(active?' active':'')}
                     onMouseEnter={()=>setSel(i)} onMouseDown={e=>{e.preventDefault();activate(it);}}>
                     {it.avatar
-                      ? <div className="avatar gs-av" style={{background:`linear-gradient(135deg,${col[0]},${col[1]})`}}>{initials(it.avatar)}</div>
+                      ? ((window.MK&&window.MK.Av)
+                          // Photo-aware: staff results show the person's real photo when
+                          // one is stored (name-keyed lookup); initials otherwise.
+                          ? <window.MK.Av name={it.avatar} size={34} radius={9} style={{fontSize:12.5}}/>
+                          : <div className="avatar gs-av" style={{background:`linear-gradient(135deg,${col[0]},${col[1]})`}}>{initials(it.avatar)}</div>)
                       : <div className="gs-ic"><Ic d={it.icon||I.arrowR} s={17}/></div>}
                     <div className="gs-text">
                       <div className="gs-label">{it.label}</div>

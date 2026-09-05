@@ -793,6 +793,12 @@ require('./duty-roster').mount(app, {
 // and the prescriptions written from it. Prescriptions carry patient names, UHIDs and
 // diagnoses, so the whole module is gated on 'medicine'; editing the shared drug
 // catalogue is admin-only inside it.
+// Medicine catalogue: when `medicine` is in D1_MODULES the catalogue routes are
+// mounted FIRST from the D1+Cloudinary store (they win the Express match), and
+// medicines.js below keeps serving what stays in Mongo (prescriptions, templates).
+if (require('./d1-store').enabled('medicine')) {
+  require('./medicines-d1').mount(app, { requireApi: [session.requireApi, access.requireModule('medicine')] });
+}
 require('./medicines').mount(app, { requireApi: [session.requireApi, access.requireModule('medicine')] });
 
 // All other renderer assets (jsx/js/css/svg/fonts) are static. index:false so our

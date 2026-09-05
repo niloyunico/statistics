@@ -179,6 +179,11 @@ function App(){
   } else if(route.view==='staffPrevious'){
     crumbs=['UNICO','Staff','Previous Staff'];
     body=<PreviousStaff store={staff} setRoute={setRoute}/>;
+  } else if(route.view==='manpower' && typeof window!=='undefined' && window.ManpowerOverview){
+    // Manpower Overview — the whole hospital's staffing on one screen (floor map,
+    // week grid, per-unit tiles), ported 1:1 from the approved design canvas.
+    crumbs=['UNICO','Duty Roster','Manpower Overview'];
+    body=<window.ManpowerOverview setRoute={setRoute}/>;
   } else if(route.view==='rosterFullReview' && typeof window!=='undefined' && window.RosterReviewFull){
     // The cross-unit review: queue, workload tree, hospital diagram and what the store
     // can honestly say about who changed what. Its own route because it is about EVERY
@@ -192,7 +197,7 @@ function App(){
     body=<RosterView view={route.view} dept={route.dept} year={route.year} month={route.month} setRoute={setRoute}/>;
   } else if(route.view && route.view.indexOf('med')===0 && typeof MedicineView!=='undefined'){
     // Medicine module — drug index + prescription writer, inside the global shell.
-    const MV_TITLE={medHome:'Overview',medBrowse:'Drug Index',medBrand:'Brand',medGeneric:'Generic',
+    const MV_TITLE={medHome:'Overview',medInfo:'Medicine Info',medBrowse:'Drug Index',medBrand:'Brand',medGeneric:'Generic',
       medRxNew:'New Prescription',medRxList:'Prescriptions',medRxPrint:'Print Prescription',
       medTemplates:'Rx Templates',medCatalog:'Drug Catalogue'};
     crumbs=['UNICO','Medicine & Rx',MV_TITLE[route.view]||'Overview'];
