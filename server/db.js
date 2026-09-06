@@ -403,7 +403,13 @@ async function setAppData(data, previous) {
     const update = { $set };
     if (Object.keys($unset).length) update.$unset = $unset;
     await coll.updateOne({ _id: 'shared' }, update, { upsert: true });
-    return { updatedAt, changed: Object.keys($set).length - 1, removed: Object.keys($unset).length };
+    // `changedKeys` names WHAT was written, not just how many. The activity log needs
+    // it to say "saved the staff register" instead of "PUT /api/data" — the caller is
+    // the only place that still holds the previous values to describe the change.
+    return { updatedAt,
+      changed: Object.keys($set).length - 1, removed: Object.keys($unset).length,
+      changedKeys: Object.keys($set).filter((k) => k !== 'updatedAt').map((k) => k.slice(5)),
+      removedKeys: Object.keys($unset).map((k) => k.slice(5)) };
   }
 
   // No baseline (or a key we cannot express as a path) -> the original whole-doc write.

@@ -2383,7 +2383,9 @@ function ActivityLog(){
     performance_saved:{l:'Performance saved',c:'#6a52d4'}, quality_saved:{l:'Quality data saved',c:'#3ab5a7'},
     user_account_changed:{l:'User account changed',c:'#e08a1e'}, user_account_deleted:{l:'User account deleted',c:'#d23a52'},
     departments_changed:{l:'Departments changed',c:'#e08a1e'}, medicine_changed:{l:'Medicine data changed',c:'#6a52d4'},
-    supervisor_report_saved:{l:'Supervisor report saved',c:'#0090ca'} };
+    supervisor_report_saved:{l:'Supervisor report saved',c:'#0090ca'},
+    role_template_created:{l:'Role created',c:'#0090ca'}, role_template_updated:{l:'Role updated',c:'#e08a1e'},
+    role_template_deleted:{l:'Role deleted',c:'#d23a52'}, role_template_applied:{l:'Role applied to members',c:'#6a52d4'} };
   const meta=a=>META[a]||{l:a,c:'#8a93a3'};
   const fmtTs=ts=>{ try{ return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } };
   const filtered=(rows||[]).filter(r=>{ if(!q.trim()) return true; const s=(r.username+' '+r.name+' '+meta(r.action).l+' '+r.target+' '+r.detail+' '+r.ip).toLowerCase(); return s.includes(q.trim().toLowerCase()); });

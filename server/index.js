@@ -8,6 +8,11 @@ const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
 const { getUsers, getAppData, setAppData, usingMongo } = require('./db');
+const activity = require('./activity-log');
+const audit = require('./audit');
+// Recently-logged save descriptions, so a debounced form does not file the same
+// sentence twice a second. Key: "<user>|<detail>" -> timestamp.
+const SAVE_SEEN = new Map();
 const auth = require('./auth');
 const session = require('./session');
 const access = require('./access');
@@ -68,7 +73,7 @@ app.use(express.json({ limit: '12mb' })); // app-state snapshots can be sizable
 // reads are skipped, bodies are never stored, repeats collapse). Registered before
 // any route so nothing can slip in underneath it; it reads req.user at response
 // time, after the route's own session guard has resolved the caller.
-app.use(require('./audit').middleware);
+app.use(audit.middleware);
 
 // Cross-origin access. The default was '*' — with a Bearer token that let any site's
 // script call this API on a user's behalf. When login is required, default to
@@ -246,6 +251,34 @@ app.put('/api/data', requireAuth, access.attach, async (req, res) => {
     // setAppData(). Without it every save rewrote the whole blob and the last writer won.
     const r = await setAppData(merged, current && current.data);
     res.json({ ok: true, updatedAt: r.updatedAt });
+
+    // Activity log. This is where almost every edit in the app lands -- staff records,
+    // department statistics, quality indicators, roster rules -- so a bare
+    // "app_data_saved" told an auditor nothing. Log one entry PER overlay key, naming
+    // the records that were added, edited or removed. Done after the response so a slow
+    // diff can never delay the save, and it is skipped when nothing actually changed
+    // (the browser re-mirrors its whole localStorage on a debounce, so most calls write
+    // nothing at all -- those used to fill the log with entries for non-events).
+    try {
+      const prev = (current && current.data) || {};
+      const now = Date.now();
+      const touched = [...(r.changedKeys || []), ...(r.removedKeys || [])];
+      touched.slice(0, 8).forEach((k) => {
+        const what = audit.describeChange(prev[k], merged[k]);
+        if (what === 'no visible change') return;
+        const label = audit.KEY_LABELS[k] || k;
+        // The row prints "<target> — <detail>", so the label must not appear in both.
+        const detail = what || 'updated';
+        // Typing into a form saves on a debounce, so the same record can be written
+        // several times a minute. Collapse an identical description from the same
+        // person inside a minute; anything genuinely different is still its own entry.
+        const dk = (req.user && req.user.sub ? req.user.sub : 'local') + '|' + detail;
+        if (now - (SAVE_SEEN.get(dk) || 0) < 60000) return;
+        SAVE_SEEN.set(dk, now);
+        if (SAVE_SEEN.size > 500) SAVE_SEEN.forEach((ts, key) => { if (now - ts > 60000) SAVE_SEEN.delete(key); });
+        activity.log(req, 'app_data_saved', { target: label, detail });
+      });
+    } catch (e) { /* the save already succeeded; logging is best-effort */ }
   }
   catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }
 });

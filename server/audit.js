@@ -51,12 +51,63 @@ const SKIP = [
   /^\/api\/login$/,          // the login handler records success AND failure itself
   /^\/api\/report-pdf$/,     // rendering a PDF mutates nothing
   /^\/api\/keepalive/,       // the cron ping is not a person
+  // PUT /api/data records itself (see index.js): only that route still holds the
+  // previous values, so only it can say WHICH records changed. Logging here as well
+  // would file a vague duplicate beside every useful entry.
+  /^\/api\/data$/,
 ];
 
+// Record ids in the path made every entry unique -- "patch /api/submissions/sub-mtk0..."
+// -- which both read as noise and defeated the repeat collapsing below. The id belongs
+// in the detail (which keeps the full route), not in the name of the action.
+const ID_SEG = /^(?:[0-9]+|[0-9a-f]{8,}|[a-z]+-[a-z0-9]{6,}.*|[A-Za-z0-9_-]{18,})$/;
 function nameFor(method, path) {
   const key = method + ' ' + path;
   for (const [re, n] of NAMES) if (re.test(key)) return n;
-  return method.toLowerCase() + ' ' + path;
+  const generic = path.split('/').map((seg) => (ID_SEG.test(seg) ? ':id' : seg)).join('/');
+  return method.toLowerCase() + ' ' + generic;
+}
+
+/* What actually changed inside one app-state key, in words.
+
+   The browser mirrors whole localStorage values, so the raw diff is "a 98 KB string
+   became a different 98 KB string" -- useless in an audit trail. These overlays are
+   either a LIST of records (staff) or a MAP of them, so parse both sides and report
+   the records that appeared, vanished or differ, by name. Bounded on purpose: parsing
+   is skipped above ~1.5 MB and at most three names are quoted, because this runs on
+   the save path and must never become the expensive part of it. */
+const MAX_PARSE = 1.5 * 1024 * 1024;
+function labelOf(rec, id) {
+  if (!rec || typeof rec !== 'object') return String(id);
+  return String(rec.name || rec.title || rec.label || rec.staffName || rec.emp_id || id);
+}
+function describeChange(prevStr, nextStr) {
+  try {
+    if (typeof nextStr !== 'string' || nextStr.length > MAX_PARSE) return '';
+    if (typeof prevStr !== 'string') return 'first save';
+    if (prevStr.length > MAX_PARSE) return '';
+    const a = JSON.parse(prevStr), b = JSON.parse(nextStr);
+    const idx = (v) => {
+      const m = new Map();
+      if (Array.isArray(v)) v.forEach((x, i) => m.set(String((x && (x.id != null ? x.id : x.emp_id)) != null ? (x.id != null ? x.id : x.emp_id) : i), x));
+      else if (v && typeof v === 'object') Object.keys(v).forEach((k) => m.set(k, v[k]));
+      else return null;
+      return m;
+    };
+    const ma = idx(a), mb = idx(b);
+    if (!ma || !mb) return 'updated';
+    const added = [], removed = [], changed = [];
+    mb.forEach((v, k) => {
+      if (!ma.has(k)) added.push(labelOf(v, k));
+      else if (JSON.stringify(ma.get(k)) !== JSON.stringify(v)) changed.push(labelOf(v, k));
+    });
+    ma.forEach((v, k) => { if (!mb.has(k)) removed.push(labelOf(v, k)); });
+    const part = (verb, list) => (list.length
+      ? verb + ' ' + list.slice(0, 3).join(', ') + (list.length > 3 ? ' +' + (list.length - 3) + ' more' : '')
+      : null);
+    const bits = [part('added', added), part('edited', changed), part('removed', removed)].filter(Boolean);
+    return bits.join('; ') || 'no visible change';
+  } catch (e) { return ''; }
 }
 
 // What each app-state key actually holds — so an app_data_saved entry reads
@@ -113,4 +164,4 @@ function middleware(req, res, next) {
   next();
 }
 
-module.exports = { middleware };
+module.exports = { middleware, describeChange, KEY_LABELS };
