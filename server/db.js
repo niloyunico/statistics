@@ -109,7 +109,13 @@ function rawConnect(uri) {
   const { MongoClient } = require('mongodb');
   const serverless = !!process.env.VERCEL;
   const client = new MongoClient(uri, {
-    serverSelectionTimeoutMS: serverless ? 6000 : 8000,
+    // Tunable, because the default is what decides whether a merely SLOW primary
+    // counts as a dead one. A free-tier cluster reached from a cold serverless
+    // instance can take several seconds to select a server; at 6000 ms that read
+    // as "primary unreachable" and moved write authority to the standby, which
+    // then needs a manual heal. Raise DB_SELECT_TIMEOUT_MS to trade a slower first
+    // request for fewer spurious failovers.
+    serverSelectionTimeoutMS: Number(process.env.DB_SELECT_TIMEOUT_MS) || (serverless ? 6000 : 8000),
     connectTimeoutMS: 8000,
     socketTimeoutMS: 30000,
     maxPoolSize: serverless ? 5 : 25,
