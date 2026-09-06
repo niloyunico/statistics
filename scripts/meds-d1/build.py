@@ -88,8 +88,32 @@ brands = []
 img_manifest = []
 counts = {'class': {}, 'mfr': {}, 'form': {}}
 
+skipped = {'nondrug': 0, 'noname': 0}
 for r in rows:
-    gname = clean(r['generic_name']) or clean(r['brand_name'])
+    bname = clean(r['brand_name'])
+    graw = clean(r['generic_name'])
+    # NOT A MEDICINE. 11,149 source rows are retail toiletries and cosmetics —
+    # lubricants, castor oil, sun cream, handwash — and they are identifiable
+    # because they carry no generic name, no therapeutic class AND no category,
+    # while every real drug has at least a generic. None is flagged antibiotic,
+    # narcotic or OTC, and none has clinical guidance. They only crowd a clinical
+    # index (and sort to the top of A-Z), so they are left out.
+    if not graw and not clean(r['therapeutic_class']) and not clean(r['category']):
+        skipped['nondrug'] += 1
+        continue
+    # A brand name with no letters is a mis-parsed strength ("40" for Omeprazole
+    # 40 mg, "500" for Azithromycin 500 mg); one that is nothing but a bracketed
+    # qualifier ("(Premier's)", "(Off)") is a mis-parsed suffix. Both sort to the
+    # very top of A-Z, so they are the first thing anyone sees. The generic is the
+    # real identity; with no generic either, the row cannot be named at all.
+    # (A leading Greek letter like β-Sitosterol is a real name and must survive.)
+    if bname and (not re.search(r'[A-Za-z]', bname) or re.match(r'^\s*[\(\[]', bname)):
+        if not graw:
+            skipped['noname'] += 1
+            continue
+        bname = graw
+
+    gname = graw or bname
     gl = norm(gname)
     gid = 'gen-' + h16(gl)
     bid = 'b-' + h16(r['unique_id'])
@@ -119,7 +143,7 @@ for r in rows:
     if img: img_manifest.append(img + '\t' + bid)
 
     brands.append({
-        '_id': bid, 'name': clean(r['brand_name']), 'nameLower': norm(r['brand_name']),
+        '_id': bid, 'name': bname, 'nameLower': norm(bname),
         'type': btype, 'slug': clean(r['unique_id']), 'form': form,
         'generic': gname, 'genericId': gid, 'genericLower': gl,
         'strength': clean(r['strength']), 'manufacturer': mfr, 'manufacturerLower': norm(mfr),
@@ -133,6 +157,8 @@ for r in rows:
         'source': 'bd-drug-2026', 'sourceDate': '2026-09',
     })
 
+print('kept %d medicines (skipped %d non-medicines, %d unnameable)'
+      % (len(brands), skipped['nondrug'], skipped['noname']))
 print('generics:', len(gens))
 
 plain = lambda v: re.sub(r'<[^>]+>', ' ', str(v or '')).strip()
