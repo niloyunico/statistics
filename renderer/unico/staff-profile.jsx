@@ -140,6 +140,19 @@ function StaffProfile({store, empId, setRoute}){
   const priorExcl = totalY!=null ? Math.max(0, Math.round((totalY-S.unicoYearsOf(e))*100)/100) : priorY;
   const priorExclText = priorExcl!=null ? S.fmtYM(priorExcl) : '—';
   const entries=Array.isArray(e.prior_experience_entries)?e.prior_experience_entries:[];
+  const profAge=(()=>{ const t=Date.parse(e.dob); if(isNaN(t))return null;
+    const a=Math.floor((Date.now()-t)/(365.25*24*3600*1000)); return (a>=0&&a<130)?a:null; })();
+  // Days until the next birthday, so the profile says the same thing the dashboard's
+  // Birthday Reminders card does instead of leaving the reader to count months.
+  const profBday=(()=>{ const d=new Date(e.dob); if(!e.dob||isNaN(d))return null;
+    const n=new Date(); const today=new Date(n.getFullYear(),n.getMonth(),n.getDate());
+    let bd=new Date(today.getFullYear(),d.getMonth(),d.getDate());
+    if(bd<today) bd=new Date(today.getFullYear()+1,d.getMonth(),d.getDate());
+    const days=Math.round((bd-today)/86400000);
+    return days===0?'🎂 Today':days===1?'🎂 Tomorrow':days<=30?'🎂 in '+days+' days':null; })();
+  const profLicence=(()=>{ const t=Date.parse(e.licence_expiry); if(isNaN(t))return null;
+    const d=Math.round((t-Date.now())/86400000);
+    return d<0?{t:'Expired',c:'#d23a52'}:d<=60?{t:'Expires in '+d+'d',c:'#b5670a'}:{t:'Valid',c:'#157a43'}; })();
   const field=(l,v,mono)=>(
     <div style={{display:'flex',flexDirection:'column',gap:3}}>
       <span style={{fontSize:10.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,fontWeight:600}}>{l}</span>
@@ -300,7 +313,22 @@ function StaffProfile({store, empId, setRoute}){
             <div className="card-b" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'11px 12px'}}>
               {infoTile('Designation',desig)}
               {infoTile('Date of joining',e.doj,true)}
-              <div style={{gridColumn:'1 / -1'}}>{lbl('Department(s)')}{deptChipRow(e.current_department)}</div>
+              {e.gender?infoTile('Gender',e.gender):null}
+              {e.dob?infoTile('Date of birth',e.dob+(profAge!=null?'  ('+profAge+' yrs)':'')+(profBday?'   '+profBday:''),true):null}
+              <div style={{gridColumn:'1 / -1'}}>{lbl('Department(s)')}{deptChipRow(e.current_department)}
+                {e.primary_department?<div style={{fontSize:11,color:'var(--muted)',marginTop:5}}>Primary — <b style={{color:'var(--ink-2)'}}>{e.primary_department}</b>{e.can_float?' · can float to other units':''}</div>:null}</div>
+              {/* A licence that has run out is a rostering blocker, so it is stated in
+                  red on the profile rather than hidden inside the edit form. */}
+              {e.licence_no||e.licence_expiry
+                ? <div style={{gridColumn:'1 / -1',background:'var(--panel-2)',borderRadius:9,padding:'8px 11px'}}>
+                    <div style={{fontSize:9,textTransform:'uppercase',letterSpacing:.5,color:'var(--muted)',fontWeight:700,marginBottom:3}}>Registration / licence</div>
+                    <div style={{display:'flex',alignItems:'baseline',gap:9,flexWrap:'wrap'}}>
+                      <span className="num" style={{fontSize:13,fontWeight:700,color:'var(--ink)'}}>{e.licence_no||'—'}</span>
+                      {e.licence_expiry?<span style={{fontSize:11.5,color:'var(--muted)'}}>expires {e.licence_expiry}</span>:null}
+                      {profLicence?<span style={{fontSize:10.5,fontWeight:700,color:profLicence.c,background:profLicence.c+'18',border:'1px solid '+profLicence.c+'44',borderRadius:6,padding:'1px 8px'}}>{profLicence.t}</span>:null}
+                    </div>
+                  </div>
+                : null}
               <div>{lbl('Qualification')}{chipRow(e.qualification,{bg:'#eef8fc',fg:'#0072a3',br:'#dceffa'})}</div>
               <div>{lbl('Special Training')}{chipRow(e.special_training,{bg:'#fff4e5',fg:'#b5670a',br:'#ffe2b8'})}</div>
               <div style={{gridColumn:'1 / -1'}}>{lbl('Extracurricular Activities')}{chipRow(e.extracurricular,{bg:'#f1eefb',fg:'#6a52d4',br:'#e3dcf7'})}</div>
@@ -496,9 +524,15 @@ function StaffProfile({store, empId, setRoute}){
 
       {(()=>{ const defs=(S.customFields&&S.customFields())||[]; const cv=e.custom||{};
         const shown=defs.filter(d=>String(cv[d.id]||'').trim());
-        return shown.length>0 && (
+        // Built-in identity / emergency fields, shown only when filled so an old record
+        // that predates them doesn't sprout a card full of dashes.
+        const std=[['NID / Passport No.',e.nid,true],['Blood Group',e.blood_group],
+                   ['Emergency Contact',e.emergency_contact],['Emergency Contact Relation',e.emergency_relation],
+                   ['Languages Spoken',e.languages]].filter(r=>String(r[1]||'').trim());
+        return (std.length>0||shown.length>0) && (
           <div className="grid" style={{gridTemplateColumns:'1fr 1fr'}}>
-            {sec('Additional Details',shown.map(d=>field(d.name,cv[d.id])))}
+            {std.length>0&&sec('Additional Details',std.map(([l,v,mono])=>field(l,v,mono)))}
+            {shown.length>0&&sec('Custom Fields',shown.map(d=>field(d.name,cv[d.id])))}
           </div>
         ); })()}
 
@@ -645,6 +679,40 @@ function SelectDropdown({value, onChange, options, placeholder='Select…', labe
               <Ic d={I.plus} s={14}/>Add “{q.trim()}”
             </div>}
           </div>
+        </div>
+      </>}
+    </div>
+  );
+}
+
+/* FREE-TEXT FIELD WITH SUGGESTIONS.
+ * A previous employer's unit is usually NOT a UNICO department, so whatever is
+ * typed IS the value — the list below is only a shortcut. SelectDropdown made
+ * that a three-step "open, search, click Add" flow, which is backwards for a
+ * field that is free text most of the time (and made pasted/imported text
+ * awkward to enter at all). */
+function ComboInput({value, onChange, options, placeholder, labelFn, style}){
+  const [open,setOpen]=React.useState(false);
+  const lab=(o)=>labelFn?labelFn(o):o;
+  const v=String(value||'');
+  const q=v.trim().toLowerCase();
+  const sugg=[...new Set((options||[]).map(lab).filter(Boolean))]
+    .filter(l=>l.toLowerCase()!==q&&(!q||l.toLowerCase().includes(q))).slice(0,8);
+  return (
+    <div style={{position:'relative'}}>
+      <input value={v} placeholder={placeholder} style={style}
+        onChange={ev=>{onChange(ev.target.value);setOpen(true);}}
+        onFocus={()=>setOpen(true)}
+        onKeyDown={ev=>{if(ev.key==='Escape')setOpen(false);}}/>
+      {open&&sugg.length>0&&<>
+        <div onClick={()=>setOpen(false)} style={{position:'fixed',inset:0,zIndex:80}}/>
+        <div style={{position:'absolute',left:0,right:0,top:'calc(100% + 4px)',zIndex:81,background:'#fff',border:'1px solid var(--line)',borderRadius:9,boxShadow:'var(--shadow-pop)',overflow:'hidden',maxHeight:220,overflowY:'auto',padding:4}}>
+          {sugg.map(l=>(
+            <div key={l} onMouseDown={ev=>{ev.preventDefault();onChange(l);setOpen(false);}}
+              style={{padding:'7px 9px',borderRadius:6,cursor:'pointer',fontSize:12.5,color:'var(--ink-2)'}}
+              onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'}
+              onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>{l}</div>
+          ))}
         </div>
       </>}
     </div>
@@ -1427,6 +1495,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
   const [customT,setCustomT]=React.useState('');
   const [customD,setCustomD]=React.useState('');
   const [customX,setCustomX]=React.useState('');   // custom extracurricular activity
+  const [customL,setCustomL]=React.useState('');   // custom language
   // Direct "previous experience (excl. UNICO)" entry — a simple Years+Months input
   // used when the experience is NOT itemised by organisation below.
   const priorInit0=existing&&existing.prior_experience_years!=null&&existing.prior_experience_years!==''&&!isNaN(existing.prior_experience_years)?+existing.prior_experience_years:0;
@@ -1486,6 +1555,15 @@ function StaffForm({store, empId, setRoute, role, depts}){
   // exports and the profile view (which read a plain string) keep working unchanged.
   // Any existing value not in `opts` (e.g. a previously typed custom) is preserved.
   const chipsOf=(k)=>String(f[k]||'').split(',').map(x=>x.trim()).filter(Boolean);
+  // Age from date of birth — shown beside the field so a typo'd year is obvious.
+  const ageOf=(d)=>{ const t=Date.parse(d); if(isNaN(t))return null;
+    const a=Math.floor((Date.now()-t)/(365.25*24*3600*1000)); return (a>=0&&a<130)?a:null; };
+  // Licence expiry, judged as you type: expired / expiring within 60 days / valid.
+  const licenceState=(()=>{ const t=Date.parse(f.licence_expiry); if(isNaN(t))return null;
+    const days=Math.round((t-Date.now())/86400000);
+    if(days<0) return {t:'Expired '+(-days)+'d ago',c:'#d23a52'};
+    if(days<=60) return {t:'Expires in '+days+'d',c:'#b5670a'};
+    return {t:'Valid',c:'#157a43'}; })();
   const multiChk=(k,opts,customText,setCustomText,ph)=>{
     const sel=chipsOf(k);
     const extras=sel.filter(x=>!opts.includes(x));
@@ -1620,6 +1698,9 @@ function StaffForm({store, empId, setRoute, role, depts}){
             {field('Emp ID',inp('emp_id','e.g. 11234'))}
             {field('Name *',inp('name','Full name'))}
             {field('Phone',inp('phone','01XXXXXXXXX'))}
+            {field('Gender',cmb('gender',['Female','Male','Other']))}
+            {field('Date of Birth',inp('dob','YYYY-MM-DD','date'),
+              f.dob&&ageOf(f.dob)!=null?<span style={{fontSize:11,color:'var(--muted)'}}>{ageOf(f.dob)} yrs</span>:null)}
             <div style={{gridColumn:'1 / -1'}}>{field('Qualification'+(chipsOf('qualification').length?' · '+chipsOf('qualification').length+' selected':''),multiChk('qualification',S.qualificationsFor(f.role),customQ,setCustomQ))}</div>
             <div style={{gridColumn:'1 / -1'}}>{field('Extracurricular Activities'+(chipsOf('extracurricular').length?' · '+chipsOf('extracurricular').length+' selected':''),multiChk('extracurricular',S.EXTRACURRICULARS||[],customX,setCustomX,'Add another activity — e.g. Chess…'))}</div>
           </>)}
@@ -1628,9 +1709,28 @@ function StaffForm({store, empId, setRoute, role, depts}){
             {field('Current Department'+(chipsOf('current_department').length>1?' · '+chipsOf('current_department').length+' selected':''),
               <MultiSelectDropdown value={f.current_department} onChange={v=>set('current_department',v)} options={deptOpts} labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel} placeholder="Select department(s)…"/>)}
             {field('Date of Joining',inp('doj','YYYY-MM-DD','date'))}
+            {/* Which unit owns this person when they hold several. Only worth asking
+                once more than one department is selected. */}
+            {chipsOf('current_department').length>1
+              ? field('Primary Department',
+                  <SelectDropdown value={f.primary_department||''} onChange={v=>set('primary_department',v)}
+                    options={chipsOf('current_department')}
+                    labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel}
+                    placeholder="Which unit is home?"/>)
+              : null}
             {field('Total Experience',
               <div style={{padding:'9px 11px',border:'1px dashed var(--line)',borderRadius:7,fontSize:13,background:'var(--panel-2)',color:'var(--ink)',fontWeight:600}}>{S.fmtYM(totalY)}</div>,
               <span style={{fontSize:11,color:'var(--muted)'}}>auto = previous + UNICO</span>)}
+            {/* No shift picker here on purpose: which shifts someone actually works is
+                decided in the Duty Roster, and holding a second copy on the staff record
+                would only let the two disagree. `can_float` below is different — it is a
+                standing capability the roster READS, not a schedule. */}
+            <div style={{gridColumn:'1 / -1'}}>
+              <label style={{display:'flex',alignItems:'center',gap:9,fontSize:12.5,color:'var(--ink-2)',cursor:'pointer'}}>
+                <input type="checkbox" checked={!!f.can_float} onChange={e=>set('can_float',e.target.checked)}/>
+                Can be floated to other units when they are short
+              </label>
+            </div>
           </>)}
           {sec('Previous Experience',<>
             <div style={{gridColumn:'1 / -1',display:'flex',flexDirection:'column',gap:9}}>
@@ -1657,8 +1757,9 @@ function StaffForm({store, empId, setRoute, role, depts}){
                   <input value={x.org||''} onChange={ev=>setEntry(i,'org',ev.target.value)} placeholder="Organisation — e.g. City Hospital" style={rowInp}/>
                   {/* Free-text allowed: a previous employer's unit is often not a UNICO one.
                       Rows saved before this column existed simply have no `dept`. */}
-                  <SelectDropdown value={x.dept||''} onChange={v=>setEntry(i,'dept',v)} options={deptOpts}
-                    labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel} placeholder="Department / role"/>
+                  <ComboInput value={x.dept||''} onChange={v=>setEntry(i,'dept',v)} options={deptOpts}
+                    labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel}
+                    placeholder="Department / role — type anything" style={rowInp}/>
                   <input value={x.years||''} onChange={ev=>setEntry(i,'years',ev.target.value.replace(/[^\d.]/g,''))} placeholder="0" inputMode="decimal" style={{...rowInp,textAlign:'center',fontFamily:'IBM Plex Mono'}}/>
                   <input value={x.months||''} onChange={ev=>setEntry(i,'months',ev.target.value.replace(/[^\d]/g,''))} placeholder="0" inputMode="numeric" style={{...rowInp,textAlign:'center',fontFamily:'IBM Plex Mono'}}/>
                   <button className="icon-btn danger" title="Remove" onClick={()=>delEntry(i)} style={{justifySelf:'center'}}><Ic d={I.x} s={14}/></button>
@@ -1678,7 +1779,12 @@ function StaffForm({store, empId, setRoute, role, depts}){
           {sec('Compliance',<>
             <div style={{gridColumn:'1 / -1'}}>{field('Special Training'+(chipsOf('special_training').length?' · '+chipsOf('special_training').length+' selected':''),multiChk('special_training',S.TRAININGS.filter(Boolean),customT,setCustomT,'Add another training…'))}</div>
             {field('Hepatitis B Vaccination',cmb('hepatitis_b_vaccination',S.VACCINATION_STATES))}
-            {field('Remarks',inp('remarks','Any notes'))}
+            {field('Registration / Licence No.',inp('licence_no','e.g. BNMC-12345'))}
+            {/* An expired licence is a rostering problem, so it is flagged the moment
+                it is typed rather than waiting for someone to audit the register. */}
+            {field('Licence Expiry',inp('licence_expiry','YYYY-MM-DD','date'),
+              licenceState?<span style={{fontSize:11,fontWeight:700,color:licenceState.c}}>{licenceState.t}</span>:null)}
+            <div style={{gridColumn:'1 / -1'}}>{field('Remarks',inp('remarks','Any notes'))}</div>
           </>)}
           {sec('Privileges',<>
             <div style={{gridColumn:'1 / -1'}}>
@@ -1709,7 +1815,19 @@ function StaffForm({store, empId, setRoute, role, depts}){
               })()}
             </div>
           </>)}
-          {customFieldDefs.length>0&&sec('Additional Details',customFieldDefs.map(cf=>{
+          {/* Identity & contact details the design carries as standard. They live here
+              rather than in Personal so that section stays about who the person IS;
+              these are the papers and the who-to-call. Admin-defined custom fields
+              follow underneath, unchanged. */}
+          {sec('Additional Details',<>
+            {field('NID / Passport No.',inp('nid','National ID or passport number'))}
+            {field('Blood Group',cmb('blood_group',['A+','A-','B+','B-','O+','O-','AB+','AB-']))}
+            {field('Emergency Contact',inp('emergency_contact','Name & phone — e.g. Rahima, 017XXXXXXXX'))}
+            {field('Emergency Contact Relation',inp('emergency_relation','e.g. Spouse, Father'))}
+            <div style={{gridColumn:'1 / -1'}}>{field('Languages Spoken'+(chipsOf('languages').length?' · '+chipsOf('languages').length+' selected':''),
+              multiChk('languages',['Bangla','English','Hindi','Urdu','Arabic'],customL,setCustomL,'Add another language…'))}</div>
+          </>)}
+          {customFieldDefs.length>0&&sec('Custom Fields',customFieldDefs.map(cf=>{
             const cv=(f.custom||{})[cf.id]||'';
             const node = cf.kind==='multi'
               ? <MultiSelectDropdown value={cv} onChange={v=>setCustom(cf.id,v)} options={cf.options||[]} placeholder={'Select '+cf.name.toLowerCase()+'…'}/>

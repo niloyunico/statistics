@@ -384,6 +384,23 @@ function PerfAttrition({ roster, perf, staffStore, setRoute }) {
   );
 }
 
+// The reasons people actually give, per separation type. Offered as one-click chips
+// because a free-text box produces twenty spellings of "higher studies" and then the
+// attrition analysis cannot group anything. The text field stays — the chips only fill it.
+const EXIT_REASONS = {
+  'Resignation': ['Higher studies', 'Better offer', 'Family relocation', 'Health', 'Marriage', 'Going abroad', 'Workload', 'Salary', 'Personal'],
+  'End of contract': ['Contract completed', 'Not renewed', 'Project ended'],
+  'Retirement': ['Superannuation', 'Early retirement'],
+  'Termination': ['Performance', 'Misconduct', 'Attendance', 'Probation not confirmed'],
+  'Absconded': ['No notice, stopped attending'],
+  'Transfer': ['Internal transfer', 'Sister concern'],
+  'Other': ['Deceased', 'Maternity — did not return', 'Not stated'],
+};
+// Shared control styling. The dialog used bare <select>/<input>, which renders as raw
+// browser widgets in the middle of an app where every other field is a rounded, bordered
+// control — so the form looked unfinished rather than merely plain.
+const XF = { padding: '8px 10px', border: '1px solid var(--line,#dde3ec)', borderRadius: 8, fontSize: 12.6, fontFamily: 'inherit', color: 'inherit', background: '#fff', outline: 'none', width: '100%' };
+
 function ExitModal({ roster, perf, staffStore, prefill, onClose }) {
   const leavers = (staffStore.staff || []).filter((e) => e.former || e.is_active === false);
   const [empId, setEmpId] = useState(prefill ? prefill.empId : '');
@@ -394,6 +411,10 @@ function ExitModal({ roster, perf, staffStore, prefill, onClose }) {
   const [interview, setInterview] = useState('');
   const [clearance, setClearance] = useState([]);
   const [rehire, setRehire] = useState(true);
+  const [handoverTo, setHandoverTo] = useState('');
+  const [contact, setContact] = useState('');
+  const [settlementDate, setSettlementDate] = useState('');
+  const [noticeServed, setNoticeServed] = useState('');
   const [busy, setBusy] = useState(false);
 
   // Anyone still on the roster can also be exited (the usual case: HR records the exit
@@ -403,6 +424,13 @@ function ExitModal({ roster, perf, staffStore, prefill, onClose }) {
   const row = roster.byEmp[empId];
   const joined = person ? hrParse(person.doj) : null;
   const tenure = hrMonthsBetween(joined, hrParse(lastDay));
+  // Days between the notice landing and the last working day — shown beside the
+  // "notice period served" picker so the answer is checkable, not just asserted.
+  const noticeDays = (() => {
+    const a = Date.parse(noticeDate), b = Date.parse(lastDay);
+    if (isNaN(a) || isNaN(b) || b < a) return null;
+    return Math.round((b - a) / 86400000);
+  })();
   const toggle = (c) => setClearance((s) => (s.indexOf(c) >= 0 ? s.filter((x) => x !== c) : [...s, c]));
 
   const submit = () => {
@@ -411,6 +439,7 @@ function ExitModal({ roster, perf, staffStore, prefill, onClose }) {
     perf.addExit({
       empId, staffName: person.name, department: person.current_department, designation: person.designation,
       doj: person.doj, noticeDate, lastDay, separation, reason, interview, clearance, rehire,
+      handoverTo, contact, settlementDate, noticeServed,
       lastGrade: row && row.last ? row.last.grade : '',
     }).then((r) => { setBusy(false); if (r && r.ok) onClose(); });
   };
@@ -424,27 +453,55 @@ function ExitModal({ roster, perf, staffStore, prefill, onClose }) {
       </>}>
       <div style={{ display: 'grid', gap: 10 }}>
         <label style={{ display: 'grid', gap: 4 }}><span className="sub">Staff member *</span>
-          <select value={empId} onChange={(e) => setEmpId(e.target.value)}>
+          <select value={empId} onChange={(e) => setEmpId(e.target.value)} style={XF}>
             <option value="">Select…</option>
             {options.map((e) => {
               const id = e.emp_id || String(e.id);
               return <option key={id} value={id}>{e.name} — {id}{e.former ? ' (archived)' : ''}</option>;
             })}
           </select></label>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10 }}>
           <label style={{ display: 'grid', gap: 4 }}><span className="sub">Notice received</span>
-            <input type="date" value={noticeDate} onChange={(e) => setNoticeDate(e.target.value)} /></label>
+            <input type="date" value={noticeDate} onChange={(e) => setNoticeDate(e.target.value)} style={XF} /></label>
           <label style={{ display: 'grid', gap: 4 }}><span className="sub">Last working day *</span>
-            <input type="date" value={lastDay} onChange={(e) => setLastDay(e.target.value)} /></label>
+            <input type="date" value={lastDay} onChange={(e) => setLastDay(e.target.value)} style={XF} /></label>
           <label style={{ display: 'grid', gap: 4 }}><span className="sub">Separation type</span>
-            <select value={separation} onChange={(e) => setSeparation(e.target.value)}>
+            <select value={separation} onChange={(e) => { setSeparation(e.target.value); setReason(''); }} style={XF}>
               {['Resignation', 'End of contract', 'Retirement', 'Termination', 'Absconded', 'Transfer', 'Other'].map((t) => <option key={t}>{t}</option>)}
+            </select></label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span className="sub">Notice period served{noticeDays != null ? ' · ' + noticeDays + ' days' : ''}</span>
+            <select value={noticeServed} onChange={(e) => setNoticeServed(e.target.value)} style={XF}>
+              <option value="">—</option>
+              {['Full', 'Partial', 'None'].map((t) => <option key={t}>{t}</option>)}
             </select></label>
         </div>
         <label style={{ display: 'grid', gap: 4 }}><span className="sub">Stated reason at exit</span>
-          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Higher studies · Family relocation · Better offer · Health" /></label>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} style={XF}
+            placeholder="Pick one below, or type the reason as it was given" /></label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: -4 }}>
+          {(EXIT_REASONS[separation] || []).map((r) => {
+            const on = reason === r;
+            return (
+              <button key={r} onClick={() => setReason(on ? '' : r)} style={{
+                padding: '4px 10px', borderRadius: 16, cursor: 'pointer', font: 'inherit', fontSize: 11.4, fontWeight: 600,
+                border: '1px solid ' + (on ? '#27a8db' : 'var(--line,#dde3ec)'),
+                background: on ? 'rgba(39,168,219,.12)' : '#fff', color: on ? '#0b6f96' : 'var(--muted,#6c7a8c)',
+              }}>{r}</button>
+            );
+          })}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
+          <label style={{ display: 'grid', gap: 4 }}><span className="sub">Handover to</span>
+            <input value={handoverTo} onChange={(e) => setHandoverTo(e.target.value)} list="hr-exit-handover" style={XF} placeholder="Who took over the work" />
+            <datalist id="hr-exit-handover">{options.filter((e) => !e.former).slice(0, 400).map((e) => <option key={e.id} value={e.name} />)}</datalist></label>
+          <label style={{ display: 'grid', gap: 4 }}><span className="sub">Forwarding contact</span>
+            <input value={contact} onChange={(e) => setContact(e.target.value)} style={XF} placeholder="Phone or email after leaving" /></label>
+          <label style={{ display: 'grid', gap: 4 }}><span className="sub">Final settlement date</span>
+            <input type="date" value={settlementDate} onChange={(e) => setSettlementDate(e.target.value)} style={XF} /></label>
+        </div>
         <label style={{ display: 'grid', gap: 4 }}><span className="sub">Exit interview notes</span>
-          <textarea rows="3" value={interview} onChange={(e) => setInterview(e.target.value)} /></label>
+          <textarea rows="3" value={interview} onChange={(e) => setInterview(e.target.value)} style={{ ...XF, resize: 'vertical' }} /></label>
         <div>
           <div className="sub" style={{ marginBottom: 5 }}>Clearance checklist</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 6 }}>

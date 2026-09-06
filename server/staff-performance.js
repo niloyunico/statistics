@@ -191,6 +191,12 @@ function normExit(input) {
     lastGrade: s(i.lastGrade, 4),
     rehire: !!i.rehire,
     note: s(i.note, 1200),
+    // The rest of what HR actually files on a separation. All optional: an exit
+    // recorded before these existed stays valid and simply carries empty strings.
+    handoverTo: s(i.handoverTo, 120),     // who took the work over
+    contact: s(i.contact, 120),           // forwarding phone / email
+    settlementDate: s(i.settlementDate, 20), // final dues settled on
+    noticeServed: s(i.noticeServed, 20),  // 'Full' | 'Partial' | 'None' | ''
   };
 }
 

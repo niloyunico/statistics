@@ -194,31 +194,80 @@
     }, []);
 
     // ---- real people, real roster, real records ------------------------------
+    // Which personnel record this login IS. Tried in order of how deliberate the link
+    // is: the admin-set staffId, the admin-set employee id, the username used as an
+    // employee id, then the full name. The name match is last and exact (case- and
+    // space-insensitive only) — it is a convenience for accounts like "admin" whose
+    // username is not an employee id, and it must never beat an explicit link.
     const me = useMemo(() => {
       const list = (typeof window !== 'undefined' && window.STAFF_SEED) || [];
       if (!u) return list[0] || null;
+      const norm = (x) => String(x == null ? '' : x).trim().toLowerCase().replace(/\s+/g, ' ');
       if (u.staffId != null) { const hit = list.find((s) => String(s.id) === String(u.staffId)); if (hit) return hit; }
-      return list.find((s) => String(s.emp_id || '').trim() === String(u.username || '').trim()) || null;
+      if (u.staffEmpId) { const hit = list.find((s) => norm(s.emp_id) === norm(u.staffEmpId)); if (hit) return hit; }
+      return list.find((s) => norm(s.emp_id) && norm(s.emp_id) === norm(u.username))
+        || (u.name ? list.find((s) => norm(s.name) === norm(u.name)) : null)
+        || null;
     }, [u]);
+    // Birthdays across the whole roster. Everyone reaches Home, so this is where a
+    // reminder actually gets seen — the Nurse/PCA dashboards carry the same list but
+    // only managers open those. Source is the staff record's `dob`, via STAFF.birthdays
+    // so the windowing rule is defined once.
+    const bdays = useMemo(() => {
+      const list = (typeof window !== 'undefined' && window.STAFF_SEED) || [];
+      if (!list.length) return [];
+      if (window.STAFF && window.STAFF.birthdays) return window.STAFF.birthdays(list, 30);
+      return [];
+    }, [now.getDate()]);  // eslint-disable-line react-hooks/exhaustive-deps
     const staffName = (u && u.name) || (me && me.name) || 'UNICO staff';
     const designation = (u && u.designation) || (me && me.designation) || (u && u.role === 'incharge' ? 'In-charge' : 'Staff');
     const unit = (me && me.current_department) || 'Nursing Service';
     const staffId = (me && me.emp_id) || (u && u.username) || '—';
     const initials = initialsOf(staffName);
 
+    // Find MY roster, not my department's. Matching on the department name was wrong in
+    // both directions: someone rostered on a unit other than the one on their staff
+    // record (a float, a transfer, HomeCare) got "you are not on this month's roster",
+    // and when nothing matched it fell through to all[0] — an arbitrary department whose
+    // name then appeared in the message. So: look at THIS month's rosters and take the
+    // first one that actually has a row for this person; fall back to the department
+    // guess only when no roster lists them, which is the case the message is about.
     useEffect(() => {
       let live = true;
       const y = now.getFullYear(), mo = now.getMonth() + 1;
+      const hasMe = (doc) => {
+        const g = doc && doc.grid;
+        if (!g || !me) return false;
+        const row = g[String(me.id)] || g[String(me.emp_id)];
+        return !!(row && Object.keys(row).length);
+      };
       fetch('/api/rosters', { credentials: 'same-origin' }).then((r) => r.json()).then(async (j) => {
         const all = (j && (j.rosters || j.list)) || [];
-        const mine = all.filter((r) => !me || String(r.deptName || r.dept || '').toLowerCase().indexOf(String(unit).toLowerCase().slice(0, 6)) >= 0);
-        const pick = mine.find((r) => +r.year === y && +r.month === mo) || mine[0] || all.find((r) => +r.year === y && +r.month === mo) || all[0];
-        if (!pick) { if (live) setRoster(false); return; }
-        const full = await fetch('/api/rosters/' + encodeURIComponent(pick.dept) + '/' + pick.year + '/' + pick.month, { credentials: 'same-origin' }).then((r) => r.json()).catch(() => null);
-        if (live) setRoster((full && (full.roster || full.doc)) || pick || false);
+        const month = all.filter((r) => +r.year === y && +r.month === mo);
+        const unitFirst = (arr) => {
+          const key = String(unit || '').toLowerCase().slice(0, 6);
+          if (!key) return arr;
+          const hit = arr.filter((r) => String(r.deptName || r.dept || '').toLowerCase().indexOf(key) >= 0);
+          return [...hit, ...arr.filter((r) => hit.indexOf(r) < 0)];
+        };
+        const cand = unitFirst(month.length ? month : all);
+        if (!cand.length) { if (live) setRoster(false); return; }
+        const get = (r) => fetch('/api/rosters/' + encodeURIComponent(r.dept) + '/' + r.year + '/' + r.month, { credentials: 'same-origin' })
+          .then((x) => x.json()).then((f) => (f && (f.roster || f.doc)) || null).catch(() => null);
+        // Bounded: a hospital has a few dozen units and this runs on every Home load, so
+        // stop at the first match and never walk more than 12 documents.
+        let fallback = null;
+        for (const r of cand.slice(0, 12)) {
+          if (!live) return;
+          const full = await get(r);
+          if (!full) continue;
+          if (!fallback) fallback = full;
+          if (hasMe(full)) { if (live) setRoster(full); return; }
+        }
+        if (live) setRoster(fallback || cand[0] || false);
       }).catch(() => { if (live) setRoster(false); });
       return () => { live = false; };
-    }, [unit]);  // eslint-disable-line react-hooks/exhaustive-deps
+    }, [unit, me && me.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
       let live = true;
@@ -787,6 +836,34 @@
             </div>
 
             </Soon>
+
+            {/* Birthdays — no Soon gate: it needs nothing but the staff record. */}
+            <div style={sx(GLASS)}>
+              {cardH('Birthdays', <span style={sx('font-size:11px;color:#9aa6b4')}>{bdays.length ? 'next 30 days' : ''}</span>)}
+              {bdays.length === 0 ? (
+                <div style={sx('font-size:12.5px;color:#6c7a8c;line-height:1.6')}>
+                  No birthdays in the next 30 days. (Dates come from each staff profile&rsquo;s Date of Birth.)
+                </div>
+              ) : (
+                <div style={sx('display:flex;flex-direction:column;gap:6px')}>
+                  {bdays.slice(0, 6).map(({ e, bday, turns, inDays }) => (
+                    <div key={e.id} onClick={() => setRoute && setRoute({ view: 'staffProfile', emp: e.id })}
+                      style={sx('display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:11px;cursor:pointer;border:1px solid ' + (inDays === 0 ? 'rgba(214,82,155,.35)' : 'rgba(125,145,180,.22)') + ';background:' + (inDays === 0 ? 'rgba(253,238,246,.9)' : 'rgba(255,255,255,.62)'))}>
+                      <div style={sx('width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:11.5px;font-weight:700;color:#fff;flex-shrink:0;background:' + (inDays === 0 ? '#d4529b' : '#7d91b4'))}>
+                        {inDays === 0 ? '🎂' : initialsOf(e.name)}
+                      </div>
+                      <div style={sx('flex:1;min-width:0')}>
+                        <div style={sx('font-size:12.5px;font-weight:700;color:#16202e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{e.name}</div>
+                        <div style={sx('font-size:11px;color:#6c7a8c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{e.current_department || '—'}{turns ? ' · turns ' + turns : ''}</div>
+                      </div>
+                      <span style={sx('font-size:11px;font-weight:700;flex-shrink:0;color:' + (inDays === 0 ? '#b02a72' : '#6c7a8c'))}>
+                        {inDays === 0 ? 'Today' : inDays === 1 ? 'Tomorrow' : bday.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* off days — the mockup's leave ring, counting the real roster */}
             <Soon live={LIVE.offDays} label="Unlocks with the Duty Roster rollout.">

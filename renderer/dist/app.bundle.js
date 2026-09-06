@@ -2050,6 +2050,25 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     return out.sort((a,b)=>a.annv-b.annv);
   }
 
+  // Upcoming birthdays — same shape and windowing rule as anniversaries() so the two
+  // dashboard cards behave identically. `turns` is the age they are about to become, so
+  // a blank/typo'd year (age outside 15..80) just omits it rather than printing "2026 yrs".
+  // `inDays` = 0 means TODAY, which is what the dashboard highlights.
+  function birthdays(list,nDays=30){
+    const now=new Date(); const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+    const horizon=new Date(today.getTime()+nDays*86400000); const out=[];
+    list.filter(e=>e.is_active&&!e.former&&e.dob).forEach(e=>{
+      const d=new Date(e.dob); if(isNaN(d))return;
+      let bd=new Date(today.getFullYear(),d.getMonth(),d.getDate());
+      if(bd<today) bd=new Date(today.getFullYear()+1,d.getMonth(),d.getDate());
+      if(bd>=today&&bd<=horizon){
+        const t=bd.getFullYear()-d.getFullYear();
+        out.push({e,bday:bd,turns:(t>=15&&t<=80)?t:null,inDays:Math.round((bd-today)/86400000)});
+      }
+    });
+    return out.sort((a,b)=>a.bday-b.bday);
+  }
+
   // ---------- store ----------
   const KEY='unico_staff_v3';
   function realSeed(){ return (window.STAFF_SEED&&window.STAFF_SEED.length)
@@ -2104,7 +2123,7 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     deptGroupsFor,setDeptGroups,
     fieldOptList,addFieldOpt,removeFieldOpt,
     customFields,addCustomField,removeCustomField,renameCustomField,addCustomFieldOption,removeCustomFieldOption,
-    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,byRole,uniqueVals};
+    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,birthdays,byRole,uniqueVals};
   window.useStaffStore=useStaffStore;
 })();
 
@@ -12642,12 +12661,23 @@ Object.assign(window, {
     const me = useMemo(() => {
       const list = typeof window !== 'undefined' && window.STAFF_SEED || [];
       if (!u) return list[0] || null;
+      const norm = x => String(x == null ? '' : x).trim().toLowerCase().replace(/\s+/g, ' ');
       if (u.staffId != null) {
         const hit = list.find(s => String(s.id) === String(u.staffId));
         if (hit) return hit;
       }
-      return list.find(s => String(s.emp_id || '').trim() === String(u.username || '').trim()) || null;
+      if (u.staffEmpId) {
+        const hit = list.find(s => norm(s.emp_id) === norm(u.staffEmpId));
+        if (hit) return hit;
+      }
+      return list.find(s => norm(s.emp_id) && norm(s.emp_id) === norm(u.username)) || (u.name ? list.find(s => norm(s.name) === norm(u.name)) : null) || null;
     }, [u]);
+    const bdays = useMemo(() => {
+      const list = typeof window !== 'undefined' && window.STAFF_SEED || [];
+      if (!list.length) return [];
+      if (window.STAFF && window.STAFF.birthdays) return window.STAFF.birthdays(list, 30);
+      return [];
+    }, [now.getDate()]);
     const staffName = u && u.name || me && me.name || 'UNICO staff';
     const designation = u && u.designation || me && me.designation || (u && u.role === 'incharge' ? 'In-charge' : 'Staff');
     const unit = me && me.current_department || 'Nursing Service';
@@ -12657,27 +12687,50 @@ Object.assign(window, {
       let live = true;
       const y = now.getFullYear(),
         mo = now.getMonth() + 1;
+      const hasMe = doc => {
+        const g = doc && doc.grid;
+        if (!g || !me) return false;
+        const row = g[String(me.id)] || g[String(me.emp_id)];
+        return !!(row && Object.keys(row).length);
+      };
       fetch('/api/rosters', {
         credentials: 'same-origin'
       }).then(r => r.json()).then(async j => {
         const all = j && (j.rosters || j.list) || [];
-        const mine = all.filter(r => !me || String(r.deptName || r.dept || '').toLowerCase().indexOf(String(unit).toLowerCase().slice(0, 6)) >= 0);
-        const pick = mine.find(r => +r.year === y && +r.month === mo) || mine[0] || all.find(r => +r.year === y && +r.month === mo) || all[0];
-        if (!pick) {
+        const month = all.filter(r => +r.year === y && +r.month === mo);
+        const unitFirst = arr => {
+          const key = String(unit || '').toLowerCase().slice(0, 6);
+          if (!key) return arr;
+          const hit = arr.filter(r => String(r.deptName || r.dept || '').toLowerCase().indexOf(key) >= 0);
+          return [...hit, ...arr.filter(r => hit.indexOf(r) < 0)];
+        };
+        const cand = unitFirst(month.length ? month : all);
+        if (!cand.length) {
           if (live) setRoster(false);
           return;
         }
-        const full = await fetch('/api/rosters/' + encodeURIComponent(pick.dept) + '/' + pick.year + '/' + pick.month, {
+        const get = r => fetch('/api/rosters/' + encodeURIComponent(r.dept) + '/' + r.year + '/' + r.month, {
           credentials: 'same-origin'
-        }).then(r => r.json()).catch(() => null);
-        if (live) setRoster(full && (full.roster || full.doc) || pick || false);
+        }).then(x => x.json()).then(f => f && (f.roster || f.doc) || null).catch(() => null);
+        let fallback = null;
+        for (const r of cand.slice(0, 12)) {
+          if (!live) return;
+          const full = await get(r);
+          if (!full) continue;
+          if (!fallback) fallback = full;
+          if (hasMe(full)) {
+            if (live) setRoster(full);
+            return;
+          }
+        }
+        if (live) setRoster(fallback || cand[0] || false);
       }).catch(() => {
         if (live) setRoster(false);
       });
       return () => {
         live = false;
       };
-    }, [unit]);
+    }, [unit, me && me.id]);
     useEffect(() => {
       let live = true;
       fetch('/api/performance', {
@@ -13841,7 +13894,40 @@ Object.assign(window, {
       style: sx('font-size:11px;color:#6c7a8c')
     }, tp.role)), React.createElement("span", {
       style: sx(tag('#0f7a5f', 'rgba(61,220,151,.2)'))
-    }, "On duty"))))), React.createElement(Soon, {
+    }, "On duty"))))), React.createElement("div", {
+      style: sx(GLASS)
+    }, cardH('Birthdays', React.createElement("span", {
+      style: sx('font-size:11px;color:#9aa6b4')
+    }, bdays.length ? 'next 30 days' : '')), bdays.length === 0 ? React.createElement("div", {
+      style: sx('font-size:12.5px;color:#6c7a8c;line-height:1.6')
+    }, "No birthdays in the next 30 days. (Dates come from each staff profile\u2019s Date of Birth.)") : React.createElement("div", {
+      style: sx('display:flex;flex-direction:column;gap:6px')
+    }, bdays.slice(0, 6).map(({
+      e,
+      bday,
+      turns,
+      inDays
+    }) => React.createElement("div", {
+      key: e.id,
+      onClick: () => setRoute && setRoute({
+        view: 'staffProfile',
+        emp: e.id
+      }),
+      style: sx('display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:11px;cursor:pointer;border:1px solid ' + (inDays === 0 ? 'rgba(214,82,155,.35)' : 'rgba(125,145,180,.22)') + ';background:' + (inDays === 0 ? 'rgba(253,238,246,.9)' : 'rgba(255,255,255,.62)'))
+    }, React.createElement("div", {
+      style: sx('width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:11.5px;font-weight:700;color:#fff;flex-shrink:0;background:' + (inDays === 0 ? '#d4529b' : '#7d91b4'))
+    }, inDays === 0 ? '🎂' : initialsOf(e.name)), React.createElement("div", {
+      style: sx('flex:1;min-width:0')
+    }, React.createElement("div", {
+      style: sx('font-size:12.5px;font-weight:700;color:#16202e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')
+    }, e.name), React.createElement("div", {
+      style: sx('font-size:11px;color:#6c7a8c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')
+    }, e.current_department || '—', turns ? ' · turns ' + turns : '')), React.createElement("span", {
+      style: sx('font-size:11px;font-weight:700;flex-shrink:0;color:' + (inDays === 0 ? '#b02a72' : '#6c7a8c'))
+    }, inDays === 0 ? 'Today' : inDays === 1 ? 'Tomorrow' : bday.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric'
+    })))))), React.createElement(Soon, {
       live: LIVE.offDays,
       label: "Unlocks with the Duty Roster rollout."
     }, React.createElement("div", {
@@ -18215,6 +18301,8 @@ function WorkforceDashboard({
   }));
   const recent = S.recentJoiners(list, 6);
   const annv = S.anniversaries(list, 60);
+  const bdays = S.birthdays(list, 30);
+  const bdayToday = bdays.filter(b => b.inDays === 0);
   const comp = S.compliance(list);
   const compIssues = comp.missing_vaccination.length + comp.missing_training.length + comp.missing_phone.length;
   const Kpi = ({
@@ -18519,6 +18607,102 @@ function WorkforceDashboard({
     month: 'short',
     day: 'numeric'
   }))))))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("span", {
+    style: {
+      color: '#d4529b',
+      display: 'inline-flex'
+    }
+  }, React.createElement(Ic, {
+    d: I.heart,
+    s: 16
+  })), React.createElement("h3", null, "Birthday Reminders"), React.createElement("span", {
+    className: "sub"
+  }, "next 30 days"), React.createElement("span", {
+    className: "spacer"
+  }), bdayToday.length > 0 && React.createElement("span", {
+    className: "tag",
+    style: {
+      background: '#fdeef6',
+      color: '#b02a72',
+      fontWeight: 700
+    }
+  }, "\uD83C\uDF82 ", bdayToday.length, " today"), React.createElement("span", {
+    className: "tag num"
+  }, bdays.length)), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(230px,1fr))',
+      gap: 2
+    }
+  }, bdays.length === 0 && React.createElement("div", {
+    style: {
+      color: 'var(--faint)',
+      fontSize: 12.5,
+      padding: '14px 4px'
+    }
+  }, "No birthdays in the window", list.filter(e => e.dob).length === 0 ? ' — no date of birth recorded yet. Add it on a staff profile (Personal → Date of Birth).' : '.'), bdays.slice(0, 12).map(({
+    e,
+    bday,
+    turns,
+    inDays
+  }) => React.createElement("div", {
+    key: e.id,
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    }),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 11,
+      padding: '8px 9px',
+      borderRadius: 9,
+      cursor: 'pointer',
+      background: inDays === 0 ? 'linear-gradient(120deg,#fdeef6,#fff)' : 'transparent',
+      border: '1px solid ' + (inDays === 0 ? '#f5c9e0' : 'transparent')
+    }
+  }, React.createElement(Avatar, {
+    photo: e.photo,
+    name: e.name,
+    size: 32
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, inDays === 0 ? '🎂 ' : '', e.name), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, e.current_department || '—', turns ? ' · turns ' + turns : '')), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 11.5,
+      fontWeight: inDays === 0 ? 700 : 400,
+      color: inDays === 0 ? '#b02a72' : 'var(--muted)',
+      textAlign: 'right',
+      flexShrink: 0
+    }
+  }, inDays === 0 ? 'Today' : inDays === 1 ? 'Tomorrow' : bday.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric'
+  })))))), React.createElement("div", {
     className: "card feature",
     style: {
       padding: '14px 18px',
@@ -20254,6 +20438,37 @@ function StaffProfile({
   const priorExcl = totalY != null ? Math.max(0, Math.round((totalY - S.unicoYearsOf(e)) * 100) / 100) : priorY;
   const priorExclText = priorExcl != null ? S.fmtYM(priorExcl) : '—';
   const entries = Array.isArray(e.prior_experience_entries) ? e.prior_experience_entries : [];
+  const profAge = (() => {
+    const t = Date.parse(e.dob);
+    if (isNaN(t)) return null;
+    const a = Math.floor((Date.now() - t) / (365.25 * 24 * 3600 * 1000));
+    return a >= 0 && a < 130 ? a : null;
+  })();
+  const profBday = (() => {
+    const d = new Date(e.dob);
+    if (!e.dob || isNaN(d)) return null;
+    const n = new Date();
+    const today = new Date(n.getFullYear(), n.getMonth(), n.getDate());
+    let bd = new Date(today.getFullYear(), d.getMonth(), d.getDate());
+    if (bd < today) bd = new Date(today.getFullYear() + 1, d.getMonth(), d.getDate());
+    const days = Math.round((bd - today) / 86400000);
+    return days === 0 ? '🎂 Today' : days === 1 ? '🎂 Tomorrow' : days <= 30 ? '🎂 in ' + days + ' days' : null;
+  })();
+  const profLicence = (() => {
+    const t = Date.parse(e.licence_expiry);
+    if (isNaN(t)) return null;
+    const d = Math.round((t - Date.now()) / 86400000);
+    return d < 0 ? {
+      t: 'Expired',
+      c: '#d23a52'
+    } : d <= 60 ? {
+      t: 'Expires in ' + d + 'd',
+      c: '#b5670a'
+    } : {
+      t: 'Valid',
+      c: '#157a43'
+    };
+  })();
   const field = (l, v, mono) => React.createElement("div", {
     style: {
       display: 'flex',
@@ -20862,11 +21077,66 @@ function StaffProfile({
       gridTemplateColumns: '1fr 1fr',
       gap: '11px 12px'
     }
-  }, infoTile('Designation', desig), infoTile('Date of joining', e.doj, true), React.createElement("div", {
+  }, infoTile('Designation', desig), infoTile('Date of joining', e.doj, true), e.gender ? infoTile('Gender', e.gender) : null, e.dob ? infoTile('Date of birth', e.dob + (profAge != null ? '  (' + profAge + ' yrs)' : '') + (profBday ? '   ' + profBday : ''), true) : null, React.createElement("div", {
     style: {
       gridColumn: '1 / -1'
     }
-  }, lbl('Department(s)'), deptChipRow(e.current_department)), React.createElement("div", null, lbl('Qualification'), chipRow(e.qualification, {
+  }, lbl('Department(s)'), deptChipRow(e.current_department), e.primary_department ? React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginTop: 5
+    }
+  }, "Primary \u2014 ", React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, e.primary_department), e.can_float ? ' · can float to other units' : '') : null), e.licence_no || e.licence_expiry ? React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1',
+      background: 'var(--panel-2)',
+      borderRadius: 9,
+      padding: '8px 11px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9,
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      color: 'var(--muted)',
+      fontWeight: 700,
+      marginBottom: 3
+    }
+  }, "Registration / licence"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 9,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    className: "num",
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, e.licence_no || '—'), e.licence_expiry ? React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "expires ", e.licence_expiry) : null, profLicence ? React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: profLicence.c,
+      background: profLicence.c + '18',
+      border: '1px solid ' + profLicence.c + '44',
+      borderRadius: 6,
+      padding: '1px 8px'
+    }
+  }, profLicence.t) : null)) : null, React.createElement("div", null, lbl('Qualification'), chipRow(e.qualification, {
     bg: '#eef8fc',
     fg: '#0072a3',
     br: '#dceffa'
@@ -21390,12 +21660,13 @@ function StaffProfile({
     const defs = S.customFields && S.customFields() || [];
     const cv = e.custom || {};
     const shown = defs.filter(d => String(cv[d.id] || '').trim());
-    return shown.length > 0 && React.createElement("div", {
+    const std = [['NID / Passport No.', e.nid, true], ['Blood Group', e.blood_group], ['Emergency Contact', e.emergency_contact], ['Emergency Contact Relation', e.emergency_relation], ['Languages Spoken', e.languages]].filter(r => String(r[1] || '').trim());
+    return (std.length > 0 || shown.length > 0) && React.createElement("div", {
       className: "grid",
       style: {
         gridTemplateColumns: '1fr 1fr'
       }
-    }, sec('Additional Details', shown.map(d => field(d.name, cv[d.id]))));
+    }, std.length > 0 && sec('Additional Details', std.map(([l, v, mono]) => field(l, v, mono))), shown.length > 0 && sec('Custom Fields', shown.map(d => field(d.name, cv[d.id]))));
   })(), React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
@@ -21923,6 +22194,76 @@ function SelectDropdown({
     d: I.plus,
     s: 14
   }), "Add \u201C", q.trim(), "\u201D")))));
+}
+function ComboInput({
+  value,
+  onChange,
+  options,
+  placeholder,
+  labelFn,
+  style
+}) {
+  const [open, setOpen] = React.useState(false);
+  const lab = o => labelFn ? labelFn(o) : o;
+  const v = String(value || '');
+  const q = v.trim().toLowerCase();
+  const sugg = [...new Set((options || []).map(lab).filter(Boolean))].filter(l => l.toLowerCase() !== q && (!q || l.toLowerCase().includes(q))).slice(0, 8);
+  return React.createElement("div", {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement("input", {
+    value: v,
+    placeholder: placeholder,
+    style: style,
+    onChange: ev => {
+      onChange(ev.target.value);
+      setOpen(true);
+    },
+    onFocus: () => setOpen(true),
+    onKeyDown: ev => {
+      if (ev.key === 'Escape') setOpen(false);
+    }
+  }), open && sugg.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", {
+    onClick: () => setOpen(false),
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 80
+    }
+  }), React.createElement("div", {
+    style: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 'calc(100% + 4px)',
+      zIndex: 81,
+      background: '#fff',
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      boxShadow: 'var(--shadow-pop)',
+      overflow: 'hidden',
+      maxHeight: 220,
+      overflowY: 'auto',
+      padding: 4
+    }
+  }, sugg.map(l => React.createElement("div", {
+    key: l,
+    onMouseDown: ev => {
+      ev.preventDefault();
+      onChange(l);
+      setOpen(false);
+    },
+    style: {
+      padding: '7px 9px',
+      borderRadius: 6,
+      cursor: 'pointer',
+      fontSize: 12.5,
+      color: 'var(--ink-2)'
+    },
+    onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
+    onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
+  }, l)))));
 }
 function PrivilegesEditor({
   role,
@@ -23992,6 +24333,7 @@ function StaffForm({
   const [customT, setCustomT] = React.useState('');
   const [customD, setCustomD] = React.useState('');
   const [customX, setCustomX] = React.useState('');
+  const [customL, setCustomL] = React.useState('');
   const priorInit0 = existing && existing.prior_experience_years != null && existing.prior_experience_years !== '' && !isNaN(existing.prior_experience_years) ? +existing.prior_experience_years : 0;
   const [dpY, setDpY] = React.useState(() => {
     const y = Math.floor(priorInit0);
@@ -24088,6 +24430,29 @@ function StaffForm({
   const baseDesig = S.designationsFor ? S.designationsFor(f.role) : [];
   const desigOpts = [...new Set([...baseDesig, ...uniq(allStaff.map(x => canonDesig(x && x.designation)))])].filter(Boolean).sort((a, b) => a.localeCompare(b));
   const chipsOf = k => String(f[k] || '').split(',').map(x => x.trim()).filter(Boolean);
+  const ageOf = d => {
+    const t = Date.parse(d);
+    if (isNaN(t)) return null;
+    const a = Math.floor((Date.now() - t) / (365.25 * 24 * 3600 * 1000));
+    return a >= 0 && a < 130 ? a : null;
+  };
+  const licenceState = (() => {
+    const t = Date.parse(f.licence_expiry);
+    if (isNaN(t)) return null;
+    const days = Math.round((t - Date.now()) / 86400000);
+    if (days < 0) return {
+      t: 'Expired ' + -days + 'd ago',
+      c: '#d23a52'
+    };
+    if (days <= 60) return {
+      t: 'Expires in ' + days + 'd',
+      c: '#b5670a'
+    };
+    return {
+      t: 'Valid',
+      c: '#157a43'
+    };
+  })();
   const multiChk = (k, opts, customText, setCustomText, ph) => {
     const sel = chipsOf(k);
     const extras = sel.filter(x => !opts.includes(x));
@@ -24451,7 +24816,12 @@ function StaffForm({
       flexDirection: 'column',
       gap: 20
     }
-  }, sec('Personal', React.createElement(React.Fragment, null, field('Emp ID', inp('emp_id', 'e.g. 11234')), field('Name *', inp('name', 'Full name')), field('Phone', inp('phone', '01XXXXXXXXX')), React.createElement("div", {
+  }, sec('Personal', React.createElement(React.Fragment, null, field('Emp ID', inp('emp_id', 'e.g. 11234')), field('Name *', inp('name', 'Full name')), field('Phone', inp('phone', '01XXXXXXXXX')), field('Gender', cmb('gender', ['Female', 'Male', 'Other'])), field('Date of Birth', inp('dob', 'YYYY-MM-DD', 'date'), f.dob && ageOf(f.dob) != null ? React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, ageOf(f.dob), " yrs") : null), React.createElement("div", {
     style: {
       gridColumn: '1 / -1'
     }
@@ -24471,7 +24841,13 @@ function StaffForm({
     options: deptOpts,
     labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
     placeholder: "Select department(s)\u2026"
-  })), field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date')), field('Total Experience', React.createElement("div", {
+  })), field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date')), chipsOf('current_department').length > 1 ? field('Primary Department', React.createElement(SelectDropdown, {
+    value: f.primary_department || '',
+    onChange: v => set('primary_department', v),
+    options: chipsOf('current_department'),
+    labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
+    placeholder: "Which unit is home?"
+  })) : null, field('Total Experience', React.createElement("div", {
     style: {
       padding: '9px 11px',
       border: '1px dashed var(--line)',
@@ -24486,7 +24862,24 @@ function StaffForm({
       fontSize: 11,
       color: 'var(--muted)'
     }
-  }, "auto = previous + UNICO")))), sec('Previous Experience', React.createElement(React.Fragment, null, React.createElement("div", {
+  }, "auto = previous + UNICO")), React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      fontSize: 12.5,
+      color: 'var(--ink-2)',
+      cursor: 'pointer'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!f.can_float,
+    onChange: e => set('can_float', e.target.checked)
+  }), "Can be floated to other units when they are short")))), sec('Previous Experience', React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       gridColumn: '1 / -1',
       display: 'flex',
@@ -24605,12 +24998,13 @@ function StaffForm({
     onChange: ev => setEntry(i, 'org', ev.target.value),
     placeholder: "Organisation \u2014 e.g. City Hospital",
     style: rowInp
-  }), React.createElement(SelectDropdown, {
+  }), React.createElement(ComboInput, {
     value: x.dept || '',
     onChange: v => setEntry(i, 'dept', v),
     options: deptOpts,
     labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
-    placeholder: "Department / role"
+    placeholder: "Department / role \u2014 type anything",
+    style: rowInp
   }), React.createElement("input", {
     value: x.years || '',
     onChange: ev => setEntry(i, 'years', ev.target.value.replace(/[^\d.]/g, '')),
@@ -24683,7 +25077,17 @@ function StaffForm({
     style: {
       gridColumn: '1 / -1'
     }
-  }, field('Special Training' + (chipsOf('special_training').length ? ' · ' + chipsOf('special_training').length + ' selected' : ''), multiChk('special_training', S.TRAININGS.filter(Boolean), customT, setCustomT, 'Add another training…'))), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), field('Remarks', inp('remarks', 'Any notes')))), sec('Privileges', React.createElement(React.Fragment, null, React.createElement("div", {
+  }, field('Special Training' + (chipsOf('special_training').length ? ' · ' + chipsOf('special_training').length + ' selected' : ''), multiChk('special_training', S.TRAININGS.filter(Boolean), customT, setCustomT, 'Add another training…'))), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), field('Registration / Licence No.', inp('licence_no', 'e.g. BNMC-12345')), field('Licence Expiry', inp('licence_expiry', 'YYYY-MM-DD', 'date'), licenceState ? React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: licenceState.c
+    }
+  }, licenceState.t) : null), React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1'
+    }
+  }, field('Remarks', inp('remarks', 'Any notes'))))), sec('Privileges', React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       gridColumn: '1 / -1'
     }
@@ -24732,7 +25136,11 @@ function StaffForm({
       allowedKeys: allowedKeys,
       emptyHint: hint
     }));
-  })()))), customFieldDefs.length > 0 && sec('Additional Details', customFieldDefs.map(cf => {
+  })()))), sec('Additional Details', React.createElement(React.Fragment, null, field('NID / Passport No.', inp('nid', 'National ID or passport number')), field('Blood Group', cmb('blood_group', ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'])), field('Emergency Contact', inp('emergency_contact', 'Name & phone — e.g. Rahima, 017XXXXXXXX')), field('Emergency Contact Relation', inp('emergency_relation', 'e.g. Spouse, Father')), React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1'
+    }
+  }, field('Languages Spoken' + (chipsOf('languages').length ? ' · ' + chipsOf('languages').length + ' selected' : ''), multiChk('languages', ['Bangla', 'English', 'Hindi', 'Urdu', 'Arabic'], customL, setCustomL, 'Add another language…'))))), customFieldDefs.length > 0 && sec('Custom Fields', customFieldDefs.map(cf => {
     const cv = (f.custom || {})[cf.id] || '';
     const node = cf.kind === 'multi' ? React.createElement(MultiSelectDropdown, {
       value: cv,
@@ -29963,7 +30371,7 @@ function Reports({
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
-const USER_MODS = [['stats', 'Hospital Statistics'], ['quality', 'Quality Indicators'], ['supervisor', 'Supervisor Reports'], ['staff', 'Staff Management'], ['datacol', 'Data Collection'], ['reports', 'Reports'], ['users', 'Administration'], ['perf', 'Performance Appraisal'], ['roster', 'Duty Roster']];
+const USER_MODS = [['stats', 'Hospital Statistics'], ['quality', 'Quality Indicators'], ['supervisor', 'Supervisor Reports'], ['staff', 'Staff Management'], ['datacol', 'Data Collection'], ['reports', 'Reports'], ['users', 'Administration'], ['perf', 'Performance Appraisal'], ['roster', 'Duty Roster'], ['medicine', 'Medicine & Rx']];
 const PERM_LEVELS = [['none', 'None'], ['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
 const PERM_RANK = {
   none: 0,
@@ -30035,6 +30443,42 @@ const ROLE_PRESETS = {
   }
 };
 const USER_ROLES = Object.keys(ROLE_PRESETS);
+let ROLE_TMPL = null;
+let ROLE_TMPL_P = null;
+const tmplFallback = () => USER_ROLES.filter(r => r !== 'Administrator').map(r => ({
+  id: r.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+  name: r,
+  description: '',
+  perms: ROLE_PRESETS[r],
+  builtin: true
+}));
+function loadRoleTemplates(force) {
+  if (!force && ROLE_TMPL) return Promise.resolve(ROLE_TMPL);
+  if (!force && ROLE_TMPL_P) return ROLE_TMPL_P;
+  ROLE_TMPL_P = usersApi('GET', '/api/roles').then(j => {
+    ROLE_TMPL = (j.templates || []).length ? j.templates : tmplFallback();
+    ROLE_TMPL_P = null;
+    return ROLE_TMPL;
+  }).catch(() => {
+    ROLE_TMPL = tmplFallback();
+    ROLE_TMPL_P = null;
+    return ROLE_TMPL;
+  });
+  return ROLE_TMPL_P;
+}
+function useRoleTemplates() {
+  const [t, setT] = React.useState(ROLE_TMPL);
+  React.useEffect(() => {
+    let live = true;
+    loadRoleTemplates().then(x => {
+      if (live) setT(x);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return t || ROLE_TMPL || tmplFallback();
+}
 const FULL_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = [...PERM_ORDER], m), {});
 const NONE_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = [], m), {});
 const inits = n => (n || '?').split(' ').map(x => x[0]).slice(0, 2).join('').toUpperCase();
@@ -30093,8 +30537,20 @@ function UserModal({
   const [email, setEmail] = useState(editing ? initial.email || '' : '');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState(editing ? initial.active !== false ? 'active' : 'inactive' : 'active');
-  const initTemplate = editing ? initial.role === 'Administrator' ? 'Administrator' : initial.role === 'collector' ? 'Data Collector' : initial.perms ? detectTemplate(initial.perms) : initial.title && USER_ROLES.includes(initial.title) ? initial.title : 'Custom' : 'Custom';
+  const templates = useRoleTemplates();
+  const tmplMatch = pm => {
+    const t = templates.find(x => USER_MODS.every(([k]) => sameActs(pm[k], x.perms && x.perms[k])));
+    return t ? t.name : 'Custom';
+  };
+  const initTemplate = editing ? initial.role === 'Administrator' ? 'Administrator' : initial.role === 'collector' ? 'Data Collector' : initial.perms ? tmplMatch(initial.perms) : 'Custom' : 'Custom';
   const [role, setRole] = useState(initTemplate);
+  const [roleTmpl, setRoleTmpl] = useState(editing ? initial.roleTemplate || null : null);
+  React.useEffect(() => {
+    if (editing && initial.perms && role === 'Custom' && templates.length) {
+      const m = tmplMatch(initial.perms);
+      if (m !== 'Custom') setRole(m);
+    }
+  }, [templates.length]);
   const [perms, setPerms] = useState(() => {
     if (editing && initial.role === 'Administrator') return FULL_PERMS();
     const src = editing && initial.perms ? {
@@ -30133,7 +30589,18 @@ function UserModal({
   const isColl = role === 'Data Collector';
   const pickRole = r => {
     setRole(r);
-    if (r !== 'Custom' && r !== 'Data Collector' && ROLE_PRESETS[r]) setPerms(USER_MODS.reduce((m, [k]) => (m[k] = levelToActions(ROLE_PRESETS[r][k] || 'none'), m), {}));
+    if (r === 'Administrator' || r === 'Data Collector' || r === 'Custom') {
+      setRoleTmpl(null);
+      return;
+    }
+    const t = templates.find(x => x.name === r);
+    if (t) {
+      setRoleTmpl(t.id);
+      setPerms(USER_MODS.reduce((m, [k]) => (m[k] = asActions(t.perms && t.perms[k]), m), {}));
+    } else if (ROLE_PRESETS[r]) {
+      setRoleTmpl(null);
+      setPerms(USER_MODS.reduce((m, [k]) => (m[k] = levelToActions(ROLE_PRESETS[r][k] || 'none'), m), {}));
+    }
   };
   const toggleAct = (mid, act) => {
     setPerms(p => {
@@ -30147,6 +30614,7 @@ function UserModal({
       };
     });
     setRole('Custom');
+    setRoleTmpl(null);
   };
   const clearMod = mid => {
     setPerms(p => ({
@@ -30154,8 +30622,9 @@ function UserModal({
       [mid]: []
     }));
     setRole('Custom');
+    setRoleTmpl(null);
   };
-  const roleOpts = [...USER_ROLES, 'Data Collector', 'Custom'];
+  const roleOpts = ['Administrator', ...templates.map(t => t.name), 'Data Collector', 'Custom'];
   const save = async () => {
     setErr('');
     if (!editing) {
@@ -30173,7 +30642,8 @@ function UserModal({
         role: backendRole,
         title: isAdmin || isColl ? null : role === 'Custom' ? 'Custom access' : role,
         active: status === 'active',
-        perms: isAdmin || isColl ? null : perms
+        perms: isAdmin || isColl ? null : perms,
+        roleTemplate: isAdmin || isColl ? null : roleTmpl || null
       };
       if (!isAdmin && !isColl) {
         payload.staffScope = staffScope;
@@ -30643,6 +31113,460 @@ function uAvatarColor(s) {
   for (const ch of s || '') h = h * 31 + ch.charCodeAt(0) >>> 0;
   return UCOLORS[h % UCOLORS.length];
 }
+function RoleTemplatesPanel() {
+  const {
+    useState,
+    useEffect
+  } = React;
+  const [list, setList] = useState(null);
+  const [counts, setCounts] = useState({});
+  const [open, setOpen] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const may = a => {
+    try {
+      return typeof window.unicoCan !== 'function' || window.unicoCan('users', a);
+    } catch (e) {
+      return true;
+    }
+  };
+  const load = () => {
+    setErr('');
+    usersApi('GET', '/api/roles').then(j => {
+      setList(j.templates || []);
+      setCounts(j.counts || {});
+      ROLE_TMPL = j.templates || null;
+    }).catch(e => {
+      setList([]);
+      setErr(e.message || 'Could not load role templates.');
+    });
+  };
+  useEffect(load, []);
+  const startEdit = t => {
+    setOpen(t.id);
+    setDraft({
+      name: t.name,
+      description: t.description || '',
+      perms: USER_MODS.reduce((m, [k]) => (m[k] = asActions(t.perms && t.perms[k]), m), {})
+    });
+  };
+  const startNew = () => {
+    setOpen('__new');
+    setDraft({
+      name: '',
+      description: '',
+      perms: NONE_PERMS()
+    });
+  };
+  const toggle = (mid, act) => setDraft(d => {
+    const cur = asActions(d.perms[mid]);
+    let next = cur.indexOf(act) >= 0 ? cur.filter(a => a !== act) : [...cur, act];
+    if (next.some(a => a !== 'view') && next.indexOf('view') < 0) next.push('view');
+    next = PERM_ORDER.filter(a => next.indexOf(a) >= 0);
+    return {
+      ...d,
+      perms: {
+        ...d.perms,
+        [mid]: next
+      }
+    };
+  });
+  const setAll = v => setDraft(d => ({
+    ...d,
+    perms: USER_MODS.reduce((m, [k]) => (m[k] = v ? [...PERM_ORDER] : [], m), {})
+  }));
+  const save = async t => {
+    if (!draft) return;
+    if (!draft.name.trim()) {
+      setErr('Role name is required.');
+      return;
+    }
+    setBusy(true);
+    setErr('');
+    try {
+      if (t) await usersApi('PUT', '/api/roles/' + encodeURIComponent(t.id), draft);else await usersApi('POST', '/api/roles', draft);
+      uToast(t ? 'Role “' + draft.name.trim() + '” saved' : 'Role “' + draft.name.trim() + '” created');
+      setOpen(null);
+      setDraft(null);
+      loadRoleTemplates(true);
+      load();
+    } catch (e) {
+      setErr(e.message || 'Could not save the role.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const apply = async t => {
+    const n = counts[t.id] || 0;
+    const ok = await window.UI.confirm({
+      title: 'Apply “' + t.name + '” to ' + n + ' account' + (n === 1 ? '' : 's') + '?',
+      message: 'Each account stamped with this role gets exactly these permissions, replacing what it holds now. They will be signed out so the change takes effect immediately.',
+      confirmLabel: 'Apply to ' + n
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const r = await usersApi('POST', '/api/roles/' + encodeURIComponent(t.id) + '/apply');
+      uToast('Applied to ' + (r.updated || 0) + ' account' + ((r.updated || 0) === 1 ? '' : 's'));
+    } catch (e) {
+      uToast(e.message || 'Failed', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const del = async t => {
+    const n = counts[t.id] || 0;
+    const ok = await window.UI.confirm({
+      title: 'Delete the role “' + t.name + '”?',
+      message: n ? 'It is used by ' + n + ' account' + (n === 1 ? '' : 's') + '. They keep every permission they already have — only the label is removed.' : 'It is not used by any account.',
+      danger: true,
+      confirmLabel: 'Delete role'
+    });
+    if (!ok) return;
+    try {
+      await usersApi('DELETE', '/api/roles/' + encodeURIComponent(t.id));
+      uToast('Role removed');
+      loadRoleTemplates(true);
+      load();
+    } catch (e) {
+      uToast(e.message || 'Failed', 'error');
+    }
+  };
+  const summary = perms => {
+    const acts = USER_MODS.map(([k]) => asActions(perms && perms[k]));
+    const on = acts.filter(a => a.length).length;
+    if (!on) return 'No access';
+    const ed = acts.filter(a => a.length > 1).length;
+    return on + ' module' + (on !== 1 ? 's' : '') + (ed ? ' · ' + ed + ' editable' : ' · read-only');
+  };
+  const matrix = (d, t) => React.createElement("div", {
+    style: {
+      borderTop: '1px solid var(--line-2)',
+      marginTop: 11,
+      paddingTop: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginBottom: 11
+    }
+  }, React.createElement("input", {
+    value: d.name,
+    onChange: e => setDraft(x => ({
+      ...x,
+      name: e.target.value
+    })),
+    placeholder: "Role name \u2014 e.g. Nurse Manager",
+    style: {
+      flex: '1 1 210px',
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      outline: 'none'
+    }
+  }), React.createElement("input", {
+    value: d.description,
+    onChange: e => setDraft(x => ({
+      ...x,
+      description: e.target.value
+    })),
+    placeholder: "What this role is for (shown to administrators)",
+    style: {
+      flex: '2 1 300px',
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      outline: 'none'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      fontWeight: 600,
+      textTransform: 'uppercase',
+      letterSpacing: .4
+    }
+  }, "Module privileges"), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setAll(true)
+  }, "Grant all"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setAll(false)
+  }, "Clear all")), React.createElement("div", {
+    style: {
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      overflow: 'hidden'
+    }
+  }, USER_MODS.map(([mid, label], i) => {
+    const acts = asActions(d.perms[mid]);
+    return React.createElement("div", {
+      key: mid,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '8px 11px',
+        flexWrap: 'wrap',
+        borderTop: i ? '1px solid var(--line-2)' : 0,
+        background: acts.length ? 'var(--panel-2)' : 'transparent'
+      }
+    }, React.createElement("span", {
+      style: {
+        flex: '1 1 160px',
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: acts.length ? 'var(--ink)' : 'var(--muted)'
+      }
+    }, label), PERM_ACTS.map(([a, al]) => {
+      const on = acts.indexOf(a) >= 0;
+      return React.createElement("span", {
+        key: a,
+        onClick: () => toggle(mid, a),
+        style: {
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 10px',
+          borderRadius: 16,
+          fontSize: 11.5,
+          fontWeight: 600,
+          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+          background: on ? 'var(--blue-50)' : '#fff',
+          color: on ? 'var(--blue-700)' : 'var(--muted)'
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 12,
+          height: 12,
+          borderRadius: 3,
+          display: 'grid',
+          placeItems: 'center',
+          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+          background: on ? 'var(--blue)' : '#fff'
+        }
+      }, on && React.createElement(Ic, {
+        d: I.check,
+        s: 9,
+        c: "#fff"
+      })), al);
+    }));
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 9,
+      marginTop: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      flex: 1,
+      minWidth: 180,
+      alignSelf: 'center'
+    }
+  }, "Saving updates the role only. Existing accounts keep their current permissions until you press ", React.createElement("b", null, "Apply to members"), "."), React.createElement("button", {
+    className: "btn",
+    onClick: () => {
+      setOpen(null);
+      setDraft(null);
+      setErr('');
+    }
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri",
+    disabled: busy,
+    onClick: () => save(t)
+  }, busy ? 'Saving…' : t ? 'Save role' : 'Create role')));
+  return React.createElement("div", {
+    style: {
+      marginTop: 22,
+      borderTop: '1px solid var(--line)',
+      paddingTop: 18
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: 4,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700
+    }
+  }, "Role templates"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "Named privilege sets you can grant in one pick \u2014 Nurse Manager, Ward In-charge, or your own.")), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: load
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 14
+  }), "Refresh"), may('add') && React.createElement("button", {
+    className: "btn pri sm",
+    onClick: startNew
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "Add role")), err && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#b32339',
+      background: 'var(--neg-bg)',
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      padding: '10px 12px',
+      margin: '10px 0'
+    }
+  }, err), open === '__new' && draft && React.createElement("div", {
+    style: {
+      border: '1px solid var(--blue-100)',
+      borderRadius: 10,
+      padding: '12px 14px',
+      marginTop: 10,
+      background: 'var(--blue-50)'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: 'var(--blue-700)'
+    }
+  }, "New role"), matrix(draft, null)), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8,
+      marginTop: 10
+    }
+  }, list === null && React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: '18px',
+      fontSize: 13
+    }
+  }, "Loading\u2026"), (list || []).map(t => {
+    const n = counts[t.id] || 0;
+    const isOpen = open === t.id;
+    return React.createElement("div", {
+      key: t.id,
+      style: {
+        border: '1px solid ' + (isOpen ? 'var(--blue-100)' : 'var(--line)'),
+        borderRadius: 10,
+        padding: '11px 13px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: '1 1 200px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 700
+      }
+    }, t.name), t.builtin && React.createElement("span", {
+      className: "tag",
+      style: {
+        background: 'var(--panel-2)',
+        color: 'var(--muted)'
+      }
+    }, "Built-in")), t.description && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginTop: 2
+      }
+    }, t.description)), React.createElement("span", {
+      className: "tag",
+      style: {
+        minWidth: 120,
+        justifyContent: 'center',
+        color: 'var(--ink-2)'
+      }
+    }, summary(t.perms)), React.createElement("span", {
+      className: "tag",
+      style: {
+        minWidth: 78,
+        justifyContent: 'center'
+      }
+    }, n, " member", n === 1 ? '' : 's'), may('edit') && React.createElement("button", {
+      className: "btn sm",
+      onClick: () => isOpen ? (setOpen(null), setDraft(null)) : startEdit(t)
+    }, React.createElement(Ic, {
+      d: I.edit,
+      s: 13
+    }), isOpen ? 'Close' : 'Edit'), may('edit') && React.createElement("button", {
+      className: "btn sm",
+      disabled: !n || busy,
+      title: n ? 'Push these permissions onto its members' : 'No account uses this role yet',
+      onClick: () => apply(t)
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 13
+    }), "Apply to members"), may('delete') && !t.builtin && React.createElement("button", {
+      className: "icon-btn danger",
+      title: "Delete role",
+      onClick: () => del(t)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 14
+    }))), isOpen && draft && matrix(draft, t));
+  }), list !== null && list.length === 0 && React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: '18px',
+      fontSize: 13
+    }
+  }, "No role templates yet.")));
+}
+window.RoleTemplatesPanel = RoleTemplatesPanel;
 function UserManagement() {
   const {
     useState,
@@ -30905,7 +31829,7 @@ function UserManagement() {
       padding: '24px',
       fontSize: 13
     }
-  }, "No users", q ? ' match the search' : ' yet', ".")), modal && React.createElement(UserModal, {
+  }, "No users", q ? ' match the search' : ' yet', ".")), React.createElement(RoleTemplatesPanel, null), modal && React.createElement(UserModal, {
     initial: modal.user,
     onClose: () => setModal(null),
     onSaved: () => {
@@ -77045,6 +77969,26 @@ function PerfAttrition({
     onClose: () => setAdding(false)
   }));
 }
+const EXIT_REASONS = {
+  'Resignation': ['Higher studies', 'Better offer', 'Family relocation', 'Health', 'Marriage', 'Going abroad', 'Workload', 'Salary', 'Personal'],
+  'End of contract': ['Contract completed', 'Not renewed', 'Project ended'],
+  'Retirement': ['Superannuation', 'Early retirement'],
+  'Termination': ['Performance', 'Misconduct', 'Attendance', 'Probation not confirmed'],
+  'Absconded': ['No notice, stopped attending'],
+  'Transfer': ['Internal transfer', 'Sister concern'],
+  'Other': ['Deceased', 'Maternity — did not return', 'Not stated']
+};
+const XF = {
+  padding: '8px 10px',
+  border: '1px solid var(--line,#dde3ec)',
+  borderRadius: 8,
+  fontSize: 12.6,
+  fontFamily: 'inherit',
+  color: 'inherit',
+  background: '#fff',
+  outline: 'none',
+  width: '100%'
+};
 function ExitModal({
   roster,
   perf,
@@ -77061,12 +78005,22 @@ function ExitModal({
   const [interview, setInterview] = useState('');
   const [clearance, setClearance] = useState([]);
   const [rehire, setRehire] = useState(true);
+  const [handoverTo, setHandoverTo] = useState('');
+  const [contact, setContact] = useState('');
+  const [settlementDate, setSettlementDate] = useState('');
+  const [noticeServed, setNoticeServed] = useState('');
   const [busy, setBusy] = useState(false);
   const options = [...(staffStore.staff || [])].sort((a, b) => String(a.name).localeCompare(String(b.name)));
   const person = options.find(e => (e.emp_id || String(e.id)) === empId);
   const row = roster.byEmp[empId];
   const joined = person ? hrParse(person.doj) : null;
   const tenure = hrMonthsBetween(joined, hrParse(lastDay));
+  const noticeDays = (() => {
+    const a = Date.parse(noticeDate),
+      b = Date.parse(lastDay);
+    if (isNaN(a) || isNaN(b) || b < a) return null;
+    return Math.round((b - a) / 86400000);
+  })();
   const toggle = c => setClearance(s => s.indexOf(c) >= 0 ? s.filter(x => x !== c) : [...s, c]);
   const submit = () => {
     if (!person) return;
@@ -77084,6 +78038,10 @@ function ExitModal({
       interview,
       clearance,
       rehire,
+      handoverTo,
+      contact,
+      settlementDate,
+      noticeServed,
       lastGrade: row && row.last ? row.last.grade : ''
     }).then(r => {
       setBusy(false);
@@ -77117,7 +78075,8 @@ function ExitModal({
     className: "sub"
   }, "Staff member *"), React.createElement("select", {
     value: empId,
-    onChange: e => setEmpId(e.target.value)
+    onChange: e => setEmpId(e.target.value),
+    style: XF
   }, React.createElement("option", {
     value: ""
   }, "Select\u2026"), options.map(e => {
@@ -77129,7 +78088,7 @@ function ExitModal({
   }))), React.createElement("div", {
     style: {
       display: 'grid',
-      gridTemplateColumns: '1fr 1fr 1fr',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))',
       gap: 10
     }
   }, React.createElement("label", {
@@ -77142,7 +78101,8 @@ function ExitModal({
   }, "Notice received"), React.createElement("input", {
     type: "date",
     value: noticeDate,
-    onChange: e => setNoticeDate(e.target.value)
+    onChange: e => setNoticeDate(e.target.value),
+    style: XF
   })), React.createElement("label", {
     style: {
       display: 'grid',
@@ -77153,7 +78113,8 @@ function ExitModal({
   }, "Last working day *"), React.createElement("input", {
     type: "date",
     value: lastDay,
-    onChange: e => setLastDay(e.target.value)
+    onChange: e => setLastDay(e.target.value),
+    style: XF
   })), React.createElement("label", {
     style: {
       display: 'grid',
@@ -77163,8 +78124,27 @@ function ExitModal({
     className: "sub"
   }, "Separation type"), React.createElement("select", {
     value: separation,
-    onChange: e => setSeparation(e.target.value)
+    onChange: e => {
+      setSeparation(e.target.value);
+      setReason('');
+    },
+    style: XF
   }, ['Resignation', 'End of contract', 'Retirement', 'Termination', 'Absconded', 'Transfer', 'Other'].map(t => React.createElement("option", {
+    key: t
+  }, t)))), React.createElement("label", {
+    style: {
+      display: 'grid',
+      gap: 4
+    }
+  }, React.createElement("span", {
+    className: "sub"
+  }, "Notice period served", noticeDays != null ? ' · ' + noticeDays + ' days' : ''), React.createElement("select", {
+    value: noticeServed,
+    onChange: e => setNoticeServed(e.target.value),
+    style: XF
+  }, React.createElement("option", {
+    value: ""
+  }, "\u2014"), ['Full', 'Partial', 'None'].map(t => React.createElement("option", {
     key: t
   }, t))))), React.createElement("label", {
     style: {
@@ -77176,8 +78156,81 @@ function ExitModal({
   }, "Stated reason at exit"), React.createElement("input", {
     value: reason,
     onChange: e => setReason(e.target.value),
-    placeholder: "e.g. Higher studies \xB7 Family relocation \xB7 Better offer \xB7 Health"
+    style: XF,
+    placeholder: "Pick one below, or type the reason as it was given"
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginTop: -4
+    }
+  }, (EXIT_REASONS[separation] || []).map(r => {
+    const on = reason === r;
+    return React.createElement("button", {
+      key: r,
+      onClick: () => setReason(on ? '' : r),
+      style: {
+        padding: '4px 10px',
+        borderRadius: 16,
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: 11.4,
+        fontWeight: 600,
+        border: '1px solid ' + (on ? '#27a8db' : 'var(--line,#dde3ec)'),
+        background: on ? 'rgba(39,168,219,.12)' : '#fff',
+        color: on ? '#0b6f96' : 'var(--muted,#6c7a8c)'
+      }
+    }, r);
+  })), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))',
+      gap: 10
+    }
+  }, React.createElement("label", {
+    style: {
+      display: 'grid',
+      gap: 4
+    }
+  }, React.createElement("span", {
+    className: "sub"
+  }, "Handover to"), React.createElement("input", {
+    value: handoverTo,
+    onChange: e => setHandoverTo(e.target.value),
+    list: "hr-exit-handover",
+    style: XF,
+    placeholder: "Who took over the work"
+  }), React.createElement("datalist", {
+    id: "hr-exit-handover"
+  }, options.filter(e => !e.former).slice(0, 400).map(e => React.createElement("option", {
+    key: e.id,
+    value: e.name
+  })))), React.createElement("label", {
+    style: {
+      display: 'grid',
+      gap: 4
+    }
+  }, React.createElement("span", {
+    className: "sub"
+  }, "Forwarding contact"), React.createElement("input", {
+    value: contact,
+    onChange: e => setContact(e.target.value),
+    style: XF,
+    placeholder: "Phone or email after leaving"
   })), React.createElement("label", {
+    style: {
+      display: 'grid',
+      gap: 4
+    }
+  }, React.createElement("span", {
+    className: "sub"
+  }, "Final settlement date"), React.createElement("input", {
+    type: "date",
+    value: settlementDate,
+    onChange: e => setSettlementDate(e.target.value),
+    style: XF
+  }))), React.createElement("label", {
     style: {
       display: 'grid',
       gap: 4
@@ -77187,7 +78240,11 @@ function ExitModal({
   }, "Exit interview notes"), React.createElement("textarea", {
     rows: "3",
     value: interview,
-    onChange: e => setInterview(e.target.value)
+    onChange: e => setInterview(e.target.value),
+    style: {
+      ...XF,
+      resize: 'vertical'
+    }
   })), React.createElement("div", null, React.createElement("div", {
     className: "sub",
     style: {

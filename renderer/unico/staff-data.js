@@ -405,6 +405,25 @@
     return out.sort((a,b)=>a.annv-b.annv);
   }
 
+  // Upcoming birthdays — same shape and windowing rule as anniversaries() so the two
+  // dashboard cards behave identically. `turns` is the age they are about to become, so
+  // a blank/typo'd year (age outside 15..80) just omits it rather than printing "2026 yrs".
+  // `inDays` = 0 means TODAY, which is what the dashboard highlights.
+  function birthdays(list,nDays=30){
+    const now=new Date(); const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+    const horizon=new Date(today.getTime()+nDays*86400000); const out=[];
+    list.filter(e=>e.is_active&&!e.former&&e.dob).forEach(e=>{
+      const d=new Date(e.dob); if(isNaN(d))return;
+      let bd=new Date(today.getFullYear(),d.getMonth(),d.getDate());
+      if(bd<today) bd=new Date(today.getFullYear()+1,d.getMonth(),d.getDate());
+      if(bd>=today&&bd<=horizon){
+        const t=bd.getFullYear()-d.getFullYear();
+        out.push({e,bday:bd,turns:(t>=15&&t<=80)?t:null,inDays:Math.round((bd-today)/86400000)});
+      }
+    });
+    return out.sort((a,b)=>a.bday-b.bday);
+  }
+
   // ---------- store ----------
   const KEY='unico_staff_v3';
   function realSeed(){ return (window.STAFF_SEED&&window.STAFF_SEED.length)
@@ -459,6 +478,6 @@
     deptGroupsFor,setDeptGroups,
     fieldOptList,addFieldOpt,removeFieldOpt,
     customFields,addCustomField,removeCustomField,renameCustomField,addCustomFieldOption,removeCustomFieldOption,
-    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,byRole,uniqueVals};
+    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,birthdays,byRole,uniqueVals};
   window.useStaffStore=useStaffStore;
 })();

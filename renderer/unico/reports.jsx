@@ -1710,7 +1710,7 @@ function Reports({depts}){
    REQUIRE_AUTH=true they require an Administrator session. ---- */
 const UCOLORS=['#0090ca','#3ab5a7','#6a52d4','#e08a1e','#d23a52','#1f9d57'];
 // Module ids match server ACCESS_MODULES + renderer unicoAccessModuleOf().
-const USER_MODS=[['stats','Hospital Statistics'],['quality','Quality Indicators'],['supervisor','Supervisor Reports'],['staff','Staff Management'],['datacol','Data Collection'],['reports','Reports'],['users','Administration'],['perf','Performance Appraisal'],['roster','Duty Roster']];
+const USER_MODS=[['stats','Hospital Statistics'],['quality','Quality Indicators'],['supervisor','Supervisor Reports'],['staff','Staff Management'],['datacol','Data Collection'],['reports','Reports'],['users','Administration'],['perf','Performance Appraisal'],['roster','Duty Roster'],['medicine','Medicine & Rx']];
 const PERM_LEVELS=[['none','None'],['view','View'],['edit','Edit'],['add','Add'],['delete','Delete']];
 const PERM_RANK={none:0,view:1,edit:2,add:3,delete:4};
 // New model: each module grants an independent SET of actions (View/Edit/Add/Delete),
@@ -1731,6 +1731,34 @@ const ROLE_PRESETS={
   'Read-only':{stats:'view',quality:'view',supervisor:'view',staff:'view',datacol:'view',reports:'view',users:'none'},
 };
 const USER_ROLES=Object.keys(ROLE_PRESETS);
+/* ---- Role templates, admin-defined (server/users-admin.js /api/roles) ----
+   ROLE_PRESETS above is now only the OFFLINE FALLBACK — the real list is loaded from
+   the server, where an administrator can add, edit and delete roles ("Nurse Manager",
+   "Ward In-charge", "Acting In-charge") without a code change.
+
+   A template is a granting convenience, never a second authority: picking one COPIES
+   its actions into this account's own perms map, which is the only thing the server
+   enforces. That is why editing a template does not silently re-permission anyone —
+   the panel has an explicit "Apply to members" for that. */
+let ROLE_TMPL=null;          // cached list, null until the first load
+let ROLE_TMPL_P=null;        // in-flight request, so N mounts make one call
+const tmplFallback=()=>USER_ROLES.filter(r=>r!=='Administrator').map(r=>({
+  id:r.toLowerCase().replace(/[^a-z0-9]+/g,'-'),name:r,description:'',perms:ROLE_PRESETS[r],builtin:true}));
+function loadRoleTemplates(force){
+  if(!force&&ROLE_TMPL) return Promise.resolve(ROLE_TMPL);
+  if(!force&&ROLE_TMPL_P) return ROLE_TMPL_P;
+  ROLE_TMPL_P=usersApi('GET','/api/roles')
+    .then(j=>{ ROLE_TMPL=(j.templates||[]).length?j.templates:tmplFallback(); ROLE_TMPL_P=null; return ROLE_TMPL; })
+    // A read failure must not leave the Role dropdown empty — fall back to the built-ins
+    // so an administrator can still grant access while the API is unreachable.
+    .catch(()=>{ ROLE_TMPL=tmplFallback(); ROLE_TMPL_P=null; return ROLE_TMPL; });
+  return ROLE_TMPL_P;
+}
+function useRoleTemplates(){
+  const [t,setT]=React.useState(ROLE_TMPL);
+  React.useEffect(()=>{ let live=true; loadRoleTemplates().then(x=>{ if(live) setT(x); }); return ()=>{live=false;}; },[]);
+  return t||ROLE_TMPL||tmplFallback();
+}
 const FULL_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]=[...PERM_ORDER],m),{});
 const NONE_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]=[],m),{});
 const inits=n=>(n||'?').split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase();
@@ -1761,12 +1789,21 @@ function UserModal({initial,onClose,onSaved}){
   const [email,setEmail]=useState(editing?(initial.email||''):'');
   const [password,setPassword]=useState('');
   const [status,setStatus]=useState(editing?(initial.active!==false?'active':'inactive'):'active');
+  const templates=useRoleTemplates();
+  // Which template this account currently reads as: the stamp it was granted from if
+  // its permissions still match it, otherwise whichever template does, otherwise Custom.
+  // The stamp alone is not trusted — an admin may have hand-edited the matrix since.
+  const tmplMatch=(pm)=>{ const t=templates.find(x=>USER_MODS.every(([k])=>sameActs(pm[k],x.perms&&x.perms[k]))); return t?t.name:'Custom'; };
   const initTemplate=editing
     ? (initial.role==='Administrator' ? 'Administrator'
        : initial.role==='collector' ? 'Data Collector'
-       : (initial.perms ? detectTemplate(initial.perms) : (initial.title && USER_ROLES.includes(initial.title) ? initial.title : 'Custom')))
+       : (initial.perms ? tmplMatch(initial.perms) : 'Custom'))
     : 'Custom';
   const [role,setRole]=useState(initTemplate);
+  const [roleTmpl,setRoleTmpl]=useState(editing?(initial.roleTemplate||null):null);
+  // Templates arrive after the first render, so re-derive the selection once they land
+  // (only while the admin has not touched the matrix — hence the 'Custom' guard).
+  React.useEffect(()=>{ if(editing&&initial.perms&&role==='Custom'&&templates.length) { const m=tmplMatch(initial.perms); if(m!=='Custom') setRole(m); } },[templates.length]);  // eslint-disable-line react-hooks/exhaustive-deps
   // Default to NO access (start from nothing, grant only what's explicitly set). A blank
   // default of FULL_PERMS silently granted every module a User's perms map didn't mention.
   // perms is a {module: actions[]} map. Legacy level strings (from older accounts /
@@ -1794,12 +1831,20 @@ function UserModal({initial,onClose,onSaved}){
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=role==='Administrator';
   const isColl=role==='Data Collector';   // backend role 'collector' — data-collection portal, scope set in Responsible Persons
-  const pickRole=r=>{ setRole(r); if(r!=='Custom'&&r!=='Data Collector'&&ROLE_PRESETS[r]) setPerms(USER_MODS.reduce((m,[k])=>(m[k]=levelToActions(ROLE_PRESETS[r][k]||'none'),m),{})); };
+  const pickRole=r=>{
+    setRole(r);
+    if(r==='Administrator'||r==='Data Collector'||r==='Custom'){ setRoleTmpl(null); return; }
+    const t=templates.find(x=>x.name===r);
+    if(t){ setRoleTmpl(t.id); setPerms(USER_MODS.reduce((m,[k])=>(m[k]=asActions(t.perms&&t.perms[k]),m),{})); }
+    else if(ROLE_PRESETS[r]){ setRoleTmpl(null); setPerms(USER_MODS.reduce((m,[k])=>(m[k]=levelToActions(ROLE_PRESETS[r][k]||'none'),m),{})); }
+  };
   // Toggle one action for a module (independent). Granting edit/add/delete auto-adds view.
   const toggleAct=(mid,act)=>{ setPerms(p=>{ const cur=asActions(p[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
-    if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); setRole('Custom'); };
-  const clearMod=(mid)=>{ setPerms(p=>({...p,[mid]:[]})); setRole('Custom'); };
-  const roleOpts=[...USER_ROLES,'Data Collector','Custom'];
+    if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); setRole('Custom'); setRoleTmpl(null); };
+  const clearMod=(mid)=>{ setPerms(p=>({...p,[mid]:[]})); setRole('Custom'); setRoleTmpl(null); };
+  // Administrator and Data Collector are BACKEND roles, not templates — they stay in the
+  // list. Everything between them is admin-defined and can change at any time.
+  const roleOpts=['Administrator',...templates.map(t=>t.name),'Data Collector','Custom'];
 
   const save=async()=>{
     setErr('');
@@ -1816,7 +1861,10 @@ function UserModal({initial,onClose,onSaved}){
       // omit `departments` so the backend preserves the existing assignment on PATCH.
       const payload={ name:name.trim(), email:email.trim().toLowerCase(), role:backendRole,
         title:(isAdmin||isColl)?null:(role==='Custom'?'Custom access':role), active:status==='active',
-        perms:(isAdmin||isColl)?null:perms };
+        perms:(isAdmin||isColl)?null:perms,
+        // The template this grant came from. A label for the panel and the target of
+        // "Apply to members"; `perms` above is still what gets enforced.
+        roleTemplate:(isAdmin||isColl)?null:(roleTmpl||null) };
       if(!isAdmin&&!isColl){
         // Row-level staff scope. `departments` is only sent for plain Users — for a
         // collector it is their collection assignment and must not be overwritten here.
@@ -1949,6 +1997,170 @@ function UserModal({initial,onClose,onSaved}){
 }
 
 function uAvatarColor(s){ let h=0; for(const ch of s||'') h=(h*31+ch.charCodeAt(0))>>>0; return UCOLORS[h%UCOLORS.length]; }
+/* ============ Role templates — add / edit / delete privilege sets ============
+   The "role-wise" half of the privileges area. An administrator defines a named set
+   of module actions here (Nurse Manager, Ward In-charge, Acting In-charge, or anything
+   they invent), and the Add/Manage-user dialog grants it in one pick.
+
+   Two rules this panel is built around:
+   · Saving a template changes NOBODY on its own. Permissions live on the account, so
+     an edit here only takes effect where an administrator presses "Apply to members" —
+     which signs those people out so the new access is picked up immediately.
+   · Deleting a template never takes access away. It removes the label; the accounts
+     keep exactly the permissions they were granted. Built-in roles cannot be deleted
+     at all, so the list can never end up empty. ---- */
+function RoleTemplatesPanel(){
+  const {useState,useEffect}=React;
+  const [list,setList]=useState(null);
+  const [counts,setCounts]=useState({});
+  const [open,setOpen]=useState(null);       // expanded template id
+  const [draft,setDraft]=useState(null);     // {name,description,perms} being edited
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState('');
+  const may=(a)=>{ try{ return typeof window.unicoCan!=='function'||window.unicoCan('users',a); }catch(e){ return true; } };
+  const load=()=>{ setErr('');
+    usersApi('GET','/api/roles')
+      .then(j=>{ setList(j.templates||[]); setCounts(j.counts||{}); ROLE_TMPL=j.templates||null; })
+      .catch(e=>{ setList([]); setErr(e.message||'Could not load role templates.'); }); };
+  useEffect(load,[]);
+
+  const startEdit=(t)=>{ setOpen(t.id); setDraft({name:t.name,description:t.description||'',
+    perms:USER_MODS.reduce((m,[k])=>(m[k]=asActions(t.perms&&t.perms[k]),m),{})}); };
+  const startNew=()=>{ setOpen('__new'); setDraft({name:'',description:'',perms:NONE_PERMS()}); };
+  const toggle=(mid,act)=>setDraft(d=>{ const cur=asActions(d.perms[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
+    if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view');
+    next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...d,perms:{...d.perms,[mid]:next}}; });
+  const setAll=(v)=>setDraft(d=>({...d,perms:USER_MODS.reduce((m,[k])=>(m[k]=v?[...PERM_ORDER]:[],m),{})}));
+
+  const save=async(t)=>{
+    if(!draft) return;
+    if(!draft.name.trim()){ setErr('Role name is required.'); return; }
+    setBusy(true); setErr('');
+    try{
+      if(t) await usersApi('PUT','/api/roles/'+encodeURIComponent(t.id),draft);
+      else await usersApi('POST','/api/roles',draft);
+      uToast(t?'Role “'+draft.name.trim()+'” saved':'Role “'+draft.name.trim()+'” created');
+      setOpen(null); setDraft(null); loadRoleTemplates(true); load();
+    }catch(e){ setErr(e.message||'Could not save the role.'); }
+    finally{ setBusy(false); }
+  };
+  const apply=async(t)=>{
+    const n=counts[t.id]||0;
+    const ok=await window.UI.confirm({title:'Apply “'+t.name+'” to '+n+' account'+(n===1?'':'s')+'?',
+      message:'Each account stamped with this role gets exactly these permissions, replacing what it holds now. They will be signed out so the change takes effect immediately.',
+      confirmLabel:'Apply to '+n});
+    if(!ok) return;
+    setBusy(true);
+    try{ const r=await usersApi('POST','/api/roles/'+encodeURIComponent(t.id)+'/apply'); uToast('Applied to '+(r.updated||0)+' account'+((r.updated||0)===1?'':'s')); }
+    catch(e){ uToast(e.message||'Failed','error'); }
+    finally{ setBusy(false); }
+  };
+  const del=async(t)=>{
+    const n=counts[t.id]||0;
+    const ok=await window.UI.confirm({title:'Delete the role “'+t.name+'”?',
+      message:n?('It is used by '+n+' account'+(n===1?'':'s')+'. They keep every permission they already have — only the label is removed.'):'It is not used by any account.',
+      danger:true,confirmLabel:'Delete role'});
+    if(!ok) return;
+    try{ await usersApi('DELETE','/api/roles/'+encodeURIComponent(t.id)); uToast('Role removed'); loadRoleTemplates(true); load(); }
+    catch(e){ uToast(e.message||'Failed','error'); }
+  };
+
+  const summary=(perms)=>{ const acts=USER_MODS.map(([k])=>asActions(perms&&perms[k]));
+    const on=acts.filter(a=>a.length).length; if(!on) return 'No access';
+    const ed=acts.filter(a=>a.length>1).length;
+    return on+' module'+(on!==1?'s':'')+(ed?' · '+ed+' editable':' · read-only'); };
+
+  const matrix=(d,t)=>(
+    <div style={{borderTop:'1px solid var(--line-2)',marginTop:11,paddingTop:12}}>
+      <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:11}}>
+        <input value={d.name} onChange={e=>setDraft(x=>({...x,name:e.target.value}))} placeholder="Role name — e.g. Nurse Manager"
+          style={{flex:'1 1 210px',padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',outline:'none'}}/>
+        <input value={d.description} onChange={e=>setDraft(x=>({...x,description:e.target.value}))} placeholder="What this role is for (shown to administrators)"
+          style={{flex:'2 1 300px',padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',outline:'none'}}/>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+        <span style={{fontSize:11,color:'var(--muted)',fontWeight:600,textTransform:'uppercase',letterSpacing:.4}}>Module privileges</span>
+        <span className="spacer" style={{flex:1}}/>
+        <button className="btn sm" onClick={()=>setAll(true)}>Grant all</button>
+        <button className="btn sm" onClick={()=>setAll(false)}>Clear all</button>
+      </div>
+      <div style={{border:'1px solid var(--line)',borderRadius:9,overflow:'hidden'}}>
+        {USER_MODS.map(([mid,label],i)=>{
+          const acts=asActions(d.perms[mid]);
+          return (
+            <div key={mid} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 11px',flexWrap:'wrap',
+              borderTop:i?'1px solid var(--line-2)':0,background:acts.length?'var(--panel-2)':'transparent'}}>
+              <span style={{flex:'1 1 160px',fontSize:12.5,fontWeight:600,color:acts.length?'var(--ink)':'var(--muted)'}}>{label}</span>
+              {PERM_ACTS.map(([a,al])=>{ const on=acts.indexOf(a)>=0; return (
+                <span key={a} onClick={()=>toggle(mid,a)} style={{cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:16,fontSize:11.5,fontWeight:600,
+                  border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>
+                  <span style={{width:12,height:12,borderRadius:3,display:'grid',placeItems:'center',border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff"/>}</span>
+                  {al}
+                </span>
+              );})}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{display:'flex',gap:9,marginTop:12,flexWrap:'wrap'}}>
+        <span style={{fontSize:11.5,color:'var(--muted)',flex:1,minWidth:180,alignSelf:'center'}}>
+          Saving updates the role only. Existing accounts keep their current permissions until you press <b>Apply to members</b>.
+        </span>
+        <button className="btn" onClick={()=>{setOpen(null);setDraft(null);setErr('');}}>Cancel</button>
+        <button className="btn pri" disabled={busy} onClick={()=>save(t)}>{busy?'Saving…':(t?'Save role':'Create role')}</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{marginTop:22,borderTop:'1px solid var(--line)',paddingTop:18}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4,flexWrap:'wrap'}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:700}}>Role templates</div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>Named privilege sets you can grant in one pick — Nurse Manager, Ward In-charge, or your own.</div>
+        </div>
+        <span className="spacer" style={{flex:1}}/>
+        <button className="btn sm" onClick={load}><Ic d={I.search} s={14}/>Refresh</button>
+        {may('add')&&<button className="btn pri sm" onClick={startNew}><Ic d={I.plus} s={14}/>Add role</button>}
+      </div>
+      {err&&<div style={{fontSize:12.5,color:'#b32339',background:'var(--neg-bg)',border:'1px solid var(--line)',borderRadius:9,padding:'10px 12px',margin:'10px 0'}}>{err}</div>}
+      {open==='__new'&&draft&&(
+        <div style={{border:'1px solid var(--blue-100)',borderRadius:10,padding:'12px 14px',marginTop:10,background:'var(--blue-50)'}}>
+          <div style={{fontSize:13,fontWeight:700,color:'var(--blue-700)'}}>New role</div>
+          {matrix(draft,null)}
+        </div>
+      )}
+      <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:10}}>
+        {list===null&&<div style={{textAlign:'center',color:'var(--faint)',padding:'18px',fontSize:13}}>Loading…</div>}
+        {(list||[]).map(t=>{
+          const n=counts[t.id]||0; const isOpen=open===t.id;
+          return (
+            <div key={t.id} style={{border:'1px solid '+(isOpen?'var(--blue-100)':'var(--line)'),borderRadius:10,padding:'11px 13px'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                <div style={{minWidth:0,flex:'1 1 200px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:13.5,fontWeight:700}}>{t.name}</span>
+                    {t.builtin&&<span className="tag" style={{background:'var(--panel-2)',color:'var(--muted)'}}>Built-in</span>}
+                  </div>
+                  {t.description&&<div style={{fontSize:11.5,color:'var(--muted)',marginTop:2}}>{t.description}</div>}
+                </div>
+                <span className="tag" style={{minWidth:120,justifyContent:'center',color:'var(--ink-2)'}}>{summary(t.perms)}</span>
+                <span className="tag" style={{minWidth:78,justifyContent:'center'}}>{n} member{n===1?'':'s'}</span>
+                {may('edit')&&<button className="btn sm" onClick={()=>isOpen?(setOpen(null),setDraft(null)):startEdit(t)}><Ic d={I.edit} s={13}/>{isOpen?'Close':'Edit'}</button>}
+                {may('edit')&&<button className="btn sm" disabled={!n||busy} title={n?'Push these permissions onto its members':'No account uses this role yet'} onClick={()=>apply(t)}><Ic d={I.check} s={13}/>Apply to members</button>}
+                {may('delete')&&!t.builtin&&<button className="icon-btn danger" title="Delete role" onClick={()=>del(t)}><Ic d={I.x} s={14}/></button>}
+              </div>
+              {isOpen&&draft&&matrix(draft,t)}
+            </div>
+          );
+        })}
+        {list!==null&&list.length===0&&<div style={{textAlign:'center',color:'var(--faint)',padding:'18px',fontSize:13}}>No role templates yet.</div>}
+      </div>
+    </div>
+  );
+}
+window.RoleTemplatesPanel=RoleTemplatesPanel;
+
 function UserManagement(){
   const {useState,useEffect}=React;
   const [users,setUsers]=useState(null); // null = loading
@@ -2020,6 +2232,7 @@ function UserManagement(){
         })}
         {users!==null&&filtered.length===0&&<div style={{textAlign:'center',color:'var(--faint)',padding:'24px',fontSize:13}}>No users{q?' match the search':' yet'}.</div>}
       </div>
+      <RoleTemplatesPanel/>
       {modal&&<UserModal initial={modal.user} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load();}}/>}
       {confirm&&(
         <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)setConfirm(null);}}>

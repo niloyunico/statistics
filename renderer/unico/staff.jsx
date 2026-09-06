@@ -400,6 +400,8 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
   const vacc=S.vaccinationBreakdown(list).map(([label,value])=>({label,value,color:vaccColor(label)}));
   const recent=S.recentJoiners(list,6);
   const annv=S.anniversaries(list,60);
+  const bdays=S.birthdays(list,30);
+  const bdayToday=bdays.filter(b=>b.inDays===0);
   const comp=S.compliance(list);
   const compIssues=comp.missing_vaccination.length+comp.missing_training.length+comp.missing_phone.length;
 
@@ -467,6 +469,37 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Birthday reminder. Reads `dob` from the staff record — the same field the profile
+          form captures — so nobody maintains a second list. Today's birthdays are pinned
+          at the top in celebration colours; the rest is a plain 30-day look-ahead. */}
+      <div className="card">
+        <div className="card-h">
+          <span style={{color:'#d4529b',display:'inline-flex'}}><Ic d={I.heart} s={16}/></span>
+          <h3>Birthday Reminders</h3><span className="sub">next 30 days</span><span className="spacer"/>
+          {bdayToday.length>0&&<span className="tag" style={{background:'#fdeef6',color:'#b02a72',fontWeight:700}}>🎂 {bdayToday.length} today</span>}
+          <span className="tag num">{bdays.length}</span>
+        </div>
+        <div className="card-b" style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(230px,1fr))',gap:2}}>
+          {bdays.length===0&&<div style={{color:'var(--faint)',fontSize:12.5,padding:'14px 4px'}}>
+            No birthdays in the window{list.filter(e=>e.dob).length===0?' — no date of birth recorded yet. Add it on a staff profile (Personal → Date of Birth).':'.'}
+          </div>}
+          {bdays.slice(0,12).map(({e,bday,turns,inDays})=>(
+            <div key={e.id} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}
+              style={{display:'flex',alignItems:'center',gap:11,padding:'8px 9px',borderRadius:9,cursor:'pointer',
+                background:inDays===0?'linear-gradient(120deg,#fdeef6,#fff)':'transparent',border:'1px solid '+(inDays===0?'#f5c9e0':'transparent')}}>
+              <Avatar photo={e.photo} name={e.name} size={32}/>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{inDays===0?'🎂 ':''}{e.name}</div>
+                <div style={{fontSize:11,color:'var(--muted)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.current_department||'—'}{turns?' · turns '+turns:''}</div>
+              </div>
+              <div className="num" style={{fontSize:11.5,fontWeight:inDays===0?700:400,color:inDays===0?'#b02a72':'var(--muted)',textAlign:'right',flexShrink:0}}>
+                {inDays===0?'Today':inDays===1?'Tomorrow':bday.toLocaleDateString(undefined,{month:'short',day:'numeric'})}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 

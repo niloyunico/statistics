@@ -46,7 +46,7 @@ const cleanStaffScope = access.cleanStaffScope;
 
 // Changing any of these must invalidate every token the account already holds —
 // otherwise a revoked permission stays live for the rest of the 12h token TTL.
-const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId'];
+const SECURITY_FIELDS = ['role', 'active', 'perms', 'roleTemplate', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId'];
 // Compare only what actually CHANGED. The update object always carries a few scope
 // fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
 // mere presence signed a user out every time an admin fixed a typo in their name.
@@ -116,6 +116,11 @@ function safe(u) {
     staffScope: role === 'Administrator' ? 'all' : cleanStaffScope(u.staffScope),
     staffId: (u.staffId === 0 || u.staffId) ? u.staffId : null,
     staffEmpId: u.staffEmpId || null,
+    // Which admin-defined role template this account was granted from. A LABEL only:
+    // `perms` above is what the server actually enforces, so a template that is later
+    // edited or deleted cannot change what this account may do until an administrator
+    // explicitly re-applies it.
+    roleTemplate: u.roleTemplate || null,
     // Profile picture (set by the account owner via /api/upload kind=profile).
     // Only the CDN url is exposed — publicId stays server-side.
     photo: (u.photo && u.photo.url) ? { url: u.photo.url } : null,
@@ -187,6 +192,159 @@ function mount(app, opts) {
   };
   const guard = (action) => [requireApi, need(action)];
 
+  /* ---------------- Role templates (custom, admin-defined) -----------------
+     A role template is a NAMED set of per-module actions -- "Nurse Manager",
+     "Ward In-charge", "Acting In-charge" -- that an administrator can create,
+     edit and delete without a code change. Assigning one to an account COPIES
+     its perms onto that account.
+
+     The copy is deliberate. `users.perms` stays the single authority the server
+     enforces (access.js), so a template is a convenience for granting, never a
+     second place where permission is decided -- a template that was edited or
+     deleted could otherwise silently change what a live session may do. Editing
+     a template therefore does nothing on its own; "Apply to members" re-pushes
+     it to the accounts stamped with it, which is explicit and logged.
+
+     Built-ins are editable but NOT deletable, so the dropdown can never end up
+     empty. Nothing here removes an account or its permissions: deleting a
+     template only clears the `roleTemplate` label. */
+  const BUILTIN_TEMPLATES = [
+    { id: 'nurse-manager', name: 'Nurse Manager', description: 'Runs the nursing service - full roster and staffing control, appraisals, and read access to the hospital numbers.',
+      perms: { stats: 'view', quality: 'add', supervisor: 'add', staff: 'add', datacol: 'add', reports: 'view', users: 'none', perf: 'delete', roster: 'delete', medicine: 'view' } },
+    { id: 'ward-incharge', name: 'Ward In-charge', description: 'Runs one unit: builds and maintains its duty roster, submits its data, records its supervision.',
+      perms: { stats: 'view', quality: 'add', supervisor: 'add', staff: 'edit', datacol: 'add', reports: 'view', users: 'none', perf: 'edit', roster: 'add', medicine: 'view' } },
+    { id: 'acting-incharge', name: 'Acting In-charge', description: 'Covering an in-charge: the same day-to-day screens, but cannot delete a published roster.',
+      perms: { stats: 'view', quality: 'edit', supervisor: 'add', staff: 'view', datacol: 'add', reports: 'view', users: 'none', perf: 'view', roster: 'edit', medicine: 'view' } },
+    { id: 'manager', name: 'Manager', description: 'Cross-department oversight - may edit most registers, may not administer accounts.',
+      perms: { stats: 'edit', quality: 'edit', supervisor: 'edit', staff: 'edit', datacol: 'edit', reports: 'edit', users: 'view', perf: 'edit', roster: 'edit', medicine: 'view' } },
+    { id: 'department-head', name: 'Department Head', description: 'Owns one department, its indicators and its people.',
+      perms: { stats: 'view', quality: 'add', supervisor: 'add', staff: 'edit', datacol: 'add', reports: 'view', users: 'none', perf: 'edit', roster: 'view', medicine: 'view' } },
+    { id: 'data-entry', name: 'Data Entry', description: 'Submits the monthly numbers and nothing else.',
+      perms: { stats: 'view', quality: 'add', supervisor: 'add', staff: 'none', datacol: 'add', reports: 'view', users: 'none', perf: 'none', roster: 'none', medicine: 'none' } },
+    { id: 'read-only', name: 'Read-only', description: 'Can look at everything it is scoped to, can change nothing.',
+      perms: { stats: 'view', quality: 'view', supervisor: 'view', staff: 'view', datacol: 'view', reports: 'view', users: 'none', perf: 'view', roster: 'view', medicine: 'view' } },
+  ];
+  const TEMPLATES = 'roleTemplates';
+  const tmplCol = async () => { const d = await db.getDbHandle(); return d ? d.collection(TEMPLATES) : null; };
+  const slugId = (v) => String(v || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  const shapeTemplate = (t) => ({
+    id: t.id, name: t.name, description: String(t.description || ''),
+    perms: cleanPerms(t.perms), builtin: !!t.builtin,
+    updatedAt: t.updatedAt || 0, updatedBy: t.updatedBy || null,
+  });
+  // A stored row wins over the built-in default (a built-in may be re-tuned), and any
+  // built-in with no stored row is served from code -- so a fresh database already has
+  // a usable set of roles, with no seeding step that could half-fail.
+  async function listTemplates() {
+    let stored = [];
+    try { const c = await tmplCol(); if (c) stored = await c.find({}).toArray(); } catch (e) { stored = []; }
+    const byId = new Map(stored.map((t) => [t.id, t]));
+    const out = BUILTIN_TEMPLATES.map((b) => shapeTemplate(Object.assign({}, b, byId.get(b.id) || {}, { builtin: true })));
+    stored.filter((t) => !BUILTIN_TEMPLATES.some((b) => b.id === t.id))
+      .forEach((t) => out.push(shapeTemplate(Object.assign({}, t, { builtin: false }))));
+    return out;
+  }
+  // How many accounts carry each template -- shown in the panel so an administrator can
+  // see what an edit is about to affect BEFORE applying it.
+  async function templateCounts() {
+    const counts = {};
+    try {
+      const users = await db.getUsers();
+      if (typeof users.find === 'function') {
+        (await users.find({}).toArray()).forEach((u) => { if (u && u.roleTemplate) counts[u.roleTemplate] = (counts[u.roleTemplate] || 0) + 1; });
+      }
+    } catch (e) { /* counts are informational only */ }
+    return counts;
+  }
+
+  app.get('/api/roles', guard('view'), async (req, res) => {
+    try { res.json({ ok: true, templates: await listTemplates(), counts: await templateCounts(), modules: ACCESS_MODULES, actions: PERM_ACTIONS }); }
+    catch (e) { res.status(500).json({ ok: false, error: 'Could not load role templates.' }); }
+  });
+
+  app.post('/api/roles', guard('add'), async (req, res) => {
+    const b = req.body || {};
+    const name = String(b.name || '').trim().slice(0, 60);
+    if (!name) return res.status(400).json({ ok: false, error: 'Role name is required.' });
+    const id = slugId(b.id || name);
+    if (!id) return res.status(400).json({ ok: false, error: 'The role name must contain a letter or a number.' });
+    try {
+      const c = await tmplCol();
+      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable - cannot save role templates.' });
+      if ((await listTemplates()).some((t) => t.id === id)) return res.status(409).json({ ok: false, error: 'A role called "' + name + '" already exists.' });
+      const doc = { id, name, description: String(b.description || '').trim().slice(0, 300), perms: cleanPerms(b.perms), builtin: false, createdAt: Date.now(), updatedAt: Date.now(), updatedBy: meOf(req) };
+      await c.insertOne(doc);
+      activity.log(req, 'role_template_created', { target: id, name });
+      res.json({ ok: true, template: shapeTemplate(doc) });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not create the role template.' }); }
+  });
+
+  app.put('/api/roles/:id', guard('edit'), async (req, res) => {
+    const id = slugId(req.params.id);
+    const b = req.body || {};
+    try {
+      const c = await tmplCol();
+      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable - cannot save role templates.' });
+      const builtin = BUILTIN_TEMPLATES.find((t) => t.id === id);
+      const cur = await c.findOne({ id });
+      if (!builtin && !cur) return res.status(404).json({ ok: false, error: 'That role template no longer exists.' });
+      const base = Object.assign({}, builtin || {}, cur || {});
+      const set = {
+        id,
+        name: b.name != null ? (String(b.name).trim().slice(0, 60) || base.name) : base.name,
+        description: b.description != null ? String(b.description).trim().slice(0, 300) : (base.description || ''),
+        perms: cleanPerms(b.perms != null ? b.perms : base.perms),
+        builtin: !!builtin,
+        updatedAt: Date.now(), updatedBy: meOf(req),
+      };
+      await c.updateOne({ id }, { $set: set, $setOnInsert: { createdAt: Date.now() } }, { upsert: true });
+      activity.log(req, 'role_template_updated', { target: id, name: set.name });
+      res.json({ ok: true, template: shapeTemplate(set) });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not update the role template.' }); }
+  });
+
+  app.delete('/api/roles/:id', guard('delete'), async (req, res) => {
+    const id = slugId(req.params.id);
+    if (BUILTIN_TEMPLATES.some((t) => t.id === id)) return res.status(400).json({ ok: false, error: 'Built-in roles cannot be deleted. Edit their permissions instead.' });
+    try {
+      const c = await tmplCol();
+      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable.' });
+      const r = await c.deleteOne({ id });
+      if (!r.deletedCount) return res.status(404).json({ ok: false, error: 'That role template no longer exists.' });
+      // Accounts keep every permission they already hold; they simply stop being
+      // labelled with a template that no longer exists. Deleting a role must never
+      // take access away from a person who is working today.
+      let unstamped = 0;
+      try {
+        const users = await db.getUsers();
+        if (typeof users.updateMany === 'function') unstamped = (await users.updateMany({ roleTemplate: id }, { $set: { roleTemplate: null } })).modifiedCount || 0;
+      } catch (e) { /* the label is cosmetic */ }
+      activity.log(req, 'role_template_deleted', { target: id, unstamped });
+      res.json({ ok: true, unstamped });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not delete the role template.' }); }
+  });
+
+  // Push a template's permissions onto every account stamped with it. Explicit and
+  // logged, because it CHANGES what live sessions may do -- hence the epoch bump.
+  app.post('/api/roles/:id/apply', guard('edit'), async (req, res) => {
+    const id = slugId(req.params.id);
+    try {
+      const t = (await listTemplates()).find((x) => x.id === id);
+      if (!t) return res.status(404).json({ ok: false, error: 'That role template no longer exists.' });
+      const users = await db.getUsers();
+      if (typeof users.find !== 'function') return res.status(503).json({ ok: false, error: 'Database unavailable.' });
+      const targets = await users.find({ roleTemplate: id, role: 'User' }).toArray();
+      let n = 0;
+      for (const u of targets) {
+        await users.updateOne({ username: u.username }, { $set: { perms: cleanPerms(t.perms), sessionEpoch: Date.now(), updatedAt: Date.now() } });
+        access.invalidate(u.username);
+        n++;
+      }
+      activity.log(req, 'role_template_applied', { target: id, users: n });
+      res.json({ ok: true, updated: n });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not apply the role template.' }); }
+  });
+
   // List every account.
   app.get('/api/users', guard('view'), async (req, res) => {
     try {
@@ -227,6 +385,7 @@ function mount(app, opts) {
         // Per-module access levels — only meaningful for the 'User' role. Admins are
         // full (null => resolved to full in safe()); collectors use the collector portal.
         perms: role === 'User' ? cleanPerms(b.perms) : null,
+        roleTemplate: role === 'User' ? (String(b.roleTemplate || '').trim() || null) : null,
         // Row-level staff scope + the personnel record this login belongs to (needed
         // for scope 'self', where the account may see only its own file).
         staffScope: role === 'Administrator' ? 'all' : cleanStaffScope(b.staffScope),
@@ -295,8 +454,10 @@ function mount(app, opts) {
       // and collectors are cleared to null (full / portal). Absent leaves it untouched.
       if (role === 'User') {
         if (b.perms !== undefined) set.perms = cleanPerms(b.perms);
+        if (b.roleTemplate !== undefined) set.roleTemplate = String(b.roleTemplate || '').trim() || null;
       } else {
         set.perms = null;
+        set.roleTemplate = null;
       }
 
       // Never strand the system without an active administrator.
