@@ -128,7 +128,7 @@ async function upToDate() {
   await importFile('d1-brand-packs.ndjson', 'meds_brand', ['id', 'doc', 'edited'],
     (d) => [d._id, JSON.stringify(d), 0], 12);
   const out = [];
-  for (const t of ['meds_brand', 'meds_generic', 'meds_ref', 'meds_interaction', 'meds_food']) {
+  for (const t of ['meds_brand', 'meds_generic', 'meds_ref']) {   // interactions/food are CDN-served, not D1
     out.push(t.replace('meds_', '') + ' ' + (await d1.get('SELECT COUNT(*) n FROM ' + t)).n);
   }
   console.log('\nD1 now holds: ' + out.join(' · '));
