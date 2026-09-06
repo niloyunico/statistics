@@ -29,9 +29,17 @@ const storage = require('./storage');
 const meds = require('./medicines');   // checkInteractions + shared shapes
 
 const CLOUD = process.env.CLOUDINARY_CLOUD_NAME;
-// The index ships in two raw assets (Cloudinary free caps one file at 10 MB).
+/* WHERE THE INDEX COMES FROM — bundled file first, CDN second.
+ *
+ * The gzipped index parts ship INSIDE the serverless function (server/meds-index/,
+ * listed in vercel.json includeFiles, ~8.3 MB). Cloudinary is only a fallback:
+ * accounts block delivery of `raw` assets by default, so those URLs answer 401 —
+ * which is exactly how this broke in production while looking fine locally, where
+ * the build output happened to sit on disk. Reading the bundled copy also removes
+ * a multi-megabyte download from every cold start.
+ */
 const INDEX_BASE = 'https://res.cloudinary.com/' + CLOUD + '/raw/upload/unico/meds/';
-const LOCAL_OUT = path.join(__dirname, '..', 'scripts', 'meds-d1', 'out');
+const INDEX_DIRS = [path.join(__dirname, 'meds-index'), path.join(__dirname, '..', 'scripts', 'meds-d1', 'out')];
 
 const s = (v, max) => String(v == null ? '' : v).slice(0, max || 200);
 const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
@@ -62,13 +70,19 @@ function rowToGeneric(a, D) {
 }
 
 async function fetchIndexPart(file) {
+  for (const dir of INDEX_DIRS) {
+    const p = path.join(dir, file);
+    if (fs.existsSync(p)) return fs.readFileSync(p);
+  }
+  // No bundled copy — try the CDN, and say WHY if it refuses. Swallowing this is
+  // what let a 401 masquerade as "asset missing" for a whole deploy.
+  let why;
   try {
     const r = await fetch(INDEX_BASE + file);
     if (r.ok) return Buffer.from(await r.arrayBuffer());
-  } catch (e) { /* fall through to local file */ }
-  const local = path.join(LOCAL_OUT, file);
-  if (fs.existsSync(local)) return fs.readFileSync(local);
-  throw new Error('Medicine index part ' + file + ' is not available (Cloudinary asset missing and no local build).');
+    why = 'HTTP ' + r.status + (r.status === 401 ? ' — Cloudinary is blocking raw-file delivery for this account' : '');
+  } catch (e) { why = String((e && e.message) || e); }
+  throw new Error('Medicine index part ' + file + ' is not available: no bundled copy in server/meds-index, and the CDN said ' + why + '.');
 }
 
 // The few locally edited/added rows overlay the shipped index on every load.

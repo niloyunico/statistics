@@ -11,7 +11,8 @@
       "config": {
         "includeFiles": [
           "renderer/index.html",
-          "server/seed/**"
+          "server/seed/**",
+          "server/meds-index/**"
         ]
       }
     },
