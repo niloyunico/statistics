@@ -24240,7 +24240,9 @@ function DeptPrivilegesSettings({
 function StaffFormRail({
   f,
   editing,
-  set
+  set,
+  store,
+  empId
 }) {
   const MK = window.MK,
     S = window.STAFF;
@@ -24294,7 +24296,16 @@ function StaffFormRail({
     }
   }, React.createElement(PhotoPicker, {
     value: f.photo || null,
-    onChange: next => set && set('photo', next),
+    onChange: next => {
+      if (set) set('photo', next);
+      if (editing && store && store.update && empId != null) {
+        try {
+          store.update(empId, {
+            photo: next
+          });
+        } catch (e) {}
+      }
+    },
     initials: name ? initials : '?',
     name: name || 'New staff member',
     kind: "staff",
@@ -26218,7 +26229,9 @@ function StaffForm({
   }, "Cancel")))))), React.createElement(StaffFormRail, {
     f: f,
     editing: editing,
-    set: set
+    set: set,
+    store: store,
+    empId: empId
   })), saved && React.createElement(StaffSavedOverlay, {
     title: saved.title,
     sub: saved.sub,

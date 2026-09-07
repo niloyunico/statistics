@@ -1436,7 +1436,7 @@ function DeptPrivilegesSettings({ depts }){
 // Live preview of the record being typed: the ID card, the experience the register
 // will compute, and where this person can be deployed. Everything here is derived
 // from the form state, so it is a mirror rather than a second source of truth.
-function StaffFormRail({ f, editing, set }){
+function StaffFormRail({ f, editing, set, store, empId }){
   const MK = window.MK, S = window.STAFF;
   const name = (f.name || '').trim();
   const isPca = (f.role || 'Nurse') === 'PCA';
@@ -1481,7 +1481,19 @@ function StaffFormRail({ f, editing, set }){
         <div style={{ display:'grid', placeItems:'center' }}>
           <PhotoPicker
             value={f.photo || null}
-            onChange={(next) => set && set('photo', next)}
+            /* Commit the picture to the record straight away when editing an existing
+               staff member, exactly as a BNMC verification is committed.
+               The upload already reached Cloudinary AND the staff document by the time
+               this fires — but the on-screen roster reads the store, so leaving it in
+               form state meant the Directory kept showing initials until someone pressed
+               Save, and a sync in between wrote the roster back WITHOUT the picture.
+               That is why a photo could be uploaded several times and still look missing. */
+            onChange={(next) => {
+              if (set) set('photo', next);
+              if (editing && store && store.update && empId != null) {
+                try { store.update(empId, { photo: next }); } catch (e) { /* Save still carries it */ }
+              }
+            }}
             initials={name ? initials : '?'} name={name || 'New staff member'}
             kind="staff" size={112} radius="50%"
             /* So the server can put the url on the staff document, not only in the
@@ -2363,7 +2375,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
         </div></div>
       </div>
       </div>
-      <StaffFormRail f={f} editing={editing} set={set}/>
+      <StaffFormRail f={f} editing={editing} set={set} store={store} empId={empId}/>
       </div>
       {saved&&<StaffSavedOverlay title={saved.title} sub={saved.sub} onClose={leaveAfterSave}/>}
     </div>
