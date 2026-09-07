@@ -2702,8 +2702,12 @@
     const [subs, setSubs] = useState(null);
     useEffect(() => { dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
     const pendingFor = (areaKey, ind, m) => (subs || []).some((s) => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
-    const statusOf = (areaKey, ind, m) => hasData(ind, m) ? 'recorded' : pendingFor(areaKey, ind, m) ? 'pending' : 'none';
-    const tone = { recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'], pending: ['#9a6b00', '#fff4e0', 'Pending'], none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted'] };
+    // 'notobs' = the quality console declared this month deliberately not measured. It is
+    // neither recorded nor outstanding, so it gets its own tone instead of being counted
+    // as a missing submission the collector is expected to chase.
+    const notObs = (ind, m) => !!(ind && ind.mNotObserved && ind.mNotObserved[m]);
+    const statusOf = (areaKey, ind, m) => hasData(ind, m) ? 'recorded' : pendingFor(areaKey, ind, m) ? 'pending' : notObs(ind, m) ? 'notobs' : 'none';
+    const tone = { recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'], pending: ['#9a6b00', '#fff4e0', 'Pending'], notobs: ['#5b3fa8', '#f5f1fd', 'Not observed'], none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted'] };
     let totalInd = 0, rec = 0, pend = 0;
     areas.forEach((a) => a.indicators.forEach((ind) => { totalInd++; const s = statusOf(a.key, ind, month); if (s === 'recorded') rec++; else if (s === 'pending') pend++; }));
     const notSub = totalInd - rec - pend;
@@ -2793,7 +2797,7 @@
     <svg width={s || 17} height={s || 17} viewBox="0 0 24 24" fill="none" stroke={c || 'currentColor'} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
   );
   const cpChipStyle = (label) => {
-    const c = { Missing: '#d23a52', Submitted: '#0090ca', Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52', Recorded: '#1f9d57' }[label] || '#6c7a8c';
+    const c = { Missing: '#d23a52', Submitted: '#0090ca', Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52', Recorded: '#1f9d57', 'Not observed': '#5b3fa8' }[label] || '#6c7a8c';
     return { display: 'inline-flex', alignItems: 'center', fontSize: 10.5, fontWeight: 700, padding: '2px 10px', borderRadius: 12, color: c, background: c + '1a', whiteSpace: 'nowrap', flexShrink: 0 };
   };
   const cpInitials = (n) => String(n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
@@ -3478,7 +3482,11 @@
     const S = subs || [];
     const hasData = (ind, m) => { const f = (o) => o && o[m] != null && o[m] !== ''; return f(ind.mNum) || f(ind.mDen) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0); };
     const pendingFor = (areaKey, ind, m) => S.some((s) => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
-    const statusOf = (areaKey, ind, m) => cpHasData(ind, m) ? 'Recorded' : pendingFor(areaKey, ind, m) ? 'Submitted' : 'Missing';
+    const statusOf = (areaKey, ind, m) => cpHasData(ind, m) ? 'Recorded'
+      : pendingFor(areaKey, ind, m) ? 'Submitted'
+      // Declared not observed in the quality console — accounted for, so it counts as
+      // done and never appears in the "n not submitted" chip list.
+      : (ind && ind.mNotObserved && ind.mNotObserved[m]) ? 'Not observed' : 'Missing';
 
     let totalInd = 0, done = 0;
     const missing = [];

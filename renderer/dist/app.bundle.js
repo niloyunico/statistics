@@ -6105,7 +6105,11 @@ window.QI_CORRECTIONS_BY_DEFID = {
   // Object-valued indicator fields that deep-merge (rather than replace) on patch.
   // incidents/capa are month-keyed too, so editing one month's incident report from
   // the admin drill-down preserves every other month's.
-  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups'];
+  // Month-keyed maps: a patch MERGES into the existing map instead of replacing it, so
+  // editing Aug never wipes Jul. `mNotObserved` marks a month as deliberately not
+  // measured — it must merge like every other month map or the flag would be lost the
+  // next time any other month on the same indicator is edited.
+  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups', 'mNotObserved'];
 
   // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
   // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are
@@ -21136,7 +21140,39 @@ function StaffProfile({
       borderRadius: 6,
       padding: '1px 8px'
     }
-  }, profLicence.t) : null)) : null, React.createElement("div", null, lbl('Qualification'), chipRow(e.qualification, {
+  }, profLicence.t) : null, e.licence_verified ? React.createElement("span", {
+    title: 'BNMC register checked ' + String(e.licence_verified.at || '').slice(0, 10),
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: '#157a43',
+      background: '#157a4318',
+      border: '1px solid #157a4344',
+      borderRadius: 6,
+      padding: '1px 8px',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 3
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 11,
+    c: "#157a43"
+  }), "BNMC verified ", String(e.licence_verified.at || '').slice(0, 10)) : null), e.licence_verified && e.licence_verified.primary ? React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginTop: 5,
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '2px 10px'
+    }
+  }, React.createElement("span", null, e.licence_verified.primary.course), e.licence_verified.primary.institution ? React.createElement("span", null, "\xB7 ", e.licence_verified.primary.institution) : null, e.licence_verified.primary.status ? React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: e.licence_verified.primary.expired ? '#d23a52' : '#157a43'
+    }
+  }, "\xB7 ", e.licence_verified.primary.status) : null) : null) : null, React.createElement("div", null, lbl('Qualification'), chipRow(e.qualification, {
     bg: '#eef8fc',
     fg: '#0072a3',
     br: '#dceffa'
@@ -24298,6 +24334,645 @@ function StaffFormRail({
     sw: 3.4
   })), React.createElement("span", null, label)))));
 }
+function bnmcQualification(course) {
+  const c = String(course || '');
+  const has = (...w) => w.every(x => c.toLowerCase().includes(x));
+  if (has('b. sc', 'post basic') || has('b.sc', 'post basic')) return 'Post Basic B.Sc in Nursing';
+  if (has('public health nursing')) return 'B.Sc in Public Health Nursing';
+  if (has('b. sc', 'nursing') || has('b.sc', 'nursing')) return 'B.Sc in Nursing';
+  if (has('master of science')) return 'M.Sc in Nursing';
+  if (has('bachelor of science', 'midwifery')) return 'B.Sc in Nursing';
+  if (has('midwifery') && !has('nursing science')) return 'Diploma in Midwifery';
+  if (has('renal')) return 'Diploma in Renal Nursing';
+  if (has('cardiac')) return 'Diploma in Cardiac Nursing';
+  if (has('critical care') || has('intensive care')) return 'Diploma in Critical Care Nursing';
+  if (has('orthopeadic') || has('orthopaedic')) return 'Diploma in Orthopaedic Nursing';
+  if (has('psychiatric') || has('mental health')) return 'Diploma in Psychiatric / Mental Health Nursing';
+  if (has('community health')) return 'Community Health Nursing';
+  if (has('diploma', 'nursing')) return 'Diploma in Nursing';
+  return c;
+}
+async function bnmcApi(url) {
+  let r;
+  try {
+    r = await fetch(url, {
+      headers: {
+        Accept: 'application/json'
+      }
+    });
+  } catch (e) {
+    throw new Error('Could not reach the server. Check that it is running, then try again.');
+  }
+  const body = await r.text();
+  const looksHtml = /^\s*(<!doctype|<html)/i.test(body);
+  if (r.status === 401 || r.status === 403 || looksHtml && /login|sign in/i.test(body)) {
+    throw new Error('Your session has expired. Reload the page, sign in again, then verify.');
+  }
+  if (r.status === 404 || looksHtml) {
+    throw new Error('This server does not have the BNMC verification routes yet — restart the app server (npm run web) and reload this page.');
+  }
+  let j;
+  try {
+    j = JSON.parse(body);
+  } catch (e) {
+    throw new Error('The server sent an unexpected response (HTTP ' + r.status + ').');
+  }
+  if (!j || j.ok === false) throw new Error(j && j.error || 'Verification failed.');
+  return j;
+}
+function BnmcRecord({
+  m,
+  compact,
+  onPick,
+  picked
+}) {
+  const per = m.person || {},
+    regs = m.registrations || [],
+    p = m.primary || {};
+  const lbl = {
+    fontSize: 10,
+    color: 'var(--muted)',
+    textTransform: 'uppercase',
+    letterSpacing: .4,
+    fontWeight: 700
+  };
+  return React.createElement("div", {
+    style: {
+      border: '1px solid ' + (picked ? '#cde9d8' : 'var(--line)'),
+      borderRadius: 10,
+      overflow: 'hidden',
+      background: '#fff'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 13,
+      padding: 12,
+      flexWrap: 'wrap',
+      alignItems: 'flex-start'
+    }
+  }, per.photo ? React.createElement("img", {
+    src: '/api/bnmc/photo?u=' + encodeURIComponent(per.photo),
+    alt: "",
+    style: {
+      width: compact ? 66 : 92,
+      height: compact ? 80 : 110,
+      objectFit: 'cover',
+      borderRadius: 8,
+      border: '1px solid var(--line)',
+      background: 'var(--bg-2)'
+    },
+    onError: e => {
+      e.target.style.display = 'none';
+    }
+  }) : null, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 220,
+      display: 'grid',
+      gap: 4
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: compact ? 14 : 16,
+      fontWeight: 800,
+      color: 'var(--ink)'
+    }
+  }, per.name || '—'), p.status ? React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 800,
+      padding: '1px 8px',
+      borderRadius: 6,
+      color: p.expired ? '#a32c41' : '#157a43',
+      background: p.expired ? '#fdf3f4' : '#eef8f1',
+      border: '1px solid ' + (p.expired ? '#f0c2ca' : '#cde9d8')
+    }
+  }, p.status) : null, m.fromEducation ? React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: '#0072a3',
+      background: '#eef8fc',
+      border: '1px solid #dceffa',
+      borderRadius: 6,
+      padding: '1px 8px'
+    }
+  }, "matches recorded education") : null), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--ink-2)',
+      fontWeight: 600
+    }
+  }, m.programName), [["Father's name", per.father], ["Mother's name", per.mother], ['Address', per.address], ['Working place', per.workplace], ['Position', per.position]].filter(x => x[1]).map(([k, val]) => React.createElement("div", {
+    key: k,
+    style: {
+      display: 'flex',
+      gap: 7,
+      fontSize: 12
+    }
+  }, React.createElement("span", {
+    style: {
+      ...lbl,
+      minWidth: 104,
+      flexShrink: 0
+    }
+  }, k), React.createElement("span", {
+    style: {
+      color: 'var(--ink)',
+      fontWeight: 600
+    }
+  }, val)))), onPick ? React.createElement("button", {
+    type: "button",
+    className: "btn pri sm",
+    onClick: onPick,
+    style: {
+      alignSelf: 'center',
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 14
+  }), "This is the staff member") : null), React.createElement("div", {
+    style: {
+      overflowX: 'auto',
+      borderTop: '1px solid var(--line-2)'
+    }
+  }, React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 11.5,
+      minWidth: 760
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, ['Registration No', 'Course Name', 'Institution / College', 'Licensing Exam Passing Date', 'Date of Registration', 'Date of Renew/Issue', 'Renew Upto', 'Status'].map(h => React.createElement("th", {
+    key: h,
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      background: 'var(--bg-2)',
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .3,
+      fontSize: 9.5,
+      fontWeight: 800,
+      whiteSpace: 'nowrap',
+      borderBottom: '1px solid var(--line-2)'
+    }
+  }, h)))), React.createElement("tbody", null, regs.map((r, i) => {
+    const isThis = r.regNo === p.regNo && r.course === p.course;
+    return React.createElement("tr", {
+      key: i,
+      style: {
+        borderBottom: '1px solid var(--line-2)',
+        background: isThis ? '#f6fbf8' : 'transparent'
+      }
+    }, React.createElement("td", {
+      className: "num",
+      style: {
+        padding: '8px 10px',
+        fontWeight: isThis ? 800 : 600
+      }
+    }, r.regNo), React.createElement("td", {
+      style: {
+        padding: '8px 10px',
+        fontWeight: isThis ? 700 : 400
+      }
+    }, r.course), React.createElement("td", {
+      style: {
+        padding: '8px 10px'
+      }
+    }, r.institution), React.createElement("td", {
+      style: {
+        padding: '8px 10px',
+        whiteSpace: 'nowrap'
+      }
+    }, r.exam || '—'), React.createElement("td", {
+      className: "num",
+      style: {
+        padding: '8px 10px',
+        whiteSpace: 'nowrap'
+      }
+    }, r.registered || '—'), React.createElement("td", {
+      className: "num",
+      style: {
+        padding: '8px 10px',
+        whiteSpace: 'nowrap'
+      }
+    }, r.renewIssued || '—'), React.createElement("td", {
+      className: "num",
+      style: {
+        padding: '8px 10px',
+        whiteSpace: 'nowrap'
+      }
+    }, r.renewUpto || '—'), React.createElement("td", {
+      style: {
+        padding: '8px 10px',
+        fontWeight: 800,
+        whiteSpace: 'nowrap',
+        color: r.expired ? '#d23a52' : '#157a43'
+      }
+    }, r.status || '—'));
+  })))));
+}
+function BnmcVerify({
+  f,
+  set
+}) {
+  const [busy, setBusy] = React.useState('');
+  const [prog, setProg] = React.useState(null);
+  const [cands, setCands] = React.useState(null);
+  const [note, setNote] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const [manual, setManual] = React.useState(false);
+  const [programs, setPrograms] = React.useState([]);
+  const [mProg, setMProg] = React.useState(f.licence_program || '');
+  const v = f.licence_verified || null;
+  const digits = String(f.licence_no || '').replace(/\D/g, '');
+  const edu = String(f.qualification || '').trim();
+  React.useEffect(() => {
+    if (!manual || programs.length) return;
+    let live = true;
+    bnmcApi('/api/bnmc/programs').then(j => {
+      if (live) setPrograms(j.programs || []);
+    }).catch(e => {
+      if (live) setErr(e.message);
+    });
+    return () => {
+      live = false;
+    };
+  }, [manual]);
+  const sweep = async scope => {
+    let from = 0,
+      out = [],
+      tried = 0,
+      total = 0;
+    for (;;) {
+      const q = 'number=' + encodeURIComponent(digits) + '&scope=' + scope + '&from=' + from + '&hint=' + encodeURIComponent(edu);
+      const j = await bnmcApi('/api/bnmc/detect?' + q);
+      out = out.concat(j.matches || []);
+      tried += j.tried || 0;
+      total = j.total || 0;
+      setProg({
+        tried,
+        total
+      });
+      if (j.next == null) break;
+      from = j.next;
+    }
+    return {
+      matches: out,
+      total
+    };
+  };
+  const apply = m => {
+    const p = m.primary || {},
+      per = m.person || {};
+    set('licence_program', m.program);
+    set('licence_verified', {
+      at: m.fetchedAt || new Date().toISOString(),
+      number: digits,
+      program: m.program,
+      programName: m.programName,
+      person: per,
+      registrations: m.registrations || [],
+      primary: p
+    });
+    if (!String(f.name || '').trim() && per.name) set('name', per.name);
+    if (!String(f.qualification || '').trim() && p.course) set('qualification', bnmcQualification(p.course));
+    if (!String(f.licence_expiry || '').trim() && p.renewUpto) set('licence_expiry', p.renewUpto);
+    setCands(null);
+  };
+  const settle = (matches, scope, total) => {
+    if (!matches.length) {
+      setNote(scope === 'edu' ? '' : 'BNMC has no registration ' + digits + ' in any of its ' + total + ' courses. Check the number.');
+      return false;
+    }
+    if (matches.length === 1) {
+      apply(matches[0]);
+      setNote(scope === 'edu' ? 'Matched on the course implied by this staff member’s education. Other courses were not searched.' : 'One match across all ' + total + ' courses.');
+    } else {
+      setCands({
+        matches,
+        scope,
+        total
+      });
+      setNote(matches.length + ' different people hold registration ' + digits + '. Pick the right one — BNMC numbers repeat across courses.');
+    }
+    return true;
+  };
+  const verify = async () => {
+    setErr('');
+    setNote('');
+    setCands(null);
+    setProg(null);
+    try {
+      if (edu) {
+        setBusy('edu');
+        const a = await sweep('edu');
+        if (settle(a.matches, 'edu', a.total)) return;
+      }
+      setBusy('all');
+      const b = await sweep('all');
+      settle(b.matches, 'all', b.total);
+    } catch (e) {
+      setErr(e.message || 'Could not reach the verification service.');
+    } finally {
+      setBusy('');
+      setProg(null);
+    }
+  };
+  const searchAll = async () => {
+    setErr('');
+    setNote('');
+    setCands(null);
+    setProg(null);
+    setBusy('all');
+    try {
+      const b = await sweep('all');
+      if (!settle(b.matches, 'all', b.total)) setNote('No registration ' + digits + ' in any course.');
+    } catch (e) {
+      setErr(e.message || 'Could not reach the verification service.');
+    } finally {
+      setBusy('');
+      setProg(null);
+    }
+  };
+  const manualLookup = async () => {
+    setErr('');
+    setNote('');
+    setCands(null);
+    setBusy('all');
+    try {
+      const j = await bnmcApi('/api/bnmc/verify?number=' + encodeURIComponent(digits) + '&program=' + encodeURIComponent(mProg) + '&fresh=1');
+      if (!j.found) {
+        setNote('No registration ' + digits + ' under that course.');
+        return;
+      }
+      apply({
+        program: mProg,
+        programName: (programs.find(p => p.id === mProg) || {}).name || '',
+        person: j.person,
+        registrations: j.registrations,
+        primary: j.primary,
+        fetchedAt: j.fetchedAt
+      });
+    } catch (e) {
+      setErr(e.message || 'Lookup failed.');
+    } finally {
+      setBusy('');
+    }
+  };
+  const box = {
+    border: '1px solid var(--line)',
+    borderRadius: 10,
+    padding: 12,
+    background: '#fff'
+  };
+  const diffs = (() => {
+    if (!v) return [];
+    const p = v.primary || {},
+      per = v.person || {};
+    const out = [];
+    const add = (label, mine, theirs, take) => {
+      if (theirs && String(mine || '').trim() && String(mine).trim().toLowerCase() !== String(theirs).trim().toLowerCase()) out.push({
+        label,
+        theirs,
+        take
+      });
+    };
+    add('Name', f.name, per.name, () => set('name', per.name));
+    add('Qualification', f.qualification, p.course ? bnmcQualification(p.course) : '', () => set('qualification', bnmcQualification(p.course)));
+    add('Licence expiry', f.licence_expiry, p.renewUpto, () => set('licence_expiry', p.renewUpto));
+    return out;
+  })();
+  return React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 11
+    }
+  }, React.createElement("div", {
+    style: {
+      ...box,
+      display: 'flex',
+      gap: 12,
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      background: 'var(--panel-2)'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 240
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "Live BNMC verification"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginTop: 3
+    }
+  }, !digits ? 'Enter the registration number above, then verify.' : edu ? React.createElement(React.Fragment, null, "Course taken from Education: ", React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, edu)) : 'No Education recorded — every course will be searched.')), v ? React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: searchAll,
+    disabled: !!busy || !digits,
+    title: "Search every course, in case this is a different person with the same number"
+  }, "Search all courses") : null, React.createElement("button", {
+    type: "button",
+    className: "btn pri",
+    onClick: verify,
+    disabled: !digits || !!busy,
+    style: {
+      height: 38,
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 14
+  }), busy ? prog ? 'Searching ' + prog.tried + '/' + prog.total + '…' : 'Verifying…' : 'Verify with BNMC')), busy && prog ? React.createElement("div", {
+    style: {
+      height: 4,
+      borderRadius: 3,
+      background: 'var(--line-2)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      height: '100%',
+      width: Math.round(prog.tried / Math.max(1, prog.total) * 100) + '%',
+      background: 'var(--blue)',
+      transition: 'width .2s'
+    }
+  })) : null, err ? React.createElement("div", {
+    style: {
+      ...box,
+      borderColor: '#f0c2ca',
+      background: '#fdf3f4',
+      color: '#a32c41',
+      fontSize: 12.5,
+      fontWeight: 600
+    }
+  }, err) : null, note && !cands ? React.createElement("div", {
+    style: {
+      ...box,
+      borderColor: '#dbe4ee',
+      background: 'var(--panel-2)',
+      color: 'var(--ink-2)',
+      fontSize: 12,
+      fontWeight: 600
+    }
+  }, note) : null, cands ? React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 9
+    }
+  }, React.createElement("div", {
+    style: {
+      ...box,
+      borderColor: '#f2ddb4',
+      background: '#fdf8ec',
+      color: '#8a5d09',
+      fontSize: 12.5,
+      fontWeight: 700
+    }
+  }, note), cands.matches.map((m, i) => React.createElement(BnmcRecord, {
+    key: i,
+    m: m,
+    compact: true,
+    onPick: () => apply(m)
+  }))) : null, v && !cands ? React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 9
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '9px 13px',
+      borderRadius: 9,
+      background: (v.primary || {}).expired ? '#fdf3f4' : '#eef8f1',
+      border: '1px solid ' + ((v.primary || {}).expired ? '#f0c2ca' : '#cde9d8')
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 15,
+    c: (v.primary || {}).expired ? '#a32c41' : '#157a43'
+  }), React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: (v.primary || {}).expired ? '#a32c41' : '#157a43'
+    }
+  }, "Verified against the BNMC register", (v.primary || {}).expired ? ' — licence EXPIRED' : ''), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "checked ", String(v.at || '').slice(0, 10))), React.createElement(BnmcRecord, {
+    m: v,
+    picked: true
+  }), diffs.length ? React.createElement("div", {
+    style: {
+      ...box,
+      borderColor: '#f2ddb4',
+      background: '#fdf8ec',
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 8,
+      alignItems: 'center'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#8a5d09'
+    }
+  }, "Differs from what is typed:"), diffs.map(d => React.createElement("button", {
+    key: d.label,
+    type: "button",
+    onClick: d.take,
+    title: "Replace with the BNMC value",
+    style: {
+      border: '1px solid #e6c98a',
+      background: '#fff',
+      borderRadius: 20,
+      padding: '4px 11px',
+      fontSize: 11.5,
+      cursor: 'pointer',
+      color: 'var(--ink)'
+    }
+  }, React.createElement("strong", null, d.label), " \u2014 use \u201C", d.theirs, "\u201D"))) : null) : null, React.createElement("div", null, React.createElement("button", {
+    type: "button",
+    onClick: () => setManual(m => !m),
+    style: {
+      border: 0,
+      background: 'none',
+      color: 'var(--blue)',
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer',
+      padding: 0
+    }
+  }, manual ? 'Hide manual course search' : 'Search a specific course instead'), manual ? React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 9,
+      marginTop: 8,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("select", {
+    value: mProg,
+    onChange: e => setMProg(e.target.value),
+    style: {
+      flex: 1,
+      minWidth: 260,
+      padding: '8px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, programs.length ? 'Select registration type…' : 'Course list unavailable — see the message above'), programs.map(p => React.createElement("option", {
+    key: p.id,
+    value: p.id
+  }, p.name))), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: manualLookup,
+    disabled: !digits || !mProg || !!busy
+  }, "Look up")) : null));
+}
 function StaffForm({
   store,
   empId,
@@ -25077,13 +25752,29 @@ function StaffForm({
     style: {
       gridColumn: '1 / -1'
     }
-  }, field('Special Training' + (chipsOf('special_training').length ? ' · ' + chipsOf('special_training').length + ' selected' : ''), multiChk('special_training', S.TRAININGS.filter(Boolean), customT, setCustomT, 'Add another training…'))), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), field('Registration / Licence No.', inp('licence_no', 'e.g. BNMC-12345')), field('Licence Expiry', inp('licence_expiry', 'YYYY-MM-DD', 'date'), licenceState ? React.createElement("span", {
+  }, field('Special Training' + (chipsOf('special_training').length ? ' · ' + chipsOf('special_training').length + ' selected' : ''), multiChk('special_training', S.TRAININGS.filter(Boolean), customT, setCustomT, 'Add another training…'))), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), field('Registration / Licence No.', inp('licence_no', 'e.g. BNMC-12345'), f.licence_verified ? React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#157a43',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 3
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 12,
+    c: "#157a43"
+  }), "BNMC verified") : null), field('Licence Expiry', inp('licence_expiry', 'YYYY-MM-DD', 'date'), licenceState ? React.createElement("span", {
     style: {
       fontSize: 11,
       fontWeight: 700,
       color: licenceState.c
     }
-  }, licenceState.t) : null), React.createElement("div", {
+  }, licenceState.t) : null), React.createElement(BnmcVerify, {
+    f: f,
+    set: set
+  }), React.createElement("div", {
     style: {
       gridColumn: '1 / -1'
     }
@@ -35928,12 +36619,16 @@ function qcBeforeStart(ind, mk) {
     b = monthOrd(ind.startMonth);
   return a != null && b != null && a < b;
 }
+function qcNotObs(ind, mk) {
+  const m = ind && ind.mNotObserved;
+  return !!(m && m[mk]);
+}
 function qcReportCell(ind, m) {
   const mk = Array.isArray(m) ? m[0] : m;
   const mm = Array.isArray(m) ? m : [mk];
   const v = qcCellVal(ind, mm);
   const s = qStatus(ind, v);
-  if (s === 'na') return qcBeforeStart(ind, mk) ? 'N/O' : '—';
+  if (s === 'na') return qcNotObs(ind, mk) ? 'N/OB' : qcBeforeStart(ind, mk) ? 'N/O' : '—';
   return fmtVal(ind, v);
 }
 if (typeof window !== 'undefined') {
@@ -36180,16 +36875,18 @@ function QCDashboard({
         let b = 0,
           rep = 0;
         const missing = [];
+        const nobs = [];
         inds.forEach(ind => {
           const s = monthStatus(ind, m[0]);
-          if (s === 'breach') b++;else if (s !== 'na') rep++;else missing.push(ind.name);
+          if (s === 'breach') b++;else if (s !== 'na') rep++;else if (qcNotObs(ind, m[0])) nobs.push(ind.name);else missing.push(ind.name);
         });
-        const total = inds.length,
+        const total = inds.length - nobs.length,
           sub = b + rep;
         const partial = sub > 0 && sub < total;
-        const bg = sub === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : partial ? '#fdf3e3' : '#e7f6ed';
-        const fg = sub === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : partial ? '#b26a0f' : '#1f9d57';
-        const sym = sub === 0 ? '–' : b > 0 ? sub + '/' + total + ' ✕' + b : partial ? sub + '/' + total : '✓';
+        const allNobs = total === 0 && nobs.length > 0;
+        const bg = allNobs ? '#f5f1fd' : sub === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : partial ? '#fdf3e3' : '#e7f6ed';
+        const fg = allNobs ? '#5b3fa8' : sub === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : partial ? '#b26a0f' : '#1f9d57';
+        const sym = allNobs ? 'N/OB' : sub === 0 ? '–' : b > 0 ? sub + '/' + total + ' ✕' + b : partial ? sub + '/' + total : '✓';
         return {
           sym,
           bg,
@@ -36200,6 +36897,7 @@ function QCDashboard({
           sub,
           total,
           missing,
+          nobs,
           has: sub > 0
         };
       });
@@ -36601,7 +37299,7 @@ function QCDashboard({
       mk: c.mk,
       mlabel: c.mlabel
     }),
-    title: r.name + ' · ' + c.mlabel + ' — ' + c.sub + ' of ' + c.total + ' assigned indicator' + (c.total !== 1 ? 's' : '') + ' submitted' + (c.breach ? ' · ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + (c.missing.length ? ' · not submitted: ' + c.missing.slice(0, 5).join(', ') + (c.missing.length > 5 ? ' +' + (c.missing.length - 5) + ' more' : '') : '') + ' · click for details',
+    title: r.name + ' · ' + c.mlabel + ' — ' + c.sub + ' of ' + c.total + ' assigned indicator' + (c.total !== 1 ? 's' : '') + ' submitted' + (c.breach ? ' · ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + (c.missing.length ? ' · not submitted: ' + c.missing.slice(0, 5).join(', ') + (c.missing.length > 5 ? ' +' + (c.missing.length - 5) + ' more' : '') : '') + (c.nobs && c.nobs.length ? ' · not observed: ' + c.nobs.slice(0, 5).join(', ') + (c.nobs.length > 5 ? ' +' + (c.nobs.length - 5) + ' more' : '') : '') + ' · click for details',
     style: {
       display: 'inline-grid',
       placeItems: 'center',
@@ -36684,7 +37382,8 @@ function QCCellDetail({
     };
   };
   const reported = allInds.map(rowFor).filter(r => r.s !== 'na').sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
-  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na');
+  const notObserved = allInds.filter(ind => monthStatus(ind, mk) === 'na' && qcNotObs(ind, mk));
+  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk));
   const breaches = reported.filter(r => r.s === 'breach').length;
   const field = (label, val) => val ? React.createElement("div", {
     style: {
@@ -36889,7 +37588,11 @@ function QCCellDetail({
     style: {
       color: reported.length === allInds.length ? P.green : P.ink2
     }
-  }, reported.length, " of ", allInds.length), " assigned indicator", allInds.length !== 1 ? 's' : '', " submitted \xB7 ", React.createElement("b", {
+  }, reported.length, " of ", allInds.length), " assigned indicator", allInds.length !== 1 ? 's' : '', " submitted", notObserved.length ? React.createElement(React.Fragment, null, " \xB7 ", React.createElement("b", {
+    style: {
+      color: '#5b3fa8'
+    }
+  }, notObserved.length, " not observed")) : null, " \xB7 ", React.createElement("b", {
     style: {
       color: breaches ? P.rose : P.green
     }
@@ -36954,7 +37657,60 @@ function QCCellDetail({
     Q: Q,
     isNew: true,
     onClose: () => setEditId(null)
-  }), !editId && unreported.length > 0 && React.createElement("div", {
+  }), !editId && notObserved.length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 4,
+      marginBottom: 10,
+      border: '1px solid #e3daf7',
+      borderRadius: 9,
+      padding: '11px 13px',
+      background: '#faf8ff'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#5b3fa8',
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      marginBottom: 7
+    }
+  }, "Not observed in ", mlabel, " (", notObserved.length, ")"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 7
+    }
+  }, notObserved.map(ind => {
+    const why = ind.monthRemarks && ind.monthRemarks[mk] || '';
+    const chip = React.createElement("span", {
+      style: {
+        border: '1px solid #d9cdf3',
+        background: '#fff',
+        color: '#5b3fa8',
+        padding: '6px 11px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 600
+      }
+    }, ind.name, why ? ' · ' + why : '');
+    return canEdit ? React.createElement("button", {
+      key: ind.id,
+      title: 'Change the ' + mlabel + ' entry for ' + ind.name,
+      onClick: () => {
+        setAddOpen(false);
+        setEditId(ind.id);
+      },
+      style: {
+        border: 0,
+        background: 'none',
+        padding: 0,
+        cursor: 'pointer'
+      }
+    }, chip) : React.createElement("span", {
+      key: ind.id
+    }, chip);
+  }))), !editId && unreported.length > 0 && React.createElement("div", {
     style: {
       marginTop: 4,
       border: '1px dashed #b9c6d2',
@@ -36971,7 +37727,7 @@ function QCCellDetail({
       letterSpacing: '.3px',
       marginBottom: 7
     }
-  }, "Not submitted for ", mlabel, " (", unreported.length, " of ", allInds.length, " assigned)"), React.createElement("div", {
+  }, "Not submitted for ", mlabel, " (", unreported.length, " of ", allInds.length, " assigned", notObserved.length ? ' · ' + notObserved.length + ' not observed' : '', ")"), React.createElement("div", {
     style: {
       display: 'flex',
       flexWrap: 'wrap',
@@ -37029,6 +37785,7 @@ function QCIndEdit({
   const [den, setDen] = useState(() => g(ind.mDen, mk));
   const [remark, setRemark] = useState(() => ind.monthRemarks && ind.monthRemarks[mk] || '');
   const [incs, setIncs] = useState(() => ind.incidents && Array.isArray(ind.incidents[mk]) ? ind.incidents[mk].map(x => Object.assign({}, x)) : []);
+  const [notObs, setNotObs] = useState(() => qcNotObs(ind, mk));
   const setF = (i, k, v) => setIncs(a => a.map((x, j) => j === i ? Object.assign({}, x, {
     [k]: v
   }) : x));
@@ -37074,6 +37831,33 @@ function QCIndEdit({
   const den2 = useGroups ? grpTot.d > 0 ? grpTot.d : null : den === '' ? null : Number(den);
   const preview = isRate ? fmtVal(ind, window.qiFormulaCompute(ind.formula, num2 || 0, den2 || 0)) : null;
   const save = async () => {
+    if (notObs) {
+      Q.patchIndicator(dep.key, ind.id, {
+        mNotObserved: {
+          [mk]: true
+        },
+        monthRemarks: {
+          [mk]: remark
+        },
+        months: {
+          [mk]: null
+        },
+        mNum: {
+          [mk]: null
+        },
+        mDen: {
+          [mk]: null
+        },
+        mGroups: {
+          [mk]: null
+        },
+        incidents: {
+          [mk]: []
+        }
+      });
+      onClose();
+      return;
+    }
     const emptyReading = isRate ? num2 == null && den2 == null : val === '';
     if (emptyReading) {
       const msg = isRate ? `No reading will be recorded — “${ind.numLabel || 'Numerator'}” and “${ind.denLabel || 'Denominator'}” are both empty. For a "no event" month, enter 0 and the ${ind.denLabel || 'denominator'}. Save the remark only anyway?` : `No value entered for ${mlabel} — nothing will be recorded. Save the remark only anyway?`;
@@ -37088,6 +37872,9 @@ function QCIndEdit({
     const patch = {
       monthRemarks: {
         [mk]: remark
+      },
+      mNotObserved: {
+        [mk]: null
       }
     };
     if (useGroups) {
@@ -37158,6 +37945,9 @@ function QCIndEdit({
       },
       monthRemarks: {
         [mk]: ''
+      },
+      mNotObserved: {
+        [mk]: null
       }
     });
     onClose();
@@ -37243,7 +38033,45 @@ function QCIndEdit({
       fontSize: 11,
       color: P.muted
     }
-  }, "Benchmark ", benchExpr(ind))), isHH && React.createElement("div", {
+  }, "Benchmark ", benchExpr(ind))), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 11,
+      padding: '8px 10px',
+      borderRadius: 8,
+      cursor: 'pointer',
+      flexWrap: 'wrap',
+      border: '1px solid ' + (notObs ? '#c9b7e8' : '#e3e9f1'),
+      background: notObs ? '#f5f1fd' : '#fff'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: notObs,
+    onChange: e => setNotObs(e.target.checked)
+  }), React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: notObs ? '#5b3fa8' : P.ink2
+    }
+  }, "Not observed this month"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted
+    }
+  }, "\u2014 no measurement taken; reported as \u201CN/OB\u201D, not chased as pending")), notObs && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#5b3fa8',
+      background: '#f5f1fd',
+      border: '1px solid #e3daf7',
+      borderRadius: 8,
+      padding: '8px 10px',
+      marginBottom: 11
+    }
+  }, "No reading will be recorded for ", mlabel, ". Use the remark below to say why it was not observed."), !notObs && isHH && React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6,
@@ -37265,7 +38093,7 @@ function QCIndEdit({
         cursor: 'pointer'
       }
     }, l);
-  })), useGroups ? React.createElement("div", {
+  })), notObs ? null : useGroups ? React.createElement("div", {
     style: {
       marginBottom: 11
     }
@@ -38542,6 +39370,7 @@ const QC_TEMPLATES = {
       deptRanking: 0,
       benchmarkCompare: 1,
       indTrend: 1,
+      pendingData: 1,
       incidentAppendix: 1,
       standardsRefs: 1,
       cover: 1,
@@ -38614,6 +39443,7 @@ const QC_TEMPLATES = {
       deptRanking: 1,
       benchmarkCompare: 1,
       indTrend: 1,
+      pendingData: 1,
       incidentAppendix: 1,
       standardsRefs: 1,
       cover: 1,
@@ -40036,6 +40866,7 @@ function QCReportBuilder({
     deptRanking: false,
     benchmarkCompare: false,
     indTrend: false,
+    pendingData: false,
     incidentAppendix: false,
     standardsRefs: false,
     cover: false,
@@ -40295,6 +41126,9 @@ function QCReportBuilder({
       kind: 'cover'
     });
     const extra = [];
+    if (sections.pendingData) extra.push({
+      kind: 'pending'
+    });
     if (sections.incidentAppendix) extra.push({
       kind: 'appendix'
     });
@@ -41813,6 +42647,7 @@ function QCReportBuilder({
   const pageTitle = pg => {
     if (pg.kind === 'cover') return 'Cover';
     if (pg.kind === 'toc') return 'Table of Contents';
+    if (pg.kind === 'pending') return 'Pending data — not submitted';
     if (pg.kind === 'appendix') return 'Appendix — Incidents & CAPA';
     if (pg.kind === 'refs') return 'References — Standards & Benchmarks';
     if (pg.kind === 'compare') return 'Cross-department comparison';
@@ -41885,6 +42720,340 @@ function QCReportBuilder({
         }
       }, idx + 1));
     }))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function qcPendingRows() {
+    const rows = [];
+    const nobsRows = [];
+    let assigned = 0,
+      submitted = 0,
+      notObserved = 0;
+    chosen.forEach(d => {
+      (d.indicators || []).forEach(ind => {
+        const miss = [],
+          nobs = [];
+        pMonths.forEach(m => {
+          if (qcBeforeStart(ind, m[0])) return;
+          if (qcNotObs(ind, m[0])) {
+            nobs.push(m[1]);
+            notObserved++;
+            return;
+          }
+          assigned++;
+          if (monthRaw(ind, m[0]) != null) submitted++;else miss.push(m[1]);
+        });
+        if (miss.length) rows.push({
+          dept: d,
+          ind,
+          miss
+        });
+        if (nobs.length) nobsRows.push({
+          dept: d,
+          ind,
+          miss: nobs
+        });
+      });
+    });
+    return {
+      rows,
+      nobsRows,
+      assigned,
+      submitted,
+      notObserved,
+      pending: assigned - submitted
+    };
+  }
+  function PendingPage({
+    n,
+    total
+  }) {
+    const {
+      rows,
+      nobsRows,
+      assigned,
+      submitted,
+      notObserved,
+      pending
+    } = qcPendingRows();
+    const byDept = [];
+    chosen.forEach(d => {
+      let a = 0,
+        s = 0,
+        nb = 0;
+      (d.indicators || []).forEach(ind => pMonths.forEach(m => {
+        if (qcBeforeStart(ind, m[0])) return;
+        if (qcNotObs(ind, m[0])) {
+          nb++;
+          return;
+        }
+        a++;
+        if (monthRaw(ind, m[0]) != null) s++;
+      }));
+      if (a || nb) byDept.push({
+        d,
+        assigned: a,
+        submitted: s,
+        notObserved: nb,
+        pending: a - s,
+        pct: a ? Math.round(s * 100 / a) : 100
+      });
+    });
+    byDept.sort((x, y) => y.pending - x.pending || x.d.name.localeCompare(y.d.name));
+    const pctCol = p => p >= 100 ? P.green : p >= 80 ? P.amber : P.rose;
+    const th = (h, i, center) => React.createElement("th", {
+      key: h,
+      style: {
+        textAlign: center ? 'center' : 'left',
+        padding: '5px 8px',
+        fontSize: 9,
+        color: P.muted,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: .3,
+        borderBottom: '1px solid ' + P.line
+      }
+    }, h);
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      className: "qc-band",
+      style: {
+        fontWeight: 700,
+        fontSize: 16,
+        color: P.ink,
+        marginBottom: 4
+      }
+    }, "Pending Data \u2014 Not Submitted \xB7 ", rangeLabel), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: P.muted,
+        marginBottom: 12
+      }
+    }, "Assigned indicator-months that carry no reading. Months an indicator had not yet started are excluded (N/O elsewhere in this report), and so are months declared ", React.createElement("b", null, "not observed"), " (N/OB) \u2014 those are listed separately below."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        marginBottom: 14,
+        flexWrap: 'wrap'
+      }
+    }, [['Due indicator-months', String(assigned), P.ink], ['Submitted', String(submitted), P.green], ['Pending', String(pending), pending ? P.rose : P.green], ['Not observed', String(notObserved), notObserved ? '#5b3fa8' : P.muted], ['Completeness', (assigned ? Math.round(submitted * 100 / assigned) : 100) + '%', assigned ? pctCol(Math.round(submitted * 100 / assigned)) : P.green]].map(([l, v, c]) => React.createElement("div", {
+      key: l,
+      style: {
+        flex: '1 1 120px',
+        border: '1px solid ' + P.line,
+        borderRadius: 8,
+        padding: '8px 10px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 8.5,
+        color: P.muted,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: .4
+      }
+    }, l), React.createElement("div", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 17,
+        fontWeight: 700,
+        color: c,
+        marginTop: 2
+      }
+    }, v)))), pending === 0 ? React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.green,
+        fontWeight: 600
+      }
+    }, "Every assigned indicator was submitted for all months in this period \u2014 nothing pending.") : React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.amber,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "By department (", byDept.filter(r => r.pending).length, " with gaps)"), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 10,
+        marginBottom: 16
+      }
+    }, React.createElement("thead", null, React.createElement("tr", {
+      style: {
+        background: P.panel2
+      }
+    }, th('Department'), th('Due', 1, 1), th('Submitted', 2, 1), th('Pending', 3, 1), th('Not observed', 4, 1), th('Complete', 5, 1))), React.createElement("tbody", null, byDept.map((r, i) => React.createElement("tr", {
+      key: i,
+      style: {
+        borderBottom: '1px solid ' + P.line2
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, r.d.name), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: P.ink2
+      }
+    }, r.assigned), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: P.ink2
+      }
+    }, r.submitted), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        fontWeight: 700,
+        color: r.pending ? P.rose : P.green
+      }
+    }, r.pending || '—'), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: r.notObserved ? '#5b3fa8' : P.muted
+      }
+    }, r.notObserved || '—'), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontWeight: 700,
+        color: pctCol(r.pct)
+      }
+    }, r.pct, "%"))))), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.rose,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Missing readings (", rows.length, " indicator", rows.length !== 1 ? 's' : '', ")"), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 10
+      }
+    }, React.createElement("thead", null, React.createElement("tr", {
+      style: {
+        background: P.panel2
+      }
+    }, th('Department'), th('Indicator'), th('Months not submitted'), th('Count', 3, 1))), React.createElement("tbody", null, rows.map((r, i) => React.createElement("tr", {
+      key: i,
+      style: {
+        borderBottom: '1px solid ' + P.line2
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        color: P.ink2,
+        whiteSpace: 'nowrap'
+      }
+    }, r.dept.name), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, r.ind.name), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        color: P.rose
+      }
+    }, r.miss.join(', ')), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        fontWeight: 700,
+        color: P.rose
+      }
+    }, r.miss.length)))))), nobsRows.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 16
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#5b3fa8',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Declared not observed \xB7 N/OB (", notObserved, " indicator-month", notObserved !== 1 ? 's' : '', ")"), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 10
+      }
+    }, React.createElement("thead", null, React.createElement("tr", {
+      style: {
+        background: P.panel2
+      }
+    }, th('Department'), th('Indicator'), th('Months not observed'), th('Reason given'))), React.createElement("tbody", null, nobsRows.map((r, i) => {
+      const why = [...new Set(r.miss.map(lbl => {
+        const m = pMonths.find(x => x[1] === lbl);
+        return m ? (r.ind.monthRemarks || {})[m[0]] || '' : '';
+      }).filter(Boolean))].join('; ');
+      return React.createElement("tr", {
+        key: i,
+        style: {
+          borderBottom: '1px solid ' + P.line2
+        }
+      }, React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          color: P.ink2,
+          whiteSpace: 'nowrap'
+        }
+      }, r.dept.name), React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          fontWeight: 600,
+          color: P.ink
+        }
+      }, r.ind.name), React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          color: '#5b3fa8'
+        }
+      }, r.miss.join(', ')), React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          color: why ? P.ink2 : P.muted,
+          fontStyle: why ? 'normal' : 'italic'
+        }
+      }, why || 'no reason recorded'));
+    }))))), React.createElement(Footer, {
       n: n,
       total: total
     }));
@@ -43177,7 +44346,7 @@ function QCReportBuilder({
     }
     const QC_PY_TYPES = ['summary', 'detail', 'compare', 'handhygiene'];
     const QC_PY_STYLES = ['bar3d', 'bar', 'line', 'area', 'combo', 'grouped', 'stacked', 'pct', 'horizontal', 'donut'];
-    const qcAdvanced = ['ragHeatmap', 'deptRanking', 'benchmarkCompare', 'indTrend', 'periodCompare', 'incidentAppendix', 'standardsRefs', 'toc', 'watermark'].some(k => sections[k]);
+    const qcAdvanced = ['ragHeatmap', 'deptRanking', 'benchmarkCompare', 'indTrend', 'periodCompare', 'pendingData', 'incidentAppendix', 'standardsRefs', 'toc', 'watermark'].some(k => sections[k]);
     const qcCanServer = QC_PY_TYPES.indexOf(reportType) >= 0 && chartStyles.every(s => QC_PY_STYLES.indexOf(s) >= 0) && !qcAdvanced;
     if (window.__UNICO_SERVER_PDF__ !== false && qcCanServer) {
       setExporting(true);
@@ -43308,7 +44477,7 @@ function QCReportBuilder({
     }
     const H = window.html2canvas,
       J = window.jspdf && window.jspdf.jsPDF;
-    const vectorFaithful = reportType === 'summary' && chartStyles.length === 1 && chartStyles[0] === 'bar3d' && !sections.execSummary && !sections.breachDonut && !sections.incidents && !sections.ragHeatmap && !sections.deptRanking && !sections.benchmarkCompare && !sections.indTrend && !sections.incidentAppendix && !sections.standardsRefs && !sections.toc && !sections.periodCompare && !sections.watermark;
+    const vectorFaithful = reportType === 'summary' && chartStyles.length === 1 && chartStyles[0] === 'bar3d' && !sections.execSummary && !sections.breachDonut && !sections.incidents && !sections.ragHeatmap && !sections.deptRanking && !sections.benchmarkCompare && !sections.indTrend && !sections.pendingData && !sections.incidentAppendix && !sections.standardsRefs && !sections.toc && !sections.periodCompare && !sections.watermark;
     if (J && vectorFaithful) {
       setExporting(true);
       setNote(null);
@@ -43747,6 +44916,9 @@ function QCReportBuilder({
     total: pages.length
   }) : pg.kind === 'toc' ? React.createElement(TocPage, {
     page: pg,
+    n: i + 1,
+    total: pages.length
+  }) : pg.kind === 'pending' ? React.createElement(PendingPage, {
     n: i + 1,
     total: pages.length
   }) : pg.kind === 'appendix' ? React.createElement(AppendixPage, {
@@ -44360,7 +45532,7 @@ function QCReportBuilder({
       color: P.muted,
       marginTop: 6
     }
-  }, "Only the ticked indicators appear in the preview, PDF, Excel, Word & CSV. Departments with none ticked are omitted."))), React.createElement("div", null, fieldLabel('Report sections'), [['Content', [['execSummary', 'Executive summary'], ['kpis', 'KPI cards'], ['chart', 'Charts'], ['breachDonut', 'Breach donut'], ['table', 'Month table'], ['incidents', 'Incident details'], ['indicatorDetail', 'Indicator detail (detailed type)']]], ['Analytics', [['ragHeatmap', 'RAG heatmap'], ['deptRanking', 'Department ranking'], ['benchmarkCompare', 'Benchmark vs actual'], ['indTrend', 'Indicator trend lines'], ['periodCompare', 'Period comparison']]], ['Structure', [['cover', 'Cover page'], ['toc', 'Table of contents'], ['incidentAppendix', 'Incident & CAPA appendix'], ['standardsRefs', 'Standards references'], ['watermark', 'Watermark'], ['signatures', 'Signature block']]]].map(([grp, items]) => React.createElement("div", {
+  }, "Only the ticked indicators appear in the preview, PDF, Excel, Word & CSV. Departments with none ticked are omitted."))), React.createElement("div", null, fieldLabel('Report sections'), [['Content', [['execSummary', 'Executive summary'], ['kpis', 'KPI cards'], ['chart', 'Charts'], ['breachDonut', 'Breach donut'], ['table', 'Month table'], ['incidents', 'Incident details'], ['indicatorDetail', 'Indicator detail (detailed type)']]], ['Analytics', [['ragHeatmap', 'RAG heatmap'], ['deptRanking', 'Department ranking'], ['benchmarkCompare', 'Benchmark vs actual'], ['indTrend', 'Indicator trend lines'], ['periodCompare', 'Period comparison'], ['pendingData', 'Pending data (not submitted)']]], ['Structure', [['cover', 'Cover page'], ['toc', 'Table of contents'], ['incidentAppendix', 'Incident & CAPA appendix'], ['standardsRefs', 'Standards references'], ['watermark', 'Watermark'], ['signatures', 'Signature block']]]].map(([grp, items]) => React.createElement("div", {
     key: grp,
     style: {
       marginBottom: 8
@@ -44590,6 +45762,9 @@ function QCReportBuilder({
     total: pageCount
   }) : cur.kind === 'toc' ? React.createElement(TocPage, {
     page: cur,
+    n: pi + 1,
+    total: pageCount
+  }) : cur.kind === 'pending' ? React.createElement(PendingPage, {
     n: pi + 1,
     total: pageCount
   }) : cur.kind === 'appendix' ? React.createElement(AppendixPage, {
@@ -58963,10 +60138,12 @@ window.LockScreen = LockScreen;
       dcApi.get('/api/submissions?limit=500').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
     }, []);
     const pendingFor = (areaKey, ind, m) => (subs || []).some(s => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
-    const statusOf = (areaKey, ind, m) => hasData(ind, m) ? 'recorded' : pendingFor(areaKey, ind, m) ? 'pending' : 'none';
+    const notObs = (ind, m) => !!(ind && ind.mNotObserved && ind.mNotObserved[m]);
+    const statusOf = (areaKey, ind, m) => hasData(ind, m) ? 'recorded' : pendingFor(areaKey, ind, m) ? 'pending' : notObs(ind, m) ? 'notobs' : 'none';
     const tone = {
       recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'],
       pending: ['#9a6b00', '#fff4e0', 'Pending'],
+      notobs: ['#5b3fa8', '#f5f1fd', 'Not observed'],
       none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted']
     };
     let totalInd = 0,
@@ -59229,7 +60406,8 @@ window.LockScreen = LockScreen;
       Pending: '#e08a1e',
       Approved: '#1f9d57',
       Rejected: '#d23a52',
-      Recorded: '#1f9d57'
+      Recorded: '#1f9d57',
+      'Not observed': '#5b3fa8'
     }[label] || '#6c7a8c';
     return {
       display: 'inline-flex',
@@ -60862,7 +62040,7 @@ window.LockScreen = LockScreen;
       return f(ind.mNum) || f(ind.mDen) || f(ind.months) || ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
     };
     const pendingFor = (areaKey, ind, m) => S.some(s => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
-    const statusOf = (areaKey, ind, m) => cpHasData(ind, m) ? 'Recorded' : pendingFor(areaKey, ind, m) ? 'Submitted' : 'Missing';
+    const statusOf = (areaKey, ind, m) => cpHasData(ind, m) ? 'Recorded' : pendingFor(areaKey, ind, m) ? 'Submitted' : ind && ind.mNotObserved && ind.mNotObserved[m] ? 'Not observed' : 'Missing';
     let totalInd = 0,
       done = 0;
     const missing = [];

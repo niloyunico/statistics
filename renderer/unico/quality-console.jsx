@@ -242,8 +242,15 @@ function fmtVal(ind, v){
 const QMONS_ORD = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function monthOrd(mk){ const p=String(mk||'').split('-'); const mi=QMONS_ORD.indexOf(p[0]); const yy=parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return (2000+yy)*12+mi; }
 function qcBeforeStart(ind, mk){ if(!ind||!ind.startMonth) return false; const a=monthOrd(mk), b=monthOrd(ind.startMonth); return a!=null&&b!=null&&a<b; }
-// Report-cell text: the value; else 'N/O' for pre-start months; else '—' (gap).
-function qcReportCell(ind, m){ const mk=Array.isArray(m)?m[0]:m; const mm=Array.isArray(m)?m:[mk]; const v=qcCellVal(ind, mm); const s=qStatus(ind, v); if(s==='na') return qcBeforeStart(ind, mk) ? 'N/O' : '—'; return fmtVal(ind, v); }
+/* NOT OBSERVED — an explicit "this month was deliberately not measured" (the audit was
+   not run, the service was closed, there was nothing eligible to observe). It is a
+   STATED fact, unlike a blank month, which is just an absence and could equally be an
+   oversight. Everything that chases missing data has to honour the difference, or the
+   person who took the trouble to declare it still gets nagged for it. */
+function qcNotObs(ind, mk){ const m = ind && ind.mNotObserved; return !!(m && m[mk]); }
+// Report-cell text: the value; 'N/OB' for a declared not-observed month; else 'N/O' for
+// pre-start months; else '—' (an unexplained gap).
+function qcReportCell(ind, m){ const mk=Array.isArray(m)?m[0]:m; const mm=Array.isArray(m)?m:[mk]; const v=qcCellVal(ind, mm); const s=qStatus(ind, v); if(s==='na') return qcNotObs(ind, mk) ? 'N/OB' : (qcBeforeStart(ind, mk) ? 'N/O' : '—'); return fmtVal(ind, v); }
 
 // Expose the AUTHORITATIVE quality-compute helpers so the merged Statistics surfaces
 // (Department 360, sidebar breach badge) read the EXACT same numbers as this console —
@@ -444,21 +451,29 @@ function QCDashboard({ depts, Q }) {
         // Per-ASSIGNED-indicator submission state: which of this department's indicators
         // have a value for the month and which are still missing — so a cell can say
         // "9/15 submitted" instead of a flat ✓ that hid the missing ones.
-        let b = 0, rep = 0; const missing = [];
+        let b = 0, rep = 0; const missing = []; const nobs = [];
         inds.forEach(ind => {
           const s = monthStatus(ind, m[0]);
-          if (s === 'breach') b++; else if (s !== 'na') rep++; else missing.push(ind.name);
+          if (s === 'breach') b++;
+          else if (s !== 'na') rep++;
+          // Declared not-observed months leave the denominator entirely: "1/3" must mean
+          // "one of the three we were actually due", not count a month nobody owed.
+          else if (qcNotObs(ind, m[0])) nobs.push(ind.name);
+          else missing.push(ind.name);
         });
-        const total = inds.length, sub = b + rep;
+        const total = inds.length - nobs.length, sub = b + rep;
         const partial = sub > 0 && sub < total;
-        const bg = sub === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : partial ? '#fdf3e3' : '#e7f6ed';
-        const fg = sub === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : partial ? '#b26a0f' : '#1f9d57';
+        // Nothing was DUE (every assigned indicator declared not observed) — that is a
+        // stated position, not the grey "no data" hole it would otherwise look like.
+        const allNobs = total === 0 && nobs.length > 0;
+        const bg = allNobs ? '#f5f1fd' : sub === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : partial ? '#fdf3e3' : '#e7f6ed';
+        const fg = allNobs ? '#5b3fa8' : sub === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : partial ? '#b26a0f' : '#1f9d57';
         // Breach cells keep the submission count visible: "6/7 ✕1" = 6 of 7 indicators
         // submitted, 1 breaching — a bare breach count hid how much was reported.
-        const sym = sub === 0 ? '–' : b > 0 ? (sub + '/' + total + ' ✕' + b) : partial ? (sub + '/' + total) : '✓';
+        const sym = allNobs ? 'N/OB' : sub === 0 ? '–' : b > 0 ? (sub + '/' + total + ' ✕' + b) : partial ? (sub + '/' + total) : '✓';
         // mk/mlabel let the cell open a full dept×month drill-down (all cells clickable —
         // a grey/partial cell opens the same modal, which lists what is NOT submitted).
-        return { sym, bg, fg, mk: m[0], mlabel: m[1], breach: b, sub, total, missing, has: sub > 0 };
+        return { sym, bg, fg, mk: m[0], mlabel: m[1], breach: b, sub, total, missing, nobs, has: sub > 0 };
       });
       const st = deptStat(dep, fyMonths);
       // A department with NOTHING reported this year must read "No data", not a
@@ -569,6 +584,7 @@ function QCDashboard({ depts, Q }) {
                         title={r.name + ' · ' + c.mlabel + ' — ' + c.sub + ' of ' + c.total + ' assigned indicator' + (c.total !== 1 ? 's' : '') + ' submitted'
                           + (c.breach ? ' · ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '')
                           + (c.missing.length ? ' · not submitted: ' + c.missing.slice(0, 5).join(', ') + (c.missing.length > 5 ? ' +' + (c.missing.length - 5) + ' more' : '') : '')
+                          + (c.nobs && c.nobs.length ? ' · not observed: ' + c.nobs.slice(0, 5).join(', ') + (c.nobs.length > 5 ? ' +' + (c.nobs.length - 5) + ' more' : '') : '')
                           + ' · click for details'}
                         style={{ display: 'inline-grid', placeItems: 'center', minWidth: '24px', height: '24px', padding: '0 4px', borderRadius: '6px', background: c.bg, color: c.fg, fontWeight: 700, fontSize: c.sym.length > 2 ? '9.5px' : '11px', fontFamily: MONO, cursor: 'pointer', boxShadow: c.breach ? '0 0 0 1px #eeb9c2' : 'none' }}
                       >{c.sym}</span>
@@ -619,7 +635,9 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
   };
   const reported = allInds.map(rowFor).filter(r => r.s !== 'na')
     .sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
-  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na');
+  // A month someone DECLARED not observed is accounted for; only the rest is pending.
+  const notObserved = allInds.filter(ind => monthStatus(ind, mk) === 'na' && qcNotObs(ind, mk));
+  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk));
   const breaches = reported.filter(r => r.s === 'breach').length;
 
   const field = (label, val) => val ? (
@@ -683,7 +701,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
           <div>
             <div style={{ fontSize: 16.5, fontWeight: 700, color: P.ink }}>{dep.name} <span style={{ color: P.muted, fontWeight: 600, fontSize: 13 }}>· {mlabel}</span></div>
             <div style={{ fontSize: 12, color: P.muted, marginTop: 2 }}>
-              <b style={{ color: reported.length === allInds.length ? P.green : P.ink2 }}>{reported.length} of {allInds.length}</b> assigned indicator{allInds.length !== 1 ? 's' : ''} submitted · <b style={{ color: breaches ? P.rose : P.green }}>{breaches} off benchmark</b>
+              <b style={{ color: reported.length === allInds.length ? P.green : P.ink2 }}>{reported.length} of {allInds.length}</b> assigned indicator{allInds.length !== 1 ? 's' : ''} submitted{notObserved.length ? <> · <b style={{ color: '#5b3fa8' }}>{notObserved.length} not observed</b></> : null} · <b style={{ color: breaches ? P.rose : P.green }}>{breaches} off benchmark</b>
               {canEdit && <span style={{ marginLeft: 8, color: '#0090ca', fontWeight: 700 }}>· admin edit</span>}
             </div>
           </div>
@@ -701,13 +719,32 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
           {/* editing an indicator that had no reading yet (create path) */}
           {editing && editingUnreported && <QCIndEdit key={editing.id} dep={dep} ind={editing} mk={mk} mlabel={mlabel} Q={Q} isNew onClose={() => setEditId(null)} />}
 
+          {/* Declared not observed — shown separately from the missing list so nobody
+              chases a month that was deliberately not measured. Click to undo. */}
+          {!editId && notObserved.length > 0 && (
+            <div style={{ marginTop: 4, marginBottom: 10, border: '1px solid #e3daf7', borderRadius: 9, padding: '11px 13px', background: '#faf8ff' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#5b3fa8', textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: 7 }}>
+                Not observed in {mlabel} ({notObserved.length})
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                {notObserved.map(ind => {
+                  const why = (ind.monthRemarks && ind.monthRemarks[mk]) || '';
+                  const chip = <span style={{ border: '1px solid #d9cdf3', background: '#fff', color: '#5b3fa8', padding: '6px 11px', borderRadius: 20, fontSize: 11.5, fontWeight: 600 }}>{ind.name}{why ? ' · ' + why : ''}</span>;
+                  return canEdit
+                    ? <button key={ind.id} title={'Change the ' + mlabel + ' entry for ' + ind.name} onClick={() => { setAddOpen(false); setEditId(ind.id); }} style={{ border: 0, background: 'none', padding: 0, cursor: 'pointer' }}>{chip}</button>
+                    : <span key={ind.id}>{chip}</span>;
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Which ASSIGNED indicators are still missing this month — always visible so
               the submitted/not-submitted split is explicit; admins click one to add
               its reading (the old collapsed "Add a reading" flow, now one click). */}
           {!editId && unreported.length > 0 && (
             <div style={{ marginTop: 4, border: '1px dashed #b9c6d2', borderRadius: 9, padding: '11px 13px', background: '#f7f9fc' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#b26a0f', textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: 7 }}>
-                Not submitted for {mlabel} ({unreported.length} of {allInds.length} assigned)
+                Not submitted for {mlabel} ({unreported.length} of {allInds.length} assigned{notObserved.length ? ' · ' + notObserved.length + ' not observed' : ''})
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
                 {unreported.map(ind => canEdit
@@ -735,6 +772,9 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
   const [den, setDen] = useState(() => g(ind.mDen, mk));
   const [remark, setRemark] = useState(() => (ind.monthRemarks && ind.monthRemarks[mk]) || '');
   const [incs, setIncs] = useState(() => (ind.incidents && Array.isArray(ind.incidents[mk])) ? ind.incidents[mk].map(x => Object.assign({}, x)) : []);
+  // "Not observed": this month was deliberately not measured. Saved as a per-month flag
+  // so the report can tag it N/OB instead of listing it as a missing submission.
+  const [notObs, setNotObs] = useState(() => qcNotObs(ind, mk));
 
   const setF = (i, k, v) => setIncs(a => a.map((x, j) => j === i ? Object.assign({}, x, { [k]: v }) : x));
   const addInc = () => setIncs(a => [...a, { source: 'admin edit' }]);
@@ -764,6 +804,17 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
   const preview = isRate ? fmtVal(ind, window.qiFormulaCompute(ind.formula, num2 || 0, den2 || 0)) : null;
 
   const save = async () => {
+    // Declared "not observed" — there is deliberately no reading, so skip the
+    // empty-reading guard and CLEAR any value that was there before. Leaving a stale
+    // number behind a not-observed flag would let the two states contradict each other.
+    if (notObs) {
+      Q.patchIndicator(dep.key, ind.id, {
+        mNotObserved: { [mk]: true }, monthRemarks: { [mk]: remark },
+        months: { [mk]: null }, mNum: { [mk]: null }, mDen: { [mk]: null },
+        mGroups: { [mk]: null }, incidents: { [mk]: [] },
+      });
+      onClose(); return;
+    }
     // Guard: a reading with no number recorded nothing (only a remark), which silently
     // left the month "not submitted". Warn before saving an empty reading.
     const emptyReading = isRate ? (num2 == null && den2 == null) : (val === '');
@@ -776,7 +827,8 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
         : window.confirm(msg);
       if (!ok) return; // let them go back and enter the numbers
     }
-    const patch = { monthRemarks: { [mk]: remark } };
+    // Recording a value un-declares "not observed" — the month clearly WAS observed.
+    const patch = { monthRemarks: { [mk]: remark }, mNotObserved: { [mk]: null } };
     if (useGroups) {
       // store both the rolled-up rate (mNum/mDen + months) AND the per-group breakdown
       const gp = {}; HH_GROUPS.forEach(([k]) => { const n = grp[k].n === '' ? null : Number(grp[k].n), d = grp[k].d === '' ? null : Number(grp[k].d); if (n != null || d != null) gp[k] = { n: n, d: d }; });
@@ -794,7 +846,7 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
     onClose();
   };
   const clearAll = () => {
-    Q.patchIndicator(dep.key, ind.id, { months: { [mk]: null }, mNum: { [mk]: null }, mDen: { [mk]: null }, incidents: { [mk]: [] }, monthRemarks: { [mk]: '' } });
+    Q.patchIndicator(dep.key, ind.id, { months: { [mk]: null }, mNum: { [mk]: null }, mDen: { [mk]: null }, incidents: { [mk]: [] }, monthRemarks: { [mk]: '' }, mNotObserved: { [mk]: null } });
     onClose();
   };
 
@@ -817,8 +869,21 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
         <div style={{ marginLeft: 'auto', fontSize: 11, color: P.muted }}>Benchmark {benchExpr(ind)}</div>
       </div>
 
+      {/* NOT OBSERVED — a stated "we did not measure this month" (audit not run, unit
+          closed, nothing eligible to observe). Kept deliberately separate from an empty
+          month: the report tags this N/OB, and the pending-data list stops chasing it. */}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 11, padding: '8px 10px', borderRadius: 8, cursor: 'pointer', flexWrap: 'wrap',
+        border: '1px solid ' + (notObs ? '#c9b7e8' : '#e3e9f1'), background: notObs ? '#f5f1fd' : '#fff' }}>
+        <input type="checkbox" checked={notObs} onChange={e => setNotObs(e.target.checked)} />
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: notObs ? '#5b3fa8' : P.ink2 }}>Not observed this month</span>
+        <span style={{ fontSize: 11, color: P.muted }}>— no measurement taken; reported as “N/OB”, not chased as pending</span>
+      </label>
+      {notObs && <div style={{ fontSize: 11.5, color: '#5b3fa8', background: '#f5f1fd', border: '1px solid #e3daf7', borderRadius: 8, padding: '8px 10px', marginBottom: 11 }}>
+        No reading will be recorded for {mlabel}. Use the remark below to say why it was not observed.
+      </div>}
+
       {/* value — hand hygiene supports a per-staff-group breakdown that rolls up to overall */}
-      {isHH && (
+      {!notObs && isHH && (
         <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
           {[['group', 'By staff group'], ['overall', 'Overall only']].map(([v, l]) => {
             const on = (byGroup ? 'group' : 'overall') === v;
@@ -826,7 +891,7 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
           })}
         </div>
       )}
-      {useGroups ? (
+      {notObs ? null : useGroups ? (
         <div style={{ marginBottom: 11 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 54px', gap: 8, alignItems: 'center', marginBottom: 5 }}>
             <span style={{ ...lbl, marginBottom: 0 }}>Group</span>
@@ -1287,7 +1352,7 @@ const QC_TEMPLATES = {
          cover:1,toc:1,periodCompare:1,watermark:1,signatures:1} },
   nabh:    { label:'NABH/JCI Accreditation', type:'detail',
     sec:{execSummary:1,kpis:1,chart:1,breachDonut:0,table:1,incidents:1,indicatorDetail:1,
-         ragHeatmap:1,deptRanking:0,benchmarkCompare:1,indTrend:1,
+         ragHeatmap:1,deptRanking:0,benchmarkCompare:1,indTrend:1,pendingData:1,
          incidentAppendix:1,standardsRefs:1,
          cover:1,toc:1,periodCompare:0,watermark:1,signatures:1} },
   exec:    { label:'Executive Summary',   type:'summary',
@@ -1302,7 +1367,7 @@ const QC_TEMPLATES = {
          cover:1,toc:1,periodCompare:0,watermark:1,signatures:1} },
   full:    { label:'Full Detailed',       type:'detail',
     sec:{execSummary:1,kpis:1,chart:1,breachDonut:1,table:1,incidents:1,indicatorDetail:1,
-         ragHeatmap:1,deptRanking:1,benchmarkCompare:1,indTrend:1,
+         ragHeatmap:1,deptRanking:1,benchmarkCompare:1,indTrend:1,pendingData:1,
          incidentAppendix:1,standardsRefs:1,
          cover:1,toc:1,periodCompare:1,watermark:1,signatures:1} },
 };
@@ -1926,6 +1991,8 @@ function QCReportBuilder({depts}){
     execSummary:true, kpis:true, chart:true, breachDonut:true, table:true, incidents:true, indicatorDetail:true,
     // advanced charts
     ragHeatmap:false, deptRanking:false, benchmarkCompare:false, indTrend:false,
+    // data-completeness: which assigned indicator-months were never submitted
+    pendingData:false,
     // appendix + refs
     incidentAppendix:false, standardsRefs:false,
     // structure/polish
@@ -2079,7 +2146,11 @@ function QCReportBuilder({depts}){
     else base = chosen.map(d=>({kind:'summary', dept:d}));
     if(!base.length) return base; // nothing selected — no structural pages either
     const cover=[]; if(sections.cover) cover.push({kind:'cover'});
-    const extra=[]; if(sections.incidentAppendix) extra.push({kind:'appendix'}); if(sections.standardsRefs) extra.push({kind:'refs'});
+    // Pending data comes BEFORE the incident appendix: "what is still missing" is read
+    // alongside the results it qualifies, not filed behind the incident detail.
+    const extra=[];
+    if(sections.pendingData) extra.push({kind:'pending'});
+    if(sections.incidentAppendix) extra.push({kind:'appendix'}); if(sections.standardsRefs) extra.push({kind:'refs'});
     const content=[...base, ...extra];
     // Table of Contents — PAGINATED so a long index (Detailed = one page per indicator) never
     // overflows a single sheet; each TOC page lists a slice of the whole document.
@@ -2573,6 +2644,7 @@ function QCReportBuilder({depts}){
   const pageTitle=(pg)=>{
     if(pg.kind==='cover')   return 'Cover';
     if(pg.kind==='toc')     return 'Table of Contents';
+    if(pg.kind==='pending') return 'Pending data — not submitted';
     if(pg.kind==='appendix')return 'Appendix — Incidents & CAPA';
     if(pg.kind==='refs')    return 'References — Standards & Benchmarks';
     if(pg.kind==='compare') return 'Cross-department comparison';
@@ -2599,6 +2671,147 @@ function QCReportBuilder({depts}){
               </div>
             ); })}
           </div>
+        </div>
+        <Footer n={n} total={total}/>
+      </div>
+    );
+  }
+
+  /* PENDING DATA — the submission gap, stated in the report itself.
+     Every other page reports on what WAS submitted, which quietly flatters a department
+     that submitted nothing: "0 off benchmark" and a 100% zero-defect rate both look like
+     success. This page names the assigned indicator-months that were never entered, so a
+     reader can tell an genuinely clean month from an unreported one.
+
+     A month is PENDING when the indicator is assigned to the department, the month is
+     inside the reporting period, the indicator had already started by then, and no
+     reading exists. Months before an indicator's startMonth are NOT pending — they are
+     "not opened" (the report's own N/O), and counting them would invent a backlog. */
+  function qcPendingRows(){
+    const rows=[];                       // one per dept×indicator that is missing months
+    const nobsRows=[];                   // …and one per dept×indicator declared not observed
+    let assigned=0, submitted=0, notObserved=0;
+    chosen.forEach(d=>{
+      (d.indicators||[]).forEach(ind=>{
+        const miss=[], nobs=[];
+        pMonths.forEach(m=>{
+          if(qcBeforeStart(ind,m[0])) return;      // not opened yet — not a gap
+          // A DECLARED not-observed month is accounted for. It is reported below in its
+          // own right, but it is not "assigned and missing" — chasing it would punish
+          // the person who took the trouble to state it.
+          if(qcNotObs(ind,m[0])){ nobs.push(m[1]); notObserved++; return; }
+          assigned++;
+          if(monthRaw(ind,m[0])!=null) submitted++; else miss.push(m[1]);
+        });
+        if(miss.length) rows.push({dept:d, ind, miss});
+        if(nobs.length) nobsRows.push({dept:d, ind, miss:nobs});
+      });
+    });
+    return {rows, nobsRows, assigned, submitted, notObserved, pending:assigned-submitted};
+  }
+
+  function PendingPage({n,total}){
+    const {rows,nobsRows,assigned,submitted,notObserved,pending}=qcPendingRows();
+    // Per-department roll-up, worst first — the actionable order for a quality manager
+    // chasing submissions.
+    const byDept=[];
+    chosen.forEach(d=>{
+      let a=0,s=0,nb=0;
+      (d.indicators||[]).forEach(ind=>pMonths.forEach(m=>{
+        if(qcBeforeStart(ind,m[0])) return;
+        if(qcNotObs(ind,m[0])){ nb++; return; }
+        a++; if(monthRaw(ind,m[0])!=null) s++; }));
+      if(a||nb) byDept.push({d, assigned:a, submitted:s, notObserved:nb, pending:a-s, pct:a?Math.round(s*100/a):100});
+    });
+    byDept.sort((x,y)=>y.pending-x.pending||x.d.name.localeCompare(y.d.name));
+    const pctCol=p=>p>=100?P.green:p>=80?P.amber:P.rose;
+    const th=(h,i,center)=><th key={h} style={{textAlign:center?'center':'left',padding:'5px 8px',fontSize:9,color:P.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:.3,borderBottom:'1px solid '+P.line}}>{h}</th>;
+    return (
+      <div className="qc-rpage" style={{position:'relative'}}>
+        {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
+        <Header/>
+        <div style={{marginTop:18}}>
+          <div className="qc-band" style={{fontWeight:700,fontSize:16,color:P.ink,marginBottom:4}}>Pending Data — Not Submitted · {rangeLabel}</div>
+          <div style={{fontSize:10.5,color:P.muted,marginBottom:12}}>
+            Assigned indicator-months that carry no reading. Months an indicator had not yet started are excluded (N/O elsewhere in this report), and so are months declared <b>not observed</b> (N/OB) — those are listed separately below.
+          </div>
+
+          {/* Headline: submission completeness for the whole selection. */}
+          <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+            {[['Due indicator-months',String(assigned),P.ink],
+              ['Submitted',String(submitted),P.green],
+              ['Pending',String(pending),pending?P.rose:P.green],
+              ['Not observed',String(notObserved),notObserved?'#5b3fa8':P.muted],
+              ['Completeness',(assigned?Math.round(submitted*100/assigned):100)+'%',assigned?pctCol(Math.round(submitted*100/assigned)):P.green]
+            ].map(([l,v,c])=>(
+              <div key={l} style={{flex:'1 1 120px',border:'1px solid '+P.line,borderRadius:8,padding:'8px 10px'}}>
+                <div style={{fontSize:8.5,color:P.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:.4}}>{l}</div>
+                <div style={{fontFamily:MONO,fontSize:17,fontWeight:700,color:c,marginTop:2}}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {pending===0
+            ? <div style={{fontSize:11.5,color:P.green,fontWeight:600}}>Every assigned indicator was submitted for all months in this period — nothing pending.</div>
+            : (<>
+              <div style={{fontSize:9.5,fontWeight:700,color:P.amber,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>By department ({byDept.filter(r=>r.pending).length} with gaps)</div>
+              <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',fontSize:10,marginBottom:16}}>
+                <thead><tr style={{background:P.panel2}}>
+                  {th('Department')}{th('Due',1,1)}{th('Submitted',2,1)}{th('Pending',3,1)}{th('Not observed',4,1)}{th('Complete',5,1)}
+                </tr></thead>
+                <tbody>{byDept.map((r,i)=>(
+                  <tr key={i} style={{borderBottom:'1px solid '+P.line2}}>
+                    <td style={{padding:'4px 8px',fontWeight:600,color:P.ink}}>{r.d.name}</td>
+                    <td style={{padding:'4px 8px',textAlign:'center',fontFamily:MONO,color:P.ink2}}>{r.assigned}</td>
+                    <td style={{padding:'4px 8px',textAlign:'center',fontFamily:MONO,color:P.ink2}}>{r.submitted}</td>
+                    <td style={{padding:'4px 8px',textAlign:'center',fontFamily:MONO,fontWeight:700,color:r.pending?P.rose:P.green}}>{r.pending||'—'}</td>
+                    <td style={{padding:'4px 8px',textAlign:'center',fontFamily:MONO,color:r.notObserved?'#5b3fa8':P.muted}}>{r.notObserved||'—'}</td>
+                    <td style={{padding:'4px 8px',textAlign:'center',fontWeight:700,color:pctCol(r.pct)}}>{r.pct}%</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+
+              {/* The actual answer to "which data is pending": indicator, and the exact
+                  months it is missing — the list someone can work down. */}
+              <div style={{fontSize:9.5,fontWeight:700,color:P.rose,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Missing readings ({rows.length} indicator{rows.length!==1?'s':''})</div>
+              <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',fontSize:10}}>
+                <thead><tr style={{background:P.panel2}}>
+                  {th('Department')}{th('Indicator')}{th('Months not submitted')}{th('Count',3,1)}
+                </tr></thead>
+                <tbody>{rows.map((r,i)=>(
+                  <tr key={i} style={{borderBottom:'1px solid '+P.line2}}>
+                    <td style={{padding:'4px 8px',color:P.ink2,whiteSpace:'nowrap'}}>{r.dept.name}</td>
+                    <td style={{padding:'4px 8px',fontWeight:600,color:P.ink}}>{r.ind.name}</td>
+                    <td style={{padding:'4px 8px',color:P.rose}}>{r.miss.join(', ')}</td>
+                    <td style={{padding:'4px 8px',textAlign:'center',fontFamily:MONO,fontWeight:700,color:P.rose}}>{r.miss.length}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </>)}
+
+          {/* Declared not-observed months, with the reason where one was given. This is
+              the evidence that a blank cell was a decision, not an oversight — the
+              question an auditor asks about every empty month in the report. */}
+          {nobsRows.length>0 && (
+            <div style={{marginTop:16}}>
+              <div style={{fontSize:9.5,fontWeight:700,color:'#5b3fa8',textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Declared not observed · N/OB ({notObserved} indicator-month{notObserved!==1?'s':''})</div>
+              <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',fontSize:10}}>
+                <thead><tr style={{background:P.panel2}}>
+                  {th('Department')}{th('Indicator')}{th('Months not observed')}{th('Reason given')}
+                </tr></thead>
+                <tbody>{nobsRows.map((r,i)=>{
+                  const why=[...new Set(r.miss.map(lbl=>{ const m=pMonths.find(x=>x[1]===lbl); return m?((r.ind.monthRemarks||{})[m[0]]||''):''; }).filter(Boolean))].join('; ');
+                  return (
+                    <tr key={i} style={{borderBottom:'1px solid '+P.line2}}>
+                      <td style={{padding:'4px 8px',color:P.ink2,whiteSpace:'nowrap'}}>{r.dept.name}</td>
+                      <td style={{padding:'4px 8px',fontWeight:600,color:P.ink}}>{r.ind.name}</td>
+                      <td style={{padding:'4px 8px',color:'#5b3fa8'}}>{r.miss.join(', ')}</td>
+                      <td style={{padding:'4px 8px',color:why?P.ink2:P.muted,fontStyle:why?'normal':'italic'}}>{why||'no reason recorded'}</td>
+                    </tr>
+                  );})}</tbody>
+              </table>
+            </div>
+          )}
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -3056,7 +3269,7 @@ function QCReportBuilder({depts}){
     // faithful browser export below so every filter combination still renders correctly.
     const QC_PY_TYPES=['summary','detail','compare','handhygiene'];
     const QC_PY_STYLES=['bar3d','bar','line','area','combo','grouped','stacked','pct','horizontal','donut'];
-    const qcAdvanced=['ragHeatmap','deptRanking','benchmarkCompare','indTrend','periodCompare','incidentAppendix','standardsRefs','toc','watermark'].some(k=>sections[k]);
+    const qcAdvanced=['ragHeatmap','deptRanking','benchmarkCompare','indTrend','periodCompare','pendingData','incidentAppendix','standardsRefs','toc','watermark'].some(k=>sections[k]);
     const qcCanServer = QC_PY_TYPES.indexOf(reportType)>=0
       && chartStyles.every(s=>QC_PY_STYLES.indexOf(s)>=0) && !qcAdvanced;
     if(window.__UNICO_SERVER_PDF__!==false && qcCanServer){
@@ -3118,7 +3331,7 @@ function QCReportBuilder({depts}){
       && chartStyles.length===1 && chartStyles[0]==='bar3d'
       && !sections.execSummary && !sections.breachDonut && !sections.incidents
       && !sections.ragHeatmap && !sections.deptRanking && !sections.benchmarkCompare && !sections.indTrend
-      && !sections.incidentAppendix && !sections.standardsRefs
+      && !sections.pendingData && !sections.incidentAppendix && !sections.standardsRefs
       && !sections.toc && !sections.periodCompare && !sections.watermark;
     if(J && vectorFaithful){
       setExporting(true); setNote(null);
@@ -3344,6 +3557,8 @@ function QCReportBuilder({depts}){
                 ? <CoverPage n={i+1} total={pages.length}/>
                 : pg.kind==='toc'
                 ? <TocPage page={pg} n={i+1} total={pages.length}/>
+                : pg.kind==='pending'
+                ? <PendingPage n={i+1} total={pages.length}/>
                 : pg.kind==='appendix'
                 ? <AppendixPage n={i+1} total={pages.length}/>
                 : pg.kind==='refs'
@@ -3524,7 +3739,7 @@ function QCReportBuilder({depts}){
             <div>
               {fieldLabel('Report sections')}
               {[['Content',[['execSummary','Executive summary'],['kpis','KPI cards'],['chart','Charts'],['breachDonut','Breach donut'],['table','Month table'],['incidents','Incident details'],['indicatorDetail','Indicator detail (detailed type)']]],
-                ['Analytics',[['ragHeatmap','RAG heatmap'],['deptRanking','Department ranking'],['benchmarkCompare','Benchmark vs actual'],['indTrend','Indicator trend lines'],['periodCompare','Period comparison']]],
+                ['Analytics',[['ragHeatmap','RAG heatmap'],['deptRanking','Department ranking'],['benchmarkCompare','Benchmark vs actual'],['indTrend','Indicator trend lines'],['periodCompare','Period comparison'],['pendingData','Pending data (not submitted)']]],
                 ['Structure',[['cover','Cover page'],['toc','Table of contents'],['incidentAppendix','Incident & CAPA appendix'],['standardsRefs','Standards references'],['watermark','Watermark'],['signatures','Signature block']]]
               ].map(([grp,items])=>(
                 <div key={grp} style={{marginBottom:8}}>
@@ -3590,6 +3805,7 @@ function QCReportBuilder({depts}){
               : <QCPagedPreview key={pi+'|'+reportType+'|'+pageSize+'|'+orient+'|'+chosen.length+'|'+pMonths.length+'|'+indSel.size} pageW={pageW} pageMinH={pageMinH}>
                   {cur.kind==='cover' ? <CoverPage n={pi+1} total={pageCount}/>
                     : cur.kind==='toc' ? <TocPage page={cur} n={pi+1} total={pageCount}/>
+                    : cur.kind==='pending' ? <PendingPage n={pi+1} total={pageCount}/>
                     : cur.kind==='appendix' ? <AppendixPage n={pi+1} total={pageCount}/>
                     : cur.kind==='refs' ? <RefsPage n={pi+1} total={pageCount}/>
                     : cur.kind==='compare' ? <ComparePage n={pi+1} total={pageCount}/>

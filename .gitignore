@@ -60,3 +60,7 @@ scripts/.collectors-to-incharge.rollback.json
 
 .vercel
 .env*
+
+# local dev server logs (started by the restart helper)
+server/web-server.log
+server/web-server.log.err

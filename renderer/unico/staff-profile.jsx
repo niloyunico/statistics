@@ -326,7 +326,20 @@ function StaffProfile({store, empId, setRoute}){
                       <span className="num" style={{fontSize:13,fontWeight:700,color:'var(--ink)'}}>{e.licence_no||'—'}</span>
                       {e.licence_expiry?<span style={{fontSize:11.5,color:'var(--muted)'}}>expires {e.licence_expiry}</span>:null}
                       {profLicence?<span style={{fontSize:10.5,fontWeight:700,color:profLicence.c,background:profLicence.c+'18',border:'1px solid '+profLicence.c+'44',borderRadius:6,padding:'1px 8px'}}>{profLicence.t}</span>:null}
+                      {/* The council's own answer, as captured on the day it was
+                          checked. Shown here so the register does not have to be up
+                          — and so an auditor can see WHEN it was last confirmed. */}
+                      {e.licence_verified?<span title={'BNMC register checked '+String(e.licence_verified.at||'').slice(0,10)}
+                        style={{fontSize:10.5,fontWeight:700,color:'#157a43',background:'#157a4318',border:'1px solid #157a4344',borderRadius:6,padding:'1px 8px',display:'inline-flex',alignItems:'center',gap:3}}>
+                        <Ic d={I.check} s={11} c="#157a43"/>BNMC verified {String(e.licence_verified.at||'').slice(0,10)}</span>:null}
                     </div>
+                    {e.licence_verified&&e.licence_verified.primary?(
+                      <div style={{fontSize:11.5,color:'var(--muted)',marginTop:5,display:'flex',flexWrap:'wrap',gap:'2px 10px'}}>
+                        <span>{e.licence_verified.primary.course}</span>
+                        {e.licence_verified.primary.institution?<span>· {e.licence_verified.primary.institution}</span>:null}
+                        {e.licence_verified.primary.status?<span style={{fontWeight:700,color:e.licence_verified.primary.expired?'#d23a52':'#157a43'}}>· {e.licence_verified.primary.status}</span>:null}
+                      </div>
+                    ):null}
                   </div>
                 : null}
               <div>{lbl('Qualification')}{chipRow(e.qualification,{bg:'#eef8fc',fg:'#0072a3',br:'#dceffa'})}</div>
@@ -1482,6 +1495,359 @@ function StaffFormRail({ f, editing, set }){
   );
 }
 
+/* ---------------- BNMC registration verification ----------------
+   Type the licence number, press Verify. The COURSE is not asked for: it is worked out
+   from the Education/Qualification already recorded on this form, and server-side
+   (server/bnmc-verify.js) those candidate courses are tried against the council's
+   register until the registration turns up.
+
+   WHY THE RESULT IS SOMETIMES A LIST AND NOT AN ANSWER
+   A BNMC number identifies a REGISTRATION, not a person, and the series restarts per
+   course — number 7749 belongs to four different nurses under four different courses.
+   So a sweep can legitimately return several people, and this panel refuses to guess
+   between them: it shows each candidate and makes the operator choose. Nothing is
+   written onto the staff record until that choice is made.
+
+   WHAT IT WRITES BACK
+   The whole council record goes onto the staff file under `licence_verified`, not just
+   the fields this form has boxes for. A snapshot is the point: BNMC is often slow and
+   sometimes down, and "what did the council say when you checked, and when?" has to be
+   answerable without their site being up.
+
+   AUTO-FILL IS ONE-DIRECTIONAL
+   An EMPTY form field is filled from the council record. A field that already has a
+   value is NEVER overwritten — it is flagged as differing, with a click to take the
+   council's version. Silently replacing a typed name is how you lose the one local
+   correction that was right (council records carry old married names and spellings). */
+
+// BNMC's course names are longer and punctuated differently than the qualification
+// chips this app uses. Map the common ones; anything unrecognised is kept verbatim,
+// which the chip picker supports (it preserves values outside its option list).
+function bnmcQualification(course){
+  const c=String(course||'');
+  const has=(...w)=>w.every(x=>c.toLowerCase().includes(x));
+  if(has('b. sc','post basic')||has('b.sc','post basic')) return 'Post Basic B.Sc in Nursing';
+  if(has('public health nursing')) return 'B.Sc in Public Health Nursing';
+  if(has('b. sc','nursing')||has('b.sc','nursing')) return 'B.Sc in Nursing';
+  if(has('master of science')) return 'M.Sc in Nursing';
+  if(has('bachelor of science','midwifery')) return 'B.Sc in Nursing';
+  if(has('midwifery')&&!has('nursing science')) return 'Diploma in Midwifery';
+  if(has('renal')) return 'Diploma in Renal Nursing';
+  if(has('cardiac')) return 'Diploma in Cardiac Nursing';
+  if(has('critical care')||has('intensive care')) return 'Diploma in Critical Care Nursing';
+  if(has('orthopeadic')||has('orthopaedic')) return 'Diploma in Orthopaedic Nursing';
+  if(has('psychiatric')||has('mental health')) return 'Diploma in Psychiatric / Mental Health Nursing';
+  if(has('community health')) return 'Community Health Nursing';
+  if(has('diploma','nursing')) return 'Diploma in Nursing';
+  return c;
+}
+
+/* Call a /api/bnmc/* route and return its JSON, or throw something a human can act on.
+   Never `await r.json()` blind here: the answer is not always JSON.
+     - Route missing (server started before these routes existed, which is the normal
+       state right after pulling this change) -> Express's own 404 page, "<!DOCTYPE…".
+       Parsing that produced a bare "Unexpected token '<'" that told nobody anything.
+     - Signed out / session expired -> a login redirect, so also HTML.
+   Both are ordinary situations with obvious fixes, so both get told plainly. */
+async function bnmcApi(url){
+  let r;
+  try{ r=await fetch(url,{headers:{Accept:'application/json'}}); }
+  catch(e){ throw new Error('Could not reach the server. Check that it is running, then try again.'); }
+  const body=await r.text();
+  const looksHtml=/^\s*(<!doctype|<html)/i.test(body);
+  if(r.status===401||r.status===403||(looksHtml&&/login|sign in/i.test(body))){
+    throw new Error('Your session has expired. Reload the page, sign in again, then verify.');
+  }
+  if(r.status===404||looksHtml){
+    throw new Error('This server does not have the BNMC verification routes yet — restart the app server (npm run web) and reload this page.');
+  }
+  let j;
+  try{ j=JSON.parse(body); }
+  catch(e){ throw new Error('The server sent an unexpected response (HTTP '+r.status+').'); }
+  if(!j||j.ok===false) throw new Error((j&&j.error)||'Verification failed.');
+  return j;
+}
+
+// One candidate person returned by a sweep: portrait, particulars, and the council's
+// registration table in full. Used both for choosing between candidates and, once
+// chosen, as the record shown on the form.
+function BnmcRecord({ m, compact, onPick, picked }){
+  const per=m.person||{}, regs=m.registrations||[], p=m.primary||{};
+  const lbl={fontSize:10,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,fontWeight:700};
+  return (
+    <div style={{border:'1px solid '+(picked?'#cde9d8':'var(--line)'),borderRadius:10,overflow:'hidden',background:'#fff'}}>
+      <div style={{display:'flex',gap:13,padding:12,flexWrap:'wrap',alignItems:'flex-start'}}>
+        {/* Served through our own origin: BNMC hosts portraits on plain http, which
+            the https app is not allowed to embed. */}
+        {per.photo?<img src={'/api/bnmc/photo?u='+encodeURIComponent(per.photo)} alt=""
+          style={{width:compact?66:92,height:compact?80:110,objectFit:'cover',borderRadius:8,border:'1px solid var(--line)',background:'var(--bg-2)'}}
+          onError={e=>{e.target.style.display='none';}}/>:null}
+        <div style={{flex:1,minWidth:220,display:'grid',gap:4}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+            <span style={{fontSize:compact?14:16,fontWeight:800,color:'var(--ink)'}}>{per.name||'—'}</span>
+            {p.status?<span style={{fontSize:10.5,fontWeight:800,padding:'1px 8px',borderRadius:6,
+              color:p.expired?'#a32c41':'#157a43',background:p.expired?'#fdf3f4':'#eef8f1',
+              border:'1px solid '+(p.expired?'#f0c2ca':'#cde9d8')}}>{p.status}</span>:null}
+            {m.fromEducation?<span style={{fontSize:10,fontWeight:700,color:'#0072a3',background:'#eef8fc',border:'1px solid #dceffa',borderRadius:6,padding:'1px 8px'}}>matches recorded education</span>:null}
+          </div>
+          <div style={{fontSize:12,color:'var(--ink-2)',fontWeight:600}}>{m.programName}</div>
+          {[["Father's name",per.father],["Mother's name",per.mother],['Address',per.address],
+            ['Working place',per.workplace],['Position',per.position]].filter(x=>x[1]).map(([k,val])=>(
+            <div key={k} style={{display:'flex',gap:7,fontSize:12}}>
+              <span style={{...lbl,minWidth:104,flexShrink:0}}>{k}</span>
+              <span style={{color:'var(--ink)',fontWeight:600}}>{val}</span>
+            </div>
+          ))}
+        </div>
+        {onPick?<button type="button" className="btn pri sm" onClick={onPick} style={{alignSelf:'center',whiteSpace:'nowrap'}}>
+          <Ic d={I.check} s={14}/>This is the staff member</button>:null}
+      </div>
+
+      {/* The council's registration table, kept whole. A nurse may hold several
+          registrations under different numbers, and the older rows are evidence too.
+          The row carrying the number that was searched is highlighted — that is the
+          licence being verified. */}
+      <div style={{overflowX:'auto',borderTop:'1px solid var(--line-2)'}}>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:11.5,minWidth:760}}>
+          <thead>
+            <tr>{['Registration No','Course Name','Institution / College','Licensing Exam Passing Date','Date of Registration','Date of Renew/Issue','Renew Upto','Status'].map(h=>(
+              <th key={h} style={{textAlign:'left',padding:'8px 10px',background:'var(--bg-2)',color:'var(--muted)',
+                textTransform:'uppercase',letterSpacing:.3,fontSize:9.5,fontWeight:800,whiteSpace:'nowrap',borderBottom:'1px solid var(--line-2)'}}>{h}</th>
+            ))}</tr>
+          </thead>
+          <tbody>
+            {regs.map((r,i)=>{ const isThis=r.regNo===p.regNo&&r.course===p.course; return (
+              <tr key={i} style={{borderBottom:'1px solid var(--line-2)',background:isThis?'#f6fbf8':'transparent'}}>
+                <td className="num" style={{padding:'8px 10px',fontWeight:isThis?800:600}}>{r.regNo}</td>
+                <td style={{padding:'8px 10px',fontWeight:isThis?700:400}}>{r.course}</td>
+                <td style={{padding:'8px 10px'}}>{r.institution}</td>
+                {/* Not a date field: BNMC puts the literal word "Passed" here for some
+                    registrants and a date for others. */}
+                <td style={{padding:'8px 10px',whiteSpace:'nowrap'}}>{r.exam||'—'}</td>
+                <td className="num" style={{padding:'8px 10px',whiteSpace:'nowrap'}}>{r.registered||'—'}</td>
+                <td className="num" style={{padding:'8px 10px',whiteSpace:'nowrap'}}>{r.renewIssued||'—'}</td>
+                <td className="num" style={{padding:'8px 10px',whiteSpace:'nowrap'}}>{r.renewUpto||'—'}</td>
+                <td style={{padding:'8px 10px',fontWeight:800,whiteSpace:'nowrap',color:r.expired?'#d23a52':'#157a43'}}>{r.status||'—'}</td>
+              </tr>
+            );})}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function BnmcVerify({ f, set }){
+  const [busy,setBusy]=React.useState('');            // '' | 'edu' | 'all'
+  const [prog,setProg]=React.useState(null);          // {tried,total} while sweeping
+  const [cands,setCands]=React.useState(null);        // candidate list awaiting a choice
+  const [note,setNote]=React.useState('');
+  const [err,setErr]=React.useState('');
+  const [manual,setManual]=React.useState(false);
+  const [programs,setPrograms]=React.useState([]);
+  const [mProg,setMProg]=React.useState(f.licence_program||'');
+  const v=f.licence_verified||null;
+
+  // BNMC searches on digits only; people type "BNMC-7749" or "7749 " into the box.
+  const digits=String(f.licence_no||'').replace(/\D/g,'');
+  const edu=String(f.qualification||'').trim();
+
+  // Only needed for the manual override, so it is not fetched until that is opened.
+  // A failure here has to be VISIBLE: an empty dropdown with no explanation is what
+  // this looked like when the server was missing the routes.
+  React.useEffect(()=>{ if(!manual||programs.length) return; let live=true;
+    bnmcApi('/api/bnmc/programs')
+      .then(j=>{ if(live) setPrograms(j.programs||[]); })
+      .catch(e=>{ if(live) setErr(e.message); });
+    return ()=>{live=false;};
+  },[manual]);
+
+  // Walk one scope to completion, batch by batch, showing progress as it goes. The
+  // server hands back a cursor rather than doing all 39 courses in one request, which
+  // keeps every call short of a serverless timeout.
+  const sweep=async(scope)=>{
+    let from=0, out=[], tried=0, total=0;
+    for(;;){
+      const q='number='+encodeURIComponent(digits)+'&scope='+scope+'&from='+from+'&hint='+encodeURIComponent(edu);
+      const j=await bnmcApi('/api/bnmc/detect?'+q);
+      out=out.concat(j.matches||[]); tried+=j.tried||0; total=j.total||0;
+      setProg({tried,total});
+      if(j.next==null) break;
+      from=j.next;
+    }
+    return {matches:out,total};
+  };
+
+  const apply=(m)=>{
+    const p=m.primary||{}, per=m.person||{};
+    set('licence_program',m.program);
+    set('licence_verified',{
+      at:m.fetchedAt||new Date().toISOString(), number:digits,
+      program:m.program, programName:m.programName,
+      person:per, registrations:m.registrations||[], primary:p,
+    });
+    // Fill only what is blank (see the header note) — the mismatch chips below hand
+    // over anything that conflicts, on an explicit click.
+    if(!String(f.name||'').trim() && per.name) set('name',per.name);
+    if(!String(f.qualification||'').trim() && p.course) set('qualification',bnmcQualification(p.course));
+    if(!String(f.licence_expiry||'').trim() && p.renewUpto) set('licence_expiry',p.renewUpto);
+    setCands(null);
+  };
+
+  const settle=(matches,scope,total)=>{
+    if(!matches.length){
+      setNote(scope==='edu'
+        ? ''                                   // caller widens the search instead
+        : 'BNMC has no registration '+digits+' in any of its '+total+' courses. Check the number.');
+      return false;
+    }
+    // One match is only presented as the answer, never as a certainty — the operator
+    // still sees the name and can widen the search if it is the wrong person.
+    if(matches.length===1){ apply(matches[0]); setNote(scope==='edu'
+      ? 'Matched on the course implied by this staff member’s education. Other courses were not searched.'
+      : 'One match across all '+total+' courses.'); }
+    else { setCands({matches,scope,total}); setNote(matches.length+' different people hold registration '+digits+'. Pick the right one — BNMC numbers repeat across courses.'); }
+    return true;
+  };
+
+  // The main action: education-scoped first (usually one or two requests), widening to
+  // every course only if that finds nothing.
+  const verify=async()=>{
+    setErr(''); setNote(''); setCands(null); setProg(null);
+    try{
+      if(edu){
+        setBusy('edu');
+        const a=await sweep('edu');
+        if(settle(a.matches,'edu',a.total)) return;
+      }
+      setBusy('all');
+      const b=await sweep('all');
+      settle(b.matches,'all',b.total);
+    }catch(e){ setErr(e.message||'Could not reach the verification service.'); }
+    finally{ setBusy(''); setProg(null); }
+  };
+
+  // Explicit widening, for when the education-scoped hit is the wrong person.
+  const searchAll=async()=>{
+    setErr(''); setNote(''); setCands(null); setProg(null); setBusy('all');
+    try{ const b=await sweep('all'); if(!settle(b.matches,'all',b.total)) setNote('No registration '+digits+' in any course.'); }
+    catch(e){ setErr(e.message||'Could not reach the verification service.'); }
+    finally{ setBusy(''); setProg(null); }
+  };
+
+  const manualLookup=async()=>{
+    setErr(''); setNote(''); setCands(null); setBusy('all');
+    try{
+      const j=await bnmcApi('/api/bnmc/verify?number='+encodeURIComponent(digits)+'&program='+encodeURIComponent(mProg)+'&fresh=1');
+      if(!j.found){ setNote('No registration '+digits+' under that course.'); return; }
+      apply({program:mProg,programName:(programs.find(p=>p.id===mProg)||{}).name||'',
+        person:j.person,registrations:j.registrations,primary:j.primary,fetchedAt:j.fetchedAt});
+    }catch(e){ setErr(e.message||'Lookup failed.'); }
+    finally{ setBusy(''); }
+  };
+
+  const box={border:'1px solid var(--line)',borderRadius:10,padding:12,background:'#fff'};
+
+  // A field the council disagrees with. Shown rather than applied; `take` is the click.
+  const diffs=(()=>{
+    if(!v) return [];
+    const p=v.primary||{}, per=v.person||{};
+    const out=[];
+    const add=(label,mine,theirs,take)=>{ if(theirs&&String(mine||'').trim()&&String(mine).trim().toLowerCase()!==String(theirs).trim().toLowerCase()) out.push({label,theirs,take}); };
+    add('Name',f.name,per.name,()=>set('name',per.name));
+    add('Qualification',f.qualification,p.course?bnmcQualification(p.course):'',()=>set('qualification',bnmcQualification(p.course)));
+    add('Licence expiry',f.licence_expiry,p.renewUpto,()=>set('licence_expiry',p.renewUpto));
+    return out;
+  })();
+
+  return (
+    <div style={{gridColumn:'1 / -1',display:'flex',flexDirection:'column',gap:11}}>
+      <div style={{...box,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap',background:'var(--panel-2)'}}>
+        <div style={{flex:1,minWidth:240}}>
+          <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)'}}>Live BNMC verification</div>
+          {/* The course is derived, not asked for — that is the whole point of this
+              control. Say which education it is working from so a wrong Education
+              entry is visible as the cause when a search comes back empty. */}
+          <div style={{fontSize:11.5,color:'var(--muted)',marginTop:3}}>
+            {!digits
+              ? 'Enter the registration number above, then verify.'
+              : edu
+                ? <>Course taken from Education: <b style={{color:'var(--ink-2)'}}>{edu}</b></>
+                : 'No Education recorded — every course will be searched.'}
+          </div>
+        </div>
+        {v?<button type="button" className="btn sm" onClick={searchAll} disabled={!!busy||!digits} title="Search every course, in case this is a different person with the same number">Search all courses</button>:null}
+        <button type="button" className="btn pri" onClick={verify} disabled={!digits||!!busy} style={{height:38,whiteSpace:'nowrap'}}>
+          <Ic d={I.search} s={14}/>{busy?(prog?'Searching '+prog.tried+'/'+prog.total+'…':'Verifying…'):'Verify with BNMC'}
+        </button>
+      </div>
+
+      {busy&&prog?(
+        <div style={{height:4,borderRadius:3,background:'var(--line-2)',overflow:'hidden'}}>
+          <div style={{height:'100%',width:Math.round((prog.tried/Math.max(1,prog.total))*100)+'%',background:'var(--blue)',transition:'width .2s'}}/>
+        </div>
+      ):null}
+
+      {err?<div style={{...box,borderColor:'#f0c2ca',background:'#fdf3f4',color:'#a32c41',fontSize:12.5,fontWeight:600}}>{err}</div>:null}
+      {note&&!cands?<div style={{...box,borderColor:'#dbe4ee',background:'var(--panel-2)',color:'var(--ink-2)',fontSize:12,fontWeight:600}}>{note}</div>:null}
+
+      {/* Several people, one number. No default, no pre-selection — the operator picks. */}
+      {cands?(
+        <div style={{display:'flex',flexDirection:'column',gap:9}}>
+          <div style={{...box,borderColor:'#f2ddb4',background:'#fdf8ec',color:'#8a5d09',fontSize:12.5,fontWeight:700}}>{note}</div>
+          {cands.matches.map((m,i)=><BnmcRecord key={i} m={m} compact onPick={()=>apply(m)}/>)}
+        </div>
+      ):null}
+
+      {v&&!cands?(
+        <div style={{display:'flex',flexDirection:'column',gap:9}}>
+          <div style={{display:'flex',alignItems:'center',gap:9,padding:'9px 13px',borderRadius:9,
+            background:(v.primary||{}).expired?'#fdf3f4':'#eef8f1',
+            border:'1px solid '+((v.primary||{}).expired?'#f0c2ca':'#cde9d8')}}>
+            <Ic d={I.check} s={15} c={(v.primary||{}).expired?'#a32c41':'#157a43'}/>
+            <span style={{fontSize:12.5,fontWeight:800,color:(v.primary||{}).expired?'#a32c41':'#157a43'}}>
+              Verified against the BNMC register{(v.primary||{}).expired?' — licence EXPIRED':''}
+            </span>
+            <span style={{flex:1}}/>
+            <span style={{fontSize:11,color:'var(--muted)'}}>checked {String(v.at||'').slice(0,10)}</span>
+          </div>
+          <BnmcRecord m={v} picked/>
+          {diffs.length?(
+            <div style={{...box,borderColor:'#f2ddb4',background:'#fdf8ec',display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>
+              <span style={{fontSize:11.5,fontWeight:700,color:'#8a5d09'}}>Differs from what is typed:</span>
+              {diffs.map(d=>(
+                <button key={d.label} type="button" onClick={d.take} title="Replace with the BNMC value"
+                  style={{border:'1px solid #e6c98a',background:'#fff',borderRadius:20,padding:'4px 11px',fontSize:11.5,cursor:'pointer',color:'var(--ink)'}}>
+                  <strong>{d.label}</strong> — use “{d.theirs}”
+                </button>
+              ))}
+            </div>
+          ):null}
+        </div>
+      ):null}
+
+      {/* Escape hatch: search one named course directly. Needed when the Education
+          field is wrong or blank and the operator already knows the course. */}
+      <div>
+        <button type="button" onClick={()=>setManual(m=>!m)}
+          style={{border:0,background:'none',color:'var(--blue)',fontSize:11.5,fontWeight:600,cursor:'pointer',padding:0}}>
+          {manual?'Hide manual course search':'Search a specific course instead'}
+        </button>
+        {manual?(
+          <div style={{display:'flex',gap:9,marginTop:8,alignItems:'center',flexWrap:'wrap'}}>
+            <select value={mProg} onChange={e=>setMProg(e.target.value)}
+              style={{flex:1,minWidth:260,padding:'8px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:12.5,fontFamily:'inherit',background:'#fff'}}>
+              <option value="">{programs.length?'Select registration type…':'Course list unavailable — see the message above'}</option>
+              {programs.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <button type="button" className="btn sm" onClick={manualLookup} disabled={!digits||!mProg||!!busy}>Look up</button>
+          </div>
+        ):null}
+      </div>
+    </div>
+  );
+}
+
 function StaffForm({store, empId, setRoute, role, depts}){
   const editing=!!empId;
   const existing=editing?store.get(empId):null;
@@ -1779,11 +2145,15 @@ function StaffForm({store, empId, setRoute, role, depts}){
           {sec('Compliance',<>
             <div style={{gridColumn:'1 / -1'}}>{field('Special Training'+(chipsOf('special_training').length?' · '+chipsOf('special_training').length+' selected':''),multiChk('special_training',S.TRAININGS.filter(Boolean),customT,setCustomT,'Add another training…'))}</div>
             {field('Hepatitis B Vaccination',cmb('hepatitis_b_vaccination',S.VACCINATION_STATES))}
-            {field('Registration / Licence No.',inp('licence_no','e.g. BNMC-12345'))}
+            {field('Registration / Licence No.',inp('licence_no','e.g. BNMC-12345'),
+              f.licence_verified?<span style={{fontSize:11,fontWeight:700,color:'#157a43',display:'inline-flex',alignItems:'center',gap:3}}><Ic d={I.check} s={12} c="#157a43"/>BNMC verified</span>:null)}
             {/* An expired licence is a rostering problem, so it is flagged the moment
                 it is typed rather than waiting for someone to audit the register. */}
             {field('Licence Expiry',inp('licence_expiry','YYYY-MM-DD','date'),
               licenceState?<span style={{fontSize:11,fontWeight:700,color:licenceState.c}}>{licenceState.t}</span>:null)}
+            {/* Checks the number above against the council's public register and keeps
+                the whole answer on the record. See the note above BnmcVerify. */}
+            <BnmcVerify f={f} set={set}/>
             <div style={{gridColumn:'1 / -1'}}>{field('Remarks',inp('remarks','Any notes'))}</div>
           </>)}
           {sec('Privileges',<>

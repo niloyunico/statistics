@@ -765,6 +765,13 @@ require('./media-admin').mount(app, { requireApi: [session.requireApi, access.at
 // account picture. Bytes go to Cloudinary; only the CDN url is ever stored.
 require('./photos').mount(app, { requireApi: [session.requireApi, access.attach] });
 
+// BNMC registration verification: looks a nurse's licence number up in the Bangladesh
+// Nursing and Midwifery Council's public register. Must be server-side — their form is
+// CSRF-protected, sends no CORS headers, and serves portraits over plain http. Gated on
+// VIEW of the staff module: it reads a public register and writes nothing, and the
+// staff profile verifies from a read-only screen too.
+require('./bnmc-verify').mount(app, { requireApi: [session.requireApi, access.requirePerm('staff', 'view')] });
+
 // Individual Performance module: the 6-monthly appraisal (Form HR-NUR-PA-01) plus the
 // achievement and incident registers whose points feed into it. Appraisals are
 // personal-file records, so the whole module is gated on 'perf' and the verb decides

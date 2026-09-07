@@ -107,7 +107,11 @@
   // Object-valued indicator fields that deep-merge (rather than replace) on patch.
   // incidents/capa are month-keyed too, so editing one month's incident report from
   // the admin drill-down preserves every other month's.
-  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups'];
+  // Month-keyed maps: a patch MERGES into the existing map instead of replacing it, so
+  // editing Aug never wipes Jul. `mNotObserved` marks a month as deliberately not
+  // measured — it must merge like every other month map or the flag would be lost the
+  // next time any other month on the same indicator is edited.
+  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups', 'mNotObserved'];
 
   // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
   // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are
