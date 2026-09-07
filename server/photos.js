@@ -33,6 +33,7 @@ const storage = require('./storage');
 const activity = require('./activity-log');
 const access = require('./access');
 const { getUsers, getDbHandle } = require('./db');
+const cache = require('./cache');
 
 /* Write the portrait url onto the staff document.
  *
@@ -57,6 +58,12 @@ async function setStaffPhoto(staffId, empId, photo) {
   if (!or.length) return false;
   const upd = photo ? { $set: { photo } } : { $unset: { photo: '' } };
   const r = await dbh.collection('staff').updateOne({ $or: or }, upd);
+  // Invalidate EXPLICITLY rather than trusting the instrumented write to do it.
+  // A portrait that reaches the database but not the cached `staff` copy is invisible:
+  // __UNICO_STAFF__ is built from that copy, so the browser is handed a roster with no
+  // picture and the client-side merge has nothing to restore. Exactly that happened to
+  // one record — the document had the photo, the cached read did not.
+  try { await cache.bump('staff'); } catch (e) { /* best effort */ }
   return r.matchedCount > 0;
 }
 

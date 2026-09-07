@@ -54,6 +54,7 @@ const activity = require('./activity-log');
 const redis = require('./redis');
 const access = require('./access');
 const { getDbHandle } = require('./db');
+const cache = require('./cache');
 
 const BASE = 'https://bncdb.bnmc.gov.bd/verify/';
 const HOST = 'bncdb.bnmc.gov.bd';
@@ -482,6 +483,9 @@ async function storeVerification(staffId, empId, payload) {
   if (payload.licence_program) set.licence_program = String(payload.licence_program);
   if (payload.licence_expiry) set.licence_expiry = String(payload.licence_expiry);
   const r = await dbh.collection('staff').updateOne({ $or: or }, { $set: set });
+  // Same reason as server/photos.js: a verification the cached roster does not carry
+  // never reaches the browser, and the client merge cannot restore what it is not sent.
+  try { await cache.bump('staff'); } catch (e) { /* best effort */ }
   return r.matchedCount > 0;
 }
 
