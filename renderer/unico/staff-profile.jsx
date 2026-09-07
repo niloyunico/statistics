@@ -1675,7 +1675,14 @@ async function bnmcApi(url){
   catch(e){ throw new Error('Could not reach the server. Check that it is running, then try again.'); }
   const body=await r.text();
   const looksHtml=/^\s*(<!doctype|<html)/i.test(body);
-  if(r.status===401||r.status===403||(looksHtml&&/login|sign in/i.test(body))){
+  // 401 = not signed in. 403 is NOT the same thing — it means signed in without the
+  // permission — and calling that "session expired" sends someone to re-login for a
+  // problem no login will fix.
+  if(r.status===403){
+    let m=''; try{ m=(JSON.parse(body)||{}).error||''; }catch(e){}
+    throw new Error(m||'You do not have permission to do this. Ask an administrator for staff edit access.');
+  }
+  if(r.status===401||(looksHtml&&/login|sign in/i.test(body))){
     throw new Error('Your session has expired. Reload the page, sign in again, then verify.');
   }
   if(r.status===404||looksHtml){
