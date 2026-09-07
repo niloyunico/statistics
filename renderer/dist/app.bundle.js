@@ -24344,7 +24344,7 @@ function StaffPhotoLibrary({
     const d = new Date(iso);
     return isNaN(d) ? '' : d.toLocaleString();
   };
-  return React.createElement("div", {
+  const modal = React.createElement("div", {
     onMouseDown: ev => {
       if (ev.target === ev.currentTarget) onClose();
     },
@@ -24535,6 +24535,8 @@ function StaffPhotoLibrary({
       color: 'var(--muted)'
     }
   }, "Only accounts with ", React.createElement("b", null, "edit"), " access to Nurse Management can open this library. Accounts with no staff access are never sent staff photos.")));
+  const RD = typeof window !== 'undefined' && window.ReactDOM;
+  return RD && RD.createPortal && typeof document !== 'undefined' ? RD.createPortal(modal, document.body) : modal;
 }
 function StaffFormRail({
   f,

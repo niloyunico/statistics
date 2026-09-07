@@ -1498,7 +1498,12 @@ function StaffPhotoLibrary({ f, set, store, empId, editing, onClose }){
   };
 
   const when=(iso)=>{ const d=new Date(iso); return isNaN(d)?'':d.toLocaleString(); };
-  return (
+  /* PORTALED to document.body on purpose. This is opened from inside the sticky
+     right-hand rail, and an ancestor there (backdrop-filter / transform on the card
+     chrome) makes position:fixed resolve against that card instead of the viewport —
+     so the "popup" rendered as a squeezed grid inside the ID preview. A portal escapes
+     every ancestor containing block, which is the only reliable way to be a modal. */
+  const modal = (
     <div onMouseDown={(ev)=>{ if(ev.target===ev.currentTarget) onClose(); }}
       style={{position:'fixed',inset:0,background:'rgba(16,32,46,.55)',zIndex:6000,display:'grid',placeItems:'center',padding:16}}>
       <div style={{background:'#fff',width:'min(920px,100%)',maxHeight:'88vh',borderRadius:14,boxShadow:'0 24px 60px rgba(5,12,24,.4)',display:'flex',flexDirection:'column',overflow:'hidden'}}>
@@ -1551,6 +1556,8 @@ function StaffPhotoLibrary({ f, set, store, empId, editing, onClose }){
       </div>
     </div>
   );
+  const RD = (typeof window !== 'undefined') && window.ReactDOM;
+  return (RD && RD.createPortal && typeof document !== 'undefined') ? RD.createPortal(modal, document.body) : modal;
 }
 
 function StaffFormRail({ f, editing, set, store, empId }){
