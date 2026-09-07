@@ -24237,6 +24237,305 @@ function DeptPrivilegesSettings({
     sw: 2.4
   })))))))));
 }
+function StaffPhotoLibrary({
+  f,
+  set,
+  store,
+  empId,
+  editing,
+  onClose
+}) {
+  const [rows, setRows] = React.useState(null);
+  const [counts, setCounts] = React.useState(null);
+  const [err, setErr] = React.useState('');
+  const [filter, setFilter] = React.useState('unattached');
+  const [busy, setBusy] = React.useState('');
+  const me = String(f.emp_id || '');
+  const myId = f.id != null ? String(f.id) : '';
+  React.useEffect(() => {
+    let live = true;
+    fetch('/api/upload/library', {
+      credentials: 'same-origin'
+    }).then(r => r.json()).then(j => {
+      if (!live) return;
+      if (!j || !j.ok) {
+        setErr(j && j.error || 'Could not load the library.');
+        setRows([]);
+        return;
+      }
+      setRows(j.assets || []);
+      setCounts(j.counts || null);
+    }).catch(() => {
+      if (live) {
+        setErr('Could not reach the server.');
+        setRows([]);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  React.useEffect(() => {
+    const k = e => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [onClose]);
+  const isMine = a => a.attachedTo && (me && String(a.attachedTo.empId || '') === me || myId && String(a.attachedTo.staffId) === myId);
+  const shown = (rows || []).filter(a => filter === 'all' || !a.attachedTo || isMine(a));
+  const pick = async a => {
+    if (a.attachedTo && !isMine(a)) {
+      const q = 'This photo is attached to ' + (a.attachedTo.name || 'another staff member') + (a.attachedTo.empId ? ' (' + a.attachedTo.empId + ')' : '') + '. Use it for ' + (f.name || 'this record') + ' instead?';
+      const ok = window.UI && window.UI.confirm ? await window.UI.confirm({
+        title: 'Photo belongs to someone else',
+        message: q,
+        confirmLabel: 'Use it here',
+        cancelLabel: 'Keep'
+      }) : window.confirm(q);
+      if (!ok) return;
+    }
+    const photo = {
+      url: a.url,
+      publicId: a.publicId,
+      updatedAt: Date.now()
+    };
+    setBusy(a.publicId);
+    setErr('');
+    try {
+      if (set) set('photo', photo);
+      if (editing && store && store.update && empId != null) {
+        try {
+          store.update(empId, {
+            photo
+          });
+        } catch (e) {}
+      }
+      if (editing && (f.id != null || f.emp_id)) {
+        const r = await fetch('/api/upload/attach', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            publicId: a.publicId,
+            url: a.url,
+            staffId: f.id != null ? f.id : null,
+            empId: f.emp_id || null,
+            staffName: f.name || ''
+          })
+        });
+        const j = await r.json().catch(() => ({
+          ok: false
+        }));
+        if (!r.ok || !j.ok) {
+          setErr(j.error || 'Attached on this device, but the server copy could not be written — press Save changes.');
+        }
+      }
+      onClose();
+    } catch (e) {
+      setErr('Could not attach the photo.');
+    } finally {
+      setBusy('');
+    }
+  };
+  const when = iso => {
+    const d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleString();
+  };
+  return React.createElement("div", {
+    onMouseDown: ev => {
+      if (ev.target === ev.currentTarget) onClose();
+    },
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(16,32,46,.55)',
+      zIndex: 6000,
+      display: 'grid',
+      placeItems: 'center',
+      padding: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      background: '#fff',
+      width: 'min(920px,100%)',
+      maxHeight: '88vh',
+      borderRadius: 14,
+      boxShadow: '0 24px 60px rgba(5,12,24,.4)',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '14px 18px',
+      borderBottom: '1px solid var(--line-2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 15.5,
+      fontWeight: 800,
+      color: 'var(--ink)'
+    }
+  }, "Uploaded staff photos"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginTop: 2
+    }
+  }, counts ? React.createElement(React.Fragment, null, counts.total, " in the library \xB7 ", React.createElement("b", {
+    style: {
+      color: counts.unattached ? '#b5670a' : '#157a43'
+    }
+  }, counts.unattached, " not attached to anyone")) : 'Loading…', f.name ? React.createElement(React.Fragment, null, " \xB7 choosing for ", React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, f.name)) : null)), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    className: "seg",
+    style: {
+      display: 'flex',
+      gap: 4
+    }
+  }, [['unattached', 'Not attached'], ['all', 'All photos']].map(([v, l]) => React.createElement("button", {
+    key: v,
+    type: "button",
+    onClick: () => setFilter(v),
+    style: {
+      border: '1px solid ' + (filter === v ? 'var(--blue)' : 'var(--line)'),
+      background: filter === v ? 'var(--blue-50)' : '#fff',
+      color: filter === v ? 'var(--blue-700)' : 'var(--ink-2)',
+      padding: '5px 11px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, l))), React.createElement("button", {
+    type: "button",
+    className: "icon-btn",
+    onClick: onClose,
+    title: "Close (Esc)"
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 15
+  }))), err ? React.createElement("div", {
+    style: {
+      margin: '12px 18px 0',
+      padding: '9px 12px',
+      borderRadius: 8,
+      background: '#fdf3f4',
+      border: '1px solid #f0c2ca',
+      color: '#a32c41',
+      fontSize: 12.5,
+      fontWeight: 600
+    }
+  }, err) : null, React.createElement("div", {
+    style: {
+      padding: 16,
+      overflowY: 'auto'
+    }
+  }, rows === null ? React.createElement("div", {
+    style: {
+      color: 'var(--muted)',
+      fontSize: 12.5,
+      padding: '30px 0',
+      textAlign: 'center'
+    }
+  }, "Loading the library\u2026") : shown.length === 0 ? React.createElement("div", {
+    style: {
+      color: 'var(--faint)',
+      fontSize: 12.5,
+      padding: '30px 0',
+      textAlign: 'center'
+    }
+  }, filter === 'unattached' ? 'Every uploaded photo is attached to someone.' : 'No photos have been uploaded yet.') : React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))',
+      gap: 12
+    }
+  }, shown.map(a => {
+    const mine = isMine(a),
+      taken = a.attachedTo && !mine;
+    return React.createElement("button", {
+      key: a.publicId,
+      type: "button",
+      onClick: () => pick(a),
+      disabled: !!busy,
+      title: taken ? 'Attached to ' + a.attachedTo.name : mine ? 'Already this staff member’s photo' : 'Attach to ' + (f.name || 'this record'),
+      style: {
+        border: '1px solid ' + (mine ? '#1f9d57' : taken ? 'var(--line)' : '#e6c98a'),
+        borderRadius: 11,
+        padding: 0,
+        background: '#fff',
+        cursor: 'pointer',
+        textAlign: 'left',
+        overflow: 'hidden',
+        boxShadow: mine ? '0 0 0 2px #1f9d5733' : 'none',
+        opacity: busy && busy !== a.publicId ? .6 : 1
+      }
+    }, React.createElement("img", {
+      src: a.thumbUrl || a.url,
+      alt: "",
+      style: {
+        width: '100%',
+        aspectRatio: '1',
+        objectFit: 'cover',
+        display: 'block',
+        background: 'var(--panel-2)'
+      }
+    }), React.createElement("div", {
+      style: {
+        padding: '7px 9px 9px'
+      }
+    }, mine ? React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 800,
+        color: '#157a43'
+      }
+    }, "\u2713 Current photo") : taken ? React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: 'var(--ink-2)',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, "\u2192 ", a.attachedTo.name || a.attachedTo.empId) : React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 800,
+        color: '#b5670a'
+      }
+    }, "Not attached"), React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: 'var(--muted)',
+        marginTop: 2
+      }
+    }, when(a.createdAt), a.bytes ? ' · ' + Math.round(a.bytes / 1024) + ' KB' : '')));
+  }))), React.createElement("div", {
+    style: {
+      padding: '10px 18px',
+      borderTop: '1px solid var(--line-2)',
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "Only accounts with ", React.createElement("b", null, "edit"), " access to Nurse Management can open this library. Accounts with no staff access are never sent staff photos.")));
+}
 function StaffFormRail({
   f,
   editing,
@@ -24244,6 +24543,7 @@ function StaffFormRail({
   store,
   empId
 }) {
+  const [libOpen, setLibOpen] = React.useState(false);
   const MK = window.MK,
     S = window.STAFF;
   const name = (f.name || '').trim();
@@ -24323,7 +24623,28 @@ function StaffFormRail({
       display: 'grid',
       placeItems: 'center'
     }
-  })), React.createElement("div", {
+  })), (window.unicoCan ? window.unicoCan('staff', 'edit') : true) && React.createElement("button", {
+    type: "button",
+    onClick: () => setLibOpen(true),
+    style: {
+      marginTop: 10,
+      border: '1px solid rgba(255,255,255,.28)',
+      background: 'rgba(255,255,255,.08)',
+      color: '#dbe9f7',
+      padding: '5px 12px',
+      borderRadius: 20,
+      fontSize: 11.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, "Choose from uploaded photos"), libOpen && React.createElement(StaffPhotoLibrary, {
+    f: f,
+    set: set,
+    store: store,
+    empId: empId,
+    editing: editing,
+    onClose: () => setLibOpen(false)
+  }), React.createElement("div", {
     style: {
       fontSize: 16,
       fontWeight: 700,

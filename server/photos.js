@@ -32,7 +32,7 @@
 const storage = require('./storage');
 const activity = require('./activity-log');
 const access = require('./access');
-const { getUsers, getDbHandle } = require('./db');
+const { getUsers, getDbHandle, getAppData } = require('./db');
 const cache = require('./cache');
 
 /* Write the portrait url onto the staff document.
@@ -204,6 +204,81 @@ function mount(app, opts) {
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: String((e && e.message) || 'Delete failed.') });
+    }
+  });
+
+  // ---- library ------------------------------------------------------------
+  /* Every portrait ever uploaded for staff, with WHO it is attached to.
+   *
+   * Cloudinary names an upload with a random id, so once the link on the staff
+   * record is lost there is nothing in the asset that says whose face it is. 23 of 51
+   * portraits on production ended up that way. This listing pairs each asset with the
+   * record that points at it (staff document first, then the browser-mirrored overlay),
+   * so an unattached one can be recognised by eye and attached with one click instead
+   * of being photographed again.
+   *
+   * Requires EDIT on staff — the same right as uploading — because this shows every
+   * portrait in the register, not just the ones a scoped account may see. */
+  app.get('/api/upload/library', requireApi, async (req, res) => {
+    if (!storage.status().configured) return notConfigured(res);
+    const kind = await allow(req, res, 'staff');
+    if (!kind) return;
+    try {
+      // Page through the folder (bounded — a runaway listing must not hang a request).
+      const assets = []; let cursor = '';
+      for (let i = 0; i < 10; i++) {
+        const page = await storage.listAssets({ folder: kind.folder, resourceType: 'image', limit: 100, cursor });
+        assets.push.apply(assets, page.assets || []);
+        cursor = page.cursor || ''; if (!cursor) break;
+      }
+      // Who points at what. Keyed by publicId and by url, since older overlay rows
+      // carry only the url.
+      const owner = {};
+      const claim = (rec, src) => {
+        const p = rec && rec.photo; if (!p) return;
+        const url = typeof p === 'string' ? p : (p.url || ''); const pid = typeof p === 'object' ? (p.publicId || '') : '';
+        const who = { name: rec.name || '', empId: rec.emp_id || '', staffId: rec.id != null ? rec.id : null, src };
+        if (pid && !owner[pid]) owner[pid] = who;
+        if (url && !owner[url]) owner[url] = who;
+      };
+      const h = await getDbHandle(); const dbh = h && h.db ? h.db : h;
+      if (dbh) (await dbh.collection('staff').find({}, { projection: { id: 1, emp_id: 1, name: 1, photo: 1 } }).toArray()).forEach((r) => claim(r, 'record'));
+      try {
+        let ov = ((await getAppData()) || {}).data; ov = ov && ov['unico_staff_v3'];
+        if (typeof ov === 'string') ov = JSON.parse(ov);
+        if (Array.isArray(ov)) ov.forEach((r) => claim(r, 'overlay'));
+      } catch (e) { /* overlay unreadable -> record ownership only */ }
+      const out = assets
+        .map((a) => Object.assign({}, a, { attachedTo: owner[a.publicId] || owner[a.url] || null }))
+        .sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)));
+      const attached = out.filter((a) => a.attachedTo).length;
+      res.json({ ok: true, assets: out, counts: { total: out.length, attached, unattached: out.length - attached } });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String((e && e.message) || 'Could not list the library.') });
+    }
+  });
+
+  // Attach an ALREADY-UPLOADED portrait to a staff record — the recovery path for the
+  // orphans above, and a way to reuse a picture without re-uploading it.
+  app.post('/api/upload/attach', requireApi, async (req, res) => {
+    const body = (req.body && typeof req.body === 'object') ? req.body : {};
+    const kind = await allow(req, res, 'staff');
+    if (!kind) return;
+    const publicId = String(body.publicId || '');
+    if (publicId.indexOf(kind.folder + '/') !== 0) return res.status(400).json({ ok: false, error: 'That is not a staff portrait.' });
+    if (body.staffId == null && !body.empId) return res.status(400).json({ ok: false, error: 'Save the staff record first, then attach a photo to it.' });
+    try {
+      const url = String(body.url || '');
+      const photo = { url, publicId, updatedAt: Date.now() };
+      const ok = await setStaffPhoto(body.staffId, body.empId, photo);
+      if (!ok) return res.status(404).json({ ok: false, error: 'That staff member has no saved record yet — save the record first.' });
+      activity.record(Object.assign({}, activity.actorOf(req), {
+        action: 'photo_upload', ip: activity.ipOf(req),
+        detail: 'attached ' + publicId + ' to staff ' + (body.empId || body.staffId) + (body.staffName ? ' · ' + String(body.staffName).slice(0, 60) : ''),
+      }));
+      res.json({ ok: true, photo });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String((e && e.message) || 'Could not attach the photo.') });
     }
   });
 
