@@ -170,9 +170,31 @@ async function qAllAreas() {
     .map((d) => Object.assign({ _id: d.quality.key, deptId: d.id }, d.quality))
     .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 }
-async function qSetIndicators(key, indicators) {
+/* Write ONE indicator, never the whole array.
+ *
+ * WHY THIS IS NOT `$set: {'quality.indicators': indicators}`
+ * That is what it used to be, and it silently destroyed approved data. applyQuality
+ * reads the department, copies its indicator array, edits one entry and writes the
+ * WHOLE array back. Two approvals that overlap in time each read the array before the
+ * other had written, so the second write restored its own stale copy over the first —
+ * a textbook lost update. It only shows up when several submissions are approved in
+ * quick succession, which is exactly what the normal "approve everything for August"
+ * pass looks like: CTVS ICU had 7 Aug-26 approvals ~1s apart and kept the last 2.
+ *
+ * Scoping the $set to the matched array element means two approvals for DIFFERENT
+ * indicators no longer touch the same field at all, so neither can erase the other.
+ */
+async function qSetIndicator(key, ind) {
   const c = await col('departments'); if (!c) return { matchedCount: 0 };
-  return c.updateOne({ 'quality.key': String(key) }, { $set: { 'quality.indicators': indicators } });
+  const r = await c.updateOne(
+    { 'quality.key': String(key), 'quality.indicators.id': ind.id },
+    { $set: { 'quality.indicators.$[el]': ind } },
+    { arrayFilters: [{ 'el.id': ind.id }] },
+  );
+  if (r.matchedCount) return r;
+  // Indicator not on the department yet — append it. $push is atomic too, so adding a
+  // new indicator cannot wipe a sibling that landed a moment earlier.
+  return c.updateOne({ 'quality.key': String(key) }, { $push: { 'quality.indicators': ind } });
 }
 async function qSetArea(key, setObj) {
   const c = await col('departments'); if (!c) return { matchedCount: 0 };
@@ -501,11 +523,12 @@ async function applyPatient(spec) {
 async function applyQuality(spec) {
   const doc = await qArea(spec.area);
   if (!doc) throw new Error('Quality area no longer exists: ' + spec.area);
+  // Read-only lookup: the indicator is written back on its own (qSetIndicator), so this
+  // array is never persisted as a whole and cannot carry a stale sibling with it.
   const indicators = Array.isArray(doc.indicators) ? doc.indicators.map((i) => Object.assign({}, i)) : [];
   let ind = indicators.find((i) => i.id === spec.indicatorId);
   if (!ind) {
     ind = { id: spec.indicatorId, name: spec.indicatorName, valueType: spec.valueType || 'Count', benchmark: spec.benchmark || '', benchmarkValue: (spec.benchmarkValue != null ? spec.benchmarkValue : null), goalDirection: spec.goalDirection || 'lower_is_better', months: {}, monthRemarks: {} };
-    indicators.push(ind);
   }
   // Persist the calculation definition so the rich entry form re-renders on reselect.
   if (spec.formula) ind.formula = spec.formula;
@@ -529,7 +552,7 @@ async function applyQuality(spec) {
     const q = Object.keys(QUARTER_MONTHS).find((k) => (QUARTER_MONTHS[k] || []).includes(mo));
     if (q && ind.quarters) { ind.quarters = Object.assign({}, ind.quarters); delete ind.quarters[q]; }
     recomputeQuarters(ind);
-    await qSetIndicators(spec.area, indicators);
+    await qSetIndicator(spec.area, ind);
     return;
   }
   // A real reading supersedes any earlier "Not observed" mark for the month.
@@ -547,7 +570,7 @@ async function applyQuality(spec) {
       if (spec.remark) ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [spec.month]: spec.remark });
       if (spec.capa) ind.capa = Object.assign({}, ind.capa || {}, { [spec.month]: Object.assign({ value: spec.value, recordedAt: Date.now() }, spec.capa) });
       recomputeQuarters(ind);
-      await qSetIndicators(spec.area, indicators);
+      await qSetIndicator(spec.area, ind);
       return;
     }
     // A submission with no real denominator (e.g. a collector logging NSI cases against the
@@ -575,7 +598,7 @@ async function applyQuality(spec) {
   // monthly data. `ind` is the same reference held in `indicators`, so the in-place
   // mutation is persisted by the $set below.
   recomputeQuarters(ind);
-  await qSetIndicators(spec.area, indicators);
+  await qSetIndicator(spec.area, ind);
 }
 
 /* ---------------- admin: custom fields on the patient form ---------------- */
@@ -1208,4 +1231,6 @@ module.exports = {
   createShortlink, getShortlinks, deleteShortlink, shortlinkMeta, shortlinkSubmit,
   registerCollector, upsertCollectorUser, getUserScope, recomputeQuarters,
   addDepartmentField, removeDepartmentField,
+  // exported so a repair script can re-apply an approval through the SAME code path
+  applyQuality,
 };
