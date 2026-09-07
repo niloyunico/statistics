@@ -20928,7 +20928,28 @@ function StaffProfile({
     className: "chip pos"
   }, "\u25CF Active") : React.createElement("span", {
     className: "chip neg"
-  }, "\u25CB Inactive"))), React.createElement("div", {
+  }, "\u25CB Inactive"), e.licence_verified ? (() => {
+    const ex = (e.licence_verified.primary || {}).expired;
+    return React.createElement("span", {
+      title: 'Checked against the BNMC register on ' + String(e.licence_verified.at || '').slice(0, 10),
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '3px 10px',
+        borderRadius: 15,
+        color: ex ? '#a32c41' : '#157a43',
+        background: ex ? '#fdf3f4' : '#eef8f1',
+        border: '1px solid ' + (ex ? '#f0c2ca' : '#cde9d8')
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 11,
+      c: ex ? '#a32c41' : '#157a43'
+    }), "BNMC ", ex ? 'expired' : 'verified');
+  })() : null)), React.createElement("div", {
     style: {
       padding: '8px 22px 0'
     }
@@ -21188,7 +21209,176 @@ function StaffProfile({
     bg: '#f1eefb',
     fg: '#6a52d4',
     br: '#e3dcf7'
-  })))), React.createElement("div", {
+  })))), e.licence_verified ? (() => {
+    const v = e.licence_verified,
+      per = v.person || {},
+      regs = v.registrations || [],
+      p = v.primary || {};
+    const ex = !!p.expired;
+    return React.createElement("div", {
+      className: "card",
+      style: {
+        borderLeft: '4px solid ' + (ex ? '#d23a52' : '#1f9d57')
+      }
+    }, secHead(I.check || I.doc, 'BNMC Registration', 'verified against the council register', {
+      bg: ex ? '#fdf3f4' : '#e7f6ed',
+      fg: ex ? '#d23a52' : '#1f9d57'
+    }), React.createElement("div", {
+      className: "card-b"
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '8px 12px',
+        borderRadius: 9,
+        marginBottom: 13,
+        flexWrap: 'wrap',
+        background: ex ? '#fdf3f4' : '#eef8f1',
+        border: '1px solid ' + (ex ? '#f0c2ca' : '#cde9d8')
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 15,
+      c: ex ? '#a32c41' : '#157a43'
+    }), React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: ex ? '#a32c41' : '#157a43'
+      }
+    }, "Registration ", p.regNo || v.number, " \xB7 ", p.status || '—', ex ? ' — this licence has expired' : ''), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "checked ", String(v.at || '').slice(0, 10))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 15,
+        flexWrap: 'wrap',
+        marginBottom: 14
+      }
+    }, per.photo ? React.createElement("img", {
+      src: '/api/bnmc/photo?u=' + encodeURIComponent(per.photo),
+      alt: "",
+      style: {
+        width: 92,
+        height: 110,
+        objectFit: 'cover',
+        borderRadius: 9,
+        border: '1px solid var(--line)',
+        background: 'var(--panel-2)'
+      },
+      onError: ev => {
+        ev.target.style.display = 'none';
+      }
+    }) : null, React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 230,
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: '11px 20px',
+        alignSelf: 'start'
+      }
+    }, field('Name on the register', per.name), field('Course', p.course), field("Father's name", per.father), field("Mother's name", per.mother), React.createElement("div", {
+      style: {
+        gridColumn: '1 / -1'
+      }
+    }, field('Address', per.address)), field('Working place', per.workplace), field('Position', per.position))), React.createElement("div", {
+      style: {
+        overflowX: 'auto',
+        border: '1px solid var(--line-2)',
+        borderRadius: 9
+      }
+    }, React.createElement("table", {
+      style: {
+        width: '100%',
+        borderCollapse: 'collapse',
+        fontSize: 11.5,
+        minWidth: 740
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, ['Registration No', 'Course Name', 'Institution / College', 'Licensing Exam Passing Date', 'Date of Registration', 'Date of Renew/Issue', 'Renew Upto', 'Status'].map(h => React.createElement("th", {
+      key: h,
+      style: {
+        textAlign: 'left',
+        padding: '8px 10px',
+        background: 'var(--panel-2)',
+        color: 'var(--muted)',
+        textTransform: 'uppercase',
+        letterSpacing: .3,
+        fontSize: 9.5,
+        fontWeight: 800,
+        whiteSpace: 'nowrap',
+        borderBottom: '1px solid var(--line-2)'
+      }
+    }, h)))), React.createElement("tbody", null, regs.map((r, i) => {
+      const isThis = r.regNo === p.regNo && r.course === p.course;
+      return React.createElement("tr", {
+        key: i,
+        style: {
+          borderBottom: '1px solid var(--line-2)',
+          background: isThis ? ex ? '#fdf7f8' : '#f6fbf8' : 'transparent'
+        }
+      }, React.createElement("td", {
+        className: "num",
+        style: {
+          padding: '8px 10px',
+          fontWeight: isThis ? 800 : 600
+        }
+      }, r.regNo), React.createElement("td", {
+        style: {
+          padding: '8px 10px',
+          fontWeight: isThis ? 700 : 400
+        }
+      }, r.course), React.createElement("td", {
+        style: {
+          padding: '8px 10px'
+        }
+      }, r.institution), React.createElement("td", {
+        style: {
+          padding: '8px 10px',
+          whiteSpace: 'nowrap'
+        }
+      }, r.exam || '—'), React.createElement("td", {
+        className: "num",
+        style: {
+          padding: '8px 10px',
+          whiteSpace: 'nowrap'
+        }
+      }, r.registered || '—'), React.createElement("td", {
+        className: "num",
+        style: {
+          padding: '8px 10px',
+          whiteSpace: 'nowrap'
+        }
+      }, r.renewIssued || '—'), React.createElement("td", {
+        className: "num",
+        style: {
+          padding: '8px 10px',
+          whiteSpace: 'nowrap'
+        }
+      }, r.renewUpto || '—'), React.createElement("td", {
+        style: {
+          padding: '8px 10px',
+          fontWeight: 800,
+          whiteSpace: 'nowrap',
+          color: r.expired ? '#d23a52' : '#157a43'
+        }
+      }, r.status || '—'));
+    })))), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        marginTop: 9
+      }
+    }, "Recorded from bncdb.bnmc.gov.bd on ", String(v.at || '').slice(0, 10), v.programName ? ' · searched under ' + v.programName : '', ". Re-check from Edit profile.")));
+  })() : null, React.createElement("div", {
     className: "card",
     style: {
       borderLeft: '4px solid #3ab5a7'

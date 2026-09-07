@@ -267,6 +267,16 @@ function StaffProfile({store, empId, setRoute}){
               <div style={{display:'flex',gap:6,marginTop:11,flexWrap:'wrap',justifyContent:'center'}}>
                 <RoleBadge role={e.role}/>
                 {e.is_active?<span className="chip pos">● Active</span>:<span className="chip neg">○ Inactive</span>}
+                {/* Credential badge — states that the licence was checked against the
+                    council's own register, not merely typed in. An EXPIRED registration
+                    is still "verified" (we did check), so the badge reports what the
+                    council actually said rather than flattening both to a green tick. */}
+                {e.licence_verified?(()=>{ const ex=(e.licence_verified.primary||{}).expired;
+                  return <span title={'Checked against the BNMC register on '+String(e.licence_verified.at||'').slice(0,10)}
+                    style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:15,
+                      color:ex?'#a32c41':'#157a43',background:ex?'#fdf3f4':'#eef8f1',border:'1px solid '+(ex?'#f0c2ca':'#cde9d8')}}>
+                    <Ic d={I.check} s={11} c={ex?'#a32c41':'#157a43'}/>BNMC {ex?'expired':'verified'}</span>;
+                })():null}
               </div>
             </div>
             {/* detail rows */}
@@ -347,6 +357,85 @@ function StaffProfile({store, empId, setRoute}){
               <div style={{gridColumn:'1 / -1'}}>{lbl('Extracurricular Activities')}{chipRow(e.extracurricular,{bg:'#f1eefb',fg:'#6a52d4',br:'#e3dcf7'})}</div>
             </div>
           </div>
+
+          {/* BNMC REGISTRATION — the council's own record, as captured on the day it was
+              checked. Shown in full on the profile because the licence block above only
+              has room for a one-line summary, and this is the part a regulator or an
+              accreditation surveyor actually asks to see: who the council says this
+              person is, which institution trained them, and how long the registration
+              runs. It is a SNAPSHOT (see server/bnmc-verify.js) — deliberately readable
+              on a day BNMC is unreachable, and re-checked from Edit profile. */}
+          {e.licence_verified?(()=>{
+            const v=e.licence_verified, per=v.person||{}, regs=v.registrations||[], p=v.primary||{};
+            const ex=!!p.expired;
+            return (
+          <div className="card" style={{borderLeft:'4px solid '+(ex?'#d23a52':'#1f9d57')}}>
+            {secHead(I.check||I.doc,'BNMC Registration','verified against the council register',{bg:ex?'#fdf3f4':'#e7f6ed',fg:ex?'#d23a52':'#1f9d57'})}
+            <div className="card-b">
+              <div style={{display:'flex',alignItems:'center',gap:9,padding:'8px 12px',borderRadius:9,marginBottom:13,flexWrap:'wrap',
+                background:ex?'#fdf3f4':'#eef8f1',border:'1px solid '+(ex?'#f0c2ca':'#cde9d8')}}>
+                <Ic d={I.check} s={15} c={ex?'#a32c41':'#157a43'}/>
+                <span style={{fontSize:12.5,fontWeight:800,color:ex?'#a32c41':'#157a43'}}>
+                  Registration {p.regNo||v.number} · {p.status||'—'}{ex?' — this licence has expired':''}
+                </span>
+                <span style={{flex:1}}/>
+                <span style={{fontSize:11,color:'var(--muted)'}}>checked {String(v.at||'').slice(0,10)}</span>
+              </div>
+
+              <div style={{display:'flex',gap:15,flexWrap:'wrap',marginBottom:14}}>
+                {/* Proxied: BNMC serves portraits over plain http, which this https page
+                    cannot embed directly. */}
+                {per.photo?<img src={'/api/bnmc/photo?u='+encodeURIComponent(per.photo)} alt=""
+                  style={{width:92,height:110,objectFit:'cover',borderRadius:9,border:'1px solid var(--line)',background:'var(--panel-2)'}}
+                  onError={ev=>{ev.target.style.display='none';}}/>:null}
+                <div style={{flex:1,minWidth:230,display:'grid',gridTemplateColumns:'1fr 1fr',gap:'11px 20px',alignSelf:'start'}}>
+                  {field('Name on the register',per.name)}
+                  {field('Course',p.course)}
+                  {field("Father's name",per.father)}
+                  {field("Mother's name",per.mother)}
+                  <div style={{gridColumn:'1 / -1'}}>{field('Address',per.address)}</div>
+                  {field('Working place',per.workplace)}
+                  {field('Position',per.position)}
+                </div>
+              </div>
+
+              {/* Every registration the council holds for this person — a nurse may hold
+                  a diploma and a later degree under DIFFERENT numbers, and the older rows
+                  are part of the evidence. The row carrying the verified number is
+                  highlighted; that is the licence this staff record is about. */}
+              <div style={{overflowX:'auto',border:'1px solid var(--line-2)',borderRadius:9}}>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:11.5,minWidth:740}}>
+                  <thead>
+                    <tr>{['Registration No','Course Name','Institution / College','Licensing Exam Passing Date','Date of Registration','Date of Renew/Issue','Renew Upto','Status'].map(h=>(
+                      <th key={h} style={{textAlign:'left',padding:'8px 10px',background:'var(--panel-2)',color:'var(--muted)',
+                        textTransform:'uppercase',letterSpacing:.3,fontSize:9.5,fontWeight:800,whiteSpace:'nowrap',borderBottom:'1px solid var(--line-2)'}}>{h}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody>
+                    {regs.map((r,i)=>{ const isThis=r.regNo===p.regNo&&r.course===p.course; return (
+                      <tr key={i} style={{borderBottom:'1px solid var(--line-2)',background:isThis?(ex?'#fdf7f8':'#f6fbf8'):'transparent'}}>
+                        <td className="num" style={{padding:'8px 10px',fontWeight:isThis?800:600}}>{r.regNo}</td>
+                        <td style={{padding:'8px 10px',fontWeight:isThis?700:400}}>{r.course}</td>
+                        <td style={{padding:'8px 10px'}}>{r.institution}</td>
+                        {/* Not a date: BNMC prints the literal word "Passed" here for some
+                            registrants and a date for others. */}
+                        <td style={{padding:'8px 10px',whiteSpace:'nowrap'}}>{r.exam||'—'}</td>
+                        <td className="num" style={{padding:'8px 10px',whiteSpace:'nowrap'}}>{r.registered||'—'}</td>
+                        <td className="num" style={{padding:'8px 10px',whiteSpace:'nowrap'}}>{r.renewIssued||'—'}</td>
+                        <td className="num" style={{padding:'8px 10px',whiteSpace:'nowrap'}}>{r.renewUpto||'—'}</td>
+                        <td style={{padding:'8px 10px',fontWeight:800,whiteSpace:'nowrap',color:r.expired?'#d23a52':'#157a43'}}>{r.status||'—'}</td>
+                      </tr>
+                    );})}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{fontSize:11,color:'var(--muted)',marginTop:9}}>
+                Recorded from bncdb.bnmc.gov.bd on {String(v.at||'').slice(0,10)}{v.programName?' · searched under '+v.programName:''}. Re-check from Edit profile.
+              </div>
+            </div>
+          </div>
+            );
+          })():null}
 
           {/* Clinical Privileges — read-only summary of the checklist filled in on the
               create/edit form. Only the granted privilege areas are shown; edit the
