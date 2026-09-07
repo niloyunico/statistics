@@ -1750,6 +1750,8 @@ function BnmcVerify({ f, set, store, empId, editing }){
   const [err,setErr]=React.useState('');
   const [manual,setManual]=React.useState(false);
   const [savedNow,setSavedNow]=React.useState(false);   // committed straight to the record
+  const [storedSrv,setStoredSrv]=React.useState(false); // …and stored server-side, permanently
+  const [storeWarn,setStoreWarn]=React.useState('');
   const [programs,setPrograms]=React.useState([]);
   const [mProg,setMProg]=React.useState(f.licence_program||'');
   const v=f.licence_verified||null;
@@ -1806,6 +1808,17 @@ function BnmcVerify({ f, set, store, empId, editing }){
       try{ store.update(empId,{licence_no:f.licence_no||digits, licence_program:m.program, licence_verified:snap}); setSavedNow(true); }
       catch(e){ /* fall back to the normal Save path — the form state still holds it */ }
     }
+    /* …and store it on the SERVER, on the staff document itself. The line above only
+       reaches the browser's overlay, which is mirrored as one big blob and is the thing
+       that goes missing. This write is the durable one: it survives a cleared browser,
+       another device, and a redeploy, and it is what makes "verified once" mean once. */
+    const rec=store&&store.get&&editing?store.get(empId):null;
+    fetch('/api/bnmc/record',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({staffId:editing?empId:null, empId:(rec&&rec.emp_id)||f.emp_id||null,
+        licence_no:f.licence_no||digits, licence_program:m.program,
+        licence_expiry:f.licence_expiry||p.renewUpto||'', verification:snap})})
+      .then(r=>r.json()).then(j=>{ if(j&&j.ok) setStoredSrv(true); else if(j&&j.error) setStoreWarn(j.error); })
+      .catch(()=>setStoreWarn('Saved on this device, but the server copy could not be written — press Save changes.'));
     // Fill only what is blank (see the header note) — the mismatch chips below hand
     // over anything that conflicts, on an explicit click.
     if(!String(f.name||'').trim() && per.name) set('name',per.name);
@@ -1936,9 +1949,13 @@ function BnmcVerify({ f, set, store, empId, editing }){
           <div style={{fontSize:11.5,fontWeight:600,padding:'7px 11px',borderRadius:8,
             color:editing?'#157a43':'#8a5d09', background:editing?'#f2fbf5':'#fdf8ec',
             border:'1px solid '+(editing?'#cde9d8':'#f2ddb4')}}>
-            {editing
-              ? (savedNow?'Saved to this staff record — it stays even if you press Cancel.':'Recorded on this staff record.')
-              : 'This verification will be stored when you press Create staff.'}
+            {storeWarn
+              ? storeWarn
+              : storedSrv
+                ? 'Stored on the server against this staff record — it is kept permanently and survives a cleared browser, another device or a redeploy.'
+                : editing
+                  ? (savedNow?'Saved to this staff record — it stays even if you press Cancel.':'Recorded on this staff record.')
+                  : 'This verification will be stored when you press Create staff.'}
           </div>
           <BnmcRecord m={v} picked/>
           {diffs.length?(

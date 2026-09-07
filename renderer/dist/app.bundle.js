@@ -2074,7 +2074,42 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   function realSeed(){ return (window.STAFF_SEED&&window.STAFF_SEED.length)
     ? window.STAFF_SEED.map(e=>({...e,fav:!!e.fav,notes:e.notes||[]}))
     : seedStaff(); }
-  function load(){ try{const s=JSON.parse(localStorage.getItem(KEY)); return Array.isArray(s)?s:null;}catch(e){return null;} }
+  /* The overlay is the browser's copy of the roster. It masks the database by design —
+     but NOT for a BNMC verification.
+
+     A verification is evidence obtained once from an outside authority, stored on the
+     staff document server-side (POST /api/bnmc/record). It arrives here inside
+     window.__UNICO_STAFF__. Merging it OVER the overlay row means a cleared browser, a
+     stale localStorage copy, or a hydration that lost the field can never erase it: the
+     server copy always wins for these three keys, and nothing else is touched.
+
+     This is the difference between "typed again if lost" and "must never be lost". */
+  function mergeServerVerification(list){
+    try{
+      const src=(typeof window!=='undefined'&&Array.isArray(window.__UNICO_STAFF__))?window.__UNICO_STAFF__:null;
+      if(!src||!src.length||!Array.isArray(list)) return list;
+      const byId={}, byEmp={};
+      src.forEach(x=>{ if(!x||!x.licence_verified) return;
+        if(x.id!=null) byId[String(x.id)]=x;
+        if(x.emp_id) byEmp[String(x.emp_id).trim()]=x; });
+      if(!Object.keys(byId).length&&!Object.keys(byEmp).length) return list;
+      return list.map(e=>{
+        const srv=(e&&e.id!=null&&byId[String(e.id)])||(e&&e.emp_id&&byEmp[String(e.emp_id).trim()]);
+        if(!srv) return e;
+        // Only take a NEWER verification, so a local re-verify done seconds ago is not
+        // reverted by a server copy the page was hydrated with.
+        const mine=e.licence_verified&&e.licence_verified.at;
+        const theirs=srv.licence_verified&&srv.licence_verified.at;
+        if(mine&&theirs&&String(mine)>=String(theirs)) return e;
+        return Object.assign({},e,{
+          licence_verified:srv.licence_verified,
+          licence_no:e.licence_no||srv.licence_no,
+          licence_program:e.licence_program||srv.licence_program,
+        });
+      });
+    }catch(err){ return list; }
+  }
+  function load(){ try{const s=JSON.parse(localStorage.getItem(KEY)); return Array.isArray(s)?mergeServerVerification(s):null;}catch(e){return null;} }
   // Publish a photo lookup for every module that shows a staff avatar (Performance,
   // Duty Roster, HR…) but doesn't hold the staff record itself. Keyed by emp id and
   // by lowercase name; the value is the CDN url. Includes former staff — an exits
@@ -24810,6 +24845,8 @@ function BnmcVerify({
   const [err, setErr] = React.useState('');
   const [manual, setManual] = React.useState(false);
   const [savedNow, setSavedNow] = React.useState(false);
+  const [storedSrv, setStoredSrv] = React.useState(false);
+  const [storeWarn, setStoreWarn] = React.useState('');
   const [programs, setPrograms] = React.useState([]);
   const [mProg, setMProg] = React.useState(f.licence_program || '');
   const v = f.licence_verified || null;
@@ -24874,6 +24911,23 @@ function BnmcVerify({
         setSavedNow(true);
       } catch (e) {}
     }
+    const rec = store && store.get && editing ? store.get(empId) : null;
+    fetch('/api/bnmc/record', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        staffId: editing ? empId : null,
+        empId: rec && rec.emp_id || f.emp_id || null,
+        licence_no: f.licence_no || digits,
+        licence_program: m.program,
+        licence_expiry: f.licence_expiry || p.renewUpto || '',
+        verification: snap
+      })
+    }).then(r => r.json()).then(j => {
+      if (j && j.ok) setStoredSrv(true);else if (j && j.error) setStoreWarn(j.error);
+    }).catch(() => setStoreWarn('Saved on this device, but the server copy could not be written — press Save changes.'));
     if (!String(f.name || '').trim() && per.name) set('name', per.name);
     if (!String(f.qualification || '').trim() && p.course) set('qualification', bnmcQualification(p.course));
     if (!String(f.licence_expiry || '').trim() && p.renewUpto) set('licence_expiry', p.renewUpto);
@@ -25134,7 +25188,7 @@ function BnmcVerify({
       background: editing ? '#f2fbf5' : '#fdf8ec',
       border: '1px solid ' + (editing ? '#cde9d8' : '#f2ddb4')
     }
-  }, editing ? savedNow ? 'Saved to this staff record — it stays even if you press Cancel.' : 'Recorded on this staff record.' : 'This verification will be stored when you press Create staff.'), React.createElement(BnmcRecord, {
+  }, storeWarn ? storeWarn : storedSrv ? 'Stored on the server against this staff record — it is kept permanently and survives a cleared browser, another device or a redeploy.' : editing ? savedNow ? 'Saved to this staff record — it stays even if you press Cancel.' : 'Recorded on this staff record.' : 'This verification will be stored when you press Create staff.'), React.createElement(BnmcRecord, {
     m: v,
     picked: true
   }), diffs.length ? React.createElement("div", {

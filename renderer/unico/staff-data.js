@@ -429,7 +429,42 @@
   function realSeed(){ return (window.STAFF_SEED&&window.STAFF_SEED.length)
     ? window.STAFF_SEED.map(e=>({...e,fav:!!e.fav,notes:e.notes||[]}))
     : seedStaff(); }
-  function load(){ try{const s=JSON.parse(localStorage.getItem(KEY)); return Array.isArray(s)?s:null;}catch(e){return null;} }
+  /* The overlay is the browser's copy of the roster. It masks the database by design —
+     but NOT for a BNMC verification.
+
+     A verification is evidence obtained once from an outside authority, stored on the
+     staff document server-side (POST /api/bnmc/record). It arrives here inside
+     window.__UNICO_STAFF__. Merging it OVER the overlay row means a cleared browser, a
+     stale localStorage copy, or a hydration that lost the field can never erase it: the
+     server copy always wins for these three keys, and nothing else is touched.
+
+     This is the difference between "typed again if lost" and "must never be lost". */
+  function mergeServerVerification(list){
+    try{
+      const src=(typeof window!=='undefined'&&Array.isArray(window.__UNICO_STAFF__))?window.__UNICO_STAFF__:null;
+      if(!src||!src.length||!Array.isArray(list)) return list;
+      const byId={}, byEmp={};
+      src.forEach(x=>{ if(!x||!x.licence_verified) return;
+        if(x.id!=null) byId[String(x.id)]=x;
+        if(x.emp_id) byEmp[String(x.emp_id).trim()]=x; });
+      if(!Object.keys(byId).length&&!Object.keys(byEmp).length) return list;
+      return list.map(e=>{
+        const srv=(e&&e.id!=null&&byId[String(e.id)])||(e&&e.emp_id&&byEmp[String(e.emp_id).trim()]);
+        if(!srv) return e;
+        // Only take a NEWER verification, so a local re-verify done seconds ago is not
+        // reverted by a server copy the page was hydrated with.
+        const mine=e.licence_verified&&e.licence_verified.at;
+        const theirs=srv.licence_verified&&srv.licence_verified.at;
+        if(mine&&theirs&&String(mine)>=String(theirs)) return e;
+        return Object.assign({},e,{
+          licence_verified:srv.licence_verified,
+          licence_no:e.licence_no||srv.licence_no,
+          licence_program:e.licence_program||srv.licence_program,
+        });
+      });
+    }catch(err){ return list; }
+  }
+  function load(){ try{const s=JSON.parse(localStorage.getItem(KEY)); return Array.isArray(s)?mergeServerVerification(s):null;}catch(e){return null;} }
   // Publish a photo lookup for every module that shows a staff avatar (Performance,
   // Duty Roster, HR…) but doesn't hold the staff record itself. Keyed by emp id and
   // by lowercase name; the value is the CDN url. Includes former staff — an exits

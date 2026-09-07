@@ -49,8 +49,11 @@
  * often slow and sometimes down, and a staff file must still show what the council
  * said, and when, on a day their site is unreachable.
  */
+const express = require('express');
 const activity = require('./activity-log');
 const redis = require('./redis');
+const access = require('./access');
+const { getDbHandle } = require('./db');
 
 const BASE = 'https://bncdb.bnmc.gov.bd/verify/';
 const HOST = 'bncdb.bnmc.gov.bd';
@@ -449,6 +452,39 @@ async function detect(number, opts) {
   };
 }
 
+/* ------------------------------------------- storing a verification for good ---
+ * WHERE A VERIFICATION LIVES, AND WHY IT IS NOT THE OVERLAY
+ * The rest of a staff record travels in the `unico_staff_v3` app-state blob: the
+ * browser holds it in localStorage and mirrors the whole array back with PUT /api/data.
+ * That is fine for fields a person retypes if they go missing. It is NOT fine for a
+ * verification — that is evidence, obtained once from an outside authority, and a
+ * cleared browser or an unlucky hydration must never be able to erase it.
+ *
+ * So the snapshot is written straight onto the staff document in MongoDB, through
+ * getDbHandle() so the read cache is invalidated fleet-wide. It rides back to every
+ * browser inside __UNICO_STAFF__ and is merged OVER the overlay copy client-side, which
+ * means the overlay can neither mask it nor lose it.
+ *
+ * Note the cache TTLs at the top of this file are about not re-asking BNMC for the same
+ * number within a week. They have nothing to do with how long a verification is kept:
+ * what is stored here is kept until someone verifies that licence again.
+ */
+async function storeVerification(staffId, empId, payload) {
+  const h = await getDbHandle();
+  const dbh = h && h.db ? h.db : h;
+  if (!dbh) throw new Error('Database not available.');
+  const or = [];
+  if (staffId != null && staffId !== '') { or.push({ id: Number(staffId) }, { _id: String(staffId) }); }
+  if (empId) or.push({ emp_id: String(empId) });
+  if (!or.length) throw new Error('No staff member identified.');
+  const set = { licence_verified: payload.verification };
+  if (payload.licence_no) set.licence_no = String(payload.licence_no);
+  if (payload.licence_program) set.licence_program = String(payload.licence_program);
+  if (payload.licence_expiry) set.licence_expiry = String(payload.licence_expiry);
+  const r = await dbh.collection('staff').updateOne({ $or: or }, { $set: set });
+  return r.matchedCount > 0;
+}
+
 // -------------------------------------------------------------------- routes
 function mount(app, opts) {
   const requireApi = (opts && opts.requireApi) || ((req, res, next) => { req.user = null; next(); });
@@ -509,6 +545,32 @@ function mount(app, opts) {
     } catch (e) { fail(res, e); }
   });
 
+  /* Persist a verification onto the staff record itself. Needs EDIT on staff: this
+     writes to a personnel file, unlike the lookups above which only read a public
+     register. */
+  app.post('/api/bnmc/record', requireApi, express.json({ limit: '1mb' }), async (req, res) => {
+    try {
+      const a = await access.forRequest(req);
+      if (!a) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+      if (!a.unrestricted && !access.can(a, 'staff', 'edit')) {
+        return res.status(403).json({ ok: false, error: 'You do not have permission to edit staff records.' });
+      }
+      const b = req.body || {};
+      if (!b.verification || typeof b.verification !== 'object') {
+        return res.status(400).json({ ok: false, error: 'Nothing to store.' });
+      }
+      const saved = await storeVerification(b.staffId, b.empId, b);
+      if (!saved) return res.status(404).json({ ok: false, error: 'That staff member is not in the register yet — save the record first.' });
+      activity.record(Object.assign({}, activity.actorOf(req), {
+        action: 'bnmc_verify', ip: activity.ipOf(req),
+        detail: 'stored verification for staff ' + (b.empId || b.staffId) + ' (reg ' + (b.licence_no || '?') + ')',
+      }));
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String((e && e.message) || 'Could not store the verification.') });
+    }
+  });
+
   // Portrait proxy. BNMC serves photos over plain http, which the https app cannot
   // embed. The host is pinned so this parameter can never be aimed at an internal
   // address, and only image content types are passed back.
@@ -530,7 +592,7 @@ function mount(app, opts) {
 }
 
 module.exports = {
-  mount, lookup, detect, programs,
+  mount, lookup, detect, programs, storeVerification,
   parseResult, parseRows, parsePerson, parsePrograms, primaryOf,
   programsForEducation, candidateOrder, PROGRAMS_FALLBACK,
 };
