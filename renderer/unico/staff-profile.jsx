@@ -247,7 +247,7 @@ function StaffProfile({store, empId, setRoute}){
             <div style={{height:4,background:'linear-gradient(90deg,#3ab5a7,#0aa0d4,#0072a3)'}}/>
             {/* photo */}
             <div style={{display:'flex',flexDirection:'column',alignItems:'center',padding:'18px 22px 4px'}}>
-              <div style={{borderRadius:14,padding:4,background:'var(--panel)',border:'1px solid var(--line)',boxShadow:'0 6px 16px rgba(0,0,0,.13)'}}>
+              <div style={{position:'relative',borderRadius:14,padding:4,background:'var(--panel)',border:'1px solid var(--line)',boxShadow:'0 6px 16px rgba(0,0,0,.13)'}}>
                   {/* READ-ONLY on purpose. This is the profile VIEW — the badge shows
                       the photo, it does not edit it. Changing a personnel record's
                       picture belongs with the rest of that record, behind "Edit
@@ -261,6 +261,22 @@ function StaffProfile({store, empId, setRoute}){
                   w={104} h={120} radius={10} plain readOnly
                   zoomable zoomSub={desig||undefined}
                 />
+                {/* Verified tick ON the portrait. The chip below already says it in
+                    words, but the photo is what someone looks at first on an ID card,
+                    so the credential reads at a glance. The white ring keeps it legible
+                    over a dark photo. Red when the council says the licence has lapsed —
+                    an expired registration was still verified, and hiding that would let
+                    a lapsed licence pass as compliant. */}
+                {e.licence_verified?(()=>{ const ex=(e.licence_verified.primary||{}).expired;
+                  return (
+                    <span title={'BNMC '+(ex?'registration expired':'verified')+' — checked '+String(e.licence_verified.at||'').slice(0,10)}
+                      style={{position:'absolute',right:-3,bottom:-3,width:26,height:26,borderRadius:'50%',
+                        display:'grid',placeItems:'center',background:ex?'#d23a52':'#1f9d57',
+                        border:'2.5px solid var(--panel)',boxShadow:'0 2px 6px rgba(0,0,0,.28)'}}>
+                      <Ic d={I.check} s={13} c="#fff" sw={3}/>
+                    </span>
+                  );
+                })():null}
               </div>
               <h2 style={{margin:'14px 0 3px',fontSize:19,fontWeight:800,letterSpacing:'-.2px',textAlign:'center'}}>{e.name}</h2>
               <div style={{fontSize:12.5,color:'var(--blue-700)',fontWeight:700,textAlign:'center'}}>{desig||'—'}</div>

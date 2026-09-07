@@ -20880,6 +20880,7 @@ function StaffProfile({
     }
   }, React.createElement("div", {
     style: {
+      position: 'relative',
       borderRadius: 14,
       padding: 4,
       background: 'var(--panel)',
@@ -20899,7 +20900,30 @@ function StaffProfile({
     readOnly: true,
     zoomable: true,
     zoomSub: desig || undefined
-  })), React.createElement("h2", {
+  }), e.licence_verified ? (() => {
+    const ex = (e.licence_verified.primary || {}).expired;
+    return React.createElement("span", {
+      title: 'BNMC ' + (ex ? 'registration expired' : 'verified') + ' — checked ' + String(e.licence_verified.at || '').slice(0, 10),
+      style: {
+        position: 'absolute',
+        right: -3,
+        bottom: -3,
+        width: 26,
+        height: 26,
+        borderRadius: '50%',
+        display: 'grid',
+        placeItems: 'center',
+        background: ex ? '#d23a52' : '#1f9d57',
+        border: '2.5px solid var(--panel)',
+        boxShadow: '0 2px 6px rgba(0,0,0,.28)'
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 13,
+      c: "#fff",
+      sw: 3
+    }));
+  })() : null), React.createElement("h2", {
     style: {
       margin: '14px 0 3px',
       fontSize: 19,
