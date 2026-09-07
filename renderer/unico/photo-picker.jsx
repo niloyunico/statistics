@@ -66,17 +66,23 @@
     const image = (typeof src === 'string') ? src : await unicoResizeImage(src);
     const r = await fetch('/api/upload', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-      body: JSON.stringify({ image, kind: o.kind || 'staff', staffName: o.name || '' }),
+      // staffId/empId let the server store the url on the staff document itself —
+      // without them it can only go into the browser-mirrored overlay, which is how
+      // portraits went missing after a redeploy.
+      body: JSON.stringify({ image, kind: o.kind || 'staff', staffName: o.name || '',
+        staffId: o.staffId != null ? o.staffId : null, empId: o.empId || null }),
     });
     const j = await r.json().catch(() => ({ ok: false, error: 'The server sent an unreadable reply.' }));
     if (!r.ok || !j.ok) throw new Error(j.error || 'Upload failed.');
     return j;   // { url, publicId, width, height, bytes }
   }
 
-  async function unicoDeletePhoto(publicId, kind) {
+  async function unicoDeletePhoto(publicId, kind, who) {
+    const w = who || {};
     const r = await fetch('/api/upload', {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-      body: JSON.stringify({ publicId: publicId, kind: kind || 'staff' }),
+      body: JSON.stringify({ publicId: publicId, kind: kind || 'staff',
+        staffId: w.staffId != null ? w.staffId : null, empId: w.empId || null }),
     });
     const j = await r.json().catch(() => ({ ok: false }));
     if (!r.ok || !j.ok) throw new Error(j.error || 'Could not remove the photo.');
@@ -309,7 +315,7 @@
    *   zoomable makes an existing photo clickable: it opens large in a lightbox
    *   (pass zoomSub for the caption line under the name).
    */
-  function PhotoPicker({ value, onChange, initials, name, size, kind, readOnly, hue, w, h, radius, plain, zoomable, zoomSub }) {
+  function PhotoPicker({ value, onChange, initials, name, size, kind, readOnly, hue, w, h, radius, plain, zoomable, zoomSub, staffId, empId }) {
     const [busy, setBusy] = React.useState(false);
     const [cfg, setCfg] = React.useState(null);
     const [cropSrc, setCropSrc] = React.useState(null);   // data URI awaiting framing
@@ -342,7 +348,7 @@
       setCropSrc(null);
       setBusy(true);
       try {
-        const up = await unicoUploadPhoto(dataUri, { kind: kind, name: name });
+        const up = await unicoUploadPhoto(dataUri, { kind: kind, name: name, staffId: staffId, empId: empId });
         onChange && onChange({ url: up.url, publicId: up.publicId });
         toast('Photo updated', 'success');
       } catch (e) { toast(String((e && e.message) || e), 'error'); }
@@ -357,7 +363,7 @@
       if (!ok) return;
       setBusy(true);
       try {
-        await unicoDeletePhoto(value.publicId, kind);
+        await unicoDeletePhoto(value.publicId, kind, { staffId: staffId, empId: empId });
         onChange && onChange(null);
         toast('Photo removed', 'success');
       } catch (e) { toast(String((e && e.message) || e), 'error'); }

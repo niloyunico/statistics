@@ -438,13 +438,16 @@
      stale localStorage copy, or a hydration that lost the field can never erase it: the
      server copy always wins for these three keys, and nothing else is touched.
 
-     This is the difference between "typed again if lost" and "must never be lost". */
+     The same applies to a staff PORTRAIT: the bytes are in Cloudinary, but the url was
+     overlay-only, so 23 uploads on production ended up orphaned — the picture kept, the
+     link gone, and no way to tell whose face it was. server/photos.js now writes that
+     url to the staff document, and it is restored here whenever a row has lost it. */
   function mergeServerVerification(list){
     try{
       const src=(typeof window!=='undefined'&&Array.isArray(window.__UNICO_STAFF__))?window.__UNICO_STAFF__:null;
       if(!src||!src.length||!Array.isArray(list)) return list;
       const byId={}, byEmp={};
-      src.forEach(x=>{ if(!x||!x.licence_verified) return;
+      src.forEach(x=>{ if(!x||!(x.licence_verified||x.photo)) return;
         if(x.id!=null) byId[String(x.id)]=x;
         if(x.emp_id) byEmp[String(x.emp_id).trim()]=x; });
       if(!Object.keys(byId).length&&!Object.keys(byEmp).length) return list;
@@ -453,14 +456,25 @@
         if(!srv) return e;
         // Only take a NEWER verification, so a local re-verify done seconds ago is not
         // reverted by a server copy the page was hydrated with.
-        const mine=e.licence_verified&&e.licence_verified.at;
-        const theirs=srv.licence_verified&&srv.licence_verified.at;
-        if(mine&&theirs&&String(mine)>=String(theirs)) return e;
-        return Object.assign({},e,{
-          licence_verified:srv.licence_verified,
-          licence_no:e.licence_no||srv.licence_no,
-          licence_program:e.licence_program||srv.licence_program,
-        });
+        const out=Object.assign({},e);
+        let changed=false;
+        // Verification: the server copy wins unless ours is newer (a re-verify done
+        // seconds ago must not be reverted by the copy this page was hydrated with).
+        if(srv.licence_verified){
+          const mine=e.licence_verified&&e.licence_verified.at;
+          const theirs=srv.licence_verified.at;
+          if(!(mine&&theirs&&String(mine)>=String(theirs))){
+            out.licence_verified=srv.licence_verified;
+            out.licence_no=e.licence_no||srv.licence_no;
+            out.licence_program=e.licence_program||srv.licence_program;
+            changed=true;
+          }
+        }
+        // Portrait: restore ONLY when this row has none. Never overwrite a picture the
+        // overlay already carries — that may be one just chosen and not yet synced. A
+        // removal clears the server copy too (photos.js), so nothing comes back.
+        if(srv.photo&&!(e.photo||e.photo_url)){ out.photo=srv.photo; changed=true; }
+        return changed?out:e;
       });
     }catch(err){ return list; }
   }

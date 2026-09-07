@@ -2083,13 +2083,16 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
      stale localStorage copy, or a hydration that lost the field can never erase it: the
      server copy always wins for these three keys, and nothing else is touched.
 
-     This is the difference between "typed again if lost" and "must never be lost". */
+     The same applies to a staff PORTRAIT: the bytes are in Cloudinary, but the url was
+     overlay-only, so 23 uploads on production ended up orphaned — the picture kept, the
+     link gone, and no way to tell whose face it was. server/photos.js now writes that
+     url to the staff document, and it is restored here whenever a row has lost it. */
   function mergeServerVerification(list){
     try{
       const src=(typeof window!=='undefined'&&Array.isArray(window.__UNICO_STAFF__))?window.__UNICO_STAFF__:null;
       if(!src||!src.length||!Array.isArray(list)) return list;
       const byId={}, byEmp={};
-      src.forEach(x=>{ if(!x||!x.licence_verified) return;
+      src.forEach(x=>{ if(!x||!(x.licence_verified||x.photo)) return;
         if(x.id!=null) byId[String(x.id)]=x;
         if(x.emp_id) byEmp[String(x.emp_id).trim()]=x; });
       if(!Object.keys(byId).length&&!Object.keys(byEmp).length) return list;
@@ -2098,14 +2101,25 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
         if(!srv) return e;
         // Only take a NEWER verification, so a local re-verify done seconds ago is not
         // reverted by a server copy the page was hydrated with.
-        const mine=e.licence_verified&&e.licence_verified.at;
-        const theirs=srv.licence_verified&&srv.licence_verified.at;
-        if(mine&&theirs&&String(mine)>=String(theirs)) return e;
-        return Object.assign({},e,{
-          licence_verified:srv.licence_verified,
-          licence_no:e.licence_no||srv.licence_no,
-          licence_program:e.licence_program||srv.licence_program,
-        });
+        const out=Object.assign({},e);
+        let changed=false;
+        // Verification: the server copy wins unless ours is newer (a re-verify done
+        // seconds ago must not be reverted by the copy this page was hydrated with).
+        if(srv.licence_verified){
+          const mine=e.licence_verified&&e.licence_verified.at;
+          const theirs=srv.licence_verified.at;
+          if(!(mine&&theirs&&String(mine)>=String(theirs))){
+            out.licence_verified=srv.licence_verified;
+            out.licence_no=e.licence_no||srv.licence_no;
+            out.licence_program=e.licence_program||srv.licence_program;
+            changed=true;
+          }
+        }
+        // Portrait: restore ONLY when this row has none. Never overwrite a picture the
+        // overlay already carries — that may be one just chosen and not yet synced. A
+        // removal clears the server copy too (photos.js), so nothing comes back.
+        if(srv.photo&&!(e.photo||e.photo_url)){ out.photo=srv.photo; changed=true; }
+        return changed?out:e;
       });
     }catch(err){ return list; }
   }
@@ -11054,7 +11068,9 @@ Object.assign(window, {
       body: JSON.stringify({
         image,
         kind: o.kind || 'staff',
-        staffName: o.name || ''
+        staffName: o.name || '',
+        staffId: o.staffId != null ? o.staffId : null,
+        empId: o.empId || null
       })
     });
     const j = await r.json().catch(() => ({
@@ -11064,7 +11080,8 @@ Object.assign(window, {
     if (!r.ok || !j.ok) throw new Error(j.error || 'Upload failed.');
     return j;
   }
-  async function unicoDeletePhoto(publicId, kind) {
+  async function unicoDeletePhoto(publicId, kind, who) {
+    const w = who || {};
     const r = await fetch('/api/upload', {
       method: 'DELETE',
       headers: {
@@ -11073,7 +11090,9 @@ Object.assign(window, {
       credentials: 'same-origin',
       body: JSON.stringify({
         publicId: publicId,
-        kind: kind || 'staff'
+        kind: kind || 'staff',
+        staffId: w.staffId != null ? w.staffId : null,
+        empId: w.empId || null
       })
     });
     const j = await r.json().catch(() => ({
@@ -11434,7 +11453,9 @@ Object.assign(window, {
     radius,
     plain,
     zoomable,
-    zoomSub
+    zoomSub,
+    staffId,
+    empId
   }) {
     const [busy, setBusy] = React.useState(false);
     const [cfg, setCfg] = React.useState(null);
@@ -11475,7 +11496,9 @@ Object.assign(window, {
       try {
         const up = await unicoUploadPhoto(dataUri, {
           kind: kind,
-          name: name
+          name: name,
+          staffId: staffId,
+          empId: empId
         });
         onChange && onChange({
           url: up.url,
@@ -11502,7 +11525,10 @@ Object.assign(window, {
       if (!ok) return;
       setBusy(true);
       try {
-        await unicoDeletePhoto(value.publicId, kind);
+        await unicoDeletePhoto(value.publicId, kind, {
+          staffId: staffId,
+          empId: empId
+        });
         onChange && onChange(null);
         toast('Photo removed', 'success');
       } catch (e) {
@@ -24274,6 +24300,8 @@ function StaffFormRail({
     kind: "staff",
     size: 112,
     radius: "50%",
+    staffId: f.id != null ? f.id : null,
+    empId: f.emp_id || null,
     readOnly: !(window.unicoCan ? window.unicoCan('staff', 'edit') : true),
     style: {
       background: name ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'linear-gradient(135deg,#2b8f83,#0072a3)',

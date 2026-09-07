@@ -32,7 +32,33 @@
 const storage = require('./storage');
 const activity = require('./activity-log');
 const access = require('./access');
-const { getUsers } = require('./db');
+const { getUsers, getDbHandle } = require('./db');
+
+/* Write the portrait url onto the staff document.
+ *
+ * The header above used to say this route deliberately does NOT touch the staff
+ * record, on the grounds that a second writer is how concurrent edits get lost. That
+ * reasoning holds for whole-record writes; it does not hold for one field. And the
+ * cost of leaving it out was severe: the url lived only in the `unico_staff_v3`
+ * app-state blob, which the browser mirrors back wholesale, so a stale tab or an
+ * unlucky hydration dropped it. Measured on production: 51 portraits uploaded to
+ * Cloudinary, 28 still referenced — 23 orphaned, the bytes kept but the link gone,
+ * and no way to tell whose face they were.
+ *
+ * A targeted $set on one field is atomic and cannot clobber a sibling edit, and it
+ * goes through getDbHandle() so the read cache is invalidated fleet-wide. */
+async function setStaffPhoto(staffId, empId, photo) {
+  const h = await getDbHandle();
+  const dbh = h && h.db ? h.db : h;
+  if (!dbh) return false;
+  const or = [];
+  if (staffId != null && staffId !== '') or.push({ id: Number(staffId) }, { _id: String(staffId) });
+  if (empId) or.push({ emp_id: String(empId) });
+  if (!or.length) return false;
+  const upd = photo ? { $set: { photo } } : { $unset: { photo: '' } };
+  const r = await dbh.collection('staff').updateOne({ $or: or }, upd);
+  return r.matchedCount > 0;
+}
 
 // Generous for a portrait the client has already resized; small enough that a stray
 // 12 MP phone photo is refused with a clear message instead of a timeout.
@@ -115,6 +141,16 @@ function mount(app, opts) {
         }
       }
 
+      // Staff portrait: store the url on the staff document too, so it survives a
+      // cleared browser, another device and a redeploy. Best effort — a failure here
+      // must not fail an upload that already succeeded, and the overlay still carries
+      // it as before.
+      if (kind.folder === KINDS.staff.folder && (body.staffId != null || body.empId)) {
+        try {
+          await setStaffPhoto(body.staffId, body.empId, { url: up.url, publicId: up.publicId, updatedAt: Date.now() });
+        } catch (e) { /* keep the upload successful */ }
+      }
+
       activity.record(Object.assign({}, activity.actorOf(req), {
         action: 'photo_upload',
         ip: activity.ipOf(req),
@@ -149,6 +185,11 @@ function mount(app, opts) {
         const who = req.user && (req.user.sub || req.user.username);
         if (who) await (await getUsers()).updateOne({ username: who }, { $unset: { photo: '' } });
       }
+      // Removing a portrait must clear the server copy too, or the merge on the
+      // client would helpfully put it back.
+      if (kind.folder === KINDS.staff.folder && (body.staffId != null || body.empId)) {
+        try { await setStaffPhoto(body.staffId, body.empId, null); } catch (e) { /* non-fatal */ }
+      }
       await storage.deleteByPublicId(publicId);
       activity.record(Object.assign({}, activity.actorOf(req), {
         action: 'photo_delete', ip: activity.ipOf(req), detail: publicId,
@@ -168,4 +209,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, IMG_MAX, IMG_TYPES };
+module.exports = { mount, setStaffPhoto, IMG_MAX, IMG_TYPES };

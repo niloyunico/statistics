@@ -1484,6 +1484,9 @@ function StaffFormRail({ f, editing, set }){
             onChange={(next) => set && set('photo', next)}
             initials={name ? initials : '?'} name={name || 'New staff member'}
             kind="staff" size={112} radius="50%"
+            /* So the server can put the url on the staff document, not only in the
+               browser-mirrored overlay (which is what lost 23 portraits). */
+            staffId={f.id != null ? f.id : null} empId={f.emp_id || null}
             readOnly={!(window.unicoCan ? window.unicoCan('staff','edit') : true)}
             style={{ background: name ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'linear-gradient(135deg,#2b8f83,#0072a3)',
               fontSize:38, fontWeight:700, color:'#fff', boxShadow:'0 10px 30px rgba(0,144,202,.35)',
