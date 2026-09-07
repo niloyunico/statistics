@@ -24774,7 +24774,10 @@ function BnmcRecord({
 }
 function BnmcVerify({
   f,
-  set
+  set,
+  store,
+  empId,
+  editing
 }) {
   const [busy, setBusy] = React.useState('');
   const [prog, setProg] = React.useState(null);
@@ -24782,6 +24785,7 @@ function BnmcVerify({
   const [note, setNote] = React.useState('');
   const [err, setErr] = React.useState('');
   const [manual, setManual] = React.useState(false);
+  const [savedNow, setSavedNow] = React.useState(false);
   const [programs, setPrograms] = React.useState([]);
   const [mProg, setMProg] = React.useState(f.licence_program || '');
   const v = f.licence_verified || null;
@@ -24825,8 +24829,7 @@ function BnmcVerify({
   const apply = m => {
     const p = m.primary || {},
       per = m.person || {};
-    set('licence_program', m.program);
-    set('licence_verified', {
+    const snap = {
       at: m.fetchedAt || new Date().toISOString(),
       number: digits,
       program: m.program,
@@ -24834,7 +24837,19 @@ function BnmcVerify({
       person: per,
       registrations: m.registrations || [],
       primary: p
-    });
+    };
+    set('licence_program', m.program);
+    set('licence_verified', snap);
+    if (editing && store && store.update) {
+      try {
+        store.update(empId, {
+          licence_no: f.licence_no || digits,
+          licence_program: m.program,
+          licence_verified: snap
+        });
+        setSavedNow(true);
+      } catch (e) {}
+    }
     if (!String(f.name || '').trim() && per.name) set('name', per.name);
     if (!String(f.qualification || '').trim() && p.course) set('qualification', bnmcQualification(p.course));
     if (!String(f.licence_expiry || '').trim() && p.renewUpto) set('licence_expiry', p.renewUpto);
@@ -25085,7 +25100,17 @@ function BnmcVerify({
       fontSize: 11,
       color: 'var(--muted)'
     }
-  }, "checked ", String(v.at || '').slice(0, 10))), React.createElement(BnmcRecord, {
+  }, "checked ", String(v.at || '').slice(0, 10))), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      padding: '7px 11px',
+      borderRadius: 8,
+      color: editing ? '#157a43' : '#8a5d09',
+      background: editing ? '#f2fbf5' : '#fdf8ec',
+      border: '1px solid ' + (editing ? '#cde9d8' : '#f2ddb4')
+    }
+  }, editing ? savedNow ? 'Saved to this staff record — it stays even if you press Cancel.' : 'Recorded on this staff record.' : 'This verification will be stored when you press Create staff.'), React.createElement(BnmcRecord, {
     m: v,
     picked: true
   }), diffs.length ? React.createElement("div", {
@@ -25963,7 +25988,10 @@ function StaffForm({
     }
   }, licenceState.t) : null), React.createElement(BnmcVerify, {
     f: f,
-    set: set
+    set: set,
+    store: store,
+    empId: empId,
+    editing: editing
   }), React.createElement("div", {
     style: {
       gridColumn: '1 / -1'

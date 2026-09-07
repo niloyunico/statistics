@@ -1726,13 +1726,14 @@ function BnmcRecord({ m, compact, onPick, picked }){
   );
 }
 
-function BnmcVerify({ f, set }){
+function BnmcVerify({ f, set, store, empId, editing }){
   const [busy,setBusy]=React.useState('');            // '' | 'edu' | 'all'
   const [prog,setProg]=React.useState(null);          // {tried,total} while sweeping
   const [cands,setCands]=React.useState(null);        // candidate list awaiting a choice
   const [note,setNote]=React.useState('');
   const [err,setErr]=React.useState('');
   const [manual,setManual]=React.useState(false);
+  const [savedNow,setSavedNow]=React.useState(false);   // committed straight to the record
   const [programs,setPrograms]=React.useState([]);
   const [mProg,setMProg]=React.useState(f.licence_program||'');
   const v=f.licence_verified||null;
@@ -1769,12 +1770,26 @@ function BnmcVerify({ f, set }){
 
   const apply=(m)=>{
     const p=m.primary||{}, per=m.person||{};
-    set('licence_program',m.program);
-    set('licence_verified',{
+    const snap={
       at:m.fetchedAt||new Date().toISOString(), number:digits,
       program:m.program, programName:m.programName,
       person:per, registrations:m.registrations||[], primary:p,
-    });
+    };
+    set('licence_program',m.program);
+    set('licence_verified',snap);
+    /* WRITE IT NOW, not on Save.
+       The panel reports "Verified against the BNMC register" with a date, which reads
+       as a completed action — and it was: we really did ask the council and they really
+       did answer. Leaving that in form state until someone remembers to press Save
+       meant walking away discarded it, and the record then showed nothing at all with
+       no hint that anything had been lost. A verification is a fact about the licence
+       number, not an edit in progress, so for an existing record it is committed
+       immediately and survives Cancel. A NEW staff member has no record to write to
+       yet, so there it rides along with Create staff (the panel says so). */
+    if(editing && store && store.update){
+      try{ store.update(empId,{licence_no:f.licence_no||digits, licence_program:m.program, licence_verified:snap}); setSavedNow(true); }
+      catch(e){ /* fall back to the normal Save path — the form state still holds it */ }
+    }
     // Fill only what is blank (see the header note) — the mismatch chips below hand
     // over anything that conflicts, on an explicit click.
     if(!String(f.name||'').trim() && per.name) set('name',per.name);
@@ -1899,6 +1914,15 @@ function BnmcVerify({ f, set }){
             </span>
             <span style={{flex:1}}/>
             <span style={{fontSize:11,color:'var(--muted)'}}>checked {String(v.at||'').slice(0,10)}</span>
+          </div>
+          {/* Be explicit about whether this is on the record yet — the previous version
+              looked identical either way, which is how a verification got lost. */}
+          <div style={{fontSize:11.5,fontWeight:600,padding:'7px 11px',borderRadius:8,
+            color:editing?'#157a43':'#8a5d09', background:editing?'#f2fbf5':'#fdf8ec',
+            border:'1px solid '+(editing?'#cde9d8':'#f2ddb4')}}>
+            {editing
+              ? (savedNow?'Saved to this staff record — it stays even if you press Cancel.':'Recorded on this staff record.')
+              : 'This verification will be stored when you press Create staff.'}
           </div>
           <BnmcRecord m={v} picked/>
           {diffs.length?(
@@ -2242,7 +2266,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
               licenceState?<span style={{fontSize:11,fontWeight:700,color:licenceState.c}}>{licenceState.t}</span>:null)}
             {/* Checks the number above against the council's public register and keeps
                 the whole answer on the record. See the note above BnmcVerify. */}
-            <BnmcVerify f={f} set={set}/>
+            <BnmcVerify f={f} set={set} store={store} empId={empId} editing={editing}/>
             <div style={{gridColumn:'1 / -1'}}>{field('Remarks',inp('remarks','Any notes'))}</div>
           </>)}
           {sec('Privileges',<>
