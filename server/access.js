@@ -57,6 +57,9 @@ const KEY_MODULE = {
   unico_staff_v3: 'staff',
   unico_staff_customfields_v1: 'staff',
   unico_staff_fieldopts_v1: 'staff',
+  unico_privilege_custom_v1: 'staff',
+  unico_dept_privileges_v1: 'staff',
+  unico_dept_privilege_groups_v1: 'staff',
 
   unico_qc_report_presets_v1: 'reports',
   unico_report_builder_v1: 'reports',

@@ -69,6 +69,31 @@ const staffArr = [
   eq('admin snapshot untouched', Object.keys(await access.scopeSnapshot(admin, blob)).length, 5);
 
   console.log('\n== PUT /api/data merge (the data-loss guard) ==');
+  // Staff settings must follow the same permissions as the personnel register.
+  // These keys used to be absent from KEY_MODULE: admin edits disappeared for
+  // custom roles and those users' own edits were silently ignored on save.
+  const settings = {
+    unico_privilege_custom_v1: '{"Nurse":[{"group":"Updated","items":["Assessment"]}]}',
+    unico_dept_privileges_v1: '{"MICU":{"Nurse":["Assessment"]}}',
+    unico_dept_privilege_groups_v1: '[{"name":"Critical care","depts":["MICU"]}]',
+  };
+  const manager = { ...staffUser, role: 'Nurse Management' };
+  const reader = { ...manager, perms: { staff: ['view'] } };
+  const denied = { ...manager, perms: { quality: ['edit'] } };
+  eq('custom staff role receives updated privilege settings', await access.scopeSnapshot(manager, settings), settings);
+  eq('read-only staff role receives updated privilege settings', await access.scopeSnapshot(reader, settings), settings);
+  eq('other modules cannot read staff settings', await access.scopeSnapshot(denied, settings), {});
+  const updatedSettings = Object.fromEntries(Object.keys(settings).map(k => [k, '{}']));
+  eq('custom staff editor saves privilege settings', await access.mergeAppData(manager, updatedSettings, settings), updatedSettings);
+  eq('read-only role cannot overwrite staff settings', await access.mergeAppData(reader, updatedSettings, settings), settings);
+  eq('other modules cannot overwrite staff settings', await access.mergeAppData(denied, updatedSettings, settings), settings);
+  eq('read-only mirror preserves omitted staff settings', await access.mergeAppData(reader, {}, settings), settings);
+  // Discover the settings keys from the store so a newly added setting cannot
+  // silently become administrator-only again.
+  const staffSource = require('fs').readFileSync(require('path').join(__dirname, '../../renderer/unico/staff-data.js'), 'utf8');
+  const staffKeys = [...new Set(staffSource.match(/unico_[a-z0-9_]+/g) || [])];
+  staffKeys.forEach(key => eq('staff store key is registered: ' + key, access.moduleOfKey(key), 'staff'));
+
   // The scoped browser holds ONLY what it was given, and mirrors that back.
   const echoed = { unico_staff_v3: scoped.unico_staff_v3 };
   const merged = await access.mergeAppData(staffUser, echoed, blob);
