@@ -108,10 +108,35 @@ const MANIFEST = [
   { file: 'app.jsx', jsx: true },
 ];
 
-function buildBundle() {
+// The two phone apps ported from the Claude Design canvases (docs/design). Each is
+// its own page + bundle: the runtime helpers, the design data, the GENERATED view
+// (scripts/dc-to-jsx.js) and the hand-written logic, in that order. They share the
+// vendored React and fonts with the console but nothing from its bundle.
+const NURSE_MANIFEST = [
+  { file: 'dc-runtime.jsx', jsx: true },        // window.DC — S(), ix(), AndroidDevice, api()
+  { file: 'roster-spec.js', jsx: false },     // window.UNICO_ROSTER — the hospital's real duty codes
+  { file: 'appraisal-spec.js', jsx: false },  // window.UNICO_APPRAISAL — appraisal sections, to label real scores
+  { file: 'nurse-app-data.js', jsx: false },   // window.NURSE_APP_DATA — design seed/fallback data
+  { file: 'nurse-app-view.jsx', jsx: true },   // window.NurseAppView — GENERATED, do not edit
+  { file: 'nurse-app.jsx', jsx: true },        // state + view-model + mount
+];
+const ADMIN_MANIFEST = [
+  { file: 'dc-runtime.jsx', jsx: true },
+  { file: 'admin-app-data.js', jsx: false },
+  { file: 'admin-app-view.jsx', jsx: true },   // GENERATED, do not edit
+  { file: 'admin-app.jsx', jsx: true },
+];
+// out = bundle file under renderer/dist; html = the page whose ?v= token tracks it.
+const BUNDLES = [
+  { out: 'app.bundle.js', html: 'index.html', manifest: MANIFEST },
+  { out: 'nurse-app.bundle.js', html: 'nurse-app.html', manifest: NURSE_MANIFEST },
+  { out: 'admin-app.bundle.js', html: 'admin-app.html', manifest: ADMIN_MANIFEST },
+];
+
+function buildBundle(manifest) {
   const parts = [];
   let transpiled = 0;
-  for (const mod of MANIFEST) {
+  for (const mod of manifest) {
     const full = path.join(SRC, mod.file);
     let code;
     try {
@@ -145,48 +170,52 @@ function buildBundle() {
 }
 
 function main() {
-  const bundlePath = path.join(DIST, 'app.bundle.js');
-  const haveBundle = fs.existsSync(bundlePath);
-
-  // Degrade gracefully: if Babel isn't installed or the build throws, keep serving
-  // the existing committed bundle rather than blocking `npm run web`. Only hard-fail
-  // when there is no bundle at all to fall back to.
   if (!Babel) {
     const msg = '[build-renderer] @babel/standalone not found — ';
-    if (haveBundle) { console.warn(msg + 'using existing renderer/dist/app.bundle.js'); return; }
-    console.error(msg + 'and no prebuilt bundle exists. Run `npm install` in the app root.');
+    const missing = BUNDLES.filter((b) => !fs.existsSync(path.join(DIST, b.out)));
+    if (!missing.length) { console.warn(msg + 'using the existing bundles in renderer/dist'); return; }
+    console.error(msg + 'and no prebuilt bundle exists for ' + missing.map((b) => b.out).join(', ') + '. Run `npm install` in the app root.');
     process.exit(1);
   }
-
   if (!fs.existsSync(DIST)) fs.mkdirSync(DIST, { recursive: true });
-  let source, transpiled, hash;
-  try {
-    ({ source, transpiled } = buildBundle());
-    hash = crypto.createHash('sha1').update(source).digest('hex').slice(0, 10);
-  } catch (e) {
-    if (haveBundle) { console.warn('[build-renderer] build failed (' + e.message + ') — keeping existing bundle'); return; }
-    console.error('[build-renderer] build failed and no prebuilt bundle exists: ' + e.message);
-    process.exit(1);
-  }
-  fs.writeFileSync(bundlePath, source, 'utf8');
-
-  // Sync the cache-busting token in index.html so a changed bundle is re-fetched
-  // and an unchanged one stays a cache hit. No-op (with a warning) if the tag isn't
-  // present yet — lets the very first build run before index.html is switched over.
-  let updatedIndex = false;
-  try {
-    const html = fs.readFileSync(INDEX, 'utf8');
-    const re = /dist\/app\.bundle\.js\?v=[A-Za-z0-9]+/g;
-    if (re.test(html)) {
-      fs.writeFileSync(INDEX, html.replace(re, 'dist/app.bundle.js?v=' + hash), 'utf8');
-      updatedIndex = true;
+  let failed = false;
+  for (const b of BUNDLES) {
+    const bundlePath = path.join(DIST, b.out);
+    const haveBundle = fs.existsSync(bundlePath);
+    let source, transpiled, hash;
+    // Degrade gracefully: if a build throws, keep serving the existing committed
+    // bundle rather than blocking `npm run web`. Only hard-fail when there is no
+    // bundle at all to fall back to.
+    try {
+      ({ source, transpiled } = buildBundle(b.manifest));
+      hash = crypto.createHash('sha1').update(source).digest('hex').slice(0, 10);
+    } catch (e) {
+      if (haveBundle) { console.warn('[build-renderer] ' + b.out + ' build failed (' + e.message + ') — keeping existing bundle'); continue; }
+      console.error('[build-renderer] ' + b.out + ' build failed and no prebuilt bundle exists: ' + e.message);
+      failed = true; continue;
     }
-  } catch (e) { /* index.html missing — ignore */ }
+    fs.writeFileSync(bundlePath, source, 'utf8');
 
-  const kb = (Buffer.byteLength(source) / 1024).toFixed(0);
-  console.log('[build-renderer] bundled ' + MANIFEST.length + ' files ('
-    + transpiled + ' JSX transpiled) -> renderer/dist/app.bundle.js  '
-    + kb + ' KB  v=' + hash + (updatedIndex ? '  (index.html updated)' : '  (index.html tag not found yet)'));
+    // Sync the cache-busting token in the page so a changed bundle is re-fetched
+    // and an unchanged one stays a cache hit. No-op (with a note) if the tag isn't
+    // present yet.
+    let updatedIndex = false;
+    try {
+      const htmlPath = path.join(RENDERER, b.html);
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      const re = new RegExp('dist/' + b.out.replace(/[.]/g, '[.]') + '[?]v=[A-Za-z0-9]+', 'g');
+      if (re.test(html)) {
+        fs.writeFileSync(htmlPath, html.replace(re, 'dist/' + b.out + '?v=' + hash), 'utf8');
+        updatedIndex = true;
+      }
+    } catch (e) { /* page missing — ignore */ }
+
+    const kb = (Buffer.byteLength(source) / 1024).toFixed(0);
+    console.log('[build-renderer] bundled ' + b.manifest.length + ' files ('
+      + transpiled + ' JSX transpiled) -> renderer/dist/' + b.out + '  '
+      + kb + ' KB  v=' + hash + (updatedIndex ? '  (' + b.html + ' updated)' : '  (' + b.html + ' tag not found yet)'));
+  }
+  if (failed) process.exit(1);
 }
 
 main();

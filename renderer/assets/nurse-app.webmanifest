@@ -1,0 +1,12 @@
+{
+  "name": "UNICO Nurse",
+  "short_name": "UNICO Nurse",
+  "description": "Hands of Care Hospitals — Nurse App",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eef3fb",
+  "theme_color": "#0d2a4a",
+  "icons": [{ "src": "/assets/icon.png", "sizes": "512x512", "type": "image/png" }]
+}

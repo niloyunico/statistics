@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- HTTPS everywhere by default. Plain http is allowed only so a phone on the hospital
+     LAN (or the emulator's 10.0.2.2) can reach a server that has no certificate yet;
+     a public server must be https. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

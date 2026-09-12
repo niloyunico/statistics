@@ -138,3 +138,55 @@ To require a username/password before data can be read or written:
 
 `WEB_PORT` in `server/.env` controls the web port (default `8080`). Change it if
 something else is using that port.
+
+## The phone apps — Nurse App and Admin App
+
+Two phone-first apps live beside the desktop console, served by the same server and
+signed in with the same accounts:
+
+| URL | App | Who |
+| --- | --- | --- |
+| `/app` (also `/nurse`) | **Nurse App (Android)** — roster, swap/leave requests, chat, notices, staff directory, medicine info, handover, incident reporting, appraisal; for in-charges also unit reports, shift reports and monthly data collection | the four portal roles `nurse`, `pca`, `incharge`, `collector` (administrators and console users can open it too) |
+| `/admin` | **Admin App** — users & access, roles, nursing hierarchy, review & approve, departments, every module, Nurse App access matrix, broadcast, activity log, settings | `Administrator` and console (`User`) accounts |
+
+Both were designed in Claude Design (the documents are in `docs/design/`) and are
+rendered from those designs: `scripts/dc-to-jsx.js` converts each template into a
+React view (`renderer/unico/*-app-view.jsx`, generated — never edit by hand) and the
+behaviour lives in `renderer/unico/nurse-app.jsx` / `admin-app.jsx`. Re-import a
+changed design with `npm run design:import`, then `npm run build`.
+
+On a phone the app is the whole screen (add it to the home screen — both pages ship a
+web manifest); on a desktop or tablet it shows inside the design's Android frame.
+
+**Sign-in and data.** Each app has its own sign-in screen that posts to `/api/login`,
+so an already signed-in browser lands on the home screen. Every screen reads the
+server: the account profile and units (`/api/me`, `/api/phone/bootstrap`), the unit's
+staff register and published duty roster, the medicine catalogue with the pharmacy's
+photos, the data-collection sheet and quality indicators the console defines for the
+unit (submitted through the same submissions API the console reviews), and the phone
+stores in `server/phone-app.js` — notices, chat rooms and direct messages, swap/leave
+requests, shift handover, incident reports, shift reports, medicine requests, the
+appraisal on form HR-NUR-PA-01, the unit report built from the registers, and the one
+settings document the Admin App edits. Nothing is invented in the browser: a unit with
+no roster says so, an account with no appraisal says so.
+
+**Who may do what** is decided on the server and only mirrored in the menus:
+`server/phone-app.js` keeps the feature matrix per role (nurse / in-charge / collector /
+PCA) with department and per-person overrides, scopes every read and write to the
+account's own units, lets only the unit's in-charge, a manager with the module
+permission or an administrator decide requests, approve shift reports, close incidents,
+answer medicine requests or publish hospital-wide notices, rate-limits writes, caps and
+whitelists every input, and records the writes in the activity log. A role whose
+switch is off gets `403`, not just a hidden button. Phone numbers are hidden from
+roles without the *Phone numbers* feature.
+
+**Design review without an account:** on `localhost` only, open `/app#demo` (staff
+nurse), `/app#demo=incharge`, or `/admin#demo` — optionally `&screen=<name>`, e.g.
+`/app#demo=incharge&screen=reports`. Sample data only, nothing is written; on any
+other host the demo switch is ignored.
+
+**Android APK.** `android/nurse-app/` is a small native shell (a hardened WebView) that
+opens the Nurse App from the hospital server. Build it with the SDK's own tools — no
+Gradle — via `powershell -File android\nurse-app\build.ps1 -Server https://...`; the
+first screen of the app lets the user change the server address. See
+`android/nurse-app/README.md`.

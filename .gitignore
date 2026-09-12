@@ -64,3 +64,6 @@ scripts/.collectors-to-incharge.rollback.json
 # local dev server logs (started by the restart helper)
 server/web-server.log
 server/web-server.log.err
+
+# Android shell build output (APK, dex, generated debug keystore)
+android/nurse-app/build/

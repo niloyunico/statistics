@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>UNICO Nurse · setup</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; font-family: -apple-system, Roboto, "Segoe UI", sans-serif; background: radial-gradient(120% 80% at 50% 0%, #0a5f87 0%, #0d2a4a 60%, #08192e 100%); color: #fff; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .card { width: 100%; max-width: 420px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18); border-radius: 22px; padding: 26px 20px; backdrop-filter: blur(12px); }
+  .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .mark { width: 44px; height: 44px; border-radius: 13px; background: linear-gradient(140deg,#0aa0d4,#0072a3); display: grid; place-items: center; font-weight: 800; font-size: 18px; }
+  h1 { font-size: 19px; margin: 0; letter-spacing: -.2px; }
+  .sub { font-size: 12.5px; color: #b9c9dd; margin-top: 2px; }
+  label { display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: #9fb3ca; margin: 18px 0 6px; }
+  input { width: 100%; border: 1px solid rgba(255,255,255,.28); border-radius: 12px; padding: 13px 14px; font-size: 15px; background: rgba(255,255,255,.12); color: #fff; outline: none; font-family: "IBM Plex Mono", monospace; }
+  input:focus { border-color: #3ab5a7; }
+  .err { margin-top: 12px; font-size: 12.5px; color: #ffb4b4; background: rgba(214,69,69,.18); border: 1px solid rgba(214,69,69,.4); border-radius: 10px; padding: 9px 11px; display: none; white-space: pre-wrap; }
+  button { width: 100%; margin-top: 18px; border: 0; border-radius: 13px; padding: 14px; font-size: 15px; font-weight: 700; color: #fff; background: linear-gradient(140deg,#0aa0d4,#0072a3); box-shadow: 0 10px 24px rgba(0,144,202,.32); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .chip { border: 1px solid rgba(255,255,255,.25); border-radius: 999px; padding: 6px 11px; font-size: 12px; background: rgba(255,255,255,.08); color: #dbe6f2; }
+  .foot { text-align: center; font-size: 11px; color: #8fa3ba; margin-top: 18px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo"><div class="mark">U</div><div><h1>UNICO Nurse</h1><div class="sub">Connect this phone to your hospital server</div></div></div>
+    <label for="url">Server address</label>
+    <input id="url" type="url" inputmode="url" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="https://nurse.yourhospital.org">
+    <div class="chips" id="chips"></div>
+    <div class="err" id="err"></div>
+    <button id="go">Connect</button>
+    <div class="foot">Your sign-in happens on the server. Nothing is stored on this phone except the address above.<br><span id="ver"></span></div>
+  </div>
+<script>
+  (function () {
+    var q = {}; String(location.hash || '').replace(/^#/, '').split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) q[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); });
+    var input = document.getElementById('url'), err = document.getElementById('err'), chips = document.getElementById('chips');
+    var app = window.UNICOApp;
+    var cur = q.server || (app && app.getServer ? app.getServer() : '');
+    if (cur) input.value = cur;
+    if (q.error) { err.textContent = q.error; err.style.display = 'block'; }
+    document.getElementById('ver').textContent = app && app.getVersion ? 'App v' + app.getVersion() : '';
+    var presets = [];
+    if (cur) presets.push(cur);
+    presets.push('http://10.0.2.2:8081');
+    presets.filter(function (p, i) { return presets.indexOf(p) === i; }).forEach(function (p) {
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.textContent = p; b.style.width = 'auto'; b.style.margin = '0'; b.style.boxShadow = 'none';
+      b.onclick = function () { input.value = p; };
+      chips.appendChild(b);
+    });
+    function go() {
+      var v = String(input.value || '').trim();
+      if (!v) { err.textContent = 'Enter the server address your administrator gave you.'; err.style.display = 'block'; return; }
+      if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
+      if (app && app.setServer) app.setServer(v); else location.href = v + '/app';
+    }
+    document.getElementById('go').onclick = go;
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+  })();
+</script>
+</body>
+</html>

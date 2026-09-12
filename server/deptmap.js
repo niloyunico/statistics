@@ -36,7 +36,7 @@ function fromArrays(deps, quals) {
 }
 
 // Cached DB-backed map for the API write paths (short TTL — assignment saves are rare).
-let _cache = null, _ts = 0;
+let _cache = null, _ts = 0, _lastGood = null;
 const TTL = 30000;
 async function get(force) {
   const now = Date.now();
@@ -49,9 +49,19 @@ async function get(force) {
   // merge — derive the quality-area link list from departments (single source of truth).
   // Through dbRead so the circuit breaker applies: during an outage this fails in
   // milliseconds instead of waiting out the full server-selection timeout.
-  const deps = await dbRead((db) => db.collection('departments').find({}, { projection: { id: 1, name: 1, qualityKey: 1, qualityOnly: 1, quality: 1 } }).toArray());
+  let deps;
+  try {
+    deps = await dbRead((db) => db.collection('departments').find({}, { projection: { id: 1, name: 1, qualityKey: 1, qualityOnly: 1, quality: 1 } }).toArray());
+  } catch (e) {
+    // The department list changes about once a year; the circuit breaker opens for
+    // seconds. Serving the last good map keeps every department-scoped screen working
+    // through a blip instead of showing an account "no departments" (which reads as a
+    // permission change to the person holding the phone). A cold start still throws.
+    if (_lastGood) return _lastGood;
+    throw e;
+  }
   const quals = deps.filter((d) => d.quality && d.quality.key).map((d) => ({ key: d.quality.key, name: d.quality.name || d.name, deptId: d.id }));
-  _cache = fromArrays(deps, quals); _ts = now;
+  _cache = fromArrays(deps, quals); _ts = now; _lastGood = _cache;
   return _cache;
 }
 function invalidate() { _cache = null; _ts = 0; }

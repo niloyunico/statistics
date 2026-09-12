@@ -12,7 +12,9 @@
         "includeFiles": [
           "renderer/index.html",
           "server/seed/**",
-          "server/meds-index/**"
+          "server/meds-index/**",
+          "renderer/nurse-app.html",
+          "renderer/admin-app.html"
         ]
       }
     },
@@ -30,6 +32,10 @@
     },
     {
       "src": "renderer/unico/**",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "renderer/assets/**",
       "use": "@vercel/static"
     }
   ],
@@ -53,6 +59,13 @@
       "dest": "/renderer/unico/$1",
       "headers": {
         "Cache-Control": "public, max-age=0, must-revalidate"
+      }
+    },
+    {
+      "src": "/assets/(.*)",
+      "dest": "/renderer/assets/$1",
+      "headers": {
+        "Cache-Control": "public, max-age=86400"
       }
     },
     {

@@ -9,12 +9,14 @@
     "build": "node scripts/build-renderer.js",
     "web": "node scripts/build-renderer.js && node server/web.js",
     "start": "node server/web.js",
-    "vendor": "node scripts/vendor.js"
+    "vendor": "node scripts/vendor.js",
+    "design:import": "node scripts/dc-to-jsx.js \"docs/design/Nurse App (Android).dc.html\" renderer/unico/nurse-app-view.jsx NurseAppView && node scripts/dc-to-jsx.js \"docs/design/Admin App.dc.html\" renderer/unico/admin-app-view.jsx AdminAppView"
   },
   "devDependencies": {
     "@babel/standalone": "^7.29.0",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/ibm-plex-sans": "^5.2.8",
+    "parse5": "^7.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   }

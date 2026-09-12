@@ -595,7 +595,8 @@ app.post('/login', async function (req, res) {
     activity.record({ action: 'login', username: user.username, name: user.name || user.username, role: user.role, ip: activity.ipOf(req), detail: portal ? ('portal: ' + portal) : '' });
     session.setSession(res, auth.sign(user));
     // Honor an explicit return target; else collectors land on /collect, admins on the app.
-    res.redirect(302, next || (access.PORTAL_ROLES.indexOf(user.role) >= 0 ? '/collect' : '/'));
+    // Phone-only roles land on the Nurse App; collectors and in-charges keep /collect.
+    res.redirect(302, next || (user.role === 'nurse' || user.role === 'pca' ? '/app' : access.PORTAL_ROLES.indexOf(user.role) >= 0 ? '/collect' : '/'));
   } catch (e) {
     res.status(500).type('html').send(loginPage({ error: 'Server error. Is the database reachable?', username, next, portal }));
   }
@@ -615,8 +616,14 @@ app.get('/favicon.ico', function (req, res) {
   res.redirect(302, '/unico/logo-mark.svg');
 });
 
-app.get('/', session.requirePage, serveIndex);
-app.get('/index.html', session.requirePage, serveIndex);
+// A staff nurse / PCA account has no console; the phone app is their whole UNICO.
+function phoneOnlyToApp(req, res, next) {
+  const u = req.user;
+  if (u && (u.role === 'nurse' || u.role === 'pca')) return res.redirect(302, '/app');
+  next();
+}
+app.get('/', session.requirePage, phoneOnlyToApp, serveIndex);
+app.get('/index.html', session.requirePage, phoneOnlyToApp, serveIndex);
 // One shareable data-collection link: same URL for everyone, lands each signed-in
 // user on the Data Collection section scoped to their own assignments.
 app.get('/collect', function (req, res) {
@@ -626,6 +633,24 @@ app.get('/collect', function (req, res) {
   req.unicoLanding = { view: 'dcPatient' };
   return serveIndex(req, res);
 });
+
+// --- The phone apps ------------------------------------------------------------
+// /app   Nurse App (Android)  — ward staff, in-charges and data collectors
+// /admin Admin App            — administrators and console users
+// Both were designed in Claude Design (docs/design) and ported as their own pages
+// with their own bundles (scripts/build-renderer.js). They are NOT gated here on
+// purpose: each app has its own sign-in screen that posts to /api/login, which sets
+// the same session cookie the console uses, so an already signed-in browser lands
+// straight on the home screen and a signed-out one sees the app's login.
+function servePhoneApp(file) {
+  const full = path.join(RENDERER, file);
+  return function (req, res) {
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(full, function (err) { if (err && !res.headersSent) res.status(500).type('text').send('renderer/' + file + ' not found'); });
+  };
+}
+app.get(['/app', '/app/', '/nurse', '/nurse-app'], servePhoneApp('nurse-app.html'));
+app.get(['/admin', '/admin/', '/admin-app'], servePhoneApp('admin-app.html'));
 
 // Read the DB-backed datasets as JSON — used by the live refetch (approval / tab
 // refocus) and external tools. MUST apply the SAME collector scoping as the "/"
@@ -815,6 +840,11 @@ if (require('./d1-store').enabled('medicine')) {
   require('./medicines-d1').mount(app, { requireApi: [session.requireApi, access.requireModule('medicine')] });
 }
 require('./medicines').mount(app, { requireApi: [session.requireApi, access.requireModule('medicine')] });
+
+// The phone apps' own backend: notices, chat, requests, handover, incidents, shift
+// reports, medicine requests, per-user state and the feature matrix. Every route
+// resolves the live account (access.attach) and scopes itself by role and department.
+require('./phone-app').mount(app, { requireApi: [session.requireApi, access.attach] });
 
 // All other renderer assets (jsx/js/css/svg/fonts) are static. index:false so our
 // handler owns "/". The /api/* routes were registered by ./index before this.

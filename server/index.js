@@ -152,9 +152,8 @@ app.post('/api/login', async (req, res) => {
 
 // Verify a stored token (the app calls this on startup to resume a session).
 app.get('/api/me', async (req, res) => {
-  const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : '';
-  const claims = auth.check(token);
+  // Bearer token (desktop builds) OR the browser session cookie (console + phone apps).
+  const claims = auth.check(session.tokenFromReq(req));
   if (!claims) return res.status(401).json({ ok: false });
   // A valid signature is no longer enough: the account may have been deactivated or
   // had its sessions revoked since the token was minted. access.forRequest() checks
@@ -162,9 +161,27 @@ app.get('/api/me', async (req, res) => {
   req.user = claims;
   const a = await access.forRequest(req).catch(() => null);
   if (!a) return res.status(401).json({ ok: false });
+  // The phone apps (Nurse App / Admin App) build their home screen from the
+  // account's own profile — the departments it is scoped to, its designation,
+  // phone and photo — so read those off the live user document. A lookup failure
+  // only drops the extras; it never fails the sign-in check that already passed.
+  let profile = {};
+  try {
+    const users = await getUsers();
+    const u = users && typeof users.findOne === 'function' ? await users.findOne({ username: claims.sub }) : null;
+    if (u) {
+      profile = {
+        title: u.title || null, designation: u.designation || null, email: u.email || null, phone: u.phone || null,
+        photo: u.photo || null, empId: u.empId || u.emp_id || null,
+        departments: Array.isArray(u.departments) ? u.departments : [],
+        qualityAreas: Array.isArray(u.qualityAreas) ? u.qualityAreas : [],
+        createdAt: u.createdAt || null,
+      };
+    }
+  } catch (e) { /* extras only */ }
   res.json({
     ok: true,
-    user: { username: claims.sub, name: claims.name, role: claims.role },
+    user: Object.assign({ username: claims.sub, name: claims.name, role: claims.role }, profile),
     // The client mirrors these into window.__UNICO_USER__ so the UI hides what the
     // server would refuse anyway (the server stays the authority either way).
     perms: a.unrestricted ? null : a.perms,

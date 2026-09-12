@@ -24,12 +24,12 @@ const session = require('./session');
 const throttle = require('./login-throttle');
 
 // 'incharge' is a data collector who also runs a ward: same scoping, more screens.
-const ROLES = ['Administrator', 'incharge', 'collector', 'User'];
+const ROLES = ['Administrator', 'incharge', 'collector', 'nurse', 'pca', 'User'];
 /* The roles that get the scoped PORTAL rather than the admin application. Their
    assignment fields (departments, quality areas, per-indicator access) must be saved
    and enforced the same way — an in-charge created without them would be an account
    with a ward's screens and nobody's scope. */
-const ROLES_PORTAL = ['collector', 'incharge'];
+const ROLES_PORTAL = ['collector', 'incharge', 'nurse', 'pca'];
 
 // Grantable workspaces (per-module access for the standard 'User' role). Ids match
 // the renderer's unicoAccessModuleOf() output so a user's `perms` map keys 1:1 to

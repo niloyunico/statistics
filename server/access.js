@@ -182,7 +182,7 @@ async function forRequest(req) {
    application at all, they get their own scoped portal, and every route they may
    reach opts them in explicitly with `allowCollector`. An in-charge is a collector
    with a ward to run -- same data scoping, more of the ward's own screens. */
-const PORTAL_ROLES = ['collector', 'incharge'];
+const PORTAL_ROLES = ['collector', 'incharge', 'nurse', 'pca'];
 function isPortal(access) { return !!access && PORTAL_ROLES.indexOf(access.role) >= 0; }
 
 /* The unit's own staff, for a portal account.
@@ -286,6 +286,11 @@ function actionForMethod(method) {
 // against perms (they would all come out 'none' and the portal would break), but they
 // must still be locked out of every module their portal does not use.
 const COLLECTOR_MODULES = ['datacol'];
+// Which modules each PORTAL role may enter. A staff nurse or PCA on the phone app has
+// no data-collection assignment, so they never reach the submissions API at all.
+const PORTAL_MODULES = { collector: COLLECTOR_MODULES, incharge: COLLECTOR_MODULES, nurse: [], pca: [] };
+// Read-only catalogue lookups every phone user needs (the formulary). GET only.
+const PORTAL_READ_MODULES = ['medicine'];
 
 // Guard an entire mounted module. The required action is derived from the HTTP verb,
 // so a read-only account can list submissions but not post one.
@@ -297,7 +302,8 @@ function requireModule(mid) {
       req.access = a;
       if (a.unrestricted) return next();
       if (isPortal(a)) {
-        if (COLLECTOR_MODULES.indexOf(mid) >= 0) return next();
+        if ((PORTAL_MODULES[a.role] || []).indexOf(mid) >= 0) return next();
+        if (PORTAL_READ_MODULES.indexOf(mid) >= 0 && actionForMethod(req.method) === 'view') return next();
         return res.status(403).json({ ok: false, error: 'You do not have access to this.' });
       }
       if (!can(a, mid, actionForMethod(req.method))) {

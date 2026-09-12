@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#1b1642"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="UNICO Admin"/>
+<title>UNICO Admin</title>
+<link rel="icon" type="image/svg+xml" href="/unico/logo-mark.svg"/>
+<link rel="apple-touch-icon" href="/assets/icon.png"/>
+<link rel="manifest" href="/assets/admin-app.webmanifest"/>
+<!-- Offline IBM Plex fonts (vendored locally, no internet) -->
+<link rel="stylesheet" href="/vendor/fonts/ibm-plex.css"/>
+<link rel="preload" href="/vendor/react.production.min.js" as="script"/>
+<link rel="preload" href="/vendor/react-dom.production.min.js" as="script"/>
+<link rel="preload" href="/dist/admin-app.bundle.js?v=da2da31097" as="script"/>
+<style>
+html,body{margin:0;height:100%;background:#e9eff8;color:#16202e;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;overscroll-behavior:none}
+#root{min-height:100%}
+#boot-splash{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#eef2f7;z-index:9999}
+#boot-splash img{height:40px;opacity:.92}
+#boot-splash .spin{width:26px;height:26px;border-radius:50%;border:3px solid rgba(106,82,212,.25);border-top-color:#6a52d4;animation:unico-spin .8s linear infinite}
+#boot-splash .msg{font-size:12.5px;font-weight:600;color:#5b6b80;letter-spacing:.2px}
+@keyframes unico-spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="root">
+  <div id="boot-splash">
+    <img src="/unico/logo.svg" alt="UNICO"/>
+    <div class="spin"></div>
+    <div class="msg">Opening the Admin App&hellip;</div>
+  </div>
+</div>
+<script defer src="/vendor/react.production.min.js"></script>
+<script defer src="/vendor/react-dom.production.min.js"></script>
+<script defer src="/dist/admin-app.bundle.js?v=da2da31097"></script>
+</body>
+</html>

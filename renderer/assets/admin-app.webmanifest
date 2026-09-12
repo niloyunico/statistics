@@ -1,0 +1,12 @@
+{
+  "name": "UNICO Admin",
+  "short_name": "UNICO Admin",
+  "description": "Hands of Care Hospitals — Administration console",
+  "start_url": "/admin",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eef3fb",
+  "theme_color": "#1b1642",
+  "icons": [{ "src": "/assets/icon.png", "sizes": "512x512", "type": "image/png" }]
+}
