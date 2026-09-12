@@ -59,17 +59,41 @@
   }
 
   var RETRY_MS = [800, 2500, 6000];   // ~9s of quiet retrying before we bother the user
+  var acknowledged = Object.assign({}, window.__UNICO_SNAPSHOT__ || {});
+  var saveQueue = Promise.resolve();
+  var LOCAL_KEYS = { unico_api_base:1, unico_session_token:1, unico_session_user:1 };
+  function syncKey(k) { return k.indexOf('unico_') === 0 && !LOCAL_KEYS[k]; }
+  function changes(data) {
+    var patch = { partial:true, data:{}, removed:[] };
+    Object.keys(data || {}).forEach(function(k) {
+      if(syncKey(k) && data[k] !== acknowledged[k]) patch.data[k] = data[k];
+    });
+    Object.keys(acknowledged).forEach(function(k) {
+      if(syncKey(k) && !Object.prototype.hasOwnProperty.call(data || {}, k)) patch.removed.push(k);
+    });
+    return patch;
+  }
+  function acceptSnapshot(data) {
+    Object.keys(data).forEach(function(k) { acknowledged[k] = data[k]; });
+  }
   function attemptPersist(data, tries) {
+    var patch = changes(data);
+    if(!Object.keys(patch.data).length && !patch.removed.length) return Promise.resolve({ok:true});
     return fetch(API + '/api/data', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ data: data || {} }),
+      body: JSON.stringify(patch),
     }).then(function (r) {
       // An expired session is not a network problem — retrying cannot fix it.
       if (r.status === 401) { warnSessionExpired(); return { ok: false, error: 'Session expired' }; }
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      clearSaveWarning();
-      return r.json().catch(function () { return { ok: true }; });
+      return r.json().then(function(result) {
+        if(!result || !result.ok) throw new Error('Save was not accepted');
+        acceptSnapshot(patch.data);
+        patch.removed.forEach(function(k) { delete acknowledged[k]; });
+        clearSaveWarning();
+        return result;
+      });
     }).catch(function (e) {
       if (tries >= RETRY_MS.length) { warnSaveFailed(); return { ok: false, error: String(e) }; }
       return new Promise(function (resolve) { setTimeout(resolve, RETRY_MS[tries]); }).then(function () {
@@ -81,8 +105,15 @@
     });
   }
 
-  // Persist the full localStorage key->value map to MongoDB (debounced by caller).
-  function persist(data) { return attemptPersist(data, 0); }
+  // Send only local changes, in order. An unrelated edit in an idle tab must not
+  // overwrite a roster another user saved since this page was opened.
+  function persist(data) {
+    saveQueue = saveQueue.catch(function(){}).then(function() {
+      var current = typeof window.unicoSnapshotAll === 'function' ? window.unicoSnapshotAll() : data;
+      return attemptPersist(current, 0);
+    });
+    return saveQueue;
+  }
 
   // Back up = download all data as a .unicobak (JSON) file in the browser.
   function backup(data) {
@@ -161,6 +192,7 @@
   window.unicoNative = {
     snapshot: window.__UNICO_SNAPSHOT__ || {},
     persist: persist,
+    acceptSnapshot: acceptSnapshot,
     backup: backup,
     restore: restore,
     dbPath: dbPath,

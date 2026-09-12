@@ -2071,9 +2071,9 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
 
   // ---------- store ----------
   const KEY='unico_staff_v3';
-  function realSeed(){ return (window.STAFF_SEED&&window.STAFF_SEED.length)
+  function realSeed(){ return Array.isArray(window.STAFF_SEED)
     ? window.STAFF_SEED.map(e=>({...e,fav:!!e.fav,notes:e.notes||[]}))
-    : seedStaff(); }
+    : []; }
   /* The overlay is the browser's copy of the roster. It masks the database by design —
      but NOT for a BNMC verification.
 
@@ -2143,10 +2143,64 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   }
   publishPhotos(load()||[]);   // modules can render before any staff view mounts
   function useStaffStore(){
-    const [staff,setStaff]=React.useState(()=>load()||realSeed());
-    React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(staff)); publishPhotos(staff); },[staff]);
+    const [staff,replaceStaff]=React.useState(()=>load()||realSeed());
+    const [refreshing,setRefreshing]=React.useState(false);
+    const [refreshError,setRefreshError]=React.useState('');
+    const currentStaff=React.useRef(staff);
+    const version=React.useRef(0);
+    const busy=React.useRef(null);
+    const alive=React.useRef(true);
+    const setStaff=(change)=>{
+      const next=typeof change==='function'?change(currentStaff.current):change;
+      // Persist local edits immediately, so a Refresh in the same tick can flush
+      // them before fetching. React mounting/hydration never writes the register.
+      localStorage.setItem(KEY,JSON.stringify(next));
+      version.current++; currentStaff.current=next; replaceStaff(next);
+    };
+    React.useEffect(()=>{
+      publishPhotos(staff);
+    },[staff]);
+    const refresh=()=>{
+      if(busy.current) return busy.current;
+      if(window.unicoCan && !window.unicoCan('staff','view')) return Promise.resolve(false);
+      const started=version.current;
+      setRefreshing(true); setRefreshError('');
+      busy.current=(async()=>{
+        try{
+          const saved=window.unicoFlushNow ? await window.unicoFlushNow() : {ok:true};
+          if(saved && saved.ok===false) throw new Error('Save pending. Keep this tab open and try Refresh again.');
+          const session=window.unicoSession;
+          const base=session&&session.configured()?session.serverUrl():'';
+          const headers=base&&session.token()?{authorization:'Bearer '+session.token()}:{};
+          const r=await fetch(base+'/api/staff',{credentials:'same-origin',cache:'no-store',headers});
+          const j=await r.json();
+          if(!r.ok || !j.ok || !Array.isArray(j.staff)) throw new Error(j.error||'Could not refresh the staff list. Try again.');
+          if(!alive.current || version.current!==started) return false; // user edited during the request
+          const data={[KEY]:JSON.stringify(j.staff)};
+          if(window.unicoApplyRemoteData) window.unicoApplyRemoteData(data);
+          else localStorage.setItem(KEY,data[KEY]);
+          window.__UNICO_STAFF__=j.staff;
+          window.STAFF_SEED=j.staff;
+          currentStaff.current=j.staff;
+          replaceStaff(j.staff);
+          return true;
+        }catch(e){ if(alive.current) setRefreshError(e.message||'Could not refresh the staff list.'); return false; }
+        finally{ busy.current=null; if(alive.current) setRefreshing(false); }
+      })();
+      return busy.current;
+    };
+    React.useEffect(()=>{
+      alive.current=true;
+      // Fetch on entry, every 30 seconds and when returning to the app.
+      const update=()=>{ if(document.visibilityState!=='hidden') refresh(); };
+      update();
+      const timer=setInterval(update,30000);
+      window.addEventListener('focus',update);
+      document.addEventListener('visibilitychange',update);
+      return ()=>{ alive.current=false; clearInterval(timer); window.removeEventListener('focus',update); document.removeEventListener('visibilitychange',update); };
+    },[]);
     const api={
-      staff,
+      staff, refresh, refreshing, refreshError,
       get:(id)=>staff.find(e=>e.id===id),
       nextEmpId:()=>{ const max=staff.reduce((m,e)=>{const n=parseInt((e.emp_id||'').replace(/\D/g,''))||0;return Math.max(m,n);},100); return `UNC-${String(max+1).padStart(4,'0')}`; },
       create:(data)=>setStaff(s=>{ const id=Math.max(0,...s.map(e=>e.id))+1; return [...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]; }),
@@ -18446,13 +18500,12 @@ function WorkforceDashboard({
       s: 15
     }), "Compliance"), React.createElement("button", {
       className: "btn sm",
-      onClick: () => setRoute({
-        view: homeView
-      })
+      disabled: store.refreshing,
+      onClick: () => store.refresh()
     }, React.createElement(Ic, {
       d: I.activity,
       s: 15
-    }), "Refresh"), (!window.unicoCan || window.unicoCan('staff', 'add')) && React.createElement("button", {
+    }), store.refreshing ? 'Refreshing…' : 'Refresh'), (!window.unicoCan || window.unicoCan('staff', 'add')) && React.createElement("button", {
       className: "btn pri sm",
       style: {
         background: tone,
@@ -18466,7 +18519,13 @@ function WorkforceDashboard({
       d: I.plus,
       s: 15
     }), "Add ", role === 'PCA' ? 'PCA' : 'Nurse'))
-  }), React.createElement("div", {
+  }), store.refreshError && React.createElement("div", {
+    role: "alert",
+    style: {
+      color: '#b4232f',
+      fontSize: 13
+    }
+  }, store.refreshError), React.createElement("div", {
     className: "grid",
     style: {
       gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))'

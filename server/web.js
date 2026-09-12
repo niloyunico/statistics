@@ -247,6 +247,12 @@ async function serveIndex(req, res) {
   }
   let snap = (appRes && appRes.data) || {};
   let depts = deptRes || [], staff = staffRes || [], quality = qualRes || [];
+  try {
+    staff = require('./staff-roster').resolveRoster(snap, staff);
+  } catch (e) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(503).type('html').send(warmingPage());
+  }
   // Canonical department identity map (id <-> quality key <-> canonical name), built from
   // the FULL (unscoped) datasets so the client can resolve ANY department/quality key to
   // ONE canonical name everywhere. Reference data only — safe for every role.
@@ -666,7 +672,9 @@ app.get('/api/departments', session.requireApi, access.requirePerm('stats', 'vie
 // staff module AND filtered row by row to the caller's staff scope (all / their own
 // departments / their own record only).
 app.get('/api/staff', session.requireApi, access.requirePerm('staff', 'view', { allowCollector: true }), async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   try {
+    const roster = await require('./staff-roster').loadRoster();
     // A portal account receives its OWN UNIT's staff, and a thin record at that
     // (access.portalStaff). Its department list is in statistics ids, while a staff
     // record stores the department NAME, so the ids are resolved through the
@@ -680,9 +688,9 @@ app.get('/api/staff', session.requireApi, access.requirePerm('staff', 'view', { 
       // Feeding in id AND name catches both without a data migration.
       const keys = [];
       (scope.departments || []).forEach((id) => { keys.push(id); const n = map.byId[id] && map.byId[id].name; if (n) keys.push(n); });
-      return res.json({ ok: true, staff: access.portalStaff(keys, await getStaff()), scoped: true });
+      return res.json({ ok: true, staff: access.portalStaff(keys, roster), scoped: true });
     }
-    res.json({ ok: true, staff: await access.filterStaff(req.access, await getStaff()) });
+    res.json({ ok: true, staff: await access.filterStaff(req.access, roster) });
   }
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load staff.' }); }
 });

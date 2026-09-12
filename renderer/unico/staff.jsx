@@ -419,8 +419,9 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
         right={<><button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#b8860b',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
           <button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>
           <button className="btn sm" onClick={()=>setRoute({view:compView})}><Ic d={I.heart} s={15}/>Compliance</button>
-          <button className="btn sm" onClick={()=>setRoute({view:homeView})}><Ic d={I.activity} s={15}/>Refresh</button>
+          <button className="btn sm" disabled={store.refreshing} onClick={()=>store.refresh()}><Ic d={I.activity} s={15}/>{store.refreshing?'Refreshing…':'Refresh'}</button>
           {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role})}><Ic d={I.plus} s={15}/>Add {role==='PCA'?'PCA':'Nurse'}</button>}</>}/>
+      {store.refreshError&&<div role="alert" style={{color:'#b4232f',fontSize:13}}>{store.refreshError}</div>}
       <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))'}}>
         <Kpi label={`Total ${role==='PCA'?'PCAs':'Nurses'}`} val={fmt(k.total_staff)} foot={`active ${role} on roster`} color={tone}/>
         <Kpi label="Departments" val={fmt(new Set(list.map(e=>staffCanonDept(e.current_department))).size)} foot="distinct units staffed" color="#6a52d4"/>
