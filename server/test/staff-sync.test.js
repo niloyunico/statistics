@@ -31,6 +31,7 @@ async function bridgeTest() {
   local[key]=JSON.stringify([{...latest[0],name:'My edit'}]);
   await w.unicoNative.persist(local);
   assert.deepEqual(Object.keys(calls[1].data),[key]);
+  assert.equal(calls[1].staffBase,JSON.stringify(latest),'staff writes include the browser baseline for field merging');
   delete local.unico_store_v3;
   await w.unicoNative.persist(local);
   assert.deepEqual(calls[2].removed,['unico_store_v3']);
@@ -41,6 +42,26 @@ async function bridgeTest() {
   assert.equal(calls.length,4,'a second save waits for the first');
   release();await Promise.all([first,second]);
   assert.equal(calls[4].data[key],local[key],'latest edit is saved after an older in-flight save');
+}
+
+async function formSaveTest() {
+  const source=read('staff-profile.jsx');
+  const start=source.indexOf('  const save=async()=>',source.indexOf('function StaffForm('));
+  const end=source.indexOf('  // The overlay owns the route change',start);
+  let created=0,updated=0,confirmed=0,accept=false;
+  const ctx={
+    f:{name:'New nurse',role:'Nurse',extracurricular:'Singing'},entries:[],directPrior:0,
+    S:{unicoYearsOf:()=>0,fmtYM:()=>''},entYears:()=>0,initialForm:{current:{}},
+    pendingId:{current:null},saveLock:{current:false},chipsOf:()=>[],
+    setErr:()=>{},setSaving:()=>{},setSaved:()=>{confirmed++;},
+    store:{create:()=>{created++;return 7;},update:()=>{updated++;}},
+    window:{unicoFlushNow:async()=>({ok:accept,error:'Offline'})},
+  };
+  vm.runInNewContext(source.slice(start,end)+'\nthis.save=save;',ctx);
+  await ctx.save();assert.equal(confirmed,0,'failed database save must not show success');
+  assert.equal(created,1);
+  accept=true;await ctx.save();assert.equal(confirmed,1);
+  assert.equal(created,1,'retry must not create a duplicate nurse');assert.equal(updated,1);
 }
 
 async function storeTest() {
@@ -83,4 +104,4 @@ async function storeTest() {
   const before=fetches;w.unicoCan=()=>false;await store.refresh();assert.equal(fetches,before,'no staff access makes no roster request');
 }
 
-(async()=>{await bridgeTest();await storeTest();console.log('STAFF_SYNC_TEST_PASS: refresh, polling, local edits, failures, empty lists and partial saves');})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{await bridgeTest();await storeTest();await formSaveTest();console.log('STAFF_SYNC_TEST_PASS: refresh, polling, local edits, failures, empty lists, partial saves and database confirmation');})().catch(e=>{console.error(e);process.exitCode=1;});

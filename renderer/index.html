@@ -14,7 +14,7 @@
      bundle's ?v= token is kept in sync by scripts/build-renderer.js. -->
 <link rel="preload" href="vendor/react.production.min.js" as="script"/>
 <link rel="preload" href="vendor/react-dom.production.min.js" as="script"/>
-<link rel="preload" href="dist/app.bundle.js?v=e95671a1d1" as="script"/>
+<link rel="preload" href="dist/app.bundle.js?v=485f00048b" as="script"/>
 <style>
 /* Boot splash — visible from the first byte of HTML until React mounts (its first
    render replaces #root's children). Styled inline so it needs no other asset. */
@@ -133,6 +133,7 @@ setTimeout(function(){
       if(!anyDirty) return;
       var payload = { partial:true, data:{}, removed:Object.keys(dropped) };
       Object.keys(dirty).forEach(function(k){ var v=localStorage.getItem(k); if(v!==null) payload.data[k]=v; });
+      if(n.staffBase && (Object.prototype.hasOwnProperty.call(payload.data,'unico_staff_v3') || payload.removed.indexOf('unico_staff_v3')>=0)) payload.staffBase=n.staffBase();
       if(!Object.keys(payload.data).length && !payload.removed.length) return;
       try{
         fetch('/api/data', { method:'PUT', headers:{'content-type':'application/json'},
@@ -146,6 +147,6 @@ setTimeout(function(){
      concatenated into ONE cacheable bundle by scripts/build-renderer.js, so the
      browser no longer downloads Babel (3.14 MB) or compiles JSX at runtime. Rebuilt
      by `npm run web`; the ?v= token is the bundle's content hash (auto-updated). -->
-<script defer src="dist/app.bundle.js?v=e95671a1d1"></script>
+<script defer src="dist/app.bundle.js?v=485f00048b"></script>
 </body>
 </html>

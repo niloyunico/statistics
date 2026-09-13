@@ -34,7 +34,7 @@ const auth = require('../auth');
       // data sync endpoints
       const dataNoAuth = await fetch(base + '/api/data'); // must be 401
       const auth = { 'content-type': 'application/json', authorization: 'Bearer ' + good.token };
-      const putRes = await (await fetch(base + '/api/data', { method: 'PUT', headers: auth, body: JSON.stringify({ data: { unico_store_v3: '{"hello":1}', unico_staff_v3: '[]' } }) })).json();
+      const putRes = await (await fetch(base + '/api/data', { method: 'PUT', headers: auth, body: JSON.stringify({ data: { unico_store_v3: '{"hello":1}', unico_staff_v3: '[]' }, staffBase: null }) })).json();
       const getRes = await (await fetch(base + '/api/data', { headers: { authorization: 'Bearer ' + good.token } })).json();
 
       pass = health.ok === true && health.db === 'in-memory (dev)' &&

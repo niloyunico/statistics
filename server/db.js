@@ -383,7 +383,12 @@ const dottablePath = (k) => k.indexOf('.') < 0 && k.indexOf('$') !== 0 && k.leng
 async function setAppData(data, previous) {
   const updatedAt = Date.now();
   if (data && typeof data === 'object') { STALE_OVERLAY_KEYS.forEach((k) => { if (k in data) delete data[k]; }); }
-  if (!process.env.MONGODB_URI) { _memApp = { data, updatedAt }; return { updatedAt }; }
+  const staffKey = 'unico_staff_v3';
+  const staffChanged = previous && data[staffKey] !== previous[staffKey];
+  if (!process.env.MONGODB_URI) {
+    if (staffChanged && _memApp.data[staffKey] !== previous[staffKey]) throw require('./staff-merge').conflict();
+    _memApp = { data, updatedAt }; return { updatedAt };
+  }
 
   // Writes go through dbWrite: always attempted (never refused because the circuit is
   // open), and the collection proxy invalidates the cached copy as soon as it lands.
@@ -402,7 +407,16 @@ async function setAppData(data, previous) {
     prevKeys.forEach((k) => { if (!Object.prototype.hasOwnProperty.call(data, k)) $unset['data.' + k] = ''; });
     const update = { $set };
     if (Object.keys($unset).length) update.$unset = $unset;
-    await coll.updateOne({ _id: 'shared' }, update, { upsert: true });
+    const filter = { _id: 'shared' };
+    if (staffChanged) filter['data.' + staffKey] = previous[staffKey] == null ? { $exists: false } : previous[staffKey];
+    try {
+      await coll.updateOne(filter, update, { upsert: true });
+    } catch (error) {
+      // A concurrent write changed the roster after our read. The existing _id
+      // prevents the conditional upsert; never retry with an unconditional write.
+      if (staffChanged && error.code === 11000) throw require('./staff-merge').conflict();
+      throw error;
+    }
     // `changedKeys` names WHAT was written, not just how many. The activity log needs
     // it to say "saved the staff register" instead of "PUT /api/data" — the caller is
     // the only place that still holds the previous values to describe the change.

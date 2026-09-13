@@ -264,6 +264,14 @@ app.put('/api/data', requireAuth, access.attach, async (req, res) => {
     }
 
     const merged = await access.mergeAppData(req.access, incoming, current && current.data);
+    const staffMerge = require('./staff-merge');
+    const staffKey = staffMerge.KEY;
+    if (merged[staffKey] !== ((current && current.data) || {})[staffKey]) {
+      if (!Object.prototype.hasOwnProperty.call(req.body, 'staffBase')) {
+        throw staffMerge.conflict('Please reload the app before saving staff. This older session cannot safely update the register.');
+      }
+      merged[staffKey] = staffMerge.mergeStaffChanges(req.body.staffBase, merged[staffKey], ((current && current.data) || {})[staffKey]);
+    }
     // Pass the baseline we just read so only the keys that changed are written — see
     // setAppData(). Without it every save rewrote the whole blob and the last writer won.
     const r = await setAppData(merged, current && current.data);
@@ -297,7 +305,7 @@ app.put('/api/data', requireAuth, access.attach, async (req, res) => {
       });
     } catch (e) { /* the save already succeeded; logging is best-effort */ }
   }
-  catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }
+  catch (e) { res.status(e.status || 500).json({ ok: false, error: e.status === 409 ? e.message : 'Server error.' }); }
 });
 
 if (require.main === module) {

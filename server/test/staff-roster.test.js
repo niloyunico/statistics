@@ -35,9 +35,11 @@ const { resolveRoster } = require('../staff-roster');
   const base = 'http://127.0.0.1:'+server.address().port;
   const headers = u => ({authorization:'Bearer '+auth.sign(u),'content-type':'application/json'});
   const admin = {username:'admin',role:'Administrator'};
+  let staffBase = null;
   async function save(rows) {
-    const r = await fetch(base+'/api/data',{method:'PUT',headers:headers(admin),body:JSON.stringify({partial:true,data:{unico_staff_v3:JSON.stringify(rows)}})});
+    const r = await fetch(base+'/api/data',{method:'PUT',headers:headers(admin),body:JSON.stringify({partial:true,staffBase,data:{unico_staff_v3:JSON.stringify(rows)}})});
     assert.equal(r.status,200);
+    staffBase = JSON.stringify(rows);
   }
   try {
     await save(imported);
@@ -56,6 +58,22 @@ const { resolveRoster } = require('../staff-roster');
     const scoped = await (await fetch(base+'/api/staff',{headers:headers(accounts[2])})).json();
     assert.deepEqual(scoped.staff.map(x=>x.id),[1]);
     assert.equal((await fetch(base+'/api/staff',{headers:headers(accounts[3])})).status,403);
+    const staleBase = staffBase;
+    const withActivities = updated.map(row => row.id === 1 ? {...row,extracurricular:'Singing, Gardening'} : row);
+    await save(withActivities);
+    // A different field saved from an old tab must retain the new activities.
+    const staleEdit = updated.map(row => row.id === 1 ? {...row,name:'Renamed'} : row);
+    const edit = await fetch(base+'/api/data',{method:'PUT',headers:headers(admin),body:JSON.stringify({partial:true,staffBase:staleBase,data:{unico_staff_v3:JSON.stringify(staleEdit)}})});
+    assert.equal(edit.status,200);
+    const reloaded = (await (await fetch(base+'/api/staff',{headers:headers(admin)})).json()).staff;
+    assert.equal(reloaded[0].extracurricular,'Singing, Gardening');
+    assert.equal(reloaded[0].name,'Renamed');
+    const conflictEdit = updated.map(row => row.id === 1 ? {...row,extracurricular:'Dancing'} : row);
+    const conflict = await fetch(base+'/api/data',{method:'PUT',headers:headers(admin),body:JSON.stringify({partial:true,staffBase:staleBase,data:{unico_staff_v3:JSON.stringify(conflictEdit)}})});
+    assert.equal(conflict.status,409,'a competing change cannot overwrite activities');
+    const legacy = await fetch(base+'/api/data',{method:'PUT',headers:headers(admin),body:JSON.stringify({partial:true,data:{unico_staff_v3:staleBase}})});
+    assert.equal(legacy.status,409,'old clients cannot replace the register');
+    staffBase=JSON.stringify(reloaded);
     await save([]);
     assert.deepEqual((await (await fetch(base+'/api/staff',{headers:headers(accounts[0])})).json()).staff,[]);
     console.log('STAFF_ROSTER_TEST_PASS: saved updates, additions, removals, page reload, empty list and custom-role scoping');

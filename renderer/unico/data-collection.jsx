@@ -14,7 +14,7 @@
 
   const dcApi = {
     get: (url) => fetch(url, { headers: { accept: 'application/json' } }).then((r) => r.json()),
-    post: (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()),
+    post: (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { _dcAllCache = null; window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
     patch: (url, body) => fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()),
     del: (url) => fetch(url, { method: 'DELETE' }).then((r) => r.json()),
   };
@@ -29,11 +29,23 @@
     const now = Date.now();
     if (!force && _dcAllCache && (now - _dcAllAt) < 8000) return Promise.resolve(_dcAllCache);
     if (_dcAllPromise) return _dcAllPromise;
-    _dcAllPromise = dcApi.get('/api/submissions?status=all&limit=1000')
-      .then((r) => { _dcAllCache = r && r.ok ? (r.submissions || []) : (_dcAllCache || []); _dcAllAt = Date.now(); _dcAllPromise = null; return _dcAllCache; })
-      .catch(() => { _dcAllPromise = null; return _dcAllCache || []; });
+    _dcAllPromise = (async () => {
+      const rows = new Map();
+      let offset = 0;
+      do {
+        const r = await dcApi.get('/api/submissions?status=all&limit=1000&offset=' + offset);
+        if (!r || !r.ok) throw new Error((r && r.error) || 'Could not load submission history');
+        (r.submissions || []).forEach(s => rows.set(s.id, s));
+        offset = r.nextOffset;
+      } while (offset != null);
+      _dcAllCache = [...rows.values()]; _dcAllAt = Date.now();
+      return _dcAllCache;
+    })().finally(() => { _dcAllPromise = null; });
     return _dcAllPromise;
   };
+  const dcSubmissionResponse = (status, force) => dcAllSubmissions(force).then(submissions => ({
+    ok: true, submissions: !status || status === 'all' ? submissions : submissions.filter(s => s.status === status),
+  }));
   if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => { _dcAllCache = null; });
 
   // ---- shared helpers ----
@@ -87,6 +99,10 @@
   // Default reporting month = the PREVIOUS completed calendar month (monthly reporting is
   // retrospective — e.g. in July you report June). Computed from the clock, never hardcoded.
   const dcDefaultMonth = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return MONS_ABBR[d.getMonth()] + '-' + String(d.getFullYear() % 100).padStart(2, '0'); };
+  // Fiscal-year quarter (Jun–Aug Q1, Sep–Nov Q2, Dec–Feb Q3, Mar–May Q4) for a
+  // 'Mon-YY' key. Year-independent, so it keeps working after the hardcoded Jun-25…
+  // May-26 rolling window the seed uses. Matches quality-store.js MONTH_QUARTER.
+  const dcFiscalQuarter = (mk) => { const mi = MONS_ABBR.indexOf(String(mk || '').split('-')[0]); if (mi < 0) return ''; return 'Q' + (Math.floor(((mi + 7) % 12) / 3) + 1); };
   function defaultMonthFor(dept) {
     const order = MO();
     if (dept && dept.months && dept.months.length) {
@@ -578,7 +594,7 @@
     const [draftAt, setDraftAt] = useState(null);   // when the current draft was last saved
 
     useEffect(() => { dcApi.get('/api/responsibles').then((r) => setResps(r.ok ? r.responsibles : [])).catch(() => {}); }, []);
-    useEffect(() => { dcApi.get('/api/submissions?limit=300').then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {}); }, [done]);
+    useEffect(() => { dcSubmissionResponse().then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {}); }, [done]);
     const canReportDept = (r, id) => {
       if (!r || !id) return false;
       if ((r.departments || []).includes(id)) return true;
@@ -590,7 +606,6 @@
     useEffect(() => {
       if (!dept) return;
       setMonth((m) => m || defaultMonthFor(dept));
-      setValues({});
       if (!(prefill && prefill.responsible)) {
         const assigned = resps.filter((r) => canReportDept(r, dept.id));
         if (assigned.length) setResponsible(assigned[0].name);
@@ -602,6 +617,7 @@
     // than silently discarding them.
     const draftKey = (dept && month) ? DC_DRAFT_KEY(me && (me.username || me.name), dept.id, month) : null;
     useEffect(() => {
+      setValues({}); setNote(''); setReason('');
       if (!draftKey) { setDraftAt(null); return; }
       const d = dcDraftLoad(draftKey);
       if (d && d.values && Object.keys(d.values).length) { setValues(d.values); setDraftAt(d.at || null); }
@@ -959,6 +975,7 @@
     // data on month / indicator change.
     useEffect(() => {
       const blankG = { nurse: '', doctor: '', pca: '', other: '' };
+      setRemark(''); setQReason('');
       const toG = (o) => ({ nurse: o && o.nurse != null ? String(o.nurse) : '', doctor: o && o.doctor != null ? String(o.doctor) : '', pca: o && o.pca != null ? String(o.pca) : '', other: o && o.other != null ? String(o.other) : '' });
       if (!curInd) { setGroups(blankG); setGroupsDen(blankG); setDeptRows([]); setDirectNum(''); setNumMode('direct'); setDen(''); setIncidents([]); setCapa({ finding: '', corrective: '', preventive: '' }); setNotObserved(false); setNoReason(''); return; }
       const wasNO = !!(curInd.mNotObserved && curInd.mNotObserved[month]);
@@ -1008,7 +1025,7 @@
       // Load any incident reports already recorded for this indicator × month.
       const incs = (curInd.incidents && Array.isArray(curInd.incidents[month])) ? curInd.incidents[month] : [];
       setIncidents(incs.map((x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', incidentDate: x.incidentDate || '', admissionDate: x.admissionDate || '', victimName: x.victimName || '', victimId: x.victimId || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' })));
-    }, [indId, month]); // eslint-disable-line
+    }, [areaKey, indId, month]); // eslint-disable-line
 
     // The numerator (by group or direct) drives the count / rate.
     const result = computeAsRate ? (denNum > 0 ? Math.round((numerator / denNum) * mult * 100) / 100 : 0) : numerator;
@@ -2032,7 +2049,7 @@
     const [sortDir, setSortDir] = useState('desc');
     const when = (ts) => { try { return new Date(ts).toLocaleString(); } catch (e) { return ''; } };
     const load = () => {
-      dcApi.get('/api/submissions?status=' + filter + '&limit=300').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+      dcSubmissionResponse(filter, true).then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
       dcApi.get('/api/submissions/stats').then((r) => setStats(r.ok ? r.stats : null)).catch(() => {});
     };
     useEffect(() => { setRows(null); load(); }, [filter]);
@@ -2442,7 +2459,7 @@
     // limit=500 is the SAME window CollectorProfile reads. Both screens quote an
     // accuracy percentage; computing them over different-sized pages would let the
     // two disagree for a collector with more than 300 submissions.
-    const load = () => dcApi.get('/api/submissions?limit=500').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+    const load = () => dcSubmissionResponse().then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
     useEffect(() => { load(); }, []);
     // Live refresh (same as the admin review): refetch on refocus, data-refreshed, and a 30s poll.
     useEffect(() => {
@@ -2474,7 +2491,7 @@
     // department+month (patient) / area+indicator+quarter (quality) — a submission
     // supersedes the matching record row.
     const keyOf = (s) => s.type === 'quality' ? ('q|' + s.area + '|' + (s.indicatorId || s.indicatorName) + '|' + s.quarter) : ('p|' + s.department + '|' + s.month);
-    const subs = rows || [];
+    const subs = (rows || []).map((s) => (s.type === 'quality' && !s.quarter) ? Object.assign({}, s, { quarter: dcFiscalQuarter(s.month) }) : s);
     const subKeys = new Set(subs.map(keyOf));
     const merged = subs.concat(reportedRecords().filter((r) => !subKeys.has(keyOf(r))))
       .sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
@@ -2700,18 +2717,18 @@
     const monthOpts = dcWideMonths();
     const [month, setMonth] = useState(dcDefaultMonth() || (fyMonths.length ? fyMonths[fyMonths.length - 1] : '') || '');
     const [subs, setSubs] = useState(null);
-    useEffect(() => { dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
+    useEffect(() => { dcSubmissionResponse().then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
     const pendingFor = (areaKey, ind, m) => (subs || []).some((s) => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
     // 'notobs' = the quality console declared this month deliberately not measured. It is
     // neither recorded nor outstanding, so it gets its own tone instead of being counted
     // as a missing submission the collector is expected to chase.
     const notObs = (ind, m) => !!(ind && ind.mNotObserved && ind.mNotObserved[m]);
-    const statusOf = (areaKey, ind, m) => hasData(ind, m) ? 'recorded' : pendingFor(areaKey, ind, m) ? 'pending' : notObs(ind, m) ? 'notobs' : 'none';
-    const tone = { recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'], pending: ['#9a6b00', '#fff4e0', 'Pending'], notobs: ['#5b3fa8', '#f5f1fd', 'Not observed'], none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted'] };
-    let totalInd = 0, rec = 0, pend = 0;
-    areas.forEach((a) => a.indicators.forEach((ind) => { totalInd++; const s = statusOf(a.key, ind, month); if (s === 'recorded') rec++; else if (s === 'pending') pend++; }));
-    const notSub = totalInd - rec - pend;
-    const pct = totalInd ? Math.round((rec + pend) * 100 / totalInd) : 0;
+    const statusOf = (areaKey, ind, m) => cpSubmissionStatus(subs, areaKey, ind, m);
+    const tone = { recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'], pending: ['#9a6b00', '#fff4e0', 'Pending'], notobs: ['#5b3fa8', '#f5f1fd', 'Not observed'], rejected: ['var(--rose)', 'var(--neg-bg)', 'Rejected'], none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted'] };
+    let totalInd = 0, rec = 0, pend = 0, notObservedCount = 0;
+    areas.forEach((a) => a.indicators.forEach((ind) => { totalInd++; const s = statusOf(a.key, ind, month); if (s === 'recorded') rec++; else if (s === 'pending') pend++; else if (s === 'notobs') notObservedCount++; }));
+    const notSub = totalInd - rec - pend - notObservedCount;
+    const pct = totalInd ? Math.round((rec + pend + notObservedCount) * 100 / totalInd) : 0;
     const sel = { padding: '9px 11px', border: '1px solid var(--line)', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', background: '#fff' };
     const Kpi = ({ label, val, color }) => (<div style={{ flex: 1, minWidth: 110, border: '1px solid var(--line)', borderLeft: '4px solid ' + color, borderRadius: 10, padding: '12px 14px', background: '#fff' }}><div className="num" style={{ fontSize: 22, fontWeight: 800, color }}>{val}</div><div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>{label}</div></div>);
     return (
@@ -2726,13 +2743,13 @@
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <Kpi label="Coverage" val={pct + '%'} color="#0090ca" />
           <Kpi label="Recorded" val={rec} color="var(--pos)" />
-          <Kpi label="Pending review" val={pend} color="#9a6b00" />
+          <Kpi label="Pending review" val={pend} color="#9a6b00" /><Kpi label="Not observed" val={notObservedCount} color="#5b3fa8" />
           <Kpi label="Not submitted" val={notSub} color={notSub ? 'var(--rose)' : 'var(--pos)'} />
         </div>
         {subs === null ? <div style={{ padding: 20, color: 'var(--muted)' }}>Loading…</div> : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))', gap: 12 }}>
             {areas.map((a) => {
-              let ar = 0, ap = 0; a.indicators.forEach((ind) => { const s = statusOf(a.key, ind, month); if (s === 'recorded') ar++; else if (s === 'pending') ap++; });
+              let ar = 0, ap = 0; a.indicators.forEach((ind) => { const s = statusOf(a.key, ind, month); if (s === 'recorded' || s === 'notobs') ar++; else if (s === 'pending') ap++; });
               const acov = a.indicators.length ? Math.round((ar + ap) * 100 / a.indicators.length) : 0;
               return (
                 <div key={a.key} style={{ border: '1px solid var(--line)', borderRadius: 11, background: '#fff', overflow: 'hidden' }}>
@@ -2813,8 +2830,21 @@
   // two silently disagreed for a month logged purely as incident entries.
   const cpHasData = (ind, m) => {
     const f = (o) => o && o[m] != null && o[m] !== '';
-    return f(ind.mNum) || f(ind.mDen) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0);
+    return f(ind.mNum) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0);
   };
+  function cpSubmissionStatus(subs, area, ind, month) {
+    const matching = (subs || []).filter(s => s.type === 'quality' && s.area === area && s.month === month &&
+      (s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase()));
+    const latest = matching.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))[0];
+    if (latest && latest.status === 'pending') return 'pending';
+    if (ind.mNotObserved && ind.mNotObserved[month]) return 'notobs';
+    if (cpHasData(ind, month)) return 'recorded';
+    // Collector snapshots deliberately omit readings. The review record still proves
+    // an approved report was submitted; absence from that snapshot is not a gap.
+    const approved = matching.find(s => s.status === 'approved');
+    if (approved) return approved.notObserved ? 'notobs' : 'recorded';
+    return latest && latest.status === 'rejected' ? 'rejected' : 'none';
+  }
   // Most quality indicators are "lower is better", but not all -- hand hygiene,
   // certification and satisfaction rise when things improve. Colouring by the sign of
   // the change alone paints a real improvement red, so the direction is read from the
@@ -2870,7 +2900,7 @@
     const [reason, setReason] = useState('');
     const [busy, setBusy] = useState(false);
     const [undoStack, setUndoStack] = useState([]);
-    const load = () => dcApi.get('/api/submissions?limit=300').then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {});
+    const load = () => dcSubmissionResponse().then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {});
     useEffect(() => { load(); }, []);
     useEffect(() => { setEdits({}); setReason(''); setUndoStack([]); }, [deptId]);
 
@@ -3243,7 +3273,7 @@
     const depts = useMemo(() => dcAllDepts(), [dataRev]);
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
     const [subs, setSubs] = useState(null);
-    useEffect(() => { dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
+    useEffect(() => { dcSubmissionResponse().then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
     const S = subs || [];
 
     const decided = S.filter((x) => x.status === 'approved' || x.status === 'rejected');
@@ -3471,7 +3501,8 @@
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
     const depts = useMemo(() => dcAllDepts(), [dataRev]);
     const [subs, setSubs] = useState(null);
-    const load = () => dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([]));
+    const [loadError, setLoadError] = useState('');
+    const load = () => dcSubmissionResponse().then((r) => { setSubs(r.submissions); setLoadError(''); }).catch(() => setLoadError('Submission history could not be refreshed. Please retry; missing-data counts are not current.'));
     useEffect(() => { load(); }, []);
     useEffect(() => {
       const refresh = () => { if (document.visibilityState !== 'hidden') load(); };
@@ -3482,11 +3513,7 @@
     const S = subs || [];
     const hasData = (ind, m) => { const f = (o) => o && o[m] != null && o[m] !== ''; return f(ind.mNum) || f(ind.mDen) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0); };
     const pendingFor = (areaKey, ind, m) => S.some((s) => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
-    const statusOf = (areaKey, ind, m) => cpHasData(ind, m) ? 'Recorded'
-      : pendingFor(areaKey, ind, m) ? 'Submitted'
-      // Declared not observed in the quality console — accounted for, so it counts as
-      // done and never appears in the "n not submitted" chip list.
-      : (ind && ind.mNotObserved && ind.mNotObserved[m]) ? 'Not observed' : 'Missing';
+    const statusOf = (areaKey, ind, m) => ({ recorded: 'Recorded', pending: 'Submitted', notobs: 'Not observed', rejected: 'Missing', none: 'Missing' })[cpSubmissionStatus(S, areaKey, ind, m)];
 
     let totalInd = 0, done = 0;
     const missing = [];
@@ -3551,6 +3578,7 @@
 
     return (
       <div style={{ maxWidth: 1260, margin: '0 auto' }}>
+        {loadError && <div role="alert" style={{padding:12,color:'var(--rose)'}}>{loadError}</div>}
         <div style={heroStyle}>
           <div style={{ position: 'absolute', right: -60, top: -70, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle,rgba(0,144,202,.2),transparent 70%)', filter: 'blur(10px)', pointerEvents: 'none' }} />
           <div style={{ position: 'relative', minWidth: 230, flex: 1 }}>
@@ -3742,7 +3770,7 @@
     const order = MO();
 
     useEffect(() => {
-      dcApi.get('/api/submissions?limit=500').then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([]));
+      dcSubmissionResponse().then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([]));
       dcApi.get('/api/staff').then((r) => setStaff(r.ok ? (r.staff || []) : [])).catch(() => setStaff([]));
       dcApi.get('/api/staff-requests').then((r) => setReqs(r.ok ? (r.requests || []) : [])).catch(() => setReqs([]));
       const now = new Date();
@@ -3759,7 +3787,7 @@
     let totalInd = 0, missing = 0;
     areas.forEach((a) => a.indicators.forEach((ind) => {
       totalInd++;
-      const sent = cpHasData(ind, month) || S.some((x) => x.type === 'quality' && x.area === a.key && x.month === month && x.status === 'pending' && (x.indicatorId === ind.id || (x.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
+      const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
       if (!sent) missing++;
     }));
     const pct = totalInd ? Math.round((totalInd - missing) * 100 / totalInd) : 0;
@@ -4363,13 +4391,13 @@
     // while the dashboard happens to be mounted.
     useEffect(() => {
       let dead = false;
-      dcApi.get('/api/submissions?limit=500').then((r) => {
+      dcSubmissionResponse().then((r) => {
         if (dead) return;
         const S = r.ok ? (r.submissions || []) : [];
         let total = 0, missing = 0;
         areas.forEach((a) => (a.indicators || []).forEach((ind) => {
           total++;
-          const sent = cpHasData(ind, month) || S.some((s) => s.type === 'quality' && s.area === a.key && s.month === month && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
+          const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
           if (!sent) missing++;
         }));
         const statGap = Math.max(0, depts.length - depts.filter((d) => ((d.months || []).indexOf(month) >= 0) || S.some((x) => x.type === 'patient' && x.department === d.id && x.month === month && x.status !== 'rejected')).length);
@@ -4526,6 +4554,7 @@
      performance. All derived client-side from the submissions list. */
   function SubmissionAnalytics() {
     const [rows, setRows] = useState(null);
+    const [loadError, setLoadError] = useState('');
     const [days, setDays] = useState('90');          // 30 | 90 | 365 | all
     const [fType, setFType] = useState('all');       // all | patient | quality
     const [q, setQ] = useState('');                  // person/target search
@@ -4533,7 +4562,7 @@
     const [sortBy, setSortBy] = useState('total');
     const [sortDir, setSortDir] = useState('desc');
     useEffect(() => {
-      const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then((r) => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+      const load = () => dcSubmissionResponse().then((r) => { setRows(r.submissions); setLoadError(''); }).catch(() => setLoadError('Submission history could not be refreshed. Please retry; totals are not current.'));
       load();
       const refresh = () => { if (document.visibilityState !== 'hidden') load(); };
       window.addEventListener('unico:data-refreshed', refresh);
@@ -4628,6 +4657,7 @@
 
     return (
       <div className="grid" style={{ gap: 16 }}>
+        {loadError && <div role="alert" style={{padding:12,color:'var(--rose)'}}>{loadError}</div>}
         <SectionTitle icon={I.trend} title="Submission Analytics" sub="Responder performance · completeness · accuracy · timeliness"
           right={<div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <div className="seg">{[['all', 'All'], ['patient', 'Statistics'], ['quality', 'Quality']].map(([k, l]) => <button key={k} className={fType === k ? 'on' : ''} onClick={() => setFType(k)}>{l}</button>)}</div>

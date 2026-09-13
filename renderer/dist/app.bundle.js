@@ -2203,7 +2203,7 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
       staff, refresh, refreshing, refreshError,
       get:(id)=>staff.find(e=>e.id===id),
       nextEmpId:()=>{ const max=staff.reduce((m,e)=>{const n=parseInt((e.emp_id||'').replace(/\D/g,''))||0;return Math.max(m,n);},100); return `UNC-${String(max+1).padStart(4,'0')}`; },
-      create:(data)=>setStaff(s=>{ const id=Math.max(0,...s.map(e=>e.id))+1; return [...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]; }),
+      create:(data)=>{ const id=Math.max(0,...currentStaff.current.map(e=>e.id))+1; setStaff(s=>[...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]); return id; },
       update:(id,patch)=>setStaff(s=>s.map(e=>e.id===id?{...e,...patch}:e)),
       // Deactivating a staff member archives them: they leave the active roster AND
       // move to Previous Staff (which keys on `former`). Keep first-archived timestamp.
@@ -25729,6 +25729,10 @@ function StaffForm({
   const [customT, setCustomT] = React.useState('');
   const [customD, setCustomD] = React.useState('');
   const [customX, setCustomX] = React.useState('');
+  const initialForm = React.useRef(f);
+  const pendingId = React.useRef(empId || null);
+  const saveLock = React.useRef(false);
+  const [saving, setSaving] = React.useState(false);
   const [customL, setCustomL] = React.useState('');
   const priorInit0 = existing && existing.prior_experience_years != null && existing.prior_experience_years !== '' && !isNaN(existing.prior_experience_years) ? +existing.prior_experience_years : 0;
   const [dpY, setDpY] = React.useState(() => {
@@ -25987,7 +25991,8 @@ function StaffForm({
     outline: 'none',
     width: '100%'
   };
-  const save = () => {
+  const save = async () => {
+    if (saveLock.current) return;
     const fail = m => {
       setErr(m);
       try {
@@ -26015,15 +26020,26 @@ function StaffForm({
       total_experience_text: S.fmtYM(total),
       previous_experience: rowsHave ? cleanEntries.map(x => `${[x.org || 'Prior role', (x.dept || '').trim()].filter(Boolean).join(' — ')} (${S.fmtYM(entYears(x))})`).join('; ') : f.previous_experience || ''
     };
+    saveLock.current = true;
+    setSaving(true);
     try {
-      if (editing) store.update(empId, data);else store.create(data);
+      if (pendingId.current != null) {
+        const patch = Object.fromEntries(Object.entries(data).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(initialForm.current[key])));
+        store.update(pendingId.current, patch);
+      } else pendingId.current = store.create(data);
+      if (!window.unicoFlushNow) throw new Error('Database saving is unavailable. Keep this form open and reconnect.');
+      const result = await window.unicoFlushNow();
+      if (!result || result.ok !== true) throw new Error(result && result.error || 'Database did not confirm the save. Keep this form open and retry.');
     } catch (ex) {
       const msg = ex && ex.message || 'the record could not be written';
-      setErr('Not saved — ' + msg + '. Nothing was changed; try again.');
+      setErr('Not saved to database — ' + msg + ' Your edits remain in this tab.');
       try {
         window.UI && window.UI.toast && window.UI.toast('Staff record not saved', 'error');
       } catch (e) {}
       return;
+    } finally {
+      saveLock.current = false;
+      setSaving(false);
     }
     setErr('');
     setSaved({
@@ -26117,12 +26133,13 @@ function StaffForm({
     })
   }, "Cancel"), React.createElement("button", {
     className: "btn pri sm",
+    disabled: saving,
     onClick: save
   }, React.createElement(Ic, {
     d: I.check,
     s: 15,
     sw: 2.4
-  }), editing ? 'Save changes' : 'Create staff')), !editing && React.createElement("div", {
+  }), saving ? 'Saving?' : editing ? 'Save changes' : 'Create staff')), !editing && React.createElement("div", {
     style: {
       textAlign: 'right'
     }
@@ -26602,12 +26619,13 @@ function StaffForm({
     }
   }, React.createElement("button", {
     className: "btn pri",
+    disabled: saving,
     onClick: save
   }, React.createElement(Ic, {
     d: I.check,
     s: 16,
     sw: 2.4
-  }), editing ? 'Save changes' : 'Create staff'), React.createElement("button", {
+  }), saving ? 'Saving?' : editing ? 'Save changes' : 'Create staff'), React.createElement("button", {
     className: "btn",
     onClick: () => setRoute(editing ? {
       view: 'staffProfile',
@@ -37117,21 +37135,25 @@ const P = {
 };
 const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
 const QORDER = ['Q1', 'Q2', 'Q3', 'Q4'];
-const QL = [['Q1', 'Jan–Mar'], ['Q2', 'Apr–Jun'], ['Q3', 'Jul–Sep'], ['Q4', 'Oct–Dec']];
-const FY_MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const QL = [['Q1', 'Jun–Aug'], ['Q2', 'Sep–Nov'], ['Q3', 'Dec–Feb'], ['Q4', 'Mar–May']];
+const FY_MONS = ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'];
 function fyMonthsFor(startYear) {
-  const yy = String(startYear % 100).padStart(2, '0');
-  return FY_MONS.map(mn => [mn + '-' + yy, mn + ' ' + startYear, mn]);
+  return FY_MONS.map((mn, i) => {
+    const yr = i < 7 ? startYear : startYear + 1;
+    const yk = String(yr % 100).padStart(2, '0');
+    return [mn + '-' + yk, mn + ' ' + yr, mn];
+  });
 }
 function fyOfKey(key) {
   const p = String(key || '').split('-');
-  const mi = FY_MONS.indexOf(p[0]);
+  const mi = QMONS_ORD.indexOf(p[0]);
   const yy = parseInt(p[1], 10);
   if (mi < 0 || isNaN(yy)) return null;
-  return 2000 + yy;
+  return 2000 + yy - (mi >= 5 ? 0 : 1);
 }
 function currentFy() {
-  return new Date().getFullYear();
+  const d = new Date();
+  return d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1;
 }
 function dataFySet(depts) {
   const set = new Set();
@@ -37179,7 +37201,7 @@ function defaultFy(depts) {
   return yrs.sort((a, b) => counts[b] - counts[a] || b - a)[0];
 }
 function fyLabelOf(startYear) {
-  return 'Year ' + startYear;
+  return 'FY ' + startYear;
 }
 const QTAG_FY = ['Q1', 'Q1', 'Q1', 'Q2', 'Q2', 'Q2', 'Q3', 'Q3', 'Q3', 'Q4', 'Q4', 'Q4'];
 function fyAxis(startYear) {
@@ -37276,7 +37298,7 @@ function qtrStatus(ind, Q, fy) {
 }
 function qcMonthEnded(mk) {
   const p = String(mk || '').split('-');
-  const mi = FY_MONS.indexOf(p[0]);
+  const mi = QMONS_ORD.indexOf(p[0]);
   const yy = parseInt(p[1], 10);
   if (mi < 0 || isNaN(yy)) return false;
   const now = new Date();
@@ -45846,7 +45868,7 @@ function QCReportBuilder({
       color: P.muted,
       marginTop: 6
     }
-  }, "Reporting year runs Jan\u2013Dec. Switch it to view a different year; every page below follows this selection.")), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
+  }, "Reporting year runs Jun\u2013May. Switch it to view a different year; every page below follows this selection.")), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
     value: period.mode,
     onChange: e => setPeriod({
       mode: e.target.value,
@@ -53778,7 +53800,13 @@ window.LockScreen = LockScreen;
         'content-type': 'application/json'
       },
       body: JSON.stringify(body || {})
-    }).then(r => r.json()),
+    }).then(r => r.json()).then(r => {
+      if (r.ok && url.indexOf('/api/submissions') === 0) {
+        _dcAllCache = null;
+        window.dispatchEvent(new Event('unico:data-refreshed'));
+      }
+      return r;
+    }),
     patch: (url, body) => fetch(url, {
       method: 'PATCH',
       headers: {
@@ -53797,17 +53825,27 @@ window.LockScreen = LockScreen;
     const now = Date.now();
     if (!force && _dcAllCache && now - _dcAllAt < 8000) return Promise.resolve(_dcAllCache);
     if (_dcAllPromise) return _dcAllPromise;
-    _dcAllPromise = dcApi.get('/api/submissions?status=all&limit=1000').then(r => {
-      _dcAllCache = r && r.ok ? r.submissions || [] : _dcAllCache || [];
+    _dcAllPromise = (async () => {
+      const rows = new Map();
+      let offset = 0;
+      do {
+        const r = await dcApi.get('/api/submissions?status=all&limit=1000&offset=' + offset);
+        if (!r || !r.ok) throw new Error(r && r.error || 'Could not load submission history');
+        (r.submissions || []).forEach(s => rows.set(s.id, s));
+        offset = r.nextOffset;
+      } while (offset != null);
+      _dcAllCache = [...rows.values()];
       _dcAllAt = Date.now();
-      _dcAllPromise = null;
       return _dcAllCache;
-    }).catch(() => {
+    })().finally(() => {
       _dcAllPromise = null;
-      return _dcAllCache || [];
     });
     return _dcAllPromise;
   };
+  const dcSubmissionResponse = (status, force) => dcAllSubmissions(force).then(submissions => ({
+    ok: true,
+    submissions: !status || status === 'all' ? submissions : submissions.filter(s => s.status === status)
+  }));
   if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => {
     _dcAllCache = null;
   });
@@ -53930,6 +53968,11 @@ window.LockScreen = LockScreen;
     d.setDate(1);
     d.setMonth(d.getMonth() - 1);
     return MONS_ABBR[d.getMonth()] + '-' + String(d.getFullYear() % 100).padStart(2, '0');
+  };
+  const dcFiscalQuarter = mk => {
+    const mi = MONS_ABBR.indexOf(String(mk || '').split('-')[0]);
+    if (mi < 0) return '';
+    return 'Q' + (Math.floor((mi + 7) % 12 / 3) + 1);
   };
   function defaultMonthFor(dept) {
     const order = MO();
@@ -55108,7 +55151,7 @@ window.LockScreen = LockScreen;
       dcApi.get('/api/responsibles').then(r => setResps(r.ok ? r.responsibles : [])).catch(() => {});
     }, []);
     useEffect(() => {
-      dcApi.get('/api/submissions?limit=300').then(r => setSubs(r.ok ? r.submissions : [])).catch(() => {});
+      dcSubmissionResponse().then(r => setSubs(r.ok ? r.submissions : [])).catch(() => {});
     }, [done]);
     const canReportDept = (r, id) => {
       if (!r || !id) return false;
@@ -55120,7 +55163,6 @@ window.LockScreen = LockScreen;
     useEffect(() => {
       if (!dept) return;
       setMonth(m => m || defaultMonthFor(dept));
-      setValues({});
       if (!(prefill && prefill.responsible)) {
         const assigned = resps.filter(r => canReportDept(r, dept.id));
         if (assigned.length) setResponsible(assigned[0].name);
@@ -55128,6 +55170,9 @@ window.LockScreen = LockScreen;
     }, [deptId, resps.length]);
     const draftKey = dept && month ? DC_DRAFT_KEY(me && (me.username || me.name), dept.id, month) : null;
     useEffect(() => {
+      setValues({});
+      setNote('');
+      setReason('');
       if (!draftKey) {
         setDraftAt(null);
         return;
@@ -55696,6 +55741,8 @@ window.LockScreen = LockScreen;
         pca: '',
         other: ''
       };
+      setRemark('');
+      setQReason('');
       const toG = o => ({
         nurse: o && o.nurse != null ? String(o.nurse) : '',
         doctor: o && o.doctor != null ? String(o.doctor) : '',
@@ -55816,7 +55863,7 @@ window.LockScreen = LockScreen;
         preventive: x.preventive || '',
         remark: x.remark || ''
       })));
-    }, [indId, month]);
+    }, [areaKey, indId, month]);
     const result = computeAsRate ? denNum > 0 ? Math.round(numerator / denNum * mult * 100) / 100 : 0 : numerator;
     const ratePending = computeAsRate && numerator > 0 && !(denNum > 0);
     const qExists = !!(curInd && (curInd.mNotObserved && curInd.mNotObserved[month] || curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
@@ -59118,7 +59165,7 @@ window.LockScreen = LockScreen;
       }
     };
     const load = () => {
-      dcApi.get('/api/submissions?status=' + filter + '&limit=300').then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+      dcSubmissionResponse(filter, true).then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
       dcApi.get('/api/submissions/stats').then(r => setStats(r.ok ? r.stats : null)).catch(() => {});
     };
     useEffect(() => {
@@ -60238,7 +60285,7 @@ window.LockScreen = LockScreen;
     const [mode, setMode] = useState('table');
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
     const ownsSub = s => !!s && s.status === 'pending' && [me.name, me.username].filter(Boolean).some(n => n === s.submittedBy || s.responsible && s.responsible.name === n);
-    const load = () => dcApi.get('/api/submissions?limit=500').then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+    const load = () => dcSubmissionResponse().then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
     useEffect(() => {
       load();
     }, []);
@@ -60300,7 +60347,9 @@ window.LockScreen = LockScreen;
       }, m[0]);
     };
     const keyOf = s => s.type === 'quality' ? 'q|' + s.area + '|' + (s.indicatorId || s.indicatorName) + '|' + s.quarter : 'p|' + s.department + '|' + s.month;
-    const subs = rows || [];
+    const subs = (rows || []).map(s => s.type === 'quality' && !s.quarter ? Object.assign({}, s, {
+      quarter: dcFiscalQuarter(s.month)
+    }) : s);
     const subKeys = new Set(subs.map(keyOf));
     const merged = subs.concat(reportedRecords().filter(r => !subKeys.has(keyOf(r)))).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     const patientRows = merged.filter(s => s.type !== 'quality');
@@ -60861,27 +60910,29 @@ window.LockScreen = LockScreen;
     const [month, setMonth] = useState(dcDefaultMonth() || (fyMonths.length ? fyMonths[fyMonths.length - 1] : '') || '');
     const [subs, setSubs] = useState(null);
     useEffect(() => {
-      dcApi.get('/api/submissions?limit=500').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
+      dcSubmissionResponse().then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
     }, []);
     const pendingFor = (areaKey, ind, m) => (subs || []).some(s => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
     const notObs = (ind, m) => !!(ind && ind.mNotObserved && ind.mNotObserved[m]);
-    const statusOf = (areaKey, ind, m) => hasData(ind, m) ? 'recorded' : pendingFor(areaKey, ind, m) ? 'pending' : notObs(ind, m) ? 'notobs' : 'none';
+    const statusOf = (areaKey, ind, m) => cpSubmissionStatus(subs, areaKey, ind, m);
     const tone = {
       recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'],
       pending: ['#9a6b00', '#fff4e0', 'Pending'],
       notobs: ['#5b3fa8', '#f5f1fd', 'Not observed'],
+      rejected: ['var(--rose)', 'var(--neg-bg)', 'Rejected'],
       none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted']
     };
     let totalInd = 0,
       rec = 0,
-      pend = 0;
+      pend = 0,
+      notObservedCount = 0;
     areas.forEach(a => a.indicators.forEach(ind => {
       totalInd++;
       const s = statusOf(a.key, ind, month);
-      if (s === 'recorded') rec++;else if (s === 'pending') pend++;
+      if (s === 'recorded') rec++;else if (s === 'pending') pend++;else if (s === 'notobs') notObservedCount++;
     }));
-    const notSub = totalInd - rec - pend;
-    const pct = totalInd ? Math.round((rec + pend) * 100 / totalInd) : 0;
+    const notSub = totalInd - rec - pend - notObservedCount;
+    const pct = totalInd ? Math.round((rec + pend + notObservedCount) * 100 / totalInd) : 0;
     const sel = {
       padding: '9px 11px',
       border: '1px solid var(--line)',
@@ -60991,6 +61042,10 @@ window.LockScreen = LockScreen;
       val: pend,
       color: "#9a6b00"
     }), React.createElement(Kpi, {
+      label: "Not observed",
+      val: notObservedCount,
+      color: "#5b3fa8"
+    }), React.createElement(Kpi, {
       label: "Not submitted",
       val: notSub,
       color: notSub ? 'var(--rose)' : 'var(--pos)'
@@ -61010,7 +61065,7 @@ window.LockScreen = LockScreen;
         ap = 0;
       a.indicators.forEach(ind => {
         const s = statusOf(a.key, ind, month);
-        if (s === 'recorded') ar++;else if (s === 'pending') ap++;
+        if (s === 'recorded' || s === 'notobs') ar++;else if (s === 'pending') ap++;
       });
       const acov = a.indicators.length ? Math.round((ar + ap) * 100 / a.indicators.length) : 0;
       return React.createElement("div", {
@@ -61156,8 +61211,18 @@ window.LockScreen = LockScreen;
   };
   const cpHasData = (ind, m) => {
     const f = o => o && o[m] != null && o[m] !== '';
-    return f(ind.mNum) || f(ind.mDen) || f(ind.months) || ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
+    return f(ind.mNum) || f(ind.months) || ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
   };
+  function cpSubmissionStatus(subs, area, ind, month) {
+    const matching = (subs || []).filter(s => s.type === 'quality' && s.area === area && s.month === month && (s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase()));
+    const latest = matching.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))[0];
+    if (latest && latest.status === 'pending') return 'pending';
+    if (ind.mNotObserved && ind.mNotObserved[month]) return 'notobs';
+    if (cpHasData(ind, month)) return 'recorded';
+    const approved = matching.find(s => s.status === 'approved');
+    if (approved) return approved.notObserved ? 'notobs' : 'recorded';
+    return latest && latest.status === 'rejected' ? 'rejected' : 'none';
+  }
   const cpImproved = (ind, first, last) => ind && ind.goalDirection === 'higher_is_better' ? last >= first : last <= first;
   const cpDeadline = mk => {
     const p = String(mk || '').split('-');
@@ -61232,7 +61297,7 @@ window.LockScreen = LockScreen;
     const [reason, setReason] = useState('');
     const [busy, setBusy] = useState(false);
     const [undoStack, setUndoStack] = useState([]);
-    const load = () => dcApi.get('/api/submissions?limit=300').then(r => setSubs(r.ok ? r.submissions : [])).catch(() => {});
+    const load = () => dcSubmissionResponse().then(r => setSubs(r.ok ? r.submissions : [])).catch(() => {});
     useEffect(() => {
       load();
     }, []);
@@ -62075,7 +62140,7 @@ window.LockScreen = LockScreen;
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length), [dataRev]);
     const [subs, setSubs] = useState(null);
     useEffect(() => {
-      dcApi.get('/api/submissions?limit=500').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
+      dcSubmissionResponse().then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
     }, []);
     const S = subs || [];
     const decided = S.filter(x => x.status === 'approved' || x.status === 'rejected');
@@ -62749,7 +62814,11 @@ window.LockScreen = LockScreen;
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length), [dataRev]);
     const depts = useMemo(() => dcAllDepts(), [dataRev]);
     const [subs, setSubs] = useState(null);
-    const load = () => dcApi.get('/api/submissions?limit=500').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
+    const [loadError, setLoadError] = useState('');
+    const load = () => dcSubmissionResponse().then(r => {
+      setSubs(r.submissions);
+      setLoadError('');
+    }).catch(() => setLoadError('Submission history could not be refreshed. Please retry; missing-data counts are not current.'));
     useEffect(() => {
       load();
     }, []);
@@ -62766,7 +62835,13 @@ window.LockScreen = LockScreen;
       return f(ind.mNum) || f(ind.mDen) || f(ind.months) || ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
     };
     const pendingFor = (areaKey, ind, m) => S.some(s => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
-    const statusOf = (areaKey, ind, m) => cpHasData(ind, m) ? 'Recorded' : pendingFor(areaKey, ind, m) ? 'Submitted' : ind && ind.mNotObserved && ind.mNotObserved[m] ? 'Not observed' : 'Missing';
+    const statusOf = (areaKey, ind, m) => ({
+      recorded: 'Recorded',
+      pending: 'Submitted',
+      notobs: 'Not observed',
+      rejected: 'Missing',
+      none: 'Missing'
+    })[cpSubmissionStatus(S, areaKey, ind, m)];
     let totalInd = 0,
       done = 0;
     const missing = [];
@@ -62927,7 +63002,13 @@ window.LockScreen = LockScreen;
         maxWidth: 1260,
         margin: '0 auto'
       }
-    }, React.createElement("div", {
+    }, loadError && React.createElement("div", {
+      role: "alert",
+      style: {
+        padding: 12,
+        color: 'var(--rose)'
+      }
+    }, loadError), React.createElement("div", {
       style: heroStyle
     }, React.createElement("div", {
       style: {
@@ -63592,7 +63673,7 @@ window.LockScreen = LockScreen;
     const R = window.UNICO_ROSTER;
     const order = MO();
     useEffect(() => {
-      dcApi.get('/api/submissions?limit=500').then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
+      dcSubmissionResponse().then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
       dcApi.get('/api/staff').then(r => setStaff(r.ok ? r.staff || [] : [])).catch(() => setStaff([]));
       dcApi.get('/api/staff-requests').then(r => setReqs(r.ok ? r.requests || [] : [])).catch(() => setReqs([]));
       const now = new Date();
@@ -63611,7 +63692,7 @@ window.LockScreen = LockScreen;
       missing = 0;
     areas.forEach(a => a.indicators.forEach(ind => {
       totalInd++;
-      const sent = cpHasData(ind, month) || S.some(x => x.type === 'quality' && x.area === a.key && x.month === month && x.status === 'pending' && (x.indicatorId === ind.id || (x.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
+      const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
       if (!sent) missing++;
     }));
     const pct = totalInd ? Math.round((totalInd - missing) * 100 / totalInd) : 0;
@@ -65259,14 +65340,14 @@ window.LockScreen = LockScreen;
     }, []);
     useEffect(() => {
       let dead = false;
-      dcApi.get('/api/submissions?limit=500').then(r => {
+      dcSubmissionResponse().then(r => {
         if (dead) return;
         const S = r.ok ? r.submissions || [] : [];
         let total = 0,
           missing = 0;
         areas.forEach(a => (a.indicators || []).forEach(ind => {
           total++;
-          const sent = cpHasData(ind, month) || S.some(s => s.type === 'quality' && s.area === a.key && s.month === month && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
+          const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
           if (!sent) missing++;
         }));
         const statGap = Math.max(0, depts.length - depts.filter(d => (d.months || []).indexOf(month) >= 0 || S.some(x => x.type === 'patient' && x.department === d.id && x.month === month && x.status !== 'rejected')).length);
@@ -65775,6 +65856,7 @@ window.LockScreen = LockScreen;
   }
   function SubmissionAnalytics() {
     const [rows, setRows] = useState(null);
+    const [loadError, setLoadError] = useState('');
     const [days, setDays] = useState('90');
     const [fType, setFType] = useState('all');
     const [q, setQ] = useState('');
@@ -65782,7 +65864,10 @@ window.LockScreen = LockScreen;
     const [sortBy, setSortBy] = useState('total');
     const [sortDir, setSortDir] = useState('desc');
     useEffect(() => {
-      const load = () => dcApi.get('/api/submissions?status=all&limit=1000').then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
+      const load = () => dcSubmissionResponse().then(r => {
+        setRows(r.submissions);
+        setLoadError('');
+      }).catch(() => setLoadError('Submission history could not be refreshed. Please retry; totals are not current.'));
       load();
       const refresh = () => {
         if (document.visibilityState !== 'hidden') load();
@@ -66055,7 +66140,13 @@ window.LockScreen = LockScreen;
       style: {
         gap: 16
       }
-    }, React.createElement(SectionTitle, {
+    }, loadError && React.createElement("div", {
+      role: "alert",
+      style: {
+        padding: 12,
+        color: 'var(--rose)'
+      }
+    }, loadError), React.createElement(SectionTitle, {
       icon: I.trend,
       title: "Submission Analytics",
       sub: "Responder performance \xB7 completeness \xB7 accuracy \xB7 timeliness",

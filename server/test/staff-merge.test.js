@@ -1,0 +1,23 @@
+const assert = require('node:assert/strict');
+const { mergeStaffChanges } = require('../staff-merge');
+const stringify = JSON.stringify;
+const merge = (base, next, current) => JSON.parse(mergeStaffChanges(stringify(base), stringify(next), stringify(current)));
+const old = [{id:1,name:'Nurse',extracurricular:'Singing',is_active:true}];
+const live = [{...old[0],extracurricular:'Singing, Gardening'}, {id:2,name:'New nurse',is_active:true}];
+const stale = [{...old[0],name:'Correct name'}];
+assert.deepEqual(merge(old, stale, live), [{...live[0],name:'Correct name'}, live[1]]);
+assert.throws(() => merge(old, [{...old[0],extracurricular:'Dancing'}], live), error => error.status === 409);
+assert.throws(() => merge(old, [], live), error => error.status === 409);
+assert.deepEqual(merge(old, old, live), live);
+assert.deepEqual(merge(live, [{...live[0],extracurricular:''},live[1]], live)[0].extracurricular, '');
+assert.throws(() => merge([], [{id:2,name:'Other'}], live), error => error.status === 409);
+assert.throws(() => merge(old, stale, []), error => error.status === 409);
+process.env.MONGODB_URI='';
+const db=require('../db');
+(async()=>{
+  const previous=(await db.getAppData()).data;
+  await db.setAppData({unico_staff_v3:stringify(live)},previous);
+  await assert.rejects(db.setAppData({unico_staff_v3:stringify(stale)},previous),error=>error.status===409);
+  assert.equal(JSON.parse((await db.getAppData()).data.unico_staff_v3)[0].extracurricular,'Singing, Gardening');
+  console.log('Staff merge and concurrent write checks passed.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

@@ -337,12 +337,24 @@ async function deleteResponsible(id) {
 }
 
 /* ---------------- build (validate, don't apply) ---------------- */
+function validateReportingMonth(month) {
+  if (!/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2}$/.test(month)) {
+    throw new Error('Select a valid reporting month (for example, Sep-26).');
+  }
+}
+function numericReading(value, label) {
+  if (!['string', 'number'].includes(typeof value) || String(value).trim() === '' || !Number.isFinite(Number(value)) || Number(value) < 0) {
+    throw new Error(label + ' must be a finite, non-negative number.');
+  }
+  return Number(value);
+}
 async function buildPatientSpec(payload) {
   const deptId = String((payload && payload.department) || '').trim();
   const month = String((payload && payload.month) || '').trim();
   const rawValues = (payload && payload.values && typeof payload.values === 'object') ? payload.values : {};
   if (!deptId) throw new Error('Department is required.');
   if (!month) throw new Error('Month is required.');
+  validateReportingMonth(month);
   const c = await col('departments');
   if (!c) throw new Error('Database not available.');
   const dept = await c.findOne({ _id: deptId });
@@ -351,9 +363,9 @@ async function buildPatientSpec(payload) {
   Object.keys(rawValues).forEach((k) => {
     const v = rawValues[k];
     if (v === '' || v == null) return;
-    const n = Number(v);
-    row[k] = isNaN(n) ? v : n;
+    row[k] = numericReading(v, k);
   });
+  if (!Object.keys(row).length) throw new Error('Enter at least one statistic (use 0 for a measured zero).');
   return { type: 'patient', department: deptId, departmentName: dept.name || deptId, month, values: row };
 }
 
@@ -362,6 +374,7 @@ async function buildQualitySpec(payload) {
   const month = String((payload && payload.month) || '').trim();
   if (!area) throw new Error('Quality area is required.');
   if (!month) throw new Error('Reporting month is required.');
+  validateReportingMonth(month);
   const doc = await qArea(area);
   if (!doc) throw new Error('Unknown quality area: ' + area);
   const indicators = Array.isArray(doc.indicators) ? doc.indicators : [];
@@ -408,6 +421,11 @@ async function buildQualitySpec(payload) {
   // computed or stored as a value — the flag itself is the datum, so a skipped
   // observation can never be mistaken for a real 0.
   const notObserved = !!(payload && payload.notObserved);
+  if (!notObserved) {
+    ['value', 'num', 'den'].forEach((key) => {
+      if (payload && payload[key] != null && payload[key] !== '') numericReading(payload[key], key);
+    });
+  }
   let value = null, num = null, den = null;
   if (notObserved) {
     // value/num/den stay null on purpose
@@ -749,14 +767,15 @@ async function rejectSubmission(id, by, reason) {
 async function getSubmissions(query) {
   const status = query && query.status && query.status !== 'all' ? String(query.status) : null;
   const n = Math.min(Math.max(parseInt(query && query.limit, 10) || 200, 1), 1000);
+  const offset = Math.max(0, parseInt(query && query.offset, 10) || 0);
   const c = await col('submissions');
   if (!c) {
     let arr = mem.submissions.slice();
     if (status) arr = arr.filter((s) => s.status === status);
-    return arr.slice(0, n);
+    return arr.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0) || String(b.id).localeCompare(String(a.id))).slice(offset, offset + n);
   }
   const filter = status ? { status } : {};
-  const docs = await c.find(filter).sort({ submittedAt: -1 }).limit(n).toArray();
+  const docs = await c.find(filter).sort({ submittedAt: -1, _id: -1 }).skip(offset).limit(n).toArray();
   return docs.map((d) => { const { _id, ...r } = d; return { id: _id, ...r }; });
 }
 
@@ -1004,7 +1023,7 @@ function mount(app, opts) {
     return (subs || []).filter((s) => names.includes(s.submittedBy)
       || (s.responsible && names.includes(s.responsible.name))
       || (s.type === 'patient' && depts.includes(s.department))
-      || (s.type === 'quality' && areas.includes(s.area)));
+      || (s.type === 'quality' && ((scope && scope.allQualityAreas) || areas.includes(s.area))));
   };
   const statsFromSubmissions = (subs) => {
     const arr = subs || [];
@@ -1053,15 +1072,21 @@ function mount(app, opts) {
   app.get('/api/submissions', guard, async (req, res) => {
     try {
       let subs = await getSubmissions(req.query);
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+      const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+      const nextOffset = subs.length === limit ? offset + limit : null;
       // Collectors only see submissions they made or that touch their assignments.
       subs = await filterSubmissionsForUser(req, subs);
-      res.json({ ok: true, submissions: subs });
+      res.set('Cache-Control', 'no-store');
+      res.json({ ok: true, submissions: subs, nextOffset });
     } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.get('/api/submissions/stats', guard, async (req, res) => {
     try {
       if (req.user && accessRoles.PORTAL_ROLES.indexOf(req.user.role) >= 0) {
-        const subs = await filterSubmissionsForUser(req, await getSubmissions({ limit: 1000 }));
+        let all = [], page, offset = 0;
+        do { page = await getSubmissions({ limit: 1000, offset }); all.push(...page); offset += page.length; } while (page.length === 1000);
+        const subs = await filterSubmissionsForUser(req, all);
         return res.json({ ok: true, stats: statsFromSubmissions(subs) });
       }
       res.json({ ok: true, stats: await getStats() });
@@ -1130,16 +1155,18 @@ function mount(app, opts) {
       const b = req.body || {};
       const patch = { editedBy: who(req), editedAt: Date.now() };
       if (b.note != null) patch.note = String(b.note);
-      if (isAdmin && b.month) patch.month = String(b.month).trim(); // month re-assign is admin-only
+      if (isAdmin && b.month) { validateReportingMonth(String(b.month).trim()); patch.month = String(b.month).trim(); }
       if (s.type === 'patient') {
         if (b.values && typeof b.values === 'object') {
           const out = {};
-          Object.keys(b.values).forEach((k) => { const v = b.values[k]; if (v !== '' && v != null && !isNaN(Number(v))) out[k] = Number(v); });
+          Object.keys(b.values).forEach((k) => { const v = b.values[k]; if (v !== '' && v != null) out[k] = numericReading(v, k); });
+          if (!Object.keys(out).length) throw new Error('Enter at least one statistic (use 0 for a measured zero).');
           patch.values = out;
         }
         // Re-assign to a different department (admin only).
         if (isAdmin && b.department) { patch.department = String(b.department).trim(); if (b.departmentName) patch.departmentName = String(b.departmentName).trim(); }
       } else if (s.type === 'quality') {
+        ['value', 'num', 'den'].forEach((key) => { if (b[key] != null && b[key] !== '') numericReading(b[key], key); });
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
         if (b.num != null && b.num !== '' && !isNaN(Number(b.num))) patch.num = Number(b.num);   // rate numerator
         // Typing a real value onto a "Not observed" submission converts it back to a

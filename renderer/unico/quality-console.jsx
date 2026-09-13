@@ -29,29 +29,36 @@ const P = {
 
 const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
 
-/* The module-level default month axis (the current calendar year, Jan–Dec) is defined just
+/* The module-level default month axis (the current FISCAL year, Jun–May) is defined just
    below once fyAxis() exists. Views compute their own axis via fyAxis(selectedYear). */
 
 const QORDER = ['Q1','Q2','Q3','Q4'];
-const QL = [['Q1','Jan–Mar'],['Q2','Apr–Jun'],['Q3','Jul–Sep'],['Q4','Oct–Dec']];
+const QL = [['Q1','Jun–Aug'],['Q2','Sep–Nov'],['Q3','Dec–Feb'],['Q4','Mar–May']];
 
-/* ---- reporting-year helpers (calendar year, Jan–Dec) for the month + year switcher ---- */
-const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-/* The 12 months of the calendar year `startYear`, as [storeKey 'Mon-YY', 'Mon YYYY', 'Mon'] —
-   the same [key,label,…] shape MONTHS uses, so deptStat / monthStatus work unchanged. */
+/* ---- reporting-year helpers (fiscal year, Jun–May) for the month + year switcher ----
+   Mirrors quality-store.js (QUARTER_MONTHS / fyOfKeyS): the reporting year starts in June,
+   so Jan-26…May-26 belong to the fiscal year that started Jun-25. */
+const FY_MONS = ['Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May'];
+/* The 12 months of the fiscal year starting `startYear` (Jun of year N … May of N+1), as
+   [storeKey 'Mon-YY', 'Mon YYYY', 'Mon'] — the same [key,label,…] shape MONTHS uses, so
+   deptStat / monthStatus work unchanged. */
 function fyMonthsFor(startYear){
-  const yy = String(startYear % 100).padStart(2, '0');
-  return FY_MONS.map(mn => [ mn + '-' + yy, mn + ' ' + startYear, mn ]);
+  return FY_MONS.map((mn, i) => {
+    const yr = (i < 7) ? startYear : startYear + 1;
+    const yk = String(yr % 100).padStart(2, '0');
+    return [ mn + '-' + yk, mn + ' ' + yr, mn ];
+  });
 }
-/* Calendar year for a 'Mon-YY' key. */
+/* Fiscal year (Jun–May) for a 'Mon-YY' key — Jun…Dec carry their own year, Jan…May the
+   previous one. */
 function fyOfKey(key){
-  const p = String(key || '').split('-'); const mi = FY_MONS.indexOf(p[0]);
+  const p = String(key || '').split('-'); const mi = QMONS_ORD.indexOf(p[0]);
   const yy = parseInt(p[1], 10);
   if(mi < 0 || isNaN(yy)) return null;
-  return 2000 + yy;
+  return 2000 + yy - (mi >= 5 ? 0 : 1);
 }
-/* Current calendar year from the browser clock. */
-function currentFy(){ return new Date().getFullYear(); }
+/* Current fiscal year's start (June) from the browser clock. */
+function currentFy(){ const d = new Date(); return d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1; }
 /* Set of fiscal-year starts that have any actual recorded value in the data. */
 function dataFySet(depts){
   const set = new Set();
@@ -83,13 +90,13 @@ function defaultFy(depts){
   if(!yrs.length) return currentFy();
   return yrs.sort((a,b) => (counts[b]-counts[a]) || (b-a))[0];
 }
-function fyLabelOf(startYear){ return 'Year ' + startYear; }
+function fyLabelOf(startYear){ return 'FY ' + startYear; }
 /* The quarter-tagged 12-month axis for a reporting year — same [key,'Mon YYYY',Q] shape as the
    module MONTHS, so any view can `const MONTHS = fyAxis(fy)` to become year-aware with no other
    change (the local const lexically shadows the module one). */
 const QTAG_FY = ['Q1','Q1','Q1','Q2','Q2','Q2','Q3','Q3','Q3','Q4','Q4','Q4'];
 function fyAxis(startYear){ return fyMonthsFor(startYear).map((r,i)=>[r[0],r[1],QTAG_FY[i]]); }
-/* Default axis = the current calendar year; a safe fallback for helpers called without an
+/* Default axis = the current fiscal year; a safe fallback for helpers called without an
    explicit months array. Every view overrides it with its selected year. */
 const MONTHS = fyAxis(currentFy());
 /* 'Mon-YY' storeKey -> 'Mon YYYY' display label (year-agnostic). */
@@ -165,7 +172,7 @@ function qtrStatus(ind, Q, fy){ return qStatus(ind, qtrSrc(ind, fy)[Q]); }
    rollups (including pre-seeded zeros for future quarters) from painting reported-
    looking values into months nobody could have reported yet. */
 function qcMonthEnded(mk){
-  const p = String(mk||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10);
+  const p = String(mk||'').split('-'); const mi = QMONS_ORD.indexOf(p[0]); const yy = parseInt(p[1],10);
   if(mi < 0 || isNaN(yy)) return false;
   const now = new Date(); const y = 2000 + yy;
   return y < now.getFullYear() || (y === now.getFullYear() && mi < now.getMonth());
@@ -2083,7 +2090,7 @@ function QCReportBuilder({depts}){
     else base=MONTHS;
     // Trim leading/trailing months with NO reported data across the chosen departments, so
     // the report (table, charts, KPIs) STOPS at the last reported month instead of padding
-    // empty future months — a mid-year "Full Year" run now shows Jan–Jun, not Jan–Dec of
+    // empty future months — a mid-year "Full Year" run now shows Jun–Sep, not Jun–May of
     // blanks. If the whole span is empty (e.g. a future quarter picked on purpose) it is
     // left intact so the report still renders the requested period.
     if(!base.length) return base;
@@ -3622,7 +3629,7 @@ function QCReportBuilder({depts}){
               <select value={fy} onChange={e=>{setFy(Number(e.target.value));setPeriod({mode:'all'});setPageIdx(0);}} style={{...sel2,width:'100%'}}>
                 {fyOptions(depts).map(y=><option key={y} value={y}>{fyLabelOf(y)}{y===currentFy()?' · current':''}</option>)}
               </select>
-              <div style={{fontSize:11,color:P.muted,marginTop:6}}>Reporting year runs Jan–Dec. Switch it to view a different year; every page below follows this selection.</div>
+              <div style={{fontSize:11,color:P.muted,marginTop:6}}>Reporting year runs Jun–May. Switch it to view a different year; every page below follows this selection.</div>
             </div>
             <div>
               {fieldLabel('Reporting period')}

@@ -71,6 +71,9 @@
     Object.keys(acknowledged).forEach(function(k) {
       if(syncKey(k) && !Object.prototype.hasOwnProperty.call(data || {}, k)) patch.removed.push(k);
     });
+    if (Object.prototype.hasOwnProperty.call(patch.data, 'unico_staff_v3') || patch.removed.indexOf('unico_staff_v3') >= 0) {
+      patch.staffBase = acknowledged.unico_staff_v3 || null;
+    }
     return patch;
   }
   function acceptSnapshot(data) {
@@ -86,6 +89,11 @@
     }).then(function (r) {
       // An expired session is not a network problem — retrying cannot fix it.
       if (r.status === 401) { warnSessionExpired(); return { ok: false, error: 'Session expired' }; }
+      if (r.status === 409) return r.json().then(function(result) {
+        warnSaveFailed();
+        if (saveBanner) saveBanner.textContent = result.error + ' Your edits are still in this tab.';
+        return { ok: false, error: result.error, conflict: true };
+      });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json().then(function(result) {
         if(!result || !result.ok) throw new Error('Save was not accepted');
@@ -193,6 +201,7 @@
     snapshot: window.__UNICO_SNAPSHOT__ || {},
     persist: persist,
     acceptSnapshot: acceptSnapshot,
+    staffBase: function() { return acknowledged.unico_staff_v3 || null; },
     backup: backup,
     restore: restore,
     dbPath: dbPath,

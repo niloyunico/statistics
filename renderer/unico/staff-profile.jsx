@@ -2163,6 +2163,10 @@ function StaffForm({store, empId, setRoute, role, depts}){
   const [customT,setCustomT]=React.useState('');
   const [customD,setCustomD]=React.useState('');
   const [customX,setCustomX]=React.useState('');   // custom extracurricular activity
+  const initialForm=React.useRef(f);
+  const pendingId=React.useRef(empId||null);
+  const saveLock=React.useRef(false);
+  const [saving,setSaving]=React.useState(false);
   const [customL,setCustomL]=React.useState('');   // custom language
   // Direct "previous experience (excl. UNICO)" entry — a simple Years+Months input
   // used when the experience is NOT itemised by organisation below.
@@ -2277,7 +2281,8 @@ function StaffForm({store, empId, setRoute, role, depts}){
   const totalY=Math.round((priorSum+unicoY)*10)/10;
   const rowInp={padding:'8px 10px',border:'1px solid var(--line)',borderRadius:7,fontSize:12.5,fontFamily:'inherit',outline:'none',width:'100%'};
 
-  const save=()=>{
+  const save=async()=>{
+    if(saveLock.current) return;
     // Validation failures must be VISIBLE from the sticky header's Save too — the
     // inline error line lives at the bottom of a long form, so toast it as well.
     const fail=(m)=>{ setErr(m); try{ window.UI&&window.UI.toast&&window.UI.toast(m,'error'); }catch(e){} };
@@ -2296,13 +2301,22 @@ function StaffForm({store, empId, setRoute, role, depts}){
         ? cleanEntries.map(x=>`${[x.org||'Prior role',(x.dept||'').trim()].filter(Boolean).join(' — ')} (${S.fmtYM(entYears(x))})`).join('; ')
         : (f.previous_experience||'')};
     // A failed write must NOT look like a success: only the confirmation path routes away.
+    saveLock.current=true; setSaving(true);
     try{
-      if(editing) store.update(empId,data); else store.create(data);
+      if(pendingId.current!=null) {
+        const patch=Object.fromEntries(Object.entries(data).filter(([key,value])=>JSON.stringify(value)!==JSON.stringify(initialForm.current[key])));
+        store.update(pendingId.current,patch);
+      } else pendingId.current=store.create(data);
+      if(!window.unicoFlushNow) throw new Error('Database saving is unavailable. Keep this form open and reconnect.');
+      const result=await window.unicoFlushNow();
+      if(!result || result.ok!==true) throw new Error((result&&result.error)||'Database did not confirm the save. Keep this form open and retry.');
     }catch(ex){
       const msg=(ex&&ex.message)||'the record could not be written';
-      setErr('Not saved — '+msg+'. Nothing was changed; try again.');
+      setErr('Not saved to database — '+msg+' Your edits remain in this tab.');
       try{ window.UI&&window.UI.toast&&window.UI.toast('Staff record not saved','error'); }catch(e){}
       return;
+    }finally{
+      saveLock.current=false; setSaving(false);
     }
     setErr('');
     setSaved({title:`${f.role||'Nurse'} record saved`,
@@ -2337,7 +2351,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
           <button className="btn sm" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
-          <button className="btn pri sm" onClick={save}><Ic d={I.check} s={15} sw={2.4}/>{editing?'Save changes':'Create staff'}</button>
+          <button className="btn pri sm" disabled={saving} onClick={save}><Ic d={I.check} s={15} sw={2.4}/>{saving?'Saving?':editing?'Save changes':'Create staff'}</button>
         </div>
         {!editing && (
           <div style={{textAlign:'right'}}>
@@ -2510,7 +2524,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
           }))}
           {err&&<div style={{fontSize:12.5,color:'var(--rose)',fontWeight:600}}>{err}</div>}
           <div style={{display:'flex',gap:10,borderTop:'1px solid var(--line-2)',paddingTop:14}}>
-            <button className="btn pri" onClick={save}><Ic d={I.check} s={16} sw={2.4}/>{editing?'Save changes':'Create staff'}</button>
+            <button className="btn pri" disabled={saving} onClick={save}><Ic d={I.check} s={16} sw={2.4}/>{saving?'Saving?':editing?'Save changes':'Create staff'}</button>
             <button className="btn" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
           </div>
         </div></div>

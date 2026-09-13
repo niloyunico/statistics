@@ -558,7 +558,7 @@
       staff, refresh, refreshing, refreshError,
       get:(id)=>staff.find(e=>e.id===id),
       nextEmpId:()=>{ const max=staff.reduce((m,e)=>{const n=parseInt((e.emp_id||'').replace(/\D/g,''))||0;return Math.max(m,n);},100); return `UNC-${String(max+1).padStart(4,'0')}`; },
-      create:(data)=>setStaff(s=>{ const id=Math.max(0,...s.map(e=>e.id))+1; return [...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]; }),
+      create:(data)=>{ const id=Math.max(0,...currentStaff.current.map(e=>e.id))+1; setStaff(s=>[...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]); return id; },
       update:(id,patch)=>setStaff(s=>s.map(e=>e.id===id?{...e,...patch}:e)),
       // Deactivating a staff member archives them: they leave the active roster AND
       // move to Previous Staff (which keys on `former`). Keep first-archived timestamp.
