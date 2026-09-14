@@ -696,7 +696,8 @@ function mount(app, opts) {
       const buf = doc.data.buffer ? Buffer.from(doc.data.buffer) : Buffer.from(doc.data);
       const tag = '"' + (doc.updatedAt || 0) + '"';
       res.setHeader('Content-Type', doc.mime || 'image/jpeg');
-      res.setHeader('Cache-Control', 'private, max-age=86400');
+      // Revalidate every time: a replaced photo's old file is deleted (see medicines-d1.js).
+      res.setHeader('Cache-Control', 'private, no-cache');
       res.setHeader('ETag', tag);
       if (req.headers['if-none-match'] === tag) return res.status(304).end();
       res.send(buf);

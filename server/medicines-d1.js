@@ -92,7 +92,7 @@ async function fetchIndexPart(file) {
 // Re-applied on a timer as well as at load: an edit saved on ANOTHER warm instance (a
 // brand marked stocked) otherwise stayed invisible here for the instance's whole life, and
 // a D1 blip at cold start left this instance without the local edits at all.
-const OVERLAY_TTL_MS = 60000;
+const OVERLAY_TTL_MS = 15000;   // how long another instance may show a brand edit stale
 let overlayRefreshing = null;
 function refreshOverlaySoon(idx) {
   if (overlayRefreshing || Date.now() - (idx.overlayAt || 0) < OVERLAY_TTL_MS) return;
@@ -679,7 +679,9 @@ function mount(app, opts) {
       const b = at != null ? idx.brands[at] : null;
       const url = b ? imgUrl(b) : '';
       if (!url) return res.status(404).end();
-      res.setHeader('Cache-Control', 'private, max-age=86400');
+      // Revalidate every time: the URL is fixed per drug, and a replaced photo's old file
+      // is deleted — a day-long cached redirect pointed browsers at a missing image.
+      res.setHeader('Cache-Control', 'private, no-cache');
       res.redirect(302, url);
     } catch (e) { res.status(404).end(); }
   });

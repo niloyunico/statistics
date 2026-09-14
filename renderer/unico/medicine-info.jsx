@@ -154,6 +154,14 @@
        waits, and only 90 ms. The server memoises the same queries too, which is
        what makes typing feel like a local index rather than a round trip. */
     const respCache = useRef(new Map());
+    // Coming back to the tab drops cached answers, so a brand edited elsewhere (stocked,
+    // preferred, renamed) is fetched fresh instead of shown as it was when first opened.
+    useEffect(() => {
+      const drop = () => { if (document.visibilityState !== 'hidden') respCache.current.clear(); };
+      window.addEventListener('focus', drop);
+      document.addEventListener('visibilitychange', drop);
+      return () => { window.removeEventListener('focus', drop); document.removeEventListener('visibilitychange', drop); };
+    }, []);
     const cachedGet = (url) => {
       const c = respCache.current;
       if (c.has(url)) return { hit: true, data: c.get(url) };

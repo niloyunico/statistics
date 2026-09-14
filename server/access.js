@@ -114,7 +114,9 @@ function unrestricted(user) {
 // sub/role/name, and a token minted before an admin revoked access would otherwise
 // keep its old rights for the rest of its 12h life.
 const _cache = new Map();
-const CACHE_TTL = 15000; // short: a revoked permission takes effect within 15s
+// Short, because it is PER INSTANCE: invalidate() only reaches the instance that saved
+// the change, so on Vercel a revoked permission lasts this long on every other one.
+const CACHE_TTL = 3000;
 // How old a remembered user may be and still stand in when the lookup FAILS.
 const STALE_USER_MS = 60000;
 function invalidate(username) {
@@ -123,7 +125,10 @@ function invalidate(username) {
 }
 
 const DB_UNREACHABLE = Symbol('db-unreachable');
-async function loadUser(username) {
+// opts.allowStale — a failed lookup may fall back to a recent copy. Only for READS: a
+// write judged by a remembered (possibly revoked) record would apply rights the user no
+// longer has; without it the request degrades and a save is refused with 503.
+async function loadUser(username, opts) {
   const key = String(username || '').toLowerCase();
   if (!key) return null;
   const hit = _cache.get(key);
@@ -137,7 +142,7 @@ async function loadUser(username) {
     // reporting "no such user", which reads as a revoked session. Only recent: a user
     // deactivated or stripped of access on another instance must not keep the old
     // rights here for as long as this lookup keeps failing.
-    return hit && (Date.now() - hit.ts) < STALE_USER_MS ? hit.user : DB_UNREACHABLE;
+    return opts && opts.allowStale && hit && (Date.now() - hit.ts) < STALE_USER_MS ? hit.user : DB_UNREACHABLE;
   }
   _cache.set(key, { user, ts: Date.now() });
   return user;
@@ -151,7 +156,7 @@ async function forRequest(req) {
   const claims = req.user || session.userFromReq(req);
   if (!claims) return null;
 
-  const u = await loadUser(claims.sub);
+  const u = await loadUser(claims.sub, { allowStale: /^(GET|HEAD|OPTIONS)$/i.test(String((req && req.method) || '')) });
   // Database unreachable: keep the session alive but grant nothing. Signing the user
   // out here would bounce them to a /login that cannot reach the database either, so a
   // brief outage became a lockout. An empty perms map is the safe reading of "unknown".

@@ -22,7 +22,9 @@ const CF_DB = process.env.CLOUDFLARE_D1_DATABASE_ID;
 const CF_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 
 function configured() { return !!(CF_ACCOUNT && CF_DB && CF_TOKEN); }
-const D1_TIMEOUT_MS = parseInt(process.env.D1_TIMEOUT_MS || '8000', 10) || 8000;
+// Only a guard against a truly stalled call: 8 s cut off ordinary Cloudflare API calls
+// from Vercel (bom1) under load, so live medicine edits failed to apply.
+const D1_TIMEOUT_MS = parseInt(process.env.D1_TIMEOUT_MS || '20000', 10) || 20000;
 
 async function rawQuery(sql, params) {
   if (!configured()) throw new Error('Cloudflare D1 is not configured (set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID, CLOUDFLARE_API_TOKEN in server/.env).');

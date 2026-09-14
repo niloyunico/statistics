@@ -84,7 +84,13 @@ function intEnv(name, dflt) {
   return Number.isFinite(n) ? n : dflt;
 }
 
-const DISABLED = String(process.env.CACHE_DISABLED || '').toLowerCase() === 'true';
+// Also OFF on Vercel whenever Redis is not configured. The version counters that make a
+// cached copy "current" would then live in each instance's memory, so a save on one
+// instance never invalidated another: up to ~6 minutes of old data served as current,
+// the page marked authoritative, and 24-hour-old outage rescues. Many instances need a
+// shared store for this to be correct; a single PC server does not.
+const DISABLED = String(process.env.CACHE_DISABLED || '').toLowerCase() === 'true'
+  || (!!process.env.VERCEL && !redis.configured());
 const FRESH_MS = intEnv('CACHE_TTL_MS', 60000);
 const APPDATA_MS = intEnv('CACHE_APPDATA_MS', 5000);
 const REVALIDATE_MS = intEnv('CACHE_REVALIDATE_MS', 300000);

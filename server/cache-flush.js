@@ -34,6 +34,12 @@ const cache = require('./cache');
 (async () => {
   const asked = process.argv.slice(2).filter((a) => !a.startsWith('-'));
 
+  // Production runs with no read cache (CACHE_DISABLED=true, no Redis): every read goes
+  // straight to MongoDB, so there is nothing that could be serving old data.
+  if (cache.DISABLED) {
+    console.log('cache-flush: the read cache is disabled — every read goes straight to the database. Nothing to flush.');
+    process.exit(0);
+  }
   if (!redis.configured()) {
     console.error('cache-flush: no Redis is configured for this process.');
     console.error('');

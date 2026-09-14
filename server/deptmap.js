@@ -36,8 +36,12 @@ function fromArrays(deps, quals) {
 }
 
 // Cached DB-backed map for the API write paths (short TTL — assignment saves are rare).
-let _cache = null, _ts = 0, _lastGood = null;
-const TTL = 30000;
+// Per instance and never invalidated across instances, so kept short: a department's
+// quality key changed on one instance must not be read stale for long elsewhere (a user
+// saved meanwhile would store qualityAreas derived from the old map).
+let _cache = null, _ts = 0, _lastGood = null, _lastGoodTs = 0;
+const TTL = 10000;
+const LAST_GOOD_MAX_MS = 10 * 60 * 1000;   // an outage stand-in, not a permanent copy
 async function get(force) {
   const now = Date.now();
   if (!force && _cache && (now - _ts) < TTL) return _cache;
@@ -57,11 +61,11 @@ async function get(force) {
     // seconds. Serving the last good map keeps every department-scoped screen working
     // through a blip instead of showing an account "no departments" (which reads as a
     // permission change to the person holding the phone). A cold start still throws.
-    if (_lastGood) return _lastGood;
+    if (_lastGood && (now - _lastGoodTs) < LAST_GOOD_MAX_MS) return _lastGood;
     throw e;
   }
   const quals = deps.filter((d) => d.quality && d.quality.key).map((d) => ({ key: d.quality.key, name: d.quality.name || d.name, deptId: d.id }));
-  _cache = fromArrays(deps, quals); _ts = now; _lastGood = _cache;
+  _cache = fromArrays(deps, quals); _ts = now; _lastGood = _cache; _lastGoodTs = now;
   return _cache;
 }
 function invalidate() { _cache = null; _ts = 0; }
