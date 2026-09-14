@@ -36,7 +36,11 @@
     list.forEach(d=>{ const r=(store.renames||{})[d.id]; if(r){ Object.assign(d,r); } });
     // explicitly-deleted months (a later entry for the same month re-adds it)
     const removed=store.removed||{};
-    list.forEach(d=>{ const rm=removed[d.id]; if(rm&&rm.length){ for(let i=d.months.length-1;i>=0;i--){ if(rm.includes(d.months[i])){ d.months.splice(i,1); d.data.splice(i,1); } } } });
+    // …unless the month was APPROVED again after it was deleted here (newest wins): the server
+    // stamps d.approvedAt[month]; deleteMonth stamps removedAt. A legacy deletion has no stamp,
+    // so a stamped approval outranks it — hiding a later approval for good read as lost data.
+    const removedAt=store.removedAt||{};
+    list.forEach(d=>{ const rm=removed[d.id]; if(rm&&rm.length){ for(let i=d.months.length-1;i>=0;i--){ const m=d.months[i]; if(rm.includes(m) && !(Number((d.approvedAt||{})[m])>(Number((removedAt[d.id]||{})[m])||0))){ d.months.splice(i,1); d.data.splice(i,1); } } } });
     // entries merge
     const byId=Object.fromEntries(list.map(d=>[d.id,d]));
     (store.entries||[]).forEach(e=>{
@@ -49,7 +53,10 @@
         // Merge only REAL values into an existing month: an all-blank "save anyway"
         // entry used to spread nulls OVER the server's approved data, blanking the
         // whole row on screen while the values sat safely in the DB (Endoscopy Jun-26).
-        const patch={}; Object.keys(e.row||{}).forEach(k=>{ const v=(e.row||{})[k]; if(v!==null&&v!==''&&v!==undefined) patch[k]=v; });
+        // Newest wins per field: a value APPROVED for this month after the entry was typed
+        // (server stamp d.approvedAt[month] vs the entry's ts) must not be painted over by it.
+        const approvedNewer=Number((d.approvedAt||{})[e.month])>(Number(e.ts)||0);
+        const patch={}; Object.keys(e.row||{}).forEach(k=>{ const v=(e.row||{})[k]; if(v!==null&&v!==''&&v!==undefined&&!(approvedNewer&&d.data[idx]&&Object.prototype.hasOwnProperty.call(d.data[idx],k))) patch[k]=v; });
         d.data[idx]={...d.data[idx],...patch};
       }
       else if(hasValue) { d.months.push(e.month); d.data.push({...e.row}); }
@@ -89,6 +96,9 @@
     // bump on the refresh event or open views keep rendering the page-load data forever.
     const [rev,setRev]=React.useState(0);
     React.useEffect(()=>{ const h=()=>setRev(r=>r+1); window.addEventListener('unico:data-refreshed',h); return ()=>window.removeEventListener('unico:data-refreshed',h); },[]);
+    // The server merged this overlay with another session's saves: reload it, so this tab shows
+    // (and keeps building on) their edits instead of writing its older copy back.
+    React.useEffect(()=>{ const h=(e)=>{ const ks=(e&&e.detail&&e.detail.keys)||[]; if(ks.indexOf(KEY)>=0){ const s=load(); if(s) setStore(s); } }; window.addEventListener('unico:overlay-merged',h); return ()=>window.removeEventListener('unico:overlay-merged',h); },[]);
     React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(store)); },[store]);
     const depts=React.useMemo(()=>buildDepts(store),[store,rev]);
 
@@ -112,6 +122,10 @@
         if(isCustom) return {...s, custom:s.custom.filter(d=>d.id!==id), entries:(s.entries||[]).filter(e=>e.dept!==id)};
         return {...s, deleted:[...(s.deleted||[]), id]};
       }),
+      // Deleting a built-in department only HIDES it (its data stays saved); this brings it back.
+      // The only other way out used to be Settings → Reset, which wiped every Data Entry value.
+      undeleteDept:(id)=>commit(s=>({...s, deleted:(s.deleted||[]).filter(x=>x!==id)})),
+      deletedIds:store.deleted||[],
       // Remove a single month's data for a department (built-in or custom).
       deleteMonth:(id,month)=>commit(s=>{
         const isCustom=(s.custom||[]).some(d=>d.id===id);
@@ -120,7 +134,8 @@
           return {...s, entries, custom:s.custom.map(d=>{ if(d.id!==id) return d; const idx=(d.months||[]).indexOf(month); if(idx<0) return d; return {...d, months:d.months.filter((_,i)=>i!==idx), data:(d.data||[]).filter((_,i)=>i!==idx)}; })};
         }
         const removed={...(s.removed||{})}; removed[id]=[...(removed[id]||[]).filter(m=>m!==month), month];
-        return {...s, entries, removed};
+        const removedAt={...(s.removedAt||{})}; removedAt[id]={...(removedAt[id]||{}), [month]:Date.now()};
+        return {...s, entries, removed, removedAt};
       }),
       reset:()=>commit(blank()),
       undo:()=>{ const h=hist.current; if(!h.length) return; const prev=h[h.length-1]; hist.current=h.slice(0,-1); setCanUndo(hist.current.length>0); setStore(prev); }

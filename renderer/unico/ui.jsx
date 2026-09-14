@@ -59,7 +59,7 @@ const UNICO_MODULES = [
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
-  datacol:['dcReview','dcPatient','dcQuality','input','dcResponsibles','dcShare','dcFields','dcAnalytics'],
+  datacol:['dcReview','dcPatient','dcQuality','input','dcResponsibles','dcSettings','dcShare','dcFields','dcAnalytics'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
@@ -142,6 +142,7 @@ function unicoSidebarGroups(moduleId){
       {id:'dcPatient',label:'Patient Statistics',icon:I.input},
       {id:'dcQuality',label:'Quality Data',icon:I.activity},
       {id:'dcResponsibles',label:'Responsible Persons',icon:I.user},
+      {id:'dcSettings',label:'Department Setup',icon:I.gear},
       {id:'dcShare',label:'Share Links',icon:I.arrowR},
       {id:'dcFields',label:'Form Fields',icon:I.filter},
       {id:'dcReview',label:'Review & History',icon:I.doc},
@@ -349,6 +350,7 @@ function unicoWorkspaceSub(view){
     { label:'Performance',         view:'dcAnalytics' },
     { label:'Patient Statistics',  view:'dcPatient' },
     { label:'Quality Data',        view:'dcQuality' },
+    { label:'Department Setup',    view:'dcSettings' },
     { label:'Share Links',         view:'dcShare' },
   ];
   if(mod==='staff'){

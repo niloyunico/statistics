@@ -20,7 +20,7 @@
 (function () {
   'use strict';
   const React = window.React;
-  const { api, tryApi, mount } = window.DC;
+  const { api, tryApi, pageAll, mount } = window.DC;
   const D = window.NURSE_APP_DATA;
   const RS = window.UNICO_ROSTER || null;
   const AP = window.UNICO_APPRAISAL || null;
@@ -203,14 +203,25 @@
   }
   // The data-collection items for my unit: the department's monthly sheet plus the
   // quality area's indicators, both exactly as the console defines them.
-  const MULT = { pct: 100, rate100: 100, rate1000: 1000, rate10000: 10000, per1000: 1000, per100: 100 };
+  const RATE_F = ['pct', 'rate100', 'rate1000', 'avg'];
+  // The formula exactly as the desktop collector form resolves it (data-collection.jsx): a
+  // declared formula wins, else the benchmark / unit text decides; anything else is a COUNT.
+  function formulaOf(i) {
+    const declared = i.formula;
+    if (['rate1000', 'rate100', 'pct', 'count', 'avg'].indexOf(declared) >= 0) return declared;
+    const probe = (String(i.benchmark || '') + ' ' + String(i.unit || '')).toLowerCase();
+    const per1000 = /per\s*1[.,\s]?0{3}\b|\/\s*1[.,\s]?0{3}\b/.test(probe), per100 = !per1000 && /per\s*100\b/.test(probe);
+    return per1000 ? 'rate1000' : per100 ? 'rate100' : (/%/.test(probe) || /\bpercent/.test(probe)) ? 'pct' : (declared || 'count');
+  }
   function dcItemsOf(dept, area) {
     const out = [];
     if (dept && Array.isArray(dept.cols) && dept.cols.length) out.push({ id: 'stat', kind: 'stat', label: (dept.name || 'Unit') + ' statistics sheet', meta: `Monthly sheet · ${dept.cols.length} fields`, d: 'M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18', fields: dept.cols.map((c) => ({ id: c.id, label: c.label || c.id, pct: !!c.pct })) });
     (area && Array.isArray(area.indicators) ? area.indicators : []).forEach((i) => {
       const unit = i.unit === '%' ? '%' : (i.unit || '');
-      const mult = MULT[i.formula] || (unit === '%' ? 100 : (/1000/.test(unit) ? 1000 : (/100/.test(unit) ? 100 : 1)));
-      out.push({ id: i.id, kind: 'q', label: i.name, meta: unit === '%' ? '% (' + (i.denLabel || 'denominator') + ')' : unit || i.valueType || '', num: i.numLabel || 'Numerator', den: i.denLabel || 'Denominator', mult, unit: unit === '%' ? '%' : (unit ? 'per ' + unit.replace(/^per\s+/i, '') : ''), bench: i.benchmark || '—', benchV: i.benchmarkValue != null ? Number(i.benchmarkValue) : null, dir: i.goalDirection === 'higher_is_better' ? 'up' : 'down', grouped: false, denLocked: false, d: IND_D,
+      const formula = formulaOf(i), isRate = RATE_F.indexOf(formula) >= 0;
+      const mult = !isRate ? 1 : formula === 'rate1000' ? 1000 : formula === 'avg' ? 1 : 100;
+      // denAdminOnly: the administrator owns the denominator (e.g. NSI's total healthcare workers).
+      out.push({ id: i.id, kind: 'q', label: i.name, meta: unit === '%' ? '% (' + (i.denLabel || 'denominator') + ')' : unit || i.valueType || '', num: i.numLabel || 'Numerator', den: i.denLabel || 'Denominator', mult, formula, isRate, unit: unit === '%' ? '%' : (unit ? 'per ' + unit.replace(/^per\s+/i, '') : ''), bench: i.benchmark || '—', benchV: i.benchmarkValue != null ? Number(i.benchmarkValue) : null, dir: i.goalDirection === 'higher_is_better' ? 'up' : 'down', grouped: false, denLocked: !!i.denAdminOnly, d: IND_D,
         guide: (i.numeratorDef || i.denominatorDef || i.reference) ? { def: [i.numeratorDef, i.denominatorDef].filter(Boolean).join(' '), example: i.formula ? 'Formula: ' + i.formula + (mult !== 1 ? ' (× ' + fmtN(mult) + ')' : '') : '', ref: i.reference || '' } : null, ind: i });
     });
     return out;
@@ -222,11 +233,14 @@
     const stMap = { pending: 'sent', approved: 'approved', rejected: 'rejected', returned: 'rejected' };
     subs.filter((x) => String(x.month || '') === monthKey).forEach((x) => {
       const status = stMap[x.status] || 'sent';
-      const rec = { status, num: x.num, den: x.den, value: x.value, at: fmtTs(x.submittedAt || x.createdAt), reviewer: x.reviewedBy || (status === 'sent' ? '' : 'Quality team'), reason: x.rejectReason || x.reason || null, note: x.note || x.remark || '', live: true, id: x.id || x._id, ts: x.submittedAt || x.createdAt || 0 };
-      if (x.type === 'patient') { if (deptId && String(x.department) !== String(deptId)) return; if (out.stat && out.stat.ts > rec.ts) return; const vals = (fields || []).map((f) => (x.values && x.values[f.id] != null ? x.values[f.id] : '')); out.stat = Object.assign(rec, { vals, values: x.values || {} }); return; }
+      const rec = { status, num: x.num, den: x.den, value: x.value, at: fmtTs(x.submittedAt || x.createdAt), reviewer: x.reviewedBy || (status === 'sent' ? '' : 'Quality team'), reason: x.rejectReason || x.reason || null, note: x.note || x.remark || '', live: true, id: x.id || x._id, ts: x.submittedAt || x.createdAt || 0, autoRejected: !!x.autoRejected };
+      // Newest wins, except a duplicate auto-rejected BECAUSE another one was approved never
+      // hides that approved record (it is often the newer of the two).
+      const better = (a, b) => !b || (b.autoRejected && !a.autoRejected) || (!(a.autoRejected && !b.autoRejected) && a.ts >= b.ts);
+      if (x.type === 'patient') { if (deptId && String(x.department) !== String(deptId)) return; if (!better(rec, out.stat)) return; const vals = (fields || []).map((f) => (x.values && x.values[f.id] != null ? x.values[f.id] : '')); out.stat = Object.assign(rec, { vals, values: x.values || {} }); return; }
       if (areaKey && String(x.area) !== String(areaKey)) return;
       const id = x.indicatorId; if (!id) return;
-      if (!out[id] || out[id].ts < rec.ts) out[id] = rec;
+      if (better(rec, out[id])) out[id] = rec;
     });
     return out;
   }
@@ -376,7 +390,7 @@
         // staff directory
         staffSearch: '', staffDept: 'All', selStaff: null, staffOnlineOnly: false, dirTab: 'staff', staffSort: 'active',
         // data collection
-        dcMonth: DC_CUR, dcFilter: 'All', dcSel: 'stat', dcVals: {}, dcNote: '', dcCorr: '', dcGuideOpen: false, dcEvidence: false, dcFormSent: false, dcToast: '', dcMode: 'direct', dcHistFilter: 'All', dcSubs: {},
+        dcMonth: DC_CUR, dcFilter: 'All', dcSel: 'stat', dcVals: {}, dcNote: '', dcCorr: '', dcGuideOpen: false, dcEvidence: false, dcFormSent: false, dcToast: '', dcMode: 'direct', dcHistFilter: 'All', dcSubs: {}, dcAreaSel: '',
         // reports (in-charge)
         repSimple: false, compareOn: false, shareOpen: false, infoOpen: false, infoInd: '', pinnedKpis: {}, censusTip: '', repUpdated: timeNow(), refreshing: false, schedDaily: true, schedWeekly: false,
         repPeriod: 'month', repTab: 'overview', selInd: '', capaDone: {}, capaExtra: {}, capaDraft: '', exportToast: '',
@@ -394,6 +408,8 @@
     /* ---------------------------------------------------------- lifecycle --- */
     componentDidMount() {
       fetch('/assets/monographs.json').then((r) => r.json()).then((mono) => this.setState({ mono })).catch(() => {});
+      this._onExpired = () => this.sessionExpired();
+      window.addEventListener('unico:session-expired', this._onExpired);
       // Hospital name / app version for the login screen (public; nothing else is).
       tryApi('/api/phone/branding').then((b) => { if (b && b.ok && b.hospital) this.setState({ branding: b.hospital }); });
       const demo = demoFromHash();
@@ -407,7 +423,14 @@
       this._poll = setInterval(() => this.tick(), 5000);
       this._tick = 0;
     }
-    componentWillUnmount() { clearInterval(this._poll); }
+    componentWillUnmount() { clearInterval(this._poll); window.removeEventListener('unico:session-expired', this._onExpired); }
+    // Any 401 (dc-runtime fires the event): the cookie is gone and every read would come back
+    // empty, which looked like "my data vanished". Back to sign-in, keeping nothing.
+    sessionExpired() {
+      if (this.state.demo || !this.state.me) return;
+      this.setState({ screen: 'login', me: null, boot: null, empId: '', pin: '', drawerOpen: false, live: EMPTY_LIVE(), meds: null, favs: [], selChat: null, selNotice: null, selStaff: null, busy: {} });
+      this.toastMsg('Your session has expired — sign in again.');
+    }
     // Keep the screen fresh without a socket: the open thread every 5 s (only what is
     // new), rooms / notices / requests / handover every 30 s, presence every minute.
     tick() {
@@ -415,7 +438,7 @@
       const t = ++this._tick, s = this.state;
       if (s.screen === 'thread' && s.selChat) this.loadThread(s.selChat, true);
       if (t % 3 === 0 && s.screen === 'chats') this.loadRooms();
-      if (t % 6 === 0) { this.loadNotices(); if (s.screen !== 'chats') this.loadRooms(); this.loadRequests(); if (s.screen === 'handover') this.loadHandover(); }
+      if (t % 6 === 0) { this.loadNotices(); if (s.screen !== 'chats') this.loadRooms(); this.loadRequests(); if (s.screen === 'handover') this.loadHandover(); if (/^datacol/.test(s.screen)) this.loadSubs(); }
       if (t % 12 === 0) { this.loadDirectory(); }
     }
     // Sign-in landed: remember who we are, then read the phone profile and the registers.
@@ -459,7 +482,7 @@
       if (F.medReq) this.loadMedRequests();
       if (F.performance) this.loadPerf();
       if (F.datacol || F.datacolHist) {
-        const subs = await tryApi('/api/submissions?limit=300'); if (subs && subs.ok && Array.isArray(subs.submissions)) this.patchLive('subs', subs.submissions);
+        await this.loadSubs();
         const q = await tryApi('/api/quality'); if (q && q.ok && Array.isArray(q.quality)) this.patchLive('quality', q.quality);
       }
       await this.loadUnitData();
@@ -519,6 +542,9 @@
     async loadPerf() { const r = await tryApi('/api/phone/my-performance'); if (r && r.ok) this.patchLive('perf', r); }
     async loadReport() { if (!this.unit()) return; const r = await tryApi('/api/phone/unit-report' + this.unitQ()); if (r && r.ok) this.patchLive('report', r); this.setState({ repUpdated: timeNow(), refreshing: false }); }
     async loadShiftReports() { const r = await tryApi('/api/phone/shift-reports'); if (r && r.ok) this.patchLive('shiftReports', r.reports || []); }
+    // My submissions, every page — the server scopes a collector's rows BEFORE paging, so
+    // nextOffset walks only mine. One page of 300 used to drop the rest as "not submitted".
+    async loadSubs() { const rows = await pageAll('/api/submissions?limit=300', 'submissions', 10); if (rows) this.patchLive('subs', rows); }
 
     toastMsg(msg, key) { const k = key || 'toast'; this.setState({ [k]: msg }); clearTimeout(this['_t_' + k]); this['_t_' + k] = setTimeout(() => this.setState({ [k]: '' }), 2600); }
     go = (screen, extra) => {
@@ -702,19 +728,30 @@
       const s = this.state, mi = clamp(s.dcMonth, 0, DC_MONTHS.length - 1), at = dayStamp();
       const local = (status, extra) => this.setState({ dcSubs: Object.assign({}, s.dcSubs, { [mi]: Object.assign({}, s.dcSubs[mi] || {}, { [item.id]: Object.assign({ status, num: x.num, den: x.den, vals: x.vals, at, note: x.note, reason: null, reviewer: '' }, extra || {}) }) }), dcFormSent: true, dcCorr: '', dcEvidence: false });
       if (s.demo) return local('sent');
+      // One send at a time: a double tap created two pending submissions. The instance flag
+      // closes the gap before the busy state has rendered.
+      if (this._dcBusy) return;
+      this._dcBusy = true; this.setState((st) => ({ busy: Object.assign({}, st.busy, { dc: true }) }));
       try {
+        const corr = x.isCorr ? String(x.corr || '').trim() : '';
         if (item.kind === 'stat') {
           if (!x.dept) throw new Error('Your account is not linked to a department sheet.');
           const values = {}; (item.fields || []).forEach((f, i) => { if (x.vals[i] !== '' && x.vals[i] != null) values[f.id] = x.vals[i]; });
-          await api('/api/submissions/patient', { method: 'POST', body: { department: x.dept.id || x.dept._id, month: monthObj.key, values, note: x.note, isCorrection: !!x.corr, correctionReason: x.corr } });
+          await api('/api/submissions/patient', { method: 'POST', body: { department: x.dept.id || x.dept._id, month: monthObj.key, values, note: x.note, isCorrection: !!x.isCorr, correctionReason: corr } });
         } else {
           if (!x.area) throw new Error('Your account is not linked to a quality area.');
-          const ind = item.ind || {};
-          await api('/api/submissions/quality', { method: 'POST', body: { area: x.area.key, indicatorId: item.id, indicatorName: item.label, month: monthObj.key, entryMode: 'rate', num: x.num, den: x.den, mult: item.mult, value: x.resultV, remark: x.note, note: x.note, numLabel: item.num, denLabel: item.den, unit: ind.unit || item.unit, valueType: ind.valueType, benchmark: ind.benchmark, benchmarkValue: ind.benchmarkValue, goalDirection: ind.goalDirection, formula: ind.formula, isCorrection: !!x.corr, correctionReason: x.corr } });
+          const ind = item.ind || {}, rate = !!item.isRate;
+          // Mirrors the desktop collector form: a COUNT goes as {value, formula:'count'} (always
+          // sending entryMode:'rate' made approval turn counts into a %), and an admin-owned
+          // denominator is never sent — the administrator's figure stands.
+          await api('/api/submissions/quality', { method: 'POST', body: { area: x.area.key, indicatorId: item.id, indicatorName: item.label, month: monthObj.key, entryMode: rate ? 'rate' : 'count', formula: rate ? item.formula : 'count', mult: rate ? item.mult : 1, valueType: rate ? (item.formula === 'pct' ? '%' : 'Rate') : 'Count',
+            value: rate ? undefined : x.num, num: rate ? x.num : undefined, den: rate && !item.denLocked ? x.den : undefined, numLabel: rate ? item.num : undefined, denLabel: rate ? item.den : undefined, unit: rate ? (ind.unit || item.unit) : (ind.unit || 'count'),
+            remark: x.note, note: x.note, benchmark: ind.benchmark, benchmarkValue: ind.benchmarkValue, goalDirection: ind.goalDirection, isCorrection: !!x.isCorr, correctionReason: corr } });
         }
-        const subs = await tryApi('/api/submissions?limit=300'); if (subs && subs.ok && Array.isArray(subs.submissions)) this.patchLive('subs', subs.submissions);
+        await this.loadSubs();
         this.setState({ dcFormSent: true, dcCorr: '', dcEvidence: false, dcVals: {} });
       } catch (e) { this.toastMsg(e.message || 'The server did not accept the submission.', 'dcToast'); }
+      finally { this._dcBusy = false; this.setState((st) => { const b = Object.assign({}, st.busy); delete b.dc; return { busy: b }; }); }
     }
 
     /* --------------------------------------------------------- view-model --- */
@@ -728,8 +765,13 @@
       const units = boot.units || [];
       const dept = unit ? (unit.short || unit.name) : (units.length ? 'All units' : '—');
       const isRealIncharge = me.role === 'incharge';
-      const unitChip = unit ? (unit.short || unit.name) + (units.length > 1 ? ' ▾' : '') : (units.length ? 'Choose a unit ▾' : 'No unit assigned');
-      const pickUnit = () => { if (units.length <= 1) { if (!unit && units[0]) this.setUnit(units[0].id); return; } const i = units.findIndex((x) => unit && x.id === unit.id); this.setUnit(units[(i + 1) % units.length].id); };
+      // A collector scoped only to quality areas (qualityAreas / allQualityAreas, no unit) got an
+      // empty dashboard: their items come from the server-scoped /api/quality areas instead,
+      // stepped through with the same unit chip.
+      const qAreas = !unit && !s.demo && me.role === 'collector' ? (live.quality || []) : [];
+      const qArea = qAreas.find((a) => String(a.key) === String(s.dcAreaSel)) || qAreas[0] || null;
+      const unitChip = unit ? (unit.short || unit.name) + (units.length > 1 ? ' ▾' : '') : qArea ? (qArea.name || qArea.key) + (qAreas.length > 1 ? ' ▾' : '') : (units.length ? 'Choose a unit ▾' : 'No unit assigned');
+      const pickUnit = () => { if (!unit && qAreas.length > 1) { const i = qAreas.indexOf(qArea); return this.setState({ dcAreaSel: qAreas[(i + 1) % qAreas.length].key }); } if (units.length <= 1) { if (!unit && units[0]) this.setUnit(units[0].id); return; } const i = units.findIndex((x) => unit && x.id === unit.id); this.setUnit(units[(i + 1) % units.length].id); };
       const hospital = boot.hospital || s.branding || {};
       const phonesOn = F.phones !== false && !(boot.policy && boot.policy.portalPhones === false);
       const staffAll = live.staff || [];
@@ -953,7 +995,7 @@
 
       /* ---- data collection: the console's own sheet and indicators for my unit ---- */
       const dcDept = s.demo ? null : (live.depts || []).find((d) => unit && (String(d.id || d._id) === String(unit.id) || norm(d.name) === norm(unit.name))) || null;
-      const dcArea = s.demo ? null : (live.quality || []).find((a) => unit && (String(a.deptId) === String(unit.id) || norm(a.key) === norm(unit.id) || norm(a.name) === norm(unit.name))) || null;
+      const dcArea = s.demo ? null : unit ? (live.quality || []).find((a) => String(a.deptId) === String(unit.id) || norm(a.key) === norm(unit.id) || norm(a.name) === norm(unit.name)) || null : qArea;
       const ITEMS = s.demo ? DC_ITEMS : dcItemsOf(dcDept, dcArea);
       const dcMonth = clamp(s.dcMonth, 0, DC_MONTHS.length - 1);
       const dcM = DC_MONTHS[dcMonth];
@@ -989,16 +1031,33 @@
       const pdaysCol = statFields.findIndex((f) => COL_RX.pdays.test(f.id) || COL_RX.pdays.test(f.label));
       const pdaysVal = pdaysCol >= 0 && subsOf(dcMonth).stat && subsOf(dcMonth).stat.vals ? subsOf(dcMonth).stat.vals[pdaysCol] : '';
       const dcNum = byGroup ? String(GROUPS.reduce((a, _, i) => a + (Number(dcGet('gn' + i)) || 0), 0)) : dcGet('num', dcSub && dcSub.num != null ? dcSub.num : '');
-      const dcDen = byGroup ? String(GROUPS.reduce((a, _, i) => a + (Number(dcGet('gd' + i)) || 0), 0)) : dcGet('den', dcSub && dcSub.den != null ? dcSub.den : (/1000/.test(dcItem0.unit || '') && pdaysVal !== '' ? pdaysVal : ''));
+      // An admin-owned denominator (denAdminOnly) is read-only: this month's figure, else the last
+      // one recorded for any month — the carry-forward the desktop form shows.
+      const denMap = (dcItem0.ind && dcItem0.ind.mDen) || {};
+      const lockedDen = dcItem0.denLocked ? (denMap[dcM.key] != null && denMap[dcM.key] !== '' ? denMap[dcM.key] : Object.keys(denMap).map((k) => denMap[k]).filter((v) => v != null && v !== '').pop()) : null;
+      const isCount = dcItem0.kind === 'q' && dcItem0.isRate === false;
+      const dcDen = isCount ? '' : dcItem0.denLocked ? (lockedDen == null ? '' : String(lockedDen)) : byGroup ? String(GROUPS.reduce((a, _, i) => a + (Number(dcGet('gd' + i)) || 0), 0)) : dcGet('den', dcSub && dcSub.den != null ? dcSub.den : (/1000/.test(dcItem0.unit || '') && pdaysVal !== '' ? pdaysVal : ''));
       const numN = Number(dcNum) || 0, denN = Number(dcDen) || 0;
-      const resultV = dcItem0.kind === 'q' ? (denN > 0 ? Math.round(numN / denN * dcItem0.mult * 100) / 100 : null) : null;
+      const resultV = dcItem0.kind !== 'q' ? null : isCount ? (String(dcNum).trim() !== '' ? numN : null) : (denN > 0 ? Math.round(numN / denN * dcItem0.mult * 100) / 100 : null);
       const resultOk = resultV == null ? null : (dcItem0.benchV == null ? null : withinBench(dcItem0, resultV));
-      const dcSubmitOk = !!dcItem0.id && (dcItem0.kind === 'stat' ? dcStatFields.some((f) => f.v !== '') : (denN > 0 && (dcItem0.isApproved || dcItem.isApproved ? !!s.dcCorr.trim() : true)));
+      // A month already on the LIVE record is a correction too (not only an approved phone
+      // submission), as on the desktop: reason required, flagged for review. An admin-owned
+      // denominator alone does not count — the administrator sets it before anyone reports.
+      const liveHas = (() => {
+        const mk = dcM.key, has = (o) => !!(o && o[mk] != null && o[mk] !== '');
+        if (dcItem0.kind === 'q') { const i = dcItem0.ind; return !!i && (has(i.months) || has(i.mNum) || !!(i.mNotObserved && i.mNotObserved[mk]) || !!(i.incidents && Array.isArray(i.incidents[mk]) && i.incidents[mk].length) || (!dcItem0.denLocked && has(i.mDen))); }
+        if (dcItem0.kind === 'stat' && dcDept) { const idx = (dcDept.months || []).indexOf(mk); const row = idx >= 0 ? (dcDept.data || {})[String(idx)] : null; return !!row && Object.keys(row).some((k) => row[k] != null && row[k] !== ''); }
+        return false;
+      })();
+      const dcNeedsCorr = !!dcItem0.id && (dcItem.isApproved || liveHas);
+      // Rates need a denominator unless the admin owns it (or an explicit 0 over 0); counts need the number.
+      const qReady = isCount ? String(dcNum).trim() !== '' : (dcItem0.denLocked || denN > 0 || (numN === 0 && String(dcDen).trim() !== '' && Number(dcDen) === 0));
+      const dcSubmitOk = !!dcItem0.id && !s.busy.dc && (dcItem0.kind === 'stat' ? dcStatFields.some((f) => f.v !== '') : qReady) && (!dcNeedsCorr || !!s.dcCorr.trim());
       const histAll = [];
       DC_MONTHS.forEach((mm, mi) => { const subs = subsOf(mi); Object.keys(subs).forEach((id) => { const it = ITEMS.find((x) => x.id === id); if (!it) return; const sub = subs[id]; histAll.push({ mi, it, sub, v: valueOf(it, sub) }); }); });
       histAll.sort((a, b) => b.mi - a.mi || (b.sub.ts || 0) - (a.sub.ts || 0));
       const histFilterMap = { All: null, Pending: ['sent'], Approved: ['approved'], Returned: ['rejected'] };
-      const dcHistory = histAll.filter((h) => !histFilterMap[s.dcHistFilter] || histFilterMap[s.dcHistFilter].includes(stOf(h.sub))).map((h) => ({ label: h.it.label, ...stChip(stOf(h.sub)), month: DC_MONTHS[h.mi].label, summary: h.it.kind === 'stat' ? `${h.sub.vals && h.sub.vals[0] !== '' ? h.sub.vals[0] : '—'} ${statFields[0] ? statFields[0].label.toLowerCase() : ''} · ${statFields.length} fields` : `${h.sub.num} ÷ ${h.sub.den} → ${fmtV(h.it, h.v)}`, at: h.sub.at, decision: stOf(h.sub) === 'approved' ? `Approved by ${h.sub.reviewer || 'Quality team'} · counted in the hospital dashboard` : stOf(h.sub) === 'rejected' ? `Returned by ${h.sub.reviewer || 'Quality team'}: ${h.sub.reason || ''}` : null, go: () => go('datacolForm', { dcMonth: h.mi, dcSel: h.it.id, dcFormSent: false, dcGuideOpen: false, dcNote: h.sub.note || '', dcCorr: '', dcMode: 'direct' }) }));
+      const dcHistory = histAll.filter((h) => !histFilterMap[s.dcHistFilter] || histFilterMap[s.dcHistFilter].includes(stOf(h.sub))).map((h) => ({ label: h.it.label, ...stChip(stOf(h.sub)), month: DC_MONTHS[h.mi].label, summary: h.it.kind === 'stat' ? `${h.sub.vals && h.sub.vals[0] !== '' ? h.sub.vals[0] : '—'} ${statFields[0] ? statFields[0].label.toLowerCase() : ''} · ${statFields.length} fields` : (h.sub.num != null && h.sub.den != null ? `${h.sub.num} ÷ ${h.sub.den} → ${fmtV(h.it, h.v)}` : (fmtV(h.it, h.v) || '—')), at: h.sub.at, decision: stOf(h.sub) === 'approved' ? `Approved by ${h.sub.reviewer || 'Quality team'} · counted in the hospital dashboard` : stOf(h.sub) === 'rejected' ? `Returned by ${h.sub.reviewer || 'Quality team'}: ${h.sub.reason || ''}` : null, go: () => go('datacolForm', { dcMonth: h.mi, dcSel: h.it.id, dcFormSent: false, dcGuideOpen: false, dcNote: h.sub.note || '', dcCorr: '', dcMode: 'direct' }) }));
       const guide = s.demo ? DC_GUIDES[dcItem0.id] : dcItem0.guide;
 
       /* ---- handover ---- */
@@ -1204,15 +1263,15 @@
         dcToast: s.dcToast, dcItems,
         dcSteps: [['Enter', 'fill the sheet or the numerator and denominator'], ['Send', 'it goes to Quality & Administration for review'], ['Review', 'approved values feed the hospital dashboard, returned ones come back with a reason'], ['Correct', 'an approved figure can be corrected — administration approves again']].map(([t, d], i) => ({ n: i + 1, t, d })),
         /* data-collection form */
-        dcItem, dcFormSent: s.dcFormSent, dcFormOpen: !s.dcFormSent, dcSentTitle: dcItem.isApproved ? 'Correction sent' : 'Submitted for review', dcNextOpenLabel: openCount > 1 ? 'Next open item' : 'Back to list', dcNextOpen: () => { const next = dcItemsRaw.find((it) => (it.status === 'missing' || it.status === 'rejected') && it.id !== dcItem0.id); if (next) go('datacolForm', { dcSel: next.id, dcFormSent: false, dcGuideOpen: false, dcNote: '', dcCorr: '' }); else go('datacol', { dcFormSent: false }); },
+        dcItem, dcFormSent: s.dcFormSent, dcFormOpen: !s.dcFormSent, dcSentTitle: dcNeedsCorr ? 'Correction sent' : 'Submitted for review', dcNeedsCorr, dcNextOpenLabel: openCount > 1 ? 'Next open item' : 'Back to list', dcNextOpen: () => { const next = dcItemsRaw.find((it) => (it.status === 'missing' || it.status === 'rejected') && it.id !== dcItem0.id); if (next) go('datacolForm', { dcSel: next.id, dcFormSent: false, dcGuideOpen: false, dcNote: '', dcCorr: '' }); else go('datacol', { dcFormSent: false }); },
         dcIsStat: dcItem0.kind === 'stat', dcIsQuality: dcItem0.kind === 'q', dcStatFields, dcIsGrouped: !!dcItem0.grouped, dcModeOpts: [['direct', 'Direct entry'], ['group', 'By staff group']].map(([k, label]) => ({ label, go: () => this.setState({ dcMode: k }), style: pillBtn(s.dcMode === k) })), dcByGroup: byGroup, dcGroups, dcDirect: !byGroup,
-        dcReadOnly, dcNum, setDcNum: dcSet('num'), dcNumStyle: roStyle(dcReadOnly), dcDen, setDcDen: dcSet('den'), dcDenReadOnly: dcReadOnly || !!dcItem0.denLocked, dcDenStyle: roStyle(dcReadOnly || !!dcItem0.denLocked),
-        dcResult: resultV == null ? '—' : (dcItem0.unit === '%' ? resultV + '%' : String(resultV)), dcResultBg: resultOk == null ? 'rgba(125,145,180,.1)' : resultOk ? 'rgba(43,182,115,.12)' : 'rgba(214,69,69,.1)', dcResultColor: resultOk == null ? '#7d8ea8' : resultOk ? '#1d8f57' : '#b32e2e', dcResultLabel: resultV == null ? 'enter both values' : resultOk == null ? 'no benchmark set' : resultOk ? 'within benchmark' : 'outside benchmark',
+        dcReadOnly, dcNum, setDcNum: dcSet('num'), dcNumStyle: roStyle(dcReadOnly), dcDen, setDcDen: dcSet('den'), dcDenReadOnly: dcReadOnly || !!dcItem0.denLocked || isCount, dcDenStyle: roStyle(dcReadOnly || !!dcItem0.denLocked || isCount),
+        dcResult: resultV == null ? '—' : (dcItem0.unit === '%' ? resultV + '%' : String(resultV)), dcResultBg: resultOk == null ? 'rgba(125,145,180,.1)' : resultOk ? 'rgba(43,182,115,.12)' : 'rgba(214,69,69,.1)', dcResultColor: resultOk == null ? '#7d8ea8' : resultOk ? '#1d8f57' : '#b32e2e', dcResultLabel: resultV == null ? (isCount ? 'enter the count' : 'enter both values') : resultOk == null ? 'no benchmark set' : resultOk ? 'within benchmark' : 'outside benchmark',
         toggleDcGuide: () => this.setState({ dcGuideOpen: !s.dcGuideOpen }), dcGuideOpen: s.dcGuideOpen, dcGuideChevron: s.dcGuideOpen ? 'transform:rotate(180deg)' : '', dcGuide: guide ? [['Definition', guide.def, 'inherit'], ['Worked example', guide.example, "'IBM Plex Mono',monospace"], ['Benchmark', `${dcItem0.bench} ${dcItem0.meta || ''}`, "'IBM Plex Mono',monospace"], ['Reference', guide.ref, 'inherit']].filter((g) => g[1]).map(([label, text, font]) => ({ label, text, font })) : [],
         dcEditable, dcCorr: s.dcCorr, setDcCorr: (e) => this.setState({ dcCorr: e.target.value }), dcNote: s.dcNote, setDcNote: (e) => this.setState({ dcNote: e.target.value }), toggleDcEvidence: () => this.setState({ dcEvidence: !s.dcEvidence }), dcEvidenceStyle: chip(s.dcEvidence) + ';display:inline-flex;align-items:center;gap:6px;align-self:flex-start', dcEvidenceLabel: s.dcEvidence ? 'Register photo noted' : 'Attach register photo',
         dcSaveDraft: () => { this.setState({ dcSubs: { ...s.dcSubs, [dcMonth]: { ...(s.dcSubs[dcMonth] || {}), [dcItem0.id]: { status: 'draft', num: numN, den: denN, vals: dcStatFields.map((f) => f.v), at: dayStamp(), note: s.dcNote } } }, screen: 'datacol' }); this.toastMsg('Draft saved on this phone · not sent yet', 'dcToast'); },
-        dcSubmitLabel: dcItem.isApproved ? 'Send correction' : 'Submit to administration', dcSubmitStyle: `flex:2;border:0;border-radius:13px;padding:13px;font-size:14px;font-weight:700;cursor:pointer;${BLUE_BTN};opacity:${dcSubmitOk ? 1 : .5}`,
-        dcSubmit: () => { if (!dcSubmitOk) return; this.submitDc(dcItem0, dcM, { num: numN, den: denN, vals: dcStatFields.map((f) => (f.v === '' ? '' : Number(f.v))), note: s.dcNote, corr: s.dcCorr, dept: dcDept, area: dcArea, resultV }); },
+        dcSubmitLabel: s.busy.dc ? 'Sending…' : dcNeedsCorr ? 'Send correction' : 'Submit to administration', dcSubmitStyle: `flex:2;border:0;border-radius:13px;padding:13px;font-size:14px;font-weight:700;cursor:${s.busy.dc ? 'wait' : 'pointer'};${BLUE_BTN};opacity:${dcSubmitOk ? 1 : .5}`,
+        dcSubmit: () => { if (!dcSubmitOk || s.busy.dc) return; this.submitDc(dcItem0, dcM, { num: numN, den: denN, vals: dcStatFields.map((f) => (f.v === '' ? '' : Number(f.v))), note: s.dcNote, corr: s.dcCorr, isCorr: dcNeedsCorr, dept: dcDept, area: dcArea, resultV }); },
         /* submission history */
         dcHistTiles: [['Sent', histAll.filter((h) => stOf(h.sub) === 'sent').length, '#0072a3'], ['Approved', histAll.filter((h) => stOf(h.sub) === 'approved').length, '#1d8f57'], ['Returned', histAll.filter((h) => stOf(h.sub) === 'rejected').length, '#b32e2e']].map(([label, v, color]) => ({ label, v, color })),
         dcHistFilters: ['All', 'Pending', 'Approved', 'Returned'].map((f) => ({ label: f, go: () => this.setState({ dcHistFilter: f }), style: chip(s.dcHistFilter === f) })), dcHistory,

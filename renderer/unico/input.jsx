@@ -120,7 +120,10 @@ function DataEntry({depts, addEntry, entries, initialDept, updateDept, deleteMon
   const [gridEdits,setGridEdits]=React.useState({});
   const gridCell=(mo,col,cur)=>(gridEdits[mo]&&gridEdits[mo][col]!==undefined)?gridEdits[mo][col]:(cur==null?'':cur);
   const setGridCell=(mo,col,v)=>setGridEdits(s=>({...s,[mo]:{...(s[mo]||{}),[col]:v}}));
-  const updateMonthRow=(r)=>{const row={};d.cols.forEach(c=>{row[c.id]=Number(gridCell(r.month,c.id,r[c.id])||0);});addEntry({dept:d.id,deptName:d.short,month:r.month,full:r.full||window.UNICO.MONTHS_FULL[r.month]||r.month,row,ts:Date.now()});setToast(`Updated ${d.short} · ${r.full||r.month}`);setGridEdits(s=>{const n={...s};delete n[r.month];return n;});};
+  // Save ONLY the cells actually edited. Writing every column (blank→0, and old on-screen values
+  // stamped as brand-new) turned unmeasured blanks into real zeros and painted stale numbers over
+  // a correction approved after this tab loaded. A cleared cell is saved as null, not 0.
+  const updateMonthRow=(r)=>{const edits=gridEdits[r.month]||{};const row={};Object.keys(edits).forEach(k=>{const v=String(edits[k]==null?'':edits[k]).trim();row[k]=v===''?null:Number(v);});if(!Object.keys(row).length){setGridEdits(s=>{const n={...s};delete n[r.month];return n;});return;}addEntry({dept:d.id,deptName:d.short,month:r.month,full:r.full||window.UNICO.MONTHS_FULL[r.month]||r.month,row,ts:Date.now()});setToast(`Updated ${d.short} · ${r.full||r.month}`);setGridEdits(s=>{const n={...s};delete n[r.month];return n;});};
   const delMonthRow=(r)=>{if(!deleteMonth){window.UI&&window.UI.toast('Delete unavailable','error');return;}window.UI.confirm({title:`Delete ${r.full||r.month}?`,message:`Removes ${d.short}'s data for this month. You can Undo afterwards.`,danger:true,confirmLabel:'Delete'}).then(ok=>{if(ok){deleteMonth(d.id,r.month);window.UI.toast('Month deleted','success');}});};
   const doUndo=()=>{ if(undo){ undo(); window.UI&&window.UI.toast('Reverted last change','success'); } };
 
@@ -427,7 +430,7 @@ function DataEntry({depts, addEntry, entries, initialDept, updateDept, deleteMon
             <tbody>{entries.slice().reverse().map((e,i)=>{
               const dd=depts.find(x=>x.id===e.dept);
               return <tr key={i}><td>{e.deptName}</td><td>{e.full}</td>
-                <td>{fmt(e.row[dd.primary]||0)}</td><td>{Object.keys(e.row).length}</td>
+                <td>{dd?fmt((e.row||{})[dd.primary]||0):'—'}</td><td>{Object.keys(e.row||{}).length}</td>{/* dd is undefined once its dept is deleted — used to blank the whole screen */}
                 <td style={{color:'var(--green)'}}>✓ {new Date(e.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</td></tr>;
             })}</tbody>
           </table>

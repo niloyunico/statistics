@@ -12,7 +12,7 @@
 (function () {
 'use strict';
 const React = window.React;
-const { S, api, tryApi, mount } = window.DC;
+const { S, api, tryApi, pageAll, mount } = window.DC;
 const D = window.ADMIN_APP_DATA;
 const View = window.AdminAppView;
 const { MODULES, ACTS, lvl, P, preset, ROLE_TEMPLATES, ROLE_META, DEPTS, DEPT_INFO, DC_ITEMS, USERS, QUEUE, LEAVE, REPORTS_Q, LOG, SCREENS, MOD_META, MOD_ORDER, APP_ROLES, APP_FEATURES, FEAT_FLAT, FEAT_LABEL, ROLE_COLORS, KIND_META, featDefaults, PARENT_SEED, seedRoles, CLUSTERS_SEED, APPROVAL_RULES, CM_TYPES, MONTHS7, STATS_DEPTS, STAT_SERIES, DEPT_SERIES, DEPT_DEATHS, DEPT_ALOS, IND_CATALOG, CAPA_LIST, INCIDENTS, SUP_REPORTS, SUP_SECTIONS, STAFF_ROWS, COMPLIANCE, PRIV_GROUPS, SHARE_LINKS, FORM_FIELDS, SAVED_REPORTS, APPRAISALS, ROSTERS, SHIFT_CODES, MEDS_ADMIN, MED_REQUESTS, pillBtn, chip, ini, toggle } = D;
@@ -57,14 +57,16 @@ class AdminApp extends React.Component {
   newUser = (roleId) => { const t = this.state.roles.find(x=>x.id===roleId) || this.state.roles.find(x=>x.id==='incharge') || this.state.roles[0]; this.setState({screen:'userDetail',drawerOpen:false,udTab:t.kind==='console'?'access':'profile',udToast:'',udNew:true,ud:{username:'',name:'',role:this.kindToLegacy(t),roleId:t.id,title:t.label,active:true,emp:'',depts:[],scope:t.kind==='admin'?'all':(t.scope||'departments'),perms:t.kind==='console'?JSON.parse(JSON.stringify(t.perms)):{},pw:'',created:'now',twofa:false,sessions:0,lastLogin:'Never'}}); };
   renderVals() {
     const s = this.state, go = this.go;
-    // Server data where it exists, the design seed where it does not (see loadLive).
-    const QUEUE = (s.live.subs && s.live.subs.length) ? s.live.subs : D.QUEUE;
-    const LOG = (s.live.log && s.live.log.length) ? s.live.log : D.LOG;
-    const DEPTS = s.live.depts ? s.live.depts.list : D.DEPTS;
+    // Signed in = server data only. An EMPTY live list is a real answer: falling back to the
+    // design seed put fake submissions in the queue whose "approvals" appeared to succeed.
+    const QUEUE = s.demo ? D.QUEUE : (s.live.subs || []);
+    const LOG = s.demo ? D.LOG : (s.live.log || []);
+    const DEPTS = s.demo ? D.DEPTS : (s.live.depts ? s.live.depts.list : []);
     const DEPT_INFO = s.live.depts ? Object.assign({}, D.DEPT_INFO, s.live.depts.info) : D.DEPT_INFO;
     const LV0 = liveShadows(s);
     const { MONTHS7, STAT_SERIES, DEPT_SERIES: DEPT_SERIES_LV, STATS_DEPTS: STATS_DEPTS_LV, DEPT_DEATHS: DEPT_DEATHS_LV, DEPT_ALOS: DEPT_ALOS_LV, INCIDENTS, MED_REQUESTS, SUP_REPORTS, ROSTERS, APPRAISALS, STAFF_ROWS, COMPLIANCE, CAPA_LIST, SAVED_REPORTS, LEAVE, REPORTS_Q, IND_CATALOG, MEDS_ADMIN } = LV0;
-    const withDefault = (src, dflt) => Object.assign(Object.fromEntries(DEPTS.map((d) => [d, typeof dflt === 'function' ? dflt() : dflt])), src);
+    // The selected / compared departments too: they start on design codes and must not crash the stats tabs while no live list exists.
+    const withDefault = (src, dflt) => Object.assign(Object.fromEntries([...DEPTS, s.stDept, s.selDept, ...(s.stCompare || [])].map((d) => [d, typeof dflt === 'function' ? dflt() : dflt])), src);
     const STATS_DEPTS = withDefault(STATS_DEPTS_LV, () => [0, 0]);
     const DEPT_SERIES = withDefault(DEPT_SERIES_LV, () => [0, 0, 0, 0, 0, 0, 0]);
     const DEPT_DEATHS = withDefault(DEPT_DEATHS_LV, 0);
@@ -104,18 +106,33 @@ class AdminApp extends React.Component {
     const toastUd = (msg) => { this.setState({udToast:msg}); setTimeout(()=>this.setState({udToast:''}),2400); };
     // approvals
     const apSource = s.apTab==='data'?QUEUE:s.apTab==='leave'?LEAVE:REPORTS_Q;
-    const apList = apSource.filter(x => s.apFilter==='All' || (s.apFilter==='Out of range' ? !x.ok : s.apFilter==='Pending' ? !s.decisions[x.id] : x.dept===s.apFilter)).map(x => { const d = s.decisions[x.id]; return {...x, vals:x.vals.map(([k,v])=>({k,v})), valueColor:x.ok?'#1d8f57':'#b32e2e', benchLabel:x.bench, pending:!d, decided:!!d, status:d?d.status:'', reason:d?d.reason:null, returning:s.returning===x.id, notReturning:s.returning!==x.id,
+    // Approving / returning a data submission is Administrator-only on the server (403 for a console manager): only offer it to one.
+    const canDecide = !!s.demo || me.role==='Administrator';
+    const apFilterOpts = ['All','Pending','Out of range',...Array.from(new Set(apSource.map(x=>x.dept)))];
+    // A department chip disappears once its items are decided; a filter left on it showed an empty list with no chip to clear it.
+    const apFilter = apFilterOpts.includes(s.apFilter) ? s.apFilter : 'All';
+    const apList = apSource.filter(x => apFilter==='All' || (apFilter==='Out of range' ? !x.ok : apFilter==='Pending' ? !s.decisions[x.id] : x.dept===apFilter)).map(x => { const d = s.decisions[x.id]; const isSub = (x.src||'submission')==='submission'; return {...x, vals:x.vals.map(([k,v])=>({k,v})), valueColor:x.ok?'#1d8f57':'#b32e2e', benchLabel:x.bench, pending:!d && (!isSub || canDecide), decided:!!d, status:d?d.status:'', reason:d?d.reason:null, returning:s.returning===x.id, notReturning:s.returning!==x.id,
       kindStyle:`font-size:9.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;padding:3px 7px;border-radius:6px;flex-shrink:0;${x.kind==='Quality'?'color:#6a52d4;background:rgba(106,82,212,.13)':x.kind==='Statistics'?'color:#0072a3;background:rgba(0,144,202,.13)':'color:#1e8a7c;background:rgba(58,181,167,.16)'}`,
       cardStyle:`border:1px solid ${!x.ok&&!d?'rgba(214,69,69,.35)':'rgba(255,255,255,.9)'};border-radius:15px;padding:12px 13px;background:rgba(255,255,255,${d?'.5':'.68'})`,
       statusStyle:`font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:999px;${d&&d.status==='Approved'?'color:#1d8f57;background:rgba(43,182,115,.14)':'color:#b32e2e;background:rgba(214,69,69,.12)'}`,
-      approve:()=>{ this.setState({decisions:{...s.decisions,[x.id]:{status:'Approved'}},apToast:`Approved · ${x.dept} ${x.label}`}); setTimeout(()=>this.setState({apToast:''}),2200); }, src:x.src||'submission',
+      approve:()=>this.decide(x,'approve'), src:x.src||'submission',
       startReturn:()=>this.setState({returning:x.id,apReason:''}), cancelReturn:()=>this.setState({returning:null}),
-      confirmReturn:()=>{ if(!s.apReason.trim()) return; this.setState({decisions:{...s.decisions,[x.id]:{status:'Returned',reason:s.apReason.trim()}},returning:null,apToast:`Returned to ${x.by} with reason`}); setTimeout(()=>this.setState({apToast:''}),2200); },
-      undo:()=>{ const d2={...s.decisions}; delete d2[x.id]; this.setState({decisions:d2}); } }; });
+      confirmReturn:()=>{ const reason=s.apReason.trim(); if(!reason) return; this.decide(x,'return',reason); },
+      undo:()=>{ if (x.live && !s.demo) return this.apToastMsg('Already recorded on the server — reopen it in the desktop console.'); const d2={...s.decisions}; delete d2[x.id]; this.setState({decisions:d2}); } }; });
     // depts coverage
-    const covOf = dept => { const items = QUEUE.filter(x=>x.dept===dept); const monthKey = LV.live ? LV_MONTH_KEY(5) : null; const all = LV.live ? (s.live.subsRaw||[]).filter(x=>x.month===monthKey && ((x.departmentName||'')===DEPT_INFO[dept]?.name || (x.areaName||'')===DEPT_INFO[dept]?.name || x.department===LV.deptId(dept))) : []; const app = LV.live ? all.filter(x=>x.status==='approved').length + items.filter(x=>s.decisions[x.id]&&s.decisions[x.id].status==='Approved').length : items.filter(x=>s.decisions[x.id]&&s.decisions[x.id].status==='Approved').length + ({LDR:2,SICU:3,'CT ICU':2,MICU:4,CCU:5,NICU:6,Emergency:3,OPD:4,'Cath Lab':2}[dept]||0); const pen = items.filter(x=>!s.decisions[x.id]).length; const rej = LV.live ? all.filter(x=>x.status==='rejected').length : items.filter(x=>s.decisions[x.id]&&s.decisions[x.id].status==='Returned').length + (dept==='LDR'?1:0); const expected = LV.live ? (1 + (((s.live.quality||[]).find(a=>String(a.deptId)===String(LV.deptId(dept)))||{}).indicators||[]).length) : 8; const total = Math.max(expected, app+pen+rej, 1); return {app,pen,rej,mis:Math.max(0,total-app-pen-rej),total}; };
+    // Coverage of the month now due (index 5 = last full month). Live: matched on department id /
+    // quality-area key (the queue's display names never equalled the short codes), only the LATEST
+    // record per target+month counts, and duplicates auto-rejected on approval are not "returned".
+    const covM = LV_MONTHS[5], covMonthLabel = LV.live ? covM.label + ' ' + covM.y : 'Aug';
+    const covOf = dept => {
+      if (!LV.live) { const items = QUEUE.filter(x=>x.dept===dept); const app = items.filter(x=>s.decisions[x.id]&&s.decisions[x.id].status==='Approved').length + ({LDR:2,SICU:3,'CT ICU':2,MICU:4,CCU:5,NICU:6,Emergency:3,OPD:4,'Cath Lab':2}[dept]||0); const pen = items.filter(x=>!s.decisions[x.id]).length; const rej = items.filter(x=>s.decisions[x.id]&&s.decisions[x.id].status==='Returned').length + (dept==='LDR'?1:0); const total = Math.max(8, app+pen+rej, 1); return {app,pen,rej,mis:Math.max(0,total-app-pen-rej),total}; }
+      const id = String(LV.deptId(dept)); const area = (s.live.quality||[]).find(a=>String(a.deptId)===id); const aKey = area ? String(area.key) : null;
+      const latest = {}; (s.live.subsRaw||[]).forEach(x => { if (x.month!==covM.key) return; if (x.type==='patient' ? String(x.department)!==id : (aKey==null || String(x.area)!==aKey)) return; const k = x.type==='patient' ? 'p' : 'q|'+(x.indicatorId||x.indicatorName||''); const cur = latest[k]; const ts = x.submittedAt||x.createdAt||0, cts = cur ? (cur.submittedAt||cur.createdAt||0) : 0; if (!cur || (cur.autoRejected && !x.autoRejected) || (!(x.autoRejected && !cur.autoRejected) && ts >= cts)) latest[k] = x; });
+      const recs = Object.values(latest).filter(x=>!x.autoRejected);
+      const app = recs.filter(x=>x.status==='approved').length, pen = recs.filter(x=>x.status==='pending'||x.status==='approving').length, rej = recs.filter(x=>x.status==='rejected').length;
+      const total = Math.max(1 + ((area||{}).indicators||[]).length, app+pen+rej, 1); return {app,pen,rej,mis:Math.max(0,total-app-pen-rej),total}; };
     const covAll = DEPTS.reduce((a,d)=>{ const c=covOf(d); a.approved+=c.app; a.pending+=c.pen; a.rejected+=c.rej; a.missing+=c.mis; a.total+=c.total; return a; },{approved:0,pending:0,rejected:0,missing:0,total:0});
-    const seg = (n,total,color) => `width:${n/total*100}%;background:${color}`;
+    const seg = (n,total,color) => `width:${n/(total||1)*100}%;background:${color}`;
     const dd = DEPT_INFO[s.selDept]; const ddCov = covOf(s.selDept);
     const ddUsers = users.filter(u=>u.depts.includes(s.selDept));
     // broadcast
@@ -371,7 +388,7 @@ class AdminApp extends React.Component {
       loginUser:s.loginUser, setLoginUser:e=>this.setState({loginUser:e.target.value}), loginPw:s.loginPw, setLoginPw:e=>this.setState({loginPw:e.target.value}), doLogin:()=>go('home'), signOut:()=>go('login',{loginUser:'',loginPw:''}),
       meName:me.name, meFirst:'Admin', meIni:'SA',
       goUsers:()=>go('users'), goApprovals:()=>go('approvals'), goDepts:()=>go('depts'), goActivity:()=>go('activity'), goNewUser:()=>this.newUser(null),
-      heroStats:[{v:users.filter(u=>u.active).length,label:'active accounts',go:()=>go('users')},{v:pendingTotal,label:'items awaiting review',go:()=>go('approvals')},{v:Math.round(covAll.approved/covAll.total*100)+'%',label:'Aug data approved',go:()=>go('depts')}],
+      heroStats:[{v:users.filter(u=>u.active).length,label:'active accounts',go:()=>go('users')},{v:pendingTotal,label:'items awaiting review',go:()=>go('approvals')},{v:Math.round(covAll.approved/(covAll.total||1)*100)+'%',label:covMonthLabel+' data approved',go:()=>go('depts')}],
       actionItems:[
         {title:`${pendingDc} data submissions`,sub:'Quality & statistics awaiting review',n:pendingDc,color:'#0072a3',bg:'rgba(0,144,202,.13)',border:'rgba(0,144,202,.3)',d:'M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z',go:()=>go('approvals',{apTab:'data'})},
         {title:`${QUEUE.filter(x=>!x.ok&&!s.decisions[x.id]).length} out-of-range values`,sub:'Benchmark breaches to check first',n:QUEUE.filter(x=>!x.ok&&!s.decisions[x.id]).length,color:'#b32e2e',bg:'rgba(214,69,69,.12)',border:'rgba(214,69,69,.3)',d:'M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',go:()=>go('approvals',{apTab:'data',apFilter:'Out of range'})},
@@ -388,7 +405,7 @@ class AdminApp extends React.Component {
         {label:'Backup now',color:'#0072a3',bg:'rgba(0,144,202,.13)',d:'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12',go:()=>go('settings')},
         {label:'Nurse App',color:'#1e8a7c',bg:'rgba(58,181,167,.16)',d:'M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z',go:()=>{ window.location.href='/app#nurse'; }},
       ],
-      covApproved:seg(covAll.approved,covAll.total,'#1d8f57'), covPending:seg(covAll.pending,covAll.total,'#0090ca'), covRejected:seg(covAll.rejected,covAll.total,'#d23a52'), covN:covAll,
+      covTitle:covMonthLabel+' data collection · hospital-wide', covApproved:seg(covAll.approved,covAll.total,'#1d8f57'), covPending:seg(covAll.pending,covAll.total,'#0090ca'), covRejected:seg(covAll.rejected,covAll.total,'#d23a52'), covN:covAll,
       homeActivity:LOG.slice(0,3).map(l=>({...l,dot:`width:8px;height:8px;border-radius:50%;background:${l.c};flex-shrink:0`})),
       // users
       userCount:users.length, adminCount:users.filter(u=>roleOf(u).kind==='admin'&&u.active).length, userQ:s.userQ, setUserQ:e=>this.setState({userQ:e.target.value}),
@@ -459,11 +476,11 @@ class AdminApp extends React.Component {
       reFeatGroups:APP_FEATURES.map(g=>({sec:g.sec,rows:g.rows.map(([fid,label,sub])=>{ const on=!!(re.appFeats&&re.appFeats[fid]); return {label,sub,go:()=>setRe({appFeats:{...(re.appFeats||{}),[fid]:!on}}),...toggle(on)}; })})),
       reMemberCount:reMembers.length, reAddMember:()=>this.newUser(re.id), reMembers:reMembers.map(u=>({ini:ini(u.name),name:u.name,username:u.username,open:()=>this.openUser(u.username),avStyle:`display:grid;place-items:center;width:36px;height:36px;border-radius:10px;color:#fff;font-size:11px;font-weight:700;background:linear-gradient(135deg,${re.color||'#0072a3'},#0090ca);flex-shrink:0`})), reNoMembers:!reMembers.length,
       /* ---- approvals ---- */
-      pendingTotal, hasPendingDc:s.apTab==='data'&&pendingDc>0,
-      approveAllOk:()=>{ const ok=QUEUE.filter(x=>x.ok&&!s.decisions[x.id]); const d={...s.decisions}; ok.forEach(x=>{ d[x.id]={status:'Approved'}; if(x.live) api('/api/submissions/'+encodeURIComponent(x.id)+'/approve',{method:'POST'}).catch(()=>{}); }); this.setState({decisions:d,apToast:`Approved ${ok.length} in-range submission${ok.length===1?'':'s'}`}); setTimeout(()=>this.setState({apToast:''}),2200); },
+      pendingTotal, hasPendingDc:s.apTab==='data'&&pendingDc>0&&canDecide,
+      approveAllOk:()=>this.approveAll(QUEUE.filter(x=>x.ok&&!s.decisions[x.id])),
       apTabs:[['data','Data',pendingDc],['leave','Leave & OT',pendingLeave],['reports','Shift reports',pendingRep]].map(([k,l,n])=>({label:l,badge:n||null,go:()=>this.setState({apTab:k,apFilter:'All',returning:null}),style:pillBtn(s.apTab===k).replace('padding:7px 10px','padding:7px 4px').replace('font-size:12px','font-size:11px')})),
-      apFilters:['All','Pending','Out of range',...Array.from(new Set(apSource.map(x=>x.dept)))].map(f=>({label:f,go:()=>this.setState({apFilter:f}),style:chip(s.apFilter===f)})), apToast:s.apToast,
-      apList:apList.map(q=>({...q,approve:()=>{ q.approve(); if(q.live) this.decideLive(q,'approve'); },confirmReturn:()=>{ const reason=s.apReason.trim(); q.confirmReturn(); if(q.live&&reason) this.decideLive(q,'return',reason); }})),
+      apFilters:apFilterOpts.map(f=>({label:f,go:()=>this.setState({apFilter:f}),style:chip(apFilter===f)})), apToast:s.apToast,
+      apList,
       apReason:s.apReason, setApReason:e=>this.setState({apReason:e.target.value}), apEmpty:!apList.length,
       /* ---- departments ---- */
       deptCount:DEPTS.length, staffTotal:DEPTS.reduce((a,d)=>a+((DEPT_INFO[d]||{}).staff||0),0),
@@ -508,6 +525,8 @@ class AdminApp extends React.Component {
   /* ------------------------------------------------------------ live layer --- */
   componentDidMount() {
     this.loadSeedMeds();
+    this._onExpired = () => this.sessionExpired();
+    window.addEventListener('unico:session-expired', this._onExpired);
     // Hospital name / version for the login screen and as a fallback for the header (public route).
     tryApi('/api/phone/branding').then((b) => { if (b && b.ok && b.hospital) this.setState({ branding: b.hospital }); });
     // Design-review mode: /admin#demo (optionally &screen=<name>) — seed data, no session.
@@ -539,20 +558,30 @@ class AdminApp extends React.Component {
     this.setState({ me: Object.assign({ perms: me.perms }, me.user || {}), booting: false, screen: 'home', drawerOpen: false, loginPw: '', loginBusy: false });
     this.loadLive();
   }
+  signedOutState() { return { screen: 'login', me: null, loginUser: '', loginPw: '', drawerOpen: false, users: [], roles: seedRoles().filter((r) => r.system || r.kind === 'portal'), decisions: {}, modDec: {}, live:{ users:null, roles:null, log:null, subs:null, depts:null, staff:null, meds:null, deptsRaw:null, staffRaw:null, subsRaw:null, quality:null, settings:null, requests:null, shiftReports:null, incidents:null, medReqs:null, rosters:null, perf:null, online:null } }; }
   signOut() {
     if (this.state.demo) { window.location.hash = ''; }
     fetch('/logout', { credentials: 'same-origin' }).catch(() => {});
-    clearInterval(this._poll); this.setState({ screen: 'login', me: null, loginUser: '', loginPw: '', drawerOpen: false, users: [], roles: seedRoles().filter((r) => r.system || r.kind === 'portal'), decisions: {}, modDec: {}, live:{ users:null, roles:null, log:null, subs:null, depts:null, staff:null, meds:null, deptsRaw:null, staffRaw:null, subsRaw:null, quality:null, settings:null, requests:null, shiftReports:null, incidents:null, medReqs:null, rosters:null, perf:null, online:null } });
+    clearInterval(this._poll); this.setState(this.signedOutState());
+  }
+  // Any 401 (dc-runtime fires the event): every read would now come back empty and look like
+  // "no data" — return to sign-in instead.
+  sessionExpired() {
+    if (this.state.demo || !this.state.me) return;
+    clearInterval(this._poll); this.setState(this.signedOutState());
+    this.toastMsg('Your session has expired — sign in again.');
   }
   // Read what the server already keeps: accounts, role templates, the audit log,
   // pending submissions, departments and the medicine catalogue. Each read is
   // independent; a failed one leaves that screen on the design's seed data.
   async loadLive() {
     const patch = (k, v) => this.setState((s) => ({ live: Object.assign({}, s.live, { [k]: v }) }));
-    const [depts, staff, users, roles, log, subs, meds] = await Promise.all([
-      tryApi('/api/departments'), tryApi('/api/staff'), tryApi('/api/users'), tryApi('/api/roles'), tryApi('/api/activity?limit=120'), tryApi('/api/submissions?limit=300'), tryApi('/api/med/browse?per=60&page=1'),
+    // Submissions page through nextOffset: the pending queue on its own (?status=pending, so a
+    // long history cannot push it off page one) and every status for coverage / analytics.
+    const [depts, staff, users, roles, log, subs, pend, meds] = await Promise.all([
+      tryApi('/api/departments'), tryApi('/api/staff'), tryApi('/api/users'), tryApi('/api/roles'), tryApi('/api/activity?limit=120'), pageAll('/api/submissions?limit=1000', 'submissions', 2), pageAll('/api/submissions?status=pending&limit=500', 'submissions', 10), tryApi('/api/med/browse?per=60&page=1'),
     ]);
-    const deptList = depts && depts.ok && Array.isArray(depts.departments) && depts.departments.length ? depts.departments : null;
+    const deptList = depts && depts.ok && Array.isArray(depts.departments) ? depts.departments : null;
     const staffList = staff && staff.ok && Array.isArray(staff.staff) ? staff.staff : [];
     const userList = users && users.ok && Array.isArray(users.users) && users.users.length ? users.users : null;
     const shortOf = (d) => d.short || liveShort(d.name || d.id);   // the register keeps a short code ('MICU', 'CT ICU')
@@ -579,12 +608,13 @@ class AdminApp extends React.Component {
       this.setState({ users: mapped, selUser: (mapped[0] || {}).username || this.state.selUser });
       patch('users', userList);
     }
-    if (log && log.ok && Array.isArray(log.entries) && log.entries.length) patch('log', log.entries.map(liveLog));
-    if (subs && subs.ok && Array.isArray(subs.submissions)) { const q = subs.submissions.filter((x) => x.status === 'pending').map(liveQueue).filter(Boolean); if (q.length) patch('subs', q); }
+    if (log && log.ok && Array.isArray(log.entries)) patch('log', log.entries.map(liveLog));
+    const pendRows = pend || (subs ? subs.filter((x) => x.status === 'pending') : null); const cols = colsOf(deptList);
+    if (pendRows) patch('subs', pendRows.map((x) => liveQueue(x, cols)).filter(Boolean));
     if (meds && meds.ok && Array.isArray(meds.rows) && meds.rows.length) { const list = meds.rows.map(liveMed); patch('meds', list); this.setState({ meds: list, amSel: list[0].id }); } else this.setState({ meds: [] });
     if (deptList) patch('deptsRaw', deptList);
     patch('staffRaw', staffList);
-    if (subs && subs.ok && Array.isArray(subs.submissions)) patch('subsRaw', subs.submissions);
+    if (subs) patch('subsRaw', subs);
     this._deptShort = deptIdToShort;
     // The phone-app stores: settings (feature matrix, hierarchy, custom modules, policy), the review queues and the registers.
     const [settings, quality, requests, shiftReports, incidents, medReqs, rosters, perf, presence, health] = await Promise.all([
@@ -604,18 +634,20 @@ class AdminApp extends React.Component {
     this._poll = setInterval(() => this.refreshQueues(), 30000);
   }
   // The review queues and presence, refreshed while the app is open.
-  async refreshQueues() {
-    if (this.state.demo || !this.state.me || (typeof document !== 'undefined' && document.hidden)) return;
+  async refreshQueues(force) {
+    if (this.state.demo || !this.state.me || (!force && typeof document !== 'undefined' && document.hidden)) return;
     const patch = (k, v) => this.setState((s) => ({ live: Object.assign({}, s.live, { [k]: v }) }));
-    const [subs, requests, shiftReports, incidents, medReqs, presence] = await Promise.all([tryApi('/api/submissions?limit=300'), tryApi('/api/phone/requests'), tryApi('/api/phone/shift-reports'), tryApi('/api/phone/incidents'), tryApi('/api/phone/med-requests?all=1'), tryApi('/api/phone/presence')]);
-    if (subs && subs.ok && Array.isArray(subs.submissions)) { patch('subsRaw', subs.submissions); patch('subs', subs.submissions.filter((x) => x.status === 'pending').map(liveQueue).filter(Boolean)); }
+    const [subs, pend, requests, shiftReports, incidents, medReqs, presence] = await Promise.all([pageAll('/api/submissions?limit=1000', 'submissions', 2), pageAll('/api/submissions?status=pending&limit=500', 'submissions', 10), tryApi('/api/phone/requests'), tryApi('/api/phone/shift-reports'), tryApi('/api/phone/incidents'), tryApi('/api/phone/med-requests?all=1'), tryApi('/api/phone/presence')]);
+    if (subs) patch('subsRaw', subs);
+    const pendRows = pend || (subs ? subs.filter((x) => x.status === 'pending') : null);
+    if (pendRows) { const cols = colsOf(this.state.live.deptsRaw); patch('subs', pendRows.map((x) => liveQueue(x, cols)).filter(Boolean)); }
     if (requests && requests.ok) patch('requests', (requests.team || []).concat(requests.mine || []).filter((r, i, a) => a.findIndex((x) => x.id === r.id) === i));
     if (shiftReports && shiftReports.ok) patch('shiftReports', shiftReports.reports || []);
     if (incidents && incidents.ok) patch('incidents', incidents.incidents || []);
     if (medReqs && medReqs.ok) patch('medReqs', medReqs.requests || []);
     if (presence && presence.ok) patch('online', presence.online || []);
   }
-  componentWillUnmount() { clearInterval(this._poll); clearTimeout(this._saveT); }
+  componentWillUnmount() { clearInterval(this._poll); clearTimeout(this._saveT); window.removeEventListener('unico:session-expired', this._onExpired); }
   // Settings document (server) -> the screens' state. Department overrides are keyed by
   // department id on the server and by the short label in the app.
   applySettings(doc) {
@@ -664,10 +696,51 @@ class AdminApp extends React.Component {
   }
   /* ---- write actions on the phone-app stores (each one re-reads its queue) ---- */
   post(path, body, after) { return api(path, { method: 'POST', body: body || {} }).then((r) => { if (after) after(r); this.refreshQueues(); return r; }).catch((e) => { this.toastMsg(e.message || 'The server rejected that.'); return null; }); }
-  decideLive(q, action, reason) {
-    if (q.src === 'request') return this.post('/api/phone/requests/' + encodeURIComponent(q.id) + '/decide', { status: action === 'approve' ? 'approved' : 'declined', reason: reason || '' });
-    if (q.src === 'shift') return this.post('/api/phone/shift-reports/' + encodeURIComponent(q.id) + '/status', { status: action === 'approve' ? 'Approved' : 'Returned', reason: reason || '' });
-    return api('/api/submissions/' + encodeURIComponent(q.id) + '/' + (action === 'approve' ? 'approve' : 'reject'), { method: 'POST', body: action === 'approve' ? {} : { reason: reason || '' } }).catch((e) => this.toastMsg(e.message || 'Server did not record the decision'));
+  // One decision on the server -> {ok, autoRejected} | {ok:false, error, superseded}. Never throws;
+  // the caller marks the card decided only on ok (it used to mark + toast before the answer).
+  async decideLive(q, action, reason) {
+    try {
+      let r;
+      if (q.src === 'request') r = await api('/api/phone/requests/' + encodeURIComponent(q.id) + '/decide', { method: 'POST', body: { status: action === 'approve' ? 'approved' : 'declined', reason: reason || '' } });
+      else if (q.src === 'shift') r = await api('/api/phone/shift-reports/' + encodeURIComponent(q.id) + '/status', { method: 'POST', body: { status: action === 'approve' ? 'Approved' : 'Returned', reason: reason || '' } });
+      else r = await api('/api/submissions/' + encodeURIComponent(q.id) + '/' + (action === 'approve' ? 'approve' : 'reject'), { method: 'POST', body: action === 'approve' ? {} : { reason: reason || '' } });
+      if (r && r.ok === false) return { ok: false, error: r.error || 'The server did not record the decision.', superseded: !!r.superseded };
+      return { ok: true, autoRejected: (r && r.autoRejected) || 0 };
+    } catch (e) { const b = e.body || {}; return { ok: false, error: b.error || e.message || 'The server did not record the decision.', superseded: !!b.superseded }; }
+  }
+  apToastMsg(msg, ms) { this.setState({ apToast: msg }); clearTimeout(this._apT); this._apT = setTimeout(() => this.setState({ apToast: '' }), ms || 2600); }
+  // Approve / return one card: await the server, then mark it. A duplicate that was already
+  // superseded by an approved one is "skipped", not a failure; anything else stays pending.
+  async decide(x, action, reason) {
+    const label = action === 'approve' ? 'Approved' : 'Returned';
+    const mark = (status, why) => this.setState((st) => ({ decisions: Object.assign({}, st.decisions, { [x.id]: { status, reason: why || null } }), returning: st.returning === x.id ? null : st.returning }));
+    if (this.state.demo || !x.live) { mark(label, reason); return this.apToastMsg(action === 'approve' ? `Approved · ${x.dept} ${x.label}` : `Returned to ${x.by} with reason`, 2200); }
+    this._deciding = this._deciding || {}; if (this._deciding[x.id]) return; this._deciding[x.id] = true;
+    try {
+      const r = await this.decideLive(x, action, reason);
+      if (r.ok) { mark(label, reason); this.apToastMsg(action === 'approve' ? `Approved · ${x.dept} ${x.label}${r.autoRejected ? ' · ' + r.autoRejected + ' duplicate' + (r.autoRejected === 1 ? '' : 's') + ' auto-rejected' : ''}` : `Returned to ${x.by} with reason`); }
+      else if (r.superseded) { mark('Skipped', r.error); this.apToastMsg('Skipped · already superseded by an approved duplicate'); }
+      else this.apToastMsg(r.error, 4000);
+    } finally { delete this._deciding[x.id]; this.refreshQueues(true); }
+  }
+  // Bulk approve: sequential (the server claims each submission; a parallel burst raced it) and
+  // counted honestly — it used to fire everything with .catch(()=>{}) and always toast success.
+  async approveAll(items) {
+    if (this._bulk || !items.length) return;
+    if (this.state.demo) { const d = Object.assign({}, this.state.decisions); items.forEach((x) => { d[x.id] = { status: 'Approved' }; }); this.setState({ decisions: d }); return this.apToastMsg(`Approved ${items.length} in-range submission${items.length === 1 ? '' : 's'}`, 2200); }
+    this._bulk = true; this.apToastMsg(`Approving ${items.length}…`, 120000);
+    let ok = 0, skipped = 0, failed = 0, lastErr = '';
+    try {
+      for (const x of items) {
+        if (!x.live) continue;
+        const r = await this.decideLive(x, 'approve');
+        const status = r.ok ? 'Approved' : r.superseded ? 'Skipped' : null;
+        if (r.ok) ok++; else if (r.superseded) skipped++; else { failed++; lastErr = r.error; }
+        if (status) this.setState((st) => ({ decisions: Object.assign({}, st.decisions, { [x.id]: { status, reason: r.ok ? null : r.error } }) }));
+      }
+    } finally { this._bulk = false; }
+    this.apToastMsg(`${ok} approved${skipped ? ' · ' + skipped + ' skipped (superseded duplicate' + (skipped === 1 ? '' : 's') + ')' : ''}${failed ? ' · ' + failed + ' failed — ' + lastErr : ''}`, failed ? 6000 : 3000);
+    this.refreshQueues(true);
   }
   incidentStatus(id, status) { if (!id || this.state.demo) return; this.post('/api/phone/incidents/' + encodeURIComponent(id) + '/status', { status }); }
   shiftStatus(id, status) { if (!id || this.state.demo) return; this.post('/api/phone/shift-reports/' + encodeURIComponent(id) + '/status', { status }); }
@@ -776,7 +849,7 @@ function liveShadows(s) {
   out.MED_REQUESTS = (L.medReqs || []).map((x) => [x.name + (x.strength ? ' ' + x.strength : ''), (x.deptName || '—') + ' · ' + ((x.by && x.by.name) || '—'), (x.reason || '') + (x.note ? ' — ' + x.note : ''), x.status === 'Approved' ? 'approved' : x.status === 'Declined' ? 'returned' : 'pending', x.id]);
   out.SUP_REPORTS = (L.shiftReports || []).map((x) => { const c = x.counts || {}; return [fmtIsoD(x.date), x.shift, (x.by && x.by.name) || '—', x.deptName || shortOfId(x.dept), (c.adm || 0) + ' adm · ' + (c.dis || 0) + ' dis · ' + (c.deaths || 0) + ' death' + (c.deaths === 1 ? '' : 's') + ' · ' + ((c.falls || 0) + (c.mederr || 0) + (c.needle || 0) + (c.code || 0)) + ' events', x.status === 'Approved' ? 'approved' : x.status === 'Returned' ? 'returned' : 'pending', x.id, x.date]; });
   const wk = Date.now() - 7 * 86400e3; const week = (L.shiftReports || []).filter((x) => (x.createdAt || 0) >= wk);
-  out.supWeek = { reports: week.length, adm: sumA(week.map((x) => (x.counts || {}).adm)), events: sumA(week.map((x) => { const c = x.counts || {}; return (c.falls || 0) + (c.mederr || 0) + (c.needle || 0) + (c.code || 0); })), codes: sumA(week.map((x) => (x.counts || {}).code)), byDay: [6, 5, 4, 3, 2, 1, 0].map((k) => { const d = new Date(); d.setDate(d.getDate() - k); const iso = d.toISOString().slice(0, 10); return { label: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()], v: sumA(week.filter((x) => x.date === iso).map((x) => (x.counts || {}).adm)) }; }) };
+  out.supWeek = { reports: week.length, adm: sumA(week.map((x) => (x.counts || {}).adm)), events: sumA(week.map((x) => { const c = x.counts || {}; return (c.falls || 0) + (c.mederr || 0) + (c.needle || 0) + (c.code || 0); })), codes: sumA(week.map((x) => (x.counts || {}).code)), byDay: [6, 5, 4, 3, 2, 1, 0].map((k) => { const d = new Date(); d.setDate(d.getDate() - k); const iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); /* local day: toISOString is UTC and slips a day back before 06:00 in UTC+6 */ return { label: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()], v: sumA(week.filter((x) => x.date === iso).map((x) => (x.counts || {}).adm)) }; }) };
   const ros = L.rosters || []; const latest = ros.reduce((a, r) => (!a || r.year > a.year || (r.year === a.year && r.month > a.month) ? r : a), null);
   out.rosterMonth = latest ? MONTHS_LONG[latest.month] + ' ' + latest.year : MONTHS_LONG[(MO + 1) % 12] + ' ' + (MO === 11 ? YR + 1 : YR);
   out.ROSTERS = ros.map((r) => [r.deptName || r.dept, MONTHS_LONG[r.month] + ' ' + r.year, r.preparedBy || r.createdBy || '—', (r.order || []).length + ' staff' + (r.revision ? ' · rev ' + r.revision : ''), r.status === 'approved' ? 'approved' : r.status === 'submitted' ? 'submitted' : 'draft', { dept: r.dept, year: r.year, month: r.month }]);
@@ -821,13 +894,15 @@ function liveUser(u, roles, deptMap) {
 function fmtWhen(t) { if (!t) return ''; const d = new Date(t); if (isNaN(d)) return String(t); const M3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']; const now = new Date(); const same = d.toDateString() === now.toDateString(); const hm = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); return same ? 'Today ' + hm : d.getDate() + ' ' + M3[d.getMonth()] + ' ' + hm; }
 const ACTION_COLOR = { login: '#0090ca', logout: '#7d8ea8', login_failed: '#b32e2e', submission_approved: '#1d8f57', submission_rejected: '#b32e2e', submission_created: '#6a52d4', user_created: '#0090ca', user_updated: '#b8650a', session_revoked: '#b8650a', backup_restore: '#3c4858', notice_published: '#6a52d4', bnmc_verify: '#1e8a7c', photo_upload: '#3c4858', photo_delete: '#b8650a' };
 function liveLog(e) { const a = String(e.action || 'event'); return { ts: e.ts || 0, who: e.name || e.username || 'System', text: a.replace(/_/g, ' ') + (e.target ? ' · ' + e.target : '') + (e.detail ? ' — ' + e.detail : ''), when: fmtWhen(e.ts), ip: e.ip || '—', action: a, c: ACTION_COLOR[a] || '#3c4858' }; }
-function liveQueue(x) {
+// department id -> {column id: label}, so a queue card names its fields instead of showing raw ids.
+function colsOf(list) { const m = {}; (list || []).forEach((d) => { const c = {}; (d.cols || []).forEach((col) => { c[col.id] = col.label || col.id; }); m[String(d.id || d._id)] = c; }); return m; }
+function liveQueue(x, cols) {
   const id = x.id || x._id; if (!id) return null;
-  const when = fmtWhen(x.createdAt), by = x.submittedBy || x.createdByName || x.createdBy || '—';
-  if (x.type === 'patient') { const vals = Object.entries(x.values || {}).slice(0, 4).map(([k, v]) => [k, v]); return { id, live: true, month: x.month, dept: (x.department && x.department.name) || x.departmentName || '—', by, label: 'Patient statistics', kind: 'Statistics', vals, value: null, bench: '', ok: true, when, note: x.note || x.remark || '' }; }
+  const when = fmtWhen(x.submittedAt || x.createdAt), by = x.submittedBy || x.createdByName || x.createdBy || '—';
+  if (x.type === 'patient') { const lab = (cols && cols[String(x.department)]) || {}; const vals = Object.entries(x.values || {}).map(([k, v]) => [lab[k] || k, v]); return { id, live: true, month: x.month, dept: (x.department && x.department.name) || x.departmentName || '—', by, label: 'Patient statistics', kind: 'Statistics', vals, value: null, bench: '', ok: true, when, note: x.note || x.remark || '' }; }
   const bv = x.benchmarkValue, v = x.value, dir = x.goalDirection || 'lower_is_better';
   const ok = bv == null || v == null ? true : (dir === 'higher_is_better' ? v >= bv : v <= bv);
-  return { id, live: true, month: x.month, dept: x.areaName || x.area || '—', by, label: x.indicatorName || 'Quality indicator', kind: 'Quality', vals: [[x.numLabel || 'Numerator', x.num], [x.denLabel || 'Denominator', x.den]], value: v == null ? null : String(v) + (x.unit === '%' ? '%' : ''), bench: x.benchmark || '', ok, when, note: x.remark || x.note || '', corr: !!x.isCorrection };
+  return { id, live: true, month: x.month, dept: x.areaName || x.area || '—', by, label: x.indicatorName || 'Quality indicator', kind: 'Quality', vals: x.num == null && x.den == null ? [['Count', x.value == null ? '—' : x.value]] : [[x.numLabel || 'Numerator', x.num], [x.denLabel || 'Denominator', x.den == null ? 'set by admin' : x.den]], value: v == null ? null : String(v) + (x.unit === '%' ? '%' : ''), bench: x.benchmark || '', ok, when, note: x.remark || x.note || '', corr: !!x.isCorrection };
 }
 const PREG = { A: 'safe', B: 'safe', C: 'caution', D: 'avoid', X: 'avoid' };
 function liveMed(b) {

@@ -15,8 +15,11 @@
   const dcApi = {
     get: (url) => fetch(url, { headers: { accept: 'application/json' } }).then((r) => r.json()),
     post: (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { _dcAllCache = null; window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
-    patch: (url, body) => fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()),
+    // An edit changes the submission lists too (and an approved edit changes live data), so it
+    // must drop the cached history exactly like a POST does, or every list keeps the old row.
+    patch: (url, body) => fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { _dcAllCache = null; window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
     del: (url) => fetch(url, { method: 'DELETE' }).then((r) => r.json()),
+    put: (url, body) => fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()),
   };
 
   // Shared, de-duped fetch of ALL submissions. The Review's Coverage panel, Collector
@@ -28,7 +31,9 @@
   const dcAllSubmissions = (force) => {
     const now = Date.now();
     if (!force && _dcAllCache && (now - _dcAllAt) < 8000) return Promise.resolve(_dcAllCache);
-    if (_dcAllPromise) return _dcAllPromise;
+    // A FORCED reload (after an approve/edit) must not reuse a fetch that started BEFORE the
+    // change — it returned the old rows, so approved items still showed as pending.
+    if (_dcAllPromise) return force ? _dcAllPromise.catch(() => {}).then(() => dcAllSubmissions(true)) : _dcAllPromise;
     _dcAllPromise = (async () => {
       const rows = new Map();
       let offset = 0;
@@ -47,6 +52,68 @@
     ok: true, submissions: !status || status === 'all' ? submissions : submissions.filter(s => s.status === status),
   }));
   if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => { _dcAllCache = null; });
+  // A duty roster belongs to ONE department. The portal used to show the first roster the
+  // server returned — and an in-charge with quality access to many areas is allowed to read many
+  // units — so every in-charge saw the same (other) department's sheet. Match rosters against the
+  // person's OWN assigned departments only (id, name, short name, quality key; squashed spelling).
+  const dcSquash = (s) => String(s == null ? '' : s).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '');
+  function dcMyRosterUnitKeys() {
+    const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
+    const ids = Array.isArray(me.departments) ? me.departments : [];
+    const all = (typeof dcAllDepts === 'function') ? dcAllDepts() : [];
+    const keys = new Set();
+    ids.forEach((id) => {
+      keys.add(dcSquash(id));
+      const d = all.find((x) => x && x.id === id);
+      if (d) { keys.add(dcSquash(d.name)); keys.add(dcSquash(d.short)); if (d.qualityKey) keys.add(dcSquash(d.qualityKey)); }
+      const nm = window.DEPTMAP && window.DEPTMAP.nameFromId ? window.DEPTMAP.nameFromId(id) : null;
+      if (nm) keys.add(dcSquash(nm));
+    });
+    keys.delete('');
+    return keys;
+  }
+  const dcRosterIsMine = (r, keys) => !!r && [r.dept, r.deptName].some((v) => v != null && keys.has(dcSquash(v)));
+  // An incident row counts only when something was typed into it — the same rule the server
+  // uses to keep it. Counting blank rows ("Add incident" clicked twice, one filled) submitted
+  // a count of 2 while only 1 incident was stored, so count and register disagreed for good.
+  const DC_INCIDENT_FIELDS = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'details', 'finding', 'corrective', 'preventive', 'remark'];
+  const dcIncidentFilled = (x) => !!x && DC_INCIDENT_FIELDS.some((k) => String(x[k] == null ? '' : x[k]).trim() !== '');
+  // The server returns every submission touching a collector's ASSIGNMENTS (colleagues on the
+  // same ward, or the whole hospital for an infection-control role). That full list is right
+  // for "is this indicator covered", but personal figures — my accuracy, my pending, my
+  // rejections — must count only what this person sent.
+  // ONE ownership rule: the login username the server stamped (submittedByUser) wins — two
+  // staff can share a display name. The name match is only for legacy rows without it.
+  const dcIsMine = (s) => {
+    if (!s) return false;
+    const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
+    if (s.submittedByUser) return !!me.username && s.submittedByUser === me.username;
+    return [me.name, me.username].filter(Boolean).some((n) => n === s.submittedBy || (s.responsible && s.responsible.name === n));
+  };
+  // Areas granted DIRECTLY to a responsible person (beyond department-derived / hospital-wide).
+  // Older records lack the field: derive it from the stored union minus today's derived areas.
+  const dcCustomAreas = (r) => {
+    if (!r) return [];
+    if (Array.isArray(r.customQualityAreas)) return r.customQualityAreas;
+    if (r.allQualityAreas) return [];
+    const auto = window.DEPTMAP ? window.DEPTMAP.areasFromDepts(r.departments || []) : [];
+    return (r.qualityAreas || []).filter((k) => !auto.includes(k));
+  };
+  // Rejections still waiting on a fix. A resubmission inserts a NEW row and the rejected one
+  // stays for ever, so count DISTINCT targets whose NEWEST row (anyone's) is a real rejection
+  // — an auto-rejected duplicate is not something the collector got wrong.
+  const dcTargetKey = (x) => (x.type === 'quality' ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '') : 'p|' + x.department) + '|' + x.month;
+  const dcOpenRejections = (subs) => {
+    const newest = {};
+    (subs || []).forEach((x) => { const k = dcTargetKey(x); if (!newest[k] || (x.submittedAt || 0) > (newest[k].submittedAt || 0)) newest[k] = x; });
+    return Object.keys(newest).map((k) => newest[k]).filter((x) => x.status === 'rejected' && !x.autoRejected && dcIsMine(x));
+  };
+  // Departments that actually report PATIENT statistics — data on record or ever submitted.
+  // Quality-only units (mapped in via a quality area) must never count as "missing stats".
+  const dcPatientDepts = (depts, subs) => {
+    const ever = new Set((subs || []).filter((s) => s.type === 'patient').map((s) => s.department));
+    return (depts || []).filter((d) => (d.series || []).length > 0 || ever.has(d.id));
+  };
 
   // ---- shared helpers ----
   // After an approve (or an admin edit of an APPROVED submission) is applied
@@ -99,10 +166,6 @@
   // Default reporting month = the PREVIOUS completed calendar month (monthly reporting is
   // retrospective — e.g. in July you report June). Computed from the clock, never hardcoded.
   const dcDefaultMonth = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return MONS_ABBR[d.getMonth()] + '-' + String(d.getFullYear() % 100).padStart(2, '0'); };
-  // Fiscal-year quarter (Jun–Aug Q1, Sep–Nov Q2, Dec–Feb Q3, Mar–May Q4) for a
-  // 'Mon-YY' key. Year-independent, so it keeps working after the hardcoded Jun-25…
-  // May-26 rolling window the seed uses. Matches quality-store.js MONTH_QUARTER.
-  const dcFiscalQuarter = (mk) => { const mi = MONS_ABBR.indexOf(String(mk || '').split('-')[0]); if (mi < 0) return ''; return 'Q' + (Math.floor(((mi + 7) % 12) / 3) + 1); };
   function defaultMonthFor(dept) {
     const order = MO();
     if (dept && dept.months && dept.months.length) {
@@ -204,12 +267,15 @@
         + (r.active === false ? ' · INACTIVE' : '');
     };
 
+    // customQualityAreas is sent on EVERY save so the server never re-derives custom access
+    // from a stale stored union. `busy` stays on until the reload lands — otherwise a quick
+    // second click posts the OLD record and silently undoes the first change.
     const saveRec = (rec, okMsg) => {
       setBusy(true);
-      return dcApi.post('/api/responsibles', rec).then((res) => {
-        setBusy(false);
-        if (res.ok) { toast(okMsg, 'success'); onChanged && onChanged(); }
-        else toast(res.error || 'Could not save', 'error');
+      const body = { ...rec, customQualityAreas: Array.isArray(rec.customQualityAreas) ? rec.customQualityAreas : dcCustomAreas(rec) };
+      return dcApi.post('/api/responsibles', body).then((res) => {
+        if (res.ok) { toast(okMsg, 'success'); return Promise.resolve(onChanged && onChanged()).finally(() => setBusy(false)); }
+        setBusy(false); toast(res.error || 'Could not save', 'error');
       }).catch(() => { setBusy(false); toast('Could not save', 'error'); });
     };
 
@@ -220,7 +286,8 @@
       const qi = { ...(r.qualityIndicators || {}) };
       if (!hasArea(r, ak)) {
         qi[ak] = [ind.id];
-        return saveRec({ ...r, qualityAreas: [...(r.qualityAreas || []), ak], qualityIndicators: qi }, r.name + ' can now report ' + ind.name);
+        const custom = dcCustomAreas(r);
+        return saveRec({ ...r, customQualityAreas: custom.includes(ak) ? custom : [...custom, ak], qualityAreas: [...(r.qualityAreas || []), ak], qualityIndicators: qi }, r.name + ' can now report ' + ind.name);
       }
       const sel = selOf(r, ak);
       if (sel.length === 0) { toast(r.name + ' already has every indicator of this area.', 'info'); return; }
@@ -236,14 +303,18 @@
       const sel0 = selOf(r, ak);
       const left = (sel0.length === 0 ? allIds : sel0).filter((x) => x !== ind.id);
       const qi = { ...(r.qualityIndicators || {}) };
-      if (left.length > 0) { qi[ak] = left; return saveRec({ ...r, qualityIndicators: qi }, 'Removed ' + ind.name + ' from ' + r.name); }
+      if (left.length > 0) {
+        qi[ak] = left;
+        // "All indicators" (empty list) just became an explicit list — say what that costs.
+        return saveRec({ ...r, qualityIndicators: qi }, 'Removed ' + ind.name + ' from ' + r.name + (sel0.length === 0 ? ' — ' + aName + ' is now a fixed list, so indicators added to it later won’t be auto-assigned to ' + r.name : ''));
+      }
       if (derived(r, ak)) {
         toast(r.name + "'s " + aName + ' access comes from their department assignment — edit the person to change departments.', 'error');
         onEditPerson && onEditPerson(r);
         return;
       }
       delete qi[ak];
-      return saveRec({ ...r, qualityAreas: (r.qualityAreas || []).filter((k) => k !== ak), qualityIndicators: qi }, 'Removed ' + r.name + ' from ' + aName);
+      return saveRec({ ...r, customQualityAreas: dcCustomAreas(r).filter((k) => k !== ak), qualityAreas: (r.qualityAreas || []).filter((k) => k !== ak), qualityIndicators: qi }, 'Removed ' + r.name + ' from ' + aName);
     };
 
     // search filters by department/area, indicator or person name
@@ -359,10 +430,18 @@
         && ((((r.qualityIndicators || {})[ak]) || []).length === 0 || (((r.qualityIndicators || {})[ak]) || []).includes(indId)))
       .map((r) => r.name);
 
-    const blank = () => ({ name: '', title: '', phone: '', staffId: null, empId: '', password: '', departments: [], qualityAreas: [], allQualityAreas: false, qualityIndicators: {}, active: true });
+    const blank = () => ({ name: '', title: '', phone: '', staffId: null, empId: '', password: '', departments: [], qualityAreas: [], customQualityAreas: [], allQualityAreas: false, qualityIndicators: {}, active: true });
+    // customQualityAreas is fixed ONCE when the editor opens. Re-deriving it on every render
+    // from the stored union made an unticked department's area look "custom", so it was
+    // re-saved and the person never lost it.
+    const openEdit = (r) => setEditing({ ...blank(), ...r, customQualityAreas: dcCustomAreas(r).slice() });
     const save = () => {
       if (!editing.name.trim()) { toast('Name is required', 'error'); return; }
-      dcApi.post('/api/responsibles', editing).then((r) => {
+      // Drop per-indicator restrictions for areas the person no longer has (skipped when the
+      // map isn't loaded — derived areas would be unknown and real restrictions lost).
+      const qi = { ...(editing.qualityIndicators || {}) };
+      if (window.DEPTMAP && !editing.allQualityAreas) Object.keys(qi).forEach((k) => { if (!effectiveAreas.includes(k)) delete qi[k]; });
+      dcApi.post('/api/responsibles', { ...editing, customQualityAreas: customAreas, qualityAreas: effectiveAreas, qualityIndicators: qi }).then((r) => {
         if (r.ok) { toast('Responsible person saved', 'success'); setEditing(null); load(); }
         else toast(r.error || 'Could not save', 'error');
       });
@@ -387,11 +466,11 @@
           ? (window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [])
           : (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : []))
       : [];
-    // Custom = areas the admin picked directly (editing.qualityAreas) that aren't already
-    // auto-granted by a department. Effective access = derived ∪ custom (or ALL if hospital-wide).
-    const customAreas = editing ? (editing.qualityAreas || []).filter((k) => !derivedAreas.includes(k)) : [];
-    const effectiveAreas = editing ? (editing.allQualityAreas ? derivedAreas : [...derivedAreas, ...customAreas]) : [];
-    const toggleCustomArea = (k) => setEditing((ed) => ({ ...ed, qualityAreas: (ed.qualityAreas || []).includes(k) ? ed.qualityAreas.filter((x) => x !== k) : [...(ed.qualityAreas || []), k] }));
+    // Custom = areas the admin granted directly (editing.customQualityAreas, fixed at open).
+    // Effective access = derived ∪ custom (or ALL if hospital-wide) — the server recomputes the same.
+    const customAreas = editing ? (editing.customQualityAreas || []) : [];
+    const effectiveAreas = editing ? (editing.allQualityAreas ? derivedAreas : [...new Set([...derivedAreas, ...customAreas])]) : [];
+    const toggleCustomArea = (k) => setEditing((ed) => { const cur = ed.customQualityAreas || []; return { ...ed, customQualityAreas: cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k] }; });
 
     return (
       <div className="grid" style={{ gap: 14 }}>
@@ -407,7 +486,7 @@
         {view === 'access' && (
           list === null ? <Card><div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div></Card>
             : <AccessMatrix persons={list} areas={areas} areaInds={areaInds} onChanged={load}
-                onEditPerson={(r) => { setView('people'); setEditing({ ...blank(), ...r }); }} />
+                onEditPerson={(r) => { setView('people'); openEdit(r); }} />
         )}
 
         {view === 'people' && editing && (
@@ -451,7 +530,7 @@
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
                   {areas.map((a) => {
                     const auto = derivedAreas.includes(a.key);
-                    const on = auto || (editing.qualityAreas || []).includes(a.key);
+                    const on = auto || customAreas.includes(a.key);
                     return <span key={a.key} onClick={() => { if (!auto) toggleCustomArea(a.key); }}
                       title={auto ? 'From an assigned department' : 'Custom extra access'}
                       style={{ cursor: auto ? 'default' : 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)', opacity: auto ? 0.85 : 1 }}>
@@ -505,14 +584,14 @@
               : <table className="tbl" style={{ width: '100%' }}>
                 <thead><tr><th>Name</th><th>Title</th><th>Login</th><th>Departments</th><th>Quality areas</th><th></th></tr></thead>
                 <tbody>{list.map((r) => (
-                  <tr key={r.id} onClick={() => setEditing({ ...blank(), ...r })} title="Tap to edit" style={{ cursor: 'pointer' }}>
+                  <tr key={r.id} onClick={() => openEdit(r)} title="Tap to edit" style={{ cursor: 'pointer' }}>
                     <td style={{ fontWeight: 600 }}>{r.name}</td>
                     <td>{r.title || '—'}</td>
                     <td>{r.empId ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--blue-700)' }} title="Has a login account">🔑 {r.empId}</span> : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
                     <td>{(r.departments || []).map(deptName).join(', ') || '—'}</td>
                     <td>{r.allQualityAreas ? 'All areas (hospital-wide)' : ((r.qualityAreas || []).map((k) => window.DEPTMAP ? window.DEPTMAP.nameFromQualityKey(k) : k).join(', ') || '—')}</td>
                     <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <button className="icon-btn" title="Edit" onClick={() => setEditing({ ...blank(), ...r })}><Ic d={I.edit} s={14} /></button>
+                      <button className="icon-btn" title="Edit" onClick={() => openEdit(r)}><Ic d={I.edit} s={14} /></button>
                       <button className="icon-btn" title="Remove" style={{ color: 'var(--rose)' }} onClick={() => remove(r.id)}><Ic d={I.x} s={14} /></button>
                     </td>
                   </tr>
@@ -564,12 +643,18 @@
    survive a closed tab, and it must never be visible to an administrator or count as
    a submission. Keyed by user + department + month so two wards, or two months of the
    same ward, cannot overwrite each other. */
-  const DC_DRAFT_KEY = (who, dept, month) => 'unico_dc_draft_v1|' + (who || 'local') + '|' + dept + '|' + month;
+  // A '.' in a key (usernames like nasif.ahammed) cannot be a Mongo field path, and one such
+  // key made every later save of the shared app state a whole-document overwrite. Drafts are
+  // device-only anyway (never synced), but encode the segments so the key is always safe.
+  const dcKeyPart = (s) => encodeURIComponent(String(s == null ? '' : s)).replace(/\./g, '%2E');
+  const DC_DRAFT_KEY = (who, dept, month) => 'unico_dc_draft_v1|' + dcKeyPart(who || 'local') + '|' + dcKeyPart(dept) + '|' + dcKeyPart(month);
   const dcDraftLoad = (k) => { try { const raw = localStorage.getItem(k); return raw ? JSON.parse(raw) : null; } catch (e) { return null; } };
   const dcDraftSave = (k, v) => { try { localStorage.setItem(k, JSON.stringify({ values: v, at: Date.now() })); return true; } catch (e) { return false; } };
   const dcDraftClear = (k) => { try { localStorage.removeItem(k); } catch (e) { } };
 
-  function DataPatientForm({ depts, prefill }) {
+  // onSubmitted(result) — optional; called right after a successful submission (the
+  // Missing data pop-up closes and recounts on it).
+  function DataPatientForm({ depts, prefill, onSubmitted }) {
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
     const lockResp = !!(me && me.role === 'collector');
     const isAdmin = !lockResp; // admins (and open local mode) may manage custom fields
@@ -591,10 +676,12 @@
     const [done, setDone] = useState(null);
     const [resps, setResps] = useState([]);
     const [subs, setSubs] = useState([]);
+    // History failed to load → the "month already pending" block below can't be trusted.
+    const [subsErr, setSubsErr] = useState(false);
     const [draftAt, setDraftAt] = useState(null);   // when the current draft was last saved
 
     useEffect(() => { dcApi.get('/api/responsibles').then((r) => setResps(r.ok ? r.responsibles : [])).catch(() => {}); }, []);
-    useEffect(() => { dcSubmissionResponse().then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {}); }, [done]);
+    useEffect(() => { dcSubmissionResponse().then((r) => { setSubs(r.ok ? r.submissions : []); setSubsErr(!r.ok); }).catch(() => setSubsErr(true)); }, [done]);
     const canReportDept = (r, id) => {
       if (!r || !id) return false;
       if ((r.departments || []).includes(id)) return true;
@@ -621,7 +708,15 @@
       if (!draftKey) { setDraftAt(null); return; }
       const d = dcDraftLoad(draftKey);
       if (d && d.values && Object.keys(d.values).length) { setValues(d.values); setDraftAt(d.at || null); }
-      else setDraftAt(null);
+      else {
+        setDraftAt(null);
+        // "Fix & resubmit": no draft → start from the figures that were rejected, not blank.
+        const fr = prefill && prefill.from;
+        if (fr && fr.values && dept && fr.department === dept.id && fr.month === month) {
+          setValues(Object.fromEntries(Object.keys(fr.values).map((k) => [k, fr.values[k] == null ? '' : String(fr.values[k])])));
+          setNote(fr.note || '');
+        }
+      }
     }, [draftKey]);
 
     const assigned = resps.filter((r) => dept && canReportDept(r, dept.id));
@@ -650,6 +745,7 @@
     const submit = () => {
       if (!dept) return;
       if (!month) { toast('Pick a month', 'error'); return; }
+      if (subsErr) { toast('Could not check what is already submitted for this month — check your connection and try again.', 'error'); dcSubmissionResponse(null, true).then((r) => { setSubs(r.ok ? r.submissions : []); setSubsErr(!r.ok); }).catch(() => {}); return; }
       if (monthPending) { toast('A submission for this month is already pending review.', 'error'); return; }
       if (pCorrection && !reason.trim()) { toast('Please add a reason for the correction.', 'error'); return; }
       const matched = resps.find((r) => r.name === responsible);
@@ -661,7 +757,7 @@
         isCorrection: pCorrection, correctionReason: pCorrection ? reason.trim() : '',
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ month, dept: dept.name, correction: pCorrection }); setFlash({ ts: Date.now(), title: pCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: dept.name + ' · ' + monthLabel(month) }); setValues({}); setNote(''); setReason(''); if (draftKey) { dcDraftClear(draftKey); setDraftAt(null); } toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success'); }
+        if (r.ok) { setDone({ month, dept: dept.name, correction: pCorrection }); setFlash({ ts: Date.now(), title: pCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: dept.name + ' · ' + monthLabel(month) }); setValues({}); setNote(''); setReason(''); if (draftKey) { dcDraftClear(draftKey); setDraftAt(null); } toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
         else toast(r.error || 'Submission failed', 'error');
       }).catch((e) => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -797,7 +893,7 @@
   }
   const dcMeets = (b, v) => (!b || v == null) ? null : (b.lowerIsBetter ? v <= b.value : v >= b.value);
 
-  function DataQualityForm({ prefill }) {
+  function DataQualityForm({ prefill, onSubmitted }) {
     const dataRev = useDcDataRev();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
@@ -953,7 +1049,7 @@
     const autoCount = isIncidentType;
 
     const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n
-      : autoCount ? incidents.length : (Number(directNum) || 0);
+      : autoCount ? incidents.filter(dcIncidentFilled).length : (Number(directNum) || 0);
     // Every indicator can take a denominator: rate indicators REQUIRE it; counts may
     // OPTIONALLY add one to compute a rate. In "By group" / "By department" modes the total
     // denominator is the sum of the group/matrix cells; "Direct value" uses the single field.
@@ -973,6 +1069,7 @@
 
     // Prefill the numerator (group breakdown or direct) + denominator from existing
     // data on month / indicator change.
+    const fromAppliedRef = React.useRef('');   // id of the rejected row already refilled
     useEffect(() => {
       const blankG = { nurse: '', doctor: '', pca: '', other: '' };
       setRemark(''); setQReason('');
@@ -1024,7 +1121,26 @@
       setCapa(cp && typeof cp === 'object' ? { finding: cp.finding || '', corrective: cp.corrective || '', preventive: cp.preventive || '' } : { finding: '', corrective: '', preventive: '' });
       // Load any incident reports already recorded for this indicator × month.
       const incs = (curInd.incidents && Array.isArray(curInd.incidents[month])) ? curInd.incidents[month] : [];
-      setIncidents(incs.map((x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', incidentDate: x.incidentDate || '', admissionDate: x.admissionDate || '', victimName: x.victimName || '', victimId: x.victimId || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' })));
+      const toInc = (x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', incidentDate: x.incidentDate || '', admissionDate: x.admissionDate || '', victimName: x.victimName || '', victimId: x.victimId || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' });
+      setIncidents(incs.map(toInc));
+      // "Fix & resubmit": overlay the REJECTED submission's own figures on top — the live record
+      // never held them, so the form used to open blank. Applied once per rejected row, so
+      // switching month/indicator afterwards behaves normally.
+      const fr = prefill && prefill.from;
+      if (fr && fr.id && fromAppliedRef.current !== fr.id && fr.area === areaKey && fr.indicatorId === indId && fr.month === month) {
+        fromAppliedRef.current = fr.id;
+        const str = (v) => (v == null ? '' : String(v));
+        setNotObserved(!!fr.notObserved);
+        if (fr.notObserved) { setNoReason(String(fr.remark || '').replace(/^not\s*observed\s*[—–:-]*\s*/i, '').trim()); setRemark(''); }
+        else setRemark(fr.remark || '');
+        const rateEntry = fr.entryMode === 'rate' || fr.num != null;
+        if (Array.isArray(fr.deptBreakdown) && fr.deptBreakdown.length) { setDeptRows(fr.deptBreakdown.map(toRow)); setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('dept'); }
+        else if (fr.groups && typeof fr.groups === 'object') { setDeptRows([]); setGroups(toG(fr.groups)); setGroupsDen(fr.groupsDen && typeof fr.groupsDen === 'object' ? toG(fr.groupsDen) : blankG); setDirectNum(''); setNumMode('group'); }
+        else if (!fr.notObserved) { setDeptRows([]); setGroups(blankG); setGroupsDen(blankG); setDirectNum(str(rateEntry ? fr.num : fr.value)); setNumMode('direct'); }
+        if (!denLockedForCollector && !fr.notObserved) setDen(str(fr.den));
+        if (Array.isArray(fr.incidents)) setIncidents(fr.incidents.map(toInc));
+        if (fr.capa && typeof fr.capa === 'object') setCapa({ finding: fr.capa.finding || '', corrective: fr.capa.corrective || '', preventive: fr.capa.preventive || '' });
+      }
     }, [areaKey, indId, month]); // eslint-disable-line
 
     // The numerator (by group or direct) drives the count / rate.
@@ -1052,6 +1168,9 @@
       if (!month) { toast('Pick a month', 'error'); return; }
       if (qCorrection && !qReason.trim()) { toast('Please add a reason for the correction.', 'error'); return; }
       if (notObserved && !noReason.trim()) { toast('Please say WHY it was not observed this month.', 'error'); return; }
+      // A forgotten numerator is not a measured zero: `Number('') || 0` sent a 0% breach as
+      // genuine data — exactly what "Not observed" exists to prevent. A typed 0 stays valid.
+      if (!notObserved && numMode === 'direct' && !autoCount && String(directNum == null ? '' : directNum).trim() === '') { toast('Enter ' + numLabel + ' — type 0 if there were none this month', 'error'); return; }
       if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
         // Zero-exposure month (e.g. "no surgical discharges"): 0 events over an EXPLICIT 0
         // denominator is a legitimate report — only refuse when events exist without a base,
@@ -1085,7 +1204,7 @@
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: qCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); }
+        if (r.ok) { setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: qCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
         else toast(r.error || 'Submission failed', 'error');
       }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -1518,8 +1637,7 @@
   // Full submission viewer. Admins can correct a PENDING submission's values
   // (PATCH /api/submissions/:id) before approving; collectors see it read-only.
   function SubmissionDetail({ s, canEdit, fullEdit = true, onClose, onSaved }) {
-    const meUser = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
-    const iOwn = [meUser.name, meUser.username].filter(Boolean).some((n) => n === s.submittedBy || (s.responsible && s.responsible.name === n));
+    const iOwn = dcIsMine(s);
     // A collector may REQUEST an edit (correction) on their OWN already-recorded submission.
     const canRequestEdit = !fullEdit && iOwn && s.status !== 'pending' && !s.isCorrection;
     const [correcting, setCorrecting] = useState(false);
@@ -1555,7 +1673,11 @@
     const grpTot = hasGrp ? GROUPS.reduce((acc, [k]) => { acc.n += Number(grp[k].n) || 0; acc.d += Number(grp[k].d) || 0; return acc; }, { n: 0, d: 0 }) : null;
     const effNum = hasDeptBreak ? breakTot.n : (hasGrp ? grpTot.n : qnum);
     const effDen = hasDeptBreak ? breakTot.d : (hasGrp ? grpTot.d : qden);
-    const shownVal = isRate ? (Number(effDen) > 0 ? Math.round((Number(effNum) / Number(effDen)) * rateMult * 100) / 100 : 0) : qval;
+    // No denominator on the submission (e.g. NSI cases against the admin-owned headcount): the
+    // rate is computed at approve from the stored headcount, so it is unknown here — never 0.
+    // No numerator either ("Not observed", or a share-link that sent a finished value): there
+    // is nothing to compute, and sending a 0 turned the record into a real zero reading.
+    const shownVal = isRate ? ((effNum === '' || effNum == null) ? '—' : Number(effDen) > 0 ? Math.round((Number(effNum) / Number(effDen)) * rateMult * 100) / 100 : (Number(effNum) > 0 ? '—' : 0)) : qval;
     const [remark, setRemark] = useState(s.remark || '');
     const [note, setNote] = useState(s.note || '');
     const [busy, setBusy] = useState(false);
@@ -1582,7 +1704,7 @@
       const body = { note, month };
       if (s.type === 'patient') { body.values = vals; if (target && target !== s.department) { body.department = target; body.departmentName = (deptOpts.find((d) => d.id === target) || {}).name || target; } }
       else {
-        body.value = isRate ? shownVal : qval; body.remark = remark;
+        body.value = isRate ? (typeof shownVal === 'number' ? shownVal : undefined) : qval; body.remark = remark;
         if (isRate) { body.num = effNum; body.den = effDen; }        // totals derive from the breakdown
         if (hasDeptBreak) body.deptBreakdown = deptBreak;
         if (hasGrp) { body.groups = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {}); body.groupsDen = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {}); }
@@ -1612,7 +1734,8 @@
       const finish = (r) => { setBusy(false); if (r && r.ok) { const ar = r.autoRejected || 0; toast('Approved & applied to live data' + (ar ? ' · ' + ar + ' duplicate' + (ar !== 1 ? 's' : '') + ' auto-rejected' : ''), 'success'); dcRefreshLive(); onSaved && onSaved(r.submission || r); } else toast((r && r.error) || 'Could not approve', 'error'); };
       const fail = () => { setBusy(false); toast('Could not approve', 'error'); };
       const doApprove = () => dcApi.post(url + '/approve', {}).then(finish).catch(fail);
-      if (editable && !correcting) dcApi.patch(url, buildBody()).then(doApprove).catch(fail); else doApprove();
+      // A refused save must STOP the approve — otherwise the old, unedited values go live.
+      if (editable && !correcting) dcApi.patch(url, buildBody()).then((r) => { if (r && r.ok) return doApprove(); setBusy(false); toast((r && r.error) || 'Could not save your edits — nothing was approved', 'error'); }).catch(fail); else doApprove();
     };
     // Collector edit request -> create a NEW pending correction (never touches live data directly).
     const submitCorrection = () => {
@@ -1840,13 +1963,13 @@
                 <div style={{ fontSize: 11, color: 'var(--muted)' }}>Your edit request goes to an administrator for review — the recorded value won’t change until it’s approved.</div>
               </div>
             )}
-            {editable && !correcting && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{s.status === 'approved' ? 'This submission is approved — saving re-applies your changes to the live dashboard immediately.' : s.status === 'rejected' ? 'This submission was rejected — saving updates the record; approve it to re-apply to live data.' : fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'}</div>}
+            {editable && !correcting && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{s.status === 'approved' ? 'This submission is approved — saving re-applies your changes to the live dashboard immediately.' : s.status === 'rejected' ? 'This submission was rejected — saving updates the record only. It cannot be approved again; the collector sends a new submission instead.' : fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'}</div>}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', position: 'sticky', bottom: 0, background: 'var(--panel)', paddingTop: 8, marginTop: 2, borderTop: '1px solid var(--line-2)' }}>
               <button className="btn sm" onClick={onClose}>Close</button>
               {canRequestEdit && !correcting && <button className="btn sm" onClick={() => setCorrecting(true)}><Ic d={I.edit} s={14} />Request an edit</button>}
               {correcting && <button className="btn pri sm" onClick={submitCorrection} disabled={busy}><Ic d={I.check} s={14} />{busy ? 'Sending…' : 'Submit edit request'}</button>}
               {editable && !correcting && <button className="btn pri sm" onClick={save} disabled={busy}><Ic d={I.check} s={14} />{busy ? 'Saving…' : 'Save changes'}</button>}
-              {canEdit && fullEdit && !correcting && s.status !== 'approved' && <button className="btn sm" onClick={approveNow} disabled={busy} style={{ background: 'var(--pos)', borderColor: 'var(--pos)', color: '#fff' }}><Ic d={I.check} s={14} />{busy ? 'Approving…' : 'Approve'}</button>}
+              {canEdit && fullEdit && !correcting && s.status === 'pending' && <button className="btn sm" onClick={approveNow} disabled={busy} style={{ background: 'var(--pos)', borderColor: 'var(--pos)', color: '#fff' }}><Ic d={I.check} s={14} />{busy ? 'Approving…' : 'Approve'}</button>}
               {canEdit && fullEdit && !correcting && s.status === 'approved' && <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--pos)', alignSelf: 'center' }}>✓ Approved — edits re-apply live on save</span>}
             </div>
           </div>
@@ -1891,6 +2014,7 @@
     const [showQ, setShowQ] = useState(false);
     const load = () => dcAllSubmissions().then((s) => setSubs(s)).catch(() => setSubs([]));
     useEffect(() => { load(); const h = () => load(); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
+    useDcCollectionRev();   // recount when Department Setup changes
     const depts = React.useMemo(() => dcAllDepts(), []);
     const areas = React.useMemo(() => (window.qualityData ? window.qualityData() : []), []);
     const MO = (window.UNICO && window.UNICO.MONTH_ORDER) || [];
@@ -1905,18 +2029,22 @@
     // Only count departments that actually collect PATIENT statistics — have data on record
     // OR have ever submitted patient data. Excludes quality-only units (e.g. Radiology) that
     // never report a patient census, so they're not wrongly flagged as "missing".
-    const everPatient = new Set((subs || []).filter((s) => s.type === 'patient').map((s) => s.department));
-    const patientDepts = depts.filter((d) => (d.series || []).length > 0 || everPatient.has(d.id));
+    // …and only for months it OWES: not before its start month (Department Setup / first data).
+    const patientDepts = dcPatientDepts(depts, subs).filter((d) => dcPatientDue(d, m, subs));
     // A dept/area is COVERED for the month if it was submitted this month OR already has data
     // on record for it (some data is entered directly, not through the submission flow).
     const hasRec = (d) => (d.series || []).some((r) => r.month === m && Object.keys(r).some((k) => k !== 'month' && k !== 'full' && r[k] != null && r[k] !== ''));
-    const qHasRec = (a) => (a.indicators || []).some((ind) => (ind.months && ind.months[m] != null && ind.months[m] !== '') || (ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''));
-    const pSub = new Set(subsM.filter((s) => s.type === 'patient').map((s) => s.department));
-    const qSub = new Set(subsM.filter((s) => s.type === 'quality').map((s) => s.area));
+    // An area owes the month only through indicators that are measured and already started.
+    const dueInds = (a) => (a.indicators || []).filter((ind) => dcIndDue(a, ind, m, subs));
+    const qAreas = areas.filter((a) => dueInds(a).length > 0);
+    const qHasRec = (a) => dueInds(a).some((ind) => (ind.months && ind.months[m] != null && ind.months[m] !== '') || (ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''));
+    // A rejected submission delivered nothing — it must not mark the unit covered.
+    const pSub = new Set(subsM.filter((s) => s.type === 'patient' && s.status !== 'rejected').map((s) => s.department));
+    const qSub = new Set(subsM.filter((s) => s.type === 'quality' && s.status !== 'rejected').map((s) => s.area));
     const pMissing = patientDepts.filter((d) => !pSub.has(d.id) && !hasRec(d));
-    const qMissing = areas.filter((a) => !qSub.has(a.key) && !qHasRec(a));
+    const qMissing = qAreas.filter((a) => !qSub.has(a.key) && !qHasRec(a));
     const pPct = patientDepts.length ? Math.round((patientDepts.length - pMissing.length) / patientDepts.length * 100) : 0;
-    const qPct = areas.length ? Math.round((areas.length - qMissing.length) / areas.length * 100) : 0;
+    const qPct = qAreas.length ? Math.round((qAreas.length - qMissing.length) / qAreas.length * 100) : 0;
     const gapN = pMissing.length + qMissing.length;
     const copyGaps = () => {
       const txt = 'Not yet submitted — ' + monthLabel(m) + '\n\nPatient statistics (' + pMissing.length + '):\n' + (pMissing.length ? pMissing.map((d) => '• ' + d.name).join('\n') : '(all submitted)') + '\n\nQuality indicators (' + qMissing.length + '):\n' + (qMissing.length ? qMissing.map((a) => '• ' + a.name).join('\n') : '(all submitted)');
@@ -1946,7 +2074,7 @@
         <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap' }}>
           {[
             { label: 'Patient statistics', done: patientDepts.length - pMissing.length, total: patientDepts.length, pct: pPct, color: 'linear-gradient(90deg,#1f9d57,#3ab5a7)', missing: pMissing, keyOf: (x) => x.id, chipBg: 'var(--pos-bg)', chipFg: 'var(--pos)', show: showP, setShow: setShowP },
-            { label: 'Quality indicators', done: areas.length - qMissing.length, total: areas.length, pct: qPct, color: 'linear-gradient(90deg,#0090ca,#27a8db)', missing: qMissing, keyOf: (x) => x.key, chipBg: 'var(--blue-50)', chipFg: 'var(--blue-700,#0b6aa2)', show: showQ, setShow: setShowQ },
+            { label: 'Quality indicators', done: qAreas.length - qMissing.length, total: qAreas.length, pct: qPct, color: 'linear-gradient(90deg,#0090ca,#27a8db)', missing: qMissing, keyOf: (x) => x.key, chipBg: 'var(--blue-50)', chipFg: 'var(--blue-700,#0b6aa2)', show: showQ, setShow: setShowQ },
           ].map((c, ci) => (
             <div key={ci} style={{ flex: '1 1 280px', minWidth: 0 }}>
               <Bar label={c.label} done={c.done} total={c.total} pct={c.pct} color={c.color} />
@@ -2078,10 +2206,23 @@
     const runAction = async (ids, kind, reason) => {
       if (!ids || !ids.length) return;
       setBusy('bulk');
-      let ok = 0, autoRej = 0; const doneIds = [];
-      for (const id of ids) {
-        try { const r = await dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? { reason: reason || '' } : {}); if (r && r.ok) { ok++; doneIds.push(id); autoRej += (r.autoRejected || 0); } } catch (e) { }
+      // NEWEST first: approving the newest row auto-rejects its older duplicates, which then
+      // come back as "superseded" skips — so the latest figures are the ones that go live.
+      // (In table order, an older copy approved first used to push the stale data live.)
+      const byId = {}; (rows || []).forEach((s) => { byId[s.id] = s; });
+      const order = ids.slice().sort((a, b) => ((byId[b] && byId[b].submittedAt) || 0) - ((byId[a] && byId[a].submittedAt) || 0));
+      let ok = 0, autoRej = 0, skipped = 0, firstErr = ''; const doneIds = [];
+      for (const id of order) {
+        // Raw fetch, not dcApi.post: that fires 'unico:data-refreshed' per item, and every
+        // listener reloaded the whole submission history once per approval in a bulk run.
+        try {
+          const r = await fetch('/api/submissions/' + encodeURIComponent(id) + '/' + kind, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(kind === 'reject' ? { reason: reason || '' } : {}) }).then((x) => x.json());
+          if (r && r.ok) { ok++; doneIds.push(id); autoRej += (r.autoRejected || 0); }
+          else if (r && r.superseded) { skipped++; doneIds.push(id); }
+          else if (!firstErr) firstErr = (r && r.error) || 'Request failed';
+        } catch (e) { if (!firstErr) firstErr = 'Network error'; }
       }
+      _dcAllCache = null; window.dispatchEvent(new Event('unico:data-refreshed'));
       setBusy(''); setSel({}); setRejectFor(null);
       // Keep the duplicate-compare dialog in step. dupGroup is a SNAPSHOT taken when the ⚠
       // badge was clicked and nothing here refreshed it, so a submission REJECTED from inside
@@ -2094,7 +2235,10 @@
         const next = cur.filter((x) => doneIds.indexOf(x.id) < 0);
         return next.length > 1 ? next : null;
       });
-      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
+      // Say WHY items failed (e.g. "Administrator access required.") — a bare "(3 failed)" left
+      // console users with Data Collection access guessing why nothing happened.
+      const failed = ids.length - ok - skipped;
+      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (skipped ? ' · ' + skipped + ' skipped (a newer copy was approved)' : '') + (failed ? ' · ' + failed + ' failed: ' + firstErr : ''), failed ? 'error' : (kind === 'approve' ? 'success' : 'info'));
       if (kind === 'approve' && ok) dcRefreshLive();
       load();
     };
@@ -2109,7 +2253,9 @@
     // Filter option lists derived from the fetched rows.
     const respOf = (s) => (s.responsible && s.responsible.name) || s.submittedBy || '';
     const deptOptions = [...new Set((rows || []).map(groupKey))].sort();
-    const monthOptions = [...new Set((rows || []).map((s) => s.month).filter(Boolean))].sort().reverse();
+    // Newest period first by DATE — a plain string sort put "Sep-26" above "Oct-26" and "Aug-26" above "Jan-27".
+    const monthRankOf = (m) => { const p = String(m).split('-'); return (parseInt(p[1], 10) || 0) * 12 + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(p[0]); };
+    const monthOptions = [...new Set((rows || []).map((s) => s.month).filter(Boolean))].sort((a, b) => monthRankOf(b) - monthRankOf(a));
     const respOptions = [...new Set((rows || []).map(respOf).filter(Boolean))].sort();
     const matchesFilter = (s) => {
       if (fType && s.type !== fType) return false;
@@ -2169,8 +2315,8 @@
           <button className="btn sm" onClick={() => setDetail(s)} style={{ marginRight: 5 }}><Ic d={I.search} s={13} />View</button>
           {s.status === 'pending' && (
             <>
-              <button className="btn sm pri" disabled={busy === s.id} onClick={() => act(s.id, 'approve')} style={{ marginRight: 5 }}><Ic d={I.check} s={13} />Approve</button>
-              <button className="btn sm" disabled={busy === s.id} onClick={() => act(s.id, 'reject')}>Reject</button>
+              <button className="btn sm pri" disabled={busy === s.id || busy === 'bulk'} onClick={() => act(s.id, 'approve')} style={{ marginRight: 5 }}><Ic d={I.check} s={13} />Approve</button>
+              <button className="btn sm" disabled={busy === s.id || busy === 'bulk'} onClick={() => act(s.id, 'reject')}>Reject</button>
             </>
           )}
           {s.status !== 'pending' && s.reviewedBy && <span style={{ fontSize: 11, color: 'var(--muted)' }}>{s.reviewedBy}</span>}
@@ -2262,7 +2408,7 @@
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           {rows === null ? <div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div>
             : rows.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No {filter === 'all' ? '' : filter} submissions.</div>
-              : filtered.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No submissions match the filters. <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => { setFq(''); setFType(''); setFDept(''); setFMonth(''); }}>Clear filters</button></div>
+              : filtered.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No submissions match the filters. <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => { setFq(''); setFType(''); setFDept(''); setFMonth(''); setFResp(''); }}>Clear filters</button></div>
               : <table className="tbl" style={{ width: '100%' }}>
                 <thead><tr><th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={(e) => { if (e.target.checked) { const m = {}; pendingRows.forEach((s) => { m[s.id] = true; }); setSel(m); } else setSel({}); }} /></th><th onClick={() => setSort('when')} style={{ cursor: 'pointer', userSelect: 'none' }}>When{sortCaret('when')}</th><th onClick={() => setSort('type')} style={{ cursor: 'pointer', userSelect: 'none' }}>Type{sortCaret('type')}</th><th onClick={() => setSort('target')} style={{ cursor: 'pointer', userSelect: 'none' }}>Target{sortCaret('target')}</th><th>Data</th><th>Responsible / By</th><th onClick={() => setSort('status')} style={{ cursor: 'pointer', userSelect: 'none' }}>Status{sortCaret('status')}</th><th></th></tr></thead>
                 <tbody>
@@ -2435,11 +2581,18 @@
       out.push({ id: 'rec-p-' + d.id + '-' + r.month, type: 'patient', department: d.id, departmentName: d.name, month: r.month, values, status: 'reported', submittedAt: null });
     }));
     const liveAreas = (window.qualityData ? window.qualityData() : []);
-    liveAreas.forEach((a) => (a.indicators || []).forEach((ind) => ['Q1', 'Q2', 'Q3', 'Q4'].forEach((q) => {
-      const v = ind.quarters && ind.quarters[q];
-      if (v == null || v === '') return;
-      out.push({ id: 'rec-q-' + a.key + '-' + ind.id + '-' + q, type: 'quality', area: a.key, areaName: a.name, indicatorId: ind.id, indicatorName: ind.name, quarter: q, value: v, remark: (ind.quarterRemarks && ind.quarterRemarks[q]) || '', status: 'reported', submittedAt: null });
-    })));
+    // One row per indicator × MONTH with data. The old rows read the legacy fixed-FY
+    // `ind.quarters` (Jun-25…May-26, no year), so nothing from Jun-26 on ever appeared.
+    const has = (o, m) => !!o && o[m] != null && o[m] !== '';
+    liveAreas.forEach((a) => (a.indicators || []).forEach((ind) => {
+      const ms = new Set([].concat(Object.keys(ind.months || {}), Object.keys(ind.mNum || {}), Object.keys(ind.mNotObserved || {}), Object.keys(ind.incidents || {})));
+      ms.forEach((m) => {
+        const notObserved = !!(ind.mNotObserved && ind.mNotObserved[m]);
+        const incs = ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
+        if (!has(ind.months, m) && !has(ind.mNum, m) && !notObserved && !incs) return;
+        out.push({ id: 'rec-q-' + a.key + '-' + ind.id + '-' + m, type: 'quality', area: a.key, areaName: a.name, indicatorId: ind.id, indicatorName: ind.name, month: m, value: has(ind.months, m) ? ind.months[m] : (has(ind.mNum, m) ? ind.mNum[m] : undefined), notObserved, remark: (ind.monthRemarks && ind.monthRemarks[m]) || '', status: 'reported', submittedAt: null });
+      });
+    }));
     return out;
   }
   /* My submissions.
@@ -2453,9 +2606,8 @@
     const [view, setView] = useState('patient');
     const [status, setStatus] = useState('All');   // All | Pending | Approved | Rejected
     const [mode, setMode] = useState('table');     // Table | Timeline
-    const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
     // A collector may edit only their OWN still-PENDING submission (values only).
-    const ownsSub = (s) => !!s && s.status === 'pending' && [me.name, me.username].filter(Boolean).some((n) => n === s.submittedBy || (s.responsible && s.responsible.name === n));
+    const ownsSub = (s) => !!s && s.status === 'pending' && dcIsMine(s);
     // limit=500 is the SAME window CollectorProfile reads. Both screens quote an
     // accuracy percentage; computing them over different-sized pages would let the
     // two disagree for a collector with more than 300 submissions.
@@ -2488,10 +2640,11 @@
       return <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: m[1], color: m[2] }}>{m[0]}</span>;
     };
     // Merge the collector's submissions with existing on-record data, de-duped by
-    // department+month (patient) / area+indicator+quarter (quality) — a submission
-    // supersedes the matching record row.
-    const keyOf = (s) => s.type === 'quality' ? ('q|' + s.area + '|' + (s.indicatorId || s.indicatorName) + '|' + s.quarter) : ('p|' + s.department + '|' + s.month);
-    const subs = (rows || []).map((s) => (s.type === 'quality' && !s.quarter) ? Object.assign({}, s, { quarter: dcFiscalQuarter(s.month) }) : s);
+    // department+month (patient) / area+indicator+MONTH (quality) — a submission
+    // supersedes the matching record row. (Keying quality on a year-less fiscal quarter let a
+    // Jul-26 submission hide the Jun–Aug-2025 record.)
+    const keyOf = (s) => s.type === 'quality' ? ('q|' + s.area + '|' + (s.indicatorId || s.indicatorName) + '|' + s.month) : ('p|' + s.department + '|' + s.month);
+    const subs = (rows || []).filter(dcIsMine);
     const subKeys = new Set(subs.map(keyOf));
     const merged = subs.concat(reportedRecords().filter((r) => !subKeys.has(keyOf(r))))
       .sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
@@ -2514,7 +2667,8 @@
        The mockup's third card, a "Unit accuracy ranking" of other wards, is left out
        on purpose: a portal account is scoped to its own data, no endpoint returns
        other units' scores, and inventing one would be a privacy decision. */
-    const decided = subs.filter((x) => x.status === 'approved' || x.status === 'rejected');
+    // An auto-rejected duplicate is not a wrong figure — excluded, as in admin Analytics.
+    const decided = subs.filter((x) => x.status === 'approved' || (x.status === 'rejected' && !x.autoRejected));
     const accPct = decided.length ? Math.round(subs.filter((x) => x.status === 'approved').length * 100 / decided.length) : null;
     const ACC_C = 144.5;                              // 2πr for the r=23 donut
     // "This cycle" = the reporting month the portal is currently on. Scoping it to a
@@ -2537,9 +2691,13 @@
        The status filter narrows whichever type tab is open; it does not replace it.
        "All" counts every row in the tab, including on-record rows that were never
        submitted, so All != Pending + Approved + Rejected by design. */
+    // "Rejected" = still waiting on a fix (same rule as the dashboard's "Needs correction"):
+    // a rejection already resubmitted, or an auto-rejected duplicate, is not open.
+    const openRej = new Set(dcOpenRejections(rows).map((x) => x.id));
     const FILTERS = ['All', 'Pending', 'Approved', 'Rejected'];
-    const countFor = (f) => f === 'All' ? shown.length : shown.filter((s) => s.status === f.toLowerCase()).length;
-    const listed = status === 'All' ? shown : shown.filter((s) => s.status === status.toLowerCase());
+    const inFilter = (s, f) => f === 'All' || (f === 'Rejected' ? openRej.has(s.id) : s.status === f.toLowerCase());
+    const countFor = (f) => shown.filter((s) => inFilter(s, f)).length;
+    const listed = shown.filter((s) => inFilter(s, status));
     const cpTab = (on) => ({ border: 0, background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent', color: on ? '#fff' : '#6c7a8c', padding: '6px 13px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all .2s', boxShadow: on ? '0 4px 12px rgba(0,144,202,.35)' : 'none' });
     const segWrap = { display: 'inline-flex', background: 'rgba(255,255,255,.5)', border: '1px solid rgba(255,255,255,.85)', borderRadius: 10, padding: 3, gap: 2 };
     const cntStyle = (on) => ({ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, background: on ? 'rgba(255,255,255,.22)' : 'rgba(125,145,180,.18)', padding: '1px 6px', borderRadius: 8 });
@@ -2549,10 +2707,14 @@
        no way back to the form. Quality rows re-enter through the very same jump
        CollectorDash's "Fill now" uses; patient rows through its twin. Returns null
        (button hidden) when the row lacks the ids the form needs in order to prefill. */
+    // The rejected row itself is passed on so the form refills the figures that were sent.
+    // No button once a NEWER non-rejected row exists for the same target+month (already fixed).
     const fixFor = (s) => {
       if (!s || s.status !== 'rejected') return null;
-      if (s.type === 'quality') return (onFixQuality && s.area && s.indicatorId && s.month) ? () => onFixQuality(s.area, s.indicatorId, s.month) : null;
-      return (onFixPatient && s.department && s.month) ? () => onFixPatient(s.department, s.month) : null;
+      const k = dcTargetKey(s);
+      if ((rows || []).some((x) => x.status !== 'rejected' && (x.submittedAt || 0) > (s.submittedAt || 0) && dcTargetKey(x) === k)) return null;
+      if (s.type === 'quality') return (onFixQuality && s.area && s.indicatorId && s.month) ? () => onFixQuality(s.area, s.indicatorId, s.month, s) : null;
+      return (onFixPatient && s.department && s.month) ? () => onFixPatient(s.department, s.month, s) : null;
     };
     const FIX_BTN = { border: '1px solid rgba(210,58,82,.35)', background: 'rgba(255,255,255,.7)', color: '#a92c42', padding: '4px 10px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' };
     const FixBtn = ({ s }) => { const go = fixFor(s); return go ? <button style={FIX_BTN} onClick={(e) => { e.stopPropagation(); go(); }}>Fix &amp; resubmit</button> : null; };
@@ -2686,14 +2848,14 @@
                 </div>
                 : <React.Fragment>
                   <div style={{ overflowX: 'auto' }}><table className="tbl" style={{ width: '100%' }}>
-                    <thead><tr><th>Submitted on</th>{isEdits ? <React.Fragment><th>Department</th><th>For</th><th>Reason</th></React.Fragment> : (isQ ? <React.Fragment><th>Area</th><th>Indicator</th><th>Quarter</th></React.Fragment> : <React.Fragment><th>Department</th><th>Month</th></React.Fragment>)}<th>Status</th><th></th></tr></thead>
+                    <thead><tr><th>Submitted on</th>{isEdits ? <React.Fragment><th>Department</th><th>For</th><th>Reason</th></React.Fragment> : (isQ ? <React.Fragment><th>Area</th><th>Indicator</th><th>Month</th></React.Fragment> : <React.Fragment><th>Department</th><th>Month</th></React.Fragment>)}<th>Status</th><th></th></tr></thead>
                     <tbody>{listed.map((s) => (
                       <tr key={s.id} onClick={() => setDetail(s)} title="Tap to view" style={{ cursor: 'pointer' }}>
                         <td className="num" style={{ whiteSpace: 'nowrap' }}>{when(s.submittedAt)}</td>
                         {isEdits
                           ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.type === 'quality' ? s.areaName : s.departmentName}</td><td>{(s.type === 'quality' ? (s.indicatorName || '') + ' · ' : '') + monthLabel(s.month)}</td><td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 260 }}>{s.correctionReason || '—'}{s.status === 'rejected' && s.rejectReason ? <div style={{ color: 'var(--rose)', fontSize: 11, marginTop: 2 }}>Rejected: {s.rejectReason}</div> : null}</td></React.Fragment>
                           : (isQ
-                            ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.areaName}</td><td style={{ fontWeight: 600 }}>{s.indicatorName}{rejNote(s)}</td><td>{s.quarter}</td></React.Fragment>
+                            ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.areaName}</td><td style={{ fontWeight: 600 }}>{s.indicatorName}{rejNote(s)}</td><td>{monthLabel(s.month)}</td></React.Fragment>
                             : <React.Fragment><td style={{ fontWeight: 600 }}>{s.departmentName}{rejNote(s)}</td><td>{monthLabel(s.month)}</td></React.Fragment>)}
                         <td>{statusChip(s.status)}</td>
                         <td style={{ textAlign: 'right' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, justifyContent: 'flex-end' }}><FixBtn s={s} /><button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View</button></div></td>
@@ -2799,6 +2961,7 @@
   const CP_NAV_HOME = ['home', 'Dashboard', 'M3 11l9-8 9 8v9a2 2 0 01-2 2h-4v-7H9v7H5a2 2 0 01-2-2z'];
   const CP_NAV_STAFFREQ = ['requests', 'Add nurse / PCA', 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M19 8v6M22 11h-6'];
   const CP_NAV_COLLECT = [
+    ['missing', 'Missing data', 'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01'],
     ['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'],
     ['quick', 'Quick entry', 'M13 2L4 14h7l-1 8 9-12h-7z'],
     ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'],
@@ -2814,7 +2977,7 @@
     <svg width={s || 17} height={s || 17} viewBox="0 0 24 24" fill="none" stroke={c || 'currentColor'} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
   );
   const cpChipStyle = (label) => {
-    const c = { Missing: '#d23a52', Submitted: '#0090ca', Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52', Recorded: '#1f9d57', 'Not observed': '#5b3fa8' }[label] || '#6c7a8c';
+    const c = { Missing: '#d23a52', Submitted: '#0090ca', Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52', Recorded: '#1f9d57', 'Not observed': '#5b3fa8', Returned: '#b5670a', 'Not measured': '#6c7a8c', 'Not started': '#8a96a8' }[label] || '#6c7a8c';
     return { display: 'inline-flex', alignItems: 'center', fontSize: 10.5, fontWeight: 700, padding: '2px 10px', borderRadius: 12, color: c, background: c + '1a', whiteSpace: 'nowrap', flexShrink: 0 };
   };
   const cpInitials = (n) => String(n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
@@ -2856,6 +3019,188 @@
     const p = String(mk || '').split('-'); const mi = MONS_ABBR.indexOf(p[0]); const yy = parseInt(p[1], 10);
     if (mi < 0 || isNaN(yy)) return null;
     return new Date(2000 + yy, mi + 2, 0, 23, 59, 59);
+  };
+
+  /* ---- Collection window: what is actually OWED, month by month ----------------------
+     An administrator sets, per department (Department Setup), the month it STARTED
+     reporting and the quality indicators it does NOT MEASURE. Both live on the department
+     document (`collection`), and the server refuses collector submissions outside them —
+     so every "missing" number in the portal and the admin coverage must be counted with
+     these same helpers, or the dashboard asks for data the server will then refuse.
+     Month keys are 'Mon-YY'; compare by rank (year*12 + month), never by list position. */
+  const dcMonthRank = (k) => {
+    const p = String(k || '').split('-'); const mi = MONS_ABBR.indexOf(p[0]); const yy = parseInt(p[1], 10);
+    return (mi < 0 || isNaN(yy)) ? null : (2000 + yy) * 12 + mi;
+  };
+  const dcMonthKey = (r) => MONS_ABBR[((r % 12) + 12) % 12] + '-' + String(Math.floor(r / 12) % 100).padStart(2, '0');
+  // The later of two month keys (either may be absent).
+  const dcLaterMonth = (a, b) => {
+    const ra = dcMonthRank(a), rb = dcMonthRank(b);
+    if (ra == null) return rb == null ? null : b;
+    if (rb == null) return a;
+    return rb > ra ? b : a;
+  };
+
+  // GET /api/collection-settings, shared + de-duped like dcAllSubmissions. It is the only
+  // source that also covers quality-only (pseudo) departments, so it wins over the
+  // `collection` copies carried on the page-load department lists.
+  let _dcCollList = null, _dcCollById = null, _dcCollByQk = null, _dcCollAt = 0, _dcCollPromise = null, _dcCollSig = '';
+  let _dcCollIdx = null;   // id -> collection from the injected department lists (fallback)
+  const dcIndexCollection = (rows) => {
+    _dcCollList = rows; _dcCollById = {}; _dcCollByQk = {};
+    rows.forEach((d) => { if (!d || !d.id) return; _dcCollById[d.id] = d; if (d.qualityKey && !_dcCollByQk[d.qualityKey]) _dcCollByQk[d.qualityKey] = d; });
+  };
+  const dcLoadCollectionSettings = (force) => {
+    if (!force && _dcCollList && (Date.now() - _dcCollAt) < 15000) return Promise.resolve(_dcCollList);
+    if (_dcCollPromise) return force ? _dcCollPromise.catch(() => {}).then(() => dcLoadCollectionSettings(true)) : _dcCollPromise;
+    _dcCollPromise = dcApi.get('/api/collection-settings').then((r) => {
+      if (!r || !r.ok) throw new Error((r && r.error) || 'Could not load department settings');
+      const rows = (r.departments || []).map((d) => ({ ...d, collection: (d.collection && typeof d.collection === 'object') ? d.collection : {} }));
+      const sig = JSON.stringify(rows.map((d) => [d.id, d.qualityKey, d.collection]));
+      dcIndexCollection(rows); _dcCollAt = Date.now();
+      if (sig !== _dcCollSig) { _dcCollSig = sig; try { window.dispatchEvent(new Event('unico:collection-settings')); } catch (e) { } }
+      return rows;
+    }).finally(() => { _dcCollPromise = null; });
+    return _dcCollPromise;
+  };
+  // After an admin save: patch the shared copy so every open view recounts at once.
+  const dcSetCollectionSettings = (id, collection) => {
+    const rows = (_dcCollList || []).map((d) => (d.id === id ? { ...d, collection: collection || {} } : d));
+    dcIndexCollection(rows); _dcCollIdx = null;
+    _dcCollSig = JSON.stringify(rows.map((d) => [d.id, d.qualityKey, d.collection]));
+    try { window.dispatchEvent(new Event('unico:collection-settings')); } catch (e) { }
+  };
+  if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => { _dcCollIdx = null; });
+  // Re-render when the settings change; (re)loads them on mount and on a live refresh.
+  const useDcCollectionRev = () => {
+    const [rev, setRev] = useState(0);
+    useEffect(() => {
+      const h = () => setRev((r) => r + 1);
+      const reload = () => { dcLoadCollectionSettings().catch(() => { }); };
+      window.addEventListener('unico:collection-settings', h);
+      window.addEventListener('unico:data-refreshed', reload);
+      reload();
+      return () => { window.removeEventListener('unico:collection-settings', h); window.removeEventListener('unico:data-refreshed', reload); };
+    }, []);
+    return rev;
+  };
+  const dcDeptSettings = (deptId) => {
+    if (!deptId) return {};
+    const api = _dcCollById && _dcCollById[deptId];
+    if (api) return api.collection || {};
+    if (!_dcCollIdx) {
+      const idx = {};
+      const put = (d) => { if (d && d.id && d.collection && typeof d.collection === 'object' && !idx[d.id]) idx[d.id] = d.collection; };
+      try { ((window.UNICO && window.UNICO.DEPARTMENTS) || []).forEach(put); } catch (e) { }
+      try { (window.__UNICO_DEPARTMENTS__ || []).forEach(put); } catch (e) { }
+      try { dcAllDepts().forEach(put); } catch (e) { }
+      _dcCollIdx = idx;
+    }
+    return _dcCollIdx[deptId] || {};
+  };
+  // The department that carries a quality area. The server resolves it by the department's
+  // quality key, so that link wins; then the area's own deptId, then the client dept map.
+  const dcAreaDeptId = (area) => {
+    if (!area) return null;
+    const hit = area.key && _dcCollByQk && _dcCollByQk[area.key];
+    if (hit) return hit.id;
+    return area.deptId || (window.DEPTMAP && area.key ? window.DEPTMAP.idFromQk(area.key) : null) || null;
+  };
+  // Submissions indexed once per list (the lists are replaced, never mutated).
+  const _dcIxCache = new WeakMap();
+  const dcSubsIndex = (subs) => {
+    const arr = Array.isArray(subs) ? subs : [];
+    if (_dcIxCache.has(arr)) return _dcIxCache.get(arr);
+    const ix = { q: new Map(), qArea: new Map(), p: new Map(), pDept: new Map() };
+    const push = (m, k, s) => { const l = m.get(k); if (l) l.push(s); else m.set(k, [s]); };
+    arr.forEach((s) => {
+      if (!s) return;
+      if (s.type === 'quality') { push(ix.q, s.area + '|' + s.month, s); push(ix.qArea, s.area, s); }
+      else if (s.type === 'patient') { push(ix.p, s.department + '|' + s.month, s); push(ix.pDept, s.department, s); }
+    });
+    _dcIxCache.set(arr, ix);
+    return ix;
+  };
+  const dcSubIsInd = (s, ind) => s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase();
+  // The first month an indicator has anything at all: a reading, a not-observed mark, an
+  // incident, or any submission.
+  const dcIndFirstMonth = (area, ind, subs) => {
+    let best = null;
+    const see = (k) => { const r = dcMonthRank(k); if (r != null && (best == null || r < best)) best = r; };
+    const has = (o, k) => o[k] != null && o[k] !== '' && o[k] !== false;
+    ['months', 'mNum', 'mNotObserved'].forEach((f) => { const o = ind && ind[f]; if (o && typeof o === 'object') Object.keys(o).forEach((k) => { if (has(o, k)) see(k); }); });
+    if (ind && ind.incidents && typeof ind.incidents === 'object') Object.keys(ind.incidents).forEach((k) => { if (Array.isArray(ind.incidents[k]) && ind.incidents[k].length) see(k); });
+    (dcSubsIndex(subs).qArea.get(area && area.key) || []).forEach((s) => { if (dcSubIsInd(s, ind)) see(s.month); });
+    return best == null ? null : dcMonthKey(best);
+  };
+  // When an indicator starts being owed: the later of the department's start and the
+  // indicator's own startMonth; with neither, its first month of any data. null = only the
+  // current due month counts. `deptStart` overrides the saved setting (admin draft).
+  const dcIndicatorStart = (area, ind, subs, deptStart) => {
+    const ds = deptStart === undefined ? dcDeptSettings(dcAreaDeptId(area)).startMonth : deptStart;
+    return dcLaterMonth(ds, ind && ind.startMonth) || dcIndFirstMonth(area, ind, subs);
+  };
+  const dcNotMeasured = (area, ind, override) => {
+    const nm = override !== undefined ? override : dcDeptSettings(dcAreaDeptId(area)).notMeasured;
+    return (nm && ind && ind.id && nm[ind.id]) || null;
+  };
+  // Every month key from `fromMonth` through the last COMPLETED month, oldest first.
+  const dcDueMonths = (fromMonth) => {
+    const last = dcDefaultMonth(); const lr = dcMonthRank(last);
+    let r = dcMonthRank(fromMonth);
+    if (r == null) return [last];
+    const out = [];
+    for (r = Math.max(r, lr - 239); r <= lr; r++) out.push(dcMonthKey(r));
+    return out;
+  };
+  // Is month `m` inside the window that starts at `start`? (null start = last completed month on.)
+  const dcMonthDue = (start, m) => {
+    const mr = dcMonthRank(m); if (mr == null) return false;
+    const sr = dcMonthRank(start);
+    return mr >= (sr == null ? dcMonthRank(dcDefaultMonth()) : sr);
+  };
+  const dcPatientStart = (dept, subs, deptStart) => {
+    if (!dept) return null;
+    const ds = deptStart === undefined ? dcDeptSettings(dept.id).startMonth : deptStart;
+    if (ds && dcMonthRank(ds) != null) return ds;
+    let best = null;
+    const see = (k) => { const r = dcMonthRank(k); if (r != null && (best == null || r < best)) best = r; };
+    (dept.months || []).forEach(see);
+    (dcSubsIndex(subs).pDept.get(dept.id) || []).forEach((s) => see(s.month));
+    return best == null ? null : dcMonthKey(best);
+  };
+  const dcQStatus = (subs, areaKey, ind, m) => cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
+  // Patient statistics for one department-month: 'recorded' | 'pending' | 'rejected' | 'none'.
+  const dcPatientState = (subs, dept, m) => {
+    if ((dept.months || []).indexOf(m) >= 0) return 'recorded';
+    const list = dcSubsIndex(subs).p.get(dept.id + '|' + m) || [];
+    if (list.some((s) => s.status === 'pending')) return 'pending';
+    if (list.some((s) => s.status !== 'rejected')) return 'recorded';
+    return list.length ? 'rejected' : 'none';
+  };
+  const dcIndDue = (area, ind, m, subs) => !dcNotMeasured(area, ind) && dcMonthDue(dcIndicatorStart(area, ind, subs), m);
+  const dcPatientDue = (dept, m, subs) => dcMonthDue(dcPatientStart(dept, subs), m);
+  // Everything still owed, across every due month. Pending / recorded / not-observed are
+  // never missing; a rejection is ("Returned") until it is re-sent.
+  const dcMissingList = (depts, areas, subs) => {
+    const ix = dcSubsIndex(subs); const rows = [];
+    const newest = (list) => list.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))[0] || null;
+    dcPatientDepts(depts, subs).forEach((d) => {
+      dcDueMonths(dcPatientStart(d, subs)).forEach((m) => {
+        const st = dcPatientState(subs, d, m);
+        if (st !== 'none' && st !== 'rejected') return;
+        rows.push({ key: 'p|' + d.id + '|' + m, kind: 'patient', month: m, rank: dcMonthRank(m), status: st, unit: d.name || d.id, deptId: d.id, from: st === 'rejected' ? newest(ix.p.get(d.id + '|' + m) || []) : null });
+      });
+    });
+    (areas || []).forEach((a) => (a && a.indicators || []).forEach((ind) => {
+      if (dcNotMeasured(a, ind)) return;
+      dcDueMonths(dcIndicatorStart(a, ind, subs)).forEach((m) => {
+        const st = dcQStatus(subs, a.key, ind, m);
+        if (st !== 'none' && st !== 'rejected') return;
+        rows.push({ key: 'q|' + a.key + '|' + ind.id + '|' + m, kind: 'quality', month: m, rank: dcMonthRank(m), status: st, unit: a.name || a.key, areaKey: a.key, ind: ind, from: st === 'rejected' ? newest((ix.q.get(a.key + '|' + m) || []).filter((s) => dcSubIsInd(s, ind))) : null });
+      });
+    }));
+    return rows;
   };
 
   /* Sparkline over the six months ending at `month`. Returns null when there is not
@@ -2974,12 +3319,19 @@
           department: dept.id, month: m, values,
           responsible: { name: me.name || '' }, note: '',
           isCorrection: isCorr, correctionReason: isCorr ? reason.trim() : '',
-        });
+        }).catch(() => null);
       });
       Promise.all(jobs).then((rs) => {
         setBusy(false);
         const bad = rs.filter((r) => !r || !r.ok);
-        if (bad.length) { toast((bad[0] && bad[0].error) || 'Some months could not be sent.', 'error'); return; }
+        if (bad.length) {
+          // Some months DID go through. Keeping them in the grid meant fixing the failed month
+          // and pressing Submit again re-sent the others as duplicate pending rows.
+          const sent = touched.filter((m, i) => rs[i] && rs[i].ok);
+          if (sent.length) { setEdits((e) => { const next = {}; Object.keys(e).forEach((k) => { if (sent.indexOf(k.split('|')[0]) < 0) next[k] = e[k]; }); return next; }); load(); }
+          toast((sent.length ? sent.map(monthLabel).join(', ') + ' sent. ' : '') + ((bad[0] && bad[0].error) || 'Some months could not be sent.'), 'error');
+          return;
+        }
         toast(touched.length + ' month' + (touched.length > 1 ? 's' : '') + ' sent for review', 'success');
         setEdits({}); setReason(''); setUndoStack([]); load(); if (onDone) onDone();
       }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
@@ -3089,11 +3441,12 @@
     const [doc, setDoc] = useState(undefined);
     const R = window.UNICO_ROSTER;
 
+    const mine = useMemo(() => dcMyRosterUnitKeys(), []);
     useEffect(() => {
       dcApi.get('/api/rosters')
         .then((r) => {
           const list = (r && r.ok ? (r.rosters || []) : [])
-            .filter((x) => x && x.status === 'approved')
+            .filter((x) => x && x.status === 'approved' && dcRosterIsMine(x, mine))
             .sort((x, y) => (y.year - x.year) || (y.month - x.month));
           setIndex(list);
           if (list.length) setPick({ dept: list[0].dept, year: list[0].year, month: list[0].month });
@@ -3136,7 +3489,7 @@
           : index.length === 0 ? (
             <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>
               <div style={{ fontSize: 13.5, fontWeight: 700, color: '#16202e', marginBottom: 5 }}>No published roster yet</div>
-              <div style={{ fontSize: 12 }}>Nothing has been approved for your unit. A roster appears here the moment it is published.</div>
+              <div style={{ fontSize: 12 }}>{mine.size ? 'Nothing has been approved for your department yet. Its roster appears here the moment it is published.' : 'No department is assigned to your account, so no roster can be shown. Ask an administrator to assign your department.'}</div>
             </div>
           ) : doc === undefined ? <div style={Object.assign({}, CP_CARD, { padding: 26, textAlign: 'center', color: '#6c7a8c' })}>Loading the sheet…</div>
             : !doc ? <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>That sheet is no longer published.</div>
@@ -3274,9 +3627,10 @@
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
     const [subs, setSubs] = useState(null);
     useEffect(() => { dcSubmissionResponse().then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
-    const S = subs || [];
+    const S = (subs || []).filter(dcIsMine);
 
-    const decided = S.filter((x) => x.status === 'approved' || x.status === 'rejected');
+    // Auto-rejected duplicates are not wrong figures (same rule as My submissions / Analytics).
+    const decided = S.filter((x) => x.status === 'approved' || (x.status === 'rejected' && !x.autoRejected));
     const accuracy = decided.length ? Math.round(S.filter((x) => x.status === 'approved').length * 100 / decided.length) : null;
     const onTime = (() => {
       let n = 0, ok = 0;
@@ -3515,32 +3869,39 @@
     const pendingFor = (areaKey, ind, m) => S.some((s) => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
     const statusOf = (areaKey, ind, m) => ({ recorded: 'Recorded', pending: 'Submitted', notobs: 'Not observed', rejected: 'Missing', none: 'Missing' })[cpSubmissionStatus(S, areaKey, ind, m)];
 
+    const collRev = useDcCollectionRev();
+    // Only what is OWED for the month: not-measured indicators and months before the
+    // department / indicator start are skipped — the same helpers as the Missing data page.
+    const dueOf = (a, ind) => dcIndDue(a, ind, month, S);
     let totalInd = 0, done = 0;
     const missing = [];
     areas.forEach((a) => a.indicators.forEach((ind) => {
+      if (!dueOf(a, ind)) return;
       totalInd++;
       const st = statusOf(a.key, ind, month);
       if (st === 'Missing') missing.push({ area: a.key, ind }); else done++;
     }));
     const pct = totalInd ? Math.round(done * 100 / totalInd) : 0;
-    const awaiting = S.filter((s) => s.status === 'pending').length;
-    // A rejection is never cleared server-side: resubmitting inserts a NEW row and
-    // leaves the rejected one in place for ever. Counting them raw would make "Needs
-    // correction" a lifetime tally that only grows, so a rejection counts only while
-    // nothing newer has been sent for the same target.
-    const targetKey = (x) => (x.type === 'quality'
-      ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '')
-      : 'p|' + x.department) + '|' + x.month;
-    const newestOk = {};
-    S.forEach((x) => { if (x.status === 'rejected') return; const k = targetKey(x); if (!(k in newestOk) || (x.submittedAt || 0) > newestOk[k]) newestOk[k] = (x.submittedAt || 0); });
-    const rejected = S.filter((x) => x.status === 'rejected' && !(newestOk[targetKey(x)] > (x.submittedAt || 0))).length;
+    const awaiting = S.filter((s) => s.status === 'pending' && dcIsMine(s)).length;
+    const mineN = S.filter(dcIsMine).length;
+    // Distinct targets whose newest row is a real rejection (see dcOpenRejections).
+    const rejected = dcOpenRejections(S).length;
+    // Every other due month still owed (the full list lives on the Missing data page).
+    const allMissing = useMemo(() => (subs ? dcMissingList(depts, areas, subs) : []), [subs, depts, areas, collRev]);
+    const otherMissing = allMissing.filter((r) => r.month !== month);
+    const otherLater = otherMissing.some((r) => r.rank > dcMonthRank(month));
 
     // Department statistics for the month: on record, or sent and awaiting review.
-    const deptDone = depts.filter((d) => ((d.months || []).indexOf(month) >= 0) || S.some((s) => s.type === 'patient' && s.department === d.id && s.month === month && s.status !== 'rejected')).length;
-    const statGap = Math.max(0, depts.length - deptDone);
+    // Only units that report patient statistics — quality-only units are never "missing".
+    const pDepts = dcPatientDepts(depts, S).filter((d) => dcPatientDue(d, month, S));
+    const deptDone = pDepts.filter((d) => ((d.months || []).indexOf(month) >= 0) || S.some((s) => s.type === 'patient' && s.department === d.id && s.month === month && s.status !== 'rejected')).length;
+    const statGap = Math.max(0, pDepts.length - deptDone);
 
     const dl = cpDeadline(month);
-    const overdueDays = dl ? Math.floor((Date.now() - dl.getTime()) / 864e5) : 0;
+    // Overdue from the first second past the deadline (Math.floor read day 1 late as on
+    // schedule); days left rounds up too.
+    const lateMs = dl ? Date.now() - dl.getTime() : 0;
+    const overdueDays = lateMs > 0 ? Math.ceil(lateMs / 864e5) : -Math.ceil(-lateMs / 864e5);
     const overdue = overdueDays > 0 && missing.length > 0;
     const ringColor = pct >= 90 ? '#1f9d57' : pct >= 60 ? '#0090ca' : pct >= 30 ? '#e08a1e' : '#d23a52';
 
@@ -3566,8 +3927,8 @@
     ];
     const CAL = [
       { lbl: 'Quality indicators', val: done + '/' + totalInd, p: totalInd ? done / totalInd : 0, c: 'linear-gradient(90deg,#3ab5a7,#1f9d57)' },
-      { lbl: 'Department stats', val: deptDone + '/' + depts.length, p: depts.length ? deptDone / depts.length : 0, c: 'linear-gradient(90deg,#27a8db,#0072a3)' },
-      { lbl: 'Awaiting review', val: awaiting + '/' + S.length, p: S.length ? awaiting / S.length : 0, c: 'linear-gradient(90deg,#8f7ce0,#5b45c4)' },
+      { lbl: 'Department stats', val: deptDone + '/' + pDepts.length, p: pDepts.length ? deptDone / pDepts.length : 0, c: 'linear-gradient(90deg,#27a8db,#0072a3)' },
+      { lbl: 'Awaiting review', val: awaiting + '/' + mineN, p: mineN ? awaiting / mineN : 0, c: 'linear-gradient(90deg,#8f7ce0,#5b45c4)' },
     ];
     const activity = S.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).slice(0, 6);
     const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
@@ -3618,6 +3979,17 @@
               <b>{missing.length} indicator{missing.length === 1 ? ' is' : 's are'} past the deadline.</b> The {monthLabel(month)} window closed on {dl.toLocaleDateString()} — submit today to clear the flag.
             </div>
             <button onClick={() => onNav('quality')} style={{ border: '1px solid rgba(210,58,82,.35)', background: 'rgba(255,255,255,.7)', color: '#a92c42', padding: '7px 13px', borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>Fix now ›</button>
+          </div>
+        )}
+
+        {otherMissing.length > 0 && (
+          <div onClick={() => onNav('missing')} role="button" style={Object.assign({}, CP_CARD, { display: 'flex', alignItems: 'center', gap: 11, padding: '10px 15px', marginBottom: 14, cursor: 'pointer', flexWrap: 'wrap', borderLeft: '4px solid #e08a1e' })}>
+            <span style={{ display: 'inline-grid', placeItems: 'center', width: 30, height: 30, borderRadius: 9, background: 'rgba(224,138,30,.14)', color: '#b5670a', flexShrink: 0 }}>{CP_ICON('M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01', 15)}</span>
+            <div style={{ flex: 1, minWidth: 190, fontSize: 12, color: '#3c4858', lineHeight: 1.5 }}>
+              <b>{otherLater ? 'Other months' : 'Earlier months'}: {otherMissing.length} missing</b>
+              <span style={{ color: '#6c7a8c' }}> — across {new Set(otherMissing.map((r) => r.month)).size} month{new Set(otherMissing.map((r) => r.month)).size === 1 ? '' : 's'}, oldest {monthLabel(otherMissing.reduce((o, r) => (r.rank < o.rank ? r : o)).month)}.</span>
+            </div>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, color: '#b5670a', flexShrink: 0 }}>View all{CP_ICON('M5 12h14M13 6l6 6-6 6', 12)}</span>
           </div>
         )}
 
@@ -3710,9 +4082,9 @@
         {subs === null ? <div style={Object.assign({}, CP_CARD, { padding: 24, color: '#6c7a8c' })}>Loading indicators…</div>
           : areas.length === 0 ? <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>No quality indicators are assigned to you yet.</div>
             : areas.map((a) => {
-              let ok = 0;
-              a.indicators.forEach((ind) => { if (statusOf(a.key, ind, month) !== 'Missing') ok++; });
-              const apct = a.indicators.length ? Math.round(ok * 100 / a.indicators.length) : 0;
+              let ok = 0, owed = 0;
+              a.indicators.forEach((ind) => { if (!dueOf(a, ind)) return; owed++; if (statusOf(a.key, ind, month) !== 'Missing') ok++; });
+              const apct = owed ? Math.round(ok * 100 / owed) : 100;
               const tone = apct === 100 ? '#1f9d57' : apct >= 50 ? '#0090ca' : apct > 0 ? '#e08a1e' : '#d23a52';
               return (
                 <div key={a.key} style={Object.assign({}, CP_CARD, { position: 'relative', marginBottom: 12, overflow: 'hidden' })}>
@@ -3725,13 +4097,13 @@
                     <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 12, color: tone, background: tone + '1a' }}>{apct}% for {monthLabel(month)}</span>
                   </div>
                   {a.indicators.map((ind) => {
-                    const st = statusOf(a.key, ind, month);
+                    const st = dcNotMeasured(a, ind) ? 'Not measured' : !dueOf(a, ind) ? 'Not started' : statusOf(a.key, ind, month);
                     const tr = cpTrend(ind, win);
                     return (
                       <div key={ind.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px 10px 22px', borderBottom: '1px solid rgba(125,145,180,.12)', flexWrap: 'wrap' }}>
                         <div style={{ minWidth: 190, flex: 1 }}>
                           <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16202e' }}>{ind.name}</div>
-                          <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{[ind.formula === 'count' ? 'Count' : ind.formula === 'rate' ? 'Rate' : 'Percentage', ind.benchmark ? 'benchmark ' + ind.benchmark : null].filter(Boolean).join(' · ')}</div>
+                          <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{[ind.formula === 'count' ? 'Count' : ind.formula === 'pct' ? 'Percentage' : ind.formula === 'avg' ? 'Average' : /^rate/.test(ind.formula || '') ? 'Rate' : 'Value', ind.benchmark ? 'benchmark ' + ind.benchmark : null].filter(Boolean).join(' · ')}</div>
                         </div>
                         <CpSpark ind={ind} months={win} />
                         {tr != null ? <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 12, fontFamily: "'IBM Plex Mono',monospace", color: cpImproved(ind, 0, tr) ? '#1f9d57' : '#d23a52', background: (cpImproved(ind, 0, tr) ? '#1f9d57' : '#d23a52') + '1a' }}>{(tr > 0 ? '+' : '') + tr}%</span> : <span style={{ width: 46 }} />}
@@ -3766,6 +4138,7 @@
     const [staff, setStaff] = useState(null);
     const [reqs, setReqs] = useState(null);
     const [duty, setDuty] = useState(undefined);   // undefined = loading, null = none published
+    useDcCollectionRev();   // recount when Department Setup changes
     const R = window.UNICO_ROSTER;
     const order = MO();
 
@@ -3775,7 +4148,9 @@
       dcApi.get('/api/staff-requests').then((r) => setReqs(r.ok ? (r.requests || []) : [])).catch(() => setReqs([]));
       const now = new Date();
       dcApi.get('/api/rosters').then((r) => {
-        const list = (r && r.ok ? (r.rosters || []) : []).filter((x) => x && x.status === 'approved' && x.year === now.getFullYear() && x.month === now.getMonth());
+        // This month's published roster of THIS in-charge's own department — never another unit's.
+        const mineKeys = dcMyRosterUnitKeys();
+        const list = (r && r.ok ? (r.rosters || []) : []).filter((x) => x && x.status === 'approved' && x.year === now.getFullYear() && x.month === now.getMonth() && dcRosterIsMine(x, mineKeys));
         if (!list.length) { setDuty(null); return; }
         const pick = list[0];
         return dcApi.get('/api/rosters/' + encodeURIComponent(pick.dept) + '/' + pick.year + '/' + pick.month)
@@ -3786,6 +4161,7 @@
     const S = subs || [];
     let totalInd = 0, missing = 0;
     areas.forEach((a) => a.indicators.forEach((ind) => {
+      if (!dcIndDue(a, ind, month, S)) return;   // not measured / before its start month
       totalInd++;
       const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
       if (!sent) missing++;
@@ -3806,8 +4182,10 @@
     const trend = trendMonths.map((m) => {
       let t = 0, done = 0;
       areas.forEach((a) => a.indicators.forEach((ind) => {
+        if (!dcIndDue(a, ind, m, S)) return;
         t++;
-        if (cpHasData(ind, m) || S.some((x) => x.type === 'quality' && x.area === a.key && x.month === m && x.status !== 'rejected')) done++;
+        // Per INDICATOR, the ring's rule — one indicator sent used to mark the whole area done.
+        if (['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, m))) done++;
       }));
       return { m: m, pct: t ? Math.round(done * 100 / t) : 0, n: done, of: t };
     });
@@ -3815,12 +4193,7 @@
 
     // Everything that is waiting on somebody, newest concern first. Each row is a way
     // into the screen that clears it -- a list you cannot act on is just a worry.
-    const rejectedOpen = (() => {
-      const key = (x) => (x.type === 'quality' ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '') : 'p|' + x.department) + '|' + x.month;
-      const newest = {};
-      S.forEach((x) => { if (x.status === 'rejected') return; const k = key(x); if (!(k in newest) || (x.submittedAt || 0) > newest[k]) newest[k] = (x.submittedAt || 0); });
-      return S.filter((x) => x.status === 'rejected' && !(newest[key(x)] > (x.submittedAt || 0)));
-    })();
+    const rejectedOpen = dcOpenRejections(S);
     const attention = [];
     if (missing) attention.push({ tone: '#b5670a', bg: 'rgba(224,138,30,.14)', title: missing + ' indicator' + (missing === 1 ? '' : 's') + ' outstanding', body: monthLabel(month) + ' is not complete yet.', go: 'status', icd: 'M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z' });
     if (rejectedOpen.length) attention.push({ tone: '#a92c42', bg: 'rgba(210,58,82,.13)', title: rejectedOpen.length + ' submission' + (rejectedOpen.length === 1 ? '' : 's') + ' sent back', body: 'Rejected and not yet resubmitted.', go: 'history', icd: 'M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01' });
@@ -4361,11 +4734,391 @@
   }
 
   /* ---- The shell ---------------------------------------------------------------- */
+  /* ---- Missing data: every month still owed, and a pop-up to send it ----------------
+     The dashboard shows ONE reporting month, so a gap three months back never surfaced
+     again. This lists every due month — from the department's start month (Department
+     Setup) or, unset, its first month of data — through the last completed month, and
+     opens the ordinary form in a pop-up so the row clears the moment it is sent (it
+     becomes pending). Not-measured indicators are never listed: the server refuses them. */
+  function CollectorMissing({ depts, areas, month, user }) {
+    const collRev = useDcCollectionRev();
+    const [subs, setSubs] = useState(null);
+    const [loadError, setLoadError] = useState('');
+    const [fType, setFType] = useState('all');
+    const [fUnit, setFUnit] = useState('');
+    const [open, setOpen] = useState(null);     // the row being submitted in the pop-up
+    const [sent, setSent] = useState({});       // rows sent since the last fresh reload
+    const downOnBackdrop = React.useRef(false);
+    const load = (force) => dcSubmissionResponse(null, force)
+      .then((r) => { setSubs(r.submissions); setLoadError(''); return true; })
+      .catch(() => { setLoadError('Submission history could not be refreshed. Please retry; this list may not be current.'); return false; });
+    useEffect(() => { load(); }, []);
+    useEffect(() => {
+      const refresh = () => { if (document.visibilityState !== 'hidden') load(); };
+      window.addEventListener('unico:data-refreshed', refresh);
+      window.addEventListener('focus', refresh);
+      return () => { window.removeEventListener('unico:data-refreshed', refresh); window.removeEventListener('focus', refresh); };
+    }, []);
+    useEffect(() => {
+      if (!open) return;
+      const onKey = (e) => { if (e.key === 'Escape') setOpen(null); };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, [open]);
+
+    const qAreas = useMemo(() => (areas || []).filter((a) => a && a.indicators && a.indicators.length), [areas]);
+    const all = useMemo(() => (subs ? dcMissingList(depts, qAreas, subs) : []), [subs, depts, qAreas, collRev]);
+    const rows = all.filter((r) => !sent[r.key]);
+    const units = [...new Set(all.map((r) => r.unit))].sort((a, b) => String(a).localeCompare(String(b)));
+    const shown = rows.filter((r) => (fType === 'all' || r.kind === fType) && (!fUnit || r.unit === fUnit));
+    const byMonth = {};
+    shown.forEach((r) => { (byMonth[r.month] = byMonth[r.month] || []).push(r); });
+    const monthKeys = Object.keys(byMonth).sort((a, b) => dcMonthRank(b) - dcMonthRank(a));
+    const statN = rows.filter((r) => r.kind === 'patient').length;
+    const qualN = rows.length - statN;
+    const oldest = rows.reduce((o, r) => (!o || r.rank < o.rank ? r : o), null);
+
+    const submitted = (row) => {
+      setOpen(null);
+      setSent((s) => ({ ...s, [row.key]: true }));
+      toast((row.kind === 'quality' ? row.ind.name : row.unit + ' statistics') + ' · ' + monthLabel(row.month) + ' sent for review', 'success');
+      // A FORCED reload returns the new pending row, which is what removes it for good.
+      load(true).then((ok) => { if (ok) setSent({}); });
+    };
+
+    // Read-only context: what the administrator has excluded, and where counting starts.
+    const nmList = [];
+    qAreas.forEach((a) => a.indicators.forEach((ind) => { const nm = dcNotMeasured(a, ind); if (nm) nmList.push({ key: a.key + '|' + ind.id, unit: a.name || a.key, ind: ind, nm: nm }); }));
+    const startList = [];
+    const seenUnit = new Set();
+    const addStart = (id, name) => {
+      if (!id || seenUnit.has(id)) return; seenUnit.add(id);
+      const s = dcDeptSettings(id).startMonth;
+      if (s) startList.push({ id: id, name: name || (window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : id), start: s });
+    };
+    (depts || []).forEach((d) => addStart(d.id, d.name));
+    qAreas.forEach((a) => addStart(dcAreaDeptId(a), a.name));
+
+    const tiles = [
+      { val: subs === null ? '…' : rows.length, lbl: 'Missing in total', c: rows.length ? '#a92c42' : '#1f9d57', bg: rows.length ? 'rgba(210,58,82,.13)' : 'rgba(31,157,87,.13)', icd: 'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01' },
+      { val: subs === null ? '…' : statN, lbl: 'Statistics months', c: '#5b45c4', bg: 'rgba(106,82,212,.14)', icd: 'M4 4h16v16H4zM4 9h16M9 4v16' },
+      { val: subs === null ? '…' : qualN, lbl: 'Quality indicator-months', c: '#12776c', bg: 'rgba(58,181,167,.16)', icd: 'M22 12h-4l-3 8-4-16-3 8H2' },
+      { val: oldest ? monthLabel(oldest.month) : '—', lbl: 'Oldest missing month', c: '#b5670a', bg: 'rgba(224,138,30,.14)', icd: 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4', small: true },
+    ];
+    const selStyle = { padding: '8px 10px', borderRadius: 9, border: '1px solid rgba(125,145,180,.3)', background: 'rgba(255,255,255,.75)', fontFamily: 'inherit', fontSize: 12.5, color: '#3c4858', outline: 'none', maxWidth: '100%', minWidth: 0 };
+
+    return (
+      <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+        <style>{'@media (max-width:640px){.cp-mm-overlay{padding:0!important}.cp-mm-box{max-height:none!important;min-height:100%;border-radius:0!important;padding:10px 12px 18px!important}}'}</style>
+        {loadError && <div role="alert" style={{ padding: 12, color: 'var(--rose)' }}>{loadError} <button className="btn sm" onClick={() => load(true)}>Retry</button></div>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12, marginBottom: 14 }}>
+          {tiles.map((t) => (
+            <div key={t.lbl} style={Object.assign({}, CP_CARD, { padding: '13px 15px', display: 'flex', alignItems: 'center', gap: 11 })}>
+              <span style={{ display: 'inline-grid', placeItems: 'center', width: 36, height: 36, borderRadius: 11, background: t.bg, color: t.c, flexShrink: 0 }}>{CP_ICON(t.icd, 17)}</span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: t.small ? 14.5 : 21, fontWeight: 700, color: '#16202e', lineHeight: 1.2 }}>{t.val}</div>
+                <div style={{ fontSize: 11, color: '#6c7a8c' }}>{t.lbl}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={Object.assign({}, CP_CARD, { padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 })}>
+          <div className="seg">
+            {[['all', 'All'], ['patient', 'Statistics'], ['quality', 'Quality']].map(([k, l]) => <button key={k} className={fType === k ? 'on' : ''} onClick={() => setFType(k)}>{l}</button>)}
+          </div>
+          <select value={fUnit} onChange={(e) => setFUnit(e.target.value)} style={selStyle} title="Department">
+            <option value="">All departments</option>
+            {units.map((u) => <option key={u} value={u}>{u}</option>)}
+          </select>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: 11.5, color: '#6c7a8c' }}>Counted through {monthLabel(dcDefaultMonth())} · {shown.length} shown</span>
+        </div>
+
+        {subs === null ? <div style={Object.assign({}, CP_CARD, { padding: 24, color: '#6c7a8c' })}>Loading your missing data…</div>
+          : rows.length === 0 ? (
+            <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center' })}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#1f9d57', marginBottom: 4 }}>Nothing is missing</div>
+              <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>Every month owed through {monthLabel(dcDefaultMonth())} has been sent or is on record.</div>
+            </div>
+          ) : shown.length === 0 ? <div style={Object.assign({}, CP_CARD, { padding: 22, textAlign: 'center', color: '#6c7a8c', fontSize: 12.5 })}>Nothing missing for this filter.</div>
+            : monthKeys.map((mk) => {
+              const list = byMonth[mk].slice().sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'patient' ? -1 : 1) || String(a.unit).localeCompare(String(b.unit)));
+              const dl = cpDeadline(mk);
+              const late = dl && Date.now() > dl.getTime();
+              return (
+                <div key={mk} style={Object.assign({}, CP_CARD, { marginBottom: 12, overflow: 'hidden' })}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px', borderBottom: '1px solid rgba(125,145,180,.18)', flexWrap: 'wrap' }}>
+                    <span style={{ display: 'inline-grid', placeItems: 'center', width: 26, height: 26, borderRadius: 8, background: 'rgba(224,138,30,.14)', color: '#b5670a', flexShrink: 0 }}>{CP_ICON('M3 5h18v16H3zM3 9h18M8 3v4M16 3v4', 13)}</span>
+                    <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 700, color: '#16202e' }}>{monthLabel(mk)}</h3>
+                    <span style={cpChipStyle('Missing')}>{list.length} missing</span>
+                    <span style={{ flex: 1 }} />
+                    {dl && <span style={{ fontSize: 11, color: late ? '#a92c42' : '#6c7a8c', fontWeight: late ? 700 : 400 }}>{late ? 'Was due ' : 'Due by '}{dl.toLocaleDateString()}</span>}
+                  </div>
+                  {list.map((r) => {
+                    const label = r.status === 'rejected' ? 'Returned' : 'Missing';
+                    const isQ = r.kind === 'quality';
+                    return (
+                      <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 16px', borderBottom: '1px solid rgba(125,145,180,.12)', flexWrap: 'wrap' }}>
+                        <span style={{ display: 'inline-grid', placeItems: 'center', width: 28, height: 28, borderRadius: 9, background: isQ ? 'rgba(58,181,167,.16)' : 'rgba(106,82,212,.14)', color: isQ ? '#12776c' : '#5b45c4', flexShrink: 0 }}>{CP_ICON(isQ ? 'M22 12h-4l-3 8-4-16-3 8H2' : 'M4 4h16v16H4zM4 9h16M9 4v16', 14)}</span>
+                        <div style={{ flex: 1, minWidth: 170 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16202e' }}>{isQ ? r.ind.name : 'Patient statistics'}</div>
+                          <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{r.unit}{r.from && r.from.rejectReason ? ' · returned: ' + r.from.rejectReason : ''}</div>
+                        </div>
+                        <span style={cpChipStyle(label)}>{label}</span>
+                        <button onClick={() => setOpen(r)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid rgba(0,144,202,.3)', background: 'rgba(0,144,202,.08)', color: '#0072a3', padding: '6px 13px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>{label === 'Returned' ? 'Fix & submit' : 'Submit'} ›</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+
+        {(nmList.length > 0 || startList.length > 0) && (
+          <div style={Object.assign({}, CP_CARD, { padding: '13px 16px', marginTop: 4 })}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e', marginBottom: 8 }}>Set by your administrator</div>
+            {startList.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: nmList.length ? 12 : 0 }}>
+                {startList.map((s) => <span key={s.id} style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 12, background: 'rgba(0,144,202,.08)', color: '#0072a3' }}><b>{s.name}</b> · Counting from {monthLabel(s.start)}</span>)}
+              </div>
+            )}
+            {nmList.length > 0 && (
+              <React.Fragment>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#6c7a8c', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 5 }}>Not measured in your departments</div>
+                {nmList.map((x) => (
+                  <div key={x.key} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline', padding: '5px 0', borderTop: '1px solid rgba(125,145,180,.12)', fontSize: 12 }}>
+                    <span style={{ fontWeight: 600, color: '#16202e' }}>{x.ind.name}</span>
+                    <span style={{ color: '#9aa6b4' }}>{x.unit}</span>
+                    <span style={{ color: '#6c7a8c', flex: '1 1 200px' }}>— {x.nm.reason || 'no reason given'}</span>
+                  </div>
+                ))}
+              </React.Fragment>
+            )}
+          </div>
+        )}
+
+        {open && (
+          <div className="cp-mm-overlay"
+            onMouseDown={(e) => { downOnBackdrop.current = e.target === e.currentTarget; }}
+            onClick={(e) => { if (e.target === e.currentTarget && downOnBackdrop.current) setOpen(null); }}
+            style={{ position: 'fixed', inset: 0, zIndex: 2500, background: 'rgba(13,27,46,.45)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '4vh 16px', overflowY: 'auto', boxSizing: 'border-box' }}>
+            <div className="cp-mm-box" role="dialog" aria-modal="true" aria-label="Submit missing data"
+              style={{ width: '100%', maxWidth: 900, maxHeight: '92vh', overflowY: 'auto', background: '#f3f8fd', borderRadius: 16, boxShadow: '0 24px 70px rgba(5,12,24,.35)', padding: '14px 18px 20px', boxSizing: 'border-box' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#b5670a', textTransform: 'uppercase', letterSpacing: '.4px' }}>{open.status === 'rejected' ? 'Returned — fix and resubmit' : 'Missing data'}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{(open.kind === 'quality' ? open.ind.name + ' · ' + open.unit : open.unit + ' · Patient statistics') + ' · ' + monthLabel(open.month)}</div>
+                </div>
+                <button onClick={() => setOpen(null)} title="Close (Esc)" aria-label="Close" style={{ display: 'grid', placeItems: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(125,145,180,.3)', background: '#fff', color: '#3c4858', cursor: 'pointer', flexShrink: 0, fontSize: 16 }}>✕</button>
+              </div>
+              {open.kind === 'quality'
+                ? <DataQualityForm key={'mq/' + open.key} prefill={{ responsible: user.name, area: open.areaKey, indicatorId: open.ind.id, month: open.month, from: open.from }} onSubmitted={() => submitted(open)} />
+                : <DataPatientForm key={'mp/' + open.key} depts={depts} prefill={{ responsible: user.name, dept: open.deptId, month: open.month, from: open.from }} onSubmitted={() => submitted(open)} />}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /* ===================== Department Setup (admin) =====================
+     Per department: the month it STARTED reporting (earlier months are never counted as
+     missing anywhere) and the quality indicators it does NOT measure (never missing, and the
+     server refuses collector submissions for them). Saved on the department document via
+     PUT /api/departments/:id/collection-settings — Administrators only. The counts are
+     live against the unsaved draft, so the effect is visible before saving. */
+  function DcSettingsCard({ row, dept, areas, subs, canSave, onSaved }) {
+    const coll = row.collection || {};
+    const origNm = coll.notMeasured || {};
+    const initNm = () => Object.fromEntries(Object.keys(origNm).map((id) => [id, { on: true, reason: (origNm[id] && origNm[id].reason) || '' }]));
+    const [start, setStart] = useState(coll.startMonth || '');
+    const [nm, setNm] = useState(initNm);
+    const [busy, setBusy] = useState(false);
+    const [showInds, setShowInds] = useState(Object.keys(origNm).length > 0);
+    const inds = [];
+    areas.forEach((a) => (a.indicators || []).forEach((ind) => { if (ind && ind.id) inds.push({ area: a, ind: ind }); }));
+    const nmOn = (id) => !!(nm[id] && nm[id].on);
+    const changedIds = Object.keys(Object.assign({}, origNm, nm)).filter((id) => {
+      const was = !!origNm[id], now = nmOn(id);
+      if (was !== now) return true;
+      return now && String(nm[id].reason || '').trim() !== String((origNm[id] && origNm[id].reason) || '').trim();
+    });
+    const startChanged = start !== (coll.startMonth || '');
+    const changed = startChanged || changedIds.length > 0;
+    const invalid = changedIds.some((id) => nmOn(id) && !String(nm[id].reason || '').trim());
+
+    const counts = useMemo(() => {
+      const ds = start || null;
+      const isPatient = !!dept && dcPatientDepts([dept], subs).length > 0;
+      const p = { due: 0, recorded: 0, pending: 0, missing: 0, from: null };
+      if (isPatient) {
+        p.from = dcPatientStart(dept, subs, ds);
+        dcDueMonths(p.from).forEach((m) => { p.due++; const st = dcPatientState(subs, dept, m); if (st === 'recorded') p.recorded++; else if (st === 'pending') p.pending++; else p.missing++; });
+      }
+      const q = { due: 0, recorded: 0, pending: 0, notobs: 0, missing: 0, skipped: 0 };
+      inds.forEach(({ area, ind }) => {
+        if (nmOn(ind.id)) { q.skipped++; return; }
+        dcDueMonths(dcIndicatorStart(area, ind, subs, ds)).forEach((m) => {
+          q.due++;
+          const st = dcQStatus(subs, area.key, ind, m);
+          if (st === 'recorded') q.recorded++; else if (st === 'pending') q.pending++; else if (st === 'notobs') q.notobs++; else q.missing++;
+        });
+      });
+      return { isPatient, p, q };
+    }, [start, nm, subs, dept, areas]); // eslint-disable-line
+
+    const discard = () => { setStart(coll.startMonth || ''); setNm(initNm()); };
+    const save = () => {
+      if (!canSave || !changed || invalid || busy) return;
+      const body = {};
+      if (startChanged) body.startMonth = start || null;
+      if (changedIds.length) body.notMeasured = Object.fromEntries(changedIds.map((id) => [id, nmOn(id) ? { reason: String(nm[id].reason).trim() } : null]));
+      setBusy(true);
+      dcApi.put('/api/departments/' + encodeURIComponent(row.id) + '/collection-settings', body).then((r) => {
+        setBusy(false);
+        if (r && r.ok) { toast('Saved', 'success'); onSaved(row.id, r.collection || {}); dcRefreshLive(); }
+        else toast((r && r.error) || 'Could not save the department settings', 'error');
+      }).catch(() => { setBusy(false); toast('Could not save — check your connection and try again.', 'error'); });
+    };
+
+    const monthOpts = dcWideMonths();
+    if (coll.startMonth && monthOpts.indexOf(coll.startMonth) < 0) monthOpts.unshift(coll.startMonth);
+    const tile = (val, lbl, color) => (
+      <div style={{ minWidth: 70, padding: '6px 10px', borderRadius: 9, background: 'var(--panel-2)', border: '1px solid var(--line)' }}>
+        <div className="num" style={{ fontSize: 16, fontWeight: 800, color: color || 'var(--ink)', lineHeight: 1.15 }}>{val}</div>
+        <div style={{ fontSize: 10.5, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{lbl}</div>
+      </div>
+    );
+    const secLbl = { fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 6 };
+    const { p, q } = counts;
+    return (
+      <Card style={{ padding: '14px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+          <b style={{ fontSize: 14, color: 'var(--ink)' }}>{row.name}</b>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)' }}>{row.id}</span>
+          {row.qualityOnly && <span className="chip" style={{ fontWeight: 700, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>Quality only</span>}
+          {changed && <span className="chip" style={{ fontWeight: 700, background: '#fff4e0', color: '#9a6b00' }}>Unsaved changes</span>}
+          <span style={{ flex: 1 }} />
+          {coll.updatedAt ? <span style={{ fontSize: 11, color: 'var(--muted)' }}>Updated {new Date(coll.updatedAt).toLocaleDateString()}{coll.updatedBy ? ' by ' + coll.updatedBy : ''}</span> : null}
+          {canSave && changed && <button className="btn sm" disabled={busy} onClick={discard}>Discard</button>}
+          {canSave && <button className="btn pri sm" disabled={!changed || invalid || busy} onClick={save} title={invalid ? 'Give a reason for every indicator marked not measured' : undefined}><Ic d={I.check} s={13} />{busy ? 'Saving…' : 'Save'}</button>}
+        </div>
+        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          <div style={{ flex: '0 1 240px', minWidth: 190 }}>
+            <Field label="Data starts from" hint={start ? 'Months before ' + monthLabel(start) + ' are never counted as missing.' : (p.from || !counts.isPatient ? 'Not set — counting starts at the first month with data.' : 'Not set — only the last completed month counts.')}>
+              <select style={inputStyle} value={start} disabled={!canSave} onChange={(e) => setStart(e.target.value)}>
+                <option value="">Not set</option>
+                {monthOpts.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div style={{ flex: '1 1 280px', minWidth: 0 }}>
+            <div style={secLbl}>Statistics{counts.isPatient ? ' · from ' + (p.from ? monthLabel(p.from) : monthLabel(dcDefaultMonth())) : ''}</div>
+            {counts.isPatient
+              ? <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{tile(p.due, 'months due')}{tile(p.recorded, 'recorded', 'var(--pos)')}{tile(p.pending, 'pending', '#b5670a')}{tile(p.missing, 'missing', p.missing ? 'var(--rose)' : undefined)}</div>
+              : <div style={{ fontSize: 12, color: 'var(--muted)' }}>Does not report patient statistics.</div>}
+          </div>
+          <div style={{ flex: '1 1 360px', minWidth: 0 }}>
+            <div style={secLbl}>Quality{q.skipped ? ' · ' + q.skipped + ' not measured' : ''}</div>
+            {inds.length
+              ? <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{tile(q.due, 'indicator-months due')}{tile(q.recorded, 'recorded', 'var(--pos)')}{tile(q.pending, 'pending', '#b5670a')}{tile(q.notobs, 'not observed', '#5b3fa8')}{tile(q.missing, 'missing', q.missing ? 'var(--rose)' : undefined)}</div>
+              : <div style={{ fontSize: 12, color: 'var(--muted)' }}>No quality indicators linked to this department.</div>}
+          </div>
+        </div>
+        {inds.length > 0 && (
+          <div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+            <button className="btn sm" onClick={() => setShowInds((v) => !v)}><Ic d={I.chevR} s={13} style={{ transform: showInds ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />{showInds ? 'Hide' : 'Show'} {inds.length} quality indicator{inds.length === 1 ? '' : 's'}</button>
+            {showInds && (
+              <div style={{ display: 'grid', gap: 6, marginTop: 9 }}>
+                {inds.map(({ area, ind }) => {
+                  const on = nmOn(ind.id);
+                  const reason = (nm[ind.id] && nm[ind.id].reason) || '';
+                  const saved = origNm[ind.id];
+                  const sub = [areas.length > 1 ? area.name : null, ind.startMonth ? 'Indicator starts ' + monthLabel(ind.startMonth) : null].filter(Boolean).join(' · ');
+                  return (
+                    <div key={area.key + '|' + ind.id} style={{ border: '1px solid ' + (on ? '#f0d9a8' : 'var(--line)'), background: on ? 'var(--warn-bg,#fff4e0)' : 'var(--panel)', borderRadius: 9, padding: '8px 11px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 170 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>{ind.name}</div>
+                          {sub && <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>{sub}</div>}
+                        </div>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: on ? '#9a6b00' : 'var(--ink-2)', cursor: canSave ? 'pointer' : 'default' }}>
+                          <input type="checkbox" checked={on} disabled={!canSave} style={{ accentColor: '#b5670a' }}
+                            onChange={(e) => { const v = e.target.checked; setNm((s) => ({ ...s, [ind.id]: { on: v, reason: (s[ind.id] && s[ind.id].reason) || (saved && saved.reason) || '' } })); }} />
+                          Not measured
+                        </label>
+                      </div>
+                      {on && (
+                        <input style={{ ...inputStyle, marginTop: 7, fontSize: 12.5, padding: '7px 10px', borderColor: reason.trim() ? 'var(--line)' : 'var(--rose)' }} readOnly={!canSave} value={reason}
+                          placeholder="Reason (required) — e.g. this unit has no ventilated patients"
+                          onChange={(e) => { const v = e.target.value; setNm((s) => ({ ...s, [ind.id]: { on: true, reason: v } })); }} />
+                      )}
+                      {on && saved && saved.by && <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 4 }}>Marked by {saved.by}{saved.at ? ' · ' + new Date(saved.at).toLocaleDateString() : ''}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+    );
+  }
+
+  function DataCollectionSettings({ depts }) {
+    const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
+    // The server accepts Administrators only; anyone else sees the page read-only.
+    const canSave = !me || me.role === 'Administrator' || (me.role !== 'collector' && me.role !== 'incharge' && !!(window.unicoCan && window.unicoCan('datacol', 'edit')));
+    const dataRev = useDcDataRev();
+    useDcCollectionRev();
+    const [loaded, setLoaded] = useState(false);
+    const [err, setErr] = useState('');
+    const [subs, setSubs] = useState([]);
+    const [q, setQ] = useState('');
+    const load = (force) => dcLoadCollectionSettings(force).then(() => { setLoaded(true); setErr(''); }).catch((e) => setErr(String((e && e.message) || 'Could not load department settings')));
+    useEffect(() => { load(true); }, []);
+    useEffect(() => {
+      const l = () => { dcAllSubmissions().then((s) => setSubs(s || [])).catch(() => { }); };
+      l();
+      window.addEventListener('unico:data-refreshed', l);
+      return () => window.removeEventListener('unico:data-refreshed', l);
+    }, []);
+    const deptById = useMemo(() => { const m = {}; ((depts && depts.length) ? depts : dcAllDepts()).forEach((d) => { if (d && d.id) m[d.id] = d; }); return m; }, [depts, dataRev]);
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
+    const rows = loaded ? (_dcCollList || []) : null;
+    const needle = q.trim().toLowerCase();
+    const shown = (rows || []).filter((r) => !needle || (String(r.name || '') + ' ' + r.id).toLowerCase().indexOf(needle) >= 0)
+      .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+    const withStart = (rows || []).filter((r) => r.collection && r.collection.startMonth).length;
+    const nmCount = (rows || []).reduce((n, r) => n + Object.keys((r.collection && r.collection.notMeasured) || {}).length, 0);
+    return (
+      <div className="grid" style={{ gap: 14 }}>
+        <SectionTitle icon={I.layers} title="Department Setup" sub="When each department started reporting, and the quality indicators it does not measure — both decide what counts as missing." />
+        {!canSave && <Banner>Read-only — only an Administrator can change a department’s start month or mark an indicator as not measured.</Banner>}
+        {err && <Banner>{err} <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => load(true)}>Retry</button></Banner>}
+        <Card style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <input style={{ ...inputStyle, flex: '1 1 220px', maxWidth: 340 }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search department…" />
+          <span style={{ flex: 1 }} />
+          {rows && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{rows.length} departments · {withStart} with a start month · {nmCount} indicator{nmCount === 1 ? '' : 's'} not measured · counted through {monthLabel(dcDefaultMonth())}</span>}
+        </Card>
+        {rows === null ? (!err && <Card style={{ color: 'var(--muted)' }}>Loading departments…</Card>)
+          : shown.length === 0 ? <Card style={{ color: 'var(--muted)', textAlign: 'center' }}>{rows.length ? 'No department matches the search.' : 'No departments found.'}</Card>
+            : shown.map((r) => (
+              <DcSettingsCard key={r.id + ':' + ((r.collection && r.collection.updatedAt) || 0)} row={r} dept={deptById[r.id] || null}
+                areas={areas.filter((a) => a && ((r.qualityKey && a.key === r.qualityKey) || dcAreaDeptId(a) === r.id))}
+                subs={subs} canSave={canSave} onSaved={dcSetCollectionSettings} />
+            ))}
+      </div>
+    );
+  }
+
   function CollectorPortal() {
     const user = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
     const dataRev = useDcDataRev();
     const depts = useMemo(() => dcAllDepts(), [dataRev]);
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
+    const collRev = useDcCollectionRev();
     const hasPatient = depts.length > 0;
     const hasQuality = areas.some((a) => a && a.indicators && a.indicators.length);
 
@@ -4396,25 +5149,30 @@
         const S = r.ok ? (r.submissions || []) : [];
         let total = 0, missing = 0;
         areas.forEach((a) => (a.indicators || []).forEach((ind) => {
+          if (!dcIndDue(a, ind, month, S)) return;   // not measured / before its start month
           total++;
-          const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
+          const sent = ['recorded', 'pending', 'notobs'].includes(dcQStatus(S, a.key, ind, month));
           if (!sent) missing++;
         }));
-        const statGap = Math.max(0, depts.length - depts.filter((d) => ((d.months || []).indexOf(month) >= 0) || S.some((x) => x.type === 'patient' && x.department === d.id && x.month === month && x.status !== 'rejected')).length);
-        setSubCount({ pending: S.filter((s) => s.status === 'pending').length, missing, total, statGap });
+        // Quality-only units never owe statistics, and nobody owes months before the start.
+        const pDepts = dcPatientDepts(depts, S).filter((d) => dcPatientDue(d, month, S));
+        const statGap = pDepts.filter((d) => ['none', 'rejected'].includes(dcPatientState(S, d, month))).length;
+        const allMissing = dcMissingList(depts, areas.filter((a) => a && a.indicators && a.indicators.length), S).length;
+        setSubCount({ pending: S.filter((s) => s.status === 'pending' && dcIsMine(s)).length, missing, total, statGap, allMissing });
       }).catch(() => {});
       return () => { dead = true; };
-    }, [month, dataRev, view]);
+    }, [month, dataRev, view, collRev]);
 
     const donePct = subCount.total ? Math.round((subCount.total - subCount.missing) * 100 / subCount.total) : 0;
-    const fillFor = (area, indicatorId, m) => { setJump({ area, indicatorId, month: m }); setView('quality'); setSidebarOpen(false); };
+    // `from` = the rejected submission being fixed; the form refills its figures.
+    const fillFor = (area, indicatorId, m, from) => { setJump({ area, indicatorId, month: m, from: from || null }); setView('quality'); setSidebarOpen(false); };
     // The patient twin of fillFor. "My submissions" needs it to reopen a REJECTED
     // statistics sheet at the right department + month; DataPatientForm already
     // reads prefill.dept / prefill.month, it just had nothing feeding them.
-    const fillStat = (deptId, m) => { setJump({ dept: deptId, month: m }); setView('patient'); setSidebarOpen(false); };
+    const fillStat = (deptId, m, from) => { setJump({ dept: deptId, month: m, from: from || null }); setView('patient'); setSidebarOpen(false); };
     const go = (v) => { setView(v); setJump(null); setSidebarOpen(false); };
 
-    const badgeFor = (v) => (v === 'quick' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '');
+    const badgeFor = (v) => (v === 'missing' ? String(subCount.allMissing || '') : v === 'quick' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '');
     // Same .sb-item / .sb-sec / .badge classes the admin sidebar (Sidebar in ui.jsx)
     // uses — the Collector Portal used to skin its own glassy/glowing nav instead of
     // matching the rest of the app; this makes the two visually one system.
@@ -4429,12 +5187,16 @@
     };
 
     const [acctOpen, setAcctOpen] = useState(false);
-    const crumb = ({ home: 'Dashboard', unit: "My unit's staff", requests: 'Add nurse / PCA', status: 'Submission status', quick: 'Quick entry', quality: 'Quality data', patient: 'Patient statistics', history: 'My submissions', roster: 'Duty roster', profile: 'My profile', dept: 'Department & staff' })[view] || 'Submission status';
-    const collectNav = CP_NAV_COLLECT.filter(([v]) => (v === 'patient' ? hasPatient : v === 'quick' ? hasPatient : hasQuality));
+    const crumb = ({ missing: 'Missing data', home: 'Dashboard', unit: "My unit's staff", requests: 'Add nurse / PCA', status: 'Submission status', quick: 'Quick entry', quality: 'Quality data', patient: 'Patient statistics', history: 'My submissions', roster: 'Duty roster', profile: 'My profile', dept: 'Department & staff' })[view] || 'Submission status';
+    const collectNav = CP_NAV_COLLECT.filter(([v]) => (v === 'missing' ? (hasPatient || hasQuality) : v === 'patient' ? hasPatient : v === 'quick' ? hasPatient : hasQuality));
     const dl = cpDeadline(month);
-    const overdueDays = dl ? Math.floor((Date.now() - dl.getTime()) / 864e5) : 0;
+    // Overdue only while something is still owed, and from the first second past the deadline
+    // (Math.floor read day 1 as on schedule). Missing statistics count too, or a
+    // statistics-only collector could never be overdue.
+    const lateMs = dl ? Date.now() - dl.getTime() : 0;
+    const overdueDays = (lateMs > 0 && (subCount.missing > 0 || subCount.statGap > 0)) ? Math.ceil(lateMs / 864e5) : 0;
     const dueTxt = overdueDays > 0 ? overdueDays + ' day' + (overdueDays === 1 ? '' : 's') + ' overdue' : 'On schedule';
-    const dueTone = overdueDays > 0 ? ['#a92c42', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.28)'] : ['#12776c', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.3)'];
+    const dueTone = overdueDays > 0 ?['#a92c42', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.28)'] : ['#12776c', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.3)'];
     const pill = (c) => ({ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, padding: '5px 11px', borderRadius: 12, color: c[0], background: c[1], border: '1px solid ' + c[2], whiteSpace: 'nowrap', flexShrink: 0 });
 
     return (
@@ -4531,10 +5293,11 @@
                 <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>Your administrator has not given you a department or quality area to report on. Once they do, it appears here.</div>
               </div>
             )}
+            {view === 'missing' && (hasPatient || hasQuality) && <CollectorMissing depts={depts} areas={areas} month={month} user={user} />}
             {view === 'status' && hasQuality && <CollectorDash month={month} setMonth={setMonth} onNav={go} onFill={fillFor} user={user} />}
             {view === 'quick' && hasPatient && <CollectorQuickGrid depts={depts} onDone={() => go('history')} />}
-            {view === 'quality' && hasQuality && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month }} /></div>}
-            {view === 'patient' && hasPatient && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataPatientForm key={jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month : 'p'} depts={depts} prefill={{ responsible: user.name, dept: jump && jump.dept, month: jump && jump.dept ? jump.month : null }} /></div>}
+            {view === 'quality' && hasQuality && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month, from: jump && jump.from }} /></div>}
+            {view === 'patient' && hasPatient && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataPatientForm key={jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'p'} depts={depts} prefill={{ responsible: user.name, dept: jump && jump.dept, month: jump && jump.dept ? jump.month : null, from: jump && jump.from }} /></div>}
             {view === 'history' && <div style={{ maxWidth: 1240, margin: '0 auto' }}><CollectorHistory month={month} onFixQuality={fillFor} onFixPatient={fillStat} /></div>}
             {view === 'roster' && <CollectorRoster />}
             {view === 'profile' && <CollectorProfile user={user} onNav={go} />}
@@ -4599,7 +5362,9 @@
         if (s.isCorrection) p.corrections++;
         if ((s.submittedAt || 0) > p.last) p.last = s.submittedAt;
         const me2 = monthEndTs(s.month), dl = deadlineTs(s.month);
-        if (me2 && s.submittedAt) { p.lagSum += (s.submittedAt - me2) / 864e5; p.lagN++; if (dl) { p.onN++; if (s.submittedAt <= dl) p.onTime++; } }
+        // An edit request is a later fix of data already sent — timing it as a late report
+        // punished the person for correcting.
+        if (me2 && s.submittedAt && !s.isCorrection) { p.lagSum += (s.submittedAt - me2) / 864e5; p.lagN++; if (dl) { p.onN++; if (s.submittedAt <= dl) p.onTime++; } }
         if (s.reviewedAt && s.submittedAt && s.reviewedAt >= s.submittedAt) { p.turnSum += (s.reviewedAt - s.submittedAt) / 864e5; p.turnN++; }
         if (s.type === 'patient') statTargets.add((s.department || '') + '|' + s.month);
         else qualTargets.add((s.area || '') + '|' + (s.indicatorId || s.indicatorName || '') + '|' + s.month);
@@ -4612,7 +5377,8 @@
       const reasonList = Object.keys(reasons).map((k) => ({ reason: k, n: reasons[k] })).sort((a, b) => b.n - a.n);
       // Activity timeline: by day (<=60d range) else by month.
       const monthly = rangeDays > 60;
-      const key = (ts) => new Date(ts).toISOString().slice(0, monthly ? 7 : 10);
+      // LOCAL date, not toISOString (UTC): anything sent 00:00–06:00 Bangladesh time was counted on the previous day — or the previous month on the 1st.
+      const key = (ts) => { const d = new Date(ts); return (d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')).slice(0, monthly ? 7 : 10); };
       const bucket = {};
       all.forEach((s) => { if (!s.submittedAt) return; const kk = key(s.submittedAt); const b = bucket[kk] || (bucket[kk] = { k: kk, total: 0, approved: 0, rejected: 0, pending: 0 }); b.total++; if (s.status === 'approved') b.approved++; else if (s.status === 'rejected') b.rejected++; else b.pending++; });
       const timeline = Object.keys(bucket).map((k2) => bucket[k2]).sort((a, b) => a.k < b.k ? -1 : 1).slice(-48);
@@ -4622,7 +5388,7 @@
     if (!rows) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>Loading analytics…</div>;
 
     const sorted = data.list.slice().sort((a, b) => {
-      const val = (p) => sortBy === 'accuracy' ? (p.accuracy == null ? -1 : p.accuracy) : sortBy === 'rejected' ? p.rejected : sortBy === 'quality' ? p.quality : sortBy === 'last' ? p.last : sortBy === 'ontime' ? (p.onPct == null ? -1 : p.onPct) : sortBy === 'lag' ? (p.avgLag == null ? 1e9 : p.avgLag) : sortBy === 'turn' ? (p.avgTurn == null ? 1e9 : p.avgTurn) : p.total;
+      const val = (p) => sortBy === 'name' ? String(p.name || '').toLowerCase() : sortBy === 'accuracy' ? (p.accuracy == null ? -1 : p.accuracy) : sortBy === 'rejected' ? p.rejected : sortBy === 'quality' ? p.quality : sortBy === 'last' ? p.last : sortBy === 'ontime' ? (p.onPct == null ? -1 : p.onPct) : sortBy === 'lag' ? (p.avgLag == null ? 1e9 : p.avgLag) : sortBy === 'turn' ? (p.avgTurn == null ? 1e9 : p.avgTurn) : p.total;
       const r = val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0; return sortDir === 'asc' ? r : -r;
     });
     const setSort = (k) => { if (sortBy === k) setSortDir((d) => d === 'asc' ? 'desc' : 'asc'); else { setSortBy(k); setSortDir('desc'); } };
@@ -4713,7 +5479,7 @@
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
               <thead><tr>
-                <th style={th} onClick={() => setSort('name')}>Responsible</th>
+                <th style={th} onClick={() => setSort('name')}>Responsible{caret('name')}</th>
                 <th style={{ ...th, textAlign: 'center' }} onClick={() => setSort('total')}>Total{caret('total')}</th>
                 <th style={{ ...th, textAlign: 'center' }}>Stat / Qual</th>
                 <th style={{ ...th, textAlign: 'center' }}>Appr.</th>
@@ -4820,5 +5586,5 @@
     );
   }
 
-  Object.assign(window, { DataResponsibles, DataPatientForm, DataQualityForm, DataReview, DataShareLinks, CollectorPortal, SubmissionAnalytics });
+  Object.assign(window, { DataResponsibles, DataPatientForm, DataQualityForm, DataReview, DataShareLinks, CollectorPortal, SubmissionAnalytics, DataCollectionSettings });
 })();

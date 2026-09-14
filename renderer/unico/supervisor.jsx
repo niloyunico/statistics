@@ -641,22 +641,40 @@ function SupEditor({ id, shift, openAdd, depts, setRoute }) {
   const readOnly = rep.status === 'approved' && !admin;
 
   const draftKey = (rid) => 'unico_sup_draft_' + (rid || 'new');
+  // JSON of the report as loaded / last saved; null until loaded = write NO draft. Opening an
+  // existing report used to mirror the initial blank (id-less) report to unico_sup_draft_new
+  // before the fetch landed, overwriting a supervisor's unsaved new-report draft (synced key).
+  const baseline = useRef(null);
+  const repRef = useRef(rep); repRef.current = rep;
+  // Lost-update protection (server/supervisor-reports.js): every save carries the updatedAt of
+  // the copy this editor loaded; a 409 means someone saved since (or the report is approved), so
+  // autosave stops instead of overwriting their work. The local draft keeps these edits.
+  const baseAt = useRef(null);
+  const blocked = useRef(false);
   useEffect(() => {
+    baseline.current = null;
     if (!id) {
       // Restore an unsaved local draft so nothing is lost if the window was closed.
-      try { const d = localStorage.getItem('unico_sup_draft_new'); if (d) { const r = JSON.parse(d); if (r && (String(r.supervisorName || '').trim() || (r.newAdmissions || []).length || (r.criticalArea || []).length)) { setRep(r); supToast('Restored your unsaved draft.', 'info'); } } } catch (e) {}
+      let init = repRef.current;
+      try { const d = localStorage.getItem('unico_sup_draft_new'); if (d) { const r = JSON.parse(d); if (r && (String(r.supervisorName || '').trim() || (r.newAdmissions || []).length || (r.criticalArea || []).length)) { init = r; setRep(r); supToast('Restored your unsaved draft.', 'info'); } } } catch (e) {}
+      baseline.current = JSON.stringify(init);
       return;
     }
     setLoading(true);
     supApi.get('/api/supervisor-reports/' + encodeURIComponent(id)).then((j) => {
-      if (j.ok && j.report) setRep({ ...blankReport(), ...j.report });
+      if (j.ok && j.report) { const r = { ...blankReport(), ...j.report }; baseline.current = JSON.stringify(r); baseAt.current = j.report.updatedAt || null; blocked.current = false; setRep(r); }
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [id]);
 
-  // No-loss safety net: mirror the report to localStorage on every change (survives a
-  // closed tab / crash), and warn before leaving with unsaved edits.
-  useEffect(() => { if (readOnly) return; try { localStorage.setItem(draftKey(rep.id), JSON.stringify(rep)); } catch (e) {} }, [rep, readOnly]);
+  // No-loss safety net: mirror the report to localStorage on every REAL change (survives a
+  // closed tab / crash), and warn before leaving with unsaved edits. Editing an existing
+  // report never touches the "new" draft (no write until it has loaded with its id).
+  useEffect(() => {
+    if (readOnly || baseline.current == null || (id && !rep.id)) return;
+    const s = JSON.stringify(rep); if (s === baseline.current) return;
+    try { localStorage.setItem(draftKey(rep.id), s); } catch (e) {}
+  }, [rep, readOnly, id]);
   useEffect(() => {
     const h = (e) => { if (dirty.current) { e.preventDefault(); e.returnValue = ''; } };
     window.addEventListener('beforeunload', h);
@@ -668,17 +686,26 @@ function SupEditor({ id, shift, openAdd, depts, setRoute }) {
 
   // Autosave (debounced) once the required identity fields exist.
   useEffect(() => {
-    if (!dirty.current || readOnly) return;
+    if (!dirty.current || readOnly || blocked.current) return;
     if (!(rep.date && String(rep.supervisorName || '').trim())) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
       setSaved('Saving…');
-      const payload = { ...rep, totals: supComputeTotals(rep), census: { ...rep.census, TOTAL: supComputeCensusTotal(rep.census, deptNames) } };
+      const payload = { ...rep, totals: supComputeTotals(rep), census: { ...rep.census, TOTAL: supComputeCensusTotal(rep.census, deptNames) }, baseUpdatedAt: baseAt.current || undefined };
       try {
         const j = await supApi.post('/api/supervisor-reports', payload);
         if (j.ok) {
           dirty.current = false; setSaved('Saved ✓');
+          if (j.report && j.report.updatedAt) baseAt.current = j.report.updatedAt;
+          // Saved = no longer a draft: rebase the snapshot and drop this report's local copy —
+          // unless it was edited while the save was in flight (that newer draft must stay).
+          const rid = rep.id || (j.report && j.report.id);
+          if (rid) { baseline.current = JSON.stringify(rep.id ? rep : { ...rep, id: rid }); if (repRef.current === rep) { try { localStorage.removeItem(draftKey(rid)); } catch (e) {} } }
           if (!rep.id && j.report && j.report.id) { try { localStorage.removeItem('unico_sup_draft_new'); } catch (e) {} setRep((r) => ({ ...r, id: j.report.id })); }
+        } else if (j.conflict || j.locked) {
+          blocked.current = true;
+          setSaved(j.locked ? 'Locked — not saved' : 'Not saved — changed elsewhere');
+          supToast((j.error || 'This report was changed elsewhere.') + ' Your edits are kept as a draft on this device.', 'error');
         } else setSaved('Save failed');
       } catch (e) { setSaved('Save failed'); }
     }, 1100);
@@ -724,7 +751,14 @@ function SupEditor({ id, shift, openAdd, depts, setRoute }) {
     if (!rep.id) { supToast('Save the report first.', 'info'); return; }
     try {
       const j = await supApi.post('/api/supervisor-reports/' + rep.id + '/status', { status });
-      if (j.ok) { setRep((r) => ({ ...r, status })); supToast('Report ' + status + '.', 'success'); }
+      if (j.ok) {
+        setRep((r) => ({ ...r, status })); supToast('Report ' + status + '.', 'success');
+        // A status change bumps updatedAt: rebase, or the next autosave would conflict with itself.
+        const nb = j.report && j.report.updatedAt;
+        if (nb) baseAt.current = nb;
+        else supApi.get('/api/supervisor-reports/' + encodeURIComponent(rep.id)).then((g) => { if (g.ok && g.report) baseAt.current = g.report.updatedAt || baseAt.current; }).catch(() => {});
+        blocked.current = false;
+      }
     } catch (e) { supToast('Could not update status.', 'error'); }
   };
 
@@ -1357,9 +1391,9 @@ function BoardEditModal({ patient, deptNames, onClose, onSaved }) {
     setBusy(true);
     const sec = patient.section;
     const arr = (rep[sec] || []).slice(); arr[idx] = { ...arr[idx], ...row };
-    const j = await supApi.post('/api/supervisor-reports', { ...rep, [sec]: arr });
+    const j = await supApi.post('/api/supervisor-reports', { ...rep, [sec]: arr, baseUpdatedAt: rep.updatedAt || undefined });
     setBusy(false);
-    if (j.ok) { supToast('Patient updated.', 'success'); onSaved && onSaved(); onClose(); } else supToast('Save failed.', 'error');
+    if (j.ok) { supToast('Patient updated.', 'success'); onSaved && onSaved(); onClose(); } else supToast(j.error || 'Save failed.', 'error');
   };
   if (!patient) return null;
   const custom = (rep && cfg.cols[patient.section]) || [];

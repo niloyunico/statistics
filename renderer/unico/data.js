@@ -31,7 +31,10 @@ const _FALLBACK_DEPTS = (typeof window !== 'undefined' && Array.isArray(window._
   : [];
 // Same rule as the quality seed: an injected list wins even when it is empty. A
 // scoped account with no departments must see none, not the bundled sample data.
-const DEPARTMENTS = (_INJECTED_DEPTS || _FALLBACK_DEPTS).map(d => ({ ...d }));
+// Hidden duplicate columns (an empty twin marked { hidden, duplicateOf } by
+// scripts/organize-database.js) stay on the stored record but are never shown or offered for
+// entry, so a value can't be typed into the twin and split across two ids again.
+const DEPARTMENTS = (_INJECTED_DEPTS || _FALLBACK_DEPTS).map(d => ({ ...d, cols: Array.isArray(d.cols) ? d.cols.filter(c => !(c && c.hidden)) : d.cols }));
 
 // Attach the derived fields the app expects (series/total/latest/prev/delta/peak),
 // guarded so a department with no rows can't throw.

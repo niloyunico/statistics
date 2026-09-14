@@ -81,7 +81,7 @@ function App(){
   } else if(route.view==='departments'){
     if(!depts.length){ body=<EmptyState setRoute={setRoute}/>; crumbs=['UNICO','Departments']; }
     else if(!route.dept){ crumbs=['UNICO','Departments']; body=<DeptGrid depts={depts} openDept={openDept} setRoute={setRoute}/>; }
-    else { const cd=depts.find(d=>d.id===route.dept)||depts[0]; crumbs=['UNICO','Departments',cd.name]; body=<DeptDetail dept={cd} openDept={openDept} depts={depts} setRoute={setRoute}/>; }
+    else { const cd=depts.find(d=>d.id===route.dept)||depts[0]; crumbs=['UNICO','Departments',cd.name]; body=<DeptDetail key={cd.id} dept={cd} openDept={openDept} depts={depts} setRoute={setRoute}/>; }
   } else if(route.view==='compare'){
     crumbs=['UNICO','Compare'];
     body=<DeptCompare depts={depts} openDept={openDept}/>;
@@ -141,6 +141,9 @@ function App(){
   } else if(route.view==='dcResponsibles'){
     crumbs=['UNICO','Data Collection','Responsible Persons'];
     body=<DataResponsibles depts={depts}/>;
+  } else if(route.view==='dcSettings'){
+    crumbs=['UNICO','Data Collection','Department Setup'];
+    body=(typeof DataCollectionSettings!=='undefined') ? <DataCollectionSettings depts={depts}/> : null;
   } else if(route.view==='dcReview'){
     crumbs=['UNICO','Data Collection','Review & History'];
     body=<DataReview/>;

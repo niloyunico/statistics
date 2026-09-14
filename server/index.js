@@ -175,7 +175,7 @@ app.get('/api/me', async (req, res) => {
         photo: u.photo || null, empId: u.empId || u.emp_id || null,
         departments: Array.isArray(u.departments) ? u.departments : [],
         qualityAreas: Array.isArray(u.qualityAreas) ? u.qualityAreas : [],
-        createdAt: u.createdAt || null,
+        createdAt: u.createdAt || u.created_at || null, // seed-admin.js accounts store `created_at`
       };
     }
   } catch (e) { /* extras only */ }
@@ -274,8 +274,32 @@ app.put('/api/data', requireAuth, access.attach, async (req, res) => {
     }
     // Pass the baseline we just read so only the keys that changed are written — see
     // setAppData(). Without it every save rewrote the whole blob and the last writer won.
+    // LOST-UPDATE GUARD for every other key (staff has its own row merge above). Each key
+    // used to be written whole, so a tab opened earlier erased everything saved since it
+    // loaded. The browser now sends its baseline per changed key; when the stored value has
+    // moved on since that baseline, merge three-way instead of overwriting (appdata-merge.js)
+    // and hand the merged value back so the tab adopts it. Old bundles send no bases and
+    // keep the previous behaviour.
+    const stored = (current && current.data) || {};
+    const bases = (req.body && req.body.bases && typeof req.body.bases === 'object' && !Array.isArray(req.body.bases)) ? req.body.bases : null;
+    const mergedBack = {};
+    if (bases) {
+      const { mergeKey } = require('./appdata-merge');
+      Object.keys(merged).forEach((k) => {
+        if (k === staffKey || !Object.prototype.hasOwnProperty.call(bases, k) || typeof bases[k] !== 'string') return;
+        if (merged[k] === stored[k] || bases[k] === stored[k] || typeof stored[k] !== 'string') return;
+        const out = mergeKey(bases[k], stored[k], merged[k]);
+        merged[k] = out;
+        if (out !== data[k]) mergedBack[k] = out;
+      });
+    }
+    // A NEW key that cannot be a Mongo field path ('.'/'$') would force every later save into
+    // a whole-document overwrite (db.js dottablePath). Such keys are device-only drafts; refuse
+    // to store them rather than weaken every other save.
+    Object.keys(merged).forEach((k) => { if ((k.indexOf('.') >= 0 || k.charAt(0) === '$') && !Object.prototype.hasOwnProperty.call(stored, k)) delete merged[k]; });
     const r = await setAppData(merged, current && current.data);
-    res.json({ ok: true, updatedAt: r.updatedAt });
+    const saved = { ok: true, updatedAt: r.updatedAt, merged: Object.keys(mergedBack).length ? mergedBack : undefined };
+    const logWrites = [];
 
     // Activity log. This is where almost every edit in the app lands -- staff records,
     // department statistics, quality indicators, roster rules -- so a bare
@@ -301,11 +325,20 @@ app.put('/api/data', requireAuth, access.attach, async (req, res) => {
         if (now - (SAVE_SEEN.get(dk) || 0) < 60000) return;
         SAVE_SEEN.set(dk, now);
         if (SAVE_SEEN.size > 500) SAVE_SEEN.forEach((ts, key) => { if (now - ts > 60000) SAVE_SEEN.delete(key); });
-        activity.log(req, 'app_data_saved', { target: label, detail });
+        logWrites.push(Promise.resolve(activity.log(req, 'app_data_saved', { target: label, detail })));
       });
     } catch (e) { /* the save already succeeded; logging is best-effort */ }
+    // Respond AFTER the log writes (capped): on Vercel the function can be frozen the moment
+    // the response is sent, so a fire-and-forget D1 insert was silently lost.
+    if (logWrites.length) await Promise.race([Promise.allSettled(logWrites), new Promise((r2) => setTimeout(r2, 1500))]);
+    res.json(saved);
   }
-  catch (e) { res.status(e.status || 500).json({ ok: false, error: e.status === 409 ? e.message : 'Server error.' }); }
+  catch (e) {
+    // 403 (not allowed to write this change) and 503 (user/database lookup unavailable) carry a
+    // message the person must see; a bare "Server error." read as a glitch while nothing saved.
+    if (e.status === 503) res.set('Retry-After', '5');
+    res.status(e.status || 500).json({ ok: false, error: (e.status === 409 || e.status === 403 || e.status === 503) ? e.message : 'Server error.' });
+  }
 });
 
 if (require.main === module) {

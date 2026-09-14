@@ -1731,6 +1731,11 @@ const ROLE_PRESETS={
   'Read-only':{stats:'view',quality:'view',supervisor:'view',staff:'view',datacol:'view',reports:'view',users:'none'},
 };
 const USER_ROLES=Object.keys(ROLE_PRESETS);
+// PORTAL backend roles (server/access.js PORTAL_ROLES) → the dropdown label. Only
+// 'collector' used to be known here, so an in-charge/nurse/PCA opened as 'Custom', saved
+// as role 'User' and lost their portal, ward and quality areas on a mere rename.
+const PORTAL_ROLE_LABEL={collector:'Data Collector',incharge:'In-charge (portal)',nurse:'Nurse (portal)',pca:'PCA (portal)'};
+const portalRoleOfLabel=l=>Object.keys(PORTAL_ROLE_LABEL).find(k=>PORTAL_ROLE_LABEL[k]===l)||null;
 /* ---- Role templates, admin-defined (server/users-admin.js /api/roles) ----
    ROLE_PRESETS above is now only the OFFLINE FALLBACK — the real list is loaded from
    the server, where an administrator can add, edit and delete roles ("Nurse Manager",
@@ -1796,7 +1801,7 @@ function UserModal({initial,onClose,onSaved}){
   const tmplMatch=(pm)=>{ const t=templates.find(x=>USER_MODS.every(([k])=>sameActs(pm[k],x.perms&&x.perms[k]))); return t?t.name:'Custom'; };
   const initTemplate=editing
     ? (initial.role==='Administrator' ? 'Administrator'
-       : initial.role==='collector' ? 'Data Collector'
+       : PORTAL_ROLE_LABEL[initial.role] ? PORTAL_ROLE_LABEL[initial.role]
        : (initial.perms ? tmplMatch(initial.perms) : 'Custom'))
     : 'Custom';
   const [role,setRole]=useState(initTemplate);
@@ -1830,10 +1835,11 @@ function UserModal({initial,onClose,onSaved}){
   const toggleDept=(id)=>setStaffDepts(ds=>ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds,id]);
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=role==='Administrator';
-  const isColl=role==='Data Collector';   // backend role 'collector' — data-collection portal, scope set in Responsible Persons
+  const portalRole=portalRoleOfLabel(role);   // 'collector'|'incharge'|'nurse'|'pca' or null — scope set in Responsible Persons
+  const isColl=!!portalRole;
   const pickRole=r=>{
     setRole(r);
-    if(r==='Administrator'||r==='Data Collector'||r==='Custom'){ setRoleTmpl(null); return; }
+    if(r==='Administrator'||portalRoleOfLabel(r)||r==='Custom'){ setRoleTmpl(null); return; }
     const t=templates.find(x=>x.name===r);
     if(t){ setRoleTmpl(t.id); setPerms(USER_MODS.reduce((m,[k])=>(m[k]=asActions(t.perms&&t.perms[k]),m),{})); }
     else if(ROLE_PRESETS[r]){ setRoleTmpl(null); setPerms(USER_MODS.reduce((m,[k])=>(m[k]=levelToActions(ROLE_PRESETS[r][k]||'none'),m),{})); }
@@ -1844,7 +1850,7 @@ function UserModal({initial,onClose,onSaved}){
   const clearMod=(mid)=>{ setPerms(p=>({...p,[mid]:[]})); setRole('Custom'); setRoleTmpl(null); };
   // Administrator and Data Collector are BACKEND roles, not templates — they stay in the
   // list. Everything between them is admin-defined and can change at any time.
-  const roleOpts=['Administrator',...templates.map(t=>t.name),'Data Collector','Custom'];
+  const roleOpts=['Administrator',...templates.map(t=>t.name),...Object.values(PORTAL_ROLE_LABEL),'Custom'];
 
   const save=async()=>{
     setErr('');
@@ -1856,15 +1862,20 @@ function UserModal({initial,onClose,onSaved}){
     if(email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
     setBusy(true);
     try{
-      const backendRole=isAdmin?'Administrator':(isColl?'collector':'User');
-      // Collectors keep their department/quality scope (managed in Responsible Persons); we
-      // omit `departments` so the backend preserves the existing assignment on PATCH.
-      const payload={ name:name.trim(), email:email.trim().toLowerCase(), role:backendRole,
+      const backendRole=isAdmin?'Administrator':(portalRole||'User');
+      // Portal accounts keep their department/quality scope (managed in Responsible Persons); we
+      // omit `departments` and the quality-area fields so the backend preserves the existing
+      // assignment (incl. its stored customQualityAreas split) on PATCH. This form edits
+      // no areas, so it has no custom-area list to compute or send.
+      const payload={ name:name.trim(), email:email.trim().toLowerCase(),
         title:(isAdmin||isColl)?null:(role==='Custom'?'Custom access':role), active:status==='active',
         perms:(isAdmin||isColl)?null:perms,
         // The template this grant came from. A label for the panel and the target of
         // "Apply to members"; `perms` above is still what gets enforced.
         roleTemplate:(isAdmin||isColl)?null:(roleTmpl||null) };
+      // Send `role` only when the admin actually changed it: an account the form cannot
+      // represent must never be silently re-roled by an unrelated edit.
+      if(!editing||backendRole!==(initial.role||'User')) payload.role=backendRole;
       if(!isAdmin&&!isColl){
         // Row-level staff scope. `departments` is only sent for plain Users — for a
         // collector it is their collection assignment and must not be overwritten here.
@@ -1915,7 +1926,7 @@ function UserModal({initial,onClose,onSaved}){
             </div>
           ) : isColl ? (
             <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'flex-start'}}>
-              <Ic d={I.check} s={16} c="var(--blue)"/><span><b>Data Collector.</b> Signs in to the data-collection portal only. Choose which departments &amp; indicators they collect in <b>Settings → Responsible Persons</b> — that assignment is kept when you save here.</span>
+              <Ic d={I.check} s={16} c="var(--blue)"/><span><b>{role}.</b> Signs in to the portal only. Choose which departments &amp; indicators they collect in <b>Settings → Responsible Persons</b> — that assignment is kept when you save here.</span>
             </div>
           ) : (
           <div>
@@ -2181,13 +2192,13 @@ function UserManagement(){
   // showing buttons that come back 403.
   const may=(a)=>{ try{ return typeof window.unicoCan!=='function' || window.unicoCan('users',a); }catch(e){ return true; } };
   const mayAdd=may('add'), mayEdit=may('edit'), mayDel=may('delete');
-  const roleLabel=u=> u.role==='Administrator'?'Administrator':(u.role==='collector'?'Data Collector':(u.title||'User'));
+  const roleLabel=u=> u.role==='Administrator'?'Administrator':(PORTAL_ROLE_LABEL[u.role]||(u.title||'User'));
   // Surface the row-level staff scope in the list too, so "who can see whose records"
   // is answerable at a glance instead of only inside the edit modal.
   const staffScopeLabel=u=>{ const sc=u.staffScope||'all'; if(sc==='self') return 'own record only'; if(sc==='departments') return (u.departments&&u.departments.length?u.departments.length+' dept':'no dept')+' staff'; return ''; };
   const summaryOf=u=>{
     if(u.role==='Administrator') return 'Full access';
-    if(u.role==='collector') return 'Data collection';
+    if(PORTAL_ROLE_LABEL[u.role]) return u.role==='collector'?'Data collection':'Portal';
     const base=permSummary(u.perms);
     const sc=staffScopeLabel(u);
     return sc&&base!=='No access'?base+' · '+sc:base;
@@ -2504,7 +2515,7 @@ function CacheStats(){
             {tile('Redis calls',(r.calls==null?'—':r.calls),(r.errors||0)+' errors'+(r.mutedForMs>0?' · MUTED '+Math.ceil(r.mutedForMs/1000)+'s':''),r.mutedForMs>0?'#d23a52':undefined)}
           </div>
           {r.lastError&&<div style={{fontSize:11.5,color:'#b5670a',background:'rgba(224,138,30,.1)',borderRadius:7,padding:'8px 11px'}}>Last Redis error: {String(r.lastError).slice(0,180)}</div>}
-          {!redisLive&&<div style={{fontSize:11.5,color:'var(--muted)',background:'var(--panel-2)',borderRadius:7,padding:'8px 11px'}}>Each serverless instance is caching alone and invalidations don't reach the others. Set <b>UPSTASH_REDIS_REST_URL</b> + <b>UPSTASH_REDIS_REST_TOKEN</b> (or connect Upstash from Vercel → Storage) and redeploy to share the cache fleet-wide.</div>}
+          {!redisLive&&<div style={{fontSize:11.5,color:'var(--muted)',background:'var(--panel-2)',borderRadius:7,padding:'8px 11px'}}>No shared cache is configured — by design since Redis was removed (CACHE_DISABLED=true). Every read goes straight to the database, so data is always current; pages may load a little slower.</div>}
         </div>
       )}
     </div></div>
@@ -2991,7 +3002,7 @@ function Settings({depts, store, setRoute}){
       <SectionTitle icon={I.gear} title="Settings" sub="Configure the statistics platform"/>
       <div className="grid" style={{gridTemplateColumns:'200px 1fr',alignItems:'start'}}>
         <div className="card" style={{padding:6}}>
-          {[['general','General',I.gear],['departments','Departments',I.layers],['stafffields','Staff Fields',I.steth],['deptprivileges','Department Privileges',I.check],['users','Users & Roles',I.user],['activity','Activity Log',I.activity],['database','Database',I.grid],['media','Media',I.doc],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
+          {[['general','General',I.gear],['departments','Departments',I.layers],['stafffields','Staff Fields',I.steth],['deptprivileges','Department Privileges',I.check],['users','Users & Roles',I.user],['activity','Activity Log',I.activity],['database','Database',I.grid],['monitor','System Monitor',I.activity],['media','Media',I.doc],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
             <div key={id} onClick={()=>setTab(id)} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:7,cursor:'pointer',fontSize:13,fontWeight:600,
               background:tab===id?'var(--blue-50)':'transparent',color:tab===id?'var(--blue-700)':'var(--ink-2)'}}>
               <Ic d={ic} s={16}/>{l}
@@ -3025,6 +3036,7 @@ function Settings({depts, store, setRoute}){
           {tab==='deptprivileges'&&(typeof DeptPrivilegesSettings!=='undefined'?<DeptPrivilegesSettings depts={depts}/>:null)}
           {tab==='activity'&&<ActivityLog/>}
           {tab==='database'&&<React.Fragment><CacheStats/><DatabaseBrowser/></React.Fragment>}
+          {tab==='monitor'&&(window.SystemMonitor?<window.SystemMonitor/>:<div className="card"><div className="card-b">System Monitor is not loaded.</div></div>)}
           {tab==='media'&&<MediaBrowser/>}
           {tab==='users'&&<div className="card"><div className="card-b"><UserManagement/></div></div>}
           {tab==='responsibles'&&(typeof DataResponsibles!=='undefined'?<DataResponsibles depts={depts}/>:null)}

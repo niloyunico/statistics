@@ -137,12 +137,29 @@
     if (!r.ok) {
       const err = new Error((j && j.error) || ('HTTP ' + r.status));
       err.status = r.status; err.body = j;
+      // An expired session otherwise reads as "no data" (tryApi swallows it) — tell the app
+      // so it can return to sign-in. A wrong password on /api/login is not an expiry.
+      if (r.status === 401 && !/^\/api\/login\b/.test(path)) { try { window.dispatchEvent(new CustomEvent('unico:session-expired', { detail: { path } })); } catch (e) { /* old webview */ } }
       throw err;
     }
     return j || { ok: true };
   }
   // A read that must never break a screen: resolve null on any failure.
   const tryApi = (path, opts) => api(path, opts).catch(() => null);
+  // Every page of a {ok, <key>:[...], nextOffset} list. null when the FIRST page fails (keep
+  // what is on screen); a later failure also returns null so a half list never reads as
+  // "these items were never submitted". Capped so a runaway cursor cannot loop forever.
+  async function pageAll(path, key, maxPages) {
+    const out = []; let offset = 0;
+    for (let p = 0; p < (maxPages || 10); p++) {
+      const r = await tryApi(path + (path.indexOf('?') < 0 ? '?' : '&') + 'offset=' + offset);
+      if (!r || !r.ok || !Array.isArray(r[key])) return null;
+      out.push(...r[key]);
+      if (r.nextOffset == null || r.nextOffset <= offset) break;
+      offset = r.nextOffset;
+    }
+    return out;
+  }
 
   /* ----------------------------------------------------------------- mount --- */
   function injectCSS(id, css) {
@@ -158,5 +175,5 @@
     if (ReactDOM.createRoot) ReactDOM.createRoot(root).render(el); else ReactDOM.render(el, root);
   }
 
-  window.DC = { S, ix, vx, cssToObj, AndroidDevice, usePhone, api, tryApi, injectCSS, mount };
+  window.DC = { S, ix, vx, cssToObj, AndroidDevice, usePhone, api, tryApi, pageAll, injectCSS, mount };
 })();

@@ -29,36 +29,31 @@ const P = {
 
 const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
 
-/* The module-level default month axis (the current FISCAL year, Jun–May) is defined just
+/* The module-level default month axis (the current calendar year, Jan–Dec) is defined just
    below once fyAxis() exists. Views compute their own axis via fyAxis(selectedYear). */
 
 const QORDER = ['Q1','Q2','Q3','Q4'];
-const QL = [['Q1','Jun–Aug'],['Q2','Sep–Nov'],['Q3','Dec–Feb'],['Q4','Mar–May']];
+const QL = [['Q1','Jan–Mar'],['Q2','Apr–Jun'],['Q3','Jul–Sep'],['Q4','Oct–Dec']];
 
-/* ---- reporting-year helpers (fiscal year, Jun–May) for the month + year switcher ----
-   Mirrors quality-store.js (QUARTER_MONTHS / fyOfKeyS): the reporting year starts in June,
-   so Jan-26…May-26 belong to the fiscal year that started Jun-25. */
-const FY_MONS = ['Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May'];
-/* The 12 months of the fiscal year starting `startYear` (Jun of year N … May of N+1), as
-   [storeKey 'Mon-YY', 'Mon YYYY', 'Mon'] — the same [key,label,…] shape MONTHS uses, so
-   deptStat / monthStatus work unchanged. */
+/* ---- reporting-year helpers (CALENDAR year, Jan–Dec) for the month + year switcher ----
+   The reporting year is the calendar year (as it was before the Jun–May fiscal port came
+   back in): Jan-26…Dec-26 = "Year 2026", Q1 = Jan–Mar. Mirrors quality-store.js fyOfKeyS. */
+const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+/* The 12 months of the calendar year `startYear`, as [storeKey 'Mon-YY', 'Mon YYYY', 'Mon'] —
+   the same [key,label,…] shape MONTHS uses, so deptStat / monthStatus work unchanged. */
 function fyMonthsFor(startYear){
-  return FY_MONS.map((mn, i) => {
-    const yr = (i < 7) ? startYear : startYear + 1;
-    const yk = String(yr % 100).padStart(2, '0');
-    return [ mn + '-' + yk, mn + ' ' + yr, mn ];
-  });
+  const yy = String(startYear % 100).padStart(2, '0');
+  return FY_MONS.map(mn => [ mn + '-' + yy, mn + ' ' + startYear, mn ]);
 }
-/* Fiscal year (Jun–May) for a 'Mon-YY' key — Jun…Dec carry their own year, Jan…May the
-   previous one. */
+/* Calendar year for a 'Mon-YY' key. */
 function fyOfKey(key){
-  const p = String(key || '').split('-'); const mi = QMONS_ORD.indexOf(p[0]);
+  const p = String(key || '').split('-'); const mi = FY_MONS.indexOf(p[0]);
   const yy = parseInt(p[1], 10);
   if(mi < 0 || isNaN(yy)) return null;
-  return 2000 + yy - (mi >= 5 ? 0 : 1);
+  return 2000 + yy;
 }
-/* Current fiscal year's start (June) from the browser clock. */
-function currentFy(){ const d = new Date(); return d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1; }
+/* Current calendar year from the browser clock. */
+function currentFy(){ return new Date().getFullYear(); }
 /* Set of fiscal-year starts that have any actual recorded value in the data. */
 function dataFySet(depts){
   const set = new Set();
@@ -90,13 +85,13 @@ function defaultFy(depts){
   if(!yrs.length) return currentFy();
   return yrs.sort((a,b) => (counts[b]-counts[a]) || (b-a))[0];
 }
-function fyLabelOf(startYear){ return 'FY ' + startYear; }
+function fyLabelOf(startYear){ return 'Year ' + startYear; }
 /* The quarter-tagged 12-month axis for a reporting year — same [key,'Mon YYYY',Q] shape as the
    module MONTHS, so any view can `const MONTHS = fyAxis(fy)` to become year-aware with no other
    change (the local const lexically shadows the module one). */
 const QTAG_FY = ['Q1','Q1','Q1','Q2','Q2','Q2','Q3','Q3','Q3','Q4','Q4','Q4'];
 function fyAxis(startYear){ return fyMonthsFor(startYear).map((r,i)=>[r[0],r[1],QTAG_FY[i]]); }
-/* Default axis = the current fiscal year; a safe fallback for helpers called without an
+/* Default axis = the current calendar year; a safe fallback for helpers called without an
    explicit months array. Every view overrides it with its selected year. */
 const MONTHS = fyAxis(currentFy());
 /* 'Mon-YY' storeKey -> 'Mon YYYY' display label (year-agnostic). */
@@ -514,9 +509,9 @@ function QCDashboard({ depts, Q }) {
         </div>
         {/* Fiscal-year switcher — drives every panel on this dashboard. */}
         <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '2px', background: '#f1f6fb', border: '1px solid #dde3ec', borderRadius: '10px', padding: '3px', flexShrink: 0 }}>
-          <button onClick={goPrev} disabled={!canPrev} title="Previous fiscal year" style={{ border: 0, background: 'transparent', cursor: canPrev ? 'pointer' : 'default', color: canPrev ? '#0090ca' : '#c4ccd6', fontSize: '17px', lineHeight: 1, padding: '3px 10px', borderRadius: '7px', fontWeight: 700 }}>‹</button>
+          <button onClick={goPrev} disabled={!canPrev} title="Previous year" style={{ border: 0, background: 'transparent', cursor: canPrev ? 'pointer' : 'default', color: canPrev ? '#0090ca' : '#c4ccd6', fontSize: '17px', lineHeight: 1, padding: '3px 10px', borderRadius: '7px', fontWeight: 700 }}>‹</button>
           <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#16202e', minWidth: '96px', textAlign: 'center', fontFamily: MONO }}>{fyLabelOf(safeFy)}</span>
-          <button onClick={goNext} disabled={!canNext} title="Next fiscal year" style={{ border: 0, background: 'transparent', cursor: canNext ? 'pointer' : 'default', color: canNext ? '#0090ca' : '#c4ccd6', fontSize: '17px', lineHeight: 1, padding: '3px 10px', borderRadius: '7px', fontWeight: 700 }}>›</button>
+          <button onClick={goNext} disabled={!canNext} title="Next year" style={{ border: 0, background: 'transparent', cursor: canNext ? 'pointer' : 'default', color: canNext ? '#0090ca' : '#c4ccd6', fontSize: '17px', lineHeight: 1, padding: '3px 10px', borderRadius: '7px', fontWeight: 700 }}>›</button>
         </div>
       </div>
 
@@ -853,7 +848,10 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
     onClose();
   };
   const clearAll = () => {
-    Q.patchIndicator(dep.key, ind.id, { months: { [mk]: null }, mNum: { [mk]: null }, mDen: { [mk]: null }, incidents: { [mk]: [] }, monthRemarks: { [mk]: '' }, mNotObserved: { [mk]: null } });
+    // Every month-keyed part of the reading: a kept HH group / department breakdown re-filled the
+    // form and re-saving resurrected the deleted reading. (All of these merge per month in
+    // quality-store NESTED, so a {[mk]:null} patch clears only this month.)
+    Q.patchIndicator(dep.key, ind.id, { months: { [mk]: null }, mNum: { [mk]: null }, mDen: { [mk]: null }, incidents: { [mk]: [] }, monthRemarks: { [mk]: '' }, mNotObserved: { [mk]: null }, mGroups: { [mk]: null }, mGroupsDen: { [mk]: null }, mDeptBreakdown: { [mk]: null }, capa: { [mk]: null } });
     onClose();
   };
 
@@ -1988,7 +1986,7 @@ function QCReportBuilder({depts}){
   const [exporting,setExporting]   = useState(false);
   const [note,setNote]             = useState(null);
   const [pendingExport,setPendingExport] = useState(null); // one-click report: {fmt} to run after a render tick
-  // Dynamic fiscal year (Jun–May). Opens on the most recent year that HAS data, so freshly
+  // Dynamic reporting year (calendar, Jan–Dec). Opens on the most recent year that HAS data, so freshly
   // entered current-year data (e.g. Jun 2026) shows immediately; the FY picker below pages back.
   const [fy,setFy]                 = useState(()=>defaultFy(depts));
 
@@ -2090,7 +2088,7 @@ function QCReportBuilder({depts}){
     else base=MONTHS;
     // Trim leading/trailing months with NO reported data across the chosen departments, so
     // the report (table, charts, KPIs) STOPS at the last reported month instead of padding
-    // empty future months — a mid-year "Full Year" run now shows Jun–Sep, not Jun–May of
+    // empty future months — a mid-year "Full Year" run now shows Jan–Sep, not Jan–Dec of
     // blanks. If the whole span is empty (e.g. a future quarter picked on purpose) it is
     // left intact so the report still renders the requested period.
     if(!base.length) return base;
@@ -2921,7 +2919,7 @@ function QCReportBuilder({depts}){
         <Header/>
         <div style={{marginTop:60,textAlign:'center'}}>
           <div style={{fontSize:16,fontWeight:700,color:P.ink,marginBottom:8}}>Hand Hygiene Compliance</div>
-          <div style={{fontSize:12,color:P.muted,maxWidth:460,margin:'0 auto'}}>No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) records for {fyLabelOf(fy)}. Record hand hygiene in Quality Data — or switch the fiscal year above — then regenerate.</div>
+          <div style={{fontSize:12,color:P.muted,maxWidth:460,margin:'0 auto'}}>No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) records for {fyLabelOf(fy)}. Record hand hygiene in Quality Data — or switch the year above — then regenerate.</div>
         </div>
         <Footer n={n} total={total}/>
       </div>
@@ -3629,7 +3627,7 @@ function QCReportBuilder({depts}){
               <select value={fy} onChange={e=>{setFy(Number(e.target.value));setPeriod({mode:'all'});setPageIdx(0);}} style={{...sel2,width:'100%'}}>
                 {fyOptions(depts).map(y=><option key={y} value={y}>{fyLabelOf(y)}{y===currentFy()?' · current':''}</option>)}
               </select>
-              <div style={{fontSize:11,color:P.muted,marginTop:6}}>Reporting year runs Jun–May. Switch it to view a different year; every page below follows this selection.</div>
+              <div style={{fontSize:11,color:P.muted,marginTop:6}}>Reporting year runs Jan–Dec. Switch it to view a different year; every page below follows this selection.</div>
             </div>
             <div>
               {fieldLabel('Reporting period')}
@@ -4566,7 +4564,13 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const deptHasInd = (dk)=>{ if(!selInd) return false; const cid=window.qualitySlug?window.qualitySlug(selInd.name):'';
     return ((((Q.depts||[]).find(d=>d.key===dk))||{}).indicators||[]).some(i=> String(i.id)===cid || norm(i.name)===norm(selInd.name)); };
 
-  const onClone = ()=>{ if(!selInd) return; const copy=Object.assign({},selInd,{ id:window.qualitySlug(selInd.name+' copy',deptIndIds(sel.deptKey)), name:selInd.name+' (copy)' }); Q.addIndicator(sel.deptKey,copy); setSel({deptKey:sel.deptKey,id:copy.id}); };
+  // selInd comes from the MERGED store, so it carries this department's recorded values;
+  // addIndicator stores the whole object as the target's OWN copy → one department's
+  // readings/incidents showed up in another (and Clone doubled them). Clone / Copy / Assign
+  // take the DEFINITION only; Move keeps everything (it is the same indicator moving).
+  const QC_VALUE_FIELDS = ['months','mNum','mDen','mGroups','mGroupsDen','mDeptBreakdown','monthRemarks','incidents','capa','mNotObserved','mEditedAt','mApprovedAt','quarters','quarterStatus','quartersByFy','qNum','qDen','quarterRemarks','status','hhFromAudit'];
+  const defOnly = (ind, extra)=>{ const o=Object.assign({},ind); QC_VALUE_FIELDS.forEach(k=>{ delete o[k]; }); o.months={}; return Object.assign(o, extra||{}); };
+  const onClone = ()=>{ if(!selInd) return; const copy=defOnly(selInd,{ id:window.qualitySlug(selInd.name+' copy',deptIndIds(sel.deptKey)), name:selInd.name+' (copy)' }); Q.addIndicator(sel.deptKey,copy); setSel({deptKey:sel.deptKey,id:copy.id}); };
   const onDelete = ()=>{ if(!selInd) return; Q.removeIndicator(sel.deptKey,sel.id); setSel({deptKey:null,id:null}); setCopyOpen(false); setCopyT({}); };
   // Moving onto a department that already reports this indicator would land on the same
   // id and overwrite THEIR recorded months with this department's — make that explicit
@@ -4577,7 +4581,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
     const moved=Object.assign({},selInd); Q.addIndicator(nd,moved); Q.removeIndicator(sel.deptKey,sel.id); setSel({deptKey:nd,id:moved.id}); };
   // Targets that already report it are disabled in the picker; skipped here too, since
   // copyT can still hold a tick from before the selection changed.
-  const onDoCopy = ()=>{ if(!selInd) return; Object.keys(copyT).forEach(dk=>{ if(copyT[dk] && !deptHasInd(dk)){ const c=Object.assign({},selInd,{ id:window.qualitySlug(selInd.name) }); Q.addIndicator(dk,c); } }); setCopyOpen(false); setCopyT({}); };
+  const onDoCopy = ()=>{ if(!selInd) return; Object.keys(copyT).forEach(dk=>{ if(copyT[dk] && !deptHasInd(dk)){ const c=defOnly(selInd,{ id:window.qualitySlug(selInd.name) }); Q.addIndicator(dk,c); } }); setCopyOpen(false); setCopyT({}); };
 
   const meas = selInd? measureOf(selInd.formula) : null;
   // every department reporting the SAME indicator id — drives the edit-scope banner
@@ -4643,7 +4647,8 @@ function QCAdmin({Q,q,onQ,initialDept}){
       const seedD=(window.QUALITY_SEED||[]).find(x=>x.key===dk);
       const seedInst=seedD&&(seedD.indicators||[]).find(x=> (rec.code && stdMatch(x.name)===rec.code) || norm(x.name)===norm(rec.name));
       if(seedInst){ Q.restoreIndicator(dk,seedInst.id); return; }
-      const c=Object.assign({},rec.tmpl,{ id:window.qualitySlug(rec.tmpl.name||rec.name) }); Q.addIndicator(dk,c);
+      // custom rows use a live department indicator as tmpl — definition only, never its readings
+      const c=defOnly(rec.tmpl,{ id:window.qualitySlug(rec.tmpl.name||rec.name) }); Q.addIndicator(dk,c);
     }
   };
 

@@ -29,7 +29,7 @@ const ROLES = ['Administrator', 'incharge', 'collector', 'nurse', 'pca', 'User']
    assignment fields (departments, quality areas, per-indicator access) must be saved
    and enforced the same way — an in-charge created without them would be an account
    with a ward's screens and nobody's scope. */
-const ROLES_PORTAL = ['collector', 'incharge', 'nurse', 'pca'];
+const ROLES_PORTAL = access.PORTAL_ROLES;   // one list app-wide, so a new portal role cannot drift
 
 // Grantable workspaces (per-module access for the standard 'User' role). Ids match
 // the renderer's unicoAccessModuleOf() output so a user's `perms` map keys 1:1 to
@@ -104,6 +104,9 @@ function safe(u) {
     departments: Array.isArray(u.departments) ? u.departments : [],
     qualityAreas: Array.isArray(u.qualityAreas) ? u.qualityAreas : [],
     allQualityAreas: !!u.allQualityAreas,
+    // Areas granted directly, beyond the departments' own. null = legacy account whose
+    // split has not been stored yet (the server derives it on the next save).
+    customQualityAreas: Array.isArray(u.customQualityAreas) ? u.customQualityAreas : null,
     qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {},
     // Per-module access levels. Administrators are always full; a 'User' carries its
     // own map; null = unrestricted (legacy account predating this feature => full access
@@ -124,7 +127,9 @@ function safe(u) {
     // Profile picture (set by the account owner via /api/upload kind=profile).
     // Only the CDN url is exposed — publicId stays server-side.
     photo: (u.photo && u.photo.url) ? { url: u.photo.url } : null,
-    createdAt: u.createdAt || null,
+    // 20 of 23 accounts were created by seed-admin.js, which stored `created_at`; reading only
+    // `createdAt` showed them with no creation date. Read both (no stored data is changed).
+    createdAt: u.createdAt || u.created_at || null,
     updatedAt: u.updatedAt || null,
   };
 }
@@ -133,15 +138,43 @@ const cleanList = (v) => Array.isArray(v) ? v.map(x => String(x).trim()).filter(
 // Specific-indicator access map: { areaKey: [indicatorId,...] } — empty lists dropped.
 const cleanQI = (qi) => { const out = {}; if (!qi || typeof qi !== 'object' || Array.isArray(qi)) return out; Object.keys(qi).forEach(k => { const list = Array.isArray(qi[k]) ? qi[k].map(x => String(x).trim()).filter(Boolean) : []; if (list.length) out[String(k)] = list; }); return out; };
 
-async function storedCustomAreas(user) {
+/* Quality areas granted DIRECTLY (customQualityAreas), as opposed to the ones an
+   account's departments derive. qualityAreas stays the stored effective union so every
+   reader keeps working; this is only the "extras" half, kept separately.
+
+   Why: the editor used to post the effective union back as "custom" areas, so an area
+   that came from a department survived that department being unticked (or hospital-wide
+   being switched off) — the access could never be removed. Same rule as data-collection.js. */
+async function derivedAreaSet(departments) {
   const map = await deptmap.get();
-  if (user && user.allQualityAreas) return [];
   const auto = new Set();
-  (Array.isArray(user && user.departments) ? user.departments : []).forEach((id) => {
+  (Array.isArray(departments) ? departments : []).forEach((id) => {
     const ak = map.idToQk && map.idToQk[id];
     if (ak) auto.add(ak);
   });
-  return (Array.isArray(user && user.qualityAreas) ? user.qualityAreas : []).filter((ak) => !auto.has(ak));
+  return auto;
+}
+// What the stored doc holds as custom. Legacy docs (no field): hospital-wide => none,
+// else whatever of qualityAreas its departments do not explain.
+async function storedCustomAreas(user) {
+  if (!user) return [];
+  if (Array.isArray(user.customQualityAreas)) return cleanList(user.customQualityAreas);
+  if (user.allQualityAreas) return [];
+  const auto = await derivedAreaSet(user.departments);
+  return (Array.isArray(user.qualityAreas) ? user.qualityAreas : []).filter((ak) => !auto.has(ak));
+}
+// Custom areas for a save. An explicit customQualityAreas wins; a posted qualityAreas is
+// read as effective, so the areas the account's EXISTING (pre-edit) departments derive
+// are subtracted; with neither, the stored split is kept. `baseDepartments` is only used
+// on create, where there is no existing doc to subtract against.
+async function resolveCustomAreas(b, existing, baseDepartments) {
+  if (Array.isArray(b.customQualityAreas)) return cleanList(b.customQualityAreas);
+  if (b.qualityAreas != null) {
+    if (existing && existing.allQualityAreas) return [];
+    const auto = await derivedAreaSet(existing ? existing.departments : baseDepartments);
+    return cleanList(b.qualityAreas).filter((ak) => !auto.has(ak));
+  }
+  return storedCustomAreas(existing);
 }
 
 // Count active administrators (so we never strand the system without one).
@@ -371,6 +404,7 @@ function mount(app, opts) {
       // for the staff register (staffScope 'departments'). Administrators: neither.
       const departments = (ROLES_PORTAL.indexOf(role) >= 0 || role === 'User') ? cleanList(b.departments) : [];
       const allQualityAreas = ROLES_PORTAL.indexOf(role) >= 0 ? !!b.allQualityAreas : false;
+      const customQualityAreas = ROLES_PORTAL.indexOf(role) >= 0 ? await resolveCustomAreas(b, null, departments) : [];
       const doc = {
         username, name: String(b.name || username).trim(), role,
         email: String(b.email || '').trim().toLowerCase() || null,
@@ -380,7 +414,8 @@ function mount(app, opts) {
         allQualityAreas,
         // Quality areas = departments' auto areas UNION custom/extra areas (b.qualityAreas), or
         // ALL when hospital-wide. Assign once + optional custom access on top.
-        qualityAreas: ROLES_PORTAL.indexOf(role) >= 0 ? await deptmap.deriveQualityAreas(departments, allQualityAreas, cleanList(b.qualityAreas)) : [],
+        customQualityAreas,
+        qualityAreas: ROLES_PORTAL.indexOf(role) >= 0 ? await deptmap.deriveQualityAreas(departments, allQualityAreas, customQualityAreas) : [],
         qualityIndicators: ROLES_PORTAL.indexOf(role) >= 0 ? cleanQI(b.qualityIndicators) : {}, // specific-indicator access
         // Per-module access levels — only meaningful for the 'User' role. Admins are
         // full (null => resolved to full in safe()); collectors use the collector portal.
@@ -416,15 +451,19 @@ function mount(app, opts) {
       if (b.name != null) set.name = String(b.name).trim();
       if (b.email != null) set.email = String(b.email).trim().toLowerCase() || null;
       if (b.title != null) set.title = String(b.title).trim() || null;
+      // Absent role = unchanged. (An unknown role string is ignored the same way.)
       if (b.role != null && ROLES.includes(b.role)) set.role = b.role;
       if (b.active != null) set.active = !!b.active;
       const role = set.role || u.role;
       if (ROLES_PORTAL.indexOf(role) >= 0) {
         const departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
         const allQualityAreas = (b.allQualityAreas != null) ? !!b.allQualityAreas : !!u.allQualityAreas;
-        const customAreas = (b.qualityAreas != null) ? cleanList(b.qualityAreas) : await storedCustomAreas(u);
+        // Custom = ONLY the directly-granted extras (see resolveCustomAreas) — never the
+        // posted union, or a removed department's area would be re-saved as "custom".
+        const customAreas = await resolveCustomAreas(b, u);
         if (b.departments != null) set.departments = departments;
         set.allQualityAreas = allQualityAreas;
+        set.customQualityAreas = customAreas;
         // Departments' auto areas UNION custom/extra areas (assign-once + custom access on top).
         set.qualityAreas = await deptmap.deriveQualityAreas(departments, allQualityAreas, customAreas);
         if (b.qualityIndicators != null) set.qualityIndicators = cleanQI(b.qualityIndicators);
@@ -432,13 +471,15 @@ function mount(app, opts) {
         // A 'User' keeps a department list too — not for data-collection assignment
         // (that is the collector mechanism) but as the row-level scope for the staff
         // register: "this in-charge sees Medical ICU staff and no one else". The
-        // quality-area/indicator assignment stays collector-only.
+        // quality-area/indicator assignment stays portal-only. Reached only when the
+        // account IS (or is explicitly being made) a 'User' — a body without `role`
+        // keeps a portal account in the branch above, ward and areas intact.
         if (b.departments != null) set.departments = cleanList(b.departments);
-        set.qualityAreas = []; set.allQualityAreas = false; set.qualityIndicators = {};
+        set.qualityAreas = []; set.allQualityAreas = false; set.qualityIndicators = {}; set.customQualityAreas = [];
       } else if (set.role && ROLES_PORTAL.indexOf(set.role) < 0) {
         // Demoted out of a portal role: the assignment fields go with it. Testing a
         // single role here would have wiped an in-charge's own ward on any edit.
-        set.departments = []; set.qualityAreas = []; set.allQualityAreas = false; set.qualityIndicators = {};
+        set.departments = []; set.qualityAreas = []; set.allQualityAreas = false; set.qualityIndicators = {}; set.customQualityAreas = [];
       }
 
       // Row-level staff scope. Administrators are always unrestricted.

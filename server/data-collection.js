@@ -26,9 +26,11 @@ const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
 const QUARTER_MONTHS = { Q1: ['Jun-25', 'Jul-25', 'Aug-25'], Q2: ['Sep-25', 'Oct-25', 'Nov-25'], Q3: ['Dec-25', 'Jan-26', 'Feb-26'], Q4: ['Mar-26', 'Apr-26', 'May-26'] };
 // Fiscal-year (Jun–May) helpers so quarters roll up PER YEAR, not just 2025-26. A month's
 // quarter depends only on its month name, so any year works.
-const FY_MONS_S = ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'];
-function fyOfKeyS(key) { const p = String(key || '').split('-'); const mi = FY_MONS_S.indexOf(p[0]); const yy = parseInt(p[1], 10); if (mi < 0 || isNaN(yy)) return null; return 2000 + yy - (mi >= 7 ? 1 : 0); }
-function fyQuarterMonths(startYear) { const yy = String(startYear % 100).padStart(2, '0'); const ny = String((startYear + 1) % 100).padStart(2, '0'); return { Q1: ['Jun-' + yy, 'Jul-' + yy, 'Aug-' + yy], Q2: ['Sep-' + yy, 'Oct-' + yy, 'Nov-' + yy], Q3: ['Dec-' + yy, 'Jan-' + ny, 'Feb-' + ny], Q4: ['Mar-' + ny, 'Apr-' + ny, 'May-' + ny] }; }
+// Per-year rollups follow the CALENDAR reporting year (Jan–Dec, Q1 = Jan–Mar), matching
+// quality-store.js and the console's year picker.
+const FY_MONS_S = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fyOfKeyS(key) { const p = String(key || '').split('-'); const mi = FY_MONS_S.indexOf(p[0]); const yy = parseInt(p[1], 10); if (mi < 0 || isNaN(yy)) return null; return 2000 + yy; }
+function fyQuarterMonths(startYear) { const yy = String(startYear % 100).padStart(2, '0'); return { Q1: ['Jan-' + yy, 'Feb-' + yy, 'Mar-' + yy], Q2: ['Apr-' + yy, 'May-' + yy, 'Jun-' + yy], Q3: ['Jul-' + yy, 'Aug-' + yy, 'Sep-' + yy], Q4: ['Oct-' + yy, 'Nov-' + yy, 'Dec-' + yy] }; }
 function fysInInd(ind) { const set = new Set(); ['months', 'mNum', 'mDen'].forEach((f) => { const o = ind && ind[f]; if (o) Object.keys(o).forEach((k) => { if (o[k] != null && o[k] !== '') { const fy = fyOfKeyS(k); if (fy != null) set.add(fy); } }); }); return [...set]; }
 function avgVals(vals) { return Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100; }
 function computeFallbackFormulaQuarter(formula, vals) {
@@ -498,16 +500,36 @@ async function buildQualitySpec(payload) {
 }
 
 /* ---------------- apply (write to canonical collections) ---------------- */
+/* Same lost-update hazard qSetIndicator documents, on the statistics side: this rewrites
+ * the department's whole months[]/data[] arrays, so two approvals for one department that
+ * overlap in time (an "approve all of August" pass, or Jul + Aug for the same ward) each
+ * read the arrays before the other wrote, and the second write erased the first. The
+ * write is now conditional on the arrays still being exactly what was read; on a clash
+ * it re-reads and re-merges, so both approvals land. */
 async function applyPatient(spec) {
   const c = await col('departments');
   if (!c) throw new Error('Database not available.');
-  const dept = await c.findOne({ _id: spec.department });
-  if (!dept) throw new Error('Department no longer exists: ' + spec.department);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const dept = await c.findOne({ _id: spec.department });
+    if (!dept) throw new Error('Department no longer exists: ' + spec.department);
+    const set = await mergePatient(dept, spec);
+    const unchanged = (f) => (dept[f] === undefined ? { $exists: false } : dept[f]);
+    const filter = { _id: spec.department, months: unchanged('months'), data: unchanged('data') };
+    if (set.cols) filter.cols = unchanged('cols');
+    const r = await c.updateOne(filter, { $set: set });
+    if (r.matchedCount) return;
+  }
+  throw new Error('The department was being updated by someone else — please approve again.');
+}
+async function mergePatient(dept, spec) {
   const months = Array.isArray(dept.months) ? dept.months.slice() : [];
   const data = Array.isArray(dept.data) ? dept.data.map((r) => Object.assign({}, r)) : [];
   const idx = months.indexOf(spec.month);
   if (idx >= 0) data[idx] = Object.assign({}, data[idx], spec.values);
   else { months.push(spec.month); data.push(Object.assign({}, spec.values)); }
+  // An admin CLEARED a figure on an approved sheet: the merge above can only add or overwrite,
+  // so the wrongly entered number used to stay live. Only keys this submission itself set.
+  (spec.removeKeys || []).forEach((k) => { const i = months.indexOf(spec.month); if (i >= 0 && data[i]) delete data[i][k]; });
   const zipped = months.map((m, i) => ({ m, r: data[i], rank: monthRank(m) })).sort((a, b) => a.rank - b.rank);
   // Auto-register any submitted metric the column catalog doesn't know. Custom fields
   // are defined in the CLIENT overlay (unico_store_v3 renames[dept].cols), which drifts
@@ -535,21 +557,65 @@ async function applyPatient(spec) {
   }
   const set = { months: zipped.map((z) => z.m), data: zipped.map((z) => z.r) };
   if (unknown.length) set.cols = cols;
-  await c.updateOne({ _id: spec.department }, { $set: set });
+  // WHEN this month was last approved — store.js lets it outrank an OLDER Data Entry overlay
+  // value or month deletion (the overlay used to win on screen regardless of age).
+  set['approvedAt.' + spec.month] = Date.now();
+  return set;
 }
 
+/* qSetIndicator stopped approvals for DIFFERENT indicators erasing each other, but it still
+ * writes the WHOLE indicator: two approvals for the SAME indicator and different months
+ * (Jul + Aug CAUTI in one "approve all" pass) each merged into their own stale copy, and
+ * the later write dropped the earlier month. The write is now conditional on the indicator
+ * still being exactly what was read; on a clash it re-reads and re-merges. */
 async function applyQuality(spec) {
-  const doc = await qArea(spec.area);
-  if (!doc) throw new Error('Quality area no longer exists: ' + spec.area);
-  // Read-only lookup: the indicator is written back on its own (qSetIndicator), so this
-  // array is never persisted as a whole and cannot carry a stale sibling with it.
-  const indicators = Array.isArray(doc.indicators) ? doc.indicators.map((i) => Object.assign({}, i)) : [];
-  let ind = indicators.find((i) => i.id === spec.indicatorId);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const doc = await qArea(spec.area);
+    if (!doc) throw new Error('Quality area no longer exists: ' + spec.area);
+    const orig = (Array.isArray(doc.indicators) ? doc.indicators : []).find((i) => i.id === spec.indicatorId) || null;
+    // A fresh spec copy per attempt: the merge rewrites spec.value, and a retry must start
+    // from what was submitted, not from the previous attempt's computed value.
+    const ind = mergeQuality(orig, Object.assign({}, spec));
+    if (await qSetIndicatorIf(spec.area, orig, ind)) return;
+  }
+  throw new Error('This indicator was being updated by someone else — please approve again.');
+}
+async function qSetIndicatorIf(key, orig, ind) {
+  const c = await col('departments'); if (!c) return true;
+  const r = orig
+    ? await c.updateOne({ 'quality.key': String(key), 'quality.indicators': orig }, { $set: { 'quality.indicators.$[el]': ind } }, { arrayFilters: [{ 'el.id': ind.id }] })
+    : await c.updateOne({ 'quality.key': String(key), 'quality.indicators.id': { $ne: ind.id } }, { $push: { 'quality.indicators': ind } });
+  if (r.matchedCount) return true;
+  // Nothing changed since the read, yet the equality filter missed (a stored value that
+  // doesn't round-trip byte-identically): write as before rather than failing every retry.
+  const now = await qArea(key);
+  const cur = now && (now.indicators || []).find((i) => i.id === ind.id);
+  if (JSON.stringify(cur || null) === JSON.stringify(orig)) { await qSetIndicator(key, ind); return true; }
+  return false;
+}
+// The indicator ON RECORD decides how a reading is stored. A count indicator (falls, NSI
+// cases) submitted in rate mode — an optional denominator typed on the desktop form, or the
+// phone app sending every entry as a rate — used to be stored as num/den×mult AND to rewrite
+// the indicator's formula, turning every month of it into a rate for good.
+function alignToIndicator(spec, ind) {
+  if (!(ind && ind.formula === 'count' && spec.entryMode === 'rate')) return;
+  const n = (spec.num != null && spec.num !== '') ? spec.num : spec.value;
+  Object.assign(spec, { entryMode: 'count', formula: 'count', value: (n == null || n === '') ? null : Number(n), num: null, den: null });
+}
+function mergeQuality(orig, spec) {
+  let ind = orig ? Object.assign({}, orig) : null;
   if (!ind) {
     ind = { id: spec.indicatorId, name: spec.indicatorName, valueType: spec.valueType || 'Count', benchmark: spec.benchmark || '', benchmarkValue: (spec.benchmarkValue != null ? spec.benchmarkValue : null), goalDirection: spec.goalDirection || 'lower_is_better', months: {}, monthRemarks: {} };
   }
-  // Persist the calculation definition so the rich entry form re-renders on reselect.
-  if (spec.formula) ind.formula = spec.formula;
+  alignToIndicator(spec, orig);
+  // WHEN this month was last approved. Manual console edits live in the shared overlay, which
+  // always used to win on screen — so a month cleared or typed there earlier hid every later
+  // approved reading for good ("data missing after approval"). The client compares this stamp
+  // with the overlay edit's own stamp (mEditedAt) and shows whichever is newer.
+  ind.mApprovedAt = Object.assign({}, ind.mApprovedAt || {}, { [spec.month]: Date.now() });
+  // Persist the calculation definition so the rich entry form re-renders on reselect — but
+  // only where the indicator has none; a submission never redefines an existing indicator.
+  if (spec.formula && !ind.formula) ind.formula = spec.formula;
   if (spec.benchmark) ind.benchmark = spec.benchmark;
   if (spec.benchmarkValue != null) ind.benchmarkValue = spec.benchmarkValue;
   if (spec.numLabel) ind.numLabel = spec.numLabel;
@@ -570,8 +636,7 @@ async function applyQuality(spec) {
     const q = Object.keys(QUARTER_MONTHS).find((k) => (QUARTER_MONTHS[k] || []).includes(mo));
     if (q && ind.quarters) { ind.quarters = Object.assign({}, ind.quarters); delete ind.quarters[q]; }
     recomputeQuarters(ind);
-    await qSetIndicator(spec.area, ind);
-    return;
+    return ind;
   }
   // A real reading supersedes any earlier "Not observed" mark for the month.
   if (ind.mNotObserved && ind.mNotObserved[spec.month]) { ind.mNotObserved = Object.assign({}, ind.mNotObserved); delete ind.mNotObserved[spec.month]; }
@@ -588,8 +653,7 @@ async function applyQuality(spec) {
       if (spec.remark) ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [spec.month]: spec.remark });
       if (spec.capa) ind.capa = Object.assign({}, ind.capa || {}, { [spec.month]: Object.assign({ value: spec.value, recordedAt: Date.now() }, spec.capa) });
       recomputeQuarters(ind);
-      await qSetIndicator(spec.area, ind);
-      return;
+      return ind;
     }
     // A submission with no real denominator (e.g. a collector logging NSI cases against the
     // ADMIN-owned staff headcount) must NOT overwrite the stored denominator. Fall back to the
@@ -601,7 +665,10 @@ async function applyQuality(spec) {
     // den 0 with events logged -> rate is UNKNOWN (null), never a false on-benchmark 0.
     const computed = den > 0 ? Math.round((Number(num) / den) * mlt * 100) / 100 : (Number(num) > 0 ? null : 0);
     // Admin value-only correction while pending: back-solve the numerator from the edited value.
-    if (spec.value != null && spec.value !== '' && den > 0 && Number(spec.value) !== computed) {
+    // Only when the submission carried its OWN denominator — a value is only meaningful against
+    // the base it was computed on. Without one (NSI cases against the admin headcount) a stored
+    // value of 0 is a placeholder, and back-solving from it erased every logged case to 0.
+    if (submittedDen != null && spec.value != null && spec.value !== '' && Number(spec.value) !== computed) {
       num = Math.round((Number(spec.value) / mlt) * den * 100) / 100;
     }
     ind.mNum = Object.assign({}, ind.mNum || {}, { [spec.month]: num });
@@ -616,7 +683,7 @@ async function applyQuality(spec) {
   // monthly data. `ind` is the same reference held in `indicators`, so the in-place
   // mutation is persisted by the $set below.
   recomputeQuarters(ind);
-  await qSetIndicator(spec.area, ind);
+  return ind;
 }
 
 /* ---------------- admin: custom fields on the patient form ---------------- */
@@ -659,6 +726,10 @@ async function createSubmission(spec, meta) {
     responsible: normResp(meta && meta.responsible),
     note: String((meta && meta.note) || ''),
     submittedBy: (meta && meta.submittedBy) || 'local',
+    // The LOGIN (username) of whoever sent it. Ownership ("my submissions", edit-own-pending)
+    // used to match on the display NAME only, which broke on a rename and let two people with
+    // the same name see each other's rows. Clients prefer this field; old rows fall back to name.
+    submittedByUser: (meta && meta.submittedByUser) || null,
     source: (meta && meta.source) || 'app',
     submittedAt: Date.now(),
     // Correction / edit-request markers (absent/false for a normal new submission).
@@ -690,14 +761,43 @@ async function snapshotQualityPrior(spec) {
     return { value: (ind.months || {})[m], num: (ind.mNum || {})[m], den: (ind.mDen || {})[m], incidents: (ind.incidents || {})[m] || null };
   } catch (e) { return null; }
 }
+// One pending row per target + month. A second one (a double Save, a resubmit after the
+// success popup, a phone double-tap) sat beside the first until an admin approved ONE of
+// them — and approving the emptier copy auto-rejected the real data. Edit the pending one.
+async function refuseIfPending(spec) {
+  const key = dupKeyOf(spec);
+  const c = await col('submissions');
+  const open = ['pending', 'approving'];
+  let cands;
+  if (!c) cands = mem.submissions.filter((x) => open.includes(x.status) && x.type === spec.type && x.month === spec.month);
+  else {
+    const q = { status: { $in: open }, type: spec.type, month: spec.month };
+    if (spec.type === 'patient') q.department = spec.department; else q.area = spec.area;
+    cands = await c.find(q).toArray();
+  }
+  if (cands.some((x) => dupKeyOf(x) === key)) {
+    const what = spec.type === 'patient' ? (spec.departmentName || spec.department) : (spec.indicatorName || spec.indicatorId);
+    const e = new Error('A submission for ' + what + ' — ' + spec.month + ' is already waiting for review. Open it and edit it instead of sending another.');
+    e.status = 409; throw e;
+  }
+}
 async function submitPatient(payload, meta) {
   const spec = await buildPatientSpec(payload);
+  if (meta && meta.enforceCollection) await refuseOutsideCollection(spec);
+  await refuseIfPending(spec);
   const m = Object.assign({}, payload, meta);
   if (m.isCorrection) m.priorValues = await snapshotPatientPrior(spec);
   return { ok: true, submission: await createSubmission(spec, m) };
 }
-async function submitQuality(payload, meta) {
+async function submitQuality(payload, meta, indicatorAllowed) {
   const spec = await buildQualitySpec(payload);
+  if (meta && meta.enforceCollection) await refuseOutsideCollection(spec);
+  await refuseIfPending(spec);
+  // Checked on the RESOLVED indicator (buildQualitySpec maps a typed name onto an existing
+  // id), so a collector limited to specific indicators can't report one outside the list.
+  if (indicatorAllowed && !spec.isNewIndicator && !indicatorAllowed(spec.area, spec.indicatorId)) {
+    const err = new Error('You are not assigned to report "' + spec.indicatorName + '".'); err.status = 403; throw err;
+  }
   const m = Object.assign({}, payload, meta);
   if (m.isCorrection) m.priorValues = await snapshotQualityPrior(spec);
   return { ok: true, submission: await createSubmission(spec, m) };
@@ -727,33 +827,73 @@ function dupKeyOf(s) {
 async function autoRejectDuplicates(s, by) {
   const key = dupKeyOf(s);
   const patch = { status: 'rejected', reviewedBy: by || 'admin', reviewedAt: Date.now(), rejectReason: 'Duplicate — superseded by an approved submission', autoRejected: true };
+  // OLDER duplicates only. Rejecting every other pending row let approval ORDER decide which
+  // data survived: approving the original first auto-rejected the collector's later
+  // correction, and the stale figures went live. A NEWER pending row stays for review.
+  const older = (x) => (x.submittedAt || 0) <= (s.submittedAt || 0);
   const c = await col('submissions');
   if (!c) {
     let n = 0;
-    mem.submissions.forEach((x) => { if (x.id !== s.id && x.status === 'pending' && dupKeyOf(x) === key) { Object.assign(x, patch); n++; } });
+    mem.submissions.forEach((x) => { if (x.id !== s.id && x.status === 'pending' && dupKeyOf(x) === key && older(x)) { Object.assign(x, patch); n++; } });
     return n;
   }
   const q = { _id: { $ne: String(s.id) }, status: 'pending', type: s.type, month: s.month };
   if (s.type === 'patient') q.department = s.department; else q.area = s.area;
   const cands = await c.find(q).toArray();
-  const ids = cands.filter((x) => dupKeyOf(x) === key).map((x) => x._id);
+  const ids = cands.filter((x) => dupKeyOf(x) === key && older(x)).map((x) => x._id);
   if (!ids.length) return 0;
   const r = await c.updateMany({ _id: { $in: ids } }, { $set: patch });
   return (r && r.modifiedCount) || ids.length;
 }
 
+// An approval must be CLAIMED before it is applied. Checking `status === 'pending'` and then
+// writing later let a double click, a bulk pass overlapping a detail-modal approve, or two
+// admins each pass the check and apply the same submission twice — and let a reject/edit
+// land between the check and the write. The claim is one atomic pending -> approving flip;
+// a claim older than APPROVE_CLAIM_MS (a serverless function killed mid-apply) is reclaimable.
+const APPROVE_CLAIM_MS = 2 * 60 * 1000;
+async function claimForApproval(id) {
+  const c = await col('submissions');
+  const now = Date.now();
+  if (!c) {
+    const s = mem.submissions.find((x) => x.id === String(id));
+    if (!s || !(s.status === 'pending' || (s.status === 'approving' && s.approvingAt < now - APPROVE_CLAIM_MS))) return false;
+    Object.assign(s, { status: 'approving', approvingAt: now });
+    return true;
+  }
+  const r = await c.updateOne(
+    { _id: String(id), $or: [{ status: 'pending' }, { status: 'approving', approvingAt: { $lt: now - APPROVE_CLAIM_MS } }] },
+    { $set: { status: 'approving', approvingAt: now } },
+  );
+  return !!r.modifiedCount;
+}
 async function approveSubmission(id, by) {
   const s = await getSubmissionById(id);
   if (!s) throw new Error('Submission not found.');
   if (s.status === 'approved') return { ok: true, submission: s, already: true };
+  // Auto-rejected as an older duplicate while a bulk pass was running: a skip, not a failure.
+  if (s.status === 'rejected' && s.autoRejected) { const e = new Error('Skipped — a newer submission for the same target and month was approved.'); e.superseded = true; throw e; }
   // Only a PENDING submission may be applied — never re-apply a rejected one to live data.
-  if (s.status !== 'pending') throw new Error('Only pending submissions can be approved (this one is "' + s.status + '").');
-  if (s.type === 'patient') await applyPatient(s);
-  else if (s.type === 'quality') await applyQuality(s);
-  else throw new Error('Unknown submission type.');
-  const upd = await setSubmissionStatus(id, { status: 'approved', reviewedBy: by || 'admin', reviewedAt: Date.now() });
+  if (s.status !== 'pending' && s.status !== 'approving') throw new Error('Only pending submissions can be approved (this one is "' + s.status + '").');
+  if (!(await claimForApproval(id))) {
+    const now = await getSubmissionById(id);
+    if (now && now.status === 'approved') return { ok: true, submission: now, already: true };
+    if (now && now.status === 'approving') throw new Error('This submission is already being approved — refresh in a moment.');
+    throw new Error('Only pending submissions can be approved (this one is "' + (now ? now.status : 'deleted') + '").');
+  }
+  // Apply what is on record NOW (an edit may have landed after the first read).
+  const cur = (await getSubmissionById(id)) || s;
+  try {
+    if (cur.type === 'patient') await applyPatient(cur);
+    else if (cur.type === 'quality') await applyQuality(cur);
+    else throw new Error('Unknown submission type.');
+  } catch (e) {
+    await setSubmissionStatus(id, { status: 'pending', approvingAt: null });
+    throw e;
+  }
+  const upd = await setSubmissionStatus(id, { status: 'approved', reviewedBy: by || 'admin', reviewedAt: Date.now(), approvingAt: null });
   // Keep only one on record: reject any remaining pending duplicates for this target+month.
-  const autoRejected = await autoRejectDuplicates(s, by);
+  const autoRejected = await autoRejectDuplicates(cur, by);
   return { ok: true, submission: upd, autoRejected };
 }
 async function rejectSubmission(id, by, reason) {
@@ -854,7 +994,9 @@ async function shortlinkMeta(code) {
     return {
       ok: true, type: 'patient', label: link.label, responsible: link.responsible,
       department: { id: dept._id, name: dept.name },
-      cols: (dept.cols || []).map((co) => ({ id: co.id, label: co.label, pct: !!co.pct })),
+      // Hidden duplicate columns (an empty twin of another column) are kept on the record but
+      // never offered for entry, so values cannot be split between two ids again.
+      cols: (dept.cols || []).filter((co) => !co.hidden).map((co) => ({ id: co.id, label: co.label, pct: !!co.pct })),
       suggestedMonth: nextMonthSuggestion(dept),
     };
   }
@@ -965,6 +1107,59 @@ function signupPage(opts) {
     + '</form></body></html>';
 }
 
+/* ---------------- per-department collection settings (admin) ---------------- */
+// Stored ON the department document — never in the shared browser overlay blobs, whose
+// last-writer-wins saves lost data:
+//   departments.collection = { startMonth, notMeasured: { [indicatorId]: { reason, by, at } }, updatedAt, updatedBy }
+//   startMonth  — the department began reporting this month; earlier months are never "missing".
+//   notMeasured — quality indicators this department does not measure: never "missing", and a
+//                 collector cannot submit them. Only an administrator changes either (PUT route).
+const SAFE_FIELD_KEY = /^[A-Za-z0-9_\-:@+~]+$/;   // becomes a Mongo field path: no '.' or '$'
+async function getCollectionSettings() {
+  const c = await col('departments'); if (!c) return [];
+  const deps = await c.find({}, { projection: { id: 1, name: 1, qualityKey: 1, 'quality.key': 1, qualityOnly: 1, collection: 1 } }).toArray();
+  return deps.map((d) => ({ id: d._id, name: d.name || d._id, qualityKey: (d.quality && d.quality.key) || d.qualityKey || null, qualityOnly: !!d.qualityOnly, collection: d.collection || {} }));
+}
+async function saveCollectionSettings(deptId, body, by) {
+  const c = await col('departments'); if (!c) throw new Error('Database not available.');
+  const b = body || {}; const now = Date.now();
+  const $set = { 'collection.updatedAt': now, 'collection.updatedBy': by || 'admin' }, $unset = {};
+  if (Object.prototype.hasOwnProperty.call(b, 'startMonth')) {
+    const m = b.startMonth == null ? '' : String(b.startMonth).trim();
+    if (m) { validateReportingMonth(m); $set['collection.startMonth'] = m; } else $unset['collection.startMonth'] = '';
+  }
+  if (b.notMeasured != null) {
+    if (typeof b.notMeasured !== 'object' || Array.isArray(b.notMeasured)) throw new Error('notMeasured must map an indicator id to { reason } or null.');
+    Object.keys(b.notMeasured).forEach((id) => {
+      if (!SAFE_FIELD_KEY.test(id)) throw new Error('Invalid indicator id: ' + id);
+      const v = b.notMeasured[id];
+      if (v === null || v === false) { $unset['collection.notMeasured.' + id] = ''; return; }
+      const reason = String((v && v.reason) || '').trim().slice(0, 300);
+      if (!reason) throw new Error('Give a reason for marking an indicator as not measured.');
+      $set['collection.notMeasured.' + id] = { reason, by: by || 'admin', at: now };
+    });
+  }
+  const update = { $set };
+  if (Object.keys($unset).length) update.$unset = $unset;
+  const r = await c.updateOne({ _id: String(deptId) }, update);
+  if (!r.matchedCount) { const e = new Error('Department not found.'); e.status = 404; throw e; }
+  const d = await c.findOne({ _id: String(deptId) }, { projection: { collection: 1 } });
+  return (d && d.collection) || {};
+}
+// A collector may not report a month before the department's start, or an indicator the
+// administrator marked not measured for that department. (Admins can still backfill.)
+async function refuseOutsideCollection(spec) {
+  const c = await col('departments'); if (!c) return;
+  const d = spec.type === 'patient' ? await c.findOne({ _id: String(spec.department) }) : await c.findOne({ 'quality.key': String(spec.area) });
+  const set = (d && d.collection) || {};
+  if (set.startMonth && monthRank(spec.month) < monthRank(set.startMonth)) {
+    const e = new Error((d.name || 'This department') + ' reports data from ' + set.startMonth + ' — ' + spec.month + ' is before that.'); e.status = 400; throw e;
+  }
+  if (spec.type === 'quality' && set.notMeasured && set.notMeasured[spec.indicatorId]) {
+    const e = new Error('"' + (spec.indicatorName || spec.indicatorId) + '" is marked not measured for this department by an administrator.'); e.status = 403; throw e;
+  }
+}
+
 /* ---------------- quality departments / areas (admin CRUD) ---------------- */
 async function getQualityAreas() {
   const docs = await qAllAreas();
@@ -1069,14 +1264,29 @@ function mount(app, opts) {
     try { await deleteResponsible(req.params.id); res.json({ ok: true }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
 
+  const isPortalReq = (req) => !!(req.user && accessRoles.PORTAL_ROLES.indexOf(req.user.role) >= 0);
+  const everySubmission = async (status) => {
+    const all = []; let page, offset = 0;
+    do { page = await getSubmissions({ status, limit: 1000, offset }); all.push(...page); offset += page.length; } while (page.length === 1000);
+    return all;
+  };
   app.get('/api/submissions', guard, async (req, res) => {
     try {
-      let subs = await getSubmissions(req.query);
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
       const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
-      const nextOffset = subs.length === limit ? offset + limit : null;
-      // Collectors only see submissions they made or that touch their assignments.
-      subs = await filterSubmissionsForUser(req, subs);
+      let subs, nextOffset;
+      if (isPortalReq(req)) {
+        // Collectors only see submissions they made or that touch their assignments — and the
+        // scope filter must run BEFORE the page is cut. Paging the hospital-wide list first
+        // meant a phone asking for "the newest 300" got the newest 300 of EVERYONE's, so a
+        // collector's own July rows fell off the page and showed as "Not submitted".
+        const scoped = await filterSubmissionsForUser(req, await everySubmission(req.query.status));
+        subs = scoped.slice(offset, offset + limit);
+        nextOffset = offset + limit < scoped.length ? offset + limit : null;
+      } else {
+        subs = await getSubmissions(req.query);
+        nextOffset = subs.length === limit ? offset + limit : null;
+      }
       res.set('Cache-Control', 'no-store');
       res.json({ ok: true, submissions: subs, nextOffset });
     } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
@@ -1096,17 +1306,34 @@ function mount(app, opts) {
     try {
       const deny = await denyIfOutOfScope(req, 'patient', String((req.body && req.body.department) || '').trim());
       if (deny) return res.status(403).json({ ok: false, error: deny });
-      res.json(await submitPatient(req.body || {}, { submittedBy: who(req), source: 'app' }));
-    } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+      res.json(await submitPatient(req.body || {}, { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req) }));
+    } catch (e) { res.status(e.status || 400).json({ ok: false, error: String(e.message || e) }); }
   });
   app.post('/api/submissions/quality', guard, async (req, res) => {
     try {
       const deny = await denyIfOutOfScope(req, 'quality', String((req.body && req.body.area) || '').trim());
       if (deny) return res.status(403).json({ ok: false, error: deny });
-      res.json(await submitQuality(req.body || {}, { submittedBy: who(req), source: 'app' }));
-    } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+      // Area access alone isn't the whole scope: a collector limited to specific indicators
+      // (qualityIndicators[area] non-empty) may report only those. Empty/absent = all.
+      let indicatorAllowed = null;
+      if (req.user && accessRoles.PORTAL_ROLES.indexOf(req.user.role) >= 0) {
+        const scope = await getUserScope(req.user.sub);
+        const qi = (scope && scope.qualityIndicators) || {};
+        indicatorAllowed = (area, id) => !(Array.isArray(qi[area]) && qi[area].length) || qi[area].map(String).includes(String(id));
+      }
+      res.json(await submitQuality(req.body || {}, { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req) }, indicatorAllowed));
+    } catch (e) { res.status(e.status || 400).json({ ok: false, error: String(e.message || e) }); }
   });
   // Admin: manage quality departments / areas (create / rename / delete).
+  // Per-department collection settings: start month + not-measured quality indicators.
+  app.get('/api/collection-settings', guard, async (req, res) => {
+    try { res.set('Cache-Control', 'no-store').json({ ok: true, departments: await getCollectionSettings() }); }
+    catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
+  });
+  app.put('/api/departments/:id/collection-settings', guard, adminOnly, async (req, res) => {
+    try { res.json({ ok: true, collection: await saveCollectionSettings(req.params.id, req.body || {}, who(req)) }); }
+    catch (e) { res.status(e.status || 400).json({ ok: false, error: String(e.message || e) }); }
+  });
   app.get('/api/quality/areas', guard, async (req, res) => {
     try { res.json({ ok: true, areas: await getQualityAreas() }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
@@ -1128,7 +1355,7 @@ function mount(app, opts) {
   });
 
   app.post('/api/submissions/:id/approve', guard, adminOnly, async (req, res) => {
-    try { res.json(await approveSubmission(req.params.id, who(req))); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+    try { res.json(await approveSubmission(req.params.id, who(req))); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e), superseded: !!e.superseded || undefined }); }
   });
   app.post('/api/submissions/:id/reject', guard, adminOnly, async (req, res) => {
     try { res.json(await rejectSubmission(req.params.id, who(req), req.body && req.body.reason)); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
@@ -1141,9 +1368,15 @@ function mount(app, opts) {
       // Admins edit anything AT ANY TIME (incl. approved — the change re-applies to live data
       // below); a collector may edit only their OWN still-pending submission (values only, no
       // re-assign to a different department/area/month).
-      const isAdmin = !(req.user && req.user.role && req.user.role !== 'Administrator');
+      // Same authority as adminOnly: the RESOLVED live account (req.access), not the role claim
+      // frozen into the token — a demoted admin's old token must not keep "edit anything".
+      const isAdmin = req.access ? !!req.access.unrestricted : !(req.user && req.user.role && req.user.role !== 'Administrator');
+      if (s.status === 'approving') return res.status(409).json({ ok: false, error: 'This submission is being approved right now — refresh and try again.' });
       if (s.status !== 'pending' && !isAdmin) return res.status(400).json({ ok: false, error: 'Only pending submissions can be edited.' });
-      if (isAdmin && s.status === 'approved' && (req.body && (req.body.month || req.body.department || req.body.area))) {
+      // Compare against the record, not mere presence: the editor always sends the (unchanged)
+      // month, so a presence check refused EVERY save on an approved submission.
+      const moved = (k) => req.body && req.body[k] != null && req.body[k] !== '' && String(req.body[k]).trim() !== String(s[k] == null ? '' : s[k]);
+      if (isAdmin && s.status === 'approved' && (moved('month') || moved('department') || moved('area'))) {
         return res.status(400).json({ ok: false, error: 'Approved submissions can only have their values/details edited. Create a new correction to change department, area, or month.' });
       }
       if (!isAdmin) {
@@ -1169,10 +1402,23 @@ function mount(app, opts) {
         ['value', 'num', 'den'].forEach((key) => { if (b[key] != null && b[key] !== '') numericReading(b[key], key); });
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
         if (b.num != null && b.num !== '' && !isNaN(Number(b.num))) patch.num = Number(b.num);   // rate numerator
+        if (b.den != null && b.den !== '' && !isNaN(Number(b.den))) patch.den = Number(b.den);   // rate denominator
+        // Rate submissions: the stored value must follow the numerator/denominator. Keeping the
+        // OLD value after a num/den edit made applyQuality back-solve the numerator from it at
+        // approve, silently reverting the correction. The server computes it; a client value is
+        // honoured only as a value-only correction (num/den unchanged, real denominator).
+        const rateSub = s.entryMode === 'rate' || ['pct', 'rate100', 'rate1000', 'avg'].includes(s.formula);
+        const effNum = patch.num != null ? patch.num : s.num;
+        if (rateSub && effNum != null && effNum !== '' && (patch.num != null || patch.den != null || patch.value != null)) {
+          const effDen = Number(patch.den != null ? patch.den : s.den) || 0;
+          const mlt = Number(s.mult) || 100;
+          const computed = effDen > 0 ? Math.round((Number(effNum) / effDen) * mlt * 100) / 100 : (Number(effNum) > 0 ? null : 0);
+          const numDenChanged = (patch.num != null && patch.num !== Number(s.num)) || (patch.den != null && patch.den !== Number(s.den));
+          if (!(effDen > 0) || numDenChanged || patch.value == null) patch.value = computed;
+        }
         // Typing a real value onto a "Not observed" submission converts it back to a
         // normal reading — otherwise the flag would discard the edited value at apply.
         if (s.notObserved && (patch.value != null || patch.num != null)) patch.notObserved = false;
-        if (b.den != null && b.den !== '' && !isNaN(Number(b.den))) patch.den = Number(b.den);   // rate denominator
         // Full breakdown edits: department × staff-group matrix, and/or staff-group totals.
         if (Array.isArray(b.deptBreakdown)) { const bd = sanitizeDeptBreakdown(b.deptBreakdown); if (bd) patch.deptBreakdown = bd; }
         if (b.groups) { const g = sanitizeGroupMap(b.groups); if (g) patch.groups = g; }
@@ -1191,7 +1437,9 @@ function mount(app, opts) {
       // time; an admin editing it later must RE-APPLY so the dashboard reflects the correction.
       if (updated && updated.status === 'approved') {
         try {
-          if (updated.type === 'patient') await applyPatient(updated);
+          // Figures the admin cleared on this already-live sheet come off the live row too.
+          const removeKeys = (s.status === 'approved' && patch.values) ? Object.keys(s.values || {}).filter((k) => !Object.prototype.hasOwnProperty.call(patch.values, k)) : [];
+          if (updated.type === 'patient') await applyPatient(Object.assign({}, updated, { removeKeys }));
           else if (updated.type === 'quality') await applyQuality(updated);
         } catch (e) { return res.status(400).json({ ok: false, error: 'Saved, but re-applying to live data failed: ' + String(e.message || e) }); }
       }
@@ -1257,7 +1505,7 @@ module.exports = {
   buildPatientSpec, buildQualitySpec, createSubmission,
   createShortlink, getShortlinks, deleteShortlink, shortlinkMeta, shortlinkSubmit,
   registerCollector, upsertCollectorUser, getUserScope, recomputeQuarters,
-  addDepartmentField, removeDepartmentField,
+  addDepartmentField, removeDepartmentField, getCollectionSettings, saveCollectionSettings,
   // exported so a repair script can re-apply an approval through the SAME code path
   applyQuality,
 };

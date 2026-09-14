@@ -62,11 +62,26 @@
   var acknowledged = Object.assign({}, window.__UNICO_SNAPSHOT__ || {});
   var saveQueue = Promise.resolve();
   var LOCAL_KEYS = { unico_api_base:1, unico_session_token:1, unico_session_user:1 };
-  function syncKey(k) { return k.indexOf('unico_') === 0 && !LOCAL_KEYS[k]; }
+  // Drafts shown as "saved on this device" must stay on the device: syncing them made the
+  // server drop them for restricted accounts and the startup purge delete them on reload.
+  var LOCAL_PREFIXES = ['unico_dc_draft_v1|'];
+  // A key the server refused with a conflict (only the staff register is checked) is parked
+  // so it cannot block every OTHER edit from saving; a refresh of that data clears it.
+  var conflicted = {};
+  function syncKey(k) {
+    if (k.indexOf('unico_') !== 0 || LOCAL_KEYS[k] || conflicted[k]) return false;
+    for (var i = 0; i < LOCAL_PREFIXES.length; i++) if (k.indexOf(LOCAL_PREFIXES[i]) === 0) return false;
+    return true;
+  }
   function changes(data) {
-    var patch = { partial:true, data:{}, removed:[] };
+    // `bases`: the value this tab started from, per changed key. The server merges against it
+    // when someone else saved the same key in the meantime, instead of the last save winning.
+    var patch = { partial:true, data:{}, removed:[], bases:{} };
     Object.keys(data || {}).forEach(function(k) {
-      if(syncKey(k) && data[k] !== acknowledged[k]) patch.data[k] = data[k];
+      if(syncKey(k) && data[k] !== acknowledged[k]) {
+        patch.data[k] = data[k];
+        if (k !== 'unico_staff_v3' && Object.prototype.hasOwnProperty.call(acknowledged, k)) patch.bases[k] = acknowledged[k];
+      }
     });
     Object.keys(acknowledged).forEach(function(k) {
       if(syncKey(k) && !Object.prototype.hasOwnProperty.call(data || {}, k)) patch.removed.push(k);
@@ -77,7 +92,8 @@
     return patch;
   }
   function acceptSnapshot(data) {
-    Object.keys(data).forEach(function(k) { acknowledged[k] = data[k]; });
+    // Accepting a server copy of a parked key (e.g. the staff Refresh) resolves its conflict.
+    Object.keys(data).forEach(function(k) { acknowledged[k] = data[k]; delete conflicted[k]; });
   }
   function attemptPersist(data, tries) {
     var patch = changes(data);
@@ -89,17 +105,41 @@
     }).then(function (r) {
       // An expired session is not a network problem — retrying cannot fix it.
       if (r.status === 401) { warnSessionExpired(); return { ok: false, error: 'Session expired' }; }
-      if (r.status === 409) return r.json().then(function(result) {
+      // Not allowed to write this change (view-only access, out-of-scope staff row). Retrying
+      // can never succeed, so say so at once instead of three silent retries and a vague banner.
+      if (r.status === 403) return r.json().catch(function(){ return {}; }).then(function(result) {
+        var msg = (result && result.error) || 'You do not have permission to save this change.';
         warnSaveFailed();
-        if (saveBanner) saveBanner.textContent = result.error + ' Your edits are still in this tab.';
-        return { ok: false, error: result.error, conflict: true };
+        if (saveBanner) saveBanner.textContent = msg + ' This change was NOT saved.';
+        return { ok: false, error: msg, forbidden: true };
+      });
+      if (r.status === 409) return r.json().catch(function(){ return {}; }).then(function(result) {
+        // Only the staff register is conflict-checked. A 409 used to refuse the WHOLE save and
+        // every later one, so statistics / quality / CAPA edits piled up unsaved behind it and
+        // the only way out (reload) threw them all away. Park the staff key and save the rest.
+        var msg = (result && result.error) || 'The staff register changed on the server.';
+        var parked = Object.prototype.hasOwnProperty.call(patch.data, 'unico_staff_v3') || patch.removed.indexOf('unico_staff_v3') >= 0;
+        if (parked) conflicted.unico_staff_v3 = true;
+        warnSaveFailed();
+        if (saveBanner) saveBanner.textContent = msg + ' Refresh the staff list to continue — your other changes are still being saved.';
+        if (!parked) return { ok: false, error: msg, conflict: true };
+        var fresh = (typeof window.unicoSnapshotAll === 'function') ? window.unicoSnapshotAll() : data;
+        return attemptPersist(fresh, tries).then(function() { return { ok: false, error: msg, conflict: true }; });
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json().then(function(result) {
         if(!result || !result.ok) throw new Error('Save was not accepted');
         acceptSnapshot(patch.data);
         patch.removed.forEach(function(k) { delete acknowledged[k]; });
-        clearSaveWarning();
+        // The server merged some keys with edits another session saved since this tab loaded.
+        // Adopt the merged value (and tell the stores to reload it) unless the user typed again
+        // meanwhile — then the SENT value stays the baseline, so the next save merges again.
+        var merged = (result && result.merged) || {}, adopted = [];
+        Object.keys(merged).forEach(function(k) {
+          if (typeof window.unicoAdoptMerged === 'function' && window.unicoAdoptMerged(k, patch.data[k], merged[k])) { acknowledged[k] = merged[k]; adopted.push(k); }
+        });
+        if (adopted.length) { try { window.dispatchEvent(new CustomEvent('unico:overlay-merged', { detail: { keys: adopted } })); } catch (e) { /* old browser */ } }
+        if (!Object.keys(conflicted).length) clearSaveWarning();
         return result;
       });
     }).catch(function (e) {
@@ -202,6 +242,8 @@
     persist: persist,
     acceptSnapshot: acceptSnapshot,
     staffBase: function() { return acknowledged.unico_staff_v3 || null; },
+    // The last server-confirmed value of a key — the closing-tab flush sends it as the merge baseline.
+    baseOf: function(k) { return Object.prototype.hasOwnProperty.call(acknowledged, k) ? acknowledged[k] : null; },
     backup: backup,
     restore: restore,
     dbPath: dbPath,

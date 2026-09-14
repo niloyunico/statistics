@@ -25,9 +25,11 @@
 
   // Fiscal-year (Jun–May) helpers so quarters can be rolled up PER YEAR, not just for the
   // hardcoded 2025-26 above. A month's quarter depends only on its month name, so any year works.
-  const FY_MONS = ['Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May'];
-  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return 2000+yy-(mi>=7?1:0); }
-  function fyQuarterMonths(startYear){ const yy=String(startYear%100).padStart(2,'0'); const ny=String((startYear+1)%100).padStart(2,'0'); return { Q1:['Jun-'+yy,'Jul-'+yy,'Aug-'+yy], Q2:['Sep-'+yy,'Oct-'+yy,'Nov-'+yy], Q3:['Dec-'+yy,'Jan-'+ny,'Feb-'+ny], Q4:['Mar-'+ny,'Apr-'+ny,'May-'+ny] }; }
+  // Per-year quarter rollups (quartersByFy) follow the CALENDAR reporting year the console uses:
+  // year N = Jan…Dec of N, Q1 = Jan–Mar. (The flat legacy `quarters` above stays as it was.)
+  const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return 2000+yy; }
+  function fyQuarterMonths(startYear){ const yy=String(startYear%100).padStart(2,'0'); return { Q1:['Jan-'+yy,'Feb-'+yy,'Mar-'+yy], Q2:['Apr-'+yy,'May-'+yy,'Jun-'+yy], Q3:['Jul-'+yy,'Aug-'+yy,'Sep-'+yy], Q4:['Oct-'+yy,'Nov-'+yy,'Dec-'+yy] }; }
   function fysInInd(ind){ const set=new Set(); ['months','mNum','mDen'].forEach(f=>{ const o=ind && ind[f]; if(o) Object.keys(o).forEach(k=>{ if(o[k]!=null&&o[k]!==''){ const fy=fyOfKeyS(k); if(fy!=null) set.add(fy); } }); }); return [...set]; }
 
   function isPct(ind) {
@@ -111,7 +113,37 @@
   // editing Aug never wipes Jul. `mNotObserved` marks a month as deliberately not
   // measured — it must merge like every other month map or the flag would be lost the
   // next time any other month on the same indicator is edited.
-  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups', 'mNotObserved'];
+  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups', 'mGroupsDen', 'mDeptBreakdown', 'mNotObserved', 'mEditedAt'];
+
+  /* NEWEST WINS between a manual edit here (overlay) and an approved submission (database).
+     The overlay used to win unconditionally, so a month cleared or typed in the console
+     earlier hid every reading approved for it later — the approved data was safely in the
+     database but "missing" on screen (e.g. MICU CLABSI Aug-26 showed blank, not the approved 0).
+     The server stamps base.mApprovedAt[month]; patchIndicator stamps layer.mEditedAt[month].
+     A layer cell is dropped only where the approval is newer AND the database actually holds
+     that cell, so an admin-owned headcount (mDen) the submission never carried is kept. Legacy
+     edits carry no stamp and therefore yield to a stamped approval. */
+  const MONTH_MAPS = ['months', 'monthRemarks', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups', 'mGroupsDen', 'mDeptBreakdown', 'mNotObserved'];
+  function withoutSuperseded(layer, base) {
+    const appr = base && base.mApprovedAt;
+    if (!layer || !appr || typeof appr !== 'object') return layer;
+    const edited = layer.mEditedAt || {};
+    let out = layer;
+    Object.keys(appr).forEach((m) => {
+      if (!(Number(appr[m]) > (Number(edited[m]) || 0))) return;
+      const has = (k) => !!(base[k] && Object.prototype.hasOwnProperty.call(base[k], m));
+      const dbReading = ['months', 'mNum'].some((k) => has(k) && base[k][m] != null && base[k][m] !== '');
+      const dbNotObs = !!(base.mNotObserved && base.mNotObserved[m]);
+      MONTH_MAPS.forEach((k) => {
+        if (!out[k] || !Object.prototype.hasOwnProperty.call(out[k], m)) return;
+        const drop = has(k) || (k === 'mNotObserved' && dbReading) || (dbNotObs && k !== 'mDen');
+        if (!drop) return;
+        if (out === layer) out = Object.assign({}, layer);
+        out[k] = Object.assign({}, out[k]); delete out[k][m];
+      });
+    });
+    return out;
+  }
 
   // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
   // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are
@@ -138,6 +170,7 @@
     // Apply the authoritative correction to the BASE so an explicit user edit (patch)
     // still wins, but every uncorrected indicator gets the right formula/reference.
     const corrected = correctedBase(seedInd);
+    patch = withoutSuperseded(patch, corrected);
     const ind = Object.assign({}, corrected, patch || {});
     if (patch) NESTED.forEach(k => { if (patch[k]) ind[k] = Object.assign({}, corrected[k] || {}, patch[k]); });
 
@@ -225,8 +258,10 @@
         const base = rawById.get(key);
         let raw = a;
         if (base) {
-          raw = Object.assign({}, base, a);
-          NESTED.forEach(k => { if (base[k] || a[k]) raw[k] = Object.assign({}, base[k] || {}, a[k] || {}); });
+          // The added copy is an overlay snapshot too: a month approved after it was taken wins.
+          const a2 = withoutSuperseded(a, base);
+          raw = Object.assign({}, base, a2);
+          NESTED.forEach(k => { if (base[k] || a2[k]) raw[k] = Object.assign({}, base[k] || {}, a2[k] || {}); });
         }
         const merged = mergeIndicator(raw, patches[a.id]);
         const at = idxById.get(key);
@@ -332,6 +367,9 @@
     // refocus); the memo only watches the overlay, so bump to rebuild from fresh seed.
     const [rev, setRev] = React.useState(0);
     React.useEffect(() => { const h = () => setRev(r => r + 1); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
+    // The server merged the quality overlay with another session's saves: reload it so this
+    // tab builds on their edits instead of writing its older copy back.
+    React.useEffect(() => { const h = (e) => { const ks = (e && e.detail && e.detail.keys) || []; if (ks.some(k => /^unico_quality_v\d+$/.test(k))) setOverlay(loadOverlay()); }; window.addEventListener('unico:overlay-merged', h); return () => window.removeEventListener('unico:overlay-merged', h); }, []);
     React.useEffect(() => { saveOverlay(overlay); }, [overlay]);
     const merged = React.useMemo(
       () => applyHHDeptBreakdown((window.QUALITY_SEED || []).map(d => mergeDept(d, overlay.depts[d.key]))),
@@ -385,6 +423,10 @@
         const prev = all[indId] || {};
         const next = Object.assign({}, prev, patch);
         NESTED.forEach(k => { if (patch[k]) next[k] = Object.assign({}, prev[k] || {}, patch[k]); });
+        // Stamp WHEN each month was edited, so it can be weighed against a later approval.
+        const now = Date.now(), touched = {};
+        MONTH_MAPS.forEach(k => { if (patch[k] && typeof patch[k] === 'object') Object.keys(patch[k]).forEach(m => { touched[m] = now; }); });
+        if (Object.keys(touched).length) next.mEditedAt = Object.assign({}, prev.mEditedAt || {}, touched);
         all[indId] = next;
         return Object.assign({}, cur, { indPatches: all });
       }),

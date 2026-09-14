@@ -23,7 +23,9 @@ async function bridgeTest() {
   assert.equal(calls.length,0,'mount is not a save');
   local.unico_store_v3='edited stats';
   await w.unicoNative.persist(local);
-  assert.deepEqual(calls[0],{partial:true,data:{unico_store_v3:'edited stats'},removed:[]},'unrelated save cannot overwrite stale staff');
+  // `bases` carries the value this tab started from, so the server merges a stale tab's save
+  // instead of overwriting (server/appdata-merge.js). Staff keeps its own staffBase.
+  assert.deepEqual(calls[0],{partial:true,data:{unico_store_v3:'edited stats'},removed:[],bases:{unico_store_v3:'old stats'}},'unrelated save cannot overwrite stale staff');
   local[key]=JSON.stringify(latest);
   w.unicoNative.acceptSnapshot({[key]:local[key]});
   await w.unicoNative.persist(local);

@@ -240,7 +240,10 @@ async function serveIndex(req, res) {
   // indicators and NO error — which reads as "all my data is gone" and is the worst
   // possible answer to a database that is merely still waking up. Say so instead, and
   // come back by itself.
-  if (appRes === null && deptRes === null && qualRes === null) {
+  // ANY core dataset failing counts, not only all of them: one shed/timed-out read used to
+  // render "no staff" / "no indicators" as if the data were gone (and marked that page's
+  // snapshot authoritative). The warming page retries by itself within seconds.
+  if (appRes === null || deptRes === null || qualRes === null || staffRes === null) {
     res.set('Cache-Control', 'no-store');
     res.set('Retry-After', '5');
     return res.status(503).type('html').send(warmingPage());
@@ -687,7 +690,8 @@ app.get('/api/departments', session.requireApi, access.requirePerm('stats', 'vie
       // (custom columns / renames) on live refresh, not only at page load
       try { const dov = scopeDeptOverlay((await getAppData()).data['unico_store_v3'], da); if (dov) out.overlay = { unico_store_v3: JSON.stringify(dov) }; } catch (e) { }
     }
-    out.departments = depts;
+    // Hidden duplicate columns stay stored but are never offered to the apps for entry.
+    out.departments = depts.map((d) => (Array.isArray(d.cols) && d.cols.some((c) => c && c.hidden)) ? Object.assign({}, d, { cols: d.cols.filter((c) => !(c && c.hidden)) }) : d);
     res.json(out);
   }
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load departments.' }); }
@@ -745,6 +749,14 @@ app.get('/api/quality', session.requireApi, access.requirePerm('quality', 'view'
 // carries no session cookie, and the response is only a timestamp. Set CRON_SECRET to
 // require a bearer token (Vercel then sends it automatically).
 keepalive.mount(app);
+
+// Verified, append-only backups of every Mongo collection + D1 table to Cloudflare R2
+// (Vercel cron /api/backup/cron, admin POST /api/backup/run, daily timer on the PC server).
+const backupJobs = require('./backup');
+backupJobs.mount(app, { requireApi: [session.requireApi, access.attach] });
+// Data-integrity monitor (server/monitor.js): daily snapshots + failed-save reports.
+require('./monitor').mount(app, { requireApi: [session.requireApi, access.attach] });
+backupJobs.start();
 
 // Data Collection module: responsible persons + Google-form-style submissions
 // (responsibles / submissions APIs). Self-contained; honors the same auth gate.

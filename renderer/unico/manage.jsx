@@ -1,7 +1,7 @@
 /* UNICO — Manage Departments (CRUD + custom columns) */
 function slug(s){return (s||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')||'col';}
 
-function DeptModal({initial, onClose, onSave, groups}){
+function DeptModal({initial, onClose, onSave, groups, entries}){
   const editing=!!initial;
   const [name,setName]=React.useState(initial?.name||'');
   const [short,setShort]=React.useState(initial?.short||'');
@@ -30,6 +30,14 @@ function DeptModal({initial, onClose, onSave, groups}){
     // Preserve the existing id for any column that already has one (so its stored
     // data stays connected); slug a fresh, unique id ONLY for newly-added columns.
     const used=new Set(clean.filter(c=>c.id).map(c=>c.id));
+    // Also reserve every id this department has EVER stored values under — a removed
+    // column or a server-only one keeps its values in the data rows/entries, so re-using
+    // its slug for a new metric resurrected those old hidden values under it.
+    if(editing){
+      const srv=((window.UNICO&&window.UNICO.DEPARTMENTS)||[]).find(d=>d.id===initial.id);
+      [initial,srv].forEach(d=>{ if(!d) return; (d.cols||[]).forEach(c=>{ if(c&&c.id) used.add(c.id); }); (d.data||[]).forEach(r=>{ if(r) Object.keys(r).forEach(k=>used.add(k)); }); });
+      (entries||[]).forEach(e=>{ if(e&&e.dept===initial.id&&e.row) Object.keys(e.row).forEach(k=>used.add(k)); });
+    }
     const finalCols=clean.map(c=>{
       if(c.id) return {id:c.id,label:c.label.trim(),pct:c.pct};
       let id=slug(c.label),b=id,k=1; while(used.has(id)){id=b+'_'+(++k);} used.add(id);
@@ -207,9 +215,21 @@ function ManageDepts({depts, store, setRoute}){
         {(!window.unicoCan||window.unicoCan('stats','add'))&&<button className="btn pri" onClick={()=>setModal({type:'add'})}><Ic d={I.plus} s={16}/>New Department</button>}
       </div>
 
-      {modal&&<DeptModal initial={modal.type==='edit'?modal.dept:null} groups={groups} onClose={()=>setModal(null)} onSave={onSave}/>}
+      {/* Deleting a built-in department only hides it — its saved data stays. List them here so
+          an administrator can bring one back (the old advice, Settings → Reset, wiped all entries). */}
+      {store.undeleteDept&&(store.deletedIds||[]).length>0&&(!window.unicoCan||window.unicoCan('stats','edit'))&&(
+        <div className="card" style={{padding:'12px 16px',marginTop:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <b style={{fontSize:13}}>Hidden departments</b>
+          <span style={{fontSize:12,color:'var(--muted)'}}>Their data is still saved.</span>
+          {(store.deletedIds||[]).map(id=>{const src=(window.UNICO.DEPARTMENTS||[]).find(x=>x.id===id);return(
+            <button key={id} className="btn sm" onClick={()=>{store.undeleteDept(id);window.UI&&window.UI.toast(`${(src&&src.name)||id} restored`,'success');}}>
+              <Ic d={I.check} s={13}/>Restore {(src&&(src.short||src.name))||id}
+            </button>);})}
+        </div>
+      )}
+      {modal&&<DeptModal initial={modal.type==='edit'?modal.dept:null} groups={groups} entries={store.entries} onClose={()=>setModal(null)} onSave={onSave}/>}
       {confirm&&<ConfirmModal title={`Delete ${confirm.name}?`} danger
-        body={confirm.custom?'This custom department and its entered data will be permanently removed.':'This built-in department will be hidden from the platform. You can re-add it by resetting in Settings.'}
+        body={confirm.custom?'This custom department and its entered data will be permanently removed.':'This built-in department will be hidden from the platform. Its saved data is not deleted — an administrator can restore the department.'}
         onClose={()=>setConfirm(null)} onConfirm={()=>{store.deleteDept(confirm.id);setConfirm(null);}}/>}
     </div>
   );
