@@ -104,4 +104,44 @@ async function storeTest() {
   const before=fetches;w.unicoCan=()=>false;await store.refresh();assert.equal(fetches,before,'no staff access makes no roster request');
 }
 
-(async()=>{await bridgeTest();await storeTest();await formSaveTest();console.log('STAFF_SYNC_TEST_PASS: refresh, polling, local edits, failures, empty lists, partial saves and database confirmation');})().catch(e=>{console.error(e);process.exitCode=1;});
+// Two views holding the staff store (the app shell and the always-mounted header search),
+// the real page bridge and the real server merge: a roster read that started before a
+// save and lands while it is in flight must not delete or revert what was saved.
+async function sharedRosterRaceTest(label,act,check) {
+  const {mergeStaffChanges}=require('../staff-merge');
+  const html=read('../index.html'), at=html.indexOf('var n = window.unicoNative');
+  const bridge=html.slice(html.lastIndexOf('<script>',at)+8,html.indexOf('</script>',at));
+  let server=JSON.stringify([{id:1,name:'Existing',role:'Nurse',is_active:true}]),heldGet=null,heldPut=null,reads=0;
+  const hold=()=>{let release;const wait=new Promise(r=>release=r);return {wait,release};};
+  const tick=async()=>{for(let i=0;i<8;i++) await new Promise(setImmediate);};
+  class Storage{constructor(){this.m=new Map();} getItem(k){return this.m.has(k)?this.m.get(k):null;} setItem(k,v){this.m.set(k,String(v));}
+    removeItem(k){this.m.delete(k);} clear(){this.m.clear();} key(i){return [...this.m.keys()][i]??null;} get length(){return this.m.size;}}
+  const ctx={console,setImmediate,clearTimeout,setInterval:()=>1,clearInterval:()=>{},setTimeout:(fn,ms)=>ms===200?0:setTimeout(fn,ms),
+    document:{visibilityState:'hidden',addEventListener(){},removeEventListener(){}},addEventListener(){},removeEventListener(){},
+    unicoCan:()=>true,STAFF_SEED:[],__UNICO_STAFF__:[],__UNICO_SNAPSHOT__:{[key]:server}};
+  ctx.window=ctx;ctx.localStorage=new Storage();
+  ctx.fetch=async(url,opts={})=>{
+    if(opts.method==='PUT'){const body=JSON.parse(opts.body);if(body.data[key]!==undefined)server=mergeStaffChanges(body.staffBase,body.data[key],server);
+      if(heldPut){const h=heldPut;heldPut=null;await h.wait;}return {ok:true,status:200,json:async()=>({ok:true})};}
+    const snap=server;reads++;if(heldGet){const h=heldGet;heldGet=null;await h.wait;}return {ok:true,status:200,json:async()=>({ok:true,staff:JSON.parse(snap)})};
+  };
+  let cur=null;
+  ctx.React={useState(init){const c=cur,i=c.i++;if(!(i in c.cells))c.cells[i]=typeof init==='function'?init():init;return [c.cells[i],v=>{c.cells[i]=typeof v==='function'?v(c.cells[i]):v;}];},
+    useRef(value){const c=cur,i=c.i++;return c.cells[i]||(c.cells[i]={current:value});},
+    useEffect(fn){const c=cur,i=c.i++;if(!c.deps[i]){c.deps[i]=true;c.effects.push(fn);}}};
+  vm.createContext(ctx);
+  [read('web-native.js'),bridge,read('staff-data.js')].forEach(code=>vm.runInContext(code,ctx));
+  const render=inst=>{cur=inst;inst.i=0;const store=ctx.useStaffStore();cur=null;inst.effects.splice(0).forEach(fn=>fn());return store;};
+  const shell=render({cells:[],deps:[],effects:[],i:0}), search=render({cells:[],deps:[],effects:[],i:0});
+  const get=heldGet=hold();const refreshing=search.refresh();await tick();assert.equal(reads,1,'the search view is reading the roster');
+  const put=heldPut=hold();const id=act(shell);const saving=ctx.unicoFlushNow();await tick();
+  get.release();await refreshing;await tick();
+  put.release();assert.equal((await saving).ok,true);await tick();
+  await ctx.unicoFlushNow();
+  assert(check(JSON.parse(server),id),label);
+}
+
+(async()=>{await bridgeTest();await storeTest();await formSaveTest();
+  await sharedRosterRaceTest('a staff record created during a refresh stays saved',s=>s.create({name:'New nurse',role:'Nurse',extracurricular:'Singing'}),(rows,id)=>rows.some(r=>r.id===id&&r.extracurricular==='Singing'));
+  await sharedRosterRaceTest('activities entered during a refresh stay saved',s=>{s.update(1,{extracurricular:'Dancing'});return 1;},rows=>rows[0].extracurricular==='Dancing');
+  console.log('STAFF_SYNC_TEST_PASS: refresh, polling, local edits, failures, empty lists, partial saves, database confirmation and shared-roster save races');})().catch(e=>{console.error(e);process.exitCode=1;});

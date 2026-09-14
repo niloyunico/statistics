@@ -26,7 +26,11 @@
  * modules use when no MONGODB_URI is configured (local development only).
  */
 'use strict';
-const { getDbHandle, getUsers, getDepartments, getStaff, getQuality } = require('./db');
+const { getDbHandle, getUsers, getDepartments, getQuality } = require('./db');
+// Staff come from the saved register, not the `staff` collection: that collection is the
+// July import, so it lacks everyone added since and every edit made on the console.
+const { loadRoster } = require('./staff-roster');
+const staffRegister = () => loadRoster({ cached: true });
 const access = require('./access');
 const activity = require('./activity-log');
 const deptmap = require('./deptmap');
@@ -646,7 +650,7 @@ function mount(app, opts) {
   app.get(P + '/unit-report', G, requireFeature('reports'), async (req, res) => {
     try {
       const ctx = req.ctx, dept = deptParam(req); if (!dept) return fail(res, 403, 'Not your unit.');
-      const [depts, quality, staff] = await Promise.all([getDepartments().catch(() => []), getQuality().catch(() => []), getStaff().catch(() => [])]);
+      const [depts, quality, staff] = await Promise.all([getDepartments().catch(() => []), getQuality().catch(() => []), staffRegister().catch(() => [])]);
       const d = arr(depts).find((x) => String(x.id || x._id) === String(dept)) || null;
       const months = d ? arr(d.months).slice(-7) : [];
       const offset = d ? Math.max(0, arr(d.months).length - months.length) : 0;
@@ -669,7 +673,7 @@ function mount(app, opts) {
   app.get(P + '/my-performance', G, requireFeature('performance'), async (req, res) => {
     try {
       const ctx = req.ctx;
-      const staff = await getStaff().catch(() => []);
+      const staff = await staffRegister().catch(() => []);
       const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
       const me = arr(staff).find((p) => (ctx.a.staffEmpId && norm(p.emp_id) === norm(ctx.a.staffEmpId)) || (ctx.a.staffId != null && String(p.id) === String(ctx.a.staffId)) || norm(p.name) === norm(ctx.name)) || null;
       const db = await getDbHandle().catch(() => null);
@@ -741,7 +745,7 @@ function mount(app, opts) {
       if (!(ctx.isAdmin || ctx.isIncharge || ctx.can('staff', 'view'))) return fail(res, 403, 'Staff register access required.');
       const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
       const short = (ctx.byId[unit.id] && ctx.byId[unit.id].short) || '';
-      const staff = (await getStaff().catch(() => [])).filter((p) => !p.former && p.is_active !== false && String(p.current_department || '').split(',').some((x) => norm(x) === norm(unit.name) || norm(x) === norm(unit.id) || (short && norm(x) === norm(short))));
+      const staff = (await staffRegister().catch(() => [])).filter((p) => !p.former && p.is_active !== false && String(p.current_department || '').split(',').some((x) => norm(x) === norm(unit.name) || norm(x) === norm(unit.id) || (short && norm(x) === norm(short))));
       const accounts = await accountList(); const online = await presence();
       const photoOf = (p) => { const x = p.photo || p.photo_url; return x ? (typeof x === 'string' ? x : x.url || null) : null; };
       const rows = staff.map((p) => { const a = accounts.find((u) => (u.staffEmpId && p.emp_id && norm(u.staffEmpId) === norm(p.emp_id)) || norm(u.name) === norm(p.name)) || null; return { id: p.id, name: p.name, designation: p.designation || (p.role === 'PCA' ? 'Patient Care Assistant' : 'Staff Nurse'), role: p.role === 'PCA' ? 'PCA' : 'Nurse', empId: p.emp_id || null, doj: p.doj || null, dob: p.dob || p.date_of_birth || p.birthday || null, phone: p.phone || null, photo: photoOf(p), qualification: p.qualification || null, experience: p.total_experience_text || null, training: p.special_training || null, hepB: p.hepatitis_b_vaccination || null, account: a ? { username: a.username, role: a.role, roleLabel: roleLabel(a.role), online: online.has(a.username) } : null }; });

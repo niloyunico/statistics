@@ -24,10 +24,12 @@ function resolveRoster(data, base) {
   });
 }
 
-async function loadRoster() {
-  const [snapshot, base] = await Promise.all([
-    getAppData({ fresh: true, noRescue: true }), getStaff({ fresh: true }),
-  ]);
+// `cached` is for display-only reads (the phone apps); GET /api/staff stays fresh.
+async function loadRoster(opts) {
+  const cached = !!(opts && opts.cached);
+  const [snapshot, base] = await Promise.all(cached
+    ? [getAppData(), getStaff()]
+    : [getAppData({ fresh: true, noRescue: true }), getStaff({ fresh: true })]);
   return resolveRoster(snapshot.data, base);
 }
 

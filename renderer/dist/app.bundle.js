@@ -2142,68 +2142,90 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     }catch(err){}
   }
   publishPhotos(load()||[]);   // modules can render before any staff view mounts
+  /* ONE roster per page, shared by every useStaffStore() call.
+
+     The hook is called by the app shell, the header search (always mounted), Performance,
+     Duty Roster, Manpower… and each call used to keep its OWN copy of the roster, edit
+     counter and 30-second refresh. A refresh only knew about edits made through its own
+     copy. When the header search read the roster just before a Save and its answer
+     landed while that save was in flight, the older roster was written back into the
+     browser, and the next routine save sent it to the server as a deliberate edit: the
+     new nurse was deleted, or the activities just entered were reverted — after the form
+     had already said "saved". With one shared state, an edit made through any view
+     invalidates every refresh that started before it. */
+  const shared={staff:null,version:0,busy:null,refreshing:false,error:'',subs:new Set(),mounted:0,timer:null};
+  const rosterNow=()=>{ if(shared.staff===null) shared.staff=load()||realSeed(); return shared.staff; };
+  const notify=()=>shared.subs.forEach(fn=>{ try{ fn(); }catch(e){} });
+  function setStaff(change){
+    const next=typeof change==='function'?change(rosterNow()):change;
+    // Persist local edits immediately, so a Refresh in the same tick can flush
+    // them before fetching. React mounting/hydration never writes the register.
+    localStorage.setItem(KEY,JSON.stringify(next));
+    shared.version++; shared.staff=next; notify();
+  }
+  function refresh(){
+    if(shared.busy) return shared.busy;
+    if(window.unicoCan && !window.unicoCan('staff','view')) return Promise.resolve(false);
+    const started=shared.version, stored=localStorage.getItem(KEY);
+    shared.refreshing=true; shared.error=''; notify();
+    shared.busy=(async()=>{
+      try{
+        const saved=window.unicoFlushNow ? await window.unicoFlushNow() : {ok:true};
+        if(saved && saved.ok===false) throw new Error('Save pending. Keep this tab open and try Refresh again.');
+        const session=window.unicoSession;
+        const base=session&&session.configured()?session.serverUrl():'';
+        const headers=base&&session.token()?{authorization:'Bearer '+session.token()}:{};
+        const r=await fetch(base+'/api/staff',{credentials:'same-origin',cache:'no-store',headers});
+        const j=await r.json();
+        if(!r.ok || !j.ok || !Array.isArray(j.staff)) throw new Error(j.error||'Could not refresh the staff list. Try again.');
+        // Anything written to the roster while the request was out is newer than its answer.
+        if(shared.version!==started || localStorage.getItem(KEY)!==stored) return false;
+        const data={[KEY]:JSON.stringify(j.staff)};
+        if(window.unicoApplyRemoteData){
+          const applied=window.unicoApplyRemoteData(data);
+          if(applied && applied[KEY]===false) return false; // the bridge still holds an unconfirmed edit
+        } else localStorage.setItem(KEY,data[KEY]);
+        window.__UNICO_STAFF__=j.staff;
+        window.STAFF_SEED=j.staff;
+        shared.staff=j.staff;
+        return true;
+      }catch(e){ shared.error=e.message||'Could not refresh the staff list.'; return false; }
+      finally{ shared.busy=null; shared.refreshing=false; notify(); }
+    })();
+    return shared.busy;
+  }
+  // One poll for the page however many views show staff: on entry, every 30 seconds
+  // and when returning to the app.
+  const pollNow=()=>{ if(document.visibilityState!=='hidden') refresh(); };
   function useStaffStore(){
-    const [staff,replaceStaff]=React.useState(()=>load()||realSeed());
-    const [refreshing,setRefreshing]=React.useState(false);
-    const [refreshError,setRefreshError]=React.useState('');
-    const currentStaff=React.useRef(staff);
-    const version=React.useRef(0);
-    const busy=React.useRef(null);
-    const alive=React.useRef(true);
-    const setStaff=(change)=>{
-      const next=typeof change==='function'?change(currentStaff.current):change;
-      // Persist local edits immediately, so a Refresh in the same tick can flush
-      // them before fetching. React mounting/hydration never writes the register.
-      localStorage.setItem(KEY,JSON.stringify(next));
-      version.current++; currentStaff.current=next; replaceStaff(next);
-    };
+    const [,rerender]=React.useState(0);
+    React.useEffect(()=>{
+      const fn=()=>rerender(n=>n+1);
+      shared.subs.add(fn);
+      if(!shared.mounted++){
+        shared.timer=setInterval(pollNow,30000);
+        window.addEventListener('focus',pollNow);
+        document.addEventListener('visibilitychange',pollNow);
+      }
+      pollNow();
+      return ()=>{
+        shared.subs.delete(fn);
+        if(!--shared.mounted){
+          clearInterval(shared.timer); shared.timer=null;
+          window.removeEventListener('focus',pollNow);
+          document.removeEventListener('visibilitychange',pollNow);
+        }
+      };
+    },[]);
+    const staff=rosterNow();
     React.useEffect(()=>{
       publishPhotos(staff);
     },[staff]);
-    const refresh=()=>{
-      if(busy.current) return busy.current;
-      if(window.unicoCan && !window.unicoCan('staff','view')) return Promise.resolve(false);
-      const started=version.current;
-      setRefreshing(true); setRefreshError('');
-      busy.current=(async()=>{
-        try{
-          const saved=window.unicoFlushNow ? await window.unicoFlushNow() : {ok:true};
-          if(saved && saved.ok===false) throw new Error('Save pending. Keep this tab open and try Refresh again.');
-          const session=window.unicoSession;
-          const base=session&&session.configured()?session.serverUrl():'';
-          const headers=base&&session.token()?{authorization:'Bearer '+session.token()}:{};
-          const r=await fetch(base+'/api/staff',{credentials:'same-origin',cache:'no-store',headers});
-          const j=await r.json();
-          if(!r.ok || !j.ok || !Array.isArray(j.staff)) throw new Error(j.error||'Could not refresh the staff list. Try again.');
-          if(!alive.current || version.current!==started) return false; // user edited during the request
-          const data={[KEY]:JSON.stringify(j.staff)};
-          if(window.unicoApplyRemoteData) window.unicoApplyRemoteData(data);
-          else localStorage.setItem(KEY,data[KEY]);
-          window.__UNICO_STAFF__=j.staff;
-          window.STAFF_SEED=j.staff;
-          currentStaff.current=j.staff;
-          replaceStaff(j.staff);
-          return true;
-        }catch(e){ if(alive.current) setRefreshError(e.message||'Could not refresh the staff list.'); return false; }
-        finally{ busy.current=null; if(alive.current) setRefreshing(false); }
-      })();
-      return busy.current;
-    };
-    React.useEffect(()=>{
-      alive.current=true;
-      // Fetch on entry, every 30 seconds and when returning to the app.
-      const update=()=>{ if(document.visibilityState!=='hidden') refresh(); };
-      update();
-      const timer=setInterval(update,30000);
-      window.addEventListener('focus',update);
-      document.addEventListener('visibilitychange',update);
-      return ()=>{ alive.current=false; clearInterval(timer); window.removeEventListener('focus',update); document.removeEventListener('visibilitychange',update); };
-    },[]);
     const api={
-      staff, refresh, refreshing, refreshError,
+      staff, refresh, refreshing:shared.refreshing, refreshError:shared.error,
       get:(id)=>staff.find(e=>e.id===id),
       nextEmpId:()=>{ const max=staff.reduce((m,e)=>{const n=parseInt((e.emp_id||'').replace(/\D/g,''))||0;return Math.max(m,n);},100); return `UNC-${String(max+1).padStart(4,'0')}`; },
-      create:(data)=>{ const id=Math.max(0,...currentStaff.current.map(e=>e.id))+1; setStaff(s=>[...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]); return id; },
+      create:(data)=>{ const id=Math.max(0,...rosterNow().map(e=>e.id))+1; setStaff(s=>[...s,{id,is_active:true,notes:[],created_at:Date.now(),...data}]); return id; },
       update:(id,patch)=>setStaff(s=>s.map(e=>e.id===id?{...e,...patch}:e)),
       // Deactivating a staff member archives them: they leave the active roster AND
       // move to Previous Staff (which keys on `former`). Keep first-archived timestamp.
