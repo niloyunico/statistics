@@ -136,6 +136,30 @@ function unicoFirstAllowedHome(){
   for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return homes[i][1]; }
   return null;
 }
+// Perms were injected once at page load, so a module granted/revoked meanwhile needed a reload
+// (its buttons 403'd). Re-read the live grant; on a change FIRST pull the data it now allows —
+// a newly granted module's overlay was never sent to this tab, and a store opened on that blank
+// copy would save it over the hospital's — then tell the shell to re-render ('unico:perms-changed').
+function unicoRefreshPerms(){
+  const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
+  if(!u || !u.username || u.role==='Administrator' || ['collector','incharge','nurse','pca'].indexOf(u.role)>=0) return Promise.resolve(false);
+  return fetch('/api/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{
+    // degraded = the server could not read the account: its empty perms are not a revocation.
+    if(!j||!j.ok||j.degraded||!j.perms||typeof j.perms!=='object'||Array.isArray(j.perms)) return false;
+    const staffScope=j.staffScope||u.staffScope;
+    if(JSON.stringify(j.perms)===JSON.stringify(u.perms||null) && staffScope===u.staffScope) return false;
+    const appJob=window.unicoRefreshAppData ? window.unicoRefreshAppData({includeNew:true}) : Promise.resolve([]);
+    const jobs=[appJob];
+    try{ if(window.UNICO&&window.UNICO.refreshDepartments) jobs.push(window.UNICO.refreshDepartments()); }catch(e){}
+    try{ if(window.refreshQualitySeed) jobs.push(window.refreshQualitySeed()); }catch(e){}
+    return Promise.all(jobs.map(p=>Promise.resolve(p).catch(()=>null))).then(res=>{
+      if(res[0]===null) return false;   // overlay not refreshed: keep the old grant, retry next round
+      Object.assign(u,{perms:j.perms,staffScope});
+      try{ window.dispatchEvent(new CustomEvent('unico:perms-changed',{detail:{perms:j.perms}})); }catch(e){}
+      return true;
+    });
+  }).catch(()=>false);
+}
 function unicoSidebarGroups(moduleId){
   if(moduleId==='datacol') return [
     {sec:'Data Collection', items:[
@@ -673,4 +697,4 @@ function SectionTitle({icon,title,sub,right}){
 
 Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, ModuleSwitch, unicoModuleOf,
   UNICO_ACCESS_MODULES, unicoAccessModuleOf, unicoAllowedModules, unicoCanAccessModule, unicoCanAccessView, unicoFirstAllowedHome,
-  unicoCan, unicoModuleLevel, unicoUserPerms });
+  unicoCan, unicoModuleLevel, unicoUserPerms, unicoRefreshPerms });

@@ -98,14 +98,28 @@ window.unicoSig = {
 // server, the page-load snapshot above is stale. Swap the canonical department
 // data in place so every view that (re)mounts sees the fresh numbers without a
 // full page reload.
+let _deptSig = null;
 window.UNICO.refreshDepartments = function () {
-  return fetch('/api/departments', { credentials: 'same-origin' })
+  return fetch('/api/departments', { credentials: 'same-origin', cache: 'no-store' })
     .then(r => r.json())
     .then(j => {
       if (!j || !j.ok || !Array.isArray(j.departments)) return false;
       // Collector sessions also receive their re-scoped config overlay — keep the
       // local copy current so admin column/rename edits apply on live refresh.
-      try { if (j.overlay && typeof j.overlay['unico_store_v3'] === 'string') localStorage.setItem('unico_store_v3', j.overlay['unico_store_v3']); } catch (e) { }
+      // Through the bridge (raw write, skips this tab's unsaved edits, updates the save baseline)
+      // AND announced: mounted stores held the old overlay in React state and wrote it back.
+      try {
+        const ov = j.overlay && j.overlay['unico_store_v3'];
+        if (typeof ov === 'string') {
+          if (typeof window.unicoApplyRemoteOverlay === 'function') window.unicoApplyRemoteOverlay({ unico_store_v3: ov }, { source: 'departments' });
+          else if (localStorage.getItem('unico_store_v3') !== ov) { localStorage.setItem('unico_store_v3', ov); window.dispatchEvent(new CustomEvent('unico:overlay-merged', { detail: { keys: ['unico_store_v3'], source: 'departments' } })); }
+        }
+      } catch (e) { }
+      // Unchanged since the last refresh: skip the swap and the event. The app polls every 60 s,
+      // and 'unico:data-refreshed' makes stores rebuild and several views refetch their lists.
+      const sig = JSON.stringify(j.departments);
+      if (sig === _deptSig) return true;
+      _deptSig = sig;
       const fresh = j.departments.map(d => ({ ...d }));
       fresh.forEach(decorateDept);
       DEPARTMENTS.length = 0; fresh.forEach(d => DEPARTMENTS.push(d));

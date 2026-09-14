@@ -131,6 +131,9 @@
         if(!result || !result.ok) throw new Error('Save was not accepted');
         acceptSnapshot(patch.data);
         patch.removed.forEach(function(k) { delete acknowledged[k]; });
+        // Release the page bridge's in-memory guard for exactly these values (index.html `pending`):
+        // until now another tab's hydration could not erase them. Before adopting a merge below.
+        if (typeof window.unicoConfirmSaved === 'function') window.unicoConfirmSaved(patch.data, patch.removed);
         // The server merged some keys with edits another session saved since this tab loaded.
         // Adopt the merged value (and tell the stores to reload it) unless the user typed again
         // meanwhile — then the SENT value stays the baseline, so the next save merges again.

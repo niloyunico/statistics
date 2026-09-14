@@ -267,6 +267,9 @@ async function saveResponsible(input) {
   doc.allQualityAreas = allQA;
   // Effective areas = departments' auto areas UNION any custom/extra areas the admin picked
   // (doc.qualityAreas came from input). Custom access rides on top of the assign-once default.
+  // Force-refresh the per-instance map first (never invalidated across instances): these areas
+  // are STORED, so a stale map would persist the wrong access. registerCollector comes through here too.
+  await deptmap.get(true).catch(() => null);
   doc.qualityAreas = await deptmap.deriveQualityAreas(doc.departments, allQA, doc.qualityAreas);
   let rec;
   if (!c) {

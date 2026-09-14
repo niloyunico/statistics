@@ -721,7 +721,9 @@
 
     const assigned = resps.filter((r) => dept && canReportDept(r, dept.id));
     const order = MO();
-    const monthOpts = order.slice(Math.max(0, order.indexOf('Jan-25')), order.length); // sensible window
+    const monthOpts = dcPortalUser()
+      ? dcRealMonthOpts([dcPatientStart(dept, subs)], [month, prefill && prefill.month])   // collectors: real months only
+      : order.slice(Math.max(0, order.indexOf('Jan-25')), order.length); // admins keep the wide window for backfills
     // What's already on record for each month of THIS department: the latest
     // SUBMISSION status (pending/approved/rejected) takes priority; otherwise a
     // month already in the live database is flagged "reported".
@@ -901,7 +903,7 @@
     // Months = the quality FY (Jun-25…May-26), read from the store so it stays in
     // sync with the dashboard/quarters; default to the latest FY month.
     const fyMonths = (window.QUALITY_QUARTER_MONTHS) ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
-    const monthOpts = dcWideMonths();
+    const monthOpts = dcPortalUser() ? dcRealMonthOpts(areas.flatMap((a) => dcAreaStarts(a, [])), [prefill && prefill.month]) : dcWideMonths();
     const defMonth = dcDefaultMonth() || ((fyMonths && fyMonths.length) ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
     // Default to the first area that actually HAS indicators (so a collector never
     // lands on an empty area), falling back to the first area.
@@ -2029,7 +2031,7 @@
     // Only count departments that actually collect PATIENT statistics — have data on record
     // OR have ever submitted patient data. Excludes quality-only units (e.g. Radiology) that
     // never report a patient census, so they're not wrongly flagged as "missing".
-    // …and only for months it OWES: not before its start month (Department Setup / first data).
+    // …and only for months it OWES: not before its start month (Department Setup / January this year).
     const patientDepts = dcPatientDepts(depts, subs).filter((d) => dcPatientDue(d, m, subs));
     // A dept/area is COVERED for the month if it was submitted this month OR already has data
     // on record for it (some data is entered directly, not through the submission flow).
@@ -3033,6 +3035,22 @@
     return (mi < 0 || isNaN(yy)) ? null : (2000 + yy) * 12 + mi;
   };
   const dcMonthKey = (r) => MONS_ABBR[((r % 12) + 12) % 12] + '-' + String(Math.floor(r / 12) % 100).padStart(2, '0');
+  // Month picker for a DATA COLLECTOR / IN-CHARGE: only real reporting months. The pickers used a
+  // fixed 2024-2032 window, so a unit that started in Feb-26 was offered January 2025 onwards.
+  // Range = the earliest month anything assigned actually started (Department Setup start month,
+  // else indicator start, else first recorded data/submission) up to the latest due month, newest
+  // first. `keep` months (the current selection / a prefilled month) are always included.
+  const dcPortalUser = () => { const r = ((typeof window !== 'undefined' && window.__UNICO_USER__) || {}).role; return r === 'collector' || r === 'incharge'; };
+  const dcRealMonthOpts = (startMonths, keep) => {
+    const last = dcDefaultMonth(); const lr = dcMonthRank(last);
+    let first = null;
+    (startMonths || []).forEach((m) => { const r = dcMonthRank(m); if (r != null && r <= lr && (first == null || r < first)) first = r; });
+    const out = [];
+    for (let r = lr; r >= (first == null ? lr : first); r--) out.push(dcMonthKey(r));
+    (keep || []).forEach((k) => { if (k && out.indexOf(k) < 0 && dcMonthRank(k) != null) out.push(k); });
+    return out.sort((a, b) => dcMonthRank(b) - dcMonthRank(a));
+  };
+  const dcAreaStarts = (area, subs) => ((area && area.indicators) || []).filter((ind) => !dcNotMeasured(area, ind)).map((ind) => dcIndicatorStart(area, ind, subs || []));
   // The later of two month keys (either may be absent).
   const dcLaterMonth = (a, b) => {
     const ra = dcMonthRank(a), rb = dcMonthRank(b);
@@ -3122,6 +3140,16 @@
     return ix;
   };
   const dcSubIsInd = (s, ind) => s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase();
+  // With no start month set, counting begins in January of the current reporting year (or at
+  // the first data, when that is earlier). Starting at the first data hid real gaps: nothing
+  // before a department's first reading was ever "missing" (ER Jan–Mar looked complete).
+  const dcYearStart = () => 'Jan-' + dcDefaultMonth().split('-')[1];
+  const dcEarlierMonth = (a, b) => {
+    const ra = dcMonthRank(a), rb = dcMonthRank(b);
+    if (ra == null) return rb == null ? null : b;
+    if (rb == null) return a;
+    return ra <= rb ? a : b;
+  };
   // The first month an indicator has anything at all: a reading, a not-observed mark, an
   // incident, or any submission.
   const dcIndFirstMonth = (area, ind, subs) => {
@@ -3134,11 +3162,11 @@
     return best == null ? null : dcMonthKey(best);
   };
   // When an indicator starts being owed: the later of the department's start and the
-  // indicator's own startMonth; with neither, its first month of any data. null = only the
+  // indicator's own startMonth; with neither, January of this year (or earlier first data). null = only the
   // current due month counts. `deptStart` overrides the saved setting (admin draft).
   const dcIndicatorStart = (area, ind, subs, deptStart) => {
     const ds = deptStart === undefined ? dcDeptSettings(dcAreaDeptId(area)).startMonth : deptStart;
-    return dcLaterMonth(ds, ind && ind.startMonth) || dcIndFirstMonth(area, ind, subs);
+    return dcLaterMonth(ds, ind && ind.startMonth) || dcEarlierMonth(dcIndFirstMonth(area, ind, subs), dcYearStart());
   };
   const dcNotMeasured = (area, ind, override) => {
     const nm = override !== undefined ? override : dcDeptSettings(dcAreaDeptId(area)).notMeasured;
@@ -3167,7 +3195,7 @@
     const see = (k) => { const r = dcMonthRank(k); if (r != null && (best == null || r < best)) best = r; };
     (dept.months || []).forEach(see);
     (dcSubsIndex(subs).pDept.get(dept.id) || []).forEach((s) => see(s.month));
-    return best == null ? null : dcMonthKey(best);
+    return best == null ? dcYearStart() : dcEarlierMonth(dcMonthKey(best), dcYearStart());
   };
   const dcQStatus = (subs, areaKey, ind, m) => cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
   // Patient statistics for one department-month: 'recorded' | 'pending' | 'rejected' | 'none'.
@@ -3913,7 +3941,10 @@
     const heroStyle = Object.assign({}, CP_CARD, { position: 'relative', overflow: 'hidden', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 14 });
     const ic = (bg, c) => ({ display: 'inline-grid', placeItems: 'center', width: 38, height: 38, borderRadius: 11, background: bg, color: c, flexShrink: 0 });
 
+    // ALL missing items across every due month: the first thing a collector should see.
+    const missMonths = new Set(allMissing.map((r) => r.month)).size;
     const KPIS = [
+      { val: subs === null ? '...' : allMissing.length, lbl: 'Missing data', go: 'missing', foot: subs === null ? 'checking...' : allMissing.length ? 'in ' + missMonths + ' month' + (missMonths === 1 ? '' : 's') + ' - tap to submit' : 'nothing missing - all caught up', icd: 'M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01', bg: allMissing.length ? 'rgba(210,58,82,.13)' : 'rgba(31,157,87,.13)', c: allMissing.length ? '#a92c42' : '#1f9d57' },
       { val: totalInd, lbl: 'Assigned indicators', foot: 'across ' + areas.length + ' quality area' + (areas.length === 1 ? '' : 's'), icd: 'M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z', bg: 'rgba(0,144,202,.12)', c: '#0072a3' },
       { val: done, lbl: 'Sent this month', foot: pct + '% of your workload', icd: 'M20 6L9 17l-5-5', bg: 'rgba(31,157,87,.13)', c: '#1f9d57' },
       { val: awaiting, lbl: 'Awaiting review', foot: 'with the administrator', icd: 'M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', bg: 'rgba(224,138,30,.14)', c: '#b5670a' },
@@ -3934,7 +3965,8 @@
     const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
     const stLabel = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' };
 
-    const monthOpts = dcWideMonths();
+    // Only months this user's units really report (start to latest due), newest first.
+    const monthOpts = dcRealMonthOpts([...dcPatientDepts(depts, S).map((d) => dcPatientStart(d, S)), ...areas.flatMap((a) => dcAreaStarts(a, S))], [month]);
     const first = String(user.name || '').trim().split(/\s+/)[0] || 'there';
 
     return (
@@ -3995,7 +4027,7 @@
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 14, marginBottom: 14 }}>
           {KPIS.map((k) => (
-            <div key={k.lbl} style={Object.assign({}, CP_CARD, { padding: '14px 16px' })}>
+            <div key={k.lbl} onClick={k.go ? () => onNav(k.go) : undefined} role={k.go ? 'button' : undefined} title={k.go ? 'Open Missing data' : undefined} style={Object.assign({}, CP_CARD, { padding: '14px 16px' }, k.go ? { cursor: 'pointer', borderLeft: '4px solid ' + k.c } : null)}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
                 <div style={ic(k.bg, k.c)}>{CP_ICON(k.icd, 18)}</div>
                 <div style={{ minWidth: 0 }}>
@@ -4737,7 +4769,7 @@
   /* ---- Missing data: every month still owed, and a pop-up to send it ----------------
      The dashboard shows ONE reporting month, so a gap three months back never surfaced
      again. This lists every due month — from the department's start month (Department
-     Setup) or, unset, its first month of data — through the last completed month, and
+     Setup) or, unset, January of this year — through the last completed month, and
      opens the ordinary form in a pop-up so the row clears the moment it is sent (it
      becomes pending). Not-measured indicators are never listed: the server refuses them. */
   function CollectorMissing({ depts, areas, month, user }) {
@@ -5006,7 +5038,7 @@
         </div>
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-start' }}>
           <div style={{ flex: '0 1 240px', minWidth: 190 }}>
-            <Field label="Data starts from" hint={start ? 'Months before ' + monthLabel(start) + ' are never counted as missing.' : (p.from || !counts.isPatient ? 'Not set — counting starts at the first month with data.' : 'Not set — only the last completed month counts.')}>
+            <Field label="Data starts from" hint={start ? 'Months before ' + monthLabel(start) + ' are never counted as missing.' : 'Not set — counting starts in January of this year (or at earlier data).'}>
               <select style={inputStyle} value={start} disabled={!canSave} onChange={(e) => setStart(e.target.value)}>
                 <option value="">Not set</option>
                 {monthOpts.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
@@ -5157,8 +5189,8 @@
         // Quality-only units never owe statistics, and nobody owes months before the start.
         const pDepts = dcPatientDepts(depts, S).filter((d) => dcPatientDue(d, month, S));
         const statGap = pDepts.filter((d) => ['none', 'rejected'].includes(dcPatientState(S, d, month))).length;
-        const allMissing = dcMissingList(depts, areas.filter((a) => a && a.indicators && a.indicators.length), S).length;
-        setSubCount({ pending: S.filter((s) => s.status === 'pending' && dcIsMine(s)).length, missing, total, statGap, allMissing });
+        const missingRows = dcMissingList(depts, areas.filter((a) => a && a.indicators && a.indicators.length), S);
+        setSubCount({ pending: S.filter((s) => s.status === 'pending' && dcIsMine(s)).length, missing, total, statGap, allMissing: missingRows.length, missingRows });
       }).catch(() => {});
       return () => { dead = true; };
     }, [month, dataRev, view, collRev]);
@@ -5187,6 +5219,21 @@
     };
 
     const [acctOpen, setAcctOpen] = useState(false);
+    // LOGIN ALERT: the first time the counts load after signing in, if anything assigned is
+    // missing, say so up front with a way straight to it. Once per sign-in (sessionStorage flag,
+    // cleared on Sign out) so it doesn't nag on every page change.
+    const [missAlert, setMissAlert] = useState(false);
+    const missAlertKey = 'dcMissingAlertShown|' + (user.username || user.name || '');
+    useEffect(() => {
+      if (!(subCount.allMissing > 0)) return;
+      let shown = false; try { shown = sessionStorage.getItem(missAlertKey) === '1'; } catch (e) { /* private mode */ }
+      if (shown) return;
+      try { sessionStorage.setItem(missAlertKey, '1'); } catch (e) { /* private mode */ }
+      setMissAlert(true);
+    }, [subCount.allMissing]);
+    const clearMissAlert = () => { try { sessionStorage.removeItem(missAlertKey); } catch (e) { /* ignore */ } };
+    const missRows = (subCount.missingRows || []).slice().sort((a, b) => b.rank - a.rank);
+    const missByMonth = []; missRows.forEach((r) => { const g = missByMonth.find((x) => x.month === r.month); if (g) g.rows.push(r); else missByMonth.push({ month: r.month, rows: [r] }); });
     const crumb = ({ missing: 'Missing data', home: 'Dashboard', unit: "My unit's staff", requests: 'Add nurse / PCA', status: 'Submission status', quick: 'Quick entry', quality: 'Quality data', patient: 'Patient statistics', history: 'My submissions', roster: 'Duty roster', profile: 'My profile', dept: 'Department & staff' })[view] || 'Submission status';
     const collectNav = CP_NAV_COLLECT.filter(([v]) => (v === 'missing' ? (hasPatient || hasQuality) : v === 'patient' ? hasPatient : v === 'quick' ? hasPatient : hasQuality));
     const dl = cpDeadline(month);
@@ -5202,6 +5249,31 @@
     return (
       <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'transparent' }}>
         <style>{'@media (max-width:900px){.cp-aside{position:fixed!important;z-index:200;height:100vh;transform:translateX(-100%);transition:transform .22s ease}.cp-aside.cp-open{transform:none}.cp-burger{display:grid!important}}'}</style>
+        {missAlert && (
+          <div onClick={() => setMissAlert(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(13,27,46,.45)', zIndex: 400, display: 'grid', placeItems: 'center', padding: 16 }}>
+            <div role="alertdialog" aria-labelledby="dc-miss-title" onClick={(e) => e.stopPropagation()} style={Object.assign({}, CP_CARD, { width: 'min(480px,100%)', maxHeight: '86vh', overflowY: 'auto', padding: '20px 22px', background: '#fff', borderLeft: '5px solid #d23a52' })}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 8 }}>
+                <span style={{ display: 'inline-grid', placeItems: 'center', width: 38, height: 38, borderRadius: 11, background: 'rgba(210,58,82,.13)', color: '#a92c42', flexShrink: 0 }}>{CP_ICON('M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01', 19)}</span>
+                <div id="dc-miss-title" style={{ fontSize: 16, fontWeight: 800, color: '#16202e' }}>{subCount.allMissing} missing data submission{subCount.allMissing === 1 ? '' : 's'}</div>
+              </div>
+              <div style={{ fontSize: 12.5, color: '#3c4858', lineHeight: 1.55, marginBottom: 12 }}>Data you are assigned to report has not been sent for {missByMonth.length} month{missByMonth.length === 1 ? '' : 's'}. Please submit it so the reports are complete.</div>
+              <div style={{ display: 'grid', gap: 7, marginBottom: 16 }}>
+                {missByMonth.slice(0, 6).map((g) => (
+                  <div key={g.month} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 11px', borderRadius: 9, background: 'rgba(210,58,82,.06)', border: '1px solid rgba(210,58,82,.16)' }}>
+                    <b style={{ fontSize: 12.5, color: '#16202e', minWidth: 96 }}>{monthLabel(g.month)}</b>
+                    <span style={{ fontSize: 12, color: '#a92c42', fontWeight: 700, whiteSpace: 'nowrap' }}>{g.rows.length} missing</span>
+                    <span style={{ fontSize: 11.5, color: '#6c7a8c', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[...new Set(g.rows.map((r) => r.unit))].join(', ')}</span>
+                  </div>
+                ))}
+                {missByMonth.length > 6 && <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>and {missByMonth.length - 6} more month{missByMonth.length - 6 === 1 ? '' : 's'}</div>}
+              </div>
+              <div style={{ display: 'flex', gap: 9, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button onClick={() => setMissAlert(false)} style={{ border: '1px solid rgba(125,145,180,.4)', background: '#fff', color: '#3c4858', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Remind me later</button>
+                <button autoFocus onClick={() => { setMissAlert(false); go('missing'); }} style={{ border: 0, background: 'linear-gradient(135deg,#e0566e,#b8283f)', color: '#fff', padding: '9px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 20px rgba(210,58,82,.3)' }}>Submit missing data</button>
+              </div>
+            </div>
+          </div>
+        )}
         {sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(13,27,46,.4)', zIndex: 150 }} />}
         <aside className={'sb cp-aside' + (sidebarOpen ? ' cp-open' : '')} style={{ width: 248, flexShrink: 0 }}>
           <div className="sb-brand">
@@ -5232,7 +5304,7 @@
               <div style={{ color: '#fff', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name || 'Collector'}</div>
               <div style={{ color: '#83909f', fontSize: 10.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{(inCharge ? 'In-charge' : 'Data Collector') + (depts[0] ? ' · ' + depts[0].name : '')}</div>
             </div>
-            <a href="/logout" title="Sign out" style={{ marginLeft: 'auto', display: 'grid', placeItems: 'center', width: 32, height: 32, borderRadius: 8, color: '#cfe0f0', background: 'rgba(255,255,255,.08)', textDecoration: 'none', flexShrink: 0 }}>
+            <a href="/logout" onClick={clearMissAlert} title="Sign out" style={{ marginLeft: 'auto', display: 'grid', placeItems: 'center', width: 32, height: 32, borderRadius: 8, color: '#cfe0f0', background: 'rgba(255,255,255,.08)', textDecoration: 'none', flexShrink: 0 }}>
               {CP_ICON('M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9', 15)}
             </a>
           </div>
@@ -5277,7 +5349,7 @@
                       style={{ width: '100%', textAlign: 'left', padding: '10px 13px', border: 0, background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, color: '#16202e', display: 'flex', alignItems: 'center', gap: 9 }}>
                       {CP_ICON('M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0', 14, '#0072a3')}My profile &amp; photo
                     </button>
-                    <a href="/logout" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 13px', borderTop: '1px solid rgba(125,145,180,.14)', fontSize: 12.5, fontWeight: 600, color: '#a92c42', textDecoration: 'none' }}>
+                    <a href="/logout" onClick={clearMissAlert} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 13px', borderTop: '1px solid rgba(125,145,180,.14)', fontSize: 12.5, fontWeight: 600, color: '#a92c42', textDecoration: 'none' }}>
                       {CP_ICON('M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9', 14, '#a92c42')}Sign out
                     </a>
                   </div>

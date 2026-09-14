@@ -250,6 +250,52 @@ function qcBeforeStart(ind, mk){ if(!ind||!ind.startMonth) return false; const a
    oversight. Everything that chases missing data has to honour the difference, or the
    person who took the trouble to declare it still gets nagged for it. */
 function qcNotObs(ind, mk){ const m = ind && ind.mNotObserved; return !!(m && m[mk]); }
+/* DEPARTMENT SETUP (Data Collection → Department Setup = departments.collection). The
+   collector portal counts a month as owed only from the department's start month or the
+   indicator's own startMonth (the later one), and never for an indicator an administrator
+   marked NOT MEASURED. With no start month set, EVERY month counts — a blank is missing.
+   (A "first reading" fallback painted ✓ over months where 6 of 7 indicators were blank.) This console ignored both,
+   so a department whose portal said "nothing missing" still showed n/N here. Same rule
+   now, one answer on both screens. GET /api/collection-settings also covers quality-only
+   areas; users without Data Collection access fall back to the injected department list. */
+let _qcColl = null, _qcCollAt = 0, _qcCollBusy = false, _qcCollSelf = false;
+function qcCollLoad(force){
+  if(_qcCollBusy || (!force && Date.now() - _qcCollAt < 60000)) return;
+  _qcCollBusy = true; _qcCollAt = Date.now();
+  fetch('/api/collection-settings', { headers:{ accept:'application/json' }, credentials:'same-origin' })
+    .then(r => r.ok ? r.json() : null)
+    .then(r => {
+      if(!r || !r.ok || !Array.isArray(r.departments)) return;
+      const next = {};
+      r.departments.forEach(d => { const c = (d.collection && typeof d.collection === 'object') ? d.collection : {}; if(d.qualityKey) next['k|' + d.qualityKey] = c; if(d.id) next['i|' + d.id] = c; });
+      const changed = JSON.stringify(next) !== JSON.stringify(_qcColl);
+      _qcColl = next;
+      if(changed){ _qcCollSelf = true; try{ window.dispatchEvent(new Event('unico:collection-settings')); }catch(e){} _qcCollSelf = false; }
+    })
+    .catch(() => {})
+    .finally(() => { _qcCollBusy = false; });
+}
+function qcDeptColl(dep){
+  if(!dep) return {};
+  const id = dep.deptId || (window.DEPTMAP && window.DEPTMAP.idFromQk && dep.key ? window.DEPTMAP.idFromQk(dep.key) : null);
+  if(_qcColl){ const c = (dep.key && _qcColl['k|' + dep.key]) || (id && _qcColl['i|' + id]); if(c) return c; }
+  const lists = [(window.UNICO && window.UNICO.DEPARTMENTS) || [], window.__UNICO_DEPARTMENTS__ || []];
+  for(const l of lists){
+    const hit = Array.isArray(l) && l.find(x => x && x.collection && typeof x.collection === 'object' && ((dep.key && x.qualityKey === dep.key) || (id && x.id === id)));
+    if(hit) return hit.collection;
+  }
+  return {};
+}
+function qcNotMeasured(dep, ind){ const nm = qcDeptColl(dep).notMeasured; return (nm && ind && ind.id && nm[ind.id]) || null; }
+// true = this indicator-month is not owed (before its start, or not measured) — a blank
+// there is not a missing submission.
+function qcNotDue(dep, ind, mk){
+  if(qcNotMeasured(dep, ind)) return true;
+  const o = monthOrd(mk); if(o == null) return false;
+  const a = monthOrd(qcDeptColl(dep).startMonth), b = monthOrd(ind && ind.startMonth);
+  if(a == null && b == null) return false;   // no start month set: the month is owed
+  return o < Math.max(a == null ? -Infinity : a, b == null ? -Infinity : b);
+}
 // Report-cell text: the value; 'N/OB' for a declared not-observed month; else 'N/O' for
 // pre-start months; else '—' (an unexplained gap).
 function qcReportCell(ind, m){ const mk=Array.isArray(m)?m[0]:m; const mm=Array.isArray(m)?m:[mk]; const v=qcCellVal(ind, mm); const s=qStatus(ind, v); if(s==='na') return qcNotObs(ind, mk) ? 'N/OB' : (qcBeforeStart(ind, mk) ? 'N/O' : '—'); return fmtVal(ind, v); }
@@ -407,6 +453,17 @@ function QCDashboard({ depts, Q }) {
   // Heatmap cell drill-down: which department × month is being viewed (null = closed).
   const [cellSel, setCellSel] = useState(null);
 
+  // Department Setup changes (start month / not measured) re-count the heatmap live.
+  const [collRev, setCollRev] = useState(0);
+  useEffect(() => {
+    const onColl = () => { setCollRev(r => r + 1); if (!_qcCollSelf) qcCollLoad(true); };
+    const onData = () => qcCollLoad(true);
+    window.addEventListener('unico:collection-settings', onColl);
+    window.addEventListener('unico:data-refreshed', onData);
+    qcCollLoad();
+    return () => { window.removeEventListener('unico:collection-settings', onColl); window.removeEventListener('unico:data-refreshed', onData); };
+  }, []);
+
   const d = useMemo(() => {
     // "Overall Hospital" is a data-entry container for the hospital-wide hand-hygiene
     // audit, not a real department. Its audit is distributed down to each department, so
@@ -453,7 +510,7 @@ function QCDashboard({ depts, Q }) {
         // Per-ASSIGNED-indicator submission state: which of this department's indicators
         // have a value for the month and which are still missing — so a cell can say
         // "9/15 submitted" instead of a flat ✓ that hid the missing ones.
-        let b = 0, rep = 0; const missing = []; const nobs = [];
+        let b = 0, rep = 0; const missing = []; const nobs = []; const notDue = [];
         inds.forEach(ind => {
           const s = monthStatus(ind, m[0]);
           if (s === 'breach') b++;
@@ -461,9 +518,12 @@ function QCDashboard({ depts, Q }) {
           // Declared not-observed months leave the denominator entirely: "1/3" must mean
           // "one of the three we were actually due", not count a month nobody owed.
           else if (qcNotObs(ind, m[0])) nobs.push(ind.name);
+          // Likewise months before the department/indicator start and not-measured
+          // indicators (Department Setup) — the collector portal does not ask for them.
+          else if (qcNotDue(dep, ind, m[0])) notDue.push(ind.name);
           else missing.push(ind.name);
         });
-        const total = inds.length - nobs.length, sub = b + rep;
+        const total = inds.length - nobs.length - notDue.length, sub = b + rep;
         const partial = sub > 0 && sub < total;
         // Nothing was DUE (every assigned indicator declared not observed) — that is a
         // stated position, not the grey "no data" hole it would otherwise look like.
@@ -475,7 +535,7 @@ function QCDashboard({ depts, Q }) {
         const sym = allNobs ? 'N/OB' : sub === 0 ? '–' : b > 0 ? (sub + '/' + total + ' ✕' + b) : partial ? (sub + '/' + total) : '✓';
         // mk/mlabel let the cell open a full dept×month drill-down (all cells clickable —
         // a grey/partial cell opens the same modal, which lists what is NOT submitted).
-        return { sym, bg, fg, mk: m[0], mlabel: m[1], breach: b, sub, total, missing, nobs, has: sub > 0 };
+        return { sym, bg, fg, mk: m[0], mlabel: m[1], breach: b, sub, total, missing, nobs, notDue, has: sub > 0 };
       });
       const st = deptStat(dep, fyMonths);
       // A department with NOTHING reported this year must read "No data", not a
@@ -493,7 +553,7 @@ function QCDashboard({ depts, Q }) {
 
     const monthCols = fyMonths.map(m => m[2]);
     return { dashKpis, mix, breachByMonth, heatRows, monthCols };
-  }, [depts, fyMonths]);
+  }, [depts, fyMonths, collRev]);
 
   const thBase = { padding: '9px 8px', fontSize: '10.5px', color: '#6c7a8c', fontWeight: 700, borderBottom: '1px solid #dde3ec', background: '#f7f9fc' };
 
@@ -559,7 +619,7 @@ function QCDashboard({ depts, Q }) {
       <div style={{ background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius: '12px', boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)', overflow: 'hidden' }}>
         <div style={{ padding: '13px 16px', borderBottom: '1px solid #e8edf3' }}>
           <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#16202e' }}>Department × Month Heatmap <span style={{ fontWeight: 600, color: '#9aa6b4', fontSize: '11.5px' }}>· {fyLabelOf(safeFy)}</span></div>
-          <div style={{ fontSize: '11.5px', color: '#6c7a8c' }}>per assigned indicator — <b style={{ color: '#1f9d57' }}>✓ all submitted</b> · <b style={{ color: '#b26a0f' }}>n/N partially submitted</b> · <b style={{ color: '#d23a52' }}>red = off benchmark</b> · grey none — click any cell to see what's submitted &amp; missing</div>
+          <div style={{ fontSize: '11.5px', color: '#6c7a8c' }}>per assigned indicator — <b style={{ color: '#1f9d57' }}>✓ all submitted</b> · <b style={{ color: '#b26a0f' }}>n/N partially submitted</b> · <b style={{ color: '#d23a52' }}>red = off benchmark</b> · grey none · months before a department's start and not-measured indicators are not counted — click any cell to see what's submitted &amp; missing</div>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ borderCollapse: 'collapse', fontSize: '12.5px', width: '100%' }}>
@@ -587,6 +647,7 @@ function QCDashboard({ depts, Q }) {
                           + (c.breach ? ' · ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '')
                           + (c.missing.length ? ' · not submitted: ' + c.missing.slice(0, 5).join(', ') + (c.missing.length > 5 ? ' +' + (c.missing.length - 5) + ' more' : '') : '')
                           + (c.nobs && c.nobs.length ? ' · not observed: ' + c.nobs.slice(0, 5).join(', ') + (c.nobs.length > 5 ? ' +' + (c.nobs.length - 5) + ' more' : '') : '')
+                          + (c.notDue && c.notDue.length ? ' · not due (not started / not measured): ' + c.notDue.slice(0, 5).join(', ') + (c.notDue.length > 5 ? ' +' + (c.notDue.length - 5) + ' more' : '') : '')
                           + ' · click for details'}
                         style={{ display: 'inline-grid', placeItems: 'center', minWidth: '24px', height: '24px', padding: '0 4px', borderRadius: '6px', background: c.bg, color: c.fg, fontWeight: 700, fontSize: c.sym.length > 2 ? '9.5px' : '11px', fontFamily: MONO, cursor: 'pointer', boxShadow: c.breach ? '0 0 0 1px #eeb9c2' : 'none' }}
                       >{c.sym}</span>
@@ -639,7 +700,9 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
     .sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
   // A month someone DECLARED not observed is accounted for; only the rest is pending.
   const notObserved = allInds.filter(ind => monthStatus(ind, mk) === 'na' && qcNotObs(ind, mk));
-  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk));
+  // Not owed (before the start month / not measured in Department Setup) is not "not submitted".
+  const notDue = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && qcNotDue(dep, ind, mk));
+  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && !qcNotDue(dep, ind, mk));
   const breaches = reported.filter(r => r.s === 'breach').length;
 
   const field = (label, val) => val ? (
@@ -746,7 +809,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
           {!editId && unreported.length > 0 && (
             <div style={{ marginTop: 4, border: '1px dashed #b9c6d2', borderRadius: 9, padding: '11px 13px', background: '#f7f9fc' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#b26a0f', textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: 7 }}>
-                Not submitted for {mlabel} ({unreported.length} of {allInds.length} assigned{notObserved.length ? ' · ' + notObserved.length + ' not observed' : ''})
+                Not submitted for {mlabel} ({unreported.length} of {allInds.length} assigned{notObserved.length ? ' · ' + notObserved.length + ' not observed' : ''}{notDue.length ? ' · ' + notDue.length + ' not due' : ''})
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
                 {unreported.map(ind => canEdit
@@ -754,6 +817,24 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
                   : <span key={ind.id} style={{ border: '1px solid #dde3ec', background: '#fff', color: P.muted, padding: '6px 11px', borderRadius: 20, fontSize: 11.5, fontWeight: 600 }}>{ind.name}</span>)}
               </div>
               {canEdit && <div style={{ fontSize: 10.5, color: P.muted, marginTop: 8 }}>Click an indicator to add its {mlabel} reading now.</div>}
+            </div>
+          )}
+
+          {!editId && notDue.length > 0 && (
+            <div style={{ marginTop: 10, border: '1px dashed #d5dce5', borderRadius: 9, padding: '11px 13px', background: '#fbfcfd' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: P.muted, textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: 4 }}>
+                Not due for {mlabel} ({notDue.length})
+              </div>
+              <div style={{ fontSize: 10.5, color: P.muted, marginBottom: 7 }}>Before the department's or indicator's start month, or marked not measured in Data Collection → Department Setup. Not counted as missing.</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                {notDue.map(ind => {
+                  const nm = qcNotMeasured(dep, ind);
+                  const label = ind.name + (nm ? ' · not measured' : '');
+                  return canEdit
+                    ? <button key={ind.id} title={(nm ? 'Not measured: ' + (nm.reason || '') + ' — ' : '') + 'Add the ' + mlabel + ' reading for ' + ind.name} onClick={() => { setAddOpen(false); setEditId(ind.id); }} style={{ border: '1px solid #dde3ec', background: '#fff', color: P.muted, padding: '6px 11px', borderRadius: 20, fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}>+ {label}</button>
+                    : <span key={ind.id} title={nm ? 'Not measured: ' + (nm.reason || '') : undefined} style={{ border: '1px solid #e4e9ef', background: '#fff', color: '#9aa6b4', padding: '6px 11px', borderRadius: 20, fontSize: 11.5, fontWeight: 600 }}>{label}</span>;
+                })}
+              </div>
             </div>
           )}
         </div>
@@ -2018,6 +2099,13 @@ function QCReportBuilder({depts}){
   // saved report formats — reusable presets persisted to localStorage (same pattern as CAPA)
   const [presets,setPresets]=useState(()=>{ try{ return JSON.parse(localStorage.getItem('unico_qc_report_presets_v1'))||[]; }catch(e){ return []; } });
   useEffect(()=>{ try{ localStorage.setItem('unico_qc_report_presets_v1',JSON.stringify(presets)); }catch(e){} },[presets]);
+  // Adopt saved formats from another tab/session, or this list is written back over them.
+  useEffect(()=>{
+    const h=(e)=>{ const ks=e&&e.detail&&e.detail.keys; if(Array.isArray(ks)&&ks.indexOf('unico_qc_report_presets_v1')<0) return;
+      try{ const raw=localStorage.getItem('unico_qc_report_presets_v1'); const next=JSON.parse(raw)||[]; setPresets(cur=>JSON.stringify(cur)===raw?cur:next); }catch(_){} };
+    window.addEventListener('unico:overlay-merged',h);
+    return ()=>window.removeEventListener('unico:overlay-merged',h);
+  },[]);
   const [presetSel,setPresetSel]=useState('');
   const [presetName,setPresetName]=useState('');
   // Flip one toggle; a manual change means the config is no longer a named preset.
@@ -2705,6 +2793,7 @@ function QCReportBuilder({depts}){
           // own right, but it is not "assigned and missing" — chasing it would punish
           // the person who took the trouble to state it.
           if(qcNotObs(ind,m[0])){ nobs.push(m[1]); notObserved++; return; }
+          if(monthRaw(ind,m[0])==null && qcNotDue(d,ind,m[0])) return;   // not owed (Department Setup)
           assigned++;
           if(monthRaw(ind,m[0])!=null) submitted++; else miss.push(m[1]);
         });
@@ -2725,6 +2814,7 @@ function QCReportBuilder({depts}){
       (d.indicators||[]).forEach(ind=>pMonths.forEach(m=>{
         if(qcBeforeStart(ind,m[0])) return;
         if(qcNotObs(ind,m[0])){ nb++; return; }
+        if(monthRaw(ind,m[0])==null && qcNotDue(d,ind,m[0])) return;
         a++; if(monthRaw(ind,m[0])!=null) s++; }));
       if(a||nb) byDept.push({d, assigned:a, submitted:s, notObserved:nb, pending:a-s, pct:a?Math.round(s*100/a):100});
     });
@@ -4188,6 +4278,14 @@ function IncidentReport({rec,onBack,Q}){
 function QCActionPlans({depts}){
   const [capa,setCapa]=useState(()=>{try{return JSON.parse(localStorage.getItem('unico_capa_v1'))||{}}catch(e){return{}}});
   useEffect(()=>{try{localStorage.setItem('unico_capa_v1',JSON.stringify(capa))}catch(e){}},[capa]);
+  // Adopt CAPA saved from another tab/session (the bridge fires this after a merge or a live
+  // refresh) — the old copy held in state would otherwise be written back on the next edit.
+  useEffect(()=>{
+    const h=(e)=>{ const ks=e&&e.detail&&e.detail.keys; if(Array.isArray(ks)&&ks.indexOf('unico_capa_v1')<0) return;
+      try{ const raw=localStorage.getItem('unico_capa_v1'); const next=JSON.parse(raw)||{}; setCapa(cur=>JSON.stringify(cur)===raw?cur:next); }catch(_){} };
+    window.addEventListener('unico:overlay-merged',h);
+    return ()=>window.removeEventListener('unico:overlay-merged',h);
+  },[]);
   const [fy,setFy]=useState(()=>defaultFy(depts));
   const MONTHS=fyAxis(fy);
 

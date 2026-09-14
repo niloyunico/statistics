@@ -207,6 +207,9 @@ function warmingPage() {
     + '</div></body></html>';
 }
 
+// A failed user-scope read, as distinct from getUserScope's legitimate null (no such user).
+const SCOPE_FAILED = Symbol('scope-failed');
+
 async function serveIndex(req, res) {
   let html;
   try { html = fs.readFileSync(INDEX_FILE, 'utf8'); }
@@ -225,7 +228,8 @@ async function serveIndex(req, res) {
     getDepartments().catch(() => null),       // /api/departments reports the error
     getStaff().catch(() => null),
     getQuality().catch(() => null),
-    (req.user && req.user.sub) ? dataCollection.getUserScope(req.user.sub).catch(() => null) : null,
+    // SCOPE_FAILED (not null): null legitimately means "no such user" (-> sign-in redirect below).
+    (req.user && req.user.sub) ? dataCollection.getUserScope(req.user.sub).catch(() => SCOPE_FAILED) : null,
     // Canonical quality-formula catalogue (one row per formula). Reference data —
     // injected for every role so the by-name master drives all departments.
     // getFormulas() resolves its own guarded handle: awaiting getDbHandle() here would
@@ -243,7 +247,9 @@ async function serveIndex(req, res) {
   // ANY core dataset failing counts, not only all of them: one shed/timed-out read used to
   // render "no staff" / "no indicators" as if the data were gone (and marked that page's
   // snapshot authoritative). The warming page retries by itself within seconds.
-  if (appRes === null || deptRes === null || qualRes === null || staffRes === null) {
+  // A signed-in user whose scope read FAILED counts too: a collector would otherwise fall into
+  // the non-collector branch and get an empty portal whose AUTHORITATIVE snapshot purges their overlay.
+  if (appRes === null || deptRes === null || qualRes === null || staffRes === null || scopeRes === SCOPE_FAILED) {
     res.set('Cache-Control', 'no-store');
     res.set('Retry-After', '5');
     return res.status(503).type('html').send(warmingPage());

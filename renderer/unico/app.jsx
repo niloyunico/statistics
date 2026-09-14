@@ -33,24 +33,37 @@ function App(){
     return ()=>{ live=false; };
   },[]);
   useEffect(()=>{ const h=()=>setAuthed(false); window.addEventListener('unico:logout',h); return ()=>window.removeEventListener('unico:logout',h); },[]);
+  // A live grant change (ui.jsx unicoRefreshPerms) re-renders the shell (sidebar, gates) and
+  // re-runs the route guard below for the view already open.
+  const [permsRev,setPermsRev]=useState(0);
+  useEffect(()=>{ const h=()=>setPermsRev(r=>r+1); window.addEventListener('unico:perms-changed',h); return ()=>window.removeEventListener('unico:perms-changed',h); },[]);
   // Long-lived tabs go stale: department/quality snapshots are injected at page LOAD,
   // and an approval made in ANOTHER tab (or by a collector) never reaches this one.
   // On tab refocus (away ≥15s), refetch both; the refreshers dispatch
   // 'unico:data-refreshed' and the stores rebuild, so open views update live.
+  // Also: the shared overlay (/api/data — Data Entry cells, renames, indicator patches, CAPA,
+  // presets), Formula Library edits and the account's perms, all of which were page-load only.
+  // Wall dashboards stay focused for hours and never refocus, so the same refresh also runs
+  // every 60 s while visible. One run at a time.
   useEffect(()=>{
     let stamp=Date.now(), busy=false;
-    const refresh=()=>{
+    const refresh=(e)=>{
       if(busy || (typeof document!=='undefined' && document.visibilityState==='hidden')) return;
-      if(Date.now()-stamp<15000) return;
+      if(e!=='tick' && Date.now()-stamp<15000) return;
       busy=true; stamp=Date.now();
       const jobs=[];
+      try{ if(window.unicoRefreshAppData) jobs.push(window.unicoRefreshAppData()); }catch(e){}
       try{ if(window.UNICO&&window.UNICO.refreshDepartments) jobs.push(window.UNICO.refreshDepartments()); }catch(e){}
       try{ if(window.refreshQualitySeed) jobs.push(window.refreshQualitySeed()); }catch(e){}
-      Promise.all(jobs).catch(()=>{}).then(()=>{ busy=false; });
+      try{ if(window.refreshQualityFormulas) jobs.push(window.refreshQualityFormulas()); }catch(e){}
+      try{ if(window.unicoRefreshPerms) jobs.push(window.unicoRefreshPerms()); }catch(e){}
+      // Settle each job: Promise.all rejects on the first failure while the rest still run.
+      Promise.all(jobs.map(p=>Promise.resolve(p).catch(()=>null))).then(()=>{ busy=false; });
     };
+    const poll=setInterval(()=>refresh('tick'),60000);
     window.addEventListener('focus',refresh);
     document.addEventListener('visibilitychange',refresh);
-    return ()=>{ window.removeEventListener('focus',refresh); document.removeEventListener('visibilitychange',refresh); };
+    return ()=>{ clearInterval(poll); window.removeEventListener('focus',refresh); document.removeEventListener('visibilitychange',refresh); };
   },[]);
 
   // Per-module access guard: if the current view belongs to a workspace this user was
@@ -61,7 +74,7 @@ function App(){
       const home=window.unicoFirstAllowedHome && window.unicoFirstAllowedHome();
       if(home && home!==route.view) setRoute({view:home});
     }
-  },[route.view]);
+  },[route.view,permsRev]);
 
   const openDept=id=>setRoute({view:'departments',dept:id});
   const safeDepts = depts.length?depts:[];

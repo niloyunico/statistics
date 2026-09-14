@@ -67,6 +67,10 @@ app.use((req, res, next) => {
   next();
 });
 
+// API JSON is personal (scoped per session): without a header Vercel's edge applies its default
+// public caching. Set before every route; a route that sets its own Cache-Control later wins.
+app.use('/api', (req, res, next) => { res.set('Cache-Control', 'private, no-store'); next(); });
+
 app.use(express.json({ limit: '12mb' })); // app-state snapshots can be sizable
 
 // Record every successful WRITE on /api/* to the Activity Log (see server/audit.js:
@@ -186,6 +190,9 @@ app.get('/api/me', async (req, res) => {
     // server would refuse anyway (the server stays the authority either way).
     perms: a.unrestricted ? null : a.perms,
     staffScope: a.staffScope || 'all',
+    // Database unreachable: perms above is the empty stand-in, not a revocation. The console's
+    // live perms refresh must ignore it or a blip hides every workspace.
+    degraded: a.degraded ? true : undefined,
   });
 });
 

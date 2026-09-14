@@ -403,6 +403,9 @@ function mount(app, opts) {
       // Collectors: their data-collection assignment. Plain Users: the row-level scope
       // for the staff register (staffScope 'departments'). Administrators: neither.
       const departments = (ROLES_PORTAL.indexOf(role) >= 0 || role === 'User') ? cleanList(b.departments) : [];
+      // deptmap caches per instance and nothing invalidates it across instances: derive the
+      // areas stored below from a FRESH map (a blip falls back to the cached one inside get()).
+      if (ROLES_PORTAL.indexOf(role) >= 0) await deptmap.get(true).catch(() => null);
       const allQualityAreas = ROLES_PORTAL.indexOf(role) >= 0 ? !!b.allQualityAreas : false;
       const customQualityAreas = ROLES_PORTAL.indexOf(role) >= 0 ? await resolveCustomAreas(b, null, departments) : [];
       const doc = {
@@ -456,6 +459,7 @@ function mount(app, opts) {
       if (b.active != null) set.active = !!b.active;
       const role = set.role || u.role;
       if (ROLES_PORTAL.indexOf(role) >= 0) {
+        await deptmap.get(true).catch(() => null); // stored qualityAreas must not come from a stale per-instance map
         const departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
         const allQualityAreas = (b.allQualityAreas != null) ? !!b.allQualityAreas : !!u.allQualityAreas;
         // Custom = ONLY the directly-granted extras (see resolveCustomAreas) — never the

@@ -422,8 +422,11 @@
       tryApi('/api/me').then((me) => { if (me && me.ok && me.user) this.enter(me); else this.setState({ booting: false, screen: 'login' }); });
       this._poll = setInterval(() => this.tick(), 5000);
       this._tick = 0;
+      // Back online: features / unit grants may have changed while the phone was offline.
+      this._onOnline = () => { if (!this.state.demo && this.state.me) this.loadBoot(true); };
+      window.addEventListener('online', this._onOnline);
     }
-    componentWillUnmount() { clearInterval(this._poll); window.removeEventListener('unico:session-expired', this._onExpired); }
+    componentWillUnmount() { clearInterval(this._poll); window.removeEventListener('unico:session-expired', this._onExpired); window.removeEventListener('online', this._onOnline); }
     // Any 401 (dc-runtime fires the event): the cookie is gone and every read would come back
     // empty, which looked like "my data vanished". Back to sign-in, keeping nothing.
     sessionExpired() {
@@ -440,6 +443,8 @@
       if (t % 3 === 0 && s.screen === 'chats') this.loadRooms();
       if (t % 6 === 0) { this.loadNotices(); if (s.screen !== 'chats') this.loadRooms(); this.loadRequests(); if (s.screen === 'handover') this.loadHandover(); if (/^datacol/.test(s.screen)) this.loadSubs(); }
       if (t % 12 === 0) { this.loadDirectory(); }
+      // Features were read once at sign-in: an admin granting/revoking one needed an app restart.
+      if (t % 60 === 0) this.loadBoot(true);   // ~5 min
     }
     // Sign-in landed: remember who we are, then read the phone profile and the registers.
     enter(me) {
@@ -447,9 +452,19 @@
       this.setState({ me: Object.assign({ perms: me.perms, staffScope: me.staffScope }, u), booting: false, screen: 'home', drawerOpen: false, pin: '', live: EMPTY_LIVE() });
       this.loadBoot().then(() => this.loadLive(u));
     }
-    async loadBoot() {
+    // quiet = the periodic / back-online re-read: one attempt, and on failure keep what we have
+    // (no toast, no fallback to default features); on success swap the profile only — no redirect
+    // mid-use, and the chat filter / prefs the person is using are left alone.
+    async loadBoot(quiet) {
       const url = '/api/phone/bootstrap' + (this.state.unitSel ? '?unit=' + encodeURIComponent(this.state.unitSel) : '');
       let b = null;
+      if (quiet) {
+        try { b = await api(url); } catch (e) { return; }
+        if (!b || !b.ok || !b.user || !this.state.me) return;
+        const qr = b.user.role;
+        this.setState({ boot: b, role: (b.user.isIncharge || b.user.canManage || b.user.isAdmin) ? 'incharge' : (qr === 'pca' ? 'pca' : qr === 'collector' ? 'collector' : 'nurse') });
+        return;
+      }
       for (let i = 0; i < 3 && !b; i++) { try { b = await api(url); } catch (e) { console.warn('[nurse] bootstrap attempt ' + (i + 1) + ' failed: ' + (e.status || '') + ' ' + (e.message || e)); if (e.status === 401) break; await new Promise((r) => setTimeout(r, 700 * (i + 1))); } }
       if (!b || !b.ok) { console.warn('[nurse] bootstrap unusable: ' + JSON.stringify(b).slice(0, 300)); this.toastMsg('Could not load your app profile — some features may be hidden.'); this.setState((s) => ({ boot: { user: s.me || {}, unit: null, units: [], features: defaultFeatures(s.me && s.me.role), hospital: {}, policy: {}, phonebook: [], prefs: {}, favs: [], counts: {} } })); return; }
       // Administrators and managers get the Admin App; /app#nurse keeps them here on purpose.

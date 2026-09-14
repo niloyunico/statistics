@@ -274,7 +274,9 @@
     // Show the single canonical Statistics name everywhere quality is rendered (keeps the
     // `key` as the stable identity — only the displayed `name` becomes canonical).
     const cn = canonicalDeptName(seedDept);
-    if (cn && cn !== dept.name) dept = Object.assign({}, dept, { name: cn });
+    // qualityName keeps the quality doc's own name: the hand-hygiene audit files rows under it
+    // ("Emergency Medicine"), so after the rename to "Emergency Room" nothing matched.
+    if (cn && cn !== dept.name) dept = Object.assign({}, dept, { name: cn, qualityName: dept.name });
     return dept;
   }
 
@@ -331,7 +333,7 @@
           const rows = bd[mk]; if (!Array.isArray(rows)) return;
           // Match by canonical name (alias-mapped) OR by the dept's stable key, so a
           // later display-name change never breaks a department's audit distribution.
-          const row = rows.find((r) => r && (canonDept(r.dept) === canonDept(d.name) || normN(r.dept) === normN(d.key) || canonDept(r.dept) === normN(d.key))); if (!row) return;
+          const row = rows.find((r) => r && (canonDept(r.dept) === canonDept(d.name) || (d.qualityName && canonDept(r.dept) === canonDept(d.qualityName)) || normN(r.dept) === normN(d.key) || canonDept(r.dept) === normN(d.key))); if (!row) return;
           let n = 0, den = 0; const g = row.g || {};
           ['nurse', 'doctor', 'pca', 'other'].forEach((k) => { const x = g[k] || {}; n += Number(x.n) || 0; den += Number(x.d) || 0; });
           if (!(den > 0)) return; // this dept was not audited that month (0/0 row)
