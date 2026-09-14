@@ -268,6 +268,15 @@
       const err = new Error(j && j.error || 'HTTP ' + r.status);
       err.status = r.status;
       err.body = j;
+      if (r.status === 401 && !/^\/api\/login\b/.test(path)) {
+        try {
+          window.dispatchEvent(new CustomEvent('unico:session-expired', {
+            detail: {
+              path
+            }
+          }));
+        } catch (e) {}
+      }
       throw err;
     }
     return j || {
@@ -275,6 +284,18 @@
     };
   }
   const tryApi = (path, opts) => api(path, opts).catch(() => null);
+  async function pageAll(path, key, maxPages) {
+    const out = [];
+    let offset = 0;
+    for (let p = 0; p < (maxPages || 10); p++) {
+      const r = await tryApi(path + (path.indexOf('?') < 0 ? '?' : '&') + 'offset=' + offset);
+      if (!r || !r.ok || !Array.isArray(r[key])) return null;
+      out.push(...r[key]);
+      if (r.nextOffset == null || r.nextOffset <= offset) break;
+      offset = r.nextOffset;
+    }
+    return out;
+  }
   function injectCSS(id, css) {
     if (!css || document.getElementById(id)) return;
     const el = document.createElement('style');
@@ -297,6 +318,7 @@
     usePhone,
     api,
     tryApi,
+    pageAll,
     injectCSS,
     mount
   };
@@ -10960,7 +10982,7 @@
       }
     }, ix(g?.label)), React.createElement("div", {
       style: S(`font-size:12.5px;line-height:1.5;margin-top:2px;text-wrap:pretty;font-family:${g?.font ?? ""}`)
-    }, ix(g?.text))))))) : null) : null, v.dcEditable ? React.createElement(React.Fragment, null, v.dcItem?.isApproved ? React.createElement(React.Fragment, null, React.createElement("label", {
+    }, ix(g?.text))))))) : null) : null, v.dcEditable ? React.createElement(React.Fragment, null, v.dcNeedsCorr ? React.createElement(React.Fragment, null, React.createElement("label", {
       style: {
         "display": "flex",
         "flexDirection": "column",
@@ -13551,6 +13573,7 @@
   const {
     api,
     tryApi,
+    pageAll,
     mount
   } = window.DC;
   const D = window.NURSE_APP_DATA;
@@ -14111,14 +14134,15 @@
       deptName: rep.deptName
     };
   }
-  const MULT = {
-    pct: 100,
-    rate100: 100,
-    rate1000: 1000,
-    rate10000: 10000,
-    per1000: 1000,
-    per100: 100
-  };
+  const RATE_F = ['pct', 'rate100', 'rate1000', 'avg'];
+  function formulaOf(i) {
+    const declared = i.formula;
+    if (['rate1000', 'rate100', 'pct', 'count', 'avg'].indexOf(declared) >= 0) return declared;
+    const probe = (String(i.benchmark || '') + ' ' + String(i.unit || '')).toLowerCase();
+    const per1000 = /per\s*1[.,\s]?0{3}\b|\/\s*1[.,\s]?0{3}\b/.test(probe),
+      per100 = !per1000 && /per\s*100\b/.test(probe);
+    return per1000 ? 'rate1000' : per100 ? 'rate100' : /%/.test(probe) || /\bpercent/.test(probe) ? 'pct' : declared || 'count';
+  }
   function dcItemsOf(dept, area) {
     const out = [];
     if (dept && Array.isArray(dept.cols) && dept.cols.length) out.push({
@@ -14135,7 +14159,9 @@
     });
     (area && Array.isArray(area.indicators) ? area.indicators : []).forEach(i => {
       const unit = i.unit === '%' ? '%' : i.unit || '';
-      const mult = MULT[i.formula] || (unit === '%' ? 100 : /1000/.test(unit) ? 1000 : /100/.test(unit) ? 100 : 1);
+      const formula = formulaOf(i),
+        isRate = RATE_F.indexOf(formula) >= 0;
+      const mult = !isRate ? 1 : formula === 'rate1000' ? 1000 : formula === 'avg' ? 1 : 100;
       out.push({
         id: i.id,
         kind: 'q',
@@ -14144,12 +14170,14 @@
         num: i.numLabel || 'Numerator',
         den: i.denLabel || 'Denominator',
         mult,
+        formula,
+        isRate,
         unit: unit === '%' ? '%' : unit ? 'per ' + unit.replace(/^per\s+/i, '') : '',
         bench: i.benchmark || '—',
         benchV: i.benchmarkValue != null ? Number(i.benchmarkValue) : null,
         dir: i.goalDirection === 'higher_is_better' ? 'up' : 'down',
         grouped: false,
-        denLocked: false,
+        denLocked: !!i.denAdminOnly,
         d: IND_D,
         guide: i.numeratorDef || i.denominatorDef || i.reference ? {
           def: [i.numeratorDef, i.denominatorDef].filter(Boolean).join(' '),
@@ -14183,11 +14211,13 @@
         note: x.note || x.remark || '',
         live: true,
         id: x.id || x._id,
-        ts: x.submittedAt || x.createdAt || 0
+        ts: x.submittedAt || x.createdAt || 0,
+        autoRejected: !!x.autoRejected
       };
+      const better = (a, b) => !b || b.autoRejected && !a.autoRejected || !(a.autoRejected && !b.autoRejected) && a.ts >= b.ts;
       if (x.type === 'patient') {
         if (deptId && String(x.department) !== String(deptId)) return;
-        if (out.stat && out.stat.ts > rec.ts) return;
+        if (!better(rec, out.stat)) return;
         const vals = (fields || []).map(f => x.values && x.values[f.id] != null ? x.values[f.id] : '');
         out.stat = Object.assign(rec, {
           vals,
@@ -14198,7 +14228,7 @@
       if (areaKey && String(x.area) !== String(areaKey)) return;
       const id = x.indicatorId;
       if (!id) return;
-      if (!out[id] || out[id].ts < rec.ts) out[id] = rec;
+      if (better(rec, out[id])) out[id] = rec;
     });
     return out;
   }
@@ -15095,6 +15125,7 @@
         dcMode: 'direct',
         dcHistFilter: 'All',
         dcSubs: {},
+        dcAreaSel: '',
         repSimple: false,
         compareOn: false,
         shareOpen: false,
@@ -15153,6 +15184,8 @@
       fetch('/assets/monographs.json').then(r => r.json()).then(mono => this.setState({
         mono
       })).catch(() => {});
+      this._onExpired = () => this.sessionExpired();
+      window.addEventListener('unico:session-expired', this._onExpired);
       tryApi('/api/phone/branding').then(b => {
         if (b && b.ok && b.hospital) this.setState({
           branding: b.hospital
@@ -15201,6 +15234,26 @@
     }
     componentWillUnmount() {
       clearInterval(this._poll);
+      window.removeEventListener('unico:session-expired', this._onExpired);
+    }
+    sessionExpired() {
+      if (this.state.demo || !this.state.me) return;
+      this.setState({
+        screen: 'login',
+        me: null,
+        boot: null,
+        empId: '',
+        pin: '',
+        drawerOpen: false,
+        live: EMPTY_LIVE(),
+        meds: null,
+        favs: [],
+        selChat: null,
+        selNotice: null,
+        selStaff: null,
+        busy: {}
+      });
+      this.toastMsg('Your session has expired — sign in again.');
     }
     tick() {
       if (this.state.demo || !this.state.me || typeof document !== 'undefined' && document.hidden) return;
@@ -15213,6 +15266,7 @@
         if (s.screen !== 'chats') this.loadRooms();
         this.loadRequests();
         if (s.screen === 'handover') this.loadHandover();
+        if (/^datacol/.test(s.screen)) this.loadSubs();
       }
       if (t % 12 === 0) {
         this.loadDirectory();
@@ -15339,8 +15393,7 @@
       if (F.medReq) this.loadMedRequests();
       if (F.performance) this.loadPerf();
       if (F.datacol || F.datacolHist) {
-        const subs = await tryApi('/api/submissions?limit=300');
-        if (subs && subs.ok && Array.isArray(subs.submissions)) this.patchLive('subs', subs.submissions);
+        await this.loadSubs();
         const q = await tryApi('/api/quality');
         if (q && q.ok && Array.isArray(q.quality)) this.patchLive('quality', q.quality);
       }
@@ -15552,6 +15605,10 @@
     async loadShiftReports() {
       const r = await tryApi('/api/phone/shift-reports');
       if (r && r.ok) this.patchLive('shiftReports', r.reports || []);
+    }
+    async loadSubs() {
+      const rows = await pageAll('/api/submissions?limit=300', 'submissions', 10);
+      if (rows) this.patchLive('subs', rows);
     }
     toastMsg(msg, key) {
       const k = key || 'toast';
@@ -16364,7 +16421,15 @@
         dcEvidence: false
       });
       if (s.demo) return local('sent');
+      if (this._dcBusy) return;
+      this._dcBusy = true;
+      this.setState(st => ({
+        busy: Object.assign({}, st.busy, {
+          dc: true
+        })
+      }));
       try {
+        const corr = x.isCorr ? String(x.corr || '').trim() : '';
         if (item.kind === 'stat') {
           if (!x.dept) throw new Error('Your account is not linked to a department sheet.');
           const values = {};
@@ -16378,13 +16443,14 @@
               month: monthObj.key,
               values,
               note: x.note,
-              isCorrection: !!x.corr,
-              correctionReason: x.corr
+              isCorrection: !!x.isCorr,
+              correctionReason: corr
             }
           });
         } else {
           if (!x.area) throw new Error('Your account is not linked to a quality area.');
-          const ind = item.ind || {};
+          const ind = item.ind || {},
+            rate = !!item.isRate;
           await api('/api/submissions/quality', {
             method: 'POST',
             body: {
@@ -16392,28 +16458,27 @@
               indicatorId: item.id,
               indicatorName: item.label,
               month: monthObj.key,
-              entryMode: 'rate',
-              num: x.num,
-              den: x.den,
-              mult: item.mult,
-              value: x.resultV,
+              entryMode: rate ? 'rate' : 'count',
+              formula: rate ? item.formula : 'count',
+              mult: rate ? item.mult : 1,
+              valueType: rate ? item.formula === 'pct' ? '%' : 'Rate' : 'Count',
+              value: rate ? undefined : x.num,
+              num: rate ? x.num : undefined,
+              den: rate && !item.denLocked ? x.den : undefined,
+              numLabel: rate ? item.num : undefined,
+              denLabel: rate ? item.den : undefined,
+              unit: rate ? ind.unit || item.unit : ind.unit || 'count',
               remark: x.note,
               note: x.note,
-              numLabel: item.num,
-              denLabel: item.den,
-              unit: ind.unit || item.unit,
-              valueType: ind.valueType,
               benchmark: ind.benchmark,
               benchmarkValue: ind.benchmarkValue,
               goalDirection: ind.goalDirection,
-              formula: ind.formula,
-              isCorrection: !!x.corr,
-              correctionReason: x.corr
+              isCorrection: !!x.isCorr,
+              correctionReason: corr
             }
           });
         }
-        const subs = await tryApi('/api/submissions?limit=300');
-        if (subs && subs.ok && Array.isArray(subs.submissions)) this.patchLive('subs', subs.submissions);
+        await this.loadSubs();
         this.setState({
           dcFormSent: true,
           dcCorr: '',
@@ -16422,6 +16487,15 @@
         });
       } catch (e) {
         this.toastMsg(e.message || 'The server did not accept the submission.', 'dcToast');
+      } finally {
+        this._dcBusy = false;
+        this.setState(st => {
+          const b = Object.assign({}, st.busy);
+          delete b.dc;
+          return {
+            busy: b
+          };
+        });
       }
     }
     renderVals() {
@@ -16440,8 +16514,16 @@
       const units = boot.units || [];
       const dept = unit ? unit.short || unit.name : units.length ? 'All units' : '—';
       const isRealIncharge = me.role === 'incharge';
-      const unitChip = unit ? (unit.short || unit.name) + (units.length > 1 ? ' ▾' : '') : units.length ? 'Choose a unit ▾' : 'No unit assigned';
+      const qAreas = !unit && !s.demo && me.role === 'collector' ? live.quality || [] : [];
+      const qArea = qAreas.find(a => String(a.key) === String(s.dcAreaSel)) || qAreas[0] || null;
+      const unitChip = unit ? (unit.short || unit.name) + (units.length > 1 ? ' ▾' : '') : qArea ? (qArea.name || qArea.key) + (qAreas.length > 1 ? ' ▾' : '') : units.length ? 'Choose a unit ▾' : 'No unit assigned';
       const pickUnit = () => {
+        if (!unit && qAreas.length > 1) {
+          const i = qAreas.indexOf(qArea);
+          return this.setState({
+            dcAreaSel: qAreas[(i + 1) % qAreas.length].key
+          });
+        }
         if (units.length <= 1) {
           if (!unit && units[0]) this.setUnit(units[0].id);
           return;
@@ -17196,7 +17278,7 @@
       const srShiftCodes = s.demo ? ['M4', 'E3', 'N2'] : Array.from(new Set([todayCode, ...unitStaff.map(p => p.shift)].filter(isWork))).slice(0, 4);
       if (!srShiftCodes.length) srShiftCodes.push('M4', 'E3', 'N2');
       const dcDept = s.demo ? null : (live.depts || []).find(d => unit && (String(d.id || d._id) === String(unit.id) || norm(d.name) === norm(unit.name))) || null;
-      const dcArea = s.demo ? null : (live.quality || []).find(a => unit && (String(a.deptId) === String(unit.id) || norm(a.key) === norm(unit.id) || norm(a.name) === norm(unit.name))) || null;
+      const dcArea = s.demo ? null : unit ? (live.quality || []).find(a => String(a.deptId) === String(unit.id) || norm(a.key) === norm(unit.id) || norm(a.name) === norm(unit.name)) || null : qArea;
       const ITEMS = s.demo ? DC_ITEMS : dcItemsOf(dcDept, dcArea);
       const dcMonth = clamp(s.dcMonth, 0, DC_MONTHS.length - 1);
       const dcM = DC_MONTHS[dcMonth];
@@ -17321,12 +17403,31 @@
       const pdaysCol = statFields.findIndex(f => COL_RX.pdays.test(f.id) || COL_RX.pdays.test(f.label));
       const pdaysVal = pdaysCol >= 0 && subsOf(dcMonth).stat && subsOf(dcMonth).stat.vals ? subsOf(dcMonth).stat.vals[pdaysCol] : '';
       const dcNum = byGroup ? String(GROUPS.reduce((a, _, i) => a + (Number(dcGet('gn' + i)) || 0), 0)) : dcGet('num', dcSub && dcSub.num != null ? dcSub.num : '');
-      const dcDen = byGroup ? String(GROUPS.reduce((a, _, i) => a + (Number(dcGet('gd' + i)) || 0), 0)) : dcGet('den', dcSub && dcSub.den != null ? dcSub.den : /1000/.test(dcItem0.unit || '') && pdaysVal !== '' ? pdaysVal : '');
+      const denMap = dcItem0.ind && dcItem0.ind.mDen || {};
+      const lockedDen = dcItem0.denLocked ? denMap[dcM.key] != null && denMap[dcM.key] !== '' ? denMap[dcM.key] : Object.keys(denMap).map(k => denMap[k]).filter(v => v != null && v !== '').pop() : null;
+      const isCount = dcItem0.kind === 'q' && dcItem0.isRate === false;
+      const dcDen = isCount ? '' : dcItem0.denLocked ? lockedDen == null ? '' : String(lockedDen) : byGroup ? String(GROUPS.reduce((a, _, i) => a + (Number(dcGet('gd' + i)) || 0), 0)) : dcGet('den', dcSub && dcSub.den != null ? dcSub.den : /1000/.test(dcItem0.unit || '') && pdaysVal !== '' ? pdaysVal : '');
       const numN = Number(dcNum) || 0,
         denN = Number(dcDen) || 0;
-      const resultV = dcItem0.kind === 'q' ? denN > 0 ? Math.round(numN / denN * dcItem0.mult * 100) / 100 : null : null;
+      const resultV = dcItem0.kind !== 'q' ? null : isCount ? String(dcNum).trim() !== '' ? numN : null : denN > 0 ? Math.round(numN / denN * dcItem0.mult * 100) / 100 : null;
       const resultOk = resultV == null ? null : dcItem0.benchV == null ? null : withinBench(dcItem0, resultV);
-      const dcSubmitOk = !!dcItem0.id && (dcItem0.kind === 'stat' ? dcStatFields.some(f => f.v !== '') : denN > 0 && (dcItem0.isApproved || dcItem.isApproved ? !!s.dcCorr.trim() : true));
+      const liveHas = (() => {
+        const mk = dcM.key,
+          has = o => !!(o && o[mk] != null && o[mk] !== '');
+        if (dcItem0.kind === 'q') {
+          const i = dcItem0.ind;
+          return !!i && (has(i.months) || has(i.mNum) || !!(i.mNotObserved && i.mNotObserved[mk]) || !!(i.incidents && Array.isArray(i.incidents[mk]) && i.incidents[mk].length) || !dcItem0.denLocked && has(i.mDen));
+        }
+        if (dcItem0.kind === 'stat' && dcDept) {
+          const idx = (dcDept.months || []).indexOf(mk);
+          const row = idx >= 0 ? (dcDept.data || {})[String(idx)] : null;
+          return !!row && Object.keys(row).some(k => row[k] != null && row[k] !== '');
+        }
+        return false;
+      })();
+      const dcNeedsCorr = !!dcItem0.id && (dcItem.isApproved || liveHas);
+      const qReady = isCount ? String(dcNum).trim() !== '' : dcItem0.denLocked || denN > 0 || numN === 0 && String(dcDen).trim() !== '' && Number(dcDen) === 0;
+      const dcSubmitOk = !!dcItem0.id && !s.busy.dc && (dcItem0.kind === 'stat' ? dcStatFields.some(f => f.v !== '') : qReady) && (!dcNeedsCorr || !!s.dcCorr.trim());
       const histAll = [];
       DC_MONTHS.forEach((mm, mi) => {
         const subs = subsOf(mi);
@@ -17353,7 +17454,7 @@
         label: h.it.label,
         ...stChip(stOf(h.sub)),
         month: DC_MONTHS[h.mi].label,
-        summary: h.it.kind === 'stat' ? `${h.sub.vals && h.sub.vals[0] !== '' ? h.sub.vals[0] : '—'} ${statFields[0] ? statFields[0].label.toLowerCase() : ''} · ${statFields.length} fields` : `${h.sub.num} ÷ ${h.sub.den} → ${fmtV(h.it, h.v)}`,
+        summary: h.it.kind === 'stat' ? `${h.sub.vals && h.sub.vals[0] !== '' ? h.sub.vals[0] : '—'} ${statFields[0] ? statFields[0].label.toLowerCase() : ''} · ${statFields.length} fields` : h.sub.num != null && h.sub.den != null ? `${h.sub.num} ÷ ${h.sub.den} → ${fmtV(h.it, h.v)}` : fmtV(h.it, h.v) || '—',
         at: h.sub.at,
         decision: stOf(h.sub) === 'approved' ? `Approved by ${h.sub.reviewer || 'Quality team'} · counted in the hospital dashboard` : stOf(h.sub) === 'rejected' ? `Returned by ${h.sub.reviewer || 'Quality team'}: ${h.sub.reason || ''}` : null,
         go: () => go('datacolForm', {
@@ -18716,7 +18817,8 @@
         dcItem,
         dcFormSent: s.dcFormSent,
         dcFormOpen: !s.dcFormSent,
-        dcSentTitle: dcItem.isApproved ? 'Correction sent' : 'Submitted for review',
+        dcSentTitle: dcNeedsCorr ? 'Correction sent' : 'Submitted for review',
+        dcNeedsCorr,
         dcNextOpenLabel: openCount > 1 ? 'Next open item' : 'Back to list',
         dcNextOpen: () => {
           const next = dcItemsRaw.find(it => (it.status === 'missing' || it.status === 'rejected') && it.id !== dcItem0.id);
@@ -18750,12 +18852,12 @@
         dcNumStyle: roStyle(dcReadOnly),
         dcDen,
         setDcDen: dcSet('den'),
-        dcDenReadOnly: dcReadOnly || !!dcItem0.denLocked,
-        dcDenStyle: roStyle(dcReadOnly || !!dcItem0.denLocked),
+        dcDenReadOnly: dcReadOnly || !!dcItem0.denLocked || isCount,
+        dcDenStyle: roStyle(dcReadOnly || !!dcItem0.denLocked || isCount),
         dcResult: resultV == null ? '—' : dcItem0.unit === '%' ? resultV + '%' : String(resultV),
         dcResultBg: resultOk == null ? 'rgba(125,145,180,.1)' : resultOk ? 'rgba(43,182,115,.12)' : 'rgba(214,69,69,.1)',
         dcResultColor: resultOk == null ? '#7d8ea8' : resultOk ? '#1d8f57' : '#b32e2e',
-        dcResultLabel: resultV == null ? 'enter both values' : resultOk == null ? 'no benchmark set' : resultOk ? 'within benchmark' : 'outside benchmark',
+        dcResultLabel: resultV == null ? isCount ? 'enter the count' : 'enter both values' : resultOk == null ? 'no benchmark set' : resultOk ? 'within benchmark' : 'outside benchmark',
         toggleDcGuide: () => this.setState({
           dcGuideOpen: !s.dcGuideOpen
         }),
@@ -18800,16 +18902,17 @@
           });
           this.toastMsg('Draft saved on this phone · not sent yet', 'dcToast');
         },
-        dcSubmitLabel: dcItem.isApproved ? 'Send correction' : 'Submit to administration',
-        dcSubmitStyle: `flex:2;border:0;border-radius:13px;padding:13px;font-size:14px;font-weight:700;cursor:pointer;${BLUE_BTN};opacity:${dcSubmitOk ? 1 : .5}`,
+        dcSubmitLabel: s.busy.dc ? 'Sending…' : dcNeedsCorr ? 'Send correction' : 'Submit to administration',
+        dcSubmitStyle: `flex:2;border:0;border-radius:13px;padding:13px;font-size:14px;font-weight:700;cursor:${s.busy.dc ? 'wait' : 'pointer'};${BLUE_BTN};opacity:${dcSubmitOk ? 1 : .5}`,
         dcSubmit: () => {
-          if (!dcSubmitOk) return;
+          if (!dcSubmitOk || s.busy.dc) return;
           this.submitDc(dcItem0, dcM, {
             num: numN,
             den: denN,
             vals: dcStatFields.map(f => f.v === '' ? '' : Number(f.v)),
             note: s.dcNote,
             corr: s.dcCorr,
+            isCorr: dcNeedsCorr,
             dept: dcDept,
             area: dcArea,
             resultV

@@ -1405,7 +1405,10 @@ const _FALLBACK_DEPTS = (typeof window !== 'undefined' && Array.isArray(window._
   : [];
 // Same rule as the quality seed: an injected list wins even when it is empty. A
 // scoped account with no departments must see none, not the bundled sample data.
-const DEPARTMENTS = (_INJECTED_DEPTS || _FALLBACK_DEPTS).map(d => ({ ...d }));
+// Hidden duplicate columns (an empty twin marked { hidden, duplicateOf } by
+// scripts/organize-database.js) stay on the stored record but are never shown or offered for
+// entry, so a value can't be typed into the twin and split across two ids again.
+const DEPARTMENTS = (_INJECTED_DEPTS || _FALLBACK_DEPTS).map(d => ({ ...d, cols: Array.isArray(d.cols) ? d.cols.filter(c => !(c && c.hidden)) : d.cols }));
 
 // Attach the derived fields the app expects (series/total/latest/prev/delta/peak),
 // guarded so a department with no rows can't throw.
@@ -1536,7 +1539,11 @@ window.UNICO.refreshDepartments = function () {
     list.forEach(d=>{ const r=(store.renames||{})[d.id]; if(r){ Object.assign(d,r); } });
     // explicitly-deleted months (a later entry for the same month re-adds it)
     const removed=store.removed||{};
-    list.forEach(d=>{ const rm=removed[d.id]; if(rm&&rm.length){ for(let i=d.months.length-1;i>=0;i--){ if(rm.includes(d.months[i])){ d.months.splice(i,1); d.data.splice(i,1); } } } });
+    // …unless the month was APPROVED again after it was deleted here (newest wins): the server
+    // stamps d.approvedAt[month]; deleteMonth stamps removedAt. A legacy deletion has no stamp,
+    // so a stamped approval outranks it — hiding a later approval for good read as lost data.
+    const removedAt=store.removedAt||{};
+    list.forEach(d=>{ const rm=removed[d.id]; if(rm&&rm.length){ for(let i=d.months.length-1;i>=0;i--){ const m=d.months[i]; if(rm.includes(m) && !(Number((d.approvedAt||{})[m])>(Number((removedAt[d.id]||{})[m])||0))){ d.months.splice(i,1); d.data.splice(i,1); } } } });
     // entries merge
     const byId=Object.fromEntries(list.map(d=>[d.id,d]));
     (store.entries||[]).forEach(e=>{
@@ -1549,7 +1556,10 @@ window.UNICO.refreshDepartments = function () {
         // Merge only REAL values into an existing month: an all-blank "save anyway"
         // entry used to spread nulls OVER the server's approved data, blanking the
         // whole row on screen while the values sat safely in the DB (Endoscopy Jun-26).
-        const patch={}; Object.keys(e.row||{}).forEach(k=>{ const v=(e.row||{})[k]; if(v!==null&&v!==''&&v!==undefined) patch[k]=v; });
+        // Newest wins per field: a value APPROVED for this month after the entry was typed
+        // (server stamp d.approvedAt[month] vs the entry's ts) must not be painted over by it.
+        const approvedNewer=Number((d.approvedAt||{})[e.month])>(Number(e.ts)||0);
+        const patch={}; Object.keys(e.row||{}).forEach(k=>{ const v=(e.row||{})[k]; if(v!==null&&v!==''&&v!==undefined&&!(approvedNewer&&d.data[idx]&&Object.prototype.hasOwnProperty.call(d.data[idx],k))) patch[k]=v; });
         d.data[idx]={...d.data[idx],...patch};
       }
       else if(hasValue) { d.months.push(e.month); d.data.push({...e.row}); }
@@ -1589,6 +1599,9 @@ window.UNICO.refreshDepartments = function () {
     // bump on the refresh event or open views keep rendering the page-load data forever.
     const [rev,setRev]=React.useState(0);
     React.useEffect(()=>{ const h=()=>setRev(r=>r+1); window.addEventListener('unico:data-refreshed',h); return ()=>window.removeEventListener('unico:data-refreshed',h); },[]);
+    // The server merged this overlay with another session's saves: reload it, so this tab shows
+    // (and keeps building on) their edits instead of writing its older copy back.
+    React.useEffect(()=>{ const h=(e)=>{ const ks=(e&&e.detail&&e.detail.keys)||[]; if(ks.indexOf(KEY)>=0){ const s=load(); if(s) setStore(s); } }; window.addEventListener('unico:overlay-merged',h); return ()=>window.removeEventListener('unico:overlay-merged',h); },[]);
     React.useEffect(()=>{ localStorage.setItem(KEY,JSON.stringify(store)); },[store]);
     const depts=React.useMemo(()=>buildDepts(store),[store,rev]);
 
@@ -1612,6 +1625,10 @@ window.UNICO.refreshDepartments = function () {
         if(isCustom) return {...s, custom:s.custom.filter(d=>d.id!==id), entries:(s.entries||[]).filter(e=>e.dept!==id)};
         return {...s, deleted:[...(s.deleted||[]), id]};
       }),
+      // Deleting a built-in department only HIDES it (its data stays saved); this brings it back.
+      // The only other way out used to be Settings → Reset, which wiped every Data Entry value.
+      undeleteDept:(id)=>commit(s=>({...s, deleted:(s.deleted||[]).filter(x=>x!==id)})),
+      deletedIds:store.deleted||[],
       // Remove a single month's data for a department (built-in or custom).
       deleteMonth:(id,month)=>commit(s=>{
         const isCustom=(s.custom||[]).some(d=>d.id===id);
@@ -1620,7 +1637,8 @@ window.UNICO.refreshDepartments = function () {
           return {...s, entries, custom:s.custom.map(d=>{ if(d.id!==id) return d; const idx=(d.months||[]).indexOf(month); if(idx<0) return d; return {...d, months:d.months.filter((_,i)=>i!==idx), data:(d.data||[]).filter((_,i)=>i!==idx)}; })};
         }
         const removed={...(s.removed||{})}; removed[id]=[...(removed[id]||[]).filter(m=>m!==month), month];
-        return {...s, entries, removed};
+        const removedAt={...(s.removedAt||{})}; removedAt[id]={...(removedAt[id]||{}), [month]:Date.now()};
+        return {...s, entries, removed, removedAt};
       }),
       reset:()=>commit(blank()),
       undo:()=>{ const h=hist.current; if(!h.length) return; const prev=h[h.length-1]; hist.current=h.slice(0,-1); setCanUndo(hist.current.length>0); setStore(prev); }
@@ -2091,13 +2109,15 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     try{
       const src=(typeof window!=='undefined'&&Array.isArray(window.__UNICO_STAFF__))?window.__UNICO_STAFF__:null;
       if(!src||!src.length||!Array.isArray(list)) return list;
-      const byId={}, byEmp={};
+      // Matched by record id ONLY. Employee numbers are shared by different people
+      // (11410, 11520), and an emp_id fallback stamped one nurse's photo and BNMC licence
+      // onto the other, which the next staff save then made permanent.
+      const byId={};
       src.forEach(x=>{ if(!x||!(x.licence_verified||x.photo)) return;
-        if(x.id!=null) byId[String(x.id)]=x;
-        if(x.emp_id) byEmp[String(x.emp_id).trim()]=x; });
-      if(!Object.keys(byId).length&&!Object.keys(byEmp).length) return list;
+        if(x.id!=null) byId[String(x.id)]=x; });
+      if(!Object.keys(byId).length) return list;
       return list.map(e=>{
-        const srv=(e&&e.id!=null&&byId[String(e.id)])||(e&&e.emp_id&&byEmp[String(e.emp_id).trim()]);
+        const srv=e&&e.id!=null&&byId[String(e.id)];
         if(!srv) return e;
         // Only take a NEWER verification, so a local re-verify done seconds ago is not
         // reverted by a server copy the page was hydrated with.
@@ -6148,9 +6168,11 @@ window.QI_CORRECTIONS_BY_DEFID = {
 
   // Fiscal-year (Jun–May) helpers so quarters can be rolled up PER YEAR, not just for the
   // hardcoded 2025-26 above. A month's quarter depends only on its month name, so any year works.
-  const FY_MONS = ['Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May'];
-  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return 2000+yy-(mi>=7?1:0); }
-  function fyQuarterMonths(startYear){ const yy=String(startYear%100).padStart(2,'0'); const ny=String((startYear+1)%100).padStart(2,'0'); return { Q1:['Jun-'+yy,'Jul-'+yy,'Aug-'+yy], Q2:['Sep-'+yy,'Oct-'+yy,'Nov-'+yy], Q3:['Dec-'+yy,'Jan-'+ny,'Feb-'+ny], Q4:['Mar-'+ny,'Apr-'+ny,'May-'+ny] }; }
+  // Per-year quarter rollups (quartersByFy) follow the CALENDAR reporting year the console uses:
+  // year N = Jan…Dec of N, Q1 = Jan–Mar. (The flat legacy `quarters` above stays as it was.)
+  const FY_MONS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fyOfKeyS(key){ const p = String(key||'').split('-'); const mi = FY_MONS.indexOf(p[0]); const yy = parseInt(p[1],10); if(mi<0||isNaN(yy)) return null; return 2000+yy; }
+  function fyQuarterMonths(startYear){ const yy=String(startYear%100).padStart(2,'0'); return { Q1:['Jan-'+yy,'Feb-'+yy,'Mar-'+yy], Q2:['Apr-'+yy,'May-'+yy,'Jun-'+yy], Q3:['Jul-'+yy,'Aug-'+yy,'Sep-'+yy], Q4:['Oct-'+yy,'Nov-'+yy,'Dec-'+yy] }; }
   function fysInInd(ind){ const set=new Set(); ['months','mNum','mDen'].forEach(f=>{ const o=ind && ind[f]; if(o) Object.keys(o).forEach(k=>{ if(o[k]!=null&&o[k]!==''){ const fy=fyOfKeyS(k); if(fy!=null) set.add(fy); } }); }); return [...set]; }
 
   function isPct(ind) {
@@ -6234,7 +6256,37 @@ window.QI_CORRECTIONS_BY_DEFID = {
   // editing Aug never wipes Jul. `mNotObserved` marks a month as deliberately not
   // measured — it must merge like every other month map or the flag would be lost the
   // next time any other month on the same indicator is edited.
-  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups', 'mNotObserved'];
+  const NESTED = ['quarters', 'quarterRemarks', 'months', 'monthRemarks', 'qNum', 'qDen', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups', 'mGroupsDen', 'mDeptBreakdown', 'mNotObserved', 'mEditedAt'];
+
+  /* NEWEST WINS between a manual edit here (overlay) and an approved submission (database).
+     The overlay used to win unconditionally, so a month cleared or typed in the console
+     earlier hid every reading approved for it later — the approved data was safely in the
+     database but "missing" on screen (e.g. MICU CLABSI Aug-26 showed blank, not the approved 0).
+     The server stamps base.mApprovedAt[month]; patchIndicator stamps layer.mEditedAt[month].
+     A layer cell is dropped only where the approval is newer AND the database actually holds
+     that cell, so an admin-owned headcount (mDen) the submission never carried is kept. Legacy
+     edits carry no stamp and therefore yield to a stamped approval. */
+  const MONTH_MAPS = ['months', 'monthRemarks', 'mNum', 'mDen', 'incidents', 'capa', 'mGroups', 'mGroupsDen', 'mDeptBreakdown', 'mNotObserved'];
+  function withoutSuperseded(layer, base) {
+    const appr = base && base.mApprovedAt;
+    if (!layer || !appr || typeof appr !== 'object') return layer;
+    const edited = layer.mEditedAt || {};
+    let out = layer;
+    Object.keys(appr).forEach((m) => {
+      if (!(Number(appr[m]) > (Number(edited[m]) || 0))) return;
+      const has = (k) => !!(base[k] && Object.prototype.hasOwnProperty.call(base[k], m));
+      const dbReading = ['months', 'mNum'].some((k) => has(k) && base[k][m] != null && base[k][m] !== '');
+      const dbNotObs = !!(base.mNotObserved && base.mNotObserved[m]);
+      MONTH_MAPS.forEach((k) => {
+        if (!out[k] || !Object.prototype.hasOwnProperty.call(out[k], m)) return;
+        const drop = has(k) || (k === 'mNotObserved' && dbReading) || (dbNotObs && k !== 'mDen');
+        if (!drop) return;
+        if (out === layer) out = Object.assign({}, layer);
+        out[k] = Object.assign({}, out[k]); delete out[k][m];
+      });
+    });
+    return out;
+  }
 
   // Definition fields overwritten by an authoritative correction (window.QI_CORRECTIONS,
   // keyed by indicator name). VALUE fields (quarters/qNum/qDen/mNum/mDen/months) are
@@ -6261,6 +6313,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     // Apply the authoritative correction to the BASE so an explicit user edit (patch)
     // still wins, but every uncorrected indicator gets the right formula/reference.
     const corrected = correctedBase(seedInd);
+    patch = withoutSuperseded(patch, corrected);
     const ind = Object.assign({}, corrected, patch || {});
     if (patch) NESTED.forEach(k => { if (patch[k]) ind[k] = Object.assign({}, corrected[k] || {}, patch[k]); });
 
@@ -6348,8 +6401,10 @@ window.QI_CORRECTIONS_BY_DEFID = {
         const base = rawById.get(key);
         let raw = a;
         if (base) {
-          raw = Object.assign({}, base, a);
-          NESTED.forEach(k => { if (base[k] || a[k]) raw[k] = Object.assign({}, base[k] || {}, a[k] || {}); });
+          // The added copy is an overlay snapshot too: a month approved after it was taken wins.
+          const a2 = withoutSuperseded(a, base);
+          raw = Object.assign({}, base, a2);
+          NESTED.forEach(k => { if (base[k] || a2[k]) raw[k] = Object.assign({}, base[k] || {}, a2[k] || {}); });
         }
         const merged = mergeIndicator(raw, patches[a.id]);
         const at = idxById.get(key);
@@ -6455,6 +6510,9 @@ window.QI_CORRECTIONS_BY_DEFID = {
     // refocus); the memo only watches the overlay, so bump to rebuild from fresh seed.
     const [rev, setRev] = React.useState(0);
     React.useEffect(() => { const h = () => setRev(r => r + 1); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
+    // The server merged the quality overlay with another session's saves: reload it so this
+    // tab builds on their edits instead of writing its older copy back.
+    React.useEffect(() => { const h = (e) => { const ks = (e && e.detail && e.detail.keys) || []; if (ks.some(k => /^unico_quality_v\d+$/.test(k))) setOverlay(loadOverlay()); }; window.addEventListener('unico:overlay-merged', h); return () => window.removeEventListener('unico:overlay-merged', h); }, []);
     React.useEffect(() => { saveOverlay(overlay); }, [overlay]);
     const merged = React.useMemo(
       () => applyHHDeptBreakdown((window.QUALITY_SEED || []).map(d => mergeDept(d, overlay.depts[d.key]))),
@@ -6508,6 +6566,10 @@ window.QI_CORRECTIONS_BY_DEFID = {
         const prev = all[indId] || {};
         const next = Object.assign({}, prev, patch);
         NESTED.forEach(k => { if (patch[k]) next[k] = Object.assign({}, prev[k] || {}, patch[k]); });
+        // Stamp WHEN each month was edited, so it can be weighed against a later approval.
+        const now = Date.now(), touched = {};
+        MONTH_MAPS.forEach(k => { if (patch[k] && typeof patch[k] === 'object') Object.keys(patch[k]).forEach(m => { touched[m] = now; }); });
+        if (Object.keys(touched).length) next.mEditedAt = Object.assign({}, prev.mEditedAt || {}, touched);
         all[indId] = next;
         return Object.assign({}, cur, { indPatches: all });
       }),
@@ -7696,7 +7758,7 @@ function BarChart({
   const [tip, setTip] = useTip();
   const wrap = useRef(null);
   const max = Math.max(1, ...data.map(d => d[y] || 0));
-  const id = 'bg' + (label || y).replace(/\W/g, '');
+  const id = 'bg' + String(label || y || 'v').replace(/\W/g, '');
   return React.createElement("div", {
     ref: wrap,
     style: {
@@ -9511,7 +9573,7 @@ const UNICO_MODULES = [{
 }];
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
-  datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcResponsibles', 'dcShare', 'dcFields', 'dcAnalytics'],
+  datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcResponsibles', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
   staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
   supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport'],
@@ -9596,6 +9658,10 @@ function unicoSidebarGroups(moduleId) {
       id: 'dcResponsibles',
       label: 'Responsible Persons',
       icon: I.user
+    }, {
+      id: 'dcSettings',
+      label: 'Department Setup',
+      icon: I.gear
     }, {
       id: 'dcShare',
       label: 'Share Links',
@@ -10049,6 +10115,9 @@ function unicoWorkspaceSub(view) {
   }, {
     label: 'Quality Data',
     view: 'dcQuality'
+  }, {
+    label: 'Department Setup',
+    view: 'dcSettings'
   }, {
     label: 'Share Links',
     view: 'dcShare'
@@ -11588,7 +11657,25 @@ Object.assign(window, {
       }
     }
     async function clear() {
-      if (!value || !value.publicId) {
+      if (!value) {
+        onChange && onChange(null);
+        return;
+      }
+      if (!value.publicId) {
+        if ((kind || 'staff') === 'staff' && staffId != null && staffId !== '') {
+          setBusy(true);
+          try {
+            await unicoDeletePhoto('', 'staff', {
+              staffId: staffId,
+              empId: empId
+            });
+          } catch (e) {
+            toast(String(e && e.message || e), 'error');
+            setBusy(false);
+            return;
+          }
+          setBusy(false);
+        }
         onChange && onChange(null);
         return;
       }
@@ -12827,25 +12914,22 @@ Object.assign(window, {
     useEffect(() => {
       let live = true;
       const y = now.getFullYear(),
-        mo = now.getMonth() + 1;
+        mo = now.getMonth();
       const hasMe = doc => {
         const g = doc && doc.grid;
         if (!g || !me) return false;
-        const row = g[String(me.id)] || g[String(me.emp_id)];
+        const row = g['S' + me.id] || g[String(me.id)] || g[String(me.emp_id)];
         return !!(row && Object.keys(row).length);
       };
+      const sq = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const myUnits = String(unit || '').split(',').map(sq).filter(Boolean);
+      const isMyUnit = r => !!r && (myUnits.indexOf(sq(r.dept)) >= 0 || myUnits.indexOf(sq(r.deptName)) >= 0);
       fetch('/api/rosters', {
         credentials: 'same-origin'
       }).then(r => r.json()).then(async j => {
         const all = j && (j.rosters || j.list) || [];
         const month = all.filter(r => +r.year === y && +r.month === mo);
-        const unitFirst = arr => {
-          const key = String(unit || '').toLowerCase().slice(0, 6);
-          if (!key) return arr;
-          const hit = arr.filter(r => String(r.deptName || r.dept || '').toLowerCase().indexOf(key) >= 0);
-          return [...hit, ...arr.filter(r => hit.indexOf(r) < 0)];
-        };
-        const cand = unitFirst(month.length ? month : all);
+        const cand = [...month.filter(isMyUnit), ...month.filter(r => !isMyUnit(r))];
         if (!cand.length) {
           if (live) setRoster(false);
           return;
@@ -12858,13 +12942,13 @@ Object.assign(window, {
           if (!live) return;
           const full = await get(r);
           if (!full) continue;
-          if (!fallback) fallback = full;
+          if (!fallback && isMyUnit(full)) fallback = full;
           if (hasMe(full)) {
             if (live) setRoster(full);
             return;
           }
         }
-        if (live) setRoster(fallback || cand[0] || false);
+        if (live) setRoster(fallback || false);
       }).catch(() => {
         if (live) setRoster(false);
       });
@@ -14616,7 +14700,7 @@ function DeptMiniCard({
       color: 'var(--ink)',
       lineHeight: 1
     }
-  }, fmt(d.latest[d.primary] || 0)), React.createElement("div", {
+  }, d.series.length ? fmt(d.latest[d.primary] || 0) : '—'), React.createElement("div", {
     style: {
       fontSize: 10,
       color: 'var(--faint)',
@@ -14624,12 +14708,12 @@ function DeptMiniCard({
       letterSpacing: .3,
       marginTop: 3
     }
-  }, d.primaryLabel, " \xB7 ", d.latest.month)), React.createElement(Spark, {
+  }, d.primaryLabel, " \xB7 ", d.latest.month || 'no report in period')), vals.length ? React.createElement(Spark, {
     values: vals,
     color: tone,
     w: 96,
     h: 36
-  })));
+  }) : null));
 }
 function ReportingCompliance({
   depts,
@@ -14817,7 +14901,18 @@ function ReportingCompliance({
 function deptForPeriod(d, monthSet) {
   const idxs = [];
   for (let i = 0; i < d.months.length; i++) if (monthSet.has(d.months[i])) idxs.push(i);
-  if (!idxs.length) return d;
+  if (!idxs.length) return {
+    ...d,
+    months: [],
+    data: [],
+    series: [],
+    total: 0,
+    latest: {},
+    prev: null,
+    delta: 0,
+    peak: 0,
+    avg: 0
+  };
   const months = idxs.map(i => d.months[i]);
   const data = idxs.map(i => d.data[i]);
   const series = data.map((row, i) => ({
@@ -14827,7 +14922,13 @@ function deptForPeriod(d, monthSet) {
   }));
   const total = series.reduce((s, r) => s + (r[d.primary] || 0), 0);
   const latest = series[series.length - 1];
-  const prev = series.length > 1 ? series[series.length - 2] : null;
+  const li = idxs[idxs.length - 1];
+  const prevRow = li > 0 ? d.data[li - 1] : null;
+  const prev = prevRow ? {
+    month: d.months[li - 1],
+    full: window.UNICO.MONTHS_FULL[d.months[li - 1]] || d.months[li - 1],
+    ...prevRow
+  } : null;
   const cur = latest[d.primary] || 0,
     pv = prev ? prev[d.primary] || 0 : 0;
   const delta = pv === 0 ? cur > 0 ? 100 : 0 : Math.round((cur - pv) / pv * 100);
@@ -15027,7 +15128,7 @@ function Dashboard({
       d: d,
       onOpen: () => openDept(d.id)
     }))), React.createElement(ReportingCompliance, {
-      depts: depts,
+      depts: rawDepts,
       onFill: onFill
     }));
   }
@@ -15151,7 +15252,7 @@ function Dashboard({
     value: d.latest[d.primary] || 0,
     color: PALETTE[d.id.charCodeAt(0) % PALETTE.length]
   })).sort((a, b) => b.value - a.value).slice(0, 8);
-  const groupMix = window.UNICO.GROUPS.map((g, i) => ({
+  const groupMix = [...new Set(depts.map(d => d.group).filter(Boolean))].map((g, i) => ({
     label: g,
     value: depts.filter(d => d.group === g).reduce((s, d) => s + d.total, 0),
     color: PALETTE[i]
@@ -15225,13 +15326,9 @@ function Dashboard({
     className: "sub"
   }, rangeFull), React.createElement("span", {
     className: "spacer"
-  }), React.createElement("span", {
-    className: "tag",
-    style: {
-      background: 'var(--pos-bg)',
-      color: 'var(--pos)'
-    }
-  }, "\u25B2 ", opd.delta, "% MoM")), React.createElement("div", {
+  }), React.createElement(Delta, {
+    v: opd.delta
+  })), React.createElement("div", {
     className: "card-b"
   }, React.createElement(LineChart, {
     data: opd.series,
@@ -15277,7 +15374,7 @@ function unicoDeptQuality(dept) {
     if (!area || !(area.indicators && area.indicators.length)) return null;
     const Qh = window.UNICO_Q;
     if (!Qh) return null;
-    const fy = Qh.defaultFy(areas);
+    const fy = Qh.defaultFy([area]);
     const months = Qh.fyAxis(fy);
     let capaMap = {};
     try {
@@ -15531,13 +15628,20 @@ function DeptDetail({
   const [rangeMode, setRangeMode] = React.useState('all');
   const [fromM, setFromM] = React.useState(d.months[0]);
   const [toM, setToM] = React.useState(d.months[d.months.length - 1]);
+  React.useEffect(() => {
+    setRangeMode('all');
+    setFromM(d.months[0]);
+    setToM(d.months[d.months.length - 1]);
+  }, [d.id]);
   let vs = d.series;
   if (rangeMode === 'l3') vs = d.series.slice(-3);else if (rangeMode === 'l6') vs = d.series.slice(-6);else if (rangeMode === 'latest') vs = d.series.slice(-1);else if (rangeMode === 'custom') {
     const fi = d.months.indexOf(fromM),
       ti = d.months.indexOf(toM);
-    const a = Math.min(fi, ti),
-      b = Math.max(fi, ti);
-    vs = d.series.slice(a, b + 1);
+    if (fi < 0 || ti < 0) vs = d.series;else {
+      const a = Math.min(fi, ti),
+        b = Math.max(fi, ti);
+      vs = d.series.slice(a, b + 1);
+    }
   }
   if (!vs.length) vs = d.series.slice(-1);
   const vTotal = vs.reduce((s, r) => s + (r[d.primary] || 0), 0);
@@ -16150,7 +16254,13 @@ function DeptGrid({
   const [q, setQ] = React.useState('');
   const GROUPS = window.UNICO.GROUPS;
   const allM = [...new Set(depts.flatMap(d => d.months || []))];
-  const gapOf = d => allM.length - (d.months && d.months.length || 0);
+  const MO = window.UNICO.MONTH_ORDER || [];
+  const gapOf = d => {
+    const own = (d.months || []).map(m => MO.indexOf(m)).filter(i => i >= 0);
+    if (!own.length) return allM.length - (d.months && d.months.length || 0);
+    const first = Math.min(...own);
+    return Math.max(0, allM.filter(m => MO.indexOf(m) >= first).length - d.months.length);
+  };
   const query = q.trim().toLowerCase();
   const shown = query ? depts.filter(d => ((d.name || '') + ' ' + (d.short || '')).toLowerCase().includes(query)) : depts;
   let groups;
@@ -16375,11 +16485,17 @@ function DeptCompare({
   const [rangeMode, setRangeMode] = useState('all');
   const RANGE = [['all', 'All'], ['l6', 'Last 6M'], ['l3', 'Last 3M'], ['latest', 'Latest']];
   const sliceN = rangeMode === 'l3' ? 3 : rangeMode === 'l6' ? 6 : rangeMode === 'latest' ? 1 : 0;
+  const MO = window.UNICO && window.UNICO.MONTH_ORDER || [];
+  const windowMonths = useMemo(() => {
+    if (rangeMode === 'all') return null;
+    const all = [...new Set(selDepts.flatMap(d => (d.series || []).map(r => r.month)))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b));
+    return new Set(all.slice(-sliceN));
+  }, [selDepts, rangeMode, sliceN]);
   const inRange = d => {
     const s = d.series || [];
     if (!s.length) return [];
-    if (rangeMode === 'all') return s;
-    return s.slice(-sliceN);
+    if (!windowMonths) return s;
+    return s.filter(r => windowMonths.has(r.month));
   };
   const stats = useMemo(() => selDepts.map(d => {
     const k = keyFor(d);
@@ -16832,7 +16948,8 @@ function DeptModal({
   initial,
   onClose,
   onSave,
-  groups
+  groups,
+  entries
 }) {
   const editing = !!initial;
   const [name, setName] = React.useState(initial?.name || '');
@@ -16883,6 +17000,21 @@ function DeptModal({
       return;
     }
     const used = new Set(clean.filter(c => c.id).map(c => c.id));
+    if (editing) {
+      const srv = (window.UNICO && window.UNICO.DEPARTMENTS || []).find(d => d.id === initial.id);
+      [initial, srv].forEach(d => {
+        if (!d) return;
+        (d.cols || []).forEach(c => {
+          if (c && c.id) used.add(c.id);
+        });
+        (d.data || []).forEach(r => {
+          if (r) Object.keys(r).forEach(k => used.add(k));
+        });
+      });
+      (entries || []).forEach(e => {
+        if (e && e.dept === initial.id && e.row) Object.keys(e.row).forEach(k => used.add(k));
+      });
+    }
     const finalCols = clean.map(c => {
       if (c.id) return {
         id: c.id,
@@ -17462,15 +17594,48 @@ function ManageDepts({
   }, React.createElement(Ic, {
     d: I.plus,
     s: 16
-  }), "New Department")), modal && React.createElement(DeptModal, {
+  }), "New Department")), store.undeleteDept && (store.deletedIds || []).length > 0 && (!window.unicoCan || window.unicoCan('stats', 'edit')) && React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '12px 16px',
+      marginTop: 14,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("b", {
+    style: {
+      fontSize: 13
+    }
+  }, "Hidden departments"), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Their data is still saved."), (store.deletedIds || []).map(id => {
+    const src = (window.UNICO.DEPARTMENTS || []).find(x => x.id === id);
+    return React.createElement("button", {
+      key: id,
+      className: "btn sm",
+      onClick: () => {
+        store.undeleteDept(id);
+        window.UI && window.UI.toast(`${src && src.name || id} restored`, 'success');
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 13
+    }), "Restore ", src && (src.short || src.name) || id);
+  })), modal && React.createElement(DeptModal, {
     initial: modal.type === 'edit' ? modal.dept : null,
     groups: groups,
+    entries: store.entries,
     onClose: () => setModal(null),
     onSave: onSave
   }), confirm && React.createElement(ConfirmModal, {
     title: `Delete ${confirm.name}?`,
     danger: true,
-    body: confirm.custom ? 'This custom department and its entered data will be permanently removed.' : 'This built-in department will be hidden from the platform. You can re-add it by resetting in Settings.',
+    body: confirm.custom ? 'This custom department and its entered data will be permanently removed.' : 'This built-in department will be hidden from the platform. Its saved data is not deleted — an administrator can restore the department.',
     onClose: () => setConfirm(null),
     onConfirm: () => {
       store.deleteDept(confirm.id);
@@ -19126,6 +19291,10 @@ function StaffHighlight({
     right: `${years} yr${years > 1 ? 's' : ''}`
   }))))));
 }
+function staffDeptList(e) {
+  const parts = String(e && e.current_department || '').split(',').map(x => x.trim()).filter(Boolean);
+  return parts.length ? parts.map(x => staffCanonDept(x)) : [staffCanonDept(e && e.current_department)];
+}
 function StaffDirectory({
   store,
   setRoute,
@@ -19140,7 +19309,7 @@ function StaffDirectory({
   const filtered = list.filter(e => {
     if (q && !`${e.name} ${e.emp_id} ${e.phone || ''}`.toLowerCase().includes(q.toLowerCase())) return false;
     if (role && (e.role || 'Nurse') !== role) return false;
-    if (dept && staffCanonDept(e.current_department) !== dept) return false;
+    if (dept && staffDeptList(e).indexOf(dept) < 0) return false;
     if (desig && staffCanonDesig(e.designation) !== desig) return false;
     if (vacc === '__ok' && !vaccOK(e.hepatitis_b_vaccination)) return false;
     if (vacc === '__gap' && vaccOK(e.hepatitis_b_vaccination)) return false;
@@ -19580,10 +19749,11 @@ function ManageStaff({
         return true;
     }
   };
+  const staffDeptsOf = staffDeptList;
   const filtered = base.filter(e => {
     if (!matchChip(e)) return false;
     if (q && !`${e.name} ${e.emp_id} ${e.phone || ''}`.toLowerCase().includes(q.toLowerCase())) return false;
-    if (dept && staffCanonDept(e.current_department) !== dept) return false;
+    if (dept && staffDeptsOf(e).indexOf(dept) < 0) return false;
     if (desig && staffCanonDesig(e.designation) !== desig) return false;
     if (vacc === '__ok' && !vaccOK(e.hepatitis_b_vaccination)) return false;
     if (vacc === '__gap' && vaccOK(e.hepatitis_b_vaccination)) return false;
@@ -19612,7 +19782,7 @@ function ManageStaff({
     if (sortBy === 'dept') return (a.current_department || '').localeCompare(b.current_department || '') || (a.name || '').localeCompare(b.name || '');
     return (a.name || '').localeCompare(b.name || '');
   });
-  const deptOpts = [...new Set(all.map(e => staffCanonDept(e.current_department)))].sort((a, b) => a.localeCompare(b));
+  const deptOpts = [...new Set(all.flatMap(e => staffDeptsOf(e)))].sort((a, b) => a.localeCompare(b));
   const desigOpts = [...new Set(all.map(e => staffCanonDesig(e.designation)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const qualOpts = S.uniqueVals(all, 'qualification');
   const sel = {
@@ -20890,7 +21060,7 @@ function StaffProfile({
   }, React.createElement(Ic, {
     d: I.print,
     s: 15
-  }), "Print"), React.createElement("button", {
+  }), "Print"), (!window.unicoCan || window.unicoCan('staff', 'delete')) && React.createElement("button", {
     className: "btn sm",
     title: "Delete permanently",
     style: {
@@ -20916,7 +21086,7 @@ function StaffProfile({
     d: I.x,
     s: 15,
     sw: 2.4
-  }), "Delete"), React.createElement("button", {
+  }), "Delete"), (!window.unicoCan || window.unicoCan('staff', 'edit')) && React.createElement("button", {
     className: "btn pri sm",
     onClick: () => setRoute({
       view: 'staffForm',
@@ -27069,10 +27239,22 @@ function DataEntry({
     }
   }));
   const updateMonthRow = r => {
+    const edits = gridEdits[r.month] || {};
     const row = {};
-    d.cols.forEach(c => {
-      row[c.id] = Number(gridCell(r.month, c.id, r[c.id]) || 0);
+    Object.keys(edits).forEach(k => {
+      const v = String(edits[k] == null ? '' : edits[k]).trim();
+      row[k] = v === '' ? null : Number(v);
     });
+    if (!Object.keys(row).length) {
+      setGridEdits(s => {
+        const n = {
+          ...s
+        };
+        delete n[r.month];
+        return n;
+      });
+      return;
+    }
     addEntry({
       dept: d.id,
       deptName: d.short,
@@ -27981,7 +28163,7 @@ function DataEntry({
     const dd = depts.find(x => x.id === e.dept);
     return React.createElement("tr", {
       key: i
-    }, React.createElement("td", null, e.deptName), React.createElement("td", null, e.full), React.createElement("td", null, fmt(e.row[dd.primary] || 0)), React.createElement("td", null, Object.keys(e.row).length), React.createElement("td", {
+    }, React.createElement("td", null, e.deptName), React.createElement("td", null, e.full), React.createElement("td", null, dd ? fmt((e.row || {})[dd.primary] || 0) : '—'), React.createElement("td", null, Object.keys(e.row || {}).length), React.createElement("td", {
       style: {
         color: 'var(--green)'
       }
@@ -31900,6 +32082,13 @@ const ROLE_PRESETS = {
   }
 };
 const USER_ROLES = Object.keys(ROLE_PRESETS);
+const PORTAL_ROLE_LABEL = {
+  collector: 'Data Collector',
+  incharge: 'In-charge (portal)',
+  nurse: 'Nurse (portal)',
+  pca: 'PCA (portal)'
+};
+const portalRoleOfLabel = l => Object.keys(PORTAL_ROLE_LABEL).find(k => PORTAL_ROLE_LABEL[k] === l) || null;
 let ROLE_TMPL = null;
 let ROLE_TMPL_P = null;
 const tmplFallback = () => USER_ROLES.filter(r => r !== 'Administrator').map(r => ({
@@ -31999,7 +32188,7 @@ function UserModal({
     const t = templates.find(x => USER_MODS.every(([k]) => sameActs(pm[k], x.perms && x.perms[k])));
     return t ? t.name : 'Custom';
   };
-  const initTemplate = editing ? initial.role === 'Administrator' ? 'Administrator' : initial.role === 'collector' ? 'Data Collector' : initial.perms ? tmplMatch(initial.perms) : 'Custom' : 'Custom';
+  const initTemplate = editing ? initial.role === 'Administrator' ? 'Administrator' : PORTAL_ROLE_LABEL[initial.role] ? PORTAL_ROLE_LABEL[initial.role] : initial.perms ? tmplMatch(initial.perms) : 'Custom' : 'Custom';
   const [role, setRole] = useState(initTemplate);
   const [roleTmpl, setRoleTmpl] = useState(editing ? initial.roleTemplate || null : null);
   React.useEffect(() => {
@@ -32043,10 +32232,11 @@ function UserModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const isAdmin = role === 'Administrator';
-  const isColl = role === 'Data Collector';
+  const portalRole = portalRoleOfLabel(role);
+  const isColl = !!portalRole;
   const pickRole = r => {
     setRole(r);
-    if (r === 'Administrator' || r === 'Data Collector' || r === 'Custom') {
+    if (r === 'Administrator' || portalRoleOfLabel(r) || r === 'Custom') {
       setRoleTmpl(null);
       return;
     }
@@ -32081,7 +32271,7 @@ function UserModal({
     setRole('Custom');
     setRoleTmpl(null);
   };
-  const roleOpts = ['Administrator', ...templates.map(t => t.name), 'Data Collector', 'Custom'];
+  const roleOpts = ['Administrator', ...templates.map(t => t.name), ...Object.values(PORTAL_ROLE_LABEL), 'Custom'];
   const save = async () => {
     setErr('');
     if (!editing) {
@@ -32092,16 +32282,16 @@ function UserModal({
     if (email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
     setBusy(true);
     try {
-      const backendRole = isAdmin ? 'Administrator' : isColl ? 'collector' : 'User';
+      const backendRole = isAdmin ? 'Administrator' : portalRole || 'User';
       const payload = {
         name: name.trim(),
         email: email.trim().toLowerCase(),
-        role: backendRole,
         title: isAdmin || isColl ? null : role === 'Custom' ? 'Custom access' : role,
         active: status === 'active',
         perms: isAdmin || isColl ? null : perms,
         roleTemplate: isAdmin || isColl ? null : roleTmpl || null
       };
+      if (!editing || backendRole !== (initial.role || 'User')) payload.role = backendRole;
       if (!isAdmin && !isColl) {
         payload.staffScope = staffScope;
         payload.departments = staffScope === 'departments' ? staffDepts : [];
@@ -32304,7 +32494,7 @@ function UserModal({
     d: I.check,
     s: 16,
     c: "var(--blue)"
-  }), React.createElement("span", null, React.createElement("b", null, "Data Collector."), " Signs in to the data-collection portal only. Choose which departments & indicators they collect in ", React.createElement("b", null, "Settings \u2192 Responsible Persons"), " \u2014 that assignment is kept when you save here.")) : React.createElement("div", null, React.createElement("div", {
+  }), React.createElement("span", null, React.createElement("b", null, role, "."), " Signs in to the portal only. Choose which departments & indicators they collect in ", React.createElement("b", null, "Settings \u2192 Responsible Persons"), " \u2014 that assignment is kept when you save here.")) : React.createElement("div", null, React.createElement("div", {
     style: {
       fontSize: 12.5,
       fontWeight: 700,
@@ -33078,7 +33268,7 @@ function UserManagement() {
   const mayAdd = may('add'),
     mayEdit = may('edit'),
     mayDel = may('delete');
-  const roleLabel = u => u.role === 'Administrator' ? 'Administrator' : u.role === 'collector' ? 'Data Collector' : u.title || 'User';
+  const roleLabel = u => u.role === 'Administrator' ? 'Administrator' : PORTAL_ROLE_LABEL[u.role] || u.title || 'User';
   const staffScopeLabel = u => {
     const sc = u.staffScope || 'all';
     if (sc === 'self') return 'own record only';
@@ -33087,7 +33277,7 @@ function UserManagement() {
   };
   const summaryOf = u => {
     if (u.role === 'Administrator') return 'Full access';
-    if (u.role === 'collector') return 'Data collection';
+    if (PORTAL_ROLE_LABEL[u.role]) return u.role === 'collector' ? 'Data collection' : 'Portal';
     const base = permSummary(u.perms);
     const sc = staffScopeLabel(u);
     return sc && base !== 'No access' ? base + ' · ' + sc : base;
@@ -34376,7 +34566,7 @@ function CacheStats() {
       borderRadius: 7,
       padding: '8px 11px'
     }
-  }, "Each serverless instance is caching alone and invalidations don't reach the others. Set ", React.createElement("b", null, "UPSTASH_REDIS_REST_URL"), " + ", React.createElement("b", null, "UPSTASH_REDIS_REST_TOKEN"), " (or connect Upstash from Vercel \u2192 Storage) and redeploy to share the cache fleet-wide."))));
+  }, "No shared cache is configured \u2014 by design since Redis was removed (CACHE_DISABLED=true). Every read goes straight to the database, so data is always current; pages may load a little slower."))));
 }
 function DatabaseBrowser() {
   const [info, setInfo] = React.useState(null);
@@ -35580,7 +35770,7 @@ function Settings({
     style: {
       padding: 6
     }
-  }, [['general', 'General', I.gear], ['departments', 'Departments', I.layers], ['stafffields', 'Staff Fields', I.steth], ['deptprivileges', 'Department Privileges', I.check], ['users', 'Users & Roles', I.user], ['activity', 'Activity Log', I.activity], ['database', 'Database', I.grid], ['media', 'Media', I.doc], ['responsibles', 'Responsible Persons', I.user], ['fields', 'Form Fields', I.filter], ['data', 'Data & Export', I.doc]].map(([id, l, ic]) => React.createElement("div", {
+  }, [['general', 'General', I.gear], ['departments', 'Departments', I.layers], ['stafffields', 'Staff Fields', I.steth], ['deptprivileges', 'Department Privileges', I.check], ['users', 'Users & Roles', I.user], ['activity', 'Activity Log', I.activity], ['database', 'Database', I.grid], ['monitor', 'System Monitor', I.activity], ['media', 'Media', I.doc], ['responsibles', 'Responsible Persons', I.user], ['fields', 'Form Fields', I.filter], ['data', 'Data & Export', I.doc]].map(([id, l, ic]) => React.createElement("div", {
     key: id,
     onClick: () => setTab(id),
     style: {
@@ -35763,7 +35953,11 @@ function Settings({
     setRoute: setRoute
   }), tab === 'deptprivileges' && (typeof DeptPrivilegesSettings !== 'undefined' ? React.createElement(DeptPrivilegesSettings, {
     depts: depts
-  }) : null), tab === 'activity' && React.createElement(ActivityLog, null), tab === 'database' && React.createElement(React.Fragment, null, React.createElement(CacheStats, null), React.createElement(DatabaseBrowser, null)), tab === 'media' && React.createElement(MediaBrowser, null), tab === 'users' && React.createElement("div", {
+  }) : null), tab === 'activity' && React.createElement(ActivityLog, null), tab === 'database' && React.createElement(React.Fragment, null, React.createElement(CacheStats, null), React.createElement(DatabaseBrowser, null)), tab === 'monitor' && (window.SystemMonitor ? React.createElement(window.SystemMonitor, null) : React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b"
+  }, "System Monitor is not loaded."))), tab === 'media' && React.createElement(MediaBrowser, null), tab === 'users' && React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b"
@@ -37157,25 +37351,21 @@ const P = {
 };
 const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
 const QORDER = ['Q1', 'Q2', 'Q3', 'Q4'];
-const QL = [['Q1', 'Jun–Aug'], ['Q2', 'Sep–Nov'], ['Q3', 'Dec–Feb'], ['Q4', 'Mar–May']];
-const FY_MONS = ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'];
+const QL = [['Q1', 'Jan–Mar'], ['Q2', 'Apr–Jun'], ['Q3', 'Jul–Sep'], ['Q4', 'Oct–Dec']];
+const FY_MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function fyMonthsFor(startYear) {
-  return FY_MONS.map((mn, i) => {
-    const yr = i < 7 ? startYear : startYear + 1;
-    const yk = String(yr % 100).padStart(2, '0');
-    return [mn + '-' + yk, mn + ' ' + yr, mn];
-  });
+  const yy = String(startYear % 100).padStart(2, '0');
+  return FY_MONS.map(mn => [mn + '-' + yy, mn + ' ' + startYear, mn]);
 }
 function fyOfKey(key) {
   const p = String(key || '').split('-');
-  const mi = QMONS_ORD.indexOf(p[0]);
+  const mi = FY_MONS.indexOf(p[0]);
   const yy = parseInt(p[1], 10);
   if (mi < 0 || isNaN(yy)) return null;
-  return 2000 + yy - (mi >= 5 ? 0 : 1);
+  return 2000 + yy;
 }
 function currentFy() {
-  const d = new Date();
-  return d.getMonth() >= 5 ? d.getFullYear() : d.getFullYear() - 1;
+  return new Date().getFullYear();
 }
 function dataFySet(depts) {
   const set = new Set();
@@ -37223,7 +37413,7 @@ function defaultFy(depts) {
   return yrs.sort((a, b) => counts[b] - counts[a] || b - a)[0];
 }
 function fyLabelOf(startYear) {
-  return 'FY ' + startYear;
+  return 'Year ' + startYear;
 }
 const QTAG_FY = ['Q1', 'Q1', 'Q1', 'Q2', 'Q2', 'Q2', 'Q3', 'Q3', 'Q3', 'Q4', 'Q4', 'Q4'];
 function fyAxis(startYear) {
@@ -37765,7 +37955,7 @@ function QCDashboard({
   }, React.createElement("button", {
     onClick: goPrev,
     disabled: !canPrev,
-    title: "Previous fiscal year",
+    title: "Previous year",
     style: {
       border: 0,
       background: 'transparent',
@@ -37789,7 +37979,7 @@ function QCDashboard({
   }, fyLabelOf(safeFy)), React.createElement("button", {
     onClick: goNext,
     disabled: !canNext,
-    title: "Next fiscal year",
+    title: "Next year",
     style: {
       border: 0,
       background: 'transparent',
@@ -38717,6 +38907,18 @@ function QCIndEdit({
         [mk]: ''
       },
       mNotObserved: {
+        [mk]: null
+      },
+      mGroups: {
+        [mk]: null
+      },
+      mGroupsDen: {
+        [mk]: null
+      },
+      mDeptBreakdown: {
+        [mk]: null
+      },
+      capa: {
         [mk]: null
       }
     });
@@ -44121,7 +44323,7 @@ function QCReportBuilder({
         maxWidth: 460,
         margin: '0 auto'
       }
-    }, "No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) records for ", fyLabelOf(fy), ". Record hand hygiene in Quality Data \u2014 or switch the fiscal year above \u2014 then regenerate.")), React.createElement(Footer, {
+    }, "No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) records for ", fyLabelOf(fy), ". Record hand hygiene in Quality Data \u2014 or switch the year above \u2014 then regenerate.")), React.createElement(Footer, {
       n: n,
       total: total
     }));
@@ -45890,7 +46092,7 @@ function QCReportBuilder({
       color: P.muted,
       marginTop: 6
     }
-  }, "Reporting year runs Jun\u2013May. Switch it to view a different year; every page below follows this selection.")), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
+  }, "Reporting year runs Jan\u2013Dec. Switch it to view a different year; every page below follows this selection.")), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
     value: period.mode,
     onChange: e => setPeriod({
       mode: e.target.value,
@@ -48322,9 +48524,18 @@ function QCAdmin({
     const cid = window.qualitySlug ? window.qualitySlug(selInd.name) : '';
     return (((Q.depts || []).find(d => d.key === dk) || {}).indicators || []).some(i => String(i.id) === cid || norm(i.name) === norm(selInd.name));
   };
+  const QC_VALUE_FIELDS = ['months', 'mNum', 'mDen', 'mGroups', 'mGroupsDen', 'mDeptBreakdown', 'monthRemarks', 'incidents', 'capa', 'mNotObserved', 'mEditedAt', 'mApprovedAt', 'quarters', 'quarterStatus', 'quartersByFy', 'qNum', 'qDen', 'quarterRemarks', 'status', 'hhFromAudit'];
+  const defOnly = (ind, extra) => {
+    const o = Object.assign({}, ind);
+    QC_VALUE_FIELDS.forEach(k => {
+      delete o[k];
+    });
+    o.months = {};
+    return Object.assign(o, extra || {});
+  };
   const onClone = () => {
     if (!selInd) return;
-    const copy = Object.assign({}, selInd, {
+    const copy = defOnly(selInd, {
       id: window.qualitySlug(selInd.name + ' copy', deptIndIds(sel.deptKey)),
       name: selInd.name + ' (copy)'
     });
@@ -48366,7 +48577,7 @@ function QCAdmin({
     if (!selInd) return;
     Object.keys(copyT).forEach(dk => {
       if (copyT[dk] && !deptHasInd(dk)) {
-        const c = Object.assign({}, selInd, {
+        const c = defOnly(selInd, {
           id: window.qualitySlug(selInd.name)
         });
         Q.addIndicator(dk, c);
@@ -48472,7 +48683,7 @@ function QCAdmin({
         Q.restoreIndicator(dk, seedInst.id);
         return;
       }
-      const c = Object.assign({}, rec.tmpl, {
+      const c = defOnly(rec.tmpl, {
         id: window.qualitySlug(rec.tmpl.name || rec.name)
       });
       Q.addIndicator(dk, c);
@@ -53835,9 +54046,22 @@ window.LockScreen = LockScreen;
         'content-type': 'application/json'
       },
       body: JSON.stringify(body || {})
-    }).then(r => r.json()),
+    }).then(r => r.json()).then(r => {
+      if (r.ok && url.indexOf('/api/submissions') === 0) {
+        _dcAllCache = null;
+        window.dispatchEvent(new Event('unico:data-refreshed'));
+      }
+      return r;
+    }),
     del: url => fetch(url, {
       method: 'DELETE'
+    }).then(r => r.json()),
+    put: (url, body) => fetch(url, {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(body || {})
     }).then(r => r.json())
   };
   let _dcAllCache = null,
@@ -53846,7 +54070,7 @@ window.LockScreen = LockScreen;
   const dcAllSubmissions = force => {
     const now = Date.now();
     if (!force && _dcAllCache && now - _dcAllAt < 8000) return Promise.resolve(_dcAllCache);
-    if (_dcAllPromise) return _dcAllPromise;
+    if (_dcAllPromise) return force ? _dcAllPromise.catch(() => {}).then(() => dcAllSubmissions(true)) : _dcAllPromise;
     _dcAllPromise = (async () => {
       const rows = new Map();
       let offset = 0;
@@ -53871,6 +54095,55 @@ window.LockScreen = LockScreen;
   if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => {
     _dcAllCache = null;
   });
+  const dcSquash = s => String(s == null ? '' : s).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '');
+  function dcMyRosterUnitKeys() {
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
+    const ids = Array.isArray(me.departments) ? me.departments : [];
+    const all = typeof dcAllDepts === 'function' ? dcAllDepts() : [];
+    const keys = new Set();
+    ids.forEach(id => {
+      keys.add(dcSquash(id));
+      const d = all.find(x => x && x.id === id);
+      if (d) {
+        keys.add(dcSquash(d.name));
+        keys.add(dcSquash(d.short));
+        if (d.qualityKey) keys.add(dcSquash(d.qualityKey));
+      }
+      const nm = window.DEPTMAP && window.DEPTMAP.nameFromId ? window.DEPTMAP.nameFromId(id) : null;
+      if (nm) keys.add(dcSquash(nm));
+    });
+    keys.delete('');
+    return keys;
+  }
+  const dcRosterIsMine = (r, keys) => !!r && [r.dept, r.deptName].some(v => v != null && keys.has(dcSquash(v)));
+  const DC_INCIDENT_FIELDS = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'details', 'finding', 'corrective', 'preventive', 'remark'];
+  const dcIncidentFilled = x => !!x && DC_INCIDENT_FIELDS.some(k => String(x[k] == null ? '' : x[k]).trim() !== '');
+  const dcIsMine = s => {
+    if (!s) return false;
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
+    if (s.submittedByUser) return !!me.username && s.submittedByUser === me.username;
+    return [me.name, me.username].filter(Boolean).some(n => n === s.submittedBy || s.responsible && s.responsible.name === n);
+  };
+  const dcCustomAreas = r => {
+    if (!r) return [];
+    if (Array.isArray(r.customQualityAreas)) return r.customQualityAreas;
+    if (r.allQualityAreas) return [];
+    const auto = window.DEPTMAP ? window.DEPTMAP.areasFromDepts(r.departments || []) : [];
+    return (r.qualityAreas || []).filter(k => !auto.includes(k));
+  };
+  const dcTargetKey = x => (x.type === 'quality' ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '') : 'p|' + x.department) + '|' + x.month;
+  const dcOpenRejections = subs => {
+    const newest = {};
+    (subs || []).forEach(x => {
+      const k = dcTargetKey(x);
+      if (!newest[k] || (x.submittedAt || 0) > (newest[k].submittedAt || 0)) newest[k] = x;
+    });
+    return Object.keys(newest).map(k => newest[k]).filter(x => x.status === 'rejected' && !x.autoRejected && dcIsMine(x));
+  };
+  const dcPatientDepts = (depts, subs) => {
+    const ever = new Set((subs || []).filter(s => s.type === 'patient').map(s => s.department));
+    return (depts || []).filter(d => (d.series || []).length > 0 || ever.has(d.id));
+  };
   const dcRefreshLive = () => {
     try {
       window.UNICO && window.UNICO.refreshDepartments && window.UNICO.refreshDepartments();
@@ -53990,11 +54263,6 @@ window.LockScreen = LockScreen;
     d.setDate(1);
     d.setMonth(d.getMonth() - 1);
     return MONS_ABBR[d.getMonth()] + '-' + String(d.getFullYear() % 100).padStart(2, '0');
-  };
-  const dcFiscalQuarter = mk => {
-    const mi = MONS_ABBR.indexOf(String(mk || '').split('-')[0]);
-    if (mi < 0) return '';
-    return 'Q' + (Math.floor((mi + 7) % 12 / 3) + 1);
   };
   function defaultMonthFor(dept) {
     const order = MO();
@@ -54162,12 +54430,17 @@ window.LockScreen = LockScreen;
     };
     const saveRec = (rec, okMsg) => {
       setBusy(true);
-      return dcApi.post('/api/responsibles', rec).then(res => {
-        setBusy(false);
+      const body = {
+        ...rec,
+        customQualityAreas: Array.isArray(rec.customQualityAreas) ? rec.customQualityAreas : dcCustomAreas(rec)
+      };
+      return dcApi.post('/api/responsibles', body).then(res => {
         if (res.ok) {
           toast(okMsg, 'success');
-          onChanged && onChanged();
-        } else toast(res.error || 'Could not save', 'error');
+          return Promise.resolve(onChanged && onChanged()).finally(() => setBusy(false));
+        }
+        setBusy(false);
+        toast(res.error || 'Could not save', 'error');
       }).catch(() => {
         setBusy(false);
         toast('Could not save', 'error');
@@ -54181,8 +54454,10 @@ window.LockScreen = LockScreen;
       };
       if (!hasArea(r, ak)) {
         qi[ak] = [ind.id];
+        const custom = dcCustomAreas(r);
         return saveRec({
           ...r,
+          customQualityAreas: custom.includes(ak) ? custom : [...custom, ak],
           qualityAreas: [...(r.qualityAreas || []), ak],
           qualityIndicators: qi
         }, r.name + ' can now report ' + ind.name);
@@ -54210,7 +54485,7 @@ window.LockScreen = LockScreen;
         return saveRec({
           ...r,
           qualityIndicators: qi
-        }, 'Removed ' + ind.name + ' from ' + r.name);
+        }, 'Removed ' + ind.name + ' from ' + r.name + (sel0.length === 0 ? ' — ' + aName + ' is now a fixed list, so indicators added to it later won’t be auto-assigned to ' + r.name : ''));
       }
       if (derived(r, ak)) {
         toast(r.name + "'s " + aName + ' access comes from their department assignment — edit the person to change departments.', 'error');
@@ -54220,6 +54495,7 @@ window.LockScreen = LockScreen;
       delete qi[ak];
       return saveRec({
         ...r,
+        customQualityAreas: dcCustomAreas(r).filter(k => k !== ak),
         qualityAreas: (r.qualityAreas || []).filter(k => k !== ak),
         qualityIndicators: qi
       }, 'Removed ' + r.name + ' from ' + aName);
@@ -54554,16 +54830,33 @@ window.LockScreen = LockScreen;
       password: '',
       departments: [],
       qualityAreas: [],
+      customQualityAreas: [],
       allQualityAreas: false,
       qualityIndicators: {},
       active: true
+    });
+    const openEdit = r => setEditing({
+      ...blank(),
+      ...r,
+      customQualityAreas: dcCustomAreas(r).slice()
     });
     const save = () => {
       if (!editing.name.trim()) {
         toast('Name is required', 'error');
         return;
       }
-      dcApi.post('/api/responsibles', editing).then(r => {
+      const qi = {
+        ...(editing.qualityIndicators || {})
+      };
+      if (window.DEPTMAP && !editing.allQualityAreas) Object.keys(qi).forEach(k => {
+        if (!effectiveAreas.includes(k)) delete qi[k];
+      });
+      dcApi.post('/api/responsibles', {
+        ...editing,
+        customQualityAreas: customAreas,
+        qualityAreas: effectiveAreas,
+        qualityIndicators: qi
+      }).then(r => {
         if (r.ok) {
           toast('Responsible person saved', 'success');
           setEditing(null);
@@ -54589,12 +54882,15 @@ window.LockScreen = LockScreen;
       return d && (d.name || d.short) || id;
     };
     const derivedAreas = editing ? editing.allQualityAreas ? window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [] : window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : [] : [];
-    const customAreas = editing ? (editing.qualityAreas || []).filter(k => !derivedAreas.includes(k)) : [];
-    const effectiveAreas = editing ? editing.allQualityAreas ? derivedAreas : [...derivedAreas, ...customAreas] : [];
-    const toggleCustomArea = k => setEditing(ed => ({
-      ...ed,
-      qualityAreas: (ed.qualityAreas || []).includes(k) ? ed.qualityAreas.filter(x => x !== k) : [...(ed.qualityAreas || []), k]
-    }));
+    const customAreas = editing ? editing.customQualityAreas || [] : [];
+    const effectiveAreas = editing ? editing.allQualityAreas ? derivedAreas : [...new Set([...derivedAreas, ...customAreas])] : [];
+    const toggleCustomArea = k => setEditing(ed => {
+      const cur = ed.customQualityAreas || [];
+      return {
+        ...ed,
+        customQualityAreas: cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k]
+      };
+    });
     return React.createElement("div", {
       className: "grid",
       style: {
@@ -54646,10 +54942,7 @@ window.LockScreen = LockScreen;
       onChanged: load,
       onEditPerson: r => {
         setView('people');
-        setEditing({
-          ...blank(),
-          ...r
-        });
+        openEdit(r);
       }
     })), view === 'people' && editing && React.createElement(Card, null, React.createElement("div", {
       style: {
@@ -54796,7 +55089,7 @@ window.LockScreen = LockScreen;
       }
     }, areas.map(a => {
       const auto = derivedAreas.includes(a.key);
-      const on = auto || (editing.qualityAreas || []).includes(a.key);
+      const on = auto || customAreas.includes(a.key);
       return React.createElement("span", {
         key: a.key,
         onClick: () => {
@@ -54947,10 +55240,7 @@ window.LockScreen = LockScreen;
       }
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Name"), React.createElement("th", null, "Title"), React.createElement("th", null, "Login"), React.createElement("th", null, "Departments"), React.createElement("th", null, "Quality areas"), React.createElement("th", null))), React.createElement("tbody", null, list.map(r => React.createElement("tr", {
       key: r.id,
-      onClick: () => setEditing({
-        ...blank(),
-        ...r
-      }),
+      onClick: () => openEdit(r),
       title: "Tap to edit",
       style: {
         cursor: 'pointer'
@@ -54979,10 +55269,7 @@ window.LockScreen = LockScreen;
     }, React.createElement("button", {
       className: "icon-btn",
       title: "Edit",
-      onClick: () => setEditing({
-        ...blank(),
-        ...r
-      })
+      onClick: () => openEdit(r)
     }, React.createElement(Ic, {
       d: I.edit,
       s: 14
@@ -55115,7 +55402,8 @@ window.LockScreen = LockScreen;
       s: 13
     }), "Add field")));
   }
-  const DC_DRAFT_KEY = (who, dept, month) => 'unico_dc_draft_v1|' + (who || 'local') + '|' + dept + '|' + month;
+  const dcKeyPart = s => encodeURIComponent(String(s == null ? '' : s)).replace(/\./g, '%2E');
+  const DC_DRAFT_KEY = (who, dept, month) => 'unico_dc_draft_v1|' + dcKeyPart(who || 'local') + '|' + dcKeyPart(dept) + '|' + dcKeyPart(month);
   const dcDraftLoad = k => {
     try {
       const raw = localStorage.getItem(k);
@@ -55142,7 +55430,8 @@ window.LockScreen = LockScreen;
   };
   function DataPatientForm({
     depts,
-    prefill
+    prefill,
+    onSubmitted
   }) {
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     const lockResp = !!(me && me.role === 'collector');
@@ -55168,12 +55457,16 @@ window.LockScreen = LockScreen;
     const [done, setDone] = useState(null);
     const [resps, setResps] = useState([]);
     const [subs, setSubs] = useState([]);
+    const [subsErr, setSubsErr] = useState(false);
     const [draftAt, setDraftAt] = useState(null);
     useEffect(() => {
       dcApi.get('/api/responsibles').then(r => setResps(r.ok ? r.responsibles : [])).catch(() => {});
     }, []);
     useEffect(() => {
-      dcSubmissionResponse().then(r => setSubs(r.ok ? r.submissions : [])).catch(() => {});
+      dcSubmissionResponse().then(r => {
+        setSubs(r.ok ? r.submissions : []);
+        setSubsErr(!r.ok);
+      }).catch(() => setSubsErr(true));
     }, [done]);
     const canReportDept = (r, id) => {
       if (!r || !id) return false;
@@ -55203,7 +55496,14 @@ window.LockScreen = LockScreen;
       if (d && d.values && Object.keys(d.values).length) {
         setValues(d.values);
         setDraftAt(d.at || null);
-      } else setDraftAt(null);
+      } else {
+        setDraftAt(null);
+        const fr = prefill && prefill.from;
+        if (fr && fr.values && dept && fr.department === dept.id && fr.month === month) {
+          setValues(Object.fromEntries(Object.keys(fr.values).map(k => [k, fr.values[k] == null ? '' : String(fr.values[k])])));
+          setNote(fr.note || '');
+        }
+      }
     }, [draftKey]);
     const assigned = resps.filter(r => dept && canReportDept(r, dept.id));
     const order = MO();
@@ -55233,6 +55533,14 @@ window.LockScreen = LockScreen;
       if (!dept) return;
       if (!month) {
         toast('Pick a month', 'error');
+        return;
+      }
+      if (subsErr) {
+        toast('Could not check what is already submitted for this month — check your connection and try again.', 'error');
+        dcSubmissionResponse(null, true).then(r => {
+          setSubs(r.ok ? r.submissions : []);
+          setSubsErr(!r.ok);
+        }).catch(() => {});
         return;
       }
       if (monthPending) {
@@ -55282,6 +55590,11 @@ window.LockScreen = LockScreen;
             setDraftAt(null);
           }
           toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success');
+          if (onSubmitted) {
+            try {
+              onSubmitted(r);
+            } catch (e) {}
+          }
         } else toast(r.error || 'Submission failed', 'error');
       }).catch(e => {
         setBusy(false);
@@ -55545,7 +55858,8 @@ window.LockScreen = LockScreen;
   }
   const dcMeets = (b, v) => !b || v == null ? null : b.lowerIsBetter ? v <= b.value : v >= b.value;
   function DataQualityForm({
-    prefill
+    prefill,
+    onSubmitted
   }) {
     const dataRev = useDcDataRev();
     const areas = useMemo(() => window.qualityData ? window.qualityData() : [], [dataRev]);
@@ -55748,7 +56062,7 @@ window.LockScreen = LockScreen;
     } : x));
     const delIncident = i => setIncidents(a => a.filter((_, j) => j !== i));
     const autoCount = isIncidentType;
-    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : autoCount ? incidents.length : Number(directNum) || 0;
+    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : autoCount ? incidents.filter(dcIncidentFilled).length : Number(directNum) || 0;
     const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : Number(den) || 0;
     const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
@@ -55756,6 +56070,7 @@ window.LockScreen = LockScreen;
     const unitQ = computeAsRate ? rateUnit : unitRaw || 'count';
     const formulaTextQ = formula === 'avg' ? indNameQ + ' = ' + numLabel + ' ÷ ' + denLabel + (unitRaw ? ' (' + unitRaw + ')' : '') : computeAsRate ? indNameQ + ' = (' + numLabel + ' ÷ ' + denLabel + ') × ' + mult : indNameQ + ' = ' + numLabel;
     const guide = hqiGuideFor(indNameQ);
+    const fromAppliedRef = React.useRef('');
     useEffect(() => {
       const blankG = {
         nurse: '',
@@ -55869,7 +56184,7 @@ window.LockScreen = LockScreen;
         preventive: ''
       });
       const incs = curInd.incidents && Array.isArray(curInd.incidents[month]) ? curInd.incidents[month] : [];
-      setIncidents(incs.map(x => ({
+      const toInc = x => ({
         patientName: x.patientName || '',
         uhid: x.uhid || '',
         age: x.age || '',
@@ -55884,7 +56199,45 @@ window.LockScreen = LockScreen;
         corrective: x.corrective || '',
         preventive: x.preventive || '',
         remark: x.remark || ''
-      })));
+      });
+      setIncidents(incs.map(toInc));
+      const fr = prefill && prefill.from;
+      if (fr && fr.id && fromAppliedRef.current !== fr.id && fr.area === areaKey && fr.indicatorId === indId && fr.month === month) {
+        fromAppliedRef.current = fr.id;
+        const str = v => v == null ? '' : String(v);
+        setNotObserved(!!fr.notObserved);
+        if (fr.notObserved) {
+          setNoReason(String(fr.remark || '').replace(/^not\s*observed\s*[—–:-]*\s*/i, '').trim());
+          setRemark('');
+        } else setRemark(fr.remark || '');
+        const rateEntry = fr.entryMode === 'rate' || fr.num != null;
+        if (Array.isArray(fr.deptBreakdown) && fr.deptBreakdown.length) {
+          setDeptRows(fr.deptBreakdown.map(toRow));
+          setGroups(blankG);
+          setGroupsDen(blankG);
+          setDirectNum('');
+          setNumMode('dept');
+        } else if (fr.groups && typeof fr.groups === 'object') {
+          setDeptRows([]);
+          setGroups(toG(fr.groups));
+          setGroupsDen(fr.groupsDen && typeof fr.groupsDen === 'object' ? toG(fr.groupsDen) : blankG);
+          setDirectNum('');
+          setNumMode('group');
+        } else if (!fr.notObserved) {
+          setDeptRows([]);
+          setGroups(blankG);
+          setGroupsDen(blankG);
+          setDirectNum(str(rateEntry ? fr.num : fr.value));
+          setNumMode('direct');
+        }
+        if (!denLockedForCollector && !fr.notObserved) setDen(str(fr.den));
+        if (Array.isArray(fr.incidents)) setIncidents(fr.incidents.map(toInc));
+        if (fr.capa && typeof fr.capa === 'object') setCapa({
+          finding: fr.capa.finding || '',
+          corrective: fr.capa.corrective || '',
+          preventive: fr.capa.preventive || ''
+        });
+      }
     }, [areaKey, indId, month]);
     const result = computeAsRate ? denNum > 0 ? Math.round(numerator / denNum * mult * 100) / 100 : 0 : numerator;
     const ratePending = computeAsRate && numerator > 0 && !(denNum > 0);
@@ -55914,6 +56267,10 @@ window.LockScreen = LockScreen;
       }
       if (notObserved && !noReason.trim()) {
         toast('Please say WHY it was not observed this month.', 'error');
+        return;
+      }
+      if (!notObserved && numMode === 'direct' && !autoCount && String(directNum == null ? '' : directNum).trim() === '') {
+        toast('Enter ' + numLabel + ' — type 0 if there were none this month', 'error');
         return;
       }
       if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
@@ -56030,6 +56387,11 @@ window.LockScreen = LockScreen;
             });
           }
           toast('Saved monthly value', 'success');
+          if (onSubmitted) {
+            try {
+              onSubmitted(r);
+            } catch (e) {}
+          }
         } else toast(r.error || 'Submission failed', 'error');
       }).catch(() => {
         setBusy(false);
@@ -57556,8 +57918,7 @@ window.LockScreen = LockScreen;
     onClose,
     onSaved
   }) {
-    const meUser = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
-    const iOwn = [meUser.name, meUser.username].filter(Boolean).some(n => n === s.submittedBy || s.responsible && s.responsible.name === n);
+    const iOwn = dcIsMine(s);
     const canRequestEdit = !fullEdit && iOwn && s.status !== 'pending' && !s.isCorrection;
     const [correcting, setCorrecting] = useState(false);
     const [correctReason, setCorrectReason] = useState('');
@@ -57628,7 +57989,7 @@ window.LockScreen = LockScreen;
     }) : null;
     const effNum = hasDeptBreak ? breakTot.n : hasGrp ? grpTot.n : qnum;
     const effDen = hasDeptBreak ? breakTot.d : hasGrp ? grpTot.d : qden;
-    const shownVal = isRate ? Number(effDen) > 0 ? Math.round(Number(effNum) / Number(effDen) * rateMult * 100) / 100 : 0 : qval;
+    const shownVal = isRate ? effNum === '' || effNum == null ? '—' : Number(effDen) > 0 ? Math.round(Number(effNum) / Number(effDen) * rateMult * 100) / 100 : Number(effNum) > 0 ? '—' : 0 : qval;
     const [remark, setRemark] = useState(s.remark || '');
     const [note, setNote] = useState(s.note || '');
     const [busy, setBusy] = useState(false);
@@ -57682,7 +58043,7 @@ window.LockScreen = LockScreen;
           body.departmentName = (deptOpts.find(d => d.id === target) || {}).name || target;
         }
       } else {
-        body.value = isRate ? shownVal : qval;
+        body.value = isRate ? typeof shownVal === 'number' ? shownVal : undefined : qval;
         body.remark = remark;
         if (isRate) {
           body.num = effNum;
@@ -57732,7 +58093,11 @@ window.LockScreen = LockScreen;
         toast('Could not approve', 'error');
       };
       const doApprove = () => dcApi.post(url + '/approve', {}).then(finish).catch(fail);
-      if (editable && !correcting) dcApi.patch(url, buildBody()).then(doApprove).catch(fail);else doApprove();
+      if (editable && !correcting) dcApi.patch(url, buildBody()).then(r => {
+        if (r && r.ok) return doApprove();
+        setBusy(false);
+        toast(r && r.error || 'Could not save your edits — nothing was approved', 'error');
+      }).catch(fail);else doApprove();
     };
     const submitCorrection = () => {
       if (!correctReason.trim()) {
@@ -58521,7 +58886,7 @@ window.LockScreen = LockScreen;
         fontSize: 11,
         color: 'var(--muted)'
       }
-    }, s.status === 'approved' ? 'This submission is approved — saving re-applies your changes to the live dashboard immediately.' : s.status === 'rejected' ? 'This submission was rejected — saving updates the record; approve it to re-apply to live data.' : fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'), React.createElement("div", {
+    }, s.status === 'approved' ? 'This submission is approved — saving re-applies your changes to the live dashboard immediately.' : s.status === 'rejected' ? 'This submission was rejected — saving updates the record only. It cannot be approved again; the collector sends a new submission instead.' : fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -58556,7 +58921,7 @@ window.LockScreen = LockScreen;
     }, React.createElement(Ic, {
       d: I.check,
       s: 14
-    }), busy ? 'Saving…' : 'Save changes'), canEdit && fullEdit && !correcting && s.status !== 'approved' && React.createElement("button", {
+    }), busy ? 'Saving…' : 'Save changes'), canEdit && fullEdit && !correcting && s.status === 'pending' && React.createElement("button", {
       className: "btn sm",
       onClick: approveNow,
       disabled: busy,
@@ -58697,6 +59062,7 @@ window.LockScreen = LockScreen;
       window.addEventListener('unico:data-refreshed', h);
       return () => window.removeEventListener('unico:data-refreshed', h);
     }, []);
+    useDcCollectionRev();
     const depts = React.useMemo(() => dcAllDepts(), []);
     const areas = React.useMemo(() => window.qualityData ? window.qualityData() : [], []);
     const MO = window.UNICO && window.UNICO.MONTH_ORDER || [];
@@ -58715,16 +59081,17 @@ window.LockScreen = LockScreen;
     const busiest = React.useMemo(() => Object.keys(monthCounts).sort((a, b) => monthCounts[b] - monthCounts[a])[0] || '', [monthCounts]);
     const m = month || busiest || months[0] || '';
     const subsM = (subs || []).filter(s => s.month === m);
-    const everPatient = new Set((subs || []).filter(s => s.type === 'patient').map(s => s.department));
-    const patientDepts = depts.filter(d => (d.series || []).length > 0 || everPatient.has(d.id));
+    const patientDepts = dcPatientDepts(depts, subs).filter(d => dcPatientDue(d, m, subs));
     const hasRec = d => (d.series || []).some(r => r.month === m && Object.keys(r).some(k => k !== 'month' && k !== 'full' && r[k] != null && r[k] !== ''));
-    const qHasRec = a => (a.indicators || []).some(ind => ind.months && ind.months[m] != null && ind.months[m] !== '' || ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '');
-    const pSub = new Set(subsM.filter(s => s.type === 'patient').map(s => s.department));
-    const qSub = new Set(subsM.filter(s => s.type === 'quality').map(s => s.area));
+    const dueInds = a => (a.indicators || []).filter(ind => dcIndDue(a, ind, m, subs));
+    const qAreas = areas.filter(a => dueInds(a).length > 0);
+    const qHasRec = a => dueInds(a).some(ind => ind.months && ind.months[m] != null && ind.months[m] !== '' || ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '');
+    const pSub = new Set(subsM.filter(s => s.type === 'patient' && s.status !== 'rejected').map(s => s.department));
+    const qSub = new Set(subsM.filter(s => s.type === 'quality' && s.status !== 'rejected').map(s => s.area));
     const pMissing = patientDepts.filter(d => !pSub.has(d.id) && !hasRec(d));
-    const qMissing = areas.filter(a => !qSub.has(a.key) && !qHasRec(a));
+    const qMissing = qAreas.filter(a => !qSub.has(a.key) && !qHasRec(a));
     const pPct = patientDepts.length ? Math.round((patientDepts.length - pMissing.length) / patientDepts.length * 100) : 0;
-    const qPct = areas.length ? Math.round((areas.length - qMissing.length) / areas.length * 100) : 0;
+    const qPct = qAreas.length ? Math.round((qAreas.length - qMissing.length) / qAreas.length * 100) : 0;
     const gapN = pMissing.length + qMissing.length;
     const copyGaps = () => {
       const txt = 'Not yet submitted — ' + monthLabel(m) + '\n\nPatient statistics (' + pMissing.length + '):\n' + (pMissing.length ? pMissing.map(d => '• ' + d.name).join('\n') : '(all submitted)') + '\n\nQuality indicators (' + qMissing.length + '):\n' + (qMissing.length ? qMissing.map(a => '• ' + a.name).join('\n') : '(all submitted)');
@@ -58844,8 +59211,8 @@ window.LockScreen = LockScreen;
       setShow: setShowP
     }, {
       label: 'Quality indicators',
-      done: areas.length - qMissing.length,
-      total: areas.length,
+      done: qAreas.length - qMissing.length,
+      total: qAreas.length,
       pct: qPct,
       color: 'linear-gradient(90deg,#0090ca,#27a8db)',
       missing: qMissing,
@@ -59218,21 +59585,41 @@ window.LockScreen = LockScreen;
     const runAction = async (ids, kind, reason) => {
       if (!ids || !ids.length) return;
       setBusy('bulk');
+      const byId = {};
+      (rows || []).forEach(s => {
+        byId[s.id] = s;
+      });
+      const order = ids.slice().sort((a, b) => (byId[b] && byId[b].submittedAt || 0) - (byId[a] && byId[a].submittedAt || 0));
       let ok = 0,
-        autoRej = 0;
+        autoRej = 0,
+        skipped = 0,
+        firstErr = '';
       const doneIds = [];
-      for (const id of ids) {
+      for (const id of order) {
         try {
-          const r = await dcApi.post('/api/submissions/' + encodeURIComponent(id) + '/' + kind, kind === 'reject' ? {
-            reason: reason || ''
-          } : {});
+          const r = await fetch('/api/submissions/' + encodeURIComponent(id) + '/' + kind, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json'
+            },
+            body: JSON.stringify(kind === 'reject' ? {
+              reason: reason || ''
+            } : {})
+          }).then(x => x.json());
           if (r && r.ok) {
             ok++;
             doneIds.push(id);
             autoRej += r.autoRejected || 0;
-          }
-        } catch (e) {}
+          } else if (r && r.superseded) {
+            skipped++;
+            doneIds.push(id);
+          } else if (!firstErr) firstErr = r && r.error || 'Request failed';
+        } catch (e) {
+          if (!firstErr) firstErr = 'Network error';
+        }
       }
+      _dcAllCache = null;
+      window.dispatchEvent(new Event('unico:data-refreshed'));
       setBusy('');
       setSel({});
       setRejectFor(null);
@@ -59241,7 +59628,8 @@ window.LockScreen = LockScreen;
         const next = cur.filter(x => doneIds.indexOf(x.id) < 0);
         return next.length > 1 ? next : null;
       });
-      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (ok < ids.length ? ' (' + (ids.length - ok) + ' failed)' : ''), kind === 'approve' ? 'success' : 'info');
+      const failed = ids.length - ok - skipped;
+      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (skipped ? ' · ' + skipped + ' skipped (a newer copy was approved)' : '') + (failed ? ' · ' + failed + ' failed: ' + firstErr : ''), failed ? 'error' : kind === 'approve' ? 'success' : 'info');
       if (kind === 'approve' && ok) dcRefreshLive();
       load();
     };
@@ -59258,7 +59646,11 @@ window.LockScreen = LockScreen;
     const groupKey = s => (s.type === 'quality' ? window.DEPTMAP && window.DEPTMAP.nameFromQualityKey(s.area) || s.areaName : window.DEPTMAP && window.DEPTMAP.nameFromId(s.department) || s.departmentName) || '—';
     const respOf = s => s.responsible && s.responsible.name || s.submittedBy || '';
     const deptOptions = [...new Set((rows || []).map(groupKey))].sort();
-    const monthOptions = [...new Set((rows || []).map(s => s.month).filter(Boolean))].sort().reverse();
+    const monthRankOf = m => {
+      const p = String(m).split('-');
+      return (parseInt(p[1], 10) || 0) * 12 + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(p[0]);
+    };
+    const monthOptions = [...new Set((rows || []).map(s => s.month).filter(Boolean))].sort((a, b) => monthRankOf(b) - monthRankOf(a));
     const respOptions = [...new Set((rows || []).map(respOf).filter(Boolean))].sort();
     const matchesFilter = s => {
       if (fType && s.type !== fType) return false;
@@ -59420,7 +59812,7 @@ window.LockScreen = LockScreen;
       s: 13
     }), "View"), s.status === 'pending' && React.createElement(React.Fragment, null, React.createElement("button", {
       className: "btn sm pri",
-      disabled: busy === s.id,
+      disabled: busy === s.id || busy === 'bulk',
       onClick: () => act(s.id, 'approve'),
       style: {
         marginRight: 5
@@ -59430,7 +59822,7 @@ window.LockScreen = LockScreen;
       s: 13
     }), "Approve"), React.createElement("button", {
       className: "btn sm",
-      disabled: busy === s.id,
+      disabled: busy === s.id || busy === 'bulk',
       onClick: () => act(s.id, 'reject')
     }, "Reject")), s.status !== 'pending' && s.reviewedBy && React.createElement("span", {
       style: {
@@ -59746,6 +60138,7 @@ window.LockScreen = LockScreen;
         setFType('');
         setFDept('');
         setFMonth('');
+        setFResp('');
       }
     }, "Clear filters")) : React.createElement("table", {
       className: "tbl",
@@ -60276,23 +60669,29 @@ window.LockScreen = LockScreen;
       });
     }));
     const liveAreas = window.qualityData ? window.qualityData() : [];
-    liveAreas.forEach(a => (a.indicators || []).forEach(ind => ['Q1', 'Q2', 'Q3', 'Q4'].forEach(q => {
-      const v = ind.quarters && ind.quarters[q];
-      if (v == null || v === '') return;
-      out.push({
-        id: 'rec-q-' + a.key + '-' + ind.id + '-' + q,
-        type: 'quality',
-        area: a.key,
-        areaName: a.name,
-        indicatorId: ind.id,
-        indicatorName: ind.name,
-        quarter: q,
-        value: v,
-        remark: ind.quarterRemarks && ind.quarterRemarks[q] || '',
-        status: 'reported',
-        submittedAt: null
+    const has = (o, m) => !!o && o[m] != null && o[m] !== '';
+    liveAreas.forEach(a => (a.indicators || []).forEach(ind => {
+      const ms = new Set([].concat(Object.keys(ind.months || {}), Object.keys(ind.mNum || {}), Object.keys(ind.mNotObserved || {}), Object.keys(ind.incidents || {})));
+      ms.forEach(m => {
+        const notObserved = !!(ind.mNotObserved && ind.mNotObserved[m]);
+        const incs = ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
+        if (!has(ind.months, m) && !has(ind.mNum, m) && !notObserved && !incs) return;
+        out.push({
+          id: 'rec-q-' + a.key + '-' + ind.id + '-' + m,
+          type: 'quality',
+          area: a.key,
+          areaName: a.name,
+          indicatorId: ind.id,
+          indicatorName: ind.name,
+          month: m,
+          value: has(ind.months, m) ? ind.months[m] : has(ind.mNum, m) ? ind.mNum[m] : undefined,
+          notObserved,
+          remark: ind.monthRemarks && ind.monthRemarks[m] || '',
+          status: 'reported',
+          submittedAt: null
+        });
       });
-    })));
+    }));
     return out;
   }
   function CollectorHistory({
@@ -60305,8 +60704,7 @@ window.LockScreen = LockScreen;
     const [view, setView] = useState('patient');
     const [status, setStatus] = useState('All');
     const [mode, setMode] = useState('table');
-    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
-    const ownsSub = s => !!s && s.status === 'pending' && [me.name, me.username].filter(Boolean).some(n => n === s.submittedBy || s.responsible && s.responsible.name === n);
+    const ownsSub = s => !!s && s.status === 'pending' && dcIsMine(s);
     const load = () => dcSubmissionResponse().then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
     useEffect(() => {
       load();
@@ -60368,10 +60766,8 @@ window.LockScreen = LockScreen;
         }
       }, m[0]);
     };
-    const keyOf = s => s.type === 'quality' ? 'q|' + s.area + '|' + (s.indicatorId || s.indicatorName) + '|' + s.quarter : 'p|' + s.department + '|' + s.month;
-    const subs = (rows || []).map(s => s.type === 'quality' && !s.quarter ? Object.assign({}, s, {
-      quarter: dcFiscalQuarter(s.month)
-    }) : s);
+    const keyOf = s => s.type === 'quality' ? 'q|' + s.area + '|' + (s.indicatorId || s.indicatorName) + '|' + s.month : 'p|' + s.department + '|' + s.month;
+    const subs = (rows || []).filter(dcIsMine);
     const subKeys = new Set(subs.map(keyOf));
     const merged = subs.concat(reportedRecords().filter(r => !subKeys.has(keyOf(r)))).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     const patientRows = merged.filter(s => s.type !== 'quality');
@@ -60385,7 +60781,7 @@ window.LockScreen = LockScreen;
     const isQ = active === 'quality';
     const isEdits = active === 'edits';
     const shown = isEdits ? editRows : isQ ? qualityRows : patientRows;
-    const decided = subs.filter(x => x.status === 'approved' || x.status === 'rejected');
+    const decided = subs.filter(x => x.status === 'approved' || x.status === 'rejected' && !x.autoRejected);
     const accPct = decided.length ? Math.round(subs.filter(x => x.status === 'approved').length * 100 / decided.length) : null;
     const ACC_C = 144.5;
     const cycle = subs.filter(x => x.month === month);
@@ -60394,9 +60790,11 @@ window.LockScreen = LockScreen;
     const turn = cycle.filter(x => x.submittedAt && x.reviewedAt && x.reviewedAt >= x.submittedAt);
     const avgDays = turn.length ? turn.reduce((a, x) => a + (x.reviewedAt - x.submittedAt), 0) / turn.length / 864e5 : null;
     const cycleStats = [['Submitted', String(cycle.length), '#0090ca'], ['Approved', String(cycleAppr), '#1f9d57'], ['Rejected', String(cycleRej), '#d23a52'], ['Avg. response time', avgDays == null ? '—' : Math.round(avgDays * 10) / 10 + ' d', '#6a52d4']];
+    const openRej = new Set(dcOpenRejections(rows).map(x => x.id));
     const FILTERS = ['All', 'Pending', 'Approved', 'Rejected'];
-    const countFor = f => f === 'All' ? shown.length : shown.filter(s => s.status === f.toLowerCase()).length;
-    const listed = status === 'All' ? shown : shown.filter(s => s.status === status.toLowerCase());
+    const inFilter = (s, f) => f === 'All' || (f === 'Rejected' ? openRej.has(s.id) : s.status === f.toLowerCase());
+    const countFor = f => shown.filter(s => inFilter(s, f)).length;
+    const listed = shown.filter(s => inFilter(s, status));
     const cpTab = on => ({
       border: 0,
       background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent',
@@ -60430,8 +60828,10 @@ window.LockScreen = LockScreen;
     });
     const fixFor = s => {
       if (!s || s.status !== 'rejected') return null;
-      if (s.type === 'quality') return onFixQuality && s.area && s.indicatorId && s.month ? () => onFixQuality(s.area, s.indicatorId, s.month) : null;
-      return onFixPatient && s.department && s.month ? () => onFixPatient(s.department, s.month) : null;
+      const k = dcTargetKey(s);
+      if ((rows || []).some(x => x.status !== 'rejected' && (x.submittedAt || 0) > (s.submittedAt || 0) && dcTargetKey(x) === k)) return null;
+      if (s.type === 'quality') return onFixQuality && s.area && s.indicatorId && s.month ? () => onFixQuality(s.area, s.indicatorId, s.month, s) : null;
+      return onFixPatient && s.department && s.month ? () => onFixPatient(s.department, s.month, s) : null;
     };
     const FIX_BTN = {
       border: '1px solid rgba(210,58,82,.35)',
@@ -60846,7 +61246,7 @@ window.LockScreen = LockScreen;
       style: {
         width: '100%'
       }
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Submitted on"), isEdits ? React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "For"), React.createElement("th", null, "Reason")) : isQ ? React.createElement(React.Fragment, null, React.createElement("th", null, "Area"), React.createElement("th", null, "Indicator"), React.createElement("th", null, "Quarter")) : React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "Month")), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, listed.map(s => React.createElement("tr", {
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Submitted on"), isEdits ? React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "For"), React.createElement("th", null, "Reason")) : isQ ? React.createElement(React.Fragment, null, React.createElement("th", null, "Area"), React.createElement("th", null, "Indicator"), React.createElement("th", null, "Month")) : React.createElement(React.Fragment, null, React.createElement("th", null, "Department"), React.createElement("th", null, "Month")), React.createElement("th", null, "Status"), React.createElement("th", null))), React.createElement("tbody", null, listed.map(s => React.createElement("tr", {
       key: s.id,
       onClick: () => setDetail(s),
       title: "Tap to view",
@@ -60882,7 +61282,7 @@ window.LockScreen = LockScreen;
       style: {
         fontWeight: 600
       }
-    }, s.indicatorName, rejNote(s)), React.createElement("td", null, s.quarter)) : React.createElement(React.Fragment, null, React.createElement("td", {
+    }, s.indicatorName, rejNote(s)), React.createElement("td", null, monthLabel(s.month))) : React.createElement(React.Fragment, null, React.createElement("td", {
       style: {
         fontWeight: 600
       }
@@ -61188,7 +61588,7 @@ window.LockScreen = LockScreen;
   };
   const CP_NAV_HOME = ['home', 'Dashboard', 'M3 11l9-8 9 8v9a2 2 0 01-2 2h-4v-7H9v7H5a2 2 0 01-2-2z'];
   const CP_NAV_STAFFREQ = ['requests', 'Add nurse / PCA', 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M19 8v6M22 11h-6'];
-  const CP_NAV_COLLECT = [['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'], ['quick', 'Quick entry', 'M13 2L4 14h7l-1 8 9-12h-7z'], ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'], ['patient', 'Patient statistics', 'M4 4h16v16H4zM4 9h16M9 4v16']];
+  const CP_NAV_COLLECT = [['missing', 'Missing data', 'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01'], ['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'], ['quick', 'Quick entry', 'M13 2L4 14h7l-1 8 9-12h-7z'], ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'], ['patient', 'Patient statistics', 'M4 4h16v16H4zM4 9h16M9 4v16']];
   const CP_NAV_UNIT = [['history', 'My submissions', 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7'], ['roster', 'Duty roster', 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4M8 13h3M13 13h3'], ['profile', 'My profile', 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0'], ['dept', 'Department & staff', 'M4 4h16v16H4zM4 9h16M9 4v16']];
   const CP_ICON = (d, s, c) => React.createElement("svg", {
     width: s || 17,
@@ -61210,7 +61610,10 @@ window.LockScreen = LockScreen;
       Approved: '#1f9d57',
       Rejected: '#d23a52',
       Recorded: '#1f9d57',
-      'Not observed': '#5b3fa8'
+      'Not observed': '#5b3fa8',
+      Returned: '#b5670a',
+      'Not measured': '#6c7a8c',
+      'Not started': '#8a96a8'
     }[label] || '#6c7a8c';
     return {
       display: 'inline-flex',
@@ -61252,6 +61655,256 @@ window.LockScreen = LockScreen;
     const yy = parseInt(p[1], 10);
     if (mi < 0 || isNaN(yy)) return null;
     return new Date(2000 + yy, mi + 2, 0, 23, 59, 59);
+  };
+  const dcMonthRank = k => {
+    const p = String(k || '').split('-');
+    const mi = MONS_ABBR.indexOf(p[0]);
+    const yy = parseInt(p[1], 10);
+    return mi < 0 || isNaN(yy) ? null : (2000 + yy) * 12 + mi;
+  };
+  const dcMonthKey = r => MONS_ABBR[(r % 12 + 12) % 12] + '-' + String(Math.floor(r / 12) % 100).padStart(2, '0');
+  const dcLaterMonth = (a, b) => {
+    const ra = dcMonthRank(a),
+      rb = dcMonthRank(b);
+    if (ra == null) return rb == null ? null : b;
+    if (rb == null) return a;
+    return rb > ra ? b : a;
+  };
+  let _dcCollList = null,
+    _dcCollById = null,
+    _dcCollByQk = null,
+    _dcCollAt = 0,
+    _dcCollPromise = null,
+    _dcCollSig = '';
+  let _dcCollIdx = null;
+  const dcIndexCollection = rows => {
+    _dcCollList = rows;
+    _dcCollById = {};
+    _dcCollByQk = {};
+    rows.forEach(d => {
+      if (!d || !d.id) return;
+      _dcCollById[d.id] = d;
+      if (d.qualityKey && !_dcCollByQk[d.qualityKey]) _dcCollByQk[d.qualityKey] = d;
+    });
+  };
+  const dcLoadCollectionSettings = force => {
+    if (!force && _dcCollList && Date.now() - _dcCollAt < 15000) return Promise.resolve(_dcCollList);
+    if (_dcCollPromise) return force ? _dcCollPromise.catch(() => {}).then(() => dcLoadCollectionSettings(true)) : _dcCollPromise;
+    _dcCollPromise = dcApi.get('/api/collection-settings').then(r => {
+      if (!r || !r.ok) throw new Error(r && r.error || 'Could not load department settings');
+      const rows = (r.departments || []).map(d => ({
+        ...d,
+        collection: d.collection && typeof d.collection === 'object' ? d.collection : {}
+      }));
+      const sig = JSON.stringify(rows.map(d => [d.id, d.qualityKey, d.collection]));
+      dcIndexCollection(rows);
+      _dcCollAt = Date.now();
+      if (sig !== _dcCollSig) {
+        _dcCollSig = sig;
+        try {
+          window.dispatchEvent(new Event('unico:collection-settings'));
+        } catch (e) {}
+      }
+      return rows;
+    }).finally(() => {
+      _dcCollPromise = null;
+    });
+    return _dcCollPromise;
+  };
+  const dcSetCollectionSettings = (id, collection) => {
+    const rows = (_dcCollList || []).map(d => d.id === id ? {
+      ...d,
+      collection: collection || {}
+    } : d);
+    dcIndexCollection(rows);
+    _dcCollIdx = null;
+    _dcCollSig = JSON.stringify(rows.map(d => [d.id, d.qualityKey, d.collection]));
+    try {
+      window.dispatchEvent(new Event('unico:collection-settings'));
+    } catch (e) {}
+  };
+  if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => {
+    _dcCollIdx = null;
+  });
+  const useDcCollectionRev = () => {
+    const [rev, setRev] = useState(0);
+    useEffect(() => {
+      const h = () => setRev(r => r + 1);
+      const reload = () => {
+        dcLoadCollectionSettings().catch(() => {});
+      };
+      window.addEventListener('unico:collection-settings', h);
+      window.addEventListener('unico:data-refreshed', reload);
+      reload();
+      return () => {
+        window.removeEventListener('unico:collection-settings', h);
+        window.removeEventListener('unico:data-refreshed', reload);
+      };
+    }, []);
+    return rev;
+  };
+  const dcDeptSettings = deptId => {
+    if (!deptId) return {};
+    const api = _dcCollById && _dcCollById[deptId];
+    if (api) return api.collection || {};
+    if (!_dcCollIdx) {
+      const idx = {};
+      const put = d => {
+        if (d && d.id && d.collection && typeof d.collection === 'object' && !idx[d.id]) idx[d.id] = d.collection;
+      };
+      try {
+        (window.UNICO && window.UNICO.DEPARTMENTS || []).forEach(put);
+      } catch (e) {}
+      try {
+        (window.__UNICO_DEPARTMENTS__ || []).forEach(put);
+      } catch (e) {}
+      try {
+        dcAllDepts().forEach(put);
+      } catch (e) {}
+      _dcCollIdx = idx;
+    }
+    return _dcCollIdx[deptId] || {};
+  };
+  const dcAreaDeptId = area => {
+    if (!area) return null;
+    const hit = area.key && _dcCollByQk && _dcCollByQk[area.key];
+    if (hit) return hit.id;
+    return area.deptId || (window.DEPTMAP && area.key ? window.DEPTMAP.idFromQk(area.key) : null) || null;
+  };
+  const _dcIxCache = new WeakMap();
+  const dcSubsIndex = subs => {
+    const arr = Array.isArray(subs) ? subs : [];
+    if (_dcIxCache.has(arr)) return _dcIxCache.get(arr);
+    const ix = {
+      q: new Map(),
+      qArea: new Map(),
+      p: new Map(),
+      pDept: new Map()
+    };
+    const push = (m, k, s) => {
+      const l = m.get(k);
+      if (l) l.push(s);else m.set(k, [s]);
+    };
+    arr.forEach(s => {
+      if (!s) return;
+      if (s.type === 'quality') {
+        push(ix.q, s.area + '|' + s.month, s);
+        push(ix.qArea, s.area, s);
+      } else if (s.type === 'patient') {
+        push(ix.p, s.department + '|' + s.month, s);
+        push(ix.pDept, s.department, s);
+      }
+    });
+    _dcIxCache.set(arr, ix);
+    return ix;
+  };
+  const dcSubIsInd = (s, ind) => s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase();
+  const dcIndFirstMonth = (area, ind, subs) => {
+    let best = null;
+    const see = k => {
+      const r = dcMonthRank(k);
+      if (r != null && (best == null || r < best)) best = r;
+    };
+    const has = (o, k) => o[k] != null && o[k] !== '' && o[k] !== false;
+    ['months', 'mNum', 'mNotObserved'].forEach(f => {
+      const o = ind && ind[f];
+      if (o && typeof o === 'object') Object.keys(o).forEach(k => {
+        if (has(o, k)) see(k);
+      });
+    });
+    if (ind && ind.incidents && typeof ind.incidents === 'object') Object.keys(ind.incidents).forEach(k => {
+      if (Array.isArray(ind.incidents[k]) && ind.incidents[k].length) see(k);
+    });
+    (dcSubsIndex(subs).qArea.get(area && area.key) || []).forEach(s => {
+      if (dcSubIsInd(s, ind)) see(s.month);
+    });
+    return best == null ? null : dcMonthKey(best);
+  };
+  const dcIndicatorStart = (area, ind, subs, deptStart) => {
+    const ds = deptStart === undefined ? dcDeptSettings(dcAreaDeptId(area)).startMonth : deptStart;
+    return dcLaterMonth(ds, ind && ind.startMonth) || dcIndFirstMonth(area, ind, subs);
+  };
+  const dcNotMeasured = (area, ind, override) => {
+    const nm = override !== undefined ? override : dcDeptSettings(dcAreaDeptId(area)).notMeasured;
+    return nm && ind && ind.id && nm[ind.id] || null;
+  };
+  const dcDueMonths = fromMonth => {
+    const last = dcDefaultMonth();
+    const lr = dcMonthRank(last);
+    let r = dcMonthRank(fromMonth);
+    if (r == null) return [last];
+    const out = [];
+    for (r = Math.max(r, lr - 239); r <= lr; r++) out.push(dcMonthKey(r));
+    return out;
+  };
+  const dcMonthDue = (start, m) => {
+    const mr = dcMonthRank(m);
+    if (mr == null) return false;
+    const sr = dcMonthRank(start);
+    return mr >= (sr == null ? dcMonthRank(dcDefaultMonth()) : sr);
+  };
+  const dcPatientStart = (dept, subs, deptStart) => {
+    if (!dept) return null;
+    const ds = deptStart === undefined ? dcDeptSettings(dept.id).startMonth : deptStart;
+    if (ds && dcMonthRank(ds) != null) return ds;
+    let best = null;
+    const see = k => {
+      const r = dcMonthRank(k);
+      if (r != null && (best == null || r < best)) best = r;
+    };
+    (dept.months || []).forEach(see);
+    (dcSubsIndex(subs).pDept.get(dept.id) || []).forEach(s => see(s.month));
+    return best == null ? null : dcMonthKey(best);
+  };
+  const dcQStatus = (subs, areaKey, ind, m) => cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
+  const dcPatientState = (subs, dept, m) => {
+    if ((dept.months || []).indexOf(m) >= 0) return 'recorded';
+    const list = dcSubsIndex(subs).p.get(dept.id + '|' + m) || [];
+    if (list.some(s => s.status === 'pending')) return 'pending';
+    if (list.some(s => s.status !== 'rejected')) return 'recorded';
+    return list.length ? 'rejected' : 'none';
+  };
+  const dcIndDue = (area, ind, m, subs) => !dcNotMeasured(area, ind) && dcMonthDue(dcIndicatorStart(area, ind, subs), m);
+  const dcPatientDue = (dept, m, subs) => dcMonthDue(dcPatientStart(dept, subs), m);
+  const dcMissingList = (depts, areas, subs) => {
+    const ix = dcSubsIndex(subs);
+    const rows = [];
+    const newest = list => list.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))[0] || null;
+    dcPatientDepts(depts, subs).forEach(d => {
+      dcDueMonths(dcPatientStart(d, subs)).forEach(m => {
+        const st = dcPatientState(subs, d, m);
+        if (st !== 'none' && st !== 'rejected') return;
+        rows.push({
+          key: 'p|' + d.id + '|' + m,
+          kind: 'patient',
+          month: m,
+          rank: dcMonthRank(m),
+          status: st,
+          unit: d.name || d.id,
+          deptId: d.id,
+          from: st === 'rejected' ? newest(ix.p.get(d.id + '|' + m) || []) : null
+        });
+      });
+    });
+    (areas || []).forEach(a => (a && a.indicators || []).forEach(ind => {
+      if (dcNotMeasured(a, ind)) return;
+      dcDueMonths(dcIndicatorStart(a, ind, subs)).forEach(m => {
+        const st = dcQStatus(subs, a.key, ind, m);
+        if (st !== 'none' && st !== 'rejected') return;
+        rows.push({
+          key: 'q|' + a.key + '|' + ind.id + '|' + m,
+          kind: 'quality',
+          month: m,
+          rank: dcMonthRank(m),
+          status: st,
+          unit: a.name || a.key,
+          areaKey: a.key,
+          ind: ind,
+          from: st === 'rejected' ? newest((ix.q.get(a.key + '|' + m) || []).filter(s => dcSubIsInd(s, ind))) : null
+        });
+      });
+    }));
+    return rows;
   };
   function CpSpark({
     ind,
@@ -61426,13 +62079,24 @@ window.LockScreen = LockScreen;
           note: '',
           isCorrection: isCorr,
           correctionReason: isCorr ? reason.trim() : ''
-        });
+        }).catch(() => null);
       });
       Promise.all(jobs).then(rs => {
         setBusy(false);
         const bad = rs.filter(r => !r || !r.ok);
         if (bad.length) {
-          toast(bad[0] && bad[0].error || 'Some months could not be sent.', 'error');
+          const sent = touched.filter((m, i) => rs[i] && rs[i].ok);
+          if (sent.length) {
+            setEdits(e => {
+              const next = {};
+              Object.keys(e).forEach(k => {
+                if (sent.indexOf(k.split('|')[0]) < 0) next[k] = e[k];
+              });
+              return next;
+            });
+            load();
+          }
+          toast((sent.length ? sent.map(monthLabel).join(', ') + ' sent. ' : '') + (bad[0] && bad[0].error || 'Some months could not be sent.'), 'error');
           return;
         }
         toast(touched.length + ' month' + (touched.length > 1 ? 's' : '') + ' sent for review', 'success');
@@ -61762,9 +62426,10 @@ window.LockScreen = LockScreen;
     const [pick, setPick] = useState(null);
     const [doc, setDoc] = useState(undefined);
     const R = window.UNICO_ROSTER;
+    const mine = useMemo(() => dcMyRosterUnitKeys(), []);
     useEffect(() => {
       dcApi.get('/api/rosters').then(r => {
-        const list = (r && r.ok ? r.rosters || [] : []).filter(x => x && x.status === 'approved').sort((x, y) => y.year - x.year || y.month - x.month);
+        const list = (r && r.ok ? r.rosters || [] : []).filter(x => x && x.status === 'approved' && dcRosterIsMine(x, mine)).sort((x, y) => y.year - x.year || y.month - x.month);
         setIndex(list);
         if (list.length) setPick({
           dept: list[0].dept,
@@ -61873,7 +62538,7 @@ window.LockScreen = LockScreen;
       style: {
         fontSize: 12
       }
-    }, "Nothing has been approved for your unit. A roster appears here the moment it is published.")) : doc === undefined ? React.createElement("div", {
+    }, mine.size ? 'Nothing has been approved for your department yet. Its roster appears here the moment it is published.' : 'No department is assigned to your account, so no roster can be shown. Ask an administrator to assign your department.')) : doc === undefined ? React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
         padding: 26,
         textAlign: 'center',
@@ -62164,8 +62829,8 @@ window.LockScreen = LockScreen;
     useEffect(() => {
       dcSubmissionResponse().then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
     }, []);
-    const S = subs || [];
-    const decided = S.filter(x => x.status === 'approved' || x.status === 'rejected');
+    const S = (subs || []).filter(dcIsMine);
+    const decided = S.filter(x => x.status === 'approved' || x.status === 'rejected' && !x.autoRejected);
     const accuracy = decided.length ? Math.round(S.filter(x => x.status === 'approved').length * 100 / decided.length) : null;
     const onTime = (() => {
       let n = 0,
@@ -62864,10 +63529,13 @@ window.LockScreen = LockScreen;
       rejected: 'Missing',
       none: 'Missing'
     })[cpSubmissionStatus(S, areaKey, ind, m)];
+    const collRev = useDcCollectionRev();
+    const dueOf = (a, ind) => dcIndDue(a, ind, month, S);
     let totalInd = 0,
       done = 0;
     const missing = [];
     areas.forEach(a => a.indicators.forEach(ind => {
+      if (!dueOf(a, ind)) return;
       totalInd++;
       const st = statusOf(a.key, ind, month);
       if (st === 'Missing') missing.push({
@@ -62876,19 +63544,18 @@ window.LockScreen = LockScreen;
       });else done++;
     }));
     const pct = totalInd ? Math.round(done * 100 / totalInd) : 0;
-    const awaiting = S.filter(s => s.status === 'pending').length;
-    const targetKey = x => (x.type === 'quality' ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '') : 'p|' + x.department) + '|' + x.month;
-    const newestOk = {};
-    S.forEach(x => {
-      if (x.status === 'rejected') return;
-      const k = targetKey(x);
-      if (!(k in newestOk) || (x.submittedAt || 0) > newestOk[k]) newestOk[k] = x.submittedAt || 0;
-    });
-    const rejected = S.filter(x => x.status === 'rejected' && !(newestOk[targetKey(x)] > (x.submittedAt || 0))).length;
-    const deptDone = depts.filter(d => (d.months || []).indexOf(month) >= 0 || S.some(s => s.type === 'patient' && s.department === d.id && s.month === month && s.status !== 'rejected')).length;
-    const statGap = Math.max(0, depts.length - deptDone);
+    const awaiting = S.filter(s => s.status === 'pending' && dcIsMine(s)).length;
+    const mineN = S.filter(dcIsMine).length;
+    const rejected = dcOpenRejections(S).length;
+    const allMissing = useMemo(() => subs ? dcMissingList(depts, areas, subs) : [], [subs, depts, areas, collRev]);
+    const otherMissing = allMissing.filter(r => r.month !== month);
+    const otherLater = otherMissing.some(r => r.rank > dcMonthRank(month));
+    const pDepts = dcPatientDepts(depts, S).filter(d => dcPatientDue(d, month, S));
+    const deptDone = pDepts.filter(d => (d.months || []).indexOf(month) >= 0 || S.some(s => s.type === 'patient' && s.department === d.id && s.month === month && s.status !== 'rejected')).length;
+    const statGap = Math.max(0, pDepts.length - deptDone);
     const dl = cpDeadline(month);
-    const overdueDays = dl ? Math.floor((Date.now() - dl.getTime()) / 864e5) : 0;
+    const lateMs = dl ? Date.now() - dl.getTime() : 0;
+    const overdueDays = lateMs > 0 ? Math.ceil(lateMs / 864e5) : -Math.ceil(-lateMs / 864e5);
     const overdue = overdueDays > 0 && missing.length > 0;
     const ringColor = pct >= 90 ? '#1f9d57' : pct >= 60 ? '#0090ca' : pct >= 30 ? '#e08a1e' : '#d23a52';
     const order = MO();
@@ -62995,13 +63662,13 @@ window.LockScreen = LockScreen;
       c: 'linear-gradient(90deg,#3ab5a7,#1f9d57)'
     }, {
       lbl: 'Department stats',
-      val: deptDone + '/' + depts.length,
-      p: depts.length ? deptDone / depts.length : 0,
+      val: deptDone + '/' + pDepts.length,
+      p: pDepts.length ? deptDone / pDepts.length : 0,
       c: 'linear-gradient(90deg,#27a8db,#0072a3)'
     }, {
       lbl: 'Awaiting review',
-      val: awaiting + '/' + S.length,
-      p: S.length ? awaiting / S.length : 0,
+      val: awaiting + '/' + mineN,
+      p: mineN ? awaiting / mineN : 0,
       c: 'linear-gradient(90deg,#8f7ce0,#5b45c4)'
     }];
     const activity = S.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).slice(0, 6);
@@ -63216,7 +63883,53 @@ window.LockScreen = LockScreen;
         fontFamily: 'inherit',
         flexShrink: 0
       }
-    }, "Fix now \u203A")), React.createElement("div", {
+    }, "Fix now \u203A")), otherMissing.length > 0 && React.createElement("div", {
+      onClick: () => onNav('missing'),
+      role: "button",
+      style: Object.assign({}, CP_CARD, {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        padding: '10px 15px',
+        marginBottom: 14,
+        cursor: 'pointer',
+        flexWrap: 'wrap',
+        borderLeft: '4px solid #e08a1e'
+      })
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 30,
+        height: 30,
+        borderRadius: 9,
+        background: 'rgba(224,138,30,.14)',
+        color: '#b5670a',
+        flexShrink: 0
+      }
+    }, CP_ICON('M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01', 15)), React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 190,
+        fontSize: 12,
+        color: '#3c4858',
+        lineHeight: 1.5
+      }
+    }, React.createElement("b", null, otherLater ? 'Other months' : 'Earlier months', ": ", otherMissing.length, " missing"), React.createElement("span", {
+      style: {
+        color: '#6c7a8c'
+      }
+    }, " \u2014 across ", new Set(otherMissing.map(r => r.month)).size, " month", new Set(otherMissing.map(r => r.month)).size === 1 ? '' : 's', ", oldest ", monthLabel(otherMissing.reduce((o, r) => r.rank < o.rank ? r : o).month), ".")), React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: '#b5670a',
+        flexShrink: 0
+      }
+    }, "View all", CP_ICON('M5 12h14M13 6l6 6-6 6', 12))), React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))',
@@ -63544,11 +64257,14 @@ window.LockScreen = LockScreen;
         color: '#6c7a8c'
       })
     }, "No quality indicators are assigned to you yet.") : areas.map(a => {
-      let ok = 0;
+      let ok = 0,
+        owed = 0;
       a.indicators.forEach(ind => {
+        if (!dueOf(a, ind)) return;
+        owed++;
         if (statusOf(a.key, ind, month) !== 'Missing') ok++;
       });
-      const apct = a.indicators.length ? Math.round(ok * 100 / a.indicators.length) : 0;
+      const apct = owed ? Math.round(ok * 100 / owed) : 100;
       const tone = apct === 100 ? '#1f9d57' : apct >= 50 ? '#0090ca' : apct > 0 ? '#e08a1e' : '#d23a52';
       return React.createElement("div", {
         key: a.key,
@@ -63612,7 +64328,7 @@ window.LockScreen = LockScreen;
           background: tone + '1a'
         }
       }, apct, "% for ", monthLabel(month))), a.indicators.map(ind => {
-        const st = statusOf(a.key, ind, month);
+        const st = dcNotMeasured(a, ind) ? 'Not measured' : !dueOf(a, ind) ? 'Not started' : statusOf(a.key, ind, month);
         const tr = cpTrend(ind, win);
         return React.createElement("div", {
           key: ind.id,
@@ -63640,7 +64356,7 @@ window.LockScreen = LockScreen;
             fontSize: 10.5,
             color: '#9aa6b4'
           }
-        }, [ind.formula === 'count' ? 'Count' : ind.formula === 'rate' ? 'Rate' : 'Percentage', ind.benchmark ? 'benchmark ' + ind.benchmark : null].filter(Boolean).join(' · '))), React.createElement(CpSpark, {
+        }, [ind.formula === 'count' ? 'Count' : ind.formula === 'pct' ? 'Percentage' : ind.formula === 'avg' ? 'Average' : /^rate/.test(ind.formula || '') ? 'Rate' : 'Value', ind.benchmark ? 'benchmark ' + ind.benchmark : null].filter(Boolean).join(' · '))), React.createElement(CpSpark, {
           ind: ind,
           months: win
         }), tr != null ? React.createElement("span", {
@@ -63692,6 +64408,7 @@ window.LockScreen = LockScreen;
     const [staff, setStaff] = useState(null);
     const [reqs, setReqs] = useState(null);
     const [duty, setDuty] = useState(undefined);
+    useDcCollectionRev();
     const R = window.UNICO_ROSTER;
     const order = MO();
     useEffect(() => {
@@ -63700,7 +64417,8 @@ window.LockScreen = LockScreen;
       dcApi.get('/api/staff-requests').then(r => setReqs(r.ok ? r.requests || [] : [])).catch(() => setReqs([]));
       const now = new Date();
       dcApi.get('/api/rosters').then(r => {
-        const list = (r && r.ok ? r.rosters || [] : []).filter(x => x && x.status === 'approved' && x.year === now.getFullYear() && x.month === now.getMonth());
+        const mineKeys = dcMyRosterUnitKeys();
+        const list = (r && r.ok ? r.rosters || [] : []).filter(x => x && x.status === 'approved' && x.year === now.getFullYear() && x.month === now.getMonth() && dcRosterIsMine(x, mineKeys));
         if (!list.length) {
           setDuty(null);
           return;
@@ -63713,6 +64431,7 @@ window.LockScreen = LockScreen;
     let totalInd = 0,
       missing = 0;
     areas.forEach(a => a.indicators.forEach(ind => {
+      if (!dcIndDue(a, ind, month, S)) return;
       totalInd++;
       const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
       if (!sent) missing++;
@@ -63725,8 +64444,9 @@ window.LockScreen = LockScreen;
       let t = 0,
         done = 0;
       areas.forEach(a => a.indicators.forEach(ind => {
+        if (!dcIndDue(a, ind, m, S)) return;
         t++;
-        if (cpHasData(ind, m) || S.some(x => x.type === 'quality' && x.area === a.key && x.month === m && x.status !== 'rejected')) done++;
+        if (['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, m))) done++;
       }));
       return {
         m: m,
@@ -63736,16 +64456,7 @@ window.LockScreen = LockScreen;
       };
     });
     const trendAvg = trend.length ? Math.round(trend.reduce((n, p) => n + p.pct, 0) / trend.length) : 0;
-    const rejectedOpen = (() => {
-      const key = x => (x.type === 'quality' ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '') : 'p|' + x.department) + '|' + x.month;
-      const newest = {};
-      S.forEach(x => {
-        if (x.status === 'rejected') return;
-        const k = key(x);
-        if (!(k in newest) || (x.submittedAt || 0) > newest[k]) newest[k] = x.submittedAt || 0;
-      });
-      return S.filter(x => x.status === 'rejected' && !(newest[key(x)] > (x.submittedAt || 0)));
-    })();
+    const rejectedOpen = dcOpenRejections(S);
     const attention = [];
     if (missing) attention.push({
       tone: '#b5670a',
@@ -65332,11 +66043,1016 @@ window.LockScreen = LockScreen;
       }, React.createElement("b", null, r.decidedBy || 'Administrator', ":"), " ", r.reason));
     })));
   }
+  function CollectorMissing({
+    depts,
+    areas,
+    month,
+    user
+  }) {
+    const collRev = useDcCollectionRev();
+    const [subs, setSubs] = useState(null);
+    const [loadError, setLoadError] = useState('');
+    const [fType, setFType] = useState('all');
+    const [fUnit, setFUnit] = useState('');
+    const [open, setOpen] = useState(null);
+    const [sent, setSent] = useState({});
+    const downOnBackdrop = React.useRef(false);
+    const load = force => dcSubmissionResponse(null, force).then(r => {
+      setSubs(r.submissions);
+      setLoadError('');
+      return true;
+    }).catch(() => {
+      setLoadError('Submission history could not be refreshed. Please retry; this list may not be current.');
+      return false;
+    });
+    useEffect(() => {
+      load();
+    }, []);
+    useEffect(() => {
+      const refresh = () => {
+        if (document.visibilityState !== 'hidden') load();
+      };
+      window.addEventListener('unico:data-refreshed', refresh);
+      window.addEventListener('focus', refresh);
+      return () => {
+        window.removeEventListener('unico:data-refreshed', refresh);
+        window.removeEventListener('focus', refresh);
+      };
+    }, []);
+    useEffect(() => {
+      if (!open) return;
+      const onKey = e => {
+        if (e.key === 'Escape') setOpen(null);
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, [open]);
+    const qAreas = useMemo(() => (areas || []).filter(a => a && a.indicators && a.indicators.length), [areas]);
+    const all = useMemo(() => subs ? dcMissingList(depts, qAreas, subs) : [], [subs, depts, qAreas, collRev]);
+    const rows = all.filter(r => !sent[r.key]);
+    const units = [...new Set(all.map(r => r.unit))].sort((a, b) => String(a).localeCompare(String(b)));
+    const shown = rows.filter(r => (fType === 'all' || r.kind === fType) && (!fUnit || r.unit === fUnit));
+    const byMonth = {};
+    shown.forEach(r => {
+      (byMonth[r.month] = byMonth[r.month] || []).push(r);
+    });
+    const monthKeys = Object.keys(byMonth).sort((a, b) => dcMonthRank(b) - dcMonthRank(a));
+    const statN = rows.filter(r => r.kind === 'patient').length;
+    const qualN = rows.length - statN;
+    const oldest = rows.reduce((o, r) => !o || r.rank < o.rank ? r : o, null);
+    const submitted = row => {
+      setOpen(null);
+      setSent(s => ({
+        ...s,
+        [row.key]: true
+      }));
+      toast((row.kind === 'quality' ? row.ind.name : row.unit + ' statistics') + ' · ' + monthLabel(row.month) + ' sent for review', 'success');
+      load(true).then(ok => {
+        if (ok) setSent({});
+      });
+    };
+    const nmList = [];
+    qAreas.forEach(a => a.indicators.forEach(ind => {
+      const nm = dcNotMeasured(a, ind);
+      if (nm) nmList.push({
+        key: a.key + '|' + ind.id,
+        unit: a.name || a.key,
+        ind: ind,
+        nm: nm
+      });
+    }));
+    const startList = [];
+    const seenUnit = new Set();
+    const addStart = (id, name) => {
+      if (!id || seenUnit.has(id)) return;
+      seenUnit.add(id);
+      const s = dcDeptSettings(id).startMonth;
+      if (s) startList.push({
+        id: id,
+        name: name || (window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : id),
+        start: s
+      });
+    };
+    (depts || []).forEach(d => addStart(d.id, d.name));
+    qAreas.forEach(a => addStart(dcAreaDeptId(a), a.name));
+    const tiles = [{
+      val: subs === null ? '…' : rows.length,
+      lbl: 'Missing in total',
+      c: rows.length ? '#a92c42' : '#1f9d57',
+      bg: rows.length ? 'rgba(210,58,82,.13)' : 'rgba(31,157,87,.13)',
+      icd: 'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01'
+    }, {
+      val: subs === null ? '…' : statN,
+      lbl: 'Statistics months',
+      c: '#5b45c4',
+      bg: 'rgba(106,82,212,.14)',
+      icd: 'M4 4h16v16H4zM4 9h16M9 4v16'
+    }, {
+      val: subs === null ? '…' : qualN,
+      lbl: 'Quality indicator-months',
+      c: '#12776c',
+      bg: 'rgba(58,181,167,.16)',
+      icd: 'M22 12h-4l-3 8-4-16-3 8H2'
+    }, {
+      val: oldest ? monthLabel(oldest.month) : '—',
+      lbl: 'Oldest missing month',
+      c: '#b5670a',
+      bg: 'rgba(224,138,30,.14)',
+      icd: 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4',
+      small: true
+    }];
+    const selStyle = {
+      padding: '8px 10px',
+      borderRadius: 9,
+      border: '1px solid rgba(125,145,180,.3)',
+      background: 'rgba(255,255,255,.75)',
+      fontFamily: 'inherit',
+      fontSize: 12.5,
+      color: '#3c4858',
+      outline: 'none',
+      maxWidth: '100%',
+      minWidth: 0
+    };
+    return React.createElement("div", {
+      style: {
+        maxWidth: 1100,
+        margin: '0 auto'
+      }
+    }, React.createElement("style", null, '@media (max-width:640px){.cp-mm-overlay{padding:0!important}.cp-mm-box{max-height:none!important;min-height:100%;border-radius:0!important;padding:10px 12px 18px!important}}'), loadError && React.createElement("div", {
+      role: "alert",
+      style: {
+        padding: 12,
+        color: 'var(--rose)'
+      }
+    }, loadError, " ", React.createElement("button", {
+      className: "btn sm",
+      onClick: () => load(true)
+    }, "Retry")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))',
+        gap: 12,
+        marginBottom: 14
+      }
+    }, tiles.map(t => React.createElement("div", {
+      key: t.lbl,
+      style: Object.assign({}, CP_CARD, {
+        padding: '13px 15px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11
+      })
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 36,
+        height: 36,
+        borderRadius: 11,
+        background: t.bg,
+        color: t.c,
+        flexShrink: 0
+      }
+    }, CP_ICON(t.icd, 17)), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontFamily: "'IBM Plex Mono',monospace",
+        fontSize: t.small ? 14.5 : 21,
+        fontWeight: 700,
+        color: '#16202e',
+        lineHeight: 1.2
+      }
+    }, t.val), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c'
+      }
+    }, t.lbl))))), React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: '10px 14px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        marginBottom: 14
+      })
+    }, React.createElement("div", {
+      className: "seg"
+    }, [['all', 'All'], ['patient', 'Statistics'], ['quality', 'Quality']].map(([k, l]) => React.createElement("button", {
+      key: k,
+      className: fType === k ? 'on' : '',
+      onClick: () => setFType(k)
+    }, l))), React.createElement("select", {
+      value: fUnit,
+      onChange: e => setFUnit(e.target.value),
+      style: selStyle,
+      title: "Department"
+    }, React.createElement("option", {
+      value: ""
+    }, "All departments"), units.map(u => React.createElement("option", {
+      key: u,
+      value: u
+    }, u))), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, "Counted through ", monthLabel(dcDefaultMonth()), " \xB7 ", shown.length, " shown")), subs === null ? React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: 24,
+        color: '#6c7a8c'
+      })
+    }, "Loading your missing data\u2026") : rows.length === 0 ? React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: 28,
+        textAlign: 'center'
+      })
+    }, React.createElement("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 700,
+        color: '#1f9d57',
+        marginBottom: 4
+      }
+    }, "Nothing is missing"), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: '#6c7a8c'
+      }
+    }, "Every month owed through ", monthLabel(dcDefaultMonth()), " has been sent or is on record.")) : shown.length === 0 ? React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: 22,
+        textAlign: 'center',
+        color: '#6c7a8c',
+        fontSize: 12.5
+      })
+    }, "Nothing missing for this filter.") : monthKeys.map(mk => {
+      const list = byMonth[mk].slice().sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'patient' ? -1 : 1) || String(a.unit).localeCompare(String(b.unit)));
+      const dl = cpDeadline(mk);
+      const late = dl && Date.now() > dl.getTime();
+      return React.createElement("div", {
+        key: mk,
+        style: Object.assign({}, CP_CARD, {
+          marginBottom: 12,
+          overflow: 'hidden'
+        })
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '11px 16px',
+          borderBottom: '1px solid rgba(125,145,180,.18)',
+          flexWrap: 'wrap'
+        }
+      }, React.createElement("span", {
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          width: 26,
+          height: 26,
+          borderRadius: 8,
+          background: 'rgba(224,138,30,.14)',
+          color: '#b5670a',
+          flexShrink: 0
+        }
+      }, CP_ICON('M3 5h18v16H3zM3 9h18M8 3v4M16 3v4', 13)), React.createElement("h3", {
+        style: {
+          margin: 0,
+          fontSize: 13.5,
+          fontWeight: 700,
+          color: '#16202e'
+        }
+      }, monthLabel(mk)), React.createElement("span", {
+        style: cpChipStyle('Missing')
+      }, list.length, " missing"), React.createElement("span", {
+        style: {
+          flex: 1
+        }
+      }), dl && React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: late ? '#a92c42' : '#6c7a8c',
+          fontWeight: late ? 700 : 400
+        }
+      }, late ? 'Was due ' : 'Due by ', dl.toLocaleDateString())), list.map(r => {
+        const label = r.status === 'rejected' ? 'Returned' : 'Missing';
+        const isQ = r.kind === 'quality';
+        return React.createElement("div", {
+          key: r.key,
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 11,
+            padding: '10px 16px',
+            borderBottom: '1px solid rgba(125,145,180,.12)',
+            flexWrap: 'wrap'
+          }
+        }, React.createElement("span", {
+          style: {
+            display: 'inline-grid',
+            placeItems: 'center',
+            width: 28,
+            height: 28,
+            borderRadius: 9,
+            background: isQ ? 'rgba(58,181,167,.16)' : 'rgba(106,82,212,.14)',
+            color: isQ ? '#12776c' : '#5b45c4',
+            flexShrink: 0
+          }
+        }, CP_ICON(isQ ? 'M22 12h-4l-3 8-4-16-3 8H2' : 'M4 4h16v16H4zM4 9h16M9 4v16', 14)), React.createElement("div", {
+          style: {
+            flex: 1,
+            minWidth: 170
+          }
+        }, React.createElement("div", {
+          style: {
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: '#16202e'
+          }
+        }, isQ ? r.ind.name : 'Patient statistics'), React.createElement("div", {
+          style: {
+            fontSize: 10.5,
+            color: '#9aa6b4'
+          }
+        }, r.unit, r.from && r.from.rejectReason ? ' · returned: ' + r.from.rejectReason : '')), React.createElement("span", {
+          style: cpChipStyle(label)
+        }, label), React.createElement("button", {
+          onClick: () => setOpen(r),
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            border: '1px solid rgba(0,144,202,.3)',
+            background: 'rgba(0,144,202,.08)',
+            color: '#0072a3',
+            padding: '6px 13px',
+            borderRadius: 8,
+            fontSize: 11.5,
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            flexShrink: 0
+          }
+        }, label === 'Returned' ? 'Fix & submit' : 'Submit', " \u203A"));
+      }));
+    }), (nmList.length > 0 || startList.length > 0) && React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: '13px 16px',
+        marginTop: 4
+      })
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: '#16202e',
+        marginBottom: 8
+      }
+    }, "Set by your administrator"), startList.length > 0 && React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginBottom: nmList.length ? 12 : 0
+      }
+    }, startList.map(s => React.createElement("span", {
+      key: s.id,
+      style: {
+        fontSize: 11.5,
+        padding: '3px 10px',
+        borderRadius: 12,
+        background: 'rgba(0,144,202,.08)',
+        color: '#0072a3'
+      }
+    }, React.createElement("b", null, s.name), " \xB7 Counting from ", monthLabel(s.start)))), nmList.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#6c7a8c',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 5
+      }
+    }, "Not measured in your departments"), nmList.map(x => React.createElement("div", {
+      key: x.key,
+      style: {
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap',
+        alignItems: 'baseline',
+        padding: '5px 0',
+        borderTop: '1px solid rgba(125,145,180,.12)',
+        fontSize: 12
+      }
+    }, React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: '#16202e'
+      }
+    }, x.ind.name), React.createElement("span", {
+      style: {
+        color: '#9aa6b4'
+      }
+    }, x.unit), React.createElement("span", {
+      style: {
+        color: '#6c7a8c',
+        flex: '1 1 200px'
+      }
+    }, "\u2014 ", x.nm.reason || 'no reason given'))))), open && React.createElement("div", {
+      className: "cp-mm-overlay",
+      onMouseDown: e => {
+        downOnBackdrop.current = e.target === e.currentTarget;
+      },
+      onClick: e => {
+        if (e.target === e.currentTarget && downOnBackdrop.current) setOpen(null);
+      },
+      style: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 2500,
+        background: 'rgba(13,27,46,.45)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        padding: '4vh 16px',
+        overflowY: 'auto',
+        boxSizing: 'border-box'
+      }
+    }, React.createElement("div", {
+      className: "cp-mm-box",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": "Submit missing data",
+      style: {
+        width: '100%',
+        maxWidth: 900,
+        maxHeight: '92vh',
+        overflowY: 'auto',
+        background: '#f3f8fd',
+        borderRadius: 16,
+        boxShadow: '0 24px 70px rgba(5,12,24,.35)',
+        padding: '14px 18px 20px',
+        boxSizing: 'border-box'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        marginBottom: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#b5670a',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px'
+      }
+    }, open.status === 'rejected' ? 'Returned — fix and resubmit' : 'Missing data'), React.createElement("div", {
+      style: {
+        fontSize: 14,
+        fontWeight: 700,
+        color: '#16202e',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, (open.kind === 'quality' ? open.ind.name + ' · ' + open.unit : open.unit + ' · Patient statistics') + ' · ' + monthLabel(open.month))), React.createElement("button", {
+      onClick: () => setOpen(null),
+      title: "Close (Esc)",
+      "aria-label": "Close",
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        width: 34,
+        height: 34,
+        borderRadius: 9,
+        border: '1px solid rgba(125,145,180,.3)',
+        background: '#fff',
+        color: '#3c4858',
+        cursor: 'pointer',
+        flexShrink: 0,
+        fontSize: 16
+      }
+    }, "\u2715")), open.kind === 'quality' ? React.createElement(DataQualityForm, {
+      key: 'mq/' + open.key,
+      prefill: {
+        responsible: user.name,
+        area: open.areaKey,
+        indicatorId: open.ind.id,
+        month: open.month,
+        from: open.from
+      },
+      onSubmitted: () => submitted(open)
+    }) : React.createElement(DataPatientForm, {
+      key: 'mp/' + open.key,
+      depts: depts,
+      prefill: {
+        responsible: user.name,
+        dept: open.deptId,
+        month: open.month,
+        from: open.from
+      },
+      onSubmitted: () => submitted(open)
+    }))));
+  }
+  function DcSettingsCard({
+    row,
+    dept,
+    areas,
+    subs,
+    canSave,
+    onSaved
+  }) {
+    const coll = row.collection || {};
+    const origNm = coll.notMeasured || {};
+    const initNm = () => Object.fromEntries(Object.keys(origNm).map(id => [id, {
+      on: true,
+      reason: origNm[id] && origNm[id].reason || ''
+    }]));
+    const [start, setStart] = useState(coll.startMonth || '');
+    const [nm, setNm] = useState(initNm);
+    const [busy, setBusy] = useState(false);
+    const [showInds, setShowInds] = useState(Object.keys(origNm).length > 0);
+    const inds = [];
+    areas.forEach(a => (a.indicators || []).forEach(ind => {
+      if (ind && ind.id) inds.push({
+        area: a,
+        ind: ind
+      });
+    }));
+    const nmOn = id => !!(nm[id] && nm[id].on);
+    const changedIds = Object.keys(Object.assign({}, origNm, nm)).filter(id => {
+      const was = !!origNm[id],
+        now = nmOn(id);
+      if (was !== now) return true;
+      return now && String(nm[id].reason || '').trim() !== String(origNm[id] && origNm[id].reason || '').trim();
+    });
+    const startChanged = start !== (coll.startMonth || '');
+    const changed = startChanged || changedIds.length > 0;
+    const invalid = changedIds.some(id => nmOn(id) && !String(nm[id].reason || '').trim());
+    const counts = useMemo(() => {
+      const ds = start || null;
+      const isPatient = !!dept && dcPatientDepts([dept], subs).length > 0;
+      const p = {
+        due: 0,
+        recorded: 0,
+        pending: 0,
+        missing: 0,
+        from: null
+      };
+      if (isPatient) {
+        p.from = dcPatientStart(dept, subs, ds);
+        dcDueMonths(p.from).forEach(m => {
+          p.due++;
+          const st = dcPatientState(subs, dept, m);
+          if (st === 'recorded') p.recorded++;else if (st === 'pending') p.pending++;else p.missing++;
+        });
+      }
+      const q = {
+        due: 0,
+        recorded: 0,
+        pending: 0,
+        notobs: 0,
+        missing: 0,
+        skipped: 0
+      };
+      inds.forEach(({
+        area,
+        ind
+      }) => {
+        if (nmOn(ind.id)) {
+          q.skipped++;
+          return;
+        }
+        dcDueMonths(dcIndicatorStart(area, ind, subs, ds)).forEach(m => {
+          q.due++;
+          const st = dcQStatus(subs, area.key, ind, m);
+          if (st === 'recorded') q.recorded++;else if (st === 'pending') q.pending++;else if (st === 'notobs') q.notobs++;else q.missing++;
+        });
+      });
+      return {
+        isPatient,
+        p,
+        q
+      };
+    }, [start, nm, subs, dept, areas]);
+    const discard = () => {
+      setStart(coll.startMonth || '');
+      setNm(initNm());
+    };
+    const save = () => {
+      if (!canSave || !changed || invalid || busy) return;
+      const body = {};
+      if (startChanged) body.startMonth = start || null;
+      if (changedIds.length) body.notMeasured = Object.fromEntries(changedIds.map(id => [id, nmOn(id) ? {
+        reason: String(nm[id].reason).trim()
+      } : null]));
+      setBusy(true);
+      dcApi.put('/api/departments/' + encodeURIComponent(row.id) + '/collection-settings', body).then(r => {
+        setBusy(false);
+        if (r && r.ok) {
+          toast('Saved', 'success');
+          onSaved(row.id, r.collection || {});
+          dcRefreshLive();
+        } else toast(r && r.error || 'Could not save the department settings', 'error');
+      }).catch(() => {
+        setBusy(false);
+        toast('Could not save — check your connection and try again.', 'error');
+      });
+    };
+    const monthOpts = dcWideMonths();
+    if (coll.startMonth && monthOpts.indexOf(coll.startMonth) < 0) monthOpts.unshift(coll.startMonth);
+    const tile = (val, lbl, color) => React.createElement("div", {
+      style: {
+        minWidth: 70,
+        padding: '6px 10px',
+        borderRadius: 9,
+        background: 'var(--panel-2)',
+        border: '1px solid var(--line)'
+      }
+    }, React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 16,
+        fontWeight: 800,
+        color: color || 'var(--ink)',
+        lineHeight: 1.15
+      }
+    }, val), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        whiteSpace: 'nowrap'
+      }
+    }, lbl));
+    const secLbl = {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--ink-2)',
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    };
+    const {
+      p,
+      q
+    } = counts;
+    return React.createElement(Card, {
+      style: {
+        padding: '14px 16px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        marginBottom: 10
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 14,
+        color: 'var(--ink)'
+      }
+    }, row.name), React.createElement("span", {
+      style: {
+        fontFamily: 'var(--mono)',
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, row.id), row.qualityOnly && React.createElement("span", {
+      className: "chip",
+      style: {
+        fontWeight: 700,
+        background: 'var(--blue-50)',
+        color: 'var(--blue-700)'
+      }
+    }, "Quality only"), changed && React.createElement("span", {
+      className: "chip",
+      style: {
+        fontWeight: 700,
+        background: '#fff4e0',
+        color: '#9a6b00'
+      }
+    }, "Unsaved changes"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), coll.updatedAt ? React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "Updated ", new Date(coll.updatedAt).toLocaleDateString(), coll.updatedBy ? ' by ' + coll.updatedBy : '') : null, canSave && changed && React.createElement("button", {
+      className: "btn sm",
+      disabled: busy,
+      onClick: discard
+    }, "Discard"), canSave && React.createElement("button", {
+      className: "btn pri sm",
+      disabled: !changed || invalid || busy,
+      onClick: save,
+      title: invalid ? 'Give a reason for every indicator marked not measured' : undefined
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 13
+    }), busy ? 'Saving…' : 'Save')), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 18,
+        flexWrap: 'wrap',
+        alignItems: 'flex-start'
+      }
+    }, React.createElement("div", {
+      style: {
+        flex: '0 1 240px',
+        minWidth: 190
+      }
+    }, React.createElement(Field, {
+      label: "Data starts from",
+      hint: start ? 'Months before ' + monthLabel(start) + ' are never counted as missing.' : p.from || !counts.isPatient ? 'Not set — counting starts at the first month with data.' : 'Not set — only the last completed month counts.'
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: start,
+      disabled: !canSave,
+      onChange: e => setStart(e.target.value)
+    }, React.createElement("option", {
+      value: ""
+    }, "Not set"), monthOpts.map(m => React.createElement("option", {
+      key: m,
+      value: m
+    }, monthLabel(m)))))), React.createElement("div", {
+      style: {
+        flex: '1 1 280px',
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: secLbl
+    }, "Statistics", counts.isPatient ? ' · from ' + (p.from ? monthLabel(p.from) : monthLabel(dcDefaultMonth())) : ''), counts.isPatient ? React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap'
+      }
+    }, tile(p.due, 'months due'), tile(p.recorded, 'recorded', 'var(--pos)'), tile(p.pending, 'pending', '#b5670a'), tile(p.missing, 'missing', p.missing ? 'var(--rose)' : undefined)) : React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, "Does not report patient statistics.")), React.createElement("div", {
+      style: {
+        flex: '1 1 360px',
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: secLbl
+    }, "Quality", q.skipped ? ' · ' + q.skipped + ' not measured' : ''), inds.length ? React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap'
+      }
+    }, tile(q.due, 'indicator-months due'), tile(q.recorded, 'recorded', 'var(--pos)'), tile(q.pending, 'pending', '#b5670a'), tile(q.notobs, 'not observed', '#5b3fa8'), tile(q.missing, 'missing', q.missing ? 'var(--rose)' : undefined)) : React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, "No quality indicators linked to this department."))), inds.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 10,
+        borderTop: '1px solid var(--line)',
+        paddingTop: 10
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setShowInds(v => !v)
+    }, React.createElement(Ic, {
+      d: I.chevR,
+      s: 13,
+      style: {
+        transform: showInds ? 'rotate(90deg)' : 'none',
+        transition: 'transform .15s'
+      }
+    }), showInds ? 'Hide' : 'Show', " ", inds.length, " quality indicator", inds.length === 1 ? '' : 's'), showInds && React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 6,
+        marginTop: 9
+      }
+    }, inds.map(({
+      area,
+      ind
+    }) => {
+      const on = nmOn(ind.id);
+      const reason = nm[ind.id] && nm[ind.id].reason || '';
+      const saved = origNm[ind.id];
+      const sub = [areas.length > 1 ? area.name : null, ind.startMonth ? 'Indicator starts ' + monthLabel(ind.startMonth) : null].filter(Boolean).join(' · ');
+      return React.createElement("div", {
+        key: area.key + '|' + ind.id,
+        style: {
+          border: '1px solid ' + (on ? '#f0d9a8' : 'var(--line)'),
+          background: on ? 'var(--warn-bg,#fff4e0)' : 'var(--panel)',
+          borderRadius: 9,
+          padding: '8px 11px'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap'
+        }
+      }, React.createElement("div", {
+        style: {
+          flex: 1,
+          minWidth: 170
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: 'var(--ink)'
+        }
+      }, ind.name), sub && React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          color: 'var(--muted)'
+        }
+      }, sub)), React.createElement("label", {
+        style: {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 12,
+          fontWeight: 700,
+          color: on ? '#9a6b00' : 'var(--ink-2)',
+          cursor: canSave ? 'pointer' : 'default'
+        }
+      }, React.createElement("input", {
+        type: "checkbox",
+        checked: on,
+        disabled: !canSave,
+        style: {
+          accentColor: '#b5670a'
+        },
+        onChange: e => {
+          const v = e.target.checked;
+          setNm(s => ({
+            ...s,
+            [ind.id]: {
+              on: v,
+              reason: s[ind.id] && s[ind.id].reason || saved && saved.reason || ''
+            }
+          }));
+        }
+      }), "Not measured")), on && React.createElement("input", {
+        style: {
+          ...inputStyle,
+          marginTop: 7,
+          fontSize: 12.5,
+          padding: '7px 10px',
+          borderColor: reason.trim() ? 'var(--line)' : 'var(--rose)'
+        },
+        readOnly: !canSave,
+        value: reason,
+        placeholder: "Reason (required) \u2014 e.g. this unit has no ventilated patients",
+        onChange: e => {
+          const v = e.target.value;
+          setNm(s => ({
+            ...s,
+            [ind.id]: {
+              on: true,
+              reason: v
+            }
+          }));
+        }
+      }), on && saved && saved.by && React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          color: 'var(--muted)',
+          marginTop: 4
+        }
+      }, "Marked by ", saved.by, saved.at ? ' · ' + new Date(saved.at).toLocaleDateString() : ''));
+    }))));
+  }
+  function DataCollectionSettings({
+    depts
+  }) {
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    const canSave = !me || me.role === 'Administrator' || me.role !== 'collector' && me.role !== 'incharge' && !!(window.unicoCan && window.unicoCan('datacol', 'edit'));
+    const dataRev = useDcDataRev();
+    useDcCollectionRev();
+    const [loaded, setLoaded] = useState(false);
+    const [err, setErr] = useState('');
+    const [subs, setSubs] = useState([]);
+    const [q, setQ] = useState('');
+    const load = force => dcLoadCollectionSettings(force).then(() => {
+      setLoaded(true);
+      setErr('');
+    }).catch(e => setErr(String(e && e.message || 'Could not load department settings')));
+    useEffect(() => {
+      load(true);
+    }, []);
+    useEffect(() => {
+      const l = () => {
+        dcAllSubmissions().then(s => setSubs(s || [])).catch(() => {});
+      };
+      l();
+      window.addEventListener('unico:data-refreshed', l);
+      return () => window.removeEventListener('unico:data-refreshed', l);
+    }, []);
+    const deptById = useMemo(() => {
+      const m = {};
+      (depts && depts.length ? depts : dcAllDepts()).forEach(d => {
+        if (d && d.id) m[d.id] = d;
+      });
+      return m;
+    }, [depts, dataRev]);
+    const areas = useMemo(() => window.qualityData ? window.qualityData() : [], [dataRev]);
+    const rows = loaded ? _dcCollList || [] : null;
+    const needle = q.trim().toLowerCase();
+    const shown = (rows || []).filter(r => !needle || (String(r.name || '') + ' ' + r.id).toLowerCase().indexOf(needle) >= 0).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+    const withStart = (rows || []).filter(r => r.collection && r.collection.startMonth).length;
+    const nmCount = (rows || []).reduce((n, r) => n + Object.keys(r.collection && r.collection.notMeasured || {}).length, 0);
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 14
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.layers,
+      title: "Department Setup",
+      sub: "When each department started reporting, and the quality indicators it does not measure \u2014 both decide what counts as missing."
+    }), !canSave && React.createElement(Banner, null, "Read-only \u2014 only an Administrator can change a department\u2019s start month or mark an indicator as not measured."), err && React.createElement(Banner, null, err, " ", React.createElement("button", {
+      className: "btn sm",
+      style: {
+        marginLeft: 8
+      },
+      onClick: () => load(true)
+    }, "Retry")), React.createElement(Card, {
+      style: {
+        padding: '10px 14px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("input", {
+      style: {
+        ...inputStyle,
+        flex: '1 1 220px',
+        maxWidth: 340
+      },
+      value: q,
+      onChange: e => setQ(e.target.value),
+      placeholder: "Search department\u2026"
+    }), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), rows && React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, rows.length, " departments \xB7 ", withStart, " with a start month \xB7 ", nmCount, " indicator", nmCount === 1 ? '' : 's', " not measured \xB7 counted through ", monthLabel(dcDefaultMonth()))), rows === null ? !err && React.createElement(Card, {
+      style: {
+        color: 'var(--muted)'
+      }
+    }, "Loading departments\u2026") : shown.length === 0 ? React.createElement(Card, {
+      style: {
+        color: 'var(--muted)',
+        textAlign: 'center'
+      }
+    }, rows.length ? 'No department matches the search.' : 'No departments found.') : shown.map(r => React.createElement(DcSettingsCard, {
+      key: r.id + ':' + (r.collection && r.collection.updatedAt || 0),
+      row: r,
+      dept: deptById[r.id] || null,
+      areas: areas.filter(a => a && (r.qualityKey && a.key === r.qualityKey || dcAreaDeptId(a) === r.id)),
+      subs: subs,
+      canSave: canSave,
+      onSaved: dcSetCollectionSettings
+    })));
+  }
   function CollectorPortal() {
     const user = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
     const dataRev = useDcDataRev();
     const depts = useMemo(() => dcAllDepts(), [dataRev]);
     const areas = useMemo(() => window.qualityData ? window.qualityData() : [], [dataRev]);
+    const collRev = useDcCollectionRev();
     const hasPatient = depts.length > 0;
     const hasQuality = areas.some(a => a && a.indicators && a.indicators.length);
     const inCharge = user.role === 'incharge';
@@ -65368,36 +67084,42 @@ window.LockScreen = LockScreen;
         let total = 0,
           missing = 0;
         areas.forEach(a => (a.indicators || []).forEach(ind => {
+          if (!dcIndDue(a, ind, month, S)) return;
           total++;
-          const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
+          const sent = ['recorded', 'pending', 'notobs'].includes(dcQStatus(S, a.key, ind, month));
           if (!sent) missing++;
         }));
-        const statGap = Math.max(0, depts.length - depts.filter(d => (d.months || []).indexOf(month) >= 0 || S.some(x => x.type === 'patient' && x.department === d.id && x.month === month && x.status !== 'rejected')).length);
+        const pDepts = dcPatientDepts(depts, S).filter(d => dcPatientDue(d, month, S));
+        const statGap = pDepts.filter(d => ['none', 'rejected'].includes(dcPatientState(S, d, month))).length;
+        const allMissing = dcMissingList(depts, areas.filter(a => a && a.indicators && a.indicators.length), S).length;
         setSubCount({
-          pending: S.filter(s => s.status === 'pending').length,
+          pending: S.filter(s => s.status === 'pending' && dcIsMine(s)).length,
           missing,
           total,
-          statGap
+          statGap,
+          allMissing
         });
       }).catch(() => {});
       return () => {
         dead = true;
       };
-    }, [month, dataRev, view]);
+    }, [month, dataRev, view, collRev]);
     const donePct = subCount.total ? Math.round((subCount.total - subCount.missing) * 100 / subCount.total) : 0;
-    const fillFor = (area, indicatorId, m) => {
+    const fillFor = (area, indicatorId, m, from) => {
       setJump({
         area,
         indicatorId,
-        month: m
+        month: m,
+        from: from || null
       });
       setView('quality');
       setSidebarOpen(false);
     };
-    const fillStat = (deptId, m) => {
+    const fillStat = (deptId, m, from) => {
       setJump({
         dept: deptId,
-        month: m
+        month: m,
+        from: from || null
       });
       setView('patient');
       setSidebarOpen(false);
@@ -65407,7 +67129,7 @@ window.LockScreen = LockScreen;
       setJump(null);
       setSidebarOpen(false);
     };
-    const badgeFor = v => v === 'quick' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '';
+    const badgeFor = v => v === 'missing' ? String(subCount.allMissing || '') : v === 'quick' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '';
     const NavItem = ([v, label, icd]) => {
       const on = view === v,
         badgeVal = badgeFor(v);
@@ -65424,6 +67146,7 @@ window.LockScreen = LockScreen;
     };
     const [acctOpen, setAcctOpen] = useState(false);
     const crumb = {
+      missing: 'Missing data',
       home: 'Dashboard',
       unit: "My unit's staff",
       requests: 'Add nurse / PCA',
@@ -65436,9 +67159,10 @@ window.LockScreen = LockScreen;
       profile: 'My profile',
       dept: 'Department & staff'
     }[view] || 'Submission status';
-    const collectNav = CP_NAV_COLLECT.filter(([v]) => v === 'patient' ? hasPatient : v === 'quick' ? hasPatient : hasQuality);
+    const collectNav = CP_NAV_COLLECT.filter(([v]) => v === 'missing' ? hasPatient || hasQuality : v === 'patient' ? hasPatient : v === 'quick' ? hasPatient : hasQuality);
     const dl = cpDeadline(month);
-    const overdueDays = dl ? Math.floor((Date.now() - dl.getTime()) / 864e5) : 0;
+    const lateMs = dl ? Date.now() - dl.getTime() : 0;
+    const overdueDays = lateMs > 0 && (subCount.missing > 0 || subCount.statGap > 0) ? Math.ceil(lateMs / 864e5) : 0;
     const dueTxt = overdueDays > 0 ? overdueDays + ' day' + (overdueDays === 1 ? '' : 's') + ' overdue' : 'On schedule';
     const dueTone = overdueDays > 0 ? ['#a92c42', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.28)'] : ['#12776c', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.3)'];
     const pill = c => ({
@@ -65821,7 +67545,12 @@ window.LockScreen = LockScreen;
         fontSize: 12.5,
         color: '#6c7a8c'
       }
-    }, "Your administrator has not given you a department or quality area to report on. Once they do, it appears here.")), view === 'status' && hasQuality && React.createElement(CollectorDash, {
+    }, "Your administrator has not given you a department or quality area to report on. Once they do, it appears here.")), view === 'missing' && (hasPatient || hasQuality) && React.createElement(CollectorMissing, {
+      depts: depts,
+      areas: areas,
+      month: month,
+      user: user
+    }), view === 'status' && hasQuality && React.createElement(CollectorDash, {
       month: month,
       setMonth: setMonth,
       onNav: go,
@@ -65836,12 +67565,13 @@ window.LockScreen = LockScreen;
         margin: '0 auto'
       }
     }, React.createElement(DataQualityForm, {
-      key: jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month : 'q',
+      key: jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q',
       prefill: {
         responsible: user.name,
         area: jump && jump.area,
         indicatorId: jump && jump.indicatorId,
-        month: jump && jump.month
+        month: jump && jump.month,
+        from: jump && jump.from
       }
     })), view === 'patient' && hasPatient && React.createElement("div", {
       style: {
@@ -65849,12 +67579,13 @@ window.LockScreen = LockScreen;
         margin: '0 auto'
       }
     }, React.createElement(DataPatientForm, {
-      key: jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month : 'p',
+      key: jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'p',
       depts: depts,
       prefill: {
         responsible: user.name,
         dept: jump && jump.dept,
-        month: jump && jump.dept ? jump.month : null
+        month: jump && jump.dept ? jump.month : null,
+        from: jump && jump.from
       }
     })), view === 'history' && React.createElement("div", {
       style: {
@@ -65971,7 +67702,7 @@ window.LockScreen = LockScreen;
         if ((s.submittedAt || 0) > p.last) p.last = s.submittedAt;
         const me2 = monthEndTs(s.month),
           dl = deadlineTs(s.month);
-        if (me2 && s.submittedAt) {
+        if (me2 && s.submittedAt && !s.isCorrection) {
           p.lagSum += (s.submittedAt - me2) / 864e5;
           p.lagN++;
           if (dl) {
@@ -66028,7 +67759,10 @@ window.LockScreen = LockScreen;
         n: reasons[k]
       })).sort((a, b) => b.n - a.n);
       const monthly = rangeDays > 60;
-      const key = ts => new Date(ts).toISOString().slice(0, monthly ? 7 : 10);
+      const key = ts => {
+        const d = new Date(ts);
+        return (d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')).slice(0, monthly ? 7 : 10);
+      };
       const bucket = {};
       all.forEach(s => {
         if (!s.submittedAt) return;
@@ -66064,7 +67798,7 @@ window.LockScreen = LockScreen;
       }
     }, "Loading analytics\u2026");
     const sorted = data.list.slice().sort((a, b) => {
-      const val = p => sortBy === 'accuracy' ? p.accuracy == null ? -1 : p.accuracy : sortBy === 'rejected' ? p.rejected : sortBy === 'quality' ? p.quality : sortBy === 'last' ? p.last : sortBy === 'ontime' ? p.onPct == null ? -1 : p.onPct : sortBy === 'lag' ? p.avgLag == null ? 1e9 : p.avgLag : sortBy === 'turn' ? p.avgTurn == null ? 1e9 : p.avgTurn : p.total;
+      const val = p => sortBy === 'name' ? String(p.name || '').toLowerCase() : sortBy === 'accuracy' ? p.accuracy == null ? -1 : p.accuracy : sortBy === 'rejected' ? p.rejected : sortBy === 'quality' ? p.quality : sortBy === 'last' ? p.last : sortBy === 'ontime' ? p.onPct == null ? -1 : p.onPct : sortBy === 'lag' ? p.avgLag == null ? 1e9 : p.avgLag : sortBy === 'turn' ? p.avgTurn == null ? 1e9 : p.avgTurn : p.total;
       const r = val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0;
       return sortDir === 'asc' ? r : -r;
     });
@@ -66417,7 +68151,7 @@ window.LockScreen = LockScreen;
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
       style: th,
       onClick: () => setSort('name')
-    }, "Responsible"), React.createElement("th", {
+    }, "Responsible", caret('name')), React.createElement("th", {
       style: {
         ...th,
         textAlign: 'center'
@@ -66846,7 +68580,8 @@ window.LockScreen = LockScreen;
     DataReview,
     DataShareLinks,
     CollectorPortal,
-    SubmissionAnalytics
+    SubmissionAnalytics,
+    DataCollectionSettings
   });
 })();
 })();
@@ -68707,35 +70442,52 @@ function SupEditor({
   const admin = supIsAdmin();
   const readOnly = rep.status === 'approved' && !admin;
   const draftKey = rid => 'unico_sup_draft_' + (rid || 'new');
+  const baseline = useRef(null);
+  const repRef = useRef(rep);
+  repRef.current = rep;
+  const baseAt = useRef(null);
+  const blocked = useRef(false);
   useEffect(() => {
+    baseline.current = null;
     if (!id) {
+      let init = repRef.current;
       try {
         const d = localStorage.getItem('unico_sup_draft_new');
         if (d) {
           const r = JSON.parse(d);
           if (r && (String(r.supervisorName || '').trim() || (r.newAdmissions || []).length || (r.criticalArea || []).length)) {
+            init = r;
             setRep(r);
             supToast('Restored your unsaved draft.', 'info');
           }
         }
       } catch (e) {}
+      baseline.current = JSON.stringify(init);
       return;
     }
     setLoading(true);
     supApi.get('/api/supervisor-reports/' + encodeURIComponent(id)).then(j => {
-      if (j.ok && j.report) setRep({
-        ...blankReport(),
-        ...j.report
-      });
+      if (j.ok && j.report) {
+        const r = {
+          ...blankReport(),
+          ...j.report
+        };
+        baseline.current = JSON.stringify(r);
+        baseAt.current = j.report.updatedAt || null;
+        blocked.current = false;
+        setRep(r);
+      }
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [id]);
   useEffect(() => {
-    if (readOnly) return;
+    if (readOnly || baseline.current == null || id && !rep.id) return;
+    const s = JSON.stringify(rep);
+    if (s === baseline.current) return;
     try {
-      localStorage.setItem(draftKey(rep.id), JSON.stringify(rep));
+      localStorage.setItem(draftKey(rep.id), s);
     } catch (e) {}
-  }, [rep, readOnly]);
+  }, [rep, readOnly, id]);
   useEffect(() => {
     const h = e => {
       if (dirty.current) {
@@ -68757,7 +70509,7 @@ function SupEditor({
     [key]: val
   });
   useEffect(() => {
-    if (!dirty.current || readOnly) return;
+    if (!dirty.current || readOnly || blocked.current) return;
     if (!(rep.date && String(rep.supervisorName || '').trim())) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
@@ -68768,13 +70520,27 @@ function SupEditor({
         census: {
           ...rep.census,
           TOTAL: supComputeCensusTotal(rep.census, deptNames)
-        }
+        },
+        baseUpdatedAt: baseAt.current || undefined
       };
       try {
         const j = await supApi.post('/api/supervisor-reports', payload);
         if (j.ok) {
           dirty.current = false;
           setSaved('Saved ✓');
+          if (j.report && j.report.updatedAt) baseAt.current = j.report.updatedAt;
+          const rid = rep.id || j.report && j.report.id;
+          if (rid) {
+            baseline.current = JSON.stringify(rep.id ? rep : {
+              ...rep,
+              id: rid
+            });
+            if (repRef.current === rep) {
+              try {
+                localStorage.removeItem(draftKey(rid));
+              } catch (e) {}
+            }
+          }
           if (!rep.id && j.report && j.report.id) {
             try {
               localStorage.removeItem('unico_sup_draft_new');
@@ -68784,6 +70550,10 @@ function SupEditor({
               id: j.report.id
             }));
           }
+        } else if (j.conflict || j.locked) {
+          blocked.current = true;
+          setSaved(j.locked ? 'Locked — not saved' : 'Not saved — changed elsewhere');
+          supToast((j.error || 'This report was changed elsewhere.') + ' Your edits are kept as a draft on this device.', 'error');
         } else setSaved('Save failed');
       } catch (e) {
         setSaved('Save failed');
@@ -68873,6 +70643,11 @@ function SupEditor({
           status
         }));
         supToast('Report ' + status + '.', 'success');
+        const nb = j.report && j.report.updatedAt;
+        if (nb) baseAt.current = nb;else supApi.get('/api/supervisor-reports/' + encodeURIComponent(rep.id)).then(g => {
+          if (g.ok && g.report) baseAt.current = g.report.updatedAt || baseAt.current;
+        }).catch(() => {});
+        blocked.current = false;
       }
     } catch (e) {
       supToast('Could not update status.', 'error');
@@ -70527,14 +72302,15 @@ function BoardEditModal({
     };
     const j = await supApi.post('/api/supervisor-reports', {
       ...rep,
-      [sec]: arr
+      [sec]: arr,
+      baseUpdatedAt: rep.updatedAt || undefined
     });
     setBusy(false);
     if (j.ok) {
       supToast('Patient updated.', 'success');
       onSaved && onSaved();
       onClose();
-    } else supToast('Save failed.', 'error');
+    } else supToast(j.error || 'Save failed.', 'error');
   };
   if (!patient) return null;
   const custom = rep && cfg.cols[patient.section] || [];
@@ -72274,12 +74050,22 @@ function DataFields({
     useState,
     useMemo
   } = React;
-  const depts = window.UNICO && window.UNICO.DEPARTMENTS || [];
+  const depts = useMemo(() => {
+    try {
+      if (window.buildDepts) {
+        const ov = JSON.parse(localStorage.getItem('unico_store_v3')) || {};
+        const m = window.buildDepts(ov);
+        if (Array.isArray(m) && m.length) return m;
+      }
+    } catch (e) {}
+    return window.UNICO && window.UNICO.DEPARTMENTS || [];
+  }, []);
   const areas = useMemo(() => (window.qualityData ? window.qualityData() : window.QUALITY_SEED || []).filter(d => d.indicators && d.indicators.length), []);
   const [tab, setTab] = useState('patient');
   const [deptId, setDeptId] = useState(depts[0] && depts[0].id || '');
   const [areaKey, setAreaKey] = useState(areas[0] && areas[0].key || '');
   const dept = depts.find(d => d.id === deptId) || depts[0];
+  const cols = dept ? (dept.cols || []).filter(c => !c.hidden) : [];
   const area = areas.find(a => a.key === areaKey) || areas[0];
   const sel = {
     padding: '8px 11px',
@@ -72362,7 +74148,7 @@ function DataFields({
     style: {
       color: 'var(--ink)'
     }
-  }, dept ? dept.name : '—'), ". They are shared app-wide with the dashboard and reports \u2014 edit them in ", React.createElement("b", null, "Statistics \u203A Manage Departments"), "."), !dept || !(dept.cols || []).length ? React.createElement("div", {
+  }, dept ? dept.name : '—'), ". They are shared app-wide with the dashboard and reports \u2014 edit them in ", React.createElement("b", null, "Statistics \u203A Manage Departments"), "."), !dept || !cols.length ? React.createElement("div", {
     style: {
       color: 'var(--muted)'
     }
@@ -72372,7 +74158,7 @@ function DataFields({
       gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))',
       gap: 10
     }
-  }, dept.cols.map((c, i) => React.createElement("div", {
+  }, cols.map(c => React.createElement("div", {
     key: c.id,
     style: {
       border: '1px solid var(--line)',
@@ -72392,7 +74178,7 @@ function DataFields({
       gap: 6,
       flexWrap: 'wrap'
     }
-  }, c.pct ? chip('%', '#6a52d4') : chip('Count', '#0090ca'), i === 0 && chip('Headline', '#1f9d57'))))))) : React.createElement("div", {
+  }, c.pct ? chip('%', '#6a52d4') : chip('Count', '#0090ca'), c.id === (dept.primary || cols[0] && cols[0].id) && chip('Headline', '#1f9d57'))))))) : React.createElement("div", {
     className: "card",
     style: {
       overflow: 'hidden'
@@ -72682,11 +74468,14 @@ function useRoster(staffStore, perf) {
     const rows = list.map(e => {
       const empId = e.emp_id || String(e.id);
       const cyc = A.cycleOf(e.doj, now);
-      const apr = perf.appraisals.find(x => x.empId === empId && cyc && x.cycleId === cyc.id) || null;
+      const current = perf.appraisals.find(x => x.empId === empId && cyc && x.cycleId === cyc.id) || null;
+      const earlier = perf.appraisals.filter(x => x.empId === empId && x.status !== 'actioned' && !(cyc && x.cycleId === cyc.id)).sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)))[0] || null;
+      const apr = earlier && earlier.status !== 'draft' ? earlier : current || earlier;
       const history = perf.appraisals.filter(x => x.empId === empId && x.status === 'actioned').sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)));
       const last = history[0] || null;
-      const inc = perf.incidents.filter(x => x.empId === empId && cyc && x.cycleId === cyc.id);
-      const ach = perf.achievements.filter(x => x.empId === empId && cyc && x.cycleId === cyc.id);
+      const regCycle = apr ? apr.cycleId : cyc && cyc.id;
+      const inc = perf.incidents.filter(x => x.empId === empId && regCycle && x.cycleId === regCycle);
+      const ach = perf.achievements.filter(x => x.empId === empId && regCycle && x.cycleId === regCycle);
       const firstDue = e.doj ? A.addMonths(A.parseDate(e.doj) || now, 6) : null;
       const neverAppraised = history.length === 0;
       const lastClosed = e.doj ? (A.cyclesSince(e.doj, now, 1) || [])[0] : null;
@@ -73931,10 +75720,10 @@ function PerfForm({
   };
   const body = status => ({
     empId: row.empId,
-    cycleId: row.cycle.id,
-    cycleLabel: row.cycle.label,
-    cycleStart: row.cycle.start.toISOString().slice(0, 10),
-    cycleEnd: row.cycle.end.toISOString().slice(0, 10),
+    cycleId: saved ? saved.cycleId : row.cycle.id,
+    cycleLabel: saved ? saved.cycleLabel : row.cycle.label,
+    cycleStart: saved ? saved.cycleStart : row.cycle.start.toISOString().slice(0, 10),
+    cycleEnd: saved ? saved.cycleEnd : row.cycle.end.toISOString().slice(0, 10),
     staffName: row.name,
     designation: row.designation,
     department: row.dept,
@@ -74075,7 +75864,7 @@ function PerfForm({
       background: 'rgba(0,144,202,.12)',
       border: '1px solid rgba(0,144,202,.35)'
     }
-  }, row.cycle.label)))), React.createElement("div", {
+  }, saved && saved.cycleLabel || row.cycle.label)))), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 22,
@@ -74125,15 +75914,18 @@ function PerfForm({
     style: {
       color: MK.INK
     }
-  }, row.cycle.label), " ", React.createElement("span", {
+  }, saved && saved.cycleLabel || row.cycle.label), " ", React.createElement("span", {
     style: {
       color: MK.MUTED
     }
-  }, "\xB7 appraisals run every 6 months from the individual\u2019s date of joining"))), !locked && perfCan('edit') && React.createElement("button", {
-    className: "btn",
-    disabled: busy,
-    onClick: () => save('draft', 'Draft saved.')
-  }, busy ? 'Saving…' : 'Save draft'), !locked && perfCan('edit') && React.createElement("button", {
+  }, "\xB7 appraisals run every 6 months from the individual\u2019s date of joining"))), !locked && perfCan('edit') && (() => {
+    const keep = saved && saved.status && saved.status !== 'draft' ? saved.status : 'draft';
+    return React.createElement("button", {
+      className: "btn",
+      disabled: busy,
+      onClick: () => save(keep, keep === 'draft' ? 'Draft saved.' : 'Changes saved.')
+    }, busy ? 'Saving…' : keep === 'draft' ? 'Save draft' : 'Save changes');
+  })(), !locked && perfCan('edit') && React.createElement("button", {
     className: "btn pri",
     disabled: busy || !canComplete,
     title: canComplete ? '' : 'Rate all 20 parameters and add remarks for any 1–2 first',
@@ -82102,6 +83894,11 @@ function RosterGrid({
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+  const [conflict, setConflict] = useState('');
+  const [storedNames, setStoredNames] = useState({});
+  const [retryTick, setRetryTick] = useState(0);
   const [brush, setBrush] = useState('');
   const [brushAll, setBrushAll] = useState(false);
   const [painting, setPainting] = useState(false);
@@ -82143,31 +83940,55 @@ function RosterGrid({
     desig: e.designation
   })).sort((a, b) => String(a.name).localeCompare(String(b.name))), [staffStore.staff, dept]);
   const rows = useMemo(() => {
-    if (!order.length) return staff;
     const byId = {};
     staff.forEach(x => {
       byId[x.empId] = x;
     });
     const seen = {};
     const out = [];
+    const ghost = id => ({
+      empId: id,
+      empIdShown: '',
+      name: storedNames[id] || id,
+      desig: 'No longer on this unit',
+      offRegister: true
+    });
+    const hasCells = id => Object.keys(grid[id] || {}).length > 0;
     order.forEach(id => {
-      if (byId[id] && !seen[id]) {
-        out.push(byId[id]);
+      if (seen[id]) return;
+      if (byId[id]) out.push(byId[id]);else if (hasCells(id)) out.push(ghost(id));else return;
+      seen[id] = 1;
+    });
+    staff.forEach(x => {
+      if (!seen[x.empId]) {
+        out.push(x);
+        seen[x.empId] = 1;
+      }
+    });
+    Object.keys(grid).forEach(id => {
+      if (!seen[id] && hasCells(id)) {
+        out.push(ghost(id));
         seen[id] = 1;
       }
     });
-    staff.forEach(x => {
-      if (!seen[x.empId]) out.push(x);
-    });
     return out;
-  }, [staff, order]);
+  }, [staff, order, grid, storedNames]);
   const depts = useMemo(() => [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => e.current_department || 'Unassigned'))].sort(), [staffStore.staff]);
   useEffect(() => {
     setLoading(true);
+    setLoadError('');
+    setConflict('');
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
-      const d = r && r.ok ? r.roster : null;
+      if (!r || !r.ok) {
+        setLoadError(r && r.error || 'The server did not return the roster.');
+        setLoading(false);
+        setDirty(false);
+        return;
+      }
+      const d = r.roster;
       setGrid(rosMigrateGrid(d && d.grid, staff));
       setOrder(d && d.order || []);
+      setStoredNames(d && d.names || {});
       setStatus(d && d.status || 'draft');
       setRev(d && d.revision || 0);
       const ru = d && d.rules || {};
@@ -82204,8 +84025,12 @@ function RosterGrid({
       setDirty(false);
       setQueue([]);
       history.current = [];
-    }).catch(() => setLoading(false));
-  }, [dept, year, month]);
+    }).catch(() => {
+      setLoadError('Could not reach the server.');
+      setLoading(false);
+      setDirty(false);
+    });
+  }, [dept, year, month, reloadKey]);
   useEffect(() => {
     const up = () => {
       setPainting(false);
@@ -82216,9 +84041,9 @@ function RosterGrid({
     return () => window.removeEventListener('mouseup', up);
   }, []);
   const locked = status === 'approved';
-  const canEdit = !locked && rosCan('edit');
+  const canEdit = !locked && !loadError && !conflict && rosCan('edit');
   const editBlocked = () => {
-    rosToast(locked ? 'Approved and locked — reopen it to edit.' : 'You do not have edit rights on the roster.', 'info');
+    rosToast(conflict ? 'Someone else saved this roster. Reload the month before editing.' : locked ? 'Approved and locked — reopen it to edit.' : 'You do not have edit rights on the roster.', 'info');
   };
   const push = () => {
     history.current.push(JSON.stringify(grid));
@@ -82386,6 +84211,7 @@ function RosterGrid({
       month,
       grid,
       order: rows.map(r => r.empId),
+      baseRevision: rev,
       rules: {
         cfg,
         off: en,
@@ -82425,7 +84251,9 @@ function RosterGrid({
         if (r.empId) m[r.empId] = r.name || '';
         return m;
       }, {}),
-      status: nextStatus || status,
+      ...(nextStatus ? {
+        status: nextStatus
+      } : {}),
       preparedBy: sign['Prepared by'] !== '—' ? sign['Prepared by'] || '' : '',
       checkedBy: sign['Checked by'] !== '—' ? sign['Checked by'] || '' : ''
     }).then(r => {
@@ -82438,11 +84266,14 @@ function RosterGrid({
         if (onSaved) onSaved();
         return true;
       }
+      if (r && r.conflict) setConflict(r.error || 'Someone else saved this roster.');
+      if (r && r.locked) setStatus('approved');
       rosToast(r && r.error || 'Could not save.', 'error');
       return false;
     }).catch(() => {
       setBusy(false);
-      rosToast('Could not reach the server.', 'error');
+      rosToast('Could not reach the server — your changes are kept on this screen and will be retried.', 'error');
+      if (quiet) setTimeout(() => setRetryTick(n => n + 1), 5000);
       return false;
     });
   };
@@ -82450,14 +84281,35 @@ function RosterGrid({
     if (!dirty || loading || !canEdit) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
       save(null, true);
     }, 1600);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [grid, cfg, en, custom, sign, dirty]);
+  }, [grid, cfg, en, custom, sign, dirty, retryTick]);
+  const saveRef = useRef(null);
+  saveRef.current = save;
+  const pendingRef = useRef(false);
+  pendingRef.current = dirty && !loading && canEdit;
+  useEffect(() => {
+    const warn = e => {
+      if (pendingRef.current) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => {
+      window.removeEventListener('beforeunload', warn);
+      if (pendingRef.current) {
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        saveRef.current(null, true);
+      }
+    };
+  }, []);
   const setStatusRemote = (st, extra) => {
-    const id = 'ros-' + dept + '-' + year + '-' + String(month).padStart(2, '0');
+    const id = 'ros-' + String(dept).slice(0, 40) + '-' + year + '-' + String(month).padStart(2, '0');
     setBusy(true);
     return rosApi.post('/api/rosters/' + encodeURIComponent(id) + '/status', Object.assign({
       status: st
@@ -82489,6 +84341,10 @@ function RosterGrid({
     if (locked) {
       setStatusRemote('draft');
       return;
+    }
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
     }
     Promise.resolve(save('submitted', true)).then(ok => {
       if (ok !== false) setStatusRemote('approved');
@@ -82645,6 +84501,33 @@ function RosterGrid({
       color: '#6c7a8c'
     }
   }, "Loading the roster\u2026");
+  const retryBox = (title, detail, label, onClick) => React.createElement("div", {
+    style: {
+      display: 'grid',
+      placeItems: 'center',
+      height: '40vh',
+      color: '#6c7a8c',
+      textAlign: 'center',
+      padding: 16
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      color: '#b4232f',
+      marginBottom: 6
+    }
+  }, title), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      marginBottom: 12,
+      maxWidth: 520
+    }
+  }, detail), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: onClick
+  }, label)));
+  if (loadError) return retryBox('The roster for ' + R.MONTHS[month] + ' ' + year + ' did not load.', loadError + ' Nothing is shown, so nothing can be saved over the stored roster.', 'Try again', () => setReloadKey(k => k + 1));
+  if (conflict) return retryBox('Someone else saved this roster while you were editing.', conflict + ' Your last changes were not saved. Reload to see the current roster, then make them again.', 'Reload the month', () => setReloadKey(k => k + 1));
   const published = status === 'approved';
   const showGrid = view === 'month' || view === 'swap';
   const showFooter = view === 'month' || view === 'rules';
@@ -90346,6 +92229,10 @@ window.RosterReviewFull = RosterReviewFull;
   }, React.createElement("path", {
     d: d
   }));
+  const mpToday = () => {
+    const d = new Date();
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  };
   function ManpowerOverview({
     setRoute
   }) {
@@ -90353,7 +92240,7 @@ window.RosterReviewFull = RosterReviewFull;
     const [S, setS] = useState(() => ({
       pop: null,
       view: 'day',
-      date: new Date().toISOString().slice(0, 10),
+      date: mpToday(),
       shift: 0,
       sel: null,
       hot: null,
@@ -90372,7 +92259,7 @@ window.RosterReviewFull = RosterReviewFull;
       window.addEventListener('resize', rs);
       return () => window.removeEventListener('resize', rs);
     }, []);
-    const today = () => new Date().toISOString().slice(0, 10);
+    const today = mpToday;
     const ini = n => {
       const p = String(n || '—').split(' ').filter(Boolean);
       return ((p[0] && p[0][0] || '—') + (p[1] ? p[1][0] : '')).toUpperCase();
@@ -93341,7 +95228,8 @@ window.RosterReviewFull = RosterReviewFull;
           generic: row.generic,
           price: row.price,
           hasImage: row.hasImage,
-          drugClass: row.drugClass
+          drugClass: row.drugClass,
+          genericId: row.genericId || (searchMode === 'generic' ? row.id : undefined)
         }]);
         try {
           localStorage.setItem(FAV_KEY, JSON.stringify(next));
@@ -93354,7 +95242,10 @@ window.RosterReviewFull = RosterReviewFull;
       if (!checkMode) return searchMode === 'generic' ? openGeneric(row.id) : openBrand(row.id);
       setPicks(p => {
         const has = p.some(x => x.id === row.id);
-        const next = has ? p.filter(x => x.id !== row.id) : p.length < 2 ? p.concat([row]) : [p[1], row];
+        const pick = row.genericId || searchMode !== 'generic' ? row : Object.assign({}, row, {
+          genericId: row.id
+        });
+        const next = has ? p.filter(x => x.id !== row.id) : p.length < 2 ? p.concat([pick]) : [p[1], pick];
         return next;
       });
     };
@@ -93363,9 +95254,20 @@ window.RosterReviewFull = RosterReviewFull;
         setCheckRes(null);
         return;
       }
+      const gids = picks.map(p => p.genericId).filter(Boolean);
+      if (gids.length < 2) {
+        setCheckRes({
+          unchecked: true
+        });
+        return;
+      }
       post('/api/med/check', {
-        genericIds: picks.map(p => p.genericId).filter(Boolean)
-      }).then(r => setCheckRes(r.ok ? r.warnings || [] : null)).catch(() => setCheckRes(null));
+        genericIds: gids
+      }).then(r => setCheckRes(r.ok ? r.warnings || [] : {
+        unchecked: true
+      })).catch(() => setCheckRes({
+        unchecked: true
+      }));
     }, [picks]);
     const shown = useMemo(() => {
       let list = favOnly ? favs.slice() : rows;
@@ -94016,7 +95918,27 @@ window.RosterReviewFull = RosterReviewFull;
         gap: 8,
         alignItems: 'flex-start'
       }
-    }, checkRes.length ? (() => {
+    }, checkRes.unchecked ? React.createElement(React.Fragment, null, React.createElement("span", {
+      style: {
+        flexShrink: 0,
+        fontSize: 9.5,
+        fontWeight: 700,
+        letterSpacing: '.5px',
+        textTransform: 'uppercase',
+        color: '#8a5a00',
+        background: 'rgba(224,161,42,.16)',
+        border: '1px solid rgba(224,161,42,.45)',
+        borderRadius: 6,
+        padding: '3px 8px'
+      }
+    }, bn ? 'যাচাই হয়নি' : 'Not checked'), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        lineHeight: 1.5,
+        color: '#2b3a4d',
+        flex: 1
+      }
+    }, bn ? 'এই জোড়ার ইন্টারঅ্যাকশন যাচাই করা যায়নি — মনোগ্রাফ বা ফার্মাসিস্টের সাথে মিলিয়ে নিন।' : 'Interactions for this pair could NOT be checked (no linked generic, or the check failed). Consult the monograph or a pharmacist.')) : checkRes.length ? (() => {
       const w = checkRes[0],
         m = sevMeta(w);
       return React.createElement(React.Fragment, null, React.createElement("span", {
@@ -99622,6 +101544,503 @@ Object.assign(window, {
 });
 })();
 ;
+/* ===== monitor.jsx ===== */
+(function(){
+(function installSaveFailureReporter() {
+  const n = window.unicoNative;
+  if (!n || typeof n.persist !== 'function' || n.__monitorWrapped) return;
+  const QUEUE = 'uncmon_pending_v1';
+  const recent = {};
+  const read = () => {
+    try {
+      const q = JSON.parse(localStorage.getItem(QUEUE));
+      return Array.isArray(q) ? q : [];
+    } catch (e) {
+      return [];
+    }
+  };
+  const write = q => {
+    try {
+      localStorage.setItem(QUEUE, JSON.stringify(q.slice(-20)));
+    } catch (e) {}
+  };
+  const send = ev => fetch('/api/monitor/event', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify(ev)
+  }).then(r => {
+    if (r.status >= 500 || r.status === 0) throw new Error('retry');
+    return true;
+  });
+  const flush = () => {
+    const q = read();
+    if (!q.length) return;
+    write([]);
+    q.reduce((p, ev) => p.then(() => send(ev)).catch(() => {
+      write(read().concat([ev]));
+    }), Promise.resolve());
+  };
+  const report = r => {
+    const detail = String(r && r.error || 'The database did not confirm the save.');
+    if (/session expired/i.test(detail)) return;
+    const kind = r && r.conflict ? 'save_conflict' : r && r.forbidden ? 'save_forbidden' : 'save_failed';
+    const sig = kind + '|' + detail;
+    const now = Date.now();
+    if (recent[sig] && now - recent[sig] < 120000) return;
+    recent[sig] = now;
+    const ev = {
+      kind,
+      detail,
+      keys: r && Array.isArray(r.conflicted) ? r.conflicted : [],
+      page: location.pathname + location.hash,
+      at: now
+    };
+    send(ev).catch(() => write(read().concat([ev])));
+  };
+  const orig = n.persist;
+  n.persist = function () {
+    const p = orig.apply(this, arguments);
+    try {
+      Promise.resolve(p).then(r => {
+        if (r && r.ok === false) report(r);
+      }, () => {});
+    } catch (e) {}
+    return p;
+  };
+  n.__monitorWrapped = true;
+  window.addEventListener('online', flush);
+  setTimeout(flush, 5000);
+})();
+function SystemMonitor() {
+  const [d, setD] = React.useState(null);
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [running, setRunning] = React.useState(false);
+  const [open, setOpen] = React.useState({});
+  const load = React.useCallback(() => {
+    setBusy(true);
+    setErr('');
+    fetch('/api/monitor/status', {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }).then(r => r.json()).then(j => {
+      if (j && j.ok) setD(j);else setErr(j && j.error || 'Could not load the monitor.');
+    }).catch(() => setErr('Could not reach the server.')).finally(() => setBusy(false));
+  }, []);
+  React.useEffect(() => {
+    load();
+  }, [load]);
+  const runNow = () => {
+    setRunning(true);
+    setErr('');
+    fetch('/api/monitor/run', {
+      method: 'POST',
+      credentials: 'same-origin'
+    }).then(r => r.json()).then(j => {
+      if (!j || !j.ok) setErr(j && j.error || 'The check failed.');
+      load();
+    }).catch(() => setErr('Could not reach the server.')).finally(() => setRunning(false));
+  };
+  const when = t => t ? new Date(t).toLocaleString([], {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  }) : '—';
+  const ago = t => {
+    if (!t) return 'never';
+    const h = Math.round((Date.now() - t) / 36e5);
+    return h < 1 ? 'within the hour' : h < 48 ? h + ' h ago' : Math.round(h / 24) + ' days ago';
+  };
+  const GOOD = '#157a43',
+    WARN = '#b5670a',
+    BAD = '#b4232f';
+  const tile = (label, val, sub, color) => React.createElement("div", {
+    key: label,
+    style: {
+      background: 'var(--panel-2)',
+      borderRadius: 9,
+      padding: '10px 13px',
+      minWidth: 120,
+      flex: '1 1 120px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      color: 'var(--muted)'
+    }
+  }, label), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 19,
+      fontWeight: 800,
+      color: color || 'var(--ink)',
+      marginTop: 2
+    }
+  }, val), sub && React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--faint)',
+      marginTop: 1
+    }
+  }, sub));
+  const pill = (text, color) => React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 11.5,
+      fontWeight: 700,
+      padding: '4px 11px',
+      borderRadius: 15,
+      color,
+      background: color + '1f'
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      background: color
+    }
+  }), text);
+  const levelColor = l => l === 'alert' ? BAD : WARN;
+  const card = (title, sub, body, extra) => React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
+    className: "card-b"
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginBottom: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 180
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, title), sub && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, sub)), extra), body));
+  if (err && !d) return card('System Monitor', null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--rose)',
+      fontWeight: 600
+    }
+  }, err), React.createElement("button", {
+    className: "btn sm",
+    onClick: load
+  }, "Retry"));
+  if (!d) return card('System Monitor', null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--faint)',
+      padding: 14,
+      textAlign: 'center'
+    }
+  }, "Loading\u2026"));
+  const h = d.health || {},
+    latest = d.latest,
+    history = d.history || [],
+    events = d.events || [];
+  const alerts = latest && latest.alerts || 0;
+  const checkStale = !latest || Date.now() - latest.at > 36 * 36e5;
+  const recentEvents = events.filter(e => Date.now() - e.at < 7 * 864e5);
+  const overall = (d.config || []).some(x => x.level === 'alert') || alerts > 0 ? ['Needs attention', BAD] : recentEvents.length || checkStale ? ['Check the notes below', WARN] : ['All clear', GOOD];
+  const findingRow = (x, i, at) => {
+    const k = (at || 0) + ':' + i;
+    return React.createElement("div", {
+      key: k,
+      style: {
+        borderLeft: '3px solid ' + levelColor(x.level),
+        background: 'var(--panel-2)',
+        borderRadius: 7,
+        padding: '8px 11px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'baseline',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: levelColor(x.level)
+      }
+    }, x.level), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)'
+      }
+    }, x.area, at ? ' · ' + when(at) : '')), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--ink)',
+        marginTop: 2
+      }
+    }, x.message), x.details && x.details.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 4
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      style: {
+        fontSize: 11,
+        padding: '2px 8px'
+      },
+      onClick: () => setOpen(o => Object.assign({}, o, {
+        [k]: !o[k]
+      }))
+    }, open[k] ? 'Hide' : 'Show', " ", x.details.length, " name", x.details.length > 1 ? 's' : ''), open[k] && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--ink-2)',
+        marginTop: 4,
+        lineHeight: 1.6
+      }
+    }, x.details.join(' · '))));
+  };
+  const olderFindings = history.slice(1).flatMap(s => (s.findings || []).filter(x => x.area !== 'configuration').map((x, i) => ({
+    x,
+    i,
+    at: s.at
+  })));
+  const kindLabel = {
+    save_failed: 'Save failed',
+    save_conflict: 'Save conflict',
+    save_forbidden: 'Not permitted',
+    save_unconfirmed: 'Not confirmed'
+  };
+  return React.createElement(React.Fragment, null, card('System Monitor', 'Checks every day that nothing saved has gone missing, and collects save problems from every browser.', React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, err && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--rose)',
+      fontWeight: 600
+    }
+  }, err), (d.config || []).map((x, i) => findingRow(x, i)), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 9,
+      flexWrap: 'wrap'
+    }
+  }, tile('Database', h.dbMs != null ? h.dbMs + ' ms' : '—', 'reachable now', h.dbMs > 2000 ? WARN : GOOD), tile('Databases in use', h.singleDatabase ? 'One' : 'Two', h.singleDatabase ? 'no split possible' : 'failover is on', h.singleDatabase ? GOOD : BAD), tile('Redis', h.redisConfigured ? 'Configured' : 'Off', h.redisConfigured ? 'not expected' : 'as intended', h.redisConfigured ? WARN : GOOD), tile('Last daily check', latest ? ago(latest.at) : 'never', latest ? when(latest.at) : 'run one now', checkStale ? WARN : GOOD), tile('Backups', h.backup === undefined ? 'Not set up' : h.backup === null ? 'None yet' : h.backup.ok ? ago(h.backup.at) : 'Failed', h.backup && h.backup.at ? when(h.backup.at) : '', h.backup && h.backup.ok ? GOOD : WARN), tile('Keep-alive', ago(h.lastKeepalive), 'database kept awake', h.lastKeepalive && Date.now() - h.lastKeepalive < 50 * 36e5 ? GOOD : WARN))), React.createElement(React.Fragment, null, pill(overall[0], overall[1]), React.createElement("button", {
+    className: "btn sm",
+    onClick: load,
+    disabled: busy
+  }, busy ? 'Loading…' : 'Refresh'), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: runNow,
+    disabled: running
+  }, running ? 'Checking…' : 'Run check now'))), card('Did anything go missing?', latest ? 'Compared with the previous check' + (history[1] ? ' on ' + when(history[1].at) : '') + '. A deliberate deletion also appears here — the Activity Log shows who made it.' : 'No check has run yet. Run one now; the next one will compare against it.', latest ? React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, latest.findings.filter(x => x.area !== 'configuration').length === 0 ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: GOOD,
+      fontWeight: 600,
+      background: 'rgba(31,157,87,.08)',
+      borderRadius: 7,
+      padding: '9px 12px'
+    }
+  }, "\u2713 Nothing went missing since the previous check.") : latest.findings.filter(x => x.area !== 'configuration').map((x, i) => findingRow(x, i, latest.at)), olderFindings.length > 0 && React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--muted)',
+      marginTop: 6,
+      textTransform: 'uppercase',
+      letterSpacing: .5
+    }
+  }, "Earlier checks"), olderFindings.slice(0, 20).map(({
+    x,
+    i,
+    at
+  }) => findingRow(x, i, at)), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 9,
+      flexWrap: 'wrap',
+      marginTop: 6
+    }
+  }, tile('Staff records', latest.staff.rows == null ? '—' : latest.staff.rows, (latest.staff.active || 0) + ' active · ' + (latest.staff.former || 0) + ' previous'), tile('With activities', latest.staff.filled.extracurricular || 0, 'extracurricular filled'), tile('Submissions', latest.submissions.total || 0, Object.entries(latest.submissions.byStatus || {}).map(([k, v]) => v + ' ' + k).join(' · ')), tile('Statistics values', latest.statisticsValues, 'across departments'), tile('Quality readings', latest.qualityReadings, 'across departments'))) : null), card('Save problems from browsers', 'Every save the database refused or never received, reported by the browser it happened in (last 30 days).', events.length === 0 ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: GOOD,
+      fontWeight: 600,
+      background: 'rgba(31,157,87,.08)',
+      borderRadius: 7,
+      padding: '9px 12px'
+    }
+  }, "\u2713 No failed saves reported.") : React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 12
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      textAlign: 'left',
+      color: 'var(--muted)',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: .4
+    }
+  }, React.createElement("th", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, "When"), React.createElement("th", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, "Who"), React.createElement("th", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, "What"), React.createElement("th", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, "Details"), React.createElement("th", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, "Screen"))), React.createElement("tbody", null, events.slice(0, 100).map((e, i) => React.createElement("tr", {
+    key: i,
+    style: {
+      borderTop: '1px solid var(--line-2)'
+    }
+  }, React.createElement("td", {
+    style: {
+      padding: '6px 8px',
+      whiteSpace: 'nowrap'
+    }
+  }, when(e.happenedAt || e.at)), React.createElement("td", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, e.name || e.username), React.createElement("td", {
+    style: {
+      padding: '6px 8px',
+      color: e.kind === 'save_conflict' ? WARN : BAD,
+      fontWeight: 700,
+      whiteSpace: 'nowrap'
+    }
+  }, kindLabel[e.kind] || e.kind), React.createElement("td", {
+    style: {
+      padding: '6px 8px',
+      color: 'var(--ink-2)'
+    }
+  }, e.detail, e.keys && e.keys.length ? ' (' + e.keys.join(', ') + ')' : ''), React.createElement("td", {
+    style: {
+      padding: '6px 8px',
+      color: 'var(--muted)'
+    }
+  }, e.page)))))), events.length ? pill(recentEvents.length + ' this week', recentEvents.length ? WARN : GOOD) : null), history.length > 1 && card('Trend', 'One row per daily check, newest first.', React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 12
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      textAlign: 'left',
+      color: 'var(--muted)',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: .4
+    }
+  }, ['Checked', 'Alerts', 'Staff', 'With activities', 'Submissions', 'Statistics values', 'Quality readings'].map(x => React.createElement("th", {
+    key: x,
+    style: {
+      padding: '6px 8px'
+    }
+  }, x)))), React.createElement("tbody", null, history.map((s, i) => React.createElement("tr", {
+    key: i,
+    style: {
+      borderTop: '1px solid var(--line-2)'
+    }
+  }, React.createElement("td", {
+    style: {
+      padding: '6px 8px',
+      whiteSpace: 'nowrap'
+    }
+  }, when(s.at)), React.createElement("td", {
+    style: {
+      padding: '6px 8px',
+      color: s.alerts ? BAD : GOOD,
+      fontWeight: 700
+    }
+  }, s.alerts || 0), React.createElement("td", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, s.staffRows), React.createElement("td", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, s.activities), React.createElement("td", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, s.submissions), React.createElement("td", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, s.statisticsValues), React.createElement("td", {
+    style: {
+      padding: '6px 8px'
+    }
+  }, s.qualityReadings))))))));
+}
+window.SystemMonitor = SystemMonitor;
+})();
+;
 /* ===== app.jsx ===== */
 (function(){
 const {
@@ -99760,6 +102179,7 @@ function App() {
       const cd = depts.find(d => d.id === route.dept) || depts[0];
       crumbs = ['UNICO', 'Departments', cd.name];
       body = React.createElement(DeptDetail, {
+        key: cd.id,
         dept: cd,
         openDept: openDept,
         depts: depts,
@@ -99906,6 +102326,11 @@ function App() {
     body = React.createElement(DataResponsibles, {
       depts: depts
     });
+  } else if (route.view === 'dcSettings') {
+    crumbs = ['UNICO', 'Data Collection', 'Department Setup'];
+    body = typeof DataCollectionSettings !== 'undefined' ? React.createElement(DataCollectionSettings, {
+      depts: depts
+    }) : null;
   } else if (route.view === 'dcReview') {
     crumbs = ['UNICO', 'Data Collection', 'Review & History'];
     body = React.createElement(DataReview, null);

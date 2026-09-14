@@ -268,6 +268,15 @@
       const err = new Error(j && j.error || 'HTTP ' + r.status);
       err.status = r.status;
       err.body = j;
+      if (r.status === 401 && !/^\/api\/login\b/.test(path)) {
+        try {
+          window.dispatchEvent(new CustomEvent('unico:session-expired', {
+            detail: {
+              path
+            }
+          }));
+        } catch (e) {}
+      }
       throw err;
     }
     return j || {
@@ -275,6 +284,18 @@
     };
   }
   const tryApi = (path, opts) => api(path, opts).catch(() => null);
+  async function pageAll(path, key, maxPages) {
+    const out = [];
+    let offset = 0;
+    for (let p = 0; p < (maxPages || 10); p++) {
+      const r = await tryApi(path + (path.indexOf('?') < 0 ? '?' : '&') + 'offset=' + offset);
+      if (!r || !r.ok || !Array.isArray(r[key])) return null;
+      out.push(...r[key]);
+      if (r.nextOffset == null || r.nextOffset <= offset) break;
+      offset = r.nextOffset;
+    }
+    return out;
+  }
   function injectCSS(id, css) {
     if (!css || document.getElementById(id)) return;
     const el = document.createElement('style');
@@ -297,6 +318,7 @@
     usePhone,
     api,
     tryApi,
+    pageAll,
     injectCSS,
     mount
   };
@@ -972,7 +994,7 @@
         "textTransform": "uppercase",
         "color": "#7d8ea8"
       }
-    }, "Aug data collection · hospital-wide"), React.createElement("button", {
+    }, ix(v.covTitle)), React.createElement("button", {
       onClick: v.goApprovals,
       style: {
         "border": "0",
@@ -8013,6 +8035,7 @@
     S,
     api,
     tryApi,
+    pageAll,
     mount
   } = window.DC;
   const D = window.ADMIN_APP_DATA;
@@ -8370,9 +8393,9 @@
     renderVals() {
       const s = this.state,
         go = this.go;
-      const QUEUE = s.live.subs && s.live.subs.length ? s.live.subs : D.QUEUE;
-      const LOG = s.live.log && s.live.log.length ? s.live.log : D.LOG;
-      const DEPTS = s.live.depts ? s.live.depts.list : D.DEPTS;
+      const QUEUE = s.demo ? D.QUEUE : s.live.subs || [];
+      const LOG = s.demo ? D.LOG : s.live.log || [];
+      const DEPTS = s.demo ? D.DEPTS : s.live.depts ? s.live.depts.list : [];
       const DEPT_INFO = s.live.depts ? Object.assign({}, D.DEPT_INFO, s.live.depts.info) : D.DEPT_INFO;
       const LV0 = liveShadows(s);
       const {
@@ -8396,7 +8419,7 @@
         IND_CATALOG,
         MEDS_ADMIN
       } = LV0;
-      const withDefault = (src, dflt) => Object.assign(Object.fromEntries(DEPTS.map(d => [d, typeof dflt === 'function' ? dflt() : dflt])), src);
+      const withDefault = (src, dflt) => Object.assign(Object.fromEntries([...DEPTS, s.stDept, s.selDept, ...(s.stCompare || [])].map(d => [d, typeof dflt === 'function' ? dflt() : dflt])), src);
       const STATS_DEPTS = withDefault(STATS_DEPTS_LV, () => [0, 0]);
       const DEPT_SERIES = withDefault(DEPT_SERIES_LV, () => [0, 0, 0, 0, 0, 0, 0]);
       const DEPT_DEATHS = withDefault(DEPT_DEATHS_LV, 0);
@@ -8545,8 +8568,12 @@
         }), 2400);
       };
       const apSource = s.apTab === 'data' ? QUEUE : s.apTab === 'leave' ? LEAVE : REPORTS_Q;
-      const apList = apSource.filter(x => s.apFilter === 'All' || (s.apFilter === 'Out of range' ? !x.ok : s.apFilter === 'Pending' ? !s.decisions[x.id] : x.dept === s.apFilter)).map(x => {
+      const canDecide = !!s.demo || me.role === 'Administrator';
+      const apFilterOpts = ['All', 'Pending', 'Out of range', ...Array.from(new Set(apSource.map(x => x.dept)))];
+      const apFilter = apFilterOpts.includes(s.apFilter) ? s.apFilter : 'All';
+      const apList = apSource.filter(x => apFilter === 'All' || (apFilter === 'Out of range' ? !x.ok : apFilter === 'Pending' ? !s.decisions[x.id] : x.dept === apFilter)).map(x => {
         const d = s.decisions[x.id];
+        const isSub = (x.src || 'submission') === 'submission';
         return {
           ...x,
           vals: x.vals.map(([k, v]) => ({
@@ -8555,7 +8582,7 @@
           })),
           valueColor: x.ok ? '#1d8f57' : '#b32e2e',
           benchLabel: x.bench,
-          pending: !d,
+          pending: !d && (!isSub || canDecide),
           decided: !!d,
           status: d ? d.status : '',
           reason: d ? d.reason : null,
@@ -8564,20 +8591,7 @@
           kindStyle: `font-size:9.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;padding:3px 7px;border-radius:6px;flex-shrink:0;${x.kind === 'Quality' ? 'color:#6a52d4;background:rgba(106,82,212,.13)' : x.kind === 'Statistics' ? 'color:#0072a3;background:rgba(0,144,202,.13)' : 'color:#1e8a7c;background:rgba(58,181,167,.16)'}`,
           cardStyle: `border:1px solid ${!x.ok && !d ? 'rgba(214,69,69,.35)' : 'rgba(255,255,255,.9)'};border-radius:15px;padding:12px 13px;background:rgba(255,255,255,${d ? '.5' : '.68'})`,
           statusStyle: `font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:999px;${d && d.status === 'Approved' ? 'color:#1d8f57;background:rgba(43,182,115,.14)' : 'color:#b32e2e;background:rgba(214,69,69,.12)'}`,
-          approve: () => {
-            this.setState({
-              decisions: {
-                ...s.decisions,
-                [x.id]: {
-                  status: 'Approved'
-                }
-              },
-              apToast: `Approved · ${x.dept} ${x.label}`
-            });
-            setTimeout(() => this.setState({
-              apToast: ''
-            }), 2200);
-          },
+          approve: () => this.decide(x, 'approve'),
           src: x.src || 'submission',
           startReturn: () => this.setState({
             returning: x.id,
@@ -8587,23 +8601,12 @@
             returning: null
           }),
           confirmReturn: () => {
-            if (!s.apReason.trim()) return;
-            this.setState({
-              decisions: {
-                ...s.decisions,
-                [x.id]: {
-                  status: 'Returned',
-                  reason: s.apReason.trim()
-                }
-              },
-              returning: null,
-              apToast: `Returned to ${x.by} with reason`
-            });
-            setTimeout(() => this.setState({
-              apToast: ''
-            }), 2200);
+            const reason = s.apReason.trim();
+            if (!reason) return;
+            this.decide(x, 'return', reason);
           },
           undo: () => {
+            if (x.live && !s.demo) return this.apToastMsg('Already recorded on the server — reopen it in the desktop console.');
             const d2 = {
               ...s.decisions
             };
@@ -8614,25 +8617,51 @@
           }
         };
       });
+      const covM = LV_MONTHS[5],
+        covMonthLabel = LV.live ? covM.label + ' ' + covM.y : 'Aug';
       const covOf = dept => {
-        const items = QUEUE.filter(x => x.dept === dept);
-        const monthKey = LV.live ? LV_MONTH_KEY(5) : null;
-        const all = LV.live ? (s.live.subsRaw || []).filter(x => x.month === monthKey && ((x.departmentName || '') === DEPT_INFO[dept]?.name || (x.areaName || '') === DEPT_INFO[dept]?.name || x.department === LV.deptId(dept))) : [];
-        const app = LV.live ? all.filter(x => x.status === 'approved').length + items.filter(x => s.decisions[x.id] && s.decisions[x.id].status === 'Approved').length : items.filter(x => s.decisions[x.id] && s.decisions[x.id].status === 'Approved').length + ({
-          LDR: 2,
-          SICU: 3,
-          'CT ICU': 2,
-          MICU: 4,
-          CCU: 5,
-          NICU: 6,
-          Emergency: 3,
-          OPD: 4,
-          'Cath Lab': 2
-        }[dept] || 0);
-        const pen = items.filter(x => !s.decisions[x.id]).length;
-        const rej = LV.live ? all.filter(x => x.status === 'rejected').length : items.filter(x => s.decisions[x.id] && s.decisions[x.id].status === 'Returned').length + (dept === 'LDR' ? 1 : 0);
-        const expected = LV.live ? 1 + (((s.live.quality || []).find(a => String(a.deptId) === String(LV.deptId(dept))) || {}).indicators || []).length : 8;
-        const total = Math.max(expected, app + pen + rej, 1);
+        if (!LV.live) {
+          const items = QUEUE.filter(x => x.dept === dept);
+          const app = items.filter(x => s.decisions[x.id] && s.decisions[x.id].status === 'Approved').length + ({
+            LDR: 2,
+            SICU: 3,
+            'CT ICU': 2,
+            MICU: 4,
+            CCU: 5,
+            NICU: 6,
+            Emergency: 3,
+            OPD: 4,
+            'Cath Lab': 2
+          }[dept] || 0);
+          const pen = items.filter(x => !s.decisions[x.id]).length;
+          const rej = items.filter(x => s.decisions[x.id] && s.decisions[x.id].status === 'Returned').length + (dept === 'LDR' ? 1 : 0);
+          const total = Math.max(8, app + pen + rej, 1);
+          return {
+            app,
+            pen,
+            rej,
+            mis: Math.max(0, total - app - pen - rej),
+            total
+          };
+        }
+        const id = String(LV.deptId(dept));
+        const area = (s.live.quality || []).find(a => String(a.deptId) === id);
+        const aKey = area ? String(area.key) : null;
+        const latest = {};
+        (s.live.subsRaw || []).forEach(x => {
+          if (x.month !== covM.key) return;
+          if (x.type === 'patient' ? String(x.department) !== id : aKey == null || String(x.area) !== aKey) return;
+          const k = x.type === 'patient' ? 'p' : 'q|' + (x.indicatorId || x.indicatorName || '');
+          const cur = latest[k];
+          const ts = x.submittedAt || x.createdAt || 0,
+            cts = cur ? cur.submittedAt || cur.createdAt || 0 : 0;
+          if (!cur || cur.autoRejected && !x.autoRejected || !(x.autoRejected && !cur.autoRejected) && ts >= cts) latest[k] = x;
+        });
+        const recs = Object.values(latest).filter(x => !x.autoRejected);
+        const app = recs.filter(x => x.status === 'approved').length,
+          pen = recs.filter(x => x.status === 'pending' || x.status === 'approving').length,
+          rej = recs.filter(x => x.status === 'rejected').length;
+        const total = Math.max(1 + ((area || {}).indicators || []).length, app + pen + rej, 1);
         return {
           app,
           pen,
@@ -8656,7 +8685,7 @@
         missing: 0,
         total: 0
       });
-      const seg = (n, total, color) => `width:${n / total * 100}%;background:${color}`;
+      const seg = (n, total, color) => `width:${n / (total || 1) * 100}%;background:${color}`;
       const dd = DEPT_INFO[s.selDept];
       const ddCov = covOf(s.selDept);
       const ddUsers = users.filter(u => u.depts.includes(s.selDept));
@@ -10938,8 +10967,8 @@
           label: 'items awaiting review',
           go: () => go('approvals')
         }, {
-          v: Math.round(covAll.approved / covAll.total * 100) + '%',
-          label: 'Aug data approved',
+          v: Math.round(covAll.approved / (covAll.total || 1) * 100) + '%',
+          label: covMonthLabel + ' data approved',
           go: () => go('depts')
         }],
         actionItems: [{
@@ -11044,6 +11073,7 @@
             window.location.href = '/app#nurse';
           }
         }],
+        covTitle: covMonthLabel + ' data collection · hospital-wide',
         covApproved: seg(covAll.approved, covAll.total, '#1d8f57'),
         covPending: seg(covAll.pending, covAll.total, '#0090ca'),
         covRejected: seg(covAll.rejected, covAll.total, '#d23a52'),
@@ -11633,28 +11663,8 @@
         })),
         reNoMembers: !reMembers.length,
         pendingTotal,
-        hasPendingDc: s.apTab === 'data' && pendingDc > 0,
-        approveAllOk: () => {
-          const ok = QUEUE.filter(x => x.ok && !s.decisions[x.id]);
-          const d = {
-            ...s.decisions
-          };
-          ok.forEach(x => {
-            d[x.id] = {
-              status: 'Approved'
-            };
-            if (x.live) api('/api/submissions/' + encodeURIComponent(x.id) + '/approve', {
-              method: 'POST'
-            }).catch(() => {});
-          });
-          this.setState({
-            decisions: d,
-            apToast: `Approved ${ok.length} in-range submission${ok.length === 1 ? '' : 's'}`
-          });
-          setTimeout(() => this.setState({
-            apToast: ''
-          }), 2200);
-        },
+        hasPendingDc: s.apTab === 'data' && pendingDc > 0 && canDecide,
+        approveAllOk: () => this.approveAll(QUEUE.filter(x => x.ok && !s.decisions[x.id])),
         apTabs: [['data', 'Data', pendingDc], ['leave', 'Leave & OT', pendingLeave], ['reports', 'Shift reports', pendingRep]].map(([k, l, n]) => ({
           label: l,
           badge: n || null,
@@ -11665,26 +11675,15 @@
           }),
           style: pillBtn(s.apTab === k).replace('padding:7px 10px', 'padding:7px 4px').replace('font-size:12px', 'font-size:11px')
         })),
-        apFilters: ['All', 'Pending', 'Out of range', ...Array.from(new Set(apSource.map(x => x.dept)))].map(f => ({
+        apFilters: apFilterOpts.map(f => ({
           label: f,
           go: () => this.setState({
             apFilter: f
           }),
-          style: chip(s.apFilter === f)
+          style: chip(apFilter === f)
         })),
         apToast: s.apToast,
-        apList: apList.map(q => ({
-          ...q,
-          approve: () => {
-            q.approve();
-            if (q.live) this.decideLive(q, 'approve');
-          },
-          confirmReturn: () => {
-            const reason = s.apReason.trim();
-            q.confirmReturn();
-            if (q.live && reason) this.decideLive(q, 'return', reason);
-          }
-        })),
+        apList,
         apReason: s.apReason,
         setApReason: e => this.setState({
           apReason: e.target.value
@@ -12037,6 +12036,8 @@
     }
     componentDidMount() {
       this.loadSeedMeds();
+      this._onExpired = () => this.sessionExpired();
+      window.addEventListener('unico:session-expired', this._onExpired);
       tryApi('/api/phone/branding').then(b => {
         if (b && b.ok && b.hospital) this.setState({
           branding: b.hospital
@@ -12128,15 +12129,8 @@
       });
       this.loadLive();
     }
-    signOut() {
-      if (this.state.demo) {
-        window.location.hash = '';
-      }
-      fetch('/logout', {
-        credentials: 'same-origin'
-      }).catch(() => {});
-      clearInterval(this._poll);
-      this.setState({
+    signedOutState() {
+      return {
         screen: 'login',
         me: null,
         loginUser: '',
@@ -12167,7 +12161,23 @@
           perf: null,
           online: null
         }
-      });
+      };
+    }
+    signOut() {
+      if (this.state.demo) {
+        window.location.hash = '';
+      }
+      fetch('/logout', {
+        credentials: 'same-origin'
+      }).catch(() => {});
+      clearInterval(this._poll);
+      this.setState(this.signedOutState());
+    }
+    sessionExpired() {
+      if (this.state.demo || !this.state.me) return;
+      clearInterval(this._poll);
+      this.setState(this.signedOutState());
+      this.toastMsg('Your session has expired — sign in again.');
     }
     async loadLive() {
       const patch = (k, v) => this.setState(s => ({
@@ -12175,8 +12185,8 @@
           [k]: v
         })
       }));
-      const [depts, staff, users, roles, log, subs, meds] = await Promise.all([tryApi('/api/departments'), tryApi('/api/staff'), tryApi('/api/users'), tryApi('/api/roles'), tryApi('/api/activity?limit=120'), tryApi('/api/submissions?limit=300'), tryApi('/api/med/browse?per=60&page=1')]);
-      const deptList = depts && depts.ok && Array.isArray(depts.departments) && depts.departments.length ? depts.departments : null;
+      const [depts, staff, users, roles, log, subs, pend, meds] = await Promise.all([tryApi('/api/departments'), tryApi('/api/staff'), tryApi('/api/users'), tryApi('/api/roles'), tryApi('/api/activity?limit=120'), pageAll('/api/submissions?limit=1000', 'submissions', 2), pageAll('/api/submissions?status=pending&limit=500', 'submissions', 10), tryApi('/api/med/browse?per=60&page=1')]);
+      const deptList = depts && depts.ok && Array.isArray(depts.departments) ? depts.departments : null;
       const staffList = staff && staff.ok && Array.isArray(staff.staff) ? staff.staff : [];
       const userList = users && users.ok && Array.isArray(users.users) && users.users.length ? users.users : null;
       const shortOf = d => d.short || liveShort(d.name || d.id);
@@ -12240,11 +12250,10 @@
         });
         patch('users', userList);
       }
-      if (log && log.ok && Array.isArray(log.entries) && log.entries.length) patch('log', log.entries.map(liveLog));
-      if (subs && subs.ok && Array.isArray(subs.submissions)) {
-        const q = subs.submissions.filter(x => x.status === 'pending').map(liveQueue).filter(Boolean);
-        if (q.length) patch('subs', q);
-      }
+      if (log && log.ok && Array.isArray(log.entries)) patch('log', log.entries.map(liveLog));
+      const pendRows = pend || (subs ? subs.filter(x => x.status === 'pending') : null);
+      const cols = colsOf(deptList);
+      if (pendRows) patch('subs', pendRows.map(x => liveQueue(x, cols)).filter(Boolean));
       if (meds && meds.ok && Array.isArray(meds.rows) && meds.rows.length) {
         const list = meds.rows.map(liveMed);
         patch('meds', list);
@@ -12257,7 +12266,7 @@
       });
       if (deptList) patch('deptsRaw', deptList);
       patch('staffRaw', staffList);
-      if (subs && subs.ok && Array.isArray(subs.submissions)) patch('subsRaw', subs.submissions);
+      if (subs) patch('subsRaw', subs);
       this._deptShort = deptIdToShort;
       const [settings, quality, requests, shiftReports, incidents, medReqs, rosters, perf, presence, health] = await Promise.all([tryApi('/api/health').then(h => h || {
         ok: false
@@ -12275,17 +12284,19 @@
       clearInterval(this._poll);
       this._poll = setInterval(() => this.refreshQueues(), 30000);
     }
-    async refreshQueues() {
-      if (this.state.demo || !this.state.me || typeof document !== 'undefined' && document.hidden) return;
+    async refreshQueues(force) {
+      if (this.state.demo || !this.state.me || !force && typeof document !== 'undefined' && document.hidden) return;
       const patch = (k, v) => this.setState(s => ({
         live: Object.assign({}, s.live, {
           [k]: v
         })
       }));
-      const [subs, requests, shiftReports, incidents, medReqs, presence] = await Promise.all([tryApi('/api/submissions?limit=300'), tryApi('/api/phone/requests'), tryApi('/api/phone/shift-reports'), tryApi('/api/phone/incidents'), tryApi('/api/phone/med-requests?all=1'), tryApi('/api/phone/presence')]);
-      if (subs && subs.ok && Array.isArray(subs.submissions)) {
-        patch('subsRaw', subs.submissions);
-        patch('subs', subs.submissions.filter(x => x.status === 'pending').map(liveQueue).filter(Boolean));
+      const [subs, pend, requests, shiftReports, incidents, medReqs, presence] = await Promise.all([pageAll('/api/submissions?limit=1000', 'submissions', 2), pageAll('/api/submissions?status=pending&limit=500', 'submissions', 10), tryApi('/api/phone/requests'), tryApi('/api/phone/shift-reports'), tryApi('/api/phone/incidents'), tryApi('/api/phone/med-requests?all=1'), tryApi('/api/phone/presence')]);
+      if (subs) patch('subsRaw', subs);
+      const pendRows = pend || (subs ? subs.filter(x => x.status === 'pending') : null);
+      if (pendRows) {
+        const cols = colsOf(this.state.live.deptsRaw);
+        patch('subs', pendRows.map(x => liveQueue(x, cols)).filter(Boolean));
       }
       if (requests && requests.ok) patch('requests', (requests.team || []).concat(requests.mine || []).filter((r, i, a) => a.findIndex(x => x.id === r.id) === i));
       if (shiftReports && shiftReports.ok) patch('shiftReports', shiftReports.reports || []);
@@ -12296,6 +12307,7 @@
     componentWillUnmount() {
       clearInterval(this._poll);
       clearTimeout(this._saveT);
+      window.removeEventListener('unico:session-expired', this._onExpired);
     }
     applySettings(doc) {
       const short = id => this._deptShort && this._deptShort[id] || id;
@@ -12438,21 +12450,129 @@
         return null;
       });
     }
-    decideLive(q, action, reason) {
-      if (q.src === 'request') return this.post('/api/phone/requests/' + encodeURIComponent(q.id) + '/decide', {
-        status: action === 'approve' ? 'approved' : 'declined',
-        reason: reason || ''
+    async decideLive(q, action, reason) {
+      try {
+        let r;
+        if (q.src === 'request') r = await api('/api/phone/requests/' + encodeURIComponent(q.id) + '/decide', {
+          method: 'POST',
+          body: {
+            status: action === 'approve' ? 'approved' : 'declined',
+            reason: reason || ''
+          }
+        });else if (q.src === 'shift') r = await api('/api/phone/shift-reports/' + encodeURIComponent(q.id) + '/status', {
+          method: 'POST',
+          body: {
+            status: action === 'approve' ? 'Approved' : 'Returned',
+            reason: reason || ''
+          }
+        });else r = await api('/api/submissions/' + encodeURIComponent(q.id) + '/' + (action === 'approve' ? 'approve' : 'reject'), {
+          method: 'POST',
+          body: action === 'approve' ? {} : {
+            reason: reason || ''
+          }
+        });
+        if (r && r.ok === false) return {
+          ok: false,
+          error: r.error || 'The server did not record the decision.',
+          superseded: !!r.superseded
+        };
+        return {
+          ok: true,
+          autoRejected: r && r.autoRejected || 0
+        };
+      } catch (e) {
+        const b = e.body || {};
+        return {
+          ok: false,
+          error: b.error || e.message || 'The server did not record the decision.',
+          superseded: !!b.superseded
+        };
+      }
+    }
+    apToastMsg(msg, ms) {
+      this.setState({
+        apToast: msg
       });
-      if (q.src === 'shift') return this.post('/api/phone/shift-reports/' + encodeURIComponent(q.id) + '/status', {
-        status: action === 'approve' ? 'Approved' : 'Returned',
-        reason: reason || ''
-      });
-      return api('/api/submissions/' + encodeURIComponent(q.id) + '/' + (action === 'approve' ? 'approve' : 'reject'), {
-        method: 'POST',
-        body: action === 'approve' ? {} : {
-          reason: reason || ''
+      clearTimeout(this._apT);
+      this._apT = setTimeout(() => this.setState({
+        apToast: ''
+      }), ms || 2600);
+    }
+    async decide(x, action, reason) {
+      const label = action === 'approve' ? 'Approved' : 'Returned';
+      const mark = (status, why) => this.setState(st => ({
+        decisions: Object.assign({}, st.decisions, {
+          [x.id]: {
+            status,
+            reason: why || null
+          }
+        }),
+        returning: st.returning === x.id ? null : st.returning
+      }));
+      if (this.state.demo || !x.live) {
+        mark(label, reason);
+        return this.apToastMsg(action === 'approve' ? `Approved · ${x.dept} ${x.label}` : `Returned to ${x.by} with reason`, 2200);
+      }
+      this._deciding = this._deciding || {};
+      if (this._deciding[x.id]) return;
+      this._deciding[x.id] = true;
+      try {
+        const r = await this.decideLive(x, action, reason);
+        if (r.ok) {
+          mark(label, reason);
+          this.apToastMsg(action === 'approve' ? `Approved · ${x.dept} ${x.label}${r.autoRejected ? ' · ' + r.autoRejected + ' duplicate' + (r.autoRejected === 1 ? '' : 's') + ' auto-rejected' : ''}` : `Returned to ${x.by} with reason`);
+        } else if (r.superseded) {
+          mark('Skipped', r.error);
+          this.apToastMsg('Skipped · already superseded by an approved duplicate');
+        } else this.apToastMsg(r.error, 4000);
+      } finally {
+        delete this._deciding[x.id];
+        this.refreshQueues(true);
+      }
+    }
+    async approveAll(items) {
+      if (this._bulk || !items.length) return;
+      if (this.state.demo) {
+        const d = Object.assign({}, this.state.decisions);
+        items.forEach(x => {
+          d[x.id] = {
+            status: 'Approved'
+          };
+        });
+        this.setState({
+          decisions: d
+        });
+        return this.apToastMsg(`Approved ${items.length} in-range submission${items.length === 1 ? '' : 's'}`, 2200);
+      }
+      this._bulk = true;
+      this.apToastMsg(`Approving ${items.length}…`, 120000);
+      let ok = 0,
+        skipped = 0,
+        failed = 0,
+        lastErr = '';
+      try {
+        for (const x of items) {
+          if (!x.live) continue;
+          const r = await this.decideLive(x, 'approve');
+          const status = r.ok ? 'Approved' : r.superseded ? 'Skipped' : null;
+          if (r.ok) ok++;else if (r.superseded) skipped++;else {
+            failed++;
+            lastErr = r.error;
+          }
+          if (status) this.setState(st => ({
+            decisions: Object.assign({}, st.decisions, {
+              [x.id]: {
+                status,
+                reason: r.ok ? null : r.error
+              }
+            })
+          }));
         }
-      }).catch(e => this.toastMsg(e.message || 'Server did not record the decision'));
+      } finally {
+        this._bulk = false;
+      }
+      this.apToastMsg(`${ok} approved${skipped ? ' · ' + skipped + ' skipped (superseded duplicate' + (skipped === 1 ? '' : 's') + ')' : ''}${failed ? ' · ' + failed + ' failed — ' + lastErr : ''}`, failed ? 6000 : 3000);
+      this.refreshQueues(true);
     }
     incidentStatus(id, status) {
       if (!id || this.state.demo) return;
@@ -12861,7 +12981,7 @@
       byDay: [6, 5, 4, 3, 2, 1, 0].map(k => {
         const d = new Date();
         d.setDate(d.getDate() - k);
-        const iso = d.toISOString().slice(0, 10);
+        const iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         return {
           label: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()],
           v: sumA(week.filter(x => x.date === iso).map(x => (x.counts || {}).adm))
@@ -13068,13 +13188,25 @@
       c: ACTION_COLOR[a] || '#3c4858'
     };
   }
-  function liveQueue(x) {
+  function colsOf(list) {
+    const m = {};
+    (list || []).forEach(d => {
+      const c = {};
+      (d.cols || []).forEach(col => {
+        c[col.id] = col.label || col.id;
+      });
+      m[String(d.id || d._id)] = c;
+    });
+    return m;
+  }
+  function liveQueue(x, cols) {
     const id = x.id || x._id;
     if (!id) return null;
-    const when = fmtWhen(x.createdAt),
+    const when = fmtWhen(x.submittedAt || x.createdAt),
       by = x.submittedBy || x.createdByName || x.createdBy || '—';
     if (x.type === 'patient') {
-      const vals = Object.entries(x.values || {}).slice(0, 4).map(([k, v]) => [k, v]);
+      const lab = cols && cols[String(x.department)] || {};
+      const vals = Object.entries(x.values || {}).map(([k, v]) => [lab[k] || k, v]);
       return {
         id,
         live: true,
@@ -13103,7 +13235,7 @@
       by,
       label: x.indicatorName || 'Quality indicator',
       kind: 'Quality',
-      vals: [[x.numLabel || 'Numerator', x.num], [x.denLabel || 'Denominator', x.den]],
+      vals: x.num == null && x.den == null ? [['Count', x.value == null ? '—' : x.value]] : [[x.numLabel || 'Numerator', x.num], [x.denLabel || 'Denominator', x.den == null ? 'set by admin' : x.den]],
       value: v == null ? null : String(v) + (x.unit === '%' ? '%' : ''),
       bench: x.benchmark || '',
       ok,
