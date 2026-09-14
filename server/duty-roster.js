@@ -49,6 +49,11 @@ function normGrid(input) {
   return out;
 }
 
+// A field the payload does not carry keeps its stored value. (The PUT route used to call
+// this WITHOUT the stored document, so every fallback below was dead: a save that did not
+// send `note` or `status` wiped the note and moved a submitted roster back to draft.)
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k) && o[k] !== undefined;
+
 function normRoster(input, existing) {
   const i = obj(input), prev = obj(existing);
   const year = parseInt(i.year, 10) || prev.year || new Date().getFullYear();
@@ -57,28 +62,43 @@ function normRoster(input, existing) {
     dept: s(i.dept || prev.dept, 40),
     deptName: s(i.deptName || prev.deptName, 120),
     year, month,
-    grid: normGrid(i.grid),
+    grid: has(i, 'grid') ? normGrid(i.grid) : (prev.grid || {}),
     order: Array.isArray(i.order) ? i.order.map((x) => s(x, 40)).slice(0, 400) : (prev.order || []),
     // empId -> display name, denormalised onto the sheet ON PURPOSE. A published
     // roster is read by people who are not allowed the staff register (a data
     // collector's scope returns no staff records at all), and a grid of bare employee
     // ids is not a roster anyone can read. Bounded like every other field here.
+    // MERGED over the stored names: a nurse transferred or archived since still has
+    // her cells on the sheet, and must keep her name there.
     names: (function () {
-      const src = obj(i.names), out = {};
+      const src = obj(i.names), out = Object.assign({}, obj(prev.names));
       Object.keys(src).slice(0, 400).forEach((k) => { const v = s(src[k], 120); if (v) out[s(k, 40)] = v; });
-      return Object.keys(out).length ? out : (prev.names || {});
+      return out;
     }()),
-    rules: obj(i.rules),
+    rules: has(i, 'rules') ? obj(i.rules) : obj(prev.rules),
     status: STATUSES.indexOf(s(i.status)) >= 0 ? s(i.status) : (prev.status || 'draft'),
-    preparedBy: s(i.preparedBy, 120),
-    checkedBy: s(i.checkedBy, 120),
-    // Falls back to what is stored, like order/names/status above. The approver is
-    // stamped by the approve ROUTE, never by a save; without this fallback the very
-    // next "Save draft" $set the field to '' and the published sheet lost the name
-    // of the person who signed it.
+    preparedBy: has(i, 'preparedBy') ? s(i.preparedBy, 120) : s(prev.preparedBy, 120),
+    checkedBy: has(i, 'checkedBy') ? s(i.checkedBy, 120) : s(prev.checkedBy, 120),
+    // The approver is stamped by the approve ROUTE, never by a save; without this
+    // fallback the very next "Save draft" $set the field to '' and the published sheet
+    // lost the name of the person who signed it.
     approvedBy: s(i.approvedBy, 120) || s(prev.approvedBy, 120),
-    note: s(i.note, 1000),
+    note: has(i, 'note') ? s(i.note, 1000) : s(prev.note, 1000),
   };
+}
+
+// A department-scoped console account may only read and write its own units' rosters,
+// and a portal account (in-charge / collector) only its assigned units. Rosters are keyed
+// on the department string, matched with the same vocabulary as staff scoping.
+async function deptMatcher(req) {
+  const a = req.access;
+  if (!a || a.unrestricted) return () => true;
+  const acc = require('./access');
+  if (!acc.isPortal(a) && (a.staffScope || 'all') !== 'departments') return () => true;
+  // The units the person is ASSIGNED to. Quality-area access (a hospital-wide infection
+  // control role holds every area) showed an in-charge every unit's roster.
+  const keys = await acc.scopedDeptNames(a, { departmentsOnly: true });
+  return (dept) => acc.deptsOfStaff({ current_department: dept }).some((k) => keys.has(k));
 }
 
 async function listAll() {
@@ -111,13 +131,16 @@ function mount(app, opts) {
   // The index: every roster, WITHOUT its grid. The list screen shows a dozen months
   // across seventeen units; shipping every grid with it would be megabytes for nothing.
   app.get('/api/rosters', readGuard, async (req, res) => {
-    try { res.json({ ok: true, rosters: publishedOnly(req, await listAll()) }); }
-    catch (e) { res.status(500).json({ ok: false, error: 'Could not load rosters.' }); }
+    try {
+      const allowed = await deptMatcher(req);
+      res.json({ ok: true, rosters: publishedOnly(req, (await listAll()).filter((d) => d && allowed(d.dept))) });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not load rosters.' }); }
   });
 
   // One month, with the grid.
   app.get('/api/rosters/:dept/:year/:month', readGuard, async (req, res) => {
     try {
+      if (!(await deptMatcher(req))(req.params.dept)) return res.status(403).json({ ok: false, error: 'This roster belongs to a unit outside your departments.' });
       const id = rosterId(req.params.dept, parseInt(req.params.year, 10), parseInt(req.params.month, 10));
       const doc = await getOne(id);
       res.json({ ok: true, roster: publishedOnly(req, doc ? [doc] : [])[0] || null });   // null when never drafted (or not published, to a collector)
@@ -128,19 +151,46 @@ function mount(app, opts) {
     try {
       const b = obj(req.body);
       if (!s(b.dept)) return res.status(400).json({ ok: false, error: 'A department is required.' });
-      const doc = normRoster(b);
-      const id = rosterId(doc.dept, doc.year, doc.month);
+      if (!(await deptMatcher(req))(b.dept)) return res.status(403).json({ ok: false, error: 'This roster belongs to a unit outside your departments.' });
+      const head = normRoster(b);
+      const id = rosterId(head.dept, head.year, head.month);
       const c = await col();
       const existing = c ? outDoc(await c.findOne({ _id: id })) : mem.find((x) => x.id === id);
-      if (existing && existing.status === 'approved' && doc.status !== 'draft') {
-        return res.status(409).json({ ok: false, error: 'This roster is approved and locked. Reopen it before editing.' });
+      // An approved roster is the published, signed sheet. NO save may overwrite it or
+      // move it back to draft — the old check let any save labelled "draft" through, so
+      // a pending autosave un-published a roster seconds after it was approved.
+      // Reopening is the admin-only status route.
+      if (existing && existing.status === 'approved') {
+        return res.status(409).json({ ok: false, locked: true, error: 'This roster is approved and locked. Reopen it before editing.' });
       }
-      doc.revision = ((existing && existing.revision) || 0) + 1;
+      // Lost-update guard. The grid is saved whole, so a browser that edited an older
+      // revision would erase every cell somebody else saved since. It says which
+      // revision it edited; a mismatch is refused instead of overwriting.
+      const current = (existing && existing.revision) || 0;
+      if (b.baseRevision != null && Number(b.baseRevision) !== current) {
+        return res.status(409).json({ ok: false, conflict: true, revision: current,
+          error: 'Someone else saved this roster since you opened it. Reload the month to see their changes, then make yours again.' });
+      }
+      const doc = normRoster(b, existing);
+      // Approval only ever happens through the status route, which stamps who signed.
+      if (doc.status === 'approved') doc.status = (existing && existing.status) || 'draft';
+      doc.revision = current + 1;
       doc.updatedAt = Date.now();
       doc.updatedBy = who(req);
-      if (!existing) { doc.createdAt = Date.now(); doc.createdBy = who(req); }
-      if (c) { await c.updateOne({ _id: id }, { $set: doc }, { upsert: true }); }
-      else {
+      const raced = () => res.status(409).json({ ok: false, conflict: true,
+        error: 'Someone else saved this roster at the same moment. Reload the month and try again.' });
+      if (c) {
+        if (existing) {
+          // Conditional on the revision just checked, so two saves can never interleave.
+          const r = await c.updateOne({ _id: id, revision: existing.revision == null ? null : existing.revision, status: { $ne: 'approved' } }, { $set: doc });
+          if (!r.matchedCount) return raced();
+        } else {
+          doc.createdAt = Date.now(); doc.createdBy = who(req);
+          try { await c.insertOne(Object.assign({ _id: id }, doc)); }
+          catch (e) { if (e && e.code === 11000) return raced(); throw e; }
+        }
+      } else {
+        if (!existing) { doc.createdAt = Date.now(); doc.createdBy = who(req); }
         const idx = mem.findIndex((x) => x.id === id);
         if (idx >= 0) mem[idx] = Object.assign({ id }, doc); else mem.push(Object.assign({ id }, doc));
       }

@@ -115,6 +115,8 @@ function unrestricted(user) {
 // keep its old rights for the rest of its 12h life.
 const _cache = new Map();
 const CACHE_TTL = 15000; // short: a revoked permission takes effect within 15s
+// How old a remembered user may be and still stand in when the lookup FAILS.
+const STALE_USER_MS = 60000;
 function invalidate(username) {
   if (username) _cache.delete(String(username).toLowerCase());
   else _cache.clear();
@@ -131,9 +133,11 @@ async function loadUser(username) {
     const users = await getUsers();
     user = await users.findOne({ username: key });
   } catch (e) {
-    // Reuse the last known answer if we have one; otherwise say so explicitly rather
-    // than reporting "no such user", which reads as a revoked session.
-    return hit ? hit.user : DB_UNREACHABLE;
+    // Reuse a RECENT answer if we have one; otherwise say so explicitly rather than
+    // reporting "no such user", which reads as a revoked session. Only recent: a user
+    // deactivated or stripped of access on another instance must not keep the old
+    // rights here for as long as this lookup keeps failing.
+    return hit && (Date.now() - hit.ts) < STALE_USER_MS ? hit.user : DB_UNREACHABLE;
   }
   _cache.set(key, { user, ts: Date.now() });
   return user;
@@ -210,14 +214,20 @@ const PORTAL_STAFF_FIELDS = [
   'special_training', 'hepatitis_b_vaccination',
 ];
 function portalStaff(deptKeys, staff) {
-  const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-  const want = new Set((deptKeys || []).map(norm).filter(Boolean));
+  // The same vocabulary department scoping uses (scopedDeptNames/deptsOfStaff): ids,
+  // names, the local spellings in DEPT_ALIASES and the Level-N rule. A plain normaliser
+  // hid "Level-10", "Level 10" and "Emergency" from the in-charges of those units.
+  const want = new Set();
+  (deptKeys || []).forEach((k) => {
+    const s = squash(k);
+    if (!s) return;
+    want.add(s);
+    const lv = levelRule(s);
+    if (lv) want.add(squash(lv));
+    (DEPT_ALIASES[k] || DEPT_ALIASES[s] || []).forEach((a) => want.add(squash(a)));
+  });
   if (!want.size) return [];
-  return (staff || []).filter((p) => {
-    if (!p || p.former) return false;
-    // A staff record may list several departments, comma separated.
-    return String(p.current_department || '').split(',').some((d) => want.has(norm(d)));
-  }).map((p) => {
+  return (staff || []).filter((p) => p && !p.former && deptsOfStaff(p).some((d) => want.has(d))).map((p) => {
     const out = {};
     PORTAL_STAFF_FIELDS.forEach((k) => { if (p[k] !== undefined) out[k] = p[k]; });
     return out;
@@ -389,7 +399,9 @@ function deptsOfStaff(rec) {
 
 // Every comparison key the departments this account is scoped to answer to: the
 // canonical id, the register name, the quality key, and the local spellings above.
-async function scopedDeptNames(access) {
+// opts.departmentsOnly — only the units the account is ASSIGNED to, ignoring quality
+// areas (used by rosters: quality access to many areas must not unlock their rosters).
+async function scopedDeptNames(access, opts) {
   const keys = new Set();
   let map = null;
   try { map = await deptmap.get(); } catch (e) { map = null; }
@@ -402,7 +414,7 @@ async function scopedDeptNames(access) {
   };
   (access.departments || []).forEach(addDept);
   // A person assigned purely through quality areas still belongs to that unit.
-  (access.qualityAreas || []).forEach((k) => {
+  if (!(opts && opts.departmentsOnly)) (access.qualityAreas || []).forEach((k) => {
     keys.add(squash(k));
     addDept(map && map.qkToId && map.qkToId[k]);
   });
@@ -419,7 +431,9 @@ function staffVisible(access, rec, deptNames) {
     if (access.staffId != null && rec && String(rec.id) === String(access.staffId)) return true;
     // emp_id is a weaker link: 39 records carry a blank one and two ids are duplicated,
     // so it only ever confirms a match, never stands in for a missing staffId.
-    if (access.staffEmpId && rec && norm(rec.emp_id) && norm(rec.emp_id) === norm(access.staffEmpId)) return true;
+    // ...and only when the account has no staffId at all: with one set, a colleague who
+    // shares the employee number (11410, 11520) was visible, editable and deletable.
+    if (access.staffId == null && access.staffEmpId && rec && norm(rec.emp_id) && norm(rec.emp_id) === norm(access.staffEmpId)) return true;
     return false;
   }
   // 'departments'
@@ -488,6 +502,15 @@ async function scopeStaffOverlay(access, raw) {
 // session overwrite only what it is allowed to write. Everything else survives
 // untouched, including keys the session never received.
 async function mergeAppData(access, incoming, current) {
+  // The user record could not be read, so this session holds NO permissions right now.
+  // Merging would keep the stored copy and the handler would answer ok:true for an edit
+  // it had thrown away — the browser would then clear it as saved. Refuse instead; the
+  // browser keeps the edit and retries.
+  if (access && access.degraded) {
+    const e = new Error('Your permissions could not be checked just now, so nothing was saved. It will be retried automatically.');
+    e.status = 503;
+    throw e;
+  }
   const cur = current || {};
   const inc = incoming || {};
   if (access && access.unrestricted) return inc; // admin / local mode: full mirror, unchanged
@@ -527,16 +550,34 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent) {
   const incomingById = new Map();
   incoming.forEach((r) => { if (r && r.id != null) incomingById.set(String(r.id), r); });
 
+  // A refused staff change is REPORTED (409, so the browser parks only the staff key and
+  // shows why). Dropping it silently let the form say "saved" for a record that the next
+  // refresh then took away.
+  const refuse = (message) => { const e = new Error(message); e.status = 409; throw e; };
+  const canDelete = can(access, 'staff', 'delete');
+  const canAdd = can(access, 'staff', 'add');
   const out = [];
   const seen = new Set();
   currentArr.forEach((rec) => {
     const id = rec && rec.id != null ? String(rec.id) : null;
     if (id) seen.add(id);
-    const mine = staffVisible(access, rec, deptNames);
-    if (!mine) { out.push(rec); return; }             // out of scope -> preserved verbatim
     const next = id ? incomingById.get(id) : null;
-    if (next) out.push(next);                          // in scope + still present -> edited
-    // in scope + absent from the payload -> a genuine delete by this session
+    if (!staffVisible(access, rec, deptNames)) {
+      // Out of scope -> preserved verbatim. A DIFFERENT record arriving under its id can
+      // only be a new person this session numbered from its own narrowed list.
+      if (next && JSON.stringify(next) !== JSON.stringify(rec)) {
+        refuse('That staff ID is already used by a record outside your departments. Reload the staff list and add the person again.');
+      }
+      out.push(rec);
+      return;
+    }
+    if (next) {                                        // in scope + still present -> edited
+      if (!staffVisible(access, next, deptNames)) refuse('You can only assign staff to your own departments. The change was not saved.');
+      out.push(next);
+      return;
+    }
+    // In scope + absent from the payload -> a delete, which needs the delete permission.
+    if (!canDelete) out.push(rec);
   });
   // New records this session created. A scoped session may only create records that
   // land inside its own scope, so it cannot mint a person into another department.
@@ -544,7 +585,9 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent) {
     const id = rec && rec.id != null ? String(rec.id) : null;
     if (id && seen.has(id)) return;
     if (scope === 'self') return;                      // self-view accounts never add staff
-    if (staffVisible(access, rec, deptNames)) out.push(rec);
+    if (!canAdd) refuse('Your account cannot add staff records. The new record was not saved.');
+    if (!staffVisible(access, rec, deptNames)) refuse('New staff can only be added to your own departments. The record was not saved.');
+    out.push(rec);
   });
   return JSON.stringify(out);
 }
@@ -554,6 +597,6 @@ module.exports = {
   ACCESS_MODULES, ACTIONS, PERM_RANK, STAFF_SCOPES, cleanStaffScope,
   KEY_MODULE, moduleOfKey,
   forRequest, attach, requirePerm, requireModule, actionForMethod, can, canWrite, invalidate,
-  filterStaff, staffVisible, scopedDeptNames,
+  filterStaff, staffVisible, scopedDeptNames, deptsOfStaff,
   scopeSnapshot, mergeAppData, mergeStaffOverlay, mayReadKey, mayWriteKey,
 };

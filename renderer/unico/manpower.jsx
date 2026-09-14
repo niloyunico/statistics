@@ -93,10 +93,15 @@
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={extra && extra.sw || 2} strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
   );
 
+  // TODAY in the hospital's local time. toISOString() is UTC: between midnight and 6 AM in
+  // Dhaka it named yesterday, so on-duty counts came from yesterday's column (and on the
+  // 1st, from last month's sheet).
+  const mpToday = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+
   function ManpowerOverview({ setRoute }) {
     const staffStore = window.useStaffStore();
     const [S, setS] = useState(() => ({
-      pop: null, view: 'day', date: new Date().toISOString().slice(0, 10), shift: 0, sel: null, hot: null, staffTab: 'on',
+      pop: null, view: 'day', date: mpToday(), shift: 0, sel: null, hot: null, staffTab: 'on',
       narrow: typeof window !== 'undefined' && window.innerWidth < 1240,
     }));
     const set = (patch) => setS((s) => ({ ...s, ...(typeof patch === 'function' ? patch(s) : patch) }));
@@ -107,7 +112,7 @@
       return () => window.removeEventListener('resize', rs);
     }, []);
 
-    const today = () => new Date().toISOString().slice(0, 10);
+    const today = mpToday;
     const ini = (n) => { const p = String(n || '—').split(' ').filter(Boolean); return ((p[0] && p[0][0] || '—') + (p[1] ? p[1][0] : '')).toUpperCase(); };
     const tone = (on, need) => !need ? '#7d8ea8' : on < need ? '#d23a52' : on > need ? '#0090ca' : '#157a43';
     const stateWord = (on, need) => !need ? 'Closed' : on < need ? (need - on) + ' short' : on > need ? '+' + (on - need) : 'OK';

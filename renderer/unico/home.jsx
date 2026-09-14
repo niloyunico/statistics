@@ -234,23 +234,26 @@
     // guess only when no roster lists them, which is the case the message is about.
     useEffect(() => {
       let live = true;
-      const y = now.getFullYear(), mo = now.getMonth() + 1;
+      // Rosters store 0-based months (January = 0), like roster.jsx and duty-roster.js;
+      // `getMonth() + 1` looked one month ahead.
+      const y = now.getFullYear(), mo = now.getMonth();
       const hasMe = (doc) => {
         const g = doc && doc.grid;
         if (!g || !me) return false;
-        const row = g[String(me.id)] || g[String(me.emp_id)];
+        // Rows are keyed 'S' + record id (roster.jsx rosKey); older sheets used the bare id
+        // or the employee number. Looking only at those, nobody was ever found — so the
+        // card always fell through to some other unit's sheet.
+        const row = g['S' + me.id] || g[String(me.id)] || g[String(me.emp_id)];
         return !!(row && Object.keys(row).length);
       };
+      const sq = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const myUnits = String(unit || '').split(',').map(sq).filter(Boolean);
+      const isMyUnit = (r) => !!r && (myUnits.indexOf(sq(r.dept)) >= 0 || myUnits.indexOf(sq(r.deptName)) >= 0);
       fetch('/api/rosters', { credentials: 'same-origin' }).then((r) => r.json()).then(async (j) => {
         const all = (j && (j.rosters || j.list)) || [];
+        // THIS month only: an older month's sheet is not "today's duty".
         const month = all.filter((r) => +r.year === y && +r.month === mo);
-        const unitFirst = (arr) => {
-          const key = String(unit || '').toLowerCase().slice(0, 6);
-          if (!key) return arr;
-          const hit = arr.filter((r) => String(r.deptName || r.dept || '').toLowerCase().indexOf(key) >= 0);
-          return [...hit, ...arr.filter((r) => hit.indexOf(r) < 0)];
-        };
-        const cand = unitFirst(month.length ? month : all);
+        const cand = [...month.filter(isMyUnit), ...month.filter((r) => !isMyUnit(r))];
         if (!cand.length) { if (live) setRoster(false); return; }
         const get = (r) => fetch('/api/rosters/' + encodeURIComponent(r.dept) + '/' + r.year + '/' + r.month, { credentials: 'same-origin' })
           .then((x) => x.json()).then((f) => (f && (f.roster || f.doc)) || null).catch(() => null);
@@ -261,10 +264,12 @@
           if (!live) return;
           const full = await get(r);
           if (!full) continue;
-          if (!fallback) fallback = full;
+          if (!fallback && isMyUnit(full)) fallback = full;
           if (hasMe(full)) { if (live) setRoster(full); return; }
         }
-        if (live) setRoster(fallback || cand[0] || false);
+        // Never another unit's sheet. With no roster listing this person, only their OWN
+        // unit's sheet may stand in (to say they are not on it); otherwise: no roster.
+        if (live) setRoster(fallback || false);
       }).catch(() => { if (live) setRoster(false); });
       return () => { live = false; };
     }, [unit, me && me.id]);  // eslint-disable-line react-hooks/exhaustive-deps

@@ -446,13 +446,15 @@
     try{
       const src=(typeof window!=='undefined'&&Array.isArray(window.__UNICO_STAFF__))?window.__UNICO_STAFF__:null;
       if(!src||!src.length||!Array.isArray(list)) return list;
-      const byId={}, byEmp={};
+      // Matched by record id ONLY. Employee numbers are shared by different people
+      // (11410, 11520), and an emp_id fallback stamped one nurse's photo and BNMC licence
+      // onto the other, which the next staff save then made permanent.
+      const byId={};
       src.forEach(x=>{ if(!x||!(x.licence_verified||x.photo)) return;
-        if(x.id!=null) byId[String(x.id)]=x;
-        if(x.emp_id) byEmp[String(x.emp_id).trim()]=x; });
-      if(!Object.keys(byId).length&&!Object.keys(byEmp).length) return list;
+        if(x.id!=null) byId[String(x.id)]=x; });
+      if(!Object.keys(byId).length) return list;
       return list.map(e=>{
-        const srv=(e&&e.id!=null&&byId[String(e.id)])||(e&&e.emp_id&&byEmp[String(e.emp_id).trim()]);
+        const srv=e&&e.id!=null&&byId[String(e.id)];
         if(!srv) return e;
         // Only take a NEWER verification, so a local re-verify done seconds ago is not
         // reverted by a server copy the page was hydrated with.

@@ -19,7 +19,9 @@ function unicoDeptQuality(dept){
     if(!area || !(area.indicators && area.indicators.length)) return null;
     const Qh = window.UNICO_Q;                 // authoritative quality-compute helpers
     if(!Qh) return null;
-    const fy = Qh.defaultFy(areas);            // reporting year with the most data
+    // THIS department's richest year — the hospital-wide one showed "—" for every
+    // indicator of a department whose data sits in a different year.
+    const fy = Qh.defaultFy([area]);
     const months = Qh.fyAxis(fy);              // year-aware [key,label,Q] month tuples
     let capaMap={}; try{ capaMap=JSON.parse(localStorage.getItem('unico_capa_v1'))||{}; }catch(e){} if(Array.isArray(capaMap)) capaMap={};
     let latestMk=null;
@@ -121,11 +123,15 @@ function DeptDetail({dept, openDept, depts, setRoute}){
   const [rangeMode,setRangeMode]=React.useState('all');
   const [fromM,setFromM]=React.useState(d.months[0]);
   const [toM,setToM]=React.useState(d.months[d.months.length-1]);
+  // Jumping to another department re-renders this same component: start it on its own
+  // full range. Its predecessor's From/To months are not in its list, and a Custom range
+  // collapsed to one month.
+  React.useEffect(()=>{ setRangeMode('all'); setFromM(d.months[0]); setToM(d.months[d.months.length-1]); },[d.id]);
   let vs=d.series;
   if(rangeMode==='l3') vs=d.series.slice(-3);
   else if(rangeMode==='l6') vs=d.series.slice(-6);
   else if(rangeMode==='latest') vs=d.series.slice(-1);
-  else if(rangeMode==='custom'){ const fi=d.months.indexOf(fromM),ti=d.months.indexOf(toM); const a=Math.min(fi,ti),b=Math.max(fi,ti); vs=d.series.slice(a,b+1); }
+  else if(rangeMode==='custom'){ const fi=d.months.indexOf(fromM),ti=d.months.indexOf(toM); if(fi<0||ti<0) vs=d.series; else { const a=Math.min(fi,ti),b=Math.max(fi,ti); vs=d.series.slice(a,b+1); } }
   if(!vs.length) vs=d.series.slice(-1);
   const vTotal=vs.reduce((s,r)=>s+(r[d.primary]||0),0);
   const vLatest=vs[vs.length-1]||{};
@@ -334,7 +340,15 @@ function DeptGrid({depts, openDept, setRoute}){
   const [q,setQ]=React.useState('');
   const GROUPS=window.UNICO.GROUPS;
   const allM=[...new Set(depts.flatMap(d=>d.months||[]))];
-  const gapOf=d=>allM.length-((d.months&&d.months.length)||0);
+  // Months missing SINCE the department's own first report: counting every month any
+  // department has flagged a newer unit (CT OT, 2026-07) as "needs attention" forever.
+  const MO=window.UNICO.MONTH_ORDER||[];
+  const gapOf=d=>{
+    const own=(d.months||[]).map(m=>MO.indexOf(m)).filter(i=>i>=0);
+    if(!own.length) return allM.length-((d.months&&d.months.length)||0);
+    const first=Math.min(...own);
+    return Math.max(0, allM.filter(m=>MO.indexOf(m)>=first).length-d.months.length);
+  };
   const query=q.trim().toLowerCase();
   const shown=query?depts.filter(d=>((d.name||'')+' '+(d.short||'')).toLowerCase().includes(query)):depts;
 

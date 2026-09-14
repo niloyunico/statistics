@@ -62,7 +62,15 @@
 const redis = require('./redis');
 
 const SERVERLESS = !!process.env.VERCEL;
-const DISABLED = String(process.env.LB_DISABLED || '').toLowerCase() === 'true';
+// With the read cache switched off (CACHE_DISABLED=true — production since Redis was
+// removed) a shed read has no cached copy to fall back to: shedding only turns a slow
+// page into an error or an empty list (after one heavy page load the limit fell to 2
+// and ordinary visits were refused). The driver pool (maxPoolSize) and its
+// waitQueueTimeoutMS still cap concurrency, so in that setup the limiter defaults to
+// OFF. LB_DISABLED=false forces it on; LB_DISABLED=true forces it off anywhere.
+const LB_ENV = String(process.env.LB_DISABLED || '').toLowerCase();
+const DISABLED = LB_ENV === 'true'
+  || (LB_ENV !== 'false' && String(process.env.CACHE_DISABLED || '').toLowerCase() === 'true');
 
 const MAX_GLOBAL = parseInt(process.env.DB_MAX_CONCURRENCY || '50', 10);
 const MIN_LOCAL = Math.max(1, parseInt(process.env.DB_MIN_LOCAL_CONCURRENCY || '2', 10));

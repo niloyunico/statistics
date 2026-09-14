@@ -132,12 +132,21 @@ function useRoster(staffStore, perf) {
     const rows = list.map((e) => {
       const empId = e.emp_id || String(e.id);
       const cyc = A.cycleOf(e.doj, now);
-      const apr = perf.appraisals.find((x) => x.empId === empId && cyc && x.cycleId === cyc.id) || null;
+      const current = perf.appraisals.find((x) => x.empId === empId && cyc && x.cycleId === cyc.id) || null;
+      // A form still open from an EARLIER window stays this person's appraisal until it is
+      // filed. Matching only the current window made a completed form awaiting Part H
+      // vanish from the queue, the dashboard and the form screen the day the next window
+      // opened — so it could never be actioned. An abandoned old DRAFT does not hide the
+      // current window's form.
+      const earlier = perf.appraisals.filter((x) => x.empId === empId && x.status !== 'actioned' && !(cyc && x.cycleId === cyc.id))
+        .sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)))[0] || null;
+      const apr = (earlier && earlier.status !== 'draft') ? earlier : (current || earlier);
       const history = perf.appraisals.filter((x) => x.empId === empId && x.status === 'actioned')
         .sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)));
       const last = history[0] || null;
-      const inc = perf.incidents.filter((x) => x.empId === empId && cyc && x.cycleId === cyc.id);
-      const ach = perf.achievements.filter((x) => x.empId === empId && cyc && x.cycleId === cyc.id);
+      const regCycle = apr ? apr.cycleId : (cyc && cyc.id);   // the registers belonging to the form shown
+      const inc = perf.incidents.filter((x) => x.empId === empId && regCycle && x.cycleId === regCycle);
+      const ach = perf.achievements.filter((x) => x.empId === empId && regCycle && x.cycleId === regCycle);
       const firstDue = e.doj ? A.addMonths(A.parseDate(e.doj) || now, 6) : null;
       const neverAppraised = history.length === 0;
       /* OVERDUE = a window that has already CLOSED with nothing filed against it.
@@ -659,8 +668,11 @@ function PerfForm({ roster, perf, empId, setRoute }) {
   const setRemark = (sl, v) => { if (locked) return; setRemarks((r) => ({ ...r, [sl]: v })); setDirty(true); };
 
   const body = (status) => ({
-    empId: row.empId, cycleId: row.cycle.id, cycleLabel: row.cycle.label,
-    cycleStart: row.cycle.start.toISOString().slice(0, 10), cycleEnd: row.cycle.end.toISOString().slice(0, 10),
+    // An appraisal from an earlier window saves back to ITS window — never re-keyed into
+    // the current one, which would create a second record carrying the old scores.
+    empId: row.empId, cycleId: saved ? saved.cycleId : row.cycle.id, cycleLabel: saved ? saved.cycleLabel : row.cycle.label,
+    cycleStart: saved ? saved.cycleStart : row.cycle.start.toISOString().slice(0, 10),
+    cycleEnd: saved ? saved.cycleEnd : row.cycle.end.toISOString().slice(0, 10),
     staffName: row.name, designation: row.designation, department: row.dept, doj: row.doj,
     scores, remarks, assessorRemarks, strengths, development, status,
     assessorName: (window.__UNICO_USER__ && window.__UNICO_USER__.name) || 'Administrator',
@@ -701,7 +713,7 @@ function PerfForm({ roster, perf, empId, setRoute }) {
             <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: .6, textTransform: 'uppercase', color: MK.FAINT, marginBottom: 5 }}>Appraisal period</div>
             <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               {prevCycle && <span style={{ fontSize: 11.5, padding: '5px 11px', borderRadius: 9, color: MK.MUTED, background: 'rgba(125,145,180,.12)' }}>{prevCycle.cycleLabel}</span>}
-              <span style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 11px', borderRadius: 9, color: '#0072a3', background: 'rgba(0,144,202,.12)', border: '1px solid rgba(0,144,202,.35)' }}>{row.cycle.label}</span>
+              <span style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 11px', borderRadius: 9, color: '#0072a3', background: 'rgba(0,144,202,.12)', border: '1px solid rgba(0,144,202,.35)' }}>{(saved && saved.cycleLabel) || row.cycle.label}</span>
             </div>
           </div>
         </div>
@@ -712,9 +724,14 @@ function PerfForm({ roster, perf, empId, setRoute }) {
           </div>
           <div style={{ flex: 1, minWidth: 220 }}>
             <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: .6, textTransform: 'uppercase', color: MK.FAINT }}>Window</div>
-            <div style={{ fontSize: 12.2 }}><b style={{ color: MK.INK }}>{row.cycle.label}</b> <span style={{ color: MK.MUTED }}>· appraisals run every 6 months from the individual&rsquo;s date of joining</span></div>
+            <div style={{ fontSize: 12.2 }}><b style={{ color: MK.INK }}>{(saved && saved.cycleLabel) || row.cycle.label}</b> <span style={{ color: MK.MUTED }}>· appraisals run every 6 months from the individual&rsquo;s date of joining</span></div>
           </div>
-          {!locked && perfCan('edit') && <button className="btn" disabled={busy} onClick={() => save('draft', 'Draft saved.')}>{busy ? 'Saving…' : 'Save draft'}</button>}
+          {/* Saving a form that is already submitted/discussed keeps its stage: "Save draft"
+              moved a completed form back to draft and out of the Part H queue. */}
+          {!locked && perfCan('edit') && (() => {
+            const keep = saved && saved.status && saved.status !== 'draft' ? saved.status : 'draft';
+            return <button className="btn" disabled={busy} onClick={() => save(keep, keep === 'draft' ? 'Draft saved.' : 'Changes saved.')}>{busy ? 'Saving…' : keep === 'draft' ? 'Save draft' : 'Save changes'}</button>;
+          })()}
           {!locked && perfCan('edit') && (
             <button className="btn pri" disabled={busy || !canComplete}
               title={canComplete ? '' : 'Rate all 20 parameters and add remarks for any 1–2 first'}

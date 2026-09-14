@@ -38,10 +38,13 @@ const isAdmin = (req) => !!(req.access && req.access.unrestricted);
 
 // A short, sortable, human-quotable reference: SR-0001. Generated from the current
 // count rather than a random id so a ward can read it out over the phone.
+// One past the HIGHEST reference ever issued — not the count, which repeated a number as
+// soon as a request was withdrawn (SR-0003 twice, read out over the phone).
 async function nextRef() {
   const c = await col();
-  const n = c ? await c.countDocuments({}) : mem.length;
-  return 'SR-' + String(n + 1).padStart(4, '0');
+  const refs = c ? (await c.find({}, { projection: { ref: 1 } }).toArray()).map((d) => d.ref) : mem.map((d) => d.ref);
+  const max = refs.reduce((m, r) => Math.max(m, parseInt(String(r || '').replace(/\D/g, ''), 10) || 0), 0);
+  return 'SR-' + String(max + 1).padStart(4, '0');
 }
 
 function normRequest(input) {

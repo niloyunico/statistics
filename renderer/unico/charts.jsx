@@ -36,7 +36,7 @@ const BAR_COLORS=['#0090ca','#159fbf','#2bb3a3','#46b87e','#7cc35a','#f0a93b','#
 function BarChart({data, x, y, height=240, color='#0b66d0', label, accent, flat=false}){
   const mounted=useMounted(); const m=flat||mounted; const [tip,setTip]=useTip(); const wrap=useRef(null);
   const max=Math.max(1,...data.map(d=>d[y]||0));
-  const id='bg'+(label||y).replace(/\W/g,'');
+  const id='bg'+String(label||y||'v').replace(/\W/g,'');   // a department with no primary column must not crash the app
   return (
     <div ref={wrap} style={{position:'relative'}}>
       <svg viewBox={`0 0 ${data.length*54} ${height}`} height={height} preserveAspectRatio="none" style={{overflow:'visible',width:'100%',maxWidth:data.length*74,margin:'0 auto',display:'block'}}>

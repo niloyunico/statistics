@@ -356,7 +356,19 @@
     }
 
     async function clear() {
-      if (!value || !value.publicId) { onChange && onChange(null); return; }
+      if (!value) { onChange && onChange(null); return; }
+      if (!value.publicId) {
+        // No storage id (url-only / backfilled portrait): nothing to delete from storage,
+        // but the copy on the staff record must be cleared too, or it comes straight back.
+        if ((kind || 'staff') === 'staff' && staffId != null && staffId !== '') {
+          setBusy(true);
+          try { await unicoDeletePhoto('', 'staff', { staffId: staffId, empId: empId }); }
+          catch (e) { toast(String((e && e.message) || e), 'error'); setBusy(false); return; }
+          setBusy(false);
+        }
+        onChange && onChange(null);
+        return;
+      }
       const ok = (window.UI && window.UI.confirm)
         ? await window.UI.confirm({ title: 'Remove this photo?', message: 'The picture is deleted from storage permanently.', danger: true, confirmLabel: 'Remove' })
         : true;

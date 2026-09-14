@@ -231,6 +231,18 @@ async function removeOne(name, id) {
 /* ---- the points a person carries in one cycle ------------------------------- */
 
 // Summed from the REGISTERS, never from anything the client sends, and capped here.
+async function findEntry(name, id) {
+  const c = await col(name);
+  return c ? outDoc(await c.findOne({ _id: String(id) })) : ((mem[name] || []).find((x) => x.id === id) || null);
+}
+// Has the authority already filed (actioned) this person's appraisal for that window?
+async function isFiled(empId, cycleId) {
+  if (!empId || !cycleId) return false;
+  const a = await findEntry(APPRAISALS, 'apr-' + empId + '-' + cycleId);
+  return !!(a && a.status === 'actioned');
+}
+const FILED_MSG = 'That appraisal window is already filed (Part H recorded). Reopen the appraisal before changing its registers.';
+
 async function pointsFor(empId, cycleId) {
   const [inc, ach] = await Promise.all([listAll(INCIDENTS), listAll(ACHIEVEMENTS)]);
   const mine = (list) => list.filter((x) => x.empId === empId && (!cycleId || x.cycleId === cycleId));
@@ -242,6 +254,16 @@ async function pointsFor(empId, cycleId) {
 // Attach the settled score to an appraisal document for the client.
 function decorate(a, pts) {
   const t = tallyScores(a.scores);
+  // A FILED (actioned) appraisal shows the score it was filed with. Recomputed from the
+  // live incident / achievement registers, a later entry changed the grade on a form
+  // whose Part H action had already been taken on the old one.
+  const f = a.status === 'actioned' && a.filed && typeof a.filed === 'object' ? a.filed : null;
+  if (f) {
+    return Object.assign({}, a, {
+      base: f.base, rated: t.rated, complete: t.complete, rawBonus: f.rawBonus, rawPenalty: f.rawPenalty,
+      bonus: f.bonus, penalty: f.penalty, score: f.score, grade: f.grade, rating: f.rating,
+    });
+  }
   const settled = settle(t.total, pts.bonus, pts.penalty);
   return Object.assign({}, a, {
     base: t.total,
@@ -322,7 +344,11 @@ function mount(app, opts) {
       if (!existing) return res.status(404).json({ ok: false, error: 'Appraisal not found.' });
       const t = tallyScores(existing.scores);
       if (!t.complete) return res.status(400).json({ ok: false, error: 'Every one of the 20 parameters must be rated before the authority can act.' });
+      // The score the action is taken on, frozen onto the filed form.
+      const snap = decorate(existing, await pointsFor(existing.empId, existing.cycleId));
       const patch = {
+        filed: { base: snap.base, rawBonus: snap.rawBonus, rawPenalty: snap.rawPenalty, bonus: snap.bonus,
+          penalty: snap.penalty, score: snap.score, grade: snap.grade, rating: snap.rating, at: Date.now() },
         actions: Array.isArray(b.actions) ? b.actions.map((x) => s(x, 60)).slice(0, 12) : [],
         authorityRemarks: s(b.authorityRemarks, 2000),
         nextReview: s(b.nextReview, 20),
@@ -355,6 +381,7 @@ function mount(app, opts) {
       const doc = normIncident(req.body);
       if (!doc.empId) return res.status(400).json({ ok: false, error: 'A staff member is required.' });
       if (!doc.what.trim()) return res.status(400).json({ ok: false, error: 'Describe what happened.' });
+      if (await isFiled(doc.empId, doc.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
       doc.createdAt = Date.now(); doc.createdBy = who(req);
       const saved = await upsert(INCIDENTS, genId('inc'), doc);
       res.json({ ok: true, incident: saved, points: await pointsFor(doc.empId, doc.cycleId) });
@@ -362,6 +389,8 @@ function mount(app, opts) {
   });
   app.delete('/api/performance/incidents/:id', guard, async (req, res) => {
     try {
+      const entry = await findEntry(INCIDENTS, s(req.params.id, 80));
+      if (entry && await isFiled(entry.empId, entry.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
       const ok = await removeOne(INCIDENTS, s(req.params.id, 80));
       res.json({ ok, error: ok ? undefined : 'Entry not found.' });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not remove the entry.' }); }
@@ -373,6 +402,7 @@ function mount(app, opts) {
       const doc = normAchievement(req.body);
       if (!doc.empId) return res.status(400).json({ ok: false, error: 'A staff member is required.' });
       if (!doc.what.trim()) return res.status(400).json({ ok: false, error: 'Describe the achievement.' });
+      if (await isFiled(doc.empId, doc.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
       doc.createdAt = Date.now(); doc.createdBy = who(req);
       const saved = await upsert(ACHIEVEMENTS, genId('ach'), doc);
       res.json({ ok: true, achievement: saved, points: await pointsFor(doc.empId, doc.cycleId) });
@@ -380,6 +410,8 @@ function mount(app, opts) {
   });
   app.delete('/api/performance/achievements/:id', guard, async (req, res) => {
     try {
+      const entry = await findEntry(ACHIEVEMENTS, s(req.params.id, 80));
+      if (entry && await isFiled(entry.empId, entry.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
       const ok = await removeOne(ACHIEVEMENTS, s(req.params.id, 80));
       res.json({ ok, error: ok ? undefined : 'Entry not found.' });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not remove the entry.' }); }

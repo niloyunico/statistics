@@ -127,6 +127,13 @@ function mount(app) {
     if (warm) lastWarmAt = now;
     try {
       const r = await ping(source, { warm });
+      // The daily "did anything go missing?" check rides this cron (Vercel Hobby allows
+      // two crons and both are taken). Only for the real cron / a secret-bearing caller,
+      // at most once per 20 h, and it can never fail the keep-alive itself.
+      if (trusted) {
+        try { r.monitor = await require('./monitor').runScheduled(source); }
+        catch (e) { r.monitor = { ok: false, error: String((e && e.message) || e).slice(0, 160) }; }
+      }
       res.set('Cache-Control', 'no-store');
       res.json(r);
     } catch (e) {

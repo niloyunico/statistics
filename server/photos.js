@@ -52,12 +52,11 @@ async function setStaffPhoto(staffId, empId, photo) {
   const h = await getDbHandle();
   const dbh = h && h.db ? h.db : h;
   if (!dbh) return false;
-  const or = [];
-  if (staffId != null && staffId !== '') or.push({ id: Number(staffId) }, { _id: String(staffId) });
-  if (empId) or.push({ emp_id: String(empId) });
-  if (!or.length) return false;
+  // By record id only — see staffIdFilter: emp ids are shared by different people.
+  const filter = require('./staff-roster').staffIdFilter(staffId);
+  if (!filter) return false;
   const upd = photo ? { $set: { photo } } : { $unset: { photo: '' } };
-  const r = await dbh.collection('staff').updateOne({ $or: or }, upd);
+  const r = await dbh.collection('staff').updateOne(filter, upd);
   // Invalidate EXPLICITLY rather than trusting the instrumented write to do it.
   // A portrait that reaches the database but not the cached `staff` copy is invisible:
   // __UNICO_STAFF__ is built from that copy, so the browser is handed a roster with no
@@ -181,6 +180,13 @@ function mount(app, opts) {
     if (!kind) return;
 
     const publicId = String(body.publicId || '').trim();
+    // A portrait saved without a publicId (url-only, or backfilled with publicId '') has
+    // nothing to delete from storage, but its link on the staff document must still be
+    // cleared: that copy is what the roster merge restored the "removed" photo from.
+    if (!publicId && kind.folder === KINDS.staff.folder && body.staffId != null && body.staffId !== '') {
+      try { await setStaffPhoto(body.staffId, body.empId, null); return res.json({ ok: true, storage: 'nothing to delete' }); }
+      catch (e) { return res.status(500).json({ ok: false, error: 'Could not clear the photo on the staff record.' }); }
+    }
     if (!publicId) return res.status(400).json({ ok: false, error: 'publicId is required.' });
     // Never let a caller reach outside the folder its kind owns.
     if (publicId.indexOf(kind.folder + '/') !== 0) {

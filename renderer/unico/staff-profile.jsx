@@ -217,11 +217,13 @@ function StaffProfile({store, empId, setRoute}){
           <button className="btn sm" title="Discontinue — record the exit reason & move to Previous Staff (feeds the attrition rate)"
             style={{color:'#d23a52',borderColor:'#f1c6cd',fontWeight:700}} onClick={()=>setDiscontinuing(true)}>⚠ Discontinue</button>}
         <button className="btn sm" title="Print / Save as PDF" onClick={()=>window.print()}><Ic d={I.print} s={15}/>Print</button>
-        <button className="btn sm" title="Delete permanently" style={{color:'#d23a52',borderColor:'#f1c6cd'}} onClick={async()=>{
+        {/* Gated like Directory/Manage: a view-only account used to get "Staff record
+            deleted" / "saved" for a change the server silently discarded. */}
+        {(!window.unicoCan||window.unicoCan('staff','delete'))&&<button className="btn sm" title="Delete permanently" style={{color:'#d23a52',borderColor:'#f1c6cd'}} onClick={async()=>{
           const ok=await window.UI.confirm({title:`Permanently delete ${e.name}?`,message:'This removes the record entirely and cannot be undone. (Use Deactivate to keep the record.)',danger:true,confirmLabel:'Delete permanently'});
           if(ok){store.destroy(empId);window.UI.toast('Staff record deleted','success');setRoute({view:backView});}
-        }}><Ic d={I.x} s={15} sw={2.4}/>Delete</button>
-        <button className="btn pri sm" onClick={()=>setRoute({view:'staffForm',emp:e.id})}><Ic d={I.edit} s={15}/>Edit profile</button>
+        }}><Ic d={I.x} s={15} sw={2.4}/>Delete</button>}
+        {(!window.unicoCan||window.unicoCan('staff','edit'))&&<button className="btn pri sm" onClick={()=>setRoute({view:'staffForm',emp:e.id})}><Ic d={I.edit} s={15}/>Edit profile</button>}
       </div>
       {discontinuing&&<DiscontinueDialog e={e} onClose={()=>setDiscontinuing(false)}
         onDone={(reasonText)=>{ setDiscontinuing(false); store.remove(empId,reasonText);

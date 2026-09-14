@@ -105,6 +105,9 @@ const MANIFEST = [
   // medicine.jsx? No — medicine.jsx only reads window.MedicineInfoV2 at render time.
   { file: 'medicine-info.jsx', jsx: true },
   { file: 'medicine.jsx', jsx: true },   // drug index + prescription pad (window.MedicineView)
+  // System Monitor panel (window.SystemMonitor) + the save-failure reporter every browser
+  // runs. Before app.jsx; wraps window.unicoNative.persist at load.
+  { file: 'monitor.jsx', jsx: true },
   { file: 'app.jsx', jsx: true },
 ];
 

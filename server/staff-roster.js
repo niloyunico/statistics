@@ -33,4 +33,17 @@ async function loadRoster(opts) {
   return resolveRoster(snapshot.data, base);
 }
 
-module.exports = { resolveRoster, loadRoster };
+// Which `staff` document a server-written field (portrait url, BNMC verification)
+// belongs to. The record id alone decides. Employee numbers are NOT unique (11410 and
+// 11520 each belong to two people) and a new record's form may carry a number already
+// used by somebody else, so an `$or` of id-or-emp_id wrote one nurse's photo or licence
+// onto another. No id -> no server write; the value still lives on the register row.
+function staffIdFilter(staffId) {
+  if (staffId == null || String(staffId).trim() === '') return null;
+  const or = [{ _id: String(staffId) }];
+  const n = Number(staffId);
+  if (Number.isFinite(n)) or.unshift({ id: n });
+  return { $or: or };
+}
+
+module.exports = { resolveRoster, loadRoster, staffIdFilter };

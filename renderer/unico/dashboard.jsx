@@ -36,10 +36,10 @@ function DeptMiniCard({d,onOpen}){
       </div>
       <div style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between'}}>
         <div>
-          <div className="num" style={{fontSize:23,fontWeight:600,color:'var(--ink)',lineHeight:1}}>{fmt(d.latest[d.primary]||0)}</div>
-          <div style={{fontSize:10,color:'var(--faint)',textTransform:'uppercase',letterSpacing:.3,marginTop:3}}>{d.primaryLabel} · {d.latest.month}</div>
+          <div className="num" style={{fontSize:23,fontWeight:600,color:'var(--ink)',lineHeight:1}}>{d.series.length?fmt(d.latest[d.primary]||0):'—'}</div>
+          <div style={{fontSize:10,color:'var(--faint)',textTransform:'uppercase',letterSpacing:.3,marginTop:3}}>{d.primaryLabel} · {d.latest.month||'no report in period'}</div>
         </div>
-        <Spark values={vals} color={tone} w={96} h={36}/>
+        {vals.length?<Spark values={vals} color={tone} w={96} h={36}/>:null}
       </div>
     </div>
   );
@@ -115,17 +115,24 @@ function ReportingCompliance({depts, onFill}){
 // Return a copy of department `d` whose time-dependent aggregates (series, total,
 // latest, prev, delta, peak, avg) are recomputed over only the in-range months.
 // Mirrors store.js `recompute` so the rest of the Dashboard reads the same shape.
-// Falls back to the unfiltered dept if it has no data inside the window.
+// A department with no report inside the window is EMPTY for that period.
 function deptForPeriod(d, monthSet){
   const idxs=[];
   for(let i=0;i<d.months.length;i++) if(monthSet.has(d.months[i])) idxs.push(i);
-  if(!idxs.length) return d;
+  // Returning the unfiltered department here added its whole-history total into the
+  // period totals ("Critical Care Vol.", "Procedures", the All-cases donut) and showed an
+  // old month as its "latest".
+  if(!idxs.length) return {...d, months:[], data:[], series:[], total:0, latest:{}, prev:null, delta:0, peak:0, avg:0};
   const months=idxs.map(i=>d.months[i]);
   const data=idxs.map(i=>d.data[i]);
   const series=data.map((row,i)=>({month:months[i], full:(window.UNICO.MONTHS_FULL[months[i]]||months[i]), ...row}));
   const total=series.reduce((s,r)=>s+(r[d.primary]||0),0);
   const latest=series[series.length-1];
-  const prev=series.length>1?series[series.length-2]:null;
+  // The month BEFORE the window's latest, from the full history: a one-month window has
+  // no in-range previous month, and every card read "▲ 100%".
+  const li=idxs[idxs.length-1];
+  const prevRow=li>0?d.data[li-1]:null;
+  const prev=prevRow?{month:d.months[li-1], full:(window.UNICO.MONTHS_FULL[d.months[li-1]]||d.months[li-1]), ...prevRow}:null;
   const cur=latest[d.primary]||0, pv=prev?(prev[d.primary]||0):0;
   const delta=pv===0?(cur>0?100:0):Math.round(((cur-pv)/pv)*100);
   const peak=Math.max(...series.map(r=>r[d.primary]||0));
@@ -213,7 +220,7 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
         <div className="grid" style={{gridTemplateColumns:'repeat(auto-fill,minmax(232px,1fr))'}}>
           {depts.map(d=><DeptMiniCard key={d.id} d={d} onOpen={()=>openDept(d.id)}/>)}
         </div>
-        <ReportingCompliance depts={depts} onFill={onFill}/>
+        <ReportingCompliance depts={rawDepts} onFill={onFill}/>
       </div>
     );
   }
@@ -253,7 +260,10 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
   // executive (default) — matches UNICO.dc.html "Hospital Overview"
   const ranking=depts.map(d=>({label:d.short,value:d.latest[d.primary]||0,color:PALETTE[(d.id.charCodeAt(0))%PALETTE.length]}))
     .sort((a,b)=>b.value-a.value).slice(0,8);
-  const groupMix=window.UNICO.GROUPS.map((g,i)=>({label:g,value:depts.filter(d=>d.group===g).reduce((s,d)=>s+d.total,0),color:PALETTE[i]})).filter(x=>x.value>0);
+  // Groups of the departments ON SCREEN: window.UNICO.GROUPS only knows the database
+  // departments' original groups, so a custom or regrouped department vanished from the
+  // donut and the All-cases total.
+  const groupMix=[...new Set(depts.map(d=>d.group).filter(Boolean))].map((g,i)=>({label:g,value:depts.filter(d=>d.group===g).reduce((s,d)=>s+d.total,0),color:PALETTE[i]})).filter(x=>x.value>0);
   const erConv=er&&er.latest&&er.latest.conv!=null?er.latest.conv:0;
   const latestFull=activeMonths.length?(MF[activeMonths[activeMonths.length-1]]||activeMonths[activeMonths.length-1]):'';
   return (
@@ -280,7 +290,7 @@ function Dashboard({layout, depts:rawDepts, period, openDept, onFill, setRoute})
           <div className="card-h">
             <h3>OPD Footfall — Hospital-wide Trend</h3>
             <span className="sub">{rangeFull}</span><span className="spacer"/>
-            <span className="tag" style={{background:'var(--pos-bg)',color:'var(--pos)'}}>▲ {opd.delta}% MoM</span>
+            <Delta v={opd.delta}/>{/* direction and colour follow the value — a fall used to show a green ▲ */}
           </div>
           <div className="card-b"><LineChart data={opd.series} x="full" y="opd" height={258} color="#0b66d0"/></div>
         </div>

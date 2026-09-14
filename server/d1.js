@@ -22,17 +22,27 @@ const CF_DB = process.env.CLOUDFLARE_D1_DATABASE_ID;
 const CF_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 
 function configured() { return !!(CF_ACCOUNT && CF_DB && CF_TOKEN); }
+const D1_TIMEOUT_MS = parseInt(process.env.D1_TIMEOUT_MS || '8000', 10) || 8000;
 
 async function rawQuery(sql, params) {
   if (!configured()) throw new Error('Cloudflare D1 is not configured (set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID, CLOUDFLARE_API_TOKEN in server/.env).');
   const url = 'https://api.cloudflare.com/client/v4/accounts/' + encodeURIComponent(CF_ACCOUNT) + '/d1/database/' + encodeURIComponent(CF_DB) + '/query';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + CF_TOKEN, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sql, params: params || [] }),
-  });
-  let body;
-  try { body = await res.json(); } catch (e) { body = null; }
+  // Bounded: a stalled Cloudflare API call otherwise held every awaited D1 request
+  // (supervisor saves, the activity log) until the serverless function itself timed out.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), D1_TIMEOUT_MS);
+  let res, body;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + CF_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql, params: params || [] }),
+      signal: ctrl.signal,
+    });
+    try { body = await res.json(); } catch (e) { body = null; }
+  } catch (e) {
+    throw new Error('D1 query failed: ' + (e && e.name === 'AbortError' ? 'Cloudflare did not answer within ' + (D1_TIMEOUT_MS / 1000) + ' s' : String((e && e.message) || e)));
+  } finally { clearTimeout(timer); }
   if (!res.ok || !(body && body.success)) {
     const errs = (body && body.errors && body.errors.length)
       ? body.errors.map((e) => (e && e.message) || String(e)).join('; ')

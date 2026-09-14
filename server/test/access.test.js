@@ -52,6 +52,8 @@ const staffArr = [
   eq('department scope sees only its own unit (incl. multi-valued)', seenByIncharge.map(r => r.id), [1, 8]);
   const seenBySelf = await access.filterStaff(selfUser, staffArr);
   eq('self scope sees only own record', seenBySelf.map(r => r.id), [7]);
+  const twins = await access.filterStaff(selfUser, staffArr.concat([{ id: 70, emp_id: 'UNC-0107', current_department: 'ccu' }]));
+  eq('self scope with a staffId does not see a colleague who shares the employee number', twins.map(r => r.id), [7]);
   eq('admin sees all', (await access.filterStaff(admin, staffArr)).map(r => r.id), [1, 2, 7, 8]);
   eq('no staff permission -> nothing', await access.filterStaff({ unrestricted: false, role: 'User', perms: {}, staffScope: 'all' }, staffArr), []);
 
@@ -108,15 +110,32 @@ const staffArr = [
   eq('in-scope edit applied', (rows.find(r => r.id === 1) || {}).name, 'EDITED');
   eq('out-of-scope row untouched', (rows.find(r => r.id === 2) || {}).emp_id, 'UNC-0102');
 
-  // Delete inside scope is honoured; the rest stays.
+  // A delete inside scope needs the DELETE permission (staffUser holds view + edit only).
   const deleted = JSON.stringify([{ id: 8, emp_id: '', current_department: 'micu, ccu' }]);
   const m3 = await access.mergeAppData(staffUser, { unico_staff_v3: deleted }, blob);
-  eq('in-scope delete honoured, others kept', JSON.parse(m3.unico_staff_v3).map(r => r.id).sort(), [2, 7, 8]);
+  eq('an edit-only account cannot delete: the record is kept', JSON.parse(m3.unico_staff_v3).map(r => r.id).sort(), [1, 2, 7, 8]);
+  const deleter = Object.assign({}, staffUser, { perms: { staff: ['view', 'edit', 'add', 'delete'] } });
+  const m3b = await access.mergeAppData(deleter, { unico_staff_v3: deleted }, blob);
+  eq('with delete permission the in-scope delete is honoured, others kept', JSON.parse(m3b.unico_staff_v3).map(r => r.id).sort(), [2, 7, 8]);
 
-  // A scoped session must not smuggle a record into another department.
+  // Refused staff changes are REPORTED (409) — dropping them silently let the form say
+  // "saved" for a record the next refresh took away.
+  const rejects = async (name, p, status, re) => {
+    try { await p; ok(name + ' (expected a refusal, got success)', false); }
+    catch (e) { ok(name + (e.status === status ? '' : ' (status ' + e.status + ': ' + e.message + ')'), e.status === status && (!re || re.test(e.message))); }
+  };
   const smuggle = JSON.stringify(staffArr.concat([{ id: 99, current_department: 'cathlab' }]));
-  const m4 = await access.mergeAppData(staffUser, { unico_staff_v3: smuggle }, blob);
-  ok('cannot create staff outside own scope', !JSON.parse(m4.unico_staff_v3).some(r => r.id === 99));
+  await rejects('an account without add permission is refused a new record', access.mergeAppData(staffUser, { unico_staff_v3: smuggle }, blob), 409, /cannot add/);
+  await rejects('a new record outside own scope is refused, not silently dropped', access.mergeAppData(deleter, { unico_staff_v3: smuggle }, blob), 409, /own departments/);
+  const inScopeNew = JSON.stringify(JSON.parse(scoped.unico_staff_v3).concat([{ id: 50, current_department: 'MICU' }]));
+  ok('a new record inside scope is added', JSON.parse((await access.mergeAppData(deleter, { unico_staff_v3: inScopeNew }, blob)).unico_staff_v3).some(r => r.id === 50));
+  // The scoped browser numbered a new nurse from its narrowed list and hit an out-of-scope id.
+  const collide = JSON.stringify([{ id: 1, emp_id: 'UNC-0101', current_department: 'micu' }, { id: 8, emp_id: '', current_department: 'micu, ccu' }, { id: 2, name: 'Brand new', current_department: 'micu' }]);
+  await rejects('a new record colliding with an out-of-scope id is refused', access.mergeAppData(deleter, { unico_staff_v3: collide }, blob), 409, /already used/);
+  const moved = JSON.stringify([{ id: 1, emp_id: 'UNC-0101', current_department: 'cathlab' }, { id: 8, emp_id: '', current_department: 'micu, ccu' }]);
+  await rejects('moving a person out of own scope is refused', access.mergeAppData(staffUser, { unico_staff_v3: moved }, blob), 409, /own departments/);
+  const degradedSave = { unrestricted: false, degraded: true, role: 'User', perms: {}, departments: [], qualityAreas: [], staffScope: 'self' };
+  await rejects('a session whose permissions could not be read is refused (503), never told "saved"', access.mergeAppData(degradedSave, { unico_store_v3: 'edit' }, blob), 503);
 
   // A write to a module it may only VIEW is ignored.
   const viewer = Object.assign({}, staffUser, { perms: { staff: ['view'] } });
@@ -188,6 +207,10 @@ const staffArr = [
   ok('contact details and notes are still withheld', rich.phone === undefined && rich.notes === undefined);
   ok('the fields a ward actually needs are kept', one.name === 'A' && one.emp_id === '1' && one.current_department === 'MICU');
   eq('no assigned unit means no staff at all', access.portalStaff([], roster), []);
+  const spellings = [{ id: 1, current_department: 'Level-10' }, { id: 2, current_department: 'Level 10' },
+    { id: 3, current_department: 'IPD Cabin Level 10' }, { id: 4, current_department: 'Emergency' }, { id: 5, current_department: 'Level 9' }];
+  eq('an in-charge sees every real spelling of their unit (aliases + Level-N)',
+    access.portalStaff(['lvl10', 'IPD Cabin Level 10', 'er', 'Emergency Room'], spellings).map(p => p.id), [1, 2, 3, 4]);
   console.log('\n== no module may hard-code a single portal role ==');
   /* This is the guard for a whole CLASS of bug, not one instance of it.
 

@@ -89,10 +89,25 @@ async function fetchIndexPart(file) {
 // Brand overrides live in meds_over (the base 118k brands are PACKED 24-per-row in
 // meds_brand as 'bpk-N' rows — D1's free tier counts rows written per day, and
 // single-row brands burned a whole day's quota on every dataset refresh).
+// Re-applied on a timer as well as at load: an edit saved on ANOTHER warm instance (a
+// brand marked stocked) otherwise stayed invisible here for the instance's whole life, and
+// a D1 blip at cold start left this instance without the local edits at all.
+const OVERLAY_TTL_MS = 60000;
+let overlayRefreshing = null;
+function refreshOverlaySoon(idx) {
+  if (overlayRefreshing || Date.now() - (idx.overlayAt || 0) < OVERLAY_TTL_MS) return;
+  overlayRefreshing = applyOverlay(idx)
+    .then((ok) => { if (ok) { buildSortIndexes(idx); qCache.clear(); } })
+    .catch(() => {})
+    .finally(() => { overlayRefreshing = null; });
+}
+
 async function applyOverlay(idx) {
   try {
-    // meds_over may not exist until the packed import has run once.
-    const eb = await d1.query('SELECT doc FROM meds_over LIMIT 5000').catch(() => []);
+    // meds_over may not exist until the packed import has run once — that alone is fine;
+    // any OTHER failure is a real one and must not pass for "no local edits".
+    const eb = await d1.query('SELECT doc FROM meds_over LIMIT 5000')
+      .catch((e) => { if (/no such table/i.test(String((e && e.message) || e))) return []; throw e; });
     eb.forEach((r) => {
       const d = JSON.parse(r.doc);
       const lite = brandLite(d);
@@ -106,7 +121,14 @@ async function applyOverlay(idx) {
       const at = idx.gById.get(lite.id);
       if (at != null) idx.generics[at] = lite; else { idx.gById.set(lite.id, idx.generics.length); idx.generics.push(lite); }
     });
-  } catch (e) { /* overlay unavailable — the shipped index still serves */ }
+    idx.overlayAt = Date.now();
+    return true;
+  } catch (e) {
+    // The shipped index still serves; try the local edits again in ~15 s.
+    idx.overlayAt = Date.now() - OVERLAY_TTL_MS + 15000;
+    console.warn('[meds-d1] local medicine edits not applied yet: ' + String((e && e.message) || e).slice(0, 160));
+    return false;
+  }
 }
 
 function brandLite(d) {
@@ -122,7 +144,7 @@ function brandLite(d) {
 }
 
 async function loadIndex() {
-  if (IDX) return IDX;
+  if (IDX) { refreshOverlaySoon(IDX); return IDX; }
   if (loadingP) return loadingP;
   loadingP = (async () => {
     const [bPart, mPart] = await Promise.all([fetchIndexPart('index-brands.json.gz'), fetchIndexPart('index-meta.json.gz')]);
@@ -143,7 +165,9 @@ async function loadIndex() {
     loadingP = null;
     console.log('[meds-d1] index loaded: ' + idx.brands.length + ' brands, ' + idx.generics.length + ' generics');
     return idx;
-  })();
+  // A failed load must not be handed to every later call: search, browse and brand
+  // pages answered 500 until the instance was recycled.
+  })().catch((e) => { loadingP = null; throw e; });
   return loadingP;
 }
 
@@ -271,7 +295,7 @@ async function loadInteractions() {
     ixLoadingP = null;
     console.log('[meds-d1] interactions loaded: ' + (raw.ix || []).length + ' warnings, ' + (raw.food || []).length + ' food notes');
     return IX;
-  })();
+  })().catch((e) => { ixLoadingP = null; throw e; });   // retry next time, don't cache the failure
   return ixLoadingP;
 }
 async function interactionRows(gids) {

@@ -732,7 +732,16 @@ function mount(app, opts) {
       const names = {}; Object.keys(obj(b.names)).slice(0, 400).forEach((k) => { const v = s(b.names[k], 120); if (v) names[s(k, 40)] = v; });
       const doc = { dept: unit.name, deptName: unit.name, year, month, grid: rosterMod.normGrid(b.grid), order: arr(b.order).map((x) => s(x, 40)).slice(0, 400), names: Object.keys(names).length ? names : ((existing && existing.names) || {}), rules: obj(existing && existing.rules), status, preparedBy: ctx.name, checkedBy: s((existing && existing.checkedBy) || '', 120), approvedBy: s((existing && existing.approvedBy) || '', 120), note: s(b.note, 1000), revision: ((existing && existing.revision) || 0) + 1, updatedAt: nowMs(), updatedBy: ctx.name, unitId: unit.id };
       if (!existing) { doc.createdAt = nowMs(); doc.createdBy = ctx.name; }
-      await c.updateOne({ _id: id }, { $set: doc }, { upsert: true });
+      // Conditional on the revision read above: the console saves the same document, and
+      // an unconditional $set let whichever save landed second erase the other's cells.
+      const raced = () => fail(res, 409, 'Someone else saved this roster at the same moment. Reload it and try again.');
+      if (existing) {
+        const wr = await c.updateOne({ _id: id, revision: existing.revision == null ? null : existing.revision, status: existing.status }, { $set: doc });
+        if (!wr.matchedCount) return raced();
+      } else {
+        try { await c.insertOne(Object.assign({ _id: id }, doc)); }
+        catch (e) { if (e && e.code === 11000) return raced(); throw e; }
+      }
       log(req, status === 'submitted' ? 'roster_submitted' : 'roster_saved', unit.name + ' · ' + (month + 1) + '/' + year, doc.order.length + ' staff · rev ' + doc.revision);
       res.json({ ok: true, roster: rosterOut(await c.findOne({ _id: id })) });
     } catch (e) { fail(res, 500, 'Could not save the roster.'); }

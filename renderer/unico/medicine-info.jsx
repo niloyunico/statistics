@@ -198,7 +198,9 @@
       setFavs((f) => {
         const has = f.some((x) => x.id === row.id);
         const next = has ? f.filter((x) => x.id !== row.id)
-          : f.concat([{ id: row.id, name: row.name, strength: row.strength, form: row.form, generic: row.generic, price: row.price, hasImage: row.hasImage, drugClass: row.drugClass }]);
+          : f.concat([{ id: row.id, name: row.name, strength: row.strength, form: row.form, generic: row.generic, price: row.price, hasImage: row.hasImage, drugClass: row.drugClass,
+            // The interaction check needs it; a favourite saved without it could never be checked.
+            genericId: row.genericId || (searchMode === 'generic' ? row.id : undefined) }]);
         try { localStorage.setItem(FAV_KEY, JSON.stringify(next)); } catch (e) {}
         return next;
       });
@@ -209,14 +211,20 @@
       if (!checkMode) return searchMode === 'generic' ? openGeneric(row.id) : openBrand(row.id);
       setPicks((p) => {
         const has = p.some((x) => x.id === row.id);
-        const next = has ? p.filter((x) => x.id !== row.id) : (p.length < 2 ? p.concat([row]) : [p[1], row]);
+        // A generic row IS its generic: give it the id the checker reads.
+        const pick = row.genericId || searchMode !== 'generic' ? row : Object.assign({}, row, { genericId: row.id });
+        const next = has ? p.filter((x) => x.id !== row.id) : (p.length < 2 ? p.concat([pick]) : [p[1], pick]);
         return next;
       });
     };
     useEffect(() => {
       if (picks.length !== 2) { setCheckRes(null); return; }
-      post('/api/med/check', { genericIds: picks.map((p) => p.genericId).filter(Boolean) })
-        .then((r) => setCheckRes(r.ok ? (r.warnings || []) : null)).catch(() => setCheckRes(null));
+      // Both drugs need a generic to be checked. A pair that cannot be checked must SAY so:
+      // an empty list came back with no warnings, which the badge read as "No known harm".
+      const gids = picks.map((p) => p.genericId).filter(Boolean);
+      if (gids.length < 2) { setCheckRes({ unchecked: true }); return; }
+      post('/api/med/check', { genericIds: gids })
+        .then((r) => setCheckRes(r.ok ? (r.warnings || []) : { unchecked: true })).catch(() => setCheckRes({ unchecked: true }));
     }, [picks]);
 
     const shown = useMemo(() => {
@@ -370,7 +378,12 @@
                 <div style={{ fontSize: 11, color: '#55677d', marginTop: 2 }}>{picks.length ? picks.map((p) => p.name).join('  +  ') : L.checkHint}</div>
                 {picks.length === 2 && checkRes != null && (
                   <div style={{ marginTop: 7, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                    {checkRes.length
+                    {checkRes.unchecked
+                      ? (<>
+                          <span style={{ flexShrink: 0, fontSize: 9.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: '#8a5a00', background: 'rgba(224,161,42,.16)', border: '1px solid rgba(224,161,42,.45)', borderRadius: 6, padding: '3px 8px' }}>{bn ? 'যাচাই হয়নি' : 'Not checked'}</span>
+                          <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#2b3a4d', flex: 1 }}>{bn ? 'এই জোড়ার ইন্টারঅ্যাকশন যাচাই করা যায়নি — মনোগ্রাফ বা ফার্মাসিস্টের সাথে মিলিয়ে নিন।' : 'Interactions for this pair could NOT be checked (no linked generic, or the check failed). Consult the monograph or a pharmacist.'}</div>
+                        </>)
+                      : checkRes.length
                       ? (() => { const w = checkRes[0], m = sevMeta(w); return (<>
                           <span style={{ flexShrink: 0, fontSize: 9.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: m[1], background: m[2], border: '1px solid ' + m[3], borderRadius: 6, padding: '3px 8px' }}>{m[0]}</span>
                           <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#2b3a4d', flex: 1 }}>{w.detail || w.title}</div>

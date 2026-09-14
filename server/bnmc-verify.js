@@ -474,15 +474,16 @@ async function storeVerification(staffId, empId, payload) {
   const h = await getDbHandle();
   const dbh = h && h.db ? h.db : h;
   if (!dbh) throw new Error('Database not available.');
-  const or = [];
-  if (staffId != null && staffId !== '') { or.push({ id: Number(staffId) }, { _id: String(staffId) }); }
-  if (empId) or.push({ emp_id: String(empId) });
-  if (!or.length) throw new Error('No staff member identified.');
+  // By record id only — see staffIdFilter: emp ids are shared by different people, and
+  // a verification written onto the wrong nurse is worse than one kept only on the row.
+  const filter = require('./staff-roster').staffIdFilter(staffId);
+  if (!filter && !empId) throw new Error('No staff member identified.');
+  if (!filter) return false;
   const set = { licence_verified: payload.verification };
   if (payload.licence_no) set.licence_no = String(payload.licence_no);
   if (payload.licence_program) set.licence_program = String(payload.licence_program);
   if (payload.licence_expiry) set.licence_expiry = String(payload.licence_expiry);
-  const r = await dbh.collection('staff').updateOne({ $or: or }, { $set: set });
+  const r = await dbh.collection('staff').updateOne(filter, { $set: set });
   // Same reason as server/photos.js: a verification the cached roster does not carry
   // never reaches the browser, and the client merge cannot restore what it is not sent.
   try { await cache.bump('staff'); } catch (e) { /* best effort */ }

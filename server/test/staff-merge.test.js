@@ -12,6 +12,21 @@ assert.deepEqual(merge(old, old, live), live);
 assert.deepEqual(merge(live, [{...live[0],extracurricular:''},live[1]], live)[0].extracurricular, '');
 assert.throws(() => merge([], [{id:2,name:'Other'}], live), error => error.status === 409);
 assert.throws(() => merge(old, stale, []), error => error.status === 409);
+// Fields the server restores from the staff document (photo, BNMC licence) are not
+// somebody else's edit: they made every delete / photo change / re-verification a 409.
+const stored = [{id:5,name:'Chelcia',is_active:true}];
+const resolved = [{...stored[0],photo:{url:'p'},licence_verified:{at:'2026-09-07'},licence_no:'7749'}];
+assert.deepEqual(merge(resolved, [], stored), [], 'deleting a person whose photo/licence came from the server is not a conflict');
+assert.deepEqual(merge(resolved, [{...resolved[0],photo:{url:'new'}}], stored)[0].photo, {url:'new'}, 'changing that photo is not a conflict');
+assert.equal(merge(resolved, [{...resolved[0],licence_verified:{at:'2026-09-14'}}], [{...stored[0],licence_verified:{at:'2026-01-01'}}])[0].licence_verified.at, '2026-09-14', 're-verifying over an older stored verification is not a conflict');
+assert.throws(() => merge(resolved, [{...resolved[0],photo:{url:'new'}}], [{...stored[0],photo:{url:'someone else'}}]), error => error.status === 409, 'a real competing photo change still conflicts');
+assert.throws(() => merge(old, [], [{...old[0],extracurricular:'Changed'}]), error => error.status === 409, 'deleting a record someone else edited still conflicts');
+// Server-written photo/licence fields match the record id only, never the employee number.
+const { staffIdFilter } = require('../staff-roster');
+assert.deepEqual(staffIdFilter(120), {$or:[{id:120},{_id:'120'}]});
+assert.deepEqual(staffIdFilter('S-9'), {$or:[{_id:'S-9'}]});
+assert.equal(staffIdFilter(''), null, 'no record id means no server write');
+assert.equal(staffIdFilter(null), null);
 process.env.MONGODB_URI='';
 const db=require('../db');
 (async()=>{

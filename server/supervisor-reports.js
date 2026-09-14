@@ -157,16 +157,38 @@ async function getReportById(id) {
   return outDoc(await c.findOne({ _id: String(id) }));
 }
 
+function refusal(status, message, extra) {
+  const e = new Error(message);
+  e.status = status;
+  return Object.assign(e, extra || {});
+}
+
 async function saveReport(input) {
   const i = obj(input);
   const now = Date.now();
   const doc = normReport(i);
   // Update in place when an id is supplied; else create.
   const existingId = i.id || i._id;
+  // `baseUpdatedAt` — the updatedAt of the copy the browser edited (optional; clients
+  // that send it get lost-update protection).
+  const base = i.baseUpdatedAt == null || i.baseUpdatedAt === '' ? null : Number(i.baseUpdatedAt);
+  // Guards for an update, in every store. An approved report is the signed shift log:
+  // no save may overwrite it or quietly move it back to draft (reopen through setStatus).
+  // An older copy saved from another tab is refused instead of replacing every section
+  // somebody else filled in since. And a save never approves.
+  const guardUpdate = (prevStatus, prevUpdatedAt) => {
+    if (prevStatus === 'approved') throw refusal(409, 'This report is approved and locked. Reopen it before editing.', { locked: true });
+    if (base != null && Number.isFinite(base) && Number(prevUpdatedAt) !== base) {
+      throw refusal(409, 'Someone else saved this report since you opened it. Reload it to see their changes, then make yours again.', { conflict: true });
+    }
+    if (doc.status === 'approved') doc.status = prevStatus || 'draft';
+  };
+  if (!existingId && doc.status === 'approved') doc.status = 'draft';
   if (d1On()) {
     if (existingId) {
       const prev = await d1store.withSchema(() => d1.get('SELECT ' + D1_COLS + ' FROM supervisor_reports WHERE id = ?', [String(existingId)]));
       if (!prev) throw new Error('Report not found.');
+      guardUpdate(prev.status, prev.updated_at);
       // Merge OVER the stored doc rather than replacing it, to match Mongo's $set
       // semantics: custom_* sections absent from THIS payload are kept, not dropped.
       const merged = Object.assign({}, d1store.parseJson(prev.doc, {}) || {}, doc);
@@ -193,15 +215,19 @@ async function saveReport(input) {
     if (!c) {
       const idx = mem.reports.findIndex((r) => r._id === existingId);
       if (idx < 0) throw new Error('Report not found.');
+      guardUpdate(mem.reports[idx].status, mem.reports[idx].updatedAt);
       mem.reports[idx] = Object.assign({}, mem.reports[idx], doc, { _id: existingId, updatedAt: now });
       return outDoc(mem.reports[idx]);
     }
     const prev = await c.findOne({ _id: String(existingId) });
     if (!prev) throw new Error('Report not found.');
+    guardUpdate(prev.status, prev.updatedAt);
     const merged = Object.assign({}, doc, {
       createdBy: prev.createdBy || null, createdAt: prev.createdAt || now, updatedAt: now,
     });
-    await c.updateOne({ _id: String(existingId) }, { $set: merged });
+    // Conditional on the copy just checked, so two saves cannot interleave.
+    const wr = await c.updateOne({ _id: String(existingId), updatedAt: prev.updatedAt, status: { $ne: 'approved' } }, { $set: merged });
+    if (!wr.matchedCount) throw refusal(409, 'Someone else saved this report at the same moment. Reload it and try again.', { conflict: true });
     return outDoc(Object.assign({ _id: String(existingId) }, prev, merged));
   }
   const _id = genId('rpt');
@@ -329,7 +355,7 @@ function mount(app, opts) {
       const body = Object.assign({}, req.body || {});
       if (!body.id && !body._id) body.createdBy = who(req);
       res.json({ ok: true, report: await saveReport(body) });
-    } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+    } catch (e) { res.status(e.status || 400).json({ ok: false, error: String(e.message || e), locked: !!e.locked, conflict: !!e.conflict }); }
   });
   app.post('/api/supervisor-reports/:id/status', guard, async (req, res) => {
     try { res.json({ ok: true, report: await setStatus(req.params.id, (req.body || {}).status) }); }

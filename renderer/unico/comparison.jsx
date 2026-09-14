@@ -48,11 +48,19 @@ function DeptCompare({depts, openDept}){
   const [rangeMode,setRangeMode]=useState('all');
   const RANGE=[['all','All'],['l6','Last 6M'],['l3','Last 3M'],['latest','Latest']];
   const sliceN=rangeMode==='l3'?3:rangeMode==='l6'?6:rangeMode==='latest'?1:0;
+  // "Last N months" = the same N CALENDAR months for every department compared. Slicing
+  // each series on its own put one unit's Mar–May beside another's Jul–Sep as if equal.
+  const MO=(window.UNICO&&window.UNICO.MONTH_ORDER)||[];
+  const windowMonths=useMemo(()=>{
+    if(rangeMode==='all') return null;
+    const all=[...new Set(selDepts.flatMap(d=>(d.series||[]).map(r=>r.month)))].sort((a,b)=>MO.indexOf(a)-MO.indexOf(b));
+    return new Set(all.slice(-sliceN));
+  },[selDepts,rangeMode,sliceN]); // eslint-disable-line
   const inRange=(d)=>{
     const s=d.series||[];
     if(!s.length) return [];
-    if(rangeMode==='all') return s;
-    return s.slice(-sliceN);
+    if(!windowMonths) return s;
+    return s.filter(r=>windowMonths.has(r.month));
   };
 
   // ---- per-dept computed stats over range ----

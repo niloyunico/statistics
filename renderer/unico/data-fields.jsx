@@ -13,12 +13,24 @@
 
 function DataFields({ setRoute }) {
   const { useState, useMemo } = React;
-  const depts = (window.UNICO && window.UNICO.DEPARTMENTS) || [];
+  // The FULL department list: custom departments and edited columns live in the
+  // unico_store_v3 overlay, which window.UNICO.DEPARTMENTS (the database copy) lacks.
+  const depts = useMemo(() => {
+    try {
+      if (window.buildDepts) {
+        const ov = JSON.parse(localStorage.getItem('unico_store_v3')) || {};
+        const m = window.buildDepts(ov);
+        if (Array.isArray(m) && m.length) return m;
+      }
+    } catch (e) { /* fall back to the database copy */ }
+    return (window.UNICO && window.UNICO.DEPARTMENTS) || [];
+  }, []);
   const areas = useMemo(() => (window.qualityData ? window.qualityData() : (window.QUALITY_SEED || [])).filter(d => d.indicators && d.indicators.length), []);
   const [tab, setTab] = useState('patient');
   const [deptId, setDeptId] = useState((depts[0] && depts[0].id) || '');
   const [areaKey, setAreaKey] = useState((areas[0] && areas[0].key) || '');
   const dept = depts.find(d => d.id === deptId) || depts[0];
+  const cols = dept ? (dept.cols || []).filter(c => !c.hidden) : [];
   const area = areas.find(a => a.key === areaKey) || areas[0];
 
   const sel = { padding: '8px 11px', border: '1px solid var(--line)', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', background: '#fff', color: 'var(--ink)', minWidth: 220 };
@@ -46,14 +58,14 @@ function DataFields({ setRoute }) {
             <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 12 }}>
               These metric columns are the fields on the Patient Statistics form for <b style={{ color: 'var(--ink)' }}>{dept ? dept.name : '—'}</b>. They are shared app-wide with the dashboard and reports — edit them in <b>Statistics › Manage Departments</b>.
             </div>
-            {!dept || !(dept.cols || []).length ? <div style={{ color: 'var(--muted)' }}>No fields defined.</div> : (
+            {!dept || !cols.length ? <div style={{ color: 'var(--muted)' }}>No fields defined.</div> : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 10 }}>
-                {dept.cols.map((c, i) => (
+                {cols.map((c) => (
                   <div key={c.id} style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '10px 12px', background: 'var(--panel-2)' }}>
                     <div style={{ fontWeight: 700, color: 'var(--ink)' }}>{c.label}</div>
                     <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {c.pct ? chip('%', '#6a52d4') : chip('Count', '#0090ca')}
-                      {i === 0 && chip('Headline', '#1f9d57')}
+                      {c.id === (dept.primary || (cols[0] && cols[0].id)) && chip('Headline', '#1f9d57')}
                     </div>
                   </div>
                 ))}

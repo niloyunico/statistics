@@ -358,7 +358,11 @@ async function getAppData(opts) {
     return cache.read(
       'appdata',
       { coll: 'appdata', freshMs: APPDATA_TTL, fresh: !!(opts && opts.fresh), noRescue: !!(opts && opts.noRescue) },
-      () => dbRead(async (d) => {
+      // noRescue marks the read a SAVE depends on (PUT /api/data merges into it). It gets
+      // the write lane: never shed by the load limiter, never refused by an open circuit.
+      // In the read queue it was turned away under ordinary traffic once the cache was
+      // switched off (the limit falls to 2 after one page load), and the save failed.
+      () => (opts && opts.noRescue ? dbWrite : dbRead)(async (d) => {
         const doc = await d.collection('appdata').findOne({ _id: 'shared' });
         return doc ? { data: doc.data || {}, updatedAt: doc.updatedAt || 0 } : { data: {}, updatedAt: 0 };
       })

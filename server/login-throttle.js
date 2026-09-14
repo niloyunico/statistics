@@ -84,13 +84,42 @@ function localNoteFail(key) {
   return rec;
 }
 
+/* ---- shared counter WITHOUT Redis: a small MongoDB collection ------------------
+   Production runs without Redis, and a per-instance Map handed an attacker a fresh
+   allowance of guesses on every serverless instance. One document per IP|username,
+   removed by a TTL index. Any database trouble falls back to the local verdict, exactly
+   as a Redis failure does, so it can neither lock everyone out nor throw. */
+const COLL = 'loginThrottle';
+let indexed = false;
+async function throttleColl() {
+  if (!process.env.MONGODB_URI) return null;
+  const h = await require('./db').getDbHandle();
+  const db = h && h.db ? h.db : h;
+  if (!db) return null;
+  const c = db.collection(COLL);
+  if (!indexed) { indexed = true; c.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }).catch(() => { indexed = false; }); }
+  return c;
+}
+
 /* ---- public API (async: may consult the shared counter) ---------------------- */
 
 // Seconds the caller must wait, or 0 when they may try now.
 async function blockedFor(key) {
   const local = localBlockedFor(key);
   if (local > 0) return local;                 // already locked here — no need to ask
-  if (!redis.configured()) return 0;
+  if (!redis.configured()) {
+    try {
+      const c = await throttleColl();
+      if (!c) return 0;
+      const doc = await c.findOne({ _id: key }, { projection: { until: 1 } });
+      const until = doc ? Number(doc.until) : 0;
+      if (!until || until <= Date.now()) return 0;
+      const rec = fails.get(key) || { count: 0, first: Date.now(), until: 0 };   // mirror ONLY the lock (see below)
+      rec.until = until;
+      fails.set(key, rec);
+      return Math.ceil((until - Date.now()) / 1000);
+    } catch (e) { return 0; }
+  }
   try {
     const until = parseInt(await redis.get(lockKey(key)), 10);
     if (!Number.isFinite(until) || until <= Date.now()) return 0;
@@ -112,7 +141,26 @@ async function blockedFor(key) {
 // Record one failed attempt.
 async function noteFail(key) {
   const rec = localNoteFail(key);
-  if (!redis.configured()) return;
+  if (!redis.configured()) {
+    try {
+      const c = await throttleColl();
+      if (!c) return;
+      const now = Date.now();
+      // Increment and slide the expiry in one atomic write (same semantics as the Redis
+      // INCR + PEXPIRE pipeline below).
+      const r = await c.findOneAndUpdate({ _id: key },
+        { $inc: { count: 1 }, $set: { expiresAt: new Date(now + WINDOW_MS) }, $setOnInsert: { first: now } },
+        { upsert: true, returnDocument: 'after' });
+      const doc = r && Object.prototype.hasOwnProperty.call(r, 'value') ? r.value : r;
+      if (doc && Number(doc.count) >= MAX_FAILS) {
+        const until = now + LOCK_MS;
+        await c.updateOne({ _id: key }, { $set: { until, expiresAt: new Date(until) } });
+        rec.until = until;
+        fails.set(key, rec);
+      }
+    } catch (e) { /* the local counter still applies */ }
+    return;
+  }
   try {
     // INCR and the expiry in ONE pipeline, and the expiry EVERY time.
     //
@@ -142,7 +190,10 @@ async function noteFail(key) {
 // A successful login clears both counters.
 async function clear(key) {
   fails.delete(key);
-  if (!redis.configured()) return;
+  if (!redis.configured()) {
+    try { const c = await throttleColl(); if (c) await c.deleteOne({ _id: key }); } catch (e) { /* expires anyway */ }
+    return;
+  }
   // One round trip, not two: this sits on the SUCCESSFUL login path, in front of the
   // session cookie, so every avoidable millisecond here is felt by every user.
   try { await redis.pipeline([['DEL', countKey(key)], ['DEL', lockKey(key)]]); } catch (e) { /* expires anyway */ }

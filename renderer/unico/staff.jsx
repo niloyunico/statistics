@@ -579,6 +579,14 @@ function StaffHighlight({list, role, tone, setRoute, onClose}){
 }
 
 /* ---------------- Staff Directory ---------------- */
+// A person's canonical departments. current_department can list several ("MICU, CCU");
+// canonicalising the whole string filed them under one unit only, so a department
+// filter missed everyone who also works elsewhere.
+function staffDeptList(e){
+  const parts=String((e&&e.current_department)||'').split(',').map(x=>x.trim()).filter(Boolean);
+  return parts.length?parts.map(x=>staffCanonDept(x)):[staffCanonDept(e&&e.current_department)];
+}
+
 function StaffDirectory({store, setRoute, initialFilter}){
   const [q,setQ]=React.useState('');
   const [role,setRole]=React.useState(initialFilter?.role||'');
@@ -589,7 +597,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
   const filtered=list.filter(e=>{
     if(q&&!(`${e.name} ${e.emp_id} ${e.phone||''}`.toLowerCase().includes(q.toLowerCase())))return false;
     if(role&&(e.role||'Nurse')!==role)return false;
-    if(dept&&staffCanonDept(e.current_department)!==dept)return false;
+    if(dept&&staffDeptList(e).indexOf(dept)<0)return false;
     if(desig&&staffCanonDesig(e.designation)!==desig)return false;
     if(vacc==='__ok'&&!vaccOK(e.hepatitis_b_vaccination))return false;
     if(vacc==='__gap'&&vaccOK(e.hepatitis_b_vaccination))return false;
@@ -720,10 +728,11 @@ function ManageStaff({store, setRoute, role}){
       default: return true;
     }
   };
+  const staffDeptsOf=staffDeptList;
   const filtered=base.filter(e=>{
     if(!matchChip(e))return false;
     if(q&&!`${e.name} ${e.emp_id} ${e.phone||''}`.toLowerCase().includes(q.toLowerCase()))return false;
-    if(dept&&staffCanonDept(e.current_department)!==dept)return false;
+    if(dept&&staffDeptsOf(e).indexOf(dept)<0)return false;
     if(desig&&staffCanonDesig(e.designation)!==desig)return false;
     if(vacc==='__ok'&&!vaccOK(e.hepatitis_b_vaccination))return false;
     if(vacc==='__gap'&&vaccOK(e.hepatitis_b_vaccination))return false;
@@ -744,7 +753,7 @@ function ManageStaff({store, setRoute, role}){
     if(sortBy==='dept')return (a.current_department||'').localeCompare(b.current_department||'')||(a.name||'').localeCompare(b.name||'');
     return (a.name||'').localeCompare(b.name||'');
   });
-  const deptOpts=[...new Set(all.map(e=>staffCanonDept(e.current_department)))].sort((a,b)=>a.localeCompare(b));
+  const deptOpts=[...new Set(all.flatMap(e=>staffDeptsOf(e)))].sort((a,b)=>a.localeCompare(b));
   const desigOpts=[...new Set(all.map(e=>staffCanonDesig(e.designation)).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const qualOpts=S.uniqueVals(all,'qualification');
   const sel={padding:'9px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:12.5,fontFamily:'inherit',background:'#fff'};

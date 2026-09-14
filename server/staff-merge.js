@@ -13,6 +13,24 @@ function parse(raw) {
   return rows;
 }
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// Fields the server restores onto a register row from the `staff` document
+// (staff-roster.js resolveRoster): a browser's baseline can carry them while the stored
+// row does not. That difference is not anybody's edit. Treating it as one made every
+// delete, photo change or re-verification of such a person fail with a 409 forever.
+const RESTORED = new Set(['photo', 'licence_verified', 'licence_no', 'licence_program']);
+const absent = (v) => v === undefined || v === null || v === '';
+function restoredOnly(field, live, before) {
+  if (!RESTORED.has(field) || absent(before)) return false;
+  if (absent(live)) return true;
+  // resolveRoster also swaps in a NEWER server verification over an older stored one.
+  return field === 'licence_verified' && String((live && live.at) || '') < String((before && before.at) || '');
+}
+function sameRow(live, before) {
+  for (const k of new Set([...Object.keys(live), ...Object.keys(before)])) {
+    if (!equal(live[k], before[k]) && !restoredOnly(k, live[k], before[k])) return false;
+  }
+  return true;
+}
 // Apply only edits made since this browser read the roster. Unchanged fields and
 // people from an older browser copy must never undo another person's saved work.
 function mergeStaffChanges(baseRaw, incomingRaw, currentRaw) {
@@ -22,7 +40,7 @@ function mergeStaffChanges(baseRaw, incomingRaw, currentRaw) {
   for (const [id, before] of base) {
     const next = incoming.get(id), live = current.get(id);
     if (!next) {
-      if (live && !equal(live, before)) throw conflict();
+      if (live && !sameRow(live, before)) throw conflict();
       current.delete(id);
       continue;
     }
@@ -31,7 +49,8 @@ function mergeStaffChanges(baseRaw, incomingRaw, currentRaw) {
     const merged = { ...live };
     for (const field of new Set([...Object.keys(before), ...Object.keys(next)])) {
       if (equal(before[field], next[field])) continue;
-      if (!equal(live[field], before[field]) && !equal(live[field], next[field])) throw conflict();
+      if (!equal(live[field], before[field]) && !equal(live[field], next[field])
+        && !restoredOnly(field, live[field], before[field])) throw conflict();
       if (Object.prototype.hasOwnProperty.call(next, field)) merged[field] = next[field];
       else delete merged[field];
     }

@@ -417,6 +417,16 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The month could NOT be loaded (500, timeout, no network) — distinct from "never
+  // drafted". A failed load used to show an empty, editable grid, and the first
+  // autosave replaced the real month with it.
+  const [loadError, setLoadError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+  // The server refused a save because someone else saved a newer revision.
+  const [conflict, setConflict] = useState('');
+  // Names stored with the sheet, for people no longer on this unit.
+  const [storedNames, setStoredNames] = useState({});
+  const [retryTick, setRetryTick] = useState(0);
 
   // editor state, named as the design names it
   const [brush, setBrush] = useState('');
@@ -458,24 +468,42 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
     .sort((a, b) => String(a.name).localeCompare(String(b.name))), [staffStore.staff, dept]);
 
   const rows = useMemo(() => {
-    if (!order.length) return staff;
     const byId = {}; staff.forEach((x) => { byId[x.empId] = x; });
     const seen = {}; const out = [];
-    order.forEach((id) => { if (byId[id] && !seen[id]) { out.push(byId[id]); seen[id] = 1; } });
-    staff.forEach((x) => { if (!seen[x.empId]) out.push(x); });
+    // Someone no longer on this unit (transferred or archived) whose shifts are still on
+    // this month's sheet keeps a row, under the name stored with the sheet. Without it a
+    // past roster lost her from the grid, totals and print, and the next save stripped
+    // her from the published sheet for good.
+    const ghost = (id) => ({ empId: id, empIdShown: '', name: storedNames[id] || id, desig: 'No longer on this unit', offRegister: true });
+    const hasCells = (id) => Object.keys(grid[id] || {}).length > 0;
+    order.forEach((id) => {
+      if (seen[id]) return;
+      if (byId[id]) out.push(byId[id]);
+      else if (hasCells(id)) out.push(ghost(id));
+      else return;
+      seen[id] = 1;
+    });
+    staff.forEach((x) => { if (!seen[x.empId]) { out.push(x); seen[x.empId] = 1; } });
+    Object.keys(grid).forEach((id) => { if (!seen[id] && hasCells(id)) { out.push(ghost(id)); seen[id] = 1; } });
     return out;
-  }, [staff, order]);
+  }, [staff, order, grid, storedNames]);
 
   const depts = useMemo(() => [...new Set((staffStore.staff || [])
     .filter((e) => e.is_active !== false && !e.former)
     .map((e) => e.current_department || 'Unassigned'))].sort(), [staffStore.staff]);
 
   useEffect(() => {
-    setLoading(true);
+    setLoading(true); setLoadError(''); setConflict('');
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then((r) => {
-      const d = r && r.ok ? r.roster : null;
+      if (!r || !r.ok) {
+        setLoadError((r && r.error) || 'The server did not return the roster.');
+        setLoading(false); setDirty(false);
+        return;
+      }
+      const d = r.roster;                       // null = never drafted, a real empty month
       setGrid(rosMigrateGrid(d && d.grid, staff));
       setOrder((d && d.order) || []);
+      setStoredNames((d && d.names) || {});
       setStatus((d && d.status) || 'draft');
       setRev((d && d.revision) || 0);
       const ru = (d && d.rules) || {};
@@ -497,8 +525,8 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
       setApprovedAt(d && d.approvedAt ? new Date(d.approvedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : null);
       setLoading(false); setDirty(false);
       setQueue([]); history.current = [];
-    }).catch(() => setLoading(false));
-  }, [dept, year, month]);
+    }).catch(() => { setLoadError('Could not reach the server.'); setLoading(false); setDirty(false); });
+  }, [dept, year, month, reloadKey]);
 
   // the design's window mouseup — stop painting / dragging wherever the button lifts
   useEffect(() => {
@@ -508,8 +536,11 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
   }, []);
 
   const locked = status === 'approved';
-  const canEdit = !locked && rosCan('edit');
-  const editBlocked = () => { rosToast(locked ? 'Approved and locked — reopen it to edit.' : 'You do not have edit rights on the roster.', 'info'); };
+  const canEdit = !locked && !loadError && !conflict && rosCan('edit');
+  const editBlocked = () => {
+    rosToast(conflict ? 'Someone else saved this roster. Reload the month before editing.'
+      : locked ? 'Approved and locked — reopen it to edit.' : 'You do not have edit rights on the roster.', 'info');
+  };
 
   // push() — one history entry per gesture, so a whole paint stroke is ONE undo.
   const push = () => { history.current.push(JSON.stringify(grid)); if (history.current.length > 25) history.current.shift(); };
@@ -640,6 +671,9 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
     setBusy(true);
     return rosApi.put('/api/rosters', {
       dept, deptName: dept, year, month, grid, order: rows.map((r) => r.empId),
+      // Which revision these edits were made on: the server refuses the save if someone
+      // saved since, instead of this whole grid erasing their cells.
+      baseRevision: rev,
       rules: {
         cfg, off: en, custom,
         // legacy mirror — roster-review.jsx and the print sheet read these keys
@@ -650,7 +684,9 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
         leaveClash: { on: en.leave !== false, value: cfg.maxLeavePerDay, label: 'Maximum staff away on the same day', unit: 'per day' },
       },
       names: rows.reduce((m, r) => { if (r.empId) m[r.empId] = r.name || ''; return m; }, {}),
-      status: nextStatus || status,
+      // Status only when this save deliberately changes it. An autosave carrying the
+      // status it LOADED moved a roster that was submitted from the phone back to draft.
+      ...(nextStatus ? { status: nextStatus } : {}),
       preparedBy: sign['Prepared by'] !== '—' ? (sign['Prepared by'] || '') : '',
       checkedBy: sign['Checked by'] !== '—' ? (sign['Checked by'] || '') : '',
     }).then((r) => {
@@ -663,21 +699,46 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
         if (onSaved) onSaved();
         return true;
       }
+      // Refused for a reason retrying cannot fix: stop editing (which also stops the
+      // autosave) and say why, instead of re-sending the same refused grid forever.
+      if (r && r.conflict) setConflict(r.error || 'Someone else saved this roster.');
+      if (r && r.locked) setStatus('approved');
       rosToast((r && r.error) || 'Could not save.', 'error');
       return false;
-    }).catch(() => { setBusy(false); rosToast('Could not reach the server.', 'error'); return false; });
+    }).catch(() => {
+      setBusy(false);
+      rosToast('Could not reach the server — your changes are kept on this screen and will be retried.', 'error');
+      if (quiet) setTimeout(() => setRetryTick((n) => n + 1), 5000);   // network failure: try again
+      return false;
+    });
   };
 
   // The debounced autosave. Guarded on canEdit so a read-only viewer never writes.
   useEffect(() => {
     if (!dirty || loading || !canEdit) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => { save(null, true); }, 1600);
+    saveTimer.current = setTimeout(() => { saveTimer.current = null; save(null, true); }, 1600);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [grid, cfg, en, custom, sign, dirty]);   // eslint-disable-line
+  }, [grid, cfg, en, custom, sign, dirty, retryTick]);   // eslint-disable-line
+
+  // Leaving the sheet — another month or unit remounts it, or the person opens another
+  // module — must not drop edits still waiting for the 1.6 s autosave. The refs carry
+  // the latest state into the unmount; closing the tab with unsaved edits asks first.
+  const saveRef = useRef(null); saveRef.current = save;
+  const pendingRef = useRef(false); pendingRef.current = dirty && !loading && canEdit;
+  useEffect(() => {
+    const warn = (e) => { if (pendingRef.current) { e.preventDefault(); e.returnValue = ''; } };
+    window.addEventListener('beforeunload', warn);
+    return () => {
+      window.removeEventListener('beforeunload', warn);
+      if (pendingRef.current) { if (saveTimer.current) clearTimeout(saveTimer.current); saveRef.current(null, true); }
+    };
+  }, []);
 
   const setStatusRemote = (st, extra) => {
-    const id = 'ros-' + dept + '-' + year + '-' + String(month).padStart(2, '0');
+    // Same id the server builds (rosterId cuts the department to 40 characters) — a long
+    // multi-unit department string otherwise answered "Roster not found" on Publish.
+    const id = 'ros-' + String(dept).slice(0, 40) + '-' + year + '-' + String(month).padStart(2, '0');
     setBusy(true);
     return rosApi.post('/api/rosters/' + encodeURIComponent(id) + '/status', Object.assign({ status: st }, extra || {})).then((r) => {
       setBusy(false);
@@ -698,6 +759,9 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
   const publish = () => {
     if (!rosIsAdmin()) { rosToast('Only an administrator can publish the roster.', 'info'); return; }
     if (locked) { setStatusRemote('draft'); return; }
+    // Cancel a pending autosave: firing after the approval it would hit the lock (and,
+    // before the server guard, used to un-publish the roster).
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
     Promise.resolve(save('submitted', true)).then((ok) => { if (ok !== false) setStatusRemote('approved'); });
   };
 
@@ -783,6 +847,20 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
   };
 
   if (loading) return <div style={{ display: 'grid', placeItems: 'center', height: '40vh', color: '#6c7a8c' }}>Loading the roster…</div>;
+  // A failed load shows NO grid: an empty one could be edited and saved over the real month.
+  const retryBox = (title, detail, label, onClick) => (
+    <div style={{ display: 'grid', placeItems: 'center', height: '40vh', color: '#6c7a8c', textAlign: 'center', padding: 16 }}>
+      <div>
+        <div style={{ fontWeight: 700, color: '#b4232f', marginBottom: 6 }}>{title}</div>
+        <div style={{ fontSize: 12.5, marginBottom: 12, maxWidth: 520 }}>{detail}</div>
+        <button className="btn pri sm" onClick={onClick}>{label}</button>
+      </div>
+    </div>
+  );
+  if (loadError) return retryBox('The roster for ' + R.MONTHS[month] + ' ' + year + ' did not load.',
+    loadError + ' Nothing is shown, so nothing can be saved over the stored roster.', 'Try again', () => setReloadKey((k) => k + 1));
+  if (conflict) return retryBox('Someone else saved this roster while you were editing.',
+    conflict + ' Your last changes were not saved. Reload to see the current roster, then make them again.', 'Reload the month', () => setReloadKey((k) => k + 1));
 
   const published = status === 'approved';
   const showGrid = view === 'month' || view === 'swap';
