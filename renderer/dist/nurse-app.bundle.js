@@ -15231,10 +15231,15 @@
       });
       this._poll = setInterval(() => this.tick(), 5000);
       this._tick = 0;
+      this._onOnline = () => {
+        if (!this.state.demo && this.state.me) this.loadBoot(true);
+      };
+      window.addEventListener('online', this._onOnline);
     }
     componentWillUnmount() {
       clearInterval(this._poll);
       window.removeEventListener('unico:session-expired', this._onExpired);
+      window.removeEventListener('online', this._onOnline);
     }
     sessionExpired() {
       if (this.state.demo || !this.state.me) return;
@@ -15271,6 +15276,7 @@
       if (t % 12 === 0) {
         this.loadDirectory();
       }
+      if (t % 60 === 0) this.loadBoot(true);
     }
     enter(me) {
       const u = me.user || {};
@@ -15287,9 +15293,23 @@
       });
       this.loadBoot().then(() => this.loadLive(u));
     }
-    async loadBoot() {
+    async loadBoot(quiet) {
       const url = '/api/phone/bootstrap' + (this.state.unitSel ? '?unit=' + encodeURIComponent(this.state.unitSel) : '');
       let b = null;
+      if (quiet) {
+        try {
+          b = await api(url);
+        } catch (e) {
+          return;
+        }
+        if (!b || !b.ok || !b.user || !this.state.me) return;
+        const qr = b.user.role;
+        this.setState({
+          boot: b,
+          role: b.user.isIncharge || b.user.canManage || b.user.isAdmin ? 'incharge' : qr === 'pca' ? 'pca' : qr === 'collector' ? 'collector' : 'nurse'
+        });
+        return;
+      }
       for (let i = 0; i < 3 && !b; i++) {
         try {
           b = await api(url);

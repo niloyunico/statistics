@@ -1472,14 +1472,28 @@ window.unicoSig = {
 // server, the page-load snapshot above is stale. Swap the canonical department
 // data in place so every view that (re)mounts sees the fresh numbers without a
 // full page reload.
+let _deptSig = null;
 window.UNICO.refreshDepartments = function () {
-  return fetch('/api/departments', { credentials: 'same-origin' })
+  return fetch('/api/departments', { credentials: 'same-origin', cache: 'no-store' })
     .then(r => r.json())
     .then(j => {
       if (!j || !j.ok || !Array.isArray(j.departments)) return false;
       // Collector sessions also receive their re-scoped config overlay — keep the
       // local copy current so admin column/rename edits apply on live refresh.
-      try { if (j.overlay && typeof j.overlay['unico_store_v3'] === 'string') localStorage.setItem('unico_store_v3', j.overlay['unico_store_v3']); } catch (e) { }
+      // Through the bridge (raw write, skips this tab's unsaved edits, updates the save baseline)
+      // AND announced: mounted stores held the old overlay in React state and wrote it back.
+      try {
+        const ov = j.overlay && j.overlay['unico_store_v3'];
+        if (typeof ov === 'string') {
+          if (typeof window.unicoApplyRemoteOverlay === 'function') window.unicoApplyRemoteOverlay({ unico_store_v3: ov }, { source: 'departments' });
+          else if (localStorage.getItem('unico_store_v3') !== ov) { localStorage.setItem('unico_store_v3', ov); window.dispatchEvent(new CustomEvent('unico:overlay-merged', { detail: { keys: ['unico_store_v3'], source: 'departments' } })); }
+        }
+      } catch (e) { }
+      // Unchanged since the last refresh: skip the swap and the event. The app polls every 60 s,
+      // and 'unico:data-refreshed' makes stores rebuild and several views refetch their lists.
+      const sig = JSON.stringify(j.departments);
+      if (sig === _deptSig) return true;
+      _deptSig = sig;
       const fresh = j.departments.map(d => ({ ...d }));
       fresh.forEach(decorateDept);
       DEPARTMENTS.length = 0; fresh.forEach(d => DEPARTMENTS.push(d));
@@ -4942,18 +4956,57 @@ window.QUALITY_SEED = (typeof window !== 'undefined' && Array.isArray(window.__U
 // Live refetch (same contract as window.UNICO.refreshDepartments): after an approved
 // quality submission is applied server-side, replace the stale page-load snapshot so
 // the Quality console shows the new reading when its view (re)mounts.
+var _qualitySig = null;
 window.refreshQualitySeed = function () {
-  return fetch('/api/quality', { credentials: 'same-origin' })
+  return fetch('/api/quality', { credentials: 'same-origin', cache: 'no-store' })
     .then(function (r) { return r.json(); })
     .then(function (j) {
       if (!j || !j.ok || !Array.isArray(j.quality)) return false;
-      window.QUALITY_SEED = j.quality;
       // Collector sessions also receive their re-scoped definition overlay (indicator
       // assign/unassign etc.) — keep the local copy current so admin edits apply live.
-      try { if (j.overlay && typeof j.overlay['unico_quality_v2'] === 'string') localStorage.setItem('unico_quality_v2', j.overlay['unico_quality_v2']); } catch (e) { }
+      // Through the bridge + announced, so mounted quality stores reload instead of writing
+      // their old overlay back (see refreshDepartments).
+      try {
+        var ov = j.overlay && j.overlay['unico_quality_v2'];
+        if (typeof ov === 'string') {
+          if (typeof window.unicoApplyRemoteOverlay === 'function') window.unicoApplyRemoteOverlay({ unico_quality_v2: ov }, { source: 'quality' });
+          else if (localStorage.getItem('unico_quality_v2') !== ov) { localStorage.setItem('unico_quality_v2', ov); window.dispatchEvent(new CustomEvent('unico:overlay-merged', { detail: { keys: ['unico_quality_v2'], source: 'quality' } })); }
+        }
+      } catch (e) { }
+      // Unchanged since the last refresh (the app polls every 60 s): no swap, no rebuild event.
+      var sig = JSON.stringify(j.quality);
+      if (sig === _qualitySig) return true;
+      _qualitySig = sig;
+      window.QUALITY_SEED = j.quality;
       // Same contract as refreshDepartments: notify mounted stores so open quality
       // views rebuild from the fresh seed without needing a remount/reload.
       try { window.dispatchEvent(new CustomEvent('unico:data-refreshed', { detail: { source: 'quality' } })); } catch (e) { }
+      return true;
+    }).catch(function () { return false; });
+};
+
+// Formula Library edits used to reach only the tab that saved them (the master is injected
+// once at page load). Re-read the catalogue and rebuild window.QI_CORRECTIONS exactly like the
+// server inject (server/quality-formulas.js buildByNameMap: same DEF_FIELDS, same norm — the one
+// quality-store.js correctedBase() looks names up with). An empty catalogue (dev / no DB) keeps
+// the bundled static corrections, as at load.
+window.refreshQualityFormulas = function () {
+  return fetch('/api/quality-formulas', { credentials: 'same-origin', cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      if (!j || !j.ok || !Array.isArray(j.formulas) || !j.formulas.length) return false;
+      if (JSON.stringify(j.formulas) === JSON.stringify(window.__UNICO_QI_FORMULAS__ || null)) return false;
+      var DEF_FIELDS = ['formula', 'unit', 'numLabel', 'denLabel', 'numeratorDef', 'denominatorDef', 'benchmark', 'benchmarkValue', 'benchmarkNote', 'goalDirection', 'reference', 'referenceUrl', 'denAdminOnly', 'victimField'];
+      var norm = function (s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); };
+      var empty = function (v) { return v === undefined || v === null || v === ''; };
+      var map = {};
+      j.formulas.forEach(function (f) {
+        var def = { canonicalName: f.canonicalName };
+        DEF_FIELDS.forEach(function (k) { if (!empty(f[k])) def[k] = f[k]; });
+        (f.aliases || []).map(norm).concat([norm(f.canonicalName)]).forEach(function (k) { if (k) map[k] = def; });
+      });
+      window.QI_CORRECTIONS = map; window.__UNICO_QI_CORRECTIONS__ = map; window.__UNICO_QI_FORMULAS__ = j.formulas;
+      try { window.dispatchEvent(new CustomEvent('unico:data-refreshed', { detail: { source: 'formulas' } })); } catch (e) { }
       return true;
     }).catch(function () { return false; });
 };
@@ -6417,7 +6470,9 @@ window.QI_CORRECTIONS_BY_DEFID = {
     // Show the single canonical Statistics name everywhere quality is rendered (keeps the
     // `key` as the stable identity — only the displayed `name` becomes canonical).
     const cn = canonicalDeptName(seedDept);
-    if (cn && cn !== dept.name) dept = Object.assign({}, dept, { name: cn });
+    // qualityName keeps the quality doc's own name: the hand-hygiene audit files rows under it
+    // ("Emergency Medicine"), so after the rename to "Emergency Room" nothing matched.
+    if (cn && cn !== dept.name) dept = Object.assign({}, dept, { name: cn, qualityName: dept.name });
     return dept;
   }
 
@@ -6474,7 +6529,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
           const rows = bd[mk]; if (!Array.isArray(rows)) return;
           // Match by canonical name (alias-mapped) OR by the dept's stable key, so a
           // later display-name change never breaks a department's audit distribution.
-          const row = rows.find((r) => r && (canonDept(r.dept) === canonDept(d.name) || normN(r.dept) === normN(d.key) || canonDept(r.dept) === normN(d.key))); if (!row) return;
+          const row = rows.find((r) => r && (canonDept(r.dept) === canonDept(d.name) || (d.qualityName && canonDept(r.dept) === canonDept(d.qualityName)) || normN(r.dept) === normN(d.key) || canonDept(r.dept) === normN(d.key))); if (!row) return;
           let n = 0, den = 0; const g = row.g || {};
           ['nurse', 'doctor', 'pca', 'other'].forEach((k) => { const x = g[k] || {}; n += Number(x.n) || 0; den += Number(x.d) || 0; });
           if (!(den > 0)) return; // this dept was not audited that month (0/0 row)
@@ -9643,6 +9698,43 @@ function unicoFirstAllowedHome() {
   }
   return null;
 }
+function unicoRefreshPerms() {
+  const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+  if (!u || !u.username || u.role === 'Administrator' || ['collector', 'incharge', 'nurse', 'pca'].indexOf(u.role) >= 0) return Promise.resolve(false);
+  return fetch('/api/me', {
+    credentials: 'same-origin',
+    cache: 'no-store'
+  }).then(r => r.ok ? r.json() : null).then(j => {
+    if (!j || !j.ok || j.degraded || !j.perms || typeof j.perms !== 'object' || Array.isArray(j.perms)) return false;
+    const staffScope = j.staffScope || u.staffScope;
+    if (JSON.stringify(j.perms) === JSON.stringify(u.perms || null) && staffScope === u.staffScope) return false;
+    const appJob = window.unicoRefreshAppData ? window.unicoRefreshAppData({
+      includeNew: true
+    }) : Promise.resolve([]);
+    const jobs = [appJob];
+    try {
+      if (window.UNICO && window.UNICO.refreshDepartments) jobs.push(window.UNICO.refreshDepartments());
+    } catch (e) {}
+    try {
+      if (window.refreshQualitySeed) jobs.push(window.refreshQualitySeed());
+    } catch (e) {}
+    return Promise.all(jobs.map(p => Promise.resolve(p).catch(() => null))).then(res => {
+      if (res[0] === null) return false;
+      Object.assign(u, {
+        perms: j.perms,
+        staffScope
+      });
+      try {
+        window.dispatchEvent(new CustomEvent('unico:perms-changed', {
+          detail: {
+            perms: j.perms
+          }
+        }));
+      } catch (e) {}
+      return true;
+    });
+  }).catch(() => false);
+}
 function unicoSidebarGroups(moduleId) {
   if (moduleId === 'datacol') return [{
     sec: 'Data Collection',
@@ -11152,7 +11244,8 @@ Object.assign(window, {
   unicoFirstAllowedHome,
   unicoCan,
   unicoModuleLevel,
-  unicoUserPerms
+  unicoUserPerms,
+  unicoRefreshPerms
 });
 })();
 ;
@@ -37583,6 +37676,67 @@ function qcNotObs(ind, mk) {
   const m = ind && ind.mNotObserved;
   return !!(m && m[mk]);
 }
+let _qcColl = null,
+  _qcCollAt = 0,
+  _qcCollBusy = false,
+  _qcCollSelf = false;
+function qcCollLoad(force) {
+  if (_qcCollBusy || !force && Date.now() - _qcCollAt < 60000) return;
+  _qcCollBusy = true;
+  _qcCollAt = Date.now();
+  fetch('/api/collection-settings', {
+    headers: {
+      accept: 'application/json'
+    },
+    credentials: 'same-origin'
+  }).then(r => r.ok ? r.json() : null).then(r => {
+    if (!r || !r.ok || !Array.isArray(r.departments)) return;
+    const next = {};
+    r.departments.forEach(d => {
+      const c = d.collection && typeof d.collection === 'object' ? d.collection : {};
+      if (d.qualityKey) next['k|' + d.qualityKey] = c;
+      if (d.id) next['i|' + d.id] = c;
+    });
+    const changed = JSON.stringify(next) !== JSON.stringify(_qcColl);
+    _qcColl = next;
+    if (changed) {
+      _qcCollSelf = true;
+      try {
+        window.dispatchEvent(new Event('unico:collection-settings'));
+      } catch (e) {}
+      _qcCollSelf = false;
+    }
+  }).catch(() => {}).finally(() => {
+    _qcCollBusy = false;
+  });
+}
+function qcDeptColl(dep) {
+  if (!dep) return {};
+  const id = dep.deptId || (window.DEPTMAP && window.DEPTMAP.idFromQk && dep.key ? window.DEPTMAP.idFromQk(dep.key) : null);
+  if (_qcColl) {
+    const c = dep.key && _qcColl['k|' + dep.key] || id && _qcColl['i|' + id];
+    if (c) return c;
+  }
+  const lists = [window.UNICO && window.UNICO.DEPARTMENTS || [], window.__UNICO_DEPARTMENTS__ || []];
+  for (const l of lists) {
+    const hit = Array.isArray(l) && l.find(x => x && x.collection && typeof x.collection === 'object' && (dep.key && x.qualityKey === dep.key || id && x.id === id));
+    if (hit) return hit.collection;
+  }
+  return {};
+}
+function qcNotMeasured(dep, ind) {
+  const nm = qcDeptColl(dep).notMeasured;
+  return nm && ind && ind.id && nm[ind.id] || null;
+}
+function qcNotDue(dep, ind, mk) {
+  if (qcNotMeasured(dep, ind)) return true;
+  const o = monthOrd(mk);
+  if (o == null) return false;
+  const a = monthOrd(qcDeptColl(dep).startMonth),
+    b = monthOrd(ind && ind.startMonth);
+  if (a == null && b == null) return false;
+  return o < Math.max(a == null ? -Infinity : a, b == null ? -Infinity : b);
+}
 function qcReportCell(ind, m) {
   const mk = Array.isArray(m) ? m[0] : m;
   const mm = Array.isArray(m) ? m : [mk];
@@ -37760,6 +37914,21 @@ function QCDashboard({
     if (canNext) setFyStart(fyOpts[pos + 1]);
   };
   const [cellSel, setCellSel] = useState(null);
+  const [collRev, setCollRev] = useState(0);
+  useEffect(() => {
+    const onColl = () => {
+      setCollRev(r => r + 1);
+      if (!_qcCollSelf) qcCollLoad(true);
+    };
+    const onData = () => qcCollLoad(true);
+    window.addEventListener('unico:collection-settings', onColl);
+    window.addEventListener('unico:data-refreshed', onData);
+    qcCollLoad();
+    return () => {
+      window.removeEventListener('unico:collection-settings', onColl);
+      window.removeEventListener('unico:data-refreshed', onData);
+    };
+  }, []);
   const d = useMemo(() => {
     const rowDepts = depts.filter(dep => !/overall\s*hospital/i.test(dep && (dep.name || dep.key) || ''));
     let ok = 0,
@@ -37836,11 +38005,12 @@ function QCDashboard({
           rep = 0;
         const missing = [];
         const nobs = [];
+        const notDue = [];
         inds.forEach(ind => {
           const s = monthStatus(ind, m[0]);
-          if (s === 'breach') b++;else if (s !== 'na') rep++;else if (qcNotObs(ind, m[0])) nobs.push(ind.name);else missing.push(ind.name);
+          if (s === 'breach') b++;else if (s !== 'na') rep++;else if (qcNotObs(ind, m[0])) nobs.push(ind.name);else if (qcNotDue(dep, ind, m[0])) notDue.push(ind.name);else missing.push(ind.name);
         });
-        const total = inds.length - nobs.length,
+        const total = inds.length - nobs.length - notDue.length,
           sub = b + rep;
         const partial = sub > 0 && sub < total;
         const allNobs = total === 0 && nobs.length > 0;
@@ -37858,6 +38028,7 @@ function QCDashboard({
           total,
           missing,
           nobs,
+          notDue,
           has: sub > 0
         };
       });
@@ -37888,7 +38059,7 @@ function QCDashboard({
       heatRows,
       monthCols
     };
-  }, [depts, fyMonths]);
+  }, [depts, fyMonths, collRev]);
   const thBase = {
     padding: '9px 8px',
     fontSize: '10.5px',
@@ -38191,7 +38362,7 @@ function QCDashboard({
     style: {
       color: '#d23a52'
     }
-  }, "red = off benchmark"), " \xB7 grey none \u2014 click any cell to see what's submitted & missing")), React.createElement("div", {
+  }, "red = off benchmark"), " \xB7 grey none \xB7 months before a department's start and not-measured indicators are not counted \u2014 click any cell to see what's submitted & missing")), React.createElement("div", {
     style: {
       overflowX: 'auto'
     }
@@ -38259,7 +38430,7 @@ function QCDashboard({
       mk: c.mk,
       mlabel: c.mlabel
     }),
-    title: r.name + ' · ' + c.mlabel + ' — ' + c.sub + ' of ' + c.total + ' assigned indicator' + (c.total !== 1 ? 's' : '') + ' submitted' + (c.breach ? ' · ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + (c.missing.length ? ' · not submitted: ' + c.missing.slice(0, 5).join(', ') + (c.missing.length > 5 ? ' +' + (c.missing.length - 5) + ' more' : '') : '') + (c.nobs && c.nobs.length ? ' · not observed: ' + c.nobs.slice(0, 5).join(', ') + (c.nobs.length > 5 ? ' +' + (c.nobs.length - 5) + ' more' : '') : '') + ' · click for details',
+    title: r.name + ' · ' + c.mlabel + ' — ' + c.sub + ' of ' + c.total + ' assigned indicator' + (c.total !== 1 ? 's' : '') + ' submitted' + (c.breach ? ' · ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + (c.missing.length ? ' · not submitted: ' + c.missing.slice(0, 5).join(', ') + (c.missing.length > 5 ? ' +' + (c.missing.length - 5) + ' more' : '') : '') + (c.nobs && c.nobs.length ? ' · not observed: ' + c.nobs.slice(0, 5).join(', ') + (c.nobs.length > 5 ? ' +' + (c.nobs.length - 5) + ' more' : '') : '') + (c.notDue && c.notDue.length ? ' · not due (not started / not measured): ' + c.notDue.slice(0, 5).join(', ') + (c.notDue.length > 5 ? ' +' + (c.notDue.length - 5) + ' more' : '') : '') + ' · click for details',
     style: {
       display: 'inline-grid',
       placeItems: 'center',
@@ -38343,7 +38514,8 @@ function QCCellDetail({
   };
   const reported = allInds.map(rowFor).filter(r => r.s !== 'na').sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
   const notObserved = allInds.filter(ind => monthStatus(ind, mk) === 'na' && qcNotObs(ind, mk));
-  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk));
+  const notDue = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && qcNotDue(dep, ind, mk));
+  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && !qcNotDue(dep, ind, mk));
   const breaches = reported.filter(r => r.s === 'breach').length;
   const field = (label, val) => val ? React.createElement("div", {
     style: {
@@ -38687,7 +38859,7 @@ function QCCellDetail({
       letterSpacing: '.3px',
       marginBottom: 7
     }
-  }, "Not submitted for ", mlabel, " (", unreported.length, " of ", allInds.length, " assigned", notObserved.length ? ' · ' + notObserved.length + ' not observed' : '', ")"), React.createElement("div", {
+  }, "Not submitted for ", mlabel, " (", unreported.length, " of ", allInds.length, " assigned", notObserved.length ? ' · ' + notObserved.length + ' not observed' : '', notDue.length ? ' · ' + notDue.length + ' not due' : '', ")"), React.createElement("div", {
     style: {
       display: 'flex',
       flexWrap: 'wrap',
@@ -38727,7 +38899,69 @@ function QCCellDetail({
       color: P.muted,
       marginTop: 8
     }
-  }, "Click an indicator to add its ", mlabel, " reading now.")))));
+  }, "Click an indicator to add its ", mlabel, " reading now.")), !editId && notDue.length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 10,
+      border: '1px dashed #d5dce5',
+      borderRadius: 9,
+      padding: '11px 13px',
+      background: '#fbfcfd'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      marginBottom: 4
+    }
+  }, "Not due for ", mlabel, " (", notDue.length, ")"), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: P.muted,
+      marginBottom: 7
+    }
+  }, "Before the department's or indicator's start month, or marked not measured in Data Collection \u2192 Department Setup. Not counted as missing."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 7
+    }
+  }, notDue.map(ind => {
+    const nm = qcNotMeasured(dep, ind);
+    const label = ind.name + (nm ? ' · not measured' : '');
+    return canEdit ? React.createElement("button", {
+      key: ind.id,
+      title: (nm ? 'Not measured: ' + (nm.reason || '') + ' — ' : '') + 'Add the ' + mlabel + ' reading for ' + ind.name,
+      onClick: () => {
+        setAddOpen(false);
+        setEditId(ind.id);
+      },
+      style: {
+        border: '1px solid #dde3ec',
+        background: '#fff',
+        color: P.muted,
+        padding: '6px 11px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 600,
+        cursor: 'pointer'
+      }
+    }, "+ ", label) : React.createElement("span", {
+      key: ind.id,
+      title: nm ? 'Not measured: ' + (nm.reason || '') : undefined,
+      style: {
+        border: '1px solid #e4e9ef',
+        background: '#fff',
+        color: '#9aa6b4',
+        padding: '6px 11px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 600
+      }
+    }, label);
+  }))))));
 }
 function QCIndEdit({
   dep,
@@ -41883,6 +42117,19 @@ function QCReportBuilder({
       localStorage.setItem('unico_qc_report_presets_v1', JSON.stringify(presets));
     } catch (e) {}
   }, [presets]);
+  useEffect(() => {
+    const h = e => {
+      const ks = e && e.detail && e.detail.keys;
+      if (Array.isArray(ks) && ks.indexOf('unico_qc_report_presets_v1') < 0) return;
+      try {
+        const raw = localStorage.getItem('unico_qc_report_presets_v1');
+        const next = JSON.parse(raw) || [];
+        setPresets(cur => JSON.stringify(cur) === raw ? cur : next);
+      } catch (_) {}
+    };
+    window.addEventListener('unico:overlay-merged', h);
+    return () => window.removeEventListener('unico:overlay-merged', h);
+  }, []);
   const [presetSel, setPresetSel] = useState('');
   const [presetName, setPresetName] = useState('');
   const setSec = (k, v) => {
@@ -43713,6 +43960,7 @@ function QCReportBuilder({
             notObserved++;
             return;
           }
+          if (monthRaw(ind, m[0]) == null && qcNotDue(d, ind, m[0])) return;
           assigned++;
           if (monthRaw(ind, m[0]) != null) submitted++;else miss.push(m[1]);
         });
@@ -43760,6 +44008,7 @@ function QCReportBuilder({
           nb++;
           return;
         }
+        if (monthRaw(ind, m[0]) == null && qcNotDue(d, ind, m[0])) return;
         a++;
         if (monthRaw(ind, m[0]) != null) s++;
       }));
@@ -47538,6 +47787,19 @@ function QCActionPlans({
       localStorage.setItem('unico_capa_v1', JSON.stringify(capa));
     } catch (e) {}
   }, [capa]);
+  useEffect(() => {
+    const h = e => {
+      const ks = e && e.detail && e.detail.keys;
+      if (Array.isArray(ks) && ks.indexOf('unico_capa_v1') < 0) return;
+      try {
+        const raw = localStorage.getItem('unico_capa_v1');
+        const next = JSON.parse(raw) || {};
+        setCapa(cur => JSON.stringify(cur) === raw ? cur : next);
+      } catch (_) {}
+    };
+    window.addEventListener('unico:overlay-merged', h);
+    return () => window.removeEventListener('unico:overlay-merged', h);
+  }, []);
   const [fy, setFy] = useState(() => defaultFy(depts));
   const MONTHS = fyAxis(fy);
   const plans = useMemo(() => {
@@ -55507,7 +55769,7 @@ window.LockScreen = LockScreen;
     }, [draftKey]);
     const assigned = resps.filter(r => dept && canReportDept(r, dept.id));
     const order = MO();
-    const monthOpts = order.slice(Math.max(0, order.indexOf('Jan-25')), order.length);
+    const monthOpts = dcPortalUser() ? dcRealMonthOpts([dcPatientStart(dept, subs)], [month, prefill && prefill.month]) : order.slice(Math.max(0, order.indexOf('Jan-25')), order.length);
     const monthStatus = useMemo(() => {
       const map = {};
       (subs || []).forEach(s => {
@@ -55866,7 +56128,7 @@ window.LockScreen = LockScreen;
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     const lockResp = !!(me && me.role === 'collector');
     const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
-    const monthOpts = dcWideMonths();
+    const monthOpts = dcPortalUser() ? dcRealMonthOpts(areas.flatMap(a => dcAreaStarts(a, [])), [prefill && prefill.month]) : dcWideMonths();
     const defMonth = dcDefaultMonth() || (fyMonths && fyMonths.length ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
     const [areaKey, setAreaKey] = useState(prefill && prefill.area || (areas.find(a => a.indicators && a.indicators.length) || areas[0] || {}).key || '');
     const area = useMemo(() => areas.find(a => a.key === areaKey) || areas[0], [areas, areaKey]);
@@ -61663,6 +61925,26 @@ window.LockScreen = LockScreen;
     return mi < 0 || isNaN(yy) ? null : (2000 + yy) * 12 + mi;
   };
   const dcMonthKey = r => MONS_ABBR[(r % 12 + 12) % 12] + '-' + String(Math.floor(r / 12) % 100).padStart(2, '0');
+  const dcPortalUser = () => {
+    const r = (typeof window !== 'undefined' && window.__UNICO_USER__ || {}).role;
+    return r === 'collector' || r === 'incharge';
+  };
+  const dcRealMonthOpts = (startMonths, keep) => {
+    const last = dcDefaultMonth();
+    const lr = dcMonthRank(last);
+    let first = null;
+    (startMonths || []).forEach(m => {
+      const r = dcMonthRank(m);
+      if (r != null && r <= lr && (first == null || r < first)) first = r;
+    });
+    const out = [];
+    for (let r = lr; r >= (first == null ? lr : first); r--) out.push(dcMonthKey(r));
+    (keep || []).forEach(k => {
+      if (k && out.indexOf(k) < 0 && dcMonthRank(k) != null) out.push(k);
+    });
+    return out.sort((a, b) => dcMonthRank(b) - dcMonthRank(a));
+  };
+  const dcAreaStarts = (area, subs) => (area && area.indicators || []).filter(ind => !dcNotMeasured(area, ind)).map(ind => dcIndicatorStart(area, ind, subs || []));
   const dcLaterMonth = (a, b) => {
     const ra = dcMonthRank(a),
       rb = dcMonthRank(b);
@@ -61799,6 +62081,14 @@ window.LockScreen = LockScreen;
     return ix;
   };
   const dcSubIsInd = (s, ind) => s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase();
+  const dcYearStart = () => 'Jan-' + dcDefaultMonth().split('-')[1];
+  const dcEarlierMonth = (a, b) => {
+    const ra = dcMonthRank(a),
+      rb = dcMonthRank(b);
+    if (ra == null) return rb == null ? null : b;
+    if (rb == null) return a;
+    return ra <= rb ? a : b;
+  };
   const dcIndFirstMonth = (area, ind, subs) => {
     let best = null;
     const see = k => {
@@ -61822,7 +62112,7 @@ window.LockScreen = LockScreen;
   };
   const dcIndicatorStart = (area, ind, subs, deptStart) => {
     const ds = deptStart === undefined ? dcDeptSettings(dcAreaDeptId(area)).startMonth : deptStart;
-    return dcLaterMonth(ds, ind && ind.startMonth) || dcIndFirstMonth(area, ind, subs);
+    return dcLaterMonth(ds, ind && ind.startMonth) || dcEarlierMonth(dcIndFirstMonth(area, ind, subs), dcYearStart());
   };
   const dcNotMeasured = (area, ind, override) => {
     const nm = override !== undefined ? override : dcDeptSettings(dcAreaDeptId(area)).notMeasured;
@@ -61854,7 +62144,7 @@ window.LockScreen = LockScreen;
     };
     (dept.months || []).forEach(see);
     (dcSubsIndex(subs).pDept.get(dept.id) || []).forEach(s => see(s.month));
-    return best == null ? null : dcMonthKey(best);
+    return best == null ? dcYearStart() : dcEarlierMonth(dcMonthKey(best), dcYearStart());
   };
   const dcQStatus = (subs, areaKey, ind, m) => cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
   const dcPatientState = (subs, dept, m) => {
@@ -63581,7 +63871,16 @@ window.LockScreen = LockScreen;
       color: c,
       flexShrink: 0
     });
+    const missMonths = new Set(allMissing.map(r => r.month)).size;
     const KPIS = [{
+      val: subs === null ? '...' : allMissing.length,
+      lbl: 'Missing data',
+      go: 'missing',
+      foot: subs === null ? 'checking...' : allMissing.length ? 'in ' + missMonths + ' month' + (missMonths === 1 ? '' : 's') + ' - tap to submit' : 'nothing missing - all caught up',
+      icd: 'M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01',
+      bg: allMissing.length ? 'rgba(210,58,82,.13)' : 'rgba(31,157,87,.13)',
+      c: allMissing.length ? '#a92c42' : '#1f9d57'
+    }, {
       val: totalInd,
       lbl: 'Assigned indicators',
       foot: 'across ' + areas.length + ' quality area' + (areas.length === 1 ? '' : 's'),
@@ -63684,7 +63983,7 @@ window.LockScreen = LockScreen;
       approved: 'Approved',
       rejected: 'Rejected'
     };
-    const monthOpts = dcWideMonths();
+    const monthOpts = dcRealMonthOpts([...dcPatientDepts(depts, S).map(d => dcPatientStart(d, S)), ...areas.flatMap(a => dcAreaStarts(a, S))], [month]);
     const first = String(user.name || '').trim().split(/\s+/)[0] || 'there';
     return React.createElement("div", {
       style: {
@@ -63938,9 +64237,15 @@ window.LockScreen = LockScreen;
       }
     }, KPIS.map(k => React.createElement("div", {
       key: k.lbl,
+      onClick: k.go ? () => onNav(k.go) : undefined,
+      role: k.go ? 'button' : undefined,
+      title: k.go ? 'Open Missing data' : undefined,
       style: Object.assign({}, CP_CARD, {
         padding: '14px 16px'
-      })
+      }, k.go ? {
+        cursor: 'pointer',
+        borderLeft: '4px solid ' + k.c
+      } : null)
     }, React.createElement("div", {
       style: {
         display: 'flex',
@@ -66783,7 +67088,7 @@ window.LockScreen = LockScreen;
       }
     }, React.createElement(Field, {
       label: "Data starts from",
-      hint: start ? 'Months before ' + monthLabel(start) + ' are never counted as missing.' : p.from || !counts.isPatient ? 'Not set — counting starts at the first month with data.' : 'Not set — only the last completed month counts.'
+      hint: start ? 'Months before ' + monthLabel(start) + ' are never counted as missing.' : 'Not set — counting starts in January of this year (or at earlier data).'
     }, React.createElement("select", {
       style: inputStyle,
       value: start,
@@ -67091,13 +67396,14 @@ window.LockScreen = LockScreen;
         }));
         const pDepts = dcPatientDepts(depts, S).filter(d => dcPatientDue(d, month, S));
         const statGap = pDepts.filter(d => ['none', 'rejected'].includes(dcPatientState(S, d, month))).length;
-        const allMissing = dcMissingList(depts, areas.filter(a => a && a.indicators && a.indicators.length), S).length;
+        const missingRows = dcMissingList(depts, areas.filter(a => a && a.indicators && a.indicators.length), S);
         setSubCount({
           pending: S.filter(s => s.status === 'pending' && dcIsMine(s)).length,
           missing,
           total,
           statGap,
-          allMissing
+          allMissing: missingRows.length,
+          missingRows
         });
       }).catch(() => {});
       return () => {
@@ -67145,6 +67451,34 @@ window.LockScreen = LockScreen;
       }, badgeVal));
     };
     const [acctOpen, setAcctOpen] = useState(false);
+    const [missAlert, setMissAlert] = useState(false);
+    const missAlertKey = 'dcMissingAlertShown|' + (user.username || user.name || '');
+    useEffect(() => {
+      if (!(subCount.allMissing > 0)) return;
+      let shown = false;
+      try {
+        shown = sessionStorage.getItem(missAlertKey) === '1';
+      } catch (e) {}
+      if (shown) return;
+      try {
+        sessionStorage.setItem(missAlertKey, '1');
+      } catch (e) {}
+      setMissAlert(true);
+    }, [subCount.allMissing]);
+    const clearMissAlert = () => {
+      try {
+        sessionStorage.removeItem(missAlertKey);
+      } catch (e) {}
+    };
+    const missRows = (subCount.missingRows || []).slice().sort((a, b) => b.rank - a.rank);
+    const missByMonth = [];
+    missRows.forEach(r => {
+      const g = missByMonth.find(x => x.month === r.month);
+      if (g) g.rows.push(r);else missByMonth.push({
+        month: r.month,
+        rows: [r]
+      });
+    });
     const crumb = {
       missing: 'Missing data',
       home: 'Dashboard',
@@ -67186,7 +67520,144 @@ window.LockScreen = LockScreen;
         overflow: 'hidden',
         background: 'transparent'
       }
-    }, React.createElement("style", null, '@media (max-width:900px){.cp-aside{position:fixed!important;z-index:200;height:100vh;transform:translateX(-100%);transition:transform .22s ease}.cp-aside.cp-open{transform:none}.cp-burger{display:grid!important}}'), sidebarOpen && React.createElement("div", {
+    }, React.createElement("style", null, '@media (max-width:900px){.cp-aside{position:fixed!important;z-index:200;height:100vh;transform:translateX(-100%);transition:transform .22s ease}.cp-aside.cp-open{transform:none}.cp-burger{display:grid!important}}'), missAlert && React.createElement("div", {
+      onClick: () => setMissAlert(false),
+      style: {
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(13,27,46,.45)',
+        zIndex: 400,
+        display: 'grid',
+        placeItems: 'center',
+        padding: 16
+      }
+    }, React.createElement("div", {
+      role: "alertdialog",
+      "aria-labelledby": "dc-miss-title",
+      onClick: e => e.stopPropagation(),
+      style: Object.assign({}, CP_CARD, {
+        width: 'min(480px,100%)',
+        maxHeight: '86vh',
+        overflowY: 'auto',
+        padding: '20px 22px',
+        background: '#fff',
+        borderLeft: '5px solid #d23a52'
+      })
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        marginBottom: 8
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 38,
+        height: 38,
+        borderRadius: 11,
+        background: 'rgba(210,58,82,.13)',
+        color: '#a92c42',
+        flexShrink: 0
+      }
+    }, CP_ICON('M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01', 19)), React.createElement("div", {
+      id: "dc-miss-title",
+      style: {
+        fontSize: 16,
+        fontWeight: 800,
+        color: '#16202e'
+      }
+    }, subCount.allMissing, " missing data submission", subCount.allMissing === 1 ? '' : 's')), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: '#3c4858',
+        lineHeight: 1.55,
+        marginBottom: 12
+      }
+    }, "Data you are assigned to report has not been sent for ", missByMonth.length, " month", missByMonth.length === 1 ? '' : 's', ". Please submit it so the reports are complete."), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 7,
+        marginBottom: 16
+      }
+    }, missByMonth.slice(0, 6).map(g => React.createElement("div", {
+      key: g.month,
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 10,
+        padding: '8px 11px',
+        borderRadius: 9,
+        background: 'rgba(210,58,82,.06)',
+        border: '1px solid rgba(210,58,82,.16)'
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 12.5,
+        color: '#16202e',
+        minWidth: 96
+      }
+    }, monthLabel(g.month)), React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: '#a92c42',
+        fontWeight: 700,
+        whiteSpace: 'nowrap'
+      }
+    }, g.rows.length, " missing"), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c',
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, [...new Set(g.rows.map(r => r.unit))].join(', ')))), missByMonth.length > 6 && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, "and ", missByMonth.length - 6, " more month", missByMonth.length - 6 === 1 ? '' : 's')), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 9,
+        justifyContent: 'flex-end',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("button", {
+      onClick: () => setMissAlert(false),
+      style: {
+        border: '1px solid rgba(125,145,180,.4)',
+        background: '#fff',
+        color: '#3c4858',
+        padding: '9px 15px',
+        borderRadius: 10,
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit'
+      }
+    }, "Remind me later"), React.createElement("button", {
+      autoFocus: true,
+      onClick: () => {
+        setMissAlert(false);
+        go('missing');
+      },
+      style: {
+        border: 0,
+        background: 'linear-gradient(135deg,#e0566e,#b8283f)',
+        color: '#fff',
+        padding: '9px 16px',
+        borderRadius: 10,
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        boxShadow: '0 8px 20px rgba(210,58,82,.3)'
+      }
+    }, "Submit missing data")))), sidebarOpen && React.createElement("div", {
       onClick: () => setSidebarOpen(false),
       style: {
         position: 'fixed',
@@ -67308,6 +67779,7 @@ window.LockScreen = LockScreen;
       }
     }, (inCharge ? 'In-charge' : 'Data Collector') + (depts[0] ? ' · ' + depts[0].name : ''))), React.createElement("a", {
       href: "/logout",
+      onClick: clearMissAlert,
       title: "Sign out",
       style: {
         marginLeft: 'auto',
@@ -67509,6 +67981,7 @@ window.LockScreen = LockScreen;
       }
     }, CP_ICON('M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0', 14, '#0072a3'), "My profile & photo"), React.createElement("a", {
       href: "/logout",
+      onClick: clearMissAlert,
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -95131,6 +95604,17 @@ window.RosterReviewFull = RosterReviewFull;
       }).catch(() => {});
     }, []);
     const respCache = useRef(new Map());
+    useEffect(() => {
+      const drop = () => {
+        if (document.visibilityState !== 'hidden') respCache.current.clear();
+      };
+      window.addEventListener('focus', drop);
+      document.addEventListener('visibilitychange', drop);
+      return () => {
+        window.removeEventListener('focus', drop);
+        document.removeEventListener('visibilitychange', drop);
+      };
+    }, []);
     const cachedGet = url => {
       const c = respCache.current;
       if (c.has(url)) return {
@@ -102096,28 +102580,45 @@ function App() {
     window.addEventListener('unico:logout', h);
     return () => window.removeEventListener('unico:logout', h);
   }, []);
+  const [permsRev, setPermsRev] = useState(0);
+  useEffect(() => {
+    const h = () => setPermsRev(r => r + 1);
+    window.addEventListener('unico:perms-changed', h);
+    return () => window.removeEventListener('unico:perms-changed', h);
+  }, []);
   useEffect(() => {
     let stamp = Date.now(),
       busy = false;
-    const refresh = () => {
+    const refresh = e => {
       if (busy || typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      if (Date.now() - stamp < 15000) return;
+      if (e !== 'tick' && Date.now() - stamp < 15000) return;
       busy = true;
       stamp = Date.now();
       const jobs = [];
+      try {
+        if (window.unicoRefreshAppData) jobs.push(window.unicoRefreshAppData());
+      } catch (e) {}
       try {
         if (window.UNICO && window.UNICO.refreshDepartments) jobs.push(window.UNICO.refreshDepartments());
       } catch (e) {}
       try {
         if (window.refreshQualitySeed) jobs.push(window.refreshQualitySeed());
       } catch (e) {}
-      Promise.all(jobs).catch(() => {}).then(() => {
+      try {
+        if (window.refreshQualityFormulas) jobs.push(window.refreshQualityFormulas());
+      } catch (e) {}
+      try {
+        if (window.unicoRefreshPerms) jobs.push(window.unicoRefreshPerms());
+      } catch (e) {}
+      Promise.all(jobs.map(p => Promise.resolve(p).catch(() => null))).then(() => {
         busy = false;
       });
     };
+    const poll = setInterval(() => refresh('tick'), 60000);
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => {
+      clearInterval(poll);
       window.removeEventListener('focus', refresh);
       document.removeEventListener('visibilitychange', refresh);
     };
@@ -102129,7 +102630,7 @@ function App() {
         view: home
       });
     }
-  }, [route.view]);
+  }, [route.view, permsRev]);
   const openDept = id => setRoute({
     view: 'departments',
     dept: id
