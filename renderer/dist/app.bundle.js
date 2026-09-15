@@ -6473,6 +6473,10 @@ window.QI_CORRECTIONS_BY_DEFID = {
     // qualityName keeps the quality doc's own name: the hand-hygiene audit files rows under it
     // ("Emergency Medicine"), so after the rename to "Emergency Room" nothing matched.
     if (cn && cn !== dept.name) dept = Object.assign({}, dept, { name: cn, qualityName: dept.name });
+    // Unassigning hand hygiene from a department with audit rows must stick: the audit clone
+    // below used to re-create it on every build, so the assignment "came back".
+    const rmIds = (ov && ov.indRemoved) || [];
+    if (rmIds.some((id) => String(id) === 'ind-hh-from-audit' || (seedDept.indicators || []).some((i) => String(i.id) === String(id) && /hand\s*hygiene/i.test(i.name || '')))) dept = Object.assign({}, dept, { hhOptOut: true });
     return dept;
   }
 
@@ -6513,6 +6517,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
       return list.map((d) => {
         if (d === src.dep) return d;
         const idx = (d.indicators || []).findIndex(isHH);
+        if (idx < 0 && d.hhOptOut) return d;   // admin unassigned it — no audit clone
         // A dept with audited rows but NO hand-hygiene indicator of its own (e.g. CT ICU)
         // gets a synthetic one cloned from the hospital-wide source — otherwise its
         // audited compliance renders as a blank '—' column in every heatmap/report.
@@ -48554,6 +48559,22 @@ function QCAdmin({
   const depts = allDepts.filter(d => (d.indicators || []).length);
   const [view, setView] = useState('manage');
   const [assignQ, setAssignQ] = useState('');
+  const [asgDraft, setAsgDraft] = useState({});
+  const [asgSave, setAsgSave] = useState({
+    state: 'idle'
+  });
+  const asgPendingRef = React.useRef(0);
+  React.useEffect(() => {
+    const h = e => {
+      if (asgPendingRef.current > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
+    };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, []);
   const [tab, setTab] = useState('identity');
   const [sel, setSel] = useState(() => initialDept ? {
     deptKey: initialDept,
@@ -48933,8 +48954,9 @@ function QCAdmin({
   });
   const _aq = assignQ.trim().toLowerCase();
   const assignRows = _aq ? assignNames.filter(r => (r.name || '').toLowerCase().includes(_aq)) : assignNames;
-  const toggleAssign = (rec, dk) => {
-    if (rec.set.has(dk)) {
+  const applyAssign = (rec, dk, want) => {
+    if (want === rec.set.has(dk)) return;
+    if (!want) {
       const d = (Q.depts || []).find(x => x.key === dk);
       const inst = d && (d.indicators || []).find(x => rec.code && stdMatch(x.name) === rec.code || norm(x.name) === norm(rec.name));
       if (inst) Q.removeIndicator(dk, inst.id);
@@ -48945,11 +48967,85 @@ function QCAdmin({
         Q.restoreIndicator(dk, seedInst.id);
         return;
       }
+      if (/hand\s*hygiene/i.test(rec.name || '')) Q.restoreIndicator(dk, 'ind-hh-from-audit');
       const c = defOnly(rec.tmpl, {
         id: window.qualitySlug(rec.tmpl.name || rec.name)
       });
       Q.addIndicator(dk, c);
     }
+  };
+  const asgCellKey = (rec, dk) => rec.key + '|' + dk;
+  const asgPending = Object.keys(asgDraft).map(k => {
+    const i = k.lastIndexOf('|');
+    const rec = rowsByKey[k.slice(0, i)];
+    const dk = k.slice(i + 1);
+    return rec ? {
+      k,
+      rec,
+      dk,
+      want: asgDraft[k]
+    } : null;
+  }).filter(p => p && p.want !== p.rec.set.has(p.dk));
+  asgPendingRef.current = asgPending.length;
+  const asgWant = (rec, dk) => {
+    const k = asgCellKey(rec, dk);
+    return Object.prototype.hasOwnProperty.call(asgDraft, k) ? asgDraft[k] : rec.set.has(dk);
+  };
+  const toggleAssign = (rec, dk) => {
+    const k = asgCellKey(rec, dk),
+      saved = rec.set.has(dk),
+      next = !asgWant(rec, dk);
+    setAsgDraft(d => {
+      const o = Object.assign({}, d);
+      if (next === saved) delete o[k];else o[k] = next;
+      return o;
+    });
+    if (asgSave.state !== 'saving') setAsgSave({
+      state: 'idle'
+    });
+  };
+  const asgFlush = n => {
+    const f = window.unicoFlushNow;
+    if (typeof f !== 'function') {
+      setAsgSave({
+        state: 'saved',
+        at: Date.now(),
+        n
+      });
+      return;
+    }
+    Promise.resolve(f()).then(r => {
+      if (r && r.ok === false) setAsgSave({
+        state: 'error',
+        n,
+        error: r.error || 'The server did not accept the save'
+      });else setAsgSave({
+        state: 'saved',
+        at: Date.now(),
+        n
+      });
+    }).catch(e => setAsgSave({
+      state: 'error',
+      n,
+      error: String(e && e.message || e)
+    }));
+  };
+  const saveAssign = () => {
+    const list = asgPending;
+    if (!list.length || asgSave.state === 'saving') return;
+    setAsgSave({
+      state: 'saving',
+      n: list.length
+    });
+    list.forEach(p => applyAssign(p.rec, p.dk, p.want));
+    setAsgDraft({});
+    setTimeout(() => asgFlush(list.length), 400);
+  };
+  const discardAssign = () => {
+    setAsgDraft({});
+    setAsgSave({
+      state: 'idle'
+    });
   };
   const STD = typeof HQI_STANDARDS !== 'undefined' && HQI_STANDARDS || [];
   const useCount = {};
@@ -49111,7 +49207,11 @@ function QCAdmin({
     const active = view === t.id;
     return React.createElement("button", {
       key: t.id,
-      onClick: () => setView(t.id),
+      onClick: () => {
+        if (view === 'assign' && t.id !== 'assign' && asgPending.length && !window.confirm('Discard ' + asgPending.length + ' unsaved assignment change' + (asgPending.length !== 1 ? 's' : '') + '?')) return;
+        if (t.id !== 'assign') setAsgDraft({});
+        setView(t.id);
+      },
       style: {
         display: 'inline-flex',
         alignItems: 'center',
@@ -51048,7 +51148,105 @@ function QCAdmin({
     strokeLinecap: "round"
   }, React.createElement("path", {
     d: "M6 6l12 12M18 6L6 18"
-  })), "Delete indicator")))))))), view === 'assign' && React.createElement("div", {
+  })), "Delete indicator")))))))), view === 'assign' && React.createElement(React.Fragment, null, (() => {
+    const n = asgPending.length,
+      st = asgSave.state,
+      adds = asgPending.filter(p => p.want).length;
+    const tone = st === 'error' ? {
+      bd: '#f1c6cd',
+      bg: 'rgba(253,238,240,.97)',
+      fg: '#b3263e'
+    } : n ? {
+      bd: '#f1d49a',
+      bg: 'rgba(255,248,233,.97)',
+      fg: '#8a5a00'
+    } : st === 'saved' ? {
+      bd: '#bfe6cd',
+      bg: 'rgba(236,248,241,.97)',
+      fg: '#1f7a47'
+    } : {
+      bd: '#dde3ec',
+      bg: 'rgba(255,255,255,.95)',
+      fg: P.muted
+    };
+    const hm = t => new Date(t).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    const msg = st === 'saving' ? 'Saving ' + (asgSave.n || 0) + ' change' + (asgSave.n !== 1 ? 's' : '') + ' to the server…' : n ? n + ' unsaved change' + (n !== 1 ? 's' : '') + ' — ' + adds + ' to assign · ' + (n - adds) + ' to unassign. Nothing is stored until you press Save.' : st === 'error' ? '⚠ Not saved to the server: ' + asgSave.error + '. The change is kept on this device and retried automatically — keep this page open, or press Retry.' : st === 'saved' ? '✓ Saved to the server at ' + hm(asgSave.at) + ' (' + asgSave.n + ' change' + (asgSave.n !== 1 ? 's' : '') + ').' : 'Tick cells to assign / unassign, then press Save.';
+    return React.createElement("div", {
+      role: "status",
+      style: {
+        position: 'sticky',
+        top: 0,
+        zIndex: 30,
+        marginBottom: 10,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        padding: '10px 14px',
+        borderRadius: 11,
+        border: '1px solid ' + tone.bd,
+        background: tone.bg,
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
+        boxShadow: '0 6px 18px rgba(31,59,90,.12)'
+      }
+    }, React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 220,
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: tone.fg
+      }
+    }, msg), st === 'error' && !n && React.createElement("button", {
+      onClick: () => {
+        setAsgSave({
+          state: 'saving',
+          n: asgSave.n
+        });
+        asgFlush(asgSave.n);
+      },
+      style: {
+        border: '1px solid #d23a52',
+        background: '#fff',
+        color: '#b3263e',
+        padding: '7px 13px',
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontWeight: 600,
+        cursor: 'pointer'
+      }
+    }, "Retry"), n > 0 && st !== 'saving' && React.createElement("button", {
+      onClick: discardAssign,
+      style: {
+        border: '1px solid ' + P.line,
+        background: '#fff',
+        color: P.ink,
+        padding: '7px 13px',
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontWeight: 600,
+        cursor: 'pointer'
+      }
+    }, "Discard"), React.createElement("button", {
+      onClick: saveAssign,
+      disabled: !n || st === 'saving',
+      style: {
+        border: '1px solid #0090ca',
+        background: !n || st === 'saving' ? '#9fd3ea' : '#0090ca',
+        color: '#fff',
+        padding: '7px 16px',
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: !n || st === 'saving' ? 'default' : 'pointer',
+        boxShadow: n ? '0 1px 3px rgba(0,144,202,.4)' : 'none'
+      }
+    }, st === 'saving' ? 'Saving…' : 'Save' + (n ? ' (' + n + ')' : '')));
+  })(), React.createElement("div", {
     style: {
       background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
       backdropFilter: 'blur(26px) saturate(1.75)',
@@ -51083,7 +51281,7 @@ function QCAdmin({
       fontSize: 11.5,
       color: P.muted
     }
-  }, "Which department reports which indicator \u2014 all ", assignNames.length, " catalog indicators. Tick a cell to assign / unassign.")), React.createElement("input", {
+  }, "Which department reports which indicator \u2014 all ", assignNames.length, " catalog indicators. Tick cells to assign / unassign, then press Save.")), React.createElement("input", {
     value: assignQ,
     onChange: e => setAssignQ(e.target.value),
     placeholder: "Search indicator...",
@@ -51218,7 +51416,9 @@ function QCAdmin({
         color: '#c2ccd8'
       }
     }, "\u2014"))), assignCols.map(c => {
-      const on = rec.set.has(c.key);
+      const saved = rec.set.has(c.key),
+        on = asgWant(rec, c.key),
+        pend = on !== saved;
       return React.createElement("td", {
         key: c.key,
         className: "qa-x",
@@ -51228,7 +51428,7 @@ function QCAdmin({
         }
       }, React.createElement("span", {
         onClick: () => toggleAssign(rec, c.key),
-        title: rec.name + ' × ' + c.name + ' — ' + (on ? 'assigned · click to unassign' : 'not assigned · click to assign'),
+        title: rec.name + ' × ' + c.name + ' — ' + (pend ? (on ? 'will be ASSIGNED when you press Save' : 'will be UNASSIGNED when you press Save') + ' · click to undo' : on ? 'assigned · click to unassign' : 'not assigned · click to assign'),
         style: {
           display: 'inline-grid',
           placeItems: 'center',
@@ -51236,15 +51436,15 @@ function QCAdmin({
           height: 22,
           borderRadius: 6,
           cursor: 'pointer',
-          background: on ? '#e7f6ed' : '#f7f9fc',
-          color: on ? '#1f9d57' : '#cdd6e2',
+          background: pend ? on ? '#fff4e0' : '#fdeef0' : on ? '#e7f6ed' : '#f7f9fc',
+          color: pend ? on ? '#1f9d57' : '#d23a52' : on ? '#1f9d57' : '#cdd6e2',
           fontSize: 12,
           fontWeight: 700,
-          boxShadow: on ? '0 0 0 1px #bfe6cd' : 'none'
+          boxShadow: pend ? '0 0 0 1.5px ' + (on ? '#e0a23a' : '#e58a9a') : on ? '0 0 0 1px #bfe6cd' : 'none'
         }
-      }, on ? '✓' : ''));
+      }, pend ? on ? '✓' : '✕' : on ? '✓' : ''));
     }));
-  }))))), view === 'catalog' && React.createElement("div", {
+  })))))), view === 'catalog' && React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -54386,6 +54586,12 @@ window.LockScreen = LockScreen;
     if (s.submittedByUser) return !!me.username && s.submittedByUser === me.username;
     return [me.name, me.username].filter(Boolean).some(n => n === s.submittedBy || s.responsible && s.responsible.name === n);
   };
+  const DC_PORTAL_ROLES = ['collector', 'incharge', 'nurse', 'pca'];
+  const dcIsPortalRole = me => !!(me && DC_PORTAL_ROLES.indexOf(me.role) >= 0);
+  const dcIsAdminUser = () => {
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    return !me || me.role === 'Administrator';
+  };
   const dcCustomAreas = r => {
     if (!r) return [];
     if (Array.isArray(r.customQualityAreas)) return r.customQualityAreas;
@@ -54397,10 +54603,105 @@ window.LockScreen = LockScreen;
   const dcOpenRejections = subs => {
     const newest = {};
     (subs || []).forEach(x => {
+      if (x.status === 'withdrawn') return;
       const k = dcTargetKey(x);
       if (!newest[k] || (x.submittedAt || 0) > (newest[k].submittedAt || 0)) newest[k] = x;
     });
     return Object.keys(newest).map(k => newest[k]).filter(x => x.status === 'rejected' && !x.autoRejected && dcIsMine(x));
+  };
+  const dcNormVal = v => {
+    if (v == null) return '';
+    if (typeof v === 'boolean') return v ? 'Yes' : '';
+    const t = String(v).trim();
+    if (!t) return '';
+    const n = Number(t);
+    return isNaN(n) ? t : String(n);
+  };
+  const dcCmpRow = (key, label, old, now) => {
+    const blank = dcNormVal(now) === '';
+    return {
+      key,
+      label,
+      old,
+      now: blank ? null : now,
+      kept: blank && dcNormVal(old) !== '',
+      changed: !blank && dcNormVal(old) !== dcNormVal(now)
+    };
+  };
+  const dcPatientCompareRows = (cols, prior, next, prefix) => {
+    const lbl = {};
+    (cols || []).forEach(c => {
+      lbl[c.id] = c.label || c.id;
+    });
+    const keys = (cols || []).map(c => c.id);
+    [prior || {}, next || {}].forEach(o => Object.keys(o).forEach(k => {
+      if (k !== 'month' && k !== 'full' && keys.indexOf(k) < 0) keys.push(k);
+    }));
+    return keys.map(k => dcCmpRow((prefix || '') + '|' + k, (prefix ? prefix + ' · ' : '') + (lbl[k] || String(k).replace(/^c_/, '').replace(/[_-]+/g, ' ')), (prior || {})[k], (next || {})[k])).filter(r => dcNormVal(r.old) !== '' || r.now != null);
+  };
+  const dcTextRows = (key, label, old, now) => {
+    const r = dcCmpRow(key, label, old, now);
+    return dcNormVal(r.old) !== '' || r.now != null ? [r] : [];
+  };
+  const dcQualityCompareRows = (prior, next, numLabel, denLabel) => {
+    const p = prior || {},
+      n = next || {};
+    const rows = [];
+    rows.push(dcCmpRow('no', 'Not observed', p.notObserved ? 'Yes' : 'No', n.notObserved ? 'Yes' : 'No'));
+    if (!n.notObserved) {
+      if (n.rate) {
+        rows.push(dcCmpRow('num', numLabel || 'Numerator', p.num, n.num));
+        rows.push(dcCmpRow('den', denLabel || 'Denominator', p.den, n.den));
+        rows.push(dcCmpRow('value', 'Value (calculated)', p.value, n.value));
+      } else rows.push(dcCmpRow('value', 'Value', p.value, n.value));
+    }
+    const filled = x => Array.isArray(x) ? x.filter(dcIncidentFilled) : [];
+    const pi = filled(p.incidents),
+      ni = filled(n.incidents);
+    if (pi.length || ni.length) {
+      rows.push(dcCmpRow('inc', 'Incidents logged', pi.length, ni.length));
+      const sig = arr => JSON.stringify(arr.map(x => DC_INCIDENT_FIELDS.map(k => String(x[k] == null ? '' : x[k]).trim())));
+      if (pi.length === ni.length && sig(pi) !== sig(ni)) rows.push({
+        key: 'incd',
+        label: 'Incident details',
+        old: pi.length + ' on record',
+        now: 'edited',
+        changed: true
+      });
+    }
+    const CAPA_F = ['incidentDetails', 'finding', 'corrective', 'preventive'];
+    const capaSig = c => (c && typeof c === 'object' ? CAPA_F.map(k => String(c[k] == null ? '' : c[k]).trim()) : []).join('|');
+    const pc = capaSig(p.capa),
+      nc = capaSig(n.capa);
+    if (nc.replace(/\|/g, '') && pc !== nc) rows.push({
+      key: 'capa',
+      label: 'CAPA details',
+      old: pc.replace(/\|/g, '') ? 'on record' : '',
+      now: 'edited',
+      changed: true
+    });
+    return rows.concat(dcTextRows('remark', 'Remark', p.remark, n.remark), dcTextRows('note', 'Note', p.note, n.note));
+  };
+  const dcWithdraw = s => {
+    const go = () => dcApi.post('/api/submissions/' + encodeURIComponent(s.id) + '/withdraw', {}).then(r => {
+      if (r && r.ok) {
+        toast('Withdrawn — it will not be reviewed', 'success');
+        return true;
+      }
+      toast(r && r.error || 'Could not withdraw', 'error');
+      return false;
+    }).catch(() => {
+      toast('Could not withdraw — check your connection', 'error');
+      return false;
+    });
+    const message = 'It will not be reviewed. You can send it again later.';
+    if (window.UI && window.UI.confirm) return window.UI.confirm({
+      title: 'Withdraw this submission?',
+      message,
+      confirmLabel: 'Withdraw',
+      danger: true
+    }).then(ok => ok ? go() : false);
+    return window.confirm('Withdraw this submission? ' + message) ? go() : Promise.resolve(false);
   };
   const dcPatientDepts = (depts, subs) => {
     const ever = new Set((subs || []).filter(s => s.type === 'patient').map(s => s.department));
@@ -54562,6 +54863,7 @@ window.LockScreen = LockScreen;
   }
   function Card(props) {
     return React.createElement("div", {
+      className: props.className,
       style: {
         background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
         backdropFilter: 'blur(26px) saturate(1.75)',
@@ -54648,6 +54950,250 @@ window.LockScreen = LockScreen;
       d: I.x,
       s: 13
     })));
+  }
+  function DcCompareModal({
+    title,
+    rows,
+    reason,
+    setReason,
+    busy,
+    onEdit,
+    onSend
+  }) {
+    const [showSame, setShowSame] = useState(false);
+    const changed = rows.filter(r => r.changed),
+      same = rows.filter(r => !r.changed);
+    const none = changed.length === 0;
+    const show = v => dcNormVal(v) === '' ? '—' : String(v);
+    const cell = {
+      padding: '6px 8px',
+      borderBottom: '1px solid var(--line-2)'
+    };
+    const row = r => React.createElement("tr", {
+      key: r.key,
+      style: {
+        background: r.changed ? '#fff4e0' : 'transparent',
+        opacity: r.changed ? 1 : .6
+      }
+    }, React.createElement("td", {
+      style: {
+        ...cell,
+        fontWeight: r.changed ? 700 : 500
+      }
+    }, r.label), React.createElement("td", {
+      className: "num",
+      style: {
+        ...cell,
+        textAlign: 'right'
+      }
+    }, show(r.old)), React.createElement("td", {
+      className: "num",
+      style: {
+        ...cell,
+        textAlign: 'right',
+        fontWeight: r.changed ? 800 : 500,
+        color: r.changed ? '#9a6b00' : 'var(--ink-2)'
+      }
+    }, r.kept ? show(r.old) + ' (kept)' : show(r.now)));
+    return React.createElement("div", {
+      onMouseDown: onEdit,
+      style: {
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(16,32,46,.45)',
+        zIndex: 3100,
+        display: 'grid',
+        placeItems: 'center',
+        padding: 16
+      }
+    }, React.createElement("div", {
+      role: "dialog",
+      "aria-modal": "true",
+      onMouseDown: e => e.stopPropagation(),
+      style: {
+        background: 'var(--panel,#fff)',
+        border: '1px solid var(--line)',
+        borderRadius: 12,
+        width: 'min(580px,100%)',
+        maxHeight: '90vh',
+        overflow: 'auto',
+        boxShadow: 'var(--shadow-pop)'
+      }
+    }, React.createElement("div", {
+      style: {
+        padding: '14px 16px',
+        borderBottom: '1px solid var(--line-2)',
+        fontWeight: 700,
+        fontSize: 14
+      }
+    }, title), React.createElement("div", {
+      style: {
+        padding: '12px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)',
+        lineHeight: 1.55
+      }
+    }, "This is already on record, so your figures go to an administrator as an ", React.createElement("b", null, "edit request"), ". Nothing on record changes until it is approved."), React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, React.createElement("table", {
+      style: {
+        width: '100%',
+        borderCollapse: 'collapse',
+        fontSize: 12.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, ['Field', 'On record', 'Your new value'].map((h, i) => React.createElement("th", {
+      key: h,
+      style: {
+        textAlign: i ? 'right' : 'left',
+        padding: '6px 8px',
+        fontSize: 10.5,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        color: 'var(--muted)',
+        borderBottom: '1px solid var(--line)'
+      }
+    }, h)))), React.createElement("tbody", null, changed.map(row), same.length > 0 && React.createElement("tr", null, React.createElement("td", {
+      colSpan: 3,
+      style: {
+        padding: '6px 8px'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setShowSame(v => !v)
+    }, showSame ? 'Hide' : 'Show', " ", same.length, " unchanged"))), showSame && same.map(row)))), none && React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--rose)'
+      }
+    }, "No changes from what is on record."), React.createElement("label", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        fontWeight: 600
+      }
+    }, "Reason for the change (required)"), React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 58,
+        resize: 'vertical'
+      },
+      value: reason,
+      onChange: e => setReason(e.target.value),
+      placeholder: "e.g. wrong count entered \u2014 should be Y not X",
+      autoFocus: true
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        justifyContent: 'flex-end',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: onEdit,
+      disabled: busy
+    }, "Edit my values"), React.createElement("button", {
+      className: "btn pri sm",
+      onClick: onSend,
+      disabled: busy || none || !String(reason || '').trim()
+    }, busy ? 'Sending…' : 'Send edit request')))));
+  }
+  function DcPendingNotice({
+    id,
+    message,
+    subs,
+    onClose,
+    onSaved
+  }) {
+    const [sub, setSub] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const portal = dcPortalUser();
+    const open = () => {
+      const hit = (subs || []).find(x => x && x.id === id);
+      if (hit) {
+        setSub(hit);
+        return;
+      }
+      setBusy(true);
+      dcSubmissionResponse(null, true).then(r => {
+        setBusy(false);
+        const s = (r && r.submissions || []).find(x => x.id === id);
+        if (s) setSub(s);else toast('That submission is not visible to you — ask an administrator.', 'error');
+      }).catch(() => {
+        setBusy(false);
+        toast('Could not load it — check your connection.', 'error');
+      });
+    };
+    if (sub) return React.createElement(SubmissionDetail, {
+      s: sub,
+      canEdit: !portal || sub.status === 'pending' && dcIsMine(sub),
+      fullEdit: !portal,
+      onClose: onClose,
+      onSaved: () => {
+        onClose();
+        if (onSaved) onSaved();
+      }
+    });
+    return React.createElement("div", {
+      onMouseDown: onClose,
+      style: {
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(16,32,46,.45)',
+        zIndex: 3100,
+        display: 'grid',
+        placeItems: 'center',
+        padding: 16
+      }
+    }, React.createElement("div", {
+      role: "alertdialog",
+      "aria-modal": "true",
+      onMouseDown: e => e.stopPropagation(),
+      style: {
+        background: 'var(--panel,#fff)',
+        border: '1px solid var(--line)',
+        borderLeft: '4px solid #e08a1e',
+        borderRadius: 12,
+        width: 'min(440px,100%)',
+        boxShadow: 'var(--shadow-pop)',
+        padding: '16px 18px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 14,
+        marginBottom: 6
+      }
+    }, "A submission for this is already waiting for review"), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--ink-2)',
+        lineHeight: 1.55,
+        marginBottom: 14
+      }
+    }, message || 'Open it and edit it instead of sending another.'), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        justifyContent: 'flex-end'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: onClose
+    }, "Close"), React.createElement("button", {
+      className: "btn pri sm",
+      disabled: busy || !id,
+      onClick: open
+    }, busy ? 'Opening…' : 'Open it to edit'))));
   }
   function ResponsiblePicker({
     value,
@@ -55664,6 +56210,431 @@ window.LockScreen = LockScreen;
       s: 13
     }), "Add field")));
   }
+  const DC_FR_STATUS = {
+    pending: ['Pending', '#fff4e0', '#9a6b00'],
+    approving: ['Pending', '#fff4e0', '#9a6b00'],
+    approved: ['Added', 'var(--pos-bg)', 'var(--pos)'],
+    rejected: ['Declined', 'var(--neg-bg)', 'var(--rose)']
+  };
+  const dcFrChip = st => {
+    const c = DC_FR_STATUS[st] || [String(st || ''), 'var(--panel-2)', 'var(--ink-2)'];
+    return React.createElement("span", {
+      className: "chip",
+      style: {
+        fontWeight: 700,
+        background: c[1],
+        color: c[2],
+        whiteSpace: 'nowrap'
+      }
+    }, c[0]);
+  };
+  const dcFrWhen = t => t ? new Date(t).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  }) : '';
+  const DC_FR_HEAD = {
+    fontSize: 11,
+    fontWeight: 700,
+    color: 'var(--ink-2)',
+    textTransform: 'uppercase',
+    letterSpacing: .3
+  };
+  function DcFieldRequestCard({
+    dept
+  }) {
+    const [label, setLabel] = useState('');
+    const [pct, setPct] = useState(false);
+    const [reason, setReason] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState('');
+    const [mine, setMine] = useState(null);
+    const deptId = dept && dept.id;
+    const name = dept && (dept.short || dept.name) || '';
+    const load = () => dcApi.get('/api/field-requests?status=all').then(r => setMine(r && r.ok ? r.requests || [] : [])).catch(() => setMine([]));
+    useEffect(() => {
+      setErr('');
+      load();
+    }, [deptId]);
+    const submit = () => {
+      if (!label.trim()) {
+        setErr('Enter the name of the field you need.');
+        return;
+      }
+      if (!reason.trim()) {
+        setErr('Say why this field is needed.');
+        return;
+      }
+      setBusy(true);
+      setErr('');
+      dcApi.post('/api/departments/' + encodeURIComponent(deptId) + '/field-requests', {
+        label: label.trim(),
+        pct,
+        reason: reason.trim()
+      }).then(r => {
+        setBusy(false);
+        if (r && r.ok) {
+          setLabel('');
+          setPct(false);
+          setReason('');
+          toast('Field request sent to an administrator', 'success');
+        } else setErr(r && r.error || 'Could not send the request.');
+        load();
+      }).catch(() => {
+        setBusy(false);
+        setErr('Could not send the request — check your connection and try again.');
+      });
+    };
+    const rows = (mine || []).filter(x => x.deptId === deptId);
+    return React.createElement("div", null, React.createElement("div", {
+      style: {
+        ...DC_FR_HEAD,
+        marginBottom: 3
+      }
+    }, "Request a new field for ", name), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginBottom: 8
+      }
+    }, "Need to report a figure this form doesn\u2019t have? Ask for it here \u2014 an administrator reviews the request and adds the field."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        marginBottom: 8
+      }
+    }, React.createElement("input", {
+      style: {
+        ...inputStyle,
+        flex: 1,
+        minWidth: 160
+      },
+      value: label,
+      maxLength: 80,
+      onChange: e => setLabel(e.target.value),
+      placeholder: "Field name (e.g. Re-admissions)"
+    }), React.createElement("label", {
+      style: {
+        fontSize: 12,
+        color: 'var(--ink-2)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        whiteSpace: 'nowrap'
+      },
+      title: "The figure is a percentage"
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: pct,
+      onChange: e => setPct(e.target.checked)
+    }), "%")), React.createElement("textarea", {
+      style: {
+        ...inputStyle,
+        minHeight: 54,
+        resize: 'vertical'
+      },
+      value: reason,
+      maxLength: 500,
+      onChange: e => setReason(e.target.value),
+      placeholder: "Why is this field needed? (required)"
+    }), err && React.createElement("div", {
+      role: "alert",
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: 'var(--rose)',
+        marginTop: 6
+      }
+    }, err), React.createElement("div", {
+      style: {
+        marginTop: 8
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      disabled: busy,
+      onClick: submit
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 13
+    }), busy ? 'Sending…' : 'Send request')), React.createElement("div", {
+      style: {
+        ...DC_FR_HEAD,
+        margin: '14px 0 6px'
+      }
+    }, "Your field requests"), mine === null ? React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026") : rows.length === 0 ? React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, "None yet for ", name, ".") : React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 6
+      }
+    }, rows.map(x => React.createElement("div", {
+      key: x.id,
+      style: {
+        background: '#fff',
+        border: '1px solid var(--line)',
+        borderRadius: 9,
+        padding: '7px 10px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--ink)'
+      }
+    }, x.label, x.pct ? ' (%)' : ''), dcFrChip(x.status), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "Asked ", dcFrWhen(x.createdAt), x.decidedAt ? ' · decided ' + dcFrWhen(x.decidedAt) : '')), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--ink-2)',
+        marginTop: 3
+      }
+    }, x.reason), x.decisionReason && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        marginTop: 3,
+        color: x.status === 'rejected' ? 'var(--rose)' : 'var(--ink-2)',
+        fontWeight: 600
+      }
+    }, x.status === 'rejected' ? 'Declined: ' : 'Administrator: ', x.decisionReason)))));
+  }
+  function DcFieldRequestsAdmin() {
+    const [tab, setTab] = useState('pending');
+    const [rows, setRows] = useState(null);
+    const [err, setErr] = useState('');
+    const [busyId, setBusyId] = useState(null);
+    const [declineId, setDeclineId] = useState(null);
+    const [why, setWhy] = useState('');
+    const load = () => dcApi.get('/api/field-requests?status=all').then(r => {
+      if (r && r.ok) {
+        setRows(r.requests || []);
+        setErr('');
+      } else setErr(r && r.error || 'Could not load field requests.');
+    }).catch(() => setErr('Could not load field requests — check your connection.'));
+    useEffect(() => {
+      load();
+    }, []);
+    const pending = (rows || []).filter(x => x.status === 'pending' || x.status === 'approving');
+    const shown = tab === 'pending' ? pending : rows || [];
+    const decide = (x, status, reason) => {
+      if (busyId) return;
+      if (status === 'rejected' && !String(reason || '').trim()) {
+        toast('Give a reason for declining', 'error');
+        return;
+      }
+      setBusyId(x.id);
+      dcApi.post('/api/field-requests/' + encodeURIComponent(x.id) + '/decide', {
+        status,
+        reason: String(reason || '').trim()
+      }).then(r => {
+        setBusyId(null);
+        if (r && r.ok) {
+          if (status === 'approved') {
+            toast(r.linked ? '“' + x.label + '” was already on ' + x.deptName + ' — request linked to it' : '“' + x.label + '” added to ' + x.deptName, 'success');
+            dcRefreshLive();
+          } else toast('Request declined', 'info');
+          setDeclineId(null);
+          setWhy('');
+        } else toast(r && r.error || 'Could not save the decision', 'error');
+        load();
+      }).catch(() => {
+        setBusyId(null);
+        toast('Could not save — check your connection and try again.', 'error');
+      });
+    };
+    const tabBtn = (v, lbl) => React.createElement("button", {
+      className: 'btn sm' + (tab === v ? ' pri' : ''),
+      onClick: () => setTab(v)
+    }, lbl);
+    return React.createElement(Card, {
+      style: {
+        padding: '14px 16px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        marginBottom: 10
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 14,
+        color: 'var(--ink)'
+      }
+    }, "Field requests"), pending.length > 0 && React.createElement("span", {
+      className: "chip num",
+      style: {
+        fontWeight: 700,
+        background: '#fff4e0',
+        color: '#9a6b00'
+      }
+    }, pending.length, " pending"), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "Units ask for new fields on their statistics form; approving adds the field."), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), tabBtn('pending', 'Pending'), tabBtn('all', 'All')), err && React.createElement(Banner, null, err, " ", React.createElement("button", {
+      className: "btn sm",
+      style: {
+        marginLeft: 8
+      },
+      onClick: load
+    }, "Retry")), rows === null ? !err && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026") : shown.length === 0 ? React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, tab === 'pending' ? 'No field requests waiting.' : 'No field requests yet.') : React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 7
+      }
+    }, shown.map(x => {
+      const open = x.status === 'pending';
+      const busy = busyId === x.id;
+      return React.createElement("div", {
+        key: x.id,
+        style: {
+          border: '1px solid ' + (open ? '#f0d9a8' : 'var(--line)'),
+          background: 'var(--panel)',
+          borderRadius: 9,
+          padding: '9px 12px'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap'
+        }
+      }, React.createElement("div", {
+        style: {
+          flex: '1 1 260px',
+          minWidth: 0
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 13,
+          fontWeight: 700,
+          color: 'var(--ink)'
+        }
+      }, x.label, x.pct ? React.createElement("span", {
+        className: "chip",
+        style: {
+          marginLeft: 6,
+          fontWeight: 700
+        }
+      }, "%") : null, " ", React.createElement("span", {
+        style: {
+          fontWeight: 500,
+          color: 'var(--muted)'
+        }
+      }, "\xB7 ", x.deptName)), React.createElement("div", {
+        style: {
+          fontSize: 12,
+          color: 'var(--ink-2)',
+          marginTop: 2
+        }
+      }, x.reason), React.createElement("div", {
+        style: {
+          fontSize: 11,
+          color: 'var(--muted)',
+          marginTop: 2
+        }
+      }, "Requested by ", x.requestedBy, x.requestedByUser && x.requestedByUser !== x.requestedBy ? ' (' + x.requestedByUser + ')' : '', " \xB7 ", dcFrWhen(x.createdAt), x.decidedAt ? ' · decided by ' + (x.decidedBy || 'admin') + ' ' + dcFrWhen(x.decidedAt) : ''), x.decisionReason && React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          marginTop: 2,
+          fontWeight: 600,
+          color: x.status === 'rejected' ? 'var(--rose)' : 'var(--ink-2)'
+        }
+      }, x.decisionReason)), !open && dcFrChip(x.status), open && declineId !== x.id && React.createElement(React.Fragment, null, React.createElement("button", {
+        className: "btn pri sm",
+        disabled: busy,
+        onClick: () => decide(x, 'approved', '')
+      }, React.createElement(Ic, {
+        d: I.check,
+        s: 13
+      }), busy ? 'Saving…' : 'Approve'), React.createElement("button", {
+        className: "btn sm",
+        disabled: busy,
+        onClick: () => {
+          setDeclineId(x.id);
+          setWhy('');
+        }
+      }, React.createElement(Ic, {
+        d: I.x,
+        s: 13
+      }), "Decline"))), open && declineId === x.id && React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          marginTop: 8
+        }
+      }, React.createElement("input", {
+        autoFocus: true,
+        style: {
+          ...inputStyle,
+          flex: 1,
+          minWidth: 200,
+          borderColor: why.trim() ? 'var(--line)' : 'var(--rose)'
+        },
+        value: why,
+        maxLength: 500,
+        onChange: e => setWhy(e.target.value),
+        onKeyDown: e => {
+          if (e.key === 'Enter') decide(x, 'rejected', why);
+          if (e.key === 'Escape') setDeclineId(null);
+        },
+        placeholder: "Reason for declining (required) \u2014 the requester sees it"
+      }), React.createElement("button", {
+        className: "btn sm",
+        disabled: busy || !why.trim(),
+        onClick: () => decide(x, 'rejected', why)
+      }, busy ? 'Saving…' : 'Decline request'), React.createElement("button", {
+        className: "btn sm",
+        disabled: busy,
+        onClick: () => setDeclineId(null)
+      }, "Cancel")));
+    })));
+  }
   const dcKeyPart = s => encodeURIComponent(String(s == null ? '' : s)).replace(/\./g, '%2E');
   const DC_DRAFT_KEY = (who, dept, month) => 'unico_dc_draft_v1|' + dcKeyPart(who || 'local') + '|' + dcKeyPart(dept) + '|' + dcKeyPart(month);
   const dcDraftLoad = k => {
@@ -55696,8 +56667,8 @@ window.LockScreen = LockScreen;
     onSubmitted
   }) {
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
-    const lockResp = !!(me && me.role === 'collector');
-    const isAdmin = !lockResp;
+    const lockResp = dcIsPortalRole(me);
+    const isAdmin = dcIsAdminUser();
     const baseList = useMemo(() => (depts && depts.length ? depts : dcAllDepts()).map(d => ({
       ...d
     })), [depts]);
@@ -55773,7 +56744,7 @@ window.LockScreen = LockScreen;
     const monthStatus = useMemo(() => {
       const map = {};
       (subs || []).forEach(s => {
-        if (s.type === 'patient' && s.department === deptId && s.month && !map[s.month]) map[s.month] = s.status;
+        if (s.type === 'patient' && s.department === deptId && s.month && s.status !== 'withdrawn' && !map[s.month]) map[s.month] = s.status;
       });
       return map;
     }, [subs, deptId]);
@@ -55786,8 +56757,10 @@ window.LockScreen = LockScreen;
       return reported.has(m) ? ' · ✓ reported' : '';
     };
     const monthPending = lockResp && monthStatus[month] === 'pending';
-    const pCorrection = lockResp && !monthPending && (monthStatus[month] === 'approved' || reported.has(month));
+    const pCorrection = !monthPending && (monthStatus[month] === 'approved' || reported.has(month));
     const [reason, setReason] = useState('');
+    const [cmp, setCmp] = useState(null);
+    const [pendingDlg, setPendingDlg] = useState(null);
     const cols = dept && dept.cols || [];
     const last = dept && dept.data && dept.data.length ? dept.data[dept.data.length - 1] : {};
     const [flash, setFlash] = useState(null);
@@ -55809,10 +56782,18 @@ window.LockScreen = LockScreen;
         toast('A submission for this month is already pending review.', 'error');
         return;
       }
-      if (pCorrection && !reason.trim()) {
-        toast('Please add a reason for the correction.', 'error');
+      const idx = pCorrection ? (dept.months || []).indexOf(month) : -1;
+      if (idx >= 0) {
+        setCmp({
+          prior: {
+            values: dept.data && dept.data[idx] || {}
+          }
+        });
         return;
       }
+      send(false, '');
+    };
+    const send = (corr, why) => {
       const matched = resps.find(r => r.name === responsible);
       setBusy(true);
       setDone(null);
@@ -55829,19 +56810,20 @@ window.LockScreen = LockScreen;
           name: responsible
         } : null,
         note,
-        isCorrection: pCorrection,
-        correctionReason: pCorrection ? reason.trim() : ''
+        isCorrection: corr,
+        correctionReason: corr ? why : ''
       }).then(r => {
         setBusy(false);
         if (r.ok) {
+          setCmp(null);
           setDone({
             month,
             dept: dept.name,
-            correction: pCorrection
+            correction: corr
           });
           setFlash({
             ts: Date.now(),
-            title: pCorrection ? 'Correction submitted!' : 'Data submitted successfully!',
+            title: corr ? 'Edit request sent!' : 'Data submitted successfully!',
             sub: dept.name + ' · ' + monthLabel(month)
           });
           setValues({});
@@ -55851,12 +56833,22 @@ window.LockScreen = LockScreen;
             dcDraftClear(draftKey);
             setDraftAt(null);
           }
-          toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success');
+          toast(corr ? 'Edit request sent for review' : 'Submitted for review', 'success');
           if (onSubmitted) {
             try {
               onSubmitted(r);
             } catch (e) {}
           }
+        } else if (r.code === 'exists') setCmp({
+          prior: r.prior || {
+            values: {}
+          }
+        });else if (r.code === 'pending') {
+          setCmp(null);
+          setPendingDlg({
+            id: r.pendingId,
+            message: r.error
+          });
         } else toast(r.error || 'Submission failed', 'error');
       }).catch(e => {
         setBusy(false);
@@ -55878,6 +56870,20 @@ window.LockScreen = LockScreen;
       title: flash.title,
       sub: flash.sub,
       onClose: () => setFlash(null)
+    }), cmp && React.createElement(DcCompareModal, {
+      title: 'Data already recorded for ' + (dept ? dept.name : '') + ' · ' + monthLabel(month),
+      rows: dcPatientCompareRows(cols, cmp.prior && cmp.prior.values || {}, values).concat(dcTextRows('note', 'Note', ((subs || []).find(x => x.type === 'patient' && x.department === (dept && dept.id) && x.month === month && x.status === 'approved') || {}).note, note)),
+      reason: reason,
+      setReason: setReason,
+      busy: busy,
+      onEdit: () => setCmp(null),
+      onSend: () => send(true, reason.trim())
+    }), pendingDlg && React.createElement(DcPendingNotice, {
+      id: pendingDlg.id,
+      message: pendingDlg.message,
+      subs: subs,
+      onClose: () => setPendingDlg(null),
+      onSaved: () => dcSubmissionResponse(null, true).then(r => setSubs(r.ok ? r.submissions : [])).catch(() => {})
     }), done && React.createElement(Banner, {
       ok: true,
       onClose: () => setDone(null)
@@ -55987,7 +56993,7 @@ window.LockScreen = LockScreen;
           marginTop: 3
         }
       }, swing > 0 ? '+' : '', swing, "% vs last month \u2014 check before sending."));
-    })), isAdmin && dept && React.createElement("div", {
+    })), dept && React.createElement("div", {
       style: {
         border: '1px dashed var(--line)',
         borderRadius: 9,
@@ -55995,9 +57001,11 @@ window.LockScreen = LockScreen;
         margin: '2px 0 12px',
         background: 'var(--panel-2)'
       }
-    }, React.createElement(DeptFieldManager, {
+    }, isAdmin ? React.createElement(DeptFieldManager, {
       dept: dept,
       onChange: refreshDepts
+    }) : React.createElement(DcFieldRequestCard, {
+      dept: dept
     })), React.createElement(Field, {
       label: "Note (optional)"
     }, React.createElement("input", {
@@ -56005,14 +57013,13 @@ window.LockScreen = LockScreen;
       value: note,
       onChange: e => setNote(e.target.value),
       placeholder: "Any comment about this submission"
-    })), pCorrection && React.createElement(React.Fragment, null, React.createElement(Banner, null, dept ? dept.name : '', " \xB7 ", monthLabel(month), " is already recorded \u2014 submitting sends a ", React.createElement("b", null, "correction (edit request)"), " to an administrator. The recorded value won\u2019t change until it is approved."), React.createElement(Field, {
-      label: "Reason for the correction"
-    }, React.createElement("input", {
-      style: inputStyle,
-      value: reason,
-      onChange: e => setReason(e.target.value),
-      placeholder: "e.g. wrong count entered \u2014 should be Y not X"
-    }))), monthPending && React.createElement(Banner, null, dept ? dept.name : '', " \xB7 ", monthLabel(month), " already has a submission pending review \u2014 wait for the admin to approve or reject it before editing."), React.createElement("div", {
+    })), pCorrection && React.createElement(React.Fragment, null, React.createElement(Banner, null, dept ? dept.name : '', " \xB7 ", monthLabel(month), " is already recorded \u2014 submitting sends a ", React.createElement("b", null, "correction (edit request)"), " to an administrator. The recorded value won\u2019t change until it is approved."), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        margin: '-6px 0 10px'
+      }
+    }, "Submitting shows your changes next to what is on record and asks for the reason.")), monthPending && React.createElement(Banner, null, dept ? dept.name : '', " \xB7 ", monthLabel(month), " already has a submission pending review \u2014 wait for the admin to approve or reject it before editing."), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -56126,7 +57133,7 @@ window.LockScreen = LockScreen;
     const dataRev = useDcDataRev();
     const areas = useMemo(() => window.qualityData ? window.qualityData() : [], [dataRev]);
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
-    const lockResp = !!(me && me.role === 'collector');
+    const lockResp = dcIsPortalRole(me);
     const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
     const monthOpts = dcPortalUser() ? dcRealMonthOpts(areas.flatMap(a => dcAreaStarts(a, [])), [prefill && prefill.month]) : dcWideMonths();
     const defMonth = dcDefaultMonth() || (fyMonths && fyMonths.length ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
@@ -56503,9 +57510,31 @@ window.LockScreen = LockScreen;
     }, [areaKey, indId, month]);
     const result = computeAsRate ? denNum > 0 ? Math.round(numerator / denNum * mult * 100) / 100 : 0 : numerator;
     const ratePending = computeAsRate && numerator > 0 && !(denNum > 0);
-    const qExists = !!(curInd && (curInd.mNotObserved && curInd.mNotObserved[month] || curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length || curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
-    const qCorrection = lockResp && !isNew && qExists;
+    const qExists = !!(curInd && (curInd.mNotObserved && curInd.mNotObserved[month] || curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '' || curInd.months && curInd.months[month] != null && curInd.months[month] !== ''));
+    const qCorrection = !isNew && qExists;
     const [qReason, setQReason] = useState('');
+    const [qCmp, setQCmp] = useState(null);
+    const [qPending, setQPending] = useState(null);
+    const qPriorLocal = () => ({
+      value: (curInd.months || {})[month],
+      num: (curInd.mNum || {})[month],
+      den: (curInd.mDen || {})[month],
+      notObserved: !!(curInd.mNotObserved || {})[month],
+      incidents: (curInd.incidents || {})[month] || [],
+      remark: (curInd.monthRemarks || {})[month] || '',
+      capa: (curInd.capa || {})[month] || null
+    });
+    const qRemarkOut = () => notObserved ? 'Not observed — ' + noReason.trim() + (remark.trim() ? ' (' + remark.trim() + ')' : '') : remark;
+    const qNext = () => ({
+      notObserved,
+      rate: computeAsRate,
+      value: notObserved ? null : computeAsRate ? ratePending ? null : result : numerator,
+      num: !notObserved && computeAsRate ? numerator : null,
+      den: !notObserved && computeAsRate && !denLockedForCollector ? denNum : null,
+      incidents: notObserved ? [] : incidents,
+      remark: qRemarkOut(),
+      capa: notObserved ? null : capa
+    });
     const submit = () => {
       if (!area) {
         toast('Select an area', 'error');
@@ -56523,10 +57552,6 @@ window.LockScreen = LockScreen;
         toast('Pick a month', 'error');
         return;
       }
-      if (qCorrection && !qReason.trim()) {
-        toast('Please add a reason for the correction.', 'error');
-        return;
-      }
       if (notObserved && !noReason.trim()) {
         toast('Please say WHY it was not observed this month.', 'error');
         return;
@@ -56542,14 +57567,23 @@ window.LockScreen = LockScreen;
           return;
         }
       }
+      if (qCorrection) {
+        setQCmp({
+          prior: qPriorLocal()
+        });
+        return;
+      }
+      sendQ(false, '');
+    };
+    const sendQ = (corr, why) => {
       const matched = resps.find(r => r.name === responsible);
       setBusy(true);
       setDone(null);
       dcApi.post('/api/submissions/quality', {
         area: area.key,
         month,
-        isCorrection: qCorrection,
-        correctionReason: qCorrection ? qReason.trim() : '',
+        isCorrection: corr,
+        correctionReason: corr ? why : '',
         indicatorId: isNew ? '' : indId,
         indicatorName: isNew ? newInd.name : curInd && curInd.name,
         valueType: computeAsRate ? formula === 'pct' ? '%' : 'Rate' : 'Count',
@@ -56592,7 +57626,7 @@ window.LockScreen = LockScreen;
           corrective: x.corrective,
           preventive: x.preventive,
           remark: x.remark
-        })) : undefined,
+        })) : !notObserved && corr ? [] : undefined,
         remark: notObserved ? 'Not observed — ' + noReason.trim() + (remark.trim() ? ' (' + remark.trim() + ')' : '') : remark,
         responsible: lockResp ? {
           name: me.name
@@ -56605,13 +57639,15 @@ window.LockScreen = LockScreen;
       }).then(r => {
         setBusy(false);
         if (r.ok) {
+          setQCmp(null);
+          setQReason('');
           setDone({
             area: area.name,
             month
           });
           setFlash({
             ts: Date.now(),
-            title: qCorrection ? 'Correction submitted!' : 'Data submitted successfully!',
+            title: corr ? 'Edit request sent!' : 'Data submitted successfully!',
             sub: area.name + ' · ' + (curInd && curInd.name || isNew && newInd.name || 'Quality data') + ' · ' + monthLabel(month)
           });
           setGroups({
@@ -56648,12 +57684,20 @@ window.LockScreen = LockScreen;
               unit: ''
             });
           }
-          toast('Saved monthly value', 'success');
+          toast(corr ? 'Edit request sent for review' : 'Saved monthly value', 'success');
           if (onSubmitted) {
             try {
               onSubmitted(r);
             } catch (e) {}
           }
+        } else if (r.code === 'exists') setQCmp({
+          prior: r.prior || {}
+        });else if (r.code === 'pending') {
+          setQCmp(null);
+          setQPending({
+            id: r.pendingId,
+            message: r.error
+          });
         } else toast(r.error || 'Submission failed', 'error');
       }).catch(() => {
         setBusy(false);
@@ -56676,6 +57720,18 @@ window.LockScreen = LockScreen;
       title: flash.title,
       sub: flash.sub,
       onClose: () => setFlash(null)
+    }), qCmp && React.createElement(DcCompareModal, {
+      title: 'Data already recorded for ' + (area ? area.name : '') + ' · ' + (curInd && curInd.name || '') + ' · ' + monthLabel(month),
+      rows: dcQualityCompareRows(qCmp.prior, qNext(), numLabel, denLabel),
+      reason: qReason,
+      setReason: setQReason,
+      busy: busy,
+      onEdit: () => setQCmp(null),
+      onSend: () => sendQ(true, qReason.trim())
+    }), qPending && React.createElement(DcPendingNotice, {
+      id: qPending.id,
+      message: qPending.message,
+      onClose: () => setQPending(null)
     }), done && React.createElement(Banner, {
       ok: true,
       onClose: () => setDone(null)
@@ -58034,14 +59090,14 @@ window.LockScreen = LockScreen;
       style: {
         flex: 1
       }
-    }, curInd && curInd.name || 'This indicator', " already has data for ", monthLabel(month), ". Submitting sends a ", React.createElement("b", null, "correction"), " to an administrator for review \u2014 the recorded value won\u2019t change until it is approved.")), qCorrection && React.createElement(Field, {
-      label: "Reason for the correction"
-    }, React.createElement("input", {
-      style: inputStyle,
-      value: qReason,
-      onChange: e => setQReason(e.target.value),
-      placeholder: "e.g. wrong denominator \u2014 should be Y not X"
-    })), React.createElement("div", {
+    }, curInd && curInd.name || 'This indicator', " already has data for ", monthLabel(month), ". Submitting sends a ", React.createElement("b", null, "correction"), " to an administrator for review \u2014 the recorded value won\u2019t change until it is approved.")), qCorrection && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#9a6b00',
+        fontWeight: 600,
+        margin: '0 0 10px'
+      }
+    }, monthLabel(month), " is already on record \u2014 submitting shows your changes next to it, asks for a reason and sends an edit request."), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -58173,18 +59229,49 @@ window.LockScreen = LockScreen;
       }
     }, v[k]))) : '(no values)');
   }
+  function dcrDataEl(s) {
+    if (s.type === 'quality') {
+      return React.createElement(React.Fragment, null, React.createElement("div", {
+        className: "dcr-dataline"
+      }, dcMonthChip(s.month), !s.notObserved && s.value != null && s.value !== '' ? React.createElement("span", {
+        className: "dcr-val"
+      }, s.value) : null, s.notObserved ? React.createElement("span", {
+        className: "dcr-val neg"
+      }, "\u26D4 Not observed") : null), s.remark ? React.createElement("div", {
+        className: "dcr-remark"
+      }, s.remark) : null);
+    }
+    const v = s.values || {};
+    const lm = colLabelMap(s);
+    const keys = Object.keys(v);
+    return React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "dcr-dataline"
+    }, dcMonthChip(s.month)), keys.length ? React.createElement("div", {
+      className: "dcr-kvs"
+    }, keys.map(k => React.createElement("span", {
+      key: k,
+      className: "dcr-kv"
+    }, React.createElement("i", null, lm[k] || prettyKey(k)), React.createElement("b", null, v[k])))) : React.createElement("div", {
+      className: "dcr-sub"
+    }, "(no values)"));
+  }
   function SubmissionDetail({
     s,
     canEdit,
     fullEdit = true,
     onClose,
-    onSaved
+    onSaved,
+    initialMode
   }) {
     const iOwn = dcIsMine(s);
-    const canRequestEdit = !fullEdit && iOwn && s.status !== 'pending' && !s.isCorrection;
+    const canRequestEdit = !fullEdit && iOwn && s.status === 'approved' && !s.isCorrection;
+    const canWithdraw = iOwn && s.status === 'pending';
+    const canResend = !fullEdit && iOwn && s.status === 'rejected' && !s.autoRejected;
     const [correcting, setCorrecting] = useState(false);
     const [correctReason, setCorrectReason] = useState('');
-    const editable = canEdit && (fullEdit || s.status === 'pending') || correcting;
+    const [resending, setResending] = useState(initialMode === 'resend' && canResend);
+    const [cmpOpen, setCmpOpen] = useState(false);
+    const editable = s.status !== 'withdrawn' && (canEdit && (fullEdit || s.status === 'pending') || correcting || resending);
     const dept = s.type === 'patient' ? dcAllDepts().find(d => d.id === s.department) : null;
     const cols = dept && dept.cols || (s.values ? Object.keys(s.values).map(id => ({
       id,
@@ -58255,6 +59342,9 @@ window.LockScreen = LockScreen;
     const [remark, setRemark] = useState(s.remark || '');
     const [note, setNote] = useState(s.note || '');
     const [busy, setBusy] = useState(false);
+    const [resendCmp, setResendCmp] = useState(null);
+    const [resendReason, setResendReason] = useState('');
+    const qStillNotObserved = s.type === 'quality' && !!s.notObserved && (isRate ? effNum === '' || effNum == null : qval === '' || qval == null);
     const [month, setMonth] = useState(s.month || '');
     const [target, setTarget] = useState(s.type === 'patient' ? s.department || '' : s.area || '');
     const [incidents, setIncidents] = useState(() => s.type === 'quality' && Array.isArray(s.incidents) ? s.incidents.map(x => Object.assign({}, x)) : []);
@@ -58324,12 +59414,22 @@ window.LockScreen = LockScreen;
       }
       return body;
     };
-    const save = () => {
+    const save = reasonArg => {
+      const why = typeof reasonArg === 'string' ? reasonArg : '';
       setBusy(true);
-      dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), buildBody()).then(r => {
+      const body = buildBody();
+      if (resending && why) body.correctionReason = why;
+      dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), body).then(r => {
         setBusy(false);
+        if (resending && r.code === 'exists') {
+          setResendCmp({
+            prior: r.prior || {}
+          });
+          return;
+        }
         if (r.ok) {
-          toast('Submission updated', 'success');
+          setResendCmp(null);
+          toast(r.resent ? why ? 'Edit request sent for review' : 'Sent again for review' : 'Submission updated', 'success');
           if (r.submission && r.submission.status === 'approved') dcRefreshLive();
           onSaved && onSaved(r.submission);
         } else toast(r.error || 'Could not save', 'error');
@@ -58361,6 +59461,16 @@ window.LockScreen = LockScreen;
         toast(r && r.error || 'Could not save your edits — nothing was approved', 'error');
       }).catch(fail);else doApprove();
     };
+    const cmpRowsVs = prior => s.type === 'patient' ? dcPatientCompareRows(cols, prior && prior.values || {}, vals).concat(dcTextRows('note', 'Note', prior && prior.note, note)) : dcQualityCompareRows(prior, {
+      notObserved: qStillNotObserved,
+      rate: isRate,
+      value: isRate ? typeof shownVal === 'number' ? shownVal : null : qval,
+      num: isRate ? effNum : null,
+      den: isRate ? effDen : null,
+      incidents,
+      remark,
+      note
+    }, s.numLabel, s.denLabel);
     const submitCorrection = () => {
       if (!correctReason.trim()) {
         toast('Please add a reason for the edit request.', 'error');
@@ -58394,9 +59504,11 @@ window.LockScreen = LockScreen;
           numLabel: s.numLabel,
           denLabel: s.denLabel,
           unit: s.unit,
+          notObserved: qStillNotObserved || undefined,
           value: isRate ? undefined : qval === '' ? undefined : Number(qval),
           num: isRate ? Number(effNum) : undefined,
           den: isRate ? Number(effDen) : undefined,
+          remark,
           groups: hasGrp ? GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {}) : undefined,
           groupsDen: hasGrp && isRate ? GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {}) : undefined,
           deptBreakdown: hasDeptBreak ? deptBreak.map(r => ({
@@ -58406,12 +59518,13 @@ window.LockScreen = LockScreen;
               d: Number(r.g[k].d) || 0
             }, o), {})
           })) : undefined,
-          incidents: incidents.length ? incidents : undefined
+          incidents: incidents.length || Array.isArray(s.incidents) && s.incidents.length ? incidents : undefined
         }, common);
       }
       dcApi.post(url, body).then(r => {
         setBusy(false);
         if (r.ok) {
+          setCmpOpen(false);
           toast('Edit request sent for review', 'success');
           onSaved && onSaved();
         } else toast(r.error || 'Could not send edit request', 'error');
@@ -58598,9 +59711,12 @@ window.LockScreen = LockScreen;
     }), s.editedBy && React.createElement(Meta, {
       label: "Last edited by",
       value: s.editedBy + (s.editedAt ? ' · ' + when(s.editedAt) : '')
-    }), s.rejectReason && React.createElement(Meta, {
-      label: "Reject reason",
-      value: s.rejectReason
+    }), s.resubmittedAt && React.createElement(Meta, {
+      label: "Sent again",
+      value: when(s.resubmittedAt)
+    }), s.lastRejectReason && s.status !== 'rejected' && React.createElement(Meta, {
+      label: "Last returned for",
+      value: s.lastRejectReason
     }), s.notObserved && React.createElement(Meta, {
       label: "Entry",
       value: "Not observed \u2014 no observation was done this month"
@@ -58610,7 +59726,98 @@ window.LockScreen = LockScreen;
     }), s.isCorrection && s.correctionReason && React.createElement(Meta, {
       label: "Correction reason",
       value: s.correctionReason
-    })), s.priorValues && React.createElement("div", {
+    })), s.status === 'rejected' && (s.autoRejected ? React.createElement("div", {
+      style: {
+        border: '1px solid var(--line)',
+        background: 'var(--panel-2)',
+        borderRadius: 9,
+        padding: '10px 12px',
+        fontSize: 12.5,
+        color: 'var(--ink-2)'
+      }
+    }, React.createElement("b", null, "Superseded"), " \u2014 a newer submission for the same target and month was approved. ", s.rejectReason ? '(' + s.rejectReason + ')' : '') : React.createElement("div", {
+      style: {
+        border: '1px solid #f1c6cd',
+        background: 'var(--neg-bg)',
+        borderRadius: 9,
+        padding: '10px 12px',
+        color: 'var(--rose)'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 800,
+        textTransform: 'uppercase',
+        letterSpacing: .4
+      }
+    }, "Returned by ", s.reviewedBy || 'the administrator', s.reviewedAt ? ' · ' + when(s.reviewedAt) : ''), React.createElement("div", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 700,
+        marginTop: 3
+      }
+    }, s.rejectReason || 'No reason given'), canResend && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--ink-2)',
+        marginTop: 4
+      }
+    }, "Fix the figures and send it again \u2014 it goes back to the administrator for review."))), s.status === 'withdrawn' && React.createElement("div", {
+      style: {
+        border: '1px solid var(--line)',
+        background: 'var(--panel-2)',
+        borderRadius: 9,
+        padding: '10px 12px',
+        fontSize: 12.5,
+        color: 'var(--muted)'
+      }
+    }, React.createElement("b", {
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }, "Withdrawn"), s.withdrawnBy ? ' by ' + s.withdrawnBy : '', s.withdrawnAt ? ' · ' + when(s.withdrawnAt) : '', " \u2014 it will not be reviewed."), Array.isArray(s.history) && s.history.length > 0 && React.createElement("div", {
+      style: {
+        border: '1px solid var(--line)',
+        borderRadius: 9,
+        padding: '9px 12px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--ink-2)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 4
+      }
+    }, "Previous returns"), s.history.map((h, i) => React.createElement("div", {
+      key: i,
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'flex-start',
+        fontSize: 12,
+        padding: '4px 0'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        background: 'var(--rose)',
+        marginTop: 5,
+        flexShrink: 0
+      }
+    }), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("b", null, "Returned by ", h.reviewedBy || 'the administrator'), h.reviewedAt ? ' · ' + when(h.reviewedAt) : '', " \u2014 ", h.rejectReason || 'no reason given', React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "Fixed and sent again ", when(h.at)))))), s.priorValues && React.createElement("div", {
       style: {
         border: '1px solid #f0d9a8',
         background: 'var(--warn-bg,#fff4e0)',
@@ -59127,18 +60334,13 @@ window.LockScreen = LockScreen;
         flexDirection: 'column',
         gap: 4
       }
-    }, React.createElement("label", {
+    }, React.createElement("div", {
       style: {
-        fontSize: 11.5,
-        color: 'var(--muted)'
+        fontSize: 12,
+        fontWeight: 700,
+        color: 'var(--ink-2)'
       }
-    }, "Reason for the edit request"), React.createElement("input", {
-      style: inputStyle,
-      value: correctReason,
-      onChange: e => setCorrectReason(e.target.value),
-      placeholder: "e.g. wrong value entered \u2014 should be Y not X",
-      autoFocus: true
-    }), React.createElement("div", {
+    }, "Change the figures above, then review your changes and give a reason."), React.createElement("div", {
       style: {
         fontSize: 11,
         color: 'var(--muted)'
@@ -59148,7 +60350,7 @@ window.LockScreen = LockScreen;
         fontSize: 11,
         color: 'var(--muted)'
       }
-    }, s.status === 'approved' ? 'This submission is approved — saving re-applies your changes to the live dashboard immediately.' : s.status === 'rejected' ? 'This submission was rejected — saving updates the record only. It cannot be approved again; the collector sends a new submission instead.' : fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'), React.createElement("div", {
+    }, resending ? 'Fix the figures, then send it again — it goes back to the administrator for review.' : s.status === 'approved' ? 'This submission is approved — saving re-applies your changes to the live dashboard immediately.' : s.status === 'rejected' ? 'This submission was rejected — saving updates the record only. It cannot be approved again; the collector sends a new submission instead.' : fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -59163,7 +60365,29 @@ window.LockScreen = LockScreen;
     }, React.createElement("button", {
       className: "btn sm",
       onClick: onClose
-    }, "Close"), canRequestEdit && !correcting && React.createElement("button", {
+    }, "Close"), canWithdraw && React.createElement("button", {
+      className: "btn sm",
+      style: {
+        color: 'var(--rose)'
+      },
+      disabled: busy,
+      onClick: () => {
+        setBusy(true);
+        dcWithdraw(s).then(ok => {
+          setBusy(false);
+          if (ok && onSaved) onSaved();
+        });
+      }
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 14
+    }), "Withdraw"), canResend && !resending && React.createElement("button", {
+      className: "btn pri sm",
+      onClick: () => setResending(true)
+    }, React.createElement(Ic, {
+      d: I.edit,
+      s: 14
+    }), "Fix & resend"), canRequestEdit && !correcting && React.createElement("button", {
       className: "btn sm",
       onClick: () => setCorrecting(true)
     }, React.createElement(Ic, {
@@ -59171,19 +60395,47 @@ window.LockScreen = LockScreen;
       s: 14
     }), "Request an edit"), correcting && React.createElement("button", {
       className: "btn pri sm",
-      onClick: submitCorrection,
+      onClick: () => setCmpOpen(true),
       disabled: busy
     }, React.createElement(Ic, {
       d: I.check,
       s: 14
-    }), busy ? 'Sending…' : 'Submit edit request'), editable && !correcting && React.createElement("button", {
+    }), "Review & send edit request"), editable && !correcting && React.createElement("button", {
       className: "btn pri sm",
       onClick: save,
       disabled: busy
     }, React.createElement(Ic, {
       d: I.check,
       s: 14
-    }), busy ? 'Saving…' : 'Save changes'), canEdit && fullEdit && !correcting && s.status === 'pending' && React.createElement("button", {
+    }), busy ? 'Saving…' : resending ? 'Send again for review' : 'Save changes'), cmpOpen && React.createElement(DcCompareModal, {
+      title: 'Data already recorded for ' + (s.type === 'quality' ? (s.areaName || '') + ' · ' + (s.indicatorName || '') : s.departmentName || '') + ' · ' + monthLabel(s.month),
+      rows: cmpRowsVs({
+        values: s.values,
+        value: s.value,
+        num: s.num,
+        den: s.den,
+        notObserved: s.notObserved,
+        incidents: s.incidents,
+        remark: s.remark,
+        capa: s.capa,
+        note: s.note
+      }),
+      reason: correctReason,
+      setReason: setCorrectReason,
+      busy: busy,
+      onEdit: () => setCmpOpen(false),
+      onSend: submitCorrection
+    }), resendCmp && React.createElement(DcCompareModal, {
+      title: 'Data already recorded for ' + (s.type === 'quality' ? (s.areaName || '') + ' · ' + (s.indicatorName || '') : s.departmentName || '') + ' · ' + monthLabel(s.month),
+      rows: cmpRowsVs(Object.assign({}, resendCmp.prior, {
+        note: s.note
+      })),
+      reason: resendReason,
+      setReason: setResendReason,
+      busy: busy,
+      onEdit: () => setResendCmp(null),
+      onSend: () => save(resendReason.trim())
+    }), canEdit && fullEdit && !correcting && s.status === 'pending' && React.createElement("button", {
       className: "btn sm",
       onClick: approveNow,
       disabled: busy,
@@ -59210,7 +60462,7 @@ window.LockScreen = LockScreen;
     onCancel,
     onConfirm
   }) {
-    const presets = ['Wrong value / data-entry error', 'Wrong month', 'Duplicate submission', 'Incomplete data', 'Not verified with records'];
+    const presets = ['Wrong value', 'Wrong month', 'Wrong department / indicator', 'Missing incident details', 'Duplicate'];
     const [reason, setReason] = useState('');
     return React.createElement("div", {
       onMouseDown: onCancel,
@@ -59241,7 +60493,7 @@ window.LockScreen = LockScreen;
         fontWeight: 700,
         fontSize: 14
       }
-    }, "Reject ", ids.length > 1 ? ids.length + ' submissions' : 'submission'), React.createElement("div", {
+    }, "Reject & return to collector", ids.length > 1 ? ' · ' + ids.length + ' submissions' : ''), React.createElement("div", {
       style: {
         padding: '14px 16px',
         display: 'flex',
@@ -59253,7 +60505,7 @@ window.LockScreen = LockScreen;
         fontSize: 12,
         color: 'var(--muted)'
       }
-    }, "Pick a reason or type your own \u2014 it is saved in history and shown to the collector."), React.createElement("div", {
+    }, "A reason is required \u2014 pick one or type your own. The collector sees it, fixes the submission and sends it again."), React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
@@ -59280,7 +60532,7 @@ window.LockScreen = LockScreen;
       },
       value: reason,
       onChange: e => setReason(e.target.value),
-      placeholder: "Reason (optional)"
+      placeholder: "Reason (required) \u2014 what should the collector fix?"
     }), React.createElement("div", {
       style: {
         display: 'flex',
@@ -59297,9 +60549,9 @@ window.LockScreen = LockScreen;
         borderColor: 'var(--rose)',
         color: '#fff'
       },
-      disabled: busy,
-      onClick: () => onConfirm(reason)
-    }, busy ? 'Rejecting…' : 'Reject')))));
+      disabled: busy || !reason.trim(),
+      onClick: () => onConfirm(reason.trim())
+    }, busy ? 'Returning…' : 'Reject & return to collector')))));
   }
   const dcFilterSel = {
     padding: '8px 10px',
@@ -59348,8 +60600,8 @@ window.LockScreen = LockScreen;
     const dueInds = a => (a.indicators || []).filter(ind => dcIndDue(a, ind, m, subs));
     const qAreas = areas.filter(a => dueInds(a).length > 0);
     const qHasRec = a => dueInds(a).some(ind => ind.months && ind.months[m] != null && ind.months[m] !== '' || ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '');
-    const pSub = new Set(subsM.filter(s => s.type === 'patient' && s.status !== 'rejected').map(s => s.department));
-    const qSub = new Set(subsM.filter(s => s.type === 'quality' && s.status !== 'rejected').map(s => s.area));
+    const pSub = new Set(subsM.filter(s => s.type === 'patient' && s.status !== 'rejected' && s.status !== 'withdrawn').map(s => s.department));
+    const qSub = new Set(subsM.filter(s => s.type === 'quality' && s.status !== 'rejected' && s.status !== 'withdrawn').map(s => s.area));
     const pMissing = patientDepts.filter(d => !pSub.has(d.id) && !hasRec(d));
     const qMissing = qAreas.filter(a => !qSub.has(a.key) && !qHasRec(a));
     const pPct = patientDepts.length ? Math.round((patientDepts.length - pMissing.length) / patientDepts.length * 100) : 0;
@@ -59553,7 +60805,7 @@ window.LockScreen = LockScreen;
     }, []);
     const respOf = s => s.responsible && s.responsible.name || s.submittedBy || '—';
     const byPerson = {};
-    (subs || []).forEach(s => {
+    (subs || []).filter(s => s.status !== 'withdrawn').forEach(s => {
       const p = respOf(s);
       const r = byPerson[p] = byPerson[p] || {
         name: p,
@@ -59891,7 +61143,7 @@ window.LockScreen = LockScreen;
         return next.length > 1 ? next : null;
       });
       const failed = ids.length - ok - skipped;
-      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (skipped ? ' · ' + skipped + ' skipped (a newer copy was approved)' : '') + (failed ? ' · ' + failed + ' failed: ' + firstErr : ''), failed ? 'error' : kind === 'approve' ? 'success' : 'info');
+      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'returned to the collector') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (skipped ? ' · ' + skipped + ' skipped (a newer copy was approved)' : '') + (failed ? ' · ' + failed + ' failed: ' + firstErr : ''), failed ? 'error' : kind === 'approve' ? 'success' : 'info');
       if (kind === 'approve' && ok) dcRefreshLive();
       load();
     };
@@ -59963,6 +61215,7 @@ window.LockScreen = LockScreen;
     };
     const dupCount = {};
     filtered.forEach(s => {
+      if (s.status === 'withdrawn') return;
       const k = dupKey(s);
       dupCount[k] = (dupCount[k] || 0) + 1;
     });
@@ -59975,17 +61228,38 @@ window.LockScreen = LockScreen;
       (groups[k] = groups[k] || []).push(s);
     });
     const groupNames = Object.keys(groups).sort();
-    const rowFill = s => s.type === 'quality' ? 'rgba(0,144,202,.06)' : 'rgba(31,157,87,.06)';
+    const [collapsed, setCollapsed] = useState({});
+    const stopRowClick = e => e.stopPropagation();
+    const whenDate = ts => {
+      try {
+        return ts ? new Date(ts).toLocaleDateString() : '—';
+      } catch (e) {
+        return '—';
+      }
+    };
+    const whenTime = ts => {
+      try {
+        return ts ? new Date(ts).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit'
+        }) : '';
+      } catch (e) {
+        return '';
+      }
+    };
+    const openDupGroup = s => {
+      const k = dupKey(s);
+      dcAllSubmissions(true).then(subs => setDupGroup((subs && subs.length ? subs : filtered).filter(x => dupKey(x) === k && x.status !== 'withdrawn'))).catch(() => setDupGroup(filtered.filter(x => dupKey(x) === k && x.status !== 'withdrawn')));
+    };
     const submissionRow = s => React.createElement("tr", {
       key: s.id,
+      className: 'dcr-row ' + s.type,
+      "data-status": s.status,
       onClick: () => setDetail(s),
-      title: "Open to view / edit",
-      style: {
-        background: grouped ? rowFill(s) : undefined,
-        cursor: 'pointer'
-      }
+      title: "Open to view / edit"
     }, React.createElement("td", {
-      onClick: e => e.stopPropagation()
+      className: "dcr-sel",
+      onClick: stopRowClick
     }, s.status === 'pending' ? React.createElement("input", {
       type: "checkbox",
       checked: !!sel[s.id],
@@ -59993,11 +61267,16 @@ window.LockScreen = LockScreen;
         [s.id]: e.target.checked
       }))
     }) : null), React.createElement("td", {
-      style: {
-        whiteSpace: 'nowrap'
-      },
-      className: "num"
-    }, when(s.submittedAt)), React.createElement("td", null, React.createElement("span", {
+      className: "dcr-when",
+      "data-label": "Submitted"
+    }, React.createElement("div", {
+      className: "dcr-date"
+    }, whenDate(s.submittedAt)), React.createElement("div", {
+      className: "dcr-time num"
+    }, whenTime(s.submittedAt))), React.createElement("td", {
+      className: "dcr-type",
+      "data-label": "Type"
+    }, React.createElement("span", {
       className: "chip",
       style: {
         background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)',
@@ -60005,80 +61284,57 @@ window.LockScreen = LockScreen;
         fontWeight: 700
       }
     }, s.type === 'quality' ? 'Quality' : 'Patient')), React.createElement("td", {
-      style: {
-        fontWeight: 600,
-        whiteSpace: 'nowrap'
-      }
-    }, s.type === 'quality' ? s.areaName : s.departmentName, dupCount[dupKey(s)] > 1 && React.createElement("span", {
+      className: "dcr-target",
+      "data-label": "Target"
+    }, React.createElement("div", {
+      className: "dcr-title"
+    }, s.type === 'quality' ? s.indicatorName || s.areaName : 'Patient statistics'), !grouped && React.createElement("div", {
+      className: "dcr-sub"
+    }, groupKey(s)), dupCount[dupKey(s)] > 1 && React.createElement("span", {
+      className: "dcr-badge warn",
       title: "Multiple submissions for the same target and month \u2014 click to compare (incl. previous / on-record responses)",
       onClick: e => {
         e.stopPropagation();
-        const k = dupKey(s);
-        dcAllSubmissions(true).then(subs => setDupGroup((subs && subs.length ? subs : filtered).filter(x => dupKey(x) === k))).catch(() => setDupGroup(filtered.filter(x => dupKey(x) === k)));
-      },
-      style: {
-        marginLeft: 6,
-        fontSize: 10,
-        fontWeight: 700,
-        color: '#9a6b00',
-        background: 'var(--warn-bg,#fff4e0)',
-        borderRadius: 999,
-        padding: '1px 6px',
-        cursor: 'pointer',
-        border: '1px solid #e6c34d'
+        openDupGroup(s);
       }
     }, "\u26A0 ", dupCount[dupKey(s)], "\xD7 duplicate"), s.isCorrection && React.createElement("span", {
-      title: s.correctionReason || 'Correction / edit request',
-      style: {
-        marginLeft: 6,
-        fontSize: 10,
-        fontWeight: 700,
-        color: '#7c4dd6',
-        background: 'rgba(124,77,214,.12)',
-        borderRadius: 999,
-        padding: '1px 7px'
-      }
-    }, "\u270E correction")), React.createElement("td", {
-      style: {
-        fontSize: 12,
-        color: 'var(--ink-2)',
-        maxWidth: 320
-      }
-    }, valuesSummaryEl(s)), React.createElement("td", {
-      style: {
-        whiteSpace: 'nowrap'
-      }
-    }, React.createElement("b", {
-      style: {
-        color: 'var(--ink)'
-      }
-    }, s.responsible && s.responsible.name || s.submittedBy || '—'), s.submittedBy && s.responsible && s.responsible.name && s.submittedBy !== s.responsible.name && React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: 'var(--muted)'
-      }
-    }, "by ", s.submittedBy)), React.createElement("td", null, statusChip(s.status)), React.createElement("td", {
-      onClick: e => e.stopPropagation(),
-      style: {
-        textAlign: 'right',
-        whiteSpace: 'nowrap'
-      }
+      className: "dcr-badge violet",
+      title: s.correctionReason || 'Correction / edit request'
+    }, "\u270E correction"), s.status === 'withdrawn' && React.createElement("span", {
+      className: "dcr-badge muted"
+    }, "Withdrawn"), s.status === 'pending' && s.lastRejectReason && React.createElement("span", {
+      className: "dcr-badge neg",
+      title: 'Returned earlier: ' + s.lastRejectReason
+    }, "\u21BA resent after return")), React.createElement("td", {
+      className: "dcr-data",
+      "data-label": "Data"
+    }, dcrDataEl(s)), React.createElement("td", {
+      className: "dcr-person",
+      "data-label": "Responsible"
+    }, React.createElement("b", null, s.responsible && s.responsible.name || s.submittedBy || '—'), s.submittedBy && s.responsible && s.responsible.name && s.submittedBy !== s.responsible.name && React.createElement("div", {
+      className: "dcr-sub"
+    }, "by ", s.submittedBy)), React.createElement("td", {
+      className: "dcr-status",
+      "data-label": "Status"
+    }, statusChip(s.status), s.status === 'rejected' && s.rejectReason ? React.createElement("div", {
+      className: "dcr-sub neg"
+    }, s.rejectReason) : null, s.status !== 'pending' && s.reviewedBy ? React.createElement("div", {
+      className: "dcr-sub"
+    }, s.reviewedBy) : null), React.createElement("td", {
+      className: "dcr-act",
+      onClick: stopRowClick
+    }, React.createElement("div", {
+      className: "dcr-actions"
     }, React.createElement("button", {
       className: "btn sm",
-      onClick: () => setDetail(s),
-      style: {
-        marginRight: 5
-      }
+      onClick: () => setDetail(s)
     }, React.createElement(Ic, {
       d: I.search,
       s: 13
     }), "View"), s.status === 'pending' && React.createElement(React.Fragment, null, React.createElement("button", {
       className: "btn sm pri",
       disabled: busy === s.id || busy === 'bulk',
-      onClick: () => act(s.id, 'approve'),
-      style: {
-        marginRight: 5
-      }
+      onClick: () => act(s.id, 'approve')
     }, React.createElement(Ic, {
       d: I.check,
       s: 13
@@ -60086,17 +61342,13 @@ window.LockScreen = LockScreen;
       className: "btn sm",
       disabled: busy === s.id || busy === 'bulk',
       onClick: () => act(s.id, 'reject')
-    }, "Reject")), s.status !== 'pending' && s.reviewedBy && React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: 'var(--muted)'
-      }
-    }, s.reviewedBy)));
+    }, "Reject")))));
     const statusChip = st => {
       const map = {
         pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'],
         approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'],
-        rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)']
+        rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'],
+        withdrawn: ['Withdrawn', 'var(--panel-2)', 'var(--muted)']
       };
       const m = map[st] || ['—', 'var(--panel-2)', 'var(--muted)'];
       return React.createElement("span", {
@@ -60110,7 +61362,7 @@ window.LockScreen = LockScreen;
         }
       }, m[0]);
     };
-    const tabs = [['pending', 'Pending'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']];
+    const tabs = [['pending', 'Pending'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['withdrawn', 'Withdrawn'], ['all', 'All']];
     return React.createElement("div", {
       className: "grid",
       style: {
@@ -60136,11 +61388,7 @@ window.LockScreen = LockScreen;
         s: 14
       }), "Refresh"))
     }), React.createElement(CollectionCoverage, null), React.createElement(CollectorProgress, null), stats && React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 10,
-        flexWrap: 'wrap'
-      }
+      className: "dcr-stats"
     }, React.createElement(StatCard, {
       label: "Total",
       value: stats.total
@@ -60156,6 +61404,10 @@ window.LockScreen = LockScreen;
       label: "Rejected",
       value: stats.rejected,
       color: "var(--rose)"
+    }), stats.withdrawn != null && React.createElement(StatCard, {
+      label: "Withdrawn",
+      value: stats.withdrawn,
+      color: "var(--muted)"
     }), React.createElement(StatCard, {
       label: "Patient",
       value: stats.patient,
@@ -60165,12 +61417,9 @@ window.LockScreen = LockScreen;
       value: stats.quality,
       color: "var(--blue)"
     })), React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        flexWrap: 'wrap'
-      }
+      className: "dcr-toolbar"
+    }, React.createElement("div", {
+      className: "dcr-toolbar-row"
     }, React.createElement("div", {
       className: "seg"
     }, tabs.map(([id, l]) => React.createElement("button", {
@@ -60196,82 +61445,32 @@ window.LockScreen = LockScreen;
       checked: grouped,
       onChange: e => setGrouped(e.target.checked)
     }), "Group by department"), React.createElement("span", {
+      className: "dcr-legend"
+    }, React.createElement("span", null, React.createElement("i", {
       style: {
-        fontSize: 11,
-        color: 'var(--muted)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 10
+        background: 'rgba(31,157,87,.45)'
       }
-    }, React.createElement("span", {
+    }), "Patient"), React.createElement("span", null, React.createElement("i", {
       style: {
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4
+        background: 'rgba(0,144,202,.45)'
       }
-    }, React.createElement("span", {
-      style: {
-        width: 10,
-        height: 10,
-        borderRadius: 2,
-        background: 'rgba(31,157,87,.35)'
-      }
-    }), " Patient"), React.createElement("span", {
-      style: {
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4
-      }
-    }, React.createElement("span", {
-      style: {
-        width: 10,
-        height: 10,
-        borderRadius: 2,
-        background: 'rgba(0,144,202,.35)'
-      }
-    }), " Quality"))), React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        flexWrap: 'wrap'
-      }
+    }), "Quality"))), React.createElement("div", {
+      className: "dcr-filters"
     }, React.createElement("div", {
-      style: {
-        position: 'relative',
-        flex: '1 1 220px',
-        minWidth: 180
-      }
+      className: "dcr-search"
     }, React.createElement("span", {
-      style: {
-        position: 'absolute',
-        left: 10,
-        top: '50%',
-        transform: 'translateY(-50%)',
-        color: 'var(--muted)',
-        pointerEvents: 'none'
-      }
+      className: "dcr-search-ic"
     }, React.createElement(Ic, {
       d: I.search,
       s: 14
     })), React.createElement("input", {
       value: fq,
       onChange: e => setFq(e.target.value),
-      placeholder: "Search target, indicator, person\u2026",
-      style: {
-        width: '100%',
-        padding: '8px 10px 8px 30px',
-        border: '1px solid var(--line)',
-        borderRadius: 8,
-        fontSize: 12.5,
-        fontFamily: 'inherit',
-        outline: 'none',
-        boxSizing: 'border-box'
-      }
+      placeholder: "Search target, indicator, person\u2026"
     })), React.createElement("select", {
+      className: "dcr-select",
       value: fType,
-      onChange: e => setFType(e.target.value),
-      style: dcFilterSel
+      onChange: e => setFType(e.target.value)
     }, React.createElement("option", {
       value: ""
     }, "All types"), React.createElement("option", {
@@ -60279,27 +61478,27 @@ window.LockScreen = LockScreen;
     }, "Patient"), React.createElement("option", {
       value: "quality"
     }, "Quality")), React.createElement("select", {
+      className: "dcr-select",
       value: fDept,
-      onChange: e => setFDept(e.target.value),
-      style: dcFilterSel
+      onChange: e => setFDept(e.target.value)
     }, React.createElement("option", {
       value: ""
     }, "All departments"), deptOptions.map(n => React.createElement("option", {
       key: n,
       value: n
     }, n))), React.createElement("select", {
+      className: "dcr-select",
       value: fMonth,
-      onChange: e => setFMonth(e.target.value),
-      style: dcFilterSel
+      onChange: e => setFMonth(e.target.value)
     }, React.createElement("option", {
       value: ""
     }, "All periods"), monthOptions.map(m => React.createElement("option", {
       key: m,
       value: m
     }, m))), React.createElement("select", {
+      className: "dcr-select",
       value: fResp,
-      onChange: e => setFResp(e.target.value),
-      style: dcFilterSel
+      onChange: e => setFResp(e.target.value)
     }, React.createElement("option", {
       value: ""
     }, "All people"), respOptions.map(n => React.createElement("option", {
@@ -60318,11 +61517,7 @@ window.LockScreen = LockScreen;
       d: I.x,
       s: 13
     }), "Clear"), rows && React.createElement("span", {
-      style: {
-        fontSize: 11.5,
-        color: 'var(--muted)',
-        marginLeft: 'auto'
-      }
+      className: "dcr-count"
     }, filtered.length, " of ", rows.length, " shown"), pendingRows.length > 0 && React.createElement("button", {
       className: "btn sm pri",
       disabled: busy === 'bulk',
@@ -60332,20 +61527,8 @@ window.LockScreen = LockScreen;
       d: I.check,
       s: 13
     }), "Approve all ", pendingRows.length)), selIds.length > 0 && React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '8px 12px',
-        background: 'var(--blue-50)',
-        border: '1px solid var(--blue-100,#cfe6f7)',
-        borderRadius: 9
-      }
-    }, React.createElement("b", {
-      style: {
-        fontSize: 12.5
-      }
-    }, selIds.length, " selected"), React.createElement("button", {
+      className: "dcr-bulk"
+    }, React.createElement("b", null, selIds.length, " selected"), React.createElement("button", {
       className: "btn sm pri",
       disabled: busy === 'bulk',
       onClick: () => runAction(selIds, 'approve')
@@ -60368,11 +61551,11 @@ window.LockScreen = LockScreen;
     }), React.createElement("button", {
       className: "btn sm",
       onClick: () => setSel({})
-    }, "Clear")), React.createElement(Card, {
+    }, "Clear"))), React.createElement(Card, {
       style: {
-        padding: 0,
-        overflow: 'hidden'
-      }
+        padding: 0
+      },
+      className: "card dcr-card"
     }, rows === null ? React.createElement("div", {
       style: {
         padding: 24,
@@ -60403,14 +61586,9 @@ window.LockScreen = LockScreen;
         setFResp('');
       }
     }, "Clear filters")) : React.createElement("table", {
-      className: "tbl",
-      style: {
-        width: '100%'
-      }
+      className: "dcr"
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
-      style: {
-        width: 30
-      }
+      className: "dcr-sel"
     }, React.createElement("input", {
       type: "checkbox",
       checked: allSelected,
@@ -60424,47 +61602,47 @@ window.LockScreen = LockScreen;
         } else setSel({});
       }
     })), React.createElement("th", {
-      onClick: () => setSort('when'),
-      style: {
-        cursor: 'pointer',
-        userSelect: 'none'
-      }
+      className: "dcr-when dcr-sort",
+      onClick: () => setSort('when')
     }, "When", sortCaret('when')), React.createElement("th", {
-      onClick: () => setSort('type'),
-      style: {
-        cursor: 'pointer',
-        userSelect: 'none'
-      }
+      className: "dcr-type dcr-sort",
+      onClick: () => setSort('type')
     }, "Type", sortCaret('type')), React.createElement("th", {
-      onClick: () => setSort('target'),
-      style: {
-        cursor: 'pointer',
-        userSelect: 'none'
-      }
-    }, "Target", sortCaret('target')), React.createElement("th", null, "Data"), React.createElement("th", null, "Responsible / By"), React.createElement("th", {
-      onClick: () => setSort('status'),
-      style: {
-        cursor: 'pointer',
-        userSelect: 'none'
-      }
-    }, "Status", sortCaret('status')), React.createElement("th", null))), React.createElement("tbody", null, grouped ? groupNames.map(g => React.createElement(React.Fragment, {
-      key: g
-    }, React.createElement("tr", null, React.createElement("td", {
-      colSpan: 8,
-      style: {
-        background: 'var(--panel-2)',
-        fontWeight: 700,
-        color: 'var(--ink)',
-        padding: '7px 12px',
-        borderTop: '1px solid var(--line-2)'
-      }
-    }, g, " ", React.createElement("span", {
-      style: {
-        fontWeight: 500,
-        color: 'var(--muted)',
-        fontSize: 12
-      }
-    }, "\xB7 ", groups[g].length, " submission", groups[g].length > 1 ? 's' : ''))), groups[g].map(submissionRow))) : filtered.map(submissionRow)))), detail && React.createElement(SubmissionDetail, {
+      className: "dcr-target dcr-sort",
+      onClick: () => setSort('target')
+    }, "Target", sortCaret('target')), React.createElement("th", {
+      className: "dcr-data"
+    }, "Data"), React.createElement("th", {
+      className: "dcr-person"
+    }, "Responsible / By"), React.createElement("th", {
+      className: "dcr-status dcr-sort",
+      onClick: () => setSort('status')
+    }, "Status", sortCaret('status')), React.createElement("th", {
+      className: "dcr-act"
+    }))), React.createElement("tbody", null, grouped ? groupNames.map(g => {
+      const pend = groups[g].filter(s => s.status === 'pending').length;
+      return React.createElement(React.Fragment, {
+        key: g
+      }, React.createElement("tr", {
+        className: 'dcr-group' + (collapsed[g] ? ' collapsed' : ''),
+        onClick: () => setCollapsed(c => Object.assign({}, c, {
+          [g]: !c[g]
+        })),
+        title: collapsed[g] ? 'Show this department' : 'Hide this department'
+      }, React.createElement("td", {
+        colSpan: 8
+      }, React.createElement("div", {
+        className: "dcr-group-in"
+      }, React.createElement("span", {
+        className: "dcr-group-name"
+      }, g), React.createElement("span", {
+        className: "dcr-group-count"
+      }, groups[g].length, " submission", groups[g].length > 1 ? 's' : ''), pend ? React.createElement("span", {
+        className: "dcr-badge warn"
+      }, pend, " pending") : null, React.createElement("span", {
+        className: "dcr-caret"
+      }, "\u25BE")))), !collapsed[g] && groups[g].map(submissionRow));
+    }) : filtered.map(submissionRow)))), detail && React.createElement(SubmissionDetail, {
       s: detail,
       canEdit: true,
       onClose: () => setDetail(null),
@@ -60965,7 +62143,8 @@ window.LockScreen = LockScreen;
     const [detail, setDetail] = useState(null);
     const [view, setView] = useState('patient');
     const [status, setStatus] = useState('All');
-    const [mode, setMode] = useState('table');
+    const mode = 'timeline';
+    const [detailMode, setDetailMode] = useState(null);
     const ownsSub = s => !!s && s.status === 'pending' && dcIsMine(s);
     const load = () => dcSubmissionResponse().then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
     useEffect(() => {
@@ -61014,7 +62193,8 @@ window.LockScreen = LockScreen;
       const m = {
         pending: ['Pending', '#fff4e0', '#9a6b00'],
         approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'],
-        rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)'],
+        rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'],
+        withdrawn: ['Withdrawn', '#eef1f5', '#6c7a8c'],
         reported: ['On record', 'var(--blue-50)', 'var(--blue-700)']
       }[st] || ['—', '#eef1f5', '#789'];
       return React.createElement("span", {
@@ -61030,7 +62210,7 @@ window.LockScreen = LockScreen;
     };
     const keyOf = s => s.type === 'quality' ? 'q|' + s.area + '|' + (s.indicatorId || s.indicatorName) + '|' + s.month : 'p|' + s.department + '|' + s.month;
     const subs = (rows || []).filter(dcIsMine);
-    const subKeys = new Set(subs.map(keyOf));
+    const subKeys = new Set(subs.filter(s => s.status !== 'withdrawn').map(keyOf));
     const merged = subs.concat(reportedRecords().filter(r => !subKeys.has(keyOf(r)))).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     const patientRows = merged.filter(s => s.type !== 'quality');
     const qualityRows = merged.filter(s => s.type === 'quality');
@@ -61046,14 +62226,14 @@ window.LockScreen = LockScreen;
     const decided = subs.filter(x => x.status === 'approved' || x.status === 'rejected' && !x.autoRejected);
     const accPct = decided.length ? Math.round(subs.filter(x => x.status === 'approved').length * 100 / decided.length) : null;
     const ACC_C = 144.5;
-    const cycle = subs.filter(x => x.month === month);
+    const cycle = subs.filter(x => x.month === month && x.status !== 'withdrawn');
     const cycleAppr = cycle.filter(x => x.status === 'approved').length;
     const cycleRej = cycle.filter(x => x.status === 'rejected').length;
     const turn = cycle.filter(x => x.submittedAt && x.reviewedAt && x.reviewedAt >= x.submittedAt);
     const avgDays = turn.length ? turn.reduce((a, x) => a + (x.reviewedAt - x.submittedAt), 0) / turn.length / 864e5 : null;
     const cycleStats = [['Submitted', String(cycle.length), '#0090ca'], ['Approved', String(cycleAppr), '#1f9d57'], ['Rejected', String(cycleRej), '#d23a52'], ['Avg. response time', avgDays == null ? '—' : Math.round(avgDays * 10) / 10 + ' d', '#6a52d4']];
     const openRej = new Set(dcOpenRejections(rows).map(x => x.id));
-    const FILTERS = ['All', 'Pending', 'Approved', 'Rejected'];
+    const FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Withdrawn'];
     const inFilter = (s, f) => f === 'All' || (f === 'Rejected' ? openRej.has(s.id) : s.status === f.toLowerCase());
     const countFor = f => shown.filter(s => inFilter(s, f)).length;
     const listed = shown.filter(s => inFilter(s, status));
@@ -61088,10 +62268,15 @@ window.LockScreen = LockScreen;
       padding: '1px 6px',
       borderRadius: 8
     });
+    const ownReturn = s => !!s && s.status === 'rejected' && !s.autoRejected && dcIsMine(s);
     const fixFor = s => {
       if (!s || s.status !== 'rejected') return null;
       const k = dcTargetKey(s);
-      if ((rows || []).some(x => x.status !== 'rejected' && (x.submittedAt || 0) > (s.submittedAt || 0) && dcTargetKey(x) === k)) return null;
+      if ((rows || []).some(x => x.status !== 'rejected' && x.status !== 'withdrawn' && (x.submittedAt || 0) > (s.submittedAt || 0) && dcTargetKey(x) === k)) return null;
+      if (ownReturn(s)) return () => {
+        setDetailMode('resend');
+        setDetail(s);
+      };
       if (s.type === 'quality') return onFixQuality && s.area && s.indicatorId && s.month ? () => onFixQuality(s.area, s.indicatorId, s.month, s) : null;
       return onFixPatient && s.department && s.month ? () => onFixPatient(s.department, s.month, s) : null;
     };
@@ -61117,8 +62302,30 @@ window.LockScreen = LockScreen;
           e.stopPropagation();
           go();
         }
-      }, "Fix & resubmit") : null;
+      }, ownReturn(s) ? 'Fix & resend' : 'Fix & resubmit') : null;
     };
+    const EDIT_BTN = Object.assign({}, FIX_BTN, {
+      border: '1px solid rgba(0,144,202,.35)',
+      color: '#0072a3'
+    });
+    const PendingBtns = ({
+      s
+    }) => ownsSub(s) ? React.createElement(React.Fragment, null, React.createElement("button", {
+      style: EDIT_BTN,
+      onClick: e => {
+        e.stopPropagation();
+        setDetailMode(null);
+        setDetail(s);
+      }
+    }, "Edit"), React.createElement("button", {
+      style: FIX_BTN,
+      onClick: e => {
+        e.stopPropagation();
+        dcWithdraw(s).then(ok => {
+          if (ok) load();
+        });
+      }
+    }, "Withdraw")) : null;
     const REASON = {
       fontSize: 10.5,
       fontWeight: 400,
@@ -61133,7 +62340,7 @@ window.LockScreen = LockScreen;
     };
     const rejNote = s => s.status === 'rejected' && s.rejectReason ? React.createElement("div", {
       style: REASON
-    }, s.rejectReason) : null;
+    }, s.autoRejected ? s.rejectReason : React.createElement(React.Fragment, null, React.createElement("b", null, "Returned by ", s.reviewedBy || 'the administrator', ":"), " ", s.rejectReason)) : null;
     const targetOf = s => (s.type === 'quality' ? s.indicatorName || s.areaName : s.departmentName) || '—';
     const typeOf = s => s.type === 'quality' ? 'Quality' : 'Statistics';
     const typeChip = s => ({
@@ -61315,19 +62522,7 @@ window.LockScreen = LockScreen;
       style: cpTab(status === f)
     }, f, React.createElement("span", {
       style: cntStyle(status === f)
-    }, countFor(f))))), React.createElement("span", {
-      style: {
-        flex: 1
-      }
-    }), React.createElement("div", {
-      style: segWrap
-    }, React.createElement("button", {
-      onClick: () => setMode('table'),
-      style: cpTab(mode === 'table')
-    }, "Table"), React.createElement("button", {
-      onClick: () => setMode('timeline'),
-      style: cpTab(mode === 'timeline')
-    }, "Timeline"))), React.createElement(Card, {
+    }, countFor(f)))))), React.createElement(Card, {
       style: {
         padding: 0,
         overflow: 'hidden'
@@ -61411,12 +62606,14 @@ window.LockScreen = LockScreen;
       const dot = {
         pending: '#e08a1e',
         approved: '#1f9d57',
-        rejected: '#d23a52'
+        rejected: '#d23a52',
+        withdrawn: '#9aa6b4'
       }[s.status] || '#0090ca';
       const halo = {
         pending: 'rgba(224,138,30,.16)',
         approved: 'rgba(31,157,87,.16)',
-        rejected: 'rgba(210,58,82,.16)'
+        rejected: 'rgba(210,58,82,.16)',
+        withdrawn: 'rgba(154,166,180,.18)'
       }[s.status] || 'rgba(0,144,202,.16)';
       return React.createElement("div", {
         key: s.id,
@@ -61478,6 +62675,8 @@ window.LockScreen = LockScreen;
         style: typeChip(s)
       }, typeOf(s)), statusChip(s.status), React.createElement(FixBtn, {
         s: s
+      }), React.createElement(PendingBtns, {
+        s: s
       })), React.createElement("div", {
         style: {
           fontSize: 11,
@@ -61499,7 +62698,7 @@ window.LockScreen = LockScreen;
         fontSize: 11,
         color: '#9aa6b4'
       }
-    }, "Rejected submissions show the administrator's reason \u2014 correct the figure and resubmit.")) : React.createElement(React.Fragment, null, React.createElement("div", {
+    }, "Returned submissions show the administrator's reason \u2014 use Fix & resend to correct and send them again. A pending one can still be edited or withdrawn.")) : React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         overflowX: 'auto'
       }
@@ -61561,6 +62760,8 @@ window.LockScreen = LockScreen;
       }
     }, React.createElement(FixBtn, {
       s: s
+    }), React.createElement(PendingBtns, {
+      s: s
     }), React.createElement("button", {
       className: "btn sm",
       onClick: () => setDetail(s)
@@ -61573,13 +62774,19 @@ window.LockScreen = LockScreen;
         fontSize: 11,
         color: '#9aa6b4'
       }
-    }, "Rejected submissions show the administrator's reason \u2014 correct the figure and resubmit."))), detail && React.createElement(SubmissionDetail, {
+    }, "Returned submissions show the administrator's reason \u2014 use Fix & resend to correct and send them again. A pending one can still be edited or withdrawn."))), detail && React.createElement(SubmissionDetail, {
+      key: detail.id + '/' + (detailMode || ''),
       s: detail,
       canEdit: ownsSub(detail),
       fullEdit: false,
-      onClose: () => setDetail(null),
+      initialMode: detailMode,
+      onClose: () => {
+        setDetail(null);
+        setDetailMode(null);
+      },
       onSaved: () => {
         setDetail(null);
+        setDetailMode(null);
         load();
       }
     }));
@@ -61875,7 +63082,8 @@ window.LockScreen = LockScreen;
       'Not observed': '#5b3fa8',
       Returned: '#b5670a',
       'Not measured': '#6c7a8c',
-      'Not started': '#8a96a8'
+      'Not started': '#8a96a8',
+      Withdrawn: '#8a96a8'
     }[label] || '#6c7a8c';
     return {
       display: 'inline-flex',
@@ -61901,7 +63109,7 @@ window.LockScreen = LockScreen;
     return f(ind.mNum) || f(ind.months) || ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
   };
   function cpSubmissionStatus(subs, area, ind, month) {
-    const matching = (subs || []).filter(s => s.type === 'quality' && s.area === area && s.month === month && (s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase()));
+    const matching = (subs || []).filter(s => s.type === 'quality' && s.status !== 'withdrawn' && s.area === area && s.month === month && (s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase()));
     const latest = matching.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))[0];
     if (latest && latest.status === 'pending') return 'pending';
     if (ind.mNotObserved && ind.mNotObserved[month]) return 'notobs';
@@ -61925,10 +63133,7 @@ window.LockScreen = LockScreen;
     return mi < 0 || isNaN(yy) ? null : (2000 + yy) * 12 + mi;
   };
   const dcMonthKey = r => MONS_ABBR[(r % 12 + 12) % 12] + '-' + String(Math.floor(r / 12) % 100).padStart(2, '0');
-  const dcPortalUser = () => {
-    const r = (typeof window !== 'undefined' && window.__UNICO_USER__ || {}).role;
-    return r === 'collector' || r === 'incharge';
-  };
+  const dcPortalUser = () => dcIsPortalRole(typeof window !== 'undefined' && window.__UNICO_USER__ || null);
   const dcRealMonthOpts = (startMonths, keep) => {
     const last = dcDefaultMonth();
     const lr = dcMonthRank(last);
@@ -62149,7 +63354,7 @@ window.LockScreen = LockScreen;
   const dcQStatus = (subs, areaKey, ind, m) => cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
   const dcPatientState = (subs, dept, m) => {
     if ((dept.months || []).indexOf(m) >= 0) return 'recorded';
-    const list = dcSubsIndex(subs).p.get(dept.id + '|' + m) || [];
+    const list = (dcSubsIndex(subs).p.get(dept.id + '|' + m) || []).filter(s => s.status !== 'withdrawn');
     if (list.some(s => s.status === 'pending')) return 'pending';
     if (list.some(s => s.status !== 'rejected')) return 'recorded';
     return list.length ? 'rejected' : 'none';
@@ -62172,7 +63377,7 @@ window.LockScreen = LockScreen;
           status: st,
           unit: d.name || d.id,
           deptId: d.id,
-          from: st === 'rejected' ? newest(ix.p.get(d.id + '|' + m) || []) : null
+          from: st === 'rejected' ? newest((ix.p.get(d.id + '|' + m) || []).filter(s => s.status === 'rejected')) : null
         });
       });
     });
@@ -62190,7 +63395,7 @@ window.LockScreen = LockScreen;
           unit: a.name || a.key,
           areaKey: a.key,
           ind: ind,
-          from: st === 'rejected' ? newest((ix.q.get(a.key + '|' + m) || []).filter(s => dcSubIsInd(s, ind))) : null
+          from: st === 'rejected' ? newest((ix.q.get(a.key + '|' + m) || []).filter(s => dcSubIsInd(s, ind) && s.status === 'rejected')) : null
         });
       });
     }));
@@ -62262,6 +63467,8 @@ window.LockScreen = LockScreen;
     const [reason, setReason] = useState('');
     const [busy, setBusy] = useState(false);
     const [undoStack, setUndoStack] = useState([]);
+    const [cmp, setCmp] = useState(null);
+    const [pendingDlg, setPendingDlg] = useState(null);
     const load = () => dcSubmissionResponse().then(r => setSubs(r.ok ? r.submissions : [])).catch(() => {});
     useEffect(() => {
       load();
@@ -62270,6 +63477,7 @@ window.LockScreen = LockScreen;
       setEdits({});
       setReason('');
       setUndoStack([]);
+      setCmp(null);
     }, [deptId]);
     const cols = dept && dept.cols || [];
     const order = MO();
@@ -62287,7 +63495,7 @@ window.LockScreen = LockScreen;
     });
     const subStatus = {};
     (subs || []).forEach(s => {
-      if (s.type === 'patient' && s.department === deptId && s.month && !subStatus[s.month]) subStatus[s.month] = s.status;
+      if (s.type === 'patient' && s.department === deptId && s.month && s.status !== 'withdrawn' && !subStatus[s.month]) subStatus[s.month] = s.status;
     });
     const cellVal = (m, cid) => {
       const k = m + '|' + cid;
@@ -62347,54 +63555,75 @@ window.LockScreen = LockScreen;
         toast('A submission for ' + blocked.map(monthLabel).join(', ') + ' is already awaiting review.', 'error');
         return;
       }
-      if (corrections.length && !reason.trim()) {
-        toast('Please say why you are changing months already on record.', 'error');
+      if (corrections.length) {
+        setCmp({
+          months: corrections,
+          send: touched,
+          prior: Object.fromEntries(corrections.map(m => [m, byMonth[m] || {}]))
+        });
         return;
       }
+      sendMonths(touched, [], '');
+    };
+    const valuesFor = m => {
+      const values = {};
+      cols.forEach(c => {
+        const v = cellVal(m, c.id);
+        if (String(v).trim() !== '') values[c.id] = Number(v);
+      });
+      return values;
+    };
+    const sendMonths = (months, corrMonths, why) => {
       setBusy(true);
-      const jobs = touched.map(m => {
-        const values = {};
-        cols.forEach(c => {
-          const v = cellVal(m, c.id);
-          if (String(v).trim() !== '') values[c.id] = Number(v);
-        });
-        const isCorr = corrections.indexOf(m) >= 0;
+      const jobs = months.map(m => {
+        const isCorr = corrMonths.indexOf(m) >= 0;
         return dcApi.post('/api/submissions/patient', {
           department: dept.id,
           month: m,
-          values,
+          values: valuesFor(m),
           responsible: {
             name: me.name || ''
           },
           note: '',
           isCorrection: isCorr,
-          correctionReason: isCorr ? reason.trim() : ''
+          correctionReason: isCorr ? why : ''
         }).catch(() => null);
       });
       Promise.all(jobs).then(rs => {
         setBusy(false);
-        const bad = rs.filter(r => !r || !r.ok);
-        if (bad.length) {
-          const sent = touched.filter((m, i) => rs[i] && rs[i].ok);
-          if (sent.length) {
-            setEdits(e => {
-              const next = {};
-              Object.keys(e).forEach(k => {
-                if (sent.indexOf(k.split('|')[0]) < 0) next[k] = e[k];
-              });
-              return next;
+        const sent = months.filter((m, i) => rs[i] && rs[i].ok);
+        if (sent.length) {
+          setEdits(e => {
+            const next = {};
+            Object.keys(e).forEach(k => {
+              if (sent.indexOf(k.split('|')[0]) < 0) next[k] = e[k];
             });
-            load();
-          }
+            return next;
+          });
+          load();
+        }
+        const exists = months.filter((m, i) => rs[i] && rs[i].code === 'exists');
+        setCmp(exists.length ? {
+          months: exists,
+          send: exists,
+          prior: Object.fromEntries(exists.map(m => [m, (rs[months.indexOf(m)].prior || {}).values || {}]))
+        } : null);
+        const pend = rs.find(r => r && r.code === 'pending');
+        if (pend) setPendingDlg({
+          id: pend.pendingId,
+          message: pend.error
+        });
+        const bad = rs.filter(r => !r || !r.ok && r.code !== 'exists' && r.code !== 'pending');
+        if (bad.length) {
           toast((sent.length ? sent.map(monthLabel).join(', ') + ' sent. ' : '') + (bad[0] && bad[0].error || 'Some months could not be sent.'), 'error');
           return;
         }
-        toast(touched.length + ' month' + (touched.length > 1 ? 's' : '') + ' sent for review', 'success');
-        setEdits({});
-        setReason('');
-        setUndoStack([]);
-        load();
-        if (onDone) onDone();
+        if (sent.length === months.length) {
+          toast(sent.length + ' month' + (sent.length > 1 ? 's' : '') + (corrMonths.length ? ' sent (edit requests go to the administrator)' : ' sent for review'), 'success');
+          setReason('');
+          setUndoStack([]);
+          if (onDone) onDone();
+        } else if (sent.length) toast(sent.map(monthLabel).join(', ') + ' sent.', 'success');
       }).catch(() => {
         setBusy(false);
         toast('Submission failed', 'error');
@@ -62429,7 +63658,21 @@ window.LockScreen = LockScreen;
         maxWidth: 1240,
         margin: '0 auto'
       }
-    }, React.createElement("div", {
+    }, cmp && React.createElement(DcCompareModal, {
+      title: 'Data already recorded for ' + dept.name + ' · ' + cmp.months.map(monthLabel).join(', '),
+      rows: [].concat.apply([], cmp.months.map(m => dcPatientCompareRows(cols, cmp.prior[m] || {}, valuesFor(m), monthLabel(m)))),
+      reason: reason,
+      setReason: setReason,
+      busy: busy,
+      onEdit: () => setCmp(null),
+      onSend: () => sendMonths(cmp.send, cmp.months, reason.trim())
+    }), pendingDlg && React.createElement(DcPendingNotice, {
+      id: pendingDlg.id,
+      message: pendingDlg.message,
+      subs: subs,
+      onClose: () => setPendingDlg(null),
+      onSaved: load
+    }), React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -62653,22 +63896,12 @@ window.LockScreen = LockScreen;
         marginBottom: 8,
         lineHeight: 1.55
       }
-    }, React.createElement("b", null, corrections.map(monthLabel).join(', ')), " ", corrections.length > 1 ? 'are' : 'is', " already on record. Changing ", corrections.length > 1 ? 'them' : 'it', " sends a correction to the administrator \u2014 live data is not overwritten until it is approved."), React.createElement("input", {
-      value: reason,
-      onChange: e => setReason(e.target.value),
-      placeholder: "Why is this being corrected?",
+    }, React.createElement("b", null, corrections.map(monthLabel).join(', ')), " ", corrections.length > 1 ? 'are' : 'is', " already on record. Changing ", corrections.length > 1 ? 'them' : 'it', " sends a correction to the administrator \u2014 live data is not overwritten until it is approved."), React.createElement("div", {
       style: {
-        width: '100%',
-        boxSizing: 'border-box',
-        padding: '9px 11px',
-        borderRadius: 9,
-        border: '1px solid rgba(125,145,180,.4)',
-        background: 'rgba(255,255,255,.85)',
-        fontFamily: 'inherit',
-        fontSize: 12.5,
-        outline: 'none'
+        fontSize: 11.5,
+        color: '#6c7a8c'
       }
-    })), React.createElement("div", {
+    }, "Submitting shows your changes next to what is on record and asks why.")), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 10,
@@ -63120,12 +64353,13 @@ window.LockScreen = LockScreen;
       dcSubmissionResponse().then(r => setSubs(r.ok ? r.submissions || [] : [])).catch(() => setSubs([]));
     }, []);
     const S = (subs || []).filter(dcIsMine);
+    const sentS = S.filter(x => x.status !== 'withdrawn');
     const decided = S.filter(x => x.status === 'approved' || x.status === 'rejected' && !x.autoRejected);
     const accuracy = decided.length ? Math.round(S.filter(x => x.status === 'approved').length * 100 / decided.length) : null;
     const onTime = (() => {
       let n = 0,
         ok = 0;
-      S.forEach(x => {
+      sentS.forEach(x => {
         const dl = cpDeadline(x.month);
         if (!dl || !x.submittedAt) return;
         n++;
@@ -63341,7 +64575,7 @@ window.LockScreen = LockScreen;
         gap: 20,
         flexWrap: 'wrap'
       }
-    }, stat(indCount, 'indicators'), stat(depts.length, depts.length === 1 ? 'department' : 'departments'), stat(subs === null ? '—' : S.length, 'submissions'))), React.createElement("div", {
+    }, stat(indCount, 'indicators'), stat(depts.length, depts.length === 1 ? 'department' : 'departments'), stat(subs === null ? '—' : sentS.length, 'submissions'))), React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))',
@@ -63531,7 +64765,7 @@ window.LockScreen = LockScreen;
         fontSize: 12,
         padding: '10px 0'
       }
-    }, "You have not sent anything yet. Once you do, your accuracy and timeliness appear here.") : React.createElement(React.Fragment, null, accuracy != null && bar('Accepted first time', accuracy, accuracy + '%', 'linear-gradient(90deg,#3ab5a7,#1f9d57)'), onTime && bar('Sent on time', onTime.pct, onTime.pct + '%', 'linear-gradient(90deg,#27a8db,#0072a3)'), bar('Approved', S.length ? S.filter(x => x.status === 'approved').length * 100 / S.length : 0, String(S.filter(x => x.status === 'approved').length), 'linear-gradient(90deg,#8f7ce0,#5b45c4)'), React.createElement("div", {
+    }, "You have not sent anything yet. Once you do, your accuracy and timeliness appear here.") : React.createElement(React.Fragment, null, accuracy != null && bar('Accepted first time', accuracy, accuracy + '%', 'linear-gradient(90deg,#3ab5a7,#1f9d57)'), onTime && bar('Sent on time', onTime.pct, onTime.pct + '%', 'linear-gradient(90deg,#27a8db,#0072a3)'), bar('Approved', sentS.length ? sentS.filter(x => x.status === 'approved').length * 100 / sentS.length : 0, String(sentS.filter(x => x.status === 'approved').length), 'linear-gradient(90deg,#8f7ce0,#5b45c4)'), React.createElement("div", {
       style: {
         fontSize: 11,
         color: '#6c7a8c',
@@ -63598,12 +64832,14 @@ window.LockScreen = LockScreen;
       const label = {
         pending: 'Pending',
         approved: 'Approved',
-        rejected: 'Rejected'
+        rejected: 'Rejected',
+        withdrawn: 'Withdrawn'
       }[x.status] || 'Pending';
       const dot = {
         Pending: '#e08a1e',
         Approved: '#1f9d57',
-        Rejected: '#d23a52'
+        Rejected: '#d23a52',
+        Withdrawn: '#9aa6b4'
       }[label];
       return React.createElement("div", {
         key: x.id,
@@ -63647,14 +64883,80 @@ window.LockScreen = LockScreen;
       }, label));
     })));
   }
+  const cpSquash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   function CollectorDeptStaff() {
     const dataRev = useDcDataRev();
     const all = useMemo(() => dcAllDepts(), [dataRev]);
     const areas = useMemo(() => window.qualityData ? window.qualityData() : [], [dataRev]);
+    const [staff, setStaff] = useState(null);
+    useEffect(() => {
+      const load = () => dcApi.get('/api/staff').then(r => setStaff(r.ok ? r.staff || [] : [])).catch(() => setStaff(s => s || []));
+      load();
+      const refresh = () => {
+        if (document.visibilityState !== 'hidden') load();
+      };
+      window.addEventListener('unico:data-refreshed', refresh);
+      return () => window.removeEventListener('unico:data-refreshed', refresh);
+    }, []);
     const order = MO();
     const cur = dcDefaultMonth();
     const ci = Math.max(0, order.indexOf(cur));
     const win = order.slice(Math.max(0, ci - 11), ci + 1);
+    const byDept = {};
+    const unplaced = [];
+    (staff || []).forEach(p => {
+      if (all.length === 1) {
+        (byDept[all[0].id] = byDept[all[0].id] || []).push(p);
+        return;
+      }
+      const k = cpSquash(p.current_department);
+      const d = all.find(x => cpSquash(x.id) === k || cpSquash(x.name) === k);
+      if (d) (byDept[d.id] = byDept[d.id] || []).push(p);else unplaced.push(p);
+    });
+    const staffBlock = (rows, title) => {
+      const pca = rows.filter(p => p.role === 'PCA').length;
+      return React.createElement("div", {
+        style: {
+          marginTop: 15,
+          borderTop: '1px solid rgba(125,145,180,.18)',
+          paddingTop: 12
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap',
+          marginBottom: 8
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 12.5,
+          fontWeight: 700,
+          color: '#16202e'
+        }
+      }, title), staff !== null && React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: '#6c7a8c'
+        }
+      }, rows.length, " staff \xB7 ", rows.length - pca, " nurses \xB7 ", pca, " PCA")), staff === null ? React.createElement("div", {
+        style: {
+          padding: '10px 0',
+          color: '#6c7a8c',
+          fontSize: 12
+        }
+      }, "Loading staff\u2026") : rows.length === 0 ? React.createElement("div", {
+        style: {
+          padding: '14px 0',
+          textAlign: 'center',
+          color: '#6c7a8c',
+          fontSize: 12
+        }
+      }, "No staff are recorded against this unit yet. Ask your administrator to set the department on their records.") : React.createElement(CpStaffTable, {
+        rows: rows
+      }));
+    };
     return React.createElement("div", {
       style: {
         maxWidth: 1240,
@@ -63777,8 +65079,12 @@ window.LockScreen = LockScreen;
           color: have.has(m) ? '#fff' : '#9aa6b4',
           background: have.has(m) ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'rgba(125,145,180,.14)'
         }
-      }, m))));
-    }));
+      }, m))), staffBlock(byDept[d.id] || [], 'Staff'));
+    }), unplaced.length > 0 && React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: '15px 17px'
+      })
+    }, staffBlock(unplaced, 'Other staff in your units')));
   }
   function CollectorDash({
     month,
@@ -63841,7 +65147,7 @@ window.LockScreen = LockScreen;
     const otherMissing = allMissing.filter(r => r.month !== month);
     const otherLater = otherMissing.some(r => r.rank > dcMonthRank(month));
     const pDepts = dcPatientDepts(depts, S).filter(d => dcPatientDue(d, month, S));
-    const deptDone = pDepts.filter(d => (d.months || []).indexOf(month) >= 0 || S.some(s => s.type === 'patient' && s.department === d.id && s.month === month && s.status !== 'rejected')).length;
+    const deptDone = pDepts.filter(d => (d.months || []).indexOf(month) >= 0 || S.some(s => s.type === 'patient' && s.department === d.id && s.month === month && s.status !== 'rejected' && s.status !== 'withdrawn')).length;
     const statGap = Math.max(0, pDepts.length - deptDone);
     const dl = cpDeadline(month);
     const lateMs = dl ? Date.now() - dl.getTime() : 0;
@@ -65734,22 +67040,6 @@ window.LockScreen = LockScreen;
     const hepDone = all.filter(p => CP_HEPB_DONE(p.hepatitis_b_vaccination)).length;
     const hepUnknown = all.filter(p => String(p.hepatitis_b_vaccination || '').trim().toLowerCase() === 'unknown' || !String(p.hepatitis_b_vaccination || '').trim()).length;
     const STATS = [[all.length, 'staff in unit'], [avgYrs == null ? '—' : avgYrs.toFixed(1), 'avg. years experience'], [hepDone, 'Hep-B complete'], [hepUnknown, 'vaccination unknown']];
-    const th = {
-      textAlign: 'left',
-      padding: '9px 12px',
-      fontSize: 10.5,
-      letterSpacing: '.5px',
-      textTransform: 'uppercase',
-      color: '#7d8ea8',
-      fontWeight: 700,
-      borderBottom: '1px solid rgba(125,145,180,.25)',
-      whiteSpace: 'nowrap'
-    };
-    const td = {
-      padding: '9px 12px',
-      borderBottom: '1px solid rgba(125,145,180,.12)',
-      verticalAlign: 'middle'
-    };
     return React.createElement("div", {
       style: {
         maxWidth: 1240,
@@ -65885,7 +67175,350 @@ window.LockScreen = LockScreen;
         color: '#6c7a8c',
         fontSize: 12.5
       }
-    }, "Nobody matches that filter.") : React.createElement("div", {
+    }, "Nobody matches that filter.") : React.createElement(CpStaffTable, {
+      rows: rows
+    })));
+  }
+  function CpStaffProfile({
+    p,
+    onClose
+  }) {
+    useEffect(() => {
+      const k = e => {
+        if (e.key === 'Escape') onClose();
+      };
+      window.addEventListener('keydown', k);
+      return () => window.removeEventListener('keydown', k);
+    }, [onClose]);
+    const v = p.licence_verified || null,
+      pr = v && v.primary || {};
+    const expired = !!pr.expired;
+    const checked = v && v.at ? String(v.at).slice(0, 10) : '';
+    const hep = CP_HEPB_TONE(p.hepatitis_b_vaccination);
+    const list = x => (Array.isArray(x) ? x : String(x || '').split(/[,;]/)).map(s => String(s).trim()).filter(s => s && s !== '-');
+    const chips = (x, bg, fg) => {
+      const items = list(x);
+      return items.length ? React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 5,
+          flexWrap: 'wrap'
+        }
+      }, items.map((s, k) => React.createElement("span", {
+        key: k,
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '3px 9px',
+          borderRadius: 12,
+          background: bg,
+          color: fg
+        }
+      }, s))) : React.createElement("span", {
+        style: {
+          fontSize: 12,
+          color: '#b6c0cc'
+        }
+      }, "None recorded");
+    };
+    const lbl = {
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: '.5px',
+      textTransform: 'uppercase',
+      color: '#7d8ea8',
+      marginBottom: 4
+    };
+    const tile = (label, value, mono) => React.createElement("div", {
+      style: {
+        background: 'rgba(255,255,255,.7)',
+        border: '1px solid rgba(125,145,180,.18)',
+        borderRadius: 10,
+        padding: '8px 11px',
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: lbl
+    }, label), value ? React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: '#16202e',
+        fontFamily: mono ? "'IBM Plex Mono',monospace" : 'inherit',
+        wordBreak: 'break-word'
+      }
+    }, value) : React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: '#b6c0cc',
+        fontStyle: 'italic'
+      }
+    }, "Not recorded"));
+    const dept = Array.isArray(p.current_department) ? p.current_department.join(', ') : p.current_department;
+    return React.createElement("div", {
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": 'Staff profile — ' + p.name,
+      onClick: onClose,
+      style: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1000,
+        background: 'rgba(15,27,46,.45)',
+        display: 'grid',
+        placeItems: 'center',
+        padding: 16
+      }
+    }, React.createElement("div", {
+      onClick: e => e.stopPropagation(),
+      style: {
+        width: 'min(640px,100%)',
+        maxHeight: 'calc(100vh - 32px)',
+        overflowY: 'auto',
+        background: 'linear-gradient(160deg,#fbfdff,#eef5fb)',
+        borderRadius: 16,
+        boxShadow: '0 24px 60px rgba(15,27,46,.35)'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 16,
+        alignItems: 'center',
+        padding: '20px 22px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.18)',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        position: 'relative',
+        flexShrink: 0
+      }
+    }, React.createElement(UnicoAvatar, {
+      photo: p.photo || null,
+      initials: cpInitials(p.name),
+      size: 72,
+      radius: 18,
+      style: {
+        background: 'linear-gradient(135deg,#3ab5a7,#0090ca)',
+        color: '#fff',
+        display: 'grid',
+        placeItems: 'center',
+        fontSize: 22,
+        fontWeight: 700
+      }
+    }), v && React.createElement("span", {
+      title: 'BNMC ' + (expired ? 'registration expired' : 'verified') + (checked ? ' — checked ' + checked : ''),
+      style: {
+        position: 'absolute',
+        right: -4,
+        bottom: -4,
+        width: 24,
+        height: 24,
+        borderRadius: '50%',
+        display: 'grid',
+        placeItems: 'center',
+        background: expired ? '#d23a52' : '#1f9d57',
+        border: '2.5px solid #fff',
+        boxShadow: '0 2px 6px rgba(0,0,0,.25)'
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 12,
+      c: "#fff"
+    }))), React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 180
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 18,
+        fontWeight: 800,
+        color: '#16202e'
+      }
+    }, p.name), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: '#0072a3',
+        marginTop: 2
+      }
+    }, p.designation || p.role || '—'), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap',
+        marginTop: 8
+      }
+    }, v ? React.createElement("span", {
+      title: checked ? 'Checked against the BNMC register on ' + checked : 'Checked against the BNMC register',
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '3px 10px',
+        borderRadius: 14,
+        color: expired ? '#a32c41' : '#157a43',
+        background: expired ? '#fdf3f4' : '#eef8f1',
+        border: '1px solid ' + (expired ? '#f0c2ca' : '#cde9d8')
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 11,
+      c: expired ? '#a32c41' : '#157a43'
+    }), "BNMC ", expired ? 'expired' : 'verified') : React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '3px 10px',
+        borderRadius: 14,
+        color: '#6c7a8c',
+        background: 'rgba(125,145,180,.12)'
+      }
+    }, "Licence not verified"), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '3px 10px',
+        borderRadius: 14,
+        color: hep[0],
+        background: hep[0] + '1a'
+      }
+    }, "Hep-B \xB7 ", hep[1]), p.role && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '3px 10px',
+        borderRadius: 14,
+        color: '#3c4858',
+        background: 'rgba(125,145,180,.14)'
+      }
+    }, p.role))), React.createElement("button", {
+      onClick: onClose,
+      "aria-label": "Close",
+      style: {
+        alignSelf: 'flex-start',
+        border: '1px solid rgba(125,145,180,.35)',
+        background: '#fff',
+        borderRadius: 9,
+        width: 32,
+        height: 32,
+        cursor: 'pointer',
+        fontSize: 16,
+        color: '#6c7a8c'
+      }
+    }, "\u2715")), React.createElement("div", {
+      style: {
+        padding: '16px 22px 22px',
+        display: 'grid',
+        gap: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))',
+        gap: 9
+      }
+    }, tile('Employee ID', p.emp_id, true), tile('Department', dept), tile('Joined', p.doj, true), tile('Total experience', p.total_experience_text || (p.total_experience_years ? p.total_experience_years + ' yrs' : '')), tile('Blood group', p.blood_group, true), tile('Gender', p.gender)), (p.licence_no || p.licence_expiry || v) && React.createElement("div", {
+      style: {
+        borderRadius: 11,
+        padding: '10px 13px',
+        background: v ? expired ? '#fdf3f4' : '#eef8f1' : 'rgba(255,255,255,.7)',
+        border: '1px solid ' + (v ? expired ? '#f0c2ca' : '#cde9d8' : 'rgba(125,145,180,.18)')
+      }
+    }, React.createElement("div", {
+      style: lbl
+    }, "Registration / licence"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        alignItems: 'baseline',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontFamily: "'IBM Plex Mono',monospace",
+        fontSize: 13.5,
+        fontWeight: 700,
+        color: '#16202e'
+      }
+    }, pr.regNo || v && v.number || p.licence_no || '—'), pr.renewUpto ? React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: expired ? '#d23a52' : '#6c7a8c'
+      }
+    }, "valid until ", pr.renewUpto) : p.licence_expiry && React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, "expires ", p.licence_expiry), pr.status && React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: expired ? '#d23a52' : '#157a43'
+      }
+    }, pr.status), checked && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c',
+        marginLeft: 'auto'
+      }
+    }, "checked ", checked)), (pr.course || pr.institution) && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c',
+        marginTop: 4
+      }
+    }, [pr.course, pr.institution].filter(Boolean).join(' · '))), React.createElement("div", null, React.createElement("div", {
+      style: lbl
+    }, "Qualification"), chips(p.qualification, 'rgba(0,144,202,.1)', '#0072a3')), React.createElement("div", null, React.createElement("div", {
+      style: lbl
+    }, "Special training"), chips(p.special_training, '#fff4e5', '#b5670a')), React.createElement("div", null, React.createElement("div", {
+      style: lbl
+    }, "Extracurricular activities"), chips(p.extracurricular, '#f1eefb', '#6a52d4')), (() => {
+      const gaps = [['Blood group', p.blood_group], ['Gender', p.gender], ['BNMC licence', p.licence_no || v], ['Extracurricular activities', list(p.extracurricular).length]].filter(g => !g[1]).map(g => g[0]);
+      return gaps.length ? React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          color: '#8a5a00',
+          background: '#fff8e9',
+          border: '1px solid #f1d49a',
+          borderRadius: 9,
+          padding: '8px 11px'
+        }
+      }, "Not recorded on the staff register yet: ", React.createElement("b", null, gaps.join(', ')), ". Ask the CNS to update this record in Nurse Management.") : React.createElement("div", {
+        style: {
+          fontSize: 11,
+          color: '#9aa6b4'
+        }
+      }, "Read-only \u2014 staff records are maintained in Nurse Management by the CNS.");
+    })())));
+  }
+  function CpStaffTable({
+    rows
+  }) {
+    const [open, setOpen] = useState(null);
+    const th = {
+      textAlign: 'left',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      letterSpacing: '.5px',
+      textTransform: 'uppercase',
+      color: '#7d8ea8',
+      fontWeight: 700,
+      borderBottom: '1px solid rgba(125,145,180,.25)',
+      whiteSpace: 'nowrap'
+    };
+    const td = {
+      padding: '9px 12px',
+      borderBottom: '1px solid rgba(125,145,180,.12)',
+      verticalAlign: 'middle'
+    };
+    return React.createElement("div", {
       style: {
         overflowX: 'auto'
       }
@@ -65915,7 +67548,12 @@ window.LockScreen = LockScreen;
       const hep = CP_HEPB_TONE(p.hepatitis_b_vaccination);
       const training = String(p.special_training || '').replace(/^-$/, '').trim();
       return React.createElement("tr", {
-        key: p.id || p.emp_id || i
+        key: p.id || p.emp_id || i,
+        onClick: () => setOpen(p),
+        title: 'View ' + p.name + "'s profile",
+        style: {
+          cursor: 'pointer'
+        }
       }, React.createElement("td", {
         style: td
       }, React.createElement("div", {
@@ -65924,11 +67562,12 @@ window.LockScreen = LockScreen;
           alignItems: 'center',
           gap: 10
         }
-      }, React.createElement("span", {
+      }, React.createElement(UnicoAvatar, {
+        photo: p.photo || null,
+        initials: cpInitials(p.name),
+        size: 30,
+        radius: 9,
         style: {
-          width: 30,
-          height: 30,
-          borderRadius: 9,
           background: 'linear-gradient(135deg,#3ab5a7,#0090ca)',
           color: '#fff',
           display: 'grid',
@@ -65937,7 +67576,7 @@ window.LockScreen = LockScreen;
           fontWeight: 700,
           flexShrink: 0
         }
-      }, cpInitials(p.name)), React.createElement("div", {
+      }), React.createElement("div", {
         style: {
           minWidth: 0
         }
@@ -65945,9 +67584,26 @@ window.LockScreen = LockScreen;
         style: {
           fontWeight: 600,
           color: '#16202e',
-          whiteSpace: 'nowrap'
+          whiteSpace: 'nowrap',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5
         }
-      }, p.name), React.createElement("div", {
+      }, p.name, p.licence_verified ? React.createElement("span", {
+        title: p.licence_verified.primary && p.licence_verified.primary.expired ? 'BNMC registration expired' : 'BNMC verified',
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          width: 15,
+          height: 15,
+          borderRadius: '50%',
+          background: p.licence_verified.primary && p.licence_verified.primary.expired ? '#d23a52' : '#1f9d57'
+        }
+      }, React.createElement(Ic, {
+        d: I.check,
+        s: 9,
+        c: "#fff"
+      })) : null), React.createElement("div", {
         style: {
           fontSize: 10.5,
           color: '#9aa6b4'
@@ -66008,7 +67664,10 @@ window.LockScreen = LockScreen;
           whiteSpace: 'nowrap'
         }
       }, hep[1])));
-    }))))));
+    }))), open && React.createElement(CpStaffProfile, {
+      p: open,
+      onClose: () => setOpen(null)
+    }));
   }
   const CP_REQ_STATUS = {
     pending: 'Pending',
@@ -66361,6 +68020,7 @@ window.LockScreen = LockScreen;
     const [fUnit, setFUnit] = useState('');
     const [open, setOpen] = useState(null);
     const [sent, setSent] = useState({});
+    const [fix, setFix] = useState(null);
     const downOnBackdrop = React.useRef(false);
     const load = force => dcSubmissionResponse(null, force).then(r => {
       setSubs(r.submissions);
@@ -66649,6 +68309,7 @@ window.LockScreen = LockScreen;
         }
       }, late ? 'Was due ' : 'Due by ', dl.toLocaleDateString())), list.map(r => {
         const label = r.status === 'rejected' ? 'Returned' : 'Missing';
+        const ownFix = r.status === 'rejected' && r.from && !r.from.autoRejected && dcIsMine(r.from);
         const isQ = r.kind === 'quality';
         return React.createElement("div", {
           key: r.key,
@@ -66690,7 +68351,7 @@ window.LockScreen = LockScreen;
         }, r.unit, r.from && r.from.rejectReason ? ' · returned: ' + r.from.rejectReason : '')), React.createElement("span", {
           style: cpChipStyle(label)
         }, label), React.createElement("button", {
-          onClick: () => setOpen(r),
+          onClick: () => ownFix ? setFix(r) : setOpen(r),
           style: {
             display: 'inline-flex',
             alignItems: 'center',
@@ -66706,7 +68367,7 @@ window.LockScreen = LockScreen;
             fontFamily: 'inherit',
             flexShrink: 0
           }
-        }, label === 'Returned' ? 'Fix & submit' : 'Submit', " \u203A"));
+        }, ownFix ? 'Fix & resend' : label === 'Returned' ? 'Fix & submit' : 'Submit', " \u203A"));
       }));
     }), (nmList.length > 0 || startList.length > 0) && React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
@@ -66770,7 +68431,25 @@ window.LockScreen = LockScreen;
         color: '#6c7a8c',
         flex: '1 1 200px'
       }
-    }, "\u2014 ", x.nm.reason || 'no reason given'))))), open && React.createElement("div", {
+    }, "\u2014 ", x.nm.reason || 'no reason given'))))), fix && React.createElement(SubmissionDetail, {
+      key: 'fix/' + fix.from.id,
+      s: fix.from,
+      canEdit: false,
+      fullEdit: false,
+      initialMode: "resend",
+      onClose: () => setFix(null),
+      onSaved: () => {
+        const row = fix;
+        setFix(null);
+        setSent(s => ({
+          ...s,
+          [row.key]: true
+        }));
+        load(true).then(ok => {
+          if (ok) setSent({});
+        });
+      }
+    }), open && React.createElement("div", {
       className: "cp-mm-overlay",
       onMouseDown: e => {
         downOnBackdrop.current = e.target === e.currentTarget;
@@ -67257,7 +68936,7 @@ window.LockScreen = LockScreen;
     depts
   }) {
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
-    const canSave = !me || me.role === 'Administrator' || me.role !== 'collector' && me.role !== 'incharge' && !!(window.unicoCan && window.unicoCan('datacol', 'edit'));
+    const canSave = !me || me.role === 'Administrator' || !dcIsPortalRole(me) && !!(window.unicoCan && window.unicoCan('datacol', 'edit'));
     const dataRev = useDcDataRev();
     useDcCollectionRev();
     const [loaded, setLoaded] = useState(false);
@@ -67301,7 +68980,7 @@ window.LockScreen = LockScreen;
       icon: I.layers,
       title: "Department Setup",
       sub: "When each department started reporting, and the quality indicators it does not measure \u2014 both decide what counts as missing."
-    }), !canSave && React.createElement(Banner, null, "Read-only \u2014 only an Administrator can change a department\u2019s start month or mark an indicator as not measured."), err && React.createElement(Banner, null, err, " ", React.createElement("button", {
+    }), !canSave && React.createElement(Banner, null, "Read-only \u2014 only an Administrator can change a department\u2019s start month or mark an indicator as not measured."), dcIsAdminUser() && React.createElement(DcFieldRequestsAdmin, null), err && React.createElement(Banner, null, err, " ", React.createElement("button", {
       className: "btn sm",
       style: {
         marginLeft: 8
@@ -68130,6 +69809,7 @@ window.LockScreen = LockScreen;
     const data = useMemo(() => {
       const ql = q.trim().toLowerCase();
       const all = (rows || []).filter(s => {
+        if (s.status === 'withdrawn') return false;
         if (cutoff && (s.submittedAt || 0) < cutoff) return false;
         if (fType !== 'all' && s.type !== fType) return false;
         if (ql) {

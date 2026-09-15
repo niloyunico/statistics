@@ -14198,7 +14198,7 @@
       rejected: 'rejected',
       returned: 'rejected'
     };
-    subs.filter(x => String(x.month || '') === monthKey).forEach(x => {
+    subs.filter(x => String(x.month || '') === monthKey && x.status !== 'withdrawn').forEach(x => {
       const status = stMap[x.status] || 'sent';
       const rec = {
         status,
