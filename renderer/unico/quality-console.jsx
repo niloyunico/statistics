@@ -4528,6 +4528,17 @@ function QCAdmin({Q,q,onQ,initialDept}){
 
   const [view,setView]=useState('manage');            // manage | assign | catalog
   const [assignQ,setAssignQ]=useState('');            // Assign-by-Department indicator search
+  // Assign ticks are a DRAFT until Save: 'rowKey|deptKey' -> true (assign) / false (unassign).
+  // Every tick used to write the shared overlay instantly with no confirmation, so a save that
+  // failed or was overwritten by a stale copy only surfaced later as assignments "coming back".
+  const [asgDraft,setAsgDraft]=useState({});
+  const [asgSave,setAsgSave]=useState({state:'idle'}); // idle | saving | saved | error
+  const asgPendingRef=React.useRef(0);
+  React.useEffect(()=>{
+    const h=(e)=>{ if(asgPendingRef.current>0){ e.preventDefault(); e.returnValue=''; return ''; } };
+    window.addEventListener('beforeunload',h);
+    return ()=>window.removeEventListener('beforeunload',h);
+  },[]);
   const [tab,setTab]=useState('identity');
   const [sel,setSel]=useState(()=> initialDept? {deptKey:initialDept,id:null} : {deptKey:null,id:null});
   const [scope,setScope]=useState('all');
@@ -4732,8 +4743,9 @@ function QCAdmin({Q,q,onQ,initialDept}){
   const assignCount = {}; assignCols.forEach(c=>{ assignCount[c.key] = assignNames.reduce((n,r)=> n + (r.set.has(c.key)?1:0), 0); });
   const _aq = assignQ.trim().toLowerCase();
   const assignRows = _aq ? assignNames.filter(r=> (r.name||'').toLowerCase().includes(_aq)) : assignNames;
-  const toggleAssign = (rec,dk)=>{
-    if(rec.set.has(dk)){
+  const applyAssign = (rec,dk,want)=>{
+    if(want===rec.set.has(dk)) return;
+    if(!want){
       const d=(Q.depts||[]).find(x=>x.key===dk);
       const inst=d&&(d.indicators||[]).find(x=> (rec.code && stdMatch(x.name)===rec.code) || norm(x.name)===norm(rec.name));
       if(inst) Q.removeIndicator(dk,inst.id);
@@ -4745,10 +4757,42 @@ function QCAdmin({Q,q,onQ,initialDept}){
       const seedD=(window.QUALITY_SEED||[]).find(x=>x.key===dk);
       const seedInst=seedD&&(seedD.indicators||[]).find(x=> (rec.code && stdMatch(x.name)===rec.code) || norm(x.name)===norm(rec.name));
       if(seedInst){ Q.restoreIndicator(dk,seedInst.id); return; }
+      // Re-assigning hand hygiene also lifts an earlier opt-out of the audit-derived copy.
+      if(/hand\s*hygiene/i.test(rec.name||'')) Q.restoreIndicator(dk,'ind-hh-from-audit');
       // custom rows use a live department indicator as tmpl — definition only, never its readings
       const c=defOnly(rec.tmpl,{ id:window.qualitySlug(rec.tmpl.name||rec.name) }); Q.addIndicator(dk,c);
     }
   };
+  const asgCellKey=(rec,dk)=>rec.key+'|'+dk;
+  // Only draft entries that still differ from what is saved count (a save, or the same change
+  // arriving from another session, quietly settles them).
+  const asgPending=Object.keys(asgDraft).map(k=>{ const i=k.lastIndexOf('|'); const rec=rowsByKey[k.slice(0,i)]; const dk=k.slice(i+1); return rec?{k,rec,dk,want:asgDraft[k]}:null; })
+    .filter(p=>p && p.want!==p.rec.set.has(p.dk));
+  asgPendingRef.current=asgPending.length;
+  const asgWant=(rec,dk)=>{ const k=asgCellKey(rec,dk); return Object.prototype.hasOwnProperty.call(asgDraft,k)?asgDraft[k]:rec.set.has(dk); };
+  const toggleAssign=(rec,dk)=>{
+    const k=asgCellKey(rec,dk), saved=rec.set.has(dk), next=!asgWant(rec,dk);
+    setAsgDraft(d=>{ const o=Object.assign({},d); if(next===saved) delete o[k]; else o[k]=next; return o; });
+    if(asgSave.state!=='saving') setAsgSave({state:'idle'});
+  };
+  const asgFlush=(n)=>{
+    const f=window.unicoFlushNow;
+    if(typeof f!=='function'){ setAsgSave({state:'saved',at:Date.now(),n}); return; }
+    Promise.resolve(f()).then(r=>{
+      if(r && r.ok===false) setAsgSave({state:'error',n,error:r.error||'The server did not accept the save'});
+      else setAsgSave({state:'saved',at:Date.now(),n});
+    }).catch(e=>setAsgSave({state:'error',n,error:String((e&&e.message)||e)}));
+  };
+  const saveAssign=()=>{
+    const list=asgPending; if(!list.length || asgSave.state==='saving') return;
+    setAsgSave({state:'saving',n:list.length});
+    list.forEach(p=>applyAssign(p.rec,p.dk,p.want));
+    setAsgDraft({});
+    // The store writes the overlay in its own effect after this render; send it once that ran,
+    // and report what the SERVER said — not just that the click happened.
+    setTimeout(()=>asgFlush(list.length),400);
+  };
+  const discardAssign=()=>{ setAsgDraft({}); setAsgSave({state:'idle'}); };
 
   // ---- catalog / formula library ----
   const STD = (typeof HQI_STANDARDS!=='undefined' && HQI_STANDARDS) || [];
@@ -4792,7 +4836,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
       {/* sub-nav */}
       <div style={{display:'flex',gap:4,background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:11,padding:5,marginBottom:16,width:'max-content',maxWidth:'100%',boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)'}}>
         {subnav.map(t=>{ const active=view===t.id; return (
-          <button key={t.id} onClick={()=>setView(t.id)} style={{display:'inline-flex',alignItems:'center',gap:8,border:0,padding:'8px 16px',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',color:active?P.blue:P.muted,background:active?'#fff':'transparent',boxShadow:active?'0 1px 3px rgba(20,32,46,.12)':'none'}}>
+          <button key={t.id} onClick={()=>{ if(view==='assign' && t.id!=='assign' && asgPending.length && !window.confirm('Discard '+asgPending.length+' unsaved assignment change'+(asgPending.length!==1?'s':'')+'?')) return; if(t.id!=='assign') setAsgDraft({}); setView(t.id); }} style={{display:'inline-flex',alignItems:'center',gap:8,border:0,padding:'8px 16px',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',color:active?P.blue:P.muted,background:active?'#fff':'transparent',boxShadow:active?'0 1px 3px rgba(20,32,46,.12)':'none'}}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={t.d}></path></svg>
             <span>{t.label}</span>
             <span style={{fontFamily:MONO,fontSize:11,opacity:.7}}>{t.count}</span>
@@ -5105,10 +5149,25 @@ function QCAdmin({Q,q,onQ,initialDept}){
       )}
 
       {/* ============ ASSIGN ============ */}
-      {view==='assign' && (
+      {view==='assign' && (<React.Fragment>
+      {(()=>{ const n=asgPending.length, st=asgSave.state, adds=asgPending.filter(p=>p.want).length;
+        const tone = st==='error' ? {bd:'#f1c6cd',bg:'rgba(253,238,240,.97)',fg:'#b3263e'} : n ? {bd:'#f1d49a',bg:'rgba(255,248,233,.97)',fg:'#8a5a00'} : st==='saved' ? {bd:'#bfe6cd',bg:'rgba(236,248,241,.97)',fg:'#1f7a47'} : {bd:'#dde3ec',bg:'rgba(255,255,255,.95)',fg:P.muted};
+        const hm = (t)=>new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+        const msg = st==='saving' ? 'Saving '+(asgSave.n||0)+' change'+(asgSave.n!==1?'s':'')+' to the server…'
+          : n ? n+' unsaved change'+(n!==1?'s':'')+' — '+adds+' to assign · '+(n-adds)+' to unassign. Nothing is stored until you press Save.'
+          : st==='error' ? '⚠ Not saved to the server: '+asgSave.error+'. The change is kept on this device and retried automatically — keep this page open, or press Retry.'
+          : st==='saved' ? '✓ Saved to the server at '+hm(asgSave.at)+' ('+asgSave.n+' change'+(asgSave.n!==1?'s':'')+').'
+          : 'Tick cells to assign / unassign, then press Save.';
+        return (
+        <div role="status" style={{position:'sticky',top:0,zIndex:30,marginBottom:10,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',padding:'10px 14px',borderRadius:11,border:'1px solid '+tone.bd,background:tone.bg,backdropFilter:'blur(10px)',WebkitBackdropFilter:'blur(10px)',boxShadow:'0 6px 18px rgba(31,59,90,.12)'}}>
+          <div style={{flex:1,minWidth:220,fontSize:12.5,fontWeight:600,color:tone.fg}}>{msg}</div>
+          {st==='error' && !n && <button onClick={()=>{ setAsgSave({state:'saving',n:asgSave.n}); asgFlush(asgSave.n); }} style={{border:'1px solid #d23a52',background:'#fff',color:'#b3263e',padding:'7px 13px',borderRadius:8,fontSize:12.5,fontWeight:600,cursor:'pointer'}}>Retry</button>}
+          {n>0 && st!=='saving' && <button onClick={discardAssign} style={{border:'1px solid '+P.line,background:'#fff',color:P.ink,padding:'7px 13px',borderRadius:8,fontSize:12.5,fontWeight:600,cursor:'pointer'}}>Discard</button>}
+          <button onClick={saveAssign} disabled={!n || st==='saving'} style={{border:'1px solid #0090ca',background:(!n||st==='saving')?'#9fd3ea':'#0090ca',color:'#fff',padding:'7px 16px',borderRadius:8,fontSize:12.5,fontWeight:700,cursor:(!n||st==='saving')?'default':'pointer',boxShadow:n?'0 1px 3px rgba(0,144,202,.4)':'none'}}>{st==='saving'?'Saving…':'Save'+(n?' ('+n+')':'')}</button>
+        </div>); })()}
       <div style={{background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderRadius:12,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',overflow:'hidden'}}>
         <div style={{padding:'13px 16px',borderBottom:'1px solid #e8edf3',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-          <div style={{flex:1,minWidth:200}}><div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Assign by Department</div><div style={{fontSize:11.5,color:P.muted}}>Which department reports which indicator — all {assignNames.length} catalog indicators. Tick a cell to assign / unassign.</div></div>
+          <div style={{flex:1,minWidth:200}}><div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Assign by Department</div><div style={{fontSize:11.5,color:P.muted}}>Which department reports which indicator — all {assignNames.length} catalog indicators. Tick cells to assign / unassign, then press Save.</div></div>
           <input value={assignQ} onChange={e=>setAssignQ(e.target.value)} placeholder="Search indicator..." style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,background:'#fff',outline:'none',minWidth:230}}/>
           {_aq && <span style={{fontSize:11.5,color:P.muted,whiteSpace:'nowrap'}}>{assignRows.length} of {assignNames.length}</span>}
         </div>
@@ -5141,8 +5200,8 @@ function QCAdmin({Q,q,onQ,initialDept}){
                       : <span style={{flexShrink:0,fontSize:9.5,fontWeight:700,color:'#c2ccd8'}}>—</span>}
                   </div>
                 </td>
-                {assignCols.map(c=>{ const on=rec.set.has(c.key); return (
-                  <td key={c.key} className="qa-x" style={{textAlign:'center',padding:'6px 4px'}}><span onClick={()=>toggleAssign(rec,c.key)} title={rec.name+' × '+c.name+' — '+(on?'assigned · click to unassign':'not assigned · click to assign')} style={{display:'inline-grid',placeItems:'center',width:22,height:22,borderRadius:6,cursor:'pointer',background:on?'#e7f6ed':'#f7f9fc',color:on?'#1f9d57':'#cdd6e2',fontSize:12,fontWeight:700,boxShadow:on?'0 0 0 1px #bfe6cd':'none'}}>{on?'✓':''}</span></td>
+                {assignCols.map(c=>{ const saved=rec.set.has(c.key), on=asgWant(rec,c.key), pend=on!==saved; return (
+                  <td key={c.key} className="qa-x" style={{textAlign:'center',padding:'6px 4px'}}><span onClick={()=>toggleAssign(rec,c.key)} title={rec.name+' × '+c.name+' — '+(pend?(on?'will be ASSIGNED when you press Save':'will be UNASSIGNED when you press Save')+' · click to undo':(on?'assigned · click to unassign':'not assigned · click to assign'))} style={{display:'inline-grid',placeItems:'center',width:22,height:22,borderRadius:6,cursor:'pointer',background:pend?(on?'#fff4e0':'#fdeef0'):(on?'#e7f6ed':'#f7f9fc'),color:pend?(on?'#1f9d57':'#d23a52'):(on?'#1f9d57':'#cdd6e2'),fontSize:12,fontWeight:700,boxShadow:pend?('0 0 0 1.5px '+(on?'#e0a23a':'#e58a9a')):(on?'0 0 0 1px #bfe6cd':'none')}}>{pend?(on?'✓':'✕'):(on?'✓':'')}</span></td>
                 ); })}
               </tr>
               ); })}
@@ -5150,7 +5209,7 @@ function QCAdmin({Q,q,onQ,initialDept}){
           </table>
         </div>
       </div>
-      )}
+      </React.Fragment>)}
 
       {/* ============ CATALOG / FORMULA LIBRARY ============ */}
       {view==='catalog' && (

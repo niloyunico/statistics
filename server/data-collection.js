@@ -17,6 +17,7 @@ const accessRoles = require('./access');   // PORTAL_ROLES: collector + incharge
 const auth = require('./auth');
 const session = require('./session');
 const deptmap = require('./deptmap');
+const activity = require('./activity-log');   // best-effort audit trail (never throws)
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
@@ -221,7 +222,7 @@ async function qDeleteArea(key) {
 }
 
 // In-memory fallback for dev (no MONGODB_URI). The web app always has Mongo.
-const mem = { responsibles: [], submissions: [] };
+const mem = { responsibles: [], submissions: [], fieldRequests: [] };
 
 /* ---------------- responsible persons ---------------- */
 async function getResponsibles() {
@@ -331,7 +332,7 @@ async function getUserScope(username) {
   const users = await getUsers();
   const u = await users.findOne({ username: String(username).toLowerCase() });
   if (!u) return null;
-  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: u.role === 'incharge', departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, photo: u.photo || null, email: u.email || null, phone: u.phone || null, designation: u.designation || null, title: u.title || null };
+  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: u.role === 'incharge', responsibleId: u.responsibleId || null, departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, photo: u.photo || null, email: u.email || null, phone: u.phone || null, designation: u.designation || null, title: u.title || null };
 }
 
 async function deleteResponsible(id) {
@@ -692,22 +693,28 @@ function mergeQuality(orig, spec) {
 /* ---------------- admin: custom fields on the patient form ---------------- */
 // Admins can add/remove custom columns on a department's data-entry form. Custom
 // columns are tagged {custom:true} so built-in census columns can't be deleted.
+// The cols write is conditional on the array still being what was read (as in applyPatient):
+// two fields added at once (two field requests approved together) each rewrote the whole
+// array from their own stale copy, and the second erased the first.
 async function addDepartmentField(deptId, field) {
   const c = await col('departments');
   if (!c) throw new Error('Database not available.');
-  const dept = await c.findOne({ _id: String(deptId) });
-  if (!dept) throw new Error('Unknown department.');
   const label = String((field && field.label) || '').trim();
   if (!label) throw new Error('Field label is required.');
-  let id = String((field && field.id) || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
-  if (!id) id = 'cf' + label.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 14) + Math.floor(100 + Math.random() * 900);
-  const cols = Array.isArray(dept.cols) ? dept.cols.slice() : [];
-  if (cols.some((co) => co.id === id)) throw new Error('A field with that id already exists.');
-  const newCol = { id, label, custom: true };
-  if (field && field.pct) newCol.pct = true;
-  cols.push(newCol);
-  await c.updateOne({ _id: String(deptId) }, { $set: { cols } });
-  return { ok: true, field: newCol, cols };
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const dept = await c.findOne({ _id: String(deptId) });
+    if (!dept) throw new Error('Unknown department.');
+    let id = String((field && field.id) || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+    if (!id) id = 'cf' + label.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 14) + Math.floor(100 + Math.random() * 900);
+    const cols = Array.isArray(dept.cols) ? dept.cols.slice() : [];
+    if (cols.some((co) => co.id === id)) throw new Error('A field with that id already exists.');
+    const newCol = { id, label, custom: true };
+    if (field && field.pct) newCol.pct = true;
+    cols.push(newCol);
+    const r = await c.updateOne({ _id: String(deptId), cols: dept.cols === undefined ? { $exists: false } : dept.cols }, { $set: { cols } });
+    if (r.matchedCount) return { ok: true, field: newCol, cols };
+  }
+  throw new Error('The department was being updated by someone else — please try again.');
 }
 async function removeDepartmentField(deptId, fieldId) {
   const c = await col('departments');
@@ -720,6 +727,119 @@ async function removeDepartmentField(deptId, fieldId) {
   if (!target.custom) throw new Error('Only custom fields can be removed (built-in columns are protected).');
   await c.updateOne({ _id: String(deptId) }, { $set: { cols: cols.filter((co) => co.id !== String(fieldId)) } });
   return { ok: true, cols: cols.filter((co) => co.id !== String(fieldId)) };
+}
+
+/* ---------------- field requests: a unit ASKS for a custom field, an administrator decides ----------------
+ * Adding a column changes the form for everyone who reports that unit, so it stays admin-only;
+ * an in-charge / collector files a request instead. Collection `fieldRequests` — never deleted:
+ *   { _id, deptId, deptName, label, pct, reason, status: 'pending'|'approved'|'rejected',
+ *     requestedBy, requestedByUser, createdAt, decidedBy, decidedAt, decisionReason, fieldId, linkedExisting }
+ * An approval first CLAIMS the row (pending -> 'approving', like submissions), so a double click or
+ * two admins can never add the column twice; a claim older than APPROVE_CLAIM_MS is reclaimable. */
+const normFieldLabel = (s) => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, '');
+function httpError(status, message, extra) { const e = new Error(message); e.status = status; return Object.assign(e, extra || {}); }
+function frOut(d) { if (!d) return null; const { _id, ...r } = d; return Object.assign({ id: _id != null ? _id : r.id }, r); }
+// A visible column on the department whose label matches (case- and space-insensitive).
+// Hidden duplicate columns are never offered for entry, so they don't count as "already there".
+async function frColumnByLabel(deptId, label) {
+  const c = await col('departments'); if (!c) return null;
+  const dept = await c.findOne({ _id: String(deptId) });
+  const key = normFieldLabel(label);
+  return ((dept && dept.cols) || []).find((co) => co && !co.hidden && normFieldLabel(co.label) === key) || null;
+}
+async function getFieldRequest(id) {
+  const c = await col('fieldRequests');
+  if (!c) return frOut(mem.fieldRequests.find((r) => r.id === String(id)) || null);
+  return frOut(await c.findOne({ _id: String(id) }));
+}
+// query: { status ('all' = any; 'pending' includes an in-flight approval), user, deptId }. Newest first.
+async function listFieldRequests(query) {
+  const q = query || {};
+  const status = q.status && q.status !== 'all' ? String(q.status) : null;
+  const statuses = status === 'pending' ? ['pending', 'approving'] : (status ? [status] : null);
+  const c = await col('fieldRequests');
+  let rows;
+  if (!c) rows = mem.fieldRequests.filter((r) => (!statuses || statuses.includes(r.status)) && (!q.user || r.requestedByUser === q.user) && (!q.deptId || r.deptId === q.deptId));
+  else {
+    const f = {};
+    if (statuses) f.status = { $in: statuses };
+    if (q.user) f.requestedByUser = q.user;
+    if (q.deptId) f.deptId = q.deptId;
+    rows = await c.find(f).sort({ createdAt: -1, _id: -1 }).toArray();
+  }
+  return rows.map(frOut).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+// Conditional write: cond = { q: Mongo filter, ok: same test for the in-memory store }.
+async function frUpdateIf(id, cond, set) {
+  const c = await col('fieldRequests');
+  if (!c) { const r = mem.fieldRequests.find((x) => x.id === String(id)); if (!r || !cond.ok(r)) return null; Object.assign(r, set); return frOut(Object.assign({}, r)); }
+  const res = await c.updateOne(Object.assign({ _id: String(id) }, cond.q), { $set: set });
+  return res.matchedCount ? getFieldRequest(id) : null;
+}
+const FR_PENDING = { q: { status: 'pending' }, ok: (r) => r.status === 'pending' };
+const frClaimable = (now) => ({ q: { $or: [{ status: 'pending' }, { status: 'approving', approvingAt: { $lt: now - APPROVE_CLAIM_MS } }] }, ok: (r) => r.status === 'pending' || (r.status === 'approving' && r.approvingAt < now - APPROVE_CLAIM_MS) });
+const frHeldClaim = (at) => ({ q: { status: 'approving', approvingAt: at }, ok: (r) => r.status === 'approving' && r.approvingAt === at });
+async function frRefuseDecided(id) {
+  const cur = await getFieldRequest(id);
+  if (!cur) return httpError(404, 'Field request not found.');
+  const msg = { approving: 'This request is being approved right now.', approved: 'This request was already approved.', rejected: 'This request was already declined.' }[cur.status] || 'This request is no longer pending.';
+  return httpError(409, msg, { code: 'decided', currentStatus: cur.status, request: cur });
+}
+async function createFieldRequest(deptId, body, by) {
+  const b = body || {};
+  const label = String(b.label == null ? '' : b.label).trim().slice(0, 80);
+  const reason = String(b.reason == null ? '' : b.reason).trim().slice(0, 500);
+  if (!label) throw httpError(400, 'Enter the name of the field you need.');
+  if (!reason) throw httpError(400, 'Say why this field is needed.');
+  const c = await col('departments'); if (!c) throw httpError(503, 'Database not available.');
+  const dept = await c.findOne({ _id: String(deptId) });
+  if (!dept) throw httpError(404, 'Unknown department.');
+  const deptName = dept.name || String(deptId);
+  const have = await frColumnByLabel(deptId, label);
+  if (have) throw httpError(409, '"' + have.label + '" is already a field on ' + deptName + '.', { code: 'exists', fieldId: have.id });
+  const key = normFieldLabel(label);
+  const open = (await listFieldRequests({ status: 'pending', deptId: String(deptId) })).find((r) => normFieldLabel(r.label) === key);
+  if (open) throw httpError(409, 'A request for "' + open.label + '" on ' + deptName + ' is already waiting for an administrator.', { code: 'pending', pendingId: open.id });
+  const doc = { deptId: String(deptId), deptName, label, pct: !!b.pct, reason, status: 'pending', requestedBy: (by && by.name) || 'local', requestedByUser: (by && by.user) || null, createdAt: Date.now(), decidedBy: null, decidedAt: null, decisionReason: '', fieldId: null };
+  const id = genId('freq');
+  const fc = await col('fieldRequests');
+  if (!fc) { const rec = Object.assign({ id }, doc); mem.fieldRequests.unshift(rec); return frOut(Object.assign({}, rec)); }
+  await fc.insertOne(Object.assign({ _id: id }, doc));
+  return Object.assign({ id }, doc);
+}
+async function decideFieldRequest(id, body, by) {
+  const b = body || {};
+  const status = String(b.status || '');
+  if (status !== 'approved' && status !== 'rejected') throw httpError(400, 'Choose approve or decline.');
+  const reason = String(b.reason == null ? '' : b.reason).trim().slice(0, 500);
+  if (!(await getFieldRequest(id))) throw httpError(404, 'Field request not found.');
+  if (status === 'rejected') {
+    if (!reason) throw httpError(400, 'Give a reason so the requester knows why it was declined.');
+    const upd = await frUpdateIf(id, FR_PENDING, { status: 'rejected', decidedBy: by || 'admin', decidedAt: Date.now(), decisionReason: reason });
+    if (!upd) throw await frRefuseDecided(id);
+    return { ok: true, request: upd };
+  }
+  const at = Date.now();
+  const claimed = await frUpdateIf(id, frClaimable(at), { status: 'approving', approvingAt: at });
+  if (!claimed) throw await frRefuseDecided(id);
+  try {
+    // The column may have been added meanwhile (by hand, or an earlier request for the same
+    // label): link to it rather than adding a duplicate.
+    const existing = await frColumnByLabel(claimed.deptId, claimed.label);
+    const fieldId = existing ? existing.id : (await addDepartmentField(claimed.deptId, { label: claimed.label, pct: claimed.pct })).field.id;
+    const done = await frUpdateIf(id, frHeldClaim(at), { status: 'approved', approvingAt: null, decidedBy: by || 'admin', decidedAt: Date.now(), decisionReason: reason, fieldId, linkedExisting: !!existing });
+    if (!done) throw await frRefuseDecided(id);
+    return { ok: true, request: done, linked: !!existing };
+  } catch (e) {
+    if (e.code !== 'decided') await frUpdateIf(id, frHeldClaim(at), { status: 'pending', approvingAt: null }).catch(() => {});
+    throw e;
+  }
+}
+// Is this submission's indicator one whose denominator only an administrator sets (NSI headcount)?
+async function denIsAdminOnly(spec) {
+  const a = spec && spec.area ? await qArea(spec.area) : null;
+  const ind = a && (a.indicators || []).find((i) => i.id === spec.indicatorId);
+  return !!(ind && ind.denAdminOnly);
 }
 
 /* ---------------- submissions (pending -> approve/reject) ---------------- */
@@ -761,13 +881,51 @@ async function snapshotQualityPrior(spec) {
     const d = await qArea(spec.area); if (!d) return null;
     const ind = (d.indicators || []).find((i) => i.id === spec.indicatorId); if (!ind) return null;
     const m = spec.month;
-    return { value: (ind.months || {})[m], num: (ind.mNum || {})[m], den: (ind.mDen || {})[m], incidents: (ind.incidents || {})[m] || null };
+    // remark + CAPA too: an edit request that only changes the note or the incident / CAPA text
+    // is a real change, and the comparison pop-up needs what is on record to show it.
+    return { value: (ind.months || {})[m], num: (ind.mNum || {})[m], den: (ind.mDen || {})[m], notObserved: !!(ind.mNotObserved || {})[m], incidents: (ind.incidents || {})[m] || null, remark: (ind.monthRemarks || {})[m] || '', capa: (ind.capa || {})[m] || null };
   } catch (e) { return null; }
+}
+// Is there already data ON RECORD for this exact target + month? Returns the server's prior
+// snapshot (what the collector's new figures would replace), or null. A plain second report
+// for such a month silently overwrote approved data at approval; it must be an edit request.
+async function onRecordPrior(spec) {
+  const filled = (v) => v != null && v !== '';
+  if (spec.type === 'patient') {
+    const c = await col('departments'); if (!c) return null;
+    const d = await c.findOne({ _id: String(spec.department) }); if (!d) return null;
+    const idx = (d.months || []).indexOf(spec.month); const row = idx >= 0 ? (d.data || [])[idx] : null;
+    if (!row || !Object.keys(row).some((k) => k !== 'month' && k !== 'full' && filled(row[k]))) return null;
+    return { values: Object.assign({}, row) };
+  }
+  if (spec.isNewIndicator) return null;
+  const m = spec.month;
+  const area = await qArea(spec.area);
+  const ind = area && (area.indicators || []).find((i) => i.id === spec.indicatorId);
+  if (ind && (filled((ind.months || {})[m]) || filled((ind.mNum || {})[m]) || (ind.mNotObserved || {})[m])) return snapshotQualityPrior(spec);
+  // An approved report counts even when the stored reading was later cleared or changed.
+  const key = dupKeyOf(spec);
+  const c = await col('submissions');
+  const approved = c
+    ? (await c.find({ status: 'approved', type: 'quality', area: spec.area, month: m }).toArray()).find((x) => dupKeyOf(x) === key)
+    : mem.submissions.find((x) => x.status === 'approved' && dupKeyOf(x) === key);
+  if (!approved) return null;
+  return (await snapshotQualityPrior(spec)) || { value: approved.value, num: approved.num, den: approved.den, notObserved: !!approved.notObserved, incidents: approved.incidents || null, remark: approved.remark || '', capa: approved.capa || null };
+}
+function refuseExists(spec, prior) {
+  const what = spec.type === 'patient' ? (spec.departmentName || spec.department) : (spec.indicatorName || spec.indicatorId);
+  const e = new Error('Data for ' + what + ' — ' + spec.month + ' is already on record. Send it as an edit request with a reason for the change.');
+  e.status = 409; e.code = 'exists'; e.prior = prior; throw e;
+}
+function requireCorrectionReason(m) {
+  m.correctionReason = String(m.correctionReason || '').trim();
+  if (!m.correctionReason) { const e = new Error('Give a reason for the change.'); e.status = 400; throw e; }
 }
 // One pending row per target + month. A second one (a double Save, a resubmit after the
 // success popup, a phone double-tap) sat beside the first until an admin approved ONE of
 // them — and approving the emptier copy auto-rejected the real data. Edit the pending one.
-async function refuseIfPending(spec) {
+// 'withdrawn' / 'rejected' / 'approved' rows are not open. `excludeId` = the row being resent.
+async function refuseIfPending(spec, excludeId) {
   const key = dupKeyOf(spec);
   const c = await col('submissions');
   const open = ['pending', 'approving'];
@@ -778,10 +936,11 @@ async function refuseIfPending(spec) {
     if (spec.type === 'patient') q.department = spec.department; else q.area = spec.area;
     cands = await c.find(q).toArray();
   }
-  if (cands.some((x) => dupKeyOf(x) === key)) {
+  const hit = cands.find((x) => String(x._id || x.id) !== String(excludeId || '') && dupKeyOf(x) === key);
+  if (hit) {
     const what = spec.type === 'patient' ? (spec.departmentName || spec.department) : (spec.indicatorName || spec.indicatorId);
     const e = new Error('A submission for ' + what + ' — ' + spec.month + ' is already waiting for review. Open it and edit it instead of sending another.');
-    e.status = 409; throw e;
+    e.status = 409; e.code = 'pending'; e.pendingId = String(hit._id || hit.id); throw e;
   }
 }
 async function submitPatient(payload, meta) {
@@ -789,20 +948,28 @@ async function submitPatient(payload, meta) {
   if (meta && meta.enforceCollection) await refuseOutsideCollection(spec);
   await refuseIfPending(spec);
   const m = Object.assign({}, payload, meta);
-  if (m.isCorrection) m.priorValues = await snapshotPatientPrior(spec);
+  if (m.isCorrection) { requireCorrectionReason(m); m.priorValues = await snapshotPatientPrior(spec); }
+  else { const prior = await onRecordPrior(spec); if (prior) refuseExists(spec, prior); }
   return { ok: true, submission: await createSubmission(spec, m) };
 }
 async function submitQuality(payload, meta, indicatorAllowed) {
-  const spec = await buildQualitySpec(payload);
+  let spec = await buildQualitySpec(payload);
+  // A portal account never sets an ADMIN-OWNED denominator (NSI's total healthcare workers):
+  // the form only hid it for 'collector', and at approval a submitted denominator overwrites the
+  // stored headcount. Rebuild without it, so the rate computes against the admin's figure.
+  if (meta && meta.lockAdminDen && !spec.isNewIndicator && ((payload && payload.den != null && payload.den !== '') || (payload && payload.groupsDen)) && (await denIsAdminOnly(spec))) {
+    spec = await buildQualitySpec(Object.assign({}, payload, { indicatorId: spec.indicatorId, den: undefined, groupsDen: undefined }));
+  }
   if (meta && meta.enforceCollection) await refuseOutsideCollection(spec);
-  await refuseIfPending(spec);
   // Checked on the RESOLVED indicator (buildQualitySpec maps a typed name onto an existing
   // id), so a collector limited to specific indicators can't report one outside the list.
   if (indicatorAllowed && !spec.isNewIndicator && !indicatorAllowed(spec.area, spec.indicatorId)) {
     const err = new Error('You are not assigned to report "' + spec.indicatorName + '".'); err.status = 403; throw err;
   }
+  await refuseIfPending(spec);
   const m = Object.assign({}, payload, meta);
-  if (m.isCorrection) m.priorValues = await snapshotQualityPrior(spec);
+  if (m.isCorrection) { requireCorrectionReason(m); m.priorValues = await snapshotQualityPrior(spec); }
+  else { const prior = await onRecordPrior(spec); if (prior) refuseExists(spec, prior); }
   return { ok: true, submission: await createSubmission(spec, m) };
 }
 
@@ -818,6 +985,30 @@ async function setSubmissionStatus(id, patch) {
   if (!c) { const s = mem.submissions.find((x) => x.id === String(id)); if (s) Object.assign(s, patch); return s; }
   await c.updateOne({ _id: String(id) }, { $set: patch });
   return getSubmissionById(id);
+}
+// Conditional write: applies ONLY while the row is still `status` (one atomic filter), so a
+// withdraw / reject / resend can never land on a row an approval claimed a moment earlier.
+// Returns the updated row, or null when the status had already moved on.
+async function updateSubmissionIf(id, status, set, push) {
+  const c = await col('submissions');
+  if (!c) {
+    const s = mem.submissions.find((x) => x.id === String(id));
+    if (!s || s.status !== status) return null;
+    Object.keys(push || {}).forEach((k) => { s[k] = (Array.isArray(s[k]) ? s[k] : []).concat([push[k]]); });
+    Object.assign(s, set); return s;
+  }
+  const u = { $set: set }; if (push) u.$push = push;
+  const r = await c.updateOne({ _id: String(id), status }, u);
+  return r.matchedCount ? getSubmissionById(id) : null;
+}
+const NOT_PENDING_MSG = { approving: 'This submission is being approved right now.', approved: 'This submission is already approved — send an edit request instead.', rejected: 'This submission was returned — fix and resend it instead.', withdrawn: 'This submission was already withdrawn.' };
+// "Delete before approval" is a soft status: nothing stored is ever removed.
+async function withdrawSubmission(id, by) {
+  const upd = await updateSubmissionIf(id, 'pending', { status: 'withdrawn', withdrawnAt: Date.now(), withdrawnBy: by || 'local' });
+  if (upd) return { ok: true, submission: upd };
+  const now = await getSubmissionById(id);
+  const e = new Error(now ? ((NOT_PENDING_MSG[now.status] || 'Only pending submissions can be withdrawn.') + ' It was not withdrawn.') : 'Submission not found.');
+  e.status = now ? 409 : 404; throw e;
 }
 
 // Identity of a "duplicate" — mirrors the client's dupKey (data-collection.jsx): same
@@ -903,7 +1094,10 @@ async function rejectSubmission(id, by, reason) {
   const s = await getSubmissionById(id);
   if (!s) throw new Error('Submission not found.');
   if (s.status !== 'pending') throw new Error('Only pending submissions can be rejected (this one is "' + s.status + '").');
-  const upd = await setSubmissionStatus(id, { status: 'rejected', reviewedBy: by || 'admin', reviewedAt: Date.now(), rejectReason: String(reason || '') });
+  const why = String(reason == null ? '' : reason).trim();
+  if (!why) { const e = new Error('Give a reason so the collector knows what to fix.'); e.status = 400; throw e; }
+  const upd = await updateSubmissionIf(id, 'pending', { status: 'rejected', reviewedBy: by || 'admin', reviewedAt: Date.now(), rejectReason: why });
+  if (!upd) { const now = await getSubmissionById(id); const e = new Error('Only pending submissions can be rejected (this one is "' + (now ? now.status : 'deleted') + '").'); e.status = 409; throw e; }
   return { ok: true, submission: upd };
 }
 
@@ -926,14 +1120,14 @@ async function getStats() {
   const c = await col('submissions');
   if (!c) {
     const by = (f) => mem.submissions.filter(f).length;
-    return { total: mem.submissions.length, pending: by((s) => s.status === 'pending'), approved: by((s) => s.status === 'approved'), rejected: by((s) => s.status === 'rejected'), patient: by((s) => s.type === 'patient'), quality: by((s) => s.type === 'quality'), lastSubmittedAt: mem.submissions[0] ? mem.submissions[0].submittedAt : null };
+    return { total: mem.submissions.length, pending: by((s) => s.status === 'pending'), approved: by((s) => s.status === 'approved'), rejected: by((s) => s.status === 'rejected'), withdrawn: by((s) => s.status === 'withdrawn'), patient: by((s) => s.type === 'patient'), quality: by((s) => s.type === 'quality'), lastSubmittedAt: mem.submissions[0] ? mem.submissions[0].submittedAt : null };
   }
-  const [total, pending, approved, rejected, patient, quality] = await Promise.all([
+  const [total, pending, approved, rejected, withdrawn, patient, quality] = await Promise.all([
     c.countDocuments({}), c.countDocuments({ status: 'pending' }), c.countDocuments({ status: 'approved' }),
-    c.countDocuments({ status: 'rejected' }), c.countDocuments({ type: 'patient' }), c.countDocuments({ type: 'quality' }),
+    c.countDocuments({ status: 'rejected' }), c.countDocuments({ status: 'withdrawn' }), c.countDocuments({ type: 'patient' }), c.countDocuments({ type: 'quality' }),
   ]);
   const lastArr = await c.find({}).sort({ submittedAt: -1 }).limit(1).toArray();
-  return { total, pending, approved, rejected, patient, quality, lastSubmittedAt: lastArr[0] ? lastArr[0].submittedAt : null };
+  return { total, pending, approved, rejected, withdrawn, patient, quality, lastSubmittedAt: lastArr[0] ? lastArr[0].submittedAt : null };
 }
 
 /* ---------------- shareable short links ---------------- */
@@ -1016,12 +1210,17 @@ async function shortlinkSubmit(code, body) {
   const link = await getShortlink(code);
   if (!link) throw new Error('Invalid or expired link.');
   const meta = { responsible: link.responsible, submittedBy: (link.responsible && link.responsible.name) || 'shared-link', source: 'shortlink' };
+  const b = body || {};
+  // The SAME guards as the signed-in forms (submitPatient / submitQuality): one pending row per
+  // target + month (409 'pending'), no plain second report for a month on record (409 'exists'
+  // with the prior), and an edit request needs a reason. It used to call createSubmission
+  // directly, so a link could stack duplicates and overwrite approved data. Only whitelisted
+  // fields pass: the link itself fixes the department / area and the responsible person.
+  const corr = { isCorrection: !!b.isCorrection, correctionReason: b.correctionReason };
   if (link.type === 'patient') {
-    const spec = await buildPatientSpec({ department: link.department, month: body && body.month, values: body && body.values });
-    return { ok: true, submission: await createSubmission(spec, meta) };
+    return submitPatient(Object.assign({ department: link.department, month: b.month, values: b.values }, corr), meta);
   }
-  const spec = await buildQualitySpec({ area: link.area, indicatorId: body && body.indicatorId, indicatorName: body && body.indicatorName, month: body && body.month, value: body && body.value, remark: body && body.remark });
-  return { ok: true, submission: await createSubmission(spec, meta) };
+  return submitQuality(Object.assign({ area: link.area, indicatorId: b.indicatorId, indicatorName: b.indicatorName, month: b.month, value: b.value, remark: b.remark }, corr), meta);
 }
 
 // Self-contained public form page served at /s/:code (no admin login needed).
@@ -1038,8 +1237,12 @@ function shortlinkPage(code) {
     + '.logo{height:32px;margin-bottom:8px}h1{font-size:18px;margin:6px 0 2px}.muted{color:#6c7a8c;font-size:12.5px;margin:0 0 16px}'
     + '.who{font-size:12.5px;color:#3c4858;background:#f1f6fb;border:1px solid #e3e9f1;border-radius:8px;padding:8px 11px;margin-bottom:14px}'
     + '.grp{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}label{font-size:12px;font-weight:600;color:#3c4858}'
-    + 'input,select{width:100%;padding:10px 12px;border:1px solid #dde3ec;border-radius:8px;font-family:inherit;font-size:14px;background:#f7f9fc;outline:none}'
-    + 'input:focus,select:focus{border-color:#27a8db;background:#fff}'
+    + 'input,select,textarea{width:100%;padding:10px 12px;border:1px solid #dde3ec;border-radius:8px;font-family:inherit;font-size:14px;background:#f7f9fc;outline:none}'
+    + 'textarea{min-height:58px;resize:vertical}input:focus,select:focus,textarea:focus{border-color:#27a8db;background:#fff}'
+    + '.cmp{margin-top:14px;border:1px solid #efd08a;background:#fffaf0;border-radius:10px;padding:12px 14px;font-size:12.5px}'
+    + '.cmp table{width:100%;border-collapse:collapse;margin:4px 0 10px}.cmp th,.cmp td{padding:6px 8px;border-bottom:1px solid #f0e3c4;text-align:left}'
+    + '.cmp th{font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:#6c7a8c}.cmp tr.chg td{background:#fff4e0;font-weight:700;color:#7a5400}'
+    + '.btn.btn2{background:#eef2f7;color:#3c4858}'
     + '.btn{width:100%;margin-top:6px;padding:11px;border:0;border-radius:9px;cursor:pointer;font-weight:700;font-size:14px;color:#fff;background:linear-gradient(135deg,#27a8db,#0072a3)}'
     + '.btn:disabled{opacity:.6}.err{color:#b4232f;font-size:12.5px;font-weight:600;display:block;margin-top:8px}'
     + '.done{text-align:center;padding:14px 0}.done h2{margin:10px 0 4px;color:#1f9d57}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}'
@@ -1071,11 +1274,38 @@ function shortlinkPage(code) {
     + 'if(m.type==="patient"){var mo=(document.getElementById("f_month").value||"").trim();if(!mo){msg.innerHTML=\'<span class="err">Enter the reporting month.</span>\';return;}'
     + 'var values={};root.querySelectorAll("[data-col]").forEach(function(inp){if(inp.value!=="")values[inp.getAttribute("data-col")]=inp.value;});body={month:mo,values:values};}'
     + 'else{body={indicatorId:document.getElementById("f_ind").value,month:document.getElementById("f_month").value,value:document.getElementById("f_val").value,remark:document.getElementById("f_remark").value};}'
-    + 'btn.disabled=true;btn.textContent="Submitting…";msg.innerHTML="";'
-    + 'fetch("/s/"+code+"/submit",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(r){'
-    + 'if(r&&r.ok){root.innerHTML=\'<div class="done"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#1f9d57" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-6"/></svg><h2>Thank you!</h2><p class="muted">Your submission was recorded and sent for review.</p><button class="btn" onclick="location.reload()">Submit another</button></div>\';}'
-    + 'else{btn.disabled=false;btn.textContent="Submit";msg.innerHTML=\'<span class="err">\'+esc((r&&r.error)||"Submission failed.")+\'</span>\';}'
-    + '}).catch(function(){btn.disabled=false;btn.textContent="Submit";msg.innerHTML=\'<span class="err">Submission failed.</span>\';});}'
+    + 'msg.innerHTML="";send(m,body);}'
+    // Same 409 answers as the app forms: 'exists' opens an on-record vs new comparison with a
+    // required reason and resends as an edit request; 'pending' says one is already waiting (a
+    // public link cannot open it, so it says who can).
+    + `function norm(v){if(v==null)return "";if(typeof v==="boolean")return v?"Yes":"";var t=String(v).trim();if(!t)return "";var n=Number(t);return isNaN(n)?t:String(n);}
+function show(v){return norm(v)===""?"—":String(v);}
+function crow(label,old,now){var blank=norm(now)==="";return {label:label,old:old,now:blank?null:now,kept:blank&&norm(old)!=="",changed:!blank&&norm(old)!==norm(now)};}
+function cmpRows(m,body,prior){var rows=[],keep=function(r){if(norm(r.old)!==""||r.now!=null)rows.push(r);};
+if(m.type==="patient"){var pv=prior.values||{},nv=body.values||{},lbl={},keys=m.cols.map(function(c){lbl[c.id]=c.label;return c.id;});
+Object.keys(pv).concat(Object.keys(nv)).forEach(function(k){if(k!=="month"&&k!=="full"&&keys.indexOf(k)<0)keys.push(k);});
+keys.forEach(function(k){keep(crow(lbl[k]||k,pv[k],nv[k]));});}
+else{rows.push(crow("Not observed",prior.notObserved?"Yes":"No","No"));rows.push(crow("Value",prior.value,body.value));keep(crow("Remark",prior.remark,body.remark));}
+return rows;}
+function compare(m,body,prior){var msg=document.getElementById("msg"),rows=cmpRows(m,body,prior),none=!rows.some(function(r){return r.changed;});
+var h='<div class="cmp"><b>Data already recorded for this month</b><p class="muted" style="margin:4px 0 8px">It is already on record, so your figures go to an administrator as an <b>edit request</b>. Nothing on record changes until it is approved.</p><table><tr><th>Field</th><th>On record</th><th>Your new value</th></tr>';
+rows.forEach(function(r){h+='<tr'+(r.changed?' class="chg"':'')+'><td>'+esc(r.label)+'</td><td>'+esc(show(r.old))+'</td><td>'+esc(r.kept?show(r.old)+" (kept)":show(r.now))+'</td></tr>';});
+h+='</table>'+(none?'<span class="err" style="margin:0 0 8px">No changes from what is on record.</span>':'')+field("Reason for the change (required)",'<textarea id="f_reason" placeholder="e.g. wrong count entered — should be Y not X"></textarea>')+'<div class="grid2"><button class="btn btn2" id="ce">Edit my values</button><button class="btn" id="cs" disabled>Send edit request</button></div></div>';
+msg.innerHTML=h;var ta=document.getElementById("f_reason"),cs=document.getElementById("cs");
+ta.oninput=function(){cs.disabled=none||!ta.value.trim();};
+document.getElementById("ce").onclick=function(){msg.innerHTML="";};
+cs.onclick=function(){if(none||!ta.value.trim())return;send(m,Object.assign({},body,{isCorrection:true,correctionReason:ta.value.trim()}));};
+ta.focus();}
+function send(m,body){var btn=document.getElementById("sb"),msg=document.getElementById("msg"),cs=document.getElementById("cs");
+btn.disabled=true;btn.textContent="Submitting…";if(cs){cs.disabled=true;cs.textContent="Sending…";}
+var reset=function(){btn.disabled=false;btn.textContent="Submit";};
+fetch("/s/"+code+"/submit",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(r){
+if(r&&r.ok){var c=!!body.isCorrection;root.innerHTML='<div class="done"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#1f9d57" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-6"/></svg><h2>'+(c?"Edit request sent":"Thank you!")+'</h2><p class="muted">'+(c?"An administrator reviews it. Nothing on record changes until it is approved.":"Your submission was recorded and sent for review.")+'</p><button class="btn" onclick="location.reload()">Submit another</button></div>';return;}
+reset();
+if(r&&r.code==="exists"){compare(m,body,r.prior||{});return;}
+if(r&&r.code==="pending"){msg.innerHTML='<div class="cmp"><b>A submission for this is already waiting for review</b><p class="muted" style="margin:4px 0 0">'+esc(r.error||"")+' It cannot be opened from this link: ask the administrator to edit the waiting one instead of sending another.</p></div>';return;}
+msg.innerHTML='<span class="err">'+esc((r&&r.error)||"Submission failed.")+'</span>';
+}).catch(function(){reset();if(cs){cs.disabled=false;cs.textContent="Send edit request";}msg.innerHTML+='<span class="err">Submission failed.</span>';});}`
     + '})();</script></body></html>';
 }
 
@@ -1203,6 +1433,21 @@ function mount(app, opts) {
     if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
     next();
   };
+  // Same authority as adminOnly: the RESOLVED live account (req.access), not the role claim
+  // frozen into the token — a demoted admin's old token must not keep "edit anything".
+  const isAdminReq = (req) => (req.access ? !!req.access.unrestricted : !(req.user && req.user.role && req.user.role !== 'Administrator'));
+  // ONE ownership rule for acting on "my own" submission (edit / withdraw / resend). The login
+  // stamped at submit (submittedByUser) wins — two staff can share a display name. The name /
+  // responsible match is only for legacy rows sent before that field existed.
+  const ownsSubmission = async (req, s) => {
+    if (!req.user || !s) return false;
+    const me = String(req.user.sub || '').toLowerCase();
+    if (s.submittedByUser) return !!me && String(s.submittedByUser).toLowerCase() === me;
+    const scope = await getUserScope(req.user.sub);
+    const mine = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
+    return mine.includes(s.submittedBy) || !!(s.responsible && mine.includes(s.responsible.name));
+  };
+  const sendErr = (res, e, fallback) => res.status(e.status || fallback || 400).json({ ok: false, error: String(e.message || e), code: e.code, prior: e.prior, pendingId: e.pendingId });
   const filterSubmissionsForUser = async (req, subs) => {
     // EVERY portal role, not just 'collector'. When this named one role, adding a
     // second (incharge) silently handed that account the whole hospital's submissions.
@@ -1218,7 +1463,8 @@ function mount(app, opts) {
       depts = [...set];
     } catch (e) { /* keep stored dept scope */ }
     const areas = (scope && scope.qualityAreas) || [];
-    return (subs || []).filter((s) => names.includes(s.submittedBy)
+    const me = String(req.user.sub || '').toLowerCase();
+    return (subs || []).filter((s) => (s.submittedByUser && String(s.submittedByUser).toLowerCase() === me) || names.includes(s.submittedBy)
       || (s.responsible && names.includes(s.responsible.name))
       || (s.type === 'patient' && depts.includes(s.department))
       || (s.type === 'quality' && ((scope && scope.allQualityAreas) || areas.includes(s.area))));
@@ -1231,6 +1477,7 @@ function mount(app, opts) {
       pending: by((s) => s.status === 'pending'),
       approved: by((s) => s.status === 'approved'),
       rejected: by((s) => s.status === 'rejected'),
+      withdrawn: by((s) => s.status === 'withdrawn'),
       patient: by((s) => s.type === 'patient'),
       quality: by((s) => s.type === 'quality'),
       lastSubmittedAt: arr[0] ? arr[0].submittedAt : null,
@@ -1268,6 +1515,14 @@ function mount(app, opts) {
   });
 
   const isPortalReq = (req) => !!(req.user && accessRoles.PORTAL_ROLES.indexOf(req.user.role) >= 0);
+  // A portal account reports as ITSELF. The client locked the responsible person for 'collector'
+  // only, so an in-charge could file a report under anyone's name — the server now stamps the
+  // signed-in person whatever the body says. Admins may still name any responsible person.
+  const portalResponsible = async (req) => {
+    if (!isPortalReq(req)) return null;
+    const scope = await getUserScope(req.user.sub);
+    return { id: (scope && scope.responsibleId) || null, name: (scope && scope.name) || req.user.name || req.user.sub, title: '' };
+  };
   const everySubmission = async (status) => {
     const all = []; let page, offset = 0;
     do { page = await getSubmissions({ status, limit: 1000, offset }); all.push(...page); offset += page.length; } while (page.length === 1000);
@@ -1309,8 +1564,10 @@ function mount(app, opts) {
     try {
       const deny = await denyIfOutOfScope(req, 'patient', String((req.body && req.body.department) || '').trim());
       if (deny) return res.status(403).json({ ok: false, error: deny });
-      res.json(await submitPatient(req.body || {}, { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req) }));
-    } catch (e) { res.status(e.status || 400).json({ ok: false, error: String(e.message || e) }); }
+      const meta = { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req) };
+      const own = await portalResponsible(req); if (own) meta.responsible = own;
+      res.json(await submitPatient(req.body || {}, meta));
+    } catch (e) { sendErr(res, e); }
   });
   app.post('/api/submissions/quality', guard, async (req, res) => {
     try {
@@ -1324,8 +1581,10 @@ function mount(app, opts) {
         const qi = (scope && scope.qualityIndicators) || {};
         indicatorAllowed = (area, id) => !(Array.isArray(qi[area]) && qi[area].length) || qi[area].map(String).includes(String(id));
       }
-      res.json(await submitQuality(req.body || {}, { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req) }, indicatorAllowed));
-    } catch (e) { res.status(e.status || 400).json({ ok: false, error: String(e.message || e) }); }
+      const meta = { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req), lockAdminDen: isPortalReq(req) };
+      const own = await portalResponsible(req); if (own) meta.responsible = own;
+      res.json(await submitQuality(req.body || {}, meta, indicatorAllowed));
+    } catch (e) { sendErr(res, e); }
   });
   // Admin: manage quality departments / areas (create / rename / delete).
   // Per-department collection settings: start month + not-measured quality indicators.
@@ -1356,12 +1615,50 @@ function mount(app, opts) {
   app.delete('/api/departments/:id/fields/:fieldId', guard, adminOnly, async (req, res) => {
     try { res.json(await removeDepartmentField(req.params.id, req.params.fieldId)); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
+  // Field requests: a unit asks for a custom field (own departments only); an administrator decides.
+  app.post('/api/departments/:id/field-requests', guard, async (req, res) => {
+    try {
+      const deny = await denyIfOutOfScope(req, 'patient', String(req.params.id || '').trim());
+      if (deny) return res.status(403).json({ ok: false, error: deny });
+      const request = await createFieldRequest(req.params.id, req.body, { name: who(req), user: (req.user && req.user.sub) || null });
+      activity.log(req, 'field_requested', { target: request.deptName + ' · ' + request.label + (request.pct ? ' (%)' : ''), detail: request.reason });
+      res.json({ ok: true, request });
+    } catch (e) { sendErr(res, e); }
+  });
+  app.get('/api/field-requests', guard, async (req, res) => {
+    try {
+      const q = { status: req.query && req.query.status };
+      if (!isAdminReq(req)) q.user = (req.user && req.user.sub) || ' ';   // everyone else: their own only
+      res.set('Cache-Control', 'no-store');
+      res.json({ ok: true, requests: await listFieldRequests(q) });
+    } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
+  });
+  app.post('/api/field-requests/:id/decide', guard, adminOnly, async (req, res) => {
+    try {
+      const out = await decideFieldRequest(req.params.id, req.body, who(req));
+      const r = out.request;
+      activity.log(req, r.status === 'approved' ? 'field_request_approved' : 'field_request_rejected', {
+        target: r.deptName + ' · ' + r.label + (r.pct ? ' (%)' : ''),
+        detail: (r.status === 'approved' ? (out.linked ? 'linked to existing field ' : 'added field ') + r.fieldId : 'declined') + ' · requested by ' + r.requestedBy + (r.decisionReason ? ' · ' + r.decisionReason : ''),
+      });
+      res.json(out);
+    } catch (e) { res.status(e.status || 400).json({ ok: false, error: String(e.message || e), code: e.code, currentStatus: e.currentStatus }); }
+  });
 
   app.post('/api/submissions/:id/approve', guard, adminOnly, async (req, res) => {
     try { res.json(await approveSubmission(req.params.id, who(req))); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e), superseded: !!e.superseded || undefined }); }
   });
   app.post('/api/submissions/:id/reject', guard, adminOnly, async (req, res) => {
-    try { res.json(await rejectSubmission(req.params.id, who(req), req.body && req.body.reason)); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+    try { res.json(await rejectSubmission(req.params.id, who(req), req.body && req.body.reason)); } catch (e) { sendErr(res, e); }
+  });
+  // Owner (or admin) withdraws a still-PENDING submission: a soft status, never a delete.
+  app.post('/api/submissions/:id/withdraw', guard, async (req, res) => {
+    try {
+      const s = await getSubmissionById(req.params.id);
+      if (!s) return res.status(404).json({ ok: false, error: 'Submission not found.' });
+      if (!isAdminReq(req) && !(await ownsSubmission(req, s))) return res.status(403).json({ ok: false, error: 'You can only withdraw your own submissions.' });
+      res.json(await withdrawSubmission(req.params.id, who(req)));
+    } catch (e) { sendErr(res, e); }
   });
   // Admin: correct a PENDING submission's values/note before approving it.
   app.patch('/api/submissions/:id', guard, async (req, res) => {
@@ -1370,23 +1667,24 @@ function mount(app, opts) {
       if (!s) return res.status(404).json({ ok: false, error: 'Submission not found.' });
       // Admins edit anything AT ANY TIME (incl. approved — the change re-applies to live data
       // below); a collector may edit only their OWN still-pending submission (values only, no
-      // re-assign to a different department/area/month).
-      // Same authority as adminOnly: the RESOLVED live account (req.access), not the role claim
-      // frozen into the token — a demoted admin's old token must not keep "edit anything".
-      const isAdmin = req.access ? !!req.access.unrestricted : !(req.user && req.user.role && req.user.role !== 'Administrator');
+      // re-assign to a different department/area/month) — or fix and RESEND their own returned one.
+      const isAdmin = isAdminReq(req);
       if (s.status === 'approving') return res.status(409).json({ ok: false, error: 'This submission is being approved right now — refresh and try again.' });
-      if (s.status !== 'pending' && !isAdmin) return res.status(400).json({ ok: false, error: 'Only pending submissions can be edited.' });
+      if (s.status === 'withdrawn' && !isAdmin) return res.status(400).json({ ok: false, error: 'This submission was withdrawn — send a new one instead.' });
+      // The collector's own REJECTED row is fixed and sent back as the SAME record (history kept).
+      const resend = !isAdmin && s.status === 'rejected';
+      if (s.status !== 'pending' && !resend && !isAdmin) return res.status(400).json({ ok: false, error: 'Only pending submissions can be edited.' });
+      if (resend && s.autoRejected) return res.status(400).json({ ok: false, error: 'This copy was superseded by another approved submission — submit a new one or request an edit instead.' });
       // Compare against the record, not mere presence: the editor always sends the (unchanged)
       // month, so a presence check refused EVERY save on an approved submission.
       const moved = (k) => req.body && req.body[k] != null && req.body[k] !== '' && String(req.body[k]).trim() !== String(s[k] == null ? '' : s[k]);
       if (isAdmin && s.status === 'approved' && (moved('month') || moved('department') || moved('area'))) {
         return res.status(400).json({ ok: false, error: 'Approved submissions can only have their values/details edited. Create a new correction to change department, area, or month.' });
       }
-      if (!isAdmin) {
-        const scope = await getUserScope(req.user.sub);
-        const mine = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
-        const owns = mine.includes(s.submittedBy) || (s.responsible && mine.includes(s.responsible.name));
-        if (!owns) return res.status(403).json({ ok: false, error: 'You can only edit your own submissions.' });
+      if (!isAdmin && !(await ownsSubmission(req, s))) return res.status(403).json({ ok: false, error: 'You can only edit your own submissions.' });
+      if (resend) {
+        if (isPortalReq(req)) await refuseOutsideCollection(s);
+        await refuseIfPending(s, s.id);
       }
       const b = req.body || {};
       const patch = { editedBy: who(req), editedAt: Date.now() };
@@ -1402,6 +1700,8 @@ function mount(app, opts) {
         // Re-assign to a different department (admin only).
         if (isAdmin && b.department) { patch.department = String(b.department).trim(); if (b.departmentName) patch.departmentName = String(b.departmentName).trim(); }
       } else if (s.type === 'quality') {
+        // Same rule as the submit route: a portal account's edit cannot set an admin-owned denominator.
+        if (isPortalReq(req) && (b.den != null || b.groupsDen != null) && (await denIsAdminOnly(s))) { delete b.den; delete b.groupsDen; }
         ['value', 'num', 'den'].forEach((key) => { if (b[key] != null && b[key] !== '') numericReading(b[key], key); });
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
         if (b.num != null && b.num !== '' && !isNaN(Number(b.num))) patch.num = Number(b.num);   // rate numerator
@@ -1435,7 +1735,33 @@ function mount(app, opts) {
           patch.incidents = b.incidents.map((x) => { const o = {}; IF.forEach((k) => { if (x && x[k] != null && x[k] !== '') o[k] = String(x[k]); }); return o; }).filter((o) => Object.keys(o).length);
         }
       }
-      const updated = await setSubmissionStatus(req.params.id, patch);
+      let updated;
+      if (resend) {
+        const now = patch.editedAt;
+        // Data may have gone ON RECORD for this target + month after the row was returned (another
+        // report approved, a console edit). Reopening it as a plain report let its approval overwrite
+        // that data blind — so, like the forms, it reopens as an EDIT REQUEST with a reason and the
+        // server's snapshot of what it would replace. No reason yet -> 409 'exists' with the prior.
+        if (!s.isCorrection) {
+          const spec = Object.assign({}, s, patch);
+          const prior = await onRecordPrior(spec);
+          if (prior) {
+            const why = String(b.correctionReason == null ? '' : b.correctionReason).trim();
+            if (!why) refuseExists(spec, prior);
+            Object.assign(patch, { isCorrection: true, correctionReason: why, priorValues: prior });
+          }
+        }
+        Object.assign(patch, { status: 'pending', resubmittedAt: now, lastRejectReason: s.rejectReason || '', rejectReason: '', reviewedBy: null, reviewedAt: null });
+        updated = await updateSubmissionIf(req.params.id, 'rejected', patch, { history: { status: 'rejected', rejectReason: s.rejectReason || '', reviewedBy: s.reviewedBy || null, reviewedAt: s.reviewedAt || null, at: now } });
+        if (!updated) return res.status(409).json({ ok: false, error: 'This submission changed while you were fixing it — refresh and try again.' });
+        return res.json({ ok: true, submission: updated, resent: true });
+      }
+      // A collector's pending edit is conditional too: it must not land on a row an admin just
+      // approved, rejected or the collector withdrew in another tab.
+      if (!isAdmin) {
+        updated = await updateSubmissionIf(req.params.id, 'pending', patch);
+        if (!updated) { const cur = await getSubmissionById(req.params.id); return res.status(409).json({ ok: false, error: (NOT_PENDING_MSG[cur && cur.status] || 'This submission is no longer pending.') + ' Your edit was not saved.' }); }
+      } else updated = await setSubmissionStatus(req.params.id, patch);
       // An APPROVED submission was already written to the canonical (live) collections at approve
       // time; an admin editing it later must RE-APPLY so the dashboard reflects the correction.
       if (updated && updated.status === 'approved') {
@@ -1447,7 +1773,7 @@ function mount(app, opts) {
         } catch (e) { return res.status(400).json({ ok: false, error: 'Saved, but re-applying to live data failed: ' + String(e.message || e) }); }
       }
       res.json({ ok: true, submission: updated });
-    } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+    } catch (e) { sendErr(res, e); }
   });
 
   // Shareable short links — management (admin) ...
@@ -1476,7 +1802,8 @@ function mount(app, opts) {
     catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.post('/s/:code/submit', async (req, res) => {
-    try { res.json(await shortlinkSubmit(req.params.code, req.body || {})); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
+    // sendErr: the 409s carry code / prior / pendingId so the public page can react like the app.
+    try { res.json(await shortlinkSubmit(req.params.code, req.body || {})); } catch (e) { sendErr(res, e); }
   });
 
   // Public self sign-up for data collectors. DISABLED by default — collector
@@ -1504,11 +1831,12 @@ function mount(app, opts) {
 
 module.exports = {
   mount, getResponsibles, saveResponsible, getSubmissions, getStats,
-  submitPatient, submitQuality, approveSubmission, rejectSubmission,
+  submitPatient, submitQuality, approveSubmission, rejectSubmission, withdrawSubmission,
   buildPatientSpec, buildQualitySpec, createSubmission,
   createShortlink, getShortlinks, deleteShortlink, shortlinkMeta, shortlinkSubmit,
   registerCollector, upsertCollectorUser, getUserScope, recomputeQuarters,
   addDepartmentField, removeDepartmentField, getCollectionSettings, saveCollectionSettings,
+  createFieldRequest, listFieldRequests, decideFieldRequest,
   // exported so a repair script can re-apply an approval through the SAME code path
   applyQuality,
 };

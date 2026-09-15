@@ -268,7 +268,8 @@ const quality = async (payload) => (await dc.submitQuality(Object.assign({ area:
     assert.equal((await call('POST /api/submissions/quality', { body: { area: 'ICU', month: 'Aug-26', indicatorId: 'falls', value: 1 }, as: collector })).status, 403, 'not-measured indicators cannot be submitted');
     const fine = await call('POST /api/submissions/patient', { body: { department: 'icu', month: 'Aug-26', values: { adm: 1 } }, as: collector });
     assert.equal(fine.status, 200, JSON.stringify(fine.body));
-    assert.ok((await dc.submitPatient({ department: 'icu', month: 'Jun-26', values: { adm: 2 } }, { submittedBy: 'admin' })).ok, 'admin backfill is not restricted');
+    // May-26: Jun-26 is already on record, and a plain second report for it is now refused (15+).
+    assert.ok((await dc.submitPatient({ department: 'icu', month: 'May-26', values: { adm: 2 } }, { submittedBy: 'admin' })).ok, 'admin backfill is not restricted');
     const cleared = await call(route, { params: { id: 'icu' }, body: { startMonth: null, notMeasured: { falls: null } } });
     assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
     assert.equal(dept().collection.startMonth, undefined);
@@ -277,6 +278,198 @@ const quality = async (payload) => (await dc.submitQuality(Object.assign({ area:
     const list = await call('GET /api/collection-settings');
     assert.equal(list.body.departments[0].id, 'icu');
   }
+
+  // Two collectors who share a display name — ownership must follow the LOGIN, not the name.
+  const twins = () => {
+    colOf('users').docs.push({ username: 'na1', name: 'Nurse A', role: 'collector', departments: ['icu'], qualityAreas: ['ICU'] });
+    colOf('users').docs.push({ username: 'na2', name: 'Nurse A', role: 'collector', departments: ['icu'], qualityAreas: ['ICU'] });
+  };
+  const NA1 = { user: { sub: 'na1', role: 'collector', name: 'Nurse A' }, access: { unrestricted: false, role: 'collector' } };
+  const NA2 = { user: { sub: 'na2', role: 'collector', name: 'Nurse A' }, access: { unrestricted: false, role: 'collector' } };
+  const sendP = (month, values, as, extra) => call('POST /api/submissions/patient', { body: Object.assign({ department: 'icu', month, values }, extra || {}), as });
+  const withdraw = (id, as) => call('POST /api/submissions/:id/withdraw', { params: { id }, as });
+
+  // 15. Withdraw: owner only, pending only, soft status, never deleted.
+  reset(); twins();
+  { const r = await sendP('Jul-26', { adm: 3 }, NA1);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const id = r.body.submission.id;
+    assert.equal(sub(id).submittedByUser, 'na1');
+    assert.equal((await withdraw(id, NA2)).status, 403, 'a namesake cannot withdraw it');
+    assert.equal((await call('PATCH /api/submissions/:id', { params: { id }, body: { values: { adm: 4 } }, as: NA2 })).status, 403, 'a namesake cannot edit it');
+    const w = await withdraw(id, NA1);
+    assert.equal(w.status, 200, JSON.stringify(w.body));
+    assert.equal(sub(id).status, 'withdrawn'); assert.ok(sub(id).withdrawnAt > 0); assert.equal(sub(id).withdrawnBy, 'Nurse A');
+    assert.equal((await withdraw(id, NA1)).status, 409, 'withdrawing twice is refused');
+    assert.equal((await call('PATCH /api/submissions/:id', { params: { id }, body: { values: { adm: 4 } }, as: NA1 })).status, 400, 'a withdrawn row is not editable');
+    assert.equal(colOf('submissions').docs.length, 1, 'withdraw never deletes');
+    // A withdrawn row does not block a new submission for the same month.
+    const again = await sendP('Jul-26', { adm: 5 }, NA1);
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    const st = await call('GET /api/submissions/stats');
+    assert.equal(st.body.stats.withdrawn, 1); assert.equal(st.body.stats.pending, 1);
+    await approve(again.body.submission.id);
+    const late = await withdraw(again.body.submission.id, NA1);
+    assert.equal(late.status, 409, 'an approved row cannot be withdrawn');
+    assert.equal(sub(again.body.submission.id).status, 'approved'); }
+  // Legacy rows (no submittedByUser) still fall back to the name match.
+  reset();
+  { colOf('users').docs.push({ username: 'old1', name: 'Legacy Nurse', role: 'collector', departments: ['icu'], qualityAreas: [] });
+    const a = await dc.createSubmission({ type: 'patient', department: 'icu', month: 'Jul-26', values: { adm: 1 } }, { submittedBy: 'Legacy Nurse' });
+    assert.equal((await withdraw(a.id, { user: { sub: 'old1', role: 'collector', name: 'Legacy Nurse' }, access: { unrestricted: false, role: 'collector' } })).status, 200); }
+  // A withdraw racing an approval claim: exactly one wins, and the loser changes nothing.
+  reset();
+  { const a = await patient('Aug-26', { adm: 9 });
+    const [ap, wd] = await Promise.allSettled([approve(a.id), withdraw(a.id)]);
+    const approved = ap.status === 'fulfilled' && ap.value.ok;
+    const withdrawn = wd.status === 'fulfilled' && wd.value.status === 200;
+    assert.ok(approved !== withdrawn, 'exactly one of approve / withdraw wins');
+    if (withdrawn) { assert.equal(sub(a.id).status, 'withdrawn'); assert.equal(dept().months.indexOf('Aug-26'), -1, 'a withdrawn row never goes live'); }
+    else { assert.equal(sub(a.id).status, 'approved'); assert.equal(wd.value.status, 409); } }
+  reset();
+  { const a = await patient('Aug-26', { adm: 9 });
+    sub(a.id).status = 'approving'; sub(a.id).approvingAt = Date.now();
+    assert.equal((await withdraw(a.id)).status, 409, 'a claimed row cannot be withdrawn');
+    assert.equal(sub(a.id).status, 'approving'); }
+
+  // 16. Reject needs a reason; the internal duplicate auto-reject does not.
+  reset();
+  { const a = await patient('Jul-26', { adm: 7 });
+    const blank = await call('POST /api/submissions/:id/reject', { params: { id: a.id }, body: { reason: '   ' } });
+    assert.equal(blank.status, 400); assert.match(blank.body.error, /reason/);
+    assert.equal(sub(a.id).status, 'pending');
+    await assert.rejects(dc.rejectSubmission(a.id, 'admin'), (e) => e.status === 400);
+    const ok = await call('POST /api/submissions/:id/reject', { params: { id: a.id }, body: { reason: ' Wrong value ' } });
+    assert.equal(ok.status, 200); assert.equal(sub(a.id).rejectReason, 'Wrong value'); }
+
+  // 17. The owner fixes and resends a returned row: same record, back to pending, history kept.
+  reset(); twins();
+  { const id = (await sendP('Jul-26', { adm: 3 }, NA1)).body.submission.id;
+    assert.equal((await call('POST /api/submissions/:id/reject', { params: { id }, body: { reason: 'Wrong value' } })).status, 200);
+    assert.equal((await call('PATCH /api/submissions/:id', { params: { id }, body: { values: { adm: 5 } }, as: NA2 })).status, 403, 'a namesake cannot resend it');
+    const other = await sendP('Jul-26', { adm: 6 }, NA2);
+    assert.equal(other.status, 200, 'a returned row does not block a new submission');
+    const blocked = await call('PATCH /api/submissions/:id', { params: { id }, body: { values: { adm: 5 } }, as: NA1 });
+    assert.equal(blocked.status, 409); assert.equal(blocked.body.code, 'pending'); assert.equal(blocked.body.pendingId, other.body.submission.id);
+    assert.equal(sub(id).status, 'rejected', 'a refused resend changes nothing');
+    assert.equal((await withdraw(other.body.submission.id, NA2)).status, 200);
+    const re = await call('PATCH /api/submissions/:id', { params: { id }, body: { values: { adm: 5 } }, as: NA1 });
+    assert.equal(re.status, 200, JSON.stringify(re.body));
+    assert.equal(re.body.resent, true);
+    const s = sub(id);
+    assert.equal(s.status, 'pending'); assert.equal(s.values.adm, 5); assert.ok(s.resubmittedAt > 0);
+    assert.equal(s.rejectReason, ''); assert.equal(s.lastRejectReason, 'Wrong value');
+    assert.equal(s.history.length, 1); assert.equal(s.history[0].status, 'rejected'); assert.equal(s.history[0].rejectReason, 'Wrong value'); assert.equal(s.history[0].reviewedBy, 'Admin');
+    await approve(id);
+    assert.equal(liveRow('Jul-26').adm, 5, 'the resent figures go live on approval'); }
+  reset(); twins();
+  { const meta = { submittedBy: 'Nurse A', submittedByUser: 'na1' };
+    const a = await dc.createSubmission({ type: 'patient', department: 'icu', departmentName: 'ICU', month: 'Jul-26', values: { adm: 1 } }, meta);
+    const b = await dc.createSubmission({ type: 'patient', department: 'icu', departmentName: 'ICU', month: 'Jul-26', values: { adm: 2 } }, meta);
+    sub(a.id).submittedAt = 1000; sub(b.id).submittedAt = 2000;
+    await approve(b.id);
+    assert.equal(sub(a.id).autoRejected, true);
+    const r = await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { values: { adm: 9 } }, as: NA1 });
+    assert.equal(r.status, 400); assert.match(r.body.error, /superseded/);
+    assert.equal(sub(a.id).status, 'rejected'); }
+
+  // 18. No double report for a month already on record — it must be an edit request with a reason.
+  reset();
+  { await assert.rejects(patient('Jun-26', { adm: 6 }), (e) => e.status === 409 && e.code === 'exists' && e.prior.values.adm === 5);
+    const r = await sendP('Jun-26', { adm: 6 });
+    assert.equal(r.status, 409); assert.equal(r.body.code, 'exists'); assert.equal(r.body.prior.values.adm, 5);
+    assert.equal((await sendP('Jun-26', { adm: 6 }, ADMIN, { isCorrection: true, correctionReason: '  ' })).status, 400, 'a correction needs a reason');
+    const ok = await sendP('Jun-26', { adm: 6 }, ADMIN, { isCorrection: true, correctionReason: 'Miscounted' });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.submission.isCorrection, true); assert.equal(ok.body.submission.priorValues.values.adm, 5);
+    assert.equal(liveRow('Jun-26').adm, 5, 'live data waits for approval'); }
+  reset();
+  { const a = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 2 });
+    await approve(a.id);
+    await assert.rejects(quality({ month: 'Jul-26', indicatorId: 'falls', value: 3 }), (e) => e.status === 409 && e.code === 'exists' && e.prior.value === 2);
+    delete ind('falls').months['Jul-26'];
+    await assert.rejects(quality({ month: 'Jul-26', indicatorId: 'falls', value: 3 }), (e) => e.code === 'exists', 'an approved report counts even after the reading changed');
+    ind('hh').mNotObserved = { 'Aug-26': true };
+    const no = await call('POST /api/submissions/quality', { body: { area: 'ICU', month: 'Aug-26', indicatorId: 'hh', num: 8, den: 10 } });
+    assert.equal(no.status, 409); assert.equal(no.body.code, 'exists'); assert.equal(no.body.prior.notObserved, true);
+    await assert.rejects(quality({ month: 'Aug-26', indicatorId: 'hh', num: 8, den: 10, isCorrection: true }), (e) => e.status === 400);
+    const fix = await quality({ month: 'Aug-26', indicatorId: 'hh', num: 8, den: 10, isCorrection: true, correctionReason: 'Audit was done after all' });
+    assert.equal(fix.isCorrection, true);
+    assert.ok((await quality({ month: 'Sep-26', indicatorId: 'hh', num: 1, den: 2 })), 'an empty month is a plain submission'); }
+
+  // 19. A pending duplicate tells the client which row to open.
+  reset();
+  { const a = await patient('Jul-26', { adm: 7 });
+    const r = await sendP('Jul-26', { adm: 8 });
+    assert.equal(r.status, 409); assert.equal(r.body.code, 'pending'); assert.equal(r.body.pendingId, a.id); }
+
+  // 20. A collector's pending edit does not land on a row that stopped being pending.
+  reset(); twins();
+  { const id = (await sendP('Jul-26', { adm: 3 }, NA1)).body.submission.id;
+    await approve(id);
+    const r = await call('PATCH /api/submissions/:id', { params: { id }, body: { values: { adm: 99 } }, as: NA1 });
+    assert.equal(r.status, 400);
+    assert.equal(liveRow('Jul-26').adm, 3); }
+
+  // 21. Share-link submissions get the same guards as the app forms.
+  reset();
+  { const link = await dc.createShortlink({ type: 'patient', department: 'icu', responsible: { name: 'Link Nurse' } }, 'admin');
+    const sl = (code, body) => call('POST /s/:code/submit', { params: { code }, body, as: {} });
+    const dup = await sl(link.code, { month: 'Jun-26', values: { adm: 6 } });
+    assert.equal(dup.status, 409, 'a link cannot double-report a month on record');
+    assert.equal(dup.body.code, 'exists'); assert.equal(dup.body.prior.values.adm, 5);
+    assert.equal((await sl(link.code, { month: 'Jun-26', values: { adm: 6 }, isCorrection: true, correctionReason: ' ' })).status, 400, 'a link correction needs a reason');
+    const fix = await sl(link.code, { month: 'Jun-26', values: { adm: 6 }, isCorrection: true, correctionReason: 'Miscounted', responsible: { name: 'Someone else' } });
+    assert.equal(fix.status, 200, JSON.stringify(fix.body));
+    const fs = sub(fix.body.submission.id);
+    assert.equal(fs.isCorrection, true); assert.equal(fs.priorValues.values.adm, 5); assert.equal(fs.source, 'shortlink');
+    assert.equal(fs.responsible.name, 'Link Nurse', 'the link fixes the responsible person');
+    const again = await sl(link.code, { month: 'Jun-26', values: { adm: 7 }, isCorrection: true, correctionReason: 'Again' });
+    assert.equal(again.status, 409); assert.equal(again.body.code, 'pending'); assert.equal(again.body.pendingId, fix.body.submission.id);
+    assert.equal(liveRow('Jun-26').adm, 5, 'live data waits for approval');
+    const ql = await dc.createShortlink({ type: 'quality', area: 'ICU' }, 'admin');
+    const q1 = await sl(ql.code, { indicatorId: 'falls', month: 'Jul-26', value: 1, remark: 'one fall' });
+    assert.equal(q1.status, 200, JSON.stringify(q1.body));
+    assert.equal((await sl(ql.code, { indicatorId: 'falls', month: 'Jul-26', value: 2 })).body.code, 'pending');
+    await approve(q1.body.submission.id);
+    const q2 = await sl(ql.code, { indicatorId: 'falls', month: 'Jul-26', value: 2 });
+    assert.equal(q2.status, 409); assert.equal(q2.body.code, 'exists'); assert.equal(q2.body.prior.value, 1); assert.equal(q2.body.prior.remark, 'one fall');
+    assert.equal(colOf('submissions').docs.length, 2, 'refused link reports create nothing'); }
+
+  // 22. Fix & resend of a returned row whose month went on record meanwhile is an edit request.
+  reset(); twins();
+  { const id = (await sendP('Jul-26', { adm: 3 }, NA1)).body.submission.id;
+    assert.equal((await call('POST /api/submissions/:id/reject', { params: { id }, body: { reason: 'Wrong value' } })).status, 200);
+    await approve((await patient('Jul-26', { adm: 4 })).id);
+    const blind = await call('PATCH /api/submissions/:id', { params: { id }, body: { values: { adm: 5 } }, as: NA1 });
+    assert.equal(blind.status, 409, JSON.stringify(blind.body)); assert.equal(blind.body.code, 'exists'); assert.equal(blind.body.prior.values.adm, 4);
+    assert.equal(sub(id).status, 'rejected', 'a refused resend does not reopen the row');
+    const re = await call('PATCH /api/submissions/:id', { params: { id }, body: { values: { adm: 5 }, correctionReason: ' Recounted the register ' }, as: NA1 });
+    assert.equal(re.status, 200, JSON.stringify(re.body)); assert.equal(re.body.resent, true);
+    const s = sub(id);
+    assert.equal(s.status, 'pending'); assert.equal(s.isCorrection, true); assert.equal(s.correctionReason, 'Recounted the register');
+    assert.equal(s.priorValues.values.adm, 4, 'the server snapshot of what it replaces');
+    assert.equal(liveRow('Jul-26').adm, 4, 'nothing changes before approval');
+    await approve(id);
+    assert.equal(liveRow('Jul-26').adm, 5); }
+
+  // 23. An edit request that changes only the remark, or only the incident / CAPA details, applies on approval.
+  reset();
+  { const a = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 1, remark: 'first' });
+    await approve(a.id);
+    await assert.rejects(quality({ month: 'Jul-26', indicatorId: 'falls', value: 1, remark: 'changed' }), (e) => e.code === 'exists' && e.prior.remark === 'first');
+    const r1 = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 1, remark: 'Slipped in the bathroom', isCorrection: true, correctionReason: 'Added the circumstances' });
+    assert.equal(r1.priorValues.remark, 'first');
+    await approve(r1.id);
+    assert.equal(ind('falls').monthRemarks['Jul-26'], 'Slipped in the bathroom', 'a remark-only edit request is not a no-op');
+    assert.equal(ind('falls').months['Jul-26'], 1);
+    const r2 = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 1, incidents: [{ details: 'Fall from bed', corrective: 'Bed rails fitted' }], isCorrection: true, correctionReason: 'CAPA added' });
+    await approve(r2.id);
+    assert.equal(ind('falls').incidents['Jul-26'][0].corrective, 'Bed rails fitted', 'an incident-only edit request applies');
+    assert.equal(ind('falls').monthRemarks['Jul-26'], 'Slipped in the bathroom', 'a blank remark keeps the one on record');
+    const r3 = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 1, incidents: [], isCorrection: true, correctionReason: 'Logged in error' });
+    await approve(r3.id);
+    assert.deepEqual(ind('falls').incidents['Jul-26'], [], 'an edit request can clear the incidents'); }
 
   console.log('Approval integrity regression checks passed.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

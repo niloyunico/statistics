@@ -277,6 +277,10 @@
     // qualityName keeps the quality doc's own name: the hand-hygiene audit files rows under it
     // ("Emergency Medicine"), so after the rename to "Emergency Room" nothing matched.
     if (cn && cn !== dept.name) dept = Object.assign({}, dept, { name: cn, qualityName: dept.name });
+    // Unassigning hand hygiene from a department with audit rows must stick: the audit clone
+    // below used to re-create it on every build, so the assignment "came back".
+    const rmIds = (ov && ov.indRemoved) || [];
+    if (rmIds.some((id) => String(id) === 'ind-hh-from-audit' || (seedDept.indicators || []).some((i) => String(i.id) === String(id) && /hand\s*hygiene/i.test(i.name || '')))) dept = Object.assign({}, dept, { hhOptOut: true });
     return dept;
   }
 
@@ -317,6 +321,7 @@
       return list.map((d) => {
         if (d === src.dep) return d;
         const idx = (d.indicators || []).findIndex(isHH);
+        if (idx < 0 && d.hhOptOut) return d;   // admin unassigned it — no audit clone
         // A dept with audited rows but NO hand-hygiene indicator of its own (e.g. CT ICU)
         // gets a synthetic one cloned from the hospital-wide source — otherwise its
         // audited compliance renders as a blank '—' column in every heatmap/report.

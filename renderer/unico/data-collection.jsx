@@ -90,6 +90,13 @@
     if (s.submittedByUser) return !!me.username && s.submittedByUser === me.username;
     return [me.name, me.username].filter(Boolean).some((n) => n === s.submittedBy || (s.responsible && s.responsible.name === n));
   };
+  // Who is signed in, decided by the ROLE — the same lists the server uses (access.PORTAL_ROLES;
+  // adminOnly = Administrator, or open local mode with no user). Checking `role === 'collector'`
+  // alone treated an in-charge as an administrator: it got the custom-field manager, a free
+  // responsible-person field and the admin-owned denominators.
+  const DC_PORTAL_ROLES = ['collector', 'incharge', 'nurse', 'pca'];
+  const dcIsPortalRole = (me) => !!(me && DC_PORTAL_ROLES.indexOf(me.role) >= 0);
+  const dcIsAdminUser = () => { const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null; return !me || me.role === 'Administrator'; };
   // Areas granted DIRECTLY to a responsible person (beyond department-derived / hospital-wide).
   // Older records lack the field: derive it from the stored union minus today's derived areas.
   const dcCustomAreas = (r) => {
@@ -105,8 +112,59 @@
   const dcTargetKey = (x) => (x.type === 'quality' ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '') : 'p|' + x.department) + '|' + x.month;
   const dcOpenRejections = (subs) => {
     const newest = {};
-    (subs || []).forEach((x) => { const k = dcTargetKey(x); if (!newest[k] || (x.submittedAt || 0) > (newest[k].submittedAt || 0)) newest[k] = x; });
+    // A withdrawn copy was never sent, so it does not close an older rejection.
+    (subs || []).forEach((x) => { if (x.status === 'withdrawn') return; const k = dcTargetKey(x); if (!newest[k] || (x.submittedAt || 0) > (newest[k].submittedAt || 0)) newest[k] = x; });
     return Object.keys(newest).map((k) => newest[k]).filter((x) => x.status === 'rejected' && !x.autoRejected && dcIsMine(x));
+  };
+  // 'withdrawn' = the collector took a pending submission back before review (a soft status on
+  // the server). It is not pending, not recorded and not returned: for missing data the month is
+  // still owed, and it never enters the approval queue.
+  // Comparable form of a figure: blank/null -> '', numeric text -> canonical number text.
+  const dcNormVal = (v) => { if (v == null) return ''; if (typeof v === 'boolean') return v ? 'Yes' : ''; const t = String(v).trim(); if (!t) return ''; const n = Number(t); return isNaN(n) ? t : String(n); };
+  const dcCmpRow = (key, label, old, now) => { const blank = dcNormVal(now) === ''; return { key, label, old, now: blank ? null : now, kept: blank && dcNormVal(old) !== '', changed: !blank && dcNormVal(old) !== dcNormVal(now) }; };
+  // Old-vs-new rows for a statistics sheet. A blank new figure is KEPT at approval (the merge only
+  // adds or overwrites), so it shows as kept, never as a change.
+  const dcPatientCompareRows = (cols, prior, next, prefix) => {
+    const lbl = {}; (cols || []).forEach((c) => { lbl[c.id] = c.label || c.id; });
+    const keys = (cols || []).map((c) => c.id);
+    [prior || {}, next || {}].forEach((o) => Object.keys(o).forEach((k) => { if (k !== 'month' && k !== 'full' && keys.indexOf(k) < 0) keys.push(k); }));
+    return keys.map((k) => dcCmpRow((prefix || '') + '|' + k, (prefix ? prefix + ' · ' : '') + (lbl[k] || String(k).replace(/^c_/, '').replace(/[_-]+/g, ' ')), (prior || {})[k], (next || {})[k]))
+      .filter((r) => dcNormVal(r.old) !== '' || r.now != null);
+  };
+  // Text rows (remark / note). Only shown when either side has text; a blank new text is KEPT at
+  // approval (the server writes a remark only when one is given), so it is never a change.
+  const dcTextRows = (key, label, old, now) => { const r = dcCmpRow(key, label, old, now); return (dcNormVal(r.old) !== '' || r.now != null) ? [r] : []; };
+  // Old-vs-new rows for one quality indicator-month: { notObserved, value, num, den, incidents[], remark, capa, note } (+ next.rate).
+  // A change to ONLY the remark, the incident / CAPA details or the note is a real change.
+  const dcQualityCompareRows = (prior, next, numLabel, denLabel) => {
+    const p = prior || {}, n = next || {}; const rows = [];
+    rows.push(dcCmpRow('no', 'Not observed', p.notObserved ? 'Yes' : 'No', n.notObserved ? 'Yes' : 'No'));
+    if (!n.notObserved) {
+      if (n.rate) { rows.push(dcCmpRow('num', numLabel || 'Numerator', p.num, n.num)); rows.push(dcCmpRow('den', denLabel || 'Denominator', p.den, n.den)); rows.push(dcCmpRow('value', 'Value (calculated)', p.value, n.value)); }
+      else rows.push(dcCmpRow('value', 'Value', p.value, n.value));
+    }
+    const filled = (x) => (Array.isArray(x) ? x.filter(dcIncidentFilled) : []);
+    const pi = filled(p.incidents), ni = filled(n.incidents);
+    if (pi.length || ni.length) {
+      rows.push(dcCmpRow('inc', 'Incidents logged', pi.length, ni.length));
+      const sig = (arr) => JSON.stringify(arr.map((x) => DC_INCIDENT_FIELDS.map((k) => String(x[k] == null ? '' : x[k]).trim())));
+      if (pi.length === ni.length && sig(pi) !== sig(ni)) rows.push({ key: 'incd', label: 'Incident details', old: pi.length + ' on record', now: 'edited', changed: true });
+    }
+    // Month-level CAPA block: applied at approval only when one is sent, so a blank one is kept.
+    const CAPA_F = ['incidentDetails', 'finding', 'corrective', 'preventive'];
+    const capaSig = (c) => (c && typeof c === 'object' ? CAPA_F.map((k) => String(c[k] == null ? '' : c[k]).trim()) : []).join('|');
+    const pc = capaSig(p.capa), nc = capaSig(n.capa);
+    if (nc.replace(/\|/g, '') && pc !== nc) rows.push({ key: 'capa', label: 'CAPA details', old: pc.replace(/\|/g, '') ? 'on record' : '', now: 'edited', changed: true });
+    return rows.concat(dcTextRows('remark', 'Remark', p.remark, n.remark), dcTextRows('note', 'Note', p.note, n.note));
+  };
+  // Withdraw one's own PENDING submission — a soft status on the server, nothing is deleted.
+  const dcWithdraw = (s) => {
+    const go = () => dcApi.post('/api/submissions/' + encodeURIComponent(s.id) + '/withdraw', {})
+      .then((r) => { if (r && r.ok) { toast('Withdrawn — it will not be reviewed', 'success'); return true; } toast((r && r.error) || 'Could not withdraw', 'error'); return false; })
+      .catch(() => { toast('Could not withdraw — check your connection', 'error'); return false; });
+    const message = 'It will not be reviewed. You can send it again later.';
+    if (window.UI && window.UI.confirm) return window.UI.confirm({ title: 'Withdraw this submission?', message, confirmLabel: 'Withdraw', danger: true }).then((ok) => (ok ? go() : false));
+    return window.confirm('Withdraw this submission? ' + message) ? go() : Promise.resolve(false);
   };
   // Departments that actually report PATIENT statistics — data on record or ever submitted.
   // Quality-only units (mapped in via a quality area) must never count as "missing stats".
@@ -210,7 +268,7 @@
     // Every panel in this module goes through here, so this one style is what makes
     // the Data Collection screens glass. Call sites can still override -- the
     // caller's style is spread last, which is how sticky headers keep their opacity.
-    return <div style={{ background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))', backdropFilter: 'blur(26px) saturate(1.75)', WebkitBackdropFilter: 'blur(26px) saturate(1.75)', border: '1px solid rgba(255,255,255,.92)', boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)', borderRadius: 16, padding: 18, ...(props.style || {}) }}>{props.children}</div>;
+    return <div className={props.className} style={{ background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))', backdropFilter: 'blur(26px) saturate(1.75)', WebkitBackdropFilter: 'blur(26px) saturate(1.75)', border: '1px solid rgba(255,255,255,.92)', boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)', borderRadius: 16, padding: 18, ...(props.style || {}) }}>{props.children}</div>;
   }
   function Field({ label, hint, children }) {
     return (
@@ -227,6 +285,81 @@
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 600, marginBottom: 14, color: ok ? 'var(--pos)' : 'var(--rose)', background: ok ? 'var(--pos-bg)' : 'var(--neg-bg)', border: '1px solid ' + (ok ? '#bfe6cd' : '#f1c6cd') }}>
         <Ic d={ok ? I.check : I.x} s={16} /><span style={{ flex: 1 }}>{children}</span>
         {onClose && <button className="icon-btn" style={{ border: 0, background: 'transparent', cursor: 'pointer' }} onClick={onClose}><Ic d={I.x} s={13} /></button>}
+      </div>
+    );
+  }
+
+  /* "Data already recorded" pop-up: what is on record next to what was typed, plus a required
+     reason. Sending turns the report into an edit request (isCorrection) — nothing on record
+     changes until an administrator approves it. */
+  function DcCompareModal({ title, rows, reason, setReason, busy, onEdit, onSend }) {
+    const [showSame, setShowSame] = useState(false);
+    const changed = rows.filter((r) => r.changed), same = rows.filter((r) => !r.changed);
+    const none = changed.length === 0;
+    const show = (v) => (dcNormVal(v) === '' ? '—' : String(v));
+    const cell = { padding: '6px 8px', borderBottom: '1px solid var(--line-2)' };
+    const row = (r) => (
+      <tr key={r.key} style={{ background: r.changed ? '#fff4e0' : 'transparent', opacity: r.changed ? 1 : .6 }}>
+        <td style={{ ...cell, fontWeight: r.changed ? 700 : 500 }}>{r.label}</td>
+        <td className="num" style={{ ...cell, textAlign: 'right' }}>{show(r.old)}</td>
+        <td className="num" style={{ ...cell, textAlign: 'right', fontWeight: r.changed ? 800 : 500, color: r.changed ? '#9a6b00' : 'var(--ink-2)' }}>{r.kept ? show(r.old) + ' (kept)' : show(r.now)}</td>
+      </tr>
+    );
+    return (
+      <div onMouseDown={onEdit} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.45)', zIndex: 3100, display: 'grid', placeItems: 'center', padding: 16 }}>
+        <div role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel,#fff)', border: '1px solid var(--line)', borderRadius: 12, width: 'min(580px,100%)', maxHeight: '90vh', overflow: 'auto', boxShadow: 'var(--shadow-pop)' }}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line-2)', fontWeight: 700, fontSize: 14 }}>{title}</div>
+          <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.55 }}>This is already on record, so your figures go to an administrator as an <b>edit request</b>. Nothing on record changes until it is approved.</div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead><tr>{['Field', 'On record', 'Your new value'].map((h, i) => <th key={h} style={{ textAlign: i ? 'right' : 'left', padding: '6px 8px', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: .4, color: 'var(--muted)', borderBottom: '1px solid var(--line)' }}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {changed.map(row)}
+                  {same.length > 0 && <tr><td colSpan={3} style={{ padding: '6px 8px' }}><button className="btn sm" onClick={() => setShowSame((v) => !v)}>{showSame ? 'Hide' : 'Show'} {same.length} unchanged</button></td></tr>}
+                  {showSame && same.map(row)}
+                </tbody>
+              </table>
+            </div>
+            {none && <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--rose)' }}>No changes from what is on record.</div>}
+            <label style={{ fontSize: 11.5, color: 'var(--muted)', fontWeight: 600 }}>Reason for the change (required)</label>
+            <textarea style={{ ...inputStyle, minHeight: 58, resize: 'vertical' }} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. wrong count entered — should be Y not X" autoFocus />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button className="btn sm" onClick={onEdit} disabled={busy}>Edit my values</button>
+              <button className="btn pri sm" onClick={onSend} disabled={busy || none || !String(reason || '').trim()}>{busy ? 'Sending…' : 'Send edit request'}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  // 409 'pending': one submission per target + month may wait for review. Offer to open that one
+  // (the ordinary detail / edit modal) instead of sending a second. Not in the loaded list -> refetch.
+  function DcPendingNotice({ id, message, subs, onClose, onSaved }) {
+    const [sub, setSub] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const portal = dcPortalUser();
+    const open = () => {
+      const hit = (subs || []).find((x) => x && x.id === id);
+      if (hit) { setSub(hit); return; }
+      setBusy(true);
+      dcSubmissionResponse(null, true).then((r) => {
+        setBusy(false);
+        const s = ((r && r.submissions) || []).find((x) => x.id === id);
+        if (s) setSub(s); else toast('That submission is not visible to you — ask an administrator.', 'error');
+      }).catch(() => { setBusy(false); toast('Could not load it — check your connection.', 'error'); });
+    };
+    if (sub) return <SubmissionDetail s={sub} canEdit={!portal || (sub.status === 'pending' && dcIsMine(sub))} fullEdit={!portal} onClose={onClose} onSaved={() => { onClose(); if (onSaved) onSaved(); }} />;
+    return (
+      <div onMouseDown={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.45)', zIndex: 3100, display: 'grid', placeItems: 'center', padding: 16 }}>
+        <div role="alertdialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel,#fff)', border: '1px solid var(--line)', borderLeft: '4px solid #e08a1e', borderRadius: 12, width: 'min(440px,100%)', boxShadow: 'var(--shadow-pop)', padding: '16px 18px' }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>A submission for this is already waiting for review</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 14 }}>{message || 'Open it and edit it instead of sending another.'}</div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn sm" onClick={onClose}>Close</button>
+            <button className="btn pri sm" disabled={busy || !id} onClick={open}>{busy ? 'Opening…' : 'Open it to edit'}</button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -635,6 +768,150 @@
     );
   }
 
+  /* Field requests. Adding a column changes the form for everyone who reports a unit, so only an
+     Administrator adds one (DeptFieldManager above). Everyone else — an in-charge or collector in
+     the portal — ASKS for it here; the server allows it for their own departments only, and an
+     administrator approves or declines it in Department Setup (DcFieldRequestsAdmin below). */
+  const DC_FR_STATUS = { pending: ['Pending', '#fff4e0', '#9a6b00'], approving: ['Pending', '#fff4e0', '#9a6b00'], approved: ['Added', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Declined', 'var(--neg-bg)', 'var(--rose)'] };
+  const dcFrChip = (st) => { const c = DC_FR_STATUS[st] || [String(st || ''), 'var(--panel-2)', 'var(--ink-2)']; return <span className="chip" style={{ fontWeight: 700, background: c[1], color: c[2], whiteSpace: 'nowrap' }}>{c[0]}</span>; };
+  const dcFrWhen = (t) => (t ? new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+  const DC_FR_HEAD = { fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', textTransform: 'uppercase', letterSpacing: .3 };
+
+  function DcFieldRequestCard({ dept }) {
+    const [label, setLabel] = useState('');
+    const [pct, setPct] = useState(false);
+    const [reason, setReason] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState('');
+    const [mine, setMine] = useState(null);   // null = loading
+    const deptId = dept && dept.id;
+    const name = (dept && (dept.short || dept.name)) || '';
+    const load = () => dcApi.get('/api/field-requests?status=all')
+      .then((r) => setMine(r && r.ok ? (r.requests || []) : []))
+      .catch(() => setMine([]));
+    useEffect(() => { setErr(''); load(); }, [deptId]);
+    const submit = () => {
+      if (!label.trim()) { setErr('Enter the name of the field you need.'); return; }
+      if (!reason.trim()) { setErr('Say why this field is needed.'); return; }
+      setBusy(true); setErr('');
+      dcApi.post('/api/departments/' + encodeURIComponent(deptId) + '/field-requests', { label: label.trim(), pct, reason: reason.trim() }).then((r) => {
+        setBusy(false);
+        if (r && r.ok) { setLabel(''); setPct(false); setReason(''); toast('Field request sent to an administrator', 'success'); }
+        else setErr((r && r.error) || 'Could not send the request.');   // incl. the 409 "already a field" / "already waiting"
+        load();
+      }).catch(() => { setBusy(false); setErr('Could not send the request — check your connection and try again.'); });
+    };
+    const rows = (mine || []).filter((x) => x.deptId === deptId);
+    return (
+      <div>
+        <div style={{ ...DC_FR_HEAD, marginBottom: 3 }}>Request a new field for {name}</div>
+        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>Need to report a figure this form doesn’t have? Ask for it here — an administrator reviews the request and adds the field.</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+          <input style={{ ...inputStyle, flex: 1, minWidth: 160 }} value={label} maxLength={80} onChange={(e) => setLabel(e.target.value)} placeholder="Field name (e.g. Re-admissions)" />
+          <label style={{ fontSize: 12, color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }} title="The figure is a percentage"><input type="checkbox" checked={pct} onChange={(e) => setPct(e.target.checked)} />%</label>
+        </div>
+        <textarea style={{ ...inputStyle, minHeight: 54, resize: 'vertical' }} value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder="Why is this field needed? (required)" />
+        {err && <div role="alert" style={{ fontSize: 12, fontWeight: 600, color: 'var(--rose)', marginTop: 6 }}>{err}</div>}
+        <div style={{ marginTop: 8 }}><button className="btn sm" disabled={busy} onClick={submit}><Ic d={I.plus} s={13} />{busy ? 'Sending…' : 'Send request'}</button></div>
+        <div style={{ ...DC_FR_HEAD, margin: '14px 0 6px' }}>Your field requests</div>
+        {mine === null ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading…</div>
+          : rows.length === 0 ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>None yet for {name}.</div>
+            : <div style={{ display: 'grid', gap: 6 }}>
+              {rows.map((x) => (
+                <div key={x.id} style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: 9, padding: '7px 10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <b style={{ fontSize: 12.5, color: 'var(--ink)' }}>{x.label}{x.pct ? ' (%)' : ''}</b>
+                    {dcFrChip(x.status)}
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>Asked {dcFrWhen(x.createdAt)}{x.decidedAt ? ' · decided ' + dcFrWhen(x.decidedAt) : ''}</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--ink-2)', marginTop: 3 }}>{x.reason}</div>
+                  {x.decisionReason && <div style={{ fontSize: 11.5, marginTop: 3, color: x.status === 'rejected' ? 'var(--rose)' : 'var(--ink-2)', fontWeight: 600 }}>{x.status === 'rejected' ? 'Declined: ' : 'Administrator: '}{x.decisionReason}</div>}
+                </div>
+              ))}
+            </div>}
+      </div>
+    );
+  }
+
+  /* Administrator: decide field requests. Lives at the top of Department Setup (dcSettings). */
+  function DcFieldRequestsAdmin() {
+    const [tab, setTab] = useState('pending');
+    const [rows, setRows] = useState(null);   // null = loading
+    const [err, setErr] = useState('');
+    const [busyId, setBusyId] = useState(null);
+    const [declineId, setDeclineId] = useState(null);
+    const [why, setWhy] = useState('');
+    const load = () => dcApi.get('/api/field-requests?status=all')
+      .then((r) => { if (r && r.ok) { setRows(r.requests || []); setErr(''); } else setErr((r && r.error) || 'Could not load field requests.'); })
+      .catch(() => setErr('Could not load field requests — check your connection.'));
+    useEffect(() => { load(); }, []);
+    const pending = (rows || []).filter((x) => x.status === 'pending' || x.status === 'approving');
+    const shown = tab === 'pending' ? pending : (rows || []);
+    const decide = (x, status, reason) => {
+      if (busyId) return;
+      if (status === 'rejected' && !String(reason || '').trim()) { toast('Give a reason for declining', 'error'); return; }
+      setBusyId(x.id);
+      dcApi.post('/api/field-requests/' + encodeURIComponent(x.id) + '/decide', { status, reason: String(reason || '').trim() }).then((r) => {
+        setBusyId(null);
+        if (r && r.ok) {
+          if (status === 'approved') {
+            toast(r.linked ? '“' + x.label + '” was already on ' + x.deptName + ' — request linked to it' : '“' + x.label + '” added to ' + x.deptName, 'success');
+            dcRefreshLive();   // the new column shows on that unit's form straight away
+          } else toast('Request declined', 'info');
+          setDeclineId(null); setWhy('');
+        } else toast((r && r.error) || 'Could not save the decision', 'error');   // 409 = someone decided it already
+        load();
+      }).catch(() => { setBusyId(null); toast('Could not save — check your connection and try again.', 'error'); });
+    };
+    const tabBtn = (v, lbl) => <button className={'btn sm' + (tab === v ? ' pri' : '')} onClick={() => setTab(v)}>{lbl}</button>;
+    return (
+      <Card style={{ padding: '14px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+          <b style={{ fontSize: 14, color: 'var(--ink)' }}>Field requests</b>
+          {pending.length > 0 && <span className="chip num" style={{ fontWeight: 700, background: '#fff4e0', color: '#9a6b00' }}>{pending.length} pending</span>}
+          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>Units ask for new fields on their statistics form; approving adds the field.</span>
+          <span style={{ flex: 1 }} />
+          {tabBtn('pending', 'Pending')}{tabBtn('all', 'All')}
+        </div>
+        {err && <Banner>{err} <button className="btn sm" style={{ marginLeft: 8 }} onClick={load}>Retry</button></Banner>}
+        {rows === null ? (!err && <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading…</div>)
+          : shown.length === 0 ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>{tab === 'pending' ? 'No field requests waiting.' : 'No field requests yet.'}</div>
+            : <div style={{ display: 'grid', gap: 7 }}>
+              {shown.map((x) => {
+                const open = x.status === 'pending';
+                const busy = busyId === x.id;
+                return (
+                  <div key={x.id} style={{ border: '1px solid ' + (open ? '#f0d9a8' : 'var(--line)'), background: 'var(--panel)', borderRadius: 9, padding: '9px 12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>{x.label}{x.pct ? <span className="chip" style={{ marginLeft: 6, fontWeight: 700 }}>%</span> : null} <span style={{ fontWeight: 500, color: 'var(--muted)' }}>· {x.deptName}</span></div>
+                        <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 2 }}>{x.reason}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>Requested by {x.requestedBy}{x.requestedByUser && x.requestedByUser !== x.requestedBy ? ' (' + x.requestedByUser + ')' : ''} · {dcFrWhen(x.createdAt)}{x.decidedAt ? ' · decided by ' + (x.decidedBy || 'admin') + ' ' + dcFrWhen(x.decidedAt) : ''}</div>
+                        {x.decisionReason && <div style={{ fontSize: 11.5, marginTop: 2, fontWeight: 600, color: x.status === 'rejected' ? 'var(--rose)' : 'var(--ink-2)' }}>{x.decisionReason}</div>}
+                      </div>
+                      {!open && dcFrChip(x.status)}
+                      {open && declineId !== x.id && <>
+                        <button className="btn pri sm" disabled={busy} onClick={() => decide(x, 'approved', '')}><Ic d={I.check} s={13} />{busy ? 'Saving…' : 'Approve'}</button>
+                        <button className="btn sm" disabled={busy} onClick={() => { setDeclineId(x.id); setWhy(''); }}><Ic d={I.x} s={13} />Decline</button>
+                      </>}
+                    </div>
+                    {open && declineId === x.id && (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                        <input autoFocus style={{ ...inputStyle, flex: 1, minWidth: 200, borderColor: why.trim() ? 'var(--line)' : 'var(--rose)' }} value={why} maxLength={500} onChange={(e) => setWhy(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') decide(x, 'rejected', why); if (e.key === 'Escape') setDeclineId(null); }} placeholder="Reason for declining (required) — the requester sees it" />
+                        <button className="btn sm" disabled={busy || !why.trim()} onClick={() => decide(x, 'rejected', why)}>{busy ? 'Saving…' : 'Decline request'}</button>
+                        <button className="btn sm" disabled={busy} onClick={() => setDeclineId(null)}>Cancel</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>}
+      </Card>
+    );
+  }
+
   /* ============================ Patient Statistics form ============================ */
 /* Per-person drafts for the monthly statistics form.
 
@@ -656,8 +933,8 @@
   // Missing data pop-up closes and recounts on it).
   function DataPatientForm({ depts, prefill, onSubmitted }) {
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
-    const lockResp = !!(me && me.role === 'collector');
-    const isAdmin = !lockResp; // admins (and open local mode) may manage custom fields
+    const lockResp = dcIsPortalRole(me);   // every portal role reports as itself
+    const isAdmin = dcIsAdminUser();       // only an Administrator (or open local mode) adds fields; others request one
     // Merged base + custom departments (from the passed prop, else read the overlay).
     // Includes custom departments, which /api/departments does NOT return.
     const baseList = useMemo(() => ((depts && depts.length) ? depts : dcAllDepts()).map((d) => ({ ...d })), [depts]);
@@ -729,17 +1006,19 @@
     // month already in the live database is flagged "reported".
     const monthStatus = useMemo(() => {
       const map = {};
-      (subs || []).forEach((s) => { if (s.type === 'patient' && s.department === deptId && s.month && !map[s.month]) map[s.month] = s.status; });
+      (subs || []).forEach((s) => { if (s.type === 'patient' && s.department === deptId && s.month && s.status !== 'withdrawn' && !map[s.month]) map[s.month] = s.status; });
       return map;
     }, [subs, deptId]);
     const reported = new Set((dept && dept.months) || []);
     const monthTag = (m) => { const st = monthStatus[m]; if (st === 'approved') return ' · ✓ approved'; if (st === 'pending') return ' · ⏳ pending'; if (st === 'rejected') return ' · ✗ rejected'; return reported.has(m) ? ' · ✓ reported' : ''; };
     // A still-PENDING month is a hard block (correcting it would duplicate the pending row).
-    // An already-recorded/approved month becomes a CORRECTION (edit request): it goes to the
-    // admin and never overwrites live data until approved. (Rejected months may be re-sent.)
+    // A month already ON RECORD can only take an EDIT REQUEST — for everyone: the server refuses a
+    // plain second report (409 'exists'), so the comparison pop-up asks for the reason first.
     const monthPending = lockResp && monthStatus[month] === 'pending';
-    const pCorrection = lockResp && !monthPending && (monthStatus[month] === 'approved' || reported.has(month));
+    const pCorrection = !monthPending && (monthStatus[month] === 'approved' || reported.has(month));
     const [reason, setReason] = useState(''); // correction reason (edit request)
+    const [cmp, setCmp] = useState(null);                 // { prior } -> "Data already recorded" pop-up
+    const [pendingDlg, setPendingDlg] = useState(null);   // { id, message } -> "already waiting" pop-up
     const cols = (dept && dept.cols) || [];
     const last = (dept && dept.data && dept.data.length) ? dept.data[dept.data.length - 1] : {};
 
@@ -749,17 +1028,24 @@
       if (!month) { toast('Pick a month', 'error'); return; }
       if (subsErr) { toast('Could not check what is already submitted for this month — check your connection and try again.', 'error'); dcSubmissionResponse(null, true).then((r) => { setSubs(r.ok ? r.submissions : []); setSubsErr(!r.ok); }).catch(() => {}); return; }
       if (monthPending) { toast('A submission for this month is already pending review.', 'error'); return; }
-      if (pCorrection && !reason.trim()) { toast('Please add a reason for the correction.', 'error'); return; }
+      // On record here -> compare first. Recorded but not in this snapshot -> the server's 409 opens it.
+      const idx = pCorrection ? (dept.months || []).indexOf(month) : -1;
+      if (idx >= 0) { setCmp({ prior: { values: (dept.data && dept.data[idx]) || {} } }); return; }
+      send(false, '');
+    };
+    const send = (corr, why) => {
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/patient', {
         department: dept.id, month, values,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
         note,
-        isCorrection: pCorrection, correctionReason: pCorrection ? reason.trim() : '',
+        isCorrection: corr, correctionReason: corr ? why : '',
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ month, dept: dept.name, correction: pCorrection }); setFlash({ ts: Date.now(), title: pCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: dept.name + ' · ' + monthLabel(month) }); setValues({}); setNote(''); setReason(''); if (draftKey) { dcDraftClear(draftKey); setDraftAt(null); } toast(pCorrection ? 'Correction sent for review' : 'Submitted for review', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
+        if (r.ok) { setCmp(null); setDone({ month, dept: dept.name, correction: corr }); setFlash({ ts: Date.now(), title: corr ? 'Edit request sent!' : 'Data submitted successfully!', sub: dept.name + ' · ' + monthLabel(month) }); setValues({}); setNote(''); setReason(''); if (draftKey) { dcDraftClear(draftKey); setDraftAt(null); } toast(corr ? 'Edit request sent for review' : 'Submitted for review', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
+        else if (r.code === 'exists') setCmp({ prior: r.prior || { values: {} } });
+        else if (r.code === 'pending') { setCmp(null); setPendingDlg({ id: r.pendingId, message: r.error }); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch((e) => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -768,6 +1054,8 @@
       <div className="grid" style={{ gap: 14, maxWidth: 760 }}>
         <SectionTitle icon={I.input} title="Submit Patient Statistics" sub="Fill in a department's monthly numbers — saved straight to the database and logged." />
         {flash && <DcSuccessPopup key={flash.ts} title={flash.title} sub={flash.sub} onClose={() => setFlash(null)} />}
+        {cmp && <DcCompareModal title={'Data already recorded for ' + (dept ? dept.name : '') + ' · ' + monthLabel(month)} rows={dcPatientCompareRows(cols, (cmp.prior && cmp.prior.values) || {}, values).concat(dcTextRows('note', 'Note', ((subs || []).find((x) => x.type === 'patient' && x.department === (dept && dept.id) && x.month === month && x.status === 'approved') || {}).note, note))} reason={reason} setReason={setReason} busy={busy} onEdit={() => setCmp(null)} onSend={() => send(true, reason.trim())} />}
+        {pendingDlg && <DcPendingNotice id={pendingDlg.id} message={pendingDlg.message} subs={subs} onClose={() => setPendingDlg(null)} onSaved={() => dcSubmissionResponse(null, true).then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {})} />}
         {done && <Banner ok onClose={() => setDone(null)}>Submitted ✓ — {done.dept} · {monthLabel(done.month)} sent for admin review. It appears on the dashboard once approved in Review &amp; History.</Banner>}
         <Card>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -815,12 +1103,12 @@
               );
             })}
           </div>
-          {isAdmin && dept && <div style={{ border: '1px dashed var(--line)', borderRadius: 9, padding: '10px 12px', margin: '2px 0 12px', background: 'var(--panel-2)' }}><DeptFieldManager dept={dept} onChange={refreshDepts} /></div>}
+          {dept && <div style={{ border: '1px dashed var(--line)', borderRadius: 9, padding: '10px 12px', margin: '2px 0 12px', background: 'var(--panel-2)' }}>{isAdmin ? <DeptFieldManager dept={dept} onChange={refreshDepts} /> : <DcFieldRequestCard dept={dept} />}</div>}
           <Field label="Note (optional)"><input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Any comment about this submission" /></Field>
           {pCorrection && (
             <>
               <Banner>{dept ? dept.name : ''} · {monthLabel(month)} is already recorded — submitting sends a <b>correction (edit request)</b> to an administrator. The recorded value won’t change until it is approved.</Banner>
-              <Field label="Reason for the correction"><input style={inputStyle} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. wrong count entered — should be Y not X" /></Field>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)', margin: '-6px 0 10px' }}>Submitting shows your changes next to what is on record and asks for the reason.</div>
             </>
           )}
           {monthPending && <Banner>{dept ? dept.name : ''} · {monthLabel(month)} already has a submission pending review — wait for the admin to approve or reject it before editing.</Banner>}
@@ -899,7 +1187,7 @@
     const dataRev = useDcDataRev();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
-    const lockResp = !!(me && me.role === 'collector');
+    const lockResp = dcIsPortalRole(me);   // responsible person + admin-owned denominators locked for every portal role
     // Months = the quality FY (Jun-25…May-26), read from the store so it stays in
     // sync with the dashboard/quarters; default to the latest FY month.
     const fyMonths = (window.QUALITY_QUARTER_MONTHS) ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
@@ -1154,21 +1442,27 @@
     // When a month already has recorded data, a data collector can still submit — but
     // it's flagged as a CORRECTION that goes to an administrator for review (it doesn't
     // overwrite the live value until approved). A fresh "Add a new indicator" is never a correction.
+    // The SERVER's "on record" rule (a reading, a numerator or a not-observed mark), for everyone:
+    // a carried admin denominator alone is not a report. An approved report missing from this
+    // snapshot comes back as 409 'exists' and opens the same pop-up.
     const qExists = !!(curInd && (
       (curInd.mNotObserved && curInd.mNotObserved[month]) ||
-      (curInd.incidents && Array.isArray(curInd.incidents[month]) && curInd.incidents[month].length) ||
-      (curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '') ||
       (curInd.mNum && curInd.mNum[month] != null && curInd.mNum[month] !== '') ||
       (curInd.months && curInd.months[month] != null && curInd.months[month] !== '')
     ));
-    const qCorrection = lockResp && !isNew && qExists;
+    const qCorrection = !isNew && qExists;
     const [qReason, setQReason] = useState(''); // correction reason (quality edit request)
+    const [qCmp, setQCmp] = useState(null);         // { prior } -> "Data already recorded" pop-up
+    const [qPending, setQPending] = useState(null); // { id, message } -> "already waiting" pop-up
+    const qPriorLocal = () => ({ value: (curInd.months || {})[month], num: (curInd.mNum || {})[month], den: (curInd.mDen || {})[month], notObserved: !!(curInd.mNotObserved || {})[month], incidents: (curInd.incidents || {})[month] || [], remark: (curInd.monthRemarks || {})[month] || '', capa: (curInd.capa || {})[month] || null });
+    // The remark exactly as sendQ sends it, so a remark-only change shows (and counts) in the comparison.
+    const qRemarkOut = () => (notObserved ? ('Not observed — ' + noReason.trim() + (remark.trim() ? ' (' + remark.trim() + ')' : '')) : remark);
+    const qNext = () => ({ notObserved, rate: computeAsRate, value: notObserved ? null : (computeAsRate ? (ratePending ? null : result) : numerator), num: (!notObserved && computeAsRate) ? numerator : null, den: (!notObserved && computeAsRate && !denLockedForCollector) ? denNum : null, incidents: notObserved ? [] : incidents, remark: qRemarkOut(), capa: notObserved ? null : capa });
     const submit = () => {
       if (!area) { toast('Select an area', 'error'); return; }
       if (!indId) { toast('Select an indicator', 'error'); return; }
       if (isNew && !newInd.name.trim()) { toast('Enter the new indicator name', 'error'); return; }
       if (!month) { toast('Pick a month', 'error'); return; }
-      if (qCorrection && !qReason.trim()) { toast('Please add a reason for the correction.', 'error'); return; }
       if (notObserved && !noReason.trim()) { toast('Please say WHY it was not observed this month.', 'error'); return; }
       // A forgotten numerator is not a measured zero: `Number('') || 0` sent a 0% breach as
       // genuine data — exactly what "Not observed" exists to prevent. A typed 0 stays valid.
@@ -1180,10 +1474,14 @@
         const explicitZero = !(Number(numerator) > 0) && String(den == null ? '' : den).trim() !== '' && Number(den) === 0;
         if (!explicitZero) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error'); return; }
       }
+      if (qCorrection) { setQCmp({ prior: qPriorLocal() }); return; }
+      sendQ(false, '');
+    };
+    const sendQ = (corr, why) => {
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/quality', {
-        area: area.key, month, isCorrection: qCorrection, correctionReason: qCorrection ? qReason.trim() : '',
+        area: area.key, month, isCorrection: corr, correctionReason: corr ? why : '',
         indicatorId: isNew ? '' : indId,
         indicatorName: isNew ? newInd.name : (curInd && curInd.name),
         valueType: computeAsRate ? (formula === 'pct' ? '%' : 'Rate') : 'Count', entryMode: computeAsRate ? 'rate' : 'count', mult,
@@ -1199,14 +1497,18 @@
         capa: (!notObserved && (capa.finding || capa.corrective || capa.preventive)) ? { finding: capa.finding, corrective: capa.corrective, preventive: capa.preventive } : undefined,
         // Per-incident reports (only those with something filled in). The server stores
         // them on the indicator's month; the count above already reflects how many.
-        incidents: (!notObserved && incidents.length) ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, incidentDate: x.incidentDate, admissionDate: x.admissionDate, victimName: x.victimName, victimId: x.victimId, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : undefined,
+        // An edit request that REMOVES every incident sends [] (the server then clears the month's
+        // list) — otherwise the comparison showed "2 → 0" but approval kept the two on record.
+        incidents: (!notObserved && incidents.length) ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, incidentDate: x.incidentDate, admissionDate: x.admissionDate, victimName: x.victimName, victimId: x.victimId, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : ((!notObserved && corr) ? [] : undefined),
         // The not-observed reason IS the month's note ("Not observed — why"); any general
         // remark typed below is appended in brackets so nothing the collector wrote is lost.
         remark: notObserved ? ('Not observed — ' + noReason.trim() + (remark.trim() ? ' (' + remark.trim() + ')' : '')) : remark,
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: qCorrection ? 'Correction submitted!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast('Saved monthly value', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
+        if (r.ok) { setQCmp(null); setQReason(''); setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: corr ? 'Edit request sent!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast(corr ? 'Edit request sent for review' : 'Saved monthly value', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
+        else if (r.code === 'exists') setQCmp({ prior: r.prior || {} });
+        else if (r.code === 'pending') { setQCmp(null); setQPending({ id: r.pendingId, message: r.error }); }
         else toast(r.error || 'Submission failed', 'error');
       }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
     };
@@ -1216,6 +1518,8 @@
       <div className="grid" style={{ gap: 14, maxWidth: 760 }}>
         <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Enter the month's value — by staff group (Nurse / Doctor / PCA / Other) or directly — the count / rate is calculated automatically." />
         {flash && <DcSuccessPopup key={flash.ts} title={flash.title} sub={flash.sub} onClose={() => setFlash(null)} />}
+        {qCmp && <DcCompareModal title={'Data already recorded for ' + (area ? area.name : '') + ' · ' + ((curInd && curInd.name) || '') + ' · ' + monthLabel(month)} rows={dcQualityCompareRows(qCmp.prior, qNext(), numLabel, denLabel)} reason={qReason} setReason={setQReason} busy={busy} onEdit={() => setQCmp(null)} onSend={() => sendQ(true, qReason.trim())} />}
+        {qPending && <DcPendingNotice id={qPending.id} message={qPending.message} onClose={() => setQPending(null)} />}
         {done && <Banner ok onClose={() => setDone(null)}>Saved ✓ — {done.area} · {monthLabel(done.month)} sent for admin review.</Banner>}
         <Card>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -1589,7 +1893,7 @@
               <span style={{ flex: 1 }}>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)}. Submitting sends a <b>correction</b> to an administrator for review — the recorded value won’t change until it is approved.</span>
             </div>
           )}
-          {qCorrection && <Field label="Reason for the correction"><input style={inputStyle} value={qReason} onChange={(e) => setQReason(e.target.value)} placeholder="e.g. wrong denominator — should be Y not X" /></Field>}
+          {qCorrection && <div style={{ fontSize: 11.5, color: '#9a6b00', fontWeight: 600, margin: '0 0 10px' }}>{monthLabel(month)} is already on record — submitting shows your changes next to it, asks for a reason and sends an edit request.</div>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>
             <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); setDone(null); }}>Clear</button>
@@ -1636,17 +1940,42 @@
       ? keys.map((k, i) => <span key={k}>{i ? ', ' : ''}<span style={{ color: 'var(--muted)' }}>{lm[k] || prettyKey(k)}:</span> <b style={{ color: 'var(--ink)' }}>{v[k]}</b></span>)
       : '(no values)'}</>;
   }
+  // Review & History table "Data" cell (.dcr classes in theme.css): the month chip + the value (or
+  // the "Not observed" mark) with the remark under it; patient sheets as label/value pills. Used by
+  // that table only — valuesSummaryEl stays for the duplicate dialog and the other lists.
+  function dcrDataEl(s) {
+    if (s.type === 'quality') {
+      return <>
+        <div className="dcr-dataline">{dcMonthChip(s.month)}{!s.notObserved && s.value != null && s.value !== '' ? <span className="dcr-val">{s.value}</span> : null}{s.notObserved ? <span className="dcr-val neg">⛔ Not observed</span> : null}</div>
+        {s.remark ? <div className="dcr-remark">{s.remark}</div> : null}
+      </>;
+    }
+    const v = s.values || {}; const lm = colLabelMap(s);
+    const keys = Object.keys(v);
+    return <>
+      <div className="dcr-dataline">{dcMonthChip(s.month)}</div>
+      {keys.length
+        ? <div className="dcr-kvs">{keys.map((k) => <span key={k} className="dcr-kv"><i>{lm[k] || prettyKey(k)}</i><b>{v[k]}</b></span>)}</div>
+        : <div className="dcr-sub">(no values)</div>}
+    </>;
+  }
   // Full submission viewer. Admins can correct a PENDING submission's values
   // (PATCH /api/submissions/:id) before approving; collectors see it read-only.
-  function SubmissionDetail({ s, canEdit, fullEdit = true, onClose, onSaved }) {
+  function SubmissionDetail({ s, canEdit, fullEdit = true, onClose, onSaved, initialMode }) {
     const iOwn = dcIsMine(s);
-    // A collector may REQUEST an edit (correction) on their OWN already-recorded submission.
-    const canRequestEdit = !fullEdit && iOwn && s.status !== 'pending' && !s.isCorrection;
+    // On their OWN rows a collector may: edit or WITHDRAW a pending one, FIX & RESEND a returned
+    // (rejected) one as the same record, or REQUEST an edit (correction) on an approved one.
+    const canRequestEdit = !fullEdit && iOwn && s.status === 'approved' && !s.isCorrection;
+    const canWithdraw = iOwn && s.status === 'pending';
+    const canResend = !fullEdit && iOwn && s.status === 'rejected' && !s.autoRejected;
     const [correcting, setCorrecting] = useState(false);
     const [correctReason, setCorrectReason] = useState('');
+    const [resending, setResending] = useState(initialMode === 'resend' && canResend);
+    const [cmpOpen, setCmpOpen] = useState(false);
     // Admins (fullEdit) edit any submission at any time (approved edits re-apply to live data);
     // collectors edit their OWN pending record directly, or REQUEST an edit on a recorded one.
-    const editable = (canEdit && (fullEdit || s.status === 'pending')) || correcting;
+    // A withdrawn row is closed for everyone.
+    const editable = s.status !== 'withdrawn' && ((canEdit && (fullEdit || s.status === 'pending')) || correcting || resending);
     const dept = s.type === 'patient' ? (dcAllDepts().find((d) => d.id === s.department)) : null;
     const cols = (dept && dept.cols) || (s.values ? Object.keys(s.values).map((id) => ({ id, label: id })) : []);
     const pctOf = {}; ((dept && dept.cols) || []).forEach((c) => { pctOf[c.id] = !!c.pct; });
@@ -1683,6 +2012,12 @@
     const [remark, setRemark] = useState(s.remark || '');
     const [note, setNote] = useState(s.note || '');
     const [busy, setBusy] = useState(false);
+    // Fix & resend of a row whose month went ON RECORD after it was returned: the server answers 409
+    // 'exists' with its snapshot, and the resend goes again as an edit request with a reason.
+    const [resendCmp, setResendCmp] = useState(null);   // { prior }
+    const [resendReason, setResendReason] = useState('');
+    // "Not observed" with its figures still blank stays not observed in an edit request / comparison.
+    const qStillNotObserved = s.type === 'quality' && !!s.notObserved && (isRate ? (effNum === '' || effNum == null) : (qval === '' || qval == null));
     // Admin can also fix the MONTH, RE-ASSIGN the department/area, and edit incident details.
     const [month, setMonth] = useState(s.month || '');
     const [target, setTarget] = useState(s.type === 'patient' ? (s.department || '') : (s.area || ''));
@@ -1715,12 +2050,17 @@
       }
       return body;
     };
-    const save = () => {
+    const save = (reasonArg) => {
+      const why = typeof reasonArg === 'string' ? reasonArg : '';   // onClick={save} passes the click event
       setBusy(true);
-      dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), buildBody()).then((r) => {
+      const body = buildBody();
+      if (resending && why) body.correctionReason = why;
+      dcApi.patch('/api/submissions/' + encodeURIComponent(s.id), body).then((r) => {
         setBusy(false);
+        if (resending && r.code === 'exists') { setResendCmp({ prior: r.prior || {} }); return; }
         if (r.ok) {
-          toast('Submission updated', 'success');
+          setResendCmp(null);
+          toast(r.resent ? (why ? 'Edit request sent for review' : 'Sent again for review') : 'Submission updated', 'success');
           // An approved submission's edit was re-applied to live data on the server.
           if (r.submission && r.submission.status === 'approved') dcRefreshLive();
           onSaved && onSaved(r.submission);
@@ -1739,6 +2079,11 @@
       // A refused save must STOP the approve — otherwise the old, unedited values go live.
       if (editable && !correcting) dcApi.patch(url, buildBody()).then((r) => { if (r && r.ok) return doApprove(); setBusy(false); toast((r && r.error) || 'Could not save your edits — nothing was approved', 'error'); }).catch(fail); else doApprove();
     };
+    // Old-vs-new rows against `prior` (this submission for an edit request, the server's on-record
+    // snapshot for a resend), including the remark, note and incident / CAPA details.
+    const cmpRowsVs = (prior) => (s.type === 'patient'
+      ? dcPatientCompareRows(cols, (prior && prior.values) || {}, vals).concat(dcTextRows('note', 'Note', prior && prior.note, note))
+      : dcQualityCompareRows(prior, { notObserved: qStillNotObserved, rate: isRate, value: isRate ? (typeof shownVal === 'number' ? shownVal : null) : qval, num: isRate ? effNum : null, den: isRate ? effDen : null, incidents, remark, note }, s.numLabel, s.denLabel));
     // Collector edit request -> create a NEW pending correction (never touches live data directly).
     const submitCorrection = () => {
       if (!correctReason.trim()) { toast('Please add a reason for the edit request.', 'error'); return; }
@@ -1754,17 +2099,23 @@
           area: s.area, indicatorId: s.indicatorId || '', indicatorName: s.indicatorName,
           valueType: s.valueType, entryMode: s.entryMode, mult: s.mult, formula: s.formula,
           numLabel: s.numLabel, denLabel: s.denLabel, unit: s.unit,
+          // A "Not observed" month whose figures are still blank stays not observed — a remark-only
+          // edit request used to arrive with no value and turn the month into a real 0.
+          notObserved: qStillNotObserved || undefined,
           value: isRate ? undefined : (qval === '' ? undefined : Number(qval)),
           num: isRate ? Number(effNum) : undefined, den: isRate ? Number(effDen) : undefined,
+          // The remark was never sent, so a remark-only edit request changed nothing on approval.
+          remark,
           groups: hasGrp ? GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {}) : undefined,
           groupsDen: (hasGrp && isRate) ? GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {}) : undefined,
           deptBreakdown: hasDeptBreak ? deptBreak.map((r) => ({ dept: r.dept || '', g: GROUPS.reduce((o, [k]) => (o[k] = { n: Number(r.g[k].n) || 0, d: Number(r.g[k].d) || 0 }, o), {}) })) : undefined,
-          incidents: incidents.length ? incidents : undefined,
+          // [] when every incident on record was removed, so approval clears them (as the comparison shows).
+          incidents: (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) ? incidents : undefined,
         }, common);
       }
       dcApi.post(url, body).then((r) => {
         setBusy(false);
-        if (r.ok) { toast('Edit request sent for review', 'success'); onSaved && onSaved(); }
+        if (r.ok) { setCmpOpen(false); toast('Edit request sent for review', 'success'); onSaved && onSaved(); }
         else toast(r.error || 'Could not send edit request', 'error');
       }).catch(() => { setBusy(false); toast('Could not send edit request', 'error'); });
     };
@@ -1808,11 +2159,31 @@
               <Meta label="Status" value={s.status} />
               {s.reviewedBy && <Meta label="Reviewed by" value={s.reviewedBy + (s.reviewedAt ? ' · ' + when(s.reviewedAt) : '')} />}
               {s.editedBy && <Meta label="Last edited by" value={s.editedBy + (s.editedAt ? ' · ' + when(s.editedAt) : '')} />}
-              {s.rejectReason && <Meta label="Reject reason" value={s.rejectReason} />}
+              {s.resubmittedAt && <Meta label="Sent again" value={when(s.resubmittedAt)} />}
+              {s.lastRejectReason && s.status !== 'rejected' && <Meta label="Last returned for" value={s.lastRejectReason} />}
               {s.notObserved && <Meta label="Entry" value="Not observed — no observation was done this month" />}
               {s.isCorrection && <Meta label="Edit request" value="Correction — pending approval" />}
               {s.isCorrection && s.correctionReason && <Meta label="Correction reason" value={s.correctionReason} />}
             </div>
+            {s.status === 'rejected' && (s.autoRejected
+              ? <div style={{ border: '1px solid var(--line)', background: 'var(--panel-2)', borderRadius: 9, padding: '10px 12px', fontSize: 12.5, color: 'var(--ink-2)' }}><b>Superseded</b> — a newer submission for the same target and month was approved. {s.rejectReason ? '(' + s.rejectReason + ')' : ''}</div>
+              : <div style={{ border: '1px solid #f1c6cd', background: 'var(--neg-bg)', borderRadius: 9, padding: '10px 12px', color: 'var(--rose)' }}>
+                <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: .4 }}>Returned by {s.reviewedBy || 'the administrator'}{s.reviewedAt ? ' · ' + when(s.reviewedAt) : ''}</div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, marginTop: 3 }}>{s.rejectReason || 'No reason given'}</div>
+                {canResend && <div style={{ fontSize: 11.5, color: 'var(--ink-2)', marginTop: 4 }}>Fix the figures and send it again — it goes back to the administrator for review.</div>}
+              </div>)}
+            {s.status === 'withdrawn' && <div style={{ border: '1px solid var(--line)', background: 'var(--panel-2)', borderRadius: 9, padding: '10px 12px', fontSize: 12.5, color: 'var(--muted)' }}><b style={{ color: 'var(--ink-2)' }}>Withdrawn</b>{s.withdrawnBy ? ' by ' + s.withdrawnBy : ''}{s.withdrawnAt ? ' · ' + when(s.withdrawnAt) : ''} — it will not be reviewed.</div>}
+            {Array.isArray(s.history) && s.history.length > 0 && (
+              <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '9px 12px' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 4 }}>Previous returns</div>
+                {s.history.map((h, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, padding: '4px 0' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--rose)', marginTop: 5, flexShrink: 0 }} />
+                    <div style={{ minWidth: 0 }}><b>Returned by {h.reviewedBy || 'the administrator'}</b>{h.reviewedAt ? ' · ' + when(h.reviewedAt) : ''} — {h.rejectReason || 'no reason given'}<div style={{ fontSize: 11, color: 'var(--muted)' }}>Fixed and sent again {when(h.at)}</div></div>
+                  </div>
+                ))}
+              </div>
+            )}
             {s.priorValues && (
               <div style={{ border: '1px solid #f0d9a8', background: 'var(--warn-bg,#fff4e0)', borderRadius: 9, padding: '10px 12px' }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#9a6b00', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 6 }}>Previously on record — old vs new</div>
@@ -1960,17 +2331,24 @@
             </div>
             {correcting && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>Reason for the edit request</label>
-                <input style={inputStyle} value={correctReason} onChange={(e) => setCorrectReason(e.target.value)} placeholder="e.g. wrong value entered — should be Y not X" autoFocus />
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}>Change the figures above, then review your changes and give a reason.</div>
                 <div style={{ fontSize: 11, color: 'var(--muted)' }}>Your edit request goes to an administrator for review — the recorded value won’t change until it’s approved.</div>
               </div>
             )}
-            {editable && !correcting && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{s.status === 'approved' ? 'This submission is approved — saving re-applies your changes to the live dashboard immediately.' : s.status === 'rejected' ? 'This submission was rejected — saving updates the record only. It cannot be approved again; the collector sends a new submission instead.' : fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'}</div>}
+            {editable && !correcting && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{resending ? 'Fix the figures, then send it again — it goes back to the administrator for review.' : s.status === 'approved' ? 'This submission is approved — saving re-applies your changes to the live dashboard immediately.' : s.status === 'rejected' ? 'This submission was rejected — saving updates the record only. It cannot be approved again; the collector sends a new submission instead.' : fullEdit ? 'Approve it from the table to apply the values to live data.' : 'Saving updates your pending submission before the administrator reviews it.'}</div>}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', position: 'sticky', bottom: 0, background: 'var(--panel)', paddingTop: 8, marginTop: 2, borderTop: '1px solid var(--line-2)' }}>
               <button className="btn sm" onClick={onClose}>Close</button>
+              {canWithdraw && <button className="btn sm" style={{ color: 'var(--rose)' }} disabled={busy} onClick={() => { setBusy(true); dcWithdraw(s).then((ok) => { setBusy(false); if (ok && onSaved) onSaved(); }); }}><Ic d={I.x} s={14} />Withdraw</button>}
+              {canResend && !resending && <button className="btn pri sm" onClick={() => setResending(true)}><Ic d={I.edit} s={14} />Fix &amp; resend</button>}
               {canRequestEdit && !correcting && <button className="btn sm" onClick={() => setCorrecting(true)}><Ic d={I.edit} s={14} />Request an edit</button>}
-              {correcting && <button className="btn pri sm" onClick={submitCorrection} disabled={busy}><Ic d={I.check} s={14} />{busy ? 'Sending…' : 'Submit edit request'}</button>}
-              {editable && !correcting && <button className="btn pri sm" onClick={save} disabled={busy}><Ic d={I.check} s={14} />{busy ? 'Saving…' : 'Save changes'}</button>}
+              {correcting && <button className="btn pri sm" onClick={() => setCmpOpen(true)} disabled={busy}><Ic d={I.check} s={14} />Review &amp; send edit request</button>}
+              {editable && !correcting && <button className="btn pri sm" onClick={save} disabled={busy}><Ic d={I.check} s={14} />{busy ? 'Saving…' : (resending ? 'Send again for review' : 'Save changes')}</button>}
+              {cmpOpen && <DcCompareModal title={'Data already recorded for ' + (s.type === 'quality' ? (s.areaName || '') + ' · ' + (s.indicatorName || '') : (s.departmentName || '')) + ' · ' + monthLabel(s.month)}
+                rows={cmpRowsVs({ values: s.values, value: s.value, num: s.num, den: s.den, notObserved: s.notObserved, incidents: s.incidents, remark: s.remark, capa: s.capa, note: s.note })}
+                reason={correctReason} setReason={setCorrectReason} busy={busy} onEdit={() => setCmpOpen(false)} onSend={submitCorrection} />}
+              {resendCmp && <DcCompareModal title={'Data already recorded for ' + (s.type === 'quality' ? (s.areaName || '') + ' · ' + (s.indicatorName || '') : (s.departmentName || '')) + ' · ' + monthLabel(s.month)}
+                rows={cmpRowsVs(Object.assign({}, resendCmp.prior, { note: s.note }))}
+                reason={resendReason} setReason={setResendReason} busy={busy} onEdit={() => setResendCmp(null)} onSend={() => save(resendReason.trim())} />}
               {canEdit && fullEdit && !correcting && s.status === 'pending' && <button className="btn sm" onClick={approveNow} disabled={busy} style={{ background: 'var(--pos)', borderColor: 'var(--pos)', color: '#fff' }}><Ic d={I.check} s={14} />{busy ? 'Approving…' : 'Approve'}</button>}
               {canEdit && fullEdit && !correcting && s.status === 'approved' && <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--pos)', alignSelf: 'center' }}>✓ Approved — edits re-apply live on save</span>}
             </div>
@@ -1982,21 +2360,22 @@
 
   // Reject-reason dialog (single or bulk) — preset reasons + free text; shown in history.
   function RejectModal({ ids, busy, onCancel, onConfirm }) {
-    const presets = ['Wrong value / data-entry error', 'Wrong month', 'Duplicate submission', 'Incomplete data', 'Not verified with records'];
+    // A reason is REQUIRED (the server refuses a blank one): the collector fixes and resends from it.
+    const presets = ['Wrong value', 'Wrong month', 'Wrong department / indicator', 'Missing incident details', 'Duplicate'];
     const [reason, setReason] = useState('');
     return (
       <div onMouseDown={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(16,32,46,.42)', zIndex: 420, display: 'grid', placeItems: 'center', padding: 20 }}>
         <div onMouseDown={(e) => e.stopPropagation()} style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, width: 'min(470px,96vw)', maxHeight: '92vh', overflow: 'auto', boxShadow: 'var(--shadow-pop)' }}>
-          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line-2)', fontWeight: 700, fontSize: 14 }}>Reject {ids.length > 1 ? ids.length + ' submissions' : 'submission'}</div>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line-2)', fontWeight: 700, fontSize: 14 }}>Reject &amp; return to collector{ids.length > 1 ? ' · ' + ids.length + ' submissions' : ''}</div>
           <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Pick a reason or type your own — it is saved in history and shown to the collector.</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>A reason is required — pick one or type your own. The collector sees it, fixes the submission and sends it again.</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {presets.map((p) => <span key={p} onClick={() => setReason(p)} style={{ cursor: 'pointer', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (reason === p ? 'var(--rose)' : 'var(--line)'), background: reason === p ? '#fbe9ec' : '#fff', color: reason === p ? 'var(--rose)' : 'var(--ink-2)' }}>{p}</span>)}
             </div>
-            <textarea style={{ ...inputStyle, minHeight: 62, resize: 'vertical' }} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)" />
+            <textarea style={{ ...inputStyle, minHeight: 62, resize: 'vertical' }} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (required) — what should the collector fix?" />
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn sm" onClick={onCancel}>Cancel</button>
-              <button className="btn sm" style={{ background: 'var(--rose)', borderColor: 'var(--rose)', color: '#fff' }} disabled={busy} onClick={() => onConfirm(reason)}>{busy ? 'Rejecting…' : 'Reject'}</button>
+              <button className="btn sm" style={{ background: 'var(--rose)', borderColor: 'var(--rose)', color: '#fff' }} disabled={busy || !reason.trim()} onClick={() => onConfirm(reason.trim())}>{busy ? 'Returning…' : 'Reject & return to collector'}</button>
             </div>
           </div>
         </div>
@@ -2041,8 +2420,8 @@
     const qAreas = areas.filter((a) => dueInds(a).length > 0);
     const qHasRec = (a) => dueInds(a).some((ind) => (ind.months && ind.months[m] != null && ind.months[m] !== '') || (ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''));
     // A rejected submission delivered nothing — it must not mark the unit covered.
-    const pSub = new Set(subsM.filter((s) => s.type === 'patient' && s.status !== 'rejected').map((s) => s.department));
-    const qSub = new Set(subsM.filter((s) => s.type === 'quality' && s.status !== 'rejected').map((s) => s.area));
+    const pSub = new Set(subsM.filter((s) => s.type === 'patient' && s.status !== 'rejected' && s.status !== 'withdrawn').map((s) => s.department));
+    const qSub = new Set(subsM.filter((s) => s.type === 'quality' && s.status !== 'rejected' && s.status !== 'withdrawn').map((s) => s.area));
     const pMissing = patientDepts.filter((d) => !pSub.has(d.id) && !hasRec(d));
     const qMissing = qAreas.filter((a) => !qSub.has(a.key) && !qHasRec(a));
     const pPct = patientDepts.length ? Math.round((patientDepts.length - pMissing.length) / patientDepts.length * 100) : 0;
@@ -2107,7 +2486,7 @@
     useEffect(() => { load(); const h = () => load(); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
     const respOf = (s) => (s.responsible && s.responsible.name) || s.submittedBy || '—';
     const byPerson = {};
-    (subs || []).forEach((s) => { const p = respOf(s); const r = byPerson[p] = byPerson[p] || { name: p, total: 0, pending: 0, approved: 0, rejected: 0, patient: 0, quality: 0, last: 0 }; r.total++; r[s.status] = (r[s.status] || 0) + 1; r[s.type] = (r[s.type] || 0) + 1; if ((s.submittedAt || 0) > r.last) r.last = s.submittedAt; });
+    (subs || []).filter((s) => s.status !== 'withdrawn').forEach((s) => { const p = respOf(s); const r = byPerson[p] = byPerson[p] || { name: p, total: 0, pending: 0, approved: 0, rejected: 0, patient: 0, quality: 0, last: 0 }; r.total++; r[s.status] = (r[s.status] || 0) + 1; r[s.type] = (r[s.type] || 0) + 1; if ((s.submittedAt || 0) > r.last) r.last = s.submittedAt; });
     let people = Object.values(byPerson);
     people.sort((a, b) => sortBy === 'name' ? a.name.localeCompare(b.name) : sortBy === 'pending' ? b.pending - a.pending : sortBy === 'last' ? b.last - a.last : b.total - a.total);
     const ago = (ts) => { if (!ts) return 'never'; const m = Math.floor((Date.now() - ts) / 60000); if (m < 1) return 'just now'; if (m < 60) return m + 'm ago'; const h = Math.floor(m / 60); if (h < 24) return h + 'h ago'; return Math.floor(h / 24) + 'd ago'; };
@@ -2240,7 +2619,7 @@
       // Say WHY items failed (e.g. "Administrator access required.") — a bare "(3 failed)" left
       // console users with Data Collection access guessing why nothing happened.
       const failed = ids.length - ok - skipped;
-      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'rejected') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (skipped ? ' · ' + skipped + ' skipped (a newer copy was approved)' : '') + (failed ? ' · ' + failed + ' failed: ' + firstErr : ''), failed ? 'error' : (kind === 'approve' ? 'success' : 'info'));
+      toast(ok + ' ' + (kind === 'approve' ? 'approved — applied to live data' : 'returned to the collector') + (kind === 'approve' && autoRej ? ' · ' + autoRej + ' duplicate' + (autoRej !== 1 ? 's' : '') + ' auto-rejected' : '') + (skipped ? ' · ' + skipped + ' skipped (a newer copy was approved)' : '') + (failed ? ' · ' + failed + ' failed: ' + firstErr : ''), failed ? 'error' : (kind === 'approve' ? 'success' : 'info'));
       if (kind === 'approve' && ok) dcRefreshLive();
       load();
     };
@@ -2291,48 +2670,66 @@
       setTimeout(() => { try { document.body.removeChild(a); } catch (e) {} URL.revokeObjectURL(a.href); }, 0);
       toast(filtered.length + ' row' + (filtered.length !== 1 ? 's' : '') + ' exported', 'success');
     };
-    const dupCount = {}; filtered.forEach((s) => { const k = dupKey(s); dupCount[k] = (dupCount[k] || 0) + 1; });
+    const dupCount = {}; filtered.forEach((s) => { if (s.status === 'withdrawn') return; const k = dupKey(s); dupCount[k] = (dupCount[k] || 0) + 1; });
     const pendingRows = filtered.filter((s) => s.status === 'pending');
     const selIds = pendingRows.filter((s) => sel[s.id]).map((s) => s.id);
     const allSelected = pendingRows.length > 0 && selIds.length === pendingRows.length;
     const groups = {}; filtered.forEach((s) => { const k = groupKey(s); (groups[k] = groups[k] || []).push(s); });
     const groupNames = Object.keys(groups).sort();
-    const rowFill = (s) => s.type === 'quality' ? 'rgba(0,144,202,.06)' : 'rgba(31,157,87,.06)';
+    // Group headers fold (by group name); purely a view toggle — filters, selection and bulk actions are unchanged.
+    const [collapsed, setCollapsed] = useState({});
+    const stopRowClick = (e) => e.stopPropagation();
+    const whenDate = (ts) => { try { return ts ? new Date(ts).toLocaleDateString() : '—'; } catch (e) { return '—'; } };
+    const whenTime = (ts) => { try { return ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''; } catch (e) { return ''; } };
+    const openDupGroup = (s) => { const k = dupKey(s); dcAllSubmissions(true).then((subs) => setDupGroup((subs && subs.length ? subs : filtered).filter((x) => dupKey(x) === k && x.status !== 'withdrawn'))).catch(() => setDupGroup(filtered.filter((x) => dupKey(x) === k && x.status !== 'withdrawn'))); };
+    // Row markup = the .dcr block in theme.css (its own table style, not the numeric .tbl). The row
+    // accent comes from the type class; pending / withdrawn tints come from data-status.
     const submissionRow = (s) => (
-      <tr key={s.id} onClick={() => setDetail(s)} title="Open to view / edit" style={{ background: grouped ? rowFill(s) : undefined, cursor: 'pointer' }}>
-        <td onClick={(e) => e.stopPropagation()}>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
-        <td style={{ whiteSpace: 'nowrap' }} className="num">{when(s.submittedAt)}</td>
-        <td><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)', color: s.type === 'quality' ? 'var(--blue-700,#0b6aa2)' : 'var(--pos)', fontWeight: 700 }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
-        <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{s.type === 'quality' ? s.areaName : s.departmentName}{dupCount[dupKey(s)] > 1 && <span title="Multiple submissions for the same target and month — click to compare (incl. previous / on-record responses)" onClick={(e) => { e.stopPropagation(); const k = dupKey(s); dcAllSubmissions(true).then((subs) => setDupGroup((subs && subs.length ? subs : filtered).filter((x) => dupKey(x) === k))).catch(() => setDupGroup(filtered.filter((x) => dupKey(x) === k))); }} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', borderRadius: 999, padding: '1px 6px', cursor: 'pointer', border: '1px solid #e6c34d' }}>⚠ {dupCount[dupKey(s)]}× duplicate</span>}{s.isCorrection && <span title={s.correctionReason || 'Correction / edit request'} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#7c4dd6', background: 'rgba(124,77,214,.12)', borderRadius: 999, padding: '1px 7px' }}>✎ correction</span>}</td>
-        <td style={{ fontSize: 12, color: 'var(--ink-2)', maxWidth: 320 }}>{valuesSummaryEl(s)}</td>
-        {/* ONE person column: responsible and submitter are almost always the same
-            name — show it once (bold, eye-catching), with "by …" only when they differ. */}
-        <td style={{ whiteSpace: 'nowrap' }}>
-          <b style={{ color: 'var(--ink)' }}>{(s.responsible && s.responsible.name) || s.submittedBy || '—'}</b>
-          {s.submittedBy && s.responsible && s.responsible.name && s.submittedBy !== s.responsible.name &&
-            <div style={{ fontSize: 11, color: 'var(--muted)' }}>by {s.submittedBy}</div>}
+      <tr key={s.id} className={'dcr-row ' + s.type} data-status={s.status} onClick={() => setDetail(s)} title="Open to view / edit">
+        <td className="dcr-sel" onClick={stopRowClick}>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
+        <td className="dcr-when" data-label="Submitted"><div className="dcr-date">{whenDate(s.submittedAt)}</div><div className="dcr-time num">{whenTime(s.submittedAt)}</div></td>
+        <td className="dcr-type" data-label="Type"><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)', color: s.type === 'quality' ? 'var(--blue-700,#0b6aa2)' : 'var(--pos)', fontWeight: 700 }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
+        <td className="dcr-target" data-label="Target">
+          <div className="dcr-title">{s.type === 'quality' ? (s.indicatorName || s.areaName) : 'Patient statistics'}</div>
+          {!grouped && <div className="dcr-sub">{groupKey(s)}</div>}
+          {dupCount[dupKey(s)] > 1 && <span className="dcr-badge warn" title="Multiple submissions for the same target and month — click to compare (incl. previous / on-record responses)" onClick={(e) => { e.stopPropagation(); openDupGroup(s); }}>⚠ {dupCount[dupKey(s)]}× duplicate</span>}
+          {s.isCorrection && <span className="dcr-badge violet" title={s.correctionReason || 'Correction / edit request'}>✎ correction</span>}
+          {s.status === 'withdrawn' && <span className="dcr-badge muted">Withdrawn</span>}
+          {s.status === 'pending' && s.lastRejectReason && <span className="dcr-badge neg" title={'Returned earlier: ' + s.lastRejectReason}>↺ resent after return</span>}
         </td>
-        <td>{statusChip(s.status)}</td>
-        <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-          <button className="btn sm" onClick={() => setDetail(s)} style={{ marginRight: 5 }}><Ic d={I.search} s={13} />View</button>
-          {s.status === 'pending' && (
-            <>
-              <button className="btn sm pri" disabled={busy === s.id || busy === 'bulk'} onClick={() => act(s.id, 'approve')} style={{ marginRight: 5 }}><Ic d={I.check} s={13} />Approve</button>
-              <button className="btn sm" disabled={busy === s.id || busy === 'bulk'} onClick={() => act(s.id, 'reject')}>Reject</button>
-            </>
-          )}
-          {s.status !== 'pending' && s.reviewedBy && <span style={{ fontSize: 11, color: 'var(--muted)' }}>{s.reviewedBy}</span>}
+        <td className="dcr-data" data-label="Data">{dcrDataEl(s)}</td>
+        {/* ONE person column: responsible and submitter are almost always the same
+            name — show it once, with "by …" only when they differ. */}
+        <td className="dcr-person" data-label="Responsible">
+          <b>{(s.responsible && s.responsible.name) || s.submittedBy || '—'}</b>
+          {s.submittedBy && s.responsible && s.responsible.name && s.submittedBy !== s.responsible.name && <div className="dcr-sub">by {s.submittedBy}</div>}
+        </td>
+        <td className="dcr-status" data-label="Status">
+          {statusChip(s.status)}
+          {s.status === 'rejected' && s.rejectReason ? <div className="dcr-sub neg">{s.rejectReason}</div> : null}
+          {s.status !== 'pending' && s.reviewedBy ? <div className="dcr-sub">{s.reviewedBy}</div> : null}
+        </td>
+        <td className="dcr-act" onClick={stopRowClick}>
+          <div className="dcr-actions">
+            <button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View</button>
+            {s.status === 'pending' && (
+              <>
+                <button className="btn sm pri" disabled={busy === s.id || busy === 'bulk'} onClick={() => act(s.id, 'approve')}><Ic d={I.check} s={13} />Approve</button>
+                <button className="btn sm" disabled={busy === s.id || busy === 'bulk'} onClick={() => act(s.id, 'reject')}>Reject</button>
+              </>
+            )}
+          </div>
         </td>
       </tr>
     );
 
     const statusChip = (st) => {
-      const map = { pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)'] };
+      const map = { pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'], withdrawn: ['Withdrawn', 'var(--panel-2)', 'var(--muted)'] };
       const m = map[st] || ['—', 'var(--panel-2)', 'var(--muted)'];
       return <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: m[1], color: m[2] }}>{m[0]}</span>;
     };
 
-    const tabs = [['pending', 'Pending'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']];
+    const tabs = [['pending', 'Pending'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['withdrawn', 'Withdrawn'], ['all', 'All']];
     return (
       <div className="grid" style={{ gap: 14 }}>
         <SectionTitle icon={I.doc} title="Review & History" sub="Every submission with time, data and status. Submissions stay pending until an admin approves — approval applies them to the live dashboard."
@@ -2345,82 +2742,82 @@
         <CollectorProgress />
 
         {stats && (
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div className="dcr-stats">
             <StatCard label="Total" value={stats.total} />
             <StatCard label="Pending" value={stats.pending} color={stats.pending ? '#b8860b' : 'var(--ink)'} />
             <StatCard label="Approved" value={stats.approved} color="var(--pos)" />
             <StatCard label="Rejected" value={stats.rejected} color="var(--rose)" />
+            {stats.withdrawn != null && <StatCard label="Withdrawn" value={stats.withdrawn} color="var(--muted)" />}
             <StatCard label="Patient" value={stats.patient} color="var(--blue)" />
             <StatCard label="Quality" value={stats.quality} color="var(--blue)" />
           </div>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <div className="seg">
-            {tabs.map(([id, l]) => <button key={id} className={filter === id ? 'on' : ''} onClick={() => setFilter(id)}>{l}{id === 'pending' && stats && stats.pending ? ' (' + stats.pending + ')' : ''}</button>)}
-          </div>
-          <span style={{ flex: 1 }} />
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} />
-            Group by department
-          </label>
-          <span style={{ fontSize: 11, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'rgba(31,157,87,.35)' }} /> Patient</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: 'rgba(0,144,202,.35)' }} /> Quality</span>
-          </span>
-        </div>
-
-        {/* ---- advanced filters: search / type / department / period ---- */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 180 }}>
-            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', pointerEvents: 'none' }}><Ic d={I.search} s={14} /></span>
-            <input value={fq} onChange={(e) => setFq(e.target.value)} placeholder="Search target, indicator, person…"
-              style={{ width: '100%', padding: '8px 10px 8px 30px', border: '1px solid var(--line)', borderRadius: 8, fontSize: 12.5, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
-          </div>
-          <select value={fType} onChange={(e) => setFType(e.target.value)} style={dcFilterSel}>
-            <option value="">All types</option><option value="patient">Patient</option><option value="quality">Quality</option>
-          </select>
-          <select value={fDept} onChange={(e) => setFDept(e.target.value)} style={dcFilterSel}>
-            <option value="">All departments</option>
-            {deptOptions.map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-          <select value={fMonth} onChange={(e) => setFMonth(e.target.value)} style={dcFilterSel}>
-            <option value="">All periods</option>
-            {monthOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <select value={fResp} onChange={(e) => setFResp(e.target.value)} style={dcFilterSel}>
-            <option value="">All people</option>
-            {respOptions.map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-          {anyFilter && <button className="btn sm" onClick={() => { setFq(''); setFType(''); setFDept(''); setFMonth(''); setFResp(''); }}><Ic d={I.x} s={13} />Clear</button>}
-          {rows && <span style={{ fontSize: 11.5, color: 'var(--muted)', marginLeft: 'auto' }}>{filtered.length} of {rows.length} shown</span>}
-          {pendingRows.length > 0 && <button className="btn sm pri" disabled={busy === 'bulk'} onClick={() => runAction(pendingRows.map((s) => s.id), 'approve')} title="Approve every pending submission currently shown"><Ic d={I.check} s={13} />Approve all {pendingRows.length}</button>}
-        </div>
-
-        {selIds.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9 }}>
-            <b style={{ fontSize: 12.5 }}>{selIds.length} selected</b>
-            <button className="btn sm pri" disabled={busy === 'bulk'} onClick={() => runAction(selIds, 'approve')}><Ic d={I.check} s={13} />Approve selected</button>
-            <button className="btn sm" disabled={busy === 'bulk'} style={{ color: 'var(--rose)' }} onClick={() => setRejectFor({ ids: selIds })}>Reject selected</button>
+        {/* ---- sticky toolbar: status tabs + grouping, filters, bulk bar ---- */}
+        <div className="dcr-toolbar">
+          <div className="dcr-toolbar-row">
+            <div className="seg">
+              {tabs.map(([id, l]) => <button key={id} className={filter === id ? 'on' : ''} onClick={() => setFilter(id)}>{l}{id === 'pending' && stats && stats.pending ? ' (' + stats.pending + ')' : ''}</button>)}
+            </div>
             <span style={{ flex: 1 }} />
-            <button className="btn sm" onClick={() => setSel({})}>Clear</button>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} />
+              Group by department
+            </label>
+            <span className="dcr-legend"><span><i style={{ background: 'rgba(31,157,87,.45)' }} />Patient</span><span><i style={{ background: 'rgba(0,144,202,.45)' }} />Quality</span></span>
           </div>
-        )}
+          <div className="dcr-filters">
+            <div className="dcr-search"><span className="dcr-search-ic"><Ic d={I.search} s={14} /></span><input value={fq} onChange={(e) => setFq(e.target.value)} placeholder="Search target, indicator, person…" /></div>
+            <select className="dcr-select" value={fType} onChange={(e) => setFType(e.target.value)}>
+              <option value="">All types</option><option value="patient">Patient</option><option value="quality">Quality</option>
+            </select>
+            <select className="dcr-select" value={fDept} onChange={(e) => setFDept(e.target.value)}>
+              <option value="">All departments</option>
+              {deptOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <select className="dcr-select" value={fMonth} onChange={(e) => setFMonth(e.target.value)}>
+              <option value="">All periods</option>
+              {monthOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <select className="dcr-select" value={fResp} onChange={(e) => setFResp(e.target.value)}>
+              <option value="">All people</option>
+              {respOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            {anyFilter && <button className="btn sm" onClick={() => { setFq(''); setFType(''); setFDept(''); setFMonth(''); setFResp(''); }}><Ic d={I.x} s={13} />Clear</button>}
+            {rows && <span className="dcr-count">{filtered.length} of {rows.length} shown</span>}
+            {pendingRows.length > 0 && <button className="btn sm pri" disabled={busy === 'bulk'} onClick={() => runAction(pendingRows.map((s) => s.id), 'approve')} title="Approve every pending submission currently shown"><Ic d={I.check} s={13} />Approve all {pendingRows.length}</button>}
+          </div>
+          {selIds.length > 0 && (
+            <div className="dcr-bulk">
+              <b>{selIds.length} selected</b>
+              <button className="btn sm pri" disabled={busy === 'bulk'} onClick={() => runAction(selIds, 'approve')}><Ic d={I.check} s={13} />Approve selected</button>
+              <button className="btn sm" disabled={busy === 'bulk'} style={{ color: 'var(--rose)' }} onClick={() => setRejectFor({ ids: selIds })}>Reject selected</button>
+              <span style={{ flex: 1 }} />
+              <button className="btn sm" onClick={() => setSel({})}>Clear</button>
+            </div>
+          )}
+        </div>
 
-        <Card style={{ padding: 0, overflow: 'hidden' }}>
+        {/* "card" too: the .dcr-card rules in theme.css are written as .card.dcr-card */}
+        <Card style={{ padding: 0 }} className="card dcr-card">
           {rows === null ? <div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div>
             : rows.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No {filter === 'all' ? '' : filter} submissions.</div>
               : filtered.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No submissions match the filters. <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => { setFq(''); setFType(''); setFDept(''); setFMonth(''); setFResp(''); }}>Clear filters</button></div>
-              : <table className="tbl" style={{ width: '100%' }}>
-                <thead><tr><th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={(e) => { if (e.target.checked) { const m = {}; pendingRows.forEach((s) => { m[s.id] = true; }); setSel(m); } else setSel({}); }} /></th><th onClick={() => setSort('when')} style={{ cursor: 'pointer', userSelect: 'none' }}>When{sortCaret('when')}</th><th onClick={() => setSort('type')} style={{ cursor: 'pointer', userSelect: 'none' }}>Type{sortCaret('type')}</th><th onClick={() => setSort('target')} style={{ cursor: 'pointer', userSelect: 'none' }}>Target{sortCaret('target')}</th><th>Data</th><th>Responsible / By</th><th onClick={() => setSort('status')} style={{ cursor: 'pointer', userSelect: 'none' }}>Status{sortCaret('status')}</th><th></th></tr></thead>
+              : <table className="dcr">
+                <thead><tr><th className="dcr-sel"><input type="checkbox" checked={allSelected} onChange={(e) => { if (e.target.checked) { const m = {}; pendingRows.forEach((s) => { m[s.id] = true; }); setSel(m); } else setSel({}); }} /></th><th className="dcr-when dcr-sort" onClick={() => setSort('when')}>When{sortCaret('when')}</th><th className="dcr-type dcr-sort" onClick={() => setSort('type')}>Type{sortCaret('type')}</th><th className="dcr-target dcr-sort" onClick={() => setSort('target')}>Target{sortCaret('target')}</th><th className="dcr-data">Data</th><th className="dcr-person">Responsible / By</th><th className="dcr-status dcr-sort" onClick={() => setSort('status')}>Status{sortCaret('status')}</th><th className="dcr-act"></th></tr></thead>
                 <tbody>
                   {grouped
-                    ? groupNames.map((g) => (
-                      <React.Fragment key={g}>
-                        <tr><td colSpan={8} style={{ background: 'var(--panel-2)', fontWeight: 700, color: 'var(--ink)', padding: '7px 12px', borderTop: '1px solid var(--line-2)' }}>{g} <span style={{ fontWeight: 500, color: 'var(--muted)', fontSize: 12 }}>· {groups[g].length} submission{groups[g].length > 1 ? 's' : ''}</span></td></tr>
-                        {groups[g].map(submissionRow)}
-                      </React.Fragment>
-                    ))
+                    ? groupNames.map((g) => {
+                      const pend = groups[g].filter((s) => s.status === 'pending').length;
+                      return (
+                        <React.Fragment key={g}>
+                          <tr className={'dcr-group' + (collapsed[g] ? ' collapsed' : '')} onClick={() => setCollapsed((c) => Object.assign({}, c, { [g]: !c[g] }))} title={collapsed[g] ? 'Show this department' : 'Hide this department'}>
+                            <td colSpan={8}><div className="dcr-group-in"><span className="dcr-group-name">{g}</span><span className="dcr-group-count">{groups[g].length} submission{groups[g].length > 1 ? 's' : ''}</span>{pend ? <span className="dcr-badge warn">{pend} pending</span> : null}<span className="dcr-caret">▾</span></div></td>
+                          </tr>
+                          {!collapsed[g] && groups[g].map(submissionRow)}
+                        </React.Fragment>
+                      );
+                    })
                     : filtered.map(submissionRow)}
                 </tbody>
               </table>}
@@ -2607,7 +3004,8 @@
     const [detail, setDetail] = useState(null);
     const [view, setView] = useState('patient');
     const [status, setStatus] = useState('All');   // All | Pending | Approved | Rejected
-    const [mode, setMode] = useState('table');     // Table | Timeline
+    const mode = 'timeline';     // Timeline only (the Table view was removed at the user's request)
+    const [detailMode, setDetailMode] = useState(null);   // 'resend' opens the detail straight into Fix & resend
     // A collector may edit only their OWN still-PENDING submission (values only).
     const ownsSub = (s) => !!s && s.status === 'pending' && dcIsMine(s);
     // limit=500 is the SAME window CollectorProfile reads. Both screens quote an
@@ -2638,7 +3036,7 @@
       } catch (e) { return '—'; }
     };
     const statusChip = (st) => {
-      const m = { pending: ['Pending', '#fff4e0', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Rejected', 'var(--neg-bg)', 'var(--rose)'], reported: ['On record', 'var(--blue-50)', 'var(--blue-700)'] }[st] || ['—', '#eef1f5', '#789'];
+      const m = { pending: ['Pending', '#fff4e0', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'], withdrawn: ['Withdrawn', '#eef1f5', '#6c7a8c'], reported: ['On record', 'var(--blue-50)', 'var(--blue-700)'] }[st] || ['—', '#eef1f5', '#789'];
       return <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: m[1], color: m[2] }}>{m[0]}</span>;
     };
     // Merge the collector's submissions with existing on-record data, de-duped by
@@ -2647,7 +3045,7 @@
     // Jul-26 submission hide the Jun–Aug-2025 record.)
     const keyOf = (s) => s.type === 'quality' ? ('q|' + s.area + '|' + (s.indicatorId || s.indicatorName) + '|' + s.month) : ('p|' + s.department + '|' + s.month);
     const subs = (rows || []).filter(dcIsMine);
-    const subKeys = new Set(subs.map(keyOf));
+    const subKeys = new Set(subs.filter((s) => s.status !== 'withdrawn').map(keyOf));   // a withdrawn row never hides the record
     const merged = subs.concat(reportedRecords().filter((r) => !subKeys.has(keyOf(r))))
       .sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     // Split into Patient / Quality tabs (like the top-level forms).
@@ -2675,7 +3073,7 @@
     const ACC_C = 144.5;                              // 2πr for the r=23 donut
     // "This cycle" = the reporting month the portal is currently on. Scoping it to a
     // month is what makes it a cycle; an all-time total would only repeat the donut.
-    const cycle = subs.filter((x) => x.month === month);
+    const cycle = subs.filter((x) => x.month === month && x.status !== 'withdrawn');
     const cycleAppr = cycle.filter((x) => x.status === 'approved').length;
     const cycleRej = cycle.filter((x) => x.status === 'rejected').length;
     // Response time = how long the ADMIN took to decide (reviewedAt − submittedAt),
@@ -2696,7 +3094,7 @@
     // "Rejected" = still waiting on a fix (same rule as the dashboard's "Needs correction"):
     // a rejection already resubmitted, or an auto-rejected duplicate, is not open.
     const openRej = new Set(dcOpenRejections(rows).map((x) => x.id));
-    const FILTERS = ['All', 'Pending', 'Approved', 'Rejected'];
+    const FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Withdrawn'];
     const inFilter = (s, f) => f === 'All' || (f === 'Rejected' ? openRej.has(s.id) : s.status === f.toLowerCase());
     const countFor = (f) => shown.filter((s) => inFilter(s, f)).length;
     const listed = shown.filter((s) => inFilter(s, status));
@@ -2711,17 +3109,26 @@
        (button hidden) when the row lacks the ids the form needs in order to prefill. */
     // The rejected row itself is passed on so the form refills the figures that were sent.
     // No button once a NEWER non-rejected row exists for the same target+month (already fixed).
+    const ownReturn = (s) => !!s && s.status === 'rejected' && !s.autoRejected && dcIsMine(s);
     const fixFor = (s) => {
       if (!s || s.status !== 'rejected') return null;
       const k = dcTargetKey(s);
-      if ((rows || []).some((x) => x.status !== 'rejected' && (x.submittedAt || 0) > (s.submittedAt || 0) && dcTargetKey(x) === k)) return null;
+      if ((rows || []).some((x) => x.status !== 'rejected' && x.status !== 'withdrawn' && (x.submittedAt || 0) > (s.submittedAt || 0) && dcTargetKey(x) === k)) return null;
+      // My own returned row is fixed and sent back AS THE SAME RECORD (the server keeps its history).
+      if (ownReturn(s)) return () => { setDetailMode('resend'); setDetail(s); };
       if (s.type === 'quality') return (onFixQuality && s.area && s.indicatorId && s.month) ? () => onFixQuality(s.area, s.indicatorId, s.month, s) : null;
       return (onFixPatient && s.department && s.month) ? () => onFixPatient(s.department, s.month, s) : null;
     };
     const FIX_BTN = { border: '1px solid rgba(210,58,82,.35)', background: 'rgba(255,255,255,.7)', color: '#a92c42', padding: '4px 10px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' };
-    const FixBtn = ({ s }) => { const go = fixFor(s); return go ? <button style={FIX_BTN} onClick={(e) => { e.stopPropagation(); go(); }}>Fix &amp; resubmit</button> : null; };
+    const FixBtn = ({ s }) => { const go = fixFor(s); return go ? <button style={FIX_BTN} onClick={(e) => { e.stopPropagation(); go(); }}>{ownReturn(s) ? 'Fix & resend' : 'Fix & resubmit'}</button> : null; };
+    // My own pending row: Edit (the detail modal) or Withdraw (confirm first; a soft status).
+    const EDIT_BTN = Object.assign({}, FIX_BTN, { border: '1px solid rgba(0,144,202,.35)', color: '#0072a3' });
+    const PendingBtns = ({ s }) => (ownsSub(s) ? <React.Fragment>
+      <button style={EDIT_BTN} onClick={(e) => { e.stopPropagation(); setDetailMode(null); setDetail(s); }}>Edit</button>
+      <button style={FIX_BTN} onClick={(e) => { e.stopPropagation(); dcWithdraw(s).then((ok) => { if (ok) load(); }); }}>Withdraw</button>
+    </React.Fragment> : null);
     const REASON = { fontSize: 10.5, fontWeight: 400, color: '#a92c42', background: 'rgba(210,58,82,.09)', borderLeft: '2px solid rgba(210,58,82,.4)', borderRadius: 5, padding: '4px 8px', marginTop: 4, lineHeight: 1.45, maxWidth: 420 };
-    const rejNote = (s) => (s.status === 'rejected' && s.rejectReason) ? <div style={REASON}>{s.rejectReason}</div> : null;
+    const rejNote = (s) => (s.status === 'rejected' && s.rejectReason) ? <div style={REASON}>{s.autoRejected ? s.rejectReason : <React.Fragment><b>Returned by {s.reviewedBy || 'the administrator'}:</b> {s.rejectReason}</React.Fragment>}</div> : null;
 
     /* ---- Timeline ---------------------------------------------------------------
        The same rows, grouped by the DAY they were sent. On-record rows carry no
@@ -2789,11 +3196,6 @@
             <button key={f} onClick={() => setStatus(f)} style={cpTab(status === f)}>{f}<span style={cntStyle(status === f)}>{countFor(f)}</span></button>
           ))}
         </div>
-        <span style={{ flex: 1 }} />
-        <div style={segWrap}>
-          <button onClick={() => setMode('table')} style={cpTab(mode === 'table')}>Table</button>
-          <button onClick={() => setMode('timeline')} style={cpTab(mode === 'timeline')}>Timeline</button>
-        </div>
       </div>
 
       <Card style={{ padding: 0, overflow: 'hidden' }}>
@@ -2818,8 +3220,8 @@
                     <div key={g.label}>
                       <div style={{ fontSize: 10.5, letterSpacing: '.6px', textTransform: 'uppercase', color: '#7d8ea8', fontWeight: 700, margin: '0 0 9px' }}>{g.label}</div>
                       {g.rows.map((s) => {
-                        const dot = { pending: '#e08a1e', approved: '#1f9d57', rejected: '#d23a52' }[s.status] || '#0090ca';
-                        const halo = { pending: 'rgba(224,138,30,.16)', approved: 'rgba(31,157,87,.16)', rejected: 'rgba(210,58,82,.16)' }[s.status] || 'rgba(0,144,202,.16)';
+                        const dot = { pending: '#e08a1e', approved: '#1f9d57', rejected: '#d23a52', withdrawn: '#9aa6b4' }[s.status] || '#0090ca';
+                        const halo = { pending: 'rgba(224,138,30,.16)', approved: 'rgba(31,157,87,.16)', rejected: 'rgba(210,58,82,.16)', withdrawn: 'rgba(154,166,180,.18)' }[s.status] || 'rgba(0,144,202,.16)';
                         return (
                           <div key={s.id} onClick={() => setDetail(s)} title="Tap to view" style={{ display: 'flex', gap: 14, position: 'relative', paddingBottom: 16, cursor: 'pointer' }}>
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: 26 }}>
@@ -2831,7 +3233,7 @@
                                 <span style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e' }}>{targetOf(s)}</span>
                                 <span style={typeChip(s)}>{typeOf(s)}</span>
                                 {statusChip(s.status)}
-                                <FixBtn s={s} />
+                                <FixBtn s={s} /><PendingBtns s={s} />
                               </div>
                               <div style={{ fontSize: 11, color: '#6c7a8c', marginTop: 3 }}>
                                 {refOf(s) ? <span style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{refOf(s)}{' · '}</span> : null}
@@ -2846,7 +3248,7 @@
                       })}
                     </div>
                   ))}
-                  <div style={{ fontSize: 11, color: '#9aa6b4' }}>Rejected submissions show the administrator's reason — correct the figure and resubmit.</div>
+                  <div style={{ fontSize: 11, color: '#9aa6b4' }}>Returned submissions show the administrator's reason — use Fix &amp; resend to correct and send them again. A pending one can still be edited or withdrawn.</div>
                 </div>
                 : <React.Fragment>
                   <div style={{ overflowX: 'auto' }}><table className="tbl" style={{ width: '100%' }}>
@@ -2860,14 +3262,14 @@
                             ? <React.Fragment><td style={{ fontWeight: 600 }}>{s.areaName}</td><td style={{ fontWeight: 600 }}>{s.indicatorName}{rejNote(s)}</td><td>{monthLabel(s.month)}</td></React.Fragment>
                             : <React.Fragment><td style={{ fontWeight: 600 }}>{s.departmentName}{rejNote(s)}</td><td>{monthLabel(s.month)}</td></React.Fragment>)}
                         <td>{statusChip(s.status)}</td>
-                        <td style={{ textAlign: 'right' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, justifyContent: 'flex-end' }}><FixBtn s={s} /><button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View</button></div></td>
+                        <td style={{ textAlign: 'right' }}><div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, justifyContent: 'flex-end' }}><FixBtn s={s} /><PendingBtns s={s} /><button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View</button></div></td>
                       </tr>
                     ))}</tbody>
                   </table></div>
-                  <div style={{ padding: '10px 16px', fontSize: 11, color: '#9aa6b4' }}>Rejected submissions show the administrator's reason — correct the figure and resubmit.</div>
+                  <div style={{ padding: '10px 16px', fontSize: 11, color: '#9aa6b4' }}>Returned submissions show the administrator's reason — use Fix &amp; resend to correct and send them again. A pending one can still be edited or withdrawn.</div>
                 </React.Fragment>}
       </Card>
-      {detail && <SubmissionDetail s={detail} canEdit={ownsSub(detail)} fullEdit={false} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}
+      {detail && <SubmissionDetail key={detail.id + '/' + (detailMode || '')} s={detail} canEdit={ownsSub(detail)} fullEdit={false} initialMode={detailMode} onClose={() => { setDetail(null); setDetailMode(null); }} onSaved={() => { setDetail(null); setDetailMode(null); load(); }} />}
       </>
     );
   }
@@ -2979,7 +3381,7 @@
     <svg width={s || 17} height={s || 17} viewBox="0 0 24 24" fill="none" stroke={c || 'currentColor'} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
   );
   const cpChipStyle = (label) => {
-    const c = { Missing: '#d23a52', Submitted: '#0090ca', Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52', Recorded: '#1f9d57', 'Not observed': '#5b3fa8', Returned: '#b5670a', 'Not measured': '#6c7a8c', 'Not started': '#8a96a8' }[label] || '#6c7a8c';
+    const c = { Missing: '#d23a52', Submitted: '#0090ca', Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52', Recorded: '#1f9d57', 'Not observed': '#5b3fa8', Returned: '#b5670a', 'Not measured': '#6c7a8c', 'Not started': '#8a96a8', Withdrawn: '#8a96a8' }[label] || '#6c7a8c';
     return { display: 'inline-flex', alignItems: 'center', fontSize: 10.5, fontWeight: 700, padding: '2px 10px', borderRadius: 12, color: c, background: c + '1a', whiteSpace: 'nowrap', flexShrink: 0 };
   };
   const cpInitials = (n) => String(n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
@@ -2998,7 +3400,8 @@
     return f(ind.mNum) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0);
   };
   function cpSubmissionStatus(subs, area, ind, month) {
-    const matching = (subs || []).filter(s => s.type === 'quality' && s.area === area && s.month === month &&
+    // A withdrawn row was never sent: it is neither pending, recorded nor returned.
+    const matching = (subs || []).filter(s => s.type === 'quality' && s.status !== 'withdrawn' && s.area === area && s.month === month &&
       (s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase()));
     const latest = matching.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))[0];
     if (latest && latest.status === 'pending') return 'pending';
@@ -3040,7 +3443,7 @@
   // Range = the earliest month anything assigned actually started (Department Setup start month,
   // else indicator start, else first recorded data/submission) up to the latest due month, newest
   // first. `keep` months (the current selection / a prefilled month) are always included.
-  const dcPortalUser = () => { const r = ((typeof window !== 'undefined' && window.__UNICO_USER__) || {}).role; return r === 'collector' || r === 'incharge'; };
+  const dcPortalUser = () => dcIsPortalRole((typeof window !== 'undefined' && window.__UNICO_USER__) || null);
   const dcRealMonthOpts = (startMonths, keep) => {
     const last = dcDefaultMonth(); const lr = dcMonthRank(last);
     let first = null;
@@ -3201,7 +3604,7 @@
   // Patient statistics for one department-month: 'recorded' | 'pending' | 'rejected' | 'none'.
   const dcPatientState = (subs, dept, m) => {
     if ((dept.months || []).indexOf(m) >= 0) return 'recorded';
-    const list = dcSubsIndex(subs).p.get(dept.id + '|' + m) || [];
+    const list = (dcSubsIndex(subs).p.get(dept.id + '|' + m) || []).filter((s) => s.status !== 'withdrawn');
     if (list.some((s) => s.status === 'pending')) return 'pending';
     if (list.some((s) => s.status !== 'rejected')) return 'recorded';
     return list.length ? 'rejected' : 'none';
@@ -3217,7 +3620,7 @@
       dcDueMonths(dcPatientStart(d, subs)).forEach((m) => {
         const st = dcPatientState(subs, d, m);
         if (st !== 'none' && st !== 'rejected') return;
-        rows.push({ key: 'p|' + d.id + '|' + m, kind: 'patient', month: m, rank: dcMonthRank(m), status: st, unit: d.name || d.id, deptId: d.id, from: st === 'rejected' ? newest(ix.p.get(d.id + '|' + m) || []) : null });
+        rows.push({ key: 'p|' + d.id + '|' + m, kind: 'patient', month: m, rank: dcMonthRank(m), status: st, unit: d.name || d.id, deptId: d.id, from: st === 'rejected' ? newest((ix.p.get(d.id + '|' + m) || []).filter((s) => s.status === 'rejected')) : null });
       });
     });
     (areas || []).forEach((a) => (a && a.indicators || []).forEach((ind) => {
@@ -3225,7 +3628,7 @@
       dcDueMonths(dcIndicatorStart(a, ind, subs)).forEach((m) => {
         const st = dcQStatus(subs, a.key, ind, m);
         if (st !== 'none' && st !== 'rejected') return;
-        rows.push({ key: 'q|' + a.key + '|' + ind.id + '|' + m, kind: 'quality', month: m, rank: dcMonthRank(m), status: st, unit: a.name || a.key, areaKey: a.key, ind: ind, from: st === 'rejected' ? newest((ix.q.get(a.key + '|' + m) || []).filter((s) => dcSubIsInd(s, ind))) : null });
+        rows.push({ key: 'q|' + a.key + '|' + ind.id + '|' + m, kind: 'quality', month: m, rank: dcMonthRank(m), status: st, unit: a.name || a.key, areaKey: a.key, ind: ind, from: st === 'rejected' ? newest((ix.q.get(a.key + '|' + m) || []).filter((s) => dcSubIsInd(s, ind) && s.status === 'rejected')) : null });
       });
     }));
     return rows;
@@ -3273,9 +3676,11 @@
     const [reason, setReason] = useState('');
     const [busy, setBusy] = useState(false);
     const [undoStack, setUndoStack] = useState([]);
+    const [cmp, setCmp] = useState(null);               // { months, prior:{[m]:values}, send:[months] } -> comparison pop-up
+    const [pendingDlg, setPendingDlg] = useState(null); // { id, message } -> "already waiting" pop-up
     const load = () => dcSubmissionResponse().then((r) => setSubs(r.ok ? r.submissions : [])).catch(() => {});
     useEffect(() => { load(); }, []);
-    useEffect(() => { setEdits({}); setReason(''); setUndoStack([]); }, [deptId]);
+    useEffect(() => { setEdits({}); setReason(''); setUndoStack([]); setCmp(null); }, [deptId]);
 
     const cols = (dept && dept.cols) || [];
     const order = MO();
@@ -3292,7 +3697,7 @@
     dMonths.forEach((m, i) => { if (dData[i]) byMonth[m] = dData[i]; });
     dData.forEach((r) => { if (r && r.month) byMonth[r.month] = r; });
     const subStatus = {};
-    (subs || []).forEach((s) => { if (s.type === 'patient' && s.department === deptId && s.month && !subStatus[s.month]) subStatus[s.month] = s.status; });
+    (subs || []).forEach((s) => { if (s.type === 'patient' && s.department === deptId && s.month && s.status !== 'withdrawn' && !subStatus[s.month]) subStatus[s.month] = s.status; });
 
     const cellVal = (m, cid) => {
       const k = m + '|' + cid;
@@ -3335,33 +3740,40 @@
       if (!dept) return;
       if (!touched.length) { toast('Nothing to submit — type a figure first.', 'error'); return; }
       if (blocked.length) { toast('A submission for ' + blocked.map(monthLabel).join(', ') + ' is already awaiting review.', 'error'); return; }
-      if (corrections.length && !reason.trim()) { toast('Please say why you are changing months already on record.', 'error'); return; }
+      // Months on record go through the comparison pop-up (reason required) before anything is sent.
+      if (corrections.length) { setCmp({ months: corrections, send: touched, prior: Object.fromEntries(corrections.map((m) => [m, byMonth[m] || {}])) }); return; }
+      sendMonths(touched, [], '');
+    };
+    const valuesFor = (m) => { const values = {}; cols.forEach((c) => { const v = cellVal(m, c.id); if (String(v).trim() !== '') values[c.id] = Number(v); }); return values; };
+    const sendMonths = (months, corrMonths, why) => {
       setBusy(true);
       // One submission per month, so the admin reviews and applies them exactly as if
       // they had been sent from the single-month form.
-      const jobs = touched.map((m) => {
-        const values = {};
-        cols.forEach((c) => { const v = cellVal(m, c.id); if (String(v).trim() !== '') values[c.id] = Number(v); });
-        const isCorr = corrections.indexOf(m) >= 0;
+      const jobs = months.map((m) => {
+        const isCorr = corrMonths.indexOf(m) >= 0;
         return dcApi.post('/api/submissions/patient', {
-          department: dept.id, month: m, values,
+          department: dept.id, month: m, values: valuesFor(m),
           responsible: { name: me.name || '' }, note: '',
-          isCorrection: isCorr, correctionReason: isCorr ? reason.trim() : '',
+          isCorrection: isCorr, correctionReason: isCorr ? why : '',
         }).catch(() => null);
       });
       Promise.all(jobs).then((rs) => {
         setBusy(false);
-        const bad = rs.filter((r) => !r || !r.ok);
-        if (bad.length) {
-          // Some months DID go through. Keeping them in the grid meant fixing the failed month
-          // and pressing Submit again re-sent the others as duplicate pending rows.
-          const sent = touched.filter((m, i) => rs[i] && rs[i].ok);
-          if (sent.length) { setEdits((e) => { const next = {}; Object.keys(e).forEach((k) => { if (sent.indexOf(k.split('|')[0]) < 0) next[k] = e[k]; }); return next; }); load(); }
-          toast((sent.length ? sent.map(monthLabel).join(', ') + ' sent. ' : '') + ((bad[0] && bad[0].error) || 'Some months could not be sent.'), 'error');
-          return;
-        }
-        toast(touched.length + ' month' + (touched.length > 1 ? 's' : '') + ' sent for review', 'success');
-        setEdits({}); setReason(''); setUndoStack([]); load(); if (onDone) onDone();
+        // Months that went through leave the grid at once. Keeping them meant fixing a failed month
+        // and pressing Submit again re-sent the others as duplicate pending rows.
+        const sent = months.filter((m, i) => rs[i] && rs[i].ok);
+        if (sent.length) { setEdits((e) => { const next = {}; Object.keys(e).forEach((k) => { if (sent.indexOf(k.split('|')[0]) < 0) next[k] = e[k]; }); return next; }); load(); }
+        // The server knew a month was on record that this sheet didn't: compare those, then resend.
+        const exists = months.filter((m, i) => rs[i] && rs[i].code === 'exists');
+        setCmp(exists.length ? { months: exists, send: exists, prior: Object.fromEntries(exists.map((m) => [m, ((rs[months.indexOf(m)].prior) || {}).values || {}])) } : null);
+        const pend = rs.find((r) => r && r.code === 'pending');
+        if (pend) setPendingDlg({ id: pend.pendingId, message: pend.error });
+        const bad = rs.filter((r) => !r || (!r.ok && r.code !== 'exists' && r.code !== 'pending'));
+        if (bad.length) { toast((sent.length ? sent.map(monthLabel).join(', ') + ' sent. ' : '') + ((bad[0] && bad[0].error) || 'Some months could not be sent.'), 'error'); return; }
+        if (sent.length === months.length) {
+          toast(sent.length + ' month' + (sent.length > 1 ? 's' : '') + (corrMonths.length ? ' sent (edit requests go to the administrator)' : ' sent for review'), 'success');
+          setReason(''); setUndoStack([]); if (onDone) onDone();
+        } else if (sent.length) toast(sent.map(monthLabel).join(', ') + ' sent.', 'success');
       }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
     };
 
@@ -3372,6 +3784,10 @@
 
     return (
       <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+        {cmp && <DcCompareModal title={'Data already recorded for ' + dept.name + ' · ' + cmp.months.map(monthLabel).join(', ')}
+          rows={[].concat.apply([], cmp.months.map((m) => dcPatientCompareRows(cols, cmp.prior[m] || {}, valuesFor(m), monthLabel(m))))}
+          reason={reason} setReason={setReason} busy={busy} onEdit={() => setCmp(null)} onSend={() => sendMonths(cmp.send, cmp.months, reason.trim())} />}
+        {pendingDlg && <DcPendingNotice id={pendingDlg.id} message={pendingDlg.message} subs={subs} onClose={() => setPendingDlg(null)} onSaved={load} />}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e' }}>Quick entry — spreadsheet mode</div>
@@ -3437,8 +3853,7 @@
             <div style={{ fontSize: 12, color: '#3c4858', marginBottom: 8, lineHeight: 1.55 }}>
               <b>{corrections.map(monthLabel).join(', ')}</b> {corrections.length > 1 ? 'are' : 'is'} already on record. Changing {corrections.length > 1 ? 'them' : 'it'} sends a correction to the administrator — live data is not overwritten until it is approved.
             </div>
-            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this being corrected?"
-              style={{ width: '100%', boxSizing: 'border-box', padding: '9px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', background: 'rgba(255,255,255,.85)', fontFamily: 'inherit', fontSize: 12.5, outline: 'none' }} />
+            <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>Submitting shows your changes next to what is on record and asks why.</div>
           </div>
         )}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -3656,13 +4071,14 @@
     const [subs, setSubs] = useState(null);
     useEffect(() => { dcSubmissionResponse().then((r) => setSubs(r.ok ? (r.submissions || []) : [])).catch(() => setSubs([])); }, []);
     const S = (subs || []).filter(dcIsMine);
+    const sentS = S.filter((x) => x.status !== 'withdrawn');   // withdrawn rows were never sent for review
 
     // Auto-rejected duplicates are not wrong figures (same rule as My submissions / Analytics).
     const decided = S.filter((x) => x.status === 'approved' || (x.status === 'rejected' && !x.autoRejected));
     const accuracy = decided.length ? Math.round(S.filter((x) => x.status === 'approved').length * 100 / decided.length) : null;
     const onTime = (() => {
       let n = 0, ok = 0;
-      S.forEach((x) => { const dl = cpDeadline(x.month); if (!dl || !x.submittedAt) return; n++; if (x.submittedAt <= dl.getTime()) ok++; });
+      sentS.forEach((x) => { const dl = cpDeadline(x.month); if (!dl || !x.submittedAt) return; n++; if (x.submittedAt <= dl.getTime()) ok++; });
       return n ? { pct: Math.round(ok * 100 / n), n } : null;
     })();
     const indCount = areas.reduce((n, a) => n + a.indicators.length, 0);
@@ -3720,7 +4136,7 @@
           <div style={{ position: 'relative', display: 'flex', gap: 20, flexWrap: 'wrap' }}>
             {stat(indCount, 'indicators')}
             {stat(depts.length, depts.length === 1 ? 'department' : 'departments')}
-            {stat(subs === null ? '—' : S.length, 'submissions')}
+            {stat(subs === null ? '—' : sentS.length, 'submissions')}
           </div>
         </div>
 
@@ -3782,7 +4198,7 @@
                   <React.Fragment>
                     {accuracy != null && bar('Accepted first time', accuracy, accuracy + '%', 'linear-gradient(90deg,#3ab5a7,#1f9d57)')}
                     {onTime && bar('Sent on time', onTime.pct, onTime.pct + '%', 'linear-gradient(90deg,#27a8db,#0072a3)')}
-                    {bar('Approved', S.length ? S.filter((x) => x.status === 'approved').length * 100 / S.length : 0, String(S.filter((x) => x.status === 'approved').length), 'linear-gradient(90deg,#8f7ce0,#5b45c4)')}
+                    {bar('Approved', sentS.length ? sentS.filter((x) => x.status === 'approved').length * 100 / sentS.length : 0, String(sentS.filter((x) => x.status === 'approved').length), 'linear-gradient(90deg,#8f7ce0,#5b45c4)')}
                     <div style={{ fontSize: 11, color: '#6c7a8c', lineHeight: 1.6, background: 'rgba(0,144,202,.08)', borderRadius: 9, padding: '9px 11px' }}>
                       {decided.length ? 'Measured over ' + decided.length + ' reviewed submission' + (decided.length === 1 ? '' : 's') + (onTime ? ', and ' + onTime.n + ' with a known deadline.' : '.') : 'Nothing has been reviewed yet, so accuracy cannot be measured.'}
                     </div>
@@ -3801,8 +4217,8 @@
           {subs === null ? <div style={{ padding: 20, color: '#6c7a8c' }}>Loading…</div>
             : recent.length === 0 ? <div style={{ padding: 24, textAlign: 'center', color: '#6c7a8c', fontSize: 12 }}>Nothing yet.</div>
               : recent.map((x) => {
-                const label = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' }[x.status] || 'Pending';
-                const dot = { Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52' }[label];
+                const label = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected', withdrawn: 'Withdrawn' }[x.status] || 'Pending';
+                const dot = { Pending: '#e08a1e', Approved: '#1f9d57', Rejected: '#d23a52', Withdrawn: '#9aa6b4' }[label];
                 return (
                   <div key={x.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 16px', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, marginTop: 5, flexShrink: 0 }} />
@@ -3822,21 +4238,54 @@
   }
 
   /* ---- Department & staff --------------------------------------------------------
-     What the collector reports on, and how much of it is already on record.
+     What the collector reports on, how much of it is already on record, and who works
+     there. GET /api/staff hands a portal account its own units' staff as a thin,
+     work-facts-only record (access.portalStaff), so the list is safe to show here.
 
-     There is deliberately NO staff roster here. The server withholds staff records
-     from collectors by design (GET /api/staff returns an empty list for a collector
-     scope, matching the "/" snapshot), so a staff panel could only ever render empty.
-     Showing the department's own reporting history is both permitted and more use to
-     the person filling the forms. */
+     The server matches staff to units with aliases and the Level-N rule; the client
+     only splits that already-scoped list between cards. With one department every
+     row belongs to it; with several, rows whose department text matches no card are
+     listed together at the end rather than dropped. */
+  const cpSquash = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   function CollectorDeptStaff() {
     const dataRev = useDcDataRev();
     const all = useMemo(() => dcAllDepts(), [dataRev]);
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
+    const [staff, setStaff] = useState(null);
+    useEffect(() => {
+      const load = () => dcApi.get('/api/staff').then((r) => setStaff(r.ok ? (r.staff || []) : [])).catch(() => setStaff((s) => s || []));
+      load();
+      const refresh = () => { if (document.visibilityState !== 'hidden') load(); };
+      window.addEventListener('unico:data-refreshed', refresh);
+      return () => window.removeEventListener('unico:data-refreshed', refresh);
+    }, []);
     const order = MO();
     const cur = dcDefaultMonth();
     const ci = Math.max(0, order.indexOf(cur));
     const win = order.slice(Math.max(0, ci - 11), ci + 1);
+
+    const byDept = {};
+    const unplaced = [];
+    (staff || []).forEach((p) => {
+      if (all.length === 1) { (byDept[all[0].id] = byDept[all[0].id] || []).push(p); return; }
+      const k = cpSquash(p.current_department);
+      const d = all.find((x) => cpSquash(x.id) === k || cpSquash(x.name) === k);
+      if (d) (byDept[d.id] = byDept[d.id] || []).push(p); else unplaced.push(p);
+    });
+    const staffBlock = (rows, title) => {
+      const pca = rows.filter((p) => p.role === 'PCA').length;
+      return (
+        <div style={{ marginTop: 15, borderTop: '1px solid rgba(125,145,180,.18)', paddingTop: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e' }}>{title}</span>
+            {staff !== null && <span style={{ fontSize: 11, color: '#6c7a8c' }}>{rows.length} staff · {rows.length - pca} nurses · {pca} PCA</span>}
+          </div>
+          {staff === null ? <div style={{ padding: '10px 0', color: '#6c7a8c', fontSize: 12 }}>Loading staff…</div>
+            : rows.length === 0 ? <div style={{ padding: '14px 0', textAlign: 'center', color: '#6c7a8c', fontSize: 12 }}>No staff are recorded against this unit yet. Ask your administrator to set the department on their records.</div>
+              : <CpStaffTable rows={rows} />}
+        </div>
+      );
+    };
     return (
       <div style={{ maxWidth: 1240, margin: '0 auto', display: 'grid', gap: 14 }}>
         <div style={Object.assign({}, CP_CARD, { padding: '14px 16px' })}>
@@ -3870,9 +4319,15 @@
                     style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 7, whiteSpace: 'nowrap', color: have.has(m) ? '#fff' : '#9aa6b4', background: have.has(m) ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'rgba(125,145,180,.14)' }}>{m}</span>
                 ))}
               </div>
+              {staffBlock(byDept[d.id] || [], 'Staff')}
             </div>
           );
         })}
+        {unplaced.length > 0 && (
+          <div style={Object.assign({}, CP_CARD, { padding: '15px 17px' })}>
+            {staffBlock(unplaced, 'Other staff in your units')}
+          </div>
+        )}
       </div>
     );
   }
@@ -3922,7 +4377,7 @@
     // Department statistics for the month: on record, or sent and awaiting review.
     // Only units that report patient statistics — quality-only units are never "missing".
     const pDepts = dcPatientDepts(depts, S).filter((d) => dcPatientDue(d, month, S));
-    const deptDone = pDepts.filter((d) => ((d.months || []).indexOf(month) >= 0) || S.some((s) => s.type === 'patient' && s.department === d.id && s.month === month && s.status !== 'rejected')).length;
+    const deptDone = pDepts.filter((d) => ((d.months || []).indexOf(month) >= 0) || S.some((s) => s.type === 'patient' && s.department === d.id && s.month === month && s.status !== 'rejected' && s.status !== 'withdrawn')).length;
     const statGap = Math.max(0, pDepts.length - deptDone);
 
     const dl = cpDeadline(month);
@@ -4551,9 +5006,6 @@
       [hepDone, 'Hep-B complete'],
       [hepUnknown, 'vaccination unknown'],
     ];
-    const th = { textAlign: 'left', padding: '9px 12px', fontSize: 10.5, letterSpacing: '.5px', textTransform: 'uppercase', color: '#7d8ea8', fontWeight: 700, borderBottom: '1px solid rgba(125,145,180,.25)', whiteSpace: 'nowrap' };
-    const td = { padding: '9px 12px', borderBottom: '1px solid rgba(125,145,180,.12)', verticalAlign: 'middle' };
-
     return (
       <div style={{ maxWidth: 1240, margin: '0 auto', display: 'grid', gap: 14 }}>
         <div style={Object.assign({}, CP_CARD, { padding: '15px 17px' })}>
@@ -4592,57 +5044,166 @@
           {staff === null ? <div style={{ padding: 24, color: '#6c7a8c' }}>Loading…</div>
             : all.length === 0 ? <div style={{ padding: 28, textAlign: 'center', color: '#6c7a8c', fontSize: 12.5 }}>No staff are recorded against your unit yet. Ask your administrator to set the department on their records.</div>
               : rows.length === 0 ? <div style={{ padding: 26, textAlign: 'center', color: '#6c7a8c', fontSize: 12.5 }}>Nobody matches that filter.</div>
-                : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                      <thead>
-                        <tr>
-                          <th style={th}>Staff</th>
-                          <th style={th}>Emp ID</th>
-                          <th style={th}>Designation</th>
-                          <th style={th}>Qualification</th>
-                          <th style={Object.assign({}, th, { textAlign: 'right' })}>Experience</th>
-                          <th style={th}>Training</th>
-                          <th style={th}>Hep-B</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.map((p, i) => {
-                          const hep = CP_HEPB_TONE(p.hepatitis_b_vaccination);
-                          const training = String(p.special_training || '').replace(/^-$/, '').trim();
-                          return (
-                            <tr key={p.id || p.emp_id || i}>
-                              <td style={td}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                  <span style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{cpInitials(p.name)}</span>
-                                  <div style={{ minWidth: 0 }}>
-                                    <div style={{ fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap' }}>{p.name}</div>
-                                    <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{p.doj ? 'joined ' + p.doj : (p.role || 'Nurse')}</div>
-                                  </div>
-                                </div>
-                              </td>
-                              <td style={Object.assign({}, td, { fontFamily: "'IBM Plex Mono',monospace", color: '#6c7a8c' })}>{p.emp_id || '—'}</td>
-                              <td style={Object.assign({}, td, { color: '#3c4858' })}>{p.designation || '—'}</td>
-                              <td style={Object.assign({}, td, { color: '#3c4858' })}>{p.qualification || '—'}</td>
-                              <td style={Object.assign({}, td, { textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", color: '#3c4858' })}>{p.total_experience_text || '—'}</td>
-                              <td style={td}>
-                                {training
-                                  ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                                    {training.split(/[,;]/).map((x) => x.trim()).filter(Boolean).slice(0, 3).map((x, k) => (
-                                      <span key={k} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 11, background: 'rgba(0,144,202,.1)', color: '#0072a3', whiteSpace: 'nowrap' }}>{x}</span>
-                                    ))}
-                                  </div>
-                                  : <span style={{ fontSize: 11, color: '#b6c0cc' }}>None recorded</span>}
-                              </td>
-                              <td style={td}><span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 10px', borderRadius: 12, color: hep[0], background: hep[0] + '1a', whiteSpace: 'nowrap' }}>{hep[1]}</span></td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                : <CpStaffTable rows={rows} />}
         </div>
+      </div>
+    );
+  }
+
+  /* Read-only staff profile for the portal — opened by clicking a row in CpStaffTable. Shows
+     only what /api/staff hands a portal user (server/access.js portalStaff); anything the
+     register doesn't hold, or the server doesn't share, reads "—" rather than a guess. The BNMC
+     badge states what the council said when it was checked: an EXPIRED registration is shown
+     red, never flattened into a green tick. */
+  function CpStaffProfile({ p, onClose }) {
+    useEffect(() => {
+      const k = (e) => { if (e.key === 'Escape') onClose(); };
+      window.addEventListener('keydown', k);
+      return () => window.removeEventListener('keydown', k);
+    }, [onClose]);
+    const v = p.licence_verified || null, pr = (v && v.primary) || {};
+    const expired = !!pr.expired;
+    const checked = v && v.at ? String(v.at).slice(0, 10) : '';
+    const hep = CP_HEPB_TONE(p.hepatitis_b_vaccination);
+    const list = (x) => (Array.isArray(x) ? x : String(x || '').split(/[,;]/)).map((s) => String(s).trim()).filter((s) => s && s !== '-');
+    const chips = (x, bg, fg) => {
+      const items = list(x);
+      return items.length
+        ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>{items.map((s, k) => <span key={k} style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 12, background: bg, color: fg }}>{s}</span>)}</div>
+        : <span style={{ fontSize: 12, color: '#b6c0cc' }}>None recorded</span>;
+    };
+    const lbl = { fontSize: 10, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: '#7d8ea8', marginBottom: 4 };
+    const tile = (label, value, mono) => (
+      <div style={{ background: 'rgba(255,255,255,.7)', border: '1px solid rgba(125,145,180,.18)', borderRadius: 10, padding: '8px 11px', minWidth: 0 }}>
+        <div style={lbl}>{label}</div>
+        {value
+          ? <div style={{ fontSize: 13, fontWeight: 700, color: '#16202e', fontFamily: mono ? "'IBM Plex Mono',monospace" : 'inherit', wordBreak: 'break-word' }}>{value}</div>
+          : <div style={{ fontSize: 11.5, fontWeight: 600, color: '#b6c0cc', fontStyle: 'italic' }}>Not recorded</div>}
+      </div>
+    );
+    const dept = Array.isArray(p.current_department) ? p.current_department.join(', ') : p.current_department;
+    return (
+      <div role="dialog" aria-modal="true" aria-label={'Staff profile — ' + p.name} onClick={onClose}
+        style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,27,46,.45)', display: 'grid', placeItems: 'center', padding: 16 }}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(640px,100%)', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto', background: 'linear-gradient(160deg,#fbfdff,#eef5fb)', borderRadius: 16, boxShadow: '0 24px 60px rgba(15,27,46,.35)' }}>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center', padding: '20px 22px 16px', borderBottom: '1px solid rgba(125,145,180,.18)', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <UnicoAvatar photo={p.photo || null} initials={cpInitials(p.name)} size={72} radius={18}
+                style={{ background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 22, fontWeight: 700 }} />
+              {v && <span title={'BNMC ' + (expired ? 'registration expired' : 'verified') + (checked ? ' — checked ' + checked : '')}
+                style={{ position: 'absolute', right: -4, bottom: -4, width: 24, height: 24, borderRadius: '50%', display: 'grid', placeItems: 'center', background: expired ? '#d23a52' : '#1f9d57', border: '2.5px solid #fff', boxShadow: '0 2px 6px rgba(0,0,0,.25)' }}>
+                <Ic d={I.check} s={12} c="#fff" />
+              </span>}
+            </div>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: '#16202e' }}>{p.name}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: '#0072a3', marginTop: 2 }}>{p.designation || p.role || '—'}</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                {v
+                  ? <span title={checked ? 'Checked against the BNMC register on ' + checked : 'Checked against the BNMC register'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, color: expired ? '#a32c41' : '#157a43', background: expired ? '#fdf3f4' : '#eef8f1', border: '1px solid ' + (expired ? '#f0c2ca' : '#cde9d8') }}>
+                    <Ic d={I.check} s={11} c={expired ? '#a32c41' : '#157a43'} />BNMC {expired ? 'expired' : 'verified'}</span>
+                  : <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, color: '#6c7a8c', background: 'rgba(125,145,180,.12)' }}>Licence not verified</span>}
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, color: hep[0], background: hep[0] + '1a' }}>Hep-B · {hep[1]}</span>
+                {p.role && <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, color: '#3c4858', background: 'rgba(125,145,180,.14)' }}>{p.role}</span>}
+              </div>
+            </div>
+            <button onClick={onClose} aria-label="Close" style={{ alignSelf: 'flex-start', border: '1px solid rgba(125,145,180,.35)', background: '#fff', borderRadius: 9, width: 32, height: 32, cursor: 'pointer', fontSize: 16, color: '#6c7a8c' }}>✕</button>
+          </div>
+          <div style={{ padding: '16px 22px 22px', display: 'grid', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 9 }}>
+              {tile('Employee ID', p.emp_id, true)}
+              {tile('Department', dept)}
+              {tile('Joined', p.doj, true)}
+              {tile('Total experience', p.total_experience_text || (p.total_experience_years ? p.total_experience_years + ' yrs' : ''))}
+              {tile('Blood group', p.blood_group, true)}
+              {tile('Gender', p.gender)}
+            </div>
+            {(p.licence_no || p.licence_expiry || v) && (
+              <div style={{ borderRadius: 11, padding: '10px 13px', background: v ? (expired ? '#fdf3f4' : '#eef8f1') : 'rgba(255,255,255,.7)', border: '1px solid ' + (v ? (expired ? '#f0c2ca' : '#cde9d8') : 'rgba(125,145,180,.18)') }}>
+                <div style={lbl}>Registration / licence</div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 13.5, fontWeight: 700, color: '#16202e' }}>{pr.regNo || (v && v.number) || p.licence_no || '—'}</span>
+                  {pr.renewUpto ? <span style={{ fontSize: 11.5, color: expired ? '#d23a52' : '#6c7a8c' }}>valid until {pr.renewUpto}</span> : (p.licence_expiry && <span style={{ fontSize: 11.5, color: '#6c7a8c' }}>expires {p.licence_expiry}</span>)}
+                  {pr.status && <span style={{ fontSize: 11.5, fontWeight: 700, color: expired ? '#d23a52' : '#157a43' }}>{pr.status}</span>}
+                  {checked && <span style={{ fontSize: 11, color: '#6c7a8c', marginLeft: 'auto' }}>checked {checked}</span>}
+                </div>
+                {(pr.course || pr.institution) && <div style={{ fontSize: 11.5, color: '#6c7a8c', marginTop: 4 }}>{[pr.course, pr.institution].filter(Boolean).join(' · ')}</div>}
+              </div>
+            )}
+            <div><div style={lbl}>Qualification</div>{chips(p.qualification, 'rgba(0,144,202,.1)', '#0072a3')}</div>
+            <div><div style={lbl}>Special training</div>{chips(p.special_training, '#fff4e5', '#b5670a')}</div>
+            <div><div style={lbl}>Extracurricular activities</div>{chips(p.extracurricular, '#f1eefb', '#6a52d4')}</div>
+            {(() => {
+              // Most register rows don't hold these yet — say what is missing and who fills it
+              // in, instead of leaving a column of blanks that reads like a broken screen.
+              const gaps = [['Blood group', p.blood_group], ['Gender', p.gender], ['BNMC licence', p.licence_no || v], ['Extracurricular activities', list(p.extracurricular).length]]
+                .filter((g) => !g[1]).map((g) => g[0]);
+              return gaps.length
+                ? <div style={{ fontSize: 11.5, color: '#8a5a00', background: '#fff8e9', border: '1px solid #f1d49a', borderRadius: 9, padding: '8px 11px' }}>
+                  Not recorded on the staff register yet: <b>{gaps.join(', ')}</b>. Ask the CNS to update this record in Nurse Management.</div>
+                : <div style={{ fontSize: 11, color: '#9aa6b4' }}>Read-only — staff records are maintained in Nurse Management by the CNS.</div>;
+            })()}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // The read-only staff table shared by "My unit's staff" and "Department & staff".
+  function CpStaffTable({ rows }) {
+    const [open, setOpen] = useState(null);
+    const th = { textAlign: 'left', padding: '9px 12px', fontSize: 10.5, letterSpacing: '.5px', textTransform: 'uppercase', color: '#7d8ea8', fontWeight: 700, borderBottom: '1px solid rgba(125,145,180,.25)', whiteSpace: 'nowrap' };
+    const td = { padding: '9px 12px', borderBottom: '1px solid rgba(125,145,180,.12)', verticalAlign: 'middle' };
+    return (
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <thead>
+            <tr>
+              <th style={th}>Staff</th>
+              <th style={th}>Emp ID</th>
+              <th style={th}>Designation</th>
+              <th style={th}>Qualification</th>
+              <th style={Object.assign({}, th, { textAlign: 'right' })}>Experience</th>
+              <th style={th}>Training</th>
+              <th style={th}>Hep-B</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((p, i) => {
+              const hep = CP_HEPB_TONE(p.hepatitis_b_vaccination);
+              const training = String(p.special_training || '').replace(/^-$/, '').trim();
+              return (
+                <tr key={p.id || p.emp_id || i} onClick={() => setOpen(p)} title={'View ' + p.name + "'s profile"} style={{ cursor: 'pointer' }}>
+                  <td style={td}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <UnicoAvatar photo={p.photo || null} initials={cpInitials(p.name)} size={30} radius={9}
+                        style={{ background: 'linear-gradient(135deg,#3ab5a7,#0090ca)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 5 }}>{p.name}{p.licence_verified ? <span title={p.licence_verified.primary && p.licence_verified.primary.expired ? 'BNMC registration expired' : 'BNMC verified'} style={{ display: 'inline-grid', placeItems: 'center', width: 15, height: 15, borderRadius: '50%', background: p.licence_verified.primary && p.licence_verified.primary.expired ? '#d23a52' : '#1f9d57' }}><Ic d={I.check} s={9} c="#fff" /></span> : null}</div>
+                        <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{p.doj ? 'joined ' + p.doj : (p.role || 'Nurse')}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td style={Object.assign({}, td, { fontFamily: "'IBM Plex Mono',monospace", color: '#6c7a8c' })}>{p.emp_id || '—'}</td>
+                  <td style={Object.assign({}, td, { color: '#3c4858' })}>{p.designation || '—'}</td>
+                  <td style={Object.assign({}, td, { color: '#3c4858' })}>{p.qualification || '—'}</td>
+                  <td style={Object.assign({}, td, { textAlign: 'right', fontFamily: "'IBM Plex Mono',monospace", color: '#3c4858' })}>{p.total_experience_text || '—'}</td>
+                  <td style={td}>
+                    {training
+                      ? <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        {training.split(/[,;]/).map((x) => x.trim()).filter(Boolean).slice(0, 3).map((x, k) => (
+                          <span key={k} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 11, background: 'rgba(0,144,202,.1)', color: '#0072a3', whiteSpace: 'nowrap' }}>{x}</span>
+                        ))}
+                      </div>
+                      : <span style={{ fontSize: 11, color: '#b6c0cc' }}>None recorded</span>}
+                  </td>
+                  <td style={td}><span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 10px', borderRadius: 12, color: hep[0], background: hep[0] + '1a', whiteSpace: 'nowrap' }}>{hep[1]}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {open && <CpStaffProfile p={open} onClose={() => setOpen(null)} />}
       </div>
     );
   }
@@ -4780,6 +5341,7 @@
     const [fUnit, setFUnit] = useState('');
     const [open, setOpen] = useState(null);     // the row being submitted in the pop-up
     const [sent, setSent] = useState({});       // rows sent since the last fresh reload
+    const [fix, setFix] = useState(null);       // my own RETURNED row being fixed & resent as the same record
     const downOnBackdrop = React.useRef(false);
     const load = (force) => dcSubmissionResponse(null, force)
       .then((r) => { setSubs(r.submissions); setLoadError(''); return true; })
@@ -4890,6 +5452,8 @@
                   </div>
                   {list.map((r) => {
                     const label = r.status === 'rejected' ? 'Returned' : 'Missing';
+                    // Mine and not superseded -> fix that submission and resend it; else a new submission.
+                    const ownFix = r.status === 'rejected' && r.from && !r.from.autoRejected && dcIsMine(r.from);
                     const isQ = r.kind === 'quality';
                     return (
                       <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 16px', borderBottom: '1px solid rgba(125,145,180,.12)', flexWrap: 'wrap' }}>
@@ -4899,7 +5463,7 @@
                           <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{r.unit}{r.from && r.from.rejectReason ? ' · returned: ' + r.from.rejectReason : ''}</div>
                         </div>
                         <span style={cpChipStyle(label)}>{label}</span>
-                        <button onClick={() => setOpen(r)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid rgba(0,144,202,.3)', background: 'rgba(0,144,202,.08)', color: '#0072a3', padding: '6px 13px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>{label === 'Returned' ? 'Fix & submit' : 'Submit'} ›</button>
+                        <button onClick={() => (ownFix ? setFix(r) : setOpen(r))} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid rgba(0,144,202,.3)', background: 'rgba(0,144,202,.08)', color: '#0072a3', padding: '6px 13px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>{ownFix ? 'Fix & resend' : label === 'Returned' ? 'Fix & submit' : 'Submit'} ›</button>
                       </div>
                     );
                   })}
@@ -4930,6 +5494,8 @@
           </div>
         )}
 
+        {fix && <SubmissionDetail key={'fix/' + fix.from.id} s={fix.from} canEdit={false} fullEdit={false} initialMode="resend" onClose={() => setFix(null)}
+          onSaved={() => { const row = fix; setFix(null); setSent((s) => ({ ...s, [row.key]: true })); load(true).then((ok) => { if (ok) setSent({}); }); }} />}
         {open && (
           <div className="cp-mm-overlay"
             onMouseDown={(e) => { downOnBackdrop.current = e.target === e.currentTarget; }}
@@ -5101,7 +5667,7 @@
   function DataCollectionSettings({ depts }) {
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
     // The server accepts Administrators only; anyone else sees the page read-only.
-    const canSave = !me || me.role === 'Administrator' || (me.role !== 'collector' && me.role !== 'incharge' && !!(window.unicoCan && window.unicoCan('datacol', 'edit')));
+    const canSave = !me || me.role === 'Administrator' || (!dcIsPortalRole(me) && !!(window.unicoCan && window.unicoCan('datacol', 'edit')));
     const dataRev = useDcDataRev();
     useDcCollectionRev();
     const [loaded, setLoaded] = useState(false);
@@ -5128,6 +5694,7 @@
       <div className="grid" style={{ gap: 14 }}>
         <SectionTitle icon={I.layers} title="Department Setup" sub="When each department started reporting, and the quality indicators it does not measure — both decide what counts as missing." />
         {!canSave && <Banner>Read-only — only an Administrator can change a department’s start month or mark an indicator as not measured.</Banner>}
+        {dcIsAdminUser() && <DcFieldRequestsAdmin />}
         {err && <Banner>{err} <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => load(true)}>Retry</button></Banner>}
         <Card style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <input style={{ ...inputStyle, flex: '1 1 220px', maxWidth: 340 }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search department…" />
@@ -5416,6 +5983,7 @@
     const data = useMemo(() => {
       const ql = q.trim().toLowerCase();
       const all = (rows || []).filter((s) => {
+        if (s.status === 'withdrawn') return false;   // taken back before review: not a submission to score
         if (cutoff && (s.submittedAt || 0) < cutoff) return false;
         if (fType !== 'all' && s.type !== fType) return false;
         if (ql) { const hay = (respOf(s) + ' ' + targetOf(s) + ' ' + (s.month || '')).toLowerCase(); if (hay.indexOf(ql) < 0) return false; }

@@ -231,7 +231,8 @@
     if (!subs || !subs.length || !monthKey) return {};
     const out = {};
     const stMap = { pending: 'sent', approved: 'approved', rejected: 'rejected', returned: 'rejected' };
-    subs.filter((x) => String(x.month || '') === monthKey).forEach((x) => {
+    // A withdrawn submission was taken back before review: the item is still owed ("not submitted").
+    subs.filter((x) => String(x.month || '') === monthKey && x.status !== 'withdrawn').forEach((x) => {
       const status = stMap[x.status] || 'sent';
       const rec = { status, num: x.num, den: x.den, value: x.value, at: fmtTs(x.submittedAt || x.createdAt), reviewer: x.reviewedBy || (status === 'sent' ? '' : 'Quality team'), reason: x.rejectReason || x.reason || null, note: x.note || x.remark || '', live: true, id: x.id || x._id, ts: x.submittedAt || x.createdAt || 0, autoRejected: !!x.autoRejected };
       // Newest wins, except a duplicate auto-rejected BECAUSE another one was approved never
