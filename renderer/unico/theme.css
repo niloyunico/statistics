@@ -493,3 +493,140 @@ body.pdf-export-mode *,body.pdf-export-mode *::before,body.pdf-export-mode *::af
   *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
   .content{scroll-behavior:auto}
 }
+
+/* ============================================================================
+   Data Collection → Review & History  (class prefix "dcr")
+   Its own table style, NOT .tbl: that is the numeric-report table, which sets every
+   cell in the monospace font, right-aligns it, and pins the first column with a white
+   background — text-heavy submission rows read as a broken print-out in it.
+   Here: proportional type, left-aligned cells, a type accent on each row, department
+   group headers, a sticky filter toolbar, and a card per submission on phones.
+   ============================================================================ */
+.dcr-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px}
+.dcr-toolbar{position:sticky;top:0;z-index:20;padding:10px 2px;margin:0 -2px;
+  background:rgba(238,241,245,.9);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line-2)}
+.dcr-toolbar-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.dcr-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.dcr-search{position:relative;flex:1 1 240px;min-width:180px}
+.dcr-search input{width:100%;padding:8px 10px 8px 32px;border:1px solid var(--line);border-radius:9px;font:inherit;font-size:12.5px;background:#fff;color:var(--ink);outline:none}
+.dcr-search input:focus,.dcr-select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,144,202,.15)}
+.dcr-search .dcr-search-ic{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;display:flex}
+.dcr-select{padding:8px 10px;border:1px solid var(--line);border-radius:9px;font:inherit;font-size:12.5px;background:#fff;color:var(--ink);min-width:140px;outline:none;cursor:pointer}
+.dcr-count{font-size:11.5px;color:var(--muted);margin-left:auto;white-space:nowrap}
+.dcr-legend{display:inline-flex;align-items:center;gap:12px;font-size:11px;color:var(--muted)}
+.dcr-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+.dcr-bulk{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:8px 12px;background:var(--blue-50);border:1px solid var(--blue-100);border-radius:10px}
+
+.card.dcr-card{padding:0;overflow:visible;border-radius:var(--radius-lg)}
+table.dcr{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px;color:var(--ink-2)}
+table.dcr th{text-align:left;padding:10px 12px;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+  color:var(--muted);background:var(--panel-2);border-bottom:1px solid var(--line);white-space:nowrap}
+table.dcr th:first-child{border-top-left-radius:var(--radius-lg)}
+table.dcr th:last-child{border-top-right-radius:var(--radius-lg)}
+table.dcr th.dcr-sort{cursor:pointer;user-select:none}
+table.dcr th.dcr-sort:hover{color:var(--ink)}
+table.dcr td{padding:11px 12px;vertical-align:top;text-align:left;border-bottom:1px solid var(--line-2)}
+table.dcr .dcr-sel{width:36px;padding-right:0}
+table.dcr .dcr-when{width:128px}
+table.dcr .dcr-type{width:86px}
+table.dcr .dcr-target{min-width:180px}
+table.dcr .dcr-data{width:30%}
+table.dcr .dcr-person{width:190px}
+table.dcr .dcr-status{width:140px}
+/* the Quality/Patient chip inherits the monospace .chip font elsewhere — plain type here */
+table.dcr .dcr-type .chip,table.dcr .dcr-type span{font-family:inherit;letter-spacing:0}
+table.dcr .dcr-act{width:1%;text-align:right;white-space:nowrap}
+tr.dcr-row{cursor:pointer;--dcr-accent:var(--line)}
+tr.dcr-row.quality{--dcr-accent:var(--blue)}
+tr.dcr-row.patient{--dcr-accent:var(--green)}
+tr.dcr-row td{transition:background-color .13s}
+tr.dcr-row td:first-child{box-shadow:inset 3px 0 0 var(--dcr-accent)}
+tr.dcr-row[data-status="pending"] td,tr.dcr-row[data-status="approving"] td{background:#fffcf3}
+/* withdrawn by the collector: kept on record, visually stepped back */
+tr.dcr-row[data-status="withdrawn"]{--dcr-accent:transparent}
+tr.dcr-row[data-status="withdrawn"] td{color:var(--faint)}
+tr.dcr-row[data-status="withdrawn"] .dcr-title,tr.dcr-row[data-status="withdrawn"] .dcr-date,
+tr.dcr-row[data-status="withdrawn"] .dcr-person b,tr.dcr-row[data-status="withdrawn"] .dcr-val,
+tr.dcr-row[data-status="withdrawn"] .dcr-kv b{color:var(--faint);font-weight:500}
+tr.dcr-row[data-status="withdrawn"] .dcr-type,tr.dcr-row[data-status="withdrawn"] .dcr-data{opacity:.6}
+tr.dcr-row:hover td{background:var(--blue-50)}
+tr.dcr-row:last-child td{border-bottom:0}
+.dcr-date{font-weight:600;color:var(--ink);white-space:nowrap}
+.dcr-time{font-size:11px;color:var(--muted);margin-top:1px;white-space:nowrap}
+.dcr-title{font-weight:600;color:var(--ink);line-height:1.35}
+.dcr-sub{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.35}
+.dcr-sub.neg{color:var(--rose)}
+.dcr-badge{display:inline-flex;align-items:center;gap:4px;margin:5px 6px 0 0;font-size:10px;font-weight:700;border-radius:999px;padding:1px 8px;border:1px solid transparent;white-space:nowrap;line-height:1.6}
+.dcr-badge.warn{color:#8a5f00;background:#fff4e0;border-color:#efd08a}
+.dcr-badge.violet{color:#6b41c9;background:rgba(124,77,214,.1);border-color:rgba(124,77,214,.25)}
+.dcr-badge.muted{color:var(--muted);background:var(--panel-2);border-color:var(--line)}
+.dcr-badge.neg{color:var(--rose);background:var(--neg-bg);border-color:#f1c6cd}
+.dcr-dataline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dcr-val{display:inline-flex;align-items:center;font-weight:700;color:var(--ink);background:var(--panel-2);border:1px solid var(--line);
+  border-radius:7px;padding:1px 9px;font-feature-settings:"tnum" 1;font-variant-numeric:tabular-nums}
+.dcr-val.neg{color:var(--rose);background:var(--neg-bg);border-color:#e8a3b0}
+.dcr-remark{font-size:11.5px;color:var(--muted);margin-top:5px;font-style:italic;line-height:1.4}
+.dcr-kvs{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.dcr-kv{display:inline-flex;align-items:baseline;gap:5px;font-size:11.5px;background:var(--panel-2);border:1px solid var(--line-2);border-radius:7px;padding:2px 8px}
+.dcr-kv i{font-style:normal;color:var(--muted)}
+.dcr-kv b{color:var(--ink);font-variant-numeric:tabular-nums}
+.dcr-person b{color:var(--ink);font-weight:600}
+.dcr-actions{display:inline-flex;gap:6px;flex-wrap:nowrap;justify-content:flex-end}
+tr.dcr-group td{padding:0;border-bottom:1px solid var(--line);background:linear-gradient(90deg,var(--blue-50),var(--panel) 70%)}
+tr.dcr-group{cursor:pointer}
+.dcr-group-in{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;box-shadow:inset 3px 0 0 var(--blue-700)}
+.dcr-group-name{font-size:13px;font-weight:700;color:var(--ink)}
+.dcr-group-count{font-size:11.5px;color:var(--muted)}
+.dcr-caret{margin-left:auto;color:var(--muted);transition:transform .15s;display:inline-flex}
+tr.dcr-group.collapsed .dcr-caret{transform:rotate(-90deg)}
+
+/* tablet: keep the table, let it scroll inside its card rather than crush the columns */
+@media (min-width:761px) and (max-width:1100px){
+  .card.dcr-card{overflow-x:auto}
+  table.dcr{min-width:900px}
+}
+/* phone: one card per submission */
+@media (max-width:760px){
+  .dcr-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .dcr-toolbar{padding:8px 2px}
+  .dcr-filters>*{flex:1 1 calc(50% - 8px);min-width:0}
+  .dcr-filters .dcr-search{flex-basis:100%}
+  .dcr-select{min-width:0;width:100%}
+  .dcr-count{margin-left:0;flex-basis:100%}
+  /* !important: the Card component sets its glass background/border/shadow inline */
+  .card.dcr-card{background:transparent !important;border:0 !important;box-shadow:none !important;
+    -webkit-backdrop-filter:none !important;backdrop-filter:none !important;padding:0 !important;overflow:visible !important}
+  table.dcr,table.dcr tbody{display:block;min-width:0}
+  table.dcr thead{display:none}
+  tr.dcr-row{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;column-gap:8px;row-gap:7px;align-items:start;
+    position:relative;overflow:hidden;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:12px 12px 12px 16px;margin:0 0 10px;box-shadow:var(--shadow)}
+  tr.dcr-row::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--dcr-accent)}
+  /* table.dcr prefix: must outrank the desktop column widths (table.dcr .dcr-target
+     min-width etc.), or the card's grid keeps them and runs off the screen */
+  table.dcr tr.dcr-row td,table.dcr tr.dcr-row[data-status] td,table.dcr tr.dcr-row:hover td{display:block;padding:0;border:0;background:transparent;box-shadow:none;width:auto;min-width:0;max-width:none}
+  tr.dcr-row .dcr-status .dcr-sub{max-width:120px;margin-left:auto}
+  tr.dcr-row .dcr-sel{grid-area:1/1}
+  tr.dcr-row .dcr-sel:empty{display:none}
+  tr.dcr-row .dcr-type{grid-area:1/2}
+  tr.dcr-row .dcr-target{grid-area:1/3}
+  tr.dcr-row .dcr-status{grid-area:1/4;text-align:right}
+  tr.dcr-row .dcr-data{grid-column:1/-1;grid-row:2}
+  tr.dcr-row .dcr-person{grid-column:1/-1;grid-row:3;font-size:12px}
+  tr.dcr-row .dcr-person::before{content:attr(data-label) " · ";color:var(--muted)}
+  tr.dcr-row .dcr-person .dcr-sub{display:inline;margin-left:6px}
+  tr.dcr-row .dcr-when{grid-column:1/-1;grid-row:4;font-size:11px;color:var(--muted)}
+  tr.dcr-row .dcr-when .dcr-date,tr.dcr-row .dcr-when .dcr-time{display:inline;font-weight:400;color:var(--muted);font-size:11px}
+  tr.dcr-row .dcr-when .dcr-time{margin-left:6px}
+  tr.dcr-row .dcr-act{grid-column:1/-1;grid-row:5;text-align:left;white-space:normal;padding-top:9px;border-top:1px dashed var(--line-2)}
+  tr.dcr-row .dcr-act:empty{display:none}
+  .dcr-actions{display:flex;justify-content:flex-start}
+  .dcr-actions .btn{flex:1 1 auto;justify-content:center;min-height:38px}
+  tr.dcr-group{display:block}
+  tr.dcr-group td{display:block;background:transparent;border:0}
+  .dcr-group-in{padding:14px 2px 8px;box-shadow:none}
+}
+@media (max-width:420px){
+  .dcr-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+}

@@ -211,13 +211,30 @@ function isPortal(access) { return !!access && PORTAL_ROLES.indexOf(access.role)
    deliberately WORK facts only: qualification, training, experience and Hep-B status
    are the things a nurse in charge is accountable for and rosters around. Personal
    contact details (phone), identity documents, salary, remarks and private notes are
-   NOT here and must not be added without the same decision being taken again. */
+   NOT here and must not be added without the same decision being taken again.
+   2026-09-15 (user request, in-charge staff profile pop-up): blood group, gender,
+   extracurricular activities and the licence number/expiry were added, plus a TRIMMED
+   BNMC verification summary (see portalStaff) -- never nid, phone, dob, address or the
+   council's person/registrations snapshot. */
 const PORTAL_STAFF_FIELDS = [
   'id', 'emp_id', 'name', 'designation', 'current_department', 'role', 'active',
   'doj', 'qualification',
   'total_experience_text', 'total_experience_years',
   'special_training', 'hepatitis_b_vaccination',
+  'blood_group', 'gender', 'extracurricular', 'licence_no', 'licence_expiry',
 ];
+// The "verified" badge needs when, which number and what the council said about it --
+// not the stored council snapshot, whose person/registrations carry personal details.
+function portalVerification(v) {
+  if (!v || typeof v !== 'object') return null;
+  const p = v.primary && typeof v.primary === 'object' ? v.primary : null;
+  return {
+    at: v.at || null,
+    number: v.number || null,
+    primary: p ? { regNo: p.regNo || null, course: p.course || null, institution: p.institution || null,
+      status: p.status || null, renewUpto: p.renewUpto || null, expired: !!p.expired } : null,
+  };
+}
 function portalStaff(deptKeys, staff) {
   // The same vocabulary department scoping uses (scopedDeptNames/deptsOfStaff): ids,
   // names, the local spellings in DEPT_ALIASES and the Level-N rule. A plain normaliser
@@ -235,6 +252,14 @@ function portalStaff(deptKeys, staff) {
   return (staff || []).filter((p) => p && !p.former && deptsOfStaff(p).some((d) => want.has(d))).map((p) => {
     const out = {};
     PORTAL_STAFF_FIELDS.forEach((k) => { if (p[k] !== undefined) out[k] = p[k]; });
+    // The register photo, as a bare { url } -- the same picture the phone app's unit
+    // staff screen already shows an in-charge. Stored as a string or a { url, ... }
+    // upload record; only the URL leaves the server.
+    const ph = p.photo || p.photo_url;
+    const url = ph ? (typeof ph === 'string' ? ph : ph.url) : null;
+    if (url) out.photo = { url };
+    const ver = portalVerification(p.licence_verified);
+    if (ver) out.licence_verified = ver;
     return out;
   });
 }

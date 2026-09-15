@@ -206,6 +206,23 @@ const staffArr = [
     && rich.qualification === 'B.Sc' && rich.total_experience_text === '6 yrs');
   ok('contact details and notes are still withheld', rich.phone === undefined && rich.notes === undefined);
   ok('the fields a ward actually needs are kept', one.name === 'A' && one.emp_id === '1' && one.current_department === 'MICU');
+  const prof = access.portalStaff(['micu'], [{ id: 10, name: 'J', current_department: 'MICU',
+    blood_group: 'B+', gender: 'Female', extracurricular: 'Chess, Blood donation', licence_no: '7749',
+    licence_expiry: '2027-06-30', nid: '199', dob: '1990-01-01', address: 'x', phone: '017',
+    photo: { url: 'https://img/p.jpg', publicId: 'secret' },
+    licence_verified: { at: '2026-09-01T00:00:00Z', number: '7749', program: '1',
+      person: { name: 'J', father: 'K', photo: 'http://bnmc/p.jpg' },
+      registrations: [{ regNo: '7749', course: 'B.Sc' }],
+      primary: { regNo: '7749', course: 'B.Sc', institution: 'I', status: 'Active', renewUpto: '2027-06-30', expired: false, exam: 'x' } } }])[0];
+  ok('profile fields (blood group, gender, extracurricular, licence) are served',
+    prof.blood_group === 'B+' && prof.gender === 'Female' && prof.extracurricular === 'Chess, Blood donation'
+    && prof.licence_no === '7749' && prof.licence_expiry === '2027-06-30');
+  ok('identity and contact fields stay withheld',
+    prof.nid === undefined && prof.dob === undefined && prof.address === undefined && prof.phone === undefined);
+  eq('photo leaves the server as a bare url', prof.photo, { url: 'https://img/p.jpg' });
+  eq('verification is a trimmed summary, never the council snapshot', prof.licence_verified, {
+    at: '2026-09-01T00:00:00Z', number: '7749',
+    primary: { regNo: '7749', course: 'B.Sc', institution: 'I', status: 'Active', renewUpto: '2027-06-30', expired: false } });
   eq('no assigned unit means no staff at all', access.portalStaff([], roster), []);
   const spellings = [{ id: 1, current_department: 'Level-10' }, { id: 2, current_department: 'Level 10' },
     { id: 3, current_department: 'IPD Cabin Level 10' }, { id: 4, current_department: 'Emergency' }, { id: 5, current_department: 'Level 9' }];
