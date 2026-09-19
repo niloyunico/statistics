@@ -380,7 +380,10 @@
      WHO collects it as person chips (hover = how the access is granted); ✕ on a chip
      revokes, “+ Assign” grants — writing the SAME /api/responsibles records the People
      editor saves (the server re-derives areas and mirrors the collector login). */
-  function AccessMatrix({ persons, areas, areaInds, onChanged, onEditPerson }) {
+  function AccessMatrix({ persons: allPersons, areas, areaInds, onChanged, onEditPerson }) {
+    // An inactive record (its account was deleted or moved off a portal role) keeps its scope for a
+    // later restore but grants nothing, so it is never an assignee, a candidate or a head count.
+    const persons = useMemo(() => (allPersons || []).filter((r) => r.active !== false), [allPersons]);
     const DM = window.DEPTMAP;
     const [q, setQ] = useState('');
     const [menu, setMenu] = useState(null);   // {area, indId} — the open “+ Assign” picker
@@ -396,8 +399,7 @@
       const via = r.allQualityAreas ? 'hospital-wide access' : derived(r, ak) ? 'via department assignment' : 'custom area access';
       const sel = selOf(r, ak);
       return r.name + (r.title ? ' · ' + r.title : '') + (r.empId ? ' · ' + r.empId : '') + ' — ' + via
-        + (sel.length ? ' · restricted to ' + sel.length + ' indicator' + (sel.length > 1 ? 's' : '') : ' · all indicators of this area')
-        + (r.active === false ? ' · INACTIVE' : '');
+        + (sel.length ? ' · restricted to ' + sel.length + ' indicator' + (sel.length > 1 ? 's' : '') : ' · all indicators of this area');
     };
 
     // customQualityAreas is sent on EVERY save so the server never re-derives custom access
@@ -464,11 +466,12 @@
 
     const chip = (r, a, ind) => (
       <span key={r.id} title={tipOf(r, a.key)}
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 4px 3px 3px', borderRadius: 999, background: 'var(--blue-50)', border: '1px solid var(--blue)', fontSize: 11.5, fontWeight: 600, color: 'var(--blue-700)', opacity: r.active === false ? 0.55 : 1 }}>
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 4px 3px 3px', borderRadius: 999, background: 'var(--blue-50)', border: '1px solid var(--blue)', fontSize: 11.5, fontWeight: 600, color: 'var(--blue-700)' }}>
         {(window.MK && window.MK.Av)
           ? <window.MK.Av name={r.name} empId={r.empId} size={18} style={{ fontSize: 9 }} />
           : <span style={{ width: 18, height: 18, borderRadius: '50%', background: 'var(--blue)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{initials(r.name)}</span>}
-        <span style={{ cursor: onEditPerson ? 'pointer' : 'default' }} onClick={() => onEditPerson && onEditPerson(r)}>{r.name}</span>
+        {/* The name edits the person; keep it visibly a link and apart from the × (which revokes access). */}
+        <span title={onEditPerson ? 'Edit ' + r.name : undefined} style={{ cursor: onEditPerson ? 'pointer' : 'default', textDecoration: onEditPerson ? 'underline dotted' : 'none', textUnderlineOffset: 2, marginRight: 6 }} onClick={() => onEditPerson && onEditPerson(r)}>{r.name}</span>
         <button title={'Remove ' + ind.name + ' access from ' + r.name} disabled={busy}
           onClick={() => revoke(r, a.key, ind, a.name)}
           style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--rose)', display: 'grid', placeItems: 'center', padding: '0 3px' }}><Ic d={I.x} s={11} /></button>
@@ -480,7 +483,7 @@
         <Card style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '12px 16px' }}>
           <input style={{ ...inputStyle, width: 300, flex: '0 1 auto' }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by department, indicator or person…" />
           <span style={{ flex: 1 }} />
-          {[['Departments', areas.length], ['Indicators', totInds], ['People', persons.filter((r) => r.active !== false).length], ['Unassigned indicators', unassigned]].map(([l, v]) => (
+          {[['Departments', areas.length], ['Indicators', totInds], ['People', persons.length], ['Unassigned indicators', unassigned]].map(([l, v]) => (
             <span key={l} style={{ fontSize: 12, color: 'var(--muted)' }}><b style={{ color: l.startsWith('Unassigned') && v > 0 ? 'var(--rose)' : 'var(--ink)', fontFamily: 'var(--mono)' }}>{v}</b> {l}</span>
           ))}
         </Card>
@@ -520,13 +523,13 @@
                               {candidates.length === 0 && <div style={{ padding: 10, fontSize: 12, color: 'var(--muted)', textAlign: 'center' }}>{persons.length ? 'Everyone matching already has access.' : 'No responsible persons yet.'}</div>}
                               {candidates.map((r) => (
                                 <div key={r.id} onClick={() => give(r, a.key, ind)}
-                                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, cursor: 'pointer', opacity: r.active === false ? 0.55 : 1 }}
+                                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, cursor: 'pointer' }}
                                   onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--blue-50)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                                   {(window.MK && window.MK.Av)
                                     ? <window.MK.Av name={r.name} empId={r.empId} size={22} style={{ fontSize: 10 }} />
                                     : <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--blue)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{initials(r.name)}</span>}
                                   <span style={{ minWidth: 0, flex: 1 }}>
-                                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}{r.active === false ? ' (inactive)' : ''}</div>
+                                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</div>
                                     <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>{hasArea(r, a.key) ? 'Adds this indicator to their list' : 'Grants ' + a.name + ' · only this indicator'}</div>
                                   </span>
                                 </div>
@@ -546,35 +549,175 @@
     );
   }
 
+  /* ======================= Data-collection scope (shared editor) =======================
+     ONE editor for what a portal account collects: departments, hospital-wide, extra quality
+     areas and per-area indicator restrictions. Used by the Responsible Persons editor below AND
+     by Settings → Users & Roles → Manage user (reports.jsx), so the two can never drift.
+     value = { departments, allQualityAreas, customQualityAreas, qualityIndicators }.
+     customQualityAreas must be fixed ONCE when the editor opens (dcCustomAreas) — re-deriving it
+     from the stored union every render made an unticked department's area look "custom". */
+  const dcScopeAreas = (v) => {
+    const val = v || {};
+    const DM = window.DEPTMAP;
+    // Derived from the departments (or ALL areas when hospital-wide) — matches the server's derive.
+    const derived = val.allQualityAreas ? (DM ? DM.allAreaKeys() : []) : (DM ? DM.areasFromDepts(val.departments || []) : []);
+    const custom = val.customQualityAreas || [];
+    const effective = val.allQualityAreas ? derived : [...new Set([...derived, ...custom])];
+    return { derived, custom, effective };
+  };
+  // What the scope looked like when the editor opened: its effective areas and which areas carried
+  // an indicator limit. Take it ONCE at open (after any load/fallback) and pass it to dcScopePayload.
+  const dcScopeBase = (v) => ({ effective: dcScopeAreas(v).effective.slice(), limited: Object.keys((v && v.qualityIndicators) || {}) });
+  // Stable "no records yet" list for DcScopeEditor's `persons`: a fresh [] each render re-runs its effect.
+  const DC_NO_PERSONS = [];
+  // The body to save. A per-area indicator limit is dropped only when this edit took the area away
+  // (effective at open, not now) or the limit itself was added during this edit. A stored limit on an
+  // area this browser merely doesn't derive is KEPT: its DEPTMAP may be stale while the server's
+  // fresher map still grants the area, where a missing limit would mean ALL indicators. Without a
+  // base nothing is dropped; nothing is dropped either when the map isn't loaded.
+  const dcScopePayload = (v, base) => {
+    const val = v || {};
+    const { custom, effective } = dcScopeAreas(val);
+    const qi = { ...(val.qualityIndicators || {}) };
+    if (window.DEPTMAP && !val.allQualityAreas && base) Object.keys(qi).forEach((k) => {
+      if (!effective.includes(k) && (base.effective.includes(k) || !base.limited.includes(k))) delete qi[k];
+    });
+    return { departments: (val.departments || []).slice(), allQualityAreas: !!val.allQualityAreas, customQualityAreas: custom.slice(), qualityAreas: effective, qualityIndicators: qi };
+  };
+
+  function DcScopeEditor({ value, onChange, depts, exceptResponsibleId, persons }) {
+    const val = value || {};
+    const departments = val.departments || [];
+    const set = (patch) => onChange && onChange({ ...val, ...patch });
+    const dataRev = useDcDataRev();
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), [dataRev]);
+    const areaInds = useMemo(() => { const m = {}; (window.qualityData ? window.qualityData() : []).forEach((d) => { m[d.key] = (d.indicators || []).map((i) => ({ id: i.id, name: i.name })); }); return m; }, [dataRev]);
+    // Responsible records power the "also assigned to" hints. A caller that already holds the
+    // list passes it; otherwise it is fetched once here.
+    const [list, setList] = useState(Array.isArray(persons) ? persons : null);
+    useEffect(() => {
+      if (Array.isArray(persons)) { setList(persons); return; }
+      let live = true;
+      dcApi.get('/api/responsibles').then((r) => { if (live) setList(r.ok ? r.responsibles : []); }).catch(() => { if (live) setList([]); });
+      return () => { live = false; };
+    }, [persons]);
+    const assignedNames = (ak, indId) => (list || [])
+      .filter((r) => r.id !== exceptResponsibleId && r.active !== false && (!!r.allQualityAreas || (r.qualityAreas || []).includes(ak))
+        && ((((r.qualityIndicators || {})[ak]) || []).length === 0 || (((r.qualityIndicators || {})[ak]) || []).includes(indId)))
+      .map((r) => r.name);
+    const deptList = useMemo(() => ((depts && depts.length) ? depts : dcAllDepts()), [depts, dataRev]);
+    const deptName = (id) => {
+      const mapped = window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : null;
+      if (mapped && mapped !== id) return mapped;
+      const d = deptList.find((x) => x.id === id);
+      return (d && (d.name || d.short)) || id;
+    };
+    const [dq, setDq] = useState('');
+    const dqn = dq.trim().toLowerCase();
+    const deptsShown = dqn ? deptList.filter((d) => departments.includes(d.id) || [d.name, d.short, deptName(d.id)].some((s) => String(s || '').toLowerCase().includes(dqn))) : deptList;
+    const { derived: derivedAreas, custom: customAreas, effective: effectiveAreas } = dcScopeAreas(val);
+    const toggleDept = (id) => set({ departments: departments.includes(id) ? departments.filter((x) => x !== id) : [...departments, id] });
+    const toggleCustomArea = (k) => set({ customQualityAreas: customAreas.includes(k) ? customAreas.filter((x) => x !== k) : [...customAreas, k] });
+    const pill = (on, extra) => ({ cursor: 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)', ...(extra || {}) });
+    return (
+      <div>
+        <Field label={'Assigned departments (patient statistics)' + (departments.length ? ' · ' + departments.length + ' selected' : '')}>
+          {deptList.length > 12 && <input style={{ ...inputStyle, marginBottom: 7, padding: '7px 10px', fontSize: 12.5 }} value={dq} onChange={(e) => setDq(e.target.value)} placeholder="Search departments…" />}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, maxHeight: 190, overflow: 'auto', padding: 1 }}>
+            {deptsShown.map((d) => {
+              const on = departments.includes(d.id);
+              return <span key={d.id} onClick={() => toggleDept(d.id)} title={deptName(d.id) + (d.custom ? ' (custom)' : '')} style={pill(on)}>{d.short || deptName(d.id)}</span>;
+            })}
+            {!deptsShown.length && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{deptList.length ? 'No department matches.' : 'No departments loaded.'}</span>}
+          </div>
+        </Field>
+        <Field label="Quality areas" hint="Auto-granted by the departments above (assign once). Tick extra areas below for custom access.">
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9, cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!val.allQualityAreas} onChange={(e) => set({ allQualityAreas: e.target.checked })} />
+            Hospital-wide — every quality area (e.g. Infection Control)
+          </label>
+          {!val.allQualityAreas && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+              {areas.map((a) => {
+                const auto = derivedAreas.includes(a.key);
+                const on = auto || customAreas.includes(a.key);
+                return <span key={a.key} onClick={() => { if (!auto) toggleCustomArea(a.key); }}
+                  title={auto ? 'From an assigned department' : 'Custom extra access'}
+                  style={pill(on, { cursor: auto ? 'default' : 'pointer', opacity: auto ? 0.85 : 1 })}>
+                  {a.name}{auto && <span style={{ fontSize: 9, fontWeight: 700, marginLeft: 4, opacity: 0.7 }}>AUTO</span>}</span>;
+              })}
+            </div>
+          )}
+          {val.allQualityAreas && <div style={{ fontSize: 12, color: 'var(--muted)' }}>All {areas.length} quality areas (hospital-wide).</div>}
+        </Field>
+        {effectiveAreas.length > 0 && (
+          <Field label="Specific indicators per area (optional)" hint="Leave all unticked in an area to allow every indicator of that area. Tick some to restrict this person to just those.">
+            <div style={{ display: 'grid', gap: 10 }}>
+              {effectiveAreas.map((ak) => {
+                const inds = areaInds[ak] || [];
+                const aName = (areas.find((a) => a.key === ak) || {}).name || ak;
+                if (!inds.length) return null;
+                const sel = (val.qualityIndicators && val.qualityIndicators[ak]) || [];
+                const setSel = (ids) => { const qi = { ...(val.qualityIndicators || {}) }; if (ids && ids.length) qi[ak] = ids; else delete qi[ak]; set({ qualityIndicators: qi }); };
+                return (
+                  <div key={ak} style={{ padding: '10px 12px', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 9 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 7 }}>{aName} <span style={{ fontWeight: 500, color: 'var(--muted)' }}>· {sel.length ? sel.length + ' selected' : 'all indicators'}</span></div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                      {inds.map((ind) => {
+                        const on = sel.includes(ind.id);
+                        // who ELSE already reports this indicator — visible on hover + 👤n badge
+                        const others = assignedNames(ak, ind.id);
+                        return <span key={ind.id} onClick={() => setSel(on ? sel.filter((x) => x !== ind.id) : [...sel, ind.id])}
+                          title={others.length ? 'Also assigned to: ' + others.join(', ') : 'No one else is assigned to this indicator yet'}
+                          style={pill(on)}>
+                          {ind.name}
+                          {others.length > 0 && <span title={'Also assigned to: ' + others.join(', ')} style={{ marginLeft: 5, fontSize: 9.5, fontWeight: 700, borderRadius: 999, padding: '1px 6px', background: on ? 'var(--blue)' : 'var(--panel-2)', color: on ? '#fff' : 'var(--muted)', border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)') }}>👤{others.length}</span>}
+                        </span>;
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Field>
+        )}
+      </div>
+    );
+  }
+
   /* ============================ Responsible Persons ============================ */
-  function DataResponsibles({ depts }) {
+  function DataResponsibles({ depts, embedded, initialView }) {
     const [list, setList] = useState(null);
     const [editing, setEditing] = useState(null); // the record being added/edited
-    const [view, setView] = useState('people');   // 'people' | 'access' (indicator access matrix)
+    const [view, setView] = useState(initialView === 'access' ? 'access' : 'people');   // 'people' | 'access' (indicator access matrix)
     const dataRev = useDcDataRev();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), [dataRev]);
     const areaInds = useMemo(() => { const m = {}; (window.qualityData ? window.qualityData() : []).forEach((d) => { m[d.key] = (d.indicators || []).map((i) => ({ id: i.id, name: i.name })); }); return m; }, [dataRev]);
     const load = () => dcApi.get('/api/responsibles').then((r) => setList(r.ok ? r.responsibles : [])).catch(() => setList([]));
     useEffect(() => { load(); }, []);
-    // Everyone (except the person being edited) who can report indicator `indId` of area `ak` —
-    // powers the “who else is assigned” tooltips/badges on the editor's indicator pills.
-    const assignedNames = (ak, indId, exceptId) => (list || [])
-      .filter((r) => r.id !== exceptId && (!!r.allQualityAreas || (r.qualityAreas || []).includes(ak))
-        && ((((r.qualityIndicators || {})[ak]) || []).length === 0 || (((r.qualityIndicators || {})[ak]) || []).includes(indId)))
-      .map((r) => r.name);
 
     const blank = () => ({ name: '', title: '', phone: '', staffId: null, empId: '', password: '', departments: [], qualityAreas: [], customQualityAreas: [], allQualityAreas: false, qualityIndicators: {}, active: true });
     // customQualityAreas is fixed ONCE when the editor opens. Re-deriving it on every render
     // from the stored union made an unticked department's area look "custom", so it was
     // re-saved and the person never lost it.
-    const openEdit = (r) => setEditing({ ...blank(), ...r, customQualityAreas: dcCustomAreas(r).slice() });
+    const editorRef = React.useRef(null);
+    const scrollToEditor = React.useRef(false);
+    const scopeBase = React.useRef(null);   // the scope as opened — see dcScopePayload
+    const openEdit = (r) => {
+      const rec = { ...blank(), ...r, customQualityAreas: dcCustomAreas(r).slice() };
+      scopeBase.current = dcScopeBase(rec);
+      scrollToEditor.current = true;
+      setEditing(rec);
+    };
+    // Embedded, the editor sits above a long matrix; bring it into view once it has rendered.
+    useEffect(() => {
+      if (!scrollToEditor.current || !editing || !editorRef.current) return;
+      scrollToEditor.current = false;
+      editorRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }, [editing]);
     const save = () => {
       if (!editing.name.trim()) { toast('Name is required', 'error'); return; }
-      // Drop per-indicator restrictions for areas the person no longer has (skipped when the
-      // map isn't loaded — derived areas would be unknown and real restrictions lost).
-      const qi = { ...(editing.qualityIndicators || {}) };
-      if (window.DEPTMAP && !editing.allQualityAreas) Object.keys(qi).forEach((k) => { if (!effectiveAreas.includes(k)) delete qi[k]; });
-      dcApi.post('/api/responsibles', { ...editing, customQualityAreas: customAreas, qualityAreas: effectiveAreas, qualityIndicators: qi }).then((r) => {
+      dcApi.post('/api/responsibles', { ...editing, ...dcScopePayload(editing, scopeBase.current) }).then((r) => {
         if (r.ok) { toast('Responsible person saved', 'success'); setEditing(null); load(); }
         else toast(r.error || 'Could not save', 'error');
       });
@@ -593,37 +736,32 @@
       return (d && (d.name || d.short)) || id;                  // never show a raw id
     };
     // Quality areas are DERIVED from the assigned departments (or ALL areas when hospital-wide),
-    // so a person is assigned ONCE and covers both statistics and quality (matches the server).
-    const derivedAreas = editing
-      ? (editing.allQualityAreas
-          ? (window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [])
-          : (window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : []))
-      : [];
-    // Custom = areas the admin granted directly (editing.customQualityAreas, fixed at open).
-    // Effective access = derived ∪ custom (or ALL if hospital-wide) — the server recomputes the same.
-    const customAreas = editing ? (editing.customQualityAreas || []) : [];
-    const effectiveAreas = editing ? (editing.allQualityAreas ? derivedAreas : [...new Set([...derivedAreas, ...customAreas])]) : [];
-    const toggleCustomArea = (k) => setEditing((ed) => { const cur = ed.customQualityAreas || []; return { ...ed, customQualityAreas: cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k] }; });
+    // so a person is assigned ONCE and covers both statistics and quality — see DcScopeEditor.
+    // Embedded (Settings → Users & Roles → Indicator Access) the matrix is the only view: a
+    // person's full scope is edited in their account (Accounts → Manage). Editing a person from
+    // the matrix still opens this editor, above the matrix rather than switching views.
+    const showEditor = !!editing && (view === 'people' || embedded);
+    // Inactive records (account deleted / moved off a portal role) keep their scope for a restore but
+    // grant nothing, so they are not listed as people.
+    const activePeople = (list || []).filter((r) => r.active !== false);
 
     return (
       <div className="grid" style={{ gap: 14 }}>
-        <SectionTitle icon={I.user} title="Responsible Persons" sub="Who gives the data — assign each person to the departments / quality areas they own (e.g. Rabbi Miah → Cathlab)."
+        <SectionTitle icon={I.user}
+          title={embedded ? 'Indicator Access' : 'Responsible Persons'}
+          sub={embedded ? 'Department-wise: every indicator with the people assigned to it — give or remove access inline. A person’s departments and areas are edited in Accounts → Manage.' : 'Who gives the data — assign each person to the departments / quality areas they own (e.g. Rabbi Miah → Cathlab).'}
           right={
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <button className={'btn sm' + (view === 'people' ? ' pri' : '')} onClick={() => setView('people')}><Ic d={I.user} s={13} />People</button>
-              <button className={'btn sm' + (view === 'access' ? ' pri' : '')} title="Department-wise: every indicator with the people assigned to it — give or remove access inline" onClick={() => { setView('access'); setEditing(null); }}><Ic d={I.check} s={13} />Indicator Access</button>
-              {!editing && view === 'people' && <button className="btn pri sm" onClick={() => setEditing(blank())}><Ic d={I.plus} s={15} />Add person</button>}
+              {/* Inside Settings → Users & Roles the module's own tabs switch these two views. */}
+              {!embedded && <button className={'btn sm' + (view === 'people' ? ' pri' : '')} onClick={() => setView('people')}><Ic d={I.user} s={13} />People</button>}
+              {!embedded && <button className={'btn sm' + (view === 'access' ? ' pri' : '')} title="Department-wise: every indicator with the people assigned to it — give or remove access inline" onClick={() => { setView('access'); setEditing(null); }}><Ic d={I.check} s={13} />Indicator Access</button>}
+              {!editing && view === 'people' && <button className="btn pri sm" onClick={() => openEdit(blank())}><Ic d={I.plus} s={15} />Add person</button>}
             </div>
           } />
 
-        {view === 'access' && (
-          list === null ? <Card><div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div></Card>
-            : <AccessMatrix persons={list} areas={areas} areaInds={areaInds} onChanged={load}
-                onEditPerson={(r) => { setView('people'); openEdit(r); }} />
-        )}
-
-        {view === 'people' && editing && (
-          <Card>
+        {/* The editor renders ABOVE the matrix: below it, it opened off-screen under every department. */}
+        {showEditor && (
+          <div ref={editorRef} style={{ scrollMarginTop: 12 }}><Card>
             <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>{editing.id ? 'Edit responsible person' : 'New responsible person'}</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <Field label="Name" hint="Type a new name or pick an existing staff member.">
@@ -635,88 +773,39 @@
               <Field label="Phone (optional)"><input style={inputStyle} value={editing.phone} onChange={(e) => setEditing({ ...editing, phone: e.target.value })} placeholder="01XXXXXXXXX" /></Field>
               <div />
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, padding: '12px 14px', background: 'var(--panel-2)', border: '1px dashed var(--line)', borderRadius: 9, marginBottom: 13 }}>
+            {/* Inside Users & Roles the login (Emp ID / password) belongs to Accounts → Manage; editing it
+                here too gave the same account two places to change its sign-in. */}
+            {embedded
+              ? <div style={{ fontSize: 12, color: 'var(--muted)', padding: '9px 12px', background: 'var(--panel-2)', border: '1px dashed var(--line)', borderRadius: 9, marginBottom: 13 }}>Sign-in (Emp ID {editing.empId ? <b>{editing.empId}</b> : null} / password) is managed in <b>Accounts → Manage</b>.</div>
+              : <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, padding: '12px 14px', background: 'var(--panel-2)', border: '1px dashed var(--line)', borderRadius: 9, marginBottom: 13 }}>
               <Field label="Emp ID (login username)" hint="Set an emp ID + password to give this person a login that shows only their assigned data.">
                 <input style={inputStyle} value={editing.empId || ''} onChange={(e) => setEditing({ ...editing, empId: e.target.value })} placeholder="e.g. rabbi.miah" />
               </Field>
               <Field label={editing.hasLogin ? 'New password (blank = keep current)' : 'Password'}>
                 <input type="password" style={inputStyle} value={editing.password || ''} onChange={(e) => setEditing({ ...editing, password: e.target.value })} placeholder={editing.hasLogin ? '••••••' : 'min 4 characters'} />
               </Field>
-            </div>
-            <Field label="Assigned departments (patient statistics)">
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                {(depts || []).map((d) => {
-                  const on = editing.departments.includes(d.id);
-                  return <span key={d.id} onClick={() => setEditing((ed) => ({ ...ed, departments: ed.departments.includes(d.id) ? ed.departments.filter((x) => x !== d.id) : [...ed.departments, d.id] }))}
-                    title={deptName(d.id) + (d.custom ? ' (custom)' : '')}
-                    style={{ cursor: 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)' }}
-                   >{d.short || deptName(d.id)}</span>;
-                })}
-              </div>
-            </Field>
-            <Field label="Quality areas" hint="Auto-granted by the departments above (assign once). Tick extra areas below for custom access.">
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9, cursor: 'pointer' }}>
-                <input type="checkbox" checked={!!editing.allQualityAreas} onChange={(e) => setEditing((ed) => ({ ...ed, allQualityAreas: e.target.checked }))} />
-                Hospital-wide — every quality area (e.g. Infection Control)
-              </label>
-              {!editing.allQualityAreas && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                  {areas.map((a) => {
-                    const auto = derivedAreas.includes(a.key);
-                    const on = auto || customAreas.includes(a.key);
-                    return <span key={a.key} onClick={() => { if (!auto) toggleCustomArea(a.key); }}
-                      title={auto ? 'From an assigned department' : 'Custom extra access'}
-                      style={{ cursor: auto ? 'default' : 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)', opacity: auto ? 0.85 : 1 }}>
-                      {a.name}{auto && <span style={{ fontSize: 9, fontWeight: 700, marginLeft: 4, opacity: 0.7 }}>AUTO</span>}</span>;
-                  })}
-                </div>
-              )}
-              {editing.allQualityAreas && <div style={{ fontSize: 12, color: 'var(--muted)' }}>All {areas.length} quality areas (hospital-wide).</div>}
-            </Field>
-            {effectiveAreas.length > 0 && (
-              <Field label="Specific indicators per area (optional)" hint="Leave all unticked in an area to allow every indicator of that area. Tick some to restrict this person to just those.">
-                <div style={{ display: 'grid', gap: 10 }}>
-                  {effectiveAreas.map((ak) => {
-                    const list = areaInds[ak] || [];
-                    const aName = (areas.find((a) => a.key === ak) || {}).name || ak;
-                    if (!list.length) return null;
-                    const sel = (editing.qualityIndicators && editing.qualityIndicators[ak]) || [];
-                    const setSel = (ids) => setEditing((ed) => { const qi = { ...(ed.qualityIndicators || {}) }; if (ids && ids.length) qi[ak] = ids; else delete qi[ak]; return { ...ed, qualityIndicators: qi }; });
-                    return (
-                      <div key={ak} style={{ padding: '10px 12px', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 9 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 7 }}>{aName} <span style={{ fontWeight: 500, color: 'var(--muted)' }}>· {sel.length ? sel.length + ' selected' : 'all indicators'}</span></div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                          {list.map((ind) => {
-                            const on = sel.includes(ind.id);
-                            // who ELSE already reports this indicator — visible on hover + 👤n badge
-                            const others = assignedNames(ak, ind.id, editing.id);
-                            return <span key={ind.id} onClick={() => setSel(on ? sel.filter((x) => x !== ind.id) : [...sel, ind.id])}
-                              title={others.length ? 'Also assigned to: ' + others.join(', ') : 'No one else is assigned to this indicator yet'}
-                              style={{ cursor: 'pointer', userSelect: 'none', padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600, border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'), background: on ? 'var(--blue-50)' : '#fff', color: on ? 'var(--blue-700)' : 'var(--ink-2)' }}>
-                              {ind.name}
-                              {others.length > 0 && <span title={'Also assigned to: ' + others.join(', ')} style={{ marginLeft: 5, fontSize: 9.5, fontWeight: 700, borderRadius: 999, padding: '1px 6px', background: on ? 'var(--blue)' : 'var(--panel-2)', color: on ? '#fff' : 'var(--muted)', border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)') }}>👤{others.length}</span>}
-                            </span>;
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </Field>
-            )}
+            </div>}
+            <DcScopeEditor value={editing} depts={depts} exceptResponsibleId={editing.id} persons={list || DC_NO_PERSONS}
+              onChange={(v) => setEditing((ed) => ({ ...ed, departments: v.departments || [], allQualityAreas: !!v.allQualityAreas, customQualityAreas: v.customQualityAreas || [], qualityIndicators: v.qualityIndicators || {} }))} />
             <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
               <button className="btn pri" onClick={save}><Ic d={I.check} s={15} />Save</button>
               <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
             </div>
-          </Card>
+          </Card></div>
+        )}
+
+        {view === 'access' && (
+          list === null ? <Card><div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div></Card>
+            : <AccessMatrix persons={list} areas={areas} areaInds={areaInds} onChanged={load}
+                onEditPerson={(r) => { if (!embedded) setView('people'); openEdit(r); }} />
         )}
 
         {view === 'people' && <Card style={{ padding: 0, overflow: 'hidden' }}>
           {list === null ? <div style={{ padding: 24, color: 'var(--muted)' }}>Loading…</div>
-            : list.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No responsible persons yet. Click “Add person”.</div>
+            : activePeople.length === 0 ? <div style={{ padding: 24, color: 'var(--muted)', textAlign: 'center' }}>No responsible persons yet. Click “Add person”.</div>
               : <table className="tbl" style={{ width: '100%' }}>
                 <thead><tr><th>Name</th><th>Title</th><th>Login</th><th>Departments</th><th>Quality areas</th><th></th></tr></thead>
-                <tbody>{list.map((r) => (
+                <tbody>{activePeople.map((r) => (
                   <tr key={r.id} onClick={() => openEdit(r)} title="Tap to edit" style={{ cursor: 'pointer' }}>
                     <td style={{ fontWeight: 600 }}>{r.name}</td>
                     <td>{r.title || '—'}</td>
@@ -1073,7 +1162,7 @@
           </div>
           {lockResp
             ? <Field label="Responsible person"><input style={{ ...inputStyle, background: 'var(--panel-2)', color: 'var(--ink-2)' }} value={me.name} readOnly /></Field>
-            : <Field label="Responsible person (who is giving this data)" hint={assigned.length ? 'Assigned: ' + assigned.map((a) => a.name).join(', ') : 'Pick from staff or type a new name. Manage assignments in Responsible Persons.'}>
+            : <Field label="Responsible person (who is giving this data)" hint={assigned.length ? 'Assigned: ' + assigned.map((a) => a.name).join(', ') : 'Pick from staff or type a new name. Manage assignments in Settings → Users & Roles.'}>
                 <ResponsiblePicker value={responsible} onChange={setResponsible} suggestions={assigned} />
               </Field>}
 
@@ -5213,6 +5302,168 @@
      administrator; nobody joins the staff register from this screen. The queue below
      is the ward's own history — including what came back and why. */
   const CP_REQ_STATUS = { pending: 'Pending', changes: 'Changes requested', approved: 'Approved', rejected: 'Rejected' };
+  /* OFFICIAL blank staff registration form (A4 portrait, flows onto a 2nd sheet). Same sections and
+     option lists as Nurse Management → Add new Nurse / PCA (window.STAFF), plus admin-defined
+     custom staff fields, so what is filled in by hand maps 1:1 onto the register. Printed through
+     #pdf-root + body.pdf-export-mode like every other export. */
+  function UnicoStaffRegForm({ role, onDone }) {
+    useEffect(() => {
+      const body = document.body;
+      let finished = false;
+      const finish = () => { if (finished) return; finished = true; body.classList.remove('pdf-export-mode', 'regform-print'); window.removeEventListener('afterprint', finish); if (onDone) onDone(); };
+      // regform-print hides every other body-level node (background layers, toast/modal portals) while
+      // printing — in the real app they printed as blank sheets before and after the form.
+      body.classList.add('pdf-export-mode', 'regform-print');
+      window.addEventListener('afterprint', finish);
+      const t = setTimeout(() => { try { window.print(); } catch (e) { } setTimeout(finish, 800); }, 350);
+      return () => { clearTimeout(t); window.removeEventListener('afterprint', finish); body.classList.remove('pdf-export-mode', 'regform-print'); };
+    }, []);
+    const root = typeof document !== 'undefined' && document.getElementById('pdf-root');
+    if (!root || typeof ReactDOM === 'undefined' || !ReactDOM.createPortal) return null;
+    const S = window.STAFF || {};
+    const isPCA = role === 'PCA';
+    const uniq = (a) => [...new Set((a || []).map((x) => String(x || '').trim()).filter(Boolean))];
+    const quals = uniq(S.qualificationsFor ? S.qualificationsFor(role || 'Nurse') : (isPCA ? S.PCA_QUALIFICATIONS : S.QUALIFICATIONS));
+    const desigs = uniq(isPCA ? (S.PCA_DESIGNATIONS || []) : (S.DESIGNATIONS || []));
+    const trains = uniq(isPCA ? (S.PCA_TRAININGS || S.TRAININGS) : S.TRAININGS);
+    const extras = uniq(S.EXTRACURRICULARS);
+    const vacc = uniq(S.VACCINATION_STATES);
+    const statDepts = uniq(((window.UNICO && window.UNICO.DEPARTMENTS) || []).map((d) => d && d.name));
+    const depts = statDepts.length ? statDepts : uniq(S.DEPARTMENTS);
+    const custom = (S.customFields && S.customFields()) || [];
+    const ink = '#111a26', line = '#8e9aa8', soft = '#4f5d6e';
+    // Nurse designations always offer "Trainee Nurse" (added once, even before STAFF.DESIGNATIONS carries it).
+    if (!isPCA && !desigs.some((d) => d.toLowerCase() === 'trainee nurse')) desigs.push('Trainee Nurse');
+    const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    // Sized to print on EXACTLY 2 A4 portrait sheets: page 1 = header + sections 1-3, page 2 = the rest.
+    const Sec = ({ n, title, children }) => (
+      <div style={{ marginTop: 7, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+        <div style={{ background: '#1f3b5a', color: '#fff', fontSize: '9pt', fontWeight: 700, letterSpacing: '.4px', padding: '3px 8px', textTransform: 'uppercase', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>{n}. {title}</div>
+        <div style={{ border: '1px solid ' + line, borderTop: 0, padding: '4px 8px 6px' }}>{children}</div>
+      </div>
+    );
+    // Label + a writing line (flex share w; the label keeps its own width, the line takes the rest).
+    const Ln = ({ label, w, h }) => (
+      <div style={{ flex: (w || 1) + ' 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', gap: 5, fontSize: '8.5pt', marginTop: 5 }}>
+        <span style={{ whiteSpace: 'nowrap', fontWeight: 600, color: ink }}>{label}</span>
+        <span style={{ flex: 1, minWidth: 40, borderBottom: '1px solid ' + ink, height: h || 16 }} />
+      </div>
+    );
+    const Row = ({ children }) => <div style={{ display: 'flex', gap: 12, flexWrap: 'nowrap' }}>{children}</div>;
+    const Box = () => <span style={{ display: 'inline-block', width: 8, height: 8, border: '1.1px solid ' + ink, marginRight: 4, marginTop: 2, flexShrink: 0 }} />;
+    // Columns spelled out, not repeat(N,…): theme.css's <=820px rule collapses [style*="repeat(3"] grids to 1fr, and the A4 print viewport is narrower than that.
+    const Ticks = ({ label, items, cols, other }) => (
+      <div style={{ marginTop: 5 }}>
+        {label && <div style={{ fontSize: '8.5pt', fontWeight: 600, marginBottom: 2 }}>{label} <span style={{ fontWeight: 400, color: soft }}>(tick all that apply)</span></div>}
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) '.repeat(cols || 3).trim(), columnGap: 8, rowGap: 2 }}>
+          {items.map((x) => <div key={x} style={{ fontSize: '8pt', display: 'flex', alignItems: 'flex-start', lineHeight: 1.2 }}><Box />{x}</div>)}
+          {other !== false && <div style={{ fontSize: '8pt', display: 'flex', alignItems: 'flex-start', lineHeight: 1.2, gridColumn: 'span ' + Math.min(2, cols || 3) }}><Box />Other: <span style={{ flex: 1, borderBottom: '1px solid ' + ink, marginLeft: 4, height: 10 }} /></div>}
+        </div>
+      </div>
+    );
+    const One = ({ label, items }) => (
+      <div style={{ display: 'flex', alignItems: 'center', columnGap: 10, rowGap: 2, flexWrap: 'wrap', fontSize: '8.5pt', marginTop: 5 }}>
+        <span style={{ fontWeight: 600 }}>{label}</span>
+        {items.map((x) => <span key={x} style={{ display: 'inline-flex', alignItems: 'flex-start', fontSize: '8pt' }}><Box />{x}</span>)}
+      </div>
+    );
+    return ReactDOM.createPortal(
+      <div className="pdf-doc portrait">
+        {/* Own A4 page rule instead of .pdf-page's named page (rpt-port): switching to a named page forces a
+            break, which added an empty first sheet. */}
+        <style>{"@media print{@page{size:A4 portrait;margin:6mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .regform-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}}"}</style>
+        <section className="regform-sheet" style={{ fontFamily: "'IBM Plex Sans',system-ui,'Segoe UI',sans-serif", color: ink, padding: '7mm 9mm' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, borderBottom: '2px solid #1f3b5a', paddingBottom: 6 }}>
+            <img src="unico/logo.svg" alt="UNICO Hospitals" style={{ height: 36 }} />
+            <div style={{ flex: 1, textAlign: 'center' }}>
+              <div style={{ fontSize: '8.5pt', fontWeight: 700, letterSpacing: '1px', color: soft, textTransform: 'uppercase' }}>UNICO Hospitals PLC · Nursing Services</div>
+              <div style={{ fontSize: '13.5pt', fontWeight: 800, marginTop: 1 }}>Staff Registration Form — {isPCA ? 'Patient Care Assistant (PCA)' : 'Nurse'}</div>
+              <div style={{ fontSize: '7.8pt', color: soft, marginTop: 2 }}>Write in BLOCK LETTERS · tick (✓) the boxes that apply · attach copies of certificates, NID and BNMC registration</div>
+            </div>
+            <div style={{ width: '25mm', height: '30mm', border: '1.1px dashed ' + ink, display: 'grid', placeItems: 'center', textAlign: 'center', fontSize: '7.5pt', color: soft, flexShrink: 0 }}>Affix recent<br />passport-size<br />photograph</div>
+          </div>
+          <div style={{ display: 'flex', gap: 14, fontSize: '8pt', color: soft, marginTop: 3 }}>
+            <span>Form No.: HR-NUR-REG-01</span><span>Staff role: <b style={{ color: ink }}>{isPCA ? 'PCA' : 'Nurse'}</b></span>
+            <span style={{ flex: 1 }} /><span>Date received: ______________</span>
+          </div>
+
+          <Sec n={1} title="Personal information">
+            <Row><Ln label="Employee ID:" w={1} /><Ln label="Full name:" w={2.4} /></Row>
+            <Row><Ln label="Phone:" w={1.2} /><Ln label="Date of birth (DD/MM/YYYY):" w={1.4} /><Ln label="Age:" w={0.5} /></Row>
+            <One label="Gender:" items={['Female', 'Male', 'Other']} />
+            <Ticks label="Qualification" items={quals} cols={3} />
+            <Ticks label="Extracurricular activities" items={extras} cols={5} />
+          </Sec>
+
+          <Sec n={2} title="Job information">
+            <Ticks label="Designation" items={desigs} cols={4} />
+            <Ticks label="Current department(s)" items={depts} cols={5} other={false} />
+            <Row><Ln label="Primary department (if more than one):" w={1} /></Row>
+            <div style={{ fontSize: '8.5pt', marginTop: 5, display: 'flex', alignItems: 'flex-start' }}><Box />Can be floated to other units when they are short</div>
+          </Sec>
+
+          <Sec n={3} title="Previous experience (before joining UNICO)">
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8pt', marginTop: 2 }}>
+              <thead><tr>{['#', 'Organisation / hospital', 'Department / role', 'Years', 'Months'].map((h, i) => <th key={h} style={{ border: '1px solid ' + line, padding: '2px 5px', background: '#eef2f6', textAlign: i > 2 ? 'center' : 'left', width: i === 0 ? '5%' : i > 2 ? '10%' : 'auto', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>{h}</th>)}</tr></thead>
+              <tbody>{[1, 2, 3, 4].map((i) => <tr key={i}>{[0, 1, 2, 3, 4].map((c) => <td key={c} style={{ border: '1px solid ' + line, height: 17, textAlign: 'center', fontSize: '8pt', color: soft }}>{c === 0 ? i : ''}</td>)}</tr>)}</tbody>
+            </table>
+            <Row>
+              <div style={{ flex: '0 0 auto', fontSize: '8.5pt', fontWeight: 600, marginTop: 5, alignSelf: 'flex-end', whiteSpace: 'nowrap' }}>Total previous experience: ____ yrs ____ mo</div>
+              <Ln label="Date of joining UNICO (DD/MM/YYYY):" w={1.3} /><Ln label="Total experience:" w={0.8} />
+            </Row>
+          </Sec>
+
+          <div style={{ breakBefore: 'page', pageBreakBefore: 'always' }}>
+            <Sec n={4} title="Compliance & registration">
+              <Ticks label="Special training" items={trains} cols={5} />
+              <One label="Hepatitis-B vaccination:" items={vacc} />
+              <Row><Ln label="BNMC registration / licence no.:" w={1.5} /><Ln label="Licence expiry (DD/MM/YYYY):" w={1} /></Row>
+              <Ln label="Remarks:" />
+            </Sec>
+
+            <Sec n={5} title="Additional details">
+              <Row><Ln label="NID / Passport no.:" w={1.3} /><Ln label="Languages spoken:" w={1} /></Row>
+              <One label="Blood group:" items={['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-']} />
+              <Row><Ln label="Emergency contact (name & phone):" w={1.8} /><Ln label="Relation:" w={0.8} /></Row>
+              <One label="Languages:" items={['Bangla', 'English', 'Hindi', 'Urdu', 'Arabic', 'Other: ________']} />
+            </Sec>
+
+            {custom.length > 0 && (
+              <Sec n={6} title="Other information">
+                {custom.map((cf) => cf.kind === 'text' || !(cf.options || []).length
+                  ? <Ln key={cf.id} label={cf.name + ':'} />
+                  : <Ticks key={cf.id} label={cf.name + (cf.kind === 'multi' ? '' : ' (tick one)')} items={uniq(cf.options)} cols={5} />)}
+              </Sec>
+            )}
+
+            <Sec n={custom.length > 0 ? 7 : 6} title="Clinical privileges">
+              <div style={{ fontSize: '8.5pt', color: soft }}>Clinical activities are privileged per department by Nursing Administration using the <b style={{ color: ink }}>Department Privileges checklist</b>. Attach the signed checklist to this form.</div>
+              <Row><Ln label="Privilege checklist attached:  ☐ Yes  ☐ No   ·   Assessed by:" w={2} /><Ln label="Date:" w={0.8} /></Row>
+            </Sec>
+
+            <div style={{ marginTop: 7, border: '1px solid ' + line, padding: '5px 8px 6px', fontSize: '8.5pt', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+              <b>Declaration:</b> I declare that the information given in this form is true and complete to the best of my knowledge. I understand that any false information may lead to cancellation of my registration.
+              <Row><Ln label="Signature of staff:" w={1.5} /><Ln label="Date:" w={0.8} /></Row>
+            </div>
+
+            <div style={{ marginTop: 9, border: '1.1px dashed ' + ink, padding: '5px 8px 6px', fontSize: '8.5pt', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+              <b>FOR OFFICE USE ONLY</b>
+              <Row><Ln label="Employee ID assigned:" w={1} /><Ln label="Entered in staff register on:" w={1} /><Ln label="By:" w={0.8} /></Row>
+              <Row><Ln label="BNMC verified:  ☐ Yes  ☐ No   ·   Verified on:" w={1} /><Ln label="Documents received:  ☐ NID  ☐ Certificates  ☐ BNMC  ☐ Photo" w={0.4} /></Row>
+            </div>
+
+            <div style={{ marginTop: 8, fontSize: '7.5pt', color: soft, borderTop: '1px solid #cfd6de', paddingTop: 4, display: 'flex', justifyContent: 'space-between' }}>
+              <span>UNICO Hospitals PLC · Staff Registration Form ({isPCA ? 'PCA' : 'Nurse'}) · HR-NUR-REG-01</span>
+              <span>Printed {today}</span>
+            </div>
+          </div>
+        </section>
+      </div>,
+      root
+    );
+  }
+  if (typeof window !== 'undefined') window.UnicoStaffRegForm = UnicoStaffRegForm;
+
   function CollectorStaffRequests({ depts }) {
     const blank = { role: 'Nurse', name: '', designation: '', department: (depts[0] && depts[0].name) || '', joiningDate: '', experience: '', qualification: '', phone: '', hepB: '', note: '' };
     const [f, setF] = useState(blank);
@@ -6226,5 +6477,5 @@
     );
   }
 
-  Object.assign(window, { DataResponsibles, DataPatientForm, DataQualityForm, DataReview, DataShareLinks, CollectorPortal, SubmissionAnalytics, DataCollectionSettings });
+  Object.assign(window, { DcScopeEditor, dcScopePayload, dcScopeBase, dcScopeAreas, dcCustomAreas, DataResponsibles, DataPatientForm, DataQualityForm, DataReview, DataShareLinks, CollectorPortal, SubmissionAnalytics, DataCollectionSettings });
 })();

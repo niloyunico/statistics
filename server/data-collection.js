@@ -246,16 +246,9 @@ async function saveResponsible(input) {
     active: !(input && input.active === false),
   };
   if (!doc.name) throw new Error('Name is required.');
-  if (empId && !/^[a-z0-9._-]{3,40}$/.test(empId)) throw new Error('Emp ID must be 3-40 chars: letters, numbers, . _ -');
-  // Pre-validate the collector-login side BEFORE persisting the responsible, so a predictable
-  // user-sync failure (admin id / missing password) can't leave a saved responsible behind
-  // that a client retry would then DUPLICATE (a retry without input.id mints a new genId).
-  if (empId) {
-    const usersPre = await getUsers();
-    const exPre = await usersPre.findOne({ username: empId });
-    if (exPre && exPre.role === 'Administrator') throw new Error('That ID belongs to an administrator.');
-    if (!exPre && !(input && input.password)) throw new Error('A password is required to create the login for "' + empId + '".');
-  }
+  // 2-40 like the user dialog (users-admin.js), so a login created there can always be saved from
+  // the matrix. The public sign-up (registerCollector) keeps its own 3-40 rule.
+  if (empId && !/^[a-z0-9._-]{2,40}$/.test(empId)) throw new Error('Emp ID must be 2-40 chars: letters, numbers, . _ -');
   const id = input && input.id ? String(input.id) : genId('resp');
   const c = await col('responsibles');
   const existing = c ? await c.findOne({ _id: id }) : (mem.responsibles.find((r) => r.id === id) || null);
@@ -265,13 +258,43 @@ async function saveResponsible(input) {
   // allQualityAreas is preserved across saves (the legacy UI doesn't send it) so a
   // hospital-wide infection-control role isn't silently downgraded on an unrelated edit.
   const allQA = (input && input.allQualityAreas != null) ? !!input.allQualityAreas : !!(existing && existing.allQualityAreas);
-  doc.allQualityAreas = allQA;
-  // Effective areas = departments' auto areas UNION any custom/extra areas the admin picked
-  // (doc.qualityAreas came from input). Custom access rides on top of the assign-once default.
-  // Force-refresh the per-instance map first (never invalidated across instances): these areas
-  // are STORED, so a stale map would persist the wrong access. registerCollector comes through here too.
-  await deptmap.get(true).catch(() => null);
-  doc.qualityAreas = await deptmap.deriveQualityAreas(doc.departments, allQA, doc.qualityAreas);
+  // Effective areas = departments' auto areas UNION any custom/extra areas the admin picked.
+  // Custom access rides on top of the assign-once default. The derive is shared with the
+  // user dialog (users-admin.js → deriveAssignment) so both write paths store the same areas.
+  // A caller that sends no customQualityAreas (registerCollector, older clients) posts the
+  // effective union in qualityAreas; subtracting the derived set gives the same result as before.
+  // While hospital-wide, a posted qualityAreas is EVERY area: reading it as custom would turn every
+  // area into an extra once hospital-wide is switched off, so the stored extras are kept instead.
+  const customIn = Array.isArray(input && input.customQualityAreas) ? input.customQualityAreas
+    : !allQA ? doc.qualityAreas
+    : (existing && Array.isArray(existing.customQualityAreas)) ? existing.customQualityAreas : [];
+  const scope = await deriveAssignment({
+    departments: doc.departments,
+    allQualityAreas: allQA,
+    customQualityAreas: customIn,
+    qualityIndicators: doc.qualityIndicators,
+  });
+  doc.allQualityAreas = scope.allQualityAreas;
+  doc.customQualityAreas = scope.customQualityAreas;
+  doc.qualityAreas = scope.qualityAreas;
+  // Pre-validate the login side BEFORE any write, so a predictable user-sync failure (admin or
+  // non-portal id, nurse/PCA given scope, missing password) leaves nothing half-saved that a
+  // client retry would then DUPLICATE (a retry without input.id mints a new genId).
+  if (empId) {
+    const usersPre = await getUsers();
+    const exPre = await usersPre.findOne({ username: empId });
+    const refusal = portalLoginRefusal(exPre);
+    if (refusal) throw new Error(refusal);
+    if (exPre && NO_DATA_ROLES.indexOf(exPre.role) >= 0 && scopeIsNonEmpty(scope)) throw new Error(NURSE_PCA_SCOPE_ERROR);
+    if (!exPre && !(input && input.password)) throw new Error('A password is required to create the login for "' + empId + '".');
+  }
+  // Users doc FIRST, then the record: the same order as the user dialog (users-admin.js), and the
+  // users doc is the authority, so a failure part-way never leaves the matrix ahead of the account.
+  // When an emp ID is set, keep a matching collector LOGIN account in sync so the
+  // person can sign in and get a data-limited, per-user view of their departments.
+  if (empId) {
+    await upsertCollectorUser({ empId, password: input && input.password, name: doc.name, departments: doc.departments, qualityAreas: doc.qualityAreas, customQualityAreas: doc.customQualityAreas, allQualityAreas: doc.allQualityAreas, qualityIndicators: doc.qualityIndicators, active: doc.active, responsibleId: id });
+  }
   let rec;
   if (!c) {
     const i = mem.responsibles.findIndex((r) => r.id === id);
@@ -282,30 +305,189 @@ async function saveResponsible(input) {
     await c.replaceOne({ _id: id }, base, { upsert: true });
     rec = { id, ...base };
   }
-  // When an emp ID is set, keep a matching collector LOGIN account in sync so the
-  // person can sign in and get a data-limited, per-user view of their departments.
-  if (empId) {
-    await upsertCollectorUser({ empId, password: input && input.password, name: doc.name, departments: doc.departments, qualityAreas: doc.qualityAreas, allQualityAreas: allQA, qualityIndicators: doc.qualityIndicators, active: doc.active, responsibleId: id });
+  // The record moved to another login (emp ID changed or cleared): drop the OLD login's link to it,
+  // or saving that old account in the user dialog would take this record back and overwrite it.
+  const prevEmp = existing && existing.empId ? String(existing.empId).trim().toLowerCase() : '';
+  if (prevEmp && prevEmp !== empId) {
+    const users = await getUsers();
+    await users.updateOne({ username: prevEmp, responsibleId: id }, { $unset: { responsibleId: '' } });
   }
   return { ...rec, hasLogin: !!empId };
 }
 
-// Create/update a role:"collector" account in the users collection (the same one
-// the login portal authenticates against). Assignments are mirrored here so the
+// Nurse / PCA are portal roles WITHOUT the datacol module (access.js), so they cannot submit data.
+const NO_DATA_ROLES = ['nurse', 'pca'];
+const NURSE_PCA_SCOPE_ERROR = 'Nurse/PCA accounts cannot submit data. Change the role to Data collector or In-charge in Settings → Users & Roles.';
+// True when a scope (a derived one, or a request body) actually grants something. An empty
+// departments list etc. is "no scope": it must not mint a record or trip the nurse/PCA refusal.
+function scopeIsNonEmpty(s) {
+  if (!s) return false;
+  const filled = (v) => Array.isArray(v) && v.some((x) => String(x == null ? '' : x).trim());
+  const qi = s.qualityIndicators;
+  return s.allQualityAreas === true || filled(s.departments) || filled(s.customQualityAreas) || filled(s.qualityAreas)
+    || !!(qi && typeof qi === 'object' && !Array.isArray(qi) && Object.keys(qi).some((k) => filled(qi[k])));
+}
+// Why an EXISTING account may not be (re)written as a portal login from the matrix, or null.
+// A non-portal role is refused rather than turned into a collector: an in-charge demoted to a
+// 'User' was otherwise silently re-promoted (and its perms dropped) by the next matrix toggle.
+function portalLoginRefusal(u) {
+  if (!u) return null;
+  if (u.role === 'Administrator') return 'That ID belongs to an administrator.';
+  if (u.role && accessRoles.PORTAL_ROLES.indexOf(u.role) < 0) return 'That ID belongs to a ' + u.role + ' account. Change its role in Settings → Users & Roles first.';
+  return null;
+}
+const isDupKey = (e) => !!e && (e.code === 11000 || /E11000/.test(String(e.message || '')));
+// Records minted FOR an account use this fixed id, so concurrent creates converge on one doc.
+const RESP_USER_PREFIX = 'resp-u-';
+
+/* ONE derive for a portal account's data-collection scope, used by BOTH write paths:
+   the Indicator Access matrix (saveResponsible above) and the user dialog
+   (users-admin.js create/update). Returns the normalised scope with
+     customQualityAreas = only the areas granted directly (never the ones a department
+                          derives, or unticking that department could not remove them;
+                          kept while hospital-wide),
+     qualityAreas       = derived ∪ custom (or every area when hospital-wide).
+   The deptmap is force-refreshed first: these areas are STORED, and the per-instance map is
+   never invalidated across instances, so a stale one would persist the wrong access. */
+async function deriveAssignment(input, opts) {
+  const inp = input || {};
+  const clean = (v) => (Array.isArray(v) ? v.map((x) => String(x == null ? '' : x).trim()).filter(Boolean) : []);
+  const departments = [...new Set(clean(inp.departments))];
+  const allQualityAreas = !!inp.allQualityAreas;
+  if (!(opts && opts.mapFresh)) await deptmap.get(true).catch(() => null);   // mapFresh: caller refreshed it moments ago
+  const derived = await deptmap.deriveQualityAreas(departments, false, []);
+  // Kept even while hospital-wide (the effective areas are all of them anyway), so switching
+  // hospital-wide off brings the directly-granted extras back instead of dropping them for good.
+  const customQualityAreas = [...new Set(clean(inp.customQualityAreas))].filter((ak) => derived.indexOf(ak) < 0);
+  const qualityAreas = await deptmap.deriveQualityAreas(departments, allQualityAreas, customQualityAreas);
+  return { departments, allQualityAreas, customQualityAreas, qualityAreas, qualityIndicators: normQualityIndicators(inp.qualityIndicators) };
+}
+
+/* Mirror a portal ACCOUNT's scope into `responsibles`, so the Indicator Access matrix, the
+   "assigned" hints on the forms and the account itself never disagree.
+
+   The users doc is the authority (getUserScope reads it at sign-in); this keeps the
+   responsible record in step with it. Resolution: the doc linked by user.responsibleId,
+   else the one whose empId is the username, else a NEW one is minted (only when
+   `create` is set). The existing doc is MERGED — phone, staffId, title and anything else
+   only the responsibles side holds are left alone.
+
+   Split in two so a caller can resolve (and fail) BEFORE it writes the account:
+     const plan = await planResponsibleSync(user, { create: true });   // read only
+     ...write the user with plan.responsibleId...
+     await applyResponsibleSync(plan, user, scope);                    // throws on failure */
+async function planResponsibleSync(user, opts) {
+  const username = String((user && user.username) || '').trim().toLowerCase();
+  if (!username) throw new Error('Cannot link a data-collection record without a username.');
+  const c = await col('responsibles');
+  const byId = (id) => (c ? c.findOne({ _id: String(id) }) : Promise.resolve(mem.responsibles.find((r) => r.id === String(id)) || null));
+  const byEmp = () => (c ? c.findOne({ empId: username }) : Promise.resolve(mem.responsibles.find((r) => r.empId === username) || null));
+  // A record belongs to this account only while its empId is this username (or unset). The matrix
+  // can move a record to another login; a stale users.responsibleId must not take it back.
+  const owned = (r) => !!r && (!r.empId || String(r.empId).trim().toLowerCase() === username);
+  let existing = null;
+  if (user.responsibleId) { const linked = await byId(user.responsibleId); if (owned(linked)) existing = linked; }
+  if (!existing) existing = await byEmp();
+  if (existing) return { username, existing, responsibleId: String(c ? existing._id : existing.id), create: false };
+  if (!(opts && opts.create)) return { username, existing: null, responsibleId: null, create: false };
+  const detId = RESP_USER_PREFIX + username;
+  const taken = await byId(detId);
+  if (taken && owned(taken)) return { username, existing: taken, responsibleId: detId, create: false };
+  // The fixed id was moved to another person by the matrix: fall back to a random id.
+  return { username, existing: null, responsibleId: taken ? genId('resp') : detId, create: true };
+}
+
+/* Mark the record behind a login inactive (the account left the portal roles, or was deleted) so
+   the matrix stops listing that person as an assignee. Only the active flag and stamps are
+   written: the scope stays, and the document is never deleted. Found by responsibleId when that
+   record's empId is this username, else by empId. Returns the record id, or null when none. */
+async function deactivateResponsibleFor(user, opts) {
+  const username = String((user && user.username) || '').trim().toLowerCase();
+  if (!username) return null;
+  const c = await col('responsibles');
+  const mine = (r) => !!r && String(r.empId || '').trim().toLowerCase() === username;
+  let rec = null;
+  if (user.responsibleId) {
+    const linked = c ? await c.findOne({ _id: String(user.responsibleId) }) : (mem.responsibles.find((r) => r.id === String(user.responsibleId)) || null);
+    if (mine(linked)) rec = linked;
+  }
+  if (!rec) rec = c ? await c.findOne({ empId: username }) : (mem.responsibles.find((r) => r.empId === username) || null);
+  if (!rec) return null;
+  const now = Date.now();
+  const set = { active: false, updatedAt: now };
+  if (opts && opts.deactivatedAt) set.deactivatedAt = now;
+  const rid = String(c ? rec._id : rec.id);
+  if (!c) {
+    const i = mem.responsibles.findIndex((r) => r.id === rid);
+    if (i >= 0) mem.responsibles[i] = { ...mem.responsibles[i], ...set };
+    return rid;
+  }
+  await c.updateOne({ _id: rid }, { $set: set });
+  return rid;
+}
+async function applyResponsibleSync(plan, user, scope) {
+  if (!plan || !plan.responsibleId) return null;   // nothing linked and nothing to create
+  const now = Date.now();
+  const set = { name: String((user && user.name) || plan.username).trim() || plan.username, empId: plan.username, active: !(user && user.active === false), updatedAt: now };
+  if (scope) {
+    set.departments = scope.departments;
+    set.allQualityAreas = scope.allQualityAreas;
+    set.customQualityAreas = scope.customQualityAreas;
+    set.qualityAreas = scope.qualityAreas;
+    set.qualityIndicators = scope.qualityIndicators;
+  }
+  const c = await col('responsibles');
+  if (plan.create) {
+    const doc = { name: set.name, title: String((user && (user.title || user.designation)) || '').trim(), phone: '', staffId: null, empId: plan.username,
+      departments: [], qualityAreas: [], customQualityAreas: [], allQualityAreas: false, qualityIndicators: {}, active: set.active, ...set, createdAt: now };
+    if (!c) {
+      if (!mem.responsibles.some((r) => r.id === plan.responsibleId)) { mem.responsibles.push({ id: plan.responsibleId, ...doc }); return { id: plan.responsibleId, created: true }; }
+    } else {
+      try { await c.insertOne({ _id: plan.responsibleId, ...doc }); return { id: plan.responsibleId, created: true }; }
+      catch (e) { if (!isDupKey(e)) throw e; }
+    }
+    // A concurrent save for the same account created it first: update that record instead,
+    // unless the matrix handed the id to someone else in the meantime.
+    const cur = c ? await c.findOne({ _id: plan.responsibleId }) : mem.responsibles.find((r) => r.id === plan.responsibleId);
+    if (cur && cur.empId && String(cur.empId).trim().toLowerCase() !== plan.username) throw new Error('That data-collection record now belongs to someone else. Refresh and save again.');
+  }
+  if (!c) {
+    const i = mem.responsibles.findIndex((r) => r.id === plan.responsibleId);
+    if (i < 0) throw new Error('The linked data-collection record no longer exists.');
+    mem.responsibles[i] = { ...mem.responsibles[i], ...set };
+    return { id: plan.responsibleId, created: false };
+  }
+  const r = await c.updateOne({ _id: plan.responsibleId }, { $set: set });
+  if (!r || !r.matchedCount) throw new Error('The linked data-collection record no longer exists.');
+  return { id: plan.responsibleId, created: false };
+}
+
+// Create/update the LOGIN account behind a responsible person in the users collection (the
+// same one the login portal authenticates against). Assignments are mirrored here so the
 // session scope is available at login without a second lookup table.
+// ROLE: a new account (or a legacy one with no role) becomes 'collector'. An existing
+// in-charge / nurse / PCA / collector KEEPS its role — this used to force 'collector' on
+// every save, so editing an in-charge's indicators from Responsible Persons or the Indicator
+// Access matrix silently demoted them and took their ward screens away. Any other existing
+// role (Administrator, User) is refused: see portalLoginRefusal.
 async function upsertCollectorUser(opts) {
   const empId = String(opts.empId).toLowerCase();
   const users = await getUsers();
-  const set = { name: opts.name || empId, role: 'collector', active: opts.active !== false, departments: opts.departments || [], qualityAreas: opts.qualityAreas || [], allQualityAreas: !!opts.allQualityAreas, qualityIndicators: normQualityIndicators(opts.qualityIndicators) };
+  const set = { name: opts.name || empId, active: opts.active !== false, departments: opts.departments || [], qualityAreas: opts.qualityAreas || [], allQualityAreas: !!opts.allQualityAreas, qualityIndicators: normQualityIndicators(opts.qualityIndicators) };
+  // Keep the account's stored custom/derived split in step, or the user dialog would read a
+  // stale customQualityAreas and re-grant an area the matrix just removed.
+  if (Array.isArray(opts.customQualityAreas)) set.customQualityAreas = opts.customQualityAreas;
   if (opts.responsibleId) set.responsibleId = opts.responsibleId;
   if (opts.password) set.passwordHash = await auth.hash(String(opts.password));
   const existing = await users.findOne({ username: empId });
   if (existing) {
-    if (existing.role === 'Administrator') throw new Error('That ID belongs to an administrator.');
+    const refusal = portalLoginRefusal(existing);
+    if (refusal) throw new Error(refusal);
+    if (!existing.role) set.role = 'collector';
     await users.updateOne({ username: empId }, { $set: set });
   } else {
     if (!opts.password) throw new Error('A password is required to create the login for "' + empId + '".');
-    await users.insertOne({ username: empId, ...set, created_at: Date.now() });
+    await users.insertOne({ username: empId, ...set, role: 'collector', created_at: Date.now() });
   }
   return { username: empId };
 }
@@ -1835,6 +2017,8 @@ module.exports = {
   buildPatientSpec, buildQualitySpec, createSubmission,
   createShortlink, getShortlinks, deleteShortlink, shortlinkMeta, shortlinkSubmit,
   registerCollector, upsertCollectorUser, getUserScope, recomputeQuarters,
+  deriveAssignment, planResponsibleSync, applyResponsibleSync, deactivateResponsibleFor,
+  scopeIsNonEmpty, NO_DATA_ROLES, NURSE_PCA_SCOPE_ERROR,
   addDepartmentField, removeDepartmentField, getCollectionSettings, saveCollectionSettings,
   createFieldRequest, listFieldRequests, decideFieldRequest,
   // exported so a repair script can re-apply an approval through the SAME code path

@@ -1397,6 +1397,8 @@ function Reports({depts}){
     // Web fallback #1: TRUE VECTOR PDF — drawn with jsPDF primitives. Selectable text,
     // razor-sharp at any zoom, ~100 KB, and ~1 s even for a 17-page all-departments
     // run (the raster path below needed 25-40 s of html2canvas captures).
+    // The PDF libraries load on demand (index.html); a failed load leaves the print dialog path below.
+    if(window.unicoLoadPdfLibs&&!(window.jspdf&&window.html2canvas)){ setExporting('Preparing PDF…'); setNote(null); try{ await window.unicoLoadPdfLibs(); }catch(e){ try{ console.warn('[reports] PDF libraries failed to load:',e); }catch(_){} } }
     const J0=window.jspdf&&window.jspdf.jsPDF;
     // Vector PDF reproduces ALL report types (summary / detailed / comparison / board)
     // page-for-page as the live preview shows them.
@@ -1786,7 +1788,21 @@ function usersApi(method,path,body){
 }
 function uToast(m,k){ try{ if(window.UI&&window.UI.toast) window.UI.toast(m,k||'success'); }catch(e){} }
 
-function UserModal({initial,onClose,onSaved}){
+// Areas granted DIRECTLY (beyond the departments' own) for an account or responsible record.
+// Prefers the stored split; legacy rows without it: hospital-wide => none, else the stored
+// union minus what the departments derive. (Same rule as dcCustomAreas in data-collection.jsx.)
+function uCustomAreasOf(r){
+  if(!r) return [];
+  if(window.dcCustomAreas) return window.dcCustomAreas(r).slice();
+  if(Array.isArray(r.customQualityAreas)) return r.customQualityAreas.slice();
+  if(r.allQualityAreas) return [];
+  const auto=window.DEPTMAP?window.DEPTMAP.areasFromDepts(r.departments||[]):[];
+  return (r.qualityAreas||[]).filter(k=>auto.indexOf(k)<0);
+}
+
+// Stable "not loaded yet" list for DcScopeEditor's `persons`: a fresh [] every render re-ran its effect on each keystroke.
+const U_NO_RESPS=[];
+function UserModal({initial,onClose,onSaved,depts}){
   const {useState}=React;
   const editing=!!initial;
   const [username,setUsername]=useState(editing?initial.username:'');
@@ -1835,8 +1851,66 @@ function UserModal({initial,onClose,onSaved}){
   const toggleDept=(id)=>setStaffDepts(ds=>ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds,id]);
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=role==='Administrator';
-  const portalRole=portalRoleOfLabel(role);   // 'collector'|'incharge'|'nurse'|'pca' or null — scope set in Responsible Persons
+  const portalRole=portalRoleOfLabel(role);   // 'collector'|'incharge'|'nurse'|'pca' or null
   const isColl=!!portalRole;
+  // Only collectors and in-charges submit data. Nurse/PCA portal accounts sign in to the staff
+  // app: they carry no collection scope (the server rejects one), so none is edited or sent.
+  const collects=portalRole==='collector'||portalRole==='incharge';
+  // Data-collection scope of a collecting account, edited here with the shared DcScopeEditor
+  // (data-collection.jsx). Loaded from the /api/users row; the server mirrors every save into
+  // the responsible record the Indicator Access matrix reads.
+  const scopeInit=!!(editing&&(initial.role==='collector'||initial.role==='incharge'));
+  const scope0=React.useRef(null);   // the scope as stored on the users row at open
+  if(!scope0.current) scope0.current={
+    departments:scopeInit&&Array.isArray(initial.departments)?initial.departments.slice():[],
+    allQualityAreas:!!(scopeInit&&initial.allQualityAreas),
+    // Fixed ONCE at open (never re-derived per render) — see dcCustomAreas.
+    customQualityAreas:scopeInit?uCustomAreasOf(initial):[],
+    qualityIndicators:scopeInit&&initial.qualityIndicators&&typeof initial.qualityIndicators==='object'?{...initial.qualityIndicators}:{},
+  };
+  const [scope,setScope]=useState(scope0.current);
+  const scopeTouched=React.useRef(false);
+  const editScope=v=>{ scopeTouched.current=true; setScope(v); };
+  const scopeBase=React.useRef(null);   // the scope as loaded, before any edit — see dcScopePayload
+  const [resps,setResps]=useState(null);              // responsible records: "also assigned" hints + fallback
+  // A new account has nothing stored. An existing one waits for its linked responsible record
+  // whenever it is, or is switched to, a collecting role (the editor stays hidden until then).
+  const [scopeLoaded,setScopeLoaded]=useState(!editing);
+  const [scopeLoadFailed,setScopeLoadFailed]=useState(false);   // record fetch failed with nothing stored on the row
+  const scopeReady=!collects||scopeLoaded;
+  React.useEffect(()=>{
+    if(!collects||(resps!==null&&scopeLoaded)) return;
+    let live=true;   // a switch away from a collecting role (or closing) discards a late result
+    usersApi('GET','/api/responsibles').then(j=>{
+      if(!live) return;
+      const list=j.responsibles||[]; setResps(list);
+      if(editing&&!scopeLoaded&&!scopeTouched.current){
+        const u=initial, s0=scope0.current;
+        const rec=(u.responsibleId&&list.find(r=>r.id===u.responsibleId))||list.find(r=>String(r.empId||'').toLowerCase()===u.username);
+        let next=s0;
+        if(rec){
+          const recScope={departments:(rec.departments||[]).slice(),allQualityAreas:!!rec.allQualityAreas,customQualityAreas:uCustomAreasOf(rec),qualityIndicators:{...(rec.qualityIndicators||{})}};
+          // Not a collector at open (a User / nurse / PCA being switched back): the users row holds no
+          // scope, but the server kept the record's (now inactive) scope — show that, or saving the
+          // empty editor would wipe it.
+          if(!scopeInit) next=recScope;
+          else {
+            // The users row is the authority. Fall back to the record only for what the row lacks:
+            // no scope stored at all, or no stored custom/derived split (legacy account).
+            const empty=!(u.departments||[]).length&&!u.allQualityAreas&&!(u.qualityAreas||[]).length&&!Object.keys(u.qualityIndicators||{}).length;
+            if(empty) next=recScope;
+            else if(!Array.isArray(u.customQualityAreas)&&Array.isArray(rec.customQualityAreas)) next={...s0,customQualityAreas:rec.customQualityAreas.slice()};
+          }
+        }
+        if(next!==s0) setScope(next);
+        scopeBase.current=window.dcScopeBase?window.dcScopeBase(next):null;
+      }
+      setScopeLoaded(true);
+    }).catch(()=>{ if(live){ setResps(r=>r||[]); if(editing&&!scopeInit&&!scopeTouched.current) setScopeLoadFailed(true); setScopeLoaded(true); } });
+    return ()=>{ live=false; };
+  },[collects]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const linkedRespId=editing?(initial.responsibleId||((resps||[]).find(r=>String(r.empId||'').toLowerCase()===initial.username)||{}).id||null):null;
+  const ScopeEditor=window.DcScopeEditor;
   const pickRole=r=>{
     setRole(r);
     if(r==='Administrator'||portalRoleOfLabel(r)||r==='Custom'){ setRoleTmpl(null); return; }
@@ -1860,13 +1934,17 @@ function UserModal({initial,onClose,onSaved}){
     }
     if(!name.trim()) return setErr('Full name is required.');
     if(email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
+    // A failed load means we never saw the stored assignment: send no scope, so nothing is wiped.
+    const sendScope=collects&&!!ScopeEditor&&!!window.dcScopePayload&&!scopeLoadFailed;
+    if(sendScope&&!scopeReady) return setErr('Still loading this account’s data collection scope — try again in a moment.');
     setBusy(true);
     try{
       const backendRole=isAdmin?'Administrator':(portalRole||'User');
-      // Portal accounts keep their department/quality scope (managed in Responsible Persons); we
-      // omit `departments` and the quality-area fields so the backend preserves the existing
-      // assignment (incl. its stored customQualityAreas split) on PATCH. This form edits
-      // no areas, so it has no custom-area list to compute or send.
+      // Collector / in-charge accounts send their data-collection scope from the editor below. Only
+      // the directly-granted extras go as customQualityAreas; the server derives qualityAreas and
+      // mirrors the result into the responsible record. (If the editor is not loaded the scope
+      // fields are omitted, and the backend keeps the stored assignment as before.) Nurse/PCA
+      // accounts never send scope fields.
       const payload={ name:name.trim(), email:email.trim().toLowerCase(),
         title:(isAdmin||isColl)?null:(role==='Custom'?'Custom access':role), active:status==='active',
         perms:(isAdmin||isColl)?null:perms,
@@ -1876,6 +1954,12 @@ function UserModal({initial,onClose,onSaved}){
       // Send `role` only when the admin actually changed it: an account the form cannot
       // represent must never be silently re-roled by an unrelated edit.
       if(!editing||backendRole!==(initial.role||'User')) payload.role=backendRole;
+      if(sendScope){
+        const base=scopeBase.current||(window.dcScopeBase?window.dcScopeBase(scope0.current):undefined);
+        const sp=window.dcScopePayload(scope,base);
+        payload.departments=sp.departments; payload.allQualityAreas=sp.allQualityAreas;
+        payload.customQualityAreas=sp.customQualityAreas; payload.qualityIndicators=sp.qualityIndicators;
+      }
       if(!isAdmin&&!isColl){
         // Row-level staff scope. `departments` is only sent for plain Users — for a
         // collector it is their collection assignment and must not be overwritten here.
@@ -1897,9 +1981,10 @@ function UserModal({initial,onClose,onSaved}){
   };
 
   const lvlColor={none:'var(--muted)',view:'#0090ca',edit:'#3ab5a7',add:'#e08a1e',delete:'#d23a52'};
-  return (
+  const toBody = (n) => (typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
+  return toBody(
     <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div className="modal" style={{width:'min(560px,94vw)',maxHeight:'92vh',overflow:'auto'}}>
+      <div className="modal" style={{width:collects?'min(720px,94vw)':'min(560px,94vw)',maxHeight:'92vh',overflow:'auto'}}>
         <div className="modal-h">
           {editing&&(window.MK&&window.MK.Av)
             ? <window.MK.Av name={initial.name||initial.username} emp={initial} empId={initial.staffEmpId} size={30} radius={8} style={{fontSize:12}}/>
@@ -1924,9 +2009,23 @@ function UserModal({initial,onClose,onSaved}){
             <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'center'}}>
               <Ic d={I.check} s={16} c="var(--blue)"/><span><b>Full access.</b> Administrators can view, add, edit and delete in every module.</span>
             </div>
+          ) : isColl&&!collects ? (
+            <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'center'}}>
+              <Ic d={I.user} s={16} c="var(--blue)"/><span><b>{role}.</b> Nurse/PCA accounts sign in to the staff app; they don't submit data.</span>
+            </div>
           ) : isColl ? (
-            <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'flex-start'}}>
-              <Ic d={I.check} s={16} c="var(--blue)"/><span><b>{role}.</b> Signs in to the portal only. Choose which departments &amp; indicators they collect in <b>Settings → Responsible Persons</b> — that assignment is kept when you save here.</span>
+            <div>
+              <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Data collection scope <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· {role} — signs in to the portal only</span></div>
+              <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>The departments they report, the quality areas those give (plus any extra), and optionally which indicators. Saved with the account and shown in <b>Indicator Access</b>.</div>
+              {!ScopeEditor ? (
+                <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px'}}>The data collection module is not loaded, so the scope cannot be edited here. The current assignment is kept when you save.</div>
+              ) : scopeLoadFailed ? (
+                <div style={{fontSize:12.5,color:'#8a5a00',background:'#fff8e9',border:'1px solid #f1d49a',borderRadius:9,padding:'12px 14px'}}>Couldn’t load this account’s current data collection assignment. Close and reopen Manage to edit it — saving now keeps the stored assignment unchanged.</div>
+              ) : !scopeReady ? (
+                <div style={{fontSize:12,color:'var(--muted)',padding:'8px 0'}}>Loading assignment…</div>
+              ) : (
+                <ScopeEditor value={scope} onChange={editScope} depts={depts} exceptResponsibleId={linkedRespId} persons={resps||U_NO_RESPS}/>
+              )}
             </div>
           ) : (
           <div>
@@ -2172,8 +2271,37 @@ function RoleTemplatesPanel(){
 }
 window.RoleTemplatesPanel=RoleTemplatesPanel;
 
-function UserManagement(){
+/* Users & Roles — ONE module for who can sign in AND what they collect. A portal account's
+   departments / quality areas / indicators are edited inside its own Manage dialog (the shared
+   DcScopeEditor); the server mirrors them into the responsible record the Indicator Access matrix
+   reads, so there is no separate "scope" page to keep in step. Indicator Access stays as the
+   department-wise overview. Old links to the retired 'scope' tab land on Accounts. */
+function UsersAndRoles({depts}){
+  const [sub,setSub]=React.useState(()=>{
+    const s=(typeof window!=='undefined'&&window.__UNICO_USERS_SUBTAB__)||'accounts';
+    try{ delete window.__UNICO_USERS_SUBTAB__; }catch(e){}
+    return s==='access'?'access':'accounts';
+  });
+  const hasDC=typeof DataResponsibles!=='undefined';
+  const TABS=[['accounts','Accounts',I.user],['access','Indicator Access',I.check]];
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:14}}>
+      <div className="card"><div className="card-b" style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+        <div style={{flex:1,minWidth:220}}>
+          <div style={{fontSize:15,fontWeight:700,color:'var(--ink)'}}>Users &amp; Roles</div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>Sign-in accounts and roles. A collector’s or in-charge’s departments, quality areas and indicators are set in their account (Manage).</div>
+        </div>
+        <div className="seg">{TABS.map(([id,l,ic])=><button key={id} className={sub===id?'on':''} onClick={()=>setSub(id)} style={{display:'inline-flex',alignItems:'center',gap:6}}><Ic d={ic} s={13}/>{l}</button>)}</div>
+      </div></div>
+      {sub==='accounts'&&<div className="card"><div className="card-b"><UserManagement depts={depts}/></div></div>}
+      {sub==='access'&&(hasDC?<DataResponsibles key="access" depts={depts} embedded initialView="access"/>:null)}
+    </div>
+  );
+}
+
+function UserManagement({depts}={}){
   const {useState,useEffect}=React;
+  const toBody = (n) => (typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
   const [users,setUsers]=useState(null); // null = loading
   const [err,setErr]=useState('');
   const [q,setQ]=useState('');
@@ -2203,10 +2331,22 @@ function UserManagement(){
     const sc=staffScopeLabel(u);
     return sc&&base!=='No access'?base+' · '+sc:base;
   };
+  // Portal accounts: their data-collection scope at a glance, e.g. "CCU · 3 areas · 5 indicators limited".
+  const scopeLine=u=>{
+    if(!PORTAL_ROLE_LABEL[u.role]) return '';
+    const DM=window.DEPTMAP;
+    const ds=(u.departments||[]).map(id=>(DM?DM.nameFromId(id):id)||id);
+    const dPart=!ds.length?'No department':ds.length<=2?ds.join(', '):ds.slice(0,2).join(', ')+' +'+(ds.length-2);
+    const na=(u.qualityAreas||[]).length;
+    const aPart=u.allQualityAreas?'all areas':na+' area'+(na!==1?'s':'');
+    const qi=u.qualityIndicators||{};
+    const ni=Object.keys(qi).reduce((s,k)=>s+(Array.isArray(qi[k])?qi[k].length:0),0);
+    return [dPart,aPart,ni?ni+' indicator'+(ni!==1?'s':'')+' limited':''].filter(Boolean).join(' · ');
+  };
   return (
     <div>
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
-        <div><div style={{fontSize:14,fontWeight:700}}>Users &amp; Roles</div><div style={{fontSize:11.5,color:'var(--muted)'}}>{all.length} user{all.length!==1?'s':''} · {admins} administrator{admins!==1?'s':''}</div></div>
+        <div><div style={{fontSize:14,fontWeight:700}}>Accounts</div><div style={{fontSize:11.5,color:'var(--muted)'}}>{all.length} user{all.length!==1?'s':''} · {admins} administrator{admins!==1?'s':''}</div></div>
         <span className="spacer" style={{flex:1}}/>
         <div style={{display:'flex',alignItems:'center',gap:7,background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:7,padding:'6px 10px',width:190,color:'var(--faint)'}}><Ic d={I.search} s={14}/><input placeholder="Search users…" value={q} onChange={e=>setQ(e.target.value)} style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:12.5,color:'var(--ink)',width:'100%'}}/></div>
         <button className="btn sm" onClick={load}><Ic d={I.search} s={14}/>Refresh</button>
@@ -2231,6 +2371,7 @@ function UserManagement(){
             <div style={{minWidth:0,flex:'1 1 180px'}}>
               <div style={{display:'flex',alignItems:'center',gap:8}}><span style={{fontSize:13.5,fontWeight:700}}>{u.name}</span>{isMe&&<span className="tag" style={{background:'var(--pos-bg)',color:'var(--pos)'}}>You</span>}</div>
               <div style={{fontSize:11.5,color:'var(--muted)'}}>@{u.username}{u.email?' · '+u.email:''}</div>
+              {scopeLine(u)&&<div style={{fontSize:11,color:'var(--ink-2)',marginTop:2}} title="Data collection scope (edit in Manage)">{scopeLine(u)}</div>}
             </div>
             <span className="tag" style={{minWidth:96,justifyContent:'center'}}>{roleLabel(u)}</span>
             <span className="tag" style={{minWidth:96,justifyContent:'center',color:'var(--ink-2)'}}>{summaryOf(u)}</span>
@@ -2244,8 +2385,8 @@ function UserManagement(){
         {users!==null&&filtered.length===0&&<div style={{textAlign:'center',color:'var(--faint)',padding:'24px',fontSize:13}}>No users{q?' match the search':' yet'}.</div>}
       </div>
       <RoleTemplatesPanel/>
-      {modal&&<UserModal initial={modal.user} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load();}}/>}
-      {confirm&&(
+      {modal&&<UserModal initial={modal.user} depts={depts} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load();}}/>}
+      {confirm&&toBody(
         <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)setConfirm(null);}}>
           <div className="modal" style={{width:'min(400px,92vw)'}}><div style={{padding:'22px'}}>
             <div style={{fontSize:15.5,fontWeight:700}}>Remove {confirm.name}?</div>
@@ -2480,11 +2621,16 @@ function CacheStats(){
           <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)'}}>Cache &amp; Redis</div>
           <div style={{fontSize:11.5,color:'var(--muted)'}}>This instance, since it booted — refresh after browsing a few pages to see it work.</div>
         </div>
-        {d&&<span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11.5,fontWeight:700,padding:'4px 11px',borderRadius:15,
-          color:redisLive?'#157a43':'#b5670a',background:redisLive?'rgba(31,157,87,.12)':'rgba(224,138,30,.13)'}}>
-          <i style={{width:7,height:7,borderRadius:'50%',background:redisLive?'#1f9d57':'#e08a1e'}}/>
-          {redisLive?'Redis connected (REST)':'In-memory fallback — Redis not configured'}
-        </span>}
+        {d&&(()=>{
+          // cache.mode (server/cache.js): 'mongo' = per-process values checked against Mongo version
+          // counters (no Redis needed), 'redis', 'memory' (this instance only), 'off' (CACHE_DISABLED).
+          const mode=c&&c.mode;
+          const good=mode==='mongo'||redisLive, off=mode==='off';
+          const label=mode==='mongo'?'MongoDB version counters':off?'Cache off (CACHE_DISABLED)':redisLive?'Redis connected (REST)':'In-memory fallback — Redis not configured';
+          const fg=good?'#157a43':off?'#5b6b80':'#b5670a', bg=good?'rgba(31,157,87,.12)':off?'rgba(125,145,180,.15)':'rgba(224,138,30,.13)', dot=good?'#1f9d57':off?'#9aa6b4':'#e08a1e';
+          return <span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11.5,fontWeight:700,padding:'4px 11px',borderRadius:15,color:fg,background:bg}}>
+            <i style={{width:7,height:7,borderRadius:'50%',background:dot}}/>{label}</span>;
+        })()}
         <button className="btn sm" onClick={load} disabled={busy}><Ic d={I.activity} s={14}/>{busy?'Loading…':'Refresh'}</button>
       </div>
       {err&&<div style={{fontSize:12.5,color:'var(--rose)',fontWeight:600,background:'var(--neg-bg)',borderRadius:7,padding:'9px 11px'}}>{err}</div>}
@@ -2930,8 +3076,19 @@ function MediaBrowser(){
 }
 
 function Settings({depts, store, setRoute}){
-  const [tab,setTab]=React.useState((typeof window!=='undefined'&&window.__UNICO_SETTINGS_TAB__)||'general');
+  const [tab,setTab]=React.useState(()=>{
+    const t=(typeof window!=='undefined'&&window.__UNICO_SETTINGS_TAB__)||'general';
+    // Responsible Persons now lives inside Users & Roles (scope is edited per account); old links
+    // land on Accounts. One-shot: cleared so later visits to Settings don't keep reopening it.
+    if(t==='responsibles'){ try{ window.__UNICO_USERS_SUBTAB__='accounts'; delete window.__UNICO_SETTINGS_TAB__; }catch(e){} return 'users'; }
+    return t;
+  });
   const [dbFile,setDbFile]=React.useState('');
+  // Activity Log, Database, System Monitor and Data & Export are ONE module ("System & Data")
+  // with sub-tabs. Their old tab ids (deep links, window.__UNICO_SETTINGS_TAB__, setTab calls)
+  // still work: they land on System & Data with the matching sub-tab open.
+  const [sysTab,setSysTab]=React.useState('activity');
+  React.useEffect(()=>{ if(['activity','database','monitor','data'].indexOf(tab)>=0){ setSysTab(tab); setTab('system'); } },[tab]);
   const native=window.unicoNative;
   React.useEffect(()=>{ if(native&&native.dbPath){ native.dbPath().then(setDbFile).catch(()=>{}); } },[]);
 
@@ -3002,7 +3159,7 @@ function Settings({depts, store, setRoute}){
       <SectionTitle icon={I.gear} title="Settings" sub="Configure the statistics platform"/>
       <div className="grid" style={{gridTemplateColumns:'200px 1fr',alignItems:'start'}}>
         <div className="card" style={{padding:6}}>
-          {[['general','General',I.gear],['departments','Departments',I.layers],['stafffields','Staff Fields',I.steth],['deptprivileges','Department Privileges',I.check],['users','Users & Roles',I.user],['activity','Activity Log',I.activity],['database','Database',I.grid],['monitor','System Monitor',I.activity],['media','Media',I.doc],['responsibles','Responsible Persons',I.user],['fields','Form Fields',I.filter],['data','Data & Export',I.doc]].map(([id,l,ic])=>(
+          {[['general','General',I.gear],['departments','Departments',I.layers],['stafffields','Staff Fields',I.steth],['deptprivileges','Department Privileges',I.check],['users','Users & Roles',I.user],['system','System & Data',I.grid],['media','Media',I.doc],['fields','Form Fields',I.filter]].map(([id,l,ic])=>(
             <div key={id} onClick={()=>setTab(id)} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:7,cursor:'pointer',fontSize:13,fontWeight:600,
               background:tab===id?'var(--blue-50)':'transparent',color:tab===id?'var(--blue-700)':'var(--ink-2)'}}>
               <Ic d={ic} s={16}/>{l}
@@ -3034,14 +3191,20 @@ function Settings({depts, store, setRoute}){
           {tab==='departments'&&(typeof ManageDepts!=='undefined'?<ManageDepts depts={depts} store={store} setRoute={setRoute}/>:null)}
           {tab==='stafffields'&&<StaffFieldsSettings depts={depts} setRoute={setRoute}/>}
           {tab==='deptprivileges'&&(typeof DeptPrivilegesSettings!=='undefined'?<DeptPrivilegesSettings depts={depts}/>:null)}
-          {tab==='activity'&&<ActivityLog/>}
-          {tab==='database'&&<React.Fragment><CacheStats/><DatabaseBrowser/></React.Fragment>}
-          {tab==='monitor'&&(window.SystemMonitor?<window.SystemMonitor/>:<div className="card"><div className="card-b">System Monitor is not loaded.</div></div>)}
+          {tab==='system'&&<div className="card"><div className="card-b" style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+            <div style={{flex:1,minWidth:220}}>
+              <div style={{fontSize:15,fontWeight:700,color:'var(--ink)'}}>System &amp; Data</div>
+              <div style={{fontSize:11.5,color:'var(--muted)'}}>Activity history, the database, live system health, backups and exports.</div>
+            </div>
+            <div className="seg" style={{flexWrap:'wrap'}}>{[['activity','Activity Log',I.activity],['database','Database',I.grid],['monitor','System Monitor',I.activity],['data','Data & Export',I.doc]].map(([id,l,ic])=><button key={id} className={sysTab===id?'on':''} onClick={()=>setSysTab(id)} style={{display:'inline-flex',alignItems:'center',gap:6}}><Ic d={ic} s={13}/>{l}</button>)}</div>
+          </div></div>}
+          {tab==='system'&&sysTab==='activity'&&<ActivityLog/>}
+          {tab==='system'&&sysTab==='database'&&<React.Fragment><CacheStats/><DatabaseBrowser/></React.Fragment>}
+          {tab==='system'&&sysTab==='monitor'&&(window.SystemMonitor?<window.SystemMonitor/>:<div className="card"><div className="card-b">System Monitor is not loaded.</div></div>)}
           {tab==='media'&&<MediaBrowser/>}
-          {tab==='users'&&<div className="card"><div className="card-b"><UserManagement/></div></div>}
-          {tab==='responsibles'&&(typeof DataResponsibles!=='undefined'?<DataResponsibles depts={depts}/>:null)}
+          {tab==='users'&&<UsersAndRoles depts={depts}/>}
           {tab==='fields'&&(typeof DataFields!=='undefined'?<DataFields setRoute={setRoute}/>:null)}
-          {tab==='data'&&<div className="card"><div className="card-b">
+          {tab==='system'&&sysTab==='data'&&<div className="card"><div className="card-b">
             <div style={{fontSize:13,fontWeight:700,color:'var(--ink)',marginBottom:2}}>Backup &amp; restore</div>
             <div style={{fontSize:11.5,color:'var(--muted)',marginBottom:10}}>All data is stored in a local database on this PC. Back it up to a file you can keep safe or move to another PC.</div>
             <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>

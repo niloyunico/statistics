@@ -152,8 +152,14 @@ function App(){
     crumbs=['UNICO','Data Collection','Quality Data'];
     body=<DataQualityForm prefill={{area:route.area,responsible:route.responsible}}/>;
   } else if(route.view==='dcResponsibles'){
-    crumbs=['UNICO','Data Collection','Responsible Persons'];
-    body=<DataResponsibles depts={depts}/>;
+    // Moved into Settings → Users & Roles (Data collection scope); keep old links working. Settings
+    // is gated under 'users', so a Data Collection-only session goes to Review instead (and the
+    // one-shot Settings tab flag is not left behind for a later visit).
+    const toSettings=!window.unicoCanAccessView||window.unicoCanAccessView('settings');
+    if(toSettings){ try{ window.__UNICO_SETTINGS_TAB__='responsibles'; }catch(e){} }
+    setTimeout(()=>setRoute({view:toSettings?'settings':'dcReview'}),0);
+    crumbs=toSettings?['UNICO','Settings','Users & Roles']:['UNICO','Data Collection','Review & History'];
+    body=null;
   } else if(route.view==='dcSettings'){
     crumbs=['UNICO','Data Collection','Department Setup'];
     body=(typeof DataCollectionSettings!=='undefined') ? <DataCollectionSettings depts={depts}/> : null;

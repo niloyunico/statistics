@@ -147,7 +147,8 @@
       ? ((window.I && window.I.x) || 'M6 6l12 12M18 6L6 18')
       : ((window.I && window.I.bell) || PATH_INFO);
 
-    return (
+    const toBody = (n) => (typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
+    return toBody(
       <div className="modal-bg" onMouseDown={e => { if (e.target === e.currentTarget) cancel(); }}>
         <div className="modal" style={{ width: 'min(420px,92vw)' }}>
           <div style={{ padding: '22px 22px 18px' }}>

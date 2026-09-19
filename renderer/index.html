@@ -14,7 +14,7 @@
      bundle's ?v= token is kept in sync by scripts/build-renderer.js. -->
 <link rel="preload" href="vendor/react.production.min.js" as="script"/>
 <link rel="preload" href="vendor/react-dom.production.min.js" as="script"/>
-<link rel="preload" href="dist/app.bundle.js?v=054ad1013c" as="script"/>
+<link rel="preload" href="dist/app.bundle.js?v=9a371adb56" as="script"/>
 <style>
 /* Boot splash — visible from the first byte of HTML until React mounts (its first
    render replaces #root's children). Styled inline so it needs no other asset. */
@@ -49,13 +49,37 @@ setTimeout(function(){
 <div id="pdf-root"></div>
 <!-- Vendored libraries — run fully offline, no CDN. All external scripts are
      `defer`red: they download in parallel without blocking HTML parsing and still
-     execute in document order (react -> react-dom -> jspdf -> html2canvas -> bundle).
+     execute in document order (react -> react-dom -> bundle).
      The inline DB-bridge below is NOT deferred, so it always runs first. -->
 <script defer src="vendor/react.production.min.js"></script>
 <script defer src="vendor/react-dom.production.min.js"></script>
-<!-- PDF export (offline, vendored): powers the Report Builder's one-click PDF download -->
-<script defer src="vendor/jspdf.umd.min.js"></script>
-<script defer src="vendor/html2canvas.min.js"></script>
+<!-- PDF export (offline, vendored): jsPDF + html2canvas are ~160 KB that every page view used to
+     download and parse, although only a PDF export uses them. They now load on demand. -->
+<script>
+(function(){
+  var pending = null;
+  function load(src){
+    return new Promise(function(resolve, reject){
+      var s = document.createElement('script');
+      s.src = src; s.async = true;
+      s.onload = function(){ resolve(); };
+      s.onerror = function(){ reject(new Error('Could not load ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  // Resolves once both libraries are on window; a failed load is forgotten so the next export retries.
+  window.unicoLoadPdfLibs = function(){
+    if (window.jspdf && window.html2canvas) return Promise.resolve();
+    if (!pending) {
+      pending = Promise.all([
+        window.jspdf ? null : load('vendor/jspdf.umd.min.js'),
+        window.html2canvas ? null : load('vendor/html2canvas.min.js')
+      ]).catch(function(e){ pending = null; throw e; });
+    }
+    return pending;
+  };
+})();
+</script>
 <!-- Database bridge: hydrate localStorage from the on-disk DB, then mirror every
      change back to it. Runs before the app's stores read localStorage. -->
 <script>
@@ -249,6 +273,6 @@ setTimeout(function(){
      concatenated into ONE cacheable bundle by scripts/build-renderer.js, so the
      browser no longer downloads Babel (3.14 MB) or compiles JSX at runtime. Rebuilt
      by `npm run web`; the ?v= token is the bundle's content hash (auto-updated). -->
-<script defer src="dist/app.bundle.js?v=054ad1013c"></script>
+<script defer src="dist/app.bundle.js?v=9a371adb56"></script>
 </body>
 </html>

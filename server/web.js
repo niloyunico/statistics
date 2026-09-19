@@ -224,7 +224,9 @@ async function serveIndex(req, res) {
   // empty result, which is legitimate for a scoped collector) — the difference decides
   // whether we render the app or the warming-up page below.
   const [appRes, deptRes, staffRes, qualRes, scopeRes, formulaRes] = await Promise.all([
-    getAppData().catch(() => null),           // DB unreachable -> empty snapshot
+    // allowRescue: through a connection blip render the last copy (<=10 min, tagged
+    // `rescued`) instead of the warming page; it goes out NON-authoritative below.
+    getAppData({ allowRescue: true }).catch(() => null),
     getDepartments().catch(() => null),       // /api/departments reports the error
     getStaff().catch(() => null),
     getQuality().catch(() => null),
@@ -353,7 +355,7 @@ async function serveIndex(req, res) {
   // when the app-state read actually succeeded and access resolution was not degraded —
   // otherwise an empty snapshot from a database blip would wipe the browser's copy and
   // then mirror that emptiness back.
-  const authoritative = !!appRes && !(restricted && restricted.degraded);
+  const authoritative = !!appRes && !appRes.rescued && !(restricted && restricted.degraded);
 
   const inject =
     '<script>window.__UNICO_SNAPSHOT_AUTHORITATIVE__=' + (authoritative ? 'true' : 'false') + ';' +
@@ -709,7 +711,8 @@ app.get('/api/departments', session.requireApi, access.requirePerm('stats', 'vie
 app.get('/api/staff', session.requireApi, access.requirePerm('staff', 'view', { allowCollector: true }), async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
-    const roster = await require('./staff-roster').loadRoster();
+    // A GET: a version-validated cached read is enough (staff saves bump the 'staff' version).
+    const roster = await require('./staff-roster').loadRoster({ cached: true });
     // A portal account receives its OWN UNIT's staff, and a thin record at that
     // (access.portalStaff). Its department list is in statistics ids, while a staff
     // record stores the department NAME, so the ids are resolved through the

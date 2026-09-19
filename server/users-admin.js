@@ -30,6 +30,20 @@ const ROLES = ['Administrator', 'incharge', 'collector', 'nurse', 'pca', 'User']
    and enforced the same way — an in-charge created without them would be an account
    with a ward's screens and nobody's scope. */
 const ROLES_PORTAL = access.PORTAL_ROLES;   // one list app-wide, so a new portal role cannot drift
+// The data-collection scope derive + the `responsibles` mirror live in data-collection.js, so the
+// user dialog and the Indicator Access matrix share ONE write rule. Required lazily: that module
+// is large and only needed when a portal account is saved.
+const dc = () => require('./data-collection');
+// A save "carries scope" when it posts any assignment field; an already-linked record is then
+// refreshed (so a real clear still syncs). The mirror CREATES a record only when that scope is
+// non-empty (hasScope): every portal save posts departments: [], even a password change.
+const SCOPE_FIELDS = ['departments', 'allQualityAreas', 'customQualityAreas', 'qualityAreas', 'qualityIndicators'];
+const carriesScope = (b) => SCOPE_FIELDS.some((k) => b[k] !== undefined && b[k] !== null);
+const hasScope = (b) => dc().scopeIsNonEmpty(b);
+const isDupKey = (e) => !!e && (e.code === 11000 || /E11000/.test(String(e.message || '')));
+const DUP_MSG = 'That record already exists — refresh and try again.';
+// The driver's own text (index names, hosts) stays in the server log, not in the browser.
+const mirrorFailed = (e) => { try { console.error('[users] responsible mirror failed:', e); } catch (_) { } return 'The account was saved, but its data-collection record could not be updated. Open Manage and save again.'; };
 
 // Grantable workspaces (per-module access for the standard 'User' role). Ids match
 // the renderer's unicoAccessModuleOf() output so a user's `perms` map keys 1:1 to
@@ -108,6 +122,8 @@ function safe(u) {
     // split has not been stored yet (the server derives it on the next save).
     customQualityAreas: Array.isArray(u.customQualityAreas) ? u.customQualityAreas : null,
     qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {},
+    // The `responsibles` record mirroring this account's scope (Indicator Access matrix), if any.
+    responsibleId: u.responsibleId || null,
     // Per-module access levels. Administrators are always full; a 'User' carries its
     // own map; null = unrestricted (legacy account predating this feature => full access
     // until an admin assigns levels).
@@ -398,6 +414,7 @@ function mount(app, opts) {
     if (password.length < 6) return res.status(400).json({ ok: false, error: 'Password must be at least 6 characters.' });
     const role = ROLES.includes(b.role) ? b.role : 'User';
     try {
+      if (dc().NO_DATA_ROLES.indexOf(role) >= 0 && hasScope(b)) return res.status(400).json({ ok: false, error: dc().NURSE_PCA_SCOPE_ERROR });
       const users = await db.getUsers();
       if (await users.findOne({ username })) return res.status(409).json({ ok: false, error: 'That username already exists.' });
       // Collectors: their data-collection assignment. Plain Users: the row-level scope
@@ -405,21 +422,26 @@ function mount(app, opts) {
       const departments = (ROLES_PORTAL.indexOf(role) >= 0 || role === 'User') ? cleanList(b.departments) : [];
       // deptmap caches per instance and nothing invalidates it across instances: derive the
       // areas stored below from a FRESH map (a blip falls back to the cached one inside get()).
-      if (ROLES_PORTAL.indexOf(role) >= 0) await deptmap.get(true).catch(() => null);
-      const allQualityAreas = ROLES_PORTAL.indexOf(role) >= 0 ? !!b.allQualityAreas : false;
-      const customQualityAreas = ROLES_PORTAL.indexOf(role) >= 0 ? await resolveCustomAreas(b, null, departments) : [];
+      const isPortal = ROLES_PORTAL.indexOf(role) >= 0;
+      if (isPortal) await deptmap.get(true).catch(() => null);
+      // Portal scope through the SAME derive the Indicator Access matrix uses (data-collection.js).
+      // Quality areas = departments' auto areas UNION custom/extra areas, or ALL when hospital-wide.
+      const scope = isPortal
+        ? await dc().deriveAssignment({ departments, allQualityAreas: !!b.allQualityAreas, customQualityAreas: await resolveCustomAreas(b, null, departments), qualityIndicators: b.qualityIndicators }, { mapFresh: true })
+        : null;
+      // Resolve the responsibles record BEFORE the account exists, so a lookup failure refuses
+      // the save instead of leaving an account whose scope the matrix cannot see.
+      const plan = (isPortal && carriesScope(b)) ? await dc().planResponsibleSync({ username, responsibleId: null }, { create: hasScope(b) }) : null;
       const doc = {
         username, name: String(b.name || username).trim(), role,
         email: String(b.email || '').trim().toLowerCase() || null,
         title: String(b.title || '').trim() || null,
         active: b.active !== false,
-        departments,
-        allQualityAreas,
-        // Quality areas = departments' auto areas UNION custom/extra areas (b.qualityAreas), or
-        // ALL when hospital-wide. Assign once + optional custom access on top.
-        customQualityAreas,
-        qualityAreas: ROLES_PORTAL.indexOf(role) >= 0 ? await deptmap.deriveQualityAreas(departments, allQualityAreas, customQualityAreas) : [],
-        qualityIndicators: ROLES_PORTAL.indexOf(role) >= 0 ? cleanQI(b.qualityIndicators) : {}, // specific-indicator access
+        departments: scope ? scope.departments : departments,
+        allQualityAreas: scope ? scope.allQualityAreas : false,
+        customQualityAreas: scope ? scope.customQualityAreas : [],
+        qualityAreas: scope ? scope.qualityAreas : [],
+        qualityIndicators: scope ? scope.qualityIndicators : {}, // specific-indicator access
         // Per-module access levels — only meaningful for the 'User' role. Admins are
         // full (null => resolved to full in safe()); collectors use the collector portal.
         perms: role === 'User' ? cleanPerms(b.perms) : null,
@@ -435,10 +457,19 @@ function mount(app, opts) {
         sessionEpoch: Date.now(),
         createdAt: Date.now(), updatedAt: Date.now(),
       };
+      if (plan && plan.responsibleId) doc.responsibleId = plan.responsibleId;
       await users.insertOne(doc);
       activity.log(req, 'user_created', { target: username, detail: 'role: ' + role });
+      if (plan) {
+        try { await dc().applyResponsibleSync(plan, doc, scope); }
+        catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(doc) }); }
+      }
       res.json({ ok: true, user: safe(doc) });
-    } catch (e) { res.status(500).json({ ok: false, error: 'Could not create user.' }); }
+    } catch (e) {
+      if (isDupKey(e)) return res.status(409).json({ ok: false, error: DUP_MSG });
+      console.error('[users-admin] create user failed:', e);   // driver detail stays in the server log
+      res.status(500).json({ ok: false, error: 'Could not create user.' });
+    }
   });
 
   // Update name / role / active / scope.
@@ -458,6 +489,11 @@ function mount(app, opts) {
       if (b.role != null && ROLES.includes(b.role)) set.role = b.role;
       if (b.active != null) set.active = !!b.active;
       const role = set.role || u.role;
+      if (dc().NO_DATA_ROLES.indexOf(role) >= 0 && hasScope(b)) return res.status(400).json({ ok: false, error: dc().NURSE_PCA_SCOPE_ERROR });
+      // Leaving the portal roles: the account keeps no data-collection scope, so its record must stop
+      // showing as an assignee. Marked inactive after the write below; its scope is left as it was.
+      const leavingPortal = ROLES_PORTAL.indexOf(u.role) >= 0 && !!set.role && ROLES_PORTAL.indexOf(set.role) < 0;
+      let scope = null;
       if (ROLES_PORTAL.indexOf(role) >= 0) {
         await deptmap.get(true).catch(() => null); // stored qualityAreas must not come from a stale per-instance map
         const departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
@@ -465,14 +501,16 @@ function mount(app, opts) {
         // Custom = ONLY the directly-granted extras (see resolveCustomAreas) — never the
         // posted union, or a removed department's area would be re-saved as "custom".
         const customAreas = await resolveCustomAreas(b, u);
-        if (b.departments != null) set.departments = departments;
-        set.allQualityAreas = allQualityAreas;
-        set.customQualityAreas = customAreas;
-        // Departments' auto areas UNION custom/extra areas (assign-once + custom access on top).
-        set.qualityAreas = await deptmap.deriveQualityAreas(departments, allQualityAreas, customAreas);
-        if (b.qualityIndicators != null) set.qualityIndicators = cleanQI(b.qualityIndicators);
+        const qualityIndicators = (b.qualityIndicators != null) ? b.qualityIndicators : u.qualityIndicators;
+        // Departments' auto areas UNION custom/extra areas — the same derive as the matrix.
+        scope = await dc().deriveAssignment({ departments, allQualityAreas, customQualityAreas: customAreas, qualityIndicators }, { mapFresh: true });
+        if (b.departments != null) set.departments = scope.departments;
+        set.allQualityAreas = scope.allQualityAreas;
+        set.customQualityAreas = scope.customQualityAreas;
+        set.qualityAreas = scope.qualityAreas;
+        if (b.qualityIndicators != null) set.qualityIndicators = scope.qualityIndicators;
       } else if (role === 'User') {
-        // A 'User' keeps a department list too — not for data-collection assignment
+       // A 'User' keeps a department list too — not for data-collection assignment
         // (that is the collector mechanism) but as the row-level scope for the staff
         // register: "this in-charge sees Medical ICU staff and no one else". The
         // quality-area/indicator assignment stays portal-only. Reached only when the
@@ -514,12 +552,35 @@ function mount(app, opts) {
       if (demoting && (await activeAdminCount(users)) <= 1) {
         return res.status(400).json({ ok: false, error: 'Cannot demote or deactivate the last active administrator.' });
       }
+      // Portal account: keep its `responsibles` record in step (Indicator Access matrix, form
+      // hints). Resolved BEFORE the write so a lookup failure refuses the save. A save that
+      // carries scope creates the record when none exists; a rename / (de)activation only
+      // refreshes one that is already linked.
+      let plan = null;
+      if (scope) {
+        plan = await dc().planResponsibleSync(Object.assign({}, u, set), { create: hasScope(b) });
+        if (plan.responsibleId && plan.responsibleId !== u.responsibleId) set.responsibleId = plan.responsibleId;
+        else if (!plan.responsibleId && u.responsibleId) set.responsibleId = null;   // dead or someone else's record
+      }
       stampRevocation(set, u); // a real access change takes effect now, not in 12h
       await users.updateOne({ username }, { $set: set });
       access.invalidate(username); // drop the 15s permission cache for this account
       activity.log(req, 'user_updated', { target: username, detail: Object.keys(set).filter((k) => k !== 'updatedAt').join(', ') || 'no changes' });
-      res.json({ ok: true, user: safe(Object.assign({}, u, set)) });
-    } catch (e) { res.status(500).json({ ok: false, error: 'Could not update user.' }); }
+      const after = Object.assign({}, u, set);
+      if (plan && plan.responsibleId) {
+        try { await dc().applyResponsibleSync(plan, after, scope); }
+        catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(after) }); }
+      }
+      if (leavingPortal) {
+        try { await dc().deactivateResponsibleFor(u); }
+        catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(after) }); }
+      }
+      res.json({ ok: true, user: safe(after) });
+    } catch (e) {
+      if (isDupKey(e)) return res.status(409).json({ ok: false, error: DUP_MSG });
+      console.error('[users-admin] update user failed:', e);   // driver detail stays in the server log
+      res.status(500).json({ ok: false, error: 'Could not update user.' });
+    }
   });
 
   // Reset password.
@@ -555,6 +616,13 @@ function mount(app, opts) {
       await users.deleteOne({ username });
       access.invalidate(username); // a deleted account's token must stop working now
       activity.log(req, 'user_deleted', { target: username, detail: 'role: ' + (u.role || 'User') });
+      // The person's `responsibles` record is kept (history) but must stop listing them as an
+      // assignee in the Indicator Access matrix: marked inactive, never deleted.
+      try { await dc().deactivateResponsibleFor(u, { deactivatedAt: true }); }
+      catch (e) {
+        console.error('[users-admin] deactivate responsible after delete failed:', e);
+        return res.status(500).json({ ok: false, error: 'The account was deleted, but its data-collection record could not be marked inactive. Open Manage and set it inactive.' });
+      }
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not delete user.' }); }
   });

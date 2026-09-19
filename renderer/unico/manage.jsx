@@ -57,7 +57,8 @@ function DeptModal({initial, onClose, onSave, groups, entries}){
     onSave(def, editing);
   };
 
-  return (
+  const toBody = (n) => (typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
+  return toBody(
     <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div className="modal">
         <div className="modal-h">
@@ -125,7 +126,8 @@ function DeptModal({initial, onClose, onSave, groups, entries}){
 }
 
 function ConfirmModal({title,body,danger,onClose,onConfirm}){
-  return (
+  const toBody = (n) => (typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
+  return toBody(
     <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div className="modal" style={{width:'min(420px,92vw)'}}>
         <div style={{padding:'22px 22px 18px'}}>

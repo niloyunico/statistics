@@ -3415,6 +3415,8 @@ function QCReportBuilder({depts}){
       }catch(e){ try{ console.warn('[quality] server PDF failed, falling back:',e); }catch(_){} }
       setExporting(false);
     }
+    // The PDF libraries load on demand (index.html); a failed load leaves the print dialog path below.
+    if(window.unicoLoadPdfLibs&&!(window.jspdf&&window.html2canvas)){ try{ await window.unicoLoadPdfLibs(); }catch(e){ try{ console.warn('[quality] PDF libraries failed to load:',e); }catch(_){} } }
     const H=window.html2canvas, J=window.jspdf&&window.jspdf.jsPDF;
     // Web preferred: fast VECTOR PDF (selectable text, ~1s, one-click download) — but ONLY
     // when it faithfully reproduces the previewed pages: Summary type, the default 3D

@@ -59,7 +59,7 @@ const UNICO_MODULES = [
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
-  datacol:['dcReview','dcPatient','dcQuality','input','dcResponsibles','dcSettings','dcShare','dcFields','dcAnalytics'],
+  datacol:['dcReview','dcPatient','dcQuality','input','dcSettings','dcShare','dcFields','dcAnalytics'],
   staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
@@ -120,7 +120,9 @@ function unicoCan(mid, action){
 function unicoCanAccessModule(mid){ return unicoCan(mid,'view'); }
 // 'profile' is deliberately ungated: maintaining your OWN name, photo and password
 // is not a privilege, and a collector granted exactly one form must still reach it.
-function unicoCanAccessView(view){ if(view==='profile'||view==='home') return true; return unicoCanAccessModule(unicoAccessModuleOf(view)); }
+// 'dcResponsibles' is only a legacy redirect (app.jsx) that renders nothing and picks a
+// destination this session can open, which gates itself — gating the redirect would bounce first.
+function unicoCanAccessView(view){ if(view==='profile'||view==='home'||view==='dcResponsibles') return true; return unicoCanAccessModule(unicoAccessModuleOf(view)); }
 // Viewable module ids, or null when unrestricted. [] => the user has no access at all.
 function unicoAllowedModules(){ const p=unicoUserPerms(); if(!p) return null; return UNICO_ACCESS_MODULES.filter(m=>unicoCan(m,'view')); }
 // The landing view for the first workspace this session can open (sidebar order).
@@ -165,7 +167,6 @@ function unicoSidebarGroups(moduleId){
     {sec:'Data Collection', items:[
       {id:'dcPatient',label:'Patient Statistics',icon:I.input},
       {id:'dcQuality',label:'Quality Data',icon:I.activity},
-      {id:'dcResponsibles',label:'Responsible Persons',icon:I.user},
       {id:'dcSettings',label:'Department Setup',icon:I.gear},
       {id:'dcShare',label:'Share Links',icon:I.arrowR},
       {id:'dcFields',label:'Form Fields',icon:I.filter},
