@@ -33,20 +33,72 @@ function unicoTenure(doj){
    so filtering on the store's internal id silently matched nothing and every panel
    read as "nothing on file" for anyone who has an employee number -- which is almost
    everyone. */
+/* THE PERFORMANCE FILE IS CONFIDENTIAL. Appraisal scores, grades, achievements and
+   incidents are personal-file material: only a session holding the 'perf' module may
+   see any of it. The server already refuses /api/performance without it
+   (access.requireModule('perf') in web.js) — this is the matching client rule, and it
+   does not merely hide the panels: without perf access the request is NEVER MADE, so
+   the data does not reach the browser at all. Hiding a filled panel would still have
+   put the scores in the page; showing an empty one would have said "nothing on file"
+   about somebody who has plenty. */
+const canSeePerf=()=>{ try{ return window.unicoCan?window.unicoCan('perf','view'):true; }catch(e){ return true; } };
+const canAddPerf=()=>{ try{ return window.unicoCan?window.unicoCan('perf','add'):true; }catch(e){ return true; } };
+// Removing an entry takes points back off somebody's appraisal, so it is a 'perf'
+// DELETE — a step above being allowed to file one.
+const canDelPerf=()=>{ try{ return window.unicoCan?window.unicoCan('perf','delete'):true; }catch(e){ return true; } };
+
+/* UNDO A MISTAKEN ENTRY. Filed against the wrong person, or simply wrong — it is
+   deleted outright rather than marked void, because an achievement or an incident that
+   should not exist must stop counting towards the bonus / penalty cap immediately.
+
+   The server refuses (409) once that cycle's appraisal has been FILED: the Part H
+   action was taken on the score as it stood, so the register behind a filed form is
+   history and cannot be quietly rewritten. The message says so rather than failing
+   silently — at that point the appraisal has to be reopened first. */
+async function removeConductEntry(kind, entry, name){
+  const isAch=kind==='achievement';
+  const label=isAch?'achievement':'incident';
+  const ok=await (window.UI&&window.UI.confirm
+    ? window.UI.confirm({title:'Remove this '+label+'?',
+        message:'"'+(entry.what||'Untitled')+'" will be deleted from '+name+"'s record"+
+                (entry.points?' and the '+(isAch?'+':'−')+entry.points+' point'+(entry.points===1?'':'s')+' come back off their appraisal':'')+
+                '. This cannot be undone.',
+        danger:true,confirmLabel:'Remove '+label})
+    : Promise.resolve(window.confirm('Remove this '+label+'? This cannot be undone.')));
+  if(!ok) return false;
+  try{
+    const r=await fetch('/api/performance/'+(isAch?'achievements':'incidents')+'/'+encodeURIComponent(entry.id),
+      {method:'DELETE',credentials:'same-origin'});
+    const j=await r.json().catch(()=>({ok:false}));
+    if(!r.ok||!j.ok) throw new Error((j&&j.error)||'Could not remove the entry.');
+  }catch(ex){
+    try{ window.UI&&window.UI.toast&&window.UI.toast(String((ex&&ex.message)||ex),'error'); }catch(e){}
+    return false;
+  }
+  try{ window.UI&&window.UI.toast&&window.UI.toast('Entry removed from '+name+"'s record",'success'); }catch(e){}
+  return true;
+}
+
 function useStaffPerf(perfId){
   const [d,setD]=React.useState(null);
+  const [tick,setTick]=React.useState(0);
   React.useEffect(()=>{
     let live=true;
+    if(!canSeePerf()){ setD({appraisals:[],incidents:[],achievements:[],denied:true}); return ()=>{live=false;}; }
     const api=(window.PerfUI&&window.PerfUI.perfApi)||null;
     const get=api?api.get('/api/performance'):fetch('/api/performance',{credentials:'same-origin'}).then(r=>r.json());
     Promise.resolve(get).then(r=>{
       if(!live||!r||!r.ok) { if(live) setD({appraisals:[],incidents:[],achievements:[]}); return; }
       const mine=(list)=>(list||[]).filter(x=>String(x.empId)===String(perfId));
-      setD({appraisals:mine(r.appraisals),incidents:mine(r.incidents),achievements:mine(r.achievements)});
+      // categories are hospital-wide (an administrator maintains them in the Performance
+      // module), so they are kept whole rather than filtered to this person.
+      setD({appraisals:mine(r.appraisals),incidents:mine(r.incidents),achievements:mine(r.achievements),categories:r.categories||null});
     }).catch(()=>{ if(live) setD({appraisals:[],incidents:[],achievements:[]}); });
     return ()=>{live=false;};
-  },[perfId]);
-  return d;
+  },[perfId,tick]);
+  // Re-read after the profile files an achievement or an incident, so the panel shows
+  // what was just recorded instead of the list it loaded on mount.
+  return d ? Object.assign({}, d, { reload: ()=>setTick(t=>t+1) }) : d;
 }
 
 /* DISCONTINUE — a proper exit, not a bare "mark inactive". Collects the separation
@@ -120,11 +172,144 @@ function DiscontinueDialog({e,onClose,onDone}){
   return (window.ReactDOM&&window.ReactDOM.createPortal)?window.ReactDOM.createPortal(body,document.body):body;
 }
 
+/* RECORD AN ACHIEVEMENT / AN INCIDENT against this person, from their own profile.
+   The Performance module has its own registers; this is the same record reached from
+   where you are already standing when you have a reason to file one - looking at the
+   person. It posts to the SAME endpoints, with the same categories and points out of
+   the shared spec (window.UNICO_APPRAISAL), so an entry filed here is identical to one
+   filed in the register and lands on the same appraisal cycle.
+
+   Points are CAPPED PER CYCLE (5 bonus, 5 penalty) by the server. The dialog says how
+   much of the cap is already used, so nobody files a 3-point award expecting 3 marks
+   when only 1 is left. */
+function ConductDialog({kind,e,perfId,already,categories,onClose,onSaved}){
+  const A=window.UNICO_APPRAISAL||{};
+  const isAch=kind==='achievement';
+  // What this hospital files under: the administrator's list from the server, with the
+  // shipped spec as the fallback until it arrives (or if it was never customised).
+  const cfg=(categories&&(isAch?categories.ach:categories.inc))||null;
+  const cats=(Array.isArray(cfg)&&cfg.length)?cfg:((isAch?A.ACH_CATEGORIES:A.INC_CATEGORIES)||[]);
+  const sevs=A.SEVERITIES||[];
+  const today=(()=>{try{const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);}catch(err){return '';}})();
+  const [category,setCategory]=React.useState((cats[0]&&cats[0].label)||'');
+  const [level,setLevel]=React.useState((cats[0]&&cats[0].levels&&cats[0].levels[0][0])||'');
+  const [severity,setSeverity]=React.useState((sevs[0]&&sevs[0][0])||'Minor');
+  const [what,setWhat]=React.useState('');
+  const [date,setDate]=React.useState(today);
+  const [action,setAction]=React.useState('');
+  const [note,setNote]=React.useState('');
+  const [busy,setBusy]=React.useState(false);
+  const [err,setErr]=React.useState('');
+
+  // The level list belongs to the CHOSEN category, so changing category re-points it.
+  const levels=(cats.find(c=>c.label===category)||{}).levels||[];
+  React.useEffect(()=>{ if(isAch) setLevel((levels[0]&&levels[0][0])||''); },[category]);
+
+  const points=isAch
+    ? ((levels.find(l=>l[0]===level)||[null,1])[1])
+    : ((sevs.find(x=>x[0]===severity)||[null,1])[1]);
+  const cap=isAch?(A.BONUS_CAP||5):(A.PENALTY_CAP||5);
+  const used=Number(already)||0;
+  const effective=Math.max(0,Math.min(cap-used,points));
+
+  // The cycle the entry belongs to - the same window the appraisal uses, taken from
+  // this person's own date of joining rather than a calendar quarter.
+  const cycleId=(()=>{ try{ const c=A.cycleOf&&A.cycleOf(e.doj,new Date()); return c?c.id:''; }catch(err){ return ''; } })();
+
+  const inp={padding:'9px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:13,fontFamily:'inherit',outline:'none',width:'100%',background:'#fff'};
+  const lab=(t)=><label style={{fontSize:11,fontWeight:700,color:'var(--ink-2)'}}>{t}</label>;
+  const tone=isAch?'#1f9d57':'#d23a52';
+
+  const save=async()=>{
+    if(!what.trim()){ setErr(isAch?'Describe the achievement.':'Describe what happened.'); return; }
+    setBusy(true); setErr('');
+    // The full identity travels with the entry: the employee number the appraisal
+    // matches on, the record id that says WHICH person (numbers are not unique), and
+    // the department / designation as they stand today.
+    const body={ empId:perfId, staffId:String(e.id), staffName:e.name,
+      department:e.current_department||'', designation:e.designation||'', cycleId,
+      date, category, what:what.trim(), note, points,
+      ...(isAch?{level,reward:action}:{severity,action}) };
+    try{
+      const r=await fetch('/api/performance/'+(isAch?'achievements':'incidents'),
+        {method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)});
+      const j=await r.json().catch(()=>({ok:false}));
+      if(!r.ok||!j.ok) throw new Error((j&&j.error)||'Could not save the entry.');
+    }catch(ex){ setBusy(false); setErr(String((ex&&ex.message)||ex)); return; }
+    try{ window.UI&&window.UI.toast&&window.UI.toast((isAch?'Achievement':'Incident')+' recorded for '+e.name,'success'); }catch(ex){}
+    onSaved();
+  };
+
+  const body=(
+    /* NO CLICK-OUTSIDE-TO-CLOSE. This is a form somebody types into, and the backdrop
+       covers the whole screen: one stray click threw away a written-up incident with no
+       warning and no way back. It closes on the X or Cancel, deliberately. */
+    <div style={{position:'fixed',inset:0,background:'rgba(16,32,46,.5)',zIndex:600,display:'grid',placeItems:'center',padding:16}}>
+      <div className="card" style={{width:'min(520px,96vw)',maxHeight:'92vh',overflow:'auto'}}>
+        <div className="card-h" style={{background:isAch?'rgba(31,157,87,.07)':'rgba(210,58,82,.06)'}}>
+          <span style={{display:'inline-grid',placeItems:'center',width:30,height:30,borderRadius:9,background:isAch?'rgba(31,157,87,.13)':'rgba(210,58,82,.12)',color:tone,marginRight:7,fontSize:15}}>{isAch?'★':'⚠'}</span>
+          <h3 style={{color:tone}}>{isAch?'Add an achievement':'Record a mistake or incident'}</h3><span className="spacer"/>
+          <button className="icon-btn" onClick={onClose}><Ic d={I.x} s={15}/></button>
+        </div>
+        <div className="card-b" style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div style={{fontSize:12,color:'var(--ink-2)',lineHeight:1.55}}>
+            For <b>{e.name}</b>{e.emp_id?' ('+e.emp_id+')':''}. {isAch?'Bonus points are added to':'The deduction shows on'} their current appraisal.
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Category')}
+              <select style={inp} value={category} onChange={ev=>setCategory(ev.target.value)}>{cats.map(c=><option key={c.id}>{c.label}</option>)}</select></div>
+            {isAch ? (
+              <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Level or basis - sets the points')}
+                <select style={inp} value={level} onChange={ev=>setLevel(ev.target.value)}>{levels.map(l=><option key={l[0]} value={l[0]}>{l[0]} (+{l[1]})</option>)}</select></div>
+            ) : (
+              <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Severity - sets the points')}
+                <select style={inp} value={severity} onChange={ev=>setSeverity(ev.target.value)}>{sevs.map(x=><option key={x[0]} value={x[0]}>{x[0]} (−{x[1]})</option>)}</select></div>
+            )}
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab(isAch?'What the achievement was *':'What happened *')}
+            <textarea style={{...inp,minHeight:56,borderColor:what.trim()?undefined:'#d23a52'}} value={what} onChange={ev=>setWhat(ev.target.value)}
+              placeholder={isAch?'e.g. Presented the fall-prevention audit at the hospital QI meeting':'e.g. Wrong dose charted on the evening round - caught before administration'}/></div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab(isAch?'Date completed':'Date of incident')}
+              <input type="date" style={inp} value={date} onChange={ev=>setDate(ev.target.value)}/></div>
+            <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab(isAch?'Reward (optional)':'Action taken')}
+              <input style={inp} value={action} onChange={ev=>setAction(ev.target.value)}
+                placeholder={isAch?'e.g. Certificate of appreciation':'e.g. Counselled, retraining scheduled'}/></div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Note for the record (optional)')}
+            <textarea style={{...inp,minHeight:46}} value={note} onChange={ev=>setNote(ev.target.value)}/></div>
+
+          <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap',background:'var(--panel-2)',borderRadius:9,padding:'10px 12px'}}>
+            <div>
+              <div style={{fontSize:10.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.5,fontWeight:700}}>This entry carries</div>
+              <div style={{fontSize:18,fontWeight:800,color:tone}}>{isAch?'+':'−'}{points}</div>
+            </div>
+            <div style={{flex:1,minWidth:170,fontSize:11.5,color:'var(--muted)',lineHeight:1.5}}>
+              {used} of the {cap}-point {isAch?'bonus':'deduction'} cap is already used this cycle.
+              {effective<points && <span style={{color:'#b5670a'}}> Only {effective} of these {points} points will change the score.</span>}
+            </div>
+          </div>
+
+          {!cycleId && <div style={{fontSize:12,color:'#b5670a'}}>No appraisal window is open for this person yet - the entry is filed and attaches to their first window.</div>}
+          {err&&<div style={{fontSize:12.5,color:'#d23a52',fontWeight:600}}>{err}</div>}
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+            <button className="btn" disabled={busy||!what.trim()} onClick={save}
+              style={{background:tone,borderColor:tone,color:'#fff',fontWeight:700}}>{busy?'Saving...':(isAch?'Save achievement':'Save incident')}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+  return (window.ReactDOM&&window.ReactDOM.createPortal)?window.ReactDOM.createPortal(body,document.body):body;
+}
+
 function StaffProfile({store, empId, setRoute}){
   const S=window.STAFF;
   const e=store.get(empId);
   const [note,setNote]=React.useState('');
   const [discontinuing,setDiscontinuing]=React.useState(false);
+  const [conduct,setConduct]=React.useState(null);   // 'achievement' | 'incident' | null
   // Resolved before the early return below, so the hook order never changes.
   const perfId=e?(e.emp_id||String(e.id)):null;
   const perf=useStaffPerf(perfId);
@@ -181,10 +366,10 @@ function StaffProfile({store, empId, setRoute}){
       <div style={{fontSize:9,color:'var(--muted)',marginTop:4,textTransform:'uppercase',letterSpacing:.3,fontWeight:700}}>{l}</div>
     </div>
   );
-  const secHead=(icon,title,sub,ac)=>(
+  const secHead=(icon,title,sub,ac,right)=>(
     <div className="card-h">
       <span style={{display:'inline-grid',placeItems:'center',width:30,height:30,borderRadius:9,background:ac?ac.bg:'var(--blue-50)',color:ac?ac.fg:'var(--blue)',marginRight:7}}><Ic d={icon} s={16}/></span>
-      <h3>{title}</h3>{sub&&<span className="sub">{sub}</span>}<span className="spacer"/>
+      <h3>{title}</h3>{sub&&<span className="sub">{sub}</span>}<span className="spacer"/>{right||null}
     </div>
   );
   const infoTile=(label,val,mono)=>(
@@ -225,6 +410,10 @@ function StaffProfile({store, empId, setRoute}){
         }}><Ic d={I.x} s={15} sw={2.4}/>Delete</button>}
         {(!window.unicoCan||window.unicoCan('staff','edit'))&&<button className="btn pri sm" onClick={()=>setRoute({view:'staffForm',emp:e.id})}><Ic d={I.edit} s={15}/>Edit profile</button>}
       </div>
+      {conduct&&canAddPerf()&&<ConductDialog kind={conduct} e={e} perfId={perfId} categories={perf&&perf.categories}
+        already={(perf?(conduct==='achievement'?perf.achievements:perf.incidents):[]).reduce((n,x)=>n+(Number(x.points)||0),0)}
+        onClose={()=>setConduct(null)}
+        onSaved={()=>{ setConduct(null); if(perf&&perf.reload) perf.reload(); }}/>}
       {discontinuing&&<DiscontinueDialog e={e} onClose={()=>setDiscontinuing(false)}
         onDone={(reasonText)=>{ setDiscontinuing(false); store.remove(empId,reasonText);
           window.UI&&window.UI.toast&&window.UI.toast(e.name+' discontinued — moved to Previous Staff & filed in Attrition & Exits','success');
@@ -522,8 +711,13 @@ function StaffProfile({store, empId, setRoute}){
 
           {/* Performance — the appraisal record, read from the same file the
               Performance module writes. Deliberately read-only here: this page is the
-              personnel record, and an appraisal is filed through its own form. */}
-          <div className="card" style={{borderLeft:'4px solid #0072a3'}}>
+              personnel record, and an appraisal is filed through its own form.
+
+              CONFIDENTIAL: this card and the conduct card below exist only for a
+              session that holds the 'perf' module. Anyone else opening this profile
+              sees the personnel record with no performance section at all — not an
+              empty one, which would both advertise the file and misreport it. */}
+          {canSeePerf()&&<div className="card" style={{borderLeft:'4px solid #0072a3'}}>
             {secHead(I.trend,'Performance','appraisal record',{bg:'#eef8fc',fg:'#0072a3'})}
             <div className="card-b">
               {perf===null ? <div style={{color:'var(--muted)',fontSize:12.5}}>Loading the performance file…</div>
@@ -588,29 +782,46 @@ function StaffProfile({store, empId, setRoute}){
                   );
                 })()}
             </div>
-          </div>
+          </div>}
 
           {/* Conduct — the achievements and incidents on this person's file. Shown
               side by side on purpose: a register that only lists what went wrong is
-              not a fair record of anybody. */}
-          <div className="card" style={{borderLeft:'4px solid #6a52d4'}}>
-            {secHead(I.star||I.doc,'Recognition & conduct','achievements and incidents on file',{bg:'#f1eefb',fg:'#6a52d4'})}
+              not a fair record of anybody. Gated with the card above. */}
+          {canSeePerf()&&<div className="card" style={{borderLeft:'4px solid #6a52d4'}}>
+            {secHead(I.star||I.doc,'Recognition & conduct','achievements and incidents on file',{bg:'#f1eefb',fg:'#6a52d4'},
+              /* Filing an entry is a 'perf' ADD, so a read-only performance account sees
+                 the record without being able to write to somebody's personal file. */
+              canAddPerf()&&(
+                <span style={{display:'flex',gap:7,flexWrap:'wrap'}}>
+                  <button className="btn sm" onClick={()=>setConduct('achievement')}
+                    style={{color:'#1f7a48',borderColor:'#bfe5cd',fontWeight:700}}>★ Add achievement</button>
+                  <button className="btn sm" onClick={()=>setConduct('incident')}
+                    style={{color:'#d23a52',borderColor:'#f1c6cd',fontWeight:700}}>⚠ Record mistake</button>
+                </span>
+              ))}
             <div className="card-b">
               {perf===null ? <div style={{color:'var(--muted)',fontSize:12.5}}>Loading…</div>
                 : (perf.achievements.length===0 && perf.incidents.length===0)
-                  ? <div style={{color:'var(--muted)',fontSize:12.5}}>Nothing recorded — no achievements and no incidents on this file.</div>
+                  ? <div style={{color:'var(--muted)',fontSize:12.5}}>
+                      Nothing recorded — no achievements and no incidents on this file.
+                      {canAddPerf()&&<span> Use <b>Add achievement</b> or <b>Record mistake</b> above to file the first one.</span>}
+                    </div>
                   : (
                     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(230px,1fr))',gap:14}}>
                       <div>
                         {lbl('Achievements · '+perf.achievements.length)}
                         {perf.achievements.length===0 ? <div style={{fontSize:12,color:'var(--faint)'}}>None recorded</div>
                           : perf.achievements.slice().sort((a,b)=>(b.date||'')<(a.date||'')?-1:1).slice(0,6).map((a,i)=>(
-                            <div key={i} style={{display:'flex',gap:9,padding:'7px 0',borderBottom:'1px solid var(--line-2)'}}>
+                            <div key={a.id||i} style={{display:'flex',gap:9,padding:'7px 0',borderBottom:'1px solid var(--line-2)',alignItems:'flex-start'}}>
                               <span style={{width:8,height:8,borderRadius:'50%',background:'#1f9d57',marginTop:5,flexShrink:0}}/>
                               <div style={{minWidth:0,flex:1}}>
                                 <div style={{fontSize:12.5,fontWeight:600,color:'var(--ink)'}}>{a.what||'Achievement'}</div>
                                 <div style={{fontSize:11,color:'var(--muted)'}}>{[a.date,a.category,a.level,a.points?'+'+a.points+' pts':null].filter(Boolean).join(' · ')}</div>
                               </div>
+                              {canDelPerf()&&a.id&&<button className="icon-btn danger" title="Remove this achievement — filed by mistake"
+                                style={{width:24,height:24,flexShrink:0}}
+                                onClick={()=>removeConductEntry('achievement',a,e.name).then(done=>{ if(done&&perf&&perf.reload) perf.reload(); })}>
+                                <Ic d={I.x} s={13}/></button>}
                             </div>
                           ))}
                       </div>
@@ -618,12 +829,16 @@ function StaffProfile({store, empId, setRoute}){
                         {lbl('Incidents · '+perf.incidents.length)}
                         {perf.incidents.length===0 ? <div style={{fontSize:12,color:'var(--faint)'}}>None recorded</div>
                           : perf.incidents.slice().sort((a,b)=>(b.date||'')<(a.date||'')?-1:1).slice(0,6).map((a,i)=>(
-                            <div key={i} style={{display:'flex',gap:9,padding:'7px 0',borderBottom:'1px solid var(--line-2)'}}>
+                            <div key={a.id||i} style={{display:'flex',gap:9,padding:'7px 0',borderBottom:'1px solid var(--line-2)',alignItems:'flex-start'}}>
                               <span style={{width:8,height:8,borderRadius:'50%',background:'#e08a1e',marginTop:5,flexShrink:0}}/>
                               <div style={{minWidth:0,flex:1}}>
                                 <div style={{fontSize:12.5,fontWeight:600,color:'var(--ink)'}}>{a.what||'Incident'}</div>
                                 <div style={{fontSize:11,color:'var(--muted)'}}>{[a.date,a.category,a.severity,a.points?a.points+' pts':null].filter(Boolean).join(' · ')}</div>
                               </div>
+                              {canDelPerf()&&a.id&&<button className="icon-btn danger" title="Remove this incident — filed by mistake"
+                                style={{width:24,height:24,flexShrink:0}}
+                                onClick={()=>removeConductEntry('incident',a,e.name).then(done=>{ if(done&&perf&&perf.reload) perf.reload(); })}>
+                                <Ic d={I.x} s={13}/></button>}
                             </div>
                           ))}
                       </div>
@@ -633,7 +848,7 @@ function StaffProfile({store, empId, setRoute}){
                 Events are logged for the record and feed the appraisal's bonus and penalty caps. They are never scored on their own.
               </div>
             </div>
-          </div>
+          </div>}
 
           {e.remarks&&<div className="card" style={{borderLeft:'4px solid #b5670a'}}>
             {secHead(I.doc,'Remarks',null,{bg:'#fff4e5',fg:'#b5670a'})}
@@ -2380,11 +2595,10 @@ function StaffForm({store, empId, setRoute, role, depts}){
       <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 320px',gap:14,alignItems:'start'}}>
       <div className="grid" style={{gap:16,minWidth:0}}>
       <div className="grid" style={{alignItems:'start'}}>
-        {editing&&<div className="card" style={{padding:'10px 16px',display:'flex',alignItems:'center',gap:12}}>
-          <span style={{flex:1,fontSize:11.6,color:'var(--muted)'}}>Removing this person takes them off the active roster and moves them to Previous Staff.</span>
-          <button className="btn" style={{color:'var(--rose)',borderColor:'#f1c6cd'}}
-            onClick={()=>{if(confirm('Mark this employee as inactive?')){store.remove(empId);setRoute({view:(f.role||'Nurse')==='PCA'?'pca':'nurses'});}}}>Mark inactive</button>
-        </div>}
+        {/* No "Mark inactive" here. Leaving the roster is the Discontinue flow on the staff
+            profile (DiscontinueDialog): it takes the separation type, last working day and
+            reason, and files the exit in Attrition & Exits before archiving. This banner
+            archived people with none of that, so the attrition register lost them. */}
         <div className="card"><div className="card-b" style={{display:'flex',flexDirection:'column',gap:20}}>
           {sec('Personal',<>
             {field('Emp ID',inp('emp_id','e.g. 11234'))}

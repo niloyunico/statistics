@@ -80,6 +80,47 @@ function App(){
   const safeDepts = depts.length?depts:[];
   const curDept = route.view==='departments' ? (depts.find(d=>d.id===(route.dept||depts[0]?.id))||depts[0]) : null;
 
+  /* ---- code-split modules (scripts/build-renderer.js) ----------------------------
+     The console used to ship as ONE ~700 KB script before anything rendered. The heavy
+     modules now live in chunks that load on demand AND preload in the background once
+     the page is idle, so by the time anyone clicks they are usually already in.
+     "Usually" is not "always" on a hospital link, and the old
+     `typeof X!=='undefined' ? <X/> : null` renders an EMPTY pane in that window, which
+     reads as a broken screen. So gate the body on the chunk and say what is happening. */
+  const CHUNK_OF_VIEW=(v)=>{
+    const s=String(v||'');
+    if(s==='qualityDeptManage') return null;                 // the unified manager lives in core
+    if(s.indexOf('quality')===0||s==='reportsQuality'||s==='gallery') return 'quality';
+    if(s.indexOf('dc')===0) return 'datacollection';
+    if(s==='reports'||s==='settings') return 'reports';      // Settings renders UsersAndRoles from reports.jsx
+    if(s==='staffProfile'||s==='staffForm') return 'staffprofile';
+    if(s.indexOf('perf')===0) return 'performance';
+    if(s.indexOf('roster')===0) return 'roster';
+    if(s.indexOf('sup')===0) return 'supervisor';
+    if(s.indexOf('med')===0) return 'medicine';
+    if(s==='manpower') return 'manpower';
+    return null;
+  };
+  const [chunkTick,setChunkTick]=useState(0);
+  const [chunkErr,setChunkErr]=useState('');
+  useEffect(()=>{
+    const h=()=>setChunkTick(t=>t+1);
+    window.addEventListener('unico:chunk-loaded',h);
+    return ()=>window.removeEventListener('unico:chunk-loaded',h);
+  },[]);
+  // Access FIRST, then the chunk. A view this account may not open must not even start
+  // a download: the request itself would tell an unauthorised session that the screen
+  // exists (Performance is confidential — see access.requireModule('perf') server-side),
+  // and the guard effect above is about to redirect anyway.
+  const viewAllowed=!window.unicoCanAccessView||window.unicoCanAccessView(route.view);
+  const needChunk=viewAllowed?CHUNK_OF_VIEW(route.view):null;
+  const chunkReady=!needChunk||!window.unicoChunkReady||window.unicoChunkReady(needChunk);
+  useEffect(()=>{
+    if(!needChunk||chunkReady||!window.unicoLoadChunk) return;
+    setChunkErr('');
+    window.unicoLoadChunk(needChunk).catch(()=>setChunkErr(needChunk));
+  },[needChunk,chunkReady]);
+
   let crumbs=['UNICO'], body=null, actions=null;
   if(route.view==='dashboard'){
     crumbs=['UNICO','Dashboard'];
@@ -227,7 +268,7 @@ function App(){
   } else if(route.view && route.view.indexOf('perf')===0 && typeof PerformanceView!=='undefined'){
     // Individual Performance module — renders INSIDE the global shell, like QualityView.
     const PV_TITLE={perfHome:'Dashboard',perfDirectory:'Staff Directory',perfForm:'Appraisal Form',
-      perfPrint:'Printable Form',perfStaff:'Performance Record',perfQueue:'CNS Review Queue',
+      perfPrint:'Printable Form',perfStaff:'Performance Record',
       perfAchievements:'Achievements',perfIncidents:'Incidents',perfCompare:'Department Comparison',perfAttrition:'Attrition & Exits',perfRisk:'Retention Risk',perfBoard:'Recognition Board'};
     crumbs=['UNICO','Performance',PV_TITLE[route.view]||'Dashboard'];
     body=<PerformanceView view={route.view} emp={route.emp} cycleId={route.cycleId} setRoute={setRoute}/>;
@@ -247,7 +288,15 @@ function App(){
   // same portal with the ward screens turned on; the portal itself decides that from
   // the role, and every extra screen is backed by a route that checks it again.
   const PORTAL_ROLES=['collector','incharge'];
-  if(typeof window!=='undefined' && window.__UNICO_USER__ && PORTAL_ROLES.indexOf(window.__UNICO_USER__.role)>=0 && typeof CollectorPortal!=='undefined'){
+  if(typeof window!=='undefined' && window.__UNICO_USER__ && PORTAL_ROLES.indexOf(window.__UNICO_USER__.role)>=0){
+    // CollectorPortal lives in the data-collection chunk. While that is still arriving
+    // we must NOT fall through — the fall-through is the admin shell, which is not
+    // theirs to see. Wait here instead; the preloader fetches this chunk first for
+    // portal accounts, so it is a moment at most.
+    if(typeof CollectorPortal==='undefined'){
+      if(window.unicoLoadChunk) window.unicoLoadChunk('datacollection').catch(()=>{});
+      return <ModuleLoading/>;
+    }
     return <CollectorPortal/>;
   }
   // Per-module access: a 'User' with no workspaces granted has nothing to show.
@@ -259,6 +308,14 @@ function App(){
     crumbs=['UNICO'];
     body=<div style={{display:'grid',placeItems:'center',height:'50vh',color:'var(--muted)',fontSize:13}}>Redirecting…</div>;
   }
+  // This view's module has not arrived yet (or its download failed). The sidebar and
+  // breadcrumb stay, so the app still looks like itself while it waits.
+  if(needChunk && !chunkReady){
+    body=<ModuleLoading failed={chunkErr===needChunk} onRetry={()=>{
+      setChunkErr('');
+      if(window.unicoLoadChunk) window.unicoLoadChunk(needChunk).catch(()=>setChunkErr(needChunk));
+    }}/>;
+  }
 
   return (
     <div className={'app'+(collapsed?' collapsed':'')}>
@@ -268,6 +325,23 @@ function App(){
         <TopBar route={route} setRoute={setRoute} onBurger={()=>setCollapsed(c=>!c)} crumbs={crumbs} actions={actions} depts={depts} onFill={(id)=>setRoute({view:'input',dept:id})} period={period} setPeriod={setPeriod}/>
         <div className="content" key={route.view+(route.dept||'')+(route.emp||'')+layout}>{body}</div>
       </div>
+    </div>
+  );
+}
+
+/* While a code-split module is downloading. Deliberately plain and quiet: on a warm
+   load it flashes for a frame or not at all, and on a slow link it is the difference
+   between "the app is fetching this screen" and an empty white pane that reads as
+   broken. A failed download offers a retry rather than sitting there. */
+function ModuleLoading({failed, onRetry}){
+  return (
+    <div style={{display:'grid',placeItems:'center',height:'50vh',gap:10,color:'var(--muted)',fontSize:13,textAlign:'center'}}>
+      {failed ? (
+        <React.Fragment>
+          <div>This screen could not be downloaded. Check the connection and try again.</div>
+          {onRetry && <button className="btn sm" onClick={onRetry}>Try again</button>}
+        </React.Fragment>
+      ) : <div>Loading this screen…</div>}
     </div>
   );
 }

@@ -803,7 +803,14 @@ function ManageStaff({store, setRoute, role}){
                 <tr key={e.id} style={{opacity:e.is_active?1:.55}}>
                   <td style={{textAlign:'center'}}><span onClick={ev=>{ev.stopPropagation();store.toggleFav(e.id);}} style={{cursor:'pointer',fontSize:16,color:e.fav?'#e0a81e':'#c4ccd6'}}>{e.fav?'★':'☆'}</span></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
-                  <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar photo={e.photo} name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
+                  <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar photo={e.photo} name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)',display:'flex',alignItems:'center',gap:5}}><span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</span>{/* BNMC tick: the council's own answer on the day it was checked (staff-profile.jsx
+                      shows it in full). Absent = never checked, which is NOT the same as failed, so
+                      nothing is drawn. An EXPIRED registration is red: a green tick on a lapsed
+                      licence would read as "cleared to practise" and is the one wrong thing to say. */}
+                    {e.licence_verified?(()=>{const v=e.licence_verified,p=v.primary||{},ex=!!p.expired,c=ex?'#d23a52':'#157a43';
+                      return <span title={(ex?'BNMC licence EXPIRED':'BNMC verified')+(p.regNo?' · Reg '+p.regNo:'')+' · register checked '+(String(v.at||'').slice(0,10)||'—')}
+                        style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:14,height:14,borderRadius:'50%',background:c,flex:'0 0 auto',fontSize:10,fontWeight:800,color:'#fff',lineHeight:1}}>
+                        {ex?'!':<Ic d={I.check} s={9} c="#fff"/>}</span>;})():null}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDesig(e.designation)||'—'}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>

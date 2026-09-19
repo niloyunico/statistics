@@ -450,6 +450,29 @@
     };
   }
 
+  /* WHAT AN ACHIEVEMENT OR AN INCIDENT CAN BE, and what each is worth. These live in
+     the shared spec rather than in the Performance module because the staff profile
+     records conduct against a person too (Recognition & conduct) — two copies of this
+     list would drift, and a category that exists on one screen but not the other files
+     entries the register cannot group. */
+  var ACH_CATEGORIES = [
+    { id: 'award', label: 'Award / recognition', levels: [['Hospital', 3], ['Department', 2], ['Unit', 1]] },
+    { id: 'training', label: 'Training completed', levels: [['International', 3], ['National', 2], ['In-house', 1]] },
+    { id: 'presentation', label: 'Presentation / teaching', levels: [['Conference', 3], ['Hospital', 2], ['Unit', 1]] },
+    { id: 'improvement', label: 'Quality improvement adopted', levels: [['Hospital-wide', 3], ['Department', 2], ['Unit', 1]] },
+    { id: 'appreciation', label: 'Patient / family appreciation', levels: [['Written', 2], ['Verbal', 1]] },
+    { id: 'extra', label: 'Extra duty / emergency cover', levels: [['Sustained', 2], ['One-off', 1]] },
+  ];
+  var INC_CATEGORIES = [
+    { id: 'medication', label: 'Medication error' },
+    { id: 'documentation', label: 'Documentation lapse' },
+    { id: 'infection', label: 'Infection-control breach' },
+    { id: 'attendance', label: 'Attendance / punctuality' },
+    { id: 'conduct', label: 'Conduct / communication' },
+    { id: 'procedure', label: 'Procedure / protocol deviation' },
+  ];
+  var SEVERITIES = [['Minor', 1], ['Moderate', 2], ['Major', 3], ['Critical', 5]];
+
   // Bonus (achievements) and deduction (incidents) caps, per staff member per cycle.
   var BONUS_CAP = 5;
   var PENALTY_CAP = 5;
@@ -474,6 +497,9 @@
     TOTAL_MAX: TOTAL_MAX,
     BONUS_CAP: BONUS_CAP,
     PENALTY_CAP: PENALTY_CAP,
+    ACH_CATEGORIES: ACH_CATEGORIES,
+    INC_CATEGORIES: INC_CATEGORIES,
+    SEVERITIES: SEVERITIES,
     MONTHS: MONTHS,
     gradeFor: gradeFor,
     tally: tally,

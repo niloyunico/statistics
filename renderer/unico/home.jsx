@@ -274,8 +274,14 @@
       return () => { live = false; };
     }, [unit, me && me.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+    // The performance file is confidential: only a session holding the 'perf' module
+    // may ask for it at all (the server enforces the same rule). Home is the one screen
+    // every role can open, so it must not put this request on the wire for everybody.
     useEffect(() => {
       let live = true;
+      let allowed = true;
+      try { allowed = window.unicoCan ? window.unicoCan('perf', 'view') : true; } catch (e) { allowed = true; }
+      if (!allowed) { setCerts([]); return () => { live = false; }; }
       fetch('/api/performance', { credentials: 'same-origin' }).then((r) => r.json())
         .then((j) => { if (live) setCerts((j && j.certifications) || []); })
         .catch(() => { if (live) setCerts([]); });

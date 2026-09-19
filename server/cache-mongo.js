@@ -32,7 +32,17 @@
  */
 'use strict';
 
-const DEFAULT_TRACKED = ['appdata', 'departments', 'staff', 'qualityFormulas', 'users'];
+/* Only these are cached, and the list is FIXED IN CODE so every instance bumps the same
+   set: an instance that never read a collection must still bump it when it writes, or
+   the instances that did read it keep serving the old copy. A read of anything else goes
+   straight to its loader — which is why adding a cache.read() elsewhere silently does
+   nothing until its collection is named here (staff-performance.js's registers were
+   exactly that case). */
+const DEFAULT_TRACKED = ['appdata', 'departments', 'staff', 'qualityFormulas', 'users',
+  // Personal-file registers (server/staff-performance.js). Safe to cache because every
+  // write there goes through getDbHandle(), whose proxy bumps the version before the
+  // caller continues, and read-modify-write paths pass { fresh: true }.
+  'staffAppraisals', 'staffIncidents', 'staffAchievements', 'staffExits', 'staffPerfCategories'];
 
 const toInt = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : 0; };
 const numOr = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);

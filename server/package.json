@@ -15,7 +15,7 @@
     "d1-migrate": "node d1-migrate.js",
     "d1-import": "node d1-import.js --verify",
     "d1-rows": "node d1-rows.js",
-    "test": "node test/auth.test.js && node test/access.test.js && node test/staff-roster.test.js && node test/staff-sync.test.js && node test/cache.test.js && node test/loadbalancer.test.js && node test/cache-race.test.js && node test/cache-mongo.test.js && node test/medicines.test.js && node test/d1-store.test.js && node test/d1-admin.test.js",
+    "test": "node test/auth.test.js && node test/access.test.js && node test/staff-roster.test.js && node test/staff-sync.test.js && node test/cache.test.js && node test/loadbalancer.test.js && node test/cache-race.test.js && node test/cache-mongo.test.js && node test/staff-performance.test.js && node test/medicines.test.js && node test/d1-store.test.js && node test/d1-admin.test.js",
     "test:med": "node test/medicines.test.js",
     "test:access": "node test/access.test.js",
     "test:cache": "node test/cache.test.js",

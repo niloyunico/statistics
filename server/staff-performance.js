@@ -28,6 +28,7 @@
  * instrumented handle and invalidates the shared cache (see server/cache.js).
  */
 const { getDbHandle } = require('./db');
+const cache = require('./cache');
 
 const APPRAISALS = 'staffAppraisals';
 const INCIDENTS = 'staffIncidents';
@@ -38,6 +39,32 @@ const ACHIEVEMENTS = 'staffAchievements';
 // computed from these, so a leaver with no exit record still counts in the headcount
 // maths but contributes no reason/tenure analysis — which is the honest answer.
 const EXITS = 'staffExits';
+/* The categories an achievement or an incident can be filed under. Shipped with a
+   default set (the same list the browser's appraisal-spec.js carries) but EDITABLE BY
+   AN ADMINISTRATOR: every hospital classifies conduct a little differently, and a
+   category that cannot be added means entries get filed under "Other" and the register
+   stops being able to tell anyone what is actually going wrong.
+
+   One document, id 'categories'. Absent (or empty) => the defaults below, so an
+   installation that never touches this behaves exactly as it always did. */
+const CATEGORIES = 'staffPerfCategories';
+const CATEGORY_DOC = 'categories';
+const DEFAULT_ACH_CATEGORIES = [
+  { id: 'award', label: 'Award / recognition', levels: [['Hospital', 3], ['Department', 2], ['Unit', 1]] },
+  { id: 'training', label: 'Training completed', levels: [['International', 3], ['National', 2], ['In-house', 1]] },
+  { id: 'presentation', label: 'Presentation / teaching', levels: [['Conference', 3], ['Hospital', 2], ['Unit', 1]] },
+  { id: 'improvement', label: 'Quality improvement adopted', levels: [['Hospital-wide', 3], ['Department', 2], ['Unit', 1]] },
+  { id: 'appreciation', label: 'Patient / family appreciation', levels: [['Written', 2], ['Verbal', 1]] },
+  { id: 'extra', label: 'Extra duty / emergency cover', levels: [['Sustained', 2], ['One-off', 1]] },
+];
+const DEFAULT_INC_CATEGORIES = [
+  { id: 'medication', label: 'Medication error' },
+  { id: 'documentation', label: 'Documentation lapse' },
+  { id: 'infection', label: 'Infection-control breach' },
+  { id: 'attendance', label: 'Attendance / punctuality' },
+  { id: 'conduct', label: 'Conduct / communication' },
+  { id: 'procedure', label: 'Procedure / protocol deviation' },
+];
 
 // Mirrors renderer/unico/appraisal-spec.js. Kept as plain numbers here because the
 // server only needs the arithmetic, not the descriptors.
@@ -65,7 +92,7 @@ async function col(name) { const db = await getDbHandle(); return db ? db.collec
 function genId(prefix) { return (prefix || 'id') + '-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e8).toString(36); }
 
 // Dev fallback (no MONGODB_URI). The web app always has Mongo.
-const mem = { [APPRAISALS]: [], [INCIDENTS]: [], [ACHIEVEMENTS]: [], [EXITS]: [] };
+const mem = { [APPRAISALS]: [], [INCIDENTS]: [], [ACHIEVEMENTS]: [], [EXITS]: [], [CATEGORIES]: [] };
 
 const s = (v, max) => String(v == null ? '' : v).slice(0, max || 400);
 const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
@@ -131,17 +158,31 @@ function normAppraisal(input, existing) {
     assessorRemarks: s(i.assessorRemarks, 2000),
     strengths: s(i.strengths, 1000),
     development: s(i.development, 1000),
-    discussedOn: s(i.discussedOn, 20),
+    // Sent by the appraisal form (Part G). Absent from an older client's payload it
+    // must keep what is on file rather than silently clearing the meeting date.
+    discussedOn: s(i.discussedOn != null ? i.discussedOn : prev.discussedOn, 20),
     acknowledged: !!i.acknowledged,
   };
 }
 
+/* WHO THE ENTRY IS ABOUT, recorded so it cannot be lost or mixed up later:
+     empId       the employee number - what the appraisal maths matches on
+     staffId     the staff RECORD id. Employee numbers are NOT unique in this register
+                 (11410 and 11520 each belong to two different people, see
+                 staff-roster.js), so the number alone cannot say which colleague an
+                 entry belongs to. The record id can, and it is written from the day the
+                 entry is filed rather than reconstructed afterwards.
+     staffName / department / designation
+                 the person AS THEY WERE when it happened. A later transfer or promotion
+                 must not rewrite the history of an incident. */
 function normIncident(input) {
   const i = obj(input);
   return {
     empId: s(i.empId, 40),
+    staffId: s(i.staffId, 40),
     staffName: s(i.staffName, 120),
     department: s(i.department, 120),
+    designation: s(i.designation, 120),
     cycleId: s(i.cycleId, 40),
     date: s(i.date, 20),
     category: s(i.category, 80),
@@ -153,12 +194,15 @@ function normIncident(input) {
   };
 }
 
+// Same identity block as an incident - see normIncident.
 function normAchievement(input) {
   const i = obj(input);
   return {
     empId: s(i.empId, 40),
+    staffId: s(i.staffId, 40),
     staffName: s(i.staffName, 120),
     department: s(i.department, 120),
+    designation: s(i.designation, 120),
     cycleId: s(i.cycleId, 40),
     date: s(i.date, 20),
     category: s(i.category, 80),
@@ -168,6 +212,59 @@ function normAchievement(input) {
     note: s(i.note, 1200),
     certificate: !!i.certificate,
     points: num(i.points, 0, BONUS_CAP) || 0,
+  };
+}
+
+/* A saved category list. Deliberately strict: an id that is stable (so entries filed
+   under it keep their grouping when the label is reworded), a label, and for an
+   achievement the levels that SET THE POINTS. Points are clamped to the cap - a
+   category cannot be defined that hands out more than a cycle can carry. */
+function slug(v) {
+  return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+}
+function normCategories(input, kind) {
+  const cap = kind === 'ach' ? BONUS_CAP : PENALTY_CAP;
+  const seen = {};
+  return (Array.isArray(input) ? input : []).slice(0, 60).map((raw) => {
+    const c = obj(raw);
+    const label = s(c.label, 80).trim();
+    if (!label) return null;
+    // A blank or colliding id would silently merge two categories in the register.
+    let id = slug(c.id) || slug(label);
+    if (!id) return null;
+    while (seen[id]) id += '-2';
+    seen[id] = 1;
+    const out = { id, label };
+    if (kind === 'ach') {
+      const levels = (Array.isArray(c.levels) ? c.levels : []).slice(0, 12).map((l) => {
+        const arr = Array.isArray(l) ? l : [obj(l).label, obj(l).points];
+        const name = s(arr[0], 60).trim();
+        const pts = num(arr[1], 0, cap);
+        return name ? [name, pts == null ? 1 : Math.round(pts)] : null;
+      }).filter(Boolean);
+      // Every achievement category must offer at least one level, or it can award nothing.
+      out.levels = levels.length ? levels : [['Recorded', 1]];
+    }
+    return out;
+  }).filter(Boolean);
+}
+
+// The stored lists, falling back to the shipped defaults. An empty saved list is
+// treated as "not configured" rather than "no categories at all", which would leave
+// the dialogs with an empty dropdown and no way back.
+async function loadCategories() {
+  let doc = null;
+  try {
+    const c = await col(CATEGORIES);
+    doc = c ? await c.findOne({ _id: CATEGORY_DOC }) : (mem[CATEGORIES][0] || null);
+  } catch (e) { doc = null; }
+  const d = obj(doc);
+  const ach = normCategories(d.ach, 'ach');
+  const inc = normCategories(d.inc, 'inc');
+  return {
+    ach: ach.length ? ach : DEFAULT_ACH_CATEGORIES,
+    inc: inc.length ? inc : DEFAULT_INC_CATEGORIES,
+    customised: !!(ach.length || inc.length),
   };
 }
 
@@ -209,6 +306,28 @@ async function listAll(name) {
   return docs.map(outDoc);
 }
 
+/* A CACHED read of one register. Opening the module used to mean four full collection
+   scans, every single time, for data that changes a few times a day — which is most of
+   what "the Performance module is slow to open" was.
+
+   It is VERSION-VALIDATED, not time-based: every write in this file goes through
+   getDbHandle(), whose proxy bumps the collection's version before the caller
+   continues (server/cache.js). So a saved appraisal, incident or achievement is visible
+   on the very next read — a cached copy stamped with an older version is never a hit.
+   That is what makes caching safe for a personal-file record.
+
+   Read-modify-write paths pass { fresh: true } and skip the cache on the way in, so an
+   edit is never computed from a stale baseline. */
+const REGISTER_TTL = 30000;
+function listCached(name, opts) {
+  if (!process.env.MONGODB_URI) return listAll(name);
+  return cache.read(
+    'perf:' + name,
+    { coll: name, freshMs: REGISTER_TTL, fresh: !!(opts && opts.fresh) },
+    () => listAll(name)
+  );
+}
+
 async function upsert(name, id, doc) {
   const c = await col(name);
   if (!c) {
@@ -244,6 +363,8 @@ async function isFiled(empId, cycleId) {
 const FILED_MSG = 'That appraisal window is already filed (Part H recorded). Reopen the appraisal before changing its registers.';
 
 async function pointsFor(empId, cycleId) {
+  // Deliberately uncached: this is the arithmetic that sets somebody's grade, and it
+  // runs on the write paths, where a stale baseline could file the wrong score.
   const [inc, ach] = await Promise.all([listAll(INCIDENTS), listAll(ACHIEVEMENTS)]);
   const mine = (list) => list.filter((x) => x.empId === empId && (!cycleId || x.cycleId === cycleId));
   const penalty = mine(inc).reduce((t, x) => t + (Number(x.points) || 0), 0);
@@ -294,8 +415,8 @@ function mount(app, opts) {
   // rather than three, which matters on a cold serverless instance.
   app.get('/api/performance', guard, async (req, res) => {
     try {
-      const [appraisals, incidents, achievements, exits] = await Promise.all([
-        listAll(APPRAISALS), listAll(INCIDENTS), listAll(ACHIEVEMENTS), listAll(EXITS),
+      const [appraisals, incidents, achievements, exits, categories] = await Promise.all([
+        listCached(APPRAISALS), listCached(INCIDENTS), listCached(ACHIEVEMENTS), listCached(EXITS), loadCategories(),
       ]);
       // Settle every appraisal against its own cycle's registers.
       const byKey = {};
@@ -306,7 +427,7 @@ function mount(app, opts) {
         const raw = byKey[k] || { b: 0, p: 0 };
         return decorate(a, { rawBonus: raw.b, rawPenalty: raw.p, bonus: Math.min(raw.b, BONUS_CAP), penalty: Math.min(raw.p, PENALTY_CAP) });
       });
-      res.json({ ok: true, appraisals: out, incidents, achievements, exits, caps: { bonus: BONUS_CAP, penalty: PENALTY_CAP }, separationTypes: SEPARATION_TYPES });
+      res.json({ ok: true, appraisals: out, incidents, achievements, exits, categories, caps: { bonus: BONUS_CAP, penalty: PENALTY_CAP }, separationTypes: SEPARATION_TYPES });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load performance records.' }); }
   });
 
@@ -361,6 +482,23 @@ function mount(app, opts) {
       const pts = await pointsFor(saved.empId, saved.cycleId);
       res.json({ ok: true, appraisal: decorate(saved, pts) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not record the action.' }); }
+  });
+
+  /* Edit the category lists. ADMIN ONLY: these decide how every achievement and every
+     incident in the hospital is classified, and a renamed or deleted category changes
+     what the register reports. Entries already filed keep the category TEXT they were
+     saved with, so removing a category never rewrites history - it only stops the
+     category being offered for new entries. */
+  app.put('/api/performance/categories', guard, adminOnly, async (req, res) => {
+    try {
+      const b = obj(req.body);
+      const ach = normCategories(b.ach, 'ach');
+      const inc = normCategories(b.inc, 'inc');
+      if (!ach.length) return res.status(400).json({ ok: false, error: 'Keep at least one achievement category.' });
+      if (!inc.length) return res.status(400).json({ ok: false, error: 'Keep at least one incident category.' });
+      await upsert(CATEGORIES, CATEGORY_DOC, { ach, inc, updatedBy: who(req), updatedAt: Date.now() });
+      res.json({ ok: true, categories: await loadCategories() });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not save the categories.' }); }
   });
 
   // Reopen a filed appraisal (correcting a mistake after locking). Admin only, and

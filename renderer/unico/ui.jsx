@@ -65,7 +65,7 @@ const UNICO_MODULE_VIEWS = {
   supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
-  perf:   ['perfHome','perfDirectory','perfForm','perfPrint','perfStaff','perfQueue','perfAchievements','perfIncidents','perfCompare','perfAttrition','perfRisk','perfBoard'],
+  perf:   ['perfHome','perfDirectory','perfForm','perfPrint','perfStaff','perfAchievements','perfIncidents','perfCompare','perfAttrition','perfRisk','perfBoard'],
   roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','manpower'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
@@ -342,7 +342,6 @@ function unicoWorkspaceSub(view){
   ];
   if(mod==='perf') return [
     { label:'Staff Directory',   view:'perfDirectory', match:['perfDirectory','perfForm','perfPrint','perfStaff'] },
-    { label:'CNS Review Queue',  view:'perfQueue' },
     { label:'Achievements',      view:'perfAchievements' },
     { label:'Incidents',         view:'perfIncidents' },
     { label:'Recognition Board', view:'perfBoard' },
@@ -468,8 +467,18 @@ window.MyAccount = MyAccount;
 function Sidebar({route, setRoute, collapsed, depts}){
   const [acct,setAcct]=React.useState(false);
   const view = route.view;
-  const qBadge = React.useMemo(()=>unicoQualityBreachCount(),[]);
-  const supBadge = React.useMemo(()=>unicoSupAlertCount(),[view]);
+  // The breach count needs window.UNICO_Q, which lives in the lazily loaded quality
+  // chunk. Until it is in, show NOTHING rather than 0: a confident "no breaches" while
+  // the module is still downloading is a worse answer than no badge at all. `chunkTick`
+  // re-runs this when the chunk lands (unico:chunk-loaded).
+  const [chunkTick,setChunkTick]=React.useState(0);
+  React.useEffect(()=>{
+    const h=()=>setChunkTick(t=>t+1);
+    window.addEventListener('unico:chunk-loaded',h);
+    return ()=>window.removeEventListener('unico:chunk-loaded',h);
+  },[]);
+  const qBadge = React.useMemo(()=>(window.UNICO_Q?unicoQualityBreachCount():0),[chunkTick]);
+  const supBadge = React.useMemo(()=>unicoSupAlertCount(),[view,chunkTick]);
   const sub = unicoWorkspaceSub(view);
   const subOn = s => s.match ? s.match.indexOf(view)>=0 : view===s.view;
   return (

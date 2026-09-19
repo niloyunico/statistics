@@ -1,8 +1,14 @@
 /* UNICO — Individual Performance module (renderer).
  *
  * The 6-monthly nursing appraisal, Form HR-NUR-PA-01, end to end: score it, discuss
- * it, let the Chief Nursing Superintendent act on it, print it 1:1 with the paper
- * form, and keep the achievement and incident registers whose points feed into it.
+ * it, record the Chief Nursing Superintendent's Part H action on it, print it 1:1 with
+ * the paper form, and keep the achievement and incident registers whose points feed
+ * into it.
+ *
+ * THERE IS NO APPROVAL QUEUE. The CNS fills the appraisal in the first place, so a
+ * separate screen to approve their own work was a step that approved nothing: Part H
+ * (the action and the lock) is recorded on the form itself, at the bottom, next to the
+ * scores it is taken on.
  *
  * Views (rendered one at a time inside the global shell, like QualityView):
  *   perfHome         dashboard — cycle progress, department progress, grade mix, reminders
@@ -10,7 +16,6 @@
  *   perfForm         the appraisal form itself (10 sections, 20 parameters, live total)
  *   perfPrint        printable form, 1:1 with the paper original
  *   perfStaff        one person's performance record — trend, history, points, conduct
- *   perfQueue        CNS review queue — Part H, action and lock
  *   perfAchievements achievement register (bonus points, capped) + per-staff Achievement
  *                    History, a sub-screen of the register
  *   perfIncidents    incident register (deductions, capped) + per-staff Incident History
@@ -51,6 +56,17 @@ const todayISO = () => { try { const d = new Date(); return new Date(d.getTime()
 const perfPortal = (node) => { try { if (typeof ReactDOM !== 'undefined' && ReactDOM.createPortal) return ReactDOM.createPortal(node, document.body); } catch (e) {} return node; };
 const initials = (n) => String(n || '').split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || '?';
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+/* THE ONE PLACE THAT DECIDES NURSE vs PCA. The filter, the counts and the row badge
+   all read this, so a "Nurses" tab can never list somebody wearing a PCA badge — they
+   used to be three separate expressions over raw fields. `role` is authoritative when
+   it is set (any case / stray spaces); a record imported without one falls back to its
+   designation, which is how the PCA rows on the roster are actually identifiable. */
+const roleOf = (e) => {
+  const r = String((e && e.role) || '').trim().toUpperCase();
+  if (r) return r === 'PCA' ? 'PCA' : 'Nurse';
+  return /patient\s*care|pca/i.test(String((e && e.designation) || '')) ? 'PCA' : 'Nurse';
+};
+const isPcaRow = (r) => (r && r.role ? r.role : roleOf(r && r.emp)) === 'PCA';
 
 // Grade colours are the mockup's own GC table, so a B looks identical on a pill, a bar
 // and the printed certificate.
@@ -92,34 +108,95 @@ const capsOf = (perf) => {
   return { bonus: n(c.bonus, A.BONUS_CAP), penalty: n(c.penalty, A.PENALTY_CAP) };
 };
 
+/* THE FETCH STARTS BEFORE REACT DOES.
+
+   Opening the module used to be strictly serial: download this file, mount the view,
+   THEN ask the server for the records — so the "Loading performance records…" line was
+   showing while a request that could already have been in flight had not been sent yet.
+   This file is IIFE-wrapped and runs the instant its chunk lands, so the request goes
+   out here instead, and the store below picks up whatever is already in flight.
+
+   Only reached by a session that HAS the module: the shell checks access before it
+   downloads this code at all, so the prefetch cannot leak a confidential read.
+
+   The answer is only reused while it is genuinely young. A tab left open on another
+   screen for an hour must not open Performance on an hour-old copy — past the window
+   the store asks again. */
+const PREFETCH_MAX_AGE = 20000;
+let prefetched = null;          // { at, promise }
+function prefetchPerf() {
+  prefetched = { at: Date.now(), promise: perfApi.get('/api/performance').catch(() => null) };
+  return prefetched.promise;
+}
+function takePrefetched() {
+  const p = prefetched;
+  prefetched = null;            // one use only — a second reader gets a fresh read
+  return (p && Date.now() - p.at < PREFETCH_MAX_AGE) ? p.promise : null;
+}
+try { prefetchPerf(); } catch (e) { /* the store will ask for itself */ }
+
 function usePerfStore() {
-  const [state, setState] = useState({ appraisals: [], incidents: [], achievements: [], exits: [], caps: DEFAULT_CAPS, loading: true, error: null });
-  const load = React.useCallback(() => {
-    return perfApi.get('/api/performance').then((r) => {
-      if (r && r.ok) setState({ appraisals: r.appraisals || [], incidents: r.incidents || [], achievements: r.achievements || [], exits: r.exits || [], caps: r.caps || DEFAULT_CAPS, loading: false, error: null });
+  const [state, setState] = useState({ appraisals: [], incidents: [], achievements: [], exits: [], caps: DEFAULT_CAPS, categories: null, loading: true, error: null });
+  const load = React.useCallback((opts) => {
+    // The very first load takes the in-flight prefetch; everything after asks fresh.
+    const inflight = (opts && opts.fresh) ? null : takePrefetched();
+    return (inflight || perfApi.get('/api/performance')).then((r) => {
+      if (r && r.ok) setState({ appraisals: r.appraisals || [], incidents: r.incidents || [], achievements: r.achievements || [], exits: r.exits || [], caps: r.caps || DEFAULT_CAPS, categories: r.categories || null, loading: false, error: null });
       else setState((s) => ({ ...s, loading: false, error: (r && r.error) || 'Could not load performance records.' }));
     }).catch(() => setState((s) => ({ ...s, loading: false, error: 'Could not reach the server.' })));
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const wrap = (p, okMsg) => p.then((r) => {
-    if (r && r.ok) { if (okMsg) perfToast(okMsg); return load().then(() => r); }
+  /* APPLY THE SAVED RECORD, THEN CATCH UP IN THE BACKGROUND.
+
+     Every write used to await a full re-fetch of all four registers before the dialog
+     would even close, so filing a one-line incident cost a round trip plus the whole
+     module again — the "saving is slow" complaint. The server already returns the
+     record it just wrote, so that goes into state immediately and the UI is correct at
+     once. The reload still happens, because the SETTLED score (bonus/penalty against
+     the cap) is the server's arithmetic and only a GET recomputes it — but it happens
+     behind the response, and nobody waits for it. */
+  const patch = (fn) => setState((st) => Object.assign({}, st, fn(st)));
+  const put = (list, rec) => {
+    const i = list.findIndex((x) => x.id === rec.id);
+    return i >= 0 ? list.map((x, n) => (n === i ? rec : x)) : list.concat([rec]);
+  };
+  const applyResult = (r) => {
+    if (!r || !r.ok) return;
+    if (r.appraisal) patch((st) => ({ appraisals: put(st.appraisals, r.appraisal) }));
+    if (r.incident) patch((st) => ({ incidents: put(st.incidents, r.incident) }));
+    if (r.achievement) patch((st) => ({ achievements: put(st.achievements, r.achievement) }));
+    if (r.exit) patch((st) => ({ exits: put(st.exits, r.exit) }));
+    if (r.categories) patch(() => ({ categories: r.categories }));
+  };
+  // `after` patches state for a write whose response carries no record (a delete).
+  const wrap = (p, okMsg, after) => p.then((r) => {
+    if (r && r.ok) {
+      if (okMsg) perfToast(okMsg);
+      applyResult(r);
+      if (after) patch(after);
+      load({ fresh: true }); // deliberately NOT awaited — the screen is already right
+      return r;
+    }
     perfToast((r && r.error) || 'That did not save.', 'error');
     return r;
   }).catch(() => { perfToast('Could not reach the server.', 'error'); return { ok: false }; });
 
+  const without = (key, id) => (st) => ({ [key]: st[key].filter((x) => x.id !== id) });
+
   return {
     ...state,
-    reload: load,
+    reload: () => load({ fresh: true }),
     saveAppraisal: (body, msg) => wrap(perfApi.put('/api/performance/appraisals', body), msg),
     recordAction: (id, body) => wrap(perfApi.post('/api/performance/appraisals/' + id + '/action', body), 'Action recorded. The form is now filed to the personal record.'),
     reopen: (id) => wrap(perfApi.post('/api/performance/appraisals/' + id + '/reopen', {}), 'Appraisal reopened for correction.'),
     addIncident: (body) => wrap(perfApi.post('/api/performance/incidents', body), 'Incident recorded. The deduction now shows on the appraisal.'),
-    delIncident: (id) => wrap(perfApi.del('/api/performance/incidents/' + id), 'Entry removed.'),
+    delIncident: (id) => wrap(perfApi.del('/api/performance/incidents/' + id), 'Entry removed.', without('incidents', id)),
     addAchievement: (body) => wrap(perfApi.post('/api/performance/achievements', body), 'Achievement recorded. Bonus points are on the current appraisal.'),
     addExit: (body) => wrap(perfApi.post('/api/performance/exits', body), 'Exit recorded. The attrition figures and the unit roll-up update immediately.'),
-    delExit: (id) => wrap(perfApi.del('/api/performance/exits/' + id), 'Exit record removed.'),
-    delAchievement: (id) => wrap(perfApi.del('/api/performance/achievements/' + id), 'Entry removed.'),
+    delExit: (id) => wrap(perfApi.del('/api/performance/exits/' + id), 'Exit record removed.', without('exits', id)),
+    delAchievement: (id) => wrap(perfApi.del('/api/performance/achievements/' + id), 'Entry removed.', without('achievements', id)),
+    saveCategories: (body) => wrap(perfApi.put('/api/performance/categories', body), 'Categories saved.'),
   };
 }
 
@@ -127,26 +204,55 @@ function usePerfStore() {
 function useRoster(staffStore, perf) {
   return useMemo(() => {
     const now = new Date();
-    const list = (staffStore.staff || []).filter((e) => e.is_active !== false && !e.former);
+    // ONE ROW PER PERSON. A staff list carrying the same employee twice (a re-import,
+    // or the overlay and the DB both holding them) put the same person on screen three
+    // times, each row opening the same single appraisal. byEmp already collapsed them,
+    // so the table was the only place that disagreed with itself.
+    const seen = {};
+    const list = (staffStore.staff || []).filter((e) => {
+      if (e.is_active === false || e.former) return false;
+      // EMPLOYEE NUMBERS ARE NOT UNIQUE HERE — 11410 and 11520 each belong to two
+      // different people (see staff-roster.js). Collapsing on the number alone would
+      // have dropped a real colleague off the roster, so the name is part of the key:
+      // it removes a record imported twice and keeps two people who share a number.
+      const k = (e.emp_id || String(e.id)) + '|' + String(e.name || '').trim().toLowerCase();
+      if (seen[k]) return false;
+      seen[k] = 1;
+      return true;
+    });
+    /* INDEX THE REGISTERS ONCE, then look each person up. Every row used to re-scan the
+       whole appraisal, incident and achievement lists — six passes per person — so the
+       roster cost staff x records and grew quadratically as the registers filled. One
+       grouping pass up front makes it staff + records. */
+    const groupBy = (arr) => {
+      const m = {};
+      (arr || []).forEach((x) => { const k = String(x.empId); (m[k] || (m[k] = [])).push(x); });
+      return m;
+    };
+    const apprOf = groupBy(perf.appraisals);
+    const incOf = groupBy(perf.incidents);
+    const achOf = groupBy(perf.achievements);
+
     const byEmp = {};
     const rows = list.map((e) => {
       const empId = e.emp_id || String(e.id);
       const cyc = A.cycleOf(e.doj, now);
-      const current = perf.appraisals.find((x) => x.empId === empId && cyc && x.cycleId === cyc.id) || null;
+      const mineAppr = apprOf[String(empId)] || [];
+      const current = mineAppr.find((x) => cyc && x.cycleId === cyc.id) || null;
       // A form still open from an EARLIER window stays this person's appraisal until it is
       // filed. Matching only the current window made a completed form awaiting Part H
       // vanish from the queue, the dashboard and the form screen the day the next window
       // opened — so it could never be actioned. An abandoned old DRAFT does not hide the
       // current window's form.
-      const earlier = perf.appraisals.filter((x) => x.empId === empId && x.status !== 'actioned' && !(cyc && x.cycleId === cyc.id))
+      const earlier = mineAppr.filter((x) => x.status !== 'actioned' && !(cyc && x.cycleId === cyc.id))
         .sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)))[0] || null;
       const apr = (earlier && earlier.status !== 'draft') ? earlier : (current || earlier);
-      const history = perf.appraisals.filter((x) => x.empId === empId && x.status === 'actioned')
+      const history = mineAppr.filter((x) => x.status === 'actioned')
         .sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)));
       const last = history[0] || null;
       const regCycle = apr ? apr.cycleId : (cyc && cyc.id);   // the registers belonging to the form shown
-      const inc = perf.incidents.filter((x) => x.empId === empId && regCycle && x.cycleId === regCycle);
-      const ach = perf.achievements.filter((x) => x.empId === empId && regCycle && x.cycleId === regCycle);
+      const inc = (incOf[String(empId)] || []).filter((x) => regCycle && x.cycleId === regCycle);
+      const ach = (achOf[String(empId)] || []).filter((x) => regCycle && x.cycleId === regCycle);
       const firstDue = e.doj ? A.addMonths(A.parseDate(e.doj) || now, 6) : null;
       const neverAppraised = history.length === 0;
       /* OVERDUE = a window that has already CLOSED with nothing filed against it.
@@ -157,9 +263,9 @@ function useRoster(staffStore, perf) {
          would flag the entire roster the morning a new cycle starts, which is what the
          two earlier versions of this line did in opposite directions. */
       const lastClosed = e.doj ? (A.cyclesSince(e.doj, now, 1) || [])[0] : null;
-      const missedClosed = !!(lastClosed && !perf.appraisals.some((x) => x.empId === empId && x.cycleId === lastClosed.id));
+      const missedClosed = !!(lastClosed && !mineAppr.some((x) => x.cycleId === lastClosed.id));
       const row = {
-        emp: e, empId, name: e.name, designation: e.designation, dept: e.current_department,
+        emp: e, empId, role: roleOf(e), name: e.name, designation: e.designation, dept: e.current_department,
         doj: e.doj, cycle: cyc, appraisal: apr, status: apr ? apr.status : 'none',
         history, last, incidents: inc, achievements: ach,
         firstDue, neverAppraised,
@@ -234,18 +340,29 @@ function Modal({ title, sub, onClose, children, wide, footer }) {
     document.addEventListener('keydown', k);
     return () => document.removeEventListener('keydown', k);
   }, [onClose]);
+  /* THE mk-scope WRAPPER IS LOAD-BEARING. Everything this module looks like — the glass
+     card, .btn, .sub, and every input/select/textarea — is defined under `.mk-scope`
+     (mockup-ui.js). The modal portals to document.body, which is OUTSIDE the view's own
+     .mk-scope, so without this the dialog rendered with raw browser form controls while
+     the page behind it was fully styled. The wrapper sits INSIDE the backdrop so the
+     backdrop still covers the whole viewport (.mk-scope is max-width:1400px). */
   return perfPortal(
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(9,17,28,.55)', backdropFilter: 'blur(2px)', zIndex: 9000, display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} className="card" style={{ width: wide ? 'min(920px,96vw)' : 'min(560px,96vw)', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
-        <div className="card-h" style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700 }}>{title}</div>
-            {sub && <div className="sub" style={{ fontSize: 11.5 }}>{sub}</div>}
+    /* The backdrop does NOT close this. Every dialog behind it is a form (an incident,
+       an achievement), and a mis-aimed click used to discard whatever had been typed. */
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(9,17,28,.55)', backdropFilter: 'blur(2px)', zIndex: 9000, display: 'grid', placeItems: 'center', padding: 20 }}>
+      <div className="mk-scope"
+        style={{ width: wide ? 'min(920px,96vw)' : 'min(560px,96vw)', maxHeight: '90vh', display: 'flex' }}>
+        <div className="card" style={{ width: '100%', maxHeight: '90vh', display: 'flex', flexDirection: 'column', background: 'linear-gradient(152deg,rgba(255,255,255,.97),rgba(236,247,255,.93))', boxShadow: '0 24px 60px rgba(16,32,56,.3)' }}>
+          <div className="card-h" style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: MK.INK }}>{title}</div>
+              {sub && <div className="sub" style={{ fontSize: 11.5 }}>{sub}</div>}
+            </div>
+            <button className="icon-btn" onClick={onClose} title="Close"><Ic d={I.x || 'M18 6L6 18M6 6l12 12'} s={16} /></button>
           </div>
-          <button className="icon-btn" onClick={onClose} title="Close"><Ic d={I.x || 'M18 6L6 18M6 6l12 12'} s={16} /></button>
+          <div className="card-b" style={{ overflow: 'auto', flex: 1 }}>{children}</div>
+          {footer && <div className="card-h" style={{ borderTop: '1px solid ' + MK.LINE, borderBottom: 0, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>{footer}</div>}
         </div>
-        <div className="card-b" style={{ overflow: 'auto', flex: 1 }}>{children}</div>
-        {footer && <div className="card-h" style={{ borderTop: '1px solid var(--line,#e3e9f1)', borderBottom: 0, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>{footer}</div>}
       </div>
     </div>
   );
@@ -403,8 +520,8 @@ function PerfDashboard({ roster, perf, setRoute }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 14 }}>
-        <QuickCard icon={I.doc} title="CNS review queue" sub="Part H — action after discussion"
-          n={rows.filter((r) => r.status === 'discussed' || r.status === 'submitted').length} onClick={() => setRoute({ view: 'perfQueue' })} />
+        <QuickCard icon={I.doc} title="Appraisals to file" sub="completed — Part H not yet recorded"
+          n={rows.filter((r) => r.status === 'discussed' || r.status === 'submitted').length} onClick={() => setRoute({ view: 'perfDirectory' })} />
         <QuickCard icon={I.heart} title="Achievements" sub={'Bonus points, capped at ' + A.BONUS_CAP + ' per cycle'}
           n={perf.achievements.length} onClick={() => setRoute({ view: 'perfAchievements' })} />
         <QuickCard icon={I.alert || I.pulse} title="Incidents" sub={'Deductions, capped at ' + A.PENALTY_CAP + ' per cycle'}
@@ -468,7 +585,16 @@ function PerfDirectory({ roster, staffStore, setRoute }) {
   const [st, setSt] = useState('');
   const [sort, setSort] = useState('name');
   const [chip, setChip] = useState('all');
-  const [role, setRole] = useState('');
+  /* HOW MANY ROWS ARE ON SCREEN AT ONCE. The whole roster used to render in one go:
+     every row carries an avatar, a status chip and two buttons, and the table sits
+     inside a glass card (a 26px backdrop-filter), so ~130 rows made scrolling and even
+     typing in the filter stutter. A page at a time keeps it smooth, and the filters
+     above still search the WHOLE roster - only the drawing is limited. */
+  const PAGE = 40;
+  const [shown, setShown] = useState(PAGE);
+  // Nurses by default — the appraisal roster is overwhelmingly nursing, and landing on
+  // a mixed list made it look as though the filter was not working at all.
+  const [role, setRole] = useState('Nurse');
 
   const depts = useMemo(() => [...new Set(roster.rows.map((r) => r.dept).filter(Boolean))].sort(), [roster.rows]);
   const list = useMemo(() => {
@@ -476,7 +602,7 @@ function PerfDirectory({ roster, staffStore, setRoute }) {
     const chipDef = DIR_CHIPS.find((c) => c[0] === chip) || DIR_CHIPS[0];
     let out = roster.rows.filter((r) => {
       if (!chipDef[2](r)) return false;
-      if (role && ((r.emp && r.emp.role) || 'Nurse') !== role) return false;
+      if (role && (r.role || roleOf(r.emp)) !== role) return false;
       if (dept && r.dept !== dept) return false;
       if (st && r.status !== st) return false;
       if (!needle) return true;
@@ -490,7 +616,16 @@ function PerfDirectory({ roster, staffStore, setRoute }) {
     return out;
   }, [roster.rows, q, dept, st, sort, chip, role]);
 
-  const nurses = list.filter((r) => ((r.emp && r.emp.role) || 'Nurse') !== 'PCA').length;
+  // A new filter means a new result set: start it at the top rather than keeping a
+  // window scrolled open from the previous search.
+  useEffect(() => { setShown(PAGE); }, [q, dept, st, sort, chip, role]);
+  const page = list.slice(0, shown);
+
+  const nurses = list.filter((r) => !isPcaRow(r)).length;
+  // Segment counts come from the WHOLE roster, not the filtered list — a count that
+  // only ever read "0 PCA" because the PCA tab was not open told you nothing.
+  const allNurses = roster.rows.filter((r) => !isPcaRow(r)).length;
+  const allPca = roster.rows.length - allNurses;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -500,7 +635,13 @@ function PerfDirectory({ roster, staffStore, setRoute }) {
         ))}
       </div>
 
-      <div className="card">
+      {/* NO BACKDROP BLUR ON THIS ONE CARD. Every .card in the app is a glass panel
+          (backdrop-filter: blur(26px) saturate(1.75), mockup-ui.js), which the browser
+          must re-composite against everything behind it as you scroll. That is cheap on
+          a dashboard tile and expensive on a card holding a long staff table. An opaque
+          panel here scrolls smoothly and reads the same; `contain` keeps the table's
+          layout work from spilling into the rest of the page. */}
+      <div className="card" style={{ backdropFilter: 'none', WebkitBackdropFilter: 'none', background: 'rgba(252,254,255,.97)', contain: 'content' }}>
       <div className="card-h" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={MK.iconBadge('blue', 32)}><Ic d={I.user} s={16} /></div>
         <div style={{ flex: 1, minWidth: 200 }}>
@@ -509,8 +650,8 @@ function PerfDirectory({ roster, staffStore, setRoute }) {
         </div>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name / Emp ID…" style={{ minWidth: 190 }} />
         <div style={{ display: 'inline-flex', background: 'rgba(255,255,255,.4)', border: '1px solid rgba(255,255,255,.8)', borderRadius: 9, padding: 3, gap: 2 }}>
-          {[['', 'All'], ['Nurse', 'Nurses'], ['PCA', 'PCA']].map(([v, l]) => (
-            <button key={l} style={dirSegStyle(role === v)} onClick={() => setRole(v)}>{l}</button>
+          {[['', 'All (' + roster.rows.length + ')'], ['Nurse', 'Nurses (' + allNurses + ')'], ['PCA', 'PCA (' + allPca + ')']].map(([v, l]) => (
+            <button key={v} style={dirSegStyle(role === v)} onClick={() => setRole(v)}>{l}</button>
           ))}
         </div>
         <select value={dept} onChange={(e) => setDept(e.target.value)}><option value="">All departments</option>{depts.map((d) => <option key={d}>{d}</option>)}</select>
@@ -536,7 +677,7 @@ function PerfDirectory({ roster, staffStore, setRoute }) {
               </tr>
             </thead>
             <tbody>
-              {list.map((r) => (
+              {page.map((r) => (
                 <tr key={r.empId}>
                   <td style={{ textAlign: 'center' }}>
                     <span title={r.emp && r.emp.fav ? 'Remove from favourites' : 'Mark as a favourite'}
@@ -549,7 +690,7 @@ function PerfDirectory({ roster, staffStore, setRoute }) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <MK.Av name={r.name} emp={r.emp} empId={r.empId} size={26} />
                       <span style={{ fontWeight: 600, cursor: 'pointer' }} onClick={() => setRoute({ view: 'perfStaff', emp: r.empId })}>{r.name}</span>
-                      {r.emp && r.emp.role === 'PCA' && <span style={MK.roleChip('PCA')}>PCA</span>}
+                      {isPcaRow(r) && <span style={MK.roleChip('PCA')}>PCA</span>}
                       {r.overdue && <span className="tag" style={{ color: '#d23a52', borderColor: '#d23a5255', background: '#d23a5214' }}>overdue</span>}
                     </div>
                   </td>
@@ -579,6 +720,15 @@ function PerfDirectory({ roster, staffStore, setRoute }) {
               ))}
             </tbody>
           </table>
+        )}
+        {list.length > page.length && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 2px 2px', flexWrap: 'wrap' }}>
+            <button className="btn" onClick={() => setShown((n) => n + PAGE)}>
+              Show {Math.min(PAGE, list.length - page.length)} more
+            </button>
+            <button className="btn" onClick={() => setShown(list.length)}>Show all {list.length}</button>
+            <span style={{ fontSize: 11.5, color: MK.FAINT }}>showing {page.length} of {list.length}</span>
+          </div>
         )}
         <div style={{ paddingTop: 10, fontSize: 11, color: MK.FAINT }}>
           Click a staff member to open their profile and full appraisal history. Appraisal windows run every 6 months from each individual's date of joining.
@@ -642,6 +792,9 @@ function PerfForm({ roster, perf, empId, setRoute }) {
   const [assessorRemarks, setAssessorRemarks] = useState(() => (saved && saved.assessorRemarks) || '');
   const [strengths, setStrengths] = useState(() => (saved && saved.strengths) || '');
   const [development, setDevelopment] = useState(() => (saved && saved.development) || '');
+  // The date the appraisal was discussed with the staff member. It used to be shown
+  // (never captured) on the review queue; with the queue gone the form owns it.
+  const [discussedOn, setDiscussedOn] = useState(() => (saved && saved.discussedOn) || '');
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -651,6 +804,7 @@ function PerfForm({ roster, perf, empId, setRoute }) {
     setAssessorRemarks((saved && saved.assessorRemarks) || '');
     setStrengths((saved && saved.strengths) || '');
     setDevelopment((saved && saved.development) || '');
+    setDiscussedOn((saved && saved.discussedOn) || '');
     setDirty(false);
   }, [empId, saved && saved.id, saved && saved.updatedAt]);
 
@@ -674,7 +828,7 @@ function PerfForm({ roster, perf, empId, setRoute }) {
     cycleStart: saved ? saved.cycleStart : row.cycle.start.toISOString().slice(0, 10),
     cycleEnd: saved ? saved.cycleEnd : row.cycle.end.toISOString().slice(0, 10),
     staffName: row.name, designation: row.designation, department: row.dept, doj: row.doj,
-    scores, remarks, assessorRemarks, strengths, development, status,
+    scores, remarks, assessorRemarks, strengths, development, discussedOn, status,
     assessorName: (window.__UNICO_USER__ && window.__UNICO_USER__.name) || 'Administrator',
   });
   const save = (status, msg) => { setBusy(true); perf.saveAppraisal(body(status), msg).then(() => { setBusy(false); setDirty(false); }); };
@@ -700,7 +854,7 @@ function PerfForm({ roster, perf, empId, setRoute }) {
           <div style={{ flex: 1, minWidth: 240 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 19, fontWeight: 700, color: MK.INK }}>{row.name}</span>
-              <span style={MK.roleChip(row.emp && row.emp.role === 'PCA' ? 'PCA' : 'Nurse')}>{row.emp && row.emp.role === 'PCA' ? 'PCA' : 'Nurse'}</span>
+              <span style={MK.roleChip(isPcaRow(row) ? 'PCA' : 'Nurse')}>{isPcaRow(row) ? 'PCA' : 'Nurse'}</span>
               <span style={MK.stChip(statusLabel)}>
                 <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor', marginRight: 5 }} />{statusLabel}
               </span>
@@ -727,7 +881,7 @@ function PerfForm({ roster, perf, empId, setRoute }) {
             <div style={{ fontSize: 12.2 }}><b style={{ color: MK.INK }}>{(saved && saved.cycleLabel) || row.cycle.label}</b> <span style={{ color: MK.MUTED }}>· appraisals run every 6 months from the individual&rsquo;s date of joining</span></div>
           </div>
           {/* Saving a form that is already submitted/discussed keeps its stage: "Save draft"
-              moved a completed form back to draft and out of the Part H queue. */}
+              moved a completed form back to draft and undid the discussion. */}
           {!locked && perfCan('edit') && (() => {
             const keep = saved && saved.status && saved.status !== 'draft' ? saved.status : 'draft';
             return <button className="btn" disabled={busy} onClick={() => save(keep, keep === 'draft' ? 'Draft saved.' : 'Changes saved.')}>{busy ? 'Saving…' : keep === 'draft' ? 'Save draft' : 'Save changes'}</button>;
@@ -735,7 +889,7 @@ function PerfForm({ roster, perf, empId, setRoute }) {
           {!locked && perfCan('edit') && (
             <button className="btn pri" disabled={busy || !canComplete}
               title={canComplete ? '' : 'Rate all 20 parameters and add remarks for any 1–2 first'}
-              onClick={() => save('discussed', 'Appraisal completed — ready for the CNS review queue.')}>
+              onClick={() => save('discussed', 'Appraisal completed — record Part H at the foot of the form to file it.')}>
               ✓ Complete &amp; schedule discussion
             </button>
           )}
@@ -893,8 +1047,13 @@ function PerfForm({ roster, perf, empId, setRoute }) {
                 <textarea rows="2" disabled={locked} value={development} onChange={(e) => { setDevelopment(e.target.value); setDirty(true); }} /></label>
               <label style={{ display: 'grid', gap: 4 }}><span className="sub">Overall remarks</span>
                 <textarea rows="3" disabled={locked} value={assessorRemarks} onChange={(e) => { setAssessorRemarks(e.target.value); setDirty(true); }} /></label>
+              <label style={{ display: 'grid', gap: 4, maxWidth: 240 }}><span className="sub">Discussed with the staff member on</span>
+                <input type="date" disabled={locked} value={discussedOn} onChange={(e) => { setDiscussedOn(e.target.value); setDirty(true); }} /></label>
             </div>
           </div>
+
+          <PartH row={row} saved={saved} perf={perf} live={{ score: settled.score, grade: grade.grade }}
+            complete={canComplete} dirty={dirty} setRoute={setRoute} />
         </div>
 
         {/* ---- Score Summary ---- */}
@@ -946,6 +1105,112 @@ function PerfForm({ roster, perf, empId, setRoute }) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* Part H — the authority's action, and the lock that files the form to the personal
+   record. It lives at the FOOT OF THE APPRAISAL ITSELF rather than on a review queue:
+   the Chief Nursing Superintendent is the one who fills the form, so there was nobody
+   to hand it on to and nothing for a second screen to approve. Recording the action
+   freezes the score the action was taken on (server side) and locks the form. */
+function PartH({ row, saved, perf, live, complete, dirty, setRoute }) {
+  const a = saved || null;
+  const filed = !!(a && a.status === 'actioned');
+  const g = (a && a.grade) || (live && live.grade) || '';
+  const suggested = A.CNS_ACTIONS.filter((x) => x.suggest.indexOf(g) >= 0);
+  // null = the CNS has not picked yet, so the suggestion for the current grade stands in.
+  // Holding "not picked" separately keeps a re-score from wiping a deliberate choice.
+  const [action, setAction] = useState(null);
+  const [remarks, setRemarks] = useState((a && a.authorityRemarks) || '');
+  const [next, setNext] = useState((a && a.nextReview) || '');
+  const [memo, setMemo] = useState((a && a.memoNo) || '');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setAction(null);
+    setRemarks((a && a.authorityRemarks) || '');
+    setNext((a && a.nextReview) || '');
+    setMemo((a && a.memoNo) || '');
+  }, [a && a.id, a && a.updatedAt, a && a.status]);
+
+  const chosen = action != null ? action : ((a && a.actions && a.actions[0]) || (suggested[0] && suggested[0].id) || '');
+  const guide = A.gradeFor((a && a.score) != null ? a.score : (live && live.score) || 0);
+
+  return (
+    <div className="card" style={filed ? { borderLeft: '3px solid #1f9d57' } : null}>
+      <div className="card-h">
+        <h3>Part H — Action by the Chief Nursing Superintendent</h3>
+        <div style={{ flex: 1 }} />
+        {g ? <span style={MK.gchip(g)}>{g}</span> : null}
+      </div>
+      <div className="card-b" style={{ display: 'grid', gap: 10 }}>
+        {!a ? (
+          <div style={{ fontSize: 11.6, color: MK.MUTED }}>
+            Save the appraisal first — the action is filed against the saved form.
+          </div>
+        ) : filed ? (
+          <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(31,157,87,.1)', fontSize: 11.6, color: '#1f7a48', lineHeight: 1.55 }}>
+            ✓ Action recorded — {(a.actions || []).map((id) => (A.CNS_ACTIONS.find((x) => x.id === id) || {}).label || id).join(' · ') || '—'}.
+            Form locked and filed to the personal record.
+            {a.authorityRemarks ? <div style={{ marginTop: 5, color: MK.BODY }}>{a.authorityRemarks}</div> : null}
+            <div style={{ marginTop: 5, color: MK.MUTED }}>
+              Next review {a.nextReview || '—'} · Memo no. {a.memoNo || '—'}
+            </div>
+          </div>
+        ) : !perfIsAdmin() ? (
+          <div style={{ fontSize: 11.6, color: MK.MUTED }}>Only the Chief Nursing Superintendent may record the Part H action.</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 11.6, color: MK.MUTED }}>
+              Grade {g || '—'} — guidance: <b style={{ color: MK.INK }}>{guide.interp}</b>
+            </div>
+            {a.discussedOn ? (
+              <div style={{ padding: '9px 12px', borderRadius: 10, background: 'rgba(31,157,87,.1)', color: '#1f7a48', fontSize: 11.5, lineHeight: 1.5 }}>
+                ✓ Discussed with the staff member on <b>{a.discussedOn}</b>.
+              </div>
+            ) : (
+              <div style={{ padding: '9px 12px', borderRadius: 10, background: 'rgba(224,138,30,.12)', color: '#b5670a', fontSize: 11.5, lineHeight: 1.5 }}>
+                No discussion date recorded yet — hold the meeting with the staff member and enter the date in Part G above before filing.
+              </div>
+            )}
+            <label style={{ display: 'grid', gap: 4 }}><span className="sub">Action</span>
+              <select value={chosen} onChange={(e) => setAction(e.target.value)}>
+                <option value="">Select action…</option>
+                {A.CNS_ACTIONS.map((x) => (
+                  <option key={x.id} value={x.id}>{x.label}{x.suggest.indexOf(g) >= 0 ? '  (suggested)' : ''}</option>
+                ))}
+              </select></label>
+            <label style={{ display: 'grid', gap: 4 }}><span className="sub">Remarks / directions to the Nursing Office</span>
+              <textarea rows="3" value={remarks} onChange={(e) => setRemarks(e.target.value)} /></label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <label style={{ display: 'grid', gap: 4 }}><span className="sub">Date of next review</span>
+                <input type="date" value={next} onChange={(e) => setNext(e.target.value)} /></label>
+              <label style={{ display: 'grid', gap: 4 }}><span className="sub">Memo no.</span>
+                <input value={memo} onChange={(e) => setMemo(e.target.value)} /></label>
+            </div>
+            {dirty && (
+              <div style={{ fontSize: 11.2, color: '#b5670a' }}>
+                There are unsaved changes on the form. Save them first — the action is filed against the scores the server holds.
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn" onClick={() => setRoute({ view: 'perfPrint', emp: row.empId })}>Printable form</button>
+              <button className="btn pri" style={{ flex: 1, justifyContent: 'center' }}
+                disabled={busy || !chosen || !complete || dirty}
+                title={complete ? '' : 'Rate all 20 parameters and add remarks for any 1–2 first'}
+                onClick={() => {
+                  setBusy(true);
+                  perf.recordAction(a.id, { actions: [chosen], authorityRemarks: remarks, nextReview: next, memoNo: memo })
+                    .then(() => setBusy(false));
+                }}>{busy ? 'Recording…' : '✓ Record action & file'}</button>
+            </div>
+            <div style={{ fontSize: 10.8, color: MK.FAINT }}>
+              Filing locks the form. An administrator can reopen it from the banner at the top for a correction.
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1153,7 +1418,7 @@ function PerfStaffRecord({ roster, perf, empId, setRoute }) {
   if (!row) return <Empty icon={I.user} title="Staff member not found" />;
   const hist = row.history.slice().reverse();
   const latest = row.last;
-  const isPca = row.emp && row.emp.role === 'PCA';
+  const isPca = isPcaRow(row);
   const idRow = (k, v) => (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 0', borderBottom: '1px solid rgba(125,145,180,.14)' }}>
       <span style={{ flex: 1, fontSize: 9.6, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: MK.FAINT }}>{k}</span>
@@ -1375,214 +1640,23 @@ function Trend({ points }) {
   );
 }
 
-/* ================= 6. CNS REVIEW QUEUE ================= */
-function PerfQueue({ roster, perf, setRoute }) {
-  const [tab, setTab] = useState('pending');
-  const [sel, setSel] = useState(null);
-
-  const all = roster.rows.filter((r) => r.appraisal && ['discussed', 'submitted', 'actioned'].indexOf(r.status) >= 0);
-  const pending = all.filter((r) => r.status !== 'actioned');
-  const actioned = all.filter((r) => r.status === 'actioned');
-  const list = tab === 'pending' ? pending : tab === 'actioned' ? actioned : all;
-
-  // Keep a selection alive as the list changes; default to the first pending item.
-  const current = (sel && list.find((r) => r.empId === sel)) || list[0] || null;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={MK.iconBadge('violet', 34)}><Ic d={I.doc} s={17} /></div>
-        <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontWeight: 600, fontSize: 15.5, color: MK.INK }}>CNS Review Queue</div>
-          <div style={{ fontSize: 11.5, color: MK.MUTED }}>Part H — action by the Chief Nursing Superintendent after discussion with staff</div>
-        </div>
-        <div style={{ display: 'inline-flex', gap: 2, padding: 3, borderRadius: 11, background: 'rgba(125,145,180,.14)' }}>
-          {[['all', 'All ' + all.length], ['pending', 'Pending ' + pending.length], ['actioned', 'Actioned ' + actioned.length]].map(([k, l]) => (
-            <button key={k} onClick={() => setTab(k)} style={{
-              border: 0, cursor: 'pointer', font: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '5px 13px', borderRadius: 9,
-              color: tab === k ? MK.INK : MK.MUTED, background: tab === k ? '#fff' : 'transparent',
-              boxShadow: tab === k ? '0 2px 6px rgba(31,59,90,.12)' : 'none',
-            }}>{l}</button>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.3fr) minmax(340px,1fr)', gap: 14, alignItems: 'start' }}>
-        {/* ---- list ---- */}
-        <div className="card">
-          {list.length === 0 ? (
-            <Empty icon={I.check || I.doc} title="Nothing waiting" sub="Completed appraisals arrive here for the authority's action." />
-          ) : (
-            <>
-              <table className="tbl">
-                <thead><tr><th>Staff member</th><th style={{ width: 58 }}>Score</th><th style={{ width: 58 }}>Grade</th><th style={{ width: 106 }}>Discussed</th><th style={{ width: 130 }}>Status</th></tr></thead>
-                <tbody>
-                  {list.map((r) => {
-                    const on = current && current.empId === r.empId;
-                    const stLabel = (STATUS_META[r.status] || STATUS_META.none).label;
-                    return (
-                      <tr key={r.empId} onClick={() => setSel(r.empId)} style={{
-                        cursor: 'pointer',
-                        background: on ? 'rgba(0,144,202,.07)' : undefined,
-                        boxShadow: on ? 'inset 3px 0 0 #0090ca' : 'none',
-                      }}>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                            <MK.Av name={r.name} emp={r.emp} empId={r.empId} size={30} />
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ fontWeight: 600, color: MK.INK }}>{r.name}</span>
-                                <span style={MK.roleChip(r.emp && r.emp.role === 'PCA' ? 'PCA' : 'Nurse')}>{r.emp && r.emp.role === 'PCA' ? 'PCA' : 'Nurse'}</span>
-                              </div>
-                              <div style={{ fontSize: 10.6, color: MK.FAINT }}>{r.dept} · {r.designation}</div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="num" style={{ fontWeight: 700, color: MK.INK }}>{r.appraisal.score}</td>
-                        <td><span style={MK.gchip(r.appraisal.grade)}>{r.appraisal.grade}</span></td>
-                        <td className="num" style={{ fontSize: 11.2, color: MK.MUTED }}>{r.appraisal.discussedOn || '—'}</td>
-                        <td><span style={MK.stChip(stLabel)}>{stLabel}</span></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <div style={{ padding: '10px 14px', fontSize: 11, color: MK.FAINT, borderTop: '1px solid ' + MK.LINE }}>
-                Appraisals are filled by the CNS or Admin only. Recording the Part H action locks the form to the personal file.
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* ---- detail ---- */}
-        {current ? <QueueDetail row={current} perf={perf} setRoute={setRoute} /> : (
-          <div className="card"><Empty icon={I.doc} title="Nothing selected" sub="Pick an appraisal on the left to review it." /></div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function QueueDetail({ row, perf, setRoute }) {
-  const a = row.appraisal;
-  const g = a.grade;
-  const locked = a.status === 'actioned';
-  const suggested = A.CNS_ACTIONS.filter((x) => x.suggest.indexOf(g) >= 0);
-  const [action, setAction] = useState(() => (a.actions && a.actions[0]) || (suggested[0] && suggested[0].id) || '');
-  const [remarks, setRemarks] = useState(a.authorityRemarks || '');
-  const [next, setNext] = useState(a.nextReview || '');
-  const [memo, setMemo] = useState(a.memoNo || '');
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    const sg = A.CNS_ACTIONS.filter((x) => x.suggest.indexOf(a.grade) >= 0);
-    setAction((a.actions && a.actions[0]) || (sg[0] && sg[0].id) || '');
-    setRemarks(a.authorityRemarks || ''); setNext(a.nextReview || ''); setMemo(a.memoNo || '');
-  }, [a.id, a.updatedAt, a.status]);
-
-  const t = A.tally(a.scores);
-  const stLabel = (STATUS_META[a.status] || STATUS_META.none).label;
-
-  return (
-    <div className="card" style={{ position: 'sticky', top: 12 }}>
-      <div className="card-h"><h3>Appraisal review</h3><div style={{ flex: 1 }} /><span style={MK.stChip(stLabel)}>{stLabel}</span></div>
-      <div className="card-b">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-          <MK.Av name={row.name} emp={row.emp} empId={row.empId} size={42} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: MK.INK }}>{row.name}</div>
-            <div style={{ fontSize: 11.4, color: MK.MUTED }}>{row.dept} · {row.designation} · {row.emp && row.emp.role === 'PCA' ? 'PCA' : 'Nurse'}</div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, margin: '10px 0 12px' }}>
-          <span className="num" style={{ fontSize: 30, fontWeight: 700, color: MK.INK, lineHeight: 1 }}>{a.score}</span>
-          <span className="num" style={{ fontSize: 13, color: MK.FAINT }}>/100</span>
-          <span style={MK.gchip(g, true)}>{g} · {A.gradeFor(a.score).rating}</span>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          {t.sections.map((sc) => (
-            <div key={sc.no} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-              <span style={{ width: 118, fontSize: 11, color: MK.BODY }}>{sc.title.charAt(0) + sc.title.slice(1).toLowerCase()}</span>
-              <div style={{ flex: 1 }}><Bar value={sc.sub} max={sc.max} color={MK.barColor((sc.sub / sc.max) * 100)} height={6} /></div>
-              <span className="num" style={{ width: 42, textAlign: 'right', fontSize: 11, fontWeight: 700, color: MK.INK }}>{sc.sub}/{sc.max}</span>
-            </div>
-          ))}
-        </div>
-
-        {a.discussedOn ? (
-          <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 10, background: 'rgba(31,157,87,.1)', color: '#1f7a48', fontSize: 11.6, lineHeight: 1.5 }}>
-            ✓ Discussed with the staff member on <b>{a.discussedOn}</b> — acknowledgement signed by the employee and the CNS.
-          </div>
-        ) : (
-          <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 10, background: 'rgba(224,138,30,.12)', color: '#b5670a', fontSize: 11.6, lineHeight: 1.5 }}>
-            The discussion date has not been recorded yet. Hold the meeting with the staff member before filing the Part H action.
-          </div>
-        )}
-
-        <div style={{ marginTop: 14, fontSize: 10.4, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: '#6a52d4' }}>
-          Part H — Action by Chief Nursing Superintendent
-        </div>
-        <div style={{ fontSize: 11.6, color: MK.MUTED, margin: '3px 0 9px' }}>
-          Grade {g} — guidance: <b style={{ color: MK.INK }}>{A.gradeFor(a.score).interp}</b>
-        </div>
-
-        {locked ? (
-          <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(31,157,87,.1)', fontSize: 11.6, color: '#1f7a48' }}>
-            ✓ Part H action recorded — {(a.actions || []).map((id) => (A.CNS_ACTIONS.find((x) => x.id === id) || {}).label || id).join(' · ') || '—'}.
-            Form locked and filed to the personal record.
-            {a.authorityRemarks ? <div style={{ marginTop: 5, color: MK.BODY }}>{a.authorityRemarks}</div> : null}
-          </div>
-        ) : perfIsAdmin() ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-            <select value={action} onChange={(e) => setAction(e.target.value)}>
-              <option value="">Select action…</option>
-              {A.CNS_ACTIONS.map((x) => (
-                <option key={x.id} value={x.id}>{x.label}{x.suggest.indexOf(g) >= 0 ? '  (suggested)' : ''}</option>
-              ))}
-            </select>
-            <textarea rows="3" value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder="Remarks / directions to the Nursing Office…" />
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <input type="date" value={next} onChange={(e) => setNext(e.target.value)} title="Date of next review" />
-              <input value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="Memo no." />
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn" onClick={() => setRoute({ view: 'perfPrint', emp: row.empId })}>Printable form</button>
-              <button className="btn pri" style={{ flex: 1, justifyContent: 'center' }} disabled={busy || !action}
-                onClick={() => {
-                  setBusy(true);
-                  perf.recordAction(a.id, { actions: [action], authorityRemarks: remarks, nextReview: next, memoNo: memo })
-                    .then(() => setBusy(false));
-                }}>{busy ? 'Recording…' : '✓ Record action & lock'}</button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ fontSize: 11.5, color: MK.MUTED }}>Only the Chief Nursing Superintendent may record the Part H action.</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ================= 7. REGISTERS (achievements / incidents) ================= */
-const ACH_CATEGORIES = [
-  { id: 'award', label: 'Award / recognition', levels: [['Hospital', 3], ['Department', 2], ['Unit', 1]] },
-  { id: 'training', label: 'Training completed', levels: [['International', 3], ['National', 2], ['In-house', 1]] },
-  { id: 'presentation', label: 'Presentation / teaching', levels: [['Conference', 3], ['Hospital', 2], ['Unit', 1]] },
-  { id: 'improvement', label: 'Quality improvement adopted', levels: [['Hospital-wide', 3], ['Department', 2], ['Unit', 1]] },
-  { id: 'appreciation', label: 'Patient / family appreciation', levels: [['Written', 2], ['Verbal', 1]] },
-  { id: 'extra', label: 'Extra duty / emergency cover', levels: [['Sustained', 2], ['One-off', 1]] },
-];
-const INC_CATEGORIES = [
-  { id: 'medication', label: 'Medication error' },
-  { id: 'documentation', label: 'Documentation lapse' },
-  { id: 'infection', label: 'Infection-control breach' },
-  { id: 'attendance', label: 'Attendance / punctuality' },
-  { id: 'conduct', label: 'Conduct / communication' },
-  { id: 'procedure', label: 'Procedure / protocol deviation' },
-];
-const SEVERITIES = [['Minor', 1], ['Moderate', 2], ['Major', 3], ['Critical', 5]];
+/* ================= 6. REGISTERS (achievements / incidents) ================= */
+// The categories and the severity ramp are SHARED SPEC (appraisal-spec.js), not this
+// module's own list: the staff profile records conduct against a person too, and a
+// second copy here would drift out of step with it.
+// The DEFAULT lists. What is actually offered comes from the server, because an
+// administrator can add, rename and remove categories (PUT /api/performance/categories);
+// these stand in only until that response arrives, or for an installation that has
+// never customised them.
+const ACH_CATEGORIES = A.ACH_CATEGORIES;
+const INC_CATEGORIES = A.INC_CATEGORIES;
+const SEVERITIES = A.SEVERITIES;
+// The one place any screen asks "what can this be filed under?".
+const catsOf = (perf, kind) => {
+  const c = (perf && perf.categories) || null;
+  const list = c && (kind === 'ach' ? c.ach : c.inc);
+  return (Array.isArray(list) && list.length) ? list : (kind === 'ach' ? ACH_CATEGORIES : INC_CATEGORIES);
+};
 // The mockup's severity ramp, mapped onto this module's own severity names so a Major
 // entry reads at the same weight as the mockup's "Serious".
 const SEV_TONE = { Minor: '#e08a1e', Moderate: '#b5670a', Major: '#d23a52', Critical: '#8f2033' };
@@ -1641,6 +1715,7 @@ function PerfRegister({ kind, roster, perf, setRoute, focusEmp }) {
   const openStaff = (id) => { setStaffSel(id); setScreen('staff'); };
   const [cat, setCat] = useState('');
   const [adding, setAdding] = useState(false);
+  const [editingCats, setEditingCats] = useState(false);
   const [cert, setCert] = useState(null);
 
   const list = useMemo(() => {
@@ -1753,6 +1828,10 @@ function PerfRegister({ kind, roster, perf, setRoute, focusEmp }) {
           <button className="btn" onClick={() => setScreen(screen === 'home' ? 'register' : 'home')}>
             {screen === 'home' ? 'Register' : 'Overview'}
           </button>
+          {/* Only an administrator may change what the whole hospital files under. */}
+          {perfIsAdmin() && (
+            <button className="btn" onClick={() => setEditingCats(true)}>Manage categories</button>
+          )}
           {perfCan('add') && (
             <button className="btn pri" onClick={() => setAdding(true)}>
               + {isAch ? 'Record an achievement' : 'Record an incident'}
@@ -1924,16 +2003,21 @@ function PerfRegister({ kind, roster, perf, setRoute, focusEmp }) {
                   title={isAch ? 'No entries in this category' : 'No incidents in this category'}
                   sub={isAch ? 'Pick another category above, or record a new achievement.' : 'Pick another category above, or log a new incident.'} />
               ) : (
-                <table className="tbl">
+                /* EIGHT COLUMNS HAVE TO FIT. Left to size themselves the row grew past the
+                   card, so the last column — the one holding the buttons — was cut in half
+                   and the × dropped onto a second line under "Issue". The description takes
+                   the slack (it is the only column that can wrap usefully) and every short
+                   column is pinned to its content with nowrap. */
+                <table className="tbl" style={{ width: '100%', tableLayout: 'auto' }}>
                   <thead><tr>
-                    <th>Staff member</th>
+                    <th style={{ whiteSpace: 'nowrap' }}>Staff member</th>
                     <th>{isAch ? 'Achievement' : 'What happened'}</th>
-                    <th>{isAch ? 'Type' : 'Category'}</th>
-                    <th>{isAch ? 'Level' : 'Severity'}</th>
-                    <th>Date</th>
-                    <th style={{ width: 58, textAlign: 'right' }}>Points</th>
-                    <th>{isAch ? 'Reward' : 'Action taken'}</th>
-                    <th style={{ textAlign: 'right' }}>{isAch ? 'Certificate' : ''}</th>
+                    <th style={{ whiteSpace: 'nowrap' }}>{isAch ? 'Type' : 'Category'}</th>
+                    <th style={{ whiteSpace: 'nowrap' }}>{isAch ? 'Level' : 'Severity'}</th>
+                    <th style={{ whiteSpace: 'nowrap' }}>Date</th>
+                    <th style={{ width: 58, textAlign: 'right', whiteSpace: 'nowrap' }}>Points</th>
+                    <th style={{ whiteSpace: 'nowrap' }}>{isAch ? 'Reward' : 'Action taken'}</th>
+                    <th style={{ textAlign: 'right', width: '1%', whiteSpace: 'nowrap' }}>{isAch ? 'Certificate' : ''}</th>
                   </tr></thead>
                   <tbody>
                     {list.map((r) => {
@@ -1947,24 +2031,26 @@ function PerfRegister({ kind, roster, perf, setRoute, focusEmp }) {
                             <MK.Av name={r.staffName} empId={r.empId} size={26} />
                             <div style={{ minWidth: 0 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ fontWeight: 600, color: MK.INK, cursor: 'pointer' }} onClick={() => openStaff(r.empId)}>{r.staffName}</span>
-                                {who && who.emp && who.emp.role === 'PCA' && <span style={MK.roleChip('PCA')}>PCA</span>}
+                                <span style={{ fontWeight: 600, color: MK.INK, cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} onClick={() => openStaff(r.empId)}>{r.staffName}</span>
+                                {who && isPcaRow(who) && <span style={MK.roleChip('PCA')}>PCA</span>}
                               </div>
-                              <div style={{ fontSize: 10.6, color: MK.FAINT }}>{who && who.designation ? who.designation + ' · ' : ''}{r.department}</div>
+                              <div style={{ fontSize: 10.6, color: MK.FAINT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{who && who.designation ? who.designation + ' · ' : ''}{r.department}</div>
                             </div>
                           </div>
                         </td>
-                        <td style={{ color: MK.INK, maxWidth: 300 }}>{r.what}</td>
+                        <td style={{ color: MK.INK, minWidth: 160, maxWidth: 340 }}>{r.what}</td>
                         <td><span style={tagPill(catColor(r.category))}>{r.category || '—'}</span></td>
                         <td>{isAch
                           ? <span className="sub">{r.level || '—'}</span>
                           : <span style={tagPill(sevTone(r.severity), true)}>{r.severity || '—'}</span>}</td>
-                        <td className="num" style={{ fontSize: 11.2 }}>{r.date}</td>
+                        <td className="num" style={{ fontSize: 11.2, whiteSpace: 'nowrap' }}>{r.date}</td>
                         <td style={{ textAlign: 'right' }}><span className="num" style={{ fontWeight: 700, padding: '2px 9px', borderRadius: 14, color: tone, background: tone + '18' }}>{isAch ? '+' : '−'}{r.points}</span></td>
-                        <td style={{ fontSize: 11.5, color: MK.BODY }}>{(isAch ? r.reward : r.action) || <span style={{ color: MK.FAINT }}>—</span>}</td>
-                        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                          {isAch && <button className="btn" onClick={() => setCert(r)}>{r.certificate ? 'Certificate' : 'Issue'}</button>}{' '}
-                          {perfCan('delete') && <button className="icon-btn danger" title="Remove" onClick={() => { if (confirm('Remove this entry? The points come off the appraisal immediately.')) (isAch ? perf.delAchievement : perf.delIncident)(r.id); }}>×</button>}
+                        <td style={{ fontSize: 11.5, color: MK.BODY, maxWidth: 170 }}>{(isAch ? r.reward : r.action) || <span style={{ color: MK.FAINT }}>—</span>}</td>
+                        <td style={{ width: '1%', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                            {isAch && <button className="btn" style={{ whiteSpace: 'nowrap' }} onClick={() => setCert(r)}>{r.certificate ? 'Certificate' : 'Issue'}</button>}
+                            {perfCan('delete') && <button className="icon-btn danger" title="Remove this entry" onClick={() => { if (confirm('Remove this entry? The points come off the appraisal immediately.')) (isAch ? perf.delAchievement : perf.delIncident)(r.id); }}>×</button>}
+                          </div>
                         </td>
                       </tr>
                       );
@@ -2002,6 +2088,7 @@ function PerfRegister({ kind, roster, perf, setRoute, focusEmp }) {
       )}
 
       {adding && <EntryModal kind={kind} roster={roster} perf={perf} onClose={() => setAdding(false)} />}
+      {editingCats && <CategoryManager kind={kind} perf={perf} onClose={() => setEditingCats(false)} />}
       {cert && <CertificateModal entry={cert} onClose={() => setCert(null)} />}
     </div>
   );
@@ -2070,7 +2157,7 @@ function PerfEntryHistory({ kind, roster, perf, empId, caps, onBack, onCert, set
   cycleRows.forEach((r) => { inCycle[r.id] = true; });
   const pts = cycleRows.reduce((t, r) => t + (Number(r.points) || 0), 0);
   const applied = Math.min(pts, cap);
-  const isPca = row.emp && row.emp.role === 'PCA';
+  const isPca = isPcaRow(row);
   const cycleLabel = row.cycle ? row.cycle.label : '';
   const badges = isAch ? ACH_BADGES.filter(([, , test]) => all.some(test)) : [];
   const repeat = cycleRows.length > 1;
@@ -2190,11 +2277,122 @@ function PerfEntryHistory({ kind, roster, perf, empId, caps, onBack, onCert, set
   );
 }
 
+/* MANAGE THE CATEGORIES an achievement or an incident can be filed under. Administrator
+   only, and it edits BOTH lists in one place (the button appears on either register)
+   because they are one setting: how this hospital classifies conduct.
+
+   What it does NOT do is touch entries already filed. Each entry stores the category
+   TEXT it was saved with, so renaming "Medication error" or removing it entirely leaves
+   last year's register reading exactly as it did — the change only decides what is
+   offered from now on. The dialog says so, because "will this rewrite my history?" is
+   the first thing anybody asks before editing a list like this. */
+function CategoryManager({ kind, perf, onClose }) {
+  const capOf = (k) => (k === 'ach' ? capsOf(perf).bonus : capsOf(perf).penalty);
+  const clone = (k) => catsOf(perf, k).map((c) => ({
+    id: c.id, label: c.label,
+    levels: (c.levels || []).map((l) => [l[0], l[1]]),
+  }));
+  const [tab, setTab] = useState(kind);
+  const [ach, setAch] = useState(() => clone('ach'));
+  const [inc, setInc] = useState(() => clone('inc'));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const isAch = tab === 'ach';
+  const rows = isAch ? ach : inc;
+  const setRows = isAch ? setAch : setInc;
+  const cap = capOf(tab);
+
+  const edit = (i, patch) => setRows((r) => r.map((c, n) => (n === i ? Object.assign({}, c, patch) : c)));
+  const drop = (i) => setRows((r) => r.filter((c, n) => n !== i));
+  const add = () => setRows((r) => r.concat([{ id: '', label: '', levels: isAch ? [['Recorded', 1]] : [] }]));
+  const editLevel = (i, li, patch) => setRows((r) => r.map((c, n) => {
+    if (n !== i) return c;
+    const levels = (c.levels || []).map((l, m) => (m === li ? [patch.name != null ? patch.name : l[0], patch.pts != null ? patch.pts : l[1]] : l));
+    return Object.assign({}, c, { levels });
+  }));
+  const addLevel = (i) => setRows((r) => r.map((c, n) => (n === i ? Object.assign({}, c, { levels: (c.levels || []).concat([['', 1]]) }) : c)));
+  const dropLevel = (i, li) => setRows((r) => r.map((c, n) => (n === i ? Object.assign({}, c, { levels: (c.levels || []).filter((l, m) => m !== li) }) : c)));
+
+  const save = () => {
+    const clean = (list) => list.filter((c) => String(c.label || '').trim());
+    if (!clean(ach).length || !clean(inc).length) { setErr('Keep at least one category in each list.'); return; }
+    setBusy(true); setErr('');
+    perf.saveCategories({ ach: clean(ach), inc: clean(inc) }).then((r) => {
+      setBusy(false);
+      if (r && r.ok) onClose(); else setErr((r && r.error) || 'That did not save.');
+    });
+  };
+
+  return (
+    <Modal wide title="Manage categories" sub="what an achievement or an incident can be filed under" onClose={onClose}
+      footer={<>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn pri" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save categories'}</button>
+      </>}>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div style={{ display: 'inline-flex', gap: 2, padding: 3, borderRadius: 11, background: 'rgba(125,145,180,.14)', justifySelf: 'start' }}>
+          {[['ach', 'Achievements (' + ach.length + ')'], ['inc', 'Incidents (' + inc.length + ')']].map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)} style={{
+              border: 0, cursor: 'pointer', font: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '5px 13px', borderRadius: 9,
+              color: tab === k ? MK.INK : MK.MUTED, background: tab === k ? '#fff' : 'transparent',
+            }}>{l}</button>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 11.5, color: MK.MUTED, lineHeight: 1.55 }}>
+          {isAch
+            ? 'Each achievement category carries its own levels, and the level sets the bonus points. Nothing may award more than ' + cap + ' — the per-cycle cap.'
+            : 'Incident categories classify what happened. The points come from the severity chosen when the entry is filed, not from the category.'}
+          {' '}Entries already on file keep the category they were saved with, so editing this list never changes past records.
+        </div>
+
+        {rows.map((c, i) => (
+          <div key={i} className="card" style={{ background: 'rgba(255,255,255,.55)' }}>
+            <div className="card-b" style={{ display: 'grid', gap: 9 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input value={c.label} onChange={(e) => edit(i, { label: e.target.value })}
+                  placeholder="Category name" style={{ flex: 1, fontWeight: 600 }} />
+                <button className="icon-btn danger" title="Remove this category" onClick={() => drop(i)}>×</button>
+              </div>
+              {isAch && (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: MK.FAINT }}>Levels &amp; points</div>
+                  {(c.levels || []).map((l, li) => (
+                    <div key={li} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <input value={l[0]} onChange={(e) => editLevel(i, li, { name: e.target.value })}
+                        placeholder="e.g. Hospital" style={{ flex: 1 }} />
+                      <input type="number" min="0" max={cap} value={l[1]}
+                        onChange={(e) => editLevel(i, li, { pts: Math.max(0, Math.min(cap, Number(e.target.value) || 0)) })}
+                        style={{ width: 74 }} />
+                      <span style={{ fontSize: 11, color: MK.FAINT }}>pts</span>
+                      <button className="icon-btn danger" title="Remove this level" onClick={() => dropLevel(i, li)}>×</button>
+                    </div>
+                  ))}
+                  <button className="btn" style={{ justifySelf: 'start' }} onClick={() => addLevel(i)}>+ Add a level</button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        <button className="btn" style={{ justifySelf: 'start' }} onClick={add}>
+          + Add {isAch ? 'an achievement' : 'an incident'} category
+        </button>
+        {err && <div style={{ fontSize: 12, color: '#d23a52', fontWeight: 600 }}>{err}</div>}
+        <div style={{ fontSize: 11, color: MK.FAINT }}>
+          Both lists are saved together, whichever tab you are on.
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function EntryModal({ kind, roster, perf, onClose }) {
   const isAch = kind === 'ach';
-  const cats = isAch ? ACH_CATEGORIES : INC_CATEGORIES;
+  const cats = catsOf(perf, kind);
   const [empId, setEmpId] = useState('');
-  const [category, setCategory] = useState(cats[0].label);
+  const [category, setCategory] = useState((cats[0] || {}).label || '');
   const [level, setLevel] = useState('');
   const [severity, setSeverity] = useState(SEVERITIES[0][0]);
   const [what, setWhat] = useState('');
@@ -2221,7 +2419,10 @@ function EntryModal({ kind, roster, perf, onClose }) {
     if (!row) return;
     setBusy(true);
     const body = {
-      empId: row.empId, staffName: row.name, department: row.dept,
+      // staffId / designation travel with the entry too — see normIncident on the
+      // server for why the employee number alone cannot identify the person.
+      empId: row.empId, staffId: String(row.emp && row.emp.id), staffName: row.name,
+      department: row.dept, designation: row.designation || '',
       cycleId: row.cycle ? row.cycle.id : '', date, category, what, note, points,
       ...(isAch ? { level, reward } : { severity, action }),
     };
@@ -2236,9 +2437,9 @@ function EntryModal({ kind, roster, perf, onClose }) {
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn pri" disabled={busy || !empId || !what.trim()} onClick={submit}>{busy ? 'Saving…' : (isAch ? 'Save achievement' : 'Save incident')}</button>
       </>}>
-      <div style={{ display: 'grid', gap: 10 }}>
-        <label style={{ display: 'grid', gap: 4 }}><span className="sub">Staff member *</span>
-          <select value={empId} onChange={(e) => setEmpId(e.target.value)}>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <label style={{ display: 'grid', gap: 5 }}><span className="sub">Staff member *</span>
+          <select value={empId} onChange={(e) => setEmpId(e.target.value)} style={{ width: '100%' }}>
             <option value="">Select…</option>
             {roster.rows.map((r) => <option key={r.empId} value={r.empId}>{r.name} — {r.empId} · {r.dept}</option>)}
           </select></label>
@@ -2314,7 +2515,7 @@ function CertificateModal({ entry, onClose }) {
   );
 }
 
-/* ================= 8. DEPARTMENT COMPARISON ================= */
+/* ================= 7. DEPARTMENT COMPARISON ================= */
 const GRADE_ORDER = A.GRADES.map((g) => g.grade);   // A+ → E, straight off the spec
 
 function PerfCompare({ roster, setRoute }) {
@@ -2434,7 +2635,7 @@ function PerfCompare({ roster, setRoute }) {
   );
 }
 
-/* ================= 9. ATTRITION DRILL-INS =================
+/* ================= 8. ATTRITION DRILL-INS =================
    The Department Attrition and Leaver Record screens from the mockup. The attrition
    OVERVIEW lives in performance-hr.jsx (window.PerfAttrition) which this file does not
    own, so the drill-ins are hosted here under the existing `perfAttrition` route: a new
@@ -2473,7 +2674,7 @@ function useLeavers(staffStore, perf) {
       const joined = attrParse(e.doj);
       return {
         empId, emp: e, name: e.name, dept: e.current_department || 'Unassigned',
-        designation: e.designation, role: e.role === 'PCA' ? 'PCA' : 'Nurse',
+        designation: e.designation, role: roleOf(e),
         joined, left, exit: x, documented: !!x,
         reason: (x && x.reason) || e.archived_reason || '',
         separation: (x && x.separation) || '',
@@ -2498,7 +2699,7 @@ function useUnitAttrition(staffStore, leavers) {
     const at = (d) => m[d] || (m[d] = { dept: d, roster: 0, nurses: 0, pcas: 0, exits: 0, list: [] });
     (staffStore.staff || []).filter((e) => e.is_active !== false && !e.former).forEach((e) => {
       const u = at(e.current_department || 'Unassigned');
-      u.roster++; if (e.role === 'PCA') u.pcas++; else u.nurses++;
+      u.roster++; if (roleOf(e) === 'PCA') u.pcas++; else u.nurses++;
     });
     leavers.forEach((l) => { if (l.left >= from) { const u = at(l.dept); u.exits++; u.list.push(l); } });
     const units = Object.values(m).map((u) => ({
@@ -2753,14 +2954,45 @@ function PerfAttritionRoute({ roster, perf, staffStore, setRoute }) {
 }
 
 /* ================= root ================= */
+function PerfSkeleton() {
+  const shimmer = { background: 'linear-gradient(90deg,rgba(125,145,180,.10),rgba(125,145,180,.18),rgba(125,145,180,.10))', backgroundSize: '200% 100%', animation: 'perfShimmer 1.2s linear infinite', borderRadius: 8 };
+  const line = (w, h) => <div style={Object.assign({ width: w, height: h || 11 }, shimmer)} />;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <style>{'@keyframes perfShimmer{from{background-position:200% 0}to{background-position:-200% 0}}'}</style>
+      <div className="card"><div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {line('38%', 15)}{line('62%')}
+      </div></div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 12 }}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} className="card"><div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+            {line('55%', 9)}{line('40%', 22)}{line('72%', 9)}
+          </div></div>
+        ))}
+      </div>
+      <div className="card"><div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={Object.assign({ width: 28, height: 28, borderRadius: '50%', flexShrink: 0 }, shimmer)} />
+            {line('22%')}<div style={{ flex: 1 }}>{line('100%', 9)}</div>{line(54, 9)}
+          </div>
+        ))}
+      </div></div>
+      <div style={{ textAlign: 'center', fontSize: 11.5, color: MK.FAINT }}>Loading performance records…</div>
+    </div>
+  );
+}
+
 function PerformanceView({ view, emp, cycleId, setRoute }) {
   const staffStore = window.useStaffStore();
   const perf = usePerfStore();
   const roster = useRoster(staffStore, perf);
 
-  if (perf.loading) {
-    return <div style={{ display: 'grid', placeItems: 'center', height: '40vh', color: 'var(--muted,#8aa0b8)' }}>Loading performance records…</div>;
-  }
+  /* A SKELETON, NOT A BLANK WAIT. One centred sentence on an empty page reads as "this
+     is broken" long before it reads as "this is loading" — and it threw away the fact
+     that the shape of the screen is already known. The page draws itself immediately
+     and fills in, so the wait is visibly a wait. */
+  if (perf.loading) return <PerfSkeleton />;
   if (perf.error) {
     return <Empty icon={I.alert || I.pulse} title="Could not load performance records" sub={perf.error}
       action={<button className="btn pri" onClick={perf.reload}>Try again</button>} />;
@@ -2772,7 +3004,6 @@ function PerformanceView({ view, emp, cycleId, setRoute }) {
     case 'perfForm': return <PerfForm roster={roster} perf={perf} empId={emp} setRoute={setRoute} />;
     case 'perfPrint': return <PerfPrint roster={roster} empId={emp} cycleId={cycleId} setRoute={setRoute} />;
     case 'perfStaff': return <PerfStaffRecord roster={roster} perf={perf} empId={emp} setRoute={setRoute} />;
-    case 'perfQueue': return <PerfQueue roster={roster} perf={perf} setRoute={setRoute} />;
     // Keyed so the two registers are distinct instances. Sharing one meant a category
     // filter picked on Incidents silently emptied Achievements, with no chip to explain it.
     case 'perfAchievements': return <PerfRegister key={'ach|' + (emp || '')} kind="ach" roster={roster} perf={perf} setRoute={setRoute} focusEmp={emp} />;

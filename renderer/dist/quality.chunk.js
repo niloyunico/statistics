@@ -1,0 +1,17112 @@
+/* ===== quality-console.jsx ===== */
+(function(){
+var HQI_STANDARDS = [{
+  "code": "A1",
+  "sec": "A",
+  "name": "Hand Hygiene Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": ">90%",
+  "bv": 90,
+  "expr": "(Hand-hygiene actions performed ÷ Opportunities observed) × 100",
+  "ref": "WHO 2009 — Hand Hygiene Guidelines",
+  "num": "Hand-hygiene actions performed",
+  "den": "Opportunities observed"
+}, {
+  "code": "A2",
+  "sec": "A",
+  "name": "Catheter-Associated UTI (CAUTI)",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 cath-days",
+  "bench": "<1",
+  "bv": 1,
+  "expr": "(Catheter-associated UTIs ÷ Urinary catheter-days) × 1,000",
+  "ref": "CDC/NHSN 2024 — UTI Event",
+  "num": "CAUTI cases",
+  "den": "Urinary catheter-days"
+}, {
+  "code": "A3",
+  "sec": "A",
+  "name": "Central Line-Associated Bloodstream Infection (CLABSI)",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 line-days",
+  "bench": "<1",
+  "bv": 1,
+  "expr": "(Central line-associated BSIs ÷ Central-line days) × 1,000",
+  "ref": "CDC/NHSN 2024 — BSI Event",
+  "num": "CLABSI cases",
+  "den": "Central-line days"
+}, {
+  "code": "A4",
+  "sec": "A",
+  "name": "VAP / VAE Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 vent-days",
+  "bench": "<1",
+  "bv": 1,
+  "expr": "(Ventilator-associated events ÷ Ventilator-days) × 1,000",
+  "ref": "CDC/NHSN 2024 — VAE Module",
+  "num": "VAP / VAE events",
+  "den": "Ventilator-days"
+}, {
+  "code": "A5",
+  "sec": "A",
+  "name": "Surgical Site Infection (SSI) Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<1–2%",
+  "bv": 2,
+  "expr": "(SSIs within 30/90 days ÷ Surgical procedures) × 100",
+  "ref": "CDC/NHSN 2024; WHO 2018 SSI Guidelines",
+  "num": "SSI cases",
+  "den": "Surgical procedures"
+}, {
+  "code": "A6",
+  "sec": "A",
+  "name": "Phlebitis Rate (IV Site)",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "≤5%",
+  "bv": 5,
+  "expr": "(IV sites with phlebitis VIP ≥2 ÷ Peripheral IV sites in use) × 100",
+  "ref": "INS 2021; Jackson VIP Score",
+  "num": "IV sites with phlebitis (VIP ≥2)",
+  "den": "Peripheral IV sites in use"
+}, {
+  "code": "A7",
+  "sec": "A",
+  "name": "MRSA / MDRO Infection Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 pt-days",
+  "bench": "Minimize / track",
+  "bv": null,
+  "expr": "(HA MRSA/MDRO infections ÷ Patient-days) × 1,000",
+  "ref": "CDC/NHSN 2024 MDRO; WHO 2022 AMR",
+  "num": "HA MRSA/MDRO infections",
+  "den": "Patient-days"
+}, {
+  "code": "A8",
+  "sec": "A",
+  "name": "Overall HAI Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<5%",
+  "bv": 5,
+  "expr": "(All healthcare-associated infections ÷ Patient-days) × 100",
+  "ref": "WHO 2022 IPC Report; Allegranzi 2011",
+  "num": "All HAIs",
+  "den": "Patient-days"
+}, {
+  "code": "A9",
+  "sec": "A",
+  "name": "Blood Culture Contamination Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<3%",
+  "bv": 3,
+  "expr": "(Culture sets with skin-flora contaminants ÷ Total culture sets) × 100",
+  "ref": "CLSI 2022 M47-A2",
+  "num": "Contaminated culture sets",
+  "den": "Blood culture sets collected"
+}, {
+  "code": "A10",
+  "sec": "A",
+  "name": "Surgical Antibiotic Prophylaxis Timing",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Prophylaxis ≤60 min before incision ÷ Eligible surgical patients) × 100",
+  "ref": "SCIP Inf-1; Bratzler 2013",
+  "num": "Patients with timely prophylaxis",
+  "den": "Eligible surgical patients"
+}, {
+  "code": "A11",
+  "sec": "A",
+  "name": "CSSD Sterilization (BI) Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Cycles with passing biological indicator ÷ Total sterilization cycles) × 100",
+  "ref": "AAMI/ANSI ST79:2017; ISO 11138-3",
+  "num": "Cycles passing BI",
+  "den": "Sterilization cycles run"
+}, {
+  "code": "A12",
+  "sec": "A",
+  "name": "Biomedical Waste Segregation Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Compliant waste-audit observations ÷ Total audit observations) × 100",
+  "ref": "WHO 2014 Safe Waste Mgmt",
+  "num": "Compliant audit observations",
+  "den": "Waste audit observations"
+}, {
+  "code": "A13",
+  "sec": "A",
+  "name": "Needle Stick / Sharps Injury",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of reported needlestick & sharps injuries",
+  "ref": "OSHA 29 CFR 1910.1030; WHO 2018",
+  "num": "Needlestick / sharps injuries",
+  "den": ""
+}, {
+  "code": "A14",
+  "sec": "A",
+  "name": "Isolation / Transmission-Precaution Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Patients in correct isolation ÷ Patients requiring isolation) × 100",
+  "ref": "CDC/HICPAC 2007 (rev 2023)",
+  "num": "Correct isolations",
+  "den": "Patients requiring isolation"
+}, {
+  "code": "B1",
+  "sec": "B",
+  "name": "Medication Administration Error",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of medication errors (all categories)",
+  "ref": "ISMP 2023; NQF 2011",
+  "num": "Medication errors",
+  "den": ""
+}, {
+  "code": "B2",
+  "sec": "B",
+  "name": "Adverse Drug Reaction (ADR) Rate",
+  "ft": "count",
+  "dir": "",
+  "unit": "count",
+  "bench": "Track",
+  "bv": null,
+  "expr": "Total count of confirmed ADRs (by severity)",
+  "ref": "WHO 2002 Pharmacovigilance; ICH E2A",
+  "num": "Confirmed ADRs",
+  "den": ""
+}, {
+  "code": "B3",
+  "sec": "B",
+  "name": "Medication Reconciliation Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Reconciliation at admit AND discharge ÷ Admissions & discharges) × 100",
+  "ref": "JCI 2021 IPSG.3; ISMP 2011",
+  "num": "Completed reconciliations",
+  "den": "Admissions & discharges"
+}, {
+  "code": "B4",
+  "sec": "B",
+  "name": "High-Alert Medication Double-Check",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(High-alert doses with independent double-check ÷ High-alert doses) × 100",
+  "ref": "ISMP 2023; JCI 2021 MMU.5",
+  "num": "Doses double-checked",
+  "den": "High-alert doses administered"
+}, {
+  "code": "B5",
+  "sec": "B",
+  "name": "Verbal / Telephone Order Read-Back",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Orders with documented read-back ÷ Verbal/telephone orders) × 100",
+  "ref": "JCI 2021 IPSG.2; TJC NPSG 02.01.01",
+  "num": "Orders with read-back",
+  "den": "Verbal/telephone orders"
+}, {
+  "code": "B6",
+  "sec": "B",
+  "name": "LASA Drug Storage / Labeling Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(LASA drugs stored & labelled correctly ÷ LASA drugs audited) × 100",
+  "ref": "ISMP 2023; WHO 2019",
+  "num": "LASA drugs compliant",
+  "den": "LASA drugs audited"
+}, {
+  "code": "B7",
+  "sec": "B",
+  "name": "Controlled Drug Count Accuracy",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Shift counts with zero discrepancy ÷ Controlled-drug counts) × 100",
+  "ref": "DEA 21 CFR 1304; Pharmacy Policy",
+  "num": "Counts with zero discrepancy",
+  "den": "Controlled-drug shift counts"
+}, {
+  "code": "B8",
+  "sec": "B",
+  "name": "STAT Medication Administration Timeliness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(STAT orders within TAT ÷ Total STAT orders) × 100",
+  "ref": "ISMP 2011; TJC MM.04.01.01",
+  "num": "STAT orders within TAT",
+  "den": "STAT medication orders"
+}, {
+  "code": "C1",
+  "sec": "C",
+  "name": "Patient Identification (2-Identifier)",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Interactions with verified 2-identifier check ÷ Interactions audited) × 100",
+  "ref": "JCI 2021 IPSG.1; TJC NPSG 01.01.01",
+  "num": "Verified 2-identifier checks",
+  "den": "Care interactions audited"
+}, {
+  "code": "C2",
+  "sec": "C",
+  "name": "Patient Fall Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 pt-days",
+  "bench": "≤3.3",
+  "bv": 3.3,
+  "expr": "(Patient falls assisted + unassisted ÷ Patient-days) × 1,000",
+  "ref": "NDNQI 2023; Morse 2009",
+  "num": "Patient falls",
+  "den": "Patient-days"
+}, {
+  "code": "C2b",
+  "sec": "C",
+  "name": "Out Patient Fall",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 out-patient visits",
+  "bench": "≤3.3",
+  "bv": 3.3,
+  "expr": "(Out-patient falls ÷ Out-patient visits) × 1,000",
+  "ref": "Adapted from NDNQI inpatient fall rate",
+  "num": "Out-patient falls",
+  "den": "Out-patient visits"
+}, {
+  "code": "C3",
+  "sec": "C",
+  "name": "Falls with Injury",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of falls resulting in any injury",
+  "ref": "NDNQI 2023; AHRQ 2013",
+  "num": "Falls with injury",
+  "den": ""
+}, {
+  "code": "C4",
+  "sec": "C",
+  "name": "Hospital-Acquired Pressure Ulcer (HAPU) Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 pt-days",
+  "bench": "<0.75",
+  "bv": 0.75,
+  "expr": "(New stage 2–4/unstageable pressure injuries >72 h ÷ Patient-days) × 1,000",
+  "ref": "NPUAP/EPUAP/PPPIA 2019; NDNQI 2023",
+  "num": "New pressure injuries (stage 2–4)",
+  "den": "Patient-days"
+}, {
+  "code": "C5",
+  "sec": "C",
+  "name": "VTE / DVT Prophylaxis Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Eligible inpatients on VTE prophylaxis by day 2 ÷ Eligible inpatients) × 100",
+  "ref": "ACCP 2012; JCI 2021 IPSG.6",
+  "num": "Patients on prophylaxis",
+  "den": "Eligible adult inpatients"
+}, {
+  "code": "C6",
+  "sec": "C",
+  "name": "Deep Vein Thrombosis (DVT)",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of new DVT events ≥48 h after admission",
+  "ref": "ACCP 2012; Goldhaber 2011",
+  "num": "New DVT events ≥48 h",
+  "den": ""
+}, {
+  "code": "C7",
+  "sec": "C",
+  "name": "Wrong-Site / -Patient / -Procedure Events",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of wrong-site/-patient/-procedure (sentinel) events",
+  "ref": "TJC Universal Protocol; JCI 2021 IPSG.4",
+  "num": "Wrong-site/-patient/-procedure events",
+  "den": ""
+}, {
+  "code": "C8",
+  "sec": "C",
+  "name": "Surgical Safety Checklist Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Procedures with all 3 checklist phases ÷ Surgical procedures) × 100",
+  "ref": "WHO 2009 SSC; Haynes 2009",
+  "num": "Procedures with full checklist",
+  "den": "Surgical procedures"
+}, {
+  "code": "C9",
+  "sec": "C",
+  "name": "Restraint Use Appropriateness / Monitoring",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Restraints with order + justification + monitoring ÷ Restrained patients) × 100",
+  "ref": "TJC RC.02.01.01; CMS 42 CFR 482.13(e)",
+  "num": "Appropriate restraints",
+  "den": "Restrained patients"
+}, {
+  "code": "C10",
+  "sec": "C",
+  "name": "Pain Assessment & Reassessment",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Pain assessed + reassessed ÷ Patients requiring assessment) × 100",
+  "ref": "JCI 2021 COP; TJC PC.01.02.07",
+  "num": "Pain assessed + reassessed",
+  "den": "Patients requiring assessment"
+}, {
+  "code": "C11",
+  "sec": "C",
+  "name": "Critical Value Reporting Timeliness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Critical values reported within TAT ÷ Critical values generated) × 100",
+  "ref": "TJC NPSG 02.03.01; CLIA",
+  "num": "Critical values within TAT",
+  "den": "Critical values generated"
+}, {
+  "code": "C12",
+  "sec": "C",
+  "name": "Patient Handover (SBAR) Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Handovers using SBAR ÷ Handovers audited) × 100",
+  "ref": "JCI 2021 IPSG.2.2; WHO 2007",
+  "num": "SBAR handovers",
+  "den": "Handovers audited"
+}, {
+  "code": "D1",
+  "sec": "D",
+  "name": "Gross Hospital Mortality Rate",
+  "ft": "pct",
+  "dir": "",
+  "unit": "%",
+  "bench": "Track / benchmark",
+  "bv": null,
+  "expr": "(Inpatient deaths ÷ Discharges incl. deaths) × 100",
+  "ref": "AHRQ 2020 IQI; CMS IQR",
+  "num": "Inpatient deaths",
+  "den": "Discharges incl. deaths"
+}, {
+  "code": "D2",
+  "sec": "D",
+  "name": "ICU Mortality Rate",
+  "ft": "pct",
+  "dir": "",
+  "unit": "%",
+  "bench": "Track (APACHE/SOFA)",
+  "bv": null,
+  "expr": "(ICU deaths ÷ ICU admissions) × 100",
+  "ref": "SCCM 2020; Knaus 1985 APACHE II",
+  "num": "ICU deaths",
+  "den": "ICU admissions"
+}, {
+  "code": "D3",
+  "sec": "D",
+  "name": "ICU Re-admission within 48 h",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<5%",
+  "bv": 5,
+  "expr": "(ICU readmits ≤48 h ÷ Planned ICU step-downs) × 100",
+  "ref": "SCCM 2020; Rosenberg 2001",
+  "num": "ICU readmits ≤48 h",
+  "den": "Planned ICU discharges"
+}, {
+  "code": "D4",
+  "sec": "D",
+  "name": "Re-admission within 30 Days",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Track / minimize",
+  "bv": null,
+  "expr": "(30-day readmissions ÷ Discharges excl. deaths/planned) × 100",
+  "ref": "CMS HRRP; Jencks 2009",
+  "num": "30-day readmissions",
+  "den": "Eligible discharges"
+}, {
+  "code": "D5",
+  "sec": "D",
+  "name": "Re-intubation within 48 h",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<10%",
+  "bv": 10,
+  "expr": "(Re-intubations ≤48 h ÷ Planned extubations) × 100",
+  "ref": "Epstein 1998; SCCM 2020",
+  "num": "Re-intubations ≤48 h",
+  "den": "Planned extubations"
+}, {
+  "code": "D6",
+  "sec": "D",
+  "name": "Return to ICU",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0 / minimize",
+  "bv": 0,
+  "expr": "Count of ward→ICU transfers  (or ÷ ICU discharges to ward × 100)",
+  "ref": "SCCM 2020; Rosenberg 2001",
+  "num": "Ward patients returned to ICU",
+  "den": ""
+}, {
+  "code": "D7",
+  "sec": "D",
+  "name": "Unplanned Return to OT",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(Unplanned OT returns ÷ Surgical procedures) × 100",
+  "ref": "ACS NSQIP 2022; Clavien-Dindo",
+  "num": "Unplanned OT returns",
+  "den": "Surgical procedures"
+}, {
+  "code": "D8",
+  "sec": "D",
+  "name": "Accidental Removal of ETT (Unplanned Extubation)",
+  "ft": "rate100",
+  "dir": "low",
+  "unit": "per 100 vent-days",
+  "bench": "<1",
+  "bv": 1,
+  "expr": "(Unplanned extubations ÷ Ventilator-days) × 100",
+  "ref": "Girard 2008; SCCM 2020",
+  "num": "Unplanned extubations",
+  "den": "Ventilator-days"
+}, {
+  "code": "D9",
+  "sec": "D",
+  "name": "LAMA / DAMA Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(AMA/LAMA discharges ÷ Total discharges) × 100",
+  "ref": "WHO 2014; Alfandre 2009",
+  "num": "AMA / LAMA discharges",
+  "den": "Hospital discharges"
+}, {
+  "code": "D10",
+  "sec": "D",
+  "name": "Cardiac Arrest (Code Blue) Events",
+  "ft": "count",
+  "dir": "",
+  "unit": "count",
+  "bench": "Track",
+  "bv": null,
+  "expr": "Total count of in-hospital cardiac arrest (Code Blue) events",
+  "ref": "AHA 2020 ACLS; Utstein Style",
+  "num": "IHCA (Code Blue) events",
+  "den": ""
+}, {
+  "code": "D11",
+  "sec": "D",
+  "name": "Cardiac Arrest Survival (ROSC)",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥25%",
+  "bv": 25,
+  "expr": "(IHCA with sustained ROSC ≥20 min ÷ IHCA events) × 100",
+  "ref": "AHA 2020 ACLS; ILCOR 2020",
+  "num": "IHCA with sustained ROSC",
+  "den": "In-hospital cardiac arrest events"
+}, {
+  "code": "E1",
+  "sec": "E",
+  "name": "Informed Consent Completeness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Procedures with complete signed consent ÷ Procedures needing consent) × 100",
+  "ref": "JCI 2021 PFR.5; TJC RI.01.03.01",
+  "num": "Complete signed consents",
+  "den": "Procedures requiring consent"
+}, {
+  "code": "E2",
+  "sec": "E",
+  "name": "Initial Nursing Assessment within 24 h",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Nursing assessment ≤24 h ÷ Inpatient admissions) × 100",
+  "ref": "JCI 2021 AOP.1; TJC PC.01.02.01",
+  "num": "Assessments ≤24 h",
+  "den": "Inpatient admissions"
+}, {
+  "code": "E3",
+  "sec": "E",
+  "name": "Nursing Care Plan Documentation",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Care plans ≤24–48 h ÷ Admitted patients) × 100",
+  "ref": "JCI 2021 AOP.1; NANDA 2021",
+  "num": "Documented care plans",
+  "den": "Admitted patients"
+}, {
+  "code": "E4",
+  "sec": "E",
+  "name": "Discharge Summary Timeliness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Discharge summaries within TAT ÷ Discharges) × 100",
+  "ref": "JCI 2021 ACC.3; TJC RC.02.04.01",
+  "num": "Summaries within TAT",
+  "den": "Patient discharges"
+}, {
+  "code": "E5",
+  "sec": "E",
+  "name": "Allergy Documentation Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Allergy/NKDA documented ÷ Admissions) × 100",
+  "ref": "JCI 2021 IPSG.3; TJC NPSG 03.06.01",
+  "num": "Allergy/NKDA documented",
+  "den": "Patient admissions"
+}, {
+  "code": "E6",
+  "sec": "E",
+  "name": "Medication Chart Completeness",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Complete medication charts ÷ Charts audited) × 100",
+  "ref": "JCI 2021 MMU; TJC MM.04.01.01",
+  "num": "Complete medication charts",
+  "den": "Medication charts audited"
+}, {
+  "code": "E7",
+  "sec": "E",
+  "name": "Patient / Family Education Documentation",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Documented education sessions ÷ Eligible patients) × 100",
+  "ref": "JCI 2021 PFE.2; TJC PC.02.03.01",
+  "num": "Documented education sessions",
+  "den": "Eligible patients"
+}, {
+  "code": "F1",
+  "sec": "F",
+  "name": "Partograph Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Completed partographs ÷ Labours monitored) × 100",
+  "ref": "WHO 2014; FIGO 2018",
+  "num": "Completed partographs",
+  "den": "Labours monitored"
+}, {
+  "code": "F2",
+  "sec": "F",
+  "name": "Fetal Heart Rate (FHR) Monitoring",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Appropriate FHR monitoring ÷ Deliveries) × 100",
+  "ref": "ACOG #106 2021; FIGO 2015",
+  "num": "Appropriate FHR monitoring",
+  "den": "Deliveries"
+}, {
+  "code": "F3",
+  "sec": "F",
+  "name": "Caesarean-Section Rate",
+  "ft": "pct",
+  "dir": "",
+  "unit": "%",
+  "bench": "WHO optimal 10–15%",
+  "bv": null,
+  "expr": "(Caesarean deliveries ÷ Total deliveries) × 100",
+  "ref": "WHO 2015; Robson Classification",
+  "num": "Caesarean deliveries",
+  "den": "Total deliveries"
+}, {
+  "code": "F4",
+  "sec": "F",
+  "name": "Postpartum Haemorrhage (PPH) Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(Deliveries with PPH ÷ Total deliveries) × 100",
+  "ref": "WHO 2012; ACOG 183 2017",
+  "num": "Deliveries with PPH",
+  "den": "Total deliveries"
+}, {
+  "code": "F5",
+  "sec": "F",
+  "name": "Birth Asphyxia Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 live births",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(5-min APGAR <7 / needing PPV ÷ Live births) × 1,000",
+  "ref": "WHO 2012; AAP/AHA NRP 2015",
+  "num": "Asphyxiated live births",
+  "den": "Live births"
+}, {
+  "code": "F6",
+  "sec": "F",
+  "name": "Neonatal Mortality Rate",
+  "ft": "rate1000",
+  "dir": "",
+  "unit": "per 1000 live births",
+  "bench": "Track (national)",
+  "bv": null,
+  "expr": "(Neonatal deaths ≤28 days ÷ Live births) × 1,000",
+  "ref": "WHO 2023; UNICEF 2023",
+  "num": "Neonatal deaths ≤28 days",
+  "den": "Live births"
+}, {
+  "code": "F7",
+  "sec": "F",
+  "name": "Breastfeeding Initiation within 1 h",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Breastfeeding ≤1 h ÷ Live births) × 100",
+  "ref": "WHO/UNICEF 2018 BFHI",
+  "num": "Breastfeeding ≤1 h",
+  "den": "Live births"
+}, {
+  "code": "F9",
+  "sec": "F",
+  "name": "Kangaroo Mother Care (KMC) Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Eligible neonates receiving KMC ÷ Eligible neonates) × 100",
+  "ref": "WHO 2022; Conde-Agudelo 2016",
+  "num": "Neonates receiving KMC",
+  "den": "Eligible preterm/LBW neonates"
+}, {
+  "code": "G1",
+  "sec": "G",
+  "name": "Door-to-Balloon Time ≤90 min",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(STEMI PCI with D2B ≤90 min ÷ STEMI primary-PCI patients) × 100",
+  "ref": "ACC/AHA 2013; TJC AMI-8a",
+  "num": "STEMI PCI D2B ≤90 min",
+  "den": "STEMI primary-PCI patients"
+}, {
+  "code": "G2",
+  "sec": "G",
+  "name": "Post-PCI Complication",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of major post-PCI adverse events (24–48 h)",
+  "ref": "ACC/AHA 2021; NCDR CathPCI",
+  "num": "Major post-PCI adverse events",
+  "den": ""
+}, {
+  "code": "G3",
+  "sec": "G",
+  "name": "Puncture Site Hematoma",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of access-site hematomas >5 cm after catheterization",
+  "ref": "ACC/AHA 2012; NCDR CathPCI",
+  "num": "Access-site hematomas >5 cm",
+  "den": ""
+}, {
+  "code": "G4",
+  "sec": "G",
+  "name": "Door-to-ECG ≤10 min",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(ACS with ECG ≤10 min ÷ ACS presentations) × 100",
+  "ref": "ACC/AHA 2014; TJC AMI-1",
+  "num": "ACS with ECG ≤10 min",
+  "den": "ACS / chest-pain presentations"
+}, {
+  "code": "G5",
+  "sec": "G",
+  "name": "STEMI Door-to-Needle (Fibrinolysis)",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(STEMI fibrinolysis ≤30 min ÷ Eligible STEMI patients) × 100",
+  "ref": "ACC/AHA 2013; TJC AMI-7a",
+  "num": "Fibrinolysis ≤30 min",
+  "den": "Eligible STEMI patients"
+}, {
+  "code": "G6",
+  "sec": "G",
+  "name": "Heart Failure 30-Day Readmission",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(HF readmissions ≤30 days ÷ HF discharges) × 100",
+  "ref": "CMS HRRP (HF-30); AHRQ 2020",
+  "num": "HF 30-day readmissions",
+  "den": "Heart-failure discharges"
+}, {
+  "code": "H1",
+  "sec": "H",
+  "name": "Dialysis Adequacy — URR",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥65%",
+  "bv": 65,
+  "expr": "(Patients with URR ≥65% ÷ Patients dialyzed) × 100 · URR=[(pre-BUN−post-BUN)÷pre-BUN]×100",
+  "ref": "KDOQI 2015; Tattersall 1996",
+  "num": "Patients with URR ≥65%",
+  "den": "Patients dialyzed"
+}, {
+  "code": "H2",
+  "sec": "H",
+  "name": "Kt/V Achievement",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90% achieve Kt/V ≥1.2",
+  "bv": 90,
+  "expr": "(Patients Kt/V ≥1.2 ÷ Patients dialyzed) × 100 · Kt/V via Daugirdas 2nd-gen",
+  "ref": "KDOQI 2015; Daugirdas 1993",
+  "num": "Patients with Kt/V ≥1.2",
+  "den": "Patients dialyzed"
+}, {
+  "code": "H3",
+  "sec": "H",
+  "name": "Water Quality Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Water/dialysate tests meeting AAMI/ISO ÷ Tests performed) × 100",
+  "ref": "AAMI/ANSI 23500:2019; ISO 23500",
+  "num": "Tests meeting AAMI/ISO",
+  "den": "Water quality tests performed"
+}, {
+  "code": "H4",
+  "sec": "H",
+  "name": "Intradialytic Hypotension",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0 / minimize",
+  "bv": 0,
+  "expr": "Count of sessions with symptomatic hypotension (SBP drop ≥20 / <90 mmHg)",
+  "ref": "KDOQI 2015; Flythe 2015",
+  "num": "Sessions with symptomatic hypotension",
+  "den": ""
+}, {
+  "code": "H5",
+  "sec": "H",
+  "name": "Vascular Access Complication",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of vascular access complications",
+  "ref": "KDOQI 2006; KDIGO 2019",
+  "num": "Vascular access complications",
+  "den": ""
+}, {
+  "code": "H6",
+  "sec": "H",
+  "name": "Accidental De-lining of Catheter",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of accidental catheter disconnection events during dialysis",
+  "ref": "KDOQI 2006; Dialysis Nursing Policy",
+  "num": "Accidental de-lining events",
+  "den": ""
+}, {
+  "code": "H7",
+  "sec": "H",
+  "name": "Dialysis Access Infection Rate",
+  "ft": "rate1000",
+  "dir": "low",
+  "unit": "per 1000 access-days",
+  "bench": "0",
+  "bv": 0,
+  "expr": "(Dialysis access infections ÷ Access-days) × 1,000",
+  "ref": "CDC/NHSN 2024 Dialysis Event; KDOQI 2006",
+  "num": "Dialysis access infections",
+  "den": "Access-days"
+}, {
+  "code": "H8",
+  "sec": "H",
+  "name": "Missed / Shortened Dialysis Sessions",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(Missed or shortened >10% sessions ÷ Scheduled sessions) × 100",
+  "ref": "KDOQI 2015; Saran 2003",
+  "num": "Missed / shortened sessions",
+  "den": "Scheduled dialysis sessions"
+}, {
+  "code": "I1",
+  "sec": "I",
+  "name": "On-Time First-Case Start",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(First cases starting on time ÷ First cases scheduled) × 100",
+  "ref": "AORN 2022; NHS England 2021",
+  "num": "First cases on time",
+  "den": "First cases scheduled"
+}, {
+  "code": "I2",
+  "sec": "I",
+  "name": "Elective Case Cancellation Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<5%",
+  "bv": 5,
+  "expr": "(Elective cases cancelled same-day ÷ Elective cases scheduled) × 100",
+  "ref": "AORN 2022; RCS standards",
+  "num": "Same-day cancellations",
+  "den": "Elective cases scheduled"
+}, {
+  "code": "I3",
+  "sec": "I",
+  "name": "Instrument / Sponge Count Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Cases with documented counts at all timepoints ÷ Surgical procedures) × 100",
+  "ref": "AORN 2022; WHO 2009",
+  "num": "Cases with documented counts",
+  "den": "Surgical procedures"
+}, {
+  "code": "I4",
+  "sec": "I",
+  "name": "Specimen Labeling Error Rate",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of surgical specimen labeling errors",
+  "ref": "CAP 2021; TJC NPSG 01.01.01",
+  "num": "Specimen labeling errors",
+  "den": ""
+}, {
+  "code": "I5",
+  "sec": "I",
+  "name": "Anaesthesia-Related Complication Rate",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of anaesthesia-related adverse events",
+  "ref": "ASA 2019; APSF; Merry 2010",
+  "num": "Anaesthesia adverse events",
+  "den": ""
+}, {
+  "code": "I6",
+  "sec": "I",
+  "name": "PACU Recovery Delay Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize",
+  "bv": null,
+  "expr": "(PACU stays beyond threshold ÷ PACU admissions) × 100",
+  "ref": "ASPAN 2021; Aldrete 1995",
+  "num": "Delayed PACU discharges",
+  "den": "PACU admissions"
+}, {
+  "code": "J1",
+  "sec": "J",
+  "name": "Post-Procedure Complication",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Count of post-endoscopy complications within 30 days",
+  "ref": "ASGE 2015; BSG 2019",
+  "num": "Post-endoscopy complications",
+  "den": ""
+}, {
+  "code": "J2",
+  "sec": "J",
+  "name": "Endoscope Reprocessing Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(Endoscopes reprocessed per HLD protocol ÷ Endoscopes reprocessed) × 100",
+  "ref": "SGNA 2022; ESGE/ESGENA 2018",
+  "num": "Endoscopes per HLD protocol",
+  "den": "Endoscopes reprocessed"
+}, {
+  "code": "J3",
+  "sec": "J",
+  "name": "Perforation Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "Minimize (<0.1%)",
+  "bv": 0.1,
+  "expr": "(Iatrogenic perforations ÷ Endoscopic procedures) × 100",
+  "ref": "ASGE 2015; Pohl 2012",
+  "num": "Iatrogenic perforations",
+  "den": "Endoscopic procedures"
+}, {
+  "code": "J4",
+  "sec": "J",
+  "name": "Post-Polypectomy Bleeding",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Count of significant post-polypectomy bleeds within 30 days",
+  "ref": "ASGE 2015; ESGE 2022",
+  "num": "Post-polypectomy bleeds",
+  "den": ""
+}, {
+  "code": "K1",
+  "sec": "K",
+  "name": "Triage-to-Consult / Door-to-Doctor Time",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90% per category",
+  "bv": 90,
+  "expr": "(Patients seen within triage TAT ÷ ED presentations by category) × 100",
+  "ref": "ACEP 2019 ESI; CTAS 2020",
+  "num": "Patients seen within TAT",
+  "den": "ED presentations"
+}, {
+  "code": "K2",
+  "sec": "K",
+  "name": "Left Without Being Seen (LWBS) Rate",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<2%",
+  "bv": 2,
+  "expr": "(Patients who left without being seen ÷ ED registrations) × 100",
+  "ref": "ACEP 2019; Hobbs 2000",
+  "num": "Left without being seen",
+  "den": "ED registrations"
+}, {
+  "code": "K3",
+  "sec": "K",
+  "name": "ED Re-attendance within 72 h",
+  "ft": "pct",
+  "dir": "low",
+  "unit": "%",
+  "bench": "<5%",
+  "bv": 5,
+  "expr": "(ED re-attendances ≤72 h ÷ ED discharges) × 100",
+  "ref": "ACEP 2019; NHS England",
+  "num": "ED re-attendances ≤72 h",
+  "den": "ED discharges"
+}, {
+  "code": "K4",
+  "sec": "K",
+  "name": "Door-to-Needle for Stroke Thrombolysis",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥80%",
+  "bv": 80,
+  "expr": "(Stroke tPA ≤60 min ÷ Eligible stroke patients) × 100",
+  "ref": "AHA/ASA 2019; ESO 2021",
+  "num": "Stroke tPA ≤60 min",
+  "den": "Eligible ischemic-stroke patients"
+}, {
+  "code": "L1",
+  "sec": "L",
+  "name": "Mandatory Training Compliance",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Staff completing mandatory training ÷ Staff required) × 100",
+  "ref": "JCI 2021 SQE.3; TJC HR.01.05.01",
+  "num": "Staff completing training",
+  "den": "Staff required to train"
+}, {
+  "code": "L2",
+  "sec": "L",
+  "name": "BLS / ACLS Certification Rate",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Staff with valid BLS/ACLS ÷ Staff required) × 100",
+  "ref": "AHA 2020 BLS/ACLS; JCI 2021 SQE",
+  "num": "Staff with valid certification",
+  "den": "Staff required to certify"
+}, {
+  "code": "L3",
+  "sec": "L",
+  "name": "Induction Completion within 30 Days",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "100%",
+  "bv": 100,
+  "expr": "(New staff induction ≤30 days ÷ New staff) × 100",
+  "ref": "JCI 2021 SQE.7; TJC HR.01.04.01",
+  "num": "Inductions ≤30 days",
+  "den": "New employees"
+}, {
+  "code": "L4",
+  "sec": "L",
+  "name": "Accidental Catheter Dislodgement",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of accidental catheter dislodgements",
+  "ref": "JCI 2021 QPS; NDNQI 2023",
+  "num": "Accidental dislodgements",
+  "den": ""
+}, {
+  "code": "L5",
+  "sec": "L",
+  "name": "Accidental Removal of Catheter",
+  "ft": "count",
+  "dir": "low",
+  "unit": "count",
+  "bench": "0",
+  "bv": 0,
+  "expr": "Total count of accidental (unplanned) catheter removals",
+  "ref": "JCI 2021 QPS; NDNQI 2023",
+  "num": "Accidental catheter removals",
+  "den": ""
+}, {
+  "code": "M1",
+  "sec": "M",
+  "name": "Patient Satisfaction Score",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥85%",
+  "bv": 85,
+  "expr": "(Patients rating care 'Very Good/Excellent' ÷ Patients surveyed) × 100",
+  "ref": "HCAHPS 2024; Press Ganey 2023",
+  "num": "Top-box ratings",
+  "den": "Patients surveyed"
+}, {
+  "code": "M2",
+  "sec": "M",
+  "name": "Complaint Resolution within TAT",
+  "ft": "pct",
+  "dir": "high",
+  "unit": "%",
+  "bench": "≥90%",
+  "bv": 90,
+  "expr": "(Complaints resolved within TAT ÷ Complaints received) × 100",
+  "ref": "JCI 2021 PFR.3; TJC RI.01.07.01",
+  "num": "Complaints resolved within TAT",
+  "den": "Complaints received"
+}];
+var HQI_SECN = {
+  "A": "Infection Prevention & Control",
+  "B": "Medication Safety",
+  "C": "Patient Safety (IPSG)",
+  "D": "Clinical Outcomes & Mortality",
+  "E": "Documentation & Process",
+  "F": "Maternal & Neonatal",
+  "G": "Cardiac / Cath Lab / CCU",
+  "H": "Dialysis",
+  "I": "Surgery / OT / Anaesthesia",
+  "J": "Endoscopy",
+  "K": "Emergency",
+  "L": "Staff / Device Safety / Training",
+  "M": "Patient Experience"
+};
+const {
+  useState,
+  useEffect,
+  useMemo,
+  useRef
+} = React;
+const P = {
+  blue: '#0090ca',
+  blue700: '#0072a3',
+  teal: '#3ab5a7',
+  violet: '#6a52d4',
+  green: '#1f9d57',
+  rose: '#d23a52',
+  amber: '#e08a1e',
+  ink: '#16202e',
+  ink2: '#3c4858',
+  muted: '#6c7a8c',
+  faint: '#9aa6b4',
+  line: '#dde3ec',
+  line2: '#e8edf3',
+  panel2: '#f7f9fc',
+  navy: '#0d1b2e'
+};
+const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
+const QORDER = ['Q1', 'Q2', 'Q3', 'Q4'];
+const QL = [['Q1', 'Jan–Mar'], ['Q2', 'Apr–Jun'], ['Q3', 'Jul–Sep'], ['Q4', 'Oct–Dec']];
+const FY_MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fyMonthsFor(startYear) {
+  const yy = String(startYear % 100).padStart(2, '0');
+  return FY_MONS.map(mn => [mn + '-' + yy, mn + ' ' + startYear, mn]);
+}
+function fyOfKey(key) {
+  const p = String(key || '').split('-');
+  const mi = FY_MONS.indexOf(p[0]);
+  const yy = parseInt(p[1], 10);
+  if (mi < 0 || isNaN(yy)) return null;
+  return 2000 + yy;
+}
+function currentFy() {
+  return new Date().getFullYear();
+}
+function dataFySet(depts) {
+  const set = new Set();
+  (depts || []).forEach(dep => (dep.indicators || []).forEach(ind => {
+    const scan = obj => {
+      if (obj) Object.keys(obj).forEach(k => {
+        if (obj[k] != null && obj[k] !== '') {
+          const fy = fyOfKey(k);
+          if (fy != null) set.add(fy);
+        }
+      });
+    };
+    scan(ind.months);
+    scan(ind.mNum);
+  }));
+  return set;
+}
+function fyOptions(depts) {
+  const set = dataFySet(depts);
+  set.add(currentFy());
+  const arr = [...set];
+  if (!arr.length) arr.push(currentFy());
+  const lo = Math.min(...arr),
+    hi = Math.max(...arr);
+  const out = [];
+  for (let y = lo; y <= hi; y++) out.push(y);
+  return out;
+}
+function defaultFy(depts) {
+  const counts = {};
+  (depts || []).forEach(dep => (dep.indicators || []).forEach(ind => {
+    const scan = obj => {
+      if (obj) Object.keys(obj).forEach(k => {
+        if (obj[k] != null && obj[k] !== '') {
+          const fy = fyOfKey(k);
+          if (fy != null) counts[fy] = (counts[fy] || 0) + 1;
+        }
+      });
+    };
+    scan(ind.months);
+    scan(ind.mNum);
+  }));
+  const yrs = Object.keys(counts).map(Number);
+  if (!yrs.length) return currentFy();
+  return yrs.sort((a, b) => counts[b] - counts[a] || b - a)[0];
+}
+function fyLabelOf(startYear) {
+  return 'Year ' + startYear;
+}
+const QTAG_FY = ['Q1', 'Q1', 'Q1', 'Q2', 'Q2', 'Q2', 'Q3', 'Q3', 'Q3', 'Q4', 'Q4', 'Q4'];
+function fyAxis(startYear) {
+  return fyMonthsFor(startYear).map((r, i) => [r[0], r[1], QTAG_FY[i]]);
+}
+const MONTHS = fyAxis(currentFy());
+function qcMonthLabel(key) {
+  const p = String(key || '').split('-');
+  return p[1] ? p[0] + ' 20' + p[1] : String(key || '');
+}
+function QCFyPicker({
+  fy,
+  setFy,
+  depts,
+  style
+}) {
+  return React.createElement("select", {
+    value: fy,
+    onChange: e => setFy(Number(e.target.value)),
+    style: Object.assign({
+      padding: '7px 10px',
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      background: '#fff',
+      color: P.ink,
+      outline: 'none',
+      cursor: 'pointer'
+    }, style || {})
+  }, fyOptions(depts).map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, fyLabelOf(y), y === currentFy() ? ' · current' : '')));
+}
+function qcCanEdit() {
+  try {
+    const u = window.__UNICO_USER__;
+    return !u || u.role === 'Administrator';
+  } catch (e) {
+    return true;
+  }
+}
+const STATUS_CELL = {
+  ok: ['#e7f6ed', '#1f9d57', '✓'],
+  breach: ['#fbe9ec', '#d23a52', '!'],
+  na: ['#eef1f5', '#9aa6b4', '·']
+};
+function qiCompute(f, n, d) {
+  if (n == null || n === '') return null;
+  n = Number(n);
+  if (f === 'count' || f === 'direct') return n;
+  if (d == null || d === '' || Number(d) === 0) return null;
+  d = Number(d);
+  if (f === 'rate1000') return Math.round(n / d * 1000 * 100) / 100;
+  if (f === 'avg') return Math.round(n / d * 100) / 100;
+  return Math.round(n / d * 100 * 100) / 100;
+}
+function monthRaw(ind, mk) {
+  const f = ind && ind.formula || (ind && ind.valueType === '%' ? 'pct' : 'direct');
+  if (f === 'direct') {
+    const v = ind.months && ind.months[mk];
+    return v == null || v === '' ? null : Number(v);
+  }
+  const n = ind.mNum && ind.mNum[mk];
+  if (n == null || n === '') {
+    const v = ind.months && ind.months[mk];
+    return v == null || v === '' ? null : Number(v);
+  }
+  const d = f !== 'count' ? ind.mDen && ind.mDen[mk] : null;
+  const r = qiCompute(f, n, d);
+  if (r != null) return r;
+  const v = ind.months && ind.months[mk];
+  return v == null || v === '' ? null : Number(v);
+}
+function qStatus(ind, v) {
+  if (v == null || v === '') return 'na';
+  const b = ind.benchmarkValue;
+  if (b == null || b === '') return 'ok';
+  return ind.goalDirection === 'higher_is_better' ? v >= b ? 'ok' : 'breach' : v <= b ? 'ok' : 'breach';
+}
+function monthStatus(ind, mk) {
+  return qStatus(ind, monthRaw(ind, mk));
+}
+function qtrSrc(ind, fy) {
+  return fy != null && ind && ind.quartersByFy && ind.quartersByFy[fy] ? ind.quartersByFy[fy] : ind && ind.quarters || {};
+}
+function qtrRaw(ind, Q, fy) {
+  const v = qtrSrc(ind, fy)[Q];
+  return v == null || v === '' ? null : Number(v);
+}
+function qtrStatus(ind, Q, fy) {
+  return qStatus(ind, qtrSrc(ind, fy)[Q]);
+}
+function qcMonthEnded(mk) {
+  const p = String(mk || '').split('-');
+  const mi = QMONS_ORD.indexOf(p[0]);
+  const yy = parseInt(p[1], 10);
+  if (mi < 0 || isNaN(yy)) return false;
+  const now = new Date();
+  const y = 2000 + yy;
+  return y < now.getFullYear() || y === now.getFullYear() && mi < now.getMonth();
+}
+function qcCellVal(ind, m) {
+  const v = monthRaw(ind, m[0]);
+  if (v != null) return v;
+  if (!qcMonthEnded(m[0])) return null;
+  const fy = fyOfKey(m[0]);
+  if (fy == null || !m[2]) return null;
+  const qMonths = fyAxis(fy).filter(r => r[2] === m[2]);
+  if (qMonths.some(r => monthRaw(ind, r[0]) != null)) return null;
+  return qtrRaw(ind, m[2], fy);
+}
+function isPctInd(ind) {
+  const t = (ind && ind.valueType || '').toString().toLowerCase();
+  return t.indexOf('%') >= 0 || t.startsWith('per') || ind.formula === 'pct';
+}
+function deptStat(d, months) {
+  if (!Array.isArray(months)) months = MONTHS;
+  let ok = 0,
+    breach = 0,
+    na = 0;
+  (d.indicators || []).forEach(ind => months.forEach(m => {
+    const s = qStatus(ind, qcCellVal(ind, m));
+    if (s === 'ok') ok++;else if (s === 'breach') breach++;else na++;
+  }));
+  return {
+    ok,
+    breach,
+    na,
+    rate: ok + breach ? Math.round(ok * 100 / (ok + breach)) : 100
+  };
+}
+function hasData(ind, months) {
+  if (!Array.isArray(months)) months = MONTHS;
+  const qfy = months.length ? fyOfKey(months[0][0]) : null;
+  return months.some(m => monthRaw(ind, m[0]) != null) || QORDER.some(q => qtrRaw(ind, q, qfy) != null);
+}
+function countBreaches(ind, months) {
+  if (!Array.isArray(months)) months = MONTHS;
+  let n = 0;
+  months.forEach(m => {
+    if (qStatus(ind, qcCellVal(ind, m)) === 'breach') n++;
+  });
+  return n;
+}
+function fmtVal(ind, v) {
+  if (v == null || v === '') return '—';
+  const num = Math.round(Number(v) * 100) / 100;
+  return isPctInd(ind) ? num + '%' : num.toLocaleString();
+}
+const QMONS_ORD = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function monthOrd(mk) {
+  const p = String(mk || '').split('-');
+  const mi = QMONS_ORD.indexOf(p[0]);
+  const yy = parseInt(p[1], 10);
+  if (mi < 0 || isNaN(yy)) return null;
+  return (2000 + yy) * 12 + mi;
+}
+function qcBeforeStart(ind, mk) {
+  if (!ind || !ind.startMonth) return false;
+  const a = monthOrd(mk),
+    b = monthOrd(ind.startMonth);
+  return a != null && b != null && a < b;
+}
+function qcNotObs(ind, mk) {
+  const m = ind && ind.mNotObserved;
+  return !!(m && m[mk]);
+}
+let _qcColl = null,
+  _qcCollAt = 0,
+  _qcCollBusy = false,
+  _qcCollSelf = false;
+function qcCollLoad(force) {
+  if (_qcCollBusy || !force && Date.now() - _qcCollAt < 60000) return;
+  _qcCollBusy = true;
+  _qcCollAt = Date.now();
+  fetch('/api/collection-settings', {
+    headers: {
+      accept: 'application/json'
+    },
+    credentials: 'same-origin'
+  }).then(r => r.ok ? r.json() : null).then(r => {
+    if (!r || !r.ok || !Array.isArray(r.departments)) return;
+    const next = {};
+    r.departments.forEach(d => {
+      const c = d.collection && typeof d.collection === 'object' ? d.collection : {};
+      if (d.qualityKey) next['k|' + d.qualityKey] = c;
+      if (d.id) next['i|' + d.id] = c;
+    });
+    const changed = JSON.stringify(next) !== JSON.stringify(_qcColl);
+    _qcColl = next;
+    if (changed) {
+      _qcCollSelf = true;
+      try {
+        window.dispatchEvent(new Event('unico:collection-settings'));
+      } catch (e) {}
+      _qcCollSelf = false;
+    }
+  }).catch(() => {}).finally(() => {
+    _qcCollBusy = false;
+  });
+}
+function qcDeptColl(dep) {
+  if (!dep) return {};
+  const id = dep.deptId || (window.DEPTMAP && window.DEPTMAP.idFromQk && dep.key ? window.DEPTMAP.idFromQk(dep.key) : null);
+  if (_qcColl) {
+    const c = dep.key && _qcColl['k|' + dep.key] || id && _qcColl['i|' + id];
+    if (c) return c;
+  }
+  const lists = [window.UNICO && window.UNICO.DEPARTMENTS || [], window.__UNICO_DEPARTMENTS__ || []];
+  for (const l of lists) {
+    const hit = Array.isArray(l) && l.find(x => x && x.collection && typeof x.collection === 'object' && (dep.key && x.qualityKey === dep.key || id && x.id === id));
+    if (hit) return hit.collection;
+  }
+  return {};
+}
+function qcNotMeasured(dep, ind) {
+  const nm = qcDeptColl(dep).notMeasured;
+  return nm && ind && ind.id && nm[ind.id] || null;
+}
+function qcNotDue(dep, ind, mk) {
+  if (qcNotMeasured(dep, ind)) return true;
+  const o = monthOrd(mk);
+  if (o == null) return false;
+  const a = monthOrd(qcDeptColl(dep).startMonth),
+    b = monthOrd(ind && ind.startMonth);
+  if (a == null && b == null) return false;
+  return o < Math.max(a == null ? -Infinity : a, b == null ? -Infinity : b);
+}
+function qcReportCell(ind, m) {
+  const mk = Array.isArray(m) ? m[0] : m;
+  const mm = Array.isArray(m) ? m : [mk];
+  const v = qcCellVal(ind, mm);
+  const s = qStatus(ind, v);
+  if (s === 'na') return qcNotObs(ind, mk) ? 'N/OB' : qcBeforeStart(ind, mk) ? 'N/O' : '—';
+  return fmtVal(ind, v);
+}
+if (typeof window !== 'undefined') {
+  window.UNICO_Q = {
+    defaultFy,
+    fyOptions,
+    fyAxis,
+    fyMonthsFor,
+    fyLabelOf,
+    currentFy,
+    fyOfKey,
+    deptStat,
+    hasData,
+    countBreaches,
+    qcCellVal,
+    qStatus,
+    monthStatus,
+    monthRaw,
+    qtrRaw,
+    qtrSrc,
+    isPctInd,
+    fmtVal,
+    qcBeforeStart,
+    qcReportCell,
+    monthOrd
+  };
+}
+function measureOf(f) {
+  if (f === 'pct') return {
+    name: 'Percentage',
+    color: P.teal,
+    letter: '%'
+  };
+  if (f === 'rate1000' || f === 'rate100') return {
+    name: 'Rate',
+    color: P.violet,
+    letter: 'R'
+  };
+  if (f === 'avg') return {
+    name: 'Average',
+    color: P.violet,
+    letter: 'x̄'
+  };
+  return {
+    name: 'Count',
+    color: P.blue,
+    letter: 'C'
+  };
+}
+function isEventIndicator(ind) {
+  if (!ind) return false;
+  if (ind.formula === 'count' || ind.formula === 'rate100') return true;
+  const bv = ind.benchmarkValue;
+  if ((bv === 0 || bv === '0') && ind.goalDirection !== 'higher_is_better') return true;
+  if (/zero.?defect/i.test(String(ind.benchmark || ''))) return true;
+  if (ind.incidents && Object.keys(ind.incidents).length) return true;
+  const n = (ind.name || '').toLowerCase();
+  if (/extubation|removal of ett|accidental removal|dislodge|self-?extubat|needle ?stick|sharps|wrong-?site|wrong-?patient|wrong-?procedure|specimen labeling|medication (administration )?error|fall|de-?lining/.test(n)) return true;
+  return false;
+}
+function rateUnitWord(ind) {
+  if (!ind) return 'units';
+  if (ind.unit && ind.unit !== 'count' && ind.unit !== '%') return ind.unit;
+  if (ind.formula === 'pct') return 'points';
+  return 'units';
+}
+function qtrLabelOf(Q) {
+  const row = QL.find(r => r[0] === Q);
+  return row ? Q + ' · ' + row[1] : Q;
+}
+function benchExpr(ind) {
+  const v = ind.benchmarkValue;
+  if (v == null || v === '') return ind.benchmark || 'No benchmark';
+  const sym = ind.goalDirection === 'higher_is_better' ? '≥' : '≤';
+  const pct = ind.formula === 'pct' ? '%' : '';
+  const unit = ind.unit && !pct && ind.unit !== 'count' ? ' ' + ind.unit : '';
+  return sym + ' ' + v + pct + unit;
+}
+function formulaText(ind) {
+  const f = ind.formula;
+  const num = ind.numLabel || ind.name || 'numerator';
+  const den = ind.denLabel || 'denominator';
+  if (f === 'direct') return (ind.name || 'Value') + ' = entered value';
+  if (f === 'count') return 'value = ' + num;
+  if (f === 'avg') return 'average = ' + num + ' ÷ ' + den;
+  return '(' + num + ' ÷ ' + den + ') ' + (f === 'rate1000' ? '× 1000' : '× 100');
+}
+function statusColorFor(s) {
+  return {
+    Excellent: P.green,
+    'Very Good': P.teal,
+    Good: P.blue,
+    Satisfactory: P.teal,
+    Fair: P.amber,
+    Average: P.amber,
+    'Needs Improvement': P.rose,
+    Poor: P.rose,
+    '': P.muted
+  }[s] || P.blue;
+}
+function catOf(n) {
+  n = (n || '').toLowerCase();
+  if (/cauti|clabsi|vap|vae|ssi|infection|sepsis/.test(n)) return 'Healthcare-Associated Infection';
+  if (/hand hygiene|water quality/.test(n)) return 'Infection Prevention';
+  if (/needle stick|nsi/.test(n)) return 'Staff Safety';
+  if (/training|competency/.test(n)) return 'Staff Competency';
+  if (/volume/.test(n)) return 'Activity / Volume';
+  if (/survival|adequacy|partograph|door-to-balloon/.test(n)) return 'Clinical Outcomes';
+  if (/fall|medication|bed sore|hapu|pressure|dvt|phlebitis|hematoma|complication|hypotension|de-lining|de-linining|vascular|return/.test(n)) return 'Patient Safety';
+  return 'Clinical Outcomes';
+}
+function stdMatch(name) {
+  const n = (name || '').toLowerCase();
+  const T = [[/hand hygiene/, 'A1'], [/\bcauti\b|catheter-associated uti/, 'A2'], [/\bclabsi\b|central line/, 'A3'], [/\bvap\b|ventilator-associated pneumonia/, 'A4'], [/\bvae\b|ventilator-associated event/, 'A4'], [/surgical site infection|\bssi\b/, 'A5'], [/phlebitis/, 'A6'], [/needle stick|\bnsi\b/, 'A13'], [/medication (administration )?error/, 'B1'], [/falls with injury/, 'C3'], [/out.?patient fall/, 'C2b'], [/patient fall/, 'C2'], [/pressure ulcer|hapu|bed sore|pressure injury/, 'C4'], [/deep vein thrombosis|\bdvt\b/, 'C6'], [/return to icu/, 'D6'], [/cardiac arrest survival/, 'D11'], [/cardiac arrest events|code blue/, 'D10'], [/partograph/, 'F1'], [/door-to-balloon/, 'G1'], [/post-pci/, 'G2'], [/puncture site hematoma/, 'G3'], [/dialysis adequacy|\burr\b/, 'H1'], [/water quality/, 'H3'], [/hypotension/, 'H4'], [/vascular access complication/, 'H5'], [/de-lining/, 'H6'], [/infection rate/, 'H7'], [/post-procedure complication/, 'J1'], [/training compliance/, 'L1'], [/surgical safety/, 'C8'], [/accidental removal of ett|unplanned extubation|extubation/, 'D8'], [/accidental removal of catheter/, 'L5'], [/catheter dislodgement|dislodgement/, 'L4']];
+  for (const [re, code] of T) {
+    if (re.test(n)) return code;
+  }
+  return null;
+}
+function norm(s) {
+  return (s || '').toLowerCase().replace(/\s*\(.*?\)\s*/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function guideOf(code) {
+  try {
+    return typeof window !== 'undefined' && window.HQI_GUIDE && window.HQI_GUIDE[code] || null;
+  } catch (e) {
+    return null;
+  }
+}
+function blankIndicator(name, taken) {
+  return {
+    id: window.qualitySlug ? window.qualitySlug(name, taken) : 'ind-' + norm(name).replace(/ /g, '-'),
+    name,
+    formula: 'count',
+    valueType: 'Count',
+    goalDirection: 'lower_is_better',
+    benchmark: '0 (zero defect)',
+    benchmarkValue: 0,
+    unit: 'count',
+    numLabel: name,
+    denLabel: '',
+    numeratorDef: '',
+    denominatorDef: '',
+    category: catOf(name),
+    frequency: 'Monthly',
+    reference: '',
+    months: {},
+    mNum: {},
+    mDen: {},
+    quarters: {}
+  };
+}
+function QCDashboard({
+  depts,
+  Q
+}) {
+  const fyOpts = useMemo(() => fyOptions(depts), [depts]);
+  const [fyStart, setFyStart] = useState(() => defaultFy(depts));
+  const curPos = fyOpts.indexOf(fyStart);
+  const safeFy = curPos >= 0 ? fyStart : fyOpts.length ? fyOpts[fyOpts.length - 1] : currentFy();
+  const fyMonths = useMemo(() => fyMonthsFor(safeFy), [safeFy]);
+  const pos = fyOpts.indexOf(safeFy);
+  const canPrev = pos > 0;
+  const canNext = pos >= 0 && pos < fyOpts.length - 1;
+  const goPrev = () => {
+    if (canPrev) setFyStart(fyOpts[pos - 1]);
+  };
+  const goNext = () => {
+    if (canNext) setFyStart(fyOpts[pos + 1]);
+  };
+  const [cellSel, setCellSel] = useState(null);
+  const [collRev, setCollRev] = useState(0);
+  useEffect(() => {
+    const onColl = () => {
+      setCollRev(r => r + 1);
+      if (!_qcCollSelf) qcCollLoad(true);
+    };
+    const onData = () => qcCollLoad(true);
+    window.addEventListener('unico:collection-settings', onColl);
+    window.addEventListener('unico:data-refreshed', onData);
+    qcCollLoad();
+    return () => {
+      window.removeEventListener('unico:collection-settings', onColl);
+      window.removeEventListener('unico:data-refreshed', onData);
+    };
+  }, []);
+  const d = useMemo(() => {
+    const rowDepts = depts.filter(dep => !/overall\s*hospital/i.test(dep && (dep.name || dep.key) || ''));
+    let ok = 0,
+      br = 0,
+      na = 0;
+    const uniq = new Set();
+    let totalInd = 0;
+    rowDepts.forEach(dep => {
+      const s = deptStat(dep, fyMonths);
+      ok += s.ok;
+      br += s.breach;
+      na += s.na;
+      (dep.indicators || []).forEach(ind => {
+        uniq.add(norm(ind.name));
+        totalInd++;
+      });
+    });
+    const totalCells = ok + br + na || 1;
+    const dashKpis = [{
+      label: 'Departments',
+      val: String(rowDepts.length),
+      foot: 'reporting quality KPIs',
+      color: P.blue
+    }, {
+      label: 'Indicators',
+      val: String(uniq.size),
+      foot: totalInd + ' across departments',
+      color: P.violet
+    }, {
+      label: 'Zero-Defect Rate',
+      val: (ok + br ? Math.round(ok * 100 / (ok + br)) : 100) + '%',
+      foot: ok + ' on benchmark · ' + br + ' off benchmark',
+      color: P.green
+    }, {
+      label: 'Off Benchmark',
+      val: String(br),
+      foot: 'indicator-months off benchmark',
+      color: br > 0 ? P.rose : P.green
+    }];
+    const mix = [{
+      label: 'On benchmark',
+      v: ok,
+      color: P.green
+    }, {
+      label: 'Off benchmark',
+      v: br,
+      color: P.rose
+    }, {
+      label: 'Not reported',
+      v: na,
+      color: '#c4ccd6'
+    }].map(x => Object.assign(x, {
+      pct: Math.round(x.v * 100 / totalCells)
+    }));
+    let maxB = 1;
+    const bbm = fyMonths.map(m => {
+      let b = 0;
+      rowDepts.forEach(dep => (dep.indicators || []).forEach(ind => {
+        if (monthStatus(ind, m[0]) === 'breach') b++;
+      }));
+      if (b > maxB) maxB = b;
+      return {
+        label: m[2],
+        val: b
+      };
+    });
+    const breachByMonth = bbm.map(x => Object.assign(x, {
+      h: Math.round(x.val / maxB * 100)
+    }));
+    const heatRows = rowDepts.map(dep => {
+      const inds = dep.indicators || [];
+      const cells = fyMonths.map(m => {
+        let b = 0,
+          rep = 0;
+        const missing = [];
+        const nobs = [];
+        const notDue = [];
+        inds.forEach(ind => {
+          const s = monthStatus(ind, m[0]);
+          if (s === 'breach') b++;else if (s !== 'na') rep++;else if (qcNotObs(ind, m[0])) nobs.push(ind.name);else if (qcNotDue(dep, ind, m[0])) notDue.push(ind.name);else missing.push(ind.name);
+        });
+        const total = inds.length - nobs.length - notDue.length,
+          sub = b + rep;
+        const partial = sub > 0 && sub < total;
+        const allNobs = total === 0 && nobs.length > 0;
+        const bg = allNobs ? '#f5f1fd' : sub === 0 ? '#eef1f5' : b > 0 ? '#fbe9ec' : partial ? '#fdf3e3' : '#e7f6ed';
+        const fg = allNobs ? '#5b3fa8' : sub === 0 ? '#9aa6b4' : b > 0 ? '#d23a52' : partial ? '#b26a0f' : '#1f9d57';
+        const sym = allNobs ? 'N/OB' : sub === 0 ? '–' : b > 0 ? sub + '/' + total + ' ✕' + b : partial ? sub + '/' + total : '✓';
+        return {
+          sym,
+          bg,
+          fg,
+          mk: m[0],
+          mlabel: m[1],
+          breach: b,
+          sub,
+          total,
+          missing,
+          nobs,
+          notDue,
+          has: sub > 0
+        };
+      });
+      const st = deptStat(dep, fyMonths);
+      const reported = st.ok + st.breach > 0;
+      let status = dep.status;
+      if (!reported) status = 'No data';else if (!status) {
+        const brRate = st.breach / (st.ok + st.breach);
+        status = brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Excellent';
+      }
+      const sc = reported ? statusColorFor(status) : '#8a97a6';
+      return {
+        dep,
+        name: dep.name,
+        count: inds.length,
+        cells,
+        rate: reported ? st.rate + '%' : '—',
+        status,
+        statusColor: sc,
+        statusBg: sc + '1c'
+      };
+    });
+    const monthCols = fyMonths.map(m => m[2]);
+    return {
+      dashKpis,
+      mix,
+      breachByMonth,
+      heatRows,
+      monthCols
+    };
+  }, [depts, fyMonths, collRev]);
+  const thBase = {
+    padding: '9px 8px',
+    fontSize: '10.5px',
+    color: '#6c7a8c',
+    fontWeight: 700,
+    borderBottom: '1px solid #dde3ec',
+    background: '#f7f9fc'
+  };
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '13px',
+      marginBottom: '16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: '40px',
+      height: '40px',
+      borderRadius: '11px',
+      background: '#eef8fc',
+      color: '#0090ca',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"
+  }))), React.createElement("div", null, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: '21px',
+      fontWeight: 700,
+      color: '#16202e',
+      letterSpacing: '-.3px'
+    }
+  }, "Quality Dashboard"), React.createElement("div", {
+    style: {
+      fontSize: '12.5px',
+      color: '#6c7a8c',
+      marginTop: '2px'
+    }
+  }, "Hospital-wide quality & patient-safety performance \xB7 monthly view")), React.createElement("div", {
+    style: {
+      marginLeft: 'auto',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '2px',
+      background: '#f1f6fb',
+      border: '1px solid #dde3ec',
+      borderRadius: '10px',
+      padding: '3px',
+      flexShrink: 0
+    }
+  }, React.createElement("button", {
+    onClick: goPrev,
+    disabled: !canPrev,
+    title: "Previous year",
+    style: {
+      border: 0,
+      background: 'transparent',
+      cursor: canPrev ? 'pointer' : 'default',
+      color: canPrev ? '#0090ca' : '#c4ccd6',
+      fontSize: '17px',
+      lineHeight: 1,
+      padding: '3px 10px',
+      borderRadius: '7px',
+      fontWeight: 700
+    }
+  }, "\u2039"), React.createElement("span", {
+    style: {
+      fontSize: '12.5px',
+      fontWeight: 700,
+      color: '#16202e',
+      minWidth: '96px',
+      textAlign: 'center',
+      fontFamily: MONO
+    }
+  }, fyLabelOf(safeFy)), React.createElement("button", {
+    onClick: goNext,
+    disabled: !canNext,
+    title: "Next year",
+    style: {
+      border: 0,
+      background: 'transparent',
+      cursor: canNext ? 'pointer' : 'default',
+      color: canNext ? '#0090ca' : '#c4ccd6',
+      fontSize: '17px',
+      lineHeight: 1,
+      padding: '3px 10px',
+      borderRadius: '7px',
+      fontWeight: 700
+    }
+  }, "\u203A"))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))',
+      gap: '13px',
+      marginBottom: '16px'
+    }
+  }, d.dashKpis.map(k => React.createElement("div", {
+    key: k.label,
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderLeft: '4px solid ' + k.color,
+      borderRadius: '11px',
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '14px 17px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '11.5px',
+      fontWeight: 700,
+      color: '#3c4858',
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, k.label), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: '27px',
+      fontWeight: 600,
+      color: k.color,
+      lineHeight: 1,
+      margin: '8px 0 5px',
+      letterSpacing: '-.5px'
+    }
+  }, k.val), React.createElement("div", {
+    style: {
+      fontSize: '11px',
+      color: '#9aa6b4'
+    }
+  }, k.foot)))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: '16px',
+      marginBottom: '16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: '12px',
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '15px 17px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '13px',
+      fontWeight: 700,
+      color: '#16202e',
+      marginBottom: '13px'
+    }
+  }, "Compliance Mix"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      height: '22px',
+      borderRadius: '7px',
+      overflow: 'hidden',
+      marginBottom: '12px'
+    }
+  }, d.mix.map(m => React.createElement("div", {
+    key: m.label,
+    title: m.label,
+    style: {
+      width: m.pct + '%',
+      background: m.color
+    }
+  }))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: '16px',
+      flexWrap: 'wrap'
+    }
+  }, d.mix.map(m => React.createElement("div", {
+    key: m.label,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '7px',
+      fontSize: '12px',
+      color: '#3c4858'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: '10px',
+      height: '10px',
+      borderRadius: '3px',
+      background: m.color
+    }
+  }), m.label, " ", React.createElement("b", {
+    style: {
+      fontFamily: MONO
+    }
+  }, m.pct, "%"))))), React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: '12px',
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '15px 17px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '13px',
+      fontWeight: 700,
+      color: '#16202e',
+      marginBottom: '13px'
+    }
+  }, "Off Benchmark by Month"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: '5px',
+      height: '110px'
+    }
+  }, d.breachByMonth.map((b, i) => React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: '5px',
+      height: '100%',
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("div", {
+    title: String(b.val),
+    style: {
+      width: '100%',
+      background: 'linear-gradient(180deg,#e8607a,#d23a52)',
+      borderRadius: '3px 3px 0 0',
+      height: b.h + '%',
+      minHeight: '2px'
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: '8.5px',
+      color: '#9aa6b4'
+    }
+  }, b.label)))))), React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: '12px',
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '13px 16px',
+      borderBottom: '1px solid #e8edf3'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '13.5px',
+      fontWeight: 700,
+      color: '#16202e'
+    }
+  }, "Department \xD7 Month Heatmap ", React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      color: '#9aa6b4',
+      fontSize: '11.5px'
+    }
+  }, "\xB7 ", fyLabelOf(safeFy))), React.createElement("div", {
+    style: {
+      fontSize: '11.5px',
+      color: '#6c7a8c'
+    }
+  }, "per assigned indicator \u2014 ", React.createElement("b", {
+    style: {
+      color: '#1f9d57'
+    }
+  }, "\u2713 all submitted"), " \xB7 ", React.createElement("b", {
+    style: {
+      color: '#b26a0f'
+    }
+  }, "n/N partially submitted"), " \xB7 ", React.createElement("b", {
+    style: {
+      color: '#d23a52'
+    }
+  }, "red = off benchmark"), " \xB7 grey none \xB7 months before a department's start and not-measured indicators are not counted \u2014 click any cell to see what's submitted & missing")), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: '12.5px',
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'left',
+      padding: '9px 16px',
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Department"), d.monthCols.map((mc, i) => React.createElement("th", {
+    key: i,
+    style: {
+      ...thBase,
+      textAlign: 'center',
+      padding: '9px 5px'
+    }
+  }, mc)), React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'center',
+      padding: '9px 12px'
+    }
+  }, "Status"), React.createElement("th", {
+    style: {
+      ...thBase,
+      textAlign: 'right',
+      padding: '9px 16px'
+    }
+  }, "Rate"))), React.createElement("tbody", null, d.heatRows.map((r, ri) => React.createElement("tr", {
+    key: ri,
+    style: {
+      borderBottom: '1px solid #eef1f5'
+    }
+  }, React.createElement("td", {
+    style: {
+      padding: '8px 16px',
+      textAlign: 'left'
+    }
+  }, React.createElement("b", {
+    style: {
+      color: '#16202e'
+    }
+  }, r.name), " ", React.createElement("span", {
+    style: {
+      color: '#9aa6b4',
+      fontSize: '11px'
+    }
+  }, "\xB7 ", r.count)), r.cells.map((c, ci) => React.createElement("td", {
+    key: ci,
+    style: {
+      textAlign: 'center',
+      padding: '6px 4px'
+    }
+  }, React.createElement("span", {
+    onClick: () => setCellSel({
+      depKey: r.dep.key,
+      mk: c.mk,
+      mlabel: c.mlabel
+    }),
+    title: r.name + ' · ' + c.mlabel + ' — ' + c.sub + ' of ' + c.total + ' assigned indicator' + (c.total !== 1 ? 's' : '') + ' submitted' + (c.breach ? ' · ' + c.breach + ' breach' + (c.breach > 1 ? 'es' : '') : '') + (c.missing.length ? ' · not submitted: ' + c.missing.slice(0, 5).join(', ') + (c.missing.length > 5 ? ' +' + (c.missing.length - 5) + ' more' : '') : '') + (c.nobs && c.nobs.length ? ' · not observed: ' + c.nobs.slice(0, 5).join(', ') + (c.nobs.length > 5 ? ' +' + (c.nobs.length - 5) + ' more' : '') : '') + (c.notDue && c.notDue.length ? ' · not due (not started / not measured): ' + c.notDue.slice(0, 5).join(', ') + (c.notDue.length > 5 ? ' +' + (c.notDue.length - 5) + ' more' : '') : '') + ' · click for details',
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      minWidth: '24px',
+      height: '24px',
+      padding: '0 4px',
+      borderRadius: '6px',
+      background: c.bg,
+      color: c.fg,
+      fontWeight: 700,
+      fontSize: c.sym.length > 2 ? '9.5px' : '11px',
+      fontFamily: MONO,
+      cursor: 'pointer',
+      boxShadow: c.breach ? '0 0 0 1px #eeb9c2' : 'none'
+    }
+  }, c.sym))), React.createElement("td", {
+    style: {
+      textAlign: 'center',
+      padding: '8px 12px'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: '10.5px',
+      fontWeight: 600,
+      color: r.statusColor,
+      background: r.statusBg,
+      padding: '2px 9px',
+      borderRadius: '20px',
+      whiteSpace: 'nowrap'
+    }
+  }, r.status)), React.createElement("td", {
+    style: {
+      textAlign: 'right',
+      padding: '8px 16px',
+      fontFamily: MONO,
+      fontWeight: 600,
+      color: '#16202e'
+    }
+  }, r.rate))))))), cellSel && (() => {
+    const cd = depts.find(d => d.key === cellSel.depKey);
+    return cd ? React.createElement(QCCellDetail, {
+      dep: cd,
+      mk: cellSel.mk,
+      mlabel: cellSel.mlabel,
+      Q: Q,
+      onClose: () => setCellSel(null)
+    }) : null;
+  })());
+}
+function QCCellDetail({
+  dep,
+  mk,
+  mlabel,
+  onClose,
+  Q
+}) {
+  const canEdit = qcCanEdit() && !!Q;
+  const [editId, setEditId] = useState(null);
+  const [addOpen, setAddOpen] = useState(false);
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape') {
+        if (editId) setEditId(null);else onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, editId]);
+  const allInds = dep.indicators || [];
+  const rowFor = ind => {
+    const incsRaw = ind.incidents && Array.isArray(ind.incidents[mk]) ? ind.incidents[mk] : [];
+    const incs = incsRaw.filter(x => x && (x.details || x.finding || x.corrective || x.preventive || x.patientName || x.uhid || x.diagnosis || x.remark));
+    return {
+      ind,
+      v: monthRaw(ind, mk),
+      s: monthStatus(ind, mk),
+      incs,
+      capa: ind.capa && ind.capa[mk] ? ind.capa[mk] : null,
+      remark: ind.monthRemarks && ind.monthRemarks[mk] || ''
+    };
+  };
+  const reported = allInds.map(rowFor).filter(r => r.s !== 'na').sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
+  const notObserved = allInds.filter(ind => monthStatus(ind, mk) === 'na' && qcNotObs(ind, mk));
+  const notDue = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && qcNotDue(dep, ind, mk));
+  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && !qcNotDue(dep, ind, mk));
+  const breaches = reported.filter(r => r.s === 'breach').length;
+  const field = (label, val) => val ? React.createElement("div", {
+    style: {
+      marginBottom: 7
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, label), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.ink,
+      whiteSpace: 'pre-wrap'
+    }
+  }, val)) : null;
+  const incidentCard = (x, i) => React.createElement("div", {
+    key: i,
+    style: {
+      border: '1px solid #f1c6cd',
+      background: '#fff',
+      borderRadius: 9,
+      padding: '11px 13px',
+      marginTop: 9
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: P.rose,
+      marginBottom: 8,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Incident ", i + 1), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      columnGap: 16
+    }
+  }, field('UHID', x.uhid), field('Patient', x.patientName), field('Age / Sex', [x.age, x.gender].filter(Boolean).join(' / ')), field('Diagnosis', x.diagnosis), field('Date of incident', x.incidentDate), field('Admission', x.admissionDate), field('Procedure date', x.procedureDate), field('Victim (staff)', x.victimName), field('Victim emp ID / UHID', x.victimId)), field('Incident details', x.details), field('Finding / root cause', x.finding), field('Corrective action', x.corrective), field('Preventive action', x.preventive), field('Remark', x.remark));
+  const viewCard = r => {
+    const isBr = r.s === 'breach';
+    const col = isBr ? P.rose : P.green;
+    const hasDetail = r.incs.length > 0 || r.capa;
+    return React.createElement("div", {
+      key: r.ind.id,
+      style: {
+        border: '1px solid ' + (isBr ? '#f1c6cd' : '#dde3ec'),
+        borderLeft: '4px solid ' + col,
+        borderRadius: 10,
+        padding: '12px 15px',
+        marginBottom: 11,
+        background: isBr ? '#fef6f7' : '#fff'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 700,
+        color: P.ink
+      }
+    }, r.ind.name), React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: col,
+        background: col + '1c',
+        padding: '2px 9px',
+        borderRadius: 20,
+        textTransform: 'uppercase',
+        letterSpacing: '.3px'
+      }
+    }, isBr ? 'Off benchmark' : 'On benchmark'), React.createElement("div", {
+      style: {
+        marginLeft: 'auto',
+        fontFamily: MONO,
+        fontSize: 14,
+        fontWeight: 700,
+        color: col
+      }
+    }, fmtVal(r.ind, r.v)), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.muted
+      }
+    }, "vs ", benchExpr(r.ind)), canEdit && React.createElement("button", {
+      onClick: () => {
+        setAddOpen(false);
+        setEditId(r.ind.id);
+      },
+      title: "Edit this reading & incident report",
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        border: '1px solid #cfe6f4',
+        background: '#eef8fc',
+        color: '#0090ca',
+        padding: '4px 10px',
+        borderRadius: 7,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, React.createElement("svg", {
+      width: "12",
+      height: "12",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"
+    })), "Edit")), r.remark && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: P.ink2,
+        marginTop: 7,
+        fontStyle: 'italic'
+      }
+    }, "\u201C", r.remark, "\u201D"), r.incs.map((x, i) => incidentCard(x, i)), r.incs.length === 0 && r.capa && incidentCard({
+      details: r.capa.incidentDetails,
+      finding: r.capa.finding,
+      corrective: r.capa.corrective,
+      preventive: r.capa.preventive
+    }, 0), isBr && !hasDetail && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.muted,
+        marginTop: 8,
+        padding: '8px 10px',
+        background: '#f7f9fc',
+        borderRadius: 7
+      }
+    }, "No incident report logged for this off-benchmark reading.", canEdit ? ' Click Edit to add one.' : ' Add details in Quality Data Entry.'));
+  };
+  const editIndOf = id => allInds.find(i => i.id === id);
+  const editing = editId ? editIndOf(editId) : null;
+  const editingUnreported = editing && monthStatus(editing, mk) === 'na';
+  return React.createElement("div", {
+    onClick: onClose,
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(13,27,46,.55)',
+      zIndex: 6000,
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'center',
+      padding: '38px 16px',
+      overflowY: 'auto'
+    }
+  }, React.createElement("div", {
+    onClick: e => e.stopPropagation(),
+    style: {
+      background: '#fff',
+      width: 'min(760px,100%)',
+      borderRadius: 14,
+      boxShadow: '0 24px 60px rgba(5,12,24,.4)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '15px 20px',
+      borderBottom: '1px solid #e8edf3',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 16.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, dep.name, " ", React.createElement("span", {
+    style: {
+      color: P.muted,
+      fontWeight: 600,
+      fontSize: 13
+    }
+  }, "\xB7 ", mlabel)), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, React.createElement("b", {
+    style: {
+      color: reported.length === allInds.length ? P.green : P.ink2
+    }
+  }, reported.length, " of ", allInds.length), " assigned indicator", allInds.length !== 1 ? 's' : '', " submitted", notObserved.length ? React.createElement(React.Fragment, null, " \xB7 ", React.createElement("b", {
+    style: {
+      color: '#5b3fa8'
+    }
+  }, notObserved.length, " not observed")) : null, " \xB7 ", React.createElement("b", {
+    style: {
+      color: breaches ? P.rose : P.green
+    }
+  }, breaches, " off benchmark"), canEdit && React.createElement("span", {
+    style: {
+      marginLeft: 8,
+      color: '#0090ca',
+      fontWeight: 700
+    }
+  }, "\xB7 admin edit"))), React.createElement("button", {
+    onClick: onClose,
+    title: "Close (Esc)",
+    style: {
+      marginLeft: 'auto',
+      width: 32,
+      height: 32,
+      borderRadius: 8,
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.muted,
+      cursor: 'pointer',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }, React.createElement("svg", {
+    width: "16",
+    height: "16",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M6 6l12 12M18 6L6 18"
+  })))), React.createElement("div", {
+    style: {
+      padding: '14px 20px 20px',
+      maxHeight: '72vh',
+      overflowY: 'auto'
+    }
+  }, reported.length === 0 && !editing && React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: P.muted,
+      padding: '24px 0',
+      textAlign: 'center'
+    }
+  }, "No indicators were submitted for this month.", canEdit ? ' Click an indicator below to add its reading.' : ''), reported.map(r => editId === r.ind.id ? React.createElement(QCIndEdit, {
+    key: r.ind.id,
+    dep: dep,
+    ind: r.ind,
+    mk: mk,
+    mlabel: mlabel,
+    Q: Q,
+    onClose: () => setEditId(null)
+  }) : viewCard(r)), editing && editingUnreported && React.createElement(QCIndEdit, {
+    key: editing.id,
+    dep: dep,
+    ind: editing,
+    mk: mk,
+    mlabel: mlabel,
+    Q: Q,
+    isNew: true,
+    onClose: () => setEditId(null)
+  }), !editId && notObserved.length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 4,
+      marginBottom: 10,
+      border: '1px solid #e3daf7',
+      borderRadius: 9,
+      padding: '11px 13px',
+      background: '#faf8ff'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#5b3fa8',
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      marginBottom: 7
+    }
+  }, "Not observed in ", mlabel, " (", notObserved.length, ")"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 7
+    }
+  }, notObserved.map(ind => {
+    const why = ind.monthRemarks && ind.monthRemarks[mk] || '';
+    const chip = React.createElement("span", {
+      style: {
+        border: '1px solid #d9cdf3',
+        background: '#fff',
+        color: '#5b3fa8',
+        padding: '6px 11px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 600
+      }
+    }, ind.name, why ? ' · ' + why : '');
+    return canEdit ? React.createElement("button", {
+      key: ind.id,
+      title: 'Change the ' + mlabel + ' entry for ' + ind.name,
+      onClick: () => {
+        setAddOpen(false);
+        setEditId(ind.id);
+      },
+      style: {
+        border: 0,
+        background: 'none',
+        padding: 0,
+        cursor: 'pointer'
+      }
+    }, chip) : React.createElement("span", {
+      key: ind.id
+    }, chip);
+  }))), !editId && unreported.length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 4,
+      border: '1px dashed #b9c6d2',
+      borderRadius: 9,
+      padding: '11px 13px',
+      background: '#f7f9fc'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#b26a0f',
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      marginBottom: 7
+    }
+  }, "Not submitted for ", mlabel, " (", unreported.length, " of ", allInds.length, " assigned", notObserved.length ? ' · ' + notObserved.length + ' not observed' : '', notDue.length ? ' · ' + notDue.length + ' not due' : '', ")"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 7
+    }
+  }, unreported.map(ind => canEdit ? React.createElement("button", {
+    key: ind.id,
+    title: 'Add the ' + mlabel + ' reading for ' + ind.name,
+    onClick: () => {
+      setAddOpen(false);
+      setEditId(ind.id);
+    },
+    style: {
+      border: '1px solid #cfe6f4',
+      background: '#eef8fc',
+      color: '#0072a3',
+      padding: '6px 11px',
+      borderRadius: 20,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, "+ ", ind.name) : React.createElement("span", {
+    key: ind.id,
+    style: {
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.muted,
+      padding: '6px 11px',
+      borderRadius: 20,
+      fontSize: 11.5,
+      fontWeight: 600
+    }
+  }, ind.name))), canEdit && React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: P.muted,
+      marginTop: 8
+    }
+  }, "Click an indicator to add its ", mlabel, " reading now.")), !editId && notDue.length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 10,
+      border: '1px dashed #d5dce5',
+      borderRadius: 9,
+      padding: '11px 13px',
+      background: '#fbfcfd'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      marginBottom: 4
+    }
+  }, "Not due for ", mlabel, " (", notDue.length, ")"), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: P.muted,
+      marginBottom: 7
+    }
+  }, "Before the department's or indicator's start month, or marked not measured in Data Collection \u2192 Department Setup. Not counted as missing."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 7
+    }
+  }, notDue.map(ind => {
+    const nm = qcNotMeasured(dep, ind);
+    const label = ind.name + (nm ? ' · not measured' : '');
+    return canEdit ? React.createElement("button", {
+      key: ind.id,
+      title: (nm ? 'Not measured: ' + (nm.reason || '') + ' — ' : '') + 'Add the ' + mlabel + ' reading for ' + ind.name,
+      onClick: () => {
+        setAddOpen(false);
+        setEditId(ind.id);
+      },
+      style: {
+        border: '1px solid #dde3ec',
+        background: '#fff',
+        color: P.muted,
+        padding: '6px 11px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 600,
+        cursor: 'pointer'
+      }
+    }, "+ ", label) : React.createElement("span", {
+      key: ind.id,
+      title: nm ? 'Not measured: ' + (nm.reason || '') : undefined,
+      style: {
+        border: '1px solid #e4e9ef',
+        background: '#fff',
+        color: '#9aa6b4',
+        padding: '6px 11px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 600
+      }
+    }, label);
+  }))))));
+}
+function QCIndEdit({
+  dep,
+  ind,
+  mk,
+  mlabel,
+  Q,
+  isNew,
+  onClose
+}) {
+  const isRate = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0;
+  const g = (o, k) => o && o[k] != null && o[k] !== '' ? String(o[k]) : '';
+  const [val, setVal] = useState(() => g(ind.months, mk));
+  const [num, setNum] = useState(() => g(ind.mNum, mk));
+  const [den, setDen] = useState(() => g(ind.mDen, mk));
+  const [remark, setRemark] = useState(() => ind.monthRemarks && ind.monthRemarks[mk] || '');
+  const [incs, setIncs] = useState(() => ind.incidents && Array.isArray(ind.incidents[mk]) ? ind.incidents[mk].map(x => Object.assign({}, x)) : []);
+  const [notObs, setNotObs] = useState(() => qcNotObs(ind, mk));
+  const setF = (i, k, v) => setIncs(a => a.map((x, j) => j === i ? Object.assign({}, x, {
+    [k]: v
+  }) : x));
+  const addInc = () => setIncs(a => [...a, {
+    source: 'admin edit'
+  }]);
+  const delInc = i => setIncs(a => a.filter((_, j) => j !== i));
+  const isHH = /hand\s*hygiene/i.test(ind.name || '');
+  const HH_GROUPS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Others']];
+  const [byGroup, setByGroup] = useState(() => isHH);
+  const [grp, setGrp] = useState(() => {
+    const src = ind.mGroups && ind.mGroups[mk] || {};
+    const o = {};
+    HH_GROUPS.forEach(([k]) => {
+      const x = src[k] || {};
+      o[k] = {
+        n: x.n != null ? String(x.n) : '',
+        d: x.d != null ? String(x.d) : ''
+      };
+    });
+    return o;
+  });
+  const setG = (k, f, v) => setGrp(g => Object.assign({}, g, {
+    [k]: Object.assign({}, g[k], {
+      [f]: v
+    })
+  }));
+  const grpTot = HH_GROUPS.reduce((a, [k]) => {
+    const n = grp[k].n === '' ? null : Number(grp[k].n),
+      d = grp[k].d === '' ? null : Number(grp[k].d);
+    if (n != null) a.n += n;
+    if (d != null) a.d += d;
+    if (grp[k].n !== '' || grp[k].d !== '') a.any = true;
+    return a;
+  }, {
+    n: 0,
+    d: 0,
+    any: false
+  });
+  const grpPct = grpTot.d > 0 ? Math.round(grpTot.n / grpTot.d * 10000) / 100 : null;
+  const useGroups = isHH && byGroup;
+  const num2 = useGroups ? grpTot.d > 0 ? grpTot.n : null : num === '' ? null : Number(num);
+  const den2 = useGroups ? grpTot.d > 0 ? grpTot.d : null : den === '' ? null : Number(den);
+  const preview = isRate ? fmtVal(ind, window.qiFormulaCompute(ind.formula, num2 || 0, den2 || 0)) : null;
+  const save = async () => {
+    if (notObs) {
+      Q.patchIndicator(dep.key, ind.id, {
+        mNotObserved: {
+          [mk]: true
+        },
+        monthRemarks: {
+          [mk]: remark
+        },
+        months: {
+          [mk]: null
+        },
+        mNum: {
+          [mk]: null
+        },
+        mDen: {
+          [mk]: null
+        },
+        mGroups: {
+          [mk]: null
+        },
+        incidents: {
+          [mk]: []
+        }
+      });
+      onClose();
+      return;
+    }
+    const emptyReading = isRate ? num2 == null && den2 == null : val === '';
+    if (emptyReading) {
+      const msg = isRate ? `No reading will be recorded — “${ind.numLabel || 'Numerator'}” and “${ind.denLabel || 'Denominator'}” are both empty. For a "no event" month, enter 0 and the ${ind.denLabel || 'denominator'}. Save the remark only anyway?` : `No value entered for ${mlabel} — nothing will be recorded. Save the remark only anyway?`;
+      const ok = window.UI && window.UI.confirm ? await window.UI.confirm({
+        title: 'No reading entered',
+        message: msg,
+        confirmLabel: 'Save remark only',
+        cancelLabel: 'Go back'
+      }) : window.confirm(msg);
+      if (!ok) return;
+    }
+    const patch = {
+      monthRemarks: {
+        [mk]: remark
+      },
+      mNotObserved: {
+        [mk]: null
+      }
+    };
+    if (useGroups) {
+      const gp = {};
+      HH_GROUPS.forEach(([k]) => {
+        const n = grp[k].n === '' ? null : Number(grp[k].n),
+          d = grp[k].d === '' ? null : Number(grp[k].d);
+        if (n != null || d != null) gp[k] = {
+          n: n,
+          d: d
+        };
+      });
+      patch.mNum = {
+        [mk]: num2
+      };
+      patch.mDen = {
+        [mk]: den2
+      };
+      patch.months = {
+        [mk]: grpPct
+      };
+      patch.mGroups = {
+        [mk]: Object.keys(gp).length ? gp : null
+      };
+    } else if (isRate) {
+      patch.mNum = {
+        [mk]: num2
+      };
+      patch.mDen = {
+        [mk]: den2
+      };
+    } else {
+      const v = val === '' ? null : Number(val);
+      patch.months = {
+        [mk]: v
+      };
+      if (ind.formula === 'count') patch.mNum = {
+        [mk]: v
+      };
+    }
+    const clean = incs.map(x => {
+      const o = {};
+      Object.keys(x).forEach(k => {
+        const s = (x[k] == null ? '' : String(x[k])).trim();
+        if (s) o[k] = s;
+      });
+      return o;
+    }).filter(o => Object.keys(o).filter(k => k !== 'source').length);
+    patch.incidents = {
+      [mk]: clean
+    };
+    Q.patchIndicator(dep.key, ind.id, patch);
+    onClose();
+  };
+  const clearAll = () => {
+    Q.patchIndicator(dep.key, ind.id, {
+      months: {
+        [mk]: null
+      },
+      mNum: {
+        [mk]: null
+      },
+      mDen: {
+        [mk]: null
+      },
+      incidents: {
+        [mk]: []
+      },
+      monthRemarks: {
+        [mk]: ''
+      },
+      mNotObserved: {
+        [mk]: null
+      },
+      mGroups: {
+        [mk]: null
+      },
+      mGroupsDen: {
+        [mk]: null
+      },
+      mDeptBreakdown: {
+        [mk]: null
+      },
+      capa: {
+        [mk]: null
+      }
+    });
+    onClose();
+  };
+  const inp = {
+    width: '100%',
+    padding: '7px 9px',
+    border: '1px solid #dde3ec',
+    borderRadius: 7,
+    fontFamily: 'inherit',
+    fontSize: 12.5,
+    color: P.ink,
+    background: '#fff',
+    outline: 'none',
+    boxSizing: 'border-box'
+  };
+  const lbl = {
+    fontSize: 10,
+    fontWeight: 700,
+    color: P.muted,
+    textTransform: 'uppercase',
+    letterSpacing: '.3px',
+    marginBottom: 3,
+    display: 'block'
+  };
+  const fin = (label, i, k, ta) => React.createElement("div", {
+    style: {
+      marginBottom: 8
+    }
+  }, React.createElement("label", {
+    style: lbl
+  }, label), ta ? React.createElement("textarea", {
+    value: incs[i][k] || '',
+    onChange: e => setF(i, k, e.target.value),
+    rows: 2,
+    style: {
+      ...inp,
+      resize: 'vertical',
+      lineHeight: 1.4
+    }
+  }) : React.createElement("input", {
+    type: /date/i.test(k) ? 'date' : 'text',
+    value: incs[i][k] || '',
+    onChange: e => setF(i, k, e.target.value),
+    style: inp
+  }));
+  return React.createElement("div", {
+    style: {
+      border: '1.5px solid #27a8db',
+      borderRadius: 11,
+      padding: '13px 15px',
+      marginBottom: 11,
+      background: '#fbfdff',
+      boxShadow: '0 2px 10px rgba(0,144,202,.10)'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 11
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, ind.name), React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: '#0090ca',
+      background: '#eef8fc',
+      padding: '2px 9px',
+      borderRadius: 20,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, isNew ? 'New reading' : 'Editing', " \xB7 ", mlabel), React.createElement("div", {
+    style: {
+      marginLeft: 'auto',
+      fontSize: 11,
+      color: P.muted
+    }
+  }, "Benchmark ", benchExpr(ind))), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 11,
+      padding: '8px 10px',
+      borderRadius: 8,
+      cursor: 'pointer',
+      flexWrap: 'wrap',
+      border: '1px solid ' + (notObs ? '#c9b7e8' : '#e3e9f1'),
+      background: notObs ? '#f5f1fd' : '#fff'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: notObs,
+    onChange: e => setNotObs(e.target.checked)
+  }), React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: notObs ? '#5b3fa8' : P.ink2
+    }
+  }, "Not observed this month"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted
+    }
+  }, "\u2014 no measurement taken; reported as \u201CN/OB\u201D, not chased as pending")), notObs && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#5b3fa8',
+      background: '#f5f1fd',
+      border: '1px solid #e3daf7',
+      borderRadius: 8,
+      padding: '8px 10px',
+      marginBottom: 11
+    }
+  }, "No reading will be recorded for ", mlabel, ". Use the remark below to say why it was not observed."), !notObs && isHH && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginBottom: 10
+    }
+  }, [['group', 'By staff group'], ['overall', 'Overall only']].map(([v, l]) => {
+    const on = (byGroup ? 'group' : 'overall') === v;
+    return React.createElement("button", {
+      key: v,
+      onClick: () => setByGroup(v === 'group'),
+      style: {
+        border: '1px solid ' + (on ? '#0090ca' : '#dde3ec'),
+        background: on ? '#eef8fc' : '#fff',
+        color: on ? '#0072a3' : P.muted,
+        padding: '5px 12px',
+        borderRadius: 7,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, l);
+  })), notObs ? null : useGroups ? React.createElement("div", {
+    style: {
+      marginBottom: 11
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '86px 1fr 1fr 54px',
+      gap: 8,
+      alignItems: 'center',
+      marginBottom: 5
+    }
+  }, React.createElement("span", {
+    style: {
+      ...lbl,
+      marginBottom: 0
+    }
+  }, "Group"), React.createElement("span", {
+    style: {
+      ...lbl,
+      marginBottom: 0
+    }
+  }, "Actions done"), React.createElement("span", {
+    style: {
+      ...lbl,
+      marginBottom: 0
+    }
+  }, "Opportunities"), React.createElement("span", {
+    style: {
+      ...lbl,
+      marginBottom: 0,
+      textAlign: 'right'
+    }
+  }, "%")), HH_GROUPS.map(([k, label]) => {
+    const n = grp[k].n === '' ? null : Number(grp[k].n),
+      d = grp[k].d === '' ? null : Number(grp[k].d);
+    const p = d > 0 ? Math.round(n / d * 1000) / 10 : null;
+    return React.createElement("div", {
+      key: k,
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '86px 1fr 1fr 54px',
+        gap: 8,
+        alignItems: 'center',
+        marginBottom: 6
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, label), React.createElement("input", {
+      type: "number",
+      step: "any",
+      min: "0",
+      value: grp[k].n,
+      onChange: e => setG(k, 'n', e.target.value),
+      style: inp,
+      placeholder: "0"
+    }), React.createElement("input", {
+      type: "number",
+      step: "any",
+      min: "0",
+      value: grp[k].d,
+      onChange: e => setG(k, 'd', e.target.value),
+      style: inp,
+      placeholder: "0"
+    }), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 12,
+        fontWeight: 700,
+        color: p == null ? P.muted : P.ink,
+        textAlign: 'right'
+      }
+    }, p == null ? '—' : p + '%'));
+  }), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '86px 1fr 1fr 54px',
+      gap: 8,
+      alignItems: 'center',
+      marginTop: 4,
+      paddingTop: 8,
+      borderTop: '1px solid #e3e9f1'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 800,
+      color: '#0072a3'
+    }
+  }, "Overall"), React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: P.ink,
+      paddingLeft: 9
+    }
+  }, grpTot.any ? grpTot.n : '—'), React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: P.ink,
+      paddingLeft: 9
+    }
+  }, grpTot.any ? grpTot.d : '—'), React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 13,
+      fontWeight: 800,
+      color: grpPct == null ? P.muted : '#0072a3',
+      textAlign: 'right'
+    }
+  }, grpPct == null ? '—' : grpPct + '%'))) : React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: isRate ? '1fr 1fr auto' : '1fr',
+      gap: 12,
+      alignItems: 'end',
+      marginBottom: 11
+    }
+  }, isRate ? React.createElement(React.Fragment, null, React.createElement("div", null, React.createElement("label", {
+    style: lbl
+  }, ind.numLabel || 'Numerator'), React.createElement("input", {
+    type: "number",
+    step: "any",
+    value: num,
+    onChange: e => setNum(e.target.value),
+    style: inp
+  })), React.createElement("div", null, React.createElement("label", {
+    style: lbl
+  }, ind.denLabel || 'Denominator'), React.createElement("input", {
+    type: "number",
+    step: "any",
+    value: den,
+    onChange: e => setDen(e.target.value),
+    style: inp
+  })), React.createElement("div", {
+    style: {
+      paddingBottom: 7,
+      fontFamily: MONO,
+      fontSize: 13,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, "= ", preview)) : React.createElement("div", null, React.createElement("label", {
+    style: lbl
+  }, "Value"), React.createElement("input", {
+    type: "number",
+    step: "any",
+    value: val,
+    onChange: e => setVal(e.target.value),
+    style: inp
+  }))), React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, React.createElement("label", {
+    style: lbl
+  }, "Month remark (optional)"), React.createElement("input", {
+    value: remark,
+    onChange: e => setRemark(e.target.value),
+    style: inp
+  })), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      marginBottom: 6
+    }
+  }, "Incident report(s) \xB7 ", incs.length), incs.map((x, i) => React.createElement("div", {
+    key: i,
+    style: {
+      border: '1px solid #e3e9f1',
+      borderRadius: 9,
+      padding: '11px 12px',
+      marginBottom: 9,
+      background: '#fff'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      marginBottom: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: P.rose,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Incident ", i + 1), React.createElement("button", {
+    onClick: () => delInc(i),
+    title: "Delete this incident",
+    style: {
+      marginLeft: 'auto',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+      border: '1px solid #f1c6cd',
+      background: '#fff',
+      color: '#d23a52',
+      padding: '3px 9px',
+      borderRadius: 7,
+      fontSize: 11,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "12",
+    height: "12",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"
+  })), "Delete")), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      columnGap: 12
+    }
+  }, fin('Patient name', i, 'patientName'), fin('UHID', i, 'uhid'), fin('Age', i, 'age'), fin('Sex', i, 'gender'), fin('Date of incident', i, 'incidentDate'), fin('Admission date', i, 'admissionDate'), fin('Procedure date', i, 'procedureDate')), fin('Diagnosis', i, 'diagnosis', true), fin('Incident details', i, 'details', true), fin('Finding / root cause', i, 'finding', true), fin('Corrective action', i, 'corrective', true), fin('Preventive action', i, 'preventive', true), fin('Remark', i, 'remark'))), React.createElement("button", {
+    onClick: addInc,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px dashed #b9c6d2',
+      background: '#fff',
+      color: P.ink2,
+      padding: '7px 12px',
+      borderRadius: 8,
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M12 5v14M5 12h14"
+  })), "Add incident"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      marginTop: 14,
+      paddingTop: 12,
+      borderTop: '1px solid #e8edf3'
+    }
+  }, (!window.unicoCan || window.unicoCan('quality', 'edit')) && React.createElement("button", {
+    onClick: save,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: 0,
+      background: '#0090ca',
+      color: '#fff',
+      padding: '9px 16px',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      boxShadow: '0 1px 3px rgba(0,144,202,.4)'
+    }
+  }, React.createElement("svg", {
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M20 6L9 17l-5-5"
+  })), "Save changes"), React.createElement("button", {
+    onClick: onClose,
+    style: {
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.ink2,
+      padding: '9px 14px',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, "Cancel"), !isNew && React.createElement("button", {
+    onClick: clearAll,
+    title: "Delete this month's reading + incidents",
+    style: {
+      marginLeft: 'auto',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid #f1c6cd',
+      background: '#fff',
+      color: '#d23a52',
+      padding: '9px 14px',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"
+  })), "Delete reading")));
+}
+function QCScorecard({
+  depts
+}) {
+  const [fy, setFy] = useState(() => defaultFy(depts));
+  const MONTHS = fyAxis(fy);
+  const rows = useMemo(() => {
+    return (depts || []).map(d => {
+      const st = deptStat(d, MONTHS);
+      const inds = d.indicators || [];
+      const withData = inds.filter(i => hasData(i, MONTHS)).length;
+      const breaches = inds.reduce((a, i) => a + countBreaches(i, MONTHS), 0);
+      const rep = st.ok + st.breach;
+      const brRate = rep ? st.breach / rep : 0;
+      const status = d.status || (st.breach === 0 ? 'Excellent' : brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Very Good');
+      const sc = statusColorFor(status);
+      return {
+        key: d.key,
+        name: d.name,
+        total: inds.length,
+        withData,
+        breaches,
+        breachColor: breaches > 0 ? P.rose : P.ink2,
+        rate: st.rate,
+        status,
+        statusColor: sc,
+        statusBg: sc + '1c',
+        barColor: st.rate >= 95 ? P.green : st.rate >= 85 ? P.teal : st.rate >= 70 ? P.amber : P.rose
+      };
+    }).sort((a, b) => b.rate - a.rate);
+  }, [depts, fy]);
+  const th = {
+    padding: '10px 12px',
+    fontSize: '10.5px',
+    textTransform: 'uppercase',
+    letterSpacing: '.3px',
+    color: P.muted,
+    fontWeight: 700,
+    borderBottom: '1px solid ' + P.line,
+    background: P.panel2
+  };
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '13px',
+      marginBottom: '16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: '40px',
+      height: '40px',
+      borderRadius: '11px',
+      background: '#efeaff',
+      color: P.violet,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M12 2 2 7l10 5 10-5zM2 12l10 5 10-5M2 17l10 5 10-5"
+  }))), React.createElement("div", null, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: '21px',
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Department Scorecard"), React.createElement("div", {
+    style: {
+      fontSize: '12.5px',
+      color: P.muted,
+      marginTop: '2px'
+    }
+  }, "Zero-defect performance by department \xB7 ", fyLabelOf(fy))), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement(QCFyPicker, {
+    fy: fy,
+    setFy: setFy,
+    depts: depts
+  })), React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: '12px',
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: '12.5px',
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'left',
+      padding: '10px 16px'
+    }
+  }, "Department"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'right'
+    }
+  }, "Indicators"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'right'
+    }
+  }, "With data"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'right'
+    }
+  }, "Off Benchmark"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'left',
+      width: '200px'
+    }
+  }, "Zero-defect rate"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'center',
+      padding: '10px 16px'
+    }
+  }, "Status"))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
+    key: r.key,
+    style: {
+      borderBottom: '1px solid ' + P.line2
+    }
+  }, React.createElement("td", {
+    style: {
+      padding: '10px 16px',
+      textAlign: 'left',
+      fontWeight: 600,
+      color: P.ink
+    }
+  }, r.name), React.createElement("td", {
+    style: {
+      padding: '10px 12px',
+      textAlign: 'right',
+      fontFamily: MONO,
+      color: P.ink2
+    }
+  }, r.total), React.createElement("td", {
+    style: {
+      padding: '10px 12px',
+      textAlign: 'right',
+      fontFamily: MONO,
+      color: P.ink2
+    }
+  }, r.withData), React.createElement("td", {
+    style: {
+      padding: '10px 12px',
+      textAlign: 'right',
+      fontFamily: MONO,
+      fontWeight: 600,
+      color: r.breachColor
+    }
+  }, r.breaches), React.createElement("td", {
+    style: {
+      padding: '10px 12px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      height: '8px',
+      background: P.line2,
+      borderRadius: '5px',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      height: '100%',
+      width: r.rate + '%',
+      background: r.barColor,
+      borderRadius: '5px'
+    }
+  })), React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontWeight: 600,
+      color: P.ink,
+      fontSize: '11.5px',
+      width: '38px',
+      textAlign: 'right'
+    }
+  }, r.rate, "%"))), React.createElement("td", {
+    style: {
+      padding: '10px 16px',
+      textAlign: 'center'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: '10.5px',
+      fontWeight: 600,
+      color: r.statusColor,
+      background: r.statusBg,
+      padding: '2px 9px',
+      borderRadius: '20px',
+      whiteSpace: 'nowrap'
+    }
+  }, r.status)))))))));
+}
+function QCTrends({
+  depts
+}) {
+  const [dept, setDept] = useState(depts[0] && depts[0].key);
+  const [indId, setIndId] = useState('');
+  const [fy, setFy] = useState(() => defaultFy(depts));
+  const MONTHS = fyAxis(fy);
+  const td = useMemo(() => depts.find(x => x.key === dept) || depts[0], [depts, dept]);
+  const tInds = td && td.indicators || [];
+  let tIndId = indId;
+  if (!tInds.some(i => i.id === tIndId)) tIndId = tInds[0] && tInds[0].id;
+  const tInd = tInds.find(i => i.id === tIndId);
+  const model = useMemo(() => {
+    if (!tInd) return null;
+    const vals = MONTHS.map(m => {
+      const v = monthRaw(tInd, m[0]);
+      return {
+        label: m[1].split(' ')[0],
+        year: m[1].split(' ')[1],
+        v,
+        s: monthStatus(tInd, m[0])
+      };
+    });
+    const nums = vals.map(x => x.v).filter(v => v != null);
+    const maxV = Math.max(tInd.benchmarkValue != null ? tInd.benchmarkValue : 0, ...(nums.length ? nums : [1]), 1);
+    const bars = vals.map(x => ({
+      label: x.label,
+      year: x.year,
+      disp: x.v == null ? '—' : fmtVal(tInd, x.v),
+      h: x.v == null ? 0 : Math.max(2, Math.round(x.v / maxV * 100)),
+      color: x.s === 'breach' ? P.rose : x.s === 'ok' ? P.green : '#c4ccd6'
+    }));
+    const avg = nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length * 100) / 100 : '—';
+    return {
+      name: tInd.name,
+      unit: tInd.unit,
+      formula: formulaText(tInd),
+      bench: benchExpr(tInd),
+      avg: avg === '—' ? '—' : fmtVal(tInd, avg),
+      breaches: vals.filter(x => x.s === 'breach').length,
+      reported: nums.length,
+      bars
+    };
+  }, [tInd, fy]);
+  const selStyle = {
+    padding: '8px 11px',
+    border: '1px solid ' + P.line,
+    borderRadius: 8,
+    fontSize: 12.5,
+    fontWeight: 600,
+    background: '#fff',
+    color: P.ink,
+    outline: 'none'
+  };
+  const statLabel = {
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: '.4px',
+    color: P.faint,
+    fontWeight: 700
+  };
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      marginBottom: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#e7f6ed',
+      color: P.green,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M3 17l6-6 4 4 8-8M21 7v5h-5"
+  }))), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Trends"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "12-month trend for a single indicator, against its benchmark \xB7 ", fyLabelOf(fy))), React.createElement(QCFyPicker, {
+    fy: fy,
+    setFy: setFy,
+    depts: depts,
+    style: {
+      padding: '8px 11px'
+    }
+  }), React.createElement("select", {
+    value: dept || '',
+    onChange: e => {
+      setDept(e.target.value);
+      setIndId('');
+    },
+    style: selStyle
+  }, depts.map(d => React.createElement("option", {
+    key: d.key,
+    value: d.key
+  }, d.name))), React.createElement("select", {
+    value: tIndId || '',
+    onChange: e => setIndId(e.target.value),
+    style: {
+      ...selStyle,
+      fontWeight: 400,
+      maxWidth: 280
+    }
+  }, tInds.map(i => React.createElement("option", {
+    key: i.id,
+    value: i.id
+  }, i.name)))), model && React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 12,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '18px 20px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginBottom: 4
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 16,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, model.name), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: P.faint
+    }
+  }, model.unit)), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 12,
+      color: P.blue700,
+      marginBottom: 16
+    }
+  }, "\u0192 ", model.formula), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 22,
+      flexWrap: 'wrap',
+      marginBottom: 18
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: statLabel
+  }, "Benchmark"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 15,
+      fontWeight: 700,
+      color: P.blue700
+    }
+  }, model.bench)), React.createElement("div", null, React.createElement("div", {
+    style: statLabel
+  }, "Avg"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 15,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, model.avg)), React.createElement("div", null, React.createElement("div", {
+    style: statLabel
+  }, "Off Benchmark"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 15,
+      fontWeight: 700,
+      color: P.rose
+    }
+  }, model.breaches)), React.createElement("div", null, React.createElement("div", {
+    style: statLabel
+  }, "Months reported"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 15,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, model.reported))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 6,
+      height: 200,
+      borderBottom: '1px solid ' + P.line2,
+      paddingBottom: 0
+    }
+  }, model.bars.map((b, i) => React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: 6,
+      height: '100%',
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 9,
+      fontFamily: MONO,
+      color: P.muted
+    }
+  }, b.disp), React.createElement("div", {
+    title: b.disp,
+    style: {
+      width: '100%',
+      maxWidth: 34,
+      background: b.color,
+      borderRadius: '4px 4px 0 0',
+      height: b.h + '%',
+      minHeight: 2
+    }
+  })))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginTop: 7
+    }
+  }, model.bars.map((b, i) => React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      textAlign: 'center',
+      fontSize: 9,
+      color: P.faint
+    }
+  }, b.label)))));
+}
+function qcEsc(s) {
+  return ((s == null ? '' : s) + '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function qcDownload(content, filename, mime) {
+  try {
+    const blob = new Blob([content], {
+      type: mime
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try {
+        document.body.removeChild(a);
+      } catch (e) {}
+      URL.revokeObjectURL(url);
+    }, 600);
+  } catch (e) {}
+}
+function qcIncidentsOf(d) {
+  const out = [];
+  (d.indicators || []).forEach(ind => {
+    const incs = ind.incidents || {};
+    Object.keys(incs).forEach(mk => {
+      const arr = incs[mk];
+      const isQ = /^Q[1-4]$/.test(mk);
+      if (Array.isArray(arr)) arr.forEach(x => {
+        if (x && (x.details || x.finding || x.corrective || x.preventive || x.patientName || x.uhid || x.victimName || x.victimId)) out.push({
+          ind: ind.name,
+          month: isQ ? qtrLabelOf(mk) : qcMonthLabel(mk),
+          q: isQ ? mk : null,
+          x: x
+        });
+      });
+    });
+  });
+  return out;
+}
+function qcIncInPeriod(r, months) {
+  if (!months || !months.length) return true;
+  if (r.q) return months.some(m => m[2] === r.q);
+  return months.some(m => m[1] === r.month);
+}
+function qcReportHTML(depts, months, fyIn, opts) {
+  const o = opts || {};
+  const date = new Date().toISOString().slice(0, 10);
+  const fy = fyIn != null ? fyIn : defaultFy(depts);
+  const MONTHS = Array.isArray(months) && months.length ? months : fyAxis(fy);
+  let body = o.noTitle ? '' : '<h1 style="font-family:Calibri,Arial;color:#0072a3;margin:0 0 2px">UNICO Hospitals — Quality Indicator Report</h1>' + '<div style="font-family:Calibri;color:#555;margin-bottom:12px">' + fyLabelOf(fy) + ' · ' + MONTHS[0][1] + ' - ' + MONTHS[MONTHS.length - 1][1] + ' · generated ' + date + ' · Confidential</div>';
+  depts.forEach(d => {
+    const st = deptStat(d, MONTHS);
+    body += '<h2 style="font-family:Calibri;color:#16202e;margin:16px 0 3px">' + qcEsc(d.name) + '</h2>' + '<div style="font-family:Calibri;color:#555;margin-bottom:6px">Zero-defect: <b>' + st.rate + '%</b> · Off benchmark: <b style="color:#d23a52">' + st.breach + '</b> · Indicators: ' + (d.indicators || []).length + '</div>';
+    const th = ['Indicator', 'Benchmark'].concat(MONTHS.map(m => m[1].split(' ')[0])).map(h => '<th style="background:#0090ca;color:#fff;border:1px solid #2b6f9c;padding:5px 7px;font-family:Calibri;font-size:10.5pt;text-align:left">' + h + '</th>').join('');
+    const trs = (d.indicators || []).map((ind, i) => {
+      const cells = [qcEsc(ind.name), qcEsc(benchExpr(ind))].concat(MONTHS.map(m => {
+        const v = qcCellVal(ind, m);
+        const s = qStatus(ind, v);
+        const disp = qcReportCell(ind, m);
+        const col = s === 'breach' ? '#d23a52' : s === 'ok' ? '#1f9d57' : '#9aa6b4';
+        return '<span style="color:' + col + ';font-weight:600">' + qcEsc(disp) + '</span>';
+      }));
+      return '<tr style="background:' + (i % 2 ? '#eef6fb' : '#fff') + '">' + cells.map((c, ci) => '<td style="border:1px solid #b9c6d2;padding:4px 7px;font-family:Calibri;font-size:10pt;' + (ci > 1 ? 'text-align:center' : '') + '">' + c + '</td>').join('') + '</tr>';
+    }).join('');
+    body += '<table border="1" style="border-collapse:collapse"><thead><tr>' + th + '</tr></thead><tbody>' + trs + '</tbody></table>';
+    const inc = qcIncidentsOf(d).filter(r => qcIncInPeriod(r, MONTHS));
+    if (inc.length) {
+      body += '<h3 style="font-family:Calibri;color:#b32339;margin:12px 0 3px">Incident details (' + inc.length + ')</h3>';
+      const ith = ['Indicator', 'Month', 'Date of incident', 'UHID', 'Patient', 'Age/Sex', 'Incident details', 'Finding', 'Corrective action', 'Preventive action'].map(h => '<th style="background:#d23a52;color:#fff;border:1px solid #a02a3c;padding:5px 7px;font-family:Calibri;font-size:9.5pt;text-align:left">' + h + '</th>').join('');
+      const itrs = inc.map((r, i) => {
+        const x = r.x;
+        const cols = [r.ind, r.month, x.incidentDate || '', x.uhid || '', x.patientName || '', (x.age || '') + (x.gender ? ' / ' + x.gender : ''), x.details || '', x.finding || '', x.corrective || '', x.preventive || ''];
+        return '<tr style="background:' + (i % 2 ? '#fbeef0' : '#fff') + '">' + cols.map(c => '<td style="border:1px solid #e0b6bf;padding:4px 7px;font-family:Calibri;font-size:9pt;vertical-align:top">' + qcEsc(c) + '</td>').join('') + '</tr>';
+      }).join('');
+      body += '<table border="1" style="border-collapse:collapse;margin-top:2px"><thead><tr>' + ith + '</tr></thead><tbody>' + itrs + '</tbody></table>';
+    }
+  });
+  return body;
+}
+function qcExport(depts, fmt) {
+  const date = new Date().toISOString().slice(0, 10);
+  const base = 'UNICO-Quality-Report-' + date;
+  const MONTHS = fyAxis(defaultFy(depts));
+  if (fmt === 'csv') {
+    const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(MONTHS.map(m => m[1]))];
+    depts.forEach(d => (d.indicators || []).forEach(ind => {
+      rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(MONTHS.map(m => {
+        const v = qcCellVal(ind, m);
+        return qStatus(ind, v) === 'na' ? qcBeforeStart(ind, m[0]) ? 'Not Observed' : '' : fmtVal(ind, v);
+      })));
+    }));
+    rows.push([]);
+    rows.push(['INCIDENT DETAILS']);
+    rows.push(['Department', 'Indicator', 'Month', 'Date of incident', 'UHID', 'Patient', 'Age', 'Sex', 'Diagnosis', 'Details', 'Finding', 'Corrective', 'Preventive']);
+    depts.forEach(d => qcIncidentsOf(d).filter(r => qcIncInPeriod(r, MONTHS)).forEach(r => {
+      const x = r.x;
+      rows.push([d.name, r.ind, r.month, x.incidentDate || '', x.uhid || '', x.patientName || '', x.age || '', x.gender || '', x.diagnosis || '', x.details || '', x.finding || '', x.corrective || '', x.preventive || '']);
+    }));
+    qcDownload('﻿' + rows.map(r => r.map(c => '"' + ((c == null ? '' : c) + '').replace(/"/g, '""') + '"').join(',')).join('\r\n'), base + '.csv', 'text/csv;charset=utf-8');
+    return;
+  }
+  const html = '<html xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><style>@page{size:A4 landscape;margin:1cm}</style></head><body>' + qcReportHTML(depts) + '</body></html>';
+  if (fmt === 'excel') return qcDownload(html, base + '.xls', 'application/vnd.ms-excel');
+  if (fmt === 'word') return qcDownload(html, base + '.doc', 'application/msword');
+  if (fmt === 'pdf') {
+    const root = typeof document !== 'undefined' ? document.getElementById('pdf-root') : null;
+    const native = window.unicoNative;
+    if (!root) {
+      try {
+        window.print();
+      } catch (e) {}
+      return;
+    }
+    root.innerHTML = '<div class="pdf-page" style="padding:9mm 10mm;font-family:Calibri,Arial">' + qcReportHTML(depts) + '</div>';
+    document.body.classList.add('pdf-export-mode');
+    const done = () => {
+      root.innerHTML = '';
+      document.body.classList.remove('pdf-export-mode');
+    };
+    if (native && typeof native.exportPDF === 'function') {
+      Promise.resolve(native.exportPDF({
+        pageSize: 'A4',
+        landscape: true,
+        defaultName: base
+      })).catch(() => {}).then(done);
+    } else {
+      try {
+        window.print();
+      } catch (e) {}
+      setTimeout(done, 700);
+    }
+  }
+}
+function QCDonut({
+  rate,
+  size = 118
+}) {
+  const r = size / 2 - 11,
+    c = 2 * Math.PI * r,
+    on = Math.max(0, Math.min(100, rate));
+  const col = on >= 90 ? P.green : on >= 70 ? P.amber : P.rose;
+  return React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: '0 0 ' + size + ' ' + size
+  }, React.createElement("circle", {
+    cx: size / 2,
+    cy: size / 2,
+    r: r,
+    fill: "none",
+    stroke: P.line2,
+    strokeWidth: "12"
+  }), React.createElement("circle", {
+    cx: size / 2,
+    cy: size / 2,
+    r: r,
+    fill: "none",
+    stroke: col,
+    strokeWidth: "12",
+    strokeLinecap: "round",
+    strokeDasharray: c * on / 100 + ' ' + c,
+    transform: 'rotate(-90 ' + size / 2 + ' ' + size / 2 + ')'
+  }), React.createElement("text", {
+    x: "50%",
+    y: "47%",
+    textAnchor: "middle",
+    fontFamily: MONO,
+    fontSize: "19",
+    fontWeight: "700",
+    fill: P.ink
+  }, on, "%"), React.createElement("text", {
+    x: "50%",
+    y: "61%",
+    textAnchor: "middle",
+    fontSize: "8.5",
+    fill: P.faint
+  }, "on benchmark"));
+}
+function QCMonthBars({
+  inds
+}) {
+  const data = MONTHS.map(m => ({
+    label: m[1].split(' ')[0],
+    v: inds.reduce((n, ind) => n + (monthStatus(ind, m[0]) === 'breach' ? 1 : 0), 0)
+  }));
+  const max = Math.max(1, ...data.map(d => d.v));
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 5,
+      height: 118
+    }
+  }, data.map((d, i) => React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: 4,
+      height: '100%',
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 8.5,
+      fontFamily: MONO,
+      color: d.v ? P.rose : P.faint
+    }
+  }, d.v || ''), React.createElement("div", {
+    title: d.label + ': ' + d.v,
+    style: {
+      width: '100%',
+      maxWidth: 22,
+      background: d.v ? P.rose : P.line2,
+      borderRadius: '3px 3px 0 0',
+      height: d.v / max * 100 + '%',
+      minHeight: 3
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 8,
+      color: P.faint
+    }
+  }, d.label))));
+}
+function QCSpark({
+  ind,
+  months,
+  w = 92,
+  h = 24
+}) {
+  months = months || MONTHS;
+  const vals = months.map(m => monthRaw(ind, m[0]));
+  const nums = vals.filter(v => v != null);
+  if (!nums.length) return React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontSize: 10,
+      fontFamily: MONO
+    }
+  }, "\u2014");
+  const mn = Math.min(...nums),
+    mx = Math.max(...nums),
+    rng = mx - mn || 1;
+  const pts = vals.map((v, i) => ({
+    x: i / (months.length - 1) * w,
+    y: v == null ? null : h - 2 - (v - mn) / rng * (h - 4)
+  }));
+  const path = pts.filter(p => p.y != null).map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
+  const breach = months.some(m => monthStatus(ind, m[0]) === 'breach');
+  const col = breach ? P.rose : P.green;
+  return React.createElement("svg", {
+    width: w,
+    height: h
+  }, React.createElement("path", {
+    d: path,
+    fill: "none",
+    stroke: col,
+    strokeWidth: "1.5"
+  }), pts.map((p, i) => p.y != null && React.createElement("circle", {
+    key: i,
+    cx: p.x,
+    cy: p.y,
+    r: "1.5",
+    fill: col
+  })));
+}
+const QC_PAGE_SIZES = {
+  A4: [700, 1.414],
+  A3: [815, 1.414],
+  Letter: [700, 1.294]
+};
+function QCPagedPreview({
+  pageW,
+  pageMinH,
+  children
+}) {
+  const ref = React.useRef(null);
+  const [starts, setStarts] = React.useState([0]);
+  const [foot, setFoot] = React.useState(null);
+  const usableH = Math.max(240, pageMinH - 56);
+  React.useLayoutEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const H = root.scrollHeight,
+      rootTop = root.getBoundingClientRect().top;
+    const atoms = [];
+    const push = el => {
+      const r = el.getBoundingClientRect();
+      const t = r.top - rootTop,
+        b = r.bottom - rootTop;
+      if (r.height > 4 && r.height <= usableH) atoms.push([t, b]);
+    };
+    root.querySelectorAll('svg,table,tr,.pdf-foot,.qc-band').forEach(push);
+    root.querySelectorAll('*').forEach(el => {
+      const s = el.getAttribute('style');
+      if (s && s.indexOf('break-inside') >= 0) push(el);
+    });
+    const fEl = root.querySelector('.pdf-foot');
+    let f = null;
+    if (fEl) {
+      const r = fEl.getBoundingClientRect();
+      if (r.height > 0 && r.height <= usableH) f = [r.top - rootTop, r.bottom - rootTop];
+    }
+    const st = [0];
+    let s = 0,
+      guard = 0;
+    while (s + usableH < H - 2 && guard++ < 80) {
+      let brk = s + usableH;
+      atoms.forEach(([t, b]) => {
+        if (t > s + 8 && brk > t && brk < b) brk = Math.min(brk, t);
+      });
+      if (brk <= s + 8) brk = s + usableH;
+      st.push(brk);
+      s = brk;
+    }
+    if (st.length !== starts.length || st.some((v, i) => Math.abs(v - (starts[i] || 0)) > 2)) setStarts(st);
+    if ((f ? 1 : 0) !== (foot ? 1 : 0) || f && foot && (Math.abs(f[0] - foot[0]) > 2 || Math.abs(f[1] - foot[1]) > 2)) setFoot(f);
+  });
+  const frame = {
+    background: '#fff',
+    borderRadius: 4,
+    boxShadow: '0 4px 18px rgba(0,0,0,.12)',
+    width: pageW,
+    height: pageMinH,
+    boxSizing: 'border-box',
+    padding: '28px 30px',
+    margin: '0 auto 18px',
+    overflow: 'hidden',
+    position: 'relative'
+  };
+  const n = starts.length;
+  return React.createElement("div", null, React.createElement("div", {
+    ref: ref,
+    "aria-hidden": "true",
+    style: {
+      position: 'absolute',
+      left: -99999,
+      top: 0,
+      visibility: 'hidden',
+      pointerEvents: 'none',
+      width: pageW,
+      boxSizing: 'border-box',
+      padding: '0 30px'
+    }
+  }, children), starts.map((s0, k) => {
+    const last = k === n - 1;
+    const pin = last && foot && foot[0] >= s0 - 2;
+    const footH = pin ? Math.max(0, foot[1] - foot[0]) : 0;
+    const cut = last ? pin ? foot[0] : s0 + usableH : starts[k + 1];
+    const mainH = Math.max(0, Math.min(cut - s0, usableH - footH));
+    return React.createElement("div", {
+      key: k,
+      style: frame
+    }, React.createElement("div", {
+      style: {
+        overflow: 'hidden',
+        height: mainH
+      }
+    }, React.createElement("div", {
+      style: {
+        transform: 'translateY(' + -s0 + 'px)'
+      }
+    }, children)), pin && React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: 30,
+        right: 30,
+        bottom: 28,
+        overflow: 'hidden',
+        height: footH
+      }
+    }, React.createElement("div", {
+      style: {
+        transform: 'translateY(' + -foot[0] + 'px)'
+      }
+    }, children)), n > 1 && React.createElement("div", {
+      style: {
+        position: 'absolute',
+        right: 9,
+        bottom: 5,
+        fontSize: 9,
+        color: '#aeb7c2',
+        fontFamily: MONO
+      }
+    }, k + 1 + ' / ' + n));
+  }));
+}
+const QC_CHART_STYLE_LABEL = {
+  bar3d: '3D Bars',
+  bar: 'Bar',
+  line: 'Line',
+  area: 'Area + Benchmark',
+  combo: 'Bar + Line',
+  grouped: 'Grouped',
+  stacked: 'Stacked',
+  pct: '100% Stacked',
+  horizontal: 'Horizontal',
+  donut: 'Composition'
+};
+const QC_REPORT_STYLES = [['bar3d', '3D'], ['bar', 'Bar'], ['line', 'Line'], ['area', 'Area'], ['combo', 'Bar+Line'], ['grouped', 'Grouped'], ['stacked', 'Stacked'], ['pct', '100%'], ['horizontal', 'Horizontal'], ['donut', 'Donut']];
+const QC_TEMPLATES = {
+  board: {
+    label: 'Board Report',
+    type: 'summary',
+    sec: {
+      execSummary: 1,
+      kpis: 1,
+      chart: 1,
+      breachDonut: 1,
+      table: 1,
+      incidents: 0,
+      indicatorDetail: 0,
+      ragHeatmap: 1,
+      deptRanking: 1,
+      benchmarkCompare: 0,
+      indTrend: 0,
+      incidentAppendix: 0,
+      standardsRefs: 0,
+      cover: 1,
+      toc: 1,
+      periodCompare: 1,
+      watermark: 1,
+      signatures: 1
+    }
+  },
+  nabh: {
+    label: 'NABH/JCI Accreditation',
+    type: 'detail',
+    sec: {
+      execSummary: 1,
+      kpis: 1,
+      chart: 1,
+      breachDonut: 0,
+      table: 1,
+      incidents: 1,
+      indicatorDetail: 1,
+      ragHeatmap: 1,
+      deptRanking: 0,
+      benchmarkCompare: 1,
+      indTrend: 1,
+      pendingData: 1,
+      incidentAppendix: 1,
+      standardsRefs: 1,
+      cover: 1,
+      toc: 1,
+      periodCompare: 0,
+      watermark: 1,
+      signatures: 1
+    }
+  },
+  exec: {
+    label: 'Executive Summary',
+    type: 'summary',
+    sec: {
+      execSummary: 1,
+      kpis: 1,
+      chart: 0,
+      breachDonut: 0,
+      table: 0,
+      incidents: 0,
+      indicatorDetail: 0,
+      ragHeatmap: 1,
+      deptRanking: 1,
+      benchmarkCompare: 0,
+      indTrend: 0,
+      incidentAppendix: 0,
+      standardsRefs: 0,
+      cover: 1,
+      toc: 0,
+      periodCompare: 1,
+      watermark: 1,
+      signatures: 1
+    }
+  },
+  incident: {
+    label: 'Incident-CAPA',
+    type: 'summary',
+    sec: {
+      execSummary: 1,
+      kpis: 0,
+      chart: 0,
+      breachDonut: 1,
+      table: 0,
+      incidents: 1,
+      indicatorDetail: 0,
+      ragHeatmap: 0,
+      deptRanking: 0,
+      benchmarkCompare: 0,
+      indTrend: 0,
+      incidentAppendix: 1,
+      standardsRefs: 1,
+      cover: 1,
+      toc: 1,
+      periodCompare: 0,
+      watermark: 1,
+      signatures: 1
+    }
+  },
+  full: {
+    label: 'Full Detailed',
+    type: 'detail',
+    sec: {
+      execSummary: 1,
+      kpis: 1,
+      chart: 1,
+      breachDonut: 1,
+      table: 1,
+      incidents: 1,
+      indicatorDetail: 1,
+      ragHeatmap: 1,
+      deptRanking: 1,
+      benchmarkCompare: 1,
+      indTrend: 1,
+      pendingData: 1,
+      incidentAppendix: 1,
+      standardsRefs: 1,
+      cover: 1,
+      toc: 1,
+      periodCompare: 1,
+      watermark: 1,
+      signatures: 1
+    }
+  }
+};
+const QC_PAL = typeof window !== 'undefined' && window.PALETTE || ['#0b66d0', '#0f9b8e', '#e08a1e', '#6a52d4', '#d23a52', '#2bb3a3', '#8a93a3', '#4f8df7', '#1f9d57', '#c2486f'];
+function qcTone(d) {
+  const k = d && d.key || '';
+  return QC_PAL[(k.charCodeAt(0) || 0) % QC_PAL.length];
+}
+function qcMonthVals(ind, months) {
+  months = months || MONTHS;
+  return months.map(m => qcCellVal(ind, m));
+}
+function qcChartRows(ind, months) {
+  months = months || MONTHS;
+  const bench = ind.benchmarkValue == null || ind.benchmarkValue === '' ? null : Number(ind.benchmarkValue);
+  const vals = qcMonthVals(ind, months);
+  return months.map((m, i) => {
+    const v = vals[i];
+    return {
+      mon: m[1].split(' ')[0],
+      mfull: m[1],
+      q: m[2],
+      val: v == null ? 0 : v,
+      has: v != null,
+      bench
+    };
+  });
+}
+function qcDeptSummaryRows(d, months) {
+  months = months || MONTHS;
+  const inds = d.indicators || [];
+  const mRows = months.map(m => {
+    let ok = 0,
+      breach = 0;
+    inds.forEach(ind => {
+      const s = qStatus(ind, qcCellVal(ind, m));
+      if (s === 'ok') ok++;else if (s === 'breach') breach++;
+    });
+    const tot = ok + breach;
+    return {
+      mon: m[1].split(' ')[0],
+      mfull: m[1],
+      q: m[2],
+      val: tot ? Math.round(ok * 100 / tot) : 0,
+      has: tot > 0,
+      bench: 90
+    };
+  });
+  if (mRows.some(r => r.has)) return mRows;
+  const seen = new Set(),
+    qRows = [];
+  months.forEach(m => {
+    if (!m[2] || !qcMonthEnded(m[0])) return;
+    const fy = fyOfKey(m[0]),
+      qk = fy + ':' + m[2];
+    if (seen.has(qk)) return;
+    seen.add(qk);
+    let ok = 0,
+      breach = 0;
+    inds.forEach(ind => {
+      const s = qStatus(ind, qtrRaw(ind, m[2], fy));
+      if (s === 'ok') ok++;else if (s === 'breach') breach++;
+    });
+    const tot = ok + breach;
+    qRows.push({
+      mon: m[2],
+      mfull: m[2] + " '" + String(fy).slice(-2),
+      q: m[2],
+      val: tot ? Math.round(ok * 100 / tot) : 0,
+      has: tot > 0,
+      bench: 90
+    });
+  });
+  return qRows;
+}
+function qcSoleReportedInd(d, months) {
+  const withData = (d.indicators || []).filter(i => hasData(i, months));
+  return withData.length === 1 ? withData[0] : null;
+}
+function qcLeadIndicator(d, months) {
+  const withData = (d.indicators || []).filter(i => hasData(i, months));
+  if (!withData.length) return (d.indicators || [])[0] || null;
+  return withData.slice().sort((a, b) => countBreaches(b, months) - countBreaches(a, months))[0];
+}
+function qcDeptStatus(d, months) {
+  const st = deptStat(d, months);
+  const brRate = st.ok + st.breach ? st.breach / (st.ok + st.breach) : 0;
+  const status = brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Excellent';
+  return {
+    status,
+    color: statusColorFor(status),
+    st
+  };
+}
+function qcIndSeries(d, months) {
+  return (d.indicators || []).filter(i => hasData(i, months)).slice(0, 6).map((ind, i) => ({
+    id: 'i' + i,
+    key: 'i' + i,
+    label: ind.name,
+    color: QC_PAL[i % QC_PAL.length]
+  }));
+}
+function qcDeptCompareRows(d, months) {
+  months = months || MONTHS;
+  const inds = (d.indicators || []).filter(i => hasData(i, months)).slice(0, 6);
+  return months.map((m, mi) => {
+    const row = {
+      mon: m[1].split(' ')[0]
+    };
+    inds.forEach((ind, i) => {
+      row['i' + i] = qcMonthVals(ind, months)[mi] || 0;
+    });
+    return row;
+  });
+}
+function qcDonutData(d, months) {
+  return (d.indicators || []).map((ind, i) => ({
+    label: ind.name,
+    value: countBreaches(ind, months),
+    color: QC_PAL[i % QC_PAL.length]
+  })).filter(x => x.value > 0);
+}
+function qcStatusComp(d, months) {
+  const st = deptStat(d, months);
+  return [{
+    label: 'On benchmark',
+    value: st.ok || 0,
+    color: '#2fb56a'
+  }, {
+    label: 'Off Benchmark',
+    value: st.breach || 0,
+    color: '#e2445c'
+  }, {
+    label: 'Not reported',
+    value: st.na || 0,
+    color: '#c3ccd8'
+  }].filter(x => x.value > 0);
+}
+function qcChartEl(d, style, ind, tone, months, summary) {
+  months = months || MONTHS;
+  const sole = summary ? qcSoleReportedInd(d, months) : null;
+  if (sole) {
+    ind = sole;
+    summary = false;
+  }
+  if (!summary && !ind) return React.createElement("div", {
+    style: {
+      height: 150,
+      display: 'grid',
+      placeItems: 'center',
+      color: P.faint,
+      fontSize: 12
+    }
+  }, "No data");
+  const rows = (summary ? qcDeptSummaryRows(d, months) : qcChartRows(ind, months)).filter(r => r.has);
+  const bench = rows.length ? rows[0].bench : null;
+  if (!rows.length) return React.createElement("div", {
+    style: {
+      height: 150,
+      display: 'grid',
+      placeItems: 'center',
+      color: P.faint,
+      fontSize: 12
+    }
+  }, "No reported data to chart");
+  const W = window;
+  const vLabel = summary ? 'Zero-defect %' : ind.name;
+  if (style === 'bar') return W.BarChart({
+    data: rows,
+    x: 'mon',
+    y: 'val',
+    height: 195,
+    color: tone,
+    flat: true
+  });
+  if (style === 'line') return W.LineChart({
+    data: rows,
+    x: 'mon',
+    y: 'val',
+    height: 195,
+    color: tone,
+    area: false,
+    flat: true
+  });
+  if (style === 'area') return bench != null ? W.AreaTargetChart({
+    data: rows,
+    x: 'mon',
+    y: 'val',
+    target: bench,
+    height: 195,
+    color: tone,
+    flat: true
+  }) : W.LineChart({
+    data: rows,
+    x: 'mon',
+    y: 'val',
+    height: 195,
+    color: tone,
+    area: true,
+    flat: true
+  });
+  if (style === 'combo') return W.ComboChart({
+    data: rows,
+    x: 'mon',
+    barKey: 'val',
+    lineKey: 'bench',
+    barColor: tone,
+    lineColor: P.amber,
+    barLabel: vLabel,
+    lineLabel: summary ? 'Target' : 'Benchmark',
+    height: 210,
+    flat: true
+  });
+  if (style === 'grouped') {
+    const sr = qcIndSeries(d, months);
+    return sr.length > 1 ? W.GroupedBar({
+      data: qcDeptCompareRows(d, months),
+      x: 'mon',
+      series: sr,
+      height: 210
+    }) : W.BarChart({
+      data: rows,
+      x: 'mon',
+      y: 'val',
+      height: 195,
+      color: tone,
+      flat: true
+    });
+  }
+  if (style === 'stacked') {
+    const sr = qcIndSeries(d, months);
+    return sr.length > 1 ? W.StackedBar({
+      data: qcDeptCompareRows(d, months),
+      x: 'mon',
+      series: sr,
+      height: 210
+    }) : W.BarChart({
+      data: rows,
+      x: 'mon',
+      y: 'val',
+      height: 195,
+      color: tone,
+      flat: true
+    });
+  }
+  if (style === 'pct') {
+    const sr = qcIndSeries(d, months);
+    return sr.length > 1 ? W.StackedPctBar({
+      data: qcDeptCompareRows(d, months),
+      x: 'mon',
+      series: sr,
+      height: 210,
+      flat: true
+    }) : W.BarChart({
+      data: rows,
+      x: 'mon',
+      y: 'val',
+      height: 195,
+      color: tone,
+      flat: true
+    });
+  }
+  if (style === 'horizontal') return W.HBar({
+    rows: rows.map(r => ({
+      label: r.mfull,
+      value: r.val,
+      color: tone
+    })),
+    height: Math.max(150, rows.length * 22)
+  });
+  if (style === 'donut') {
+    const dd = qcDonutData(d, months);
+    const pie = dd.length > 1 ? dd : qcStatusComp(d, months);
+    return React.createElement("div", {
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        minHeight: 205
+      }
+    }, W.Donut({
+      data: pie,
+      size: 188,
+      centerValue: pie.reduce((s, x) => s + x.value, 0),
+      centerLabel: dd.length > 1 ? 'Off Benchmark' : 'Ind-months',
+      flat: true
+    }));
+  }
+  return W.Bar3D({
+    data: rows,
+    x: 'mon',
+    y: 'val',
+    height: 205,
+    color: tone,
+    multi: true,
+    flat: true
+  });
+}
+function qcDeptKpis(d, months) {
+  const st = deptStat(d, months);
+  const inds = d.indicators || [];
+  const breaches = st.breach;
+  const reported = st.ok + st.breach > 0;
+  if (!reported) return [['Zero-Defect %', '—', P.faint, 'no data reported this period'], ['Off Benchmark', '—', P.faint, 'no data reported this period'], ['Indicators', String(inds.length), P.violet, 'reporting quality KPIs']];
+  return [['Zero-Defect %', st.rate + '%', st.rate >= 90 ? P.green : st.rate >= 70 ? P.amber : P.rose, st.ok + ' on benchmark · ' + breaches + ' off benchmark'], ['Off Benchmark', String(breaches), breaches > 0 ? P.rose : P.green, 'indicator-months off benchmark'], ['Indicators', String(inds.length), P.violet, 'reporting quality KPIs']];
+}
+function qcIndKpis(ind, months) {
+  const vals = months.map(m => qcCellVal(ind, m));
+  const qHasMonth = {};
+  months.forEach(m => {
+    if (monthRaw(ind, m[0]) != null) qHasMonth[fyOfKey(m[0]) + ':' + m[2]] = true;
+  });
+  const qUsed = new Set();
+  const agg = [];
+  months.forEach(m => {
+    const mv = monthRaw(ind, m[0]);
+    if (mv != null) {
+      agg.push(mv);
+      return;
+    }
+    const qk = fyOfKey(m[0]) + ':' + m[2];
+    if (qHasMonth[qk] || qUsed.has(qk)) return;
+    const qv = qtrRaw(ind, m[2], fyOfKey(m[0]));
+    if (qv != null) {
+      qUsed.add(qk);
+      agg.push(qv);
+    }
+  });
+  let lastIdx = -1;
+  for (let i = vals.length - 1; i >= 0; i--) {
+    if (vals[i] != null) {
+      lastIdx = i;
+      break;
+    }
+  }
+  const latest = lastIdx < 0 ? null : vals[lastIdx];
+  const total = agg.reduce((s, v) => s + v, 0);
+  const higher = ind.goalDirection === 'higher_is_better';
+  const peak = agg.length ? higher ? Math.min.apply(null, agg) : Math.max.apply(null, agg) : null;
+  const avg = agg.length ? total / agg.length : null;
+  const event = isEventIndicator(ind);
+  const isRateF = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
+  const cards = [['Latest', latest == null ? '—' : fmtVal(ind, latest), statusColorFor(qStatus(ind, latest) === 'breach' ? 'Poor' : qStatus(ind, latest) === 'ok' ? 'Excellent' : ''), benchExpr(ind)]];
+  if (event && !isRateF) {
+    cards.push(['YTD Total', fmtVal(ind, total), P.blue, 'summed over period']);
+    cards.push(['Peak (worst)', peak == null ? '—' : fmtVal(ind, peak), P.amber, 'worst month']);
+  } else if (event) {
+    let ev = 0,
+      hasEv = false;
+    months.forEach(m => {
+      const n = ind.mNum && ind.mNum[m[0]];
+      if (n != null && n !== '') {
+        ev += Number(n) || 0;
+        hasEv = true;
+      }
+    });
+    cards.push(['Total events', hasEv ? String(ev) : '—', P.blue, hasEv ? 'numerator sum over period' : 'no event counts recorded']);
+    cards.push(['Peak (worst)', peak == null ? '—' : fmtVal(ind, peak), P.amber, 'worst month']);
+  } else {
+    cards.push(['Average', avg == null ? '—' : fmtVal(ind, avg), P.blue, 'mean over period']);
+    cards.push(['Worst', peak == null ? '—' : fmtVal(ind, peak), P.amber, higher ? 'lowest month' : 'highest month']);
+  }
+  cards.push(['Off Benchmark', String(countBreaches(ind, months)), countBreaches(ind, months) > 0 ? P.rose : P.green, 'months off benchmark']);
+  return cards;
+}
+function qcHeatColors(s) {
+  if (s === 'breach') return {
+    bg: P.rose,
+    col: '#fff'
+  };
+  if (s === 'ok') return {
+    bg: '#e7f6ed',
+    col: P.green
+  };
+  return {
+    bg: '#f1f4f8',
+    col: P.faint
+  };
+}
+function qcAnnualCell(ind, months) {
+  const rate = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
+  let anyRep = false,
+    anyBreach = false,
+    sum = 0,
+    num = 0,
+    den = 0,
+    valSum = 0,
+    nRep = 0;
+  const axis = months || MONTHS;
+  const qHasMonth = {};
+  axis.forEach(m => {
+    if (monthRaw(ind, m[0]) != null) qHasMonth[fyOfKey(m[0]) + ':' + m[2]] = true;
+  });
+  const qUsed = new Set();
+  axis.forEach(m => {
+    let v = monthRaw(ind, m[0]);
+    if (v == null) {
+      const qk = fyOfKey(m[0]) + ':' + m[2];
+      if (qHasMonth[qk] || qUsed.has(qk)) return;
+      v = qtrRaw(ind, m[2], fyOfKey(m[0]));
+      if (v == null || v === '') return;
+      qUsed.add(qk);
+    }
+    if (v == null || v === '') return;
+    anyRep = true;
+    if (qStatus(ind, v) === 'breach') anyBreach = true;
+    if (rate) {
+      nRep++;
+      valSum += Number(v) || 0;
+      const n = ind.mNum && ind.mNum[m[0]],
+        d = ind.mDen && ind.mDen[m[0]];
+      if (n != null && n !== '' && d != null && d !== '') {
+        num += Number(n) || 0;
+        den += Number(d) || 0;
+      }
+    } else sum += Number(v) || 0;
+  });
+  if (!anyRep) return {
+    rep: false,
+    status: 'na',
+    value: null,
+    count: 0,
+    isRate: rate,
+    num: 0,
+    den: 0
+  };
+  const value = rate ? den > 0 ? window.qiFormulaCompute(ind.formula || 'pct', num, den) : nRep ? Math.round(valSum / nRep * 100) / 100 : 0 : sum;
+  return {
+    rep: true,
+    status: anyBreach ? 'breach' : 'ok',
+    value,
+    count: rate ? 0 : sum,
+    isRate: rate,
+    num,
+    den
+  };
+}
+function QCHeatGrid({
+  d,
+  months
+}) {
+  months = months || MONTHS;
+  const inds = d.indicators || [];
+  return React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      width: '100%',
+      maxWidth: '100%',
+      tableLayout: 'fixed'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      width: 160,
+      textAlign: 'left',
+      padding: '6px 8px',
+      fontSize: 9,
+      color: P.muted,
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      borderBottom: '1px solid ' + P.line
+    }
+  }, "Indicator"), months.map(m => {
+    const p = m[0].split('-');
+    return React.createElement("th", {
+      key: m[0],
+      style: {
+        padding: '6px 2px',
+        fontSize: 8.5,
+        color: P.muted,
+        fontWeight: 700,
+        textAlign: 'center',
+        borderBottom: '1px solid ' + P.line
+      }
+    }, React.createElement("div", null, p[0]), React.createElement("div", {
+      style: {
+        fontWeight: 400,
+        fontSize: '.82em',
+        opacity: .55
+      }
+    }, "'" + p[1]));
+  }))), React.createElement("tbody", null, inds.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+    colSpan: months.length + 1,
+    style: {
+      padding: 14,
+      textAlign: 'center',
+      color: P.faint,
+      fontSize: 11
+    }
+  }, "No indicators assigned.")) : inds.map(ind => React.createElement("tr", {
+    key: ind.id
+  }, React.createElement("td", {
+    style: {
+      padding: '3px 8px',
+      textAlign: 'left',
+      fontWeight: 600,
+      color: P.ink,
+      fontSize: 9.5
+    }
+  }, ind.name, " ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400
+    }
+  }, ind.goalDirection === 'higher_is_better' ? '↑' : '↓')), months.map(m => {
+    const v = qcCellVal(ind, m);
+    const s = qStatus(ind, v);
+    const c = qcHeatColors(s);
+    return React.createElement("td", {
+      key: m[0],
+      style: {
+        padding: '3px 2px',
+        textAlign: 'center'
+      }
+    }, React.createElement("span", {
+      title: ind.name + ' · ' + m[1] + ' · ' + (s === 'na' ? 'not reported' : s === 'breach' ? 'breach' : 'on benchmark'),
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        minWidth: 22,
+        height: 24,
+        borderRadius: 5,
+        background: c.bg,
+        color: c.col,
+        fontFamily: MONO,
+        fontWeight: 700,
+        fontSize: 9.5
+      }
+    }, s === 'na' ? '·' : fmtVal(ind, v)));
+  }))))));
+}
+function QCHeatLegend() {
+  const item = (bg, txt) => React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      fontSize: 10,
+      color: P.muted
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 13,
+      height: 13,
+      borderRadius: 3,
+      background: bg,
+      border: '1px solid ' + P.line2
+    }
+  }), txt);
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 16,
+      flexWrap: 'wrap',
+      margin: '2px 0 8px'
+    }
+  }, item('#e7f6ed', 'on benchmark'), item(P.rose, 'breach'), item('#f1f4f8', 'not reported'));
+}
+function QCIncidentCard({
+  r,
+  showDept,
+  showMonth = true
+}) {
+  const x = r.x || {};
+  const meta = [x.patientName, x.uhid && 'UHID ' + x.uhid, [x.age, x.gender].filter(Boolean).join('/'), x.incidentDate && 'Incident ' + x.incidentDate, x.admissionDate && 'Adm ' + x.admissionDate, x.procedureDate && 'Proc ' + x.procedureDate, x.victimName && 'Victim ' + x.victimName, x.victimId && 'Victim ID ' + x.victimId].filter(Boolean).join(' · ');
+  const line = (lbl, v) => v != null && v !== '' ? React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.ink2,
+      lineHeight: 1.5,
+      marginTop: 2
+    }
+  }, React.createElement("b", {
+    style: {
+      color: P.ink
+    }
+  }, lbl, ":"), " ", v) : null;
+  return React.createElement("div", {
+    style: {
+      border: '1px solid #f1c6cd',
+      borderRadius: 8,
+      padding: '9px 11px',
+      marginBottom: 8,
+      background: '#fffafb',
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      alignItems: 'baseline',
+      marginBottom: meta ? 4 : 2
+    }
+  }, React.createElement("b", {
+    style: {
+      fontSize: 11.5,
+      color: P.ink
+    }
+  }, r.ind), showDept && r.dept && React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: P.blue,
+      fontWeight: 600
+    }
+  }, r.dept), showMonth && r.month && React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: P.rose,
+      fontWeight: 600
+    }
+  }, r.month)), meta && React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.muted,
+      marginBottom: 4
+    }
+  }, meta), line('Diagnosis', x.diagnosis), line('Incident details', x.details), line('Finding / root cause', x.finding), line('Corrective action', x.corrective), line('Preventive action', x.preventive), line('Remark', x.remark));
+}
+function QCIncidentBlock({
+  d,
+  months
+}) {
+  const inc = qcIncidentsOf(d).filter(r => qcIncInPeriod(r, months));
+  if (!inc.length) return null;
+  return React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.rose,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "Occurred incident details (", inc.length, ") \u2014 auto-included"), inc.map((r, i) => React.createElement(QCIncidentCard, {
+    key: i,
+    r: r
+  })));
+}
+function qcBaselineMonths(pMonths, mode) {
+  if (!pMonths.length) return [];
+  const fy = fyOfKey(pMonths[0][0]);
+  if (fy == null) return [];
+  const axis = fyMonthsFor(fy);
+  const keys = axis.map(r => r[0]);
+  const idx = pMonths.map(m => keys.indexOf(m[0])).filter(i => i >= 0);
+  if (!idx.length) return [];
+  const lo = Math.min(...idx),
+    n = pMonths.length;
+  const tag = r => [r[0], r[1], ''];
+  if (mode === 'yoy') {
+    return fyMonthsFor(fy - 1).slice(lo, lo + n).map(tag);
+  }
+  const axis24 = [...fyMonthsFor(fy - 1), ...axis];
+  const lo24 = lo + 12;
+  return axis24.slice(lo24 - n, lo24).map(tag);
+}
+function qcTrendArrow(delta, higherBetter) {
+  if (delta == null || Math.abs(delta) < 1e-9) return {
+    glyph: '→',
+    color: P.muted,
+    txt: 'no change'
+  };
+  const up = delta > 0;
+  const good = higherBetter ? up : !up;
+  return {
+    glyph: up ? '▲' : '▼',
+    color: good ? P.green : P.rose,
+    txt: (up ? '+' : '') + Math.round(delta * 100) / 100
+  };
+}
+function qcAggStat(chosen, months) {
+  let ok = 0,
+    breach = 0,
+    na = 0,
+    inds = 0;
+  chosen.forEach(d => {
+    inds += (d.indicators || []).length;
+    const s = deptStat(d, months);
+    ok += s.ok;
+    breach += s.breach;
+    na += s.na;
+  });
+  const rate = ok + breach ? Math.round(ok * 100 / (ok + breach)) : 100;
+  return {
+    ok,
+    breach,
+    na,
+    inds,
+    rate,
+    depts: chosen.length,
+    reported: ok + breach > 0
+  };
+}
+function qcRankRows(chosen, months) {
+  return chosen.map(d => {
+    const s = qcDeptStatus(d, months);
+    const reported = s.st.ok + s.st.breach > 0;
+    return {
+      d,
+      rate: s.st.rate,
+      breaches: s.st.breach,
+      status: reported ? s.status : 'No data',
+      color: reported ? s.color : P.faint,
+      reported
+    };
+  }).sort((a, b) => (b.reported ? 1 : 0) - (a.reported ? 1 : 0) || b.rate - a.rate || a.breaches - b.breaches);
+}
+function qcBenchRows(chosen, months) {
+  const out = [];
+  chosen.forEach(d => (d.indicators || []).forEach(ind => {
+    const bv = ind.benchmarkValue;
+    if (bv == null || bv === '') return;
+    let latest = null;
+    for (let i = months.length - 1; i >= 0; i--) {
+      const v = qcCellVal(ind, months[i]);
+      if (v != null) {
+        latest = v;
+        break;
+      }
+    }
+    if (latest == null) return;
+    out.push({
+      dept: d.name,
+      ind,
+      name: ind.name,
+      bench: Number(bv),
+      actual: latest,
+      status: qStatus(ind, latest)
+    });
+  }));
+  return out;
+}
+function QCWatermark({
+  text
+}) {
+  return React.createElement("div", {
+    className: "qc-watermark",
+    "aria-hidden": "true"
+  }, text || 'CONFIDENTIAL');
+}
+function QCExecSummary({
+  chosen,
+  months,
+  rangeLabel
+}) {
+  const agg = qcAggStat(chosen, months);
+  const rank = qcRankRows(chosen, months);
+  const rep = rank.filter(r => r.reported);
+  const best = rep[0],
+    worst = rep[rep.length - 1];
+  const noData = rank.length - rep.length;
+  const breaching = rank.filter(r => r.breaches > 0);
+  const tone = !agg.reported ? P.muted : agg.rate >= 90 ? P.green : agg.rate >= 70 ? P.amber : P.rose;
+  const verdict = agg.rate >= 90 ? 'strong compliance' : agg.rate >= 70 ? 'moderate compliance with pockets of risk' : 'compliance below target with material risk';
+  return React.createElement("div", {
+    style: {
+      marginBottom: 16,
+      border: '1px solid ' + P.line,
+      borderLeft: '4px solid ' + tone,
+      borderRadius: 9,
+      padding: '12px 15px',
+      background: P.panel2,
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "Executive summary"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.ink2,
+      lineHeight: 1.6
+    }
+  }, !agg.reported ? React.createElement(React.Fragment, null, "Across ", React.createElement("b", null, agg.depts), " department", agg.depts !== 1 ? 's' : '', " and ", React.createElement("b", null, agg.inds), " quality indicators, ", React.createElement("b", null, "no data was reported for ", rangeLabel), " \u2014 the figures below reflect an unreported period, not performance.") : React.createElement(React.Fragment, null, "Across ", React.createElement("b", null, agg.depts), " department", agg.depts !== 1 ? 's' : '', " and ", React.createElement("b", null, agg.inds), " quality indicators for ", React.createElement("b", null, rangeLabel), ", the hospital achieved an aggregate zero-defect rate of ", React.createElement("b", {
+    style: {
+      color: tone
+    }
+  }, agg.rate, "%"), " (", agg.ok, " indicator-months on benchmark, ", React.createElement("b", {
+    style: {
+      color: agg.breach ? P.rose : P.green
+    }
+  }, agg.breach), " off benchmark), reflecting ", React.createElement("b", null, verdict), "."), best && (best.breaches < (worst && worst.breaches || 0) || best.rate > (worst && worst.rate || 0) || rep.length === 1) && React.createElement(React.Fragment, null, " The strongest performer was ", React.createElement("b", null, best.d.name), " (", best.rate, "% zero-defect", best.breaches ? ', ' + best.breaches + ' off benchmark' : '', ")."), worst && worst !== best && (worst.breaches > 0 || worst.rate < best.rate) && React.createElement(React.Fragment, null, " The area needing most attention was ", React.createElement("b", null, worst.d.name), " (", worst.rate, "% zero-defect, ", worst.breaches, " breach", worst.breaches !== 1 ? 'es' : '', ")."), breaching.length > 0 ? React.createElement(React.Fragment, null, " ", breaching.length, " department", breaching.length !== 1 ? 's are' : ' is', " carrying open breaches, tracked for corrective & preventive action.") : agg.reported && React.createElement(React.Fragment, null, " No department is currently carrying a breach for the reporting period."), noData > 0 && React.createElement(React.Fragment, null, " ", React.createElement("b", null, noData), " selected department", noData !== 1 ? 's' : '', " reported no data for this period.")));
+}
+function QCPeriodCompare({
+  chosen,
+  months,
+  baseMonths,
+  baselineLabel
+}) {
+  const cur = qcAggStat(chosen, months),
+    base = qcAggStat(chosen, baseMonths);
+  const rows = [['Zero-defect rate', cur.rate, base.rate, '%', true], ['Off Benchmark', cur.breach, base.breach, '', false], ['On-benchmark months', cur.ok, base.ok, '', true]];
+  return React.createElement("div", {
+    style: {
+      marginBottom: 16,
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "Period comparison \xB7 vs ", baselineLabel), !baseMonths.length || !base.reported ? React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, !baseMonths.length ? 'No prior period available for the selected range.' : 'No data was reported for the baseline period (' + baselineLabel + ') — comparison not applicable.') : React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      width: '100%',
+      fontSize: 11
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      background: P.panel2
+    }
+  }, ['Metric', 'This period', 'Baseline', 'Change'].map((h, i) => React.createElement("th", {
+    key: h,
+    style: {
+      textAlign: i ? 'center' : 'left',
+      padding: '6px 9px',
+      fontSize: 9.5,
+      color: P.muted,
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: .3,
+      borderBottom: '1px solid ' + P.line
+    }
+  }, h)))), React.createElement("tbody", null, rows.map(([lbl, c, b, suffix, higher]) => {
+    const a = qcTrendArrow(c - b, higher);
+    return React.createElement("tr", {
+      key: lbl,
+      style: {
+        borderBottom: '1px solid ' + P.line2
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, lbl), React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: P.ink
+      }
+    }, c, suffix), React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: P.muted
+      }
+    }, b, suffix), React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        fontWeight: 700,
+        color: a.color
+      }
+    }, a.glyph, " ", a.txt, suffix && a.txt !== 'no change' ? suffix : ''));
+  }))));
+}
+function QCRagHeatmap({
+  chosen,
+  months
+}) {
+  const rows = chosen.map(d => {
+    const st = deptStat(d, months);
+    const tot = st.ok + st.breach;
+    const rate = tot ? Math.round(st.ok * 100 / tot) : 100;
+    const rag = !tot ? 'N' : rate >= 90 ? 'G' : rate >= 70 ? 'A' : 'R';
+    return {
+      d,
+      ok: st.ok,
+      breach: st.breach,
+      na: st.na,
+      rate,
+      rag,
+      reported: tot > 0
+    };
+  });
+  const cell = {
+    G: {
+      bg: '#e7f6ed',
+      col: P.green,
+      t: 'Green'
+    },
+    A: {
+      bg: '#fdf3e3',
+      col: P.amber,
+      t: 'Amber'
+    },
+    R: {
+      bg: '#fbe9ec',
+      col: P.rose,
+      t: 'Red'
+    },
+    N: {
+      bg: '#f1f4f8',
+      col: P.faint,
+      t: 'No data'
+    }
+  };
+  return React.createElement("div", {
+    style: {
+      marginBottom: 16,
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "RAG status heatmap"), React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      width: '100%',
+      fontSize: 11
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      background: P.panel2
+    }
+  }, ['Department', 'On benchmark', 'Off Benchmark', 'Not reported', 'Zero-defect', 'RAG'].map((h, i) => React.createElement("th", {
+    key: h,
+    style: {
+      textAlign: i ? 'center' : 'left',
+      padding: '6px 9px',
+      fontSize: 9.5,
+      color: P.muted,
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: .3,
+      borderBottom: '1px solid ' + P.line
+    }
+  }, h)))), React.createElement("tbody", null, rows.map(r => {
+    const c = cell[r.rag];
+    return React.createElement("tr", {
+      key: r.d.key,
+      style: {
+        borderBottom: '1px solid ' + P.line2
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, r.d.name), React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: P.green
+      }
+    }, r.ok), React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: r.breach ? P.rose : P.ink2
+      }
+    }, r.breach), React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: P.faint
+      }
+    }, r.na), React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        fontWeight: 700,
+        color: c.col
+      }
+    }, r.reported ? r.rate + '%' : '—'), React.createElement("td", {
+      style: {
+        padding: '6px 9px',
+        textAlign: 'center'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        minWidth: 54,
+        padding: '3px 8px',
+        borderRadius: 20,
+        background: c.bg,
+        color: c.col,
+        fontWeight: 700,
+        fontSize: 10.5
+      }
+    }, c.t)));
+  }))));
+}
+function QCDeptRanking({
+  chosen,
+  months
+}) {
+  const rows = qcRankRows(chosen, months);
+  const max = 100;
+  return React.createElement("div", {
+    style: {
+      marginBottom: 16,
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "Department ranking \xB7 zero-defect %"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6
+    }
+  }, rows.map((r, i) => React.createElement("div", {
+    key: r.d.key,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 16,
+      textAlign: 'right',
+      fontFamily: MONO,
+      fontSize: 10,
+      color: P.faint
+    }
+  }, r.reported ? i + 1 : '·'), React.createElement("span", {
+    style: {
+      width: 130,
+      fontSize: 10.5,
+      color: P.ink,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, r.d.name), React.createElement("div", {
+    style: {
+      flex: 1,
+      background: P.line2,
+      borderRadius: 5,
+      height: 16,
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: (r.reported ? r.rate / max * 100 : 0) + '%',
+      height: '100%',
+      background: r.color,
+      borderRadius: 5
+    }
+  })), React.createElement("span", {
+    style: {
+      width: 44,
+      textAlign: 'right',
+      fontFamily: MONO,
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: r.color
+    }
+  }, r.reported ? r.rate + '%' : '—')))));
+}
+function QCBenchmarkCompare({
+  chosen,
+  months
+}) {
+  const allRows = qcBenchRows(chosen, months);
+  const rows = allRows.slice(0, 26);
+  if (!rows.length) return React.createElement("div", {
+    style: {
+      marginBottom: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "Benchmark vs actual"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, "No benchmarked indicators with reported values in this period."));
+  return React.createElement("div", {
+    style: {
+      marginBottom: 16,
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "Benchmark vs actual \xB7 latest reported"), React.createElement("table", {
+    className: "qc-rpt-tbl",
+    style: {
+      borderCollapse: 'collapse',
+      width: '100%',
+      fontSize: 10
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      background: P.panel2
+    }
+  }, ['Department', 'Indicator', 'Benchmark', 'Actual', 'Status'].map((h, i) => React.createElement("th", {
+    key: h,
+    style: {
+      textAlign: i >= 2 ? 'center' : 'left',
+      padding: '5px 8px',
+      fontSize: 9,
+      color: P.muted,
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: .3,
+      borderBottom: '1px solid ' + P.line
+    }
+  }, h)))), React.createElement("tbody", null, rows.map((r, i) => {
+    const col = r.status === 'breach' ? P.rose : r.status === 'ok' ? P.green : P.faint;
+    return React.createElement("tr", {
+      key: i,
+      style: {
+        borderBottom: '1px solid ' + P.line2
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        color: P.ink2
+      }
+    }, r.dept), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, r.name, " ", React.createElement("span", {
+      style: {
+        color: P.faint,
+        fontWeight: 400
+      }
+    }, r.ind.goalDirection === 'higher_is_better' ? '↑' : '↓')), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: P.ink2
+      }
+    }, benchExpr(r.ind)), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        fontWeight: 700,
+        color: col
+      }
+    }, fmtVal(r.ind, r.actual)), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center'
+      }
+    }, React.createElement("span", {
+      style: {
+        color: col,
+        fontWeight: 700,
+        fontSize: 10
+      }
+    }, r.status === 'breach' ? 'Off benchmark' : r.status === 'ok' ? 'On target' : '—')));
+  }), allRows.length > rows.length && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 5,
+    style: {
+      padding: '6px 8px',
+      textAlign: 'center',
+      fontSize: 9.5,
+      color: P.faint,
+      fontStyle: 'italic'
+    }
+  }, "\u2026and ", allRows.length - rows.length, " more benchmarked indicator", allRows.length - rows.length !== 1 ? 's' : '', " not shown (first 26 listed)")))));
+}
+function QCIndTrend({
+  d,
+  months
+}) {
+  const inds = (d.indicators || []).filter(i => hasData(i, months)).slice(0, 12);
+  if (!inds.length) return null;
+  return React.createElement("div", {
+    style: {
+      marginTop: 14,
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "Indicator trend lines"), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2,1fr)',
+      gap: '6px 18px'
+    }
+  }, inds.map(ind => {
+    const vals = qcMonthVals(ind, months);
+    const nums = vals.filter(v => v != null);
+    const mn = nums.length ? Math.min(...nums) : 0,
+      mx = nums.length ? Math.max(...nums) : 1,
+      rng = mx - mn || 1;
+    const w = 150,
+      h = 30;
+    const step = months.length > 1 ? w / (months.length - 1) : 0;
+    const pts = vals.map((v, i) => ({
+      x: i * step,
+      y: v == null ? null : h - 2 - (v - mn) / rng * (h - 4)
+    }));
+    const path = pts.filter(p => p.y != null).map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
+    const breach = months.some(m => monthStatus(ind, m[0]) === 'breach');
+    const col = breach ? P.rose : P.green;
+    return React.createElement("div", {
+      key: ind.id,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        borderBottom: '1px solid ' + P.line2,
+        padding: '3px 0'
+      }
+    }, React.createElement("span", {
+      style: {
+        flex: 1,
+        fontSize: 10,
+        color: P.ink,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, ind.name), React.createElement("svg", {
+      width: w,
+      height: h,
+      style: {
+        flexShrink: 0
+      }
+    }, path && React.createElement("path", {
+      d: path,
+      fill: "none",
+      stroke: col,
+      strokeWidth: "1.5"
+    }), pts.map((p, i) => p.y != null && React.createElement("circle", {
+      key: i,
+      cx: p.x,
+      cy: p.y,
+      r: "1.4",
+      fill: col
+    }))));
+  })));
+}
+function QCSignatureBlock({
+  sig,
+  orgName
+}) {
+  const cell = (role, name) => React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      borderBottom: '1px solid ' + P.ink2,
+      height: 34
+    }
+  }), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: P.ink,
+      marginTop: 4
+    }
+  }, name || ' '), React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .3
+    }
+  }, role));
+  return React.createElement("div", {
+    style: {
+      marginTop: 26,
+      pageBreakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 12
+    }
+  }, "Authorisation \xB7 ", orgName), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 30
+    }
+  }, cell('Prepared by', sig.prepared), cell('Checked by', sig.reviewed), cell('Recommended by', sig.recommended), cell('Approved by', sig.approved)));
+}
+function qcCapaMap() {
+  try {
+    return JSON.parse(localStorage.getItem('unico_capa_v1')) || {};
+  } catch (e) {
+    return {};
+  }
+}
+function qcHHOf(chosen, depts, months) {
+  const isHH = ind => /hand\s*hygiene/i.test(ind && ind.name || '') && (ind.formula === 'pct' || ind.formula === 'direct' || isPctInd(ind));
+  const hh = [];
+  (chosen || []).forEach(d => (d.indicators || []).forEach(ind => {
+    if (isHH(ind)) hh.push({
+      d,
+      ind
+    });
+  }));
+  if (!hh.some(h => hasData(h.ind, months))) {
+    const seen = new Set(hh.map(h => h.ind));
+    (depts || []).forEach(d => (d.indicators || []).forEach(ind => {
+      if (isHH(ind) && !seen.has(ind) && hasData(ind, months)) hh.push({
+        d,
+        ind
+      });
+    }));
+  }
+  return hh;
+}
+function QCReportBuilder({
+  depts
+}) {
+  const allKeys = depts.map(d => d.key);
+  const [reportType, setReportType] = useState('summary');
+  const [period, setPeriod] = useState({
+    mode: 'all'
+  });
+  const [chartStyles, setChartStyles] = useState(['bar3d']);
+  const [hdrTitle, setHdrTitle] = useState('Quality Indicator Report');
+  const [hdrSub, setHdrSub] = useState('');
+  const [orgName, setOrgName] = useState('UNICO HOSPITALS PLC');
+  const [showLogo, setShowLogo] = useState(true);
+  const [confidential, setConfidential] = useState(true);
+  const [footerNote, setFooterNote] = useState('');
+  const [pageSize, setPageSize] = useState('A4');
+  const [orient, setOrient] = useState('portrait');
+  const [selectedDepts, setSelectedDepts] = useState(allKeys.slice(0, 4));
+  const [pageIdx, setPageIdx] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const [note, setNote] = useState(null);
+  const [pendingExport, setPendingExport] = useState(null);
+  const [fy, setFy] = useState(() => defaultFy(depts));
+  const [sections, setSections] = useState({
+    execSummary: true,
+    kpis: true,
+    chart: true,
+    breachDonut: true,
+    table: true,
+    incidents: true,
+    indicatorDetail: true,
+    ragHeatmap: false,
+    deptRanking: false,
+    benchmarkCompare: false,
+    indTrend: false,
+    pendingData: false,
+    incidentAppendix: false,
+    standardsRefs: false,
+    cover: false,
+    toc: false,
+    periodCompare: false,
+    watermark: false,
+    signatures: false
+  });
+  const [activeTemplate, setActiveTemplate] = useState('custom');
+  const [compareBaseline, setCompareBaseline] = useState('prev');
+  const [sig, setSig] = useState(() => window.unicoSig ? window.unicoSig.load() : {
+    prepared: '',
+    reviewed: '',
+    recommended: '',
+    approved: ''
+  });
+  useEffect(() => {
+    if (window.unicoSig) window.unicoSig.save(sig);
+  }, [sig]);
+  const [indMode, setIndMode] = useState('all');
+  const [indSel, setIndSel] = useState(() => new Set());
+  const [indQ, setIndQ] = useState('');
+  const toggleInd = k => setIndSel(s => {
+    const n = new Set(s);
+    n.has(k) ? n.delete(k) : n.add(k);
+    return n;
+  });
+  const setManyInd = (keys, on) => setIndSel(s => {
+    const n = new Set(s);
+    keys.forEach(k => on ? n.add(k) : n.delete(k));
+    return n;
+  });
+  const [presets, setPresets] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('unico_qc_report_presets_v1')) || [];
+    } catch (e) {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('unico_qc_report_presets_v1', JSON.stringify(presets));
+    } catch (e) {}
+  }, [presets]);
+  useEffect(() => {
+    const h = e => {
+      const ks = e && e.detail && e.detail.keys;
+      if (Array.isArray(ks) && ks.indexOf('unico_qc_report_presets_v1') < 0) return;
+      try {
+        const raw = localStorage.getItem('unico_qc_report_presets_v1');
+        const next = JSON.parse(raw) || [];
+        setPresets(cur => JSON.stringify(cur) === raw ? cur : next);
+      } catch (_) {}
+    };
+    window.addEventListener('unico:overlay-merged', h);
+    return () => window.removeEventListener('unico:overlay-merged', h);
+  }, []);
+  const [presetSel, setPresetSel] = useState('');
+  const [presetName, setPresetName] = useState('');
+  const setSec = (k, v) => {
+    setSections(s => ({
+      ...s,
+      [k]: v
+    }));
+    setActiveTemplate('custom');
+  };
+  const applyTemplate = id => {
+    const t = QC_TEMPLATES[id];
+    if (!t) return;
+    setSections(s => {
+      const o = {
+        ...s
+      };
+      Object.keys(t.sec).forEach(k => o[k] = !!t.sec[k]);
+      return o;
+    });
+    setIndMode('all');
+    setReportType(t.type);
+    setPageIdx(0);
+    setActiveTemplate(id);
+  };
+  const snapshot = () => ({
+    fy,
+    reportType,
+    period,
+    chartStyles,
+    hdrTitle,
+    hdrSub,
+    orgName,
+    showLogo,
+    confidential,
+    footerNote,
+    pageSize,
+    orient,
+    selectedDepts,
+    sections,
+    compareBaseline,
+    sig,
+    indMode,
+    indSel: [...indSel]
+  });
+  const applySnapshot = c => {
+    if (!c) return;
+    setFy(Number.isFinite(c.fy) ? c.fy : defaultFy(depts));
+    setReportType(c.reportType || 'summary');
+    setPeriod(c.period || {
+      mode: 'all'
+    });
+    setChartStyles(c.chartStyles && c.chartStyles.length ? c.chartStyles : ['bar3d']);
+    setHdrTitle(c.hdrTitle || '');
+    setHdrSub(c.hdrSub || '');
+    setOrgName(c.orgName || 'UNICO HOSPITALS PLC');
+    setShowLogo(c.showLogo !== false);
+    setConfidential(c.confidential !== false);
+    setFooterNote(c.footerNote || '');
+    setPageSize(c.pageSize || 'A4');
+    setOrient(c.orient || 'portrait');
+    setSelectedDepts(Array.isArray(c.selectedDepts) ? c.selectedDepts : allKeys.slice(0, 4));
+    setSections(s => ({
+      ...s,
+      ...(c.sections || {})
+    }));
+    setCompareBaseline(c.compareBaseline || 'prev');
+    setSig(s => {
+      const cs = c.sig || {};
+      return cs.prepared || cs.reviewed || cs.recommended || cs.approved ? {
+        prepared: cs.prepared || '',
+        reviewed: cs.reviewed || '',
+        recommended: cs.recommended || '',
+        approved: cs.approved || ''
+      } : s;
+    });
+    setIndMode(c.indMode || 'all');
+    setIndSel(new Set(c.indSel || []));
+    setActiveTemplate('custom');
+    setPageIdx(0);
+  };
+  const saveFormat = () => {
+    const name = presetName.trim();
+    if (!name) {
+      setNote({
+        ok: false,
+        text: 'Type a name for this format first.'
+      });
+      return;
+    }
+    setPresets(ps => [...ps.filter(p => p.name !== name), {
+      name,
+      config: snapshot()
+    }]);
+    setPresetSel(name);
+    setPresetName('');
+    setNote({
+      ok: true,
+      text: 'Saved format "' + name + '". Reload it any time from Saved formats.'
+    });
+  };
+  const loadFormat = name => {
+    if (!name) {
+      setPresetSel('');
+      return;
+    }
+    const p = presets.find(x => x.name === name);
+    if (p) {
+      applySnapshot(p.config);
+      setPresetSel(name);
+      setNote({
+        ok: true,
+        text: 'Loaded format "' + name + '".'
+      });
+    }
+  };
+  const delFormat = name => {
+    setPresets(ps => ps.filter(p => p.name !== name));
+    if (presetSel === name) setPresetSel('');
+  };
+  const toggleStyle = s => setChartStyles(a => a.includes(s) ? a.length > 1 ? a.filter(x => x !== s) : a : [...a, s]);
+  const toggleDept = k => setSelectedDepts(s => s.includes(k) ? s.filter(x => x !== k) : [...s, k]);
+  const chosenRaw = depts.filter(d => selectedDepts.includes(d.key));
+  const chosen = indMode === 'custom' ? chosenRaw.map(d => ({
+    ...d,
+    indicators: (d.indicators || []).filter(i => indSel.has(d.key + '::' + i.id))
+  })).filter(d => d.indicators.length) : chosenRaw;
+  const indItems = chosenRaw.flatMap(d => (d.indicators || []).map(i => ({
+    d,
+    i,
+    key: d.key + '::' + i.id
+  })));
+  const indQnorm = indQ.trim().toLowerCase();
+  const indShown = indQnorm ? indItems.filter(it => (it.i.name || '').toLowerCase().includes(indQnorm) || (it.d.name || '').toLowerCase().includes(indQnorm)) : indItems;
+  const QTAG = ['Q1', 'Q1', 'Q1', 'Q2', 'Q2', 'Q2', 'Q3', 'Q3', 'Q3', 'Q4', 'Q4', 'Q4'];
+  const MONTHS = fyMonthsFor(fy).map((r, i) => [r[0], r[1], QTAG[i]]);
+  const spanLabel = (i, j) => {
+    const a = MONTHS[i][1].split(' '),
+      b = MONTHS[j][1].split(' ');
+    return a[0] + '–' + b[0] + ' ' + b[1].slice(2);
+  };
+  const qSpan = Q => {
+    const first = QTAG.indexOf(Q),
+      last = QTAG.lastIndexOf(Q);
+    return first < 0 ? Q : spanLabel(first, last);
+  };
+  const pMonths = (() => {
+    const q = Q => MONTHS.filter(m => m[2] === Q);
+    let base;
+    if (period.mode === 'q1') base = q('Q1');else if (period.mode === 'q2') base = q('Q2');else if (period.mode === 'q3') base = q('Q3');else if (period.mode === 'q4') base = q('Q4');else if (period.mode === 'h1') base = MONTHS.slice(0, 6);else if (period.mode === 'h2') base = MONTHS.slice(6);else if (period.mode === 'last3') base = MONTHS.slice(-3);else if (period.mode === 'custom') {
+      const a = MONTHS.findIndex(m => m[0] === period.from),
+        b = MONTHS.findIndex(m => m[0] === period.to);
+      base = a >= 0 && b >= 0 ? MONTHS.slice(Math.min(a, b), Math.max(a, b) + 1) : MONTHS;
+    } else base = MONTHS;
+    if (!base.length) return base;
+    const has = m => chosen.some(d => (d.indicators || []).some(ind => qcCellVal(ind, m) != null));
+    let lo = 0,
+      hi = base.length - 1;
+    while (lo < hi && !has(base[lo])) lo++;
+    while (hi > lo && !has(base[hi])) hi--;
+    return has(base[lo]) ? base.slice(lo, hi + 1) : base;
+  })();
+  const rangeLabel = pMonths.length ? pMonths[0][1] + ' – ' + pMonths[pMonths.length - 1][1] : fyLabelOf(fy);
+  const baseMonths = qcBaselineMonths(pMonths, compareBaseline);
+  const baselineLabel = compareBaseline === 'yoy' ? 'same period last year' : baseMonths.length ? baseMonths[0][1].split(' ')[0] + '–' + baseMonths[baseMonths.length - 1][1] : 'prior period';
+  const [base, ratio] = QC_PAGE_SIZES[pageSize];
+  const portrait = orient === 'portrait';
+  const pageW = portrait ? base : Math.round(base * ratio);
+  const pageMinH = portrait ? Math.round(base * ratio) : base;
+  const pages = React.useMemo(() => {
+    let base;
+    if (reportType === 'compare') base = chosen.length ? [{
+      kind: 'compare'
+    }] : [];else if (reportType === 'detail') base = chosen.flatMap(d => {
+      const inds = (d.indicators || []).filter(i => hasData(i, pMonths));
+      return (inds.length ? inds : [null]).map(ind => ({
+        kind: 'detail',
+        dept: d,
+        ind
+      }));
+    });else if (reportType === 'heatmap') base = chosen.length ? [{
+      kind: 'heatmap'
+    }] : [];else if (reportType === 'handhygiene') {
+      const hh = qcHHOf(chosen, depts, pMonths);
+      base = chosen.length ? [{
+        kind: 'hh',
+        part: 'overview'
+      }] : [];
+      if (hh.length) {
+        const hasGroups = hh.some(h => {
+          const g = h.ind.mGroups || {};
+          return Object.keys(g).some(k => g[k] && Object.keys(g[k]).length);
+        });
+        const hasDeptBd = hh.some(h => {
+          const b = h.ind.mDeptBreakdown || {};
+          return Object.keys(b).some(k => Array.isArray(b[k]) && b[k].length);
+        });
+        const deptCount = new Set(hh.map(h => h.d.key)).size;
+        if (hasGroups || hasDeptBd || deptCount > 1) base.push({
+          kind: 'hh',
+          part: 'breakdown'
+        });
+      }
+    } else if (reportType === 'monthly') base = chosen.length ? pMonths.map(m => ({
+      kind: 'monthly',
+      month: m
+    })) : [];else base = chosen.map(d => ({
+      kind: 'summary',
+      dept: d
+    }));
+    if (!base.length) return base;
+    const cover = [];
+    if (sections.cover) cover.push({
+      kind: 'cover'
+    });
+    const extra = [];
+    if (sections.pendingData) extra.push({
+      kind: 'pending'
+    });
+    if (sections.incidentAppendix) extra.push({
+      kind: 'appendix'
+    });
+    if (sections.standardsRefs) extra.push({
+      kind: 'refs'
+    });
+    const content = [...base, ...extra];
+    let toc = [];
+    if (sections.toc) {
+      const TOC_PER = 30;
+      let nToc = 1;
+      for (let k = 0; k < 4; k++) {
+        nToc = Math.max(1, Math.ceil((cover.length + nToc + content.length) / TOC_PER));
+      }
+      toc = Array.from({
+        length: nToc
+      }, (_, i) => ({
+        kind: 'toc',
+        tocPart: i,
+        tocPer: TOC_PER
+      }));
+    }
+    return [...cover, ...toc, ...content];
+  }, [chosen, reportType, selectedDepts, pMonths, sections, indMode, indSel]);
+  const pageCount = Math.max(1, pages.length);
+  const pi = Math.min(pageIdx, pageCount - 1);
+  const cur = pages[pi];
+  const structuralKinds = {
+    cover: 1,
+    toc: 1,
+    appendix: 1,
+    refs: 1
+  };
+  const leadIdx = pages.findIndex(pg => !structuralKinds[pg.kind]);
+  useEffect(() => {
+    setPageIdx(0);
+  }, [reportType, selectedDepts.length]);
+  const fieldLabel = t => React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2,
+      marginBottom: 7
+    }
+  }, t);
+  const sel2 = {
+    padding: '9px 11px',
+    border: '1px solid ' + P.line,
+    borderRadius: 7,
+    fontSize: 13,
+    fontFamily: 'inherit',
+    background: '#fff'
+  };
+  const pill = on => ({
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '5px 10px',
+    borderRadius: 20,
+    fontSize: 11.5,
+    fontWeight: 600,
+    cursor: 'pointer',
+    border: '1px solid ' + (on ? P.blue : P.line),
+    background: on ? '#eef8fc' : '#fff',
+    color: on ? P.blue700 : P.muted
+  });
+  const Tick = () => React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "3",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M20 6L9 17l-5-5"
+  }));
+  const DownIc = () => React.createElement("svg", {
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M12 3v12m0 0l4-4m-4 4l-4-4M4 19h16"
+  }));
+  const DocIc = ({
+    c
+  }) => React.createElement("svg", {
+    width: "18",
+    height: "18",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: c || P.blue,
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7"
+  }));
+  const expBtn = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 12px',
+    border: '1px solid ' + P.line,
+    borderRadius: 7,
+    background: '#fff',
+    color: P.ink2,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer'
+  };
+  const uSub = {
+    fontSize: 9.5,
+    fontWeight: 700,
+    color: P.muted,
+    textTransform: 'uppercase',
+    letterSpacing: .4,
+    margin: '8px 0 2px'
+  };
+  const Header = () => React.createElement("div", {
+    className: "qc-band",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      borderBottom: '2px solid ' + P.blue,
+      paddingBottom: 14
+    }
+  }, showLogo && React.createElement("img", {
+    src: "unico/logo.svg",
+    alt: "UNICO Healthcare",
+    style: {
+      height: 38
+    }
+  }), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, hdrTitle || 'Quality Report'), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: P.muted,
+      letterSpacing: .4,
+      textTransform: 'uppercase',
+      marginTop: 2
+    }
+  }, (hdrSub ? hdrSub + ' · ' : '') + rangeLabel)), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    style: {
+      textAlign: 'right',
+      fontSize: 10,
+      color: P.faint
+    }
+  }, "Generated", React.createElement("br", null), React.createElement("b", {
+    style: {
+      fontFamily: MONO,
+      color: P.ink2
+    }
+  }, new Date().toLocaleDateString())));
+  const Footer = ({
+    n,
+    total
+  }) => React.createElement("div", {
+    className: "pdf-foot",
+    style: {
+      borderTop: '1px solid ' + P.line,
+      paddingTop: 8,
+      fontSize: 9.5,
+      color: P.faint,
+      display: 'flex'
+    }
+  }, React.createElement("span", null, orgName), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontFamily: MONO
+    }
+  }, "Page ", n, " of ", total), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", null, (footerNote ? footerNote + ' · ' : '') + (confidential ? 'Confidential · ' : '') + pageSize + ' ' + orient));
+  const KpiCards = ({
+    cards,
+    tone
+  }) => React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(4,1fr)',
+      gap: 10,
+      marginBottom: 16
+    }
+  }, cards.map((c, i) => React.createElement("div", {
+    key: i,
+    style: {
+      background: P.panel2,
+      borderRadius: 7,
+      padding: '9px 11px',
+      borderLeft: '3px solid ' + tone
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .3
+    }
+  }, c[0]), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 18,
+      fontWeight: 600,
+      color: c[2] || P.ink,
+      lineHeight: 1.15,
+      margin: '2px 0'
+    }
+  }, c[1]), c[3] && React.createElement("div", {
+    style: {
+      fontSize: 9,
+      color: P.faint,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, c[3]))));
+  const MonthCell = ({
+    ind,
+    m
+  }) => {
+    const v = qcCellVal(ind, m);
+    const s = qStatus(ind, v);
+    const notObs = s === 'na' && qcBeforeStart(ind, m[0]);
+    const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : notObs ? '#7c8aa0' : P.faint;
+    const bg = s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : notObs ? '#eef1f6' : '#f4f6f9';
+    return React.createElement("td", {
+      style: {
+        textAlign: 'center',
+        padding: '3px 1px'
+      }
+    }, React.createElement("span", {
+      title: notObs ? 'Not observed (monitoring started ' + ind.startMonth + ')' : undefined,
+      style: {
+        display: 'inline-block',
+        minWidth: 20,
+        padding: '2px 2px',
+        borderRadius: 5,
+        background: bg,
+        color: col,
+        fontFamily: MONO,
+        fontWeight: 600,
+        fontSize: notObs ? 7.5 : 9
+      }
+    }, notObs ? 'N/O' : s === 'na' ? '·' : fmtVal(ind, v)));
+  };
+  const thc = {
+    textAlign: 'center',
+    padding: '5px 1px',
+    fontSize: 8.5,
+    color: P.muted,
+    fontWeight: 700,
+    borderBottom: '1px solid ' + P.line,
+    background: P.panel2
+  };
+  const thl = {
+    textAlign: 'left',
+    padding: '7px 6px',
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: '.2px',
+    color: P.muted,
+    fontWeight: 700,
+    borderBottom: '1px solid ' + P.line,
+    background: P.panel2
+  };
+  const MonthTable = ({
+    d,
+    detailInd
+  }) => {
+    const rows = detailInd ? [detailInd] : d.indicators || [];
+    return React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        maxWidth: '100%',
+        tableLayout: 'fixed',
+        marginTop: 14,
+        fontSize: detailInd ? 10 : 10.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", {
+      style: {
+        background: P.panel2
+      }
+    }, React.createElement("th", {
+      style: {
+        ...thl,
+        width: 120
+      }
+    }, "Indicator"), React.createElement("th", {
+      style: {
+        ...thl,
+        textTransform: 'none',
+        fontSize: 8.5,
+        width: 56
+      }
+    }, "Benchmark"), pMonths.map(m => {
+      const p = m[0].split('-');
+      return React.createElement("th", {
+        key: m[0],
+        style: {
+          ...thc,
+          width: 33
+        }
+      }, React.createElement("div", null, p[0]), React.createElement("div", {
+        style: {
+          fontWeight: 400,
+          fontSize: '.82em',
+          opacity: .6
+        }
+      }, "'" + p[1]));
+    }), React.createElement("th", {
+      style: {
+        ...thc,
+        width: 48
+      }
+    }, "Trend"))), React.createElement("tbody", null, rows.map(ind => React.createElement("tr", {
+      key: ind.id,
+      style: {
+        borderBottom: '1px solid ' + P.line2
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '6px 6px',
+        textAlign: 'left',
+        fontWeight: 600,
+        color: P.ink,
+        fontSize: 9.5
+      }
+    }, ind.name, " ", React.createElement("span", {
+      style: {
+        color: P.faint,
+        fontWeight: 400
+      }
+    }, ind.goalDirection === 'higher_is_better' ? '↑' : '↓')), React.createElement("td", {
+      style: {
+        padding: '6px 4px',
+        textAlign: 'left',
+        fontFamily: MONO,
+        fontSize: 8.5,
+        color: P.ink2
+      }
+    }, benchExpr(ind)), pMonths.map(m => React.createElement(MonthCell, {
+      key: m[0],
+      ind: ind,
+      m: m
+    })), React.createElement("td", {
+      style: {
+        textAlign: 'center',
+        padding: '4px 2px'
+      }
+    }, React.createElement(QCSpark, {
+      ind: ind,
+      months: pMonths,
+      w: 52,
+      h: 20
+    }))))));
+  };
+  const IndicatorDetail = ({
+    d,
+    ind
+  }) => {
+    const code = stdMatch(ind.name);
+    const g = guideOf(code);
+    const incs = isEventIndicator(ind) ? qcIncidentsOf(d).filter(r => r.ind === ind.name && qcIncInPeriod(r, pMonths)) : [];
+    return React.createElement("div", {
+      style: {
+        marginTop: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        background: P.panel2,
+        border: '1px solid ' + P.line,
+        borderRadius: 9,
+        padding: '11px 14px',
+        fontSize: 11.5,
+        color: P.ink2
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.muted,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Definition & formula"), React.createElement("div", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 11,
+        color: P.ink,
+        marginBottom: 5
+      }
+    }, formulaText(ind)), ind.numeratorDef && React.createElement("div", null, React.createElement("b", null, "Numerator:"), " ", ind.numeratorDef), ind.denominatorDef && React.createElement("div", null, React.createElement("b", null, "Denominator:"), " ", ind.denominatorDef), g && g.rationale && React.createElement("div", {
+      style: {
+        marginTop: 5,
+        color: P.muted
+      }
+    }, g.rationale), React.createElement("div", {
+      style: {
+        marginTop: 5,
+        color: P.muted
+      }
+    }, "Benchmark ", React.createElement("b", {
+      style: {
+        color: P.ink2
+      }
+    }, benchExpr(ind)), code ? ' · ' + (HQI_SECN[code[0]] || '') + ' (' + code + ')' : ' · ' + catOf(ind.name))), incs.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 12
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.rose,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 5
+      }
+    }, "Incident details (", incs.length, ")"), incs.map((r, i) => React.createElement(QCIncidentCard, {
+      key: i,
+      r: r
+    }))));
+  };
+  function DeptPage({
+    page,
+    n,
+    total,
+    lead
+  }) {
+    if (!page || !page.dept) return null;
+    const d = page.dept;
+    const tone = qcTone(d);
+    const {
+      status,
+      color,
+      st
+    } = qcDeptStatus(d, pMonths);
+    const reported = st.ok + st.breach > 0;
+    const chipStatus = reported ? status : 'No data',
+      chipColor = reported ? color : P.faint;
+    const detailed = page.kind === 'detail';
+    const chartInd = detailed ? page.ind : qcLeadIndicator(d, pMonths);
+    const soleInd = !detailed ? qcSoleReportedInd(d, pMonths) : null;
+    const leadInd = qcLeadIndicator(d, pMonths);
+    const code = leadInd ? stdMatch(leadInd.name) : null;
+    const secLabel = code ? HQI_SECN[code[0]] || code : leadInd ? catOf(leadInd.name) : 'Quality';
+    const cards = detailed ? chartInd ? qcIndKpis(chartInd, pMonths) : qcDeptKpis(d, pMonths) : qcDeptKpis(d, pMonths);
+    const dd = qcDonutData(d, pMonths);
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, lead && sections.execSummary && React.createElement(QCExecSummary, {
+      chosen: chosen,
+      months: pMonths,
+      rangeLabel: rangeLabel
+    }), lead && sections.periodCompare && React.createElement(QCPeriodCompare, {
+      chosen: chosen,
+      months: pMonths,
+      baseMonths: baseMonths,
+      baselineLabel: baselineLabel
+    }), lead && sections.ragHeatmap && React.createElement(QCRagHeatmap, {
+      chosen: chosen,
+      months: pMonths
+    }), lead && sections.deptRanking && React.createElement(QCDeptRanking, {
+      chosen: chosen,
+      months: pMonths
+    }), lead && sections.benchmarkCompare && React.createElement(QCBenchmarkCompare, {
+      chosen: chosen,
+      months: pMonths
+    }), React.createElement("div", {
+      className: "qc-band",
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 12
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        background: tone + '1c',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, React.createElement(DocIc, {
+      c: tone
+    })), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 15,
+        color: P.ink
+      }
+    }, d.name, detailed && page.ind ? ' · ' + page.ind.name : ''), React.createElement("span", {
+      className: "tag"
+    }, secLabel), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        background: chipColor + '1c',
+        color: chipColor,
+        padding: '3px 10px',
+        borderRadius: 20,
+        fontWeight: 700,
+        fontSize: 11.5
+      }
+    }, chipStatus)), sections.kpis && React.createElement(KpiCards, {
+      cards: cards,
+      tone: tone
+    }), sections.chart && (() => {
+      const chartable = detailed ? chartInd && qcChartRows(chartInd, pMonths).some(r => r.has) : qcDeptSummaryRows(d, pMonths).some(r => r.has);
+      if (!chartable) {
+        const otherYears = [...dataFySet([d])].filter(y => y !== fy).sort((a, b) => b - a);
+        return React.createElement("div", {
+          style: {
+            margin: '4px 0 8px'
+          }
+        }, React.createElement("div", {
+          style: uSub
+        }, chartInd ? 'No reported values to chart for ' + rangeLabel : 'No data'), !reported && otherYears.length > 0 && React.createElement("div", {
+          style: {
+            fontSize: 11,
+            color: '#9a6b00',
+            fontWeight: 600,
+            background: '#fdf7ea',
+            border: '1px solid #f3ddb5',
+            borderRadius: 7,
+            padding: '6px 10px',
+            margin: '4px 0 6px'
+          }
+        }, "This department has recorded data in ", otherYears.map(fyLabelOf).join(', '), " \u2014 switch the reporting year above to include it."), !sections.table && React.createElement(React.Fragment, null, React.createElement(QCHeatLegend, null), React.createElement(QCHeatGrid, {
+          d: d,
+          months: pMonths
+        })));
+      }
+      const SINGLE_SERIES = ['bar3d', 'bar', 'line', 'area', 'combo', 'horizontal'];
+      return chartStyles.map(cs => {
+        const cap = [];
+        if (chartStyles.length > 1) cap.push(QC_CHART_STYLE_LABEL[cs] || cs);
+        if (!detailed && SINGLE_SERIES.indexOf(cs) >= 0) cap.push(soleInd ? soleInd.name + ' — monthly value vs benchmark' : 'Zero-defect % by month — reported indicators on benchmark');
+        return React.createElement("div", {
+          key: cs,
+          style: {
+            margin: '4px 0 8px'
+          }
+        }, cap.length > 0 && React.createElement("div", {
+          style: uSub
+        }, cap.join(' · ')), qcChartEl(d, cs, chartInd, tone, pMonths, !detailed));
+      });
+    })(), sections.breachDonut && !chartStyles.includes('donut') && (() => {
+      const pie = dd.length > 1 ? dd : qcStatusComp(d, pMonths);
+      if (!pie.length) return null;
+      return React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          background: P.panel2,
+          borderRadius: 9,
+          padding: '10px 14px',
+          marginTop: 6
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          color: P.muted,
+          textTransform: 'uppercase',
+          letterSpacing: .3,
+          fontWeight: 600,
+          width: 88
+        }
+      }, dd.length > 1 ? 'Off-benchmark composition' : 'Status mix'), window.Donut({
+        data: pie,
+        size: 104,
+        thickness: 20,
+        flat: true
+      }));
+    })(), sections.table && React.createElement(MonthTable, {
+      d: d,
+      detailInd: detailed ? page.ind : null
+    }), sections.indTrend && React.createElement(QCIndTrend, {
+      d: d,
+      months: pMonths
+    }), sections.indicatorDetail && detailed && page.ind && React.createElement(IndicatorDetail, {
+      d: d,
+      ind: page.ind
+    }), sections.incidents && !detailed && React.createElement(QCIncidentBlock, {
+      d: d,
+      months: pMonths
+    })), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function HeatmapPage({
+    page,
+    n,
+    total,
+    lead
+  }) {
+    const normN = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase().replace(/\s*\(hospital\)$/, '');
+    const names = [];
+    const seen = new Set();
+    chosen.forEach(d => (d.indicators || []).forEach(ind => {
+      const k = normN(ind.name);
+      if (!seen.has(k)) {
+        seen.add(k);
+        names.push(ind.name);
+      }
+    }));
+    const findInd = (d, name) => {
+      const k = normN(name);
+      return (d.indicators || []).find(i => normN(i.name) === k);
+    };
+    const incs = [];
+    chosen.forEach(d => qcIncidentsOf(d).forEach(r => {
+      if (qcIncInPeriod(r, pMonths)) incs.push({
+        dept: d.name,
+        ind: r.ind,
+        x: r.x,
+        month: r.month
+      });
+    }));
+    const line = (l, v) => v ? React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, React.createElement("b", {
+      style: {
+        color: P.ink
+      }
+    }, l, ":"), " ", v) : null;
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, lead && sections.execSummary && React.createElement(QCExecSummary, {
+      chosen: chosen,
+      months: pMonths,
+      rangeLabel: rangeLabel
+    }), lead && sections.periodCompare && React.createElement(QCPeriodCompare, {
+      chosen: chosen,
+      months: pMonths,
+      baseMonths: baseMonths,
+      baselineLabel: baselineLabel
+    }), lead && sections.ragHeatmap && React.createElement(QCRagHeatmap, {
+      chosen: chosen,
+      months: pMonths
+    }), lead && sections.deptRanking && React.createElement(QCDeptRanking, {
+      chosen: chosen,
+      months: pMonths
+    }), lead && sections.benchmarkCompare && React.createElement(QCBenchmarkCompare, {
+      chosen: chosen,
+      months: pMonths
+    }), React.createElement("div", {
+      className: "qc-band",
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 10
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        background: P.blue + '1c',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, React.createElement(DocIc, {
+      c: P.blue
+    })), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 15,
+        color: P.ink
+      }
+    }, "Indicator \xD7 Department heatmap \xB7 ", rangeLabel), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      className: "tag"
+    }, chosen.length, " dept \xB7 ", names.length, " indicators")), React.createElement(QCHeatLegend, null), React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, (() => {
+      const dense = chosen.length > 10,
+        vertHead = chosen.length > 6;
+      const pill = (c, i, name) => React.createElement("td", {
+        key: i,
+        style: {
+          textAlign: 'center',
+          padding: '3px 1px'
+        }
+      }, React.createElement("span", {
+        title: name + ' · ' + chosen[i].name + ' · ' + (c.a.status === 'na' ? 'not reported' : fmtVal(c.ind, c.a.value) + ' · ' + (c.a.status === 'breach' ? 'breach' : 'on benchmark')),
+        style: {
+          display: 'block',
+          margin: '0 auto',
+          maxWidth: '100%',
+          height: 20,
+          lineHeight: '20px',
+          borderRadius: 4,
+          background: qcHeatColors(c.a.status).bg,
+          color: qcHeatColors(c.a.status).col,
+          fontFamily: MONO,
+          fontWeight: 700,
+          fontSize: dense ? 7.5 : 9.5,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }
+      }, c.a.status === 'na' ? '·' : fmtVal(c.ind, c.a.value)));
+      return React.createElement("table", {
+        style: {
+          borderCollapse: 'collapse',
+          width: '100%',
+          maxWidth: '100%',
+          tableLayout: 'fixed',
+          fontSize: 9.5
+        }
+      }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+        style: {
+          ...thl,
+          width: dense ? 110 : 130
+        }
+      }, "Quality Indicator"), React.createElement("th", {
+        style: {
+          ...thc,
+          width: 36
+        }
+      }, "Total"), React.createElement("th", {
+        style: {
+          ...thl,
+          width: dense ? 56 : 62,
+          textTransform: 'none'
+        }
+      }, "Benchmark"), chosen.map(d => React.createElement("th", {
+        key: d.key,
+        title: d.name,
+        style: {
+          ...thc,
+          padding: '4px 1px',
+          height: vertHead ? 66 : undefined,
+          verticalAlign: 'bottom'
+        }
+      }, vertHead ? React.createElement("div", {
+        style: {
+          height: 60,
+          position: 'relative',
+          margin: '0 auto'
+        }
+      }, React.createElement("div", {
+        style: {
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%,-50%) rotate(-90deg)',
+          width: 58,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          textAlign: 'left',
+          fontSize: dense ? 7.5 : 8.5,
+          lineHeight: 1.1
+        }
+      }, d.name)) : d.name)))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+        colSpan: chosen.length + 3,
+        style: {
+          padding: 14,
+          textAlign: 'center',
+          color: P.faint
+        }
+      }, "No indicators for the selected departments.")) : names.map(name => {
+        let tot = 0,
+          anyCount = false,
+          num = 0,
+          den = 0,
+          anyRate = false,
+          rateInd = null;
+        const benchSet = new Set();
+        let bench = '';
+        const cells = chosen.map(d => {
+          const ind = findInd(d, name);
+          if (!ind) return {
+            none: true
+          };
+          const be = benchExpr(ind);
+          if (be && be !== 'No benchmark') {
+            benchSet.add(be);
+            if (!bench) bench = be;
+          }
+          const a = qcAnnualCell(ind, pMonths);
+          if (a.rep && !a.isRate) {
+            anyCount = true;
+            tot += a.count;
+          }
+          if (a.rep && a.isRate) {
+            anyRate = true;
+            num += a.num || 0;
+            den += a.den || 0;
+            if (!rateInd) rateInd = ind;
+          }
+          return {
+            ind,
+            a
+          };
+        });
+        let totTxt = '—',
+          totColor = P.ink2;
+        if (anyCount) {
+          totTxt = String(tot);
+          totColor = tot > 0 ? P.rose : P.ink2;
+        } else if (anyRate && den > 0 && rateInd) {
+          const pooled = window.qiFormulaCompute(rateInd.formula || 'pct', num, den);
+          if (pooled != null) {
+            totTxt = fmtVal(rateInd, pooled);
+            totColor = P.ink2;
+          }
+        }
+        return React.createElement("tr", {
+          key: name,
+          style: {
+            borderBottom: '1px solid ' + P.line2
+          }
+        }, React.createElement("td", {
+          style: {
+            padding: '5px 8px',
+            textAlign: 'left',
+            fontWeight: 600,
+            color: P.ink,
+            wordBreak: 'break-word'
+          }
+        }, name), React.createElement("td", {
+          title: anyCount ? 'total incidence over the period' : 'pooled period value (Σnum/Σden across departments)',
+          style: {
+            textAlign: 'center',
+            fontFamily: MONO,
+            fontWeight: 700,
+            fontSize: dense ? 8 : 9.5,
+            color: totColor
+          }
+        }, totTxt), React.createElement("td", {
+          style: {
+            padding: '4px 8px',
+            color: P.ink2,
+            fontSize: 9
+          }
+        }, bench ? bench + (benchSet.size > 1 ? ' ·varies' : '') : 'No benchmark'), cells.map((c, i) => c.none ? React.createElement("td", {
+          key: i,
+          style: {
+            textAlign: 'center',
+            color: P.faint,
+            fontSize: 9
+          }
+        }, "\u2014") : pill(c, i, name)));
+      })));
+    })()), sections.incidents && incs.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.rose,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Occurred incident details \xB7 ", rangeLabel, " (", incs.length, ")"), incs.map((r, i) => React.createElement(QCIncidentCard, {
+      key: i,
+      r: r,
+      showDept: true
+    })))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function MonthlyPage({
+    page,
+    n,
+    total,
+    lead
+  }) {
+    const m = page.month;
+    const normN = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase().replace(/\s*\(hospital\)$/, '');
+    const names = [];
+    const seen = new Set();
+    chosen.forEach(d => (d.indicators || []).forEach(ind => {
+      const k = normN(ind.name);
+      if (!seen.has(k)) {
+        seen.add(k);
+        names.push(ind.name);
+      }
+    }));
+    const findInd = (d, name) => {
+      const k = normN(name);
+      return (d.indicators || []).find(i => normN(i.name) === k);
+    };
+    const incs = [];
+    chosen.forEach(d => qcIncidentsOf(d).forEach(r => {
+      if (r.month === m[1]) incs.push({
+        dept: d.name,
+        ind: r.ind,
+        x: r.x
+      });
+    }));
+    const line = (l, v) => v ? React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, React.createElement("b", {
+      style: {
+        color: P.ink
+      }
+    }, l, ":"), " ", v) : null;
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, lead && sections.execSummary && React.createElement(QCExecSummary, {
+      chosen: chosen,
+      months: pMonths,
+      rangeLabel: rangeLabel
+    }), lead && sections.periodCompare && React.createElement(QCPeriodCompare, {
+      chosen: chosen,
+      months: pMonths,
+      baseMonths: baseMonths,
+      baselineLabel: baselineLabel
+    }), lead && sections.ragHeatmap && React.createElement(QCRagHeatmap, {
+      chosen: chosen,
+      months: pMonths
+    }), lead && sections.deptRanking && React.createElement(QCDeptRanking, {
+      chosen: chosen,
+      months: pMonths
+    }), lead && sections.benchmarkCompare && React.createElement(QCBenchmarkCompare, {
+      chosen: chosen,
+      months: pMonths
+    }), React.createElement("div", {
+      className: "qc-band",
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 10
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        background: P.blue + '1c',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, React.createElement(DocIc, {
+      c: P.blue
+    })), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 15,
+        color: P.ink
+      }
+    }, "Nursing Quality Indicators \xB7 ", m[1]), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      className: "tag"
+    }, chosen.length, " dept \xB7 ", names.length, " indicators")), React.createElement(QCHeatLegend, null), React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, (() => {
+      const dense = chosen.length > 10,
+        vertHead = chosen.length > 6;
+      return React.createElement("table", {
+        style: {
+          borderCollapse: 'collapse',
+          width: '100%',
+          maxWidth: '100%',
+          tableLayout: 'fixed',
+          fontSize: 9.5
+        }
+      }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+        style: {
+          ...thl,
+          width: dense ? 104 : 118
+        }
+      }, "Quality Indicator"), React.createElement("th", {
+        style: {
+          ...thc,
+          width: 42,
+          color: P.ink2
+        }
+      }, "Total Incidence"), React.createElement("th", {
+        style: {
+          ...thl,
+          width: dense ? 58 : 66,
+          textTransform: 'none'
+        }
+      }, "Benchmark"), chosen.map(d => React.createElement("th", {
+        key: d.key,
+        title: d.name,
+        style: {
+          ...thc,
+          padding: '4px 1px',
+          height: vertHead ? 66 : undefined,
+          verticalAlign: 'bottom'
+        }
+      }, vertHead ? React.createElement("div", {
+        style: {
+          height: 60,
+          position: 'relative',
+          margin: '0 auto'
+        }
+      }, React.createElement("div", {
+        style: {
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%,-50%) rotate(-90deg)',
+          width: 58,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          textAlign: 'left',
+          fontSize: dense ? 7.5 : 8.5,
+          lineHeight: 1.1
+        }
+      }, d.name)) : d.name)))), React.createElement("tbody", null, names.length === 0 ? React.createElement("tr", null, React.createElement("td", {
+        colSpan: chosen.length + 3,
+        style: {
+          padding: 14,
+          textAlign: 'center',
+          color: P.faint
+        }
+      }, "No indicators for the selected departments.")) : names.map(name => {
+        let tot = 0,
+          anyCount = false,
+          num = 0,
+          den = 0,
+          anyRate = false,
+          rateInd = null;
+        const benchSet = new Set();
+        let bench = '';
+        const cells = chosen.map(d => {
+          const ind = findInd(d, name);
+          if (!ind) return {
+            none: true
+          };
+          const be = benchExpr(ind);
+          if (be && be !== 'No benchmark') {
+            benchSet.add(be);
+            if (!bench) bench = be;
+          }
+          const v = qcCellVal(ind, m);
+          const s = qStatus(ind, v);
+          const isRate = ['pct', 'rate100', 'rate1000', 'avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
+          if (v != null) {
+            if (!isRate) {
+              anyCount = true;
+              tot += Number(v) || 0;
+            } else {
+              anyRate = true;
+              if (!rateInd) rateInd = ind;
+              const n = ind.mNum && ind.mNum[m[0]],
+                dd = ind.mDen && ind.mDen[m[0]];
+              if (n != null && n !== '' && dd != null && dd !== '') {
+                num += Number(n) || 0;
+                den += Number(dd) || 0;
+              }
+            }
+          }
+          return {
+            ind,
+            v,
+            s
+          };
+        });
+        let totTxt = '—',
+          totColor = P.ink2;
+        if (anyCount) {
+          totTxt = String(tot);
+          totColor = tot > 0 ? P.rose : P.ink2;
+        } else if (anyRate && den > 0 && rateInd) {
+          const pooled = window.qiFormulaCompute(rateInd.formula || 'pct', num, den);
+          if (pooled != null) totTxt = fmtVal(rateInd, pooled);
+        }
+        return React.createElement("tr", {
+          key: name,
+          style: {
+            borderBottom: '1px solid ' + P.line2
+          }
+        }, React.createElement("td", {
+          style: {
+            padding: '5px 8px',
+            textAlign: 'left',
+            fontWeight: 600,
+            color: P.ink,
+            wordBreak: 'break-word'
+          }
+        }, name), React.createElement("td", {
+          title: anyCount ? 'total incidence this month' : 'pooled value this month (Σnum/Σden across departments)',
+          style: {
+            textAlign: 'center',
+            fontFamily: MONO,
+            fontWeight: 700,
+            fontSize: dense ? 8 : 9.5,
+            color: totColor
+          }
+        }, totTxt), React.createElement("td", {
+          style: {
+            padding: '4px 8px',
+            color: P.ink2,
+            fontSize: 9
+          }
+        }, bench ? bench + (benchSet.size > 1 ? ' ·varies' : '') : 'No benchmark'), cells.map((c, i) => c.none ? React.createElement("td", {
+          key: i,
+          style: {
+            textAlign: 'center',
+            color: P.faint,
+            fontSize: 9
+          }
+        }, "\u2014") : React.createElement("td", {
+          key: i,
+          style: {
+            textAlign: 'center',
+            padding: '3px 1px'
+          }
+        }, React.createElement("span", {
+          title: name + ' · ' + chosen[i].name + ' · ' + (c.s === 'na' ? 'not reported' : fmtVal(c.ind, c.v) + ' · ' + (c.s === 'breach' ? 'breach' : 'on benchmark')),
+          style: {
+            display: 'block',
+            margin: '0 auto',
+            maxWidth: '100%',
+            height: 20,
+            lineHeight: '20px',
+            borderRadius: 4,
+            background: qcHeatColors(c.s).bg,
+            color: qcHeatColors(c.s).col,
+            fontFamily: MONO,
+            fontWeight: 700,
+            fontSize: dense ? 7.5 : 9.5,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }
+        }, c.s === 'na' ? '·' : fmtVal(c.ind, c.v)))));
+      })));
+    })()), sections.incidents && incs.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.rose,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Occurred incident details in ", m[1], " (", incs.length, ")"), incs.map((r, i) => React.createElement(QCIncidentCard, {
+      key: i,
+      r: r,
+      showDept: true,
+      showMonth: false
+    })))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function ComparePage({
+    n,
+    total
+  }) {
+    const rows = chosen.map(d => {
+      const s = qcDeptStatus(d, pMonths);
+      return {
+        d,
+        st: s.st,
+        status: s.status,
+        color: s.color,
+        breaches: s.st.breach,
+        rate: s.st.rate,
+        inds: (d.indicators || []).length
+      };
+    });
+    const hbar = rows.map(r => ({
+      label: r.d.name,
+      value: r.rate,
+      color: r.color
+    })).sort((a, b) => b.value - a.value);
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, sections.execSummary && React.createElement(QCExecSummary, {
+      chosen: chosen,
+      months: pMonths,
+      rangeLabel: rangeLabel
+    }), sections.periodCompare && React.createElement(QCPeriodCompare, {
+      chosen: chosen,
+      months: pMonths,
+      baseMonths: baseMonths,
+      baselineLabel: baselineLabel
+    }), sections.ragHeatmap && React.createElement(QCRagHeatmap, {
+      chosen: chosen,
+      months: pMonths
+    }), sections.benchmarkCompare && React.createElement(QCBenchmarkCompare, {
+      chosen: chosen,
+      months: pMonths
+    }), React.createElement("div", {
+      className: "qc-band",
+      style: {
+        fontWeight: 700,
+        fontSize: 15,
+        marginBottom: 12,
+        color: P.ink
+      }
+    }, "Cross-department comparison \xB7 ", chosen.length, " departments"), sections.deptRanking ? React.createElement("div", {
+      style: {
+        marginBottom: 16
+      }
+    }, React.createElement(QCDeptRanking, {
+      chosen: chosen,
+      months: pMonths
+    })) : React.createElement("div", {
+      style: {
+        marginBottom: 16
+      }
+    }, window.HBar({
+      rows: hbar,
+      height: Math.max(160, rows.length * 30)
+    })), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 11.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", {
+      style: {
+        background: P.panel2
+      }
+    }, ['Department', 'Section / Focus', 'Indicators', 'Zero-Defect %', 'Off Benchmark', 'Status'].map((h, i) => React.createElement("th", {
+      key: h,
+      style: {
+        ...(i === 0 ? thl : thc),
+        textAlign: i === 0 ? 'left' : i >= 2 ? 'center' : 'left',
+        textTransform: 'none',
+        fontSize: 10
+      }
+    }, h)))), React.createElement("tbody", null, rows.map(r => {
+      const lead = qcLeadIndicator(r.d, pMonths);
+      const code = lead ? stdMatch(lead.name) : null;
+      const sec = code ? HQI_SECN[code[0]] || code : lead ? catOf(lead.name) : '—';
+      return React.createElement("tr", {
+        key: r.d.key,
+        style: {
+          borderBottom: '1px solid ' + P.line2
+        }
+      }, React.createElement("td", {
+        style: {
+          padding: '7px 10px',
+          fontWeight: 600,
+          color: P.ink
+        }
+      }, r.d.name), React.createElement("td", {
+        style: {
+          padding: '7px 10px',
+          color: P.ink2
+        }
+      }, sec), React.createElement("td", {
+        style: {
+          padding: '7px 10px',
+          textAlign: 'center',
+          fontFamily: MONO
+        }
+      }, r.inds), React.createElement("td", {
+        style: {
+          padding: '7px 10px',
+          textAlign: 'center',
+          fontFamily: MONO,
+          fontWeight: 600,
+          color: r.rate >= 90 ? P.green : r.rate >= 70 ? P.amber : P.rose
+        }
+      }, r.rate, "%"), React.createElement("td", {
+        style: {
+          padding: '7px 10px',
+          textAlign: 'center',
+          fontFamily: MONO,
+          color: r.breaches > 0 ? P.rose : P.green
+        }
+      }, r.breaches), React.createElement("td", {
+        style: {
+          padding: '7px 10px',
+          textAlign: 'center'
+        }
+      }, React.createElement("span", {
+        style: {
+          background: r.color + '1c',
+          color: r.color,
+          padding: '3px 10px',
+          borderRadius: 20,
+          fontWeight: 700,
+          fontSize: 11
+        }
+      }, r.status)));
+    })))), React.createElement(Footer, {
+      n: n || 1,
+      total: total || 1
+    }));
+  }
+  function CoverPage({
+    n,
+    total
+  }) {
+    const agg = qcAggStat(chosen, pMonths);
+    const tone = !agg.reported ? P.faint : agg.rate >= 90 ? P.green : agg.rate >= 70 ? P.amber : P.rose;
+    const narrowed = indMode === 'custom' && chosenRaw.length !== chosen.length;
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        textAlign: 'center',
+        padding: '60px 20px 30px'
+      }
+    }, showLogo && React.createElement("img", {
+      src: "unico/logo.svg",
+      alt: "UNICO Healthcare",
+      style: {
+        height: 66,
+        marginBottom: 26
+      }
+    }), React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: P.blue,
+        textTransform: 'uppercase',
+        letterSpacing: 1.5
+      }
+    }, orgName), React.createElement("h1", {
+      style: {
+        fontSize: 32,
+        fontWeight: 700,
+        color: P.ink,
+        margin: '14px 0 6px',
+        letterSpacing: '-.5px'
+      }
+    }, hdrTitle || 'Quality Indicator Report'), hdrSub && React.createElement("div", {
+      style: {
+        fontSize: 14,
+        color: P.muted
+      }
+    }, hdrSub), React.createElement("div", {
+      style: {
+        fontSize: 14,
+        color: P.ink2,
+        marginTop: 10,
+        fontWeight: 600
+      }
+    }, rangeLabel), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 26,
+        marginTop: 34
+      }
+    }, [['Departments', String(agg.depts), P.blue], ['Indicators', String(agg.inds), P.violet], ['Zero-defect', agg.reported ? agg.rate + '%' : '—', tone], ['Off Benchmark', agg.reported ? String(agg.breach) : '—', !agg.reported ? P.faint : agg.breach ? P.rose : P.green]].map(c => React.createElement("div", {
+      key: c[0],
+      style: {
+        textAlign: 'center'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 26,
+        fontWeight: 700,
+        color: c[2]
+      }
+    }, c[1]), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: P.muted,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginTop: 2
+      }
+    }, c[0])))), !agg.reported && React.createElement("div", {
+      style: {
+        marginTop: 14,
+        fontSize: 11,
+        color: P.faint
+      }
+    }, "No data was reported for this period."), narrowed && React.createElement("div", {
+      style: {
+        marginTop: 14,
+        fontSize: 10.5,
+        color: P.amber,
+        fontWeight: 600,
+        border: '1px solid #f3ddb5',
+        background: '#fdf7ea',
+        borderRadius: 6,
+        padding: '5px 12px'
+      }
+    }, "Custom indicator selection active \u2014 ", chosen.length, " of ", chosenRaw.length, " selected departments included. Switch Indicators to \u201CAll\u201D for the full report."), confidential && React.createElement("div", {
+      style: {
+        marginTop: 34,
+        fontSize: 10.5,
+        color: P.rose,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+        border: '1px solid #f1c6cd',
+        borderRadius: 6,
+        padding: '6px 14px'
+      }
+    }, "Confidential \u2014 for authorised recipients only"), React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.faint,
+        marginTop: 20
+      }
+    }, "Generated ", new Date().toLocaleDateString())), sections.signatures && React.createElement("div", {
+      style: {
+        padding: '0 8px'
+      }
+    }, React.createElement(QCSignatureBlock, {
+      sig: sig,
+      orgName: orgName
+    })), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  const pageTitle = pg => {
+    if (pg.kind === 'cover') return 'Cover';
+    if (pg.kind === 'toc') return 'Table of Contents';
+    if (pg.kind === 'pending') return 'Pending data — not submitted';
+    if (pg.kind === 'appendix') return 'Appendix — Incidents & CAPA';
+    if (pg.kind === 'refs') return 'References — Standards & Benchmarks';
+    if (pg.kind === 'compare') return 'Cross-department comparison';
+    if (pg.kind === 'heatmap') return 'Indicator × Department heatmap';
+    if (pg.kind === 'hh') return 'Hand Hygiene Compliance' + (pg.part === 'breakdown' ? ' · breakdown' : ' · overview');
+    if (pg.kind === 'monthly') return (pg.month ? pg.month[1] : '') + ' · monthly status';
+    if (pg.kind === 'detail') return (pg.dept ? pg.dept.name : '') + (pg.ind ? ' · ' + pg.ind.name : '');
+    return (pg.dept ? pg.dept.name : 'Department') + ' · summary';
+  };
+  function TocPage({
+    page,
+    n,
+    total
+  }) {
+    const per = page && page.tocPer || 30;
+    const start = (page && page.tocPart || 0) * per;
+    const slice = pages.slice(start, start + per);
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      className: "qc-band",
+      style: {
+        fontWeight: 700,
+        fontSize: 16,
+        color: P.ink,
+        marginBottom: 14
+      }
+    }, "Table of Contents", start ? ' (continued)' : ''), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column'
+      }
+    }, slice.map((pg, j) => {
+      const idx = start + j;
+      return React.createElement("div", {
+        key: idx,
+        style: {
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 8,
+          padding: '5px 0',
+          borderBottom: '1px dotted ' + P.line2
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 11.5,
+          color: P.ink2,
+          fontWeight: pg.kind === 'cover' || pg.kind === 'toc' ? 700 : 500
+        }
+      }, pageTitle(pg)), React.createElement("span", {
+        style: {
+          flex: 1,
+          borderBottom: '1px dotted ' + P.line,
+          margin: '0 4px 3px'
+        }
+      }), React.createElement("span", {
+        style: {
+          fontFamily: MONO,
+          fontSize: 11,
+          color: P.muted
+        }
+      }, idx + 1));
+    }))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function qcPendingRows() {
+    const rows = [];
+    const nobsRows = [];
+    let assigned = 0,
+      submitted = 0,
+      notObserved = 0;
+    chosen.forEach(d => {
+      (d.indicators || []).forEach(ind => {
+        const miss = [],
+          nobs = [];
+        pMonths.forEach(m => {
+          if (qcBeforeStart(ind, m[0])) return;
+          if (qcNotObs(ind, m[0])) {
+            nobs.push(m[1]);
+            notObserved++;
+            return;
+          }
+          if (monthRaw(ind, m[0]) == null && qcNotDue(d, ind, m[0])) return;
+          assigned++;
+          if (monthRaw(ind, m[0]) != null) submitted++;else miss.push(m[1]);
+        });
+        if (miss.length) rows.push({
+          dept: d,
+          ind,
+          miss
+        });
+        if (nobs.length) nobsRows.push({
+          dept: d,
+          ind,
+          miss: nobs
+        });
+      });
+    });
+    return {
+      rows,
+      nobsRows,
+      assigned,
+      submitted,
+      notObserved,
+      pending: assigned - submitted
+    };
+  }
+  function PendingPage({
+    n,
+    total
+  }) {
+    const {
+      rows,
+      nobsRows,
+      assigned,
+      submitted,
+      notObserved,
+      pending
+    } = qcPendingRows();
+    const byDept = [];
+    chosen.forEach(d => {
+      let a = 0,
+        s = 0,
+        nb = 0;
+      (d.indicators || []).forEach(ind => pMonths.forEach(m => {
+        if (qcBeforeStart(ind, m[0])) return;
+        if (qcNotObs(ind, m[0])) {
+          nb++;
+          return;
+        }
+        if (monthRaw(ind, m[0]) == null && qcNotDue(d, ind, m[0])) return;
+        a++;
+        if (monthRaw(ind, m[0]) != null) s++;
+      }));
+      if (a || nb) byDept.push({
+        d,
+        assigned: a,
+        submitted: s,
+        notObserved: nb,
+        pending: a - s,
+        pct: a ? Math.round(s * 100 / a) : 100
+      });
+    });
+    byDept.sort((x, y) => y.pending - x.pending || x.d.name.localeCompare(y.d.name));
+    const pctCol = p => p >= 100 ? P.green : p >= 80 ? P.amber : P.rose;
+    const th = (h, i, center) => React.createElement("th", {
+      key: h,
+      style: {
+        textAlign: center ? 'center' : 'left',
+        padding: '5px 8px',
+        fontSize: 9,
+        color: P.muted,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: .3,
+        borderBottom: '1px solid ' + P.line
+      }
+    }, h);
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      className: "qc-band",
+      style: {
+        fontWeight: 700,
+        fontSize: 16,
+        color: P.ink,
+        marginBottom: 4
+      }
+    }, "Pending Data \u2014 Not Submitted \xB7 ", rangeLabel), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: P.muted,
+        marginBottom: 12
+      }
+    }, "Assigned indicator-months that carry no reading. Months an indicator had not yet started are excluded (N/O elsewhere in this report), and so are months declared ", React.createElement("b", null, "not observed"), " (N/OB) \u2014 those are listed separately below."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        marginBottom: 14,
+        flexWrap: 'wrap'
+      }
+    }, [['Due indicator-months', String(assigned), P.ink], ['Submitted', String(submitted), P.green], ['Pending', String(pending), pending ? P.rose : P.green], ['Not observed', String(notObserved), notObserved ? '#5b3fa8' : P.muted], ['Completeness', (assigned ? Math.round(submitted * 100 / assigned) : 100) + '%', assigned ? pctCol(Math.round(submitted * 100 / assigned)) : P.green]].map(([l, v, c]) => React.createElement("div", {
+      key: l,
+      style: {
+        flex: '1 1 120px',
+        border: '1px solid ' + P.line,
+        borderRadius: 8,
+        padding: '8px 10px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 8.5,
+        color: P.muted,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: .4
+      }
+    }, l), React.createElement("div", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 17,
+        fontWeight: 700,
+        color: c,
+        marginTop: 2
+      }
+    }, v)))), pending === 0 ? React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.green,
+        fontWeight: 600
+      }
+    }, "Every assigned indicator was submitted for all months in this period \u2014 nothing pending.") : React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.amber,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "By department (", byDept.filter(r => r.pending).length, " with gaps)"), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 10,
+        marginBottom: 16
+      }
+    }, React.createElement("thead", null, React.createElement("tr", {
+      style: {
+        background: P.panel2
+      }
+    }, th('Department'), th('Due', 1, 1), th('Submitted', 2, 1), th('Pending', 3, 1), th('Not observed', 4, 1), th('Complete', 5, 1))), React.createElement("tbody", null, byDept.map((r, i) => React.createElement("tr", {
+      key: i,
+      style: {
+        borderBottom: '1px solid ' + P.line2
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, r.d.name), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: P.ink2
+      }
+    }, r.assigned), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: P.ink2
+      }
+    }, r.submitted), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        fontWeight: 700,
+        color: r.pending ? P.rose : P.green
+      }
+    }, r.pending || '—'), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: r.notObserved ? '#5b3fa8' : P.muted
+      }
+    }, r.notObserved || '—'), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontWeight: 700,
+        color: pctCol(r.pct)
+      }
+    }, r.pct, "%"))))), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.rose,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Missing readings (", rows.length, " indicator", rows.length !== 1 ? 's' : '', ")"), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 10
+      }
+    }, React.createElement("thead", null, React.createElement("tr", {
+      style: {
+        background: P.panel2
+      }
+    }, th('Department'), th('Indicator'), th('Months not submitted'), th('Count', 3, 1))), React.createElement("tbody", null, rows.map((r, i) => React.createElement("tr", {
+      key: i,
+      style: {
+        borderBottom: '1px solid ' + P.line2
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        color: P.ink2,
+        whiteSpace: 'nowrap'
+      }
+    }, r.dept.name), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, r.ind.name), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        color: P.rose
+      }
+    }, r.miss.join(', ')), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        fontWeight: 700,
+        color: P.rose
+      }
+    }, r.miss.length)))))), nobsRows.length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 16
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#5b3fa8',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Declared not observed \xB7 N/OB (", notObserved, " indicator-month", notObserved !== 1 ? 's' : '', ")"), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 10
+      }
+    }, React.createElement("thead", null, React.createElement("tr", {
+      style: {
+        background: P.panel2
+      }
+    }, th('Department'), th('Indicator'), th('Months not observed'), th('Reason given'))), React.createElement("tbody", null, nobsRows.map((r, i) => {
+      const why = [...new Set(r.miss.map(lbl => {
+        const m = pMonths.find(x => x[1] === lbl);
+        return m ? (r.ind.monthRemarks || {})[m[0]] || '' : '';
+      }).filter(Boolean))].join('; ');
+      return React.createElement("tr", {
+        key: i,
+        style: {
+          borderBottom: '1px solid ' + P.line2
+        }
+      }, React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          color: P.ink2,
+          whiteSpace: 'nowrap'
+        }
+      }, r.dept.name), React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          fontWeight: 600,
+          color: P.ink
+        }
+      }, r.ind.name), React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          color: '#5b3fa8'
+        }
+      }, r.miss.join(', ')), React.createElement("td", {
+        style: {
+          padding: '4px 8px',
+          color: why ? P.ink2 : P.muted,
+          fontStyle: why ? 'normal' : 'italic'
+        }
+      }, why || 'no reason recorded'));
+    }))))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function AppendixPage({
+    n,
+    total
+  }) {
+    const capa = qcCapaMap();
+    const incs = [];
+    chosen.forEach(d => qcIncidentsOf(d).forEach(r => {
+      if (qcIncInPeriod(r, pMonths)) incs.push({
+        dept: d.name,
+        ind: r.ind,
+        month: r.month,
+        x: r.x
+      });
+    }));
+    const plans = [];
+    chosen.forEach(d => (d.indicators || []).forEach(ind => {
+      let lastQ = null;
+      QORDER.forEach(Q => {
+        if (qtrRaw(ind, Q, fy) != null) lastQ = Q;
+      });
+      const lastBreach = lastQ != null && qtrStatus(ind, lastQ, fy) === 'breach';
+      const nB = countBreaches(ind, pMonths);
+      if (!(lastBreach || nB >= 3)) return;
+      plans.push({
+        dept: d.name,
+        ind: ind.name,
+        breaches: nB,
+        status: capa[d.key + '/' + ind.id] || 'Open'
+      });
+    }));
+    const stCol = s => s === 'Closed' ? P.green : s === 'In Progress' ? P.amber : P.rose;
+    const line = (l, v) => v ? React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, React.createElement("b", {
+      style: {
+        color: P.ink
+      }
+    }, l, ":"), " ", v) : null;
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      className: "qc-band",
+      style: {
+        fontWeight: 700,
+        fontSize: 16,
+        color: P.ink,
+        marginBottom: 12
+      }
+    }, "Appendix \u2014 Incidents & CAPA \xB7 ", rangeLabel), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.violet,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Corrective & preventive action plans (", plans.length, ")"), plans.length === 0 ? React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: P.green,
+        marginBottom: 14
+      }
+    }, "No indicators off benchmark \u2014 no open action plans.") : React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 10,
+        marginBottom: 16
+      }
+    }, React.createElement("thead", null, React.createElement("tr", {
+      style: {
+        background: P.panel2
+      }
+    }, ['Department', 'Indicator', 'Off Benchmark', 'CAPA status'].map((h, i) => React.createElement("th", {
+      key: h,
+      style: {
+        textAlign: i >= 2 ? 'center' : 'left',
+        padding: '5px 8px',
+        fontSize: 9,
+        color: P.muted,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: .3,
+        borderBottom: '1px solid ' + P.line
+      }
+    }, h)))), React.createElement("tbody", null, plans.map((p, i) => React.createElement("tr", {
+      key: i,
+      style: {
+        borderBottom: '1px solid ' + P.line2
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        color: P.ink2
+      }
+    }, p.dept), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, p.ind), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center',
+        fontFamily: MONO,
+        color: p.breaches ? P.rose : P.ink2
+      }
+    }, p.breaches), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        textAlign: 'center'
+      }
+    }, React.createElement("span", {
+      style: {
+        color: stCol(p.status),
+        fontWeight: 700,
+        fontSize: 10
+      }
+    }, p.status)))))), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.rose,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 6
+      }
+    }, "Occurred incident details (", incs.length, ")"), incs.length === 0 ? React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: P.muted
+      }
+    }, "No logged incidents in the reporting period.") : incs.map((r, i) => React.createElement(QCIncidentCard, {
+      key: i,
+      r: r,
+      showDept: true
+    }))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function RefsPage({
+    n,
+    total
+  }) {
+    const seen = new Set();
+    const rows = [];
+    const STD = typeof HQI_STANDARDS !== 'undefined' && HQI_STANDARDS || [];
+    chosen.forEach(d => (d.indicators || []).forEach(ind => {
+      const code = stdMatch(ind.name);
+      if (code && !seen.has(code)) {
+        seen.add(code);
+        const s = STD.find(x => x.code === code);
+        if (s) rows.push(s);
+      }
+    }));
+    rows.sort((a, b) => a.code.localeCompare(b.code));
+    const bySec = {};
+    rows.forEach(r => {
+      (bySec[r.sec] = bySec[r.sec] || []).push(r);
+    });
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      className: "qc-band",
+      style: {
+        fontWeight: 700,
+        fontSize: 16,
+        color: P.ink,
+        marginBottom: 12
+      }
+    }, "References \u2014 Standards & Benchmarks"), rows.length === 0 ? React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: P.muted
+      }
+    }, "No mapped accreditation standards for the selected indicators.") : Object.keys(bySec).sort().map(sec => React.createElement("div", {
+      key: sec,
+      style: {
+        marginBottom: 12
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: P.blue,
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 5
+      }
+    }, sec, " \xB7 ", HQI_SECN[sec] || sec), React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 10
+      }
+    }, React.createElement("tbody", null, bySec[sec].map(s => React.createElement("tr", {
+      key: s.code,
+      style: {
+        borderBottom: '1px solid ' + P.line2,
+        verticalAlign: 'top'
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        fontFamily: MONO,
+        fontWeight: 700,
+        color: P.ink,
+        whiteSpace: 'nowrap'
+      }
+    }, s.code), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, s.name, React.createElement("div", {
+      style: {
+        fontSize: 9,
+        color: P.muted,
+        fontWeight: 400
+      }
+    }, "Benchmark ", s.bench, " \xB7 ", s.expr)), React.createElement("td", {
+      style: {
+        padding: '4px 8px',
+        color: P.muted,
+        fontSize: 9.5,
+        whiteSpace: 'nowrap'
+      }
+    }, s.ref)))))))), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  function HHPage({
+    page,
+    n,
+    total,
+    lead
+  }) {
+    const part = page.part || 'overview';
+    const hh = qcHHOf(chosen, depts, pMonths);
+    if (!hh.length) return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 60,
+        textAlign: 'center'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 16,
+        fontWeight: 700,
+        color: P.ink,
+        marginBottom: 8
+      }
+    }, "Hand Hygiene Compliance"), React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: P.muted,
+        maxWidth: 460,
+        margin: '0 auto'
+      }
+    }, "No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) records for ", fyLabelOf(fy), ". Record hand hygiene in Quality Data \u2014 or switch the year above \u2014 then regenerate.")), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+    const reportedCount = ind => pMonths.reduce((s, m) => s + (monthRaw(ind, m[0]) != null ? 1 : 0), 0);
+    let primary = hh.find(h => /overall|hospital/i.test((h.d.name || '') + ' ' + (h.ind.name || '')));
+    if (!primary) primary = hh.slice().sort((a, b) => reportedCount(b.ind) - reportedCount(a.ind))[0];
+    const pind = primary.ind;
+    const bench = pind.benchmarkValue != null && pind.benchmarkValue !== '' ? Number(pind.benchmarkValue) : 90;
+    const higher = true;
+    const whoStat = pct => pct == null ? {
+      label: '—',
+      color: P.faint,
+      bg: '#f4f6f9'
+    } : pct >= bench ? {
+      label: 'Compliant',
+      color: P.green,
+      bg: '#e7f6ed'
+    } : pct >= 75 ? {
+      label: 'Needs improvement',
+      color: P.amber,
+      bg: '#fff5e6'
+    } : {
+      label: 'Unacceptable',
+      color: P.rose,
+      bg: '#fbe9ec'
+    };
+    const monthAgg = m => {
+      let num = 0,
+        den = 0,
+        ndCount = 0,
+        total = 0;
+      const comps = [];
+      hh.forEach(({
+        ind
+      }) => {
+        const v = monthRaw(ind, m[0]);
+        if (v == null) return;
+        total++;
+        comps.push(v);
+        const nn = ind.mNum && ind.mNum[m[0]],
+          dd = ind.mDen && ind.mDen[m[0]];
+        if (nn != null && nn !== '' && dd != null && dd !== '' && Number(dd) > 0) {
+          num += Number(nn);
+          den += Number(dd);
+          ndCount++;
+        }
+      });
+      if (!total) return {
+        value: null,
+        num: null,
+        den: null
+      };
+      if (ndCount === total && den > 0) return {
+        value: Math.round(num / den * 10000) / 100,
+        num,
+        den
+      };
+      return {
+        value: Math.round(comps.reduce((s, x) => s + x, 0) / comps.length * 100) / 100,
+        num: null,
+        den: null
+      };
+    };
+    const series = pMonths.map(m => Object.assign({
+      m,
+      label: m[1].split(' ')[0]
+    }, monthAgg(m)));
+    const withVal = series.filter(r => r.value != null);
+    const latest = withVal.length ? withVal[withVal.length - 1] : null;
+    const avg = withVal.length ? Math.round(withVal.reduce((s, r) => s + r.value, 0) / withVal.length * 10) / 10 : null;
+    const onTarget = withVal.filter(r => higher ? r.value >= bench : r.value <= bench).length;
+    const tone = P.green;
+    const th = {
+      textAlign: 'left',
+      padding: '7px 9px',
+      fontSize: 9.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid ' + P.line,
+      background: P.panel2
+    };
+    const thr = {
+      ...th,
+      textAlign: 'right'
+    };
+    const tdc = {
+      padding: '5px 9px',
+      fontSize: 11,
+      color: P.ink2,
+      borderBottom: '1px solid ' + P.line2
+    };
+    const tdr = {
+      ...tdc,
+      textAlign: 'right',
+      fontFamily: MONO
+    };
+    if (part === 'overview') {
+      const st = whoStat(latest ? latest.value : null);
+      const cards = [['Latest' + (latest ? ' · ' + latest.label : ''), latest && latest.value != null ? latest.value + '%' : '—', st.color, st.label], ['Average', avg != null ? avg + '%' : '—', P.blue, withVal.length + ' month' + (withVal.length !== 1 ? 's' : '') + ' reported'], ['Benchmark', (higher ? '≥ ' : '≤ ') + bench + '%', P.violet, 'WHO compliant target'], ['Months on target', onTarget + '/' + withVal.length, withVal.length && onTarget === withVal.length ? P.green : P.amber, 'within the period']];
+      const chartRows = withVal.map(r => ({
+        mon: r.label,
+        val: r.value
+      }));
+      const chartEl = chartRows.length ? typeof window.AreaTargetChart === 'function' ? window.AreaTargetChart({
+        data: chartRows,
+        x: 'mon',
+        y: 'val',
+        target: bench,
+        height: 205,
+        color: tone,
+        flat: true
+      }) : typeof window.LineChart === 'function' ? window.LineChart({
+        data: chartRows,
+        x: 'mon',
+        y: 'val',
+        height: 205,
+        color: tone,
+        area: true,
+        flat: true
+      }) : null : React.createElement("div", {
+        style: {
+          padding: '22px 0',
+          display: 'grid',
+          placeItems: 'center',
+          color: P.faint,
+          fontSize: 12
+        }
+      }, "No hand-hygiene data in this period");
+      return React.createElement("div", {
+        className: "qc-rpage",
+        style: {
+          position: 'relative'
+        }
+      }, sections.watermark && React.createElement(QCWatermark, {
+        text: confidential ? 'CONFIDENTIAL' : orgName
+      }), React.createElement(Header, null), React.createElement("div", {
+        style: {
+          marginTop: 18
+        }
+      }, lead && sections.execSummary && React.createElement(QCExecSummary, {
+        chosen: chosen,
+        months: pMonths,
+        rangeLabel: rangeLabel
+      }), lead && sections.periodCompare && React.createElement(QCPeriodCompare, {
+        chosen: chosen,
+        months: pMonths,
+        baseMonths: baseMonths,
+        baselineLabel: baselineLabel
+      }), lead && sections.ragHeatmap && React.createElement(QCRagHeatmap, {
+        chosen: chosen,
+        months: pMonths
+      }), lead && sections.deptRanking && React.createElement(QCDeptRanking, {
+        chosen: chosen,
+        months: pMonths
+      }), lead && sections.benchmarkCompare && React.createElement(QCBenchmarkCompare, {
+        chosen: chosen,
+        months: pMonths
+      }), React.createElement("div", {
+        className: "qc-band",
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+          marginBottom: 12
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 30,
+          height: 30,
+          borderRadius: 8,
+          background: tone + '1c',
+          display: 'grid',
+          placeItems: 'center',
+          flexShrink: 0
+        }
+      }, React.createElement(DocIc, {
+        c: tone
+      })), React.createElement("div", {
+        style: {
+          fontWeight: 700,
+          fontSize: 15,
+          color: P.ink
+        }
+      }, "Hand Hygiene Compliance"), React.createElement("span", {
+        className: "tag"
+      }, "WHO 5 Moments \xB7 ", primary.d.name), React.createElement("span", {
+        style: {
+          flex: 1
+        }
+      }), React.createElement("span", {
+        style: {
+          background: st.color + '1c',
+          color: st.color,
+          padding: '3px 10px',
+          borderRadius: 20,
+          fontWeight: 700,
+          fontSize: 11.5
+        }
+      }, st.label)), React.createElement(KpiCards, {
+        cards: cards,
+        tone: tone
+      }), React.createElement("div", {
+        style: {
+          margin: '4px 0 8px'
+        }
+      }, React.createElement("div", {
+        style: uSub
+      }, "Monthly compliance trend (%) \xB7 target ", higher ? '≥' : '≤', " ", bench, "%"), chartEl), React.createElement("table", {
+        className: "qc-rpt-tbl",
+        style: {
+          borderCollapse: 'collapse',
+          width: '100%',
+          marginTop: 12,
+          fontSize: 11
+        }
+      }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+        style: th
+      }, "Month"), React.createElement("th", {
+        style: thr
+      }, "Compliant"), React.createElement("th", {
+        style: thr
+      }, "Opportunities"), React.createElement("th", {
+        style: thr
+      }, "Compliance"), React.createElement("th", {
+        style: {
+          ...th,
+          textAlign: 'center'
+        }
+      }, "Status"))), React.createElement("tbody", null, series.map(r => {
+        const s = whoStat(r.value);
+        return React.createElement("tr", {
+          key: r.m[0]
+        }, React.createElement("td", {
+          style: {
+            ...tdc,
+            fontWeight: 600,
+            color: P.ink
+          }
+        }, r.m[1]), React.createElement("td", {
+          style: tdr
+        }, r.num != null ? r.num.toLocaleString() : '—'), React.createElement("td", {
+          style: tdr
+        }, r.den != null ? r.den.toLocaleString() : '—'), React.createElement("td", {
+          style: {
+            ...tdr,
+            fontWeight: 700,
+            color: r.value == null ? P.faint : P.ink
+          }
+        }, r.value != null ? r.value + '%' : '—'), React.createElement("td", {
+          style: {
+            textAlign: 'center',
+            padding: '4px 6px'
+          }
+        }, React.createElement("span", {
+          style: {
+            display: 'inline-block',
+            padding: '2px 8px',
+            borderRadius: 20,
+            background: s.bg,
+            color: s.color,
+            fontWeight: 700,
+            fontSize: 10
+          }
+        }, s.label)));
+      })))), React.createElement(Footer, {
+        n: n,
+        total: total
+      }));
+    }
+    const gMonth = (() => {
+      for (let i = pMonths.length - 1; i >= 0; i--) {
+        const mk = pMonths[i][0];
+        const g = pind.mGroups && pind.mGroups[mk];
+        if (g && Object.keys(g).some(k => g[k] != null && g[k] !== '')) return pMonths[i];
+      }
+      return null;
+    })();
+    const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
+    const bdSrc = (() => {
+      for (let i = pMonths.length - 1; i >= 0; i--) {
+        const mk = pMonths[i][0];
+        for (const h of hh) {
+          const b = h.ind.mDeptBreakdown && h.ind.mDeptBreakdown[mk];
+          if (Array.isArray(b) && b.length) return {
+            month: pMonths[i],
+            rows: b
+          };
+        }
+      }
+      return null;
+    })();
+    const bdTot = g => GROUP_KEYS.reduce((a, [k]) => {
+      const x = (g || {})[k] || {};
+      return {
+        n: a.n + (Number(x.n) || 0),
+        d: a.d + (Number(x.d) || 0)
+      };
+    }, {
+      n: 0,
+      d: 0
+    });
+    const bdRows = bdSrc ? bdSrc.rows.map(r => {
+      const t = bdTot(r.g);
+      return {
+        label: r.dept || '—',
+        g: r.g || {},
+        n: t.n,
+        d: t.d,
+        value: t.d > 0 ? Math.round(t.n / t.d * 10000) / 100 : null
+      };
+    }).sort((a, b) => (b.value == null ? -1 : b.value) - (a.value == null ? -1 : a.value)) : [];
+    let groupRows = gMonth ? GROUP_KEYS.map(([k, lbl]) => {
+      const gN = pind.mGroups[gMonth[0]] || {};
+      const gD = pind.mGroupsDen && pind.mGroupsDen[gMonth[0]] || {};
+      const nn = Number(gN[k]) || 0,
+        dd = Number(gD[k]) || 0;
+      return {
+        label: lbl,
+        n: nn,
+        d: dd,
+        value: dd > 0 ? Math.round(nn / dd * 10000) / 100 : null
+      };
+    }).filter(r => r.d > 0 || r.n > 0) : [];
+    if (!groupRows.length && bdSrc) {
+      groupRows = GROUP_KEYS.map(([k, lbl]) => {
+        let n = 0,
+          d = 0;
+        bdSrc.rows.forEach(r => {
+          const x = (r.g || {})[k] || {};
+          n += Number(x.n) || 0;
+          d += Number(x.d) || 0;
+        });
+        return {
+          label: lbl,
+          n,
+          d,
+          value: d > 0 ? Math.round(n / d * 10000) / 100 : null
+        };
+      }).filter(r => r.d > 0 || r.n > 0);
+    }
+    const deptGroups = {};
+    hh.forEach(h => {
+      (deptGroups[h.d.key] = deptGroups[h.d.key] || {
+        name: h.d.name,
+        inds: []
+      }).inds.push(h.ind);
+    });
+    const deptLatest = inds => {
+      for (let i = pMonths.length - 1; i >= 0; i--) {
+        const mk = pMonths[i][0];
+        let num = 0,
+          den = 0,
+          ndCount = 0,
+          total = 0;
+        const comps = [];
+        inds.forEach(ind => {
+          const v = monthRaw(ind, mk);
+          if (v == null) return;
+          total++;
+          comps.push(v);
+          const nn = ind.mNum && ind.mNum[mk],
+            dd = ind.mDen && ind.mDen[mk];
+          if (nn != null && nn !== '' && dd != null && dd !== '' && Number(dd) > 0) {
+            num += Number(nn);
+            den += Number(dd);
+            ndCount++;
+          }
+        });
+        if (total) {
+          const value = ndCount === total && den > 0 ? Math.round(num / den * 10000) / 100 : Math.round(comps.reduce((s, x) => s + x, 0) / comps.length * 100) / 100;
+          return {
+            month: pMonths[i],
+            value
+          };
+        }
+      }
+      return null;
+    };
+    const deptRows = Object.keys(deptGroups).map(k => {
+      const g = deptGroups[k];
+      const dl = deptLatest(g.inds);
+      return dl ? {
+        label: (g.name || '').slice(0, 20),
+        value: dl.value,
+        month: dl.month[1].split(' ')[0]
+      } : null;
+    }).filter(Boolean).sort((a, b) => b.value - a.value);
+    return React.createElement("div", {
+      className: "qc-rpage",
+      style: {
+        position: 'relative'
+      }
+    }, sections.watermark && React.createElement(QCWatermark, {
+      text: confidential ? 'CONFIDENTIAL' : orgName
+    }), React.createElement(Header, null), React.createElement("div", {
+      style: {
+        marginTop: 18
+      }
+    }, React.createElement("div", {
+      className: "qc-band",
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        marginBottom: 12
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        background: P.blue + '1c',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0
+      }
+    }, React.createElement(DocIc, {
+      c: P.blue
+    })), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 15,
+        color: P.ink
+      }
+    }, "Hand Hygiene \u2014 breakdown", bdSrc ? ' · ' + bdSrc.month[1] : gMonth ? ' · ' + gMonth[1] : ''), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      className: "tag"
+    }, "by staff group & department")), groupRows.length > 0 && React.createElement("div", {
+      style: {
+        marginBottom: 16
+      }
+    }, React.createElement("div", {
+      style: uSub
+    }, "Compliance by staff group (%)"), typeof window.BarChart === 'function' && window.BarChart({
+      data: groupRows.map(r => ({
+        label: r.label,
+        val: r.value || 0
+      })),
+      x: 'label',
+      y: 'val',
+      height: 175,
+      color: P.blue,
+      flat: true
+    }), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        marginTop: 8,
+        fontSize: 11
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th
+    }, "Staff group"), React.createElement("th", {
+      style: thr
+    }, "Compliant"), React.createElement("th", {
+      style: thr
+    }, "Opportunities"), React.createElement("th", {
+      style: thr
+    }, "Compliance"))), React.createElement("tbody", null, groupRows.map(r => {
+      const s = whoStat(r.value);
+      return React.createElement("tr", {
+        key: r.label
+      }, React.createElement("td", {
+        style: {
+          ...tdc,
+          fontWeight: 600,
+          color: P.ink
+        }
+      }, r.label), React.createElement("td", {
+        style: tdr
+      }, r.n.toLocaleString()), React.createElement("td", {
+        style: tdr
+      }, r.d.toLocaleString()), React.createElement("td", {
+        style: {
+          ...tdr,
+          fontWeight: 700,
+          color: s.color
+        }
+      }, r.value != null ? r.value + '%' : '—'));
+    })))), bdRows.length > 0 && React.createElement("div", {
+      style: {
+        marginBottom: 16
+      }
+    }, React.createElement("div", {
+      style: uSub
+    }, "Department-wise audit \xB7 ", bdSrc.month[1], " \xB7 compliant / observed moments (WHO 5 Moments)"), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        marginTop: 6,
+        fontSize: 10.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th
+    }, "Department"), GROUP_KEYS.map(([k, lbl]) => React.createElement("th", {
+      key: k,
+      style: thr
+    }, lbl)), React.createElement("th", {
+      style: thr
+    }, "Total"), React.createElement("th", {
+      style: thr
+    }, "Compliance"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      }
+    }, "Status"))), React.createElement("tbody", null, bdRows.map(r => {
+      const s = whoStat(r.value);
+      return React.createElement("tr", {
+        key: r.label
+      }, React.createElement("td", {
+        style: {
+          ...tdc,
+          fontWeight: 600,
+          color: P.ink
+        }
+      }, r.label), GROUP_KEYS.map(([k]) => {
+        const x = r.g[k] || {};
+        const nn = Number(x.n) || 0,
+          dd = Number(x.d) || 0;
+        return React.createElement("td", {
+          key: k,
+          style: tdr
+        }, nn || dd ? nn + '/' + dd : '—');
+      }), React.createElement("td", {
+        style: {
+          ...tdr,
+          fontWeight: 600
+        }
+      }, r.d > 0 ? r.n + '/' + r.d : '—'), React.createElement("td", {
+        style: {
+          ...tdr,
+          fontWeight: 700,
+          color: r.value == null ? P.faint : P.ink
+        }
+      }, r.value != null ? r.value + '%' : '—'), React.createElement("td", {
+        style: {
+          textAlign: 'center',
+          padding: '4px 6px'
+        }
+      }, React.createElement("span", {
+        style: {
+          display: 'inline-block',
+          padding: '2px 8px',
+          borderRadius: 20,
+          background: s.bg,
+          color: s.color,
+          fontWeight: 700,
+          fontSize: 9.5
+        }
+      }, r.value == null ? 'Not audited' : s.label)));
+    })))), (() => {
+      const audited = bdRows.filter(r => r.value != null);
+      const src = audited.length ? audited.map(r => ({
+        label: (r.label || '').slice(0, 20),
+        val: r.value
+      })) : deptRows.map(r => ({
+        label: r.label,
+        val: r.value
+      }));
+      return src.length > 1 && React.createElement("div", {
+        style: {
+          marginBottom: 14
+        }
+      }, React.createElement("div", {
+        style: uSub
+      }, "Compliance by department (", audited.length ? bdSrc.month[1] : 'latest reported month', ", %)"), typeof window.BarChart === 'function' && window.BarChart({
+        data: src,
+        x: 'label',
+        y: 'val',
+        height: Math.max(170, src.length * 26),
+        color: P.violet,
+        flat: true
+      }));
+    })(), React.createElement("div", {
+      style: {
+        background: '#eef8fc',
+        border: '1px solid #cfe6f7',
+        borderRadius: 9,
+        padding: '10px 13px',
+        fontSize: 11,
+        color: P.blue700 || P.blue
+      }
+    }, React.createElement("b", null, "Interpretation (WHO):"), " \u2265 ", bench, "% compliant \xB7 75\u2013", bench - 1, "% needs improvement (re-audit within 2 weeks) \xB7 < 75% unacceptable (escalate). Reference: WHO (2009) Guidelines on Hand Hygiene in Health Care.")), React.createElement(Footer, {
+      n: n,
+      total: total
+    }));
+  }
+  const doPrint = () => {
+    if (chosen.length === 0) {
+      setNote({
+        ok: false,
+        text: 'Select at least one department first.'
+      });
+      return;
+    }
+    try {
+      document.body.classList.add('pdf-export-mode');
+      window.print();
+    } catch (e) {} finally {
+      setTimeout(() => document.body.classList.remove('pdf-export-mode'), 500);
+    }
+  };
+  async function buildQualityVectorPDF(J) {
+    const RGB = {
+      blue: [0, 144, 202],
+      ink: [22, 32, 46],
+      ink2: [60, 72, 88],
+      muted: [108, 122, 140],
+      faint: [154, 166, 180],
+      line: [221, 227, 236],
+      panel: [247, 249, 252],
+      rose: [210, 58, 82],
+      green: [31, 157, 87],
+      violet: [106, 82, 212],
+      amber: [224, 138, 30],
+      white: [255, 255, 255]
+    };
+    const PAL = [[0, 144, 202], [21, 159, 191], [43, 179, 163], [70, 184, 126], [124, 195, 90], [240, 169, 59], [239, 128, 73], [232, 92, 105], [224, 103, 155], [182, 92, 198], [106, 111, 212], [79, 141, 247]];
+    const hex2rgb = h => {
+      const m = /#?([0-9a-f]{6})/i.exec(String(h || ''));
+      if (!m) return RGB.blue;
+      const n = parseInt(m[1], 16);
+      return [n >> 16 & 255, n >> 8 & 255, n & 255];
+    };
+    const ori = orient === 'landscape' ? 'l' : 'p',
+      fmtP = pageSize === 'A3' ? 'a3' : pageSize === 'Letter' ? 'letter' : 'a4';
+    const doc = new J({
+      orientation: ori,
+      unit: 'pt',
+      format: fmtP,
+      compress: true
+    });
+    const PW = doc.internal.pageSize.getWidth(),
+      PH = doc.internal.pageSize.getHeight();
+    const M = 42,
+      CW = PW - 2 * M;
+    const F = (st, sz, c) => {
+      doc.setFont('helvetica', st);
+      doc.setFontSize(sz);
+      const cc = c || RGB.ink;
+      doc.setTextColor(cc[0], cc[1], cc[2]);
+    };
+    const line = (x1, y1, x2, y2, c, w) => {
+      const cc = c || RGB.line;
+      doc.setDrawColor(cc[0], cc[1], cc[2]);
+      doc.setLineWidth(w || 0.7);
+      doc.line(x1, y1, x2, y2);
+    };
+    const box = (x, y, w, h, f, r) => {
+      doc.setFillColor(f[0], f[1], f[2]);
+      doc.roundedRect(x, y, w, h, r == null ? 4 : r, r == null ? 4 : r, 'F');
+    };
+    const genDate = new Date().toLocaleDateString('en-US');
+    const clip = (s, w) => {
+      s = String(s == null ? '' : s);
+      if (doc.getTextWidth(s) <= w) return s;
+      while (s.length > 1 && doc.getTextWidth(s + '…') > w) s = s.slice(0, -1);
+      return s + '…';
+    };
+    const statCol = s => s === 'breach' ? RGB.rose : s === 'ok' ? RGB.green : RGB.faint;
+    const logo = await new Promise(res => {
+      try {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const c = document.createElement('canvas');
+            const s = 3;
+            c.width = (img.width || 120) * s;
+            c.height = (img.height || 40) * s;
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            res({
+              d: c.toDataURL('image/png'),
+              w: c.width / s,
+              h: c.height / s
+            });
+          } catch (e) {
+            res(null);
+          }
+        };
+        img.onerror = () => res(null);
+        img.src = 'unico/logo.svg';
+        setTimeout(() => res(null), 2000);
+      } catch (e) {
+        res(null);
+      }
+    });
+    const pageHeader = () => {
+      let x = M;
+      if (showLogo && logo) {
+        const w = 26 * (logo.w / logo.h);
+        try {
+          doc.addImage(logo.d, 'PNG', M, M - 16, w, 26);
+        } catch (e) {}
+        x = M + w + 10;
+      }
+      F('bold', 12);
+      doc.text(clip(hdrTitle || 'Quality Indicator Report', CW - 150), x, M + 2);
+      F('normal', 7.5, RGB.muted);
+      doc.text(String((hdrSub ? hdrSub + '  ·  ' : '') + rangeLabel).toUpperCase(), x, M + 13);
+      F('normal', 7.5, RGB.faint);
+      doc.text('Generated', PW - M, M - 2, {
+        align: 'right'
+      });
+      F('bold', 9, RGB.ink2);
+      doc.text(genDate, PW - M, M + 9, {
+        align: 'right'
+      });
+      line(M, M + 22, PW - M, M + 22, RGB.blue, 1.4);
+      F('normal', 7, RGB.faint);
+      doc.text(clip(String(orgName || ''), CW - 120), M, PH - 16);
+      if (confidential) {
+        F('bold', 6.5, RGB.rose);
+        doc.text('CONFIDENTIAL', PW - M, PH - 16, {
+          align: 'right'
+        });
+      }
+      return M + 42;
+    };
+    const kpiRow = (y, items) => {
+      const gap = 10,
+        w = (CW - gap * (items.length - 1)) / items.length;
+      items.forEach((it, i) => {
+        const x = M + i * (w + gap);
+        box(x, y, w, 46, RGB.panel, 5);
+        const t = it.tone || RGB.blue;
+        doc.setFillColor(t[0], t[1], t[2]);
+        doc.rect(x, y, 3, 46, 'F');
+        F('normal', 6.4, RGB.muted);
+        doc.text(clip(String(it.label).toUpperCase(), w - 14), x + 10, y + 13);
+        F('bold', 14, it.tone || RGB.ink);
+        doc.text(clip(String(it.value), w - 14), x + 10, y + 31);
+        if (it.foot) {
+          F('normal', 5.6, RGB.faint);
+          doc.text(clip(String(it.foot), w - 14), x + 10, y + 41);
+        }
+      });
+      return y + 46 + 12;
+    };
+    const vBars = (y, ind, pts) => {
+      const h = 96,
+        x = M,
+        w = CW,
+        max = Math.max(1, ...pts.map(p => Number(p.val) || 0));
+      const n = pts.length,
+        gap = n > 14 ? 3 : 6,
+        bw = n ? (w - gap * (n - 1)) / n : w;
+      const bar3d = (bx, bh, c) => {
+        const yT = y + h - bh,
+          yB = y + h,
+          dx = Math.min(6, bw * 0.3),
+          dy = -dx * 0.75,
+          li = [Math.min(255, c[0] + 34), Math.min(255, c[1] + 34), Math.min(255, c[2] + 34)],
+          dk = [Math.max(0, c[0] - 28), Math.max(0, c[1] - 28), Math.max(0, c[2] - 28)];
+        doc.setFillColor(c[0], c[1], c[2]);
+        doc.rect(bx, yT, bw, bh, 'F');
+        doc.setFillColor(li[0], li[1], li[2]);
+        doc.triangle(bx, yT, bx + dx, yT + dy, bx + bw + dx, yT + dy, 'F');
+        doc.triangle(bx, yT, bx + bw + dx, yT + dy, bx + bw, yT, 'F');
+        doc.setFillColor(dk[0], dk[1], dk[2]);
+        doc.triangle(bx + bw, yT, bx + bw + dx, yT + dy, bx + bw + dx, yB + dy, 'F');
+        doc.triangle(bx + bw, yT, bx + bw + dx, yB + dy, bx + bw, yB, 'F');
+      };
+      line(x, y + h, x + w, y + h);
+      pts.forEach((p, i) => {
+        const v = Number(p.val) || 0,
+          bh = Math.max(1.2, v / max * (h - 16)),
+          bx = x + i * (bw + gap);
+        const c = PAL[i % PAL.length];
+        bar3d(bx, bh, c);
+        F('normal', 5.6, RGB.faint);
+        doc.text(String(p.mon), bx + bw / 2, y + h + 8, {
+          align: 'center'
+        });
+        if (bw > 12) {
+          F('normal', 6, RGB.ink2);
+          doc.text(fmtVal(ind, v), bx + bw / 2, y + h - bh - Math.min(6, bw * 0.3) * 0.75 - 3, {
+            align: 'center'
+          });
+        }
+      });
+      return y + h + 18;
+    };
+    const deptTable = (y, d) => {
+      const inds = d.indicators || [],
+        mCols = pMonths;
+      const nameW = Math.min(150, Math.max(96, CW * 0.26)),
+        benchW = 54,
+        mW = (CW - nameW - benchW) / mCols.length,
+        rowH = 13,
+        headH = 15;
+      const head = yy => {
+        doc.setFillColor(RGB.blue[0], RGB.blue[1], RGB.blue[2]);
+        doc.rect(M, yy, CW, headH, 'F');
+        F('bold', 6.4, RGB.white);
+        doc.text('INDICATOR', M + 4, yy + 10);
+        doc.text('BENCH', M + nameW + 3, yy + 10);
+        mCols.forEach((m, i) => doc.text(m[1].split(' ')[0].slice(0, 3).toUpperCase(), M + nameW + benchW + i * mW + mW / 2, yy + 10, {
+          align: 'center'
+        }));
+        return yy + headH;
+      };
+      y = head(y);
+      inds.forEach((ind, ri) => {
+        if (y + rowH > PH - 40) {
+          doc.addPage(fmtP, ori);
+          y = pageHeader();
+          y = head(y);
+        }
+        if (ri % 2) {
+          doc.setFillColor(247, 250, 253);
+          doc.rect(M, y, CW, rowH, 'F');
+        }
+        F('normal', 6.6, RGB.ink);
+        doc.text(clip(ind.name, nameW - 6), M + 4, y + 9);
+        F('normal', 5.8, RGB.muted);
+        doc.text(clip(benchExpr(ind), benchW - 3), M + nameW + 2, y + 9);
+        mCols.forEach((m, i) => {
+          const v = qcCellVal(ind, m),
+            s = qStatus(ind, v),
+            cx = M + nameW + benchW + i * mW + mW / 2;
+          F('normal', 6.2, statCol(s));
+          doc.text(s === 'na' ? '·' : clip(fmtVal(ind, v), mW - 1), cx, y + 9, {
+            align: 'center'
+          });
+        });
+        y += rowH;
+        line(M, y, M + CW, y, RGB.line, 0.35);
+      });
+      return y + 12;
+    };
+    const sigBlock = y => {
+      if (!sections.signatures) return y;
+      if (!(sig && (sig.prepared || sig.reviewed || sig.recommended || sig.approved))) return y;
+      y = Math.max(y + 8, PH - 118);
+      F('bold', 7, RGB.muted);
+      doc.text('AUTHORISATION · ' + String(orgName || '').toUpperCase(), M, y);
+      const cols = [['Prepared by', sig.prepared], ['Checked by', sig.reviewed], ['Recommended by', sig.recommended], ['Approved by', sig.approved]],
+        cw = CW / 4;
+      cols.forEach((c, i) => {
+        const x = M + i * cw;
+        line(x, y + 42, x + cw - 22, y + 42, RGB.ink2, 0.8);
+        F('bold', 8.5, RGB.ink);
+        doc.text(clip(c[1] || '', cw - 26), x, y + 54);
+        F('normal', 6.2, RGB.muted);
+        doc.text(c[0].toUpperCase(), x, y + 63);
+      });
+      return y + 72;
+    };
+    if (sections.cover) {
+      let y = pageHeader();
+      F('bold', 24, RGB.ink);
+      doc.text(clip(hdrTitle || 'Quality Indicator Report', CW), M, y + 34);
+      F('normal', 12, RGB.muted);
+      doc.text(String(rangeLabel), M, y + 54);
+      const agg = {
+        ok: 0,
+        breach: 0,
+        inds: 0
+      };
+      chosen.forEach(d => {
+        const s = deptStat(d, pMonths);
+        agg.ok += s.ok;
+        agg.breach += s.breach;
+        agg.inds += (d.indicators || []).length;
+      });
+      const anyRep = agg.ok + agg.breach > 0;
+      const rate = anyRep ? Math.round(agg.ok * 100 / (agg.ok + agg.breach)) : null;
+      y = kpiRow(y + 72, [{
+        label: 'Zero-Defect %',
+        value: anyRep ? rate + '%' : '—',
+        tone: !anyRep ? RGB.muted : rate >= 90 ? RGB.green : rate >= 70 ? RGB.amber : RGB.rose,
+        foot: anyRep ? agg.ok + ' on benchmark' : 'no data reported this period'
+      }, {
+        label: 'Off Benchmark',
+        value: anyRep ? String(agg.breach) : '—',
+        tone: !anyRep ? RGB.muted : agg.breach ? RGB.rose : RGB.green,
+        foot: anyRep ? 'indicator-months off benchmark' : 'no data reported this period'
+      }, {
+        label: 'Departments',
+        value: String(chosen.length),
+        tone: RGB.blue,
+        foot: 'in this report'
+      }, {
+        label: 'Indicators',
+        value: String(agg.inds),
+        tone: RGB.violet,
+        foot: 'quality KPIs'
+      }]);
+      sigBlock(y);
+    }
+    chosen.forEach((d, di) => {
+      if (sections.cover || di > 0) doc.addPage(fmtP, ori);
+      let y = pageHeader();
+      const ds = qcDeptStatus(d, pMonths);
+      const dsRep = !!(ds && ds.st && ds.st.ok + ds.st.breach > 0);
+      F('bold', 15, RGB.ink);
+      doc.text(clip(d.name, CW - 130), M, y + 4);
+      if (dsRep) {
+        F('bold', 7.5, statCol(ds.st.breach ? 'breach' : 'ok'));
+        doc.text(String(ds.status || '').toUpperCase(), PW - M, y + 2, {
+          align: 'right'
+        });
+      } else {
+        F('bold', 7.5, RGB.muted);
+        doc.text('NO DATA', PW - M, y + 2, {
+          align: 'right'
+        });
+      }
+      y += 18;
+      const kp = qcDeptKpis(d, pMonths).map(k => ({
+        label: k[0],
+        value: k[1],
+        tone: hex2rgb(k[2]),
+        foot: k[3]
+      }));
+      y = kpiRow(y, kp);
+      if (sections.chart !== false) {
+        const sole = qcSoleReportedInd(d, pMonths);
+        const rows = (sole ? qcChartRows(sole, pMonths) : qcDeptSummaryRows(d, pMonths)).filter(r => r.has);
+        if (rows.length) {
+          const cap = sole ? sole.name + ' — monthly value vs benchmark' : 'Zero-defect % by month — reported indicators on benchmark';
+          F('bold', 8, RGB.ink2);
+          doc.text(clip(cap.toUpperCase(), CW), M, y + 2);
+          y = vBars(y + 8, sole || {
+            valueType: '%'
+          }, rows);
+        }
+      }
+      if (sections.table !== false) y = deptTable(y + 4, d);
+    });
+    doc.save('UNICO-quality-' + reportType + '-' + new Date().toISOString().slice(0, 10) + '.pdf');
+  }
+  async function doExportPDF() {
+    const native = window.unicoNative;
+    if (chosen.length === 0) {
+      setNote({
+        ok: false,
+        text: 'Select at least one department first.'
+      });
+      return;
+    }
+    if (native && typeof native.exportPDF === 'function' && !native.isWeb) {
+      setExporting(true);
+      setNote(null);
+      document.body.classList.add('pdf-export-mode');
+      try {
+        const res = await native.exportPDF({
+          pageSize,
+          landscape: orient === 'landscape',
+          defaultName: 'UNICO-quality-' + reportType + '-report'
+        });
+        if (res && res.ok) setNote({
+          ok: true,
+          text: res.path ? 'PDF saved · ' + res.path : 'PDF ready.'
+        });else if (res && res.error) setNote({
+          ok: false,
+          text: res.error
+        });
+      } catch (e) {
+        setNote({
+          ok: false,
+          text: String(e && e.message || e)
+        });
+      } finally {
+        document.body.classList.remove('pdf-export-mode');
+        setExporting(false);
+      }
+      return;
+    }
+    if (window.__UNICO_HTML_PDF__ === true && window.__UNICO_SERVER_PDF__ !== false && typeof window.unicoHtmlServerPDF === 'function') {
+      setExporting(true);
+      setNote(null);
+      try {
+        if (await window.unicoHtmlServerPDF(pageSize, orient, 'UNICO-quality-' + reportType + '-' + new Date().toISOString().slice(0, 10) + '.pdf')) {
+          setNote({
+            ok: true,
+            text: 'PDF downloaded.'
+          });
+          setExporting(false);
+          return;
+        }
+      } catch (e) {}
+      setExporting(false);
+    }
+    const QC_PY_TYPES = ['summary', 'detail', 'compare', 'handhygiene'];
+    const QC_PY_STYLES = ['bar3d', 'bar', 'line', 'area', 'combo', 'grouped', 'stacked', 'pct', 'horizontal', 'donut'];
+    const qcAdvanced = ['ragHeatmap', 'deptRanking', 'benchmarkCompare', 'indTrend', 'periodCompare', 'pendingData', 'incidentAppendix', 'standardsRefs', 'toc', 'watermark'].some(k => sections[k]);
+    const qcCanServer = QC_PY_TYPES.indexOf(reportType) >= 0 && chartStyles.every(s => QC_PY_STYLES.indexOf(s) >= 0) && !qcAdvanced;
+    if (window.__UNICO_SERVER_PDF__ !== false && qcCanServer) {
+      setExporting(true);
+      setNote(null);
+      try {
+        const liteInd = ind => {
+          const c = stdMatch(ind.name);
+          return {
+            id: ind.id,
+            name: ind.name,
+            formula: ind.formula,
+            valueType: ind.valueType,
+            unit: ind.unit,
+            benchmark: ind.benchmark,
+            benchmarkValue: ind.benchmarkValue,
+            goalDirection: ind.goalDirection,
+            numeratorDef: ind.numeratorDef,
+            denominatorDef: ind.denominatorDef,
+            formulaText: formulaText(ind),
+            indSec: c ? (HQI_SECN[c[0]] || '') + ' (' + c + ')' : catOf(ind.name),
+            months: ind.months,
+            mNum: ind.mNum,
+            mDen: ind.mDen,
+            quarters: ind.quarters,
+            quartersByFy: ind.quartersByFy
+          };
+        };
+        const secLabelOf = d => {
+          const lead = qcLeadIndicator(d, pMonths);
+          const code = lead ? stdMatch(lead.name) : null;
+          return code ? HQI_SECN[code[0]] || code : lead ? catOf(lead.name) : 'Quality';
+        };
+        const liteDept = d => ({
+          key: d.key,
+          name: d.name,
+          secLabel: secLabelOf(d),
+          indicators: (d.indicators || []).map(liteInd)
+        });
+        const es = (() => {
+          const agg = qcAggStat(chosen, pMonths),
+            rank = qcRankRows(chosen, pMonths);
+          const rep = rank.filter(r => r.reported),
+            best = rep[0],
+            worst = rep[rep.length - 1];
+          const noData = rank.length - rep.length,
+            breaching = rank.filter(r => r.breaches > 0);
+          const verdict = agg.rate >= 90 ? 'strong compliance' : agg.rate >= 70 ? 'moderate compliance with pockets of risk' : 'compliance below target with material risk';
+          let t;
+          if (!agg.reported) {
+            t = 'Across ' + agg.depts + ' department' + (agg.depts !== 1 ? 's' : '') + ' and ' + agg.inds + ' quality indicators, no data was reported for ' + rangeLabel + ' — the figures below reflect an unreported period, not performance.';
+          } else {
+            t = 'Across ' + agg.depts + ' department' + (agg.depts !== 1 ? 's' : '') + ' and ' + agg.inds + ' quality indicators for ' + rangeLabel + ', the hospital achieved an aggregate zero-defect rate of ' + agg.rate + '% (' + agg.ok + ' indicator-months on benchmark, ' + agg.breach + ' breach' + (agg.breach !== 1 ? 'es' : '') + '), reflecting ' + verdict + '.';
+            if (best && (best.breaches < (worst && worst.breaches || 0) || best.rate > (worst && worst.rate || 0) || rep.length === 1)) t += ' The strongest performer was ' + best.d.name + ' (' + best.rate + '% zero-defect' + (best.breaches ? ', ' + best.breaches + ' off benchmark' : '') + ').';
+            if (worst && worst !== best && (worst.breaches > 0 || worst.rate < best.rate)) t += ' The area needing most attention was ' + worst.d.name + ' (' + worst.rate + '% zero-defect, ' + worst.breaches + ' breach' + (worst.breaches !== 1 ? 'es' : '') + ').';
+            if (breaching.length > 0) t += ' ' + breaching.length + ' department' + (breaching.length !== 1 ? 's are' : ' is') + ' carrying open breaches, tracked for corrective & preventive action.';else t += ' No department is currently carrying a breach for the reporting period.';
+            if (noData > 0) t += ' ' + noData + ' selected department' + (noData !== 1 ? 's' : '') + ' reported no data for this period.';
+          }
+          return {
+            text: t,
+            tone: !agg.reported ? '#6c7a8c' : agg.rate >= 90 ? '#1f9d57' : agg.rate >= 70 ? '#e08a1e' : '#d23a52'
+          };
+        })();
+        const model = {
+          quality: true,
+          doc: {
+            type: reportType,
+            pageSize,
+            orient,
+            hdrTitle,
+            hdrSub,
+            orgName,
+            confidential,
+            footerNote,
+            showCover: !!sections.cover,
+            showSig: !!sections.signatures,
+            rangeLabel,
+            genDate: new Date().toLocaleDateString('en-US'),
+            sig,
+            fy,
+            fyLabel: fyLabelOf(fy),
+            sections,
+            chartStyles,
+            execSummary: es.text,
+            execTone: es.tone
+          },
+          depts: chosen.map(liteDept),
+          allDepts: (depts || []).map(liteDept),
+          pMonths
+        };
+        const res = await fetch('/api/report-pdf', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(model)
+        });
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (res.ok && ct.indexOf('pdf') >= 0) {
+          const blob = await res.blob(),
+            url = URL.createObjectURL(blob),
+            a = document.createElement('a');
+          a.href = url;
+          a.download = 'UNICO-quality-' + reportType + '-' + new Date().toISOString().slice(0, 10) + '.pdf';
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            try {
+              document.body.removeChild(a);
+            } catch (_) {}
+            URL.revokeObjectURL(url);
+          }, 600);
+          setNote({
+            ok: true,
+            text: 'PDF downloaded.'
+          });
+          setExporting(false);
+          return;
+        }
+        try {
+          console.warn('[quality] server PDF unavailable (' + res.status + ' ' + ct + ') — falling back to vector/raster');
+        } catch (_) {}
+      } catch (e) {
+        try {
+          console.warn('[quality] server PDF failed, falling back:', e);
+        } catch (_) {}
+      }
+      setExporting(false);
+    }
+    if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) {
+      try {
+        await window.unicoLoadPdfLibs();
+      } catch (e) {
+        try {
+          console.warn('[quality] PDF libraries failed to load:', e);
+        } catch (_) {}
+      }
+    }
+    const H = window.html2canvas,
+      J = window.jspdf && window.jspdf.jsPDF;
+    const vectorFaithful = reportType === 'summary' && chartStyles.length === 1 && chartStyles[0] === 'bar3d' && !sections.execSummary && !sections.breachDonut && !sections.incidents && !sections.ragHeatmap && !sections.deptRanking && !sections.benchmarkCompare && !sections.indTrend && !sections.pendingData && !sections.incidentAppendix && !sections.standardsRefs && !sections.toc && !sections.periodCompare && !sections.watermark;
+    if (J && vectorFaithful) {
+      setExporting(true);
+      setNote(null);
+      try {
+        await buildQualityVectorPDF(J);
+        setNote({
+          ok: true,
+          text: 'PDF downloaded — vector quality (selectable text).'
+        });
+        setExporting(false);
+        return;
+      } catch (e) {
+        try {
+          console.warn('[quality] vector PDF failed, falling back to raster:', e);
+        } catch (_) {}
+        setExporting(false);
+      }
+    }
+    if (H && J) {
+      setExporting(true);
+      setNote(null);
+      const stage = document.getElementById('pdf-root');
+      let els = [],
+        prev = [];
+      try {
+        if (!stage) throw new Error('render target missing');
+        document.body.classList.add('qc-pdfcap');
+        els = Array.prototype.slice.call(stage.querySelectorAll('.pdf-page'));
+        if (!els.length) throw new Error('nothing to export');
+        prev = els.map(el => el.getAttribute('style') || '');
+        els.forEach(el => {
+          el.style.width = pageW + 'px';
+          el.style.boxSizing = 'border-box';
+          el.style.padding = '28px 30px';
+          el.style.background = '#fff';
+          el.style.margin = '0';
+          el.style.height = 'auto';
+          el.style.overflow = 'visible';
+        });
+        try {
+          if (document.fonts && document.fonts.ready) await document.fonts.ready;
+        } catch (e) {}
+        await new Promise(r => setTimeout(r, 80));
+        const fmt = pageSize === 'A3' ? 'a3' : pageSize === 'Letter' ? 'letter' : 'a4',
+          ori = orient === 'landscape' ? 'l' : 'p';
+        const doc = new J({
+          orientation: ori,
+          unit: 'pt',
+          format: fmt,
+          compress: true
+        });
+        const pw = doc.internal.pageSize.getWidth(),
+          ph = doc.internal.pageSize.getHeight();
+        let firstPage = true;
+        for (let i = 0; i < els.length; i++) {
+          const el = els[i];
+          if (el.scrollHeight <= pageMinH) {
+            el.style.height = pageMinH + 'px';
+            el.style.overflow = 'hidden';
+          }
+          const elRect = el.getBoundingClientRect();
+          const guardsCss = [];
+          el.querySelectorAll('tr,svg,.qc-band,.pdf-foot,[style*="break-inside"]').forEach(a => {
+            const r = a.getBoundingClientRect();
+            if (r.height > 0) guardsCss.push([r.top - elRect.top, r.bottom - elRect.top]);
+          });
+          const fEl = el.querySelector('.pdf-foot');
+          let fCss = null;
+          if (fEl) {
+            const fr = fEl.getBoundingClientRect();
+            if (fr.height > 0) fCss = [fr.top - elRect.top, fr.bottom - elRect.top];
+          }
+          const canvas = await H(el, {
+            scale: 2,
+            backgroundColor: '#ffffff',
+            useCORS: true,
+            logging: false
+          });
+          el.style.height = 'auto';
+          el.style.overflow = 'visible';
+          const cW = canvas.width,
+            cH = canvas.height,
+            pxPerPt = cW / pw,
+            pageHpx = Math.round(ph * pxPerPt);
+          const k = elRect.height > 0 ? cH / elRect.height : 2;
+          const guards = guardsCss.map(g => [g[0] * k, g[1] * k]).filter(g => g[1] - g[0] < pageHpx * 0.9);
+          const fPx = fCss ? [fCss[0] * k, fCss[1] * k] : null;
+          const pickEnd = (y0, budget) => {
+            if (cH - y0 <= budget) return cH;
+            let cut = y0 + budget;
+            for (let pass = 0; pass < 8; pass++) {
+              let moved = false;
+              for (const g of guards) {
+                if (g[0] < cut - 1 && g[1] > cut + 1) {
+                  const c2 = Math.floor(g[0]);
+                  if (c2 > y0 + budget * 0.35) {
+                    cut = c2;
+                    moved = true;
+                  }
+                }
+              }
+              if (!moved) break;
+            }
+            return Math.max(cut, y0 + Math.round(budget * 0.35));
+          };
+          const crop = (top, h) => {
+            const tmp = document.createElement('canvas');
+            tmp.width = cW;
+            tmp.height = h;
+            tmp.getContext('2d').drawImage(canvas, 0, top, cW, h, 0, 0, cW, h);
+            return tmp.toDataURL('image/jpeg', 0.94);
+          };
+          const snapCtx = canvas.getContext('2d', {
+            willReadFrequently: true
+          });
+          const rowBlank = yy => {
+            if (yy <= 0 || yy >= cH) return false;
+            const d = snapCtx.getImageData(0, yy, cW, 1).data;
+            for (let i = 0; i < d.length; i += 4) {
+              if (d[i] < 252 || d[i + 1] < 252 || d[i + 2] < 252) return false;
+            }
+            return true;
+          };
+          const snapCut = (cut, y0) => {
+            if (rowBlank(cut)) return cut;
+            const up = Math.min(90, cut - (y0 + 24));
+            for (let dY = 1; dY <= 90; dY++) {
+              if (dY <= up && rowBlank(cut - dY)) return cut - dY;
+              if (dY <= 8 && cut + dY < cH - 1 && rowBlank(cut + dY)) return cut + dY;
+            }
+            return cut;
+          };
+          const padPx = Math.round(28 * k),
+            padPt = padPx / pxPerPt;
+          if (cH <= pageHpx + 4) {
+            if (!firstPage) doc.addPage(fmt, ori);
+            firstPage = false;
+            doc.addImage(canvas.toDataURL('image/jpeg', 0.94), 'JPEG', 0, 0, pw, Math.min(ph, cH / pxPerPt), undefined, 'FAST');
+          } else {
+            let y = 0;
+            do {
+              const first = y === 0,
+                top = first ? 0 : padPt,
+                budget = pageHpx - (first ? 1 : 2) * padPx;
+              let end = pickEnd(y, budget);
+              if (end < cH) end = snapCut(end, y);
+              const sliceH = end - y;
+              if (!firstPage) doc.addPage(fmt, ori);
+              firstPage = false;
+              if (cH - end <= 2 && sliceH < budget - 4 && fPx && fPx[0] >= y - 2 && fPx[0] < end) {
+                const fTop = Math.max(y, snapCut(Math.floor(fPx[0]), y)),
+                  contentH = fTop - y,
+                  footH = end - fTop;
+                if (contentH > 2) doc.addImage(crop(y, contentH), 'JPEG', 0, top, pw, contentH / pxPerPt, undefined, 'FAST');
+                if (footH > 2) doc.addImage(crop(fTop, footH), 'JPEG', 0, ph - footH / pxPerPt, pw, footH / pxPerPt, undefined, 'FAST');
+              } else {
+                doc.addImage(crop(y, sliceH), 'JPEG', 0, top, pw, sliceH / pxPerPt, undefined, 'FAST');
+              }
+              y = end;
+            } while (cH - y > 2);
+          }
+        }
+        els.forEach((el, i) => el.setAttribute('style', prev[i]));
+        els = [];
+        document.body.classList.remove('qc-pdfcap');
+        doc.save('UNICO-quality-' + reportType + '-' + new Date().toISOString().slice(0, 10) + '.pdf');
+        setNote({
+          ok: true,
+          text: 'PDF downloaded (' + (ori === 'l' ? 'landscape' : 'portrait') + ').'
+        });
+      } catch (e) {
+        try {
+          els.forEach((el, i) => el.setAttribute('style', prev[i]));
+        } catch (_) {}
+        document.body.classList.remove('qc-pdfcap');
+        setNote({
+          ok: false,
+          text: 'Direct PDF failed (' + String(e && e.message || e) + '); opening Print instead.'
+        });
+        try {
+          document.body.classList.add('pdf-export-mode');
+          window.print();
+          setTimeout(() => document.body.classList.remove('pdf-export-mode'), 600);
+        } catch (_) {}
+      } finally {
+        setExporting(false);
+      }
+      return;
+    }
+    setExporting(true);
+    setNote(null);
+    document.body.classList.add('pdf-export-mode');
+    try {
+      window.print();
+    } catch (e) {
+      setNote({
+        ok: false,
+        text: String(e && e.message || e)
+      });
+    } finally {
+      document.body.classList.remove('pdf-export-mode');
+      setExporting(false);
+    }
+  }
+  function qcExportBuilder(fmt) {
+    if (chosen.length === 0) {
+      setNote({
+        ok: false,
+        text: 'Select at least one department first.'
+      });
+      return;
+    }
+    const scope = chosen;
+    const date = new Date().toISOString().slice(0, 10);
+    const baseName = 'UNICO-quality-' + reportType + '-' + date;
+    if (fmt === 'csv') {
+      const rows = [['Department', 'Indicator', 'Benchmark', 'Goal'].concat(pMonths.map(m => m[1]))];
+      scope.forEach(d => (d.indicators || []).forEach(ind => rows.push([d.name, ind.name, benchExpr(ind), ind.goalDirection === 'higher_is_better' ? 'higher is better' : 'lower is better'].concat(pMonths.map(m => {
+        const v = qcCellVal(ind, m);
+        return qStatus(ind, v) === 'na' ? qcBeforeStart(ind, m[0]) ? 'Not Observed' : '' : fmtVal(ind, v);
+      })))));
+      rows.push([]);
+      rows.push(['INCIDENT DETAILS']);
+      rows.push(['Department', 'Indicator', 'Month', 'Date of incident', 'UHID', 'Patient', 'Age', 'Sex', 'Diagnosis', 'Details', 'Finding', 'Corrective', 'Preventive']);
+      scope.forEach(d => qcIncidentsOf(d).filter(r => qcIncInPeriod(r, pMonths)).forEach(r => {
+        const x = r.x;
+        rows.push([d.name, r.ind, r.month, x.incidentDate || '', x.uhid || '', x.patientName || '', x.age || '', x.gender || '', x.diagnosis || '', x.details || '', x.finding || '', x.corrective || '', x.preventive || '']);
+      }));
+      return qcDownload('﻿' + rows.map(r => r.map(c => '"' + ((c == null ? '' : c) + '').replace(/"/g, '""') + '"').join(',')).join('\r\n'), baseName + '.csv', 'text/csv;charset=utf-8');
+    }
+    const page = pageSize + (orient === 'landscape' ? ' landscape' : '');
+    const html = '<html xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><style>@page{size:' + page + ';margin:1cm}</style></head><body>' + '<h1 style="font-family:Calibri;color:#0072a3;margin:0">' + qcEsc(hdrTitle) + '</h1>' + '<div style="font-family:Calibri;color:#555;margin:2px 0 12px">' + qcEsc(orgName) + ' · ' + qcEsc(rangeLabel) + (confidential ? ' · Confidential' : '') + '</div>' + qcReportHTML(scope, pMonths, fy, {
+      noTitle: true
+    }) + '</body></html>';
+    if (fmt === 'excel') return qcDownload(html, baseName + '.xls', 'application/vnd.ms-excel');
+    if (fmt === 'word') return qcDownload(html, baseName + '.doc', 'application/msword');
+  }
+  React.useEffect(() => {
+    if (!pendingExport) return;
+    const f = pendingExport;
+    const t = setTimeout(() => {
+      setPendingExport(null);
+      if (f === 'pdf') {
+        doExportPDF();
+      } else {
+        qcExportBuilder(f);
+      }
+    }, 90);
+    return () => clearTimeout(t);
+  }, [pendingExport]);
+  const generateFullReport = (fmt, tpl) => {
+    setSelectedDepts(allKeys);
+    setIndMode('all');
+    setPeriod({
+      mode: 'all'
+    });
+    applyTemplate(tpl || 'board');
+    setPendingExport(fmt || 'pdf');
+  };
+  const pdfRoot = typeof document !== 'undefined' ? document.getElementById('pdf-root') : null;
+  const chevStyle = {
+    width: 28,
+    height: 28,
+    borderRadius: 7,
+    border: '1px solid ' + P.line,
+    background: '#fff',
+    display: 'grid',
+    placeItems: 'center',
+    color: P.muted,
+    cursor: 'pointer'
+  };
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, React.createElement("style", null, '.qc-rpage{display:flex;flex-direction:column;flex:1 0 auto}.qc-rpage .pdf-foot{margin-top:auto}@media print{.qc-rpage{display:block}.qc-rpage .pdf-foot{margin-top:12px}}body.qc-pdfcap #pdf-root{display:block !important;position:fixed;left:-11000px;top:0;z-index:-1}'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#eef8fc',
+      color: '#0090ca',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(DocIc, {
+    c: "#0090ca"
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Report Builder"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "Compose and export board-ready quality reports")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    onClick: () => generateFullReport('pdf', 'board'),
+    disabled: exporting,
+    title: "One click: all departments + full reporting year + Board template -> complete report",
+    style: {
+      ...expBtn,
+      background: P.green,
+      borderColor: P.green,
+      color: '#fff',
+      fontWeight: 700,
+      opacity: exporting ? .6 : 1
+    }
+  }, React.createElement(DownIc, null), exporting ? 'Generating…' : 'Generate NQI Report'), React.createElement("select", {
+    value: activeTemplate,
+    onChange: e => {
+      const v = e.target.value;
+      if (v === 'custom') {
+        setActiveTemplate('custom');
+      } else {
+        applyTemplate(v);
+      }
+    },
+    title: "Report template preset",
+    style: {
+      ...expBtn,
+      paddingRight: 22,
+      cursor: 'pointer'
+    }
+  }, React.createElement("option", {
+    value: "custom"
+  }, "Custom preset\u2026"), Object.keys(QC_TEMPLATES).map(k => React.createElement("option", {
+    key: k,
+    value: k
+  }, QC_TEMPLATES[k].label))), React.createElement("span", {
+    style: {
+      width: 1,
+      height: 22,
+      background: P.line,
+      margin: '0 2px'
+    }
+  }), React.createElement("button", {
+    onClick: doPrint,
+    disabled: chosen.length === 0,
+    style: {
+      ...expBtn,
+      opacity: chosen.length === 0 ? .6 : 1,
+      cursor: chosen.length === 0 ? 'default' : 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z"
+  })), "Print"), React.createElement("button", {
+    onClick: () => doExportPDF(),
+    disabled: exporting || chosen.length === 0,
+    style: {
+      ...expBtn,
+      background: P.blue,
+      borderColor: P.blue,
+      color: '#fff',
+      opacity: exporting || chosen.length === 0 ? .6 : 1
+    }
+  }, React.createElement(DownIc, null), exporting ? 'Exporting…' : 'Export PDF'), [['excel', 'Excel'], ['word', 'Word'], ['csv', 'CSV']].map(([f, l]) => React.createElement("button", {
+    key: f,
+    onClick: () => qcExportBuilder(f),
+    disabled: chosen.length === 0,
+    style: {
+      ...expBtn,
+      opacity: chosen.length === 0 ? .6 : 1,
+      cursor: chosen.length === 0 ? 'default' : 'pointer'
+    }
+  }, React.createElement(DownIc, null), l)))), note && React.createElement("div", {
+    onClick: () => setNote(null),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '10px 14px',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      cursor: 'pointer',
+      color: note.ok ? P.green : P.rose,
+      background: note.ok ? '#e7f6ed' : '#fbe9ec',
+      border: '1px solid ' + (note.ok ? '#bfe6cd' : '#f1c6cd')
+    }
+  }, React.createElement("span", {
+    style: {
+      wordBreak: 'break-all'
+    }
+  }, note.text), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 15
+    }
+  }, "\u2715")), pdfRoot && chosen.length > 0 && ReactDOM.createPortal(React.createElement("div", {
+    className: "pdf-doc" + (portrait ? ' portrait' : '')
+  }, React.createElement("style", null, '@media print{body.pdf-export-mode .pdf-doc .pdf-page,body.pdf-export-mode .pdf-doc.portrait .pdf-page{page:qc-rpt-sheet}@page qc-rpt-sheet{size:' + pageSize + (portrait ? ' portrait' : ' landscape') + ';margin:6mm}}'), pages.map((pg, i) => React.createElement("section", {
+    className: "pdf-page",
+    key: i
+  }, pg.kind === 'cover' ? React.createElement(CoverPage, {
+    n: i + 1,
+    total: pages.length
+  }) : pg.kind === 'toc' ? React.createElement(TocPage, {
+    page: pg,
+    n: i + 1,
+    total: pages.length
+  }) : pg.kind === 'pending' ? React.createElement(PendingPage, {
+    n: i + 1,
+    total: pages.length
+  }) : pg.kind === 'appendix' ? React.createElement(AppendixPage, {
+    n: i + 1,
+    total: pages.length
+  }) : pg.kind === 'refs' ? React.createElement(RefsPage, {
+    n: i + 1,
+    total: pages.length
+  }) : pg.kind === 'compare' ? React.createElement(ComparePage, {
+    n: i + 1,
+    total: pages.length
+  }) : pg.kind === 'heatmap' ? React.createElement(HeatmapPage, {
+    page: pg,
+    n: i + 1,
+    total: pages.length,
+    lead: i === leadIdx
+  }) : pg.kind === 'monthly' ? React.createElement(MonthlyPage, {
+    page: pg,
+    n: i + 1,
+    total: pages.length,
+    lead: i === leadIdx
+  }) : pg.kind === 'hh' ? React.createElement(HHPage, {
+    page: pg,
+    n: i + 1,
+    total: pages.length,
+    lead: i === leadIdx
+  }) : React.createElement(DeptPage, {
+    page: pg,
+    n: i + 1,
+    total: pages.length,
+    lead: i === leadIdx
+  })))), pdfRoot), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '320px 1fr',
+      gap: 16,
+      alignItems: 'start'
+    }
+  }, React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '13px 16px',
+      borderBottom: '1px solid ' + P.line2
+    }
+  }, React.createElement("h3", {
+    style: {
+      margin: 0,
+      fontSize: 13.5,
+      fontWeight: 600,
+      color: P.ink
+    }
+  }, "Configuration")), React.createElement("div", {
+    style: {
+      padding: 16,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      background: '#f4fbfe',
+      border: '1px solid ' + P.line,
+      borderRadius: 9,
+      padding: '12px 13px'
+    }
+  }, fieldLabel('Saved report formats'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, React.createElement("select", {
+    value: presetSel,
+    onChange: e => loadFormat(e.target.value),
+    style: {
+      ...sel2,
+      flex: 1
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, presets.length ? 'Load a saved format...' : 'No saved formats yet'), presets.map(p => React.createElement("option", {
+    key: p.name,
+    value: p.name
+  }, p.name))), React.createElement("button", {
+    onClick: () => presetSel && delFormat(presetSel),
+    disabled: !presetSel,
+    title: "Delete selected format",
+    style: {
+      ...expBtn,
+      opacity: presetSel ? 1 : .45,
+      cursor: presetSel ? 'pointer' : 'default'
+    }
+  }, "Delete")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginTop: 8
+    }
+  }, React.createElement("input", {
+    value: presetName,
+    onChange: e => setPresetName(e.target.value),
+    onKeyDown: e => {
+      if (e.key === 'Enter') saveFormat();
+    },
+    placeholder: "Name this format...",
+    style: {
+      ...sel2,
+      flex: 1
+    }
+  }), React.createElement("button", {
+    onClick: saveFormat,
+    style: {
+      ...expBtn,
+      background: P.blue,
+      borderColor: P.blue,
+      color: '#fff',
+      fontWeight: 700
+    }
+  }, "Save current")), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      marginTop: 7
+    }
+  }, "Stores ", React.createElement("b", null, "every"), " setting on this page: type, period, departments, selected indicators, sections, header/footer & page setup, so you can regenerate the exact same custom format next time.")), React.createElement("div", null, fieldLabel('Template — one-click preset'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, Object.keys(QC_TEMPLATES).map(id => {
+    const on = activeTemplate === id;
+    return React.createElement("button", {
+      key: id,
+      onClick: () => applyTemplate(id),
+      style: pill(on)
+    }, on && React.createElement(Tick, null), QC_TEMPLATES[id].label);
+  }), React.createElement("button", {
+    onClick: () => setActiveTemplate('custom'),
+    style: pill(activeTemplate === 'custom')
+  }, activeTemplate === 'custom' && React.createElement(Tick, null), "Custom")), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      marginTop: 6
+    }
+  }, "Applies a full section preset + report type. Toggling any section below switches to ", React.createElement("b", null, "Custom"), ".")), React.createElement("div", null, fieldLabel('Report type'), React.createElement("div", {
+    className: "seg",
+    style: {
+      width: '100%',
+      flexWrap: 'wrap'
+    }
+  }, [['summary', 'Summary'], ['detail', 'Detailed'], ['heatmap', 'Heatmap'], ['monthly', 'Monthly'], ['compare', 'Comparison'], ['handhygiene', 'Hand Hygiene']].map(([id, l]) => React.createElement("button", {
+    key: id,
+    className: reportType === id ? 'on' : '',
+    style: {
+      flex: '1 1 30%',
+      minWidth: 0,
+      padding: '7px 4px',
+      fontSize: 11.5,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    },
+    onClick: () => {
+      setReportType(id);
+      setPageIdx(0);
+      setActiveTemplate('custom');
+    }
+  }, l))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      marginTop: 6
+    }
+  }, reportType === 'summary' ? 'KPI cards + chart per department, one page each.' : reportType === 'detail' ? 'Every indicator × month with benchmark & RAG, per department.' : reportType === 'heatmap' ? 'Year-wise indicator × DEPARTMENT matrix (all departments on one page, like the NQI sheet), colour-coded by status, with the year’s occurred-incident details.' : reportType === 'monthly' ? 'Month-wise, ALL-department matrix (indicator × department) — one page per month, with that month’s occurred-incident details (like the NQI monthly sheet).' : reportType === 'handhygiene' ? 'WHO-style Hand Hygiene Compliance report — monthly compliance trend vs the ≥ benchmark, staff-group (Nurse / Doctor / PCA / Other) and by-department breakdown. Uses the selected departments’ hand-hygiene indicators.' : 'All selected departments on one comparison page.')), React.createElement("div", null, fieldLabel('Reporting year'), React.createElement("select", {
+    value: fy,
+    onChange: e => {
+      setFy(Number(e.target.value));
+      setPeriod({
+        mode: 'all'
+      });
+      setPageIdx(0);
+    },
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }, fyOptions(depts).map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, fyLabelOf(y), y === currentFy() ? ' · current' : ''))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      marginTop: 6
+    }
+  }, "Reporting year runs Jan\u2013Dec. Switch it to view a different year; every page below follows this selection.")), React.createElement("div", null, fieldLabel('Reporting period'), React.createElement("select", {
+    value: period.mode,
+    onChange: e => setPeriod({
+      mode: e.target.value,
+      from: MONTHS[0][0],
+      to: MONTHS[11][0]
+    }),
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }, React.createElement("option", {
+    value: "all"
+  }, "Full ", fyLabelOf(fy), " (", MONTHS[0][1], " \u2013 ", MONTHS[11][1], ")"), React.createElement("option", {
+    value: "q1"
+  }, "Q1 \xB7 ", qSpan('Q1')), React.createElement("option", {
+    value: "q2"
+  }, "Q2 \xB7 ", qSpan('Q2')), React.createElement("option", {
+    value: "q3"
+  }, "Q3 \xB7 ", qSpan('Q3')), React.createElement("option", {
+    value: "q4"
+  }, "Q4 \xB7 ", qSpan('Q4')), React.createElement("option", {
+    value: "h1"
+  }, "First half (", spanLabel(0, 5), ")"), React.createElement("option", {
+    value: "h2"
+  }, "Second half (", spanLabel(6, 11), ")"), React.createElement("option", {
+    value: "last3"
+  }, "Last 3 months"), React.createElement("option", {
+    value: "custom"
+  }, "Custom range\u2026")), period.mode === 'custom' && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 8,
+      alignItems: 'center'
+    }
+  }, React.createElement("select", {
+    value: period.from,
+    onChange: e => setPeriod(p => ({
+      ...p,
+      from: e.target.value
+    })),
+    style: {
+      ...sel2,
+      flex: 1
+    }
+  }, MONTHS.map(m => React.createElement("option", {
+    key: m[0],
+    value: m[0]
+  }, m[1]))), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: P.muted
+    }
+  }, "to"), React.createElement("select", {
+    value: period.to,
+    onChange: e => setPeriod(p => ({
+      ...p,
+      to: e.target.value
+    })),
+    style: {
+      ...sel2,
+      flex: 1
+    }
+  }, MONTHS.map(m => React.createElement("option", {
+    key: m[0],
+    value: m[0]
+  }, m[1]))))), React.createElement("div", null, fieldLabel('Chart styles — pick one or more (each renders per department)'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, QC_REPORT_STYLES.map(([id, l]) => {
+    const on = chartStyles.includes(id);
+    return React.createElement("button", {
+      key: id,
+      onClick: () => toggleStyle(id),
+      style: pill(on)
+    }, on && React.createElement(Tick, null), l);
+  }))), React.createElement("div", null, fieldLabel('Header & footer editor'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, React.createElement("input", {
+    value: hdrTitle,
+    onChange: e => setHdrTitle(e.target.value),
+    placeholder: "Report title (header)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: hdrSub,
+    onChange: e => setHdrSub(e.target.value),
+    placeholder: "Subtitle (optional)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: orgName,
+    onChange: e => setOrgName(e.target.value),
+    placeholder: "Footer \u2014 hospital / org name",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: footerNote,
+    onChange: e => setFooterNote(e.target.value),
+    placeholder: "Footer note (optional)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 16
+    }
+  }, React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: P.ink2
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: showLogo,
+    onChange: e => setShowLogo(e.target.checked)
+  }), "Show logo"), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: P.ink2
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: confidential,
+    onChange: e => setConfidential(e.target.checked)
+  }), "Confidential mark")))), React.createElement("div", null, fieldLabel('Signatures — saved automatically, shared with every report'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, React.createElement("input", {
+    value: sig.prepared,
+    onChange: e => setSig(s => ({
+      ...s,
+      prepared: e.target.value
+    })),
+    placeholder: "Prepared by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.reviewed,
+    onChange: e => setSig(s => ({
+      ...s,
+      reviewed: e.target.value
+    })),
+    placeholder: "Checked by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.recommended,
+    onChange: e => setSig(s => ({
+      ...s,
+      recommended: e.target.value
+    })),
+    placeholder: "Recommended by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.approved,
+    onChange: e => setSig(s => ({
+      ...s,
+      approved: e.target.value
+    })),
+    placeholder: "Approved by (name & title)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: P.ink2
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!sections.signatures,
+    onChange: e => setSec('signatures', e.target.checked)
+  }), "Signature block on cover page"))), React.createElement("div", null, fieldLabel('Page setup'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, React.createElement("select", {
+    value: pageSize,
+    onChange: e => setPageSize(e.target.value),
+    style: {
+      ...sel2,
+      flex: 1
+    }
+  }, React.createElement("option", null, "A4"), React.createElement("option", null, "A3"), React.createElement("option", null, "Letter")), React.createElement("div", {
+    className: "seg"
+  }, [['portrait', 'Portrait'], ['landscape', 'Landscape']].map(([id, l]) => React.createElement("button", {
+    key: id,
+    className: orient === id ? 'on' : '',
+    onClick: () => setOrient(id)
+  }, l))))), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2,
+      marginBottom: 7,
+      display: 'flex'
+    }
+  }, "Departments", React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    onClick: () => setSelectedDepts(selectedDepts.length === depts.length ? [] : allKeys),
+    style: {
+      border: 0,
+      background: 'none',
+      color: P.blue,
+      fontSize: 11,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, selectedDepts.length === depts.length ? 'Clear all' : 'Select all')), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, depts.map(d => {
+    const on = selectedDepts.includes(d.key);
+    return React.createElement("button", {
+      key: d.key,
+      onClick: () => toggleDept(d.key),
+      style: {
+        ...pill(on),
+        maxWidth: 170,
+        overflow: 'hidden'
+      }
+    }, on && React.createElement(Tick, null), React.createElement("span", {
+      style: {
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, d.name));
+  }))), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2,
+      marginBottom: 7,
+      display: 'flex',
+      alignItems: 'center'
+    }
+  }, "Indicators", React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    className: "seg",
+    style: {
+      fontSize: 10
+    }
+  }, [['all', 'All'], ['custom', 'Custom']].map(([id, l]) => React.createElement("button", {
+    key: id,
+    className: indMode === id ? 'on' : '',
+    style: {
+      padding: '4px 10px'
+    },
+    onClick: () => setIndMode(id)
+  }, l)))), indMode === 'all' ? React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.muted
+    }
+  }, "All indicators of the selected departments are included. Switch to ", React.createElement("b", null, "Custom"), " to choose specific indicators.") : React.createElement("div", null, React.createElement("input", {
+    value: indQ,
+    onChange: e => setIndQ(e.target.value),
+    placeholder: "Search indicators...",
+    style: {
+      ...sel2,
+      width: '100%',
+      marginBottom: 6
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: 6
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted
+    }
+  }, React.createElement("b", {
+    style: {
+      color: P.ink
+    }
+  }, indSel.size), " selected"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    onClick: () => setManyInd(indShown.map(x => x.key), true),
+    style: {
+      border: 0,
+      background: 'none',
+      color: P.blue,
+      fontSize: 11,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, "Select shown"), React.createElement("button", {
+    onClick: () => setManyInd(indShown.map(x => x.key), false),
+    style: {
+      border: 0,
+      background: 'none',
+      color: P.muted,
+      fontSize: 11,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, "Clear shown")), React.createElement("div", {
+    style: {
+      maxHeight: 230,
+      overflowY: 'auto',
+      border: '1px solid ' + P.line2,
+      borderRadius: 8,
+      padding: '6px 8px'
+    }
+  }, chosenRaw.length === 0 ? React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint,
+      padding: 8
+    }
+  }, "Select at least one department above first.") : indShown.length === 0 ? React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint,
+      padding: 8
+    }
+  }, "No indicators match your search.") : chosenRaw.map(d => {
+    const items = indShown.filter(x => x.d.key === d.key);
+    if (!items.length) return null;
+    return React.createElement("div", {
+      key: d.key,
+      style: {
+        marginBottom: 6
+      }
+    }, React.createElement("div", {
+      style: uSub
+    }, d.name), items.map(({
+      i,
+      key
+    }) => React.createElement("label", {
+      key: key,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        fontSize: 11.5,
+        color: P.ink2,
+        padding: '2px 0',
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: indSel.has(key),
+      onChange: () => toggleInd(key)
+    }), React.createElement("span", {
+      style: {
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, i.name))));
+  })), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      marginTop: 6
+    }
+  }, "Only the ticked indicators appear in the preview, PDF, Excel, Word & CSV. Departments with none ticked are omitted."))), React.createElement("div", null, fieldLabel('Report sections'), [['Content', [['execSummary', 'Executive summary'], ['kpis', 'KPI cards'], ['chart', 'Charts'], ['breachDonut', 'Breach donut'], ['table', 'Month table'], ['incidents', 'Incident details'], ['indicatorDetail', 'Indicator detail (detailed type)']]], ['Analytics', [['ragHeatmap', 'RAG heatmap'], ['deptRanking', 'Department ranking'], ['benchmarkCompare', 'Benchmark vs actual'], ['indTrend', 'Indicator trend lines'], ['periodCompare', 'Period comparison'], ['pendingData', 'Pending data (not submitted)']]], ['Structure', [['cover', 'Cover page'], ['toc', 'Table of contents'], ['incidentAppendix', 'Incident & CAPA appendix'], ['standardsRefs', 'Standards references'], ['watermark', 'Watermark'], ['signatures', 'Signature block']]]].map(([grp, items]) => React.createElement("div", {
+    key: grp,
+    style: {
+      marginBottom: 8
+    }
+  }, React.createElement("div", {
+    style: uSub
+  }, grp), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: '4px 10px',
+      marginTop: 4
+    }
+  }, items.map(([k, l]) => React.createElement("label", {
+    key: k,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 11,
+      color: P.ink2,
+      cursor: 'pointer'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!sections[k],
+    onChange: e => setSec(k, e.target.checked)
+  }), React.createElement("span", {
+    style: {
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, l))))))), sections.periodCompare && React.createElement("div", null, fieldLabel('Comparison baseline'), React.createElement("div", {
+    className: "seg",
+    style: {
+      width: '100%'
+    }
+  }, [['prev', 'Previous period'], ['yoy', 'Year-over-year']].map(([id, l]) => React.createElement("button", {
+    key: id,
+    className: compareBaseline === id ? 'on' : '',
+    style: {
+      flex: 1,
+      padding: '7px 4px'
+    },
+    onClick: () => setCompareBaseline(id)
+  }, l)))), sections.signatures && React.createElement("div", null, fieldLabel('Signatures'), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, React.createElement("input", {
+    value: sig.prepared,
+    onChange: e => setSig(s => ({
+      ...s,
+      prepared: e.target.value
+    })),
+    placeholder: "Prepared by (name)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.reviewed,
+    onChange: e => setSig(s => ({
+      ...s,
+      reviewed: e.target.value
+    })),
+    placeholder: "Checked by (name)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.recommended,
+    onChange: e => setSig(s => ({
+      ...s,
+      recommended: e.target.value
+    })),
+    placeholder: "Recommended by (name)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }), React.createElement("input", {
+    value: sig.approved,
+    onChange: e => setSig(s => ({
+      ...s,
+      approved: e.target.value
+    })),
+    placeholder: "Approved by (name)",
+    style: {
+      ...sel2,
+      width: '100%'
+    }
+  }))), React.createElement("div", {
+    style: {
+      background: P.panel2,
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      padding: '11px 13px',
+      fontSize: 12,
+      color: P.muted
+    }
+  }, React.createElement("b", {
+    style: {
+      color: P.ink
+    }
+  }, chosen.length), " departments \xB7 ", React.createElement("b", {
+    style: {
+      color: P.ink
+    }
+  }, reportType), " \xB7 ", pageSize, " ", orient, " \xB7 ", pMonths.length, " month", pMonths.length !== 1 ? 's' : ''))), React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      padding: 0,
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      background: P.panel2
+    }
+  }, React.createElement("h3", {
+    style: {
+      margin: 0,
+      fontSize: 13.5,
+      fontWeight: 600,
+      color: P.ink
+    }
+  }, "Live Preview"), React.createElement("span", {
+    className: "sub",
+    style: {
+      fontSize: 11.5,
+      color: P.muted
+    }
+  }, pageSize, " \xB7 ", orient), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement("button", {
+    style: {
+      ...chevStyle,
+      opacity: pi <= 0 ? .4 : 1,
+      cursor: pi <= 0 ? 'default' : 'pointer'
+    },
+    disabled: pi <= 0,
+    onClick: () => setPageIdx(p => Math.max(0, p - 1))
+  }, React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    style: {
+      transform: 'rotate(180deg)'
+    }
+  }, React.createElement("path", {
+    d: "M9 18l6-6-6-6"
+  }))), React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Page ", pi + 1, " of ", pageCount), React.createElement("button", {
+    style: {
+      ...chevStyle,
+      opacity: pi >= pageCount - 1 ? .4 : 1,
+      cursor: pi >= pageCount - 1 ? 'default' : 'pointer'
+    },
+    disabled: pi >= pageCount - 1,
+    onClick: () => setPageIdx(p => Math.min(pageCount - 1, p + 1))
+  }, React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M9 18l6-6-6-6"
+  }))))), React.createElement("div", {
+    style: {
+      padding: 26,
+      background: '#eef1f5',
+      overflowX: 'auto'
+    }
+  }, chosen.length === 0 || !cur ? React.createElement("div", {
+    style: {
+      background: '#fff',
+      borderRadius: 4,
+      boxShadow: '0 4px 18px rgba(0,0,0,.12)',
+      padding: '28px 30px',
+      width: pageW,
+      minHeight: pageMinH,
+      boxSizing: 'border-box',
+      margin: '0 auto'
+    }
+  }, React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      color: P.faint,
+      padding: '60px 0'
+    }
+  }, chosen.length === 0 ? indMode === 'custom' ? 'Tick at least one indicator (Custom mode), or switch Indicators back to All.' : 'Select at least one department.' : 'Nothing to preview.')) : React.createElement(QCPagedPreview, {
+    key: pi + '|' + reportType + '|' + pageSize + '|' + orient + '|' + chosen.length + '|' + pMonths.length + '|' + indSel.size,
+    pageW: pageW,
+    pageMinH: pageMinH
+  }, cur.kind === 'cover' ? React.createElement(CoverPage, {
+    n: pi + 1,
+    total: pageCount
+  }) : cur.kind === 'toc' ? React.createElement(TocPage, {
+    page: cur,
+    n: pi + 1,
+    total: pageCount
+  }) : cur.kind === 'pending' ? React.createElement(PendingPage, {
+    n: pi + 1,
+    total: pageCount
+  }) : cur.kind === 'appendix' ? React.createElement(AppendixPage, {
+    n: pi + 1,
+    total: pageCount
+  }) : cur.kind === 'refs' ? React.createElement(RefsPage, {
+    n: pi + 1,
+    total: pageCount
+  }) : cur.kind === 'compare' ? React.createElement(ComparePage, {
+    n: pi + 1,
+    total: pageCount
+  }) : cur.kind === 'heatmap' ? React.createElement(HeatmapPage, {
+    page: cur,
+    n: pi + 1,
+    total: pageCount,
+    lead: pi === leadIdx
+  }) : cur.kind === 'monthly' ? React.createElement(MonthlyPage, {
+    page: cur,
+    n: pi + 1,
+    total: pageCount,
+    lead: pi === leadIdx
+  }) : cur.kind === 'hh' ? React.createElement(HHPage, {
+    page: cur,
+    n: pi + 1,
+    total: pageCount,
+    lead: pi === leadIdx
+  }) : React.createElement(DeptPage, {
+    page: cur,
+    n: pi + 1,
+    total: pageCount,
+    lead: pi === leadIdx
+  }))))));
+}
+function QCReports({
+  depts
+}) {
+  return React.createElement(QCReportBuilder, {
+    depts: depts
+  });
+}
+function QCIncidents({
+  depts,
+  Q
+}) {
+  const [dept, setDept] = useState('all');
+  const [sel, setSel] = useState(null);
+  const [fy, setFy] = useState(() => defaultFy(depts));
+  const MONTHS = fyAxis(fy);
+  const list = useMemo(() => {
+    const out = [];
+    (depts || []).forEach(d => {
+      if (dept !== 'all' && d.key !== dept) return;
+      (d.indicators || []).forEach(ind => {
+        const monthIncs = mk => ind.incidents && Array.isArray(ind.incidents[mk]) ? ind.incidents[mk].filter(x => x && Object.values(x).some(v => v)) : [];
+        const hasMonthly = MONTHS.some(m => monthRaw(ind, m[0]) != null || monthIncs(m[0]).length);
+        if (hasMonthly) {
+          MONTHS.forEach(m => {
+            const breach = monthStatus(ind, m[0]) === 'breach';
+            const incs = monthIncs(m[0]);
+            if (breach || incs.length) {
+              out.push({
+                dept: d.name,
+                deptKey: d.key,
+                ind: ind.name,
+                cat: ind.category,
+                period: 'month',
+                month: m[1],
+                value: fmtVal(ind, monthRaw(ind, m[0])),
+                bench: benchExpr(ind),
+                breach: breach,
+                incCount: incs.length,
+                indObj: ind,
+                monthKey: m[0],
+                deptObj: d
+              });
+            }
+          });
+        } else {
+          QORDER.forEach(q => {
+            if (qtrStatus(ind, q, fy) === 'breach') {
+              out.push({
+                dept: d.name,
+                deptKey: d.key,
+                ind: ind.name,
+                cat: ind.category,
+                period: 'quarter',
+                month: qtrLabelOf(q),
+                value: fmtVal(ind, qtrRaw(ind, q, fy)),
+                bench: benchExpr(ind),
+                breach: true,
+                incCount: 0,
+                indObj: ind,
+                quarter: q,
+                monthKey: q,
+                deptObj: d
+              });
+            }
+          });
+        }
+      });
+    });
+    return out;
+  }, [depts, dept, fy]);
+  const rows = list.slice(0, 150);
+  const empty = list.length === 0;
+  const options = [{
+    key: 'all',
+    label: 'All departments'
+  }].concat((depts || []).map(d => ({
+    key: d.key,
+    label: d.name
+  })));
+  if (sel) {
+    return React.createElement(IncidentReport, {
+      rec: sel,
+      onBack: () => setSel(null),
+      Q: Q
+    });
+  }
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      marginBottom: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#fbe9ec',
+      color: P.rose,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M3 12h4l2 6 4-14 2 8h6"
+  }))), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Incident Reports"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, React.createElement("b", {
+    style: {
+      color: P.rose
+    }
+  }, list.length), " benchmark breaches & logged incidents in ", fyLabelOf(fy), " \u2014 each needs review")), React.createElement(QCFyPicker, {
+    fy: fy,
+    setFy: setFy,
+    depts: depts
+  }), React.createElement("select", {
+    value: dept,
+    onChange: e => setDept(e.target.value),
+    style: {
+      padding: '8px 11px',
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      background: '#fff',
+      color: P.ink,
+      outline: 'none'
+    }
+  }, options.map(o => React.createElement("option", {
+    key: o.key,
+    value: o.key
+  }, o.label)))), empty && React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      padding: 50,
+      textAlign: 'center',
+      color: P.green,
+      fontWeight: 600
+    }
+  }, "\u2713 No breaches or logged incidents in scope \u2014 all reported indicators on benchmark."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 9
+    }
+  }, rows.map((x, i) => React.createElement("div", {
+    key: x.deptKey + '|' + x.ind + '|' + x.month + '|' + i,
+    onClick: () => setSel(x),
+    onMouseEnter: e => {
+      e.currentTarget.style.boxShadow = '0 22px 54px rgba(31,59,90,.2),0 8px 24px rgba(0,144,202,.16)';
+      e.currentTarget.style.borderColor = P.rose;
+    },
+    onMouseLeave: e => {
+      e.currentTarget.style.boxShadow = '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)';
+      e.currentTarget.style.borderColor = P.line;
+    },
+    style: {
+      cursor: 'pointer',
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderLeft: '3px solid ' + (x.breach ? P.rose : '#e0a300'),
+      borderRadius: 10,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '12px 15px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      flexWrap: 'wrap',
+      transition: 'box-shadow .12s,border-color .12s'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: 9,
+      background: '#fbe9ec',
+      color: P.rose,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "17",
+    height: "17",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"
+  }))), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      color: P.ink
+    }
+  }, x.ind), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, x.dept, " \xB7 ", x.cat)), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Month"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, x.month)), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Value"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 13,
+      fontWeight: 700,
+      color: x.breach ? P.rose : P.ink2
+    }
+  }, x.value)), React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Benchmark"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 12,
+      fontWeight: 600,
+      color: P.blue700
+    }
+  }, x.bench)), x.breach ? React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: P.rose,
+      background: '#fbe9ec',
+      padding: '3px 10px',
+      borderRadius: 20
+    }
+  }, "Breach", x.incCount ? ' · ' + x.incCount + ' incident' + (x.incCount > 1 ? 's' : '') : '') : React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: '#9a6b00',
+      background: '#fff4e0',
+      padding: '3px 10px',
+      borderRadius: 20
+    }
+  }, x.incCount + ' incident' + (x.incCount > 1 ? 's' : '') + ' logged'), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.blue,
+      whiteSpace: 'nowrap'
+    }
+  }, "View report \u203A")))));
+}
+function IncidentReport({
+  rec,
+  onBack,
+  Q
+}) {
+  const liveDep = Q && Array.isArray(Q.depts) ? Q.depts.find(d => d.key === rec.deptKey) : null;
+  const liveInd = liveDep ? (liveDep.indicators || []).find(i => i.id === rec.indObj.id) : null;
+  const ind = liveInd || rec.indObj;
+  const dep = liveDep || rec.deptObj;
+  const [editing, setEditing] = useState(false);
+  const gd = guideOf(stdMatch(rec.ind)) || {};
+  const meas = measureOf(ind.formula);
+  const isQtr = rec.period === 'quarter';
+  const periodWord = isQtr ? 'quarter' : 'month';
+  const remark = isQtr ? ind.quarterRemarks && ind.quarterRemarks[rec.quarter] || '' : ind.monthRemarks && ind.monthRemarks[rec.monthKey] || '';
+  const card = {
+    background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+    backdropFilter: 'blur(26px) saturate(1.75)',
+    WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+    border: '1px solid rgba(255,255,255,.92)',
+    borderRadius: 12,
+    boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+    padding: '16px 18px'
+  };
+  const lbl = {
+    fontSize: 10,
+    fontWeight: 700,
+    color: P.muted,
+    textTransform: 'uppercase',
+    letterSpacing: '.4px',
+    marginBottom: 4
+  };
+  const secTitle = {
+    fontSize: 14,
+    fontWeight: 700,
+    color: P.ink,
+    margin: '0 0 12px',
+    letterSpacing: '-.2px'
+  };
+  const defRow = (label, value, mono) => React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: lbl
+  }, label), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.ink2,
+      lineHeight: 1.5,
+      fontFamily: mono ? MONO : 'inherit',
+      wordBreak: 'break-word'
+    }
+  }, value));
+  const trend = isQtr ? QORDER.map(q => {
+    const raw = qtrRaw(ind, q);
+    return {
+      key: q,
+      short: q,
+      val: fmtVal(ind, raw),
+      status: qtrStatus(ind, q),
+      here: q === rec.quarter
+    };
+  }) : fyAxis(fyOfKey(rec.monthKey) != null ? fyOfKey(rec.monthKey) : currentFy()).map(m => {
+    const raw = monthRaw(ind, m[0]);
+    return {
+      key: m[0],
+      short: m[1].split(' ')[0],
+      val: fmtVal(ind, raw),
+      status: monthStatus(ind, m[0]),
+      here: m[0] === rec.monthKey
+    };
+  });
+  const cellBg = s => s === 'breach' ? '#fbe9ec' : s === 'ok' ? '#e7f6ed' : '#eef1f5';
+  const cellFg = s => s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
+  let totalBreach = 0;
+  trend.forEach(t => {
+    if (t.status === 'breach') totalBreach++;
+  });
+  let consecutive = 0;
+  const hereIdx = trend.findIndex(t => t.here);
+  for (let j = hereIdx < 0 ? trend.length - 1 : hereIdx; j >= 0; j--) {
+    if (trend[j].status === 'breach') consecutive++;else break;
+  }
+  const isEvent = isEventIndicator(ind);
+  const rawNow = Number(isQtr ? qtrRaw(ind, rec.quarter) : monthRaw(ind, rec.monthKey));
+  const benchNum = Number(ind.benchmarkValue);
+  const hasGap = !isEvent && isFinite(rawNow) && ind.benchmarkValue != null && ind.benchmarkValue !== '' && isFinite(benchNum);
+  const gap = hasGap ? Math.round((rawNow - benchNum) * 100) / 100 : null;
+  const unitWord = rateUnitWord(ind);
+  const higher = ind.goalDirection === 'higher_is_better';
+  const gapDir = gap == null ? '' : gap < 0 ? 'below' : gap > 0 ? 'above' : 'at';
+  const incidents = ind.incidents && ind.incidents[isQtr ? rec.quarter : rec.monthKey] || [];
+  const remarkShownInSection = isEvent && incidents.length === 0 && remark || !isEvent && remark;
+  const liveStatus = isQtr ? qtrStatus(ind, rec.quarter) : monthStatus(ind, rec.monthKey);
+  const isBreachNow = liveStatus === 'breach';
+  const liveValue = liveStatus === 'na' ? '—' : fmtVal(ind, isQtr ? qtrRaw(ind, rec.quarter) : monthRaw(ind, rec.monthKey));
+  const canEdit = qcCanEdit() && !!Q && !isQtr;
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: Object.assign({}, card, {
+      borderTop: '3px solid ' + (isBreachNow ? P.rose : P.green)
+    })
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    onClick: onBack,
+    style: {
+      background: 'none',
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      padding: '6px 12px',
+      fontSize: 12,
+      fontWeight: 600,
+      color: P.ink2,
+      cursor: 'pointer'
+    }
+  }, "\u2190 Back to incidents"), canEdit && React.createElement("button", {
+    onClick: () => setEditing(e => !e),
+    title: editing ? 'Close editor' : 'Edit this reading & incident report',
+    style: {
+      marginLeft: 'auto',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid #cfe6f4',
+      background: editing ? '#0090ca' : '#eef8fc',
+      color: editing ? '#fff' : '#0090ca',
+      padding: '6px 13px',
+      borderRadius: 8,
+      fontSize: 12,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"
+  })), editing ? 'Close editor' : 'Edit report')), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 19,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, rec.ind), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 4
+    }
+  }, rec.dept, " \xB7 ", rec.cat, " \xB7 ", meas.name), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.faint,
+      marginTop: 2
+    }
+  }, "Reporting ", periodWord, " \u2014 ", rec.month)), React.createElement("div", {
+    style: {
+      textAlign: 'right'
+    }
+  }, React.createElement("div", {
+    style: lbl
+  }, "Recorded value"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 30,
+      fontWeight: 700,
+      color: isBreachNow ? P.rose : P.green,
+      lineHeight: 1.1
+    }
+  }, liveValue), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.ink2,
+      marginTop: 4
+    }
+  }, "Benchmark ", React.createElement("span", {
+    style: {
+      fontFamily: MONO,
+      fontWeight: 600,
+      color: P.blue700
+    }
+  }, benchExpr(ind))), React.createElement("span", {
+    style: {
+      display: 'inline-block',
+      marginTop: 6,
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: isBreachNow ? P.rose : P.green,
+      background: isBreachNow ? '#fbe9ec' : '#e7f6ed',
+      padding: '3px 10px',
+      borderRadius: 20
+    }
+  }, isBreachNow ? 'Off benchmark' : liveStatus === 'na' ? 'No reading' : 'On benchmark')))), canEdit && editing && React.createElement(QCIndEdit, {
+    dep: dep,
+    ind: ind,
+    mk: rec.monthKey,
+    mlabel: rec.month,
+    Q: Q,
+    onClose: () => setEditing(false)
+  }), React.createElement("div", {
+    style: card
+  }, React.createElement("h3", {
+    style: secTitle
+  }, "Indicator definition"), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))',
+      gap: 14
+    }
+  }, defRow('Formula', formulaText(ind), true), defRow('Benchmark', benchExpr(ind), true), defRow('Goal', higher ? 'Higher is better' : 'Lower is better'), defRow('Numerator', ind.numLabel || gd.numDef || '—'), defRow('Denominator', ind.denLabel || gd.denDef || '—'), defRow('Reference', ind.reference || gd.reference || '—')), gd.example && React.createElement("div", {
+    style: {
+      background: '#eef8fc',
+      border: '1px solid #dceffa',
+      borderRadius: 9,
+      padding: '11px 13px',
+      marginTop: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.blue700,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      marginBottom: 4
+    }
+  }, "Worked example"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.blue700,
+      lineHeight: 1.55,
+      fontFamily: MONO
+    }
+  }, gd.example))), React.createElement("div", {
+    style: card
+  }, React.createElement("h3", {
+    style: secTitle
+  }, isQtr ? '4-quarter trend' : '12-month trend', " \u2014 ", rec.dept), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(' + (isQtr ? 4 : 12) + ',1fr)',
+      gap: 6
+    }
+  }, trend.map(t => React.createElement("div", {
+    key: t.key,
+    style: {
+      textAlign: 'center',
+      padding: '7px 3px',
+      borderRadius: 7,
+      background: cellBg(t.status),
+      border: t.here ? '2px solid ' + P.rose : '1px solid transparent',
+      boxShadow: t.here ? '0 0 0 2px rgba(210,58,82,.15)' : 'none'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, t.short), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: cellFg(t.status),
+      marginTop: 3
+    }
+  }, t.status === 'na' ? '·' : t.val)))), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint,
+      marginTop: 10
+    }
+  }, "Highlighted cell = the breached ", periodWord, " under review. ", totalBreach, " breach", totalBreach === 1 ? '' : 'es', " across the fiscal year.")), isEvent ? React.createElement("div", {
+    style: card
+  }, React.createElement("h3", {
+    style: secTitle
+  }, "Incident register \u2014 ", rec.month), incidents.length ? React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, incidents.map((inc, ii) => {
+    const patient = [['UHID', inc.uhid], ['Patient name', inc.patientName], ['Age · Gender', [inc.age, inc.gender].filter(Boolean).join(' · ')], ['Date of incident', inc.incidentDate], ['Diagnosis', inc.diagnosis], ['Date of admission', inc.admissionDate], ['Date of procedure', inc.procedureDate]].filter(r => r[1] != null && r[1] !== '');
+    const capa = [['Incident details', inc.details], ['Finding / observation', inc.finding], ['Corrective action', inc.corrective], ['Preventive action', inc.preventive], ['Remark', inc.remark]].filter(r => r[1] != null && r[1] !== '');
+    return React.createElement("div", {
+      key: inc.id || inc.uhid || ii,
+      style: {
+        border: '1px solid ' + P.line,
+        borderLeft: '3px solid ' + P.rose,
+        borderRadius: 10,
+        padding: '13px 15px',
+        background: P.panel2
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: P.rose,
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 9
+      }
+    }, "Incident ", ii + 1), patient.length > 0 && React.createElement("div", {
+      style: {
+        marginBottom: capa.length ? 12 : 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: P.blue700,
+        marginBottom: 7
+      }
+    }, "Patient"), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+        gap: 10
+      }
+    }, patient.map(r => React.createElement("div", {
+      key: r[0]
+    }, defRow(r[0], r[1]))))), capa.length > 0 && React.createElement("div", null, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: P.violet,
+        marginBottom: 7
+      }
+    }, "Investigation & CAPA"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 9
+      }
+    }, capa.map(r => React.createElement("div", {
+      key: r[0]
+    }, defRow(r[0], r[1]))))), patient.length === 0 && capa.length === 0 && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: P.faint,
+        fontStyle: 'italic'
+      }
+    }, "No detail fields were logged for this incident."));
+  })) : React.createElement("div", null, React.createElement("div", {
+    style: {
+      background: '#fff7e6',
+      border: '1px solid #f0dcae',
+      borderRadius: 9,
+      padding: '12px 14px',
+      fontSize: 12.5,
+      color: P.ink2,
+      lineHeight: 1.55
+    }
+  }, React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      color: P.amber
+    }
+  }, "\u24D8 "), rec.value, " recorded this ", periodWord, ", but no per-incident detail was logged via Data Collection."), remark && React.createElement("div", {
+    style: {
+      marginTop: 12
+    }
+  }, defRow(isQtr ? 'Quarter remark' : 'Month remark', remark)))) : React.createElement("div", {
+    style: card
+  }, React.createElement("h3", {
+    style: secTitle
+  }, "Compliance analysis"), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+      gap: 14
+    }
+  }, defRow(isQtr ? 'This quarter' : 'This month', rec.value, true), defRow('Benchmark', rec.bench, true), defRow('Gap', gap == null ? '—' : (gap > 0 ? '+' : '') + gap + ' ' + unitWord, true), defRow('Consecutive breach ' + periodWord + 's', String(consecutive), true)), gap != null && React.createElement("div", {
+    style: {
+      background: P.panel2,
+      border: '1px solid ' + P.line,
+      borderRadius: 9,
+      padding: '12px 14px',
+      marginTop: 14,
+      fontSize: 12.5,
+      color: P.ink2,
+      lineHeight: 1.55
+    }
+  }, rec.value, " is ", Math.abs(gap), " ", unitWord, " ", gapDir, " the ", rec.bench, " target", gapDir === 'below' && higher ? ' — direction of concern for this indicator.' : gapDir === 'above' && !higher ? ' — direction of concern for this indicator.' : '.', ' ', "This ", periodWord, " is part of ", consecutive, " consecutive breach ", periodWord, consecutive === 1 ? '' : 's', " (", totalBreach, " in the fiscal year)."), remark && React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, defRow(isQtr ? 'Quarter remark' : 'Month remark', remark))), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted,
+      padding: '0 4px 8px'
+    }
+  }, "Corrective actions are tracked in Action Plans.", remark && !remarkShownInSection ? React.createElement("span", null, " \xB7 ", isQtr ? 'Quarter' : 'Month', " remark: ", remark) : null));
+}
+function QCActionPlans({
+  depts
+}) {
+  const [capa, setCapa] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('unico_capa_v1')) || {};
+    } catch (e) {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('unico_capa_v1', JSON.stringify(capa));
+    } catch (e) {}
+  }, [capa]);
+  useEffect(() => {
+    const h = e => {
+      const ks = e && e.detail && e.detail.keys;
+      if (Array.isArray(ks) && ks.indexOf('unico_capa_v1') < 0) return;
+      try {
+        const raw = localStorage.getItem('unico_capa_v1');
+        const next = JSON.parse(raw) || {};
+        setCapa(cur => JSON.stringify(cur) === raw ? cur : next);
+      } catch (_) {}
+    };
+    window.addEventListener('unico:overlay-merged', h);
+    return () => window.removeEventListener('unico:overlay-merged', h);
+  }, []);
+  const [fy, setFy] = useState(() => defaultFy(depts));
+  const MONTHS = fyAxis(fy);
+  const plans = useMemo(() => {
+    const out = [];
+    (depts || []).forEach(d => (d.indicators || []).forEach(ind => {
+      let lastBreach = false,
+        sawMonthly = false;
+      for (let i = MONTHS.length - 1; i >= 0; i--) {
+        const st = monthStatus(ind, MONTHS[i][0]);
+        if (st !== 'na') {
+          sawMonthly = true;
+          lastBreach = st === 'breach';
+          break;
+        }
+      }
+      if (!sawMonthly) {
+        let lastQ = null;
+        QORDER.forEach(Q => {
+          if (qtrRaw(ind, Q, fy) != null) lastQ = Q;
+        });
+        lastBreach = lastQ != null && qtrStatus(ind, lastQ, fy) === 'breach';
+      }
+      const nBreach = countBreaches(ind, MONTHS);
+      if (!(lastBreach || nBreach >= 3)) return;
+      const key = d.key + '/' + ind.id;
+      out.push({
+        key,
+        dept: d.name,
+        ind: ind.name,
+        cat: ind.category || catOf(ind.name),
+        breaches: nBreach,
+        bench: benchExpr(ind),
+        status: capa[key] || 'Open'
+      });
+    }));
+    return out;
+  }, [depts, capa, fy]);
+  const cycle = (key, status) => {
+    const order = ['Open', 'In Progress', 'Closed'];
+    const next = order[(order.indexOf(status) + 1) % 3];
+    setCapa(c => Object.assign({}, c, {
+      [key]: next
+    }));
+  };
+  const capaOpen = plans.filter(p => p.status === 'Open').length;
+  const capaProgress = plans.filter(p => p.status === 'In Progress').length;
+  const capaClosed = plans.filter(p => p.status === 'Closed').length;
+  const kpi = (label, value, color) => React.createElement("div", {
+    key: label,
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderLeft: '4px solid ' + color,
+      borderRadius: 11,
+      padding: '13px 16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: P.ink2,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, label), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 25,
+      fontWeight: 600,
+      color: color,
+      marginTop: 6
+    }
+  }, value));
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      marginBottom: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#e7f6ed',
+      color: P.green,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M4 12l5 5L20 6"
+  }))), React.createElement("div", null, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Action Plans (CAPA)"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "Corrective & preventive actions for breached indicators \xB7 ", fyLabelOf(fy), " \u2014 click status to advance")), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement(QCFyPicker, {
+    fy: fy,
+    setFy: setFy,
+    depts: depts
+  })), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))',
+      gap: 13,
+      marginBottom: 16
+    }
+  }, kpi('Total plans', plans.length, P.violet), kpi('Open', capaOpen, P.rose), kpi('In progress', capaProgress, P.amber), kpi('Closed', capaClosed, P.green)), plans.length === 0 && React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      padding: 50,
+      textAlign: 'center',
+      color: P.green,
+      fontWeight: 600
+    }
+  }, "\u2713 No open action plans \u2014 no indicators in breach."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 9
+    }
+  }, plans.map(p => {
+    const statusColor = p.status === 'Closed' ? P.green : p.status === 'In Progress' ? P.amber : P.rose;
+    const statusBg = statusColor + '1c';
+    return React.createElement("div", {
+      key: p.key,
+      style: {
+        background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+        backdropFilter: 'blur(26px) saturate(1.75)',
+        WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+        border: '1px solid rgba(255,255,255,.92)',
+        borderRadius: 10,
+        boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+        padding: '12px 15px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, p.ind), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: P.faint
+      }
+    }, p.dept, " \xB7 ", p.cat)), React.createElement("div", {
+      style: {
+        textAlign: 'center'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.faint,
+        textTransform: 'uppercase',
+        letterSpacing: '.3px'
+      }
+    }, "Off Benchmark"), React.createElement("div", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 14,
+        fontWeight: 700,
+        color: P.rose
+      }
+    }, p.breaches)), React.createElement("div", {
+      style: {
+        textAlign: 'center'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.faint,
+        textTransform: 'uppercase',
+        letterSpacing: '.3px'
+      }
+    }, "Benchmark"), React.createElement("div", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 12,
+        fontWeight: 600,
+        color: P.blue700
+      }
+    }, p.bench)), React.createElement("button", {
+      onClick: () => cycle(p.key, p.status),
+      title: "Click to advance status",
+      style: {
+        border: '1px solid ' + statusColor,
+        background: statusBg,
+        color: statusColor,
+        padding: '6px 13px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap'
+      }
+    }, p.status));
+  })));
+}
+const QF_DEF_FIELDS = ['formula', 'unit', 'numLabel', 'denLabel', 'numeratorDef', 'denominatorDef', 'benchmark', 'benchmarkValue', 'benchmarkNote', 'goalDirection', 'reference', 'referenceUrl', 'denAdminOnly', 'victimField'];
+const QF_FORMULAS = [['direct', 'Direct value — enter as-is'], ['count', 'Count — running tally (numerator only)'], ['avg', 'Average (mean) — num ÷ den'], ['rate1000', 'Rate per 1000 — num ÷ den × 1000'], ['rate100', 'Rate per 100 — num ÷ den × 100'], ['pct', 'Percentage — num ÷ den × 100']];
+const QF_DIRS = [['lower_is_better', '↓ Lower is better'], ['higher_is_better', '↑ Higher is better']];
+const QF_BADGE = {
+  pct: '%',
+  rate1000: '/1000',
+  rate100: '/100',
+  avg: 'avg',
+  count: 'count',
+  direct: 'direct'
+};
+function qfMeasColor(f) {
+  return f === 'pct' ? P.teal : f === 'rate1000' || f === 'rate100' ? P.violet : f === 'avg' ? P.amber || '#c98a12' : P.blue;
+}
+function QCFormulaMaster() {
+  const canEdit = qcCanEdit();
+  const initial = typeof window !== 'undefined' && Array.isArray(window.__UNICO_QI_FORMULAS__) ? window.__UNICO_QI_FORMULAS__ : [];
+  const [list, setList] = useState(initial);
+  const [flt, setFlt] = useState('');
+  const [open, setOpen] = useState('');
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const applyLive = rows => {
+    try {
+      const map = {};
+      rows.forEach(f => {
+        const def = {
+          canonicalName: f.canonicalName
+        };
+        QF_DEF_FIELDS.forEach(k => {
+          if (f[k] !== undefined && f[k] !== null && f[k] !== '') def[k] = f[k];
+        });
+        const keys = new Set([...(f.aliases || []).map(a => norm(a)), norm(f.canonicalName)].filter(Boolean));
+        keys.forEach(k => {
+          map[k] = def;
+        });
+      });
+      window.QI_CORRECTIONS = map;
+      window.__UNICO_QI_CORRECTIONS__ = map;
+      window.__UNICO_QI_FORMULAS__ = rows;
+      window.dispatchEvent(new CustomEvent('unico:data-refreshed', {
+        detail: {
+          source: 'formulas'
+        }
+      }));
+    } catch (e) {}
+  };
+  const startEdit = f => {
+    setOpen(f.id);
+    setDraft(Object.assign({}, f));
+    setMsg(null);
+  };
+  const cancel = () => {
+    setOpen('');
+    setDraft(null);
+  };
+  const set = (k, v) => setDraft(d => Object.assign({}, d, {
+    [k]: v
+  }));
+  const save = async () => {
+    if (!draft) return;
+    setSaving(true);
+    setMsg(null);
+    const body = {
+      canonicalName: draft.canonicalName,
+      formula: draft.formula,
+      unit: draft.unit,
+      numLabel: draft.numLabel,
+      denLabel: draft.denLabel,
+      numeratorDef: draft.numeratorDef,
+      denominatorDef: draft.denominatorDef,
+      benchmark: draft.benchmark,
+      benchmarkValue: draft.benchmarkValue === '' || draft.benchmarkValue == null ? '' : draft.benchmarkValue,
+      benchmarkNote: draft.benchmarkNote,
+      goalDirection: draft.goalDirection,
+      reference: draft.reference,
+      referenceUrl: draft.referenceUrl
+    };
+    try {
+      const r = await fetch('/api/quality-formulas/' + encodeURIComponent(draft.id), {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(body)
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+      const saved = j.formula || Object.assign({}, draft);
+      const next = list.map(f => f.id === saved.id ? Object.assign({}, f, saved) : f);
+      setList(next);
+      applyLive(next);
+      setMsg({
+        type: 'ok',
+        text: 'Saved — "' + (saved.canonicalName || draft.canonicalName) + '" now applies to every department.'
+      });
+      setOpen('');
+      setDraft(null);
+    } catch (e) {
+      setMsg({
+        type: 'err',
+        text: 'Save failed: ' + (e.message || e)
+      });
+    }
+    setSaving(false);
+  };
+  const inp = {
+    padding: '8px 10px',
+    border: '1px solid #dde3ec',
+    borderRadius: 7,
+    fontSize: 12.5,
+    color: P.ink,
+    background: '#fff',
+    outline: 'none',
+    width: '100%',
+    fontFamily: 'inherit',
+    boxSizing: 'border-box'
+  };
+  const lab = {
+    fontSize: 10,
+    fontWeight: 700,
+    color: P.faint,
+    textTransform: 'uppercase',
+    letterSpacing: '.3px',
+    marginBottom: 4,
+    display: 'block'
+  };
+  const fl = (flt || '').trim().toLowerCase();
+  const rows = list.filter(f => !fl || (f.canonicalName || '').toLowerCase().includes(fl) || (f.aliases || []).some(a => String(a).includes(fl)) || (f.formula || '').includes(fl));
+  return React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 12,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      padding: '14px 16px',
+      borderBottom: '1px solid #e8edf3',
+      background: '#f7f9fc',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 30,
+      height: 30,
+      borderRadius: 8,
+      background: '#0090ca',
+      color: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "17",
+    height: "17",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M4 7h16M4 12h16M4 17h10"
+  }))), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, "Master Formulas \u2014 one definition per indicator"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted,
+      marginTop: 1
+    }
+  }, "Edit a formula once here and it applies to ", React.createElement("b", null, "every"), " department. Monthly values stay per-department; a department with its own explicit edit keeps it.")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      background: '#fff',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      padding: '7px 11px',
+      color: P.faint,
+      minWidth: 200
+    }
+  }, React.createElement("svg", {
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12"
+  })), React.createElement("input", {
+    placeholder: "Filter formulas\u2026",
+    value: flt,
+    onInput: e => setFlt(e.target.value),
+    onChange: e => setFlt(e.target.value),
+    style: {
+      border: 0,
+      background: 'transparent',
+      outline: 'none',
+      fontSize: 12.5,
+      color: P.ink,
+      width: '100%'
+    }
+  })), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.faint,
+      fontFamily: MONO,
+      whiteSpace: 'nowrap'
+    }
+  }, rows.length, " / ", list.length)), msg && React.createElement("div", {
+    style: {
+      margin: '12px 16px 0',
+      padding: '9px 12px',
+      borderRadius: 8,
+      fontSize: 12,
+      fontWeight: 600,
+      color: msg.type === 'ok' ? '#1f7a45' : '#b4232f',
+      background: msg.type === 'ok' ? '#e7f6ed' : '#fbe9ec',
+      border: '1px solid ' + (msg.type === 'ok' ? '#bce5cc' : '#f3c9d0')
+    }
+  }, msg.text), !list.length ? React.createElement("div", {
+    style: {
+      padding: '22px 16px',
+      fontSize: 12.5,
+      color: P.muted
+    }
+  }, "No database formula catalogue is loaded \u2014 the built-in code defaults are driving the app, and they already apply to every department. (Start the web server against MongoDB to manage formulas here.)") : React.createElement("div", null, rows.map(f => {
+    const editing = open === f.id && !!draft;
+    const mc = qfMeasColor(f.formula);
+    return React.createElement("div", {
+      key: f.id,
+      style: {
+        borderBottom: '1px solid #eef1f5'
+      }
+    }, React.createElement("div", {
+      onClick: () => {
+        if (editing) cancel();else if (canEdit) startEdit(f);else setOpen(open === f.id ? '' : f.id);
+      },
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        padding: '11px 16px',
+        cursor: 'pointer',
+        background: editing ? '#f7fbfe' : '#fff'
+      }
+    }, React.createElement("span", {
+      style: {
+        color: '#cdd6e2',
+        fontFamily: MONO,
+        fontSize: 12,
+        width: 10
+      }
+    }, editing ? '▾' : '▸'), React.createElement("span", {
+      style: {
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        background: mc,
+        flexShrink: 0
+      }
+    }), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 600,
+        color: P.ink,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, f.canonicalName), (f.aliases || []).length > 1 && React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: P.faint,
+        marginTop: 1
+      }
+    }, "covers ", f.aliases.length, " name variants")), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 600,
+        color: mc,
+        background: mc + '1c',
+        padding: '2px 9px',
+        borderRadius: 6,
+        whiteSpace: 'nowrap'
+      }
+    }, QF_BADGE[f.formula] || f.formula || '—'), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: P.ink2,
+        minWidth: 78,
+        textAlign: 'right',
+        whiteSpace: 'nowrap'
+      }
+    }, f.unit || '—'), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: P.ink,
+        minWidth: 74,
+        textAlign: 'right'
+      }
+    }, f.benchmark || '—')), editing && React.createElement("div", {
+      style: {
+        padding: '6px 16px 16px 37px',
+        background: '#f7fbfe'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))',
+        gap: 12
+      }
+    }, React.createElement("div", null, React.createElement("span", {
+      style: lab
+    }, "Formula / calculation"), React.createElement("select", {
+      value: draft.formula || 'direct',
+      onChange: e => set('formula', e.target.value),
+      style: inp
+    }, QF_FORMULAS.map(o => React.createElement("option", {
+      key: o[0],
+      value: o[0]
+    }, o[1])))), React.createElement("div", null, React.createElement("span", {
+      style: lab
+    }, "Unit"), React.createElement("input", {
+      value: draft.unit || '',
+      onChange: e => set('unit', e.target.value),
+      style: inp,
+      placeholder: "e.g. per 1000 patient-days"
+    })), React.createElement("div", null, React.createElement("span", {
+      style: lab
+    }, "Goal direction"), React.createElement("select", {
+      value: draft.goalDirection || 'lower_is_better',
+      onChange: e => set('goalDirection', e.target.value),
+      style: inp
+    }, QF_DIRS.map(o => React.createElement("option", {
+      key: o[0],
+      value: o[0]
+    }, o[1])))), React.createElement("div", null, React.createElement("span", {
+      style: lab
+    }, "Benchmark (text)"), React.createElement("input", {
+      value: draft.benchmark || '',
+      onChange: e => set('benchmark', e.target.value),
+      style: inp,
+      placeholder: "e.g. \u2264 1 per 1000"
+    })), React.createElement("div", null, React.createElement("span", {
+      style: lab
+    }, "Benchmark value (number)"), React.createElement("input", {
+      value: draft.benchmarkValue == null ? '' : draft.benchmarkValue,
+      onChange: e => set('benchmarkValue', e.target.value),
+      style: inp,
+      placeholder: "e.g. 1",
+      inputMode: "decimal"
+    })), React.createElement("div", null, React.createElement("span", {
+      style: lab
+    }, "Numerator label"), React.createElement("input", {
+      value: draft.numLabel || '',
+      onChange: e => set('numLabel', e.target.value),
+      style: inp,
+      placeholder: "what the numerator counts"
+    })), React.createElement("div", null, React.createElement("span", {
+      style: lab
+    }, "Denominator label"), React.createElement("input", {
+      value: draft.denLabel || '',
+      onChange: e => set('denLabel', e.target.value),
+      style: inp,
+      placeholder: "what the denominator counts"
+    })), React.createElement("div", {
+      style: {
+        gridColumn: '1 / -1'
+      }
+    }, React.createElement("span", {
+      style: lab
+    }, "Numerator definition"), React.createElement("textarea", {
+      value: draft.numeratorDef || '',
+      onChange: e => set('numeratorDef', e.target.value),
+      style: Object.assign({}, inp, {
+        minHeight: 56,
+        resize: 'vertical'
+      })
+    })), React.createElement("div", {
+      style: {
+        gridColumn: '1 / -1'
+      }
+    }, React.createElement("span", {
+      style: lab
+    }, "Denominator definition"), React.createElement("textarea", {
+      value: draft.denominatorDef || '',
+      onChange: e => set('denominatorDef', e.target.value),
+      style: Object.assign({}, inp, {
+        minHeight: 56,
+        resize: 'vertical'
+      })
+    })), React.createElement("div", {
+      style: {
+        gridColumn: '1 / -1'
+      }
+    }, React.createElement("span", {
+      style: lab
+    }, "Reference"), React.createElement("input", {
+      value: draft.reference || '',
+      onChange: e => set('reference', e.target.value),
+      style: inp
+    })), React.createElement("div", {
+      style: {
+        gridColumn: '1 / -1'
+      }
+    }, React.createElement("span", {
+      style: lab
+    }, "Reference URL"), React.createElement("input", {
+      value: draft.referenceUrl || '',
+      onChange: e => set('referenceUrl', e.target.value),
+      style: inp
+    }))), (f.aliases || []).length > 0 && React.createElement("div", {
+      style: {
+        marginTop: 10,
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        alignItems: 'center'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: P.faint,
+        textTransform: 'uppercase',
+        letterSpacing: '.3px'
+      }
+    }, "Applies to"), f.aliases.map(a => React.createElement("span", {
+      key: a,
+      style: {
+        fontSize: 10.5,
+        color: P.ink2,
+        background: '#eef1f5',
+        padding: '2px 8px',
+        borderRadius: 12
+      }
+    }, a))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 9,
+        marginTop: 14,
+        alignItems: 'center'
+      }
+    }, (!window.unicoCan || window.unicoCan('quality', 'edit')) && React.createElement("button", {
+      onClick: save,
+      disabled: saving,
+      style: {
+        border: 0,
+        background: saving ? '#8fc7e2' : '#0090ca',
+        color: '#fff',
+        padding: '9px 18px',
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: saving ? 'default' : 'pointer'
+      }
+    }, saving ? 'Saving…' : 'Save — apply everywhere'), React.createElement("button", {
+      onClick: cancel,
+      disabled: saving,
+      style: {
+        border: '1px solid #dde3ec',
+        background: '#fff',
+        color: P.muted,
+        padding: '9px 16px',
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontWeight: 600,
+        cursor: 'pointer'
+      }
+    }, "Cancel"))));
+  }), !canEdit && React.createElement("div", {
+    style: {
+      padding: '11px 16px',
+      fontSize: 11.5,
+      color: P.faint,
+      fontStyle: 'italic'
+    }
+  }, "Sign in as an administrator to edit formulas.")));
+}
+function QCAdmin({
+  Q,
+  q,
+  onQ,
+  initialDept
+}) {
+  const allDepts = Q.depts || [];
+  const depts = allDepts.filter(d => (d.indicators || []).length);
+  const [view, setView] = useState('manage');
+  const [assignQ, setAssignQ] = useState('');
+  const [asgDraft, setAsgDraft] = useState({});
+  const [asgSave, setAsgSave] = useState({
+    state: 'idle'
+  });
+  const asgPendingRef = React.useRef(0);
+  React.useEffect(() => {
+    const h = e => {
+      if (asgPendingRef.current > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
+    };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, []);
+  const [tab, setTab] = useState('identity');
+  const [sel, setSel] = useState(() => initialDept ? {
+    deptKey: initialDept,
+    id: null
+  } : {
+    deptKey: null,
+    id: null
+  });
+  const [scope, setScope] = useState('all');
+  const [mf, setMf] = useState('all');
+  const [sf, setSf] = useState('all');
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copyT, setCopyT] = useState({});
+  const [expand, setExpand] = useState('');
+  const [entryFy, setEntryFy] = useState(() => defaultFy(allDepts));
+  const MONTHS = fyAxis(entryFy);
+  const [editScope, setEditScope] = useState('one');
+  useEffect(() => {
+    setEditScope('one');
+  }, [sel.deptKey, sel.id]);
+  const [hcAll, setHcAll] = useState('');
+  useEffect(() => {
+    setHcAll('');
+  }, [sel.deptKey, sel.id, entryFy]);
+  const CATS = ['Healthcare-Associated Infection', 'Infection Prevention', 'Patient Safety', 'Clinical Outcomes', 'Staff Safety', 'Staff Competency', 'Activity / Volume', 'Medication Safety'];
+  const FREQ = ['Monthly', 'Quarterly', 'Annually', 'Bi-annually'];
+  const FORMULAS = [['direct', 'Direct value — enter the number as-is'], ['count', 'Count — a running tally (numerator only)'], ['avg', 'Average (mean) — numerator ÷ denominator (e.g. avg length of stay)'], ['rate1000', 'Rate per 1000 — numerator ÷ denominator × 1000'], ['rate100', 'Rate per 100 — numerator ÷ denominator × 100'], ['pct', 'Percentage — numerator ÷ denominator × 100']];
+  const DIRS = [['lower_is_better', '↓ Lower is better'], ['higher_is_better', '↑ Higher is better']];
+  const FORMULA_HINT = {
+    direct: 'The value is entered directly each month; no numerator/denominator needed.',
+    count: 'A simple count (e.g. number of events). Only the numerator is captured.',
+    avg: 'A mean/average — numerator ÷ denominator with no multiplier (e.g. average length of stay = total patient-hours ÷ number of patients). Quarters roll up as the opportunity-weighted average (Σ numerator ÷ Σ denominator).',
+    rate1000: 'A rate expressed per 1000 denominator-units (e.g. per 1000 device-days).',
+    rate100: 'A rate expressed per 100 denominator-units.',
+    pct: 'A percentage of the denominator (numerator ÷ denominator × 100).'
+  };
+  const findInd = (dk, id) => {
+    const d = (Q.depts || []).find(x => x.key === dk);
+    return d ? (d.indicators || []).find(x => x.id === id) : null;
+  };
+  let totalInd = 0,
+    withData = 0,
+    totalBreach = 0;
+  const uniq = new Set();
+  depts.forEach(d => {
+    (d.indicators || []).forEach(i => {
+      totalInd++;
+      uniq.add(norm(i.name));
+      if (hasData(i)) withData++;
+      totalBreach += countBreaches(i);
+    });
+  });
+  const nameDepts = {};
+  depts.forEach(d => (d.indicators || []).forEach(i => {
+    const k = norm(i.name);
+    (nameDepts[k] = nameDepts[k] || new Set()).add(d.key);
+  }));
+  const deptStatus = d => {
+    const r = deptStat(d).rate;
+    return r >= 95 ? 'Excellent' : r >= 85 ? 'Very Good' : r >= 70 ? 'Good' : r >= 55 ? 'Fair' : r >= 40 ? 'Needs Improvement' : 'Poor';
+  };
+  const deptIndIds = dk => new Set((((Q.depts || []).find(d => d.key === dk) || {}).indicators || []).map(i => i.id));
+  const onNew = () => {
+    const dk = (scope !== 'all' ? scope : depts[0] && depts[0].key) || Q.depts[0] && Q.depts[0].key;
+    if (!dk) return;
+    const blank = blankIndicator('New Indicator', deptIndIds(dk));
+    Q.addIndicator(dk, blank);
+    setSel({
+      deptKey: dk,
+      id: blank.id
+    });
+    setView('manage');
+    setTab('identity');
+    setCopyOpen(false);
+    setCopyT({});
+  };
+  const ql = (q || '').trim().toLowerCase();
+  const matchInd = i => {
+    if (mf !== 'all' && measureOf(i.formula).name !== mf) return false;
+    if (sf === 'data' && !hasData(i)) return false;
+    if (sf === 'breach' && countBreaches(i) === 0) return false;
+    if (!ql) return true;
+    return (i.name || '').toLowerCase().includes(ql) || (i.category || '').toLowerCase().includes(ql) || (i.reference || '').toLowerCase().includes(ql) || (i.unit || '').toLowerCase().includes(ql);
+  };
+  const scopeDepts = scope === 'all' ? depts : depts.filter(d => d.key === scope);
+  const heatOf = ind => QORDER.map(Qn => {
+    const s = qtrStatus(ind, Qn, entryFy);
+    const [bg, fg, sym] = STATUS_CELL[s];
+    const v = qtrRaw(ind, Qn, entryFy);
+    return {
+      bg,
+      fg,
+      sym,
+      title: Qn + ': ' + (v == null ? 'not reported' : v) + (s === 'breach' ? ' · breach' : s === 'ok' ? ' · on benchmark' : '')
+    };
+  });
+  let shownCount = 0;
+  const groups = [];
+  scopeDepts.forEach(d => {
+    const items = (d.indicators || []).filter(matchInd).map(i => {
+      const meas = measureOf(i.formula);
+      const hd = hasData(i);
+      const br = countBreaches(i);
+      const shareN = (nameDepts[norm(i.name)] || new Set()).size;
+      const on = sel.deptKey === d.key && sel.id === i.id;
+      shownCount++;
+      return {
+        id: i.id,
+        name: i.name,
+        sub: (i.unit || meas.name) + ' · ' + (i.category || '—'),
+        measure: meas.name,
+        measureLetter: meas.letter,
+        measureColor: meas.color,
+        measureBg: meas.color + '1c',
+        dotColor: br > 0 ? P.rose : hd ? P.blue : '#cdd6e2',
+        dotTitle: br > 0 ? br + ' breach' : hd ? 'has data' : 'no data yet',
+        hasBreach: br > 0,
+        breachCount: br,
+        isShared: shareN >= 2,
+        sharedCount: shareN,
+        heat: heatOf(i),
+        bg: on ? '#eef8fc' : '#fff',
+        bar: on ? P.blue : 'transparent',
+        onClick: () => {
+          setSel({
+            deptKey: d.key,
+            id: i.id
+          });
+          setCopyOpen(false);
+          setCopyT({});
+        }
+      };
+    });
+    if (items.length === 0 && scope === 'all') return;
+    const st = deptStatus(d);
+    groups.push({
+      deptKey: d.key,
+      deptName: d.name,
+      count: items.length,
+      statusColor: statusColorFor(st),
+      statusBg: statusColorFor(st) + '1c',
+      statusLabel: st,
+      items
+    });
+  });
+  const chip = (active, label, onClick) => ({
+    label,
+    onClick,
+    bg: active ? P.blue : '#fff',
+    color: active ? '#fff' : P.ink2,
+    border: active ? P.blue : '#dde3ec'
+  });
+  const measureChips = [chip(mf === 'all', 'All', () => setMf('all')), chip(mf === 'Count', 'Count', () => setMf('Count')), chip(mf === 'Rate', 'Rate', () => setMf('Rate')), chip(mf === 'Percentage', '%', () => setMf('Percentage'))];
+  const statusChips = [chip(sf === 'all', 'All', () => setSf('all')), chip(sf === 'data', 'Has data', () => setSf('data')), chip(sf === 'breach', 'Off Benchmark', () => setSf('breach'))];
+  const scopeOptions = [{
+    key: 'all',
+    label: 'All departments'
+  }].concat(allDepts.map(d => ({
+    key: d.key,
+    label: d.name + ' · ' + (d.indicators || []).length
+  })));
+  const selInd = sel.deptKey && sel.id ? findInd(sel.deptKey, sel.id) : null;
+  const selDept = selInd ? (Q.depts || []).find(d => d.key === sel.deptKey) : null;
+  const patch = obj => {
+    if (sel.deptKey && sel.id) Q.patchIndicator(sel.deptKey, sel.id, obj);
+  };
+  const patchShared = obj => {
+    if (!sel.id) return;
+    const targets = (Q.depts || []).filter(d => (d.indicators || []).some(i => i.id === sel.id)).map(d => d.key);
+    if (sel.deptKey && targets.indexOf(sel.deptKey) < 0) targets.push(sel.deptKey);
+    targets.forEach(k => Q.patchIndicator(k, sel.id, obj));
+  };
+  const patchDef = obj => editScope === 'shared' ? patchShared(obj) : patch(obj);
+  const patchField = f => e => patchDef({
+    [f]: e.target.value
+  });
+  const START_MON_OPTS = (() => {
+    const out = [];
+    let endYY = 28;
+    try {
+      endYY = new Date().getFullYear() % 100 + 1;
+    } catch (e) {}
+    for (let y = 24; y <= Math.max(28, endYY); y++) {
+      QMONS_ORD.forEach(mo => {
+        const yy = String(y).padStart(2, '0');
+        out.push({
+          k: mo + '-' + yy,
+          label: mo + " '" + yy
+        });
+      });
+    }
+    return out;
+  })();
+  const patchMonthVal = idx => e => {
+    const v = e.target.value;
+    const nv = v === '' ? null : Number(v);
+    const obj = {
+      months: {
+        [MONTHS[idx][0]]: nv
+      }
+    };
+    if (selInd && selInd.formula === 'count') obj.mNum = {
+      [MONTHS[idx][0]]: nv
+    };
+    patch(obj);
+  };
+  const patchMonthNum = idx => e => {
+    const v = e.target.value;
+    patch({
+      mNum: {
+        [MONTHS[idx][0]]: v === '' ? null : Number(v)
+      }
+    });
+  };
+  const patchMonthDen = idx => e => {
+    const v = e.target.value;
+    patch({
+      mDen: {
+        [MONTHS[idx][0]]: v === '' ? null : Number(v)
+      }
+    });
+  };
+  const patchMonthRemark = idx => e => patch({
+    monthRemarks: {
+      [MONTHS[idx][0]]: e.target.value
+    }
+  });
+  const deptHasInd = dk => {
+    if (!selInd) return false;
+    const cid = window.qualitySlug ? window.qualitySlug(selInd.name) : '';
+    return (((Q.depts || []).find(d => d.key === dk) || {}).indicators || []).some(i => String(i.id) === cid || norm(i.name) === norm(selInd.name));
+  };
+  const QC_VALUE_FIELDS = ['months', 'mNum', 'mDen', 'mGroups', 'mGroupsDen', 'mDeptBreakdown', 'monthRemarks', 'incidents', 'capa', 'mNotObserved', 'mEditedAt', 'mApprovedAt', 'quarters', 'quarterStatus', 'quartersByFy', 'qNum', 'qDen', 'quarterRemarks', 'status', 'hhFromAudit'];
+  const defOnly = (ind, extra) => {
+    const o = Object.assign({}, ind);
+    QC_VALUE_FIELDS.forEach(k => {
+      delete o[k];
+    });
+    o.months = {};
+    return Object.assign(o, extra || {});
+  };
+  const onClone = () => {
+    if (!selInd) return;
+    const copy = defOnly(selInd, {
+      id: window.qualitySlug(selInd.name + ' copy', deptIndIds(sel.deptKey)),
+      name: selInd.name + ' (copy)'
+    });
+    Q.addIndicator(sel.deptKey, copy);
+    setSel({
+      deptKey: sel.deptKey,
+      id: copy.id
+    });
+  };
+  const onDelete = () => {
+    if (!selInd) return;
+    Q.removeIndicator(sel.deptKey, sel.id);
+    setSel({
+      deptKey: null,
+      id: null
+    });
+    setCopyOpen(false);
+    setCopyT({});
+  };
+  const onMove = e => {
+    const nd = e.target.value;
+    if (!selInd || nd === sel.deptKey) return;
+    if (deptHasInd(nd)) {
+      const t = (allDepts.find(d => d.key === nd) || {}).name || nd;
+      if (!window.confirm(t + ' already reports "' + selInd.name + '".\n\nMoving will overwrite their recorded values for it with this department\'s. Continue?')) {
+        e.target.value = sel.deptKey;
+        return;
+      }
+    }
+    const moved = Object.assign({}, selInd);
+    Q.addIndicator(nd, moved);
+    Q.removeIndicator(sel.deptKey, sel.id);
+    setSel({
+      deptKey: nd,
+      id: moved.id
+    });
+  };
+  const onDoCopy = () => {
+    if (!selInd) return;
+    Object.keys(copyT).forEach(dk => {
+      if (copyT[dk] && !deptHasInd(dk)) {
+        const c = defOnly(selInd, {
+          id: window.qualitySlug(selInd.name)
+        });
+        Q.addIndicator(dk, c);
+      }
+    });
+    setCopyOpen(false);
+    setCopyT({});
+  };
+  const meas = selInd ? measureOf(selInd.formula) : null;
+  const sharedIdDepts = selInd ? (Q.depts || []).filter(d => (d.indicators || []).some(i => i.id === sel.id)) : [];
+  const sharedOthers = sharedIdDepts.filter(d => d.key !== sel.deptKey).map(d => d.name);
+  const dirHigh = selInd && selInd.goalDirection === 'higher_is_better';
+  const benchSet = selInd && selInd.benchmarkValue != null && selInd.benchmarkValue !== '';
+  const needsNum = selInd && selInd.formula !== 'direct';
+  const needsDen = selInd && (selInd.formula === 'rate1000' || selInd.formula === 'rate100' || selInd.formula === 'pct' || selInd.formula === 'avg');
+  const assignShort = nm => {
+    const s = (nm || '').replace(/\s*(Ward|Department)\s*/g, ' ').trim();
+    return s.length > 12 ? s.slice(0, 11).trim() + '…' : s;
+  };
+  const assignCols = allDepts.map(d => ({
+    key: d.key,
+    short: assignShort(d.name),
+    name: d.name
+  }));
+  const stdTemplate = s => {
+    const ft = s.ft || 'direct';
+    return {
+      name: s.name,
+      formula: ft,
+      valueType: ft === 'pct' ? '%' : ft === 'rate1000' || ft === 'rate100' ? 'Rate' : 'Count',
+      unit: s.unit || '',
+      numLabel: s.num || 'Numerator',
+      denLabel: s.den || 'Denominator',
+      benchmark: s.bench || '',
+      benchmarkValue: s.bv == null ? '' : s.bv,
+      goalDirection: s.dir === 'high' ? 'higher_is_better' : 'lower_is_better',
+      reference: s.ref || '',
+      formulaText: s.expr || '',
+      months: {}
+    };
+  };
+  const rowsByKey = {};
+  const stdByName = {};
+  (typeof HQI_STANDARDS !== 'undefined' && HQI_STANDARDS || []).forEach(s => {
+    const rk = 'std:' + s.code;
+    rowsByKey[rk] = {
+      key: rk,
+      code: s.code,
+      name: s.name,
+      formula: s.ft || 'direct',
+      tmpl: stdTemplate(s),
+      set: new Set()
+    };
+    if (!stdByName[norm(s.name)]) stdByName[norm(s.name)] = rk;
+  });
+  depts.forEach(d => (d.indicators || []).forEach(i => {
+    const code = stdMatch(i.name);
+    const rk = code && rowsByKey['std:' + code] ? 'std:' + code : stdByName[norm(i.name)];
+    if (rk) {
+      const row = rowsByKey[rk];
+      row.set.add(d.key);
+      (row.used || (row.used = {}))[i.name] = (row.used[i.name] || 0) + 1;
+    } else {
+      const k = 'cus:' + norm(i.name);
+      if (!rowsByKey[k]) rowsByKey[k] = {
+        key: k,
+        code: null,
+        name: i.name,
+        formula: i.formula,
+        tmpl: i,
+        set: new Set()
+      };
+      rowsByKey[k].set.add(d.key);
+    }
+  }));
+  Object.values(rowsByKey).forEach(r => {
+    if (r.used) {
+      const best = Object.keys(r.used).sort((a, b) => r.used[b] - r.used[a])[0];
+      if (best) {
+        r.name = best;
+        if (r.tmpl) r.tmpl = Object.assign({}, r.tmpl, {
+          name: best
+        });
+      }
+    }
+  });
+  const assignNames = Object.values(rowsByKey).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const assignCount = {};
+  assignCols.forEach(c => {
+    assignCount[c.key] = assignNames.reduce((n, r) => n + (r.set.has(c.key) ? 1 : 0), 0);
+  });
+  const _aq = assignQ.trim().toLowerCase();
+  const assignRows = _aq ? assignNames.filter(r => (r.name || '').toLowerCase().includes(_aq)) : assignNames;
+  const applyAssign = (rec, dk, want) => {
+    if (want === rec.set.has(dk)) return;
+    if (!want) {
+      const d = (Q.depts || []).find(x => x.key === dk);
+      const inst = d && (d.indicators || []).find(x => rec.code && stdMatch(x.name) === rec.code || norm(x.name) === norm(rec.name));
+      if (inst) Q.removeIndicator(dk, inst.id);
+    } else {
+      const seedD = (window.QUALITY_SEED || []).find(x => x.key === dk);
+      const seedInst = seedD && (seedD.indicators || []).find(x => rec.code && stdMatch(x.name) === rec.code || norm(x.name) === norm(rec.name));
+      if (seedInst) {
+        Q.restoreIndicator(dk, seedInst.id);
+        return;
+      }
+      if (/hand\s*hygiene/i.test(rec.name || '')) Q.restoreIndicator(dk, 'ind-hh-from-audit');
+      const c = defOnly(rec.tmpl, {
+        id: window.qualitySlug(rec.tmpl.name || rec.name)
+      });
+      Q.addIndicator(dk, c);
+    }
+  };
+  const asgCellKey = (rec, dk) => rec.key + '|' + dk;
+  const asgPending = Object.keys(asgDraft).map(k => {
+    const i = k.lastIndexOf('|');
+    const rec = rowsByKey[k.slice(0, i)];
+    const dk = k.slice(i + 1);
+    return rec ? {
+      k,
+      rec,
+      dk,
+      want: asgDraft[k]
+    } : null;
+  }).filter(p => p && p.want !== p.rec.set.has(p.dk));
+  asgPendingRef.current = asgPending.length;
+  const asgWant = (rec, dk) => {
+    const k = asgCellKey(rec, dk);
+    return Object.prototype.hasOwnProperty.call(asgDraft, k) ? asgDraft[k] : rec.set.has(dk);
+  };
+  const toggleAssign = (rec, dk) => {
+    const k = asgCellKey(rec, dk),
+      saved = rec.set.has(dk),
+      next = !asgWant(rec, dk);
+    setAsgDraft(d => {
+      const o = Object.assign({}, d);
+      if (next === saved) delete o[k];else o[k] = next;
+      return o;
+    });
+    if (asgSave.state !== 'saving') setAsgSave({
+      state: 'idle'
+    });
+  };
+  const asgFlush = n => {
+    const f = window.unicoFlushNow;
+    if (typeof f !== 'function') {
+      setAsgSave({
+        state: 'saved',
+        at: Date.now(),
+        n
+      });
+      return;
+    }
+    Promise.resolve(f()).then(r => {
+      if (r && r.ok === false) setAsgSave({
+        state: 'error',
+        n,
+        error: r.error || 'The server did not accept the save'
+      });else setAsgSave({
+        state: 'saved',
+        at: Date.now(),
+        n
+      });
+    }).catch(e => setAsgSave({
+      state: 'error',
+      n,
+      error: String(e && e.message || e)
+    }));
+  };
+  const saveAssign = () => {
+    const list = asgPending;
+    if (!list.length || asgSave.state === 'saving') return;
+    setAsgSave({
+      state: 'saving',
+      n: list.length
+    });
+    list.forEach(p => applyAssign(p.rec, p.dk, p.want));
+    setAsgDraft({});
+    setTimeout(() => asgFlush(list.length), 400);
+  };
+  const discardAssign = () => {
+    setAsgDraft({});
+    setAsgSave({
+      state: 'idle'
+    });
+  };
+  const STD = typeof HQI_STANDARDS !== 'undefined' && HQI_STANDARDS || [];
+  const useCount = {};
+  depts.forEach(d => (d.indicators || []).forEach(i => {
+    const c = stdMatch(i.name);
+    if (c) {
+      (useCount[c] = useCount[c] || new Set()).add(d.key);
+    }
+  }));
+  const ql2 = (q || '').trim().toLowerCase();
+  const catGroups = {};
+  STD.forEach(s => {
+    if (ql2 && !((s.name || '').toLowerCase().includes(ql2) || (s.expr || '').toLowerCase().includes(ql2) || (s.ref || '').toLowerCase().includes(ql2) || (s.code || '').toLowerCase() === ql2)) return;
+    (catGroups[s.sec] = catGroups[s.sec] || []).push(s);
+  });
+  const measTypeC = f => ({
+    pct: '%',
+    rate1000: 'Rate',
+    rate100: 'Rate',
+    avg: 'Rate',
+    count: 'Count',
+    direct: 'Count'
+  })[f] || 'Count';
+  const measColC = f => f === 'pct' ? P.teal : f === 'rate1000' || f === 'rate100' ? P.violet : P.blue;
+  const libSections = Object.keys(catGroups).sort().map(sec => ({
+    sec,
+    name: typeof HQI_SECN !== 'undefined' && HQI_SECN[sec] || sec,
+    count: catGroups[sec].length,
+    rows: catGroups[sec]
+  }));
+  const subnav = [{
+    id: 'manage',
+    label: 'Manage Indicators',
+    count: totalInd,
+    d: 'M4 20h4l11-11-4-4L4 16zM14 5l4 4'
+  }, {
+    id: 'assign',
+    label: 'Assign by Department',
+    count: depts.length,
+    d: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'
+  }, {
+    id: 'catalog',
+    label: 'Formula Library',
+    count: STD.length,
+    d: 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7'
+  }];
+  const kpis = [{
+    label: 'Departments',
+    val: String(depts.length),
+    foot: 'reporting quality KPIs',
+    color: P.blue
+  }, {
+    label: 'Indicators',
+    val: String(uniq.size),
+    foot: uniq.size + ' unique · ' + totalInd + ' across departments',
+    color: P.violet
+  }, {
+    label: 'With data',
+    val: String(withData),
+    foot: 'hold ≥ 1 saved value',
+    color: P.green
+  }, {
+    label: 'Off Benchmark',
+    val: String(totalBreach),
+    foot: 'indicator-months off benchmark',
+    color: totalBreach > 0 ? P.rose : P.green
+  }];
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 14,
+      flexWrap: 'wrap',
+      marginBottom: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#eef8fc',
+      color: '#0090ca',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M4 20h4l11-11-4-4L4 16zM14 5l4 4"
+  }))), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Indicator Administration"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "Define, organise & assign every quality indicator across the hospital. Changes flow to the Dashboard, Scorecard, Reports & CAPA.")), (!window.unicoCan || window.unicoCan('quality', 'add')) && React.createElement("button", {
+    onClick: onNew,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 7,
+      border: '1px solid #0090ca',
+      background: '#0090ca',
+      color: '#fff',
+      padding: '9px 15px',
+      borderRadius: 8,
+      fontSize: 13,
+      fontWeight: 600,
+      boxShadow: '0 1px 3px rgba(0,144,202,.4)',
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "16",
+    height: "16",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.1",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M12 5v14M5 12h14"
+  })), "New indicator")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 4,
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 11,
+      padding: 5,
+      marginBottom: 16,
+      width: 'max-content',
+      maxWidth: '100%',
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)'
+    }
+  }, subnav.map(t => {
+    const active = view === t.id;
+    return React.createElement("button", {
+      key: t.id,
+      onClick: () => {
+        if (view === 'assign' && t.id !== 'assign' && asgPending.length && !window.confirm('Discard ' + asgPending.length + ' unsaved assignment change' + (asgPending.length !== 1 ? 's' : '') + '?')) return;
+        if (t.id !== 'assign') setAsgDraft({});
+        setView(t.id);
+      },
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        border: 0,
+        padding: '8px 16px',
+        borderRadius: 8,
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: 'pointer',
+        color: active ? P.blue : P.muted,
+        background: active ? '#fff' : 'transparent',
+        boxShadow: active ? '0 1px 3px rgba(20,32,46,.12)' : 'none'
+      }
+    }, React.createElement("svg", {
+      width: "16",
+      height: "16",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: t.d
+    })), React.createElement("span", null, t.label), React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 11,
+        opacity: .7
+      }
+    }, t.count));
+  })), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))',
+      gap: 13,
+      marginBottom: 18
+    }
+  }, kpis.map(k => React.createElement("div", {
+    key: k.label,
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderLeft: '4px solid ' + k.color,
+      borderRadius: 11,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '14px 17px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: P.ink2,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, k.label), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 27,
+      fontWeight: 600,
+      color: k.color,
+      lineHeight: 1,
+      margin: '8px 0 5px',
+      letterSpacing: '-.5px'
+    }
+  }, k.val), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, k.foot)))), view === 'manage' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 11,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '13px 15px',
+      marginBottom: 14,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 11
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("select", {
+    value: scope,
+    onChange: e => setScope(e.target.value),
+    style: {
+      padding: '8px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      background: '#fff',
+      color: P.ink,
+      minWidth: 210,
+      outline: 'none'
+    }
+  }, scopeOptions.map(o => React.createElement("option", {
+    key: o.key,
+    value: o.key
+  }, o.label))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      background: '#f7f9fc',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      padding: '8px 12px',
+      flex: 1,
+      minWidth: 200,
+      color: P.faint
+    }
+  }, React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12"
+  })), React.createElement("input", {
+    placeholder: "Filter this list by name, category or reference\u2026",
+    value: q || '',
+    onInput: e => onQ(e.target.value),
+    onChange: e => onQ(e.target.value),
+    style: {
+      border: 0,
+      background: 'transparent',
+      outline: 'none',
+      fontSize: 12.5,
+      color: P.ink,
+      width: '100%'
+    }
+  })), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.faint,
+      fontFamily: MONO,
+      whiteSpace: 'nowrap'
+    }
+  }, shownCount, " shown")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 18,
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      borderTop: '1px solid #e8edf3',
+      paddingTop: 11
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      marginRight: 1
+    }
+  }, "Measure"), measureChips.map(c => React.createElement("button", {
+    key: c.label,
+    onClick: c.onClick,
+    style: {
+      border: '1px solid ' + c.border,
+      background: c.bg,
+      color: c.color,
+      padding: '4px 11px',
+      borderRadius: 20,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, c.label))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      marginRight: 1
+    }
+  }, "Status"), statusChips.map(c => React.createElement("button", {
+    key: c.label,
+    onClick: c.onClick,
+    style: {
+      border: '1px solid ' + c.border,
+      background: c.bg,
+      color: c.color,
+      padding: '4px 11px',
+      borderRadius: 20,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, c.label))))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '392px 1fr',
+      gap: 16,
+      alignItems: 'start'
+    }
+  }, React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 12,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
+      maxHeight: 'calc(100vh - 320px)'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '11px 14px',
+      borderBottom: '1px solid #e8edf3',
+      flexShrink: 0
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, "Indicators"), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.faint,
+      fontFamily: MONO
+    }
+  }, shownCount), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 11,
+      fontSize: 10,
+      color: P.faint
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: '#0090ca',
+      display: 'inline-block'
+    }
+  }), "data"), React.createElement("span", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: 2,
+      background: '#d23a52',
+      display: 'inline-block'
+    }
+  }), "breach"))), React.createElement("div", {
+    style: {
+      overflowY: 'auto',
+      flex: 1
+    }
+  }, groups.map(g => React.createElement("div", {
+    key: g.deptKey
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '7px 14px',
+      background: '#f7f9fc',
+      borderBottom: '1px solid #e8edf3',
+      borderTop: '1px solid #e8edf3',
+      position: 'sticky',
+      top: 0,
+      zIndex: 2
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      background: g.statusColor,
+      flexShrink: 0
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, g.deptName), React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      fontFamily: MONO
+    }
+  }, g.count), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: g.statusColor,
+      background: g.statusBg,
+      padding: '1px 7px',
+      borderRadius: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, g.statusLabel)), g.items.map(it => React.createElement("div", {
+    key: it.id,
+    onClick: it.onClick,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '9px 14px',
+      cursor: 'pointer',
+      borderBottom: '1px solid #eef1f5',
+      borderLeft: '3px solid ' + it.bar,
+      background: it.bg
+    }
+  }, React.createElement("span", {
+    title: it.dotTitle,
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: it.dotColor,
+      flexShrink: 0
+    }
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: P.ink,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, it.name), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.faint,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, it.sub)), it.isShared && React.createElement("span", {
+    title: 'reported by ' + it.sharedCount + ' departments',
+    style: {
+      flexShrink: 0,
+      fontSize: 9.5,
+      fontWeight: 600,
+      color: '#6a52d4',
+      background: '#efeaff',
+      padding: '1px 6px',
+      borderRadius: 6,
+      whiteSpace: 'nowrap'
+    }
+  }, "\u2197", it.sharedCount), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 2,
+      flexShrink: 0
+    }
+  }, it.heat.map((c, ci) => React.createElement("span", {
+    key: ci,
+    title: c.title,
+    style: {
+      width: 17,
+      height: 16,
+      borderRadius: 3,
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: 9,
+      fontWeight: 700,
+      background: c.bg,
+      color: c.fg
+    }
+  }, c.sym))), React.createElement("span", {
+    title: it.measure,
+    style: {
+      flexShrink: 0,
+      width: 19,
+      height: 19,
+      borderRadius: 6,
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: 10,
+      fontWeight: 700,
+      background: it.measureBg,
+      color: it.measureColor
+    }
+  }, it.measureLetter), it.hasBreach && React.createElement("span", {
+    title: it.breachCount + ' month breach(es)',
+    style: {
+      flexShrink: 0,
+      fontSize: 10,
+      fontWeight: 700,
+      color: '#d23a52',
+      background: '#fbe9ec',
+      padding: '1px 6px',
+      borderRadius: 10,
+      fontFamily: MONO
+    }
+  }, it.breachCount, "!"))))), shownCount === 0 && React.createElement("div", {
+    style: {
+      padding: '40px 20px',
+      textAlign: 'center',
+      color: P.faint,
+      fontSize: 12.5
+    }
+  }, "No indicators match your filters."))), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, !selInd && React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 12,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '60px 30px',
+      textAlign: 'center',
+      color: P.faint
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: P.muted
+    }
+  }, "Select an indicator to edit"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      marginTop: 5
+    }
+  }, "Pick one from the list, or create a new indicator.")), selInd && React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 12,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '15px 18px',
+      borderBottom: '1px solid #e8edf3',
+      background: 'linear-gradient(150deg,#ffffff,#f5fafd)'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      flexWrap: 'wrap',
+      marginBottom: 11
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      color: P.muted
+    }
+  }, selDept ? selDept.name : ''), React.createElement("span", {
+    style: {
+      color: '#cdd6e2'
+    }
+  }, "\xB7"), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: meas.color,
+      background: meas.color + '1c',
+      padding: '2px 9px',
+      borderRadius: 20
+    }
+  }, meas.name), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: dirHigh ? P.blue : P.green,
+      background: (dirHigh ? P.blue : P.green) + '1c',
+      padding: '2px 9px',
+      borderRadius: 20
+    }
+  }, dirHigh ? '↑ higher is better' : '↓ lower is better'), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: benchSet ? P.blue700 : P.rose,
+      background: benchSet ? '#eef8fc' : '#fbe9ec',
+      padding: '2px 9px',
+      borderRadius: 20
+    }
+  }, benchExpr(selInd)), hasData(selInd) && React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: '#0072a3',
+      background: '#eef8fc',
+      padding: '2px 9px',
+      borderRadius: 20
+    }
+  }, "\u25CF has data"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    onClick: onClone,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.ink2,
+      padding: '5px 10px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M12 5v14M5 12h14"
+  })), "Clone"), React.createElement("button", {
+    onClick: () => setCopyOpen(!copyOpen),
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.ink2,
+      padding: '5px 10px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M12 2 2 7l10 5 10-5zM2 12l10 5 10-5"
+  })), "Copy to\u2026"), (!window.unicoCan || window.unicoCan('quality', 'delete')) && React.createElement("button", {
+    onClick: onDelete,
+    title: "Delete indicator",
+    style: {
+      width: 30,
+      height: 30,
+      borderRadius: 7,
+      border: '1px solid #f1c6cd',
+      background: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      color: '#d23a52',
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M6 6l12 12M18 6L6 18"
+  })))), React.createElement("input", {
+    value: selInd.name || '',
+    onInput: patchField('name'),
+    onChange: patchField('name'),
+    placeholder: "Indicator name",
+    style: {
+      width: '100%',
+      border: '1px solid transparent',
+      background: 'transparent',
+      fontFamily: 'inherit',
+      fontSize: 19,
+      fontWeight: 700,
+      color: P.ink,
+      padding: '3px 6px',
+      marginLeft: -6,
+      borderRadius: 7,
+      outline: 'none'
+    }
+  }), React.createElement("div", {
+    style: {
+      marginTop: 9,
+      background: '#eef8fc',
+      border: '1px solid #dceffa',
+      borderRadius: 8,
+      padding: '8px 12px',
+      fontFamily: MONO,
+      fontSize: 12.5,
+      color: '#0072a3'
+    }
+  }, "\u0192\xA0 ", formulaText(selInd)), sharedOthers.length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 9,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      flexWrap: 'wrap',
+      border: '1px solid ' + (editScope === 'shared' ? '#f0d9a8' : '#dde3ec'),
+      background: editScope === 'shared' ? '#fff8ec' : '#f7f9fc',
+      borderRadius: 8,
+      padding: '7px 11px'
+    }
+  }, React.createElement("span", {
+    title: 'Also in: ' + sharedOthers.join(', '),
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: editScope === 'shared' ? '#9a6b00' : P.ink2
+    }
+  }, "Common indicator \u2014 also in ", React.createElement("b", null, sharedOthers.length), " other department", sharedOthers.length !== 1 ? 's' : '', " ", React.createElement("span", {
+    style: {
+      fontWeight: 400,
+      color: P.muted
+    }
+  }, "(", sharedOthers.slice(0, 3).join(', '), sharedOthers.length > 3 ? ' +' + (sharedOthers.length - 3) + ' more' : '', ")")), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: .3
+    }
+  }, "Apply edits to"), [['one', 'This department only'], ['shared', 'All ' + sharedIdDepts.length + ' departments']].map(([id, l]) => {
+    const on = editScope === id;
+    return React.createElement("button", {
+      key: id,
+      onClick: () => setEditScope(id),
+      title: id === 'one' ? 'Changes affect only ' + (selDept ? selDept.name : 'this department') + "'s copy" : 'Definition changes sync to every department listed (monthly values always stay per-department)',
+      style: {
+        border: '1px solid ' + (on ? P.blue : '#dde3ec'),
+        background: on ? P.blue : '#fff',
+        color: on ? '#fff' : P.ink2,
+        padding: '4px 11px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, l);
+  }), editScope === 'shared' && React.createElement("span", {
+    style: {
+      width: '100%',
+      fontSize: 10.5,
+      color: '#9a6b00'
+    }
+  }, "Name, formula, benchmark & definition edits now update every department above. Monthly values always stay per-department.")), copyOpen && React.createElement("div", {
+    style: {
+      marginTop: 11,
+      border: '1px solid #dceffa',
+      borderRadius: 9,
+      background: '#eef8fc',
+      padding: '11px 13px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      marginBottom: 8,
+      color: P.ink
+    }
+  }, "Copy this indicator (with its values) to:"), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))',
+      gap: 6
+    }
+  }, allDepts.filter(d => d.key !== sel.deptKey).map(d => {
+    const has = deptHasInd(d.key);
+    return React.createElement("label", {
+      key: d.key,
+      title: has ? d.name + ' already reports this indicator — copying would overwrite their recorded values' : '',
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        fontSize: 12,
+        background: has ? '#f2f5f8' : '#fff',
+        border: '1px solid #dde3ec',
+        borderRadius: 7,
+        padding: '6px 9px',
+        cursor: has ? 'not-allowed' : 'pointer',
+        opacity: has ? .55 : 1
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      disabled: has,
+      checked: !has && !!copyT[d.key],
+      onChange: () => setCopyT(t => Object.assign({}, t, {
+        [d.key]: !t[d.key]
+      }))
+    }), React.createElement("span", {
+      style: {
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, d.name, has ? ' · has it' : ''));
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 9
+    }
+  }, React.createElement("button", {
+    onClick: onDoCopy,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      border: '1px solid #0090ca',
+      background: '#0090ca',
+      color: '#fff',
+      padding: '6px 12px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, "Copy"), React.createElement("button", {
+    onClick: () => setCopyOpen(false),
+    style: {
+      border: '1px solid #dde3ec',
+      background: '#fff',
+      color: P.ink2,
+      padding: '6px 12px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, "Cancel")))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 2,
+      padding: '0 14px',
+      borderBottom: '1px solid #e8edf3',
+      background: '#fff',
+      overflowX: 'auto'
+    }
+  }, [['identity', 'Identity'], ['measure', 'Measurement'], ['target', 'Target & Benchmark'], ['values', 'Monthly Values'], ['place', 'Placement']].map(([id, label]) => {
+    const on = tab === id;
+    return React.createElement("button", {
+      key: id,
+      onClick: () => setTab(id),
+      style: {
+        border: 0,
+        background: 'transparent',
+        padding: '12px 14px 11px',
+        fontSize: 12.5,
+        fontWeight: 600,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        color: on ? P.blue700 : P.muted,
+        borderBottom: '2.5px solid ' + (on ? P.blue : 'transparent')
+      }
+    }, label);
+  })), React.createElement("div", {
+    style: {
+      padding: 18
+    }
+  }, tab === 'identity' && React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Indicator name"), React.createElement("input", {
+    value: selInd.name || '',
+    onInput: patchField('name'),
+    onChange: patchField('name'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Clinical category"), React.createElement("select", {
+    value: selInd.category || '',
+    onChange: patchField('category'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, (CATS.indexOf(selInd.category) < 0 && selInd.category ? [selInd.category].concat(CATS) : CATS).map(o => React.createElement("option", {
+    key: o,
+    value: o
+  }, o)))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Reporting frequency"), React.createElement("select", {
+    value: selInd.frequency || 'Monthly',
+    onChange: patchField('frequency'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, FREQ.map(o => React.createElement("option", {
+    key: o,
+    value: o
+  }, o)))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Reference / standard ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "WHO \xB7 CDC NHSN \xB7 NABH")), React.createElement("input", {
+    value: selInd.reference || '',
+    onInput: patchField('reference'),
+    onChange: patchField('reference'),
+    placeholder: "e.g. CDC NHSN CAUTI definition",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Overall remark ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "shown on the report")), React.createElement("textarea", {
+    value: selInd.remarks || '',
+    onInput: patchField('remarks'),
+    onChange: patchField('remarks'),
+    placeholder: "optional summary note for this indicator",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 12.5,
+      background: '#fff',
+      outline: 'none',
+      minHeight: 60,
+      resize: 'vertical',
+      lineHeight: 1.5
+    }
+  }))), tab === 'measure' && React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1',
+      background: '#fff8ec',
+      border: '1px solid #f3e3c0',
+      borderRadius: 8,
+      padding: '9px 12px',
+      fontSize: 11.5,
+      color: '#8a6a1f',
+      display: 'flex',
+      gap: 8,
+      alignItems: 'flex-start'
+    }
+  }, React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    style: {
+      flexShrink: 0,
+      marginTop: 1
+    }
+  }, React.createElement("path", {
+    d: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"
+  })), React.createElement("span", null, "The shared definition for this indicator lives in ", React.createElement("b", null, "Formula Library"), " (edit once, applies to every department). Changing it ", React.createElement("b", null, "here"), " creates an override for ", React.createElement("b", null, "this department only"), ".")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "How is this measured?"), React.createElement("select", {
+    value: selInd.formula || 'count',
+    onChange: patchField('formula'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, FORMULAS.map(([v, l]) => React.createElement("option", {
+    key: v,
+    value: v
+  }, l)))), React.createElement("div", {
+    style: {
+      gridColumn: '1 / -1',
+      background: '#eef8fc',
+      border: '1px solid #dceffa',
+      borderRadius: 8,
+      padding: '11px 13px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      fontWeight: 700,
+      marginBottom: 4
+    }
+  }, "Formula used to calculate the value"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 13.5,
+      color: '#0072a3',
+      fontWeight: 700,
+      wordBreak: 'break-word'
+    }
+  }, "\u0192\xA0 ", formulaText(selInd)), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: P.muted,
+      marginTop: 5
+    }
+  }, FORMULA_HINT[selInd.formula] || '')), needsNum && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Numerator label"), React.createElement("input", {
+    value: selInd.numLabel || '',
+    onInput: patchField('numLabel'),
+    onChange: patchField('numLabel'),
+    placeholder: "e.g. CAUTI cases",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), needsDen && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Denominator label"), React.createElement("input", {
+    value: selInd.denLabel || '',
+    onInput: patchField('denLabel'),
+    onChange: patchField('denLabel'),
+    placeholder: "e.g. Catheter days",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Unit ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "display label")), React.createElement("input", {
+    value: selInd.unit || '',
+    onInput: patchField('unit'),
+    onChange: patchField('unit'),
+    placeholder: "per 1000 cath-days \xB7 % \xB7 count",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), needsNum && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Numerator definition ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "what counts")), React.createElement("textarea", {
+    value: selInd.numeratorDef || '',
+    onInput: patchField('numeratorDef'),
+    onChange: patchField('numeratorDef'),
+    placeholder: "Precise definition of the numerator",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 12.5,
+      background: '#fff',
+      outline: 'none',
+      minHeight: 54,
+      resize: 'vertical',
+      lineHeight: 1.5
+    }
+  })), needsDen && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Denominator definition ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "what counts")), React.createElement("textarea", {
+    value: selInd.denominatorDef || '',
+    onInput: patchField('denominatorDef'),
+    onChange: patchField('denominatorDef'),
+    placeholder: "Precise definition of the denominator",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 12.5,
+      background: '#fff',
+      outline: 'none',
+      minHeight: 54,
+      resize: 'vertical',
+      lineHeight: 1.5
+    }
+  })), needsDen && !!selInd.denAdminOnly && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 7,
+      gridColumn: '1 / -1',
+      background: '#fff4e0',
+      border: '1px solid #f0d9a8',
+      borderRadius: 8,
+      padding: '11px 13px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#9a6b00'
+    }
+  }, selInd.denLabel || 'Total healthcare workers', " \u2014 hospital-wide headcount, month by month ", React.createElement("span", {
+    style: {
+      fontWeight: 400,
+      fontSize: 10.5,
+      color: '#b07d15'
+    }
+  }, "admin-set \xB7 applies to every department; collectors see it read-only")), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement(QCFyPicker, {
+    fy: entryFy,
+    setFy: setEntryFy,
+    depts: allDepts,
+    style: {
+      padding: '5px 8px',
+      fontSize: 11.5
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(96px,1fr))',
+      gap: 7
+    }
+  }, MONTHS.map(mm => {
+    const v = selInd.mDen && selInd.mDen[mm[0]];
+    return React.createElement("div", {
+      key: mm[0],
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3
+      }
+    }, React.createElement("label", {
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: '#b07d15',
+        fontFamily: MONO
+      }
+    }, mm[1]), React.createElement("input", {
+      type: "number",
+      step: "any",
+      value: v == null || v === '' ? '' : v,
+      onChange: e => patchShared({
+        mDen: {
+          [mm[0]]: e.target.value === '' ? null : Number(e.target.value)
+        }
+      }),
+      placeholder: "\u2014",
+      style: {
+        padding: '7px 8px',
+        border: '1px solid #dde3ec',
+        borderRadius: 7,
+        fontSize: 12.5,
+        fontFamily: MONO,
+        background: '#fff',
+        outline: 'none',
+        width: '100%',
+        boxSizing: 'border-box'
+      }
+    }));
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("input", {
+    type: "number",
+    step: "any",
+    value: hcAll,
+    onChange: e => setHcAll(e.target.value),
+    placeholder: 'Same figure for all 12 months of ' + fyLabelOf(entryFy) + '…',
+    style: {
+      padding: '7px 10px',
+      border: '1px solid #dde3ec',
+      borderRadius: 7,
+      fontSize: 12.5,
+      fontFamily: MONO,
+      background: '#fff',
+      outline: 'none',
+      width: 250
+    }
+  }), React.createElement("button", {
+    onClick: () => {
+      if (hcAll === '') return;
+      const v = Number(hcAll);
+      patchShared({
+        mDen: MONTHS.reduce((o, mm) => {
+          o[mm[0]] = v;
+          return o;
+        }, {})
+      });
+      setHcAll('');
+    },
+    style: {
+      border: '1px solid #d8a63c',
+      background: '#fff',
+      color: '#9a6b00',
+      padding: '6px 12px',
+      borderRadius: 7,
+      fontSize: 11.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, "Fill all months"), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: '#b07d15'
+    }
+  }, "Fills every month of ", fyLabelOf(entryFy), "; you can then adjust individual months above.")))), tab === 'target' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      background: '#f7f9fc',
+      border: '1px solid #e8edf3',
+      borderRadius: 9,
+      padding: '10px 13px',
+      marginBottom: 14
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      fontWeight: 700
+    }
+  }, "Benchmark"), React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: benchSet ? P.blue700 : P.rose,
+      background: benchSet ? '#eef8fc' : '#fbe9ec',
+      padding: '3px 11px',
+      borderRadius: 20
+    }
+  }, benchExpr(selInd)), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted
+    }
+  }, dirHigh ? 'values at or above this are on benchmark' : 'values at or below this are on benchmark')), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Goal direction ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "which way is good?")), React.createElement("select", {
+    value: selInd.goalDirection || 'lower_is_better',
+    onChange: patchField('goalDirection'),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, DIRS.map(([v, l]) => React.createElement("option", {
+    key: v,
+    value: v
+  }, l)))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Benchmark value ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "drives status")), React.createElement("input", {
+    type: "number",
+    value: selInd.benchmarkValue == null ? '' : selInd.benchmarkValue,
+    onInput: e => patchDef({
+      benchmarkValue: e.target.value === '' ? null : Number(e.target.value)
+    }),
+    onChange: e => patchDef({
+      benchmarkValue: e.target.value === '' ? null : Number(e.target.value)
+    }),
+    placeholder: "e.g. 0 or 90",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      fontFamily: MONO,
+      background: '#fff',
+      outline: 'none',
+      textAlign: 'right'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Benchmark description ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "free text shown on reports")), React.createElement("input", {
+    value: selInd.benchmark || '',
+    onInput: patchField('benchmark'),
+    onChange: patchField('benchmark'),
+    placeholder: "e.g. 0 (zero defect) \xB7 \u2265 90% of moments",
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      gridColumn: '1 / -1'
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Monitoring started from ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "months before this show \u201CNot Observed\u201D on reports")), React.createElement("select", {
+    value: selInd.startMonth || '',
+    onChange: e => patchDef({
+      startMonth: e.target.value || null
+    }),
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, "Not set \u2014 observed in all months"), START_MON_OPTS.map(o => React.createElement("option", {
+    key: o.k,
+    value: o.k
+  }, o.label)))))), tab === 'values' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginBottom: 11
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted,
+      flex: 1,
+      minWidth: 220
+    }
+  }, needsDen ? 'Enter ' + (selInd.numLabel || 'numerator') + ' ÷ ' + (selInd.denLabel || 'denominator') + ' for each month — the value computes from the formula and rolls up into quarters automatically.' : 'Enter each month’s value (' + MONTHS[0][1] + ' – ' + MONTHS[11][1] + '). Leave a month blank to mark it not reported; quarters roll up automatically.'), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.muted,
+      fontWeight: 600,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px'
+    }
+  }, "Reporting year"), React.createElement(QCFyPicker, {
+    fy: entryFy,
+    setFy: setEntryFy,
+    depts: allDepts,
+    style: {
+      padding: '6px 9px',
+      fontSize: 12
+    }
+  })), React.createElement("div", {
+    style: {
+      overflowX: 'auto',
+      border: '1px solid #e8edf3',
+      borderRadius: 9
+    }
+  }, React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 12.5
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      background: '#f7f9fc'
+    }
+  }, React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3'
+    }
+  }, "Month"), needsDen && React.createElement("th", {
+    style: {
+      textAlign: 'right',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3',
+      width: 96
+    }
+  }, selInd.numLabel || 'Numerator'), needsDen && React.createElement("th", {
+    style: {
+      textAlign: 'right',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3',
+      width: 96
+    }
+  }, selInd.denLabel || 'Denominator'), React.createElement("th", {
+    style: {
+      textAlign: 'right',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3',
+      width: 90
+    }
+  }, "Value"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3',
+      width: 120
+    }
+  }, "Status"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '9px 12px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #e8edf3'
+    }
+  }, "Remark"))), React.createElement("tbody", null, MONTHS.map(([key, label, Qn], idx) => {
+    const v = monthRaw(selInd, key);
+    const s = qStatus(selInd, v);
+    const smap = {
+      ok: ['#e7f6ed', '#1f9d57', 'On benchmark'],
+      breach: ['#fbe9ec', '#d23a52', 'Off benchmark'],
+      na: ['#eef1f5', '#9aa6b4', 'Not reported']
+    };
+    const [sbg, sfg, slab] = smap[s];
+    const qFirst = idx % 3 === 0;
+    const disp = v == null ? '—' : selInd.formula === 'pct' ? v + '%' : v;
+    const numV = selInd.mNum && selInd.mNum[key] != null ? selInd.mNum[key] : '';
+    const denV = selInd.mDen && selInd.mDen[key] != null ? selInd.mDen[key] : '';
+    const directV = selInd.months && selInd.months[key] != null ? selInd.months[key] : '';
+    const rem = selInd.monthRemarks && selInd.monthRemarks[key] != null ? selInd.monthRemarks[key] : '';
+    return React.createElement("tr", {
+      key: key,
+      style: {
+        borderBottom: '1px solid #eef1f5',
+        background: qFirst ? '#fbfcfe' : '#fff'
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '7px 12px',
+        textAlign: 'left'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, label), " ", React.createElement("span", {
+      style: {
+        fontFamily: MONO,
+        fontSize: 9.5,
+        color: P.faint,
+        background: '#eef1f5',
+        padding: '1px 5px',
+        borderRadius: 5,
+        marginLeft: 5
+      }
+    }, Qn)), needsDen && React.createElement("td", {
+      style: {
+        padding: '5px 8px'
+      }
+    }, React.createElement("input", {
+      type: "number",
+      value: numV,
+      onInput: patchMonthNum(idx),
+      onChange: patchMonthNum(idx),
+      placeholder: "\u2014",
+      style: {
+        width: '100%',
+        padding: '6px 8px',
+        border: '1px solid #dde3ec',
+        borderRadius: 6,
+        fontFamily: MONO,
+        fontSize: 12.5,
+        textAlign: 'right',
+        background: '#fff',
+        outline: 'none'
+      }
+    })), needsDen && React.createElement("td", {
+      style: {
+        padding: '5px 8px'
+      }
+    }, React.createElement("input", {
+      type: "number",
+      value: denV,
+      onInput: patchMonthDen(idx),
+      onChange: patchMonthDen(idx),
+      placeholder: "\u2014",
+      style: {
+        width: '100%',
+        padding: '6px 8px',
+        border: '1px solid #dde3ec',
+        borderRadius: 6,
+        fontFamily: MONO,
+        fontSize: 12.5,
+        textAlign: 'right',
+        background: '#fff',
+        outline: 'none'
+      }
+    })), React.createElement("td", {
+      style: {
+        padding: '5px 8px'
+      }
+    }, needsDen ? React.createElement("span", {
+      title: "Computed from the formula",
+      style: {
+        display: 'block',
+        textAlign: 'right',
+        fontFamily: MONO,
+        fontWeight: 700,
+        fontSize: 12.5,
+        color: '#0072a3',
+        padding: '6px 4px'
+      }
+    }, disp) : React.createElement("input", {
+      type: "number",
+      value: directV,
+      onInput: patchMonthVal(idx),
+      onChange: patchMonthVal(idx),
+      placeholder: "\u2014",
+      style: {
+        width: '100%',
+        padding: '6px 8px',
+        border: '1px solid #dde3ec',
+        borderRadius: 6,
+        fontFamily: MONO,
+        fontSize: 12.5,
+        textAlign: 'right',
+        background: '#fff',
+        outline: 'none'
+      }
+    })), React.createElement("td", {
+      style: {
+        padding: '7px 12px',
+        textAlign: 'left'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        fontSize: 11,
+        fontWeight: 600,
+        padding: '2px 9px',
+        borderRadius: 20,
+        background: sbg,
+        color: sfg
+      }
+    }, slab)), React.createElement("td", {
+      style: {
+        padding: '5px 8px'
+      }
+    }, React.createElement("input", {
+      value: rem,
+      onInput: patchMonthRemark(idx),
+      onChange: patchMonthRemark(idx),
+      placeholder: "optional note",
+      style: {
+        width: '100%',
+        padding: '6px 9px',
+        border: '1px solid #dde3ec',
+        borderRadius: 6,
+        fontSize: 12,
+        background: '#fff',
+        outline: 'none'
+      }
+    })));
+  })))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginTop: 11,
+      padding: '9px 13px',
+      background: '#f7f9fc',
+      border: '1px solid #e8edf3',
+      borderRadius: 9
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: P.muted,
+      textTransform: 'uppercase',
+      letterSpacing: '.4px'
+    }
+  }, "Quarter rollup"), QORDER.map(Qn => {
+    const v = qtrRaw(selInd, Qn, entryFy);
+    const s = qStatus(selInd, v);
+    const col = s === 'breach' ? P.rose : s === 'ok' ? P.green : P.faint;
+    return React.createElement("span", {
+      key: Qn,
+      style: {
+        fontFamily: MONO,
+        fontSize: 12,
+        color: P.muted
+      }
+    }, Qn, " ", React.createElement("b", {
+      style: {
+        color: col
+      }
+    }, v == null ? '—' : selInd.formula === 'pct' ? v + '%' : v));
+  }), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: P.faint
+    }
+  }, "\xB7 auto-summed from months \xB7 feeds the Quarterly Report"))), tab === 'place' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 5,
+      maxWidth: 280,
+      marginBottom: 18
+    }
+  }, React.createElement("label", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: P.ink2
+    }
+  }, "Department ", React.createElement("span", {
+    style: {
+      color: P.faint,
+      fontWeight: 400,
+      fontSize: 10.5
+    }
+  }, "move this indicator")), React.createElement("select", {
+    value: sel.deptKey,
+    onChange: onMove,
+    style: {
+      padding: '9px 11px',
+      border: '1px solid #dde3ec',
+      borderRadius: 8,
+      fontSize: 13,
+      background: '#fff',
+      outline: 'none'
+    }
+  }, allDepts.map(d => React.createElement("option", {
+    key: d.key,
+    value: d.key
+  }, d.name)))), React.createElement("div", {
+    style: {
+      borderTop: '1px solid #e8edf3',
+      paddingTop: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#d23a52',
+      textTransform: 'uppercase',
+      letterSpacing: '.4px',
+      marginBottom: 9
+    }
+  }, "Danger zone"), (!window.unicoCan || window.unicoCan('quality', 'delete')) && React.createElement("button", {
+    onClick: onDelete,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid #f1c6cd',
+      background: '#fff',
+      color: '#d23a52',
+      padding: '8px 13px',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontWeight: 600,
+      cursor: 'pointer'
+    }
+  }, React.createElement("svg", {
+    width: "14",
+    height: "14",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M6 6l12 12M18 6L6 18"
+  })), "Delete indicator")))))))), view === 'assign' && React.createElement(React.Fragment, null, (() => {
+    const n = asgPending.length,
+      st = asgSave.state,
+      adds = asgPending.filter(p => p.want).length;
+    const tone = st === 'error' ? {
+      bd: '#f1c6cd',
+      bg: 'rgba(253,238,240,.97)',
+      fg: '#b3263e'
+    } : n ? {
+      bd: '#f1d49a',
+      bg: 'rgba(255,248,233,.97)',
+      fg: '#8a5a00'
+    } : st === 'saved' ? {
+      bd: '#bfe6cd',
+      bg: 'rgba(236,248,241,.97)',
+      fg: '#1f7a47'
+    } : {
+      bd: '#dde3ec',
+      bg: 'rgba(255,255,255,.95)',
+      fg: P.muted
+    };
+    const hm = t => new Date(t).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    const msg = st === 'saving' ? 'Saving ' + (asgSave.n || 0) + ' change' + (asgSave.n !== 1 ? 's' : '') + ' to the server…' : n ? n + ' unsaved change' + (n !== 1 ? 's' : '') + ' — ' + adds + ' to assign · ' + (n - adds) + ' to unassign. Nothing is stored until you press Save.' : st === 'error' ? '⚠ Not saved to the server: ' + asgSave.error + '. The change is kept on this device and retried automatically — keep this page open, or press Retry.' : st === 'saved' ? '✓ Saved to the server at ' + hm(asgSave.at) + ' (' + asgSave.n + ' change' + (asgSave.n !== 1 ? 's' : '') + ').' : 'Tick cells to assign / unassign, then press Save.';
+    return React.createElement("div", {
+      role: "status",
+      style: {
+        position: 'sticky',
+        top: 0,
+        zIndex: 30,
+        marginBottom: 10,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        padding: '10px 14px',
+        borderRadius: 11,
+        border: '1px solid ' + tone.bd,
+        background: tone.bg,
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
+        boxShadow: '0 6px 18px rgba(31,59,90,.12)'
+      }
+    }, React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 220,
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: tone.fg
+      }
+    }, msg), st === 'error' && !n && React.createElement("button", {
+      onClick: () => {
+        setAsgSave({
+          state: 'saving',
+          n: asgSave.n
+        });
+        asgFlush(asgSave.n);
+      },
+      style: {
+        border: '1px solid #d23a52',
+        background: '#fff',
+        color: '#b3263e',
+        padding: '7px 13px',
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontWeight: 600,
+        cursor: 'pointer'
+      }
+    }, "Retry"), n > 0 && st !== 'saving' && React.createElement("button", {
+      onClick: discardAssign,
+      style: {
+        border: '1px solid ' + P.line,
+        background: '#fff',
+        color: P.ink,
+        padding: '7px 13px',
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontWeight: 600,
+        cursor: 'pointer'
+      }
+    }, "Discard"), React.createElement("button", {
+      onClick: saveAssign,
+      disabled: !n || st === 'saving',
+      style: {
+        border: '1px solid #0090ca',
+        background: !n || st === 'saving' ? '#9fd3ea' : '#0090ca',
+        color: '#fff',
+        padding: '7px 16px',
+        borderRadius: 8,
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: !n || st === 'saving' ? 'default' : 'pointer',
+        boxShadow: n ? '0 1px 3px rgba(0,144,202,.4)' : 'none'
+      }
+    }, st === 'saving' ? 'Saving…' : 'Save' + (n ? ' (' + n + ')' : '')));
+  })(), React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 12,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '13px 16px',
+      borderBottom: '1px solid #e8edf3',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 200
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, "Assign by Department"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted
+    }
+  }, "Which department reports which indicator \u2014 all ", assignNames.length, " catalog indicators. Tick cells to assign / unassign, then press Save.")), React.createElement("input", {
+    value: assignQ,
+    onChange: e => setAssignQ(e.target.value),
+    placeholder: "Search indicator...",
+    style: {
+      padding: '8px 11px',
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      fontSize: 12.5,
+      background: '#fff',
+      outline: 'none',
+      minWidth: 230
+    }
+  }), _aq && React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted,
+      whiteSpace: 'nowrap'
+    }
+  }, assignRows.length, " of ", assignNames.length)), React.createElement("style", null, '.qc-asgn .qa-x{position:relative}' + '.qc-asgn .qa-x:hover::after{content:"";position:absolute;left:0;right:0;top:-6000px;bottom:-6000px;background:rgba(0,144,202,.08);pointer-events:none}' + '.qc-asgn tbody tr:hover td{background:#f0f8fd}' + '.qc-asgn tbody tr:hover td.qa-name{background:#e8f4fb !important;box-shadow:inset 3px 0 0 #0090ca}'), React.createElement("div", {
+    style: {
+      overflowX: 'auto',
+      overflowY: 'auto',
+      maxHeight: 'calc(100vh - 250px)'
+    }
+  }, React.createElement("table", {
+    className: "qc-asgn",
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: 12,
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '10px 14px',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #dde3ec',
+      background: '#eef2f7',
+      position: 'sticky',
+      left: 0,
+      top: 0,
+      zIndex: 5,
+      minWidth: 230
+    }
+  }, "Indicator"), assignCols.map(c => React.createElement("th", {
+    key: c.key,
+    className: "qa-x",
+    title: c.name + ' — ' + assignCount[c.key] + ' indicator' + (assignCount[c.key] !== 1 ? 's' : '') + ' assigned',
+    style: {
+      padding: '10px 6px',
+      fontSize: 10,
+      color: P.muted,
+      fontWeight: 700,
+      borderBottom: '1px solid #dde3ec',
+      background: '#eef2f7',
+      textAlign: 'center',
+      whiteSpace: 'nowrap',
+      position: 'sticky',
+      top: 0,
+      zIndex: 4
+    }
+  }, React.createElement("div", null, c.short), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.blue,
+      marginTop: 2
+    }
+  }, assignCount[c.key]))))), React.createElement("tbody", null, assignRows.map(rec => {
+    const rmeas = measureOf(rec.formula);
+    const inDepts = assignCols.filter(c => rec.set.has(c.key)).map(c => c.name);
+    return React.createElement("tr", {
+      key: rec.key,
+      style: {
+        borderBottom: '1px solid #eef1f5'
+      }
+    }, React.createElement("td", {
+      className: "qa-name",
+      title: inDepts.length ? 'Assigned to ' + inDepts.length + ' department' + (inDepts.length !== 1 ? 's' : '') + ': ' + inDepts.join(', ') : 'Not assigned to any department yet',
+      style: {
+        padding: '8px 14px',
+        textAlign: 'left',
+        position: 'sticky',
+        left: 0,
+        background: '#fff',
+        zIndex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: rmeas.color,
+        flexShrink: 0
+      }
+    }), React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: P.ink,
+        flex: 1,
+        minWidth: 0
+      }
+    }, rec.name), inDepts.length > 0 ? React.createElement("span", {
+      style: {
+        flexShrink: 0,
+        fontFamily: MONO,
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: P.blue700,
+        background: '#eef8fc',
+        border: '1px solid #cfe6f4',
+        borderRadius: 999,
+        padding: '1px 7px'
+      },
+      title: 'Assigned to: ' + inDepts.join(', ')
+    }, inDepts.length) : React.createElement("span", {
+      style: {
+        flexShrink: 0,
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#c2ccd8'
+      }
+    }, "\u2014"))), assignCols.map(c => {
+      const saved = rec.set.has(c.key),
+        on = asgWant(rec, c.key),
+        pend = on !== saved;
+      return React.createElement("td", {
+        key: c.key,
+        className: "qa-x",
+        style: {
+          textAlign: 'center',
+          padding: '6px 4px'
+        }
+      }, React.createElement("span", {
+        onClick: () => toggleAssign(rec, c.key),
+        title: rec.name + ' × ' + c.name + ' — ' + (pend ? (on ? 'will be ASSIGNED when you press Save' : 'will be UNASSIGNED when you press Save') + ' · click to undo' : on ? 'assigned · click to unassign' : 'not assigned · click to assign'),
+        style: {
+          display: 'inline-grid',
+          placeItems: 'center',
+          width: 22,
+          height: 22,
+          borderRadius: 6,
+          cursor: 'pointer',
+          background: pend ? on ? '#fff4e0' : '#fdeef0' : on ? '#e7f6ed' : '#f7f9fc',
+          color: pend ? on ? '#1f9d57' : '#d23a52' : on ? '#1f9d57' : '#cdd6e2',
+          fontSize: 12,
+          fontWeight: 700,
+          boxShadow: pend ? '0 0 0 1.5px ' + (on ? '#e0a23a' : '#e58a9a') : on ? '0 0 0 1px #bfe6cd' : 'none'
+        }
+      }, pend ? on ? '✓' : '✕' : on ? '✓' : ''));
+    }));
+  })))))), view === 'catalog' && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16
+    }
+  }, React.createElement(QCFormulaMaster, null), React.createElement("div", {
+    style: {
+      background: '#0d1b2e',
+      color: '#fff',
+      borderRadius: 12,
+      padding: '16px 20px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 42,
+      height: 42,
+      borderRadius: 11,
+      background: 'rgba(39,168,219,.2)',
+      color: '#7fd0f0',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.8",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7"
+  }))), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 700
+    }
+  }, "Hospital Quality Indicator Framework"), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#9fb0c4',
+      marginTop: 2
+    }
+  }, "Standardised measurement formulas, benchmarks & evidence-based references \xB7 13 domains \xB7 aligned to WHO \xB7 JCI \xB7 CDC/NHSN \xB7 KDOQI \xB7 ACC/AHA")), React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 26,
+      fontWeight: 700,
+      color: '#7fd0f0',
+      lineHeight: 1
+    }
+  }, STD.length), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#9fb0c4',
+      textTransform: 'uppercase',
+      letterSpacing: '.4px'
+    }
+  }, "indicators"))), libSections.map(g => React.createElement("div", {
+    key: g.sec,
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 12,
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '11px 16px',
+      borderBottom: '1px solid #e8edf3',
+      background: '#f7f9fc'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 26,
+      height: 26,
+      borderRadius: 7,
+      background: '#0090ca',
+      color: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      fontWeight: 700,
+      fontSize: 12,
+      flexShrink: 0
+    }
+  }, g.sec), React.createElement("span", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, g.name), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: P.faint,
+      fontFamily: MONO
+    }
+  }, g.count)), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: 12,
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", {
+    style: {
+      background: '#fbfcfe'
+    }
+  }, React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px 8px 16px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 42
+    }
+  }, "#"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 220
+    }
+  }, "Indicator"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5'
+    }
+  }, "Formula / Calculation"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 118
+    }
+  }, "Unit"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 96
+    }
+  }, "Benchmark"), React.createElement("th", {
+    style: {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: P.faint,
+      fontWeight: 700,
+      borderBottom: '1px solid #eef1f5',
+      width: 88
+    }
+  }, "Status"))), React.createElement("tbody", null, g.rows.map(s => {
+    const used = useCount[s.code] ? useCount[s.code].size : 0;
+    const gd = guideOf(s.code) || {};
+    const expanded = expand === s.code;
+    const mColor = measColC(s.ft);
+    return [React.createElement("tr", {
+      key: s.code,
+      onClick: () => setExpand(expand === s.code ? '' : s.code),
+      style: {
+        borderBottom: '1px solid #f1f3f6',
+        verticalAlign: 'top',
+        cursor: 'pointer'
+      }
+    }, React.createElement("td", {
+      style: {
+        padding: '9px 10px 9px 16px',
+        fontFamily: MONO,
+        fontSize: 11,
+        color: P.faint,
+        fontWeight: 600
+      }
+    }, React.createElement("span", {
+      style: {
+        color: '#cdd6e2',
+        marginRight: 3
+      }
+    }, expanded ? '▾' : '▸'), s.code), React.createElement("td", {
+      style: {
+        padding: '9px 10px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: mColor,
+        flexShrink: 0
+      }
+    }), React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, s.name)), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: P.faint,
+        marginTop: 2
+      }
+    }, s.ref)), React.createElement("td", {
+      style: {
+        padding: '9px 10px',
+        color: P.ink2,
+        fontSize: 11.5,
+        lineHeight: 1.45
+      }
+    }, s.expr), React.createElement("td", {
+      style: {
+        padding: '9px 10px'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 600,
+        color: mColor,
+        background: mColor + '1c',
+        padding: '2px 8px',
+        borderRadius: 6,
+        whiteSpace: 'nowrap'
+      }
+    }, s.unit || '—')), React.createElement("td", {
+      style: {
+        padding: '9px 10px',
+        fontFamily: MONO,
+        fontWeight: 600,
+        color: P.ink
+      }
+    }, s.bench), React.createElement("td", {
+      style: {
+        padding: '9px 10px'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 600,
+        color: used > 0 ? P.green : P.faint,
+        background: used > 0 ? '#e7f6ed' : '#f1f3f6',
+        padding: '2px 8px',
+        borderRadius: 20,
+        whiteSpace: 'nowrap'
+      }
+    }, used > 0 ? 'in use · ' + used + ' dept' + (used > 1 ? 's' : '') : 'not in use'))), expanded && React.createElement("tr", {
+      key: s.code + '-x',
+      style: {
+        borderBottom: '1px solid #e8edf3',
+        background: '#fbfcfe'
+      }
+    }, React.createElement("td", null), React.createElement("td", {
+      colSpan: "5",
+      style: {
+        padding: '4px 16px 16px 10px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 12
+      }
+    }, React.createElement("div", {
+      style: {
+        background: '#fff',
+        border: '1px solid #e8edf3',
+        borderRadius: 9,
+        padding: '11px 13px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#0090ca',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 4
+      }
+    }, "Numerator \u2014 what to count"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, gd.numDef || s.num || '—')), React.createElement("div", {
+      style: {
+        background: '#fff',
+        border: '1px solid #e8edf3',
+        borderRadius: 9,
+        padding: '11px 13px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#6a52d4',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 4
+      }
+    }, "Denominator \u2014 what to count"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, gd.denDef || s.den || '—')), React.createElement("div", {
+      style: {
+        background: '#eef8fc',
+        border: '1px solid #dceffa',
+        borderRadius: 9,
+        padding: '11px 13px',
+        gridColumn: '1 / -1'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#0072a3',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 4
+      }
+    }, "\uD83D\uDD22 Worked example"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#0072a3',
+        lineHeight: 1.55,
+        fontFamily: MONO
+      }
+    }, gd.example || '—')), React.createElement("div", {
+      style: {
+        background: '#fff',
+        border: '1px solid #e8edf3',
+        borderRadius: 9,
+        padding: '11px 13px',
+        gridColumn: '1 / -1'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        color: '#1f9d57',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px',
+        marginBottom: 4
+      }
+    }, "\uD83D\uDCA1 Interpretation & action"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: P.ink2,
+        lineHeight: 1.5
+      }
+    }, gd.interpretation || '—')), React.createElement("div", {
+      style: {
+        gridColumn: '1 / -1',
+        display: 'flex',
+        gap: 16,
+        flexWrap: 'wrap',
+        fontSize: 10.5,
+        color: P.faint
+      }
+    }, React.createElement("span", null, React.createElement("b", {
+      style: {
+        color: P.muted
+      }
+    }, "Multiplier:"), " ", gd.multiplier || '—'), React.createElement("span", null, React.createElement("b", {
+      style: {
+        color: P.muted
+      }
+    }, "Source:"), " ", gd.source || '—'), React.createElement("span", null, React.createElement("b", {
+      style: {
+        color: P.muted
+      }
+    }, "Reference:"), " ", gd.reference || s.ref || '—')))))];
+  }))))))));
+}
+function QCDataEntry() {
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 13,
+      marginBottom: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: '#eef8fc',
+      color: P.blue,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement("svg", {
+    width: "22",
+    height: "22",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M4 4h16v16H4zM4 9h16M9 4v16"
+  }))), React.createElement("div", null, React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontSize: 21,
+      fontWeight: 700,
+      color: P.ink,
+      letterSpacing: '-.3px'
+    }
+  }, "Quality Data Entry"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: P.muted,
+      marginTop: 2
+    }
+  }, "Log the month's incidents \u2014 the count / rate is calculated automatically"))), typeof DataQualityForm !== 'undefined' ? React.createElement(DataQualityForm, null) : React.createElement("div", {
+    style: {
+      padding: 40,
+      textAlign: 'center',
+      color: P.muted
+    }
+  }, "Data entry form unavailable."));
+}
+const QC_ICONS = {
+  dashboard: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
+  scorecard: 'M4 4h16v16H4zM4 9h16M4 14h16M9 4v16',
+  trends: 'M3 17l6-6 4 4 8-8',
+  reports: 'M6 2h9l5 5v15H6zM14 2v6h6',
+  incidents: 'M12 2l10 18H2zM12 9v5M12 17v.5',
+  admin: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z',
+  dataentry: 'M4 4h16v16H4zM4 9h16M9 4v16',
+  actionplans: 'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11'
+};
+function QualityView({
+  view,
+  initialDept,
+  setRoute
+}) {
+  const Q = window.useQualityStore();
+  const depts = (Q.depts || []).filter(d => d.key && d.indicators && d.indicators.length);
+  const [q, setQ] = useState('');
+  const v = view || 'dashboard';
+  return React.createElement("div", {
+    style: {
+      fontFamily: "'IBM Plex Sans',system-ui,sans-serif",
+      color: P.ink
+    }
+  }, v === 'dashboard' && React.createElement(QCDashboard, {
+    depts: depts,
+    Q: Q
+  }), v === 'scorecard' && React.createElement(QCScorecard, {
+    depts: depts
+  }), v === 'trends' && React.createElement(QCTrends, {
+    depts: depts
+  }), v === 'reports' && React.createElement(QCReports, {
+    depts: depts
+  }), v === 'incidents' && React.createElement(QCIncidents, {
+    depts: depts,
+    Q: Q
+  }), v === 'actionplans' && React.createElement(QCActionPlans, {
+    depts: depts
+  }), v === 'dataentry' && React.createElement(QCDataEntry, null), v === 'admin' && React.createElement(QCAdmin, {
+    Q: Q,
+    q: q,
+    onQ: setQ,
+    initialDept: initialDept
+  }));
+}
+window.QualityView = QualityView;
+function QualityConsole({
+  onExit,
+  initialView,
+  initialDept,
+  setRoute
+}) {
+  const Q = window.useQualityStore();
+  const depts = (Q.depts || []).filter(d => d.key && d.indicators && d.indicators.length);
+  const [module, setModule] = useState(initialView || 'dashboard');
+  const [gq, setGq] = useState('');
+  const [wsOpen, setWsOpen] = useState(false);
+  const WORKSPACES = [{
+    id: 'stats',
+    label: 'Statistics',
+    home: 'dashboard'
+  }, {
+    id: 'datacol',
+    label: 'Data Collection',
+    home: 'dcReview'
+  }, {
+    id: 'staff',
+    label: 'Staff Management',
+    home: 'nurseHome'
+  }, {
+    id: 'quality',
+    label: 'Quality Indicators',
+    home: 'quality',
+    current: true
+  }, {
+    id: 'users',
+    label: 'User Management',
+    home: 'users'
+  }];
+  const goWorkspace = w => {
+    setWsOpen(false);
+    if (w.current) return;
+    if (setRoute) setRoute({
+      view: w.home
+    });else if (onExit) onExit();
+  };
+  const crumbTitle = {
+    dashboard: 'Dashboard',
+    scorecard: 'Scorecard',
+    trends: 'Trends',
+    reports: 'Reports',
+    incidents: 'Incident Reports',
+    admin: 'Indicator Administration',
+    dataentry: 'Quality Data Entry',
+    actionplans: 'Action Plans'
+  }[module] || 'Dashboard';
+  const navGroups = [{
+    sec: 'Monitor',
+    items: [{
+      id: 'dashboard',
+      label: 'Dashboard'
+    }, {
+      id: 'scorecard',
+      label: 'Scorecard'
+    }, {
+      id: 'trends',
+      label: 'Trends'
+    }]
+  }, {
+    sec: 'Reporting',
+    items: [{
+      id: 'reports',
+      label: 'Reports'
+    }, {
+      id: 'incidents',
+      label: 'Incident Reports'
+    }]
+  }, {
+    sec: 'Administration',
+    items: [{
+      id: 'admin',
+      label: 'Indicator Administration'
+    }, {
+      id: 'dataentry',
+      label: 'Quality Data Entry'
+    }, {
+      id: 'actionplans',
+      label: 'Action Plans'
+    }]
+  }];
+  return React.createElement("div", {
+    style: {
+      height: '100vh',
+      display: 'grid',
+      gridTemplateColumns: '236px 1fr',
+      overflow: 'hidden',
+      fontFamily: "'IBM Plex Sans',system-ui,sans-serif",
+      background: 'transparent',
+      color: P.ink
+    }
+  }, React.createElement("aside", {
+    className: "qsb",
+    style: {
+      background: P.navy,
+      color: '#c7d2e0',
+      display: 'flex',
+      flexDirection: 'column',
+      minWidth: 0,
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      position: 'relative',
+      flexShrink: 0
+    }
+  }, React.createElement("div", {
+    onClick: () => setWsOpen(o => !o),
+    title: "Switch workspace",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '0 16px',
+      height: 56,
+      borderBottom: '1px solid rgba(255,255,255,.07)',
+      cursor: 'pointer'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 32,
+      height: 32,
+      borderRadius: 9,
+      background: 'linear-gradient(135deg,#27a8db,#0072a3)',
+      display: 'grid',
+      placeItems: 'center',
+      color: '#fff',
+      fontWeight: 700,
+      fontSize: 15,
+      boxShadow: '0 2px 9px rgba(0,144,202,.5)'
+    }
+  }, "U"), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      color: '#fff',
+      fontSize: 14,
+      letterSpacing: '.2px',
+      whiteSpace: 'nowrap'
+    }
+  }, "UNICO"), React.createElement("div", {
+    style: {
+      fontWeight: 500,
+      color: '#83909f',
+      fontSize: 9.5,
+      letterSpacing: '.7px',
+      textTransform: 'uppercase'
+    }
+  }, "Hospital Analytics")), React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "#83909f",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    style: {
+      flexShrink: 0,
+      transform: wsOpen ? 'rotate(180deg)' : 'none',
+      transition: 'transform .15s'
+    }
+  }, React.createElement("path", {
+    d: "M6 9l6 6 6-6"
+  }))), wsOpen && React.createElement(React.Fragment, null, React.createElement("div", {
+    onClick: () => setWsOpen(false),
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 40
+    }
+  }), React.createElement("div", {
+    style: {
+      position: 'absolute',
+      top: 52,
+      left: 12,
+      right: 12,
+      zIndex: 41,
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 10,
+      boxShadow: '0 12px 34px rgba(6,14,26,.45)',
+      padding: 6
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      color: P.faint,
+      textTransform: 'uppercase',
+      letterSpacing: '.5px',
+      padding: '6px 10px 4px'
+    }
+  }, "Switch workspace"), WORKSPACES.map(w => React.createElement("div", {
+    key: w.id,
+    onClick: () => goWorkspace(w),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '8px 10px',
+      borderRadius: 7,
+      cursor: 'pointer',
+      fontSize: 13,
+      fontWeight: w.current ? 700 : 500,
+      color: w.current ? P.blue700 : P.ink,
+      background: w.current ? '#eef8fc' : 'transparent'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: w.current ? P.blue : '#cdd6e2',
+      flexShrink: 0
+    }
+  }), React.createElement("span", {
+    style: {
+      flex: 1,
+      whiteSpace: 'nowrap'
+    }
+  }, w.label), w.current && React.createElement("span", {
+    style: {
+      fontSize: 9.5,
+      color: P.faint
+    }
+  }, "current")))))), React.createElement("div", {
+    style: {
+      flex: 1,
+      overflowY: 'auto',
+      padding: '10px 0'
+    }
+  }, navGroups.map(g => React.createElement("div", {
+    key: g.sec
+  }, React.createElement("div", {
+    style: {
+      padding: '13px 16px 5px',
+      fontSize: 10,
+      letterSpacing: '.8px',
+      textTransform: 'uppercase',
+      color: '#6b7a90',
+      fontWeight: 600
+    }
+  }, g.sec), g.items.map(n => {
+    const active = module === n.id;
+    return React.createElement("div", {
+      key: n.id,
+      onClick: () => setModule(n.id),
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        padding: '8px 16px',
+        cursor: 'pointer',
+        borderLeft: '3px solid ' + (active ? '#27a8db' : 'transparent'),
+        whiteSpace: 'nowrap',
+        fontSize: 13,
+        fontWeight: 500,
+        color: active ? '#fff' : '#c7d2e0',
+        background: active ? 'linear-gradient(90deg,rgba(11,102,208,.24),transparent)' : 'transparent'
+      }
+    }, React.createElement("svg", {
+      width: "17",
+      height: "17",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.9",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      style: {
+        flexShrink: 0,
+        opacity: .92
+      }
+    }, React.createElement("path", {
+      d: QC_ICONS[n.id]
+    })), React.createElement("span", null, n.label));
+  })))), React.createElement("div", {
+    style: {
+      padding: '11px 14px',
+      borderTop: '1px solid rgba(255,255,255,.07)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      flexShrink: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 32,
+      height: 32,
+      borderRadius: 9,
+      background: 'linear-gradient(135deg,#3ab5a7,#0090ca)',
+      color: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      fontWeight: 700,
+      fontSize: 12
+    }
+  }, "QM"), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#e6edf5',
+      whiteSpace: 'nowrap'
+    }
+  }, "Quality Manager"), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: '#83909f'
+    }
+  }, "Admin \xB7 full access")))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      minWidth: 0,
+      height: '100vh',
+      overflow: 'hidden'
+    }
+  }, React.createElement("header", {
+    style: {
+      height: 56,
+      background: 'rgba(255,255,255,.62)',
+      backdropFilter: 'blur(20px) saturate(1.6)',
+      WebkitBackdropFilter: 'blur(20px) saturate(1.6)',
+      borderBottom: '1px solid rgba(255,255,255,.8)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      padding: '0 18px',
+      flexShrink: 0,
+      zIndex: 5
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 32,
+      height: 32,
+      border: '1px solid ' + P.line,
+      background: P.panel2,
+      borderRadius: 7,
+      display: 'grid',
+      placeItems: 'center',
+      color: P.ink2
+    }
+  }, React.createElement("svg", {
+    width: "16",
+    height: "16",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M3 6h18M3 12h18M3 18h18"
+  }))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      color: P.muted,
+      fontSize: 12,
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement("span", null, "Quality Indicators"), React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2"
+  }, React.createElement("path", {
+    d: "M9 6l6 6-6 6"
+  })), React.createElement("b", {
+    style: {
+      color: P.ink,
+      fontWeight: 600,
+      fontSize: 14
+    }
+  }, crumbTitle)), React.createElement("div", {
+    style: {
+      marginLeft: 8,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      background: P.panel2,
+      border: '1px solid ' + P.line,
+      borderRadius: 8,
+      padding: '7px 11px',
+      width: 300,
+      color: P.faint
+    }
+  }, React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.9",
+    strokeLinecap: "round"
+  }, React.createElement("path", {
+    d: "M11 4a7 7 0 105 12l4 4M11 4a7 7 0 015 12"
+  })), React.createElement("input", {
+    placeholder: "Search indicators, departments, references\u2026",
+    value: gq,
+    onInput: e => setGq(e.target.value),
+    onChange: e => setGq(e.target.value),
+    style: {
+      border: 0,
+      background: 'transparent',
+      outline: 'none',
+      fontSize: 12.5,
+      color: P.ink,
+      width: '100%'
+    }
+  })), React.createElement("div", {
+    style: {
+      marginLeft: 'auto',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      background: P.panel2,
+      border: '1px solid ' + P.line,
+      borderRadius: 20,
+      padding: '5px 12px',
+      fontSize: 12,
+      color: P.ink2,
+      fontWeight: 500,
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: '#3ddc97',
+      boxShadow: '0 0 0 3px rgba(61,220,151,.18)'
+    }
+  }), fyLabelOf(defaultFy(depts))), React.createElement("div", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: 9,
+      background: 'linear-gradient(135deg,#3ab5a7,#0090ca)',
+      color: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      fontWeight: 700,
+      fontSize: 13
+    }
+  }, "QM"))), React.createElement("div", {
+    style: {
+      flex: 1,
+      overflowY: 'auto',
+      padding: '20px 26px 64px'
+    }
+  }, module === 'dashboard' && React.createElement(QCDashboard, {
+    depts: depts,
+    Q: Q
+  }), module === 'scorecard' && React.createElement(QCScorecard, {
+    depts: depts
+  }), module === 'trends' && React.createElement(QCTrends, {
+    depts: depts
+  }), module === 'reports' && React.createElement(QCReports, {
+    depts: depts
+  }), module === 'incidents' && React.createElement(QCIncidents, {
+    depts: depts,
+    Q: Q
+  }), module === 'actionplans' && React.createElement(QCActionPlans, {
+    depts: depts
+  }), module === 'dataentry' && React.createElement(QCDataEntry, null), module === 'admin' && React.createElement(QCAdmin, {
+    Q: Q,
+    q: gq,
+    onQ: setGq,
+    initialDept: initialDept
+  }))));
+}
+window.QualityConsole = QualityConsole;
+function QualityReportsPanel() {
+  const Q = window.useQualityStore();
+  const depts = (Q.depts || []).filter(d => d.key && d.indicators && d.indicators.length);
+  return React.createElement(QCReportBuilder, {
+    depts: depts
+  });
+}
+window.QualityReportsPanel = QualityReportsPanel;
+window.QCReportBuilder = QCReportBuilder;
+})();
+;
+/* ===== quality-dept-manage.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect
+  } = React;
+  function qdmApi(path, opts) {
+    return fetch(path, Object.assign({
+      headers: {
+        'content-type': 'application/json'
+      },
+      credentials: 'same-origin'
+    }, opts || {})).then(r => r.json().catch(() => ({
+      ok: r.ok
+    }))).catch(e => ({
+      ok: false,
+      error: String(e)
+    }));
+  }
+  function qdmToast(msg, kind) {
+    try {
+      if (window.UI && window.UI.toast) window.UI.toast(msg, kind || 'info');
+    } catch (e) {}
+  }
+  function QualityDeptManage({
+    setRoute
+  }) {
+    const [areas, setAreas] = useState(null);
+    const [name, setName] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [editKey, setEditKey] = useState(null);
+    const [editName, setEditName] = useState('');
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    const isAdmin = !me || me.role !== 'collector';
+    const load = () => qdmApi('/api/quality/areas').then(r => setAreas(r.ok ? r.areas || [] : []));
+    useEffect(() => {
+      load();
+    }, []);
+    const create = () => {
+      const nm = name.trim();
+      if (!nm) {
+        qdmToast('Enter a department name', 'error');
+        return;
+      }
+      setBusy(true);
+      qdmApi('/api/quality/areas', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: nm
+        })
+      }).then(r => {
+        setBusy(false);
+        if (r.ok) {
+          setName('');
+          qdmToast('Department “' + nm + '” created', 'success');
+          load();
+        } else qdmToast(r.error || 'Could not create the department', 'error');
+      });
+    };
+    const startEdit = a => {
+      setEditKey(a.key);
+      setEditName(a.name);
+    };
+    const saveEdit = a => {
+      const nm = editName.trim();
+      if (!nm) {
+        qdmToast('Name is required', 'error');
+        return;
+      }
+      qdmApi('/api/quality/areas/' + encodeURIComponent(a.key), {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: nm
+        })
+      }).then(r => {
+        if (r.ok) {
+          setEditKey(null);
+          qdmToast('Renamed', 'success');
+          load();
+        } else qdmToast(r.error || 'Could not rename', 'error');
+      });
+    };
+    const remove = async a => {
+      let ok = false;
+      const msg = 'Removes the department/area “' + a.name + '” and its ' + a.indicatorCount + ' indicator(s) with all collected data. This cannot be undone.';
+      try {
+        ok = await window.UI.confirm({
+          title: 'Delete ' + a.name + '?',
+          message: msg,
+          danger: true,
+          confirmLabel: 'Delete'
+        });
+      } catch (e) {
+        ok = window.confirm(msg);
+      }
+      if (!ok) return;
+      qdmApi('/api/quality/areas/' + encodeURIComponent(a.key), {
+        method: 'DELETE'
+      }).then(r => {
+        if (r.ok) {
+          qdmToast('Department deleted', 'success');
+          load();
+        } else qdmToast(r.error || 'Could not delete', 'error');
+      });
+    };
+    const inputSty = {
+      padding: '9px 11px',
+      border: '1px solid var(--line)',
+      borderRadius: 8,
+      fontSize: 13,
+      fontFamily: 'inherit',
+      background: '#fff',
+      outline: 'none',
+      width: '100%'
+    };
+    const total = areas ? areas.length : 0;
+    const totalInd = areas ? areas.reduce((s, a) => s + (a.indicatorCount || 0), 0) : 0;
+    const Kpi = ({
+      label,
+      val,
+      foot,
+      color
+    }) => React.createElement("div", {
+      className: "card anim-pop",
+      style: {
+        padding: '15px 18px',
+        borderLeft: '4px solid ' + color,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 92
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink-2)'
+      }
+    }, label), React.createElement("div", {
+      className: "num",
+      style: {
+        fontSize: 28,
+        fontWeight: 700,
+        color,
+        margin: '6px 0 0',
+        lineHeight: 1
+      }
+    }, val), foot && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        marginTop: 4
+      }
+    }, foot));
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 16
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.layers,
+      title: "Manage Quality Departments",
+      sub: "Add, rename or remove the departments / units (OPD, ICU, Labour\u2026) that hold quality indicators. New departments become available in Quality Data Entry & the collector forms.",
+      right: React.createElement("button", {
+        className: "btn sm",
+        onClick: load
+      }, React.createElement(Ic, {
+        d: I.trend,
+        s: 14
+      }), "Refresh")
+    }), React.createElement("div", {
+      className: "grid",
+      style: {
+        gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))'
+      }
+    }, React.createElement(Kpi, {
+      label: "Departments",
+      val: total,
+      foot: "quality areas / units",
+      color: "#0090ca"
+    }), React.createElement(Kpi, {
+      label: "Indicators",
+      val: totalInd,
+      foot: "tracked across departments",
+      color: "#6a52d4"
+    })), isAdmin && React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-b",
+      style: {
+        display: 'flex',
+        gap: 10,
+        flexWrap: 'wrap',
+        alignItems: 'flex-end'
+      }
+    }, React.createElement("div", {
+      className: "field",
+      style: {
+        flex: 1,
+        minWidth: 220
+      }
+    }, React.createElement("label", null, "New department / area name"), React.createElement("input", {
+      style: inputSty,
+      value: name,
+      onChange: e => setName(e.target.value),
+      placeholder: "e.g. OPD, ICU, Labour Ward\u2026",
+      onKeyDown: e => {
+        if (e.key === 'Enter') create();
+      }
+    })), React.createElement("button", {
+      className: "btn pri",
+      onClick: create,
+      disabled: busy || !name.trim()
+    }, React.createElement(Ic, {
+      d: I.plus,
+      s: 15
+    }), busy ? 'Creating…' : 'Add department'))), React.createElement("div", {
+      className: "card",
+      style: {
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Departments"), React.createElement("span", {
+      className: "spacer"
+    }), React.createElement("span", {
+      className: "tag num"
+    }, total)), areas === null ? React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026") : areas.length === 0 ? React.createElement("div", {
+      style: {
+        padding: 28,
+        color: 'var(--faint)',
+        textAlign: 'center',
+        fontSize: 13
+      }
+    }, "No departments yet. Add one above.") : React.createElement("table", {
+      className: "tbl",
+      style: {
+        width: '100%'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: {
+        textAlign: 'left'
+      }
+    }, "Department / unit"), React.createElement("th", {
+      style: {
+        textAlign: 'right'
+      }
+    }, "Indicators"), React.createElement("th", {
+      style: {
+        textAlign: 'right'
+      }
+    }, "Actions"))), React.createElement("tbody", null, areas.map(a => React.createElement("tr", {
+      key: a.key
+    }, React.createElement("td", {
+      style: {
+        textAlign: 'left'
+      }
+    }, editKey === a.key ? React.createElement("input", {
+      style: {
+        ...inputSty,
+        maxWidth: 320
+      },
+      value: editName,
+      autoFocus: true,
+      onChange: e => setEditName(e.target.value),
+      onKeyDown: e => {
+        if (e.key === 'Enter') saveEdit(a);
+        if (e.key === 'Escape') setEditKey(null);
+      }
+    }) : React.createElement("b", {
+      style: {
+        color: 'var(--ink)',
+        cursor: 'pointer'
+      },
+      title: "Open in Quality Data Entry",
+      onClick: () => setRoute && setRoute({
+        view: 'qualityDataEntry',
+        dept: a.key
+      })
+    }, a.name), React.createElement("span", {
+      style: {
+        color: 'var(--faint)',
+        fontFamily: 'IBM Plex Mono',
+        fontSize: 10.5,
+        marginLeft: 8
+      }
+    }, a.key)), React.createElement("td", {
+      style: {
+        textAlign: 'right'
+      },
+      className: "num"
+    }, a.indicatorCount), React.createElement("td", {
+      style: {
+        textAlign: 'right',
+        whiteSpace: 'nowrap'
+      }
+    }, editKey === a.key ? React.createElement(React.Fragment, null, React.createElement("button", {
+      className: "btn sm pri",
+      onClick: () => saveEdit(a),
+      style: {
+        marginRight: 5
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 13
+    }), "Save"), React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setEditKey(null)
+    }, "Cancel")) : isAdmin ? React.createElement(React.Fragment, null, React.createElement("button", {
+      className: "btn sm",
+      onClick: () => startEdit(a),
+      style: {
+        marginRight: 5
+      }
+    }, React.createElement(Ic, {
+      d: I.edit,
+      s: 13
+    }), "Rename"), React.createElement("button", {
+      className: "btn sm",
+      style: {
+        color: 'var(--rose)',
+        borderColor: '#f1c6cd'
+      },
+      onClick: () => remove(a)
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 13
+    }), "Delete")) : React.createElement("span", {
+      style: {
+        color: 'var(--faint)',
+        fontSize: 11
+      }
+    }, "view only"))))))), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        padding: '0 2px'
+      }
+    }, React.createElement(Ic, {
+      d: I.doc,
+      s: 13
+    }), " A new department starts with no indicators \u2014 add them from ", React.createElement("b", {
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }, "Indicator Administration"), " or the collector\u2019s \u201CAdd a new indicator\u201D. Newly created departments appear in the entry forms after the next page load."));
+  }
+  window.QualityDeptManage = QualityDeptManage;
+})();
+})();
+;
+/* ===== charts-gallery.jsx ===== */
+(function(){
+function chartToPNG(svgEl, filename) {
+  const toast = (m, t) => {
+    try {
+      window.UI && window.UI.toast && window.UI.toast(m, t);
+    } catch (e) {}
+  };
+  if (!svgEl) {
+    toast('Nothing to export', 'error');
+    return;
+  }
+  try {
+    const clone = svgEl.cloneNode(true);
+    const rect = svgEl.getBoundingClientRect();
+    const vb = (svgEl.getAttribute('viewBox') || '').split(/[ ,]+/).map(Number);
+    let w = Math.round(rect.width || (vb.length === 4 ? vb[2] : 300));
+    let h = Math.round(rect.height || (vb.length === 4 ? vb[3] : 200));
+    if (!w || !isFinite(w)) w = 600;
+    if (!h || !isFinite(h)) h = 360;
+    clone.setAttribute('width', w);
+    clone.setAttribute('height', h);
+    if (vb.length !== 4) clone.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    const svgStr = new XMLSerializer().serializeToString(clone);
+    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr);
+    const dpr = Math.max(2, Math.round(window.devicePixelRatio || 1) + 1);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(w * dpr));
+        canvas.height = Math.max(1, Math.round(h * dpr));
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const png = canvas.toDataURL('image/png');
+        const a = document.createElement('a');
+        a.href = png;
+        a.download = (filename || 'chart') + '.png';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        toast('Chart saved · ' + a.download, 'success');
+      } catch (e) {
+        toast('PNG export failed', 'error');
+      }
+    };
+    img.onerror = () => {
+      toast('PNG export failed (could not render chart)', 'error');
+    };
+    img.src = url;
+  } catch (e) {
+    toast('PNG export failed', 'error');
+  }
+}
+function ChartsGallery({
+  dept,
+  setRoute
+}) {
+  const d = dept;
+  const tone = PALETTE[d.id.charCodeAt(0) % PALETTE.length];
+  const series = d && d.series || [];
+  const breakdownCols = d.cols.filter(c => c.id !== d.primary && !c.pct);
+  const pctCols = d.cols.filter(c => c.pct);
+  const numericCols = d.cols.filter(c => !c.pct);
+  const secondMetric = numericCols.find(c => c.id !== d.primary);
+  const lineCol = pctCols[0] || secondMetric || null;
+  const mixSeries = breakdownCols.slice(0, 6).map((c, i) => ({
+    id: c.id,
+    label: c.label,
+    color: PALETTE[i % PALETTE.length]
+  }));
+  const hasBreakdown = mixSeries.length > 1;
+  const donutData = breakdownCols.map((c, i) => ({
+    label: c.label,
+    value: series.reduce((s, r) => s + (r[c.id] || 0), 0),
+    color: PALETTE[i % PALETTE.length]
+  })).filter(x => x.value > 0);
+  const hasDonut = donutData.length > 1;
+  const primTotal = series.reduce((s, r) => s + (r[d.primary] || 0), 0);
+  const primAvg = series.length ? Math.round(primTotal / series.length) : 0;
+  const hbarData = series.map(r => ({
+    label: r.month,
+    value: r[d.primary] || 0
+  }));
+  const charts = [];
+  charts.push({
+    id: 'trend',
+    title: 'Monthly Trend',
+    sub: 'bar',
+    render: flat => React.createElement(BarChart, {
+      data: series,
+      x: "month",
+      y: d.primary,
+      height: 260,
+      color: tone,
+      flat: flat
+    })
+  });
+  if (typeof window.Bar3D === 'function') charts.push({
+    id: 'iso',
+    title: '3D Trend',
+    sub: 'isometric bars',
+    render: flat => React.createElement(Bar3D, {
+      data: series,
+      x: "month",
+      y: d.primary,
+      height: 280,
+      color: tone,
+      flat: flat
+    })
+  });
+  charts.push({
+    id: 'line',
+    title: 'Line',
+    sub: 'trend line',
+    render: flat => React.createElement(LineChart, {
+      data: series,
+      x: "full",
+      y: d.primary,
+      height: 260,
+      color: tone,
+      flat: flat
+    })
+  });
+  if (typeof window.AreaTargetChart === 'function') charts.push({
+    id: 'area',
+    title: 'Area vs Target',
+    sub: `target = avg ${fmt(primAvg)}`,
+    render: flat => React.createElement(AreaTargetChart, {
+      data: series,
+      x: "full",
+      y: d.primary,
+      target: primAvg,
+      height: 260,
+      color: tone,
+      flat: flat
+    })
+  });
+  if (typeof window.ComboChart === 'function' && lineCol) charts.push({
+    id: 'combo',
+    title: 'Bar + Line Combo',
+    sub: `${d.primaryLabel} vs ${lineCol.label}`,
+    render: flat => React.createElement(ComboChart, {
+      data: series,
+      x: "month",
+      barKey: d.primary,
+      lineKey: lineCol.id,
+      barColor: tone,
+      lineColor: PALETTE[3],
+      barLabel: d.primaryLabel,
+      lineLabel: lineCol.label,
+      height: 260,
+      flat: flat
+    })
+  });
+  if (hasBreakdown) charts.push({
+    id: 'grouped',
+    title: 'Grouped',
+    sub: 'breakdown clusters',
+    render: flat => React.createElement(GroupedBar, {
+      data: series,
+      x: "month",
+      series: mixSeries,
+      height: 270,
+      flat: flat
+    })
+  });
+  if (hasBreakdown) charts.push({
+    id: 'stacked',
+    title: 'Stacked',
+    sub: 'cumulative breakdown',
+    render: flat => React.createElement(StackedBar, {
+      data: series,
+      x: "month",
+      series: mixSeries,
+      height: 270,
+      flat: flat
+    })
+  });
+  if (hasBreakdown && typeof window.StackedPctBar === 'function') charts.push({
+    id: 'stackpct',
+    title: '100% Stacked',
+    sub: 'composition share',
+    render: flat => React.createElement(StackedPctBar, {
+      data: series,
+      x: "month",
+      series: mixSeries,
+      height: 270,
+      flat: flat
+    })
+  });
+  if (typeof window.HBarChart === 'function') charts.push({
+    id: 'hbar',
+    title: 'Horizontal',
+    sub: `${d.primaryLabel} by month`,
+    render: flat => React.createElement(HBarChart, {
+      data: hbarData,
+      x: "label",
+      y: "value",
+      height: Math.max(220, hbarData.length * 26),
+      flat: flat
+    })
+  });
+  if (hasDonut) charts.push({
+    id: 'donut',
+    title: 'Composition',
+    sub: 'breakdown totals',
+    render: flat => React.createElement("div", {
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        minHeight: 260
+      }
+    }, React.createElement(Donut, {
+      data: donutData,
+      size: 200,
+      centerValue: fmt(donutData.reduce((s, x) => s + x.value, 0)),
+      centerLabel: "Total",
+      flat: flat
+    }))
+  });
+  const svgRefs = React.useRef({});
+  const grabSvg = id => node => {
+    if (node) svgRefs.current[id] = node.querySelector('svg');
+  };
+  const downloadPNG = c => {
+    const svg = svgRefs.current[c.id];
+    chartToPNG(svg, `UNICO-${d.short}-${c.id}`);
+  };
+  const [exporting, setExporting] = React.useState(false);
+  const [pdfCharts, setPdfCharts] = React.useState(null);
+  const exportAllPDF = () => {
+    const native = window.unicoNative;
+    const toast = (m, t) => {
+      try {
+        window.UI && window.UI.toast && window.UI.toast(m, t);
+      } catch (e) {}
+    };
+    setExporting(true);
+    setPdfCharts(charts);
+    document.body.classList.add('pdf-export-mode');
+    setTimeout(async () => {
+      try {
+        if (native && typeof native.exportPDF === 'function') {
+          const res = await native.exportPDF({
+            pageSize: 'A4',
+            landscape: true,
+            defaultName: `UNICO-${d.short}-charts`
+          });
+          if (res && res.ok) toast('Charts PDF' + (res.path ? ' saved · ' + res.path : ' ready — save it from the print dialog'), 'success');else if (res && res.canceled) {} else toast(res && res.error || 'PDF export failed', 'error');
+        } else {
+          window.print();
+          toast('Use the print dialog to save as PDF', 'info');
+        }
+      } catch (e) {
+        toast('PDF export failed', 'error');
+      } finally {
+        document.body.classList.remove('pdf-export-mode');
+        setExporting(false);
+        setPdfCharts(null);
+      }
+    }, 120);
+  };
+  const pdfRoot = typeof document !== 'undefined' ? document.getElementById('pdf-root') : null;
+  const pages = [];
+  if (pdfCharts) {
+    for (let i = 0; i < pdfCharts.length; i += 2) pages.push(pdfCharts.slice(i, i + 2));
+  }
+  const PdfHeader = () => React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      borderBottom: '2px solid var(--blue)',
+      paddingBottom: 14
+    }
+  }, React.createElement(Ic, {
+    d: DEPT_ICON[d.id] || I.activity,
+    s: 22,
+    c: tone
+  }), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15
+    }
+  }, d.name), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      marginTop: 2
+    }
+  }, "Charts")), React.createElement("div", {
+    className: "spacer"
+  }), React.createElement("span", {
+    className: "tag"
+  }, d.group));
+  const PdfFooter = ({
+    n,
+    total
+  }) => React.createElement("div", {
+    className: "pdf-foot",
+    style: {
+      marginTop: 20,
+      borderTop: '1px solid var(--line)',
+      paddingTop: 8,
+      fontSize: 9.5,
+      color: 'var(--faint)',
+      display: 'flex',
+      flex: '0 0 auto'
+    }
+  }, React.createElement("span", null, "UNICO HOSPITALS PLC"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", null, d.name, " \u2014 Charts"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", null, "Page ", n, " of ", total));
+  return React.createElement("div", {
+    className: "grid",
+    style: {
+      gap: 16
+    }
+  }, React.createElement(SectionTitle, {
+    icon: I.trend,
+    title: `${d.name} — Charts Gallery`,
+    sub: `${charts.length} visualizations · ${series.length} month${series.length !== 1 ? 's' : ''}`,
+    right: React.createElement(React.Fragment, null, setRoute && React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setRoute({
+        view: 'departments',
+        dept: d.id
+      })
+    }, React.createElement(Ic, {
+      d: I.chevR,
+      s: 15,
+      style: {
+        transform: 'rotate(180deg)'
+      }
+    }), "Back"), React.createElement("button", {
+      className: "btn pri sm",
+      onClick: exportAllPDF,
+      disabled: exporting
+    }, React.createElement(Ic, {
+      d: I.download,
+      s: 15
+    }), exporting ? 'Exporting…' : 'Export all to PDF'))
+  }), pdfRoot && pdfCharts && ReactDOM.createPortal(React.createElement("div", {
+    className: "pdf-doc"
+  }, pages.map((grp, pi) => React.createElement("section", {
+    className: "pdf-page",
+    key: pi
+  }, React.createElement("div", null, React.createElement(PdfHeader, null), React.createElement("div", {
+    style: {
+      marginTop: 18,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 18
+    }
+  }, grp.map(c => React.createElement("div", {
+    key: c.id
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13,
+      marginBottom: 6,
+      color: tone
+    }
+  }, c.title, React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginLeft: 8
+    }
+  }, c.sub)), c.render(true)))), React.createElement(PdfFooter, {
+    n: pi + 1,
+    total: pages.length
+  }))))), pdfRoot), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: 'repeat(2,minmax(0,1fr))',
+      gap: 16
+    }
+  }, charts.map(c => React.createElement("div", {
+    className: "card",
+    key: c.id,
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, c.title), c.sub && React.createElement("span", {
+    className: "sub"
+  }, c.sub), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => downloadPNG(c),
+    title: "Download this chart as PNG"
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 14
+  }), "PNG")), React.createElement("div", {
+    className: "card-b",
+    ref: grabSvg(c.id),
+    style: {
+      overflowX: 'auto'
+    }
+  }, c.render(false)))), charts.length === 0 && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: '40px 0'
+    }
+  }, "No chartable data for this department."))));
+}
+window.ChartsGallery = ChartsGallery;
+})();
