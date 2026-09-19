@@ -1680,7 +1680,7 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   const DEPARTMENTS=["ER","OPD","NICU","MICU","SICU","CCU","CT ICU","Level-10","Level-9","Level-11",
     "LDR","Dialysis","Endoscopy","Cath Lab","General OT","Cardiac OT","Radiology","HomeCare","DayCare",
     "Oncology","Infection Control","Training & Development","Management","Vaccination Room"];
-  const DESIGNATIONS=["Staff Nurse","Senior Staff Nurse","Charge Nurse","Acting Charge Nurse",
+  const DESIGNATIONS=["Staff Nurse","Trainee Nurse","Senior Staff Nurse","Charge Nurse","Acting Charge Nurse",
     "Team Leader","Assistant Nurse Manager","Nurse Manager","Senior Manager","Instructor","Infection Control Nurse","Supervisor"];
   // Bangladesh (BNMC) nursing qualifications — full current list; legacy short forms kept
   // at the end so already-recorded values still match their chip.
@@ -9633,7 +9633,7 @@ const UNICO_MODULES = [{
 }];
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
-  datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcResponsibles', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
+  datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
   staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
   supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport'],
@@ -9688,7 +9688,7 @@ function unicoCanAccessModule(mid) {
   return unicoCan(mid, 'view');
 }
 function unicoCanAccessView(view) {
-  if (view === 'profile' || view === 'home') return true;
+  if (view === 'profile' || view === 'home' || view === 'dcResponsibles') return true;
   return unicoCanAccessModule(unicoAccessModuleOf(view));
 }
 function unicoAllowedModules() {
@@ -9751,10 +9751,6 @@ function unicoSidebarGroups(moduleId) {
       id: 'dcQuality',
       label: 'Quality Data',
       icon: I.activity
-    }, {
-      id: 'dcResponsibles',
-      label: 'Responsible Persons',
-      icon: I.user
     }, {
       id: 'dcSettings',
       label: 'Department Setup',
@@ -14547,7 +14543,8 @@ Object.assign(window, {
       return () => window.removeEventListener('keydown', onKey, true);
     }, [cancel, ok]);
     const icPath = danger ? window.I && window.I.x || 'M6 6l12 12M18 6L6 18' : window.I && window.I.bell || PATH_INFO;
-    return React.createElement("div", {
+    const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
+    return toBody(React.createElement("div", {
       className: "modal-bg",
       onMouseDown: e => {
         if (e.target === e.currentTarget) cancel();
@@ -14623,7 +14620,7 @@ Object.assign(window, {
         boxShadow: 'none'
       } : undefined,
       onClick: ok
-    }, confirmLabel)))));
+    }, confirmLabel))))));
   }
   function ConfirmHost() {
     const [queue, setQueue] = useState(confirmQueue);
@@ -17147,7 +17144,8 @@ function DeptModal({
     };
     onSave(def, editing);
   };
-  return React.createElement("div", {
+  const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
+  return toBody(React.createElement("div", {
     className: "modal-bg",
     onMouseDown: e => {
       if (e.target === e.currentTarget) onClose();
@@ -17397,7 +17395,7 @@ function DeptModal({
     d: I.check,
     s: 16,
     sw: 2.4
-  }), editing ? 'Save changes' : 'Create department')))));
+  }), editing ? 'Save changes' : 'Create department'))))));
 }
 function ConfirmModal({
   title,
@@ -17406,7 +17404,8 @@ function ConfirmModal({
   onClose,
   onConfirm
 }) {
-  return React.createElement("div", {
+  const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
+  return toBody(React.createElement("div", {
     className: "modal-bg",
     onMouseDown: e => {
       if (e.target === e.currentTarget) onClose();
@@ -17474,7 +17473,7 @@ function ConfirmModal({
       boxShadow: 'none'
     },
     onClick: onConfirm
-  }, "Delete")))));
+  }, "Delete"))))));
 }
 function ManageDepts({
   depts,
@@ -26023,6 +26022,7 @@ function StaffForm({
   const pendingId = React.useRef(empId || null);
   const saveLock = React.useRef(false);
   const [saving, setSaving] = React.useState(false);
+  const [printForm, setPrintForm] = React.useState(false);
   const [customL, setCustomL] = React.useState('');
   const priorInit0 = existing && existing.prior_experience_years != null && existing.prior_experience_years !== '' && !isNaN(existing.prior_experience_years) ? +existing.prior_experience_years : 0;
   const [dpY, setDpY] = React.useState(() => {
@@ -26413,7 +26413,17 @@ function StaffForm({
       gap: 8,
       alignItems: 'center'
     }
-  }, React.createElement("button", {
+  }, !editing && window.UnicoStaffRegForm && (!window.__UNICO_USER__ || window.__UNICO_USER__.role === 'Administrator') && React.createElement("button", {
+    className: "btn sm",
+    title: "Print the official registration form to fill in by hand",
+    onClick: () => setPrintForm(true)
+  }, React.createElement(Ic, {
+    d: I.doc,
+    s: 14
+  }), "Print blank form"), printForm && window.UnicoStaffRegForm && React.createElement(window.UnicoStaffRegForm, {
+    role: f.role || 'Nurse',
+    onDone: () => setPrintForm(false)
+  }), React.createElement("button", {
     className: "btn sm",
     onClick: () => setRoute(editing ? {
       view: 'staffProfile',
@@ -31337,6 +31347,17 @@ function Reports({
         }
       } catch (e) {}
     }
+    if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) {
+      setExporting('Preparing PDF…');
+      setNote(null);
+      try {
+        await window.unicoLoadPdfLibs();
+      } catch (e) {
+        try {
+          console.warn('[reports] PDF libraries failed to load:', e);
+        } catch (_) {}
+      }
+    }
     const J0 = window.jspdf && window.jspdf.jsPDF;
     if (J0) {
       setExporting('Building PDF…');
@@ -32267,10 +32288,20 @@ function uToast(m, k) {
     if (window.UI && window.UI.toast) window.UI.toast(m, k || 'success');
   } catch (e) {}
 }
+function uCustomAreasOf(r) {
+  if (!r) return [];
+  if (window.dcCustomAreas) return window.dcCustomAreas(r).slice();
+  if (Array.isArray(r.customQualityAreas)) return r.customQualityAreas.slice();
+  if (r.allQualityAreas) return [];
+  const auto = window.DEPTMAP ? window.DEPTMAP.areasFromDepts(r.departments || []) : [];
+  return (r.qualityAreas || []).filter(k => auto.indexOf(k) < 0);
+}
+const U_NO_RESPS = [];
 function UserModal({
   initial,
   onClose,
-  onSaved
+  onSaved,
+  depts
 }) {
   const {
     useState
@@ -32332,6 +32363,74 @@ function UserModal({
   const isAdmin = role === 'Administrator';
   const portalRole = portalRoleOfLabel(role);
   const isColl = !!portalRole;
+  const collects = portalRole === 'collector' || portalRole === 'incharge';
+  const scopeInit = !!(editing && (initial.role === 'collector' || initial.role === 'incharge'));
+  const scope0 = React.useRef(null);
+  if (!scope0.current) scope0.current = {
+    departments: scopeInit && Array.isArray(initial.departments) ? initial.departments.slice() : [],
+    allQualityAreas: !!(scopeInit && initial.allQualityAreas),
+    customQualityAreas: scopeInit ? uCustomAreasOf(initial) : [],
+    qualityIndicators: scopeInit && initial.qualityIndicators && typeof initial.qualityIndicators === 'object' ? {
+      ...initial.qualityIndicators
+    } : {}
+  };
+  const [scope, setScope] = useState(scope0.current);
+  const scopeTouched = React.useRef(false);
+  const editScope = v => {
+    scopeTouched.current = true;
+    setScope(v);
+  };
+  const scopeBase = React.useRef(null);
+  const [resps, setResps] = useState(null);
+  const [scopeLoaded, setScopeLoaded] = useState(!editing);
+  const [scopeLoadFailed, setScopeLoadFailed] = useState(false);
+  const scopeReady = !collects || scopeLoaded;
+  React.useEffect(() => {
+    if (!collects || resps !== null && scopeLoaded) return;
+    let live = true;
+    usersApi('GET', '/api/responsibles').then(j => {
+      if (!live) return;
+      const list = j.responsibles || [];
+      setResps(list);
+      if (editing && !scopeLoaded && !scopeTouched.current) {
+        const u = initial,
+          s0 = scope0.current;
+        const rec = u.responsibleId && list.find(r => r.id === u.responsibleId) || list.find(r => String(r.empId || '').toLowerCase() === u.username);
+        let next = s0;
+        if (rec) {
+          const recScope = {
+            departments: (rec.departments || []).slice(),
+            allQualityAreas: !!rec.allQualityAreas,
+            customQualityAreas: uCustomAreasOf(rec),
+            qualityIndicators: {
+              ...(rec.qualityIndicators || {})
+            }
+          };
+          if (!scopeInit) next = recScope;else {
+            const empty = !(u.departments || []).length && !u.allQualityAreas && !(u.qualityAreas || []).length && !Object.keys(u.qualityIndicators || {}).length;
+            if (empty) next = recScope;else if (!Array.isArray(u.customQualityAreas) && Array.isArray(rec.customQualityAreas)) next = {
+              ...s0,
+              customQualityAreas: rec.customQualityAreas.slice()
+            };
+          }
+        }
+        if (next !== s0) setScope(next);
+        scopeBase.current = window.dcScopeBase ? window.dcScopeBase(next) : null;
+      }
+      setScopeLoaded(true);
+    }).catch(() => {
+      if (live) {
+        setResps(r => r || []);
+        if (editing && !scopeInit && !scopeTouched.current) setScopeLoadFailed(true);
+        setScopeLoaded(true);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [collects]);
+  const linkedRespId = editing ? initial.responsibleId || ((resps || []).find(r => String(r.empId || '').toLowerCase() === initial.username) || {}).id || null : null;
+  const ScopeEditor = window.DcScopeEditor;
   const pickRole = r => {
     setRole(r);
     if (r === 'Administrator' || portalRoleOfLabel(r) || r === 'Custom') {
@@ -32378,6 +32477,8 @@ function UserModal({
     }
     if (!name.trim()) return setErr('Full name is required.');
     if (email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
+    const sendScope = collects && !!ScopeEditor && !!window.dcScopePayload && !scopeLoadFailed;
+    if (sendScope && !scopeReady) return setErr('Still loading this account’s data collection scope — try again in a moment.');
     setBusy(true);
     try {
       const backendRole = isAdmin ? 'Administrator' : portalRole || 'User';
@@ -32390,6 +32491,14 @@ function UserModal({
         roleTemplate: isAdmin || isColl ? null : roleTmpl || null
       };
       if (!editing || backendRole !== (initial.role || 'User')) payload.role = backendRole;
+      if (sendScope) {
+        const base = scopeBase.current || (window.dcScopeBase ? window.dcScopeBase(scope0.current) : undefined);
+        const sp = window.dcScopePayload(scope, base);
+        payload.departments = sp.departments;
+        payload.allQualityAreas = sp.allQualityAreas;
+        payload.customQualityAreas = sp.customQualityAreas;
+        payload.qualityIndicators = sp.qualityIndicators;
+      }
       if (!isAdmin && !isColl) {
         payload.staffScope = staffScope;
         payload.departments = staffScope === 'departments' ? staffDepts : [];
@@ -32430,7 +32539,8 @@ function UserModal({
     add: '#e08a1e',
     delete: '#d23a52'
   };
-  return React.createElement("div", {
+  const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
+  return toBody(React.createElement("div", {
     className: "modal-bg",
     onMouseDown: e => {
       if (e.target === e.currentTarget) onClose();
@@ -32438,7 +32548,7 @@ function UserModal({
   }, React.createElement("div", {
     className: "modal",
     style: {
-      width: 'min(560px,94vw)',
+      width: collects ? 'min(720px,94vw)' : 'min(560px,94vw)',
       maxHeight: '92vh',
       overflow: 'auto'
     }
@@ -32576,7 +32686,7 @@ function UserModal({
     d: I.check,
     s: 16,
     c: "var(--blue)"
-  }), React.createElement("span", null, React.createElement("b", null, "Full access."), " Administrators can view, add, edit and delete in every module.")) : isColl ? React.createElement("div", {
+  }), React.createElement("span", null, React.createElement("b", null, "Full access."), " Administrators can view, add, edit and delete in every module.")) : isColl && !collects ? React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: 'var(--ink-2)',
@@ -32586,13 +32696,62 @@ function UserModal({
       padding: '12px 14px',
       display: 'flex',
       gap: 9,
-      alignItems: 'flex-start'
+      alignItems: 'center'
     }
   }, React.createElement(Ic, {
-    d: I.check,
+    d: I.user,
     s: 16,
     c: "var(--blue)"
-  }), React.createElement("span", null, React.createElement("b", null, role, "."), " Signs in to the portal only. Choose which departments & indicators they collect in ", React.createElement("b", null, "Settings \u2192 Responsible Persons"), " \u2014 that assignment is kept when you save here.")) : React.createElement("div", null, React.createElement("div", {
+  }), React.createElement("span", null, React.createElement("b", null, role, "."), " Nurse/PCA accounts sign in to the staff app; they don't submit data.")) : isColl ? React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 3
+    }
+  }, "Data collection scope ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 ", role, " \u2014 signs in to the portal only")), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginBottom: 9
+    }
+  }, "The departments they report, the quality areas those give (plus any extra), and optionally which indicators. Saved with the account and shown in ", React.createElement("b", null, "Indicator Access"), "."), !ScopeEditor ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--ink-2)',
+      background: 'var(--blue-50)',
+      border: '1px solid var(--blue-100)',
+      borderRadius: 9,
+      padding: '12px 14px'
+    }
+  }, "The data collection module is not loaded, so the scope cannot be edited here. The current assignment is kept when you save.") : scopeLoadFailed ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#8a5a00',
+      background: '#fff8e9',
+      border: '1px solid #f1d49a',
+      borderRadius: 9,
+      padding: '12px 14px'
+    }
+  }, "Couldn\u2019t load this account\u2019s current data collection assignment. Close and reopen Manage to edit it \u2014 saving now keeps the stored assignment unchanged.") : !scopeReady ? React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)',
+      padding: '8px 0'
+    }
+  }, "Loading assignment\u2026") : React.createElement(ScopeEditor, {
+    value: scope,
+    onChange: editScope,
+    depts: depts,
+    exceptResponsibleId: linkedRespId,
+    persons: resps || U_NO_RESPS
+  })) : React.createElement("div", null, React.createElement("div", {
     style: {
       fontSize: 12.5,
       fontWeight: 700,
@@ -32851,7 +33010,7 @@ function UserModal({
     d: I.check,
     s: 16,
     sw: 2.4
-  }), busy ? 'Saving…' : editing ? 'Save changes' : 'Create user')))));
+  }), busy ? 'Saving…' : editing ? 'Save changes' : 'Create user'))))));
 }
 function uAvatarColor(s) {
   let h = 0;
@@ -33312,11 +33471,85 @@ function RoleTemplatesPanel() {
   }, "No role templates yet.")));
 }
 window.RoleTemplatesPanel = RoleTemplatesPanel;
-function UserManagement() {
+function UsersAndRoles({
+  depts
+}) {
+  const [sub, setSub] = React.useState(() => {
+    const s = typeof window !== 'undefined' && window.__UNICO_USERS_SUBTAB__ || 'accounts';
+    try {
+      delete window.__UNICO_USERS_SUBTAB__;
+    } catch (e) {}
+    return s === 'access' ? 'access' : 'accounts';
+  });
+  const hasDC = typeof DataResponsibles !== 'undefined';
+  const TABS = [['accounts', 'Accounts', I.user], ['access', 'Indicator Access', I.check]];
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "Users & Roles"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "Sign-in accounts and roles. A collector\u2019s or in-charge\u2019s departments, quality areas and indicators are set in their account (Manage).")), React.createElement("div", {
+    className: "seg"
+  }, TABS.map(([id, l, ic]) => React.createElement("button", {
+    key: id,
+    className: sub === id ? 'on' : '',
+    onClick: () => setSub(id),
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement(Ic, {
+    d: ic,
+    s: 13
+  }), l))))), sub === 'accounts' && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b"
+  }, React.createElement(UserManagement, {
+    depts: depts
+  }))), sub === 'access' && (hasDC ? React.createElement(DataResponsibles, {
+    key: "access",
+    depts: depts,
+    embedded: true,
+    initialView: "access"
+  }) : null));
+}
+function UserManagement({
+  depts
+} = {}) {
   const {
     useState,
     useEffect
   } = React;
+  const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
   const [users, setUsers] = useState(null);
   const [err, setErr] = useState('');
   const [q, setQ] = useState('');
@@ -33380,6 +33613,17 @@ function UserManagement() {
     const sc = staffScopeLabel(u);
     return sc && base !== 'No access' ? base + ' · ' + sc : base;
   };
+  const scopeLine = u => {
+    if (!PORTAL_ROLE_LABEL[u.role]) return '';
+    const DM = window.DEPTMAP;
+    const ds = (u.departments || []).map(id => (DM ? DM.nameFromId(id) : id) || id);
+    const dPart = !ds.length ? 'No department' : ds.length <= 2 ? ds.join(', ') : ds.slice(0, 2).join(', ') + ' +' + (ds.length - 2);
+    const na = (u.qualityAreas || []).length;
+    const aPart = u.allQualityAreas ? 'all areas' : na + ' area' + (na !== 1 ? 's' : '');
+    const qi = u.qualityIndicators || {};
+    const ni = Object.keys(qi).reduce((s, k) => s + (Array.isArray(qi[k]) ? qi[k].length : 0), 0);
+    return [dPart, aPart, ni ? ni + ' indicator' + (ni !== 1 ? 's' : '') + ' limited' : ''].filter(Boolean).join(' · ');
+  };
   return React.createElement("div", null, React.createElement("div", {
     style: {
       display: 'flex',
@@ -33393,7 +33637,7 @@ function UserManagement() {
       fontSize: 14,
       fontWeight: 700
     }
-  }, "Users & Roles"), React.createElement("div", {
+  }, "Accounts"), React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: 'var(--muted)'
@@ -33528,7 +33772,14 @@ function UserManagement() {
         fontSize: 11.5,
         color: 'var(--muted)'
       }
-    }, "@", u.username, u.email ? ' · ' + u.email : '')), React.createElement("span", {
+    }, "@", u.username, u.email ? ' · ' + u.email : ''), scopeLine(u) && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--ink-2)',
+        marginTop: 2
+      },
+      title: "Data collection scope (edit in Manage)"
+    }, scopeLine(u))), React.createElement("span", {
       className: "tag",
       style: {
         minWidth: 96,
@@ -33576,12 +33827,13 @@ function UserManagement() {
     }
   }, "No users", q ? ' match the search' : ' yet', ".")), React.createElement(RoleTemplatesPanel, null), modal && React.createElement(UserModal, {
     initial: modal.user,
+    depts: depts,
     onClose: () => setModal(null),
     onSaved: () => {
       setModal(null);
       load();
     }
-  }), confirm && React.createElement("div", {
+  }), confirm && toBody(React.createElement("div", {
     className: "modal-bg",
     onMouseDown: e => {
       if (e.target === e.currentTarget) setConfirm(null);
@@ -33627,7 +33879,7 @@ function UserManagement() {
       borderColor: 'var(--rose)'
     },
     onClick: () => del(confirm)
-  }, "Remove"))))));
+  }, "Remove")))))));
 }
 window.UserManagement = UserManagement;
 function StaffFieldsSettings({
@@ -34560,26 +34812,35 @@ function CacheStats() {
       fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, "This instance, since it booted \u2014 refresh after browsing a few pages to see it work.")), d && React.createElement("span", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6,
-      fontSize: 11.5,
-      fontWeight: 700,
-      padding: '4px 11px',
-      borderRadius: 15,
-      color: redisLive ? '#157a43' : '#b5670a',
-      background: redisLive ? 'rgba(31,157,87,.12)' : 'rgba(224,138,30,.13)'
-    }
-  }, React.createElement("i", {
-    style: {
-      width: 7,
-      height: 7,
-      borderRadius: '50%',
-      background: redisLive ? '#1f9d57' : '#e08a1e'
-    }
-  }), redisLive ? 'Redis connected (REST)' : 'In-memory fallback — Redis not configured'), React.createElement("button", {
+  }, "This instance, since it booted \u2014 refresh after browsing a few pages to see it work.")), d && (() => {
+    const mode = c && c.mode;
+    const good = mode === 'mongo' || redisLive,
+      off = mode === 'off';
+    const label = mode === 'mongo' ? 'MongoDB version counters' : off ? 'Cache off (CACHE_DISABLED)' : redisLive ? 'Redis connected (REST)' : 'In-memory fallback — Redis not configured';
+    const fg = good ? '#157a43' : off ? '#5b6b80' : '#b5670a',
+      bg = good ? 'rgba(31,157,87,.12)' : off ? 'rgba(125,145,180,.15)' : 'rgba(224,138,30,.13)',
+      dot = good ? '#1f9d57' : off ? '#9aa6b4' : '#e08a1e';
+    return React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 11.5,
+        fontWeight: 700,
+        padding: '4px 11px',
+        borderRadius: 15,
+        color: fg,
+        background: bg
+      }
+    }, React.createElement("i", {
+      style: {
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: dot
+      }
+    }), label);
+  })(), React.createElement("button", {
     className: "btn sm",
     onClick: load,
     disabled: busy
@@ -35681,8 +35942,25 @@ function Settings({
   store,
   setRoute
 }) {
-  const [tab, setTab] = React.useState(typeof window !== 'undefined' && window.__UNICO_SETTINGS_TAB__ || 'general');
+  const [tab, setTab] = React.useState(() => {
+    const t = typeof window !== 'undefined' && window.__UNICO_SETTINGS_TAB__ || 'general';
+    if (t === 'responsibles') {
+      try {
+        window.__UNICO_USERS_SUBTAB__ = 'accounts';
+        delete window.__UNICO_SETTINGS_TAB__;
+      } catch (e) {}
+      return 'users';
+    }
+    return t;
+  });
   const [dbFile, setDbFile] = React.useState('');
+  const [sysTab, setSysTab] = React.useState('activity');
+  React.useEffect(() => {
+    if (['activity', 'database', 'monitor', 'data'].indexOf(tab) >= 0) {
+      setSysTab(tab);
+      setTab('system');
+    }
+  }, [tab]);
   const native = window.unicoNative;
   React.useEffect(() => {
     if (native && native.dbPath) {
@@ -35868,7 +36146,7 @@ function Settings({
     style: {
       padding: 6
     }
-  }, [['general', 'General', I.gear], ['departments', 'Departments', I.layers], ['stafffields', 'Staff Fields', I.steth], ['deptprivileges', 'Department Privileges', I.check], ['users', 'Users & Roles', I.user], ['activity', 'Activity Log', I.activity], ['database', 'Database', I.grid], ['monitor', 'System Monitor', I.activity], ['media', 'Media', I.doc], ['responsibles', 'Responsible Persons', I.user], ['fields', 'Form Fields', I.filter], ['data', 'Data & Export', I.doc]].map(([id, l, ic]) => React.createElement("div", {
+  }, [['general', 'General', I.gear], ['departments', 'Departments', I.layers], ['stafffields', 'Staff Fields', I.steth], ['deptprivileges', 'Department Privileges', I.check], ['users', 'Users & Roles', I.user], ['system', 'System & Data', I.grid], ['media', 'Media', I.doc], ['fields', 'Form Fields', I.filter]].map(([id, l, ic]) => React.createElement("div", {
     key: id,
     onClick: () => setTab(id),
     style: {
@@ -36051,19 +36329,58 @@ function Settings({
     setRoute: setRoute
   }), tab === 'deptprivileges' && (typeof DeptPrivilegesSettings !== 'undefined' ? React.createElement(DeptPrivilegesSettings, {
     depts: depts
-  }) : null), tab === 'activity' && React.createElement(ActivityLog, null), tab === 'database' && React.createElement(React.Fragment, null, React.createElement(CacheStats, null), React.createElement(DatabaseBrowser, null)), tab === 'monitor' && (window.SystemMonitor ? React.createElement(window.SystemMonitor, null) : React.createElement("div", {
+  }) : null), tab === 'system' && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "System & Data"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "Activity history, the database, live system health, backups and exports.")), React.createElement("div", {
+    className: "seg",
+    style: {
+      flexWrap: 'wrap'
+    }
+  }, [['activity', 'Activity Log', I.activity], ['database', 'Database', I.grid], ['monitor', 'System Monitor', I.activity], ['data', 'Data & Export', I.doc]].map(([id, l, ic]) => React.createElement("button", {
+    key: id,
+    className: sysTab === id ? 'on' : '',
+    onClick: () => setSysTab(id),
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement(Ic, {
+    d: ic,
+    s: 13
+  }), l))))), tab === 'system' && sysTab === 'activity' && React.createElement(ActivityLog, null), tab === 'system' && sysTab === 'database' && React.createElement(React.Fragment, null, React.createElement(CacheStats, null), React.createElement(DatabaseBrowser, null)), tab === 'system' && sysTab === 'monitor' && (window.SystemMonitor ? React.createElement(window.SystemMonitor, null) : React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b"
-  }, "System Monitor is not loaded."))), tab === 'media' && React.createElement(MediaBrowser, null), tab === 'users' && React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-b"
-  }, React.createElement(UserManagement, null))), tab === 'responsibles' && (typeof DataResponsibles !== 'undefined' ? React.createElement(DataResponsibles, {
+  }, "System Monitor is not loaded."))), tab === 'media' && React.createElement(MediaBrowser, null), tab === 'users' && React.createElement(UsersAndRoles, {
     depts: depts
-  }) : null), tab === 'fields' && (typeof DataFields !== 'undefined' ? React.createElement(DataFields, {
+  }), tab === 'fields' && (typeof DataFields !== 'undefined' ? React.createElement(DataFields, {
     setRoute: setRoute
-  }) : null), tab === 'data' && React.createElement("div", {
+  }) : null), tab === 'system' && sysTab === 'data' && React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b"
@@ -45701,6 +46018,15 @@ function QCReportBuilder({
       }
       setExporting(false);
     }
+    if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) {
+      try {
+        await window.unicoLoadPdfLibs();
+      } catch (e) {
+        try {
+          console.warn('[quality] PDF libraries failed to load:', e);
+        } catch (_) {}
+      }
+    }
     const H = window.html2canvas,
       J = window.jspdf && window.jspdf.jsPDF;
     const vectorFaithful = reportType === 'summary' && chartStyles.length === 1 && chartStyles[0] === 'bar3d' && !sections.execSummary && !sections.breachDonut && !sections.incidents && !sections.ragHeatmap && !sections.deptRanking && !sections.benchmarkCompare && !sections.indTrend && !sections.pendingData && !sections.incidentAppendix && !sections.standardsRefs && !sections.toc && !sections.periodCompare && !sections.watermark;
@@ -55215,12 +55541,13 @@ window.LockScreen = LockScreen;
     }))));
   }
   function AccessMatrix({
-    persons,
+    persons: allPersons,
     areas,
     areaInds,
     onChanged,
     onEditPerson
   }) {
+    const persons = useMemo(() => (allPersons || []).filter(r => r.active !== false), [allPersons]);
     const DM = window.DEPTMAP;
     const [q, setQ] = useState('');
     const [menu, setMenu] = useState(null);
@@ -55234,7 +55561,7 @@ window.LockScreen = LockScreen;
     const tipOf = (r, ak) => {
       const via = r.allQualityAreas ? 'hospital-wide access' : derived(r, ak) ? 'via department assignment' : 'custom area access';
       const sel = selOf(r, ak);
-      return r.name + (r.title ? ' · ' + r.title : '') + (r.empId ? ' · ' + r.empId : '') + ' — ' + via + (sel.length ? ' · restricted to ' + sel.length + ' indicator' + (sel.length > 1 ? 's' : '') : ' · all indicators of this area') + (r.active === false ? ' · INACTIVE' : '');
+      return r.name + (r.title ? ' · ' + r.title : '') + (r.empId ? ' · ' + r.empId : '') + ' — ' + via + (sel.length ? ' · restricted to ' + sel.length + ' indicator' + (sel.length > 1 ? 's' : '') : ' · all indicators of this area');
     };
     const saveRec = (rec, okMsg) => {
       setBusy(true);
@@ -55330,8 +55657,7 @@ window.LockScreen = LockScreen;
         border: '1px solid var(--blue)',
         fontSize: 11.5,
         fontWeight: 600,
-        color: 'var(--blue-700)',
-        opacity: r.active === false ? 0.55 : 1
+        color: 'var(--blue-700)'
       }
     }, window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
       name: r.name,
@@ -55354,8 +55680,12 @@ window.LockScreen = LockScreen;
         flexShrink: 0
       }
     }, initials(r.name)), React.createElement("span", {
+      title: onEditPerson ? 'Edit ' + r.name : undefined,
       style: {
-        cursor: onEditPerson ? 'pointer' : 'default'
+        cursor: onEditPerson ? 'pointer' : 'default',
+        textDecoration: onEditPerson ? 'underline dotted' : 'none',
+        textUnderlineOffset: 2,
+        marginRight: 6
       },
       onClick: () => onEditPerson && onEditPerson(r)
     }, r.name), React.createElement("button", {
@@ -55401,7 +55731,7 @@ window.LockScreen = LockScreen;
       style: {
         flex: 1
       }
-    }), [['Departments', areas.length], ['Indicators', totInds], ['People', persons.filter(r => r.active !== false).length], ['Unassigned indicators', unassigned]].map(([l, v]) => React.createElement("span", {
+    }), [['Departments', areas.length], ['Indicators', totInds], ['People', persons.length], ['Unassigned indicators', unassigned]].map(([l, v]) => React.createElement("span", {
       key: l,
       style: {
         fontSize: 12,
@@ -55551,8 +55881,7 @@ window.LockScreen = LockScreen;
             gap: 8,
             padding: '7px 8px',
             borderRadius: 8,
-            cursor: 'pointer',
-            opacity: r.active === false ? 0.55 : 1
+            cursor: 'pointer'
           },
           onMouseEnter: e => {
             e.currentTarget.style.background = 'var(--blue-50)';
@@ -55594,7 +55923,7 @@ window.LockScreen = LockScreen;
             overflow: 'hidden',
             textOverflow: 'ellipsis'
           }
-        }, r.name, r.active === false ? ' (inactive)' : ''), React.createElement("div", {
+        }, r.name), React.createElement("div", {
           style: {
             fontSize: 10.5,
             color: 'var(--muted)'
@@ -55603,12 +55932,287 @@ window.LockScreen = LockScreen;
       }));
     }));
   }
+  const dcScopeAreas = v => {
+    const val = v || {};
+    const DM = window.DEPTMAP;
+    const derived = val.allQualityAreas ? DM ? DM.allAreaKeys() : [] : DM ? DM.areasFromDepts(val.departments || []) : [];
+    const custom = val.customQualityAreas || [];
+    const effective = val.allQualityAreas ? derived : [...new Set([...derived, ...custom])];
+    return {
+      derived,
+      custom,
+      effective
+    };
+  };
+  const dcScopeBase = v => ({
+    effective: dcScopeAreas(v).effective.slice(),
+    limited: Object.keys(v && v.qualityIndicators || {})
+  });
+  const DC_NO_PERSONS = [];
+  const dcScopePayload = (v, base) => {
+    const val = v || {};
+    const {
+      custom,
+      effective
+    } = dcScopeAreas(val);
+    const qi = {
+      ...(val.qualityIndicators || {})
+    };
+    if (window.DEPTMAP && !val.allQualityAreas && base) Object.keys(qi).forEach(k => {
+      if (!effective.includes(k) && (base.effective.includes(k) || !base.limited.includes(k))) delete qi[k];
+    });
+    return {
+      departments: (val.departments || []).slice(),
+      allQualityAreas: !!val.allQualityAreas,
+      customQualityAreas: custom.slice(),
+      qualityAreas: effective,
+      qualityIndicators: qi
+    };
+  };
+  function DcScopeEditor({
+    value,
+    onChange,
+    depts,
+    exceptResponsibleId,
+    persons
+  }) {
+    const val = value || {};
+    const departments = val.departments || [];
+    const set = patch => onChange && onChange({
+      ...val,
+      ...patch
+    });
+    const dataRev = useDcDataRev();
+    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
+      key: d.key,
+      name: d.name
+    })), [dataRev]);
+    const areaInds = useMemo(() => {
+      const m = {};
+      (window.qualityData ? window.qualityData() : []).forEach(d => {
+        m[d.key] = (d.indicators || []).map(i => ({
+          id: i.id,
+          name: i.name
+        }));
+      });
+      return m;
+    }, [dataRev]);
+    const [list, setList] = useState(Array.isArray(persons) ? persons : null);
+    useEffect(() => {
+      if (Array.isArray(persons)) {
+        setList(persons);
+        return;
+      }
+      let live = true;
+      dcApi.get('/api/responsibles').then(r => {
+        if (live) setList(r.ok ? r.responsibles : []);
+      }).catch(() => {
+        if (live) setList([]);
+      });
+      return () => {
+        live = false;
+      };
+    }, [persons]);
+    const assignedNames = (ak, indId) => (list || []).filter(r => r.id !== exceptResponsibleId && r.active !== false && (!!r.allQualityAreas || (r.qualityAreas || []).includes(ak)) && (((r.qualityIndicators || {})[ak] || []).length === 0 || ((r.qualityIndicators || {})[ak] || []).includes(indId))).map(r => r.name);
+    const deptList = useMemo(() => depts && depts.length ? depts : dcAllDepts(), [depts, dataRev]);
+    const deptName = id => {
+      const mapped = window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : null;
+      if (mapped && mapped !== id) return mapped;
+      const d = deptList.find(x => x.id === id);
+      return d && (d.name || d.short) || id;
+    };
+    const [dq, setDq] = useState('');
+    const dqn = dq.trim().toLowerCase();
+    const deptsShown = dqn ? deptList.filter(d => departments.includes(d.id) || [d.name, d.short, deptName(d.id)].some(s => String(s || '').toLowerCase().includes(dqn))) : deptList;
+    const {
+      derived: derivedAreas,
+      custom: customAreas,
+      effective: effectiveAreas
+    } = dcScopeAreas(val);
+    const toggleDept = id => set({
+      departments: departments.includes(id) ? departments.filter(x => x !== id) : [...departments, id]
+    });
+    const toggleCustomArea = k => set({
+      customQualityAreas: customAreas.includes(k) ? customAreas.filter(x => x !== k) : [...customAreas, k]
+    });
+    const pill = (on, extra) => ({
+      cursor: 'pointer',
+      userSelect: 'none',
+      padding: '5px 10px',
+      borderRadius: 999,
+      fontSize: 12,
+      fontWeight: 600,
+      border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+      background: on ? 'var(--blue-50)' : '#fff',
+      color: on ? 'var(--blue-700)' : 'var(--ink-2)',
+      ...(extra || {})
+    });
+    return React.createElement("div", null, React.createElement(Field, {
+      label: 'Assigned departments (patient statistics)' + (departments.length ? ' · ' + departments.length + ' selected' : '')
+    }, deptList.length > 12 && React.createElement("input", {
+      style: {
+        ...inputStyle,
+        marginBottom: 7,
+        padding: '7px 10px',
+        fontSize: 12.5
+      },
+      value: dq,
+      onChange: e => setDq(e.target.value),
+      placeholder: "Search departments\u2026"
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 7,
+        maxHeight: 190,
+        overflow: 'auto',
+        padding: 1
+      }
+    }, deptsShown.map(d => {
+      const on = departments.includes(d.id);
+      return React.createElement("span", {
+        key: d.id,
+        onClick: () => toggleDept(d.id),
+        title: deptName(d.id) + (d.custom ? ' (custom)' : ''),
+        style: pill(on)
+      }, d.short || deptName(d.id));
+    }), !deptsShown.length && React.createElement("span", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, deptList.length ? 'No department matches.' : 'No departments loaded.'))), React.createElement(Field, {
+      label: "Quality areas",
+      hint: "Auto-granted by the departments above (assign once). Tick extra areas below for custom access."
+    }, React.createElement("label", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: 'var(--ink-2)',
+        marginBottom: 9,
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: !!val.allQualityAreas,
+      onChange: e => set({
+        allQualityAreas: e.target.checked
+      })
+    }), "Hospital-wide \u2014 every quality area (e.g. Infection Control)"), !val.allQualityAreas && React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 7
+      }
+    }, areas.map(a => {
+      const auto = derivedAreas.includes(a.key);
+      const on = auto || customAreas.includes(a.key);
+      return React.createElement("span", {
+        key: a.key,
+        onClick: () => {
+          if (!auto) toggleCustomArea(a.key);
+        },
+        title: auto ? 'From an assigned department' : 'Custom extra access',
+        style: pill(on, {
+          cursor: auto ? 'default' : 'pointer',
+          opacity: auto ? 0.85 : 1
+        })
+      }, a.name, auto && React.createElement("span", {
+        style: {
+          fontSize: 9,
+          fontWeight: 700,
+          marginLeft: 4,
+          opacity: 0.7
+        }
+      }, "AUTO"));
+    })), val.allQualityAreas && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, "All ", areas.length, " quality areas (hospital-wide).")), effectiveAreas.length > 0 && React.createElement(Field, {
+      label: "Specific indicators per area (optional)",
+      hint: "Leave all unticked in an area to allow every indicator of that area. Tick some to restrict this person to just those."
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 10
+      }
+    }, effectiveAreas.map(ak => {
+      const inds = areaInds[ak] || [];
+      const aName = (areas.find(a => a.key === ak) || {}).name || ak;
+      if (!inds.length) return null;
+      const sel = val.qualityIndicators && val.qualityIndicators[ak] || [];
+      const setSel = ids => {
+        const qi = {
+          ...(val.qualityIndicators || {})
+        };
+        if (ids && ids.length) qi[ak] = ids;else delete qi[ak];
+        set({
+          qualityIndicators: qi
+        });
+      };
+      return React.createElement("div", {
+        key: ak,
+        style: {
+          padding: '10px 12px',
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line)',
+          borderRadius: 9
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 12,
+          fontWeight: 700,
+          color: 'var(--ink-2)',
+          marginBottom: 7
+        }
+      }, aName, " ", React.createElement("span", {
+        style: {
+          fontWeight: 500,
+          color: 'var(--muted)'
+        }
+      }, "\xB7 ", sel.length ? sel.length + ' selected' : 'all indicators')), React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 7
+        }
+      }, inds.map(ind => {
+        const on = sel.includes(ind.id);
+        const others = assignedNames(ak, ind.id);
+        return React.createElement("span", {
+          key: ind.id,
+          onClick: () => setSel(on ? sel.filter(x => x !== ind.id) : [...sel, ind.id]),
+          title: others.length ? 'Also assigned to: ' + others.join(', ') : 'No one else is assigned to this indicator yet',
+          style: pill(on)
+        }, ind.name, others.length > 0 && React.createElement("span", {
+          title: 'Also assigned to: ' + others.join(', '),
+          style: {
+            marginLeft: 5,
+            fontSize: 9.5,
+            fontWeight: 700,
+            borderRadius: 999,
+            padding: '1px 6px',
+            background: on ? 'var(--blue)' : 'var(--panel-2)',
+            color: on ? '#fff' : 'var(--muted)',
+            border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)')
+          }
+        }, "\uD83D\uDC64", others.length));
+      })));
+    }))));
+  }
   function DataResponsibles({
-    depts
+    depts,
+    embedded,
+    initialView
   }) {
     const [list, setList] = useState(null);
     const [editing, setEditing] = useState(null);
-    const [view, setView] = useState('people');
+    const [view, setView] = useState(initialView === 'access' ? 'access' : 'people');
     const dataRev = useDcDataRev();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).map(d => ({
       key: d.key,
@@ -55628,7 +56232,6 @@ window.LockScreen = LockScreen;
     useEffect(() => {
       load();
     }, []);
-    const assignedNames = (ak, indId, exceptId) => (list || []).filter(r => r.id !== exceptId && (!!r.allQualityAreas || (r.qualityAreas || []).includes(ak)) && (((r.qualityIndicators || {})[ak] || []).length === 0 || ((r.qualityIndicators || {})[ak] || []).includes(indId))).map(r => r.name);
     const blank = () => ({
       name: '',
       title: '',
@@ -55643,27 +56246,35 @@ window.LockScreen = LockScreen;
       qualityIndicators: {},
       active: true
     });
-    const openEdit = r => setEditing({
-      ...blank(),
-      ...r,
-      customQualityAreas: dcCustomAreas(r).slice()
-    });
+    const editorRef = React.useRef(null);
+    const scrollToEditor = React.useRef(false);
+    const scopeBase = React.useRef(null);
+    const openEdit = r => {
+      const rec = {
+        ...blank(),
+        ...r,
+        customQualityAreas: dcCustomAreas(r).slice()
+      };
+      scopeBase.current = dcScopeBase(rec);
+      scrollToEditor.current = true;
+      setEditing(rec);
+    };
+    useEffect(() => {
+      if (!scrollToEditor.current || !editing || !editorRef.current) return;
+      scrollToEditor.current = false;
+      editorRef.current.scrollIntoView({
+        block: 'start',
+        behavior: 'smooth'
+      });
+    }, [editing]);
     const save = () => {
       if (!editing.name.trim()) {
         toast('Name is required', 'error');
         return;
       }
-      const qi = {
-        ...(editing.qualityIndicators || {})
-      };
-      if (window.DEPTMAP && !editing.allQualityAreas) Object.keys(qi).forEach(k => {
-        if (!effectiveAreas.includes(k)) delete qi[k];
-      });
       dcApi.post('/api/responsibles', {
         ...editing,
-        customQualityAreas: customAreas,
-        qualityAreas: effectiveAreas,
-        qualityIndicators: qi
+        ...dcScopePayload(editing, scopeBase.current)
       }).then(r => {
         if (r.ok) {
           toast('Responsible person saved', 'success');
@@ -55689,16 +56300,8 @@ window.LockScreen = LockScreen;
       const d = (depts || []).find(x => x.id === id);
       return d && (d.name || d.short) || id;
     };
-    const derivedAreas = editing ? editing.allQualityAreas ? window.DEPTMAP ? window.DEPTMAP.allAreaKeys() : [] : window.DEPTMAP ? window.DEPTMAP.areasFromDepts(editing.departments) : [] : [];
-    const customAreas = editing ? editing.customQualityAreas || [] : [];
-    const effectiveAreas = editing ? editing.allQualityAreas ? derivedAreas : [...new Set([...derivedAreas, ...customAreas])] : [];
-    const toggleCustomArea = k => setEditing(ed => {
-      const cur = ed.customQualityAreas || [];
-      return {
-        ...ed,
-        customQualityAreas: cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k]
-      };
-    });
+    const showEditor = !!editing && (view === 'people' || embedded);
+    const activePeople = (list || []).filter(r => r.active !== false);
     return React.createElement("div", {
       className: "grid",
       style: {
@@ -55706,8 +56309,8 @@ window.LockScreen = LockScreen;
       }
     }, React.createElement(SectionTitle, {
       icon: I.user,
-      title: "Responsible Persons",
-      sub: "Who gives the data \u2014 assign each person to the departments / quality areas they own (e.g. Rabbi Miah \u2192 Cathlab).",
+      title: embedded ? 'Indicator Access' : 'Responsible Persons',
+      sub: embedded ? 'Department-wise: every indicator with the people assigned to it — give or remove access inline. A person’s departments and areas are edited in Accounts → Manage.' : 'Who gives the data — assign each person to the departments / quality areas they own (e.g. Rabbi Miah → Cathlab).',
       right: React.createElement("div", {
         style: {
           display: 'flex',
@@ -55715,13 +56318,13 @@ window.LockScreen = LockScreen;
           gap: 8,
           flexWrap: 'wrap'
         }
-      }, React.createElement("button", {
+      }, !embedded && React.createElement("button", {
         className: 'btn sm' + (view === 'people' ? ' pri' : ''),
         onClick: () => setView('people')
       }, React.createElement(Ic, {
         d: I.user,
         s: 13
-      }), "People"), React.createElement("button", {
+      }), "People"), !embedded && React.createElement("button", {
         className: 'btn sm' + (view === 'access' ? ' pri' : ''),
         title: "Department-wise: every indicator with the people assigned to it \u2014 give or remove access inline",
         onClick: () => {
@@ -55733,26 +56336,17 @@ window.LockScreen = LockScreen;
         s: 13
       }), "Indicator Access"), !editing && view === 'people' && React.createElement("button", {
         className: "btn pri sm",
-        onClick: () => setEditing(blank())
+        onClick: () => openEdit(blank())
       }, React.createElement(Ic, {
         d: I.plus,
         s: 15
       }), "Add person"))
-    }), view === 'access' && (list === null ? React.createElement(Card, null, React.createElement("div", {
+    }), showEditor && React.createElement("div", {
+      ref: editorRef,
       style: {
-        padding: 24,
-        color: 'var(--muted)'
+        scrollMarginTop: 12
       }
-    }, "Loading\u2026")) : React.createElement(AccessMatrix, {
-      persons: list,
-      areas: areas,
-      areaInds: areaInds,
-      onChanged: load,
-      onEditPerson: r => {
-        setView('people');
-        openEdit(r);
-      }
-    })), view === 'people' && editing && React.createElement(Card, null, React.createElement("div", {
+    }, React.createElement(Card, null, React.createElement("div", {
       style: {
         fontWeight: 700,
         fontSize: 14,
@@ -55806,7 +56400,17 @@ window.LockScreen = LockScreen;
         phone: e.target.value
       }),
       placeholder: "01XXXXXXXXX"
-    })), React.createElement("div", null)), React.createElement("div", {
+    })), React.createElement("div", null)), embedded ? React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)',
+        padding: '9px 12px',
+        background: 'var(--panel-2)',
+        border: '1px dashed var(--line)',
+        borderRadius: 9,
+        marginBottom: 13
+      }
+    }, "Sign-in (Emp ID ", editing.empId ? React.createElement("b", null, editing.empId) : null, " / password) is managed in ", React.createElement("b", null, "Accounts \u2192 Manage"), ".") : React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
@@ -55839,178 +56443,19 @@ window.LockScreen = LockScreen;
         password: e.target.value
       }),
       placeholder: editing.hasLogin ? '••••••' : 'min 4 characters'
-    }))), React.createElement(Field, {
-      label: "Assigned departments (patient statistics)"
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 7
-      }
-    }, (depts || []).map(d => {
-      const on = editing.departments.includes(d.id);
-      return React.createElement("span", {
-        key: d.id,
-        onClick: () => setEditing(ed => ({
-          ...ed,
-          departments: ed.departments.includes(d.id) ? ed.departments.filter(x => x !== d.id) : [...ed.departments, d.id]
-        })),
-        title: deptName(d.id) + (d.custom ? ' (custom)' : ''),
-        style: {
-          cursor: 'pointer',
-          userSelect: 'none',
-          padding: '5px 10px',
-          borderRadius: 999,
-          fontSize: 12,
-          fontWeight: 600,
-          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-          background: on ? 'var(--blue-50)' : '#fff',
-          color: on ? 'var(--blue-700)' : 'var(--ink-2)'
-        }
-      }, d.short || deptName(d.id));
-    }))), React.createElement(Field, {
-      label: "Quality areas",
-      hint: "Auto-granted by the departments above (assign once). Tick extra areas below for custom access."
-    }, React.createElement("label", {
-      style: {
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 8,
-        fontSize: 12.5,
-        fontWeight: 600,
-        color: 'var(--ink-2)',
-        marginBottom: 9,
-        cursor: 'pointer'
-      }
-    }, React.createElement("input", {
-      type: "checkbox",
-      checked: !!editing.allQualityAreas,
-      onChange: e => setEditing(ed => ({
+    }))), React.createElement(DcScopeEditor, {
+      value: editing,
+      depts: depts,
+      exceptResponsibleId: editing.id,
+      persons: list || DC_NO_PERSONS,
+      onChange: v => setEditing(ed => ({
         ...ed,
-        allQualityAreas: e.target.checked
+        departments: v.departments || [],
+        allQualityAreas: !!v.allQualityAreas,
+        customQualityAreas: v.customQualityAreas || [],
+        qualityIndicators: v.qualityIndicators || {}
       }))
-    }), "Hospital-wide \u2014 every quality area (e.g. Infection Control)"), !editing.allQualityAreas && React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 7
-      }
-    }, areas.map(a => {
-      const auto = derivedAreas.includes(a.key);
-      const on = auto || customAreas.includes(a.key);
-      return React.createElement("span", {
-        key: a.key,
-        onClick: () => {
-          if (!auto) toggleCustomArea(a.key);
-        },
-        title: auto ? 'From an assigned department' : 'Custom extra access',
-        style: {
-          cursor: auto ? 'default' : 'pointer',
-          userSelect: 'none',
-          padding: '5px 10px',
-          borderRadius: 999,
-          fontSize: 12,
-          fontWeight: 600,
-          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-          background: on ? 'var(--blue-50)' : '#fff',
-          color: on ? 'var(--blue-700)' : 'var(--ink-2)',
-          opacity: auto ? 0.85 : 1
-        }
-      }, a.name, auto && React.createElement("span", {
-        style: {
-          fontSize: 9,
-          fontWeight: 700,
-          marginLeft: 4,
-          opacity: 0.7
-        }
-      }, "AUTO"));
-    })), editing.allQualityAreas && React.createElement("div", {
-      style: {
-        fontSize: 12,
-        color: 'var(--muted)'
-      }
-    }, "All ", areas.length, " quality areas (hospital-wide).")), effectiveAreas.length > 0 && React.createElement(Field, {
-      label: "Specific indicators per area (optional)",
-      hint: "Leave all unticked in an area to allow every indicator of that area. Tick some to restrict this person to just those."
-    }, React.createElement("div", {
-      style: {
-        display: 'grid',
-        gap: 10
-      }
-    }, effectiveAreas.map(ak => {
-      const list = areaInds[ak] || [];
-      const aName = (areas.find(a => a.key === ak) || {}).name || ak;
-      if (!list.length) return null;
-      const sel = editing.qualityIndicators && editing.qualityIndicators[ak] || [];
-      const setSel = ids => setEditing(ed => {
-        const qi = {
-          ...(ed.qualityIndicators || {})
-        };
-        if (ids && ids.length) qi[ak] = ids;else delete qi[ak];
-        return {
-          ...ed,
-          qualityIndicators: qi
-        };
-      });
-      return React.createElement("div", {
-        key: ak,
-        style: {
-          padding: '10px 12px',
-          background: 'var(--panel-2)',
-          border: '1px solid var(--line)',
-          borderRadius: 9
-        }
-      }, React.createElement("div", {
-        style: {
-          fontSize: 12,
-          fontWeight: 700,
-          color: 'var(--ink-2)',
-          marginBottom: 7
-        }
-      }, aName, " ", React.createElement("span", {
-        style: {
-          fontWeight: 500,
-          color: 'var(--muted)'
-        }
-      }, "\xB7 ", sel.length ? sel.length + ' selected' : 'all indicators')), React.createElement("div", {
-        style: {
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 7
-        }
-      }, list.map(ind => {
-        const on = sel.includes(ind.id);
-        const others = assignedNames(ak, ind.id, editing.id);
-        return React.createElement("span", {
-          key: ind.id,
-          onClick: () => setSel(on ? sel.filter(x => x !== ind.id) : [...sel, ind.id]),
-          title: others.length ? 'Also assigned to: ' + others.join(', ') : 'No one else is assigned to this indicator yet',
-          style: {
-            cursor: 'pointer',
-            userSelect: 'none',
-            padding: '5px 10px',
-            borderRadius: 999,
-            fontSize: 12,
-            fontWeight: 600,
-            border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-            background: on ? 'var(--blue-50)' : '#fff',
-            color: on ? 'var(--blue-700)' : 'var(--ink-2)'
-          }
-        }, ind.name, others.length > 0 && React.createElement("span", {
-          title: 'Also assigned to: ' + others.join(', '),
-          style: {
-            marginLeft: 5,
-            fontSize: 9.5,
-            fontWeight: 700,
-            borderRadius: 999,
-            padding: '1px 6px',
-            background: on ? 'var(--blue)' : 'var(--panel-2)',
-            color: on ? '#fff' : 'var(--muted)',
-            border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)')
-          }
-        }, "\uD83D\uDC64", others.length));
-      })));
-    }))), React.createElement("div", {
+    }), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 8,
@@ -56025,7 +56470,21 @@ window.LockScreen = LockScreen;
     }), "Save"), React.createElement("button", {
       className: "btn",
       onClick: () => setEditing(null)
-    }, "Cancel"))), view === 'people' && React.createElement(Card, {
+    }, "Cancel")))), view === 'access' && (list === null ? React.createElement(Card, null, React.createElement("div", {
+      style: {
+        padding: 24,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026")) : React.createElement(AccessMatrix, {
+      persons: list,
+      areas: areas,
+      areaInds: areaInds,
+      onChanged: load,
+      onEditPerson: r => {
+        if (!embedded) setView('people');
+        openEdit(r);
+      }
+    })), view === 'people' && React.createElement(Card, {
       style: {
         padding: 0,
         overflow: 'hidden'
@@ -56035,7 +56494,7 @@ window.LockScreen = LockScreen;
         padding: 24,
         color: 'var(--muted)'
       }
-    }, "Loading\u2026") : list.length === 0 ? React.createElement("div", {
+    }, "Loading\u2026") : activePeople.length === 0 ? React.createElement("div", {
       style: {
         padding: 24,
         color: 'var(--muted)',
@@ -56046,7 +56505,7 @@ window.LockScreen = LockScreen;
       style: {
         width: '100%'
       }
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Name"), React.createElement("th", null, "Title"), React.createElement("th", null, "Login"), React.createElement("th", null, "Departments"), React.createElement("th", null, "Quality areas"), React.createElement("th", null))), React.createElement("tbody", null, list.map(r => React.createElement("tr", {
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Name"), React.createElement("th", null, "Title"), React.createElement("th", null, "Login"), React.createElement("th", null, "Departments"), React.createElement("th", null, "Quality areas"), React.createElement("th", null))), React.createElement("tbody", null, activePeople.map(r => React.createElement("tr", {
       key: r.id,
       onClick: () => openEdit(r),
       title: "Tap to edit",
@@ -56925,7 +57384,7 @@ window.LockScreen = LockScreen;
       readOnly: true
     })) : React.createElement(Field, {
       label: "Responsible person (who is giving this data)",
-      hint: assigned.length ? 'Assigned: ' + assigned.map(a => a.name).join(', ') : 'Pick from staff or type a new name. Manage assignments in Responsible Persons.'
+      hint: assigned.length ? 'Assigned: ' + assigned.map(a => a.name).join(', ') : 'Pick from staff or type a new name. Manage assignments in Settings → Users & Roles.'
     }, React.createElement(ResponsiblePicker, {
       value: responsible,
       onChange: setResponsible,
@@ -67675,6 +68134,508 @@ window.LockScreen = LockScreen;
     approved: 'Approved',
     rejected: 'Rejected'
   };
+  function UnicoStaffRegForm({
+    role,
+    onDone
+  }) {
+    useEffect(() => {
+      const body = document.body;
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        body.classList.remove('pdf-export-mode', 'regform-print');
+        window.removeEventListener('afterprint', finish);
+        if (onDone) onDone();
+      };
+      body.classList.add('pdf-export-mode', 'regform-print');
+      window.addEventListener('afterprint', finish);
+      const t = setTimeout(() => {
+        try {
+          window.print();
+        } catch (e) {}
+        setTimeout(finish, 800);
+      }, 350);
+      return () => {
+        clearTimeout(t);
+        window.removeEventListener('afterprint', finish);
+        body.classList.remove('pdf-export-mode', 'regform-print');
+      };
+    }, []);
+    const root = typeof document !== 'undefined' && document.getElementById('pdf-root');
+    if (!root || typeof ReactDOM === 'undefined' || !ReactDOM.createPortal) return null;
+    const S = window.STAFF || {};
+    const isPCA = role === 'PCA';
+    const uniq = a => [...new Set((a || []).map(x => String(x || '').trim()).filter(Boolean))];
+    const quals = uniq(S.qualificationsFor ? S.qualificationsFor(role || 'Nurse') : isPCA ? S.PCA_QUALIFICATIONS : S.QUALIFICATIONS);
+    const desigs = uniq(isPCA ? S.PCA_DESIGNATIONS || [] : S.DESIGNATIONS || []);
+    const trains = uniq(isPCA ? S.PCA_TRAININGS || S.TRAININGS : S.TRAININGS);
+    const extras = uniq(S.EXTRACURRICULARS);
+    const vacc = uniq(S.VACCINATION_STATES);
+    const statDepts = uniq((window.UNICO && window.UNICO.DEPARTMENTS || []).map(d => d && d.name));
+    const depts = statDepts.length ? statDepts : uniq(S.DEPARTMENTS);
+    const custom = S.customFields && S.customFields() || [];
+    const ink = '#111a26',
+      line = '#8e9aa8',
+      soft = '#4f5d6e';
+    if (!isPCA && !desigs.some(d => d.toLowerCase() === 'trainee nurse')) desigs.push('Trainee Nurse');
+    const today = new Date().toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+    const Sec = ({
+      n,
+      title,
+      children
+    }) => React.createElement("div", {
+      style: {
+        marginTop: 7,
+        breakInside: 'avoid',
+        pageBreakInside: 'avoid'
+      }
+    }, React.createElement("div", {
+      style: {
+        background: '#1f3b5a',
+        color: '#fff',
+        fontSize: '9pt',
+        fontWeight: 700,
+        letterSpacing: '.4px',
+        padding: '3px 8px',
+        textTransform: 'uppercase',
+        WebkitPrintColorAdjust: 'exact',
+        printColorAdjust: 'exact'
+      }
+    }, n, ". ", title), React.createElement("div", {
+      style: {
+        border: '1px solid ' + line,
+        borderTop: 0,
+        padding: '4px 8px 6px'
+      }
+    }, children));
+    const Ln = ({
+      label,
+      w,
+      h
+    }) => React.createElement("div", {
+      style: {
+        flex: (w || 1) + ' 1 auto',
+        minWidth: 0,
+        display: 'flex',
+        alignItems: 'flex-end',
+        gap: 5,
+        fontSize: '8.5pt',
+        marginTop: 5
+      }
+    }, React.createElement("span", {
+      style: {
+        whiteSpace: 'nowrap',
+        fontWeight: 600,
+        color: ink
+      }
+    }, label), React.createElement("span", {
+      style: {
+        flex: 1,
+        minWidth: 40,
+        borderBottom: '1px solid ' + ink,
+        height: h || 16
+      }
+    }));
+    const Row = ({
+      children
+    }) => React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 12,
+        flexWrap: 'nowrap'
+      }
+    }, children);
+    const Box = () => React.createElement("span", {
+      style: {
+        display: 'inline-block',
+        width: 8,
+        height: 8,
+        border: '1.1px solid ' + ink,
+        marginRight: 4,
+        marginTop: 2,
+        flexShrink: 0
+      }
+    });
+    const Ticks = ({
+      label,
+      items,
+      cols,
+      other
+    }) => React.createElement("div", {
+      style: {
+        marginTop: 5
+      }
+    }, label && React.createElement("div", {
+      style: {
+        fontSize: '8.5pt',
+        fontWeight: 600,
+        marginBottom: 2
+      }
+    }, label, " ", React.createElement("span", {
+      style: {
+        fontWeight: 400,
+        color: soft
+      }
+    }, "(tick all that apply)")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0,1fr) '.repeat(cols || 3).trim(),
+        columnGap: 8,
+        rowGap: 2
+      }
+    }, items.map(x => React.createElement("div", {
+      key: x,
+      style: {
+        fontSize: '8pt',
+        display: 'flex',
+        alignItems: 'flex-start',
+        lineHeight: 1.2
+      }
+    }, React.createElement(Box, null), x)), other !== false && React.createElement("div", {
+      style: {
+        fontSize: '8pt',
+        display: 'flex',
+        alignItems: 'flex-start',
+        lineHeight: 1.2,
+        gridColumn: 'span ' + Math.min(2, cols || 3)
+      }
+    }, React.createElement(Box, null), "Other: ", React.createElement("span", {
+      style: {
+        flex: 1,
+        borderBottom: '1px solid ' + ink,
+        marginLeft: 4,
+        height: 10
+      }
+    }))));
+    const One = ({
+      label,
+      items
+    }) => React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        columnGap: 10,
+        rowGap: 2,
+        flexWrap: 'wrap',
+        fontSize: '8.5pt',
+        marginTop: 5
+      }
+    }, React.createElement("span", {
+      style: {
+        fontWeight: 600
+      }
+    }, label), items.map(x => React.createElement("span", {
+      key: x,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'flex-start',
+        fontSize: '8pt'
+      }
+    }, React.createElement(Box, null), x)));
+    return ReactDOM.createPortal(React.createElement("div", {
+      className: "pdf-doc portrait"
+    }, React.createElement("style", null, "@media print{@page{size:A4 portrait;margin:6mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .regform-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}}"), React.createElement("section", {
+      className: "regform-sheet",
+      style: {
+        fontFamily: "'IBM Plex Sans',system-ui,'Segoe UI',sans-serif",
+        color: ink,
+        padding: '7mm 9mm'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        borderBottom: '2px solid #1f3b5a',
+        paddingBottom: 6
+      }
+    }, React.createElement("img", {
+      src: "unico/logo.svg",
+      alt: "UNICO Hospitals",
+      style: {
+        height: 36
+      }
+    }), React.createElement("div", {
+      style: {
+        flex: 1,
+        textAlign: 'center'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: '8.5pt',
+        fontWeight: 700,
+        letterSpacing: '1px',
+        color: soft,
+        textTransform: 'uppercase'
+      }
+    }, "UNICO Hospitals PLC \xB7 Nursing Services"), React.createElement("div", {
+      style: {
+        fontSize: '13.5pt',
+        fontWeight: 800,
+        marginTop: 1
+      }
+    }, "Staff Registration Form \u2014 ", isPCA ? 'Patient Care Assistant (PCA)' : 'Nurse'), React.createElement("div", {
+      style: {
+        fontSize: '7.8pt',
+        color: soft,
+        marginTop: 2
+      }
+    }, "Write in BLOCK LETTERS \xB7 tick (\u2713) the boxes that apply \xB7 attach copies of certificates, NID and BNMC registration")), React.createElement("div", {
+      style: {
+        width: '25mm',
+        height: '30mm',
+        border: '1.1px dashed ' + ink,
+        display: 'grid',
+        placeItems: 'center',
+        textAlign: 'center',
+        fontSize: '7.5pt',
+        color: soft,
+        flexShrink: 0
+      }
+    }, "Affix recent", React.createElement("br", null), "passport-size", React.createElement("br", null), "photograph")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 14,
+        fontSize: '8pt',
+        color: soft,
+        marginTop: 3
+      }
+    }, React.createElement("span", null, "Form No.: HR-NUR-REG-01"), React.createElement("span", null, "Staff role: ", React.createElement("b", {
+      style: {
+        color: ink
+      }
+    }, isPCA ? 'PCA' : 'Nurse')), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", null, "Date received: ______________")), React.createElement(Sec, {
+      n: 1,
+      title: "Personal information"
+    }, React.createElement(Row, null, React.createElement(Ln, {
+      label: "Employee ID:",
+      w: 1
+    }), React.createElement(Ln, {
+      label: "Full name:",
+      w: 2.4
+    })), React.createElement(Row, null, React.createElement(Ln, {
+      label: "Phone:",
+      w: 1.2
+    }), React.createElement(Ln, {
+      label: "Date of birth (DD/MM/YYYY):",
+      w: 1.4
+    }), React.createElement(Ln, {
+      label: "Age:",
+      w: 0.5
+    })), React.createElement(One, {
+      label: "Gender:",
+      items: ['Female', 'Male', 'Other']
+    }), React.createElement(Ticks, {
+      label: "Qualification",
+      items: quals,
+      cols: 3
+    }), React.createElement(Ticks, {
+      label: "Extracurricular activities",
+      items: extras,
+      cols: 5
+    })), React.createElement(Sec, {
+      n: 2,
+      title: "Job information"
+    }, React.createElement(Ticks, {
+      label: "Designation",
+      items: desigs,
+      cols: 4
+    }), React.createElement(Ticks, {
+      label: "Current department(s)",
+      items: depts,
+      cols: 5,
+      other: false
+    }), React.createElement(Row, null, React.createElement(Ln, {
+      label: "Primary department (if more than one):",
+      w: 1
+    })), React.createElement("div", {
+      style: {
+        fontSize: '8.5pt',
+        marginTop: 5,
+        display: 'flex',
+        alignItems: 'flex-start'
+      }
+    }, React.createElement(Box, null), "Can be floated to other units when they are short")), React.createElement(Sec, {
+      n: 3,
+      title: "Previous experience (before joining UNICO)"
+    }, React.createElement("table", {
+      style: {
+        width: '100%',
+        borderCollapse: 'collapse',
+        fontSize: '8pt',
+        marginTop: 2
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, ['#', 'Organisation / hospital', 'Department / role', 'Years', 'Months'].map((h, i) => React.createElement("th", {
+      key: h,
+      style: {
+        border: '1px solid ' + line,
+        padding: '2px 5px',
+        background: '#eef2f6',
+        textAlign: i > 2 ? 'center' : 'left',
+        width: i === 0 ? '5%' : i > 2 ? '10%' : 'auto',
+        WebkitPrintColorAdjust: 'exact',
+        printColorAdjust: 'exact'
+      }
+    }, h)))), React.createElement("tbody", null, [1, 2, 3, 4].map(i => React.createElement("tr", {
+      key: i
+    }, [0, 1, 2, 3, 4].map(c => React.createElement("td", {
+      key: c,
+      style: {
+        border: '1px solid ' + line,
+        height: 17,
+        textAlign: 'center',
+        fontSize: '8pt',
+        color: soft
+      }
+    }, c === 0 ? i : '')))))), React.createElement(Row, null, React.createElement("div", {
+      style: {
+        flex: '0 0 auto',
+        fontSize: '8.5pt',
+        fontWeight: 600,
+        marginTop: 5,
+        alignSelf: 'flex-end',
+        whiteSpace: 'nowrap'
+      }
+    }, "Total previous experience: ____ yrs ____ mo"), React.createElement(Ln, {
+      label: "Date of joining UNICO (DD/MM/YYYY):",
+      w: 1.3
+    }), React.createElement(Ln, {
+      label: "Total experience:",
+      w: 0.8
+    }))), React.createElement("div", {
+      style: {
+        breakBefore: 'page',
+        pageBreakBefore: 'always'
+      }
+    }, React.createElement(Sec, {
+      n: 4,
+      title: "Compliance & registration"
+    }, React.createElement(Ticks, {
+      label: "Special training",
+      items: trains,
+      cols: 5
+    }), React.createElement(One, {
+      label: "Hepatitis-B vaccination:",
+      items: vacc
+    }), React.createElement(Row, null, React.createElement(Ln, {
+      label: "BNMC registration / licence no.:",
+      w: 1.5
+    }), React.createElement(Ln, {
+      label: "Licence expiry (DD/MM/YYYY):",
+      w: 1
+    })), React.createElement(Ln, {
+      label: "Remarks:"
+    })), React.createElement(Sec, {
+      n: 5,
+      title: "Additional details"
+    }, React.createElement(Row, null, React.createElement(Ln, {
+      label: "NID / Passport no.:",
+      w: 1.3
+    }), React.createElement(Ln, {
+      label: "Languages spoken:",
+      w: 1
+    })), React.createElement(One, {
+      label: "Blood group:",
+      items: ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-']
+    }), React.createElement(Row, null, React.createElement(Ln, {
+      label: "Emergency contact (name & phone):",
+      w: 1.8
+    }), React.createElement(Ln, {
+      label: "Relation:",
+      w: 0.8
+    })), React.createElement(One, {
+      label: "Languages:",
+      items: ['Bangla', 'English', 'Hindi', 'Urdu', 'Arabic', 'Other: ________']
+    })), custom.length > 0 && React.createElement(Sec, {
+      n: 6,
+      title: "Other information"
+    }, custom.map(cf => cf.kind === 'text' || !(cf.options || []).length ? React.createElement(Ln, {
+      key: cf.id,
+      label: cf.name + ':'
+    }) : React.createElement(Ticks, {
+      key: cf.id,
+      label: cf.name + (cf.kind === 'multi' ? '' : ' (tick one)'),
+      items: uniq(cf.options),
+      cols: 5
+    }))), React.createElement(Sec, {
+      n: custom.length > 0 ? 7 : 6,
+      title: "Clinical privileges"
+    }, React.createElement("div", {
+      style: {
+        fontSize: '8.5pt',
+        color: soft
+      }
+    }, "Clinical activities are privileged per department by Nursing Administration using the ", React.createElement("b", {
+      style: {
+        color: ink
+      }
+    }, "Department Privileges checklist"), ". Attach the signed checklist to this form."), React.createElement(Row, null, React.createElement(Ln, {
+      label: "Privilege checklist attached:  \u2610 Yes  \u2610 No   \xB7   Assessed by:",
+      w: 2
+    }), React.createElement(Ln, {
+      label: "Date:",
+      w: 0.8
+    }))), React.createElement("div", {
+      style: {
+        marginTop: 7,
+        border: '1px solid ' + line,
+        padding: '5px 8px 6px',
+        fontSize: '8.5pt',
+        breakInside: 'avoid',
+        pageBreakInside: 'avoid'
+      }
+    }, React.createElement("b", null, "Declaration:"), " I declare that the information given in this form is true and complete to the best of my knowledge. I understand that any false information may lead to cancellation of my registration.", React.createElement(Row, null, React.createElement(Ln, {
+      label: "Signature of staff:",
+      w: 1.5
+    }), React.createElement(Ln, {
+      label: "Date:",
+      w: 0.8
+    }))), React.createElement("div", {
+      style: {
+        marginTop: 9,
+        border: '1.1px dashed ' + ink,
+        padding: '5px 8px 6px',
+        fontSize: '8.5pt',
+        breakInside: 'avoid',
+        pageBreakInside: 'avoid'
+      }
+    }, React.createElement("b", null, "FOR OFFICE USE ONLY"), React.createElement(Row, null, React.createElement(Ln, {
+      label: "Employee ID assigned:",
+      w: 1
+    }), React.createElement(Ln, {
+      label: "Entered in staff register on:",
+      w: 1
+    }), React.createElement(Ln, {
+      label: "By:",
+      w: 0.8
+    })), React.createElement(Row, null, React.createElement(Ln, {
+      label: "BNMC verified:  \u2610 Yes  \u2610 No   \xB7   Verified on:",
+      w: 1
+    }), React.createElement(Ln, {
+      label: "Documents received:  \u2610 NID  \u2610 Certificates  \u2610 BNMC  \u2610 Photo",
+      w: 0.4
+    }))), React.createElement("div", {
+      style: {
+        marginTop: 8,
+        fontSize: '7.5pt',
+        color: soft,
+        borderTop: '1px solid #cfd6de',
+        paddingTop: 4,
+        display: 'flex',
+        justifyContent: 'space-between'
+      }
+    }, React.createElement("span", null, "UNICO Hospitals PLC \xB7 Staff Registration Form (", isPCA ? 'PCA' : 'Nurse', ") \xB7 HR-NUR-REG-01"), React.createElement("span", null, "Printed ", today))))), root);
+  }
+  if (typeof window !== 'undefined') window.UnicoStaffRegForm = UnicoStaffRegForm;
   function CollectorStaffRequests({
     depts
   }) {
@@ -70727,6 +71688,11 @@ window.LockScreen = LockScreen;
     }))))))));
   }
   Object.assign(window, {
+    DcScopeEditor,
+    dcScopePayload,
+    dcScopeBase,
+    dcScopeAreas,
+    dcCustomAreas,
     DataResponsibles,
     DataPatientForm,
     DataQualityForm,
@@ -104503,10 +105469,17 @@ function App() {
       }
     });
   } else if (route.view === 'dcResponsibles') {
-    crumbs = ['UNICO', 'Data Collection', 'Responsible Persons'];
-    body = React.createElement(DataResponsibles, {
-      depts: depts
-    });
+    const toSettings = !window.unicoCanAccessView || window.unicoCanAccessView('settings');
+    if (toSettings) {
+      try {
+        window.__UNICO_SETTINGS_TAB__ = 'responsibles';
+      } catch (e) {}
+    }
+    setTimeout(() => setRoute({
+      view: toSettings ? 'settings' : 'dcReview'
+    }), 0);
+    crumbs = toSettings ? ['UNICO', 'Settings', 'Users & Roles'] : ['UNICO', 'Data Collection', 'Review & History'];
+    body = null;
   } else if (route.view === 'dcSettings') {
     crumbs = ['UNICO', 'Data Collection', 'Department Setup'];
     body = typeof DataCollectionSettings !== 'undefined' ? React.createElement(DataCollectionSettings, {
