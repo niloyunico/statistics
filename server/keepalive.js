@@ -62,7 +62,7 @@ async function ping(source, opts) {
     source: source || 'timer',
   };
   // Warming only refills a read cache; with the cache disabled it is just four full reads.
-  if ((!opts || opts.warm !== false) && !require('./cache').DISABLED) {
+  if ((!opts || opts.warm !== false) && require('./cache').mode() !== 'off') {
     try { out.warmed = await warmCache(); } catch (e) { out.warmed = { error: String(e.message || e) }; }
   }
   // The STANDBY cluster must never be paused for idleness either — a paused standby

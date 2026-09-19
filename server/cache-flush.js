@@ -8,10 +8,7 @@
  * It does NOT cover writes the app never saw:
  *   - a maintenance script in scripts/ that opens its own MongoClient;
  *   - an edit made by hand in the Atlas web UI;
- *   - a restore from backup, or a mongorestore / mongoimport;
- *   - a script run from a machine whose .env has no Redis credentials — the bump is
- *     then written to that process's own in-memory stand-in and dies with it, which
- *     looks exactly like success and is the trap worth knowing about.
+ *   - a restore from backup, or a mongorestore / mongoimport.
  *
  * After any of those, the database is right and the deployment keeps serving the copy
  * it already had until each entry's fresh window lapses. That is the "I ran the fix
@@ -21,52 +18,56 @@
  *   npm --prefix server run cache:flush                 # every cached collection
  *   npm --prefix server run cache:flush -- departments  # just one or a few
  *
- * IMPORTANT: it must run with the SAME Redis credentials the deployment uses, or it
- * has nothing to talk to. It says so plainly if that is not the case, and exits 1 —
- * so a scheduled job cannot fail silently.
+ * WHERE THE COUNTERS LIVE
+ * Without Redis (the normal setup now) the cache keeps its version counters in the
+ * `cacheMeta` document of the SAME MongoDB database the deployment uses, so this must
+ * run with that MONGODB_URI. With Redis configured it must use the same Redis
+ * credentials. If neither is available it says so plainly and exits 1, so a scheduled
+ * job cannot fail silently.
  */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
-const redis = require('./redis');
+// db.js registers the MongoDB version store the cache uses without Redis ('mongo'
+// mode), so it has to be loaded before the mode is decided.
+const db = require('./db');
 const cache = require('./cache');
 
 (async () => {
   const asked = process.argv.slice(2).filter((a) => !a.startsWith('-'));
+  const mode = cache.mode();
 
-  // Production runs with no read cache (CACHE_DISABLED=true, no Redis): every read goes
-  // straight to MongoDB, so there is nothing that could be serving old data.
-  if (cache.DISABLED) {
-    console.log('cache-flush: the read cache is disabled — every read goes straight to the database. Nothing to flush.');
+  if (mode === 'off') {
+    console.log('cache-flush: the read cache is disabled (CACHE_DISABLED=true) — every read goes straight to the database. Nothing to flush.');
     process.exit(0);
   }
-  if (!redis.configured()) {
-    console.error('cache-flush: no Redis is configured for this process.');
+  if (mode === 'memory') {
+    console.error('cache-flush: this process has no shared store to invalidate.');
     console.error('');
-    console.error('  Nothing was flushed. The deployment reads its invalidation counters from');
-    console.error('  Redis, so a bump written here would go nowhere and the live site would keep');
-    console.error('  serving the data it already has.');
-    console.error('');
-    console.error('  Fix: copy UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (or the');
-    console.error('  KV_REST_API_* pair) from the Vercel project into server/.env, so scripts run');
-    console.error('  here invalidate the same cache the fleet reads.');
+    console.error('  Nothing was flushed. Set MONGODB_URI in server/.env to the database the');
+    console.error('  deployment uses (the cache keeps its version counters there), or the Redis');
+    console.error('  REST credentials if the deployment uses Redis. A bump written here would');
+    console.error('  otherwise go nowhere and the live site would keep serving what it has.');
     process.exit(1);
   }
+  if (mode === 'mongo') await db.getDbHandle();   // connect before moving the counters
 
   const results = await cache.flush(asked);
   const lost = results.filter((r) => !r.shared);
 
   results.forEach((r) => {
     console.log('  ' + (r.shared ? 'flushed ' : 'FAILED  ') + r.coll
-      + (r.shared && r.version != null ? '   (version now ' + r.version + ')' : ''));
+      + (r.shared && r.version != null ? '   (version now ' + r.version + ')' : '')
+      + (r.error ? '   (' + r.error + ')' : ''));
   });
 
+  try { await db.close(); } catch (e) { /* exiting anyway */ }
   if (lost.length) {
     console.error('\ncache-flush: ' + lost.length + ' of ' + results.length
       + ' did not reach the shared store — those collections are still being served from cache.');
     process.exit(1);
   }
-  console.log('\ncache-flush: ' + results.length + ' collection(s) invalidated fleet-wide.');
+  console.log('\ncache-flush: ' + results.length + ' collection(s) invalidated fleet-wide (' + mode + ').');
   process.exit(0);
 })().catch((e) => {
   console.error('cache-flush FAILED: ' + (e && e.stack || e));

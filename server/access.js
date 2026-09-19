@@ -119,9 +119,13 @@ const _cache = new Map();
 const CACHE_TTL = 3000;
 // How old a remembered user may be and still stand in when the lookup FAILS.
 const STALE_USER_MS = 60000;
+// With the version-validated read cache: how long a record is trusted with no write to
+// `users` anywhere — the backstop for an edit made outside the app (Atlas UI, a script).
+const USER_FRESH_MS = 15000;
 function invalidate(username) {
   if (username) _cache.delete(String(username).toLowerCase());
   else _cache.clear();
+  try { const cache = require('./cache'); if (typeof cache.dropLocal === 'function') cache.dropLocal('users'); } catch (e) { /* best effort */ }
 }
 
 const DB_UNREACHABLE = Symbol('db-unreachable');
@@ -131,6 +135,21 @@ const DB_UNREACHABLE = Symbol('db-unreachable');
 async function loadUser(username, opts) {
   const key = String(username || '').toLowerCase();
   if (!key) return null;
+  // Read cache in 'mongo' mode: the record is re-read only when `users` actually changed
+  // somewhere in the fleet (every write through the app's Db handle bumps it) or after
+  // USER_FRESH_MS. revalidateMs 0: past the fresh window the lookup waits for the
+  // database rather than serving a possibly revoked record. Not in 'redis' mode — that
+  // would copy password hashes into Redis.
+  const cache = require('./cache');
+  if (typeof cache.mode === 'function' && cache.mode() === 'mongo') {
+    try {
+      return await cache.read('user:' + key,
+        { coll: 'users', freshMs: USER_FRESH_MS, revalidateMs: 0, staleMs: STALE_USER_MS, noRescue: !(opts && opts.allowStale) },
+        async () => (await getUsers()).findOne({ username: key }));
+    } catch (e) {
+      return DB_UNREACHABLE;
+    }
+  }
   const hit = _cache.get(key);
   if (hit && (Date.now() - hit.ts) < CACHE_TTL) return hit.user;
   let user = null;

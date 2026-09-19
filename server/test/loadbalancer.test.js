@@ -8,6 +8,7 @@
 
 // Tunables are read at module load, so set them BEFORE requiring the module.
 // Small numbers make the queueing behaviour observable in milliseconds.
+process.env.LB_DISABLED = 'false';          // the limiter is off by default; this suite tests it ON
 process.env.DB_MAX_CONCURRENCY = '50';
 process.env.DB_MAX_LOCAL_CONCURRENCY = '3';
 process.env.DB_MIN_LOCAL_CONCURRENCY = '1';

@@ -70,6 +70,9 @@
  *   CACHE_STALE_MS            how long a copy may rescue an outage  (default 86400000)
  *   CACHE_LOCAL_MS            in-process re-use window              (default 2000)
  *   CACHE_COMPRESS_BYTES      gzip payloads larger than this        (default 8192)
+ *   CACHE_VERSION_CHECK_MS    'mongo' mode only: reuse one version read for this long
+ *                             (default 0 — every lookup proves the version; see
+ *                             cache-mongo.js before raising it)
  *   CACHE_VERSION             bump by hand if a cached SHAPE changes across a deploy
  */
 
@@ -84,13 +87,24 @@ function intEnv(name, dflt) {
   return Number.isFinite(n) ? n : dflt;
 }
 
-// Also OFF on Vercel whenever Redis is not configured. The version counters that make a
-// cached copy "current" would then live in each instance's memory, so a save on one
-// instance never invalidated another: up to ~6 minutes of old data served as current,
-// the page marked authoritative, and 24-hour-old outage rescues. Many instances need a
-// shared store for this to be correct; a single PC server does not.
-const DISABLED = String(process.env.CACHE_DISABLED || '').toLowerCase() === 'true'
-  || (!!process.env.VERCEL && !redis.configured());
+// Which cache runs, decided per call by mode():
+//   'redis'  — Redis configured: values AND version counters in the shared store.
+//   'mongo'  — no Redis, but db.js registered a version store (cache-mongo.js): values
+//              in this process, version counters in ONE tiny MongoDB document that every
+//              instance reads, so a save on any instance invalidates all the others.
+//   'memory' — neither (tests, a laptop without Mongo): this process only.
+//   'off'    — CACHE_DISABLED=true, or Vercel with no shared store at all. Per-instance
+//              counters there meant a save on one instance never invalidated another: up
+//              to ~6 minutes of old data served as current, the page marked
+//              authoritative, and 24-hour-old outage rescues.
+const DISABLED = String(process.env.CACHE_DISABLED || '').toLowerCase() === 'true';
+let mongo = null;   // the cache-mongo.js instance, created below once `stats` exists
+function mode() {
+  if (DISABLED) return 'off';
+  if (redis.configured()) return 'redis';
+  if (mongo && mongo.hasStore()) return 'mongo';
+  return process.env.VERCEL ? 'off' : 'memory';
+}
 const FRESH_MS = intEnv('CACHE_TTL_MS', 60000);
 const APPDATA_MS = intEnv('CACHE_APPDATA_MS', 5000);
 const REVALIDATE_MS = intEnv('CACHE_REVALIDATE_MS', 300000);
@@ -119,8 +133,8 @@ const lockKey = (name) => NS + 'e:' + name + ':lock';
 const stats = {
   hits: 0, l1Hits: 0, misses: 0, loads: 0, stale: 0, rescues: 0, bumps: 0,
   swr: 0, revalidated: 0, revalidateFails: 0, compressed: 0, oversized: 0,
-  lostBumps: 0, takeovers: 0,
-  lastRescue: null, lastLostBump: null,
+  lostBumps: 0, takeovers: 0, versionReads: 0, versionFails: 0,
+  lastRescue: null, lastLostBump: null, lastVersionError: null,
 };
 
 // Collections whose invalidation never reached the SHARED store (Redis absent, muted
@@ -128,6 +142,14 @@ const stats = {
 // and nothing detects it — so they are retried, free of charge, on the next lookup
 // pipeline this instance performs.
 const pendingBumps = new Set();
+
+// 'mongo' mode (see mode() and cache-mongo.js). Idle until db.js registers the version
+// store; shares `stats` and `pendingBumps` so /api/health reports one set of numbers.
+mongo = require('./cache-mongo').create({
+  stats, pendingBumps,
+  FRESH_MS, STALE_MS, REVALIDATE_MS, BUMP_TIMEOUT_MS,
+  versionCheckMs: intEnv('CACHE_VERSION_CHECK_MS', 0),
+});
 
 /* ---- L1: the in-process copy -------------------------------------------------
    Saves the Redis round trip when the same warm instance serves several requests in
@@ -323,7 +345,12 @@ async function resolve(spec, found) {
   // merging somebody's save against a copy from an outage can silently no-op their
   // edit or drop a key, and a visible "save failed" is far better than either.
   const onLoaderError = (e) => {
-    if (rescuable && !spec.noRescue) return rescue(name, coll, entry, lv);
+    if (rescuable && !spec.noRescue) {
+      const v = rescue(name, coll, entry, lv);
+      // markRescue: see cache-mongo.js — lets the page shell tell an outage copy apart.
+      return spec.markRescue && v && typeof v === 'object' && !Array.isArray(v)
+        ? Object.assign({}, v, { rescued: true, rescuedFromAt: entry.at }) : v;
+    }
     throw e;
   };
 
@@ -410,11 +437,16 @@ function fromL1(spec, now) {
   return { hit: false };
 }
 
-// Read SEVERAL datasets with a single Redis round trip.
-//   specs: [{ name, coll, freshMs, staleMs, fresh, loader }]
+// Read SEVERAL datasets with a single round trip to the shared store.
+//   specs: [{ name, coll, freshMs, staleMs, revalidateMs, fresh, noRescue, loader }]
 // Returns their values in the same order.
 async function readMany(specs) {
-  if (DISABLED) return Promise.all(specs.map((s) => s.loader()));
+  const m = mode();
+  if (m === 'off') return Promise.all(specs.map((s) => s.loader()));
+  // 'mongo': no L1 short-cut. Every lookup proves the version against the shared
+  // document (a few dozen bytes); a time-based in-process copy would be exactly the
+  // cross-instance staleness this mode exists to avoid.
+  if (m === 'mongo') return mongo.readMany(specs);
   const now = Date.now();
   const out = new Array(specs.length);
   const need = [];
@@ -449,7 +481,10 @@ async function bump(coll) {
   localVers.set(coll, localVer(coll) + 1);
   dropL1(coll);
   stats.bumps++;
-  if (DISABLED) return;
+  const m = mode();
+  if (m === 'off') return;
+  // 'mongo': $inc the shared counter (bounded, replayed if lost) — see cache-mongo.js.
+  if (m === 'mongo') return mongo.bump(coll);
   // Bounded so a slow Redis can never add its full timeout to every save.
   const timedOut = Symbol('timeout');
   const outcome = await Promise.race([
@@ -468,7 +503,7 @@ async function bump(coll) {
 }
 
 // Every collection the app caches something from. Used by the flush CLI.
-const CACHED_COLLECTIONS = ['departments', 'staff', 'appdata', 'qualityFormulas'];
+const CACHED_COLLECTIONS = ['departments', 'staff', 'appdata', 'qualityFormulas', 'users'];
 
 // Invalidate collections explicitly, reporting whether each bump actually reached the
 // SHARED store. This is the escape hatch for writes the Proxy cannot see: a maintenance
@@ -477,6 +512,10 @@ const CACHED_COLLECTIONS = ['departments', 'staff', 'appdata', 'qualityFormulas'
 // copy it had — the "I ran the fix and nothing changed" report.
 async function flush(colls) {
   const list = (colls && colls.length) ? colls : CACHED_COLLECTIONS;
+  if (mode() === 'mongo') {
+    list.forEach((c) => { localVers.set(c, localVer(c) + 1); dropL1(c); });
+    return mongo.flush(list);
+  }
   const out = [];
   for (const c of list) {
     localVers.set(c, localVer(c) + 1);
@@ -561,22 +600,36 @@ function instrument(db, opts) {
 }
 
 function snapshot() {
+  const m = mode();
   return Object.assign({
-    enabled: !DISABLED,
+    enabled: m !== 'off',
+    mode: m,
     pendingBumps: pendingBumps.size,
     freshMs: FRESH_MS, appdataMs: APPDATA_MS, revalidateMs: REVALIDATE_MS,
     staleMs: STALE_MS, localMs: LOCAL_MS,
-  }, stats);
+  }, stats, m === 'mongo' ? { mongo: mongo.snapshot() } : {});
+}
+
+// Forget this process's copies of a collection without touching any shared counter
+// (access.invalidate after an admin saves a user — the write itself already bumped).
+function dropLocal(coll) {
+  localVers.set(coll, localVer(coll) + 1);
+  dropL1(coll);
+  mongo.dropLocal(coll);
 }
 
 // Tests only.
 function _reset() {
   L1.clear(); localVers.clear(); revalidating.clear(); pendingBumps.clear();
   Object.keys(stats).forEach((k) => { if (typeof stats[k] === 'number') stats[k] = 0; });
-  stats.lastRescue = null;
+  stats.lastRescue = null; stats.lastLostBump = null; stats.lastVersionError = null;
+  mongo.reset();
 }
 
 module.exports = {
   read, readMany, warm, bump, flush, instrument, snapshot, _reset, CACHED_COLLECTIONS,
   FRESH_MS, APPDATA_MS, REVALIDATE_MS, STALE_MS, DISABLED,
+  mode, dropLocal,
+  // db.js hands in the MongoDB version store ('mongo' mode); tests hand in a fake.
+  useVersionStore: (store) => mongo.setStore(store),
 };

@@ -3,7 +3,7 @@
   const DEPARTMENTS=["ER","OPD","NICU","MICU","SICU","CCU","CT ICU","Level-10","Level-9","Level-11",
     "LDR","Dialysis","Endoscopy","Cath Lab","General OT","Cardiac OT","Radiology","HomeCare","DayCare",
     "Oncology","Infection Control","Training & Development","Management","Vaccination Room"];
-  const DESIGNATIONS=["Staff Nurse","Senior Staff Nurse","Charge Nurse","Acting Charge Nurse",
+  const DESIGNATIONS=["Staff Nurse","Trainee Nurse","Senior Staff Nurse","Charge Nurse","Acting Charge Nurse",
     "Team Leader","Assistant Nurse Manager","Nurse Manager","Senior Manager","Instructor","Infection Control Nurse","Supervisor"];
   // Bangladesh (BNMC) nursing qualifications — full current list; legacy short forms kept
   // at the end so already-recorded values still match their chip.

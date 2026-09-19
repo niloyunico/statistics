@@ -27,6 +27,9 @@ const lb = require('./loadbalancer');
 // because it is the busiest write target in the app.
 const REF_TTL = cache.FRESH_MS;
 const APPDATA_TTL = cache.APPDATA_MS;
+// How old an app-state copy the PAGE SHELL may render through a connection blip (tagged
+// `rescued`, so it goes out non-authoritative). Every other reader gets no rescue at all.
+const APPDATA_RESCUE_MS = Number(process.env.CACHE_APPDATA_RESCUE_MS) || 10 * 60 * 1000;
 
 /* ---- automatic cluster failover (reads AND writes) -------------------------
    MONGODB_URIS=primary,standby enables it (falls back to the single MONGODB_URI).
@@ -357,7 +360,15 @@ async function getAppData(opts) {
   if (process.env.MONGODB_URI) {
     return cache.read(
       'appdata',
-      { coll: 'appdata', freshMs: APPDATA_TTL, fresh: !!(opts && opts.fresh), noRescue: !!(opts && opts.noRescue) },
+      // By default the app-state blob is never served from an outage copy (staleMs 0):
+      // /api/data and the save paths hand it to the browser as current, and a rescued old
+      // blob would roll open tabs back. opts.allowRescue (the page shell only) accepts a
+      // copy up to APPDATA_RESCUE_MS old, TAGGED `rescued: true`, so the shell can still
+      // render the app through a connection blip — marked non-authoritative — instead of
+      // the "Starting up" page.
+      { coll: 'appdata', freshMs: APPDATA_TTL,
+        staleMs: opts && opts.allowRescue ? APPDATA_RESCUE_MS : 0, markRescue: !!(opts && opts.allowRescue),
+        fresh: !!(opts && opts.fresh), noRescue: !!(opts && opts.noRescue) },
       // noRescue marks the read a SAVE depends on (PUT /api/data merges into it). It gets
       // the write lane: never shed by the load limiter, never refused by an open circuit.
       // In the read queue it was turned away under ordinary traffic once the cache was
@@ -538,6 +549,33 @@ async function warmCache() {
   const results = await Promise.all(jobs.map(([n, f]) => f().then(() => n).catch(() => { failed.push(n); return null; })));
   results.forEach((n) => { if (n) warmed.push(n); });
   return { warmed, failed };
+}
+
+/* ---- read-cache version counters (cache.js 'mongo' mode) ----------------------
+   With no Redis, the read cache keeps its values in memory and its per-collection
+   version counters in ONE document here, which every instance (each Vercel function
+   and the PC server) reads — see cache-mongo.js. Read and $inc'd through a RAW handle:
+   through the instrumented one the bump would itself be a write that bumps. An open
+   circuit short-circuits the read (the cache then rescues instead of waiting); the $inc
+   is part of a save and is never refused. */
+const CACHE_META = 'cacheMeta';
+const rawDb = () => _client.db(process.env.DB_NAME || 'unico');
+// Driver 6 returns the document; driver 5 returns { value, ok }.
+const unwrapDoc = (r) => (r && typeof r === 'object' && 'ok' in r && 'value' in r ? r.value : r) || {};
+if (process.env.MONGODB_URI && typeof cache.useVersionStore === 'function') {
+  cache.useVersionStore({
+    read: () => warmup.guard(async () => {
+      await ensureClient();
+      return (await rawDb().collection(CACHE_META).findOne({ _id: 'versions' })) || {};
+    }),
+    incr: (colls) => warmup.guard(async () => {
+      await ensureClient();
+      const $inc = {};
+      colls.forEach((c) => { $inc[c] = 1; });
+      return unwrapDoc(await rawDb().collection(CACHE_META).findOneAndUpdate(
+        { _id: 'versions' }, { $inc }, { upsert: true, returnDocument: 'after' }));
+    }, { shortCircuit: false }),
+  });
 }
 
 // Start the Atlas handshake at module load rather than inside the first request, so
