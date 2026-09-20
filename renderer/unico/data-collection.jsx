@@ -5531,7 +5531,7 @@
     // Columns spelled out, not repeat(N,…): theme.css's <=820px rule collapses [style*="repeat(3"] grids to 1fr, and the A4 print viewport is narrower than that.
     const Ticks = ({ label, items, cols, other }) => (
       <div style={{ marginTop: 5 }}>
-        {label && <div style={{ fontSize: '8.5pt', fontWeight: 600, marginBottom: 2 }}>{label} <span style={{ fontWeight: 400, color: soft }}>(tick all that apply)</span></div>}
+        {label && <div style={{ fontSize: '8.5pt', fontWeight: 600, marginBottom: 2 }}>{label} <span style={{ fontWeight: 400, color: soft }}>(Select all that apply)</span></div>}
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) '.repeat(cols || 3).trim(), columnGap: 8, rowGap: 2 }}>
           {items.map((x) => <div key={x} style={{ fontSize: '8pt', display: 'flex', alignItems: 'flex-start', lineHeight: 1.2 }}><Box />{x}</div>)}
           {other !== false && <div style={{ fontSize: '8pt', display: 'flex', alignItems: 'flex-start', lineHeight: 1.2, gridColumn: 'span ' + Math.min(2, cols || 3) }}><Box />Other: <span style={{ flex: 1, borderBottom: '1px solid ' + ink, marginLeft: 4, height: 10 }} /></div>}
@@ -5554,13 +5554,13 @@
             <img src="unico/logo.svg" alt="UNICO Hospitals" style={{ height: 36 }} />
             <div style={{ flex: 1, textAlign: 'center' }}>
               <div style={{ fontSize: '8.5pt', fontWeight: 700, letterSpacing: '1px', color: soft, textTransform: 'uppercase' }}>UNICO Hospitals PLC · Nursing Services</div>
-              <div style={{ fontSize: '13.5pt', fontWeight: 800, marginTop: 1 }}>Staff Registration Form — {isPCA ? 'Patient Care Assistant (PCA)' : 'Nurse'}</div>
+              <div style={{ fontSize: '13.5pt', fontWeight: 800, marginTop: 1 }}>Staff Information Form — {isPCA ? 'Patient Care Assistant (PCA)' : 'Nurse'}</div>
               <div style={{ fontSize: '7.8pt', color: soft, marginTop: 2 }}>Write in BLOCK LETTERS · tick (✓) the boxes that apply · attach copies of certificates, NID and BNMC registration</div>
             </div>
             <div style={{ width: '25mm', height: '30mm', border: '1.1px dashed ' + ink, display: 'grid', placeItems: 'center', textAlign: 'center', fontSize: '7.5pt', color: soft, flexShrink: 0 }}>Affix recent<br />passport-size<br />photograph</div>
           </div>
           <div style={{ display: 'flex', gap: 14, fontSize: '8pt', color: soft, marginTop: 3 }}>
-            <span>Form No.: HR-NUR-REG-01</span><span>Staff role: <b style={{ color: ink }}>{isPCA ? 'PCA' : 'Nurse'}</b></span>
+            <span>Form No.: HR-NUR-REG-01</span><span>Ref. no.: ________________</span><span>Staff role: <b style={{ color: ink }}>{isPCA ? 'PCA' : 'Nurse'}</b></span>
             <span style={{ flex: 1 }} /><span>Date received: ______________</span>
           </div>
 
@@ -5574,15 +5574,14 @@
 
           <Sec n={2} title="Job information">
             <Ticks label="Designation" items={desigs} cols={4} />
-            <Ticks label="Current department(s)" items={depts} cols={5} other={false} />
-            <Row><Ln label="Primary department (if more than one):" w={1} /></Row>
-            <div style={{ fontSize: '8.5pt', marginTop: 5, display: 'flex', alignItems: 'flex-start' }}><Box />Can be floated to other units when they are short</div>
+            {/* Department posting, primary unit and float capability are NOT asked here:
+                the office makes that assignment, so they sit in FOR OFFICE USE ONLY below. */}
           </Sec>
 
           <Sec n={3} title="Previous experience (before joining UNICO)">
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8pt', marginTop: 2 }}>
               <thead><tr>{['#', 'Organisation / hospital', 'Department / role', 'Years', 'Months'].map((h, i) => <th key={h} style={{ border: '1px solid ' + line, padding: '2px 5px', background: '#eef2f6', textAlign: i > 2 ? 'center' : 'left', width: i === 0 ? '5%' : i > 2 ? '10%' : 'auto', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>{h}</th>)}</tr></thead>
-              <tbody>{[1, 2, 3, 4].map((i) => <tr key={i}>{[0, 1, 2, 3, 4].map((c) => <td key={c} style={{ border: '1px solid ' + line, height: 17, textAlign: 'center', fontSize: '8pt', color: soft }}>{c === 0 ? i : ''}</td>)}</tr>)}</tbody>
+              <tbody>{[1, 2, 3, 4, 5, 6, 7, 8].map((i) => <tr key={i}>{[0, 1, 2, 3, 4].map((c) => <td key={c} style={{ border: '1px solid ' + line, height: 17, textAlign: 'center', fontSize: '8pt', color: soft }}>{c === 0 ? i : ''}</td>)}</tr>)}</tbody>
             </table>
             <Row>
               <div style={{ flex: '0 0 auto', fontSize: '8.5pt', fontWeight: 600, marginTop: 5, alignSelf: 'flex-end', whiteSpace: 'nowrap' }}>Total previous experience: ____ yrs ____ mo</div>
@@ -5609,14 +5608,9 @@
               <Sec n={6} title="Other information">
                 {custom.map((cf) => cf.kind === 'text' || !(cf.options || []).length
                   ? <Ln key={cf.id} label={cf.name + ':'} />
-                  : <Ticks key={cf.id} label={cf.name + (cf.kind === 'multi' ? '' : ' (tick one)')} items={uniq(cf.options)} cols={5} />)}
+                  : <Ticks key={cf.id} label={cf.name + (cf.kind === 'multi' ? '' : ' (Select one)')} items={uniq(cf.options)} cols={5} />)}
               </Sec>
             )}
-
-            <Sec n={custom.length > 0 ? 7 : 6} title="Clinical privileges">
-              <div style={{ fontSize: '8.5pt', color: soft }}>Clinical activities are privileged per department by Nursing Administration using the <b style={{ color: ink }}>Department Privileges checklist</b>. Attach the signed checklist to this form.</div>
-              <Row><Ln label="Privilege checklist attached:  ☐ Yes  ☐ No   ·   Assessed by:" w={2} /><Ln label="Date:" w={0.8} /></Row>
-            </Sec>
 
             <div style={{ marginTop: 7, border: '1px solid ' + line, padding: '5px 8px 6px', fontSize: '8.5pt', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
               <b>Declaration:</b> I declare that the information given in this form is true and complete to the best of my knowledge. I understand that any false information may lead to cancellation of my registration.
@@ -5625,12 +5619,16 @@
 
             <div style={{ marginTop: 9, border: '1.1px dashed ' + ink, padding: '5px 8px 6px', fontSize: '8.5pt', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
               <b>FOR OFFICE USE ONLY</b>
+              {/* Posting is an office decision (user, 2026-09-20) - moved here out of section 2. */}
+              <Ticks label="Current department(s) — assigned by office" items={depts} cols={5} other={false} />
+              <Row><Ln label="Primary department (if more than one):" w={1} /></Row>
+              <div style={{ fontSize: '8.5pt', marginTop: 5, display: 'flex', alignItems: 'flex-start' }}><Box />Can be floated to other units when they are short</div>
               <Row><Ln label="Employee ID assigned:" w={1} /><Ln label="Entered in staff register on:" w={1} /><Ln label="By:" w={0.8} /></Row>
               <Row><Ln label="BNMC verified:  ☐ Yes  ☐ No   ·   Verified on:" w={1} /><Ln label="Documents received:  ☐ NID  ☐ Certificates  ☐ BNMC  ☐ Photo" w={0.4} /></Row>
             </div>
 
             <div style={{ marginTop: 8, fontSize: '7.5pt', color: soft, borderTop: '1px solid #cfd6de', paddingTop: 4, display: 'flex', justifyContent: 'space-between' }}>
-              <span>UNICO Hospitals PLC · Staff Registration Form ({isPCA ? 'PCA' : 'Nurse'}) · HR-NUR-REG-01</span>
+              <span>UNICO Hospitals PLC · Staff Information Form ({isPCA ? 'PCA' : 'Nurse'}) · HR-NUR-REG-01</span>
               <span>Printed {today}</span>
             </div>
           </div>

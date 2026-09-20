@@ -13808,7 +13808,7 @@
         fontWeight: 400,
         color: soft
       }
-    }, "(tick all that apply)")), React.createElement("div", {
+    }, "(Select all that apply)")), React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: 'minmax(0,1fr) '.repeat(cols || 3).trim(),
@@ -13906,7 +13906,7 @@
         fontWeight: 800,
         marginTop: 1
       }
-    }, "Staff Registration Form \u2014 ", isPCA ? 'Patient Care Assistant (PCA)' : 'Nurse'), React.createElement("div", {
+    }, "Staff Information Form \u2014 ", isPCA ? 'Patient Care Assistant (PCA)' : 'Nurse'), React.createElement("div", {
       style: {
         fontSize: '7.8pt',
         color: soft,
@@ -13932,7 +13932,7 @@
         color: soft,
         marginTop: 3
       }
-    }, React.createElement("span", null, "Form No.: HR-NUR-REG-01"), React.createElement("span", null, "Staff role: ", React.createElement("b", {
+    }, React.createElement("span", null, "Form No.: HR-NUR-REG-01"), React.createElement("span", null, "Ref. no.: ________________"), React.createElement("span", null, "Staff role: ", React.createElement("b", {
       style: {
         color: ink
       }
@@ -13976,22 +13976,7 @@
       label: "Designation",
       items: desigs,
       cols: 4
-    }), React.createElement(Ticks, {
-      label: "Current department(s)",
-      items: depts,
-      cols: 5,
-      other: false
-    }), React.createElement(Row, null, React.createElement(Ln, {
-      label: "Primary department (if more than one):",
-      w: 1
-    })), React.createElement("div", {
-      style: {
-        fontSize: '8.5pt',
-        marginTop: 5,
-        display: 'flex',
-        alignItems: 'flex-start'
-      }
-    }, React.createElement(Box, null), "Can be floated to other units when they are short")), React.createElement(Sec, {
+    })), React.createElement(Sec, {
       n: 3,
       title: "Previous experience (before joining UNICO)"
     }, React.createElement("table", {
@@ -14012,7 +13997,7 @@
         WebkitPrintColorAdjust: 'exact',
         printColorAdjust: 'exact'
       }
-    }, h)))), React.createElement("tbody", null, [1, 2, 3, 4].map(i => React.createElement("tr", {
+    }, h)))), React.createElement("tbody", null, [1, 2, 3, 4, 5, 6, 7, 8].map(i => React.createElement("tr", {
       key: i
     }, [0, 1, 2, 3, 4].map(c => React.createElement("td", {
       key: c,
@@ -14090,27 +14075,9 @@
       label: cf.name + ':'
     }) : React.createElement(Ticks, {
       key: cf.id,
-      label: cf.name + (cf.kind === 'multi' ? '' : ' (tick one)'),
+      label: cf.name + (cf.kind === 'multi' ? '' : ' (Select one)'),
       items: uniq(cf.options),
       cols: 5
-    }))), React.createElement(Sec, {
-      n: custom.length > 0 ? 7 : 6,
-      title: "Clinical privileges"
-    }, React.createElement("div", {
-      style: {
-        fontSize: '8.5pt',
-        color: soft
-      }
-    }, "Clinical activities are privileged per department by Nursing Administration using the ", React.createElement("b", {
-      style: {
-        color: ink
-      }
-    }, "Department Privileges checklist"), ". Attach the signed checklist to this form."), React.createElement(Row, null, React.createElement(Ln, {
-      label: "Privilege checklist attached:  \u2610 Yes  \u2610 No   \xB7   Assessed by:",
-      w: 2
-    }), React.createElement(Ln, {
-      label: "Date:",
-      w: 0.8
     }))), React.createElement("div", {
       style: {
         marginTop: 7,
@@ -14135,7 +14102,22 @@
         breakInside: 'avoid',
         pageBreakInside: 'avoid'
       }
-    }, React.createElement("b", null, "FOR OFFICE USE ONLY"), React.createElement(Row, null, React.createElement(Ln, {
+    }, React.createElement("b", null, "FOR OFFICE USE ONLY"), React.createElement(Ticks, {
+      label: "Current department(s) \u2014 assigned by office",
+      items: depts,
+      cols: 5,
+      other: false
+    }), React.createElement(Row, null, React.createElement(Ln, {
+      label: "Primary department (if more than one):",
+      w: 1
+    })), React.createElement("div", {
+      style: {
+        fontSize: '8.5pt',
+        marginTop: 5,
+        display: 'flex',
+        alignItems: 'flex-start'
+      }
+    }, React.createElement(Box, null), "Can be floated to other units when they are short"), React.createElement(Row, null, React.createElement(Ln, {
       label: "Employee ID assigned:",
       w: 1
     }), React.createElement(Ln, {
@@ -14160,7 +14142,7 @@
         display: 'flex',
         justifyContent: 'space-between'
       }
-    }, React.createElement("span", null, "UNICO Hospitals PLC \xB7 Staff Registration Form (", isPCA ? 'PCA' : 'Nurse', ") \xB7 HR-NUR-REG-01"), React.createElement("span", null, "Printed ", today))))), root);
+    }, React.createElement("span", null, "UNICO Hospitals PLC \xB7 Staff Information Form (", isPCA ? 'PCA' : 'Nurse', ") \xB7 HR-NUR-REG-01"), React.createElement("span", null, "Printed ", today))))), root);
   }
   if (typeof window !== 'undefined') window.UnicoStaffRegForm = UnicoStaffRegForm;
   function CollectorStaffRequests({

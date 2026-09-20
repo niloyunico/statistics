@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=0608404d2f","reports":"/dist/reports.chunk.js?v=9e4c428dd2","quality":"/dist/quality.chunk.js?v=1e13271f23","datacollection":"/dist/datacollection.chunk.js?v=c820cd982d","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=0608404d2f","reports":"/dist/reports.chunk.js?v=9e4c428dd2","quality":"/dist/quality.chunk.js?v=1e13271f23","datacollection":"/dist/datacollection.chunk.js?v=880373738e","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -18824,6 +18824,15 @@ function WorkforceDashboard({
   const S = window.STAFF;
   const list = store.staff.filter(e => (e.role || 'Nurse') === role && e.is_active && !e.former);
   const [showHi, setShowHi] = React.useState(false);
+  const [printForm, setPrintForm] = React.useState(false);
+  const openBlankForm = async () => {
+    if (!window.UnicoStaffRegForm && window.unicoLoadChunk) {
+      try {
+        await window.unicoLoadChunk('datacollection');
+      } catch (e) {}
+    }
+    if (window.UnicoStaffRegForm) setPrintForm(true);
+  };
   const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
   const listView = role === 'PCA' ? 'pca' : 'nurses';
   const compView = role === 'PCA' ? 'pcaCompliance' : 'nurseCompliance';
@@ -18881,14 +18890,21 @@ function WorkforceDashboard({
     style: {
       gap: 16
     }
-  }, window.PerfBands && React.createElement(window.PerfBands, {
-    role: role,
-    setRoute: setRoute
-  }), React.createElement(SectionTitle, {
+  }, React.createElement(SectionTitle, {
     icon: role === 'PCA' ? I.bed : I.steth,
     title: `${role === 'PCA' ? 'PCA' : 'Nurse'} Dashboard`,
     sub: `Live overview of the ${role} roster`,
-    right: React.createElement(React.Fragment, null, React.createElement(RoleSwitch, {
+    right: React.createElement(React.Fragment, null, (!window.__UNICO_USER__ || window.__UNICO_USER__.role === 'Administrator') && React.createElement("button", {
+      className: "btn sm",
+      title: "Print the blank staff information form to fill in by hand",
+      onClick: openBlankForm
+    }, React.createElement(Ic, {
+      d: I.print,
+      s: 15
+    }), "Print staff information"), printForm && window.UnicoStaffRegForm && React.createElement(window.UnicoStaffRegForm, {
+      role,
+      onDone: () => setPrintForm(false)
+    }), React.createElement(RoleSwitch, {
       role: role,
       setRoute: setRoute,
       views: {
@@ -18987,7 +19003,10 @@ function WorkforceDashboard({
     list: list,
     setRoute: setRoute,
     role: role
-  })), React.createElement("div", {
+  })), window.PerfBands && React.createElement(window.PerfBands, {
+    role: role,
+    setRoute: setRoute
+  }), React.createElement("div", {
     className: "grid",
     style: {
       gridTemplateColumns: '1fr 1.25fr'

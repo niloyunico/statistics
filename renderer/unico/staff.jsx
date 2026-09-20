@@ -470,6 +470,13 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
   // drill-down lists or KPIs (they live in the Directory's "Show inactive" and Previous Staff).
   const list=store.staff.filter(e=>(e.role||'Nurse')===role && e.is_active && !e.former);
   const [showHi,setShowHi]=React.useState(false);
+  // Blank A4 staff information form (window.UnicoStaffRegForm, data-collection.jsx). It lives
+  // in the datacollection CHUNK, so the click loads that chunk before rendering the sheet.
+  const [printForm,setPrintForm]=React.useState(false);
+  const openBlankForm=async()=>{
+    if(!window.UnicoStaffRegForm&&window.unicoLoadChunk){ try{ await window.unicoLoadChunk('datacollection'); }catch(e){} }
+    if(window.UnicoStaffRegForm) setPrintForm(true);
+  };
   const tone=role==='PCA'?'#6a52d4':'#0090ca';
   const listView=role==='PCA'?'pca':'nurses';
   const compView=role==='PCA'?'pcaCompliance':'nurseCompliance';
@@ -492,9 +499,11 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
   );
   return (
     <div className="grid" style={{gap:16}}>
-      {window.PerfBands && <window.PerfBands role={role} setRoute={setRoute}/>}
       <SectionTitle icon={role==='PCA'?I.bed:I.steth} title={`${role==='PCA'?'PCA':'Nurse'} Dashboard`} sub={`Live overview of the ${role} roster`}
-        right={<><RoleSwitch role={role} setRoute={setRoute} views={{Nurse:'nurseHome',PCA:'pcaHome'}}/>
+        right={<>{(!window.__UNICO_USER__||window.__UNICO_USER__.role==='Administrator')&&
+            <button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={openBlankForm}><Ic d={I.print} s={15}/>Print staff information</button>}
+          {printForm&&window.UnicoStaffRegForm&&React.createElement(window.UnicoStaffRegForm,{role,onDone:()=>setPrintForm(false)})}
+          <RoleSwitch role={role} setRoute={setRoute} views={{Nurse:'nurseHome',PCA:'pcaHome'}}/>
           <button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#b8860b',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
           <button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>
           <button className="btn sm" onClick={()=>setRoute({view:compView})}><Ic d={I.heart} s={15}/>Compliance</button>
@@ -512,6 +521,10 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
         <StaffDeptChart list={list} setRoute={setRoute} tone={tone} role={role}/>
         <StaffDesigChart list={list} setRoute={setRoute} role={role}/>
       </div>
+
+      {/* Recognition + appraisal bands sit BELOW the roster charts: the dashboard should open on
+         the roster numbers, not on the performance cycle (user, 2026-09-20). */}
+      {window.PerfBands && <window.PerfBands role={role} setRoute={setRoute}/>}
 
       <div className="grid" style={{gridTemplateColumns:'1fr 1.25fr'}}>
         <div className="card">
