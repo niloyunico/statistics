@@ -843,11 +843,26 @@ require('./staff-requests').mount(app, {
 
 // Duty Roster module: one sheet per unit per month, with shift codes, coverage and the
 // sign-off block. Gated on the 'roster' module; approval is admin-only inside it.
+// Writing a sheet: a console account through the `roster` module permission, OR a ward
+// in-charge an administrator granted `rosterEdit` (portal accounts hold no perms map, so
+// the module gate alone could never admit them). Unit scoping and the approval lock are
+// enforced inside the module, and approving remains administrator-only there.
+const rosterModuleGuard = access.requireModule('roster');
+const rosterWriteGuard = async (req, res, next) => {
+  try {
+    const a = await access.forRequest(req);
+    if (!a) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+    req.access = a;
+    if (access.portalMayEditRoster(a)) return next();
+    return rosterModuleGuard(req, res, next);
+  } catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }
+};
 require('./duty-roster').mount(app, {
   requireApi: [session.requireApi, access.requireModule('roster')],
   // Reads also open to a data collector, who then only ever receives APPROVED
-  // rosters (server/duty-roster.js publishedOnly). Writes stay on requireApi.
+  // rosters (server/duty-roster.js publishedOnly).
   requireRead: [session.requireApi, access.requirePerm('roster', 'view', { allowCollector: true })],
+  requireWrite: [session.requireApi, rosterWriteGuard],
 });
 
 // Medicine module: the Bangladesh drug index (21.7k brands / 1.7k generic monographs)

@@ -186,7 +186,7 @@ function PerfAttrition({ roster, perf, staffStore, setRoute }) {
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className="btn" onClick={() => setRoute({ view: 'perfRisk' })}>Retention risk</button>
-          <button className="btn" onClick={() => window.print()}>PDF</button>
+          {perfCan('print') && <button className="btn" onClick={() => window.print()}>PDF</button>}
           {perfCan('add') && <button className="btn pri" onClick={() => setAdding(true)}>+ Record an exit</button>}
         </div>
       </div>
@@ -766,7 +766,7 @@ function PerfBoard({ roster, perf, staffStore, setRoute }) {
           <div style={{ fontSize: 11.5, color: MK.MUTED }}>{org.label} · points from every recorded achievement and award</div>
         </div>
         <button className="btn" onClick={() => setRoute({ view: 'perfAchievements' })}>Achievement register</button>
-        <button className="btn" onClick={() => window.print()}>Print for notice board</button>
+        {perfCan('print') && <button className="btn" onClick={() => window.print()}>Print for notice board</button>}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px,1fr) minmax(0,1.6fr)', gap: 14, alignItems: 'start' }}>

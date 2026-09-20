@@ -46,14 +46,55 @@ const rosCan = a => {
     return true;
   }
 };
-const rosIsAdmin = () => {
+const rosMayApprove = () => {
   try {
-    const u = window.__UNICO_USER__;
-    return !u || u.role === 'Administrator';
+    return window.unicoCan ? window.unicoCan('roster', 'delete') : true;
   } catch (e) {
     return true;
   }
 };
+let ROS_SIGNERS = null,
+  ROS_SIGNERS_REQ = null;
+function rosLoadSigners() {
+  if (ROS_SIGNERS) return Promise.resolve(ROS_SIGNERS);
+  if (ROS_SIGNERS_REQ) return ROS_SIGNERS_REQ;
+  ROS_SIGNERS_REQ = fetch('/api/signatories', {
+    credentials: 'same-origin'
+  }).then(r => r.json()).then(j => {
+    ROS_SIGNERS = j && j.ok ? j : {
+      signatories: [],
+      tiers: []
+    };
+    ROS_SIGNERS_REQ = null;
+    return ROS_SIGNERS;
+  }).catch(() => {
+    ROS_SIGNERS = {
+      signatories: [],
+      tiers: []
+    };
+    ROS_SIGNERS_REQ = null;
+    return ROS_SIGNERS;
+  });
+  return ROS_SIGNERS_REQ;
+}
+function useRosSigners() {
+  const [v, setV] = React.useState(ROS_SIGNERS);
+  React.useEffect(() => {
+    let live = true;
+    rosLoadSigners().then(x => {
+      if (live) setV(x);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return v || ROS_SIGNERS || {
+    signatories: [],
+    tiers: []
+  };
+}
+const rosTierFor = (sg, role) => (sg.tiers || []).find(t => t.signoff === role) || null;
+const rosNamesFor = (sg, role) => (sg.signatories || []).filter(u => u.signoff === role).map(u => u.name);
 const ROS_STATUS = {
   draft: {
     label: 'Draft',
@@ -414,6 +455,68 @@ function useRosterIndex() {
     reload: load
   };
 }
+function useRosterScope() {
+  const [state, setState] = useState({
+    units: null,
+    scope: 'all',
+    can: null,
+    loading: true
+  });
+  useEffect(() => {
+    let live = true;
+    rosApi.get('/api/rosters/scope').then(r => {
+      if (!live) return;
+      if (r && r.ok) setState({
+        units: Array.isArray(r.units) ? r.units : null,
+        scope: r.scope || 'all',
+        can: r.can || null,
+        loading: false
+      });else setState(s => ({
+        ...s,
+        loading: false
+      }));
+    }).catch(() => {
+      if (live) setState(s => ({
+        ...s,
+        loading: false
+      }));
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const allowed = useMemo(() => state.scope === 'departments' && state.units ? new Set(state.units) : null, [state.scope, state.units]);
+  return {
+    ...state,
+    allowed,
+    inScope: d => !allowed || allowed.has(d)
+  };
+}
+function useRosterStaff() {
+  const store = window.useStaffStore();
+  const mayStaff = (() => {
+    try {
+      return window.unicoCan ? window.unicoCan('staff', 'view') : true;
+    } catch (e) {
+      return true;
+    }
+  })();
+  const [own, setOwn] = useState(null);
+  useEffect(() => {
+    if (mayStaff) return undefined;
+    let live = true;
+    rosApi.get('/api/rosters/staff').then(r => {
+      if (live && r && r.ok && Array.isArray(r.staff)) setOwn(r.staff);
+    }).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [mayStaff]);
+  return useMemo(() => mayStaff ? store : {
+    ...store,
+    staff: own || []
+  }, [mayStaff, store, own]);
+}
 function RosLegendPanel() {
   return React.createElement("div", {
     style: {
@@ -540,19 +643,43 @@ function RosStatusChip({
 function RosterHome({
   index,
   staffStore,
+  scope,
   setRoute
 }) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
+  const sc = scope || {
+    inScope: () => true,
+    scope: 'all',
+    loading: false,
+    units: null
+  };
+  const mayReview = !!(sc.can && sc.can.review);
+  const [tab, setTab] = useState('mine');
+  if (mayReview && tab === 'access') return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement(RosterViewSwitch, {
+    tab: tab,
+    setTab: setTab
+  }), React.createElement(RosterAccessReview, {
+    setRoute: setRoute
+  }));
   const depts = useMemo(() => {
     const m = {};
     (staffStore.staff || []).filter(e => e.is_active !== false && !e.former).forEach(e => {
       const d = e.current_department || 'Unassigned';
       m[d] = (m[d] || 0) + 1;
     });
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [staffStore.staff]);
+    if (sc.scope === 'departments' && sc.units) sc.units.forEach(u => {
+      if (!(u in m)) m[u] = 0;
+    });
+    return Object.entries(m).filter(([d]) => sc.inScope(d)).sort((a, b) => b[1] - a[1]);
+  }, [staffStore.staff, sc.units, sc.scope]);
   const byKey = useMemo(() => {
     const m = {};
     (index.rosters || []).forEach(r => {
@@ -567,7 +694,10 @@ function RosterHome({
       flexDirection: 'column',
       gap: 14
     }
-  }, React.createElement("div", {
+  }, mayReview && React.createElement(RosterViewSwitch, {
+    tab: tab,
+    setTab: setTab
+  }), React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-h",
@@ -614,7 +744,31 @@ function RosterHome({
     style: {
       marginBottom: 9
     }
-  }, "Pick a unit to open or start its ", R.MONTHS[month], " ", year, " roster."), React.createElement("div", {
+  }, sc.scope === 'departments' ? 'The units your account is assigned. Pick one to open or start its ' + R.MONTHS[month] + ' ' + year + ' roster.' : 'Pick a unit to open or start its ' + R.MONTHS[month] + ' ' + year + ' roster.'), !depts.length && !sc.loading && React.createElement("div", {
+    style: {
+      display: 'grid',
+      placeItems: 'center',
+      padding: 30,
+      textAlign: 'center',
+      gap: 6
+    }
+  }, React.createElement("div", {
+    style: {
+      opacity: .35
+    }
+  }, React.createElement(Ic, {
+    d: I.grid,
+    s: 30
+  })), React.createElement("div", {
+    style: {
+      fontWeight: 600
+    }
+  }, "No units assigned to you"), React.createElement("div", {
+    className: "sub",
+    style: {
+      maxWidth: 420
+    }
+  }, "An administrator assigns the units you roster under ", React.createElement("b", null, "Users & Roles \u2192 Manage \u2192 Duty roster units"), ".")), React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))',
@@ -755,8 +909,406 @@ function RosterHome({
     className: "sub"
   }, "the unit's own codes \u2014 used everywhere in this module")), React.createElement(RosLegendPanel, null)));
 }
+function RosterViewSwitch({
+  tab,
+  setTab
+}) {
+  return React.createElement("div", {
+    style: {
+      display: 'inline-flex',
+      gap: 3,
+      padding: 3,
+      borderRadius: 9,
+      background: 'rgba(125,145,180,.16)',
+      alignSelf: 'flex-start'
+    }
+  }, [['mine', 'My units', 'Build and open the rosters you are assigned'], ['access', 'Access & coverage', 'Every unit, who may roster it, and what is missing']].map(([v, l, tip]) => {
+    const on = tab === v;
+    return React.createElement("button", {
+      key: v,
+      type: "button",
+      title: tip,
+      onClick: () => setTab(v),
+      style: {
+        border: 0,
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: 12,
+        fontWeight: 700,
+        padding: '7px 16px',
+        borderRadius: 7,
+        color: on ? '#fff' : '#6c7a8c',
+        background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent'
+      }
+    }, l);
+  }));
+}
+function RosterAccessReview({
+  setRoute
+}) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(true);
+  const [q, setQ] = useState('');
+  const [only, setOnly] = useState('all');
+  const load = React.useCallback(() => {
+    setBusy(true);
+    setErr('');
+    return rosApi.get('/api/rosters/access').then(r => {
+      if (r && r.ok) setData(r);else setErr(r && r.error || 'Could not load the review.');
+    }).catch(() => setErr('Could not reach the server.')).finally(() => setBusy(false));
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  const rows = data && data.departments || [];
+  const people = data && data.people || [];
+  const orphans = data && data.orphans || [];
+  const noEditor = rows.filter(r => !r.editors);
+  const noSheet = rows.filter(r => !r.current);
+  const qn = q.trim().toLowerCase();
+  const shown = rows.filter(r => {
+    if (only === 'nobody' && r.editors) return false;
+    if (only === 'nosheet' && r.current) return false;
+    if (!qn) return true;
+    return String(r.name).toLowerCase().includes(qn) || (r.holders || []).some(h => String(h.name).toLowerCase().includes(qn));
+  });
+  const tile = (n, label, tone, active, onClick) => React.createElement("div", {
+    onClick: onClick,
+    style: {
+      flex: '1 1 150px',
+      cursor: onClick ? 'pointer' : 'default',
+      padding: '11px 13px',
+      borderRadius: 10,
+      background: '#fff',
+      border: '1px solid ' + (active ? tone : 'rgba(125,145,180,.22)'),
+      borderLeft: '3px solid ' + tone,
+      boxShadow: active ? '0 0 0 2px ' + tone + '22' : 'none'
+    }
+  }, React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 21,
+      fontWeight: 800,
+      color: n ? tone : '#8b98ab',
+      lineHeight: 1.1
+    }
+  }, n), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#6c7a8c',
+      marginTop: 2,
+      lineHeight: 1.4
+    }
+  }, label));
+  const actionDot = h => {
+    const may = a => (h.actions || []).indexOf(a) >= 0;
+    return may('delete') ? ['Full', '#1f9d63'] : may('add') || may('edit') ? ['Edits', '#0090ca'] : ['Reads', '#8b98ab'];
+  };
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: MK.iconBadge('teal', 32)
+  }, React.createElement(Ic, {
+    d: I.users || I.user,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 15.5,
+      color: MK.INK
+    }
+  }, "Access & coverage"), React.createElement("div", {
+    className: "sub"
+  }, "Every unit, who may roster it, and where ", data ? R.MONTHS[data.month] + ' ' + data.year : 'this month', " has no sheet yet")), React.createElement("button", {
+    className: "btn",
+    onClick: load,
+    disabled: busy
+  }, busy ? 'Loading…' : 'Refresh')), React.createElement("div", {
+    className: "card-b"
+  }, err && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#b3261e',
+      background: '#fdecea',
+      border: '1px solid #f5c6c2',
+      borderRadius: 8,
+      padding: '9px 11px',
+      marginBottom: 11
+    }
+  }, err), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 9,
+      flexWrap: 'wrap',
+      marginBottom: 12
+    }
+  }, tile(rows.length, 'Units in the hospital', '#27a8db', only === 'all', () => setOnly('all')), tile(noEditor.length, 'Nobody can edit the roster', '#d23a52', only === 'nobody', () => setOnly('nobody')), tile(noSheet.length, 'No sheet this month', '#e0a12a', only === 'nosheet', () => setOnly('nosheet')), tile(people.length, 'Accounts with roster access', '#1f9d63')), noEditor.length > 0 && only !== 'nobody' && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#8a2733',
+      background: '#fdecea',
+      border: '1px solid #f5c6c2',
+      borderRadius: 8,
+      padding: '9px 11px',
+      marginBottom: 11
+    }
+  }, React.createElement("b", null, noEditor.length, " unit", noEditor.length === 1 ? '' : 's', " have nobody who may edit the roster"), " \u2014 ", noEditor.slice(0, 5).map(r => r.name).join(', '), noEditor.length > 5 ? ' and ' + (noEditor.length - 5) + ' more' : '', ". Assign someone in Users & Roles \u2192 Manage \u2192 Duty roster access."), React.createElement("input", {
+    value: q,
+    onChange: e => setQ(e.target.value),
+    placeholder: "Search a unit or a person\u2026",
+    style: {
+      width: '100%',
+      padding: '8px 11px',
+      border: '1px solid rgba(125,145,180,.3)',
+      borderRadius: 8,
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      outline: 'none',
+      marginBottom: 10
+    }
+  }), React.createElement("div", {
+    style: {
+      overflow: 'auto'
+    }
+  }, React.createElement("table", {
+    className: "tbl",
+    style: {
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Unit"), React.createElement("th", null, "This month"), React.createElement("th", null, "Sheets"), React.createElement("th", null, "Who may roster it"), React.createElement("th", null))), React.createElement("tbody", null, shown.map(r => React.createElement("tr", {
+    key: r.id
+  }, React.createElement("td", {
+    style: {
+      fontWeight: 600,
+      whiteSpace: 'nowrap'
+    }
+  }, r.name), React.createElement("td", null, r.current ? React.createElement(RosStatusChip, {
+    st: r.current.status
+  }) : React.createElement("span", {
+    className: "tag",
+    style: {
+      opacity: .6
+    }
+  }, "not drafted")), React.createElement("td", {
+    className: "num"
+  }, r.sheets || 0), React.createElement("td", null, !r.holders.length ? React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#d23a52'
+    }
+  }, "Nobody") : React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 5,
+      flexWrap: 'wrap'
+    }
+  }, r.holders.map(h => {
+    const [lbl, c] = actionDot(h);
+    return React.createElement("span", {
+      key: h.username,
+      title: h.name + ' · ' + lbl.toLowerCase() + (h.scope === 'all' ? ' · holds every unit' : '') + (h.inherited ? ' · never assigned units, so it inherits this reach' : ''),
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 8px',
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 600,
+        background: '#fff',
+        border: '1px solid ' + c + '55',
+        color: '#4a5768'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 6,
+        height: 6,
+        borderRadius: '50%',
+        background: c,
+        flexShrink: 0
+      }
+    }), h.name, h.scope === 'all' && React.createElement("span", {
+      style: {
+        fontSize: 9,
+        opacity: .6
+      }
+    }, "ALL"), h.inherited && React.createElement("span", {
+      title: "Never assigned any units \u2014 it still reaches this one",
+      style: {
+        fontSize: 9,
+        color: '#e0a12a'
+      }
+    }, "!"));
+  }))), React.createElement("td", {
+    style: {
+      textAlign: 'right',
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    onClick: () => setRoute({
+      view: 'rosterGrid',
+      dept: r.name,
+      year: data.year,
+      month: data.month
+    })
+  }, "Open")))), !shown.length && !busy && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 5,
+    style: {
+      textAlign: 'center',
+      padding: 24
+    },
+    className: "sub"
+  }, "Nothing matches that filter."))))), React.createElement("div", {
+    className: "sub",
+    style: {
+      fontSize: 10.5,
+      marginTop: 9,
+      lineHeight: 1.6
+    }
+  }, React.createElement("b", {
+    style: {
+      color: '#1f9d63'
+    }
+  }, "\u25CF"), " full access (may publish) \xB7 ", React.createElement("b", {
+    style: {
+      color: '#0090ca'
+    }
+  }, "\u25CF"), " may build and submit \xB7 ", React.createElement("b", {
+    style: {
+      color: '#8b98ab'
+    }
+  }, "\u25CF"), " read only.", React.createElement("b", null, "ALL"), " = the account holds every unit. ", React.createElement("b", {
+    style: {
+      color: '#e0a12a'
+    }
+  }, "!"), " = never assigned any units, so it still reaches this one \u2014 set it explicitly in Users & Roles."))), orphans.length > 0 && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Sheets outside any unit"), React.createElement("div", {
+    className: "sub"
+  }, "filed under a name no department matches")), React.createElement("div", {
+    className: "card-b"
+  }, React.createElement("div", {
+    className: "sub",
+    style: {
+      marginBottom: 9
+    }
+  }, "Only an account holding ", React.createElement("i", null, "every"), " unit can open these \u2014 a unit-scoped account cannot, however it is assigned. Usually a department renamed after the sheet was written."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, orphans.map(o => React.createElement("span", {
+    key: o.id,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '4px 10px',
+      borderRadius: 999,
+      fontSize: 11.5,
+      fontWeight: 600,
+      background: '#fff8e9',
+      border: '1px solid #f1d49a',
+      color: '#8a5a00'
+    }
+  }, o.dept, " ", React.createElement("span", {
+    style: {
+      opacity: .7,
+      fontWeight: 500
+    }
+  }, R.MONTHS[o.month], " ", o.year)))))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "Accounts with roster access"), React.createElement("div", {
+    className: "sub"
+  }, people.length, " sign-in", people.length === 1 ? '' : 's', " that can open the module")), React.createElement("div", {
+    className: "card-b",
+    style: {
+      overflow: 'auto'
+    }
+  }, React.createElement("table", {
+    className: "tbl",
+    style: {
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Person"), React.createElement("th", null, "Can"), React.createElement("th", null, "Units"))), React.createElement("tbody", null, people.map(p => {
+    const [lbl, c] = actionDot(p);
+    return React.createElement("tr", {
+      key: p.username
+    }, React.createElement("td", {
+      style: {
+        fontWeight: 600
+      }
+    }, p.name, React.createElement("span", {
+      className: "sub",
+      style: {
+        fontWeight: 400
+      }
+    }, " \xB7 ", p.username)), React.createElement("td", null, React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: '#4a5768'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 6,
+        height: 6,
+        borderRadius: '50%',
+        background: c
+      }
+    }), lbl)), React.createElement("td", {
+      className: "sub"
+    }, p.covers === null ? React.createElement("b", {
+      style: {
+        color: MK.INK
+      }
+    }, "Every unit", p.inherited ? ' (never assigned — inherited)' : '') : !p.covers.length ? React.createElement("b", {
+      style: {
+        color: '#d23a52'
+      }
+    }, "None \u2014 the module opens empty") : p.covers.map(id => (rows.find(r => r.id === id) || {}).name || id).join(', ')));
+  }), !people.length && !busy && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 3,
+    style: {
+      textAlign: 'center',
+      padding: 22
+    },
+    className: "sub"
+  }, "No account has Duty Roster access yet.")))))));
+}
 function RosterGrid({
   staffStore,
+  scope,
   dept,
   year,
   month,
@@ -809,6 +1361,7 @@ function RosterGrid({
     sev: 'warning'
   });
   const [sign, setSign] = useState({});
+  const signers = useRosSigners();
   const [approvedAt, setApprovedAt] = useState(null);
   const history = useRef([]);
   const saveTimer = useRef(null);
@@ -853,7 +1406,8 @@ function RosterGrid({
     });
     return out;
   }, [staff, order, grid, storedNames]);
-  const depts = useMemo(() => [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => e.current_department || 'Unassigned'))].sort(), [staffStore.staff]);
+  const inScope = scope && scope.inScope || (() => true);
+  const depts = useMemo(() => [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => e.current_department || 'Unassigned'))].filter(d => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
   useEffect(() => {
     setLoading(true);
     setLoadError('');
@@ -923,7 +1477,7 @@ function RosterGrid({
   const locked = status === 'approved';
   const canEdit = !locked && !loadError && !conflict && rosCan('edit');
   const editBlocked = () => {
-    rosToast(conflict ? 'Someone else saved this roster. Reload the month before editing.' : locked ? 'Approved and locked — reopen it to edit.' : 'You do not have edit rights on the roster.', 'info');
+    rosToast(conflict ? 'Someone else saved this roster. Reload the month before editing.' : locked ? rosMayApprove() ? 'Published and locked — click “Published” at the top to reopen it for editing.' : 'Published and locked — ask someone with full Duty Roster access to reopen it.' : 'You do not have edit rights on the roster.', 'info');
   };
   const push = () => {
     history.current.push(JSON.stringify(grid));
@@ -1214,8 +1768,8 @@ function RosterGrid({
     });
   };
   const publish = () => {
-    if (!rosIsAdmin()) {
-      rosToast('Only an administrator can publish the roster.', 'info');
+    if (!rosMayApprove()) {
+      rosToast('Publishing and reopening need full Duty Roster access (Delete). You can still send it for approval.', 'info');
       return;
     }
     if (locked) {
@@ -4808,18 +5362,6 @@ function RosterGrid({
       }
     }, "No custom rules yet \u2014 build one above.")))));
   })(), showFooter && (() => {
-    const floatPool = (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') !== dept).sort((a, b) => String(a.name).localeCompare(String(b.name))).slice(0, 3).map(e => {
-      const ind = /Senior|Team|Charge|In-charge/i.test(e.designation || '');
-      return {
-        name: e.name,
-        empId: rosKey(e),
-        home: e.current_department || 'Unassigned',
-        level: ind ? 'Independent' : 'Supervised',
-        lvlShort: ind ? 'IND' : 'SUP',
-        c: ind ? '#157a43' : '#b5670a',
-        bg: ind ? 'rgba(31,157,87,.13)' : 'rgba(224,138,30,.14)'
-      };
-    });
     const allNames = [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => e.name).filter(Boolean))].sort();
     const approver = sign['Approved by'];
     const ready = approver && approver !== '—';
@@ -4914,86 +5456,6 @@ function RosterGrid({
         border: '1px solid rgba(255,255,255,.92)',
         borderRadius: 16,
         boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
-        padding: '14px 16px'
-      }
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 9,
-        marginBottom: 11
-      }
-    }, React.createElement("span", {
-      style: rosBadge('rgba(106,82,212,.12)', '#5b45c4', 26)
-    }, React.createElement(Ic, {
-      d: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM19 8v6M22 11h-6",
-      s: 14,
-      sw: 1.9
-    })), React.createElement("h3", {
-      style: ROS_H3
-    }, "Float pool suggestions")), React.createElement("div", {
-      style: {
-        fontSize: 11.5,
-        color: '#6c7a8c',
-        lineHeight: 1.6,
-        marginBottom: 10
-      }
-    }, "Staff from other units marked ", React.createElement("b", null, "available for redeployment"), " and competent in ", dept, "."), React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8
-      }
-    }, floatPool.map(f => React.createElement("div", {
-      key: f.empId,
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 9,
-        background: 'rgba(255,255,255,.6)',
-        border: '1px solid rgba(255,255,255,.9)',
-        borderRadius: 10,
-        padding: '8px 10px'
-      }
-    }, React.createElement(MK.Av, {
-      name: f.name,
-      empId: f.empId,
-      size: 30,
-      radius: rosAvRadius(30)
-    }), React.createElement("div", {
-      style: {
-        minWidth: 0,
-        flex: 1
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 12,
-        fontWeight: 600,
-        color: '#16202e',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis'
-      }
-    }, f.name), React.createElement("div", {
-      style: {
-        fontSize: 10,
-        color: '#9aa6b4'
-      }
-    }, f.home, " \xB7 ", f.level, " in ", dept)), React.createElement("span", {
-      style: rosChipS(f.c, f.bg)
-    }, f.lvlShort))), floatPool.length === 0 && React.createElement("div", {
-      style: {
-        fontSize: 11.5,
-        color: '#9aa6b4'
-      }
-    }, "No other units have staff on the register yet."))), React.createElement("div", {
-      style: {
-        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
-        backdropFilter: 'blur(24px) saturate(1.7)',
-        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
-        border: '1px solid rgba(255,255,255,.92)',
-        borderRadius: 16,
-        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
         padding: '14px 16px',
         display: 'flex',
         alignItems: 'center',
@@ -5025,9 +5487,14 @@ function RosterGrid({
         fontSize: 10.5,
         color: '#9aa6b4'
       }
-    }, "pick the names, then approve")), [['Prepared by', 'Nurse In-charge, ' + dept], ['Checked by', 'CNS'], ['Approved by', 'Chief of Nursing Services']].map(([role, title]) => {
+    }, "pick the names, then approve")), [['Prepared by', 'prepare'], ['Checked by', 'check'], ['Approved by', 'approve']].map(([role, chainRole]) => {
       const val = sign[role] !== undefined && sign[role] !== '' ? sign[role] : '—';
-      const pool = role === 'Prepared by' ? ['—'].concat(rows.map(r => r.name)) : ['—'].concat(allNames);
+      const tier = rosTierFor(signers, chainRole);
+      const atTier = rosNamesFor(signers, chainRole);
+      const tierPool = atTier.length ? atTier : chainRole === 'prepare' ? rows.map(r => r.name) : allNames;
+      const base = chainRole === 'prepare' ? rows.map(r => r.name).concat(tierPool.filter(n => !rows.some(r => r.name === n))) : tierPool;
+      const title = tier ? tier.name + (chainRole === 'prepare' ? ' · ' + dept : '') : chainRole === 'prepare' ? 'Prepared in ' + dept : 'No tier marked in Hierarchy';
+      const pool = ['—'].concat(base);
       const opts = pool.indexOf(val) >= 0 ? pool : [val].concat(pool);
       const stamped = role === 'Approved by' ? !!approvedAt : val !== '—';
       return React.createElement("div", {
@@ -5114,7 +5581,7 @@ function RosterGrid({
         flex: 1,
         minWidth: 180
       }
-    }, approvedAt ? 'Approved on ' + approvedAt + ' — the roster is locked for publication.' : ready ? 'Ready for the CNS to sign.' : 'Choose an approver above to enable signing.'), React.createElement("button", {
+    }, approvedAt ? 'Approved on ' + approvedAt + ' — the roster is locked for publication.' : ready ? 'Ready for ' + ((rosTierFor(signers, 'approve') || {}).name || 'the approver') + ' to sign.' : 'Choose an approver above to enable signing.'), React.createElement("button", {
       onClick: () => {
         if (!ready || approvedAt) return;
         Promise.resolve(save('submitted', true)).then(ok => {
@@ -6222,7 +6689,7 @@ function RosterPrint({
     }
   }), React.createElement("span", {
     className: "sub"
-  }, "1:1 with the roster workbook"), React.createElement("button", {
+  }, "1:1 with the roster workbook"), rosCan('print') && React.createElement("button", {
     className: "btn pri",
     onClick: () => window.print()
   }, "Print / Save as PDF"))), React.createElement("div", {
@@ -6376,8 +6843,9 @@ function RosterView({
   month,
   setRoute
 }) {
-  const staffStore = window.useStaffStore();
+  const staffStore = useRosterStaff();
   const index = useRosterIndex();
+  const scope = useRosterScope();
   const now = new Date();
   const y = Number(year) || now.getFullYear();
   const m = Number.isInteger(Number(month)) ? Number(month) : now.getMonth();
@@ -6385,6 +6853,11 @@ function RosterView({
     if (view !== 'rosterHome' && !dept) return React.createElement(RosterHome, {
       index: index,
       staffStore: staffStore,
+      scope: scope,
+      setRoute: setRoute
+    });
+    if (dept && !scope.loading && !scope.inScope(dept)) return React.createElement(RosterNoAccess, {
+      dept: dept,
       setRoute: setRoute
     });
     switch (view) {
@@ -6392,6 +6865,7 @@ function RosterView({
         return React.createElement(RosterGrid, {
           key: dept + '|' + y + '|' + m,
           staffStore: staffStore,
+          scope: scope,
           dept: dept,
           year: y,
           month: m,
@@ -6402,6 +6876,7 @@ function RosterView({
         return React.createElement(RosterGrid, {
           key: dept + '|' + y + '|' + m + '|rules',
           staffStore: staffStore,
+          scope: scope,
           dept: dept,
           year: y,
           month: m,
@@ -6421,6 +6896,7 @@ function RosterView({
         return React.createElement(RosterHome, {
           index: index,
           staffStore: staffStore,
+          scope: scope,
           setRoute: setRoute
         });
     }
@@ -6428,6 +6904,48 @@ function RosterView({
   return React.createElement("div", {
     className: "mk-scope"
   }, inner);
+}
+function RosterNoAccess({
+  dept,
+  setRoute
+}) {
+  return React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      placeItems: 'center',
+      padding: 44,
+      textAlign: 'center',
+      gap: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      opacity: .35
+    }
+  }, React.createElement(Ic, {
+    d: I.lock || I.grid,
+    s: 32
+  })), React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14.5
+    }
+  }, "You are not assigned to ", dept), React.createElement("div", {
+    className: "sub",
+    style: {
+      maxWidth: 420
+    }
+  }, "Your account holds the duty roster for other units. An administrator can add ", dept, " to it under ", React.createElement("b", null, "Users & Roles \u2192 Manage \u2192 Duty roster units"), "."), React.createElement("button", {
+    className: "btn pri",
+    style: {
+      marginTop: 6
+    },
+    onClick: () => setRoute({
+      view: 'rosterHome'
+    })
+  }, "Back to my units")));
 }
 window.RosterView = RosterView;
 })();

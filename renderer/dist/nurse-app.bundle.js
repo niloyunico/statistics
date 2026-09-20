@@ -984,6 +984,56 @@
     };
   }
 
+  /* ONE PERSON'S APPRAISAL STANDING — which window they are in, which form counts as
+     theirs, what has been filed against them, and whether a closed window went by
+     unappraised.
+
+     It lives in the spec because THREE screens now ask the same question and must give
+     the same answer: the Performance module's roster, the Appraisal column on the
+     Nurse / PCA directory, and the performance section of the staff record. Three
+     copies of this arithmetic drift the moment one of them is corrected, and a
+     directory reading "overdue" beside a module reading "due" is worse than no column
+     at all.
+
+     `appraisals` is the WHOLE register — it is filtered here on the employee key, so
+     no caller has to know that a form is filed under `emp_id || String(id)`. */
+  function standing(emp, appraisals, at) {
+    var now = parseDate(at) || new Date();
+    var empId = emp ? (emp.emp_id || String(emp.id)) : '';
+    var doj = emp && emp.doj;
+    var mine = (appraisals || []).filter(function (x) { return x && String(x.empId) === String(empId); });
+    var cyc = cycleOf(doj, now);
+    var current = mine.filter(function (x) { return cyc && x.cycleId === cyc.id; })[0] || null;
+    // A form still open from an EARLIER window stays this person's appraisal until it
+    // is filed. Matching only the current window made a completed form awaiting Part H
+    // vanish from the queue the day the next window opened — so it could never be
+    // actioned. An abandoned old DRAFT does not hide the current window's form.
+    var earlier = mine.filter(function (x) { return x.status !== 'actioned' && !(cyc && x.cycleId === cyc.id); })
+      .sort(function (a, b) { return String(b.cycleStart).localeCompare(String(a.cycleStart)); })[0] || null;
+    var appraisal = (earlier && earlier.status !== 'draft') ? earlier : (current || earlier);
+    var history = mine.filter(function (x) { return x.status === 'actioned'; })
+      .sort(function (a, b) { return String(b.cycleStart).localeCompare(String(a.cycleStart)); });
+    var firstDue = doj ? addMonths(parseDate(doj) || now, 6) : null;
+    var neverAppraised = history.length === 0;
+    /* OVERDUE = a window that has already CLOSED with nothing filed against it.
+
+       cycleOf() only ever returns the window CONTAINING today, whose due date is by
+       definition still in the future — so testing that one can never be true. The
+       closed windows come from cyclesSince(), newest first. Testing the open window
+       instead would flag the whole roster the morning a new cycle starts. */
+    var lastClosed = doj ? (cyclesSince(doj, now, 1) || [])[0] : null;
+    var missedClosed = !!(lastClosed && !mine.some(function (x) { return x.cycleId === lastClosed.id; }));
+    return {
+      empId: empId, cycle: cyc, appraisal: appraisal, status: appraisal ? appraisal.status : 'none',
+      mine: mine, history: history, last: history[0] || null,
+      firstDue: firstDue, neverAppraised: neverAppraised, lastClosed: lastClosed,
+      overdue: missedClosed,
+      // Never appraised AND past their first six months: the new-joiner reminder,
+      // which is a different question from "a window closed unappraised".
+      newJoinerDue: !!(neverAppraised && firstDue && firstDue <= now),
+    };
+  }
+
   /* WHAT AN ACHIEVEMENT OR AN INCIDENT CAN BE, and what each is worth. These live in
      the shared spec rather than in the Performance module because the staff profile
      records conduct against a person too (Recognition & conduct) — two copies of this
@@ -1041,6 +1091,7 @@
     cycleOf: cycleOf,
     cyclesSince: cyclesSince,
     orgCycle: orgCycle,
+    standing: standing,
     finalScore: finalScore,
     addMonths: addMonths,
     parseDate: parseDate,

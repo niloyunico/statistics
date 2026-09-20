@@ -306,69 +306,6 @@
               </form>
             </div>
 
-            {/* ---- Access: the same panel for every role, filled from their own perms ---- */}
-            <div className="card">
-              <div className="card-h">
-                <h3>Access</h3>
-                <span className="sub">what this account can open</span>
-              </div>
-              <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {access.unrestricted ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 9, background: 'var(--blue-50)', border: '1px solid var(--blue-100)' }}>
-                    <Ic d={I.check} s={17} c="var(--blue-700)" />
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>Full access</div>
-                      <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>Every workspace, every action.</div>
-                    </div>
-                  </div>
-                ) : access.rows.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
-                    No workspaces are assigned to this account yet. An administrator grants them
-                    from Settings → Users &amp; Roles.
-                  </div>
-                ) : (
-                  <div>
-                    {access.rows.map((r) => (
-                      <div key={r.id} className="wsrow">
-                        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)', flex: 1, minWidth: 0 }}>{r.label}</span>
-                        <span style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          {r.actions.map((a) => (
-                            <span key={a} style={Object.assign({}, mono, {
-                              fontSize: 9.5, fontWeight: 700, letterSpacing: '.4px', padding: '2px 7px', borderRadius: 5,
-                              color: a === 'delete' ? '#a92c42' : 'var(--blue-700)',
-                              background: a === 'delete' ? 'rgba(210,58,82,.10)' : 'var(--blue-50)',
-                            })}>{ACTION_LABEL[a]}</span>
-                          ))}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, paddingTop: 2 }}>
-                  <div style={{ minWidth: 150 }}>
-                    <div style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.7px', color: 'var(--muted)', fontWeight: 700 }}>Staff visible</div>
-                    <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 3 }}>{scopeText}</div>
-                  </div>
-                  <div style={{ minWidth: 150, flex: 1 }}>
-                    <div style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.7px', color: 'var(--muted)', fontWeight: 700 }}>Departments</div>
-                    <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                      {deptNames.length === 0
-                        ? <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--faint)' }}>Hospital-wide</span>
-                        : deptNames.map((d) => (
-                          <span key={d} style={{ fontSize: 11, fontWeight: 600, padding: '2px 9px', borderRadius: 11, background: 'var(--panel-2)', border: '1px solid var(--line-2)', color: 'var(--ink-2)' }}>{d}</span>
-                        ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ fontSize: 11, color: 'var(--faint)', lineHeight: 1.6, borderTop: '1px solid var(--line-2)', paddingTop: 10 }}>
-                  Role, workspaces and department scope are set by an administrator. Ask them if
-                  anything here is wrong — this page cannot change them.
-                </div>
-              </div>
-            </div>
-
             <div className="card">
               <div className="card-h"><h3>Password</h3></div>
               <form className="card-b" onSubmit={(e) => { e.preventDefault(); if (u && cur && nw && !pwBusy) savePassword(); }}

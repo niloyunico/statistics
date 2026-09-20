@@ -29,6 +29,974 @@ function unicoTenure(doj) {
     text
   };
 }
+const REC_SECTIONS = [['identity', 'Identity & contact', 'Name, employee no., role, department, date of joining, phone, NID, emergency contact', 'staff'], ['employment', 'Employment & experience', 'Designation history, UNICO tenure, prior service, total experience', 'staff'], ['credentials', 'Qualifications & licence', 'Qualification, BNMC registration, special training, vaccination', 'staff'], ['privileges', 'Clinical privileges', 'Activities granted, by privilege area', 'staff'], ['performance', 'Performance appraisals', 'Latest grade, every filed cycle, Part H action taken', 'perf'], ['achievements', 'Achievements & awards', 'The recognition register for this staff member', 'perf'], ['incidents', 'Mistakes & incidents', 'The incident register for this staff member', 'perf'], ['notes', 'Internal notes', 'Notes kept on the record by the nursing office', 'staff']];
+const REC_DEFAULT = {
+  identity: true,
+  employment: true,
+  credentials: true,
+  privileges: true,
+  performance: true,
+  achievements: true,
+  incidents: true,
+  notes: false,
+  photo: true,
+  signatures: true,
+  confidential: true
+};
+const REC_PRESETS = [['Full record', {
+  identity: 1,
+  employment: 1,
+  credentials: 1,
+  privileges: 1,
+  performance: 1,
+  achievements: 1,
+  incidents: 1,
+  notes: 0
+}], ['Profile only', {
+  identity: 1,
+  employment: 1,
+  credentials: 1,
+  privileges: 1,
+  performance: 0,
+  achievements: 0,
+  incidents: 0,
+  notes: 0
+}], ['Performance file', {
+  identity: 1,
+  employment: 0,
+  credentials: 0,
+  privileges: 0,
+  performance: 1,
+  achievements: 1,
+  incidents: 1,
+  notes: 0
+}], ['Credentials', {
+  identity: 1,
+  employment: 0,
+  credentials: 1,
+  privileges: 1,
+  performance: 0,
+  achievements: 0,
+  incidents: 0,
+  notes: 0
+}]];
+function StaffRecordPrint({
+  e,
+  perf,
+  tenure,
+  onClose
+}) {
+  const [sel, setSel] = React.useState(REC_DEFAULT);
+  const [printing, setPrinting] = React.useState(false);
+  const allowed = REC_SECTIONS.filter(s => s[3] !== 'perf' || canPrintPerf());
+  const on = k => !!sel[k];
+  const flip = k => setSel(s => Object.assign({}, s, {
+    [k]: !s[k]
+  }));
+  const preset = map => setSel(s => Object.assign({}, s, REC_SECTIONS.reduce((m, x) => (m[x[0]] = !!map[x[0]], m), {})));
+  const chosen = allowed.filter(s => on(s[0])).length;
+  React.useEffect(() => {
+    const k = ev => {
+      if (ev.key === 'Escape' && !printing) onClose();
+    };
+    document.addEventListener('keydown', k);
+    return () => document.removeEventListener('keydown', k);
+  }, [onClose, printing]);
+  if (printing) return React.createElement(StaffRecordSheet, {
+    e: e,
+    perf: perf,
+    tenure: tenure,
+    sel: sel,
+    onDone: onClose
+  });
+  const box = (k, label, sub) => React.createElement("label", {
+    key: k,
+    style: {
+      display: 'flex',
+      gap: 9,
+      alignItems: 'flex-start',
+      padding: '8px 10px',
+      borderRadius: 9,
+      cursor: 'pointer',
+      border: '1px solid ' + (on(k) ? 'var(--blue)' : 'var(--line-2)'),
+      background: on(k) ? 'var(--blue-50)' : 'var(--panel-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: on(k),
+    onChange: () => flip(k),
+    style: {
+      marginTop: 2,
+      width: 15,
+      height: 15,
+      accentColor: '#0090ca',
+      flexShrink: 0
+    }
+  }), React.createElement("span", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'block',
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, label), sub && React.createElement("span", {
+    style: {
+      display: 'block',
+      fontSize: 11,
+      color: 'var(--muted)',
+      lineHeight: 1.45,
+      marginTop: 1
+    }
+  }, sub)));
+  return React.createElement("div", {
+    onMouseDown: onClose,
+    style: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(16,32,46,.45)',
+      zIndex: 600,
+      display: 'grid',
+      placeItems: 'center',
+      padding: 'clamp(8px,3vw,22px)'
+    }
+  }, React.createElement("div", {
+    onMouseDown: ev => ev.stopPropagation(),
+    className: "card",
+    style: {
+      width: 'min(620px,100%)',
+      maxHeight: '92vh',
+      display: 'flex',
+      flexDirection: 'column',
+      background: 'var(--panel)'
+    }
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      alignItems: 'flex-start'
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 30,
+      height: 30,
+      borderRadius: 9,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      marginRight: 8
+    }
+  }, React.createElement(Ic, {
+    d: I.print,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("h3", null, "Print staff record"), React.createElement("div", {
+    className: "sub"
+  }, e.name, " \xB7 ", e.emp_id || e.id, " \u2014 tick what goes on the sheet")), React.createElement("button", {
+    className: "icon-btn",
+    title: "Close",
+    onClick: onClose
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 15
+  }))), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12,
+      overflowY: 'auto'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      color: 'var(--muted)'
+    }
+  }, "Preset"), REC_PRESETS.map(([label, map]) => React.createElement("button", {
+    key: label,
+    className: "btn sm",
+    onClick: () => preset(map)
+  }, label))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gap: 7
+    }
+  }, allowed.map(s => box(s[0], s[1], s[2]))), !canPrintPerf() && React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      lineHeight: 1.5,
+      background: 'var(--panel-2)',
+      borderRadius: 8,
+      padding: '8px 10px'
+    }
+  }, "Appraisals, achievements and incidents are personal-file material.", canSeePerf() ? ' This account may read them but has no print permission for the Performance module, so they cannot be put on a sheet.' : ' This account does not hold the Performance module, so they are not on this sheet.'), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      color: 'var(--muted)',
+      marginBottom: 6
+    }
+  }, "Sheet options"), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gap: 7,
+      gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))'
+    }
+  }, box('photo', 'Photograph', 'Print the staff photo in the header'), box('signatures', 'Signature block', 'Prepared by / verified by / authorised lines at the foot'), box('confidential', 'Confidential marking', '“Confidential — personal file” on every page')))), React.createElement("div", {
+    className: "card-h",
+    style: {
+      borderTop: '1px solid var(--line-2)',
+      borderBottom: 0,
+      justifyContent: 'flex-end',
+      gap: 8
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 11.5,
+      color: chosen ? 'var(--muted)' : '#d23a52'
+    }
+  }, chosen ? chosen + ' section' + (chosen === 1 ? '' : 's') + ' selected' : 'Tick at least one section.'), React.createElement("button", {
+    className: "btn sm",
+    onClick: onClose
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri sm",
+    disabled: !chosen,
+    onClick: () => setPrinting(true)
+  }, React.createElement(Ic, {
+    d: I.print,
+    s: 14
+  }), "Print / Save as PDF"))));
+}
+function StaffRecordSheet({
+  e,
+  perf,
+  tenure,
+  sel,
+  onDone
+}) {
+  const rawPhoto = e && e.photo && e.photo.url || '';
+  const photoUrl = rawPhoto && window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(rawPhoto, 320, 'fit') : rawPhoto;
+  const wantPhoto = !!(sel && sel.photo);
+  const [photo, setPhoto] = React.useState(() => wantPhoto && photoUrl ? 'wait' : 'fail');
+  React.useEffect(() => {
+    let live = true;
+    if (photo !== 'wait') return;
+    const img = new Image();
+    const settle = ok => {
+      if (live) setPhoto(ok ? 'ok' : 'fail');
+    };
+    img.onload = () => settle(true);
+    img.onerror = () => settle(false);
+    img.src = photoUrl;
+    if (img.complete && img.naturalWidth) settle(true);
+    const cap = setTimeout(() => settle(false), 4000);
+    return () => {
+      live = false;
+      clearTimeout(cap);
+      img.onload = img.onerror = null;
+    };
+  }, [photo, photoUrl]);
+  React.useEffect(() => {
+    if (photo === 'wait') return;
+    const body = document.body;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      body.classList.remove('pdf-export-mode', 'regform-print');
+      window.removeEventListener('afterprint', finish);
+      if (onDone) onDone();
+    };
+    body.classList.add('pdf-export-mode', 'regform-print');
+    window.addEventListener('afterprint', finish);
+    const t = setTimeout(() => {
+      try {
+        window.print();
+      } catch (err) {}
+      setTimeout(finish, 800);
+    }, 250);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('afterprint', finish);
+      body.classList.remove('pdf-export-mode', 'regform-print');
+    };
+  }, [photo]);
+  const root = typeof document !== 'undefined' && document.getElementById('pdf-root');
+  if (!root || typeof ReactDOM === 'undefined' || !ReactDOM.createPortal) return null;
+  const S = window.STAFF || {};
+  const A = window.UNICO_APPRAISAL;
+  const ink = '#111a26',
+    line = '#8e9aa8',
+    soft = '#4f5d6e',
+    head = '#1f3b5a';
+  const on = k => !!sel[k];
+  const now = new Date();
+  const today = now.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
+  const printedAt = today + ' ' + now.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  const txt = v => {
+    const s = String(v == null ? '' : v).trim();
+    return s || '—';
+  };
+  const listOf = v => String(v || '').split(/[,;]/).map(x => x.trim()).filter(Boolean);
+  const desig = (window.staffCanonDesig ? window.staffCanonDesig(e.designation) : e.designation) || '';
+  const deptText = (window.staffDeptShow ? window.staffDeptShow(e.current_department) : e.current_department) || '';
+  const st = perf && A && A.standing ? A.standing(e, perf.appraisals, new Date()) : null;
+  let n = 0;
+  const Sec = ({
+    title,
+    children
+  }) => {
+    n += 1;
+    const no = n;
+    return React.createElement("section", {
+      style: {
+        marginTop: 9,
+        breakInside: 'avoid',
+        pageBreakInside: 'avoid'
+      }
+    }, React.createElement("div", {
+      style: {
+        background: head,
+        color: '#fff',
+        fontSize: '8.6pt',
+        fontWeight: 700,
+        letterSpacing: '.4px',
+        padding: '3px 8px',
+        textTransform: 'uppercase',
+        WebkitPrintColorAdjust: 'exact',
+        printColorAdjust: 'exact'
+      }
+    }, no, ". ", title), React.createElement("div", {
+      style: {
+        border: '1px solid ' + line,
+        borderTop: 0,
+        padding: '6px 8px 7px'
+      }
+    }, children));
+  };
+  const F = ({
+    label,
+    value,
+    span
+  }) => React.createElement("div", {
+    style: {
+      gridColumn: span ? 'span ' + span : 'auto',
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '6.8pt',
+      fontWeight: 700,
+      letterSpacing: '.5px',
+      textTransform: 'uppercase',
+      color: soft
+    }
+  }, label), React.createElement("div", {
+    style: {
+      fontSize: '9pt',
+      fontWeight: 600,
+      color: ink,
+      borderBottom: '1px dotted ' + line,
+      paddingBottom: 2,
+      minHeight: 14,
+      wordBreak: 'break-word'
+    }
+  }, txt(value)));
+  const Grid = ({
+    cols,
+    children
+  }) => React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(0,1fr) '.repeat(cols || 3).trim(),
+      columnGap: 11,
+      rowGap: 7
+    }
+  }, children);
+  const Tbl = ({
+    cols,
+    rows,
+    empty
+  }) => rows.length === 0 ? React.createElement("div", {
+    style: {
+      fontSize: '8pt',
+      color: soft,
+      padding: '3px 0'
+    }
+  }, empty) : React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: '8pt',
+      marginTop: 2
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, cols.map((c, i) => React.createElement("th", {
+    key: i,
+    style: {
+      textAlign: c[2] || 'left',
+      borderBottom: '1px solid ' + line,
+      padding: '3px 4px',
+      fontSize: '7pt',
+      fontWeight: 700,
+      letterSpacing: '.3px',
+      textTransform: 'uppercase',
+      color: soft,
+      width: c[3] || 'auto'
+    }
+  }, c[0])))), React.createElement("tbody", null, rows.map((r, ri) => React.createElement("tr", {
+    key: ri
+  }, cols.map((c, ci) => React.createElement("td", {
+    key: ci,
+    style: {
+      textAlign: c[2] || 'left',
+      borderBottom: '1px dotted ' + line,
+      padding: '3px 4px',
+      color: ink,
+      verticalAlign: 'top'
+    }
+  }, c[1](r)))))));
+  const priorEntries = Array.isArray(e.prior_experience_entries) ? e.prior_experience_entries : [];
+  const privGroups = (() => {
+    try {
+      if (!S.privilegeGroupsFor || !S.privKey) return [];
+      const granted = e.privileges || {};
+      return (S.privilegeGroupsFor(e.role || 'Nurse') || []).map(g => ({
+        group: g.group,
+        items: (g.items || []).filter(it => granted[S.privKey(g.group, it)])
+      })).filter(g => g.items.length);
+    } catch (err) {
+      return [];
+    }
+  })();
+  const achievements = perf && perf.achievements || [];
+  const incidents = perf && perf.incidents || [];
+  const notes = Array.isArray(e.notes) ? e.notes : [];
+  return ReactDOM.createPortal(React.createElement("div", {
+    className: "pdf-doc portrait"
+  }, React.createElement("style", null, "@media print{@page{size:A4 portrait;margin:8mm 8mm 13mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .staffrec-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}.staffrec-foot{position:fixed;bottom:0;left:0;right:0;display:flex !important}}.staffrec-foot{display:none}"), React.createElement("div", {
+    className: "staffrec-foot",
+    style: {
+      gap: 10,
+      alignItems: 'baseline',
+      fontSize: '6.6pt',
+      color: soft,
+      borderTop: '1px solid ' + line,
+      padding: '2px 8mm 0'
+    }
+  }, React.createElement("span", null, txt(e.name), " \xB7 ", txt(e.emp_id || e.id)), on('confidential') && React.createElement("span", {
+    style: {
+      fontWeight: 700
+    }
+  }, "CONFIDENTIAL \u2014 personal file"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", null, "Printed ", printedAt)), React.createElement("section", {
+    className: "staffrec-sheet",
+    style: {
+      fontFamily: "'IBM Plex Sans',system-ui,'Segoe UI',sans-serif",
+      color: ink,
+      padding: '6mm 8mm'
+    }
+  }, React.createElement("header", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 11,
+      borderBottom: '2px solid ' + head,
+      paddingBottom: 6
+    }
+  }, React.createElement("img", {
+    src: "unico/logo.svg",
+    alt: "UNICO Hospitals",
+    style: {
+      height: 34
+    }
+  }), React.createElement("div", {
+    style: {
+      flex: 1,
+      textAlign: 'center',
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '8pt',
+      fontWeight: 700,
+      letterSpacing: '1px',
+      color: soft,
+      textTransform: 'uppercase'
+    }
+  }, "UNICO Hospitals PLC \xB7 Nursing Services"), React.createElement("div", {
+    style: {
+      fontSize: '13pt',
+      fontWeight: 800,
+      marginTop: 1
+    }
+  }, "Staff Record \u2014 ", e.role === 'PCA' ? 'Patient Care Assistant' : 'Nurse'), React.createElement("div", {
+    style: {
+      fontSize: '7.6pt',
+      color: soft,
+      marginTop: 2
+    }
+  }, "Employee no. ", React.createElement("b", {
+    style: {
+      color: ink
+    }
+  }, txt(e.emp_id || e.id)), " \xB7 printed ", printedAt, on('confidential') ? ' · CONFIDENTIAL — personal file' : '')), on('photo') && (photo === 'ok' ? React.createElement("img", {
+    src: photoUrl,
+    alt: txt(e.name),
+    crossOrigin: "anonymous",
+    style: {
+      width: '23mm',
+      height: '28mm',
+      objectFit: 'cover',
+      border: '1px solid ' + line,
+      flexShrink: 0,
+      WebkitPrintColorAdjust: 'exact',
+      printColorAdjust: 'exact'
+    }
+  }) : React.createElement("div", {
+    style: {
+      width: '23mm',
+      height: '28mm',
+      border: '1px solid ' + line,
+      display: 'grid',
+      placeItems: 'center',
+      textAlign: 'center',
+      flexShrink: 0,
+      background: '#eef3f8',
+      WebkitPrintColorAdjust: 'exact',
+      printColorAdjust: 'exact'
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: '17pt',
+      fontWeight: 800,
+      color: head,
+      lineHeight: 1
+    }
+  }, String(e.name || '?').split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || '?'), React.createElement("div", {
+    style: {
+      fontSize: '6pt',
+      color: soft,
+      marginTop: 3
+    }
+  }, rawPhoto ? 'photo unavailable' : 'no photo on file'))))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 10,
+      flexWrap: 'wrap',
+      padding: '6px 0 2px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '14pt',
+      fontWeight: 800
+    }
+  }, txt(e.name)), React.createElement("div", {
+    style: {
+      fontSize: '9.5pt',
+      fontWeight: 700,
+      color: head
+    }
+  }, txt(desig || e.role)), React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    style: {
+      fontSize: '8pt',
+      color: soft
+    }
+  }, txt(deptText), e.is_active === false ? ' · INACTIVE' : '')), on('identity') && React.createElement(Sec, {
+    title: "Identity & contact"
+  }, React.createElement(Grid, {
+    cols: 3
+  }, React.createElement(F, {
+    label: "Full name",
+    value: e.name
+  }), React.createElement(F, {
+    label: "Employee no.",
+    value: e.emp_id || e.id
+  }), React.createElement(F, {
+    label: "Role",
+    value: e.role || 'Nurse'
+  }), React.createElement(F, {
+    label: "Designation",
+    value: desig
+  }), React.createElement(F, {
+    label: "Department(s)",
+    value: deptText,
+    span: 2
+  }), React.createElement(F, {
+    label: "Date of joining",
+    value: e.doj
+  }), React.createElement(F, {
+    label: "Date of birth",
+    value: e.dob
+  }), React.createElement(F, {
+    label: "Gender",
+    value: e.gender
+  }), React.createElement(F, {
+    label: "Mobile",
+    value: e.phone
+  }), React.createElement(F, {
+    label: "Blood group",
+    value: e.blood_group
+  }), React.createElement(F, {
+    label: "NID / passport",
+    value: e.nid
+  }), React.createElement(F, {
+    label: "Emergency contact",
+    value: e.emergency_contact
+  }), React.createElement(F, {
+    label: "Relation",
+    value: e.emergency_relation
+  }), React.createElement(F, {
+    label: "Languages",
+    value: e.languages
+  }), React.createElement(F, {
+    label: "Present address",
+    value: e.address || e.present_address,
+    span: 3
+  }))), on('employment') && React.createElement(Sec, {
+    title: "Employment & experience"
+  }, React.createElement(Grid, {
+    cols: 3
+  }, React.createElement(F, {
+    label: "Service at UNICO",
+    value: tenure ? tenure.text : ''
+  }), React.createElement(F, {
+    label: "Total experience",
+    value: S.expLabel ? S.expLabel(e) : e.total_experience_text
+  }), React.createElement(F, {
+    label: "Status",
+    value: e.is_active === false ? 'Inactive / former' : 'Active on roster'
+  })), React.createElement("div", {
+    style: {
+      fontSize: '7pt',
+      fontWeight: 700,
+      letterSpacing: '.5px',
+      textTransform: 'uppercase',
+      color: soft,
+      marginTop: 8
+    }
+  }, "Prior service"), React.createElement(Tbl, {
+    cols: [['Organisation', x => txt(x.org), 'left'], ['Department', x => txt(x.dept), 'left'], ['Duration', x => S.fmtYM ? S.fmtYM((parseFloat(x.years) || 0) + (parseFloat(x.months) || 0) / 12) : txt(x.years), 'right', '22%']],
+    rows: priorEntries,
+    empty: e.previous_experience ? String(e.previous_experience) : 'No prior service recorded.'
+  })), on('credentials') && React.createElement(Sec, {
+    title: "Qualifications, registration & training"
+  }, React.createElement(Grid, {
+    cols: 2
+  }, React.createElement(F, {
+    label: "Qualification",
+    value: listOf(e.qualification).join(', ')
+  }), React.createElement(F, {
+    label: "Hepatitis-B vaccination",
+    value: e.hepatitis_b_vaccination
+  }), React.createElement(F, {
+    label: "BNMC / licence no.",
+    value: e.licence_no
+  }), React.createElement(F, {
+    label: "Licence valid until",
+    value: e.licence_expiry
+  }), React.createElement(F, {
+    label: "Special training",
+    value: listOf(e.special_training).join(', '),
+    span: 2
+  }), React.createElement(F, {
+    label: "Extracurricular activities",
+    value: listOf(e.extracurricular).join(', '),
+    span: 2
+  })), e.licence_verified && (() => {
+    const v = e.licence_verified,
+      pr = v.primary || {};
+    return React.createElement("div", {
+      style: {
+        fontSize: '7.6pt',
+        color: soft,
+        marginTop: 6,
+        borderTop: '1px dotted ' + line,
+        paddingTop: 4
+      }
+    }, "Verified against the BNMC register on ", String(v.at || '').slice(0, 10) || '—', pr.regNo ? ' — registration ' + pr.regNo : '', pr.status ? ', ' + pr.status : '', pr.expired ? ' (EXPIRED)' : '', pr.renewUpto ? ', renewable up to ' + pr.renewUpto : '', ".");
+  })()), on('privileges') && React.createElement(Sec, {
+    title: "Clinical privileges"
+  }, privGroups.length === 0 ? React.createElement("div", {
+    style: {
+      fontSize: '8pt',
+      color: soft
+    }
+  }, "No clinical privileges recorded on this file.") : privGroups.map((g, i) => React.createElement("div", {
+    key: i,
+    style: {
+      marginBottom: 5,
+      breakInside: 'avoid'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: '7.6pt',
+      fontWeight: 700,
+      color: head
+    }
+  }, g.group), React.createElement("div", {
+    style: {
+      fontSize: '8pt',
+      color: ink,
+      lineHeight: 1.45
+    }
+  }, g.items.join(' · '))))), on('performance') && canPrintPerf() && React.createElement(Sec, {
+    title: "Performance appraisals"
+  }, React.createElement(Grid, {
+    cols: 4
+  }, React.createElement(F, {
+    label: "Latest grade",
+    value: st && st.last ? st.last.grade : ''
+  }), React.createElement(F, {
+    label: "Latest score",
+    value: st && st.last && st.last.score != null ? st.last.score + ' / 100' : ''
+  }), React.createElement(F, {
+    label: "Appraisals filed",
+    value: st ? String(st.history.length) : '0'
+  }), React.createElement(F, {
+    label: "Current window",
+    value: st && st.cycle ? st.cycle.label : ''
+  })), React.createElement("div", {
+    style: {
+      fontSize: '7pt',
+      fontWeight: 700,
+      letterSpacing: '.5px',
+      textTransform: 'uppercase',
+      color: soft,
+      marginTop: 8
+    }
+  }, "Filed cycles"), React.createElement(Tbl, {
+    cols: [['Period', x => txt(x.cycleLabel || x.cycleId), 'left'], ['Score', x => x.score == null ? '—' : String(x.score), 'right', '12%'], ['Grade', x => txt(x.grade), 'center', '12%'], ['Action taken (Part H)', x => (x.actions || []).map(id => ((A && A.CNS_ACTIONS || []).find(y => y.id === id) || {}).label || id).join(' · ') || '—', 'left', '38%']],
+    rows: st ? st.history : [],
+    empty: 'No appraisal has been filed yet' + (e.doj ? ' — the first falls six months after joining (' + e.doj + ').' : '.')
+  }), st && st.overdue && React.createElement("div", {
+    style: {
+      fontSize: '7.6pt',
+      color: '#a32c41',
+      marginTop: 5,
+      fontWeight: 700
+    }
+  }, "The ", st.lastClosed ? st.lastClosed.label : 'last', " appraisal window closed with no appraisal filed.")), on('achievements') && canPrintPerf() && React.createElement(Sec, {
+    title: "Achievements & awards"
+  }, React.createElement(Tbl, {
+    cols: [['Date', x => txt(x.date), 'left', '15%'], ['Achievement', x => txt(x.what), 'left'], ['Category', x => [x.category, x.level].filter(Boolean).join(' · ') || '—', 'left', '26%'], ['Points', x => x.points ? '+' + x.points : '—', 'right', '10%']],
+    rows: achievements,
+    empty: "No achievement or award is recorded on this file."
+  })), on('incidents') && canPrintPerf() && React.createElement(Sec, {
+    title: "Mistakes & incidents"
+  }, React.createElement(Tbl, {
+    cols: [['Date', x => txt(x.date), 'left', '15%'], ['Incident', x => txt(x.what), 'left'], ['Category', x => [x.category, x.severity].filter(Boolean).join(' · ') || '—', 'left', '26%'], ['Points', x => x.points ? '−' + x.points : '—', 'right', '10%']],
+    rows: incidents,
+    empty: "Clean record \u2014 no error, lapse or disciplinary entry on this file."
+  })), on('notes') && React.createElement(Sec, {
+    title: "Internal notes"
+  }, notes.length === 0 ? React.createElement("div", {
+    style: {
+      fontSize: '8pt',
+      color: soft
+    }
+  }, "No notes on this record.") : notes.slice().reverse().map(x => React.createElement("div", {
+    key: x.id,
+    style: {
+      fontSize: '8pt',
+      marginBottom: 4,
+      breakInside: 'avoid'
+    }
+  }, React.createElement("span", {
+    style: {
+      color: soft
+    }
+  }, new Date(x.ts).toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  }), " \xB7 ", txt(x.author), " \u2014 "), txt(x.text)))), on('signatures') && React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)',
+      gap: 16,
+      marginTop: 18,
+      breakInside: 'avoid'
+    }
+  }, ['Prepared by', 'Verified by', 'Chief Nursing Superintendent'].map(l => React.createElement("div", {
+    key: l
+  }, React.createElement("div", {
+    style: {
+      borderBottom: '1px solid ' + ink,
+      height: 26
+    }
+  }), React.createElement("div", {
+    style: {
+      fontSize: '7.4pt',
+      fontWeight: 700,
+      color: soft,
+      marginTop: 3
+    }
+  }, l), React.createElement("div", {
+    style: {
+      fontSize: '6.8pt',
+      color: soft
+    }
+  }, "Name, signature & date")))), React.createElement("footer", {
+    style: {
+      marginTop: 12,
+      borderTop: '1px solid ' + line,
+      paddingTop: 4,
+      display: 'flex',
+      gap: 10,
+      fontSize: '6.8pt',
+      color: soft
+    }
+  }, React.createElement("span", null, "UNICO Hospitals PLC \u2014 Nursing Services \xB7 staff record for ", txt(e.name), " (", txt(e.emp_id || e.id), ")"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", null, on('confidential') ? 'Confidential — personal file · ' : '', "Printed ", printedAt)))), root);
+}
+function ApprTrend({
+  points
+}) {
+  if (!points.length) return null;
+  const W = 100,
+    H = 44,
+    pad = 4;
+  const xs = i => points.length < 2 ? W / 2 : pad + i * (W - pad * 2) / (points.length - 1);
+  const ys = v => H - pad - Math.max(0, Math.min(100, Number(v) || 0)) / 100 * (H - pad * 2);
+  const d = points.map((p, i) => (i ? 'L' : 'M') + xs(i).toFixed(1) + ' ' + ys(p.v).toFixed(1)).join(' ');
+  const area = d + ' L ' + xs(points.length - 1).toFixed(1) + ' ' + (H - pad) + ' L ' + xs(0).toFixed(1) + ' ' + (H - pad) + ' Z';
+  const gc = g => window.MK && window.MK.GC && window.MK.GC[g] || '#0090ca';
+  return React.createElement("div", null, React.createElement("svg", {
+    viewBox: '0 0 ' + W + ' ' + H,
+    preserveAspectRatio: "none",
+    style: {
+      width: '100%',
+      height: 96,
+      display: 'block'
+    }
+  }, [25, 50, 75].map(y => React.createElement("line", {
+    key: y,
+    x1: 0,
+    x2: W,
+    y1: ys(y),
+    y2: ys(y),
+    stroke: "var(--line-2)",
+    strokeWidth: ".4"
+  })), points.length > 1 && React.createElement("path", {
+    d: area,
+    fill: "rgba(0,144,202,.10)",
+    stroke: "none"
+  }), points.length > 1 && React.createElement("path", {
+    d: d,
+    fill: "none",
+    stroke: "#0090ca",
+    strokeWidth: "1.2",
+    strokeLinejoin: "round",
+    strokeLinecap: "round"
+  }), points.map((p, i) => React.createElement("circle", {
+    key: i,
+    cx: xs(i),
+    cy: ys(p.v),
+    r: points.length > 12 ? 1.1 : 1.8,
+    fill: gc(p.grade),
+    stroke: "#fff",
+    strokeWidth: ".6"
+  }))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      gap: 6,
+      marginTop: 4
+    }
+  }, points.map((p, i) => React.createElement("div", {
+    key: i,
+    style: {
+      flex: 1,
+      minWidth: 0,
+      textAlign: 'center'
+    }
+  }, React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: gc(p.grade)
+    }
+  }, p.v), React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      color: 'var(--muted)',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, p.label)))));
+}
+function ApprStat({
+  label,
+  value,
+  tone
+}) {
+  return React.createElement("div", {
+    style: {
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line-2)',
+      borderRadius: 9,
+      padding: '7px 11px',
+      minWidth: 88
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9,
+      fontWeight: 700,
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      color: 'var(--muted)'
+    }
+  }, label), React.createElement("div", {
+    className: "num",
+    style: {
+      fontSize: 14,
+      fontWeight: 800,
+      color: tone || 'var(--ink)',
+      marginTop: 2
+    }
+  }, value));
+}
 const canSeePerf = () => {
   try {
     return window.unicoCan ? window.unicoCan('perf', 'view') : true;
@@ -46,6 +1014,20 @@ const canAddPerf = () => {
 const canDelPerf = () => {
   try {
     return window.unicoCan ? window.unicoCan('perf', 'delete') : true;
+  } catch (e) {
+    return true;
+  }
+};
+const canPrintStaff = () => {
+  try {
+    return window.unicoCan ? window.unicoCan('staff', 'print') : true;
+  } catch (e) {
+    return true;
+  }
+};
+const canPrintPerf = () => {
+  try {
+    return window.unicoCan ? window.unicoCan('perf', 'view') && window.unicoCan('perf', 'print') : true;
   } catch (e) {
     return true;
   }
@@ -754,6 +1736,7 @@ function StaffProfile({
   const [note, setNote] = React.useState('');
   const [discontinuing, setDiscontinuing] = React.useState(false);
   const [conduct, setConduct] = React.useState(null);
+  const [printing, setPrinting] = React.useState(false);
   const perfId = e ? e.emp_id || String(e.id) : null;
   const perf = useStaffPerf(perfId);
   if (!e) return React.createElement("div", {
@@ -1073,10 +2056,10 @@ function StaffProfile({
       fontWeight: 700
     },
     onClick: () => setDiscontinuing(true)
-  }, "\u26A0 Discontinue"), React.createElement("button", {
+  }, "\u26A0 Discontinue"), canPrintStaff() && React.createElement("button", {
     className: "btn sm",
-    title: "Print / Save as PDF",
-    onClick: () => window.print()
+    title: "Print the official staff record \u2014 choose which sections go on the sheet",
+    onClick: () => setPrinting(true)
   }, React.createElement(Ic, {
     d: I.print,
     s: 15
@@ -1126,6 +2109,11 @@ function StaffProfile({
       setConduct(null);
       if (perf && perf.reload) perf.reload();
     }
+  }), printing && React.createElement(StaffRecordPrint, {
+    e: e,
+    perf: perf,
+    tenure: tenure,
+    onClose: () => setPrinting(false)
   }), discontinuing && React.createElement(DiscontinueDialog, {
     e: e,
     onClose: () => setDiscontinuing(false),
@@ -1926,90 +2914,86 @@ function StaffProfile({
     style: {
       color: 'var(--ink-2)'
     }
-  }, e.doj || '—'), tenure ? ` · ${tenure.text}` : '', "."))), canSeePerf() && React.createElement("div", {
-    className: "card",
-    style: {
-      borderLeft: '4px solid #0072a3'
-    }
-  }, secHead(I.trend, 'Performance', 'appraisal record', {
-    bg: '#eef8fc',
-    fg: '#0072a3'
-  }), React.createElement("div", {
-    className: "card-b"
-  }, perf === null ? React.createElement("div", {
-    style: {
-      color: 'var(--muted)',
-      fontSize: 12.5
-    }
-  }, "Loading the performance file\u2026") : (() => {
+  }, e.doj || '—'), tenure ? ` · ${tenure.text}` : '', "."))), canSeePerf() && (() => {
     const A = window.UNICO_APPRAISAL;
-    const done = (perf.appraisals || []).filter(a => a && a.status === 'actioned').sort((x, y) => String(x.cycleId || '') < String(y.cycleId || '') ? -1 : 1);
-    const last = done[done.length - 1];
-    const nextDue = A && A.cycleOf && e.doj ? function () {
+    const st = perf && A && A.standing ? A.standing(e, perf.appraisals, new Date()) : null;
+    const done = st ? st.history.slice().reverse() : [];
+    const last = st ? st.last : null;
+    const cyc = st ? st.cycle : null;
+    const gc = g => window.MK && window.MK.GC && window.MK.GC[g] || '#0072a3';
+    const band = last ? A.gradeFor(last.score) : null;
+    const fmtD = d => {
       try {
-        const c = A.cycleOf(e.doj, new Date());
-        if (!c || !c.end) return null;
-        const d = c.end;
-        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        return A.fmtDay(d);
       } catch (err) {
-        return null;
+        return '';
       }
-    }() : null;
-    if (!last) return React.createElement("div", null, React.createElement("div", {
+    };
+    const startLabel = !st || !cyc ? null : st.appraisal ? st.status === 'actioned' ? 'View appraisal' : 'Continue appraisal' : '+ Start ' + cyc.label + ' appraisal';
+    return React.createElement("div", {
+      className: "card",
       style: {
-        fontSize: 13,
-        fontWeight: 700,
-        color: 'var(--ink)'
+        borderLeft: '4px solid #0072a3'
       }
-    }, "No appraisal filed yet"), React.createElement("div", {
-      style: {
-        fontSize: 12,
-        color: 'var(--muted)',
-        marginTop: 3,
-        lineHeight: 1.6
-      }
-    }, "The first appraisal falls six months after joining", e.doj ? ' (' + e.doj + ')' : '', ".", nextDue ? ' Current window closes ' + nextDue + '.' : ''), React.createElement("button", {
-      className: "btn sm",
-      style: {
-        marginTop: 11
-      },
+    }, secHead(I.trend, 'Performance', e.doj ? 'every 6 months from joining (' + e.doj + ')' : 'every 6 months from the date of joining', {
+      bg: '#eef8fc',
+      fg: '#0072a3'
+    }, canAddPerf() && startLabel ? React.createElement("button", {
+      className: "btn sm pri",
       onClick: () => setRoute({
-        view: 'perfStaff',
+        view: 'perfForm',
         emp: perfId
       })
-    }, "Open performance record"));
-    const pct = Math.max(0, Math.min(100, Number(last.score) || 0));
-    const gc = window.MK && window.MK.GC && window.MK.GC[last.grade] || '#0072a3';
-    return React.createElement("div", {
+    }, startLabel) : null), React.createElement("div", {
+      className: "card-b",
       style: {
         display: 'flex',
         flexDirection: 'column',
-        gap: 12
+        gap: 16
       }
-    }, React.createElement("div", {
+    }, perf === null ? React.createElement("div", {
+      style: {
+        color: 'var(--muted)',
+        fontSize: 12.5
+      }
+    }, "Loading the performance file\u2026") : React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         display: 'flex',
-        alignItems: 'center',
         gap: 16,
+        alignItems: 'center',
         flexWrap: 'wrap'
       }
     }, React.createElement("div", {
       style: {
+        flex: 1,
+        minWidth: 230
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        textTransform: 'uppercase',
+        letterSpacing: .5,
+        color: 'var(--muted)',
+        fontWeight: 700
+      }
+    }, last ? 'Latest grade · ' + (last.cycleLabel || last.cycleId || '') : 'No appraisal filed yet'), last ? React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
         display: 'flex',
         alignItems: 'baseline',
-        gap: 9
+        gap: 10,
+        marginTop: 3
       }
     }, React.createElement("span", {
       style: {
-        fontSize: 34,
+        fontSize: 36,
         fontWeight: 800,
-        color: gc,
-        lineHeight: 1
+        lineHeight: 1,
+        color: gc(last.grade)
       }
     }, last.grade || '—'), React.createElement("span", {
       className: "num",
       style: {
-        fontSize: 20,
+        fontSize: 19,
         fontWeight: 800,
         color: 'var(--ink)'
       }
@@ -2019,45 +3003,40 @@ function StaffProfile({
         fontSize: 13,
         color: 'var(--muted)'
       }
-    }, "/ 100")), React.createElement("div", {
+    }, "/ 100")), band && React.createElement("div", {
       style: {
-        minWidth: 170,
-        flex: 1
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 10.5,
-        textTransform: 'uppercase',
-        letterSpacing: .5,
+        fontSize: 12,
         color: 'var(--muted)',
-        fontWeight: 700
+        marginTop: 2
       }
-    }, "latest cycle"), React.createElement("div", {
+    }, band.rating, " \u2014 ", band.interp)) : React.createElement("div", {
       style: {
         fontSize: 12.5,
-        fontWeight: 600,
-        color: 'var(--ink-2)'
-      }
-    }, last.cycleLabel || last.cycleId || '—')), React.createElement("div", {
-      style: {
-        textAlign: 'right'
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 10.5,
-        textTransform: 'uppercase',
-        letterSpacing: .5,
         color: 'var(--muted)',
-        fontWeight: 700
+        marginTop: 4,
+        lineHeight: 1.6
       }
-    }, "appraisals"), React.createElement("div", {
-      className: "num",
+    }, "The first appraisal falls six months after joining", e.doj ? ' (' + e.doj + ')' : '', ".", cyc ? ' The current window is ' + cyc.label + '.' : '')), React.createElement("div", {
       style: {
-        fontSize: 15,
-        fontWeight: 800,
-        color: 'var(--ink)'
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap'
       }
-    }, done.length))), React.createElement("div", {
+    }, React.createElement(ApprStat, {
+      label: "Appraisals",
+      value: st ? st.history.length : 0
+    }), done.length > 1 && (() => {
+      const d = done[done.length - 1].score - done[0].score;
+      return React.createElement(ApprStat, {
+        label: 'Since ' + String(done[0].cycleLabel || '').slice(-4),
+        value: (d >= 0 ? '▲ ' : '▼ ') + Math.abs(d) + ' pts',
+        tone: d >= 0 ? '#1f9d57' : '#d23a52'
+      });
+    })(), React.createElement(ApprStat, {
+      label: "Next due",
+      value: cyc ? fmtD(cyc.due) : '—',
+      tone: st && st.overdue ? '#d23a52' : null
+    }))), last && React.createElement("div", {
       style: {
         height: 9,
         borderRadius: 6,
@@ -2066,63 +3045,148 @@ function StaffProfile({
       }
     }, React.createElement("div", {
       style: {
-        width: pct + '%',
+        width: Math.max(0, Math.min(100, Number(last.score) || 0)) + '%',
         height: '100%',
         borderRadius: 6,
-        background: gc,
+        background: gc(last.grade),
         transition: 'width .9s cubic-bezier(.2,.7,.3,1)'
       }
-    })), done.length > 1 && React.createElement("div", {
+    })), st && st.overdue && React.createElement("div", {
       style: {
-        display: 'flex',
-        alignItems: 'flex-end',
-        gap: 7,
-        height: 52
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#d23a52',
+        background: '#d23a5212',
+        border: '1px solid #d23a5230',
+        borderRadius: 8,
+        padding: '8px 11px'
       }
-    }, done.slice(-6).map((a, i) => {
-      const h = Math.max(6, Math.round((Number(a.score) || 0) / 100 * 46));
-      const c = window.MK && window.MK.GC && window.MK.GC[a.grade] || '#0090ca';
-      return React.createElement("div", {
-        key: i,
-        title: (a.cycleLabel || a.cycleId || '') + ' — ' + (a.score == null ? '—' : a.score),
+    }, "The ", st.lastClosed ? st.lastClosed.label : 'last', " window closed with no appraisal filed."), done.length > 0 && React.createElement("div", null, lbl('Score trend · ' + done.length + ' cycle' + (done.length === 1 ? '' : 's')), React.createElement(ApprTrend, {
+      points: done.map(h => ({
+        label: h.cycleLabel || h.cycleId || '',
+        v: Number(h.score) || 0,
+        grade: h.grade
+      }))
+    })), last && (() => {
+      let secs = [];
+      try {
+        secs = A.tally(last.scores).sections;
+      } catch (err) {
+        secs = [];
+      }
+      if (!secs.length) return null;
+      return React.createElement("div", null, lbl('Latest breakdown · ' + (last.cycleLabel || '') + ' · by section'), React.createElement("div", {
         style: {
-          flex: 1,
-          minWidth: 12
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 7
         }
-      }, React.createElement("div", {
-        style: {
-          height: h,
-          borderRadius: 5,
-          background: c,
-          opacity: i === done.slice(-6).length - 1 ? 1 : .55
-        }
-      }));
-    })), React.createElement("div", {
+      }, secs.map(sc => {
+        const p = sc.max ? sc.sub / sc.max * 100 : 0;
+        const c = window.MK && window.MK.barColor ? window.MK.barColor(p) : p >= 80 ? '#1f9d57' : p >= 60 ? '#e08a1e' : '#d23a52';
+        return React.createElement("div", {
+          key: sc.no,
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 9
+          }
+        }, React.createElement("div", {
+          style: {
+            width: 150,
+            flexShrink: 0,
+            fontSize: 11.5,
+            color: 'var(--ink-2)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          },
+          title: sc.title
+        }, sc.title.charAt(0) + sc.title.slice(1).toLowerCase()), React.createElement("div", {
+          style: {
+            flex: 1,
+            height: 8,
+            borderRadius: 5,
+            background: 'var(--panel-2)',
+            overflow: 'hidden'
+          }
+        }, React.createElement("div", {
+          style: {
+            width: Math.max(0, Math.min(100, p)) + '%',
+            height: '100%',
+            borderRadius: 5,
+            background: c
+          }
+        })), React.createElement("div", {
+          className: "num",
+          style: {
+            width: 48,
+            textAlign: 'right',
+            fontSize: 11.5,
+            fontWeight: 700,
+            color: 'var(--ink)'
+          }
+        }, sc.sub, "/", sc.max));
+      })));
+    })(), React.createElement("div", null, lbl('Appraisal history · confidential'), !st || st.history.length === 0 ? React.createElement("div", {
       style: {
-        display: 'flex',
-        gap: 9,
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        borderTop: '1px solid var(--line-2)',
-        paddingTop: 11
+        fontSize: 12,
+        color: 'var(--faint)'
+      }
+    }, "No appraisal has been filed yet.") : React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, React.createElement("table", {
+      className: "tbl"
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: {
+        textAlign: 'left'
+      }
+    }, "Period"), React.createElement("th", null, "Score"), React.createElement("th", {
+      style: {
+        textAlign: 'left'
+      }
+    }, "Grade"), React.createElement("th", {
+      style: {
+        textAlign: 'left'
+      }
+    }, "Part H action"), React.createElement("th", null))), React.createElement("tbody", null, st.history.map(h => React.createElement("tr", {
+      key: h.id
+    }, React.createElement("td", {
+      style: {
+        textAlign: 'left'
+      }
+    }, h.cycleLabel || h.cycleId || '—'), React.createElement("td", {
+      className: "num"
+    }, h.score == null ? '—' : h.score), React.createElement("td", {
+      style: {
+        textAlign: 'left'
       }
     }, React.createElement("span", {
       style: {
-        fontSize: 12,
+        fontWeight: 800,
+        color: gc(h.grade)
+      }
+    }, h.grade || '—')), React.createElement("td", {
+      style: {
+        textAlign: 'left',
+        fontSize: 11.5,
         color: 'var(--muted)'
       }
-    }, nextDue ? 'Next appraisal window closes ' + nextDue + '.' : 'Appraisals run every six months from the date of joining.'), React.createElement("span", {
+    }, (h.actions || []).map(id => ((A.CNS_ACTIONS || []).find(x => x.id === id) || {}).label || id).join(' · ') || '—'), React.createElement("td", {
       style: {
-        flex: 1
+        textAlign: 'right'
       }
-    }), React.createElement("button", {
+    }, canPrintPerf() && React.createElement("button", {
       className: "btn sm",
       onClick: () => setRoute({
-        view: 'perfStaff',
-        emp: perfId
+        view: 'perfPrint',
+        emp: perfId,
+        cycleId: h.cycleId
       })
-    }, "Open performance record")));
-  })())), canSeePerf() && React.createElement("div", {
+    }, "Print")))))))))));
+  })(), canSeePerf() && React.createElement("div", {
     className: "card",
     style: {
       borderLeft: '4px solid #6a52d4'
@@ -4117,16 +5181,13 @@ function DeptPrivilegesSettings({
   const [groupsOpen, setGroupsOpen] = React.useState(false);
   const deptGroups = S.deptGroupsFor(deptObjs) || [];
   const [view, setView] = React.useState('byDept');
-  const [deptStr, setDeptStr] = React.useState(deptNames[0] || '');
+  const [deptStr, setDeptStr] = React.useState('');
   const [role, setRole] = React.useState('Nurse');
   const [copyFrom, setCopyFrom] = React.useState('');
   const [, force] = React.useState(0);
   const rerender = () => force(x => x + 1);
   const [newGroup, setNewGroup] = React.useState('');
   const [newItem, setNewItem] = React.useState('');
-  React.useEffect(() => {
-    if (!deptStr && deptNames.length) setDeptStr(deptNames[0]);
-  }, [deptNames.join('|')]);
   const selDepts = String(deptStr || '').split(',').map(x => x.trim()).filter(Boolean);
   const assigned = (() => {
     if (!selDepts.length) return {};
@@ -4868,7 +5929,7 @@ function StaffPhotoLibrary({
       fontSize: 11,
       color: 'var(--muted)'
     }
-  }, "Only accounts with ", React.createElement("b", null, "edit"), " access to Nurse Management can open this library. Accounts with no staff access are never sent staff photos.")));
+  }, "Only accounts with ", React.createElement("b", null, "edit"), " access to Staff Management can open this library. Accounts with no staff access are never sent staff photos.")));
   const RD = typeof window !== 'undefined' && window.ReactDOM;
   return RD && RD.createPortal && typeof document !== 'undefined' ? RD.createPortal(modal, document.body) : modal;
 }
@@ -6782,9 +7843,17 @@ function StaffForm({
       gridColumn: '1 / -1'
     }
   }, (() => {
-    const selDepts = chipsOf('current_department');
+    const selRaw = chipsOf('current_department');
+    const resolveDept = d => {
+      try {
+        return (window.staffDeptShow ? window.staffDeptShow(d) : d) || d;
+      } catch (e) {
+        return d;
+      }
+    };
+    const selDepts = [...new Set(selRaw.map(resolveDept).filter(Boolean))];
     const allowedKeys = S.deptPrivilegeKeysFor ? S.deptPrivilegeKeysFor(selDepts, f.role || 'Nurse') : null;
-    const unknownDepts = selDepts.filter(d => !deptOpts.includes(d));
+    const unknownDepts = selRaw.filter(d => !deptOpts.includes(resolveDept(d)));
     const hint = selDepts.length === 0 ? 'Select a department above first — privileges are assigned per department, in Settings → Department Privileges.' : unknownDepts.length ? `“${unknownDepts.join(', ')}” isn't a department Settings → Department Privileges recognises — re-pick the department above from the dropdown (it may have been renamed), then assign its privileges in Settings.` : `No privileges have been assigned to ${selDepts.join(', ')} yet for this role. Assign them in Settings → Department Privileges.`;
     return React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
@@ -6994,6 +8063,8 @@ Object.assign(window, {
   StaffSavedOverlay,
   PrivilegesEditor,
   PrivilegeDeptMatrix,
-  DeptPrivilegesSettings
+  DeptPrivilegesSettings,
+  StaffRecordPrint,
+  StaffRecordSheet
 });
 })();

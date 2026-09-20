@@ -228,6 +228,22 @@ const staffArr = [
     { id: 3, current_department: 'IPD Cabin Level 10' }, { id: 4, current_department: 'Emergency' }, { id: 5, current_department: 'Level 9' }];
   eq('an in-charge sees every real spelling of their unit (aliases + Level-N)',
     access.portalStaff(['lvl10', 'IPD Cabin Level 10', 'er', 'Emergency Room'], spellings).map(p => p.id), [1, 2, 3, 4]);
+  console.log('\n== who may build a duty roster in the portal ==');
+  /* The grant that lets a ward in-charge write their own unit's sheet. It is the ONLY
+     way a portal account reaches a write route (they hold no perms map), so each of
+     these is a door: the role, the flag, and the administrator short-circuit. */
+  {
+    const may = access.portalMayEditRoster;
+    ok('a granted in-charge may build one', may({ role: 'incharge', rosterEdit: true }));
+    ok('an in-charge without the grant may not', !may({ role: 'incharge' }));
+    ok('the grant must be a real true, not a truthy value', !may({ role: 'incharge', rosterEdit: 'yes' }));
+    ok('a collector never builds one, granted or not', !may({ role: 'collector', rosterEdit: true }));
+    ok('nor a nurse or PCA', !may({ role: 'nurse', rosterEdit: true }) && !may({ role: 'pca', rosterEdit: true }));
+    ok('a console account is governed by the roster module instead', !may({ role: 'User', rosterEdit: true, perms: { roster: ['view', 'edit'] } }));
+    ok('an administrator is not routed through this at all', !may({ unrestricted: true, role: 'Administrator', rosterEdit: true }));
+    ok('no access at all is not a grant', !may(null) && !may(undefined));
+  }
+
   console.log('\n== no module may hard-code a single portal role ==');
   /* This is the guard for a whole CLASS of bug, not one instance of it.
 

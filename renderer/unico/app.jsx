@@ -5,7 +5,7 @@ function App(){
   const store=window.useDeptStore();
   const staff=window.useStaffStore();
   const depts=store.depts;
-  const [route,setRoute]=useState(()=>{
+  const [route,setRouteRaw]=useState(()=>{
     // HOME IS THE DEFAULT LANDING. Signing in should show a person their own duty,
     // their own week and their own records first — the hospital-wide Overview is a
     // management view, and most accounts cannot even open it. Home is ungated, so
@@ -20,6 +20,33 @@ function App(){
     }
     return init;
   });
+  /* THE PERFORMANCE MODULE NO LONGER HAS A STAFF DIRECTORY OR A RECORD PAGE. Both were
+     a second copy of what Nurse / PCA Management already owns, so they folded into the
+     staff roster and the staff profile. The two retired route names are rewritten HERE,
+     in one place, rather than chased through every caller and every bookmark:
+
+       perfDirectory            -> the Nurse directory (PCA rows are one tab away)
+       perfStaff + emp=<empId>  -> that person's staff profile
+
+     `emp` on the old route is the PERFORMANCE key (emp_id || String(id)), not the staff
+     store's internal id, so it has to be looked up — passing it straight through opened
+     "Staff not found" for everybody who has an employee number, which is almost
+     everybody. */
+  const staffRef=React.useRef(staff);
+  staffRef.current=staff;
+  const fixRoute=React.useCallback((r)=>{
+    if(!r||typeof r!=='object') return r;
+    if(r.view==='perfDirectory') return Object.assign({},r,{view:'nurses'});
+    if(r.view==='perfStaff'){
+      const list=(staffRef.current&&staffRef.current.staff)||[];
+      const rec=list.find(e=>String(e.emp_id||e.id)===String(r.emp))||list.find(e=>String(e.id)===String(r.emp));
+      // No matching record (a stale link to somebody since removed): the roster is a
+      // better landing than a profile page that cannot be drawn.
+      return rec?{view:'staffProfile',emp:rec.id}:{view:(r.role==='PCA'?'pca':'nurses')};
+    }
+    return r;
+  },[]);
+  const setRoute=React.useCallback((r)=>{ setRouteRaw(typeof r==='function'?(prev=>fixRoute(r(prev))):fixRoute(r)); },[fixRoute]);
   const [collapsed,setCollapsed]=useState(()=> typeof window!=='undefined' && window.innerWidth<=820);
   const [layout,setLayout]=useState('executive');
   const [period,setPeriod]=useState({mode:'all'});
@@ -66,6 +93,17 @@ function App(){
     return ()=>{ clearInterval(poll); window.removeEventListener('focus',refresh); document.removeEventListener('visibilitychange',refresh); };
   },[]);
 
+  // A retired perf route that arrived without going through setRoute (a deep link, a
+  // route restored from storage) is rewritten to its staff-module home. BEFORE the
+  // access guard below, deliberately: 'perfStaff' is no longer a known view, so the
+  // guard would read it as belonging to nowhere and bounce the user to their default
+  // workspace instead of to the record they asked for.
+  useEffect(()=>{
+    if(route.view!=='perfStaff' && route.view!=='perfDirectory') return;
+    if(!staff.staff || !staff.staff.length) return;   // wait for the roster, or every id misses
+    setRoute(route);
+  },[route.view,route.emp,staff.staff.length]);
+
   // Per-module access guard: if the current view belongs to a workspace this user was
   // not granted (e.g. reached via a stale route or deep link), bounce to their first
   // allowed workspace. The sidebar already hides forbidden destinations.
@@ -93,7 +131,7 @@ function App(){
     if(s.indexOf('quality')===0||s==='reportsQuality'||s==='gallery') return 'quality';
     if(s.indexOf('dc')===0) return 'datacollection';
     if(s==='reports'||s==='settings') return 'reports';      // Settings renders UsersAndRoles from reports.jsx
-    if(s==='staffProfile'||s==='staffForm') return 'staffprofile';
+    if(s==='staffProfile'||s==='staffForm'||s==='perfStaff') return 'staffprofile';
     if(s.indexOf('perf')===0) return 'performance';
     if(s.indexOf('roster')===0) return 'roster';
     if(s.indexOf('sup')===0) return 'supervisor';
@@ -222,41 +260,42 @@ function App(){
     crumbs=['UNICO','User Management'];
     body=(typeof UserManagement!=='undefined') ? <UserManagement setRoute={setRoute}/> : <SectionTitle icon={I.user} title="User Management"/>;
   } else if(route.view==='nurseHome'){
-    crumbs=['UNICO','Nurse Management','Dashboard'];
+    crumbs=['UNICO','Staff Management','Nurse Dashboard'];
     body=<WorkforceDashboard store={staff} setRoute={setRoute} role="Nurse"/>;
   } else if(route.view==='pcaHome'){
-    crumbs=['UNICO','PCA Management','Dashboard'];
+    crumbs=['UNICO','Staff Management','PCA Dashboard'];
     body=<WorkforceDashboard store={staff} setRoute={setRoute} role="PCA"/>;
   } else if(route.view==='nurses'){
-    crumbs=['UNICO','Nurse Management','Directory'];
+    crumbs=['UNICO','Staff Management','Nurses'];
     body=<ManageStaff store={staff} setRoute={setRoute} role="Nurse"/>;
   } else if(route.view==='pca'){
-    crumbs=['UNICO','PCA Management','Directory'];
+    crumbs=['UNICO','Staff Management','PCA'];
     body=<ManageStaff store={staff} setRoute={setRoute} role="PCA"/>;
   } else if(route.view==='nurseCompliance'){
-    crumbs=['UNICO','Nurse Management','Compliance'];
+    crumbs=['UNICO','Staff Management','Nurse Compliance'];
     body=<StaffCompliance store={staff} setRoute={setRoute} role="Nurse"/>;
   } else if(route.view==='pcaCompliance'){
-    crumbs=['UNICO','PCA Management','Compliance'];
+    crumbs=['UNICO','Staff Management','PCA Compliance'];
     body=<StaffCompliance store={staff} setRoute={setRoute} role="PCA"/>;
   } else if(route.view==='staffPrevious'){
-    crumbs=['UNICO','Staff','Previous Staff'];
+    crumbs=['UNICO','Staff Management','Previous Staff'];
     body=<PreviousStaff store={staff} setRoute={setRoute}/>;
   } else if(route.view==='manpower' && typeof window!=='undefined' && window.ManpowerOverview){
     // Manpower Overview — the whole hospital's staffing on one screen (floor map,
     // week grid, per-unit tiles), ported 1:1 from the approved design canvas.
-    crumbs=['UNICO','Duty Roster','Manpower Overview'];
+    crumbs=['UNICO','Staff Management','Manpower Overview'];
     body=<window.ManpowerOverview setRoute={setRoute}/>;
   } else if(route.view==='rosterFullReview' && typeof window!=='undefined' && window.RosterReviewFull){
     // The cross-unit review: queue, workload tree, hospital diagram and what the store
     // can honestly say about who changed what. Its own route because it is about EVERY
     // unit's sheet, not the one month RosterView is editing.
-    crumbs=['UNICO','Duty Roster','Full Review'];
+    crumbs=['UNICO','Staff Management','Roster Full Review'];
     body=<window.RosterReviewFull setRoute={setRoute}/>;
   } else if(route.view && route.view.indexOf('roster')===0 && typeof RosterView!=='undefined'){
     // Duty Roster module — renders INSIDE the global shell.
-    const RV_TITLE={rosterHome:'All Rosters',rosterGrid:'Monthly Grid',rosterReview:'Coverage & Rules',rosterPrint:'Print Sheet'};
-    crumbs=['UNICO','Duty Roster',RV_TITLE[route.view]||'All Rosters'];
+    const RV_TITLE={rosterHome:'Duty Roster',rosterGrid:'Monthly Grid',rosterReview:'Coverage & Rules',rosterPrint:'Print Sheet'};
+    // The roster is a section of Staff Management now, not a workspace of its own.
+    crumbs=['UNICO','Staff Management',RV_TITLE[route.view]||'Duty Roster'];
     body=<RosterView view={route.view} dept={route.dept} year={route.year} month={route.month} setRoute={setRoute}/>;
   } else if(route.view && route.view.indexOf('med')===0 && typeof MedicineView!=='undefined'){
     // Medicine module — drug index + prescription writer, inside the global shell.
@@ -265,19 +304,24 @@ function App(){
       medTemplates:'Rx Templates',medCatalog:'Drug Catalogue'};
     crumbs=['UNICO','Medicine & Rx',MV_TITLE[route.view]||'Overview'];
     body=<MedicineView view={route.view} id={route.id} rx={route.rx} q={route.q} setRoute={setRoute}/>;
+  } else if(route.view==='perfStaff' || route.view==='perfDirectory'){
+    // fixRoute() above rewrites both on navigation; this catches a route that arrived
+    // from somewhere it does not run (a restored deep link, __UNICO_INITIAL_ROUTE__).
+    crumbs=['UNICO','Staff Management'];
+    body=<div style={{display:'grid',placeItems:'center',height:'50vh',color:'var(--muted)',fontSize:13}}>Opening the staff record…</div>;
   } else if(route.view && route.view.indexOf('perf')===0 && typeof PerformanceView!=='undefined'){
     // Individual Performance module — renders INSIDE the global shell, like QualityView.
-    const PV_TITLE={perfHome:'Dashboard',perfDirectory:'Staff Directory',perfForm:'Appraisal Form',
-      perfPrint:'Printable Form',perfStaff:'Performance Record',
+    const PV_TITLE={perfHome:'Performance',perfForm:'Appraisal Form',perfPrint:'Printable Form',
       perfAchievements:'Achievements',perfIncidents:'Incidents',perfCompare:'Department Comparison',perfAttrition:'Attrition & Exits',perfRisk:'Retention Risk',perfBoard:'Recognition Board'};
-    crumbs=['UNICO','Performance',PV_TITLE[route.view]||'Dashboard'];
+    // Performance is a section of Staff Management now, not a workspace of its own.
+    crumbs=['UNICO','Staff Management',PV_TITLE[route.view]||'Performance'];
     body=<PerformanceView view={route.view} emp={route.emp} cycleId={route.cycleId} setRoute={setRoute}/>;
   } else if(route.view==='staffProfile'){
     const emp=staff.get(route.emp);
-    crumbs=['UNICO','Staff',emp?emp.name:'Profile'];
+    crumbs=['UNICO','Staff Management',emp?emp.name:'Profile'];
     body=<StaffProfile store={staff} empId={route.emp} setRoute={setRoute}/>;
   } else if(route.view==='staffForm'){
-    crumbs=['UNICO','Staff',route.emp?'Edit Staff':`Add ${route.role||'Staff'}`];
+    crumbs=['UNICO','Staff Management',route.emp?'Edit Staff':`Add ${route.role||'Staff'}`];
     body=<StaffForm store={staff} empId={route.emp} setRoute={setRoute} role={route.role} depts={depts}/>;
   }
 
@@ -323,7 +367,15 @@ function App(){
       <Sidebar route={route} setRoute={setRoute} collapsed={collapsed} depts={depts}/>
       <div className="main">
         <TopBar route={route} setRoute={setRoute} onBurger={()=>setCollapsed(c=>!c)} crumbs={crumbs} actions={actions} depts={depts} onFill={(id)=>setRoute({view:'input',dept:id})} period={period} setPeriod={setPeriod}/>
-        <div className="content" key={route.view+(route.dept||'')+(route.emp||'')+layout}>{body}</div>
+        {/* Section tabs for the screens inside a destination (ui.jsx UNICO_VIEW_TABS).
+            OUTSIDE the keyed body on purpose: the key remounts on every view change, and
+            a strip that remounted with it lost its place for a frame on each tab click.
+            It is also above the body rather than inside it because one group's tabs are
+            rendered by three different components. */}
+        <div className="content" key={route.view+(route.dept||'')+(route.emp||'')+layout}>
+          {typeof ViewTabs!=='undefined' && <ViewTabs view={route.view} setRoute={setRoute}/>}
+          {body}
+        </div>
       </div>
     </div>
   );

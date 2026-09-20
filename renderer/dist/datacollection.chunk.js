@@ -9608,28 +9608,82 @@
       }
     }, "Discard changes")));
   }
+  const CP_ROS_STATUS = {
+    draft: ['Draft', '#6c7a8c'],
+    submitted: ['Waiting for approval', '#e08a1e'],
+    approved: ['Published', '#1f9d57']
+  };
+  const cpRosChip = st => {
+    const t = CP_ROS_STATUS[st] || CP_ROS_STATUS.draft;
+    return {
+      fontSize: 10.5,
+      fontWeight: 700,
+      padding: '3px 11px',
+      borderRadius: 12,
+      color: t[1],
+      background: t[1] + '1a',
+      whiteSpace: 'nowrap'
+    };
+  };
   function CollectorRoster() {
+    const R = window.UNICO_ROSTER;
+    const [scope, setScope] = useState(null);
     const [index, setIndex] = useState(null);
     const [pick, setPick] = useState(null);
     const [doc, setDoc] = useState(undefined);
-    const R = window.UNICO_ROSTER;
+    const [staff, setStaff] = useState(null);
+    const [draft, setDraft] = useState(null);
+    const [brush, setBrush] = useState('');
+    const [busy, setBusy] = useState('');
+    const [note, setNote] = useState(null);
     const mine = useMemo(() => dcMyRosterUnitKeys(), []);
+    const can = scope && scope.can || {};
+    const canEdit = !!can.edit;
+    const locked = !!(doc && doc.status === 'approved');
+    const loadIndex = mayEdit => dcApi.get('/api/rosters').then(r => {
+      const list = (r && r.ok ? r.rosters || [] : []).filter(x => x && dcRosterIsMine(x, mine) && (mayEdit || x.status === 'approved')).sort((x, y) => y.year - x.year || y.month - x.month);
+      setIndex(list);
+      return list;
+    }).catch(() => {
+      setIndex([]);
+      return [];
+    });
     useEffect(() => {
-      dcApi.get('/api/rosters').then(r => {
-        const list = (r && r.ok ? r.rosters || [] : []).filter(x => x && x.status === 'approved' && dcRosterIsMine(x, mine)).sort((x, y) => y.year - x.year || y.month - x.month);
-        setIndex(list);
-        if (list.length) setPick({
-          dept: list[0].dept,
-          year: list[0].year,
-          month: list[0].month
+      let dead = false;
+      dcApi.get('/api/rosters/scope').then(r => r && r.ok ? r : {
+        can: {},
+        units: []
+      }).catch(() => ({
+        can: {},
+        units: []
+      })).then(sc => {
+        if (dead) return null;
+        setScope(sc);
+        return loadIndex(!!(sc.can && sc.can.edit)).then(list => {
+          if (dead || !list.length) return;
+          setPick({
+            dept: list[0].dept,
+            year: list[0].year,
+            month: list[0].month
+          });
         });
-      }).catch(() => setIndex([]));
+      });
+      return () => {
+        dead = true;
+      };
     }, []);
     useEffect(() => {
       if (!pick) return;
       setDoc(undefined);
+      setDraft(null);
+      setBrush('');
+      setNote(null);
       dcApi.get('/api/rosters/' + encodeURIComponent(pick.dept) + '/' + pick.year + '/' + pick.month).then(r => setDoc(r && r.ok ? r.roster : null)).catch(() => setDoc(null));
     }, [pick && pick.dept, pick && pick.year, pick && pick.month]);
+    useEffect(() => {
+      if (!canEdit || staff !== null) return;
+      dcApi.get('/api/rosters/staff').then(r => setStaff(r && r.ok ? r.staff || [] : [])).catch(() => setStaff([]));
+    }, [canEdit]);
     const selStyle = {
       padding: '8px 11px',
       borderRadius: 9,
@@ -9639,9 +9693,143 @@
       fontSize: 12.5,
       outline: 'none'
     };
+    const btn = kind => ({
+      border: kind === 'ghost' ? '1px solid rgba(125,145,180,.4)' : 0,
+      background: kind === 'ghost' ? '#fff' : kind === 'go' ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,#3ab5a7,#12776c)',
+      color: kind === 'ghost' ? '#3c4858' : '#fff',
+      padding: '8px 14px',
+      borderRadius: 9,
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit'
+    });
     const monthName = m => R ? R.MONTHS[m] : String(m + 1);
-    const units = index ? Array.from(new Set(index.map(x => x.dept))) : [];
+    const indexUnits = index ? Array.from(new Set(index.map(x => x.dept))) : [];
+    const units = scope && scope.units && scope.units.length ? scope.units : indexUnits;
     const monthsFor = dept => (index || []).filter(x => x.dept === dept);
+    const monthWindow = function () {
+      const now = new Date(),
+        out = [];
+      for (let k = 12; k >= -2; k--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+        out.push({
+          year: d.getFullYear(),
+          month: d.getMonth()
+        });
+      }
+      return out.reverse();
+    }();
+    const statusOfMonth = (dept, year, month) => {
+      const hit = (index || []).find(x => x.dept === dept && x.year === year && x.month === month);
+      return hit ? hit.status : null;
+    };
+    const rowsForUnit = dept => (staff || []).filter(p => cpSquash(p.current_department) === cpSquash(dept));
+    const startEdit = () => {
+      if (!pick) return;
+      const base = doc || {};
+      const grid = JSON.parse(JSON.stringify(base.grid || {}));
+      const names = Object.assign({}, base.names || {});
+      const order = (base.order || []).slice();
+      rowsForUnit(pick.dept).forEach(p => {
+        const key = String(p.emp_id || 'S' + p.id);
+        if (!names[key]) names[key] = p.name;
+        if (order.indexOf(key) < 0) order.push(key);
+      });
+      Object.keys(grid).forEach(k => {
+        if (order.indexOf(k) < 0) order.push(k);
+      });
+      setDraft({
+        grid,
+        order,
+        names,
+        dirty: false
+      });
+      setNote(order.length ? null : {
+        tone: 'bad',
+        text: 'Nobody is posted to this unit on the staff register, so there is no one to roster. Ask your administrator to set the department on their records.'
+      });
+    };
+    const setCell = (emp, d) => {
+      if (!draft || !brush) return;
+      setDraft(s => {
+        const row = Object.assign({}, s.grid[emp] || {});
+        if (row[d] === brush) delete row[d];else row[d] = brush;
+        return Object.assign({}, s, {
+          grid: Object.assign({}, s.grid, {
+            [emp]: row
+          }),
+          dirty: true
+        });
+      });
+    };
+    const save = submit => {
+      if (!draft || !pick) return;
+      setBusy(submit ? 'submit' : 'save');
+      setNote(null);
+      const body = {
+        dept: pick.dept,
+        deptName: doc && doc.deptName || pick.dept,
+        year: pick.year,
+        month: pick.month,
+        grid: draft.grid,
+        order: draft.order,
+        names: draft.names,
+        baseRevision: doc && doc.revision || 0
+      };
+      dcApi.put('/api/rosters', body).then(r => {
+        if (!r || !r.ok) throw new Error(r && r.error || 'The roster could not be saved.');
+        if (!submit) {
+          setDoc(r.roster);
+          setDraft(s => s ? Object.assign({}, s, {
+            dirty: false
+          }) : s);
+          setNote({
+            tone: 'ok',
+            text: 'Draft saved. It stays yours until you send it for approval.'
+          });
+          return null;
+        }
+        return dcApi.post('/api/rosters/' + encodeURIComponent(r.roster.id) + '/status', {
+          status: 'submitted'
+        }).then(x => {
+          if (!x || !x.ok) throw new Error(x && x.error || 'The roster could not be sent for approval.');
+          setDoc(x.roster);
+          setDraft(null);
+          setNote({
+            tone: 'ok',
+            text: 'Sent for approval. An administrator publishes it; you can still edit it until they do.'
+          });
+        });
+      }).catch(e => setNote({
+        tone: 'bad',
+        text: e && e.message || 'Something went wrong.'
+      })).then(() => {
+        setBusy('');
+        return loadIndex(canEdit);
+      });
+    };
+    const palette = function () {
+      if (!R) return [];
+      const out = [];
+      R.SHIFTS.forEach(x => {
+        if (out.indexOf(x.code) < 0) out.push(x.code);
+      });
+      R.OFF_CODES.concat(R.LEAVE_CODES).forEach(c => {
+        if (out.indexOf(c) < 0) out.push(c);
+      });
+      return out;
+    }();
+    const codeColor = code => code && R ? R.BUCKET_COLOR[R.bucketOf(code)] || '#8aa0b8' : '#8aa0b8';
+    const codeLabel = code => R && R.BY_CODE[code] ? R.BY_CODE[code].label : code;
+    const view = draft || doc;
+    const days = view && R ? R.daysIn(pick.year, pick.month) : 31;
+    const dayNums = Array.from({
+      length: days
+    }, (_, i) => i + 1);
+    const people = draft ? draft.order : doc && doc.order && doc.order.length ? doc.order : Object.keys(doc && doc.grid || {});
+    const names = draft ? draft.names : doc && doc.names || {};
+    const gridOf = draft ? draft.grid : doc && doc.grid || {};
     return React.createElement("div", {
       style: {
         maxWidth: 1240,
@@ -9667,11 +9855,41 @@
         fontSize: 11.5,
         color: '#6c7a8c'
       }
-    }, "Published sheets only \u2014 read only. Drafts stay with the roster office until they are approved.")), React.createElement("span", {
+    }, canEdit ? 'Prepare your unit’s roster and send it for approval. An administrator publishes it; an approved sheet is locked.' : 'Published sheets only — read only. Drafts stay with the roster office until they are approved.')), React.createElement("span", {
       style: {
         flex: 1
       }
-    }), index && index.length > 0 && pick && React.createElement(React.Fragment, null, React.createElement("select", {
+    }), canEdit && units.length > 0 ? React.createElement(React.Fragment, null, React.createElement("select", {
+      value: pick && pick.dept || '',
+      onChange: e => setPick({
+        dept: e.target.value,
+        year: (pick || monthWindow[monthWindow.length - 1]).year,
+        month: (pick || monthWindow[monthWindow.length - 1]).month
+      }),
+      style: selStyle
+    }, units.map(u => React.createElement("option", {
+      key: u,
+      value: u
+    }, u))), React.createElement("select", {
+      value: pick ? pick.year + '|' + pick.month : '',
+      onChange: e => {
+        const p = e.target.value.split('|');
+        setPick({
+          dept: pick && pick.dept || units[0],
+          year: +p[0],
+          month: +p[1]
+        });
+      },
+      style: Object.assign({}, selStyle, {
+        fontFamily: "'IBM Plex Mono',monospace"
+      })
+    }, monthWindow.map(x => {
+      const st = pick ? statusOfMonth(pick.dept, x.year, x.month) : null;
+      return React.createElement("option", {
+        key: x.year + '|' + x.month,
+        value: x.year + '|' + x.month
+      }, monthName(x.month) + ' ' + x.year + (st ? ' · ' + (CP_ROS_STATUS[st] || [st])[0].toLowerCase() : ''));
+    }))) : index && index.length > 0 && pick ? React.createElement(React.Fragment, null, React.createElement("select", {
       value: pick.dept,
       onChange: e => {
         const d = e.target.value;
@@ -9683,7 +9901,7 @@
         });
       },
       style: selStyle
-    }, units.map(u => React.createElement("option", {
+    }, indexUnits.map(u => React.createElement("option", {
       key: u,
       value: u
     }, u))), React.createElement("select", {
@@ -9702,13 +9920,22 @@
     }, monthsFor(pick.dept).map(x => React.createElement("option", {
       key: x.year + '|' + x.month,
       value: x.year + '|' + x.month
-    }, monthName(x.month) + ' ' + x.year))))), index === null ? React.createElement("div", {
+    }, monthName(x.month) + ' ' + x.year)))) : null), note && React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: '10px 14px',
+        marginBottom: 14,
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: note.tone === 'ok' ? '#12776c' : '#a92c42',
+        background: note.tone === 'ok' ? 'rgba(58,181,167,.12)' : 'rgba(210,58,82,.1)'
+      })
+    }, note.text), index === null || scope === null ? React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
         padding: 26,
         textAlign: 'center',
         color: '#6c7a8c'
       })
-    }, "Loading\u2026") : index.length === 0 ? React.createElement("div", {
+    }, "Loading\u2026") : !canEdit && index.length === 0 ? React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
         padding: 28,
         textAlign: 'center',
@@ -9725,160 +9952,255 @@
       style: {
         fontSize: 12
       }
-    }, mine.size ? 'Nothing has been approved for your department yet. Its roster appears here the moment it is published.' : 'No department is assigned to your account, so no roster can be shown. Ask an administrator to assign your department.')) : doc === undefined ? React.createElement("div", {
-      style: Object.assign({}, CP_CARD, {
-        padding: 26,
-        textAlign: 'center',
-        color: '#6c7a8c'
-      })
-    }, "Loading the sheet\u2026") : !doc ? React.createElement("div", {
+    }, mine.size ? 'Nothing has been approved for your department yet. Its roster appears here the moment it is published.' : 'No department is assigned to your account, so no roster can be shown. Ask an administrator to assign your department.')) : canEdit && units.length === 0 ? React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
         padding: 28,
         textAlign: 'center',
         color: '#6c7a8c'
       })
-    }, "That sheet is no longer published.") : (() => {
-      const days = R ? R.daysIn(doc.year, doc.month) : 31;
-      const dayNums = Array.from({
-        length: days
-      }, (_, i) => i + 1);
-      const people = doc.order && doc.order.length ? doc.order : Object.keys(doc.grid || {});
-      const names = doc.names || {};
-      return React.createElement("div", {
-        style: Object.assign({}, CP_CARD, {
-          overflow: 'hidden'
-        })
-      }, React.createElement("div", {
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 700,
+        color: '#16202e',
+        marginBottom: 5
+      }
+    }, "No unit assigned"), React.createElement("div", {
+      style: {
+        fontSize: 12
+      }
+    }, "Your account has no unit to roster. Ask an administrator to assign your department.")) : doc === undefined ? React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: 26,
+        textAlign: 'center',
+        color: '#6c7a8c'
+      })
+    }, "Loading the sheet\u2026") : !doc && !draft ? React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: 28,
+        textAlign: 'center',
+        color: '#6c7a8c'
+      })
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 700,
+        color: '#16202e',
+        marginBottom: 5
+      }
+    }, canEdit ? 'Not started yet' : 'That sheet is no longer published.'), canEdit && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        marginBottom: 14
+      }
+    }, "No roster exists for ", pick ? monthName(pick.month) + ' ' + pick.year : 'this month', ". Start it here, then send it for approval."), canEdit && React.createElement("button", {
+      onClick: startEdit,
+      disabled: staff === null,
+      style: Object.assign({}, btn('go'), staff === null ? {
+        opacity: .6,
+        cursor: 'default'
+      } : null)
+    }, staff === null ? 'Loading the unit…' : 'Start this roster')) : React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        overflow: 'hidden'
+      })
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '11px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.18)',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 700,
+        color: '#16202e'
+      }
+    }, doc && (doc.deptName || doc.dept) || pick && pick.dept), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: '#9aa6b4',
+        fontFamily: "'IBM Plex Mono',monospace"
+      }
+    }, pick ? monthName(pick.month) + ' ' + pick.year : ''), React.createElement("span", {
+      style: cpRosChip(doc ? doc.status : 'draft')
+    }, (CP_ROS_STATUS[doc ? doc.status : 'draft'] || CP_ROS_STATUS.draft)[0], doc && doc.revision ? ' · rev ' + doc.revision : ''), doc && doc.approvedBy ? React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c'
+      }
+    }, "Approved by ", doc.approvedBy) : null, React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), canEdit && locked && React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, "Published and locked \u2014 an administrator can reopen it."), canEdit && !locked && !draft && React.createElement("button", {
+      onClick: startEdit,
+      disabled: staff === null,
+      style: btn('go')
+    }, "Edit this roster"), draft && React.createElement(React.Fragment, null, React.createElement("button", {
+      onClick: () => {
+        setDraft(null);
+        setBrush('');
+        setNote(null);
+      },
+      disabled: !!busy,
+      style: btn('ghost')
+    }, "Cancel"), React.createElement("button", {
+      onClick: () => save(false),
+      disabled: !!busy,
+      style: btn('go')
+    }, busy === 'save' ? 'Saving…' : 'Save draft'), can.submit && React.createElement("button", {
+      onClick: () => save(true),
+      disabled: !!busy,
+      style: btn('ok')
+    }, busy === 'submit' ? 'Sending…' : 'Send for approval'))), draft && React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        padding: '10px 14px',
+        borderBottom: '1px solid rgba(125,145,180,.18)',
+        background: 'rgba(240,247,255,.6)'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: '#3c4858'
+      }
+    }, "Pick a code, then tap the days:"), palette.map(c => React.createElement("button", {
+      key: c,
+      onClick: () => setBrush(brush === c ? '' : c),
+      title: codeLabel(c),
+      style: {
+        border: brush === c ? '2px solid #16202e' : '1px solid rgba(125,145,180,.35)',
+        background: brush === c ? codeColor(c) : '#fff',
+        color: brush === c ? '#fff' : '#3c4858',
+        padding: '4px 10px',
+        borderRadius: 8,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: "'IBM Plex Mono',monospace"
+      }
+    }, c)), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c'
+      }
+    }, brush ? 'Tap a day to set ' + brush + ', tap it again to clear.' : 'Nothing selected.', draft.dirty ? ' · unsaved changes' : '')), React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        fontSize: 11.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: {
+        position: 'sticky',
+        left: 0,
+        background: 'rgba(240,247,255,.97)',
+        textAlign: 'left',
+        padding: '8px 12px',
+        minWidth: 180,
+        borderBottom: '1px solid rgba(125,145,180,.25)',
+        fontSize: 10.5,
+        textTransform: 'uppercase',
+        letterSpacing: '.5px',
+        color: '#7d8ea8',
+        zIndex: 1
+      }
+    }, "Staff"), dayNums.map(d => React.createElement("th", {
+      key: d,
+      style: {
+        padding: '6px 3px',
+        minWidth: 30,
+        borderBottom: '1px solid rgba(125,145,180,.25)',
+        fontFamily: "'IBM Plex Mono',monospace",
+        fontSize: 10.5,
+        color: '#7d8ea8'
+      }
+    }, d)))), React.createElement("tbody", null, people.map(emp => React.createElement("tr", {
+      key: emp
+    }, React.createElement("td", {
+      title: 'Emp ID ' + emp,
+      style: {
+        position: 'sticky',
+        left: 0,
+        background: 'rgba(250,252,255,.97)',
+        padding: '5px 12px',
+        borderBottom: '1px solid rgba(125,145,180,.12)',
+        whiteSpace: 'nowrap',
+        fontWeight: 600,
+        color: '#16202e',
+        zIndex: 1
+      }
+    }, names[emp] || emp), dayNums.map(d => {
+      const code = gridOf[emp] && gridOf[emp][d] || '';
+      return React.createElement("td", {
+        key: d,
+        onClick: draft ? () => setCell(emp, d) : null,
         style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '11px 16px',
-          borderBottom: '1px solid rgba(125,145,180,.18)',
-          flexWrap: 'wrap'
+          padding: '3px 2px',
+          textAlign: 'center',
+          borderBottom: '1px solid rgba(125,145,180,.12)',
+          cursor: draft ? brush ? 'crosshair' : 'default' : 'default',
+          background: draft && !code ? 'rgba(125,145,180,.05)' : null
         }
-      }, React.createElement("div", {
+      }, code ? React.createElement("span", {
+        title: codeLabel(code),
         style: {
-          fontSize: 13.5,
+          display: 'inline-block',
+          minWidth: 26,
+          padding: '3px 4px',
+          borderRadius: 7,
+          background: codeColor(code),
+          color: '#fff',
           fontWeight: 700,
-          color: '#16202e'
-        }
-      }, doc.deptName || doc.dept), React.createElement("span", {
-        style: {
-          fontSize: 11.5,
-          color: '#9aa6b4',
+          fontSize: 10,
           fontFamily: "'IBM Plex Mono',monospace"
         }
-      }, monthName(doc.month) + ' ' + doc.year), React.createElement("span", {
-        style: {
-          flex: 1
-        }
-      }), React.createElement("span", {
-        style: cpChipStyle('Approved')
-      }, "Published", doc.revision ? ' · rev ' + doc.revision : ''), doc.approvedBy ? React.createElement("span", {
-        style: {
-          fontSize: 11,
-          color: '#6c7a8c'
-        }
-      }, "Approved by ", doc.approvedBy) : null), React.createElement("div", {
-        style: {
-          overflowX: 'auto'
-        }
-      }, React.createElement("table", {
-        style: {
-          borderCollapse: 'collapse',
-          fontSize: 11.5
-        }
-      }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
-        style: {
-          position: 'sticky',
-          left: 0,
-          background: 'rgba(240,247,255,.97)',
-          textAlign: 'left',
-          padding: '8px 12px',
-          minWidth: 180,
-          borderBottom: '1px solid rgba(125,145,180,.25)',
-          fontSize: 10.5,
-          textTransform: 'uppercase',
-          letterSpacing: '.5px',
-          color: '#7d8ea8',
-          zIndex: 1
-        }
-      }, "Staff"), dayNums.map(d => React.createElement("th", {
-        key: d,
-        style: {
-          padding: '6px 3px',
-          minWidth: 30,
-          borderBottom: '1px solid rgba(125,145,180,.25)',
-          fontFamily: "'IBM Plex Mono',monospace",
-          fontSize: 10.5,
-          color: '#7d8ea8'
-        }
-      }, d)))), React.createElement("tbody", null, people.map(emp => React.createElement("tr", {
-        key: emp
-      }, React.createElement("td", {
-        title: 'Emp ID ' + emp,
-        style: {
-          position: 'sticky',
-          left: 0,
-          background: 'rgba(250,252,255,.97)',
-          padding: '5px 12px',
-          borderBottom: '1px solid rgba(125,145,180,.12)',
-          whiteSpace: 'nowrap',
-          fontWeight: 600,
-          color: '#16202e',
-          zIndex: 1
-        }
-      }, names[emp] || emp), dayNums.map(d => {
-        const code = doc.grid && doc.grid[emp] && doc.grid[emp][d] || '';
-        const col = code && R ? R.BUCKET_COLOR[R.bucketOf(code)] || '#8aa0b8' : null;
-        return React.createElement("td", {
-          key: d,
-          style: {
-            padding: '3px 2px',
-            textAlign: 'center',
-            borderBottom: '1px solid rgba(125,145,180,.12)'
-          }
-        }, code ? React.createElement("span", {
-          title: R && R.BY_CODE[code] ? R.BY_CODE[code].label : code,
-          style: {
-            display: 'inline-block',
-            minWidth: 26,
-            padding: '3px 4px',
-            borderRadius: 7,
-            background: col,
-            color: '#fff',
-            fontWeight: 700,
-            fontSize: 10,
-            fontFamily: "'IBM Plex Mono',monospace"
-          }
-        }, code) : null);
-      })))))), R && React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 14,
-          flexWrap: 'wrap',
-          padding: '10px 14px',
-          borderTop: '1px solid rgba(125,145,180,.18)'
-        }
-      }, R.BUCKETS.map(b => React.createElement("span", {
-        key: b.id,
-        style: {
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          fontSize: 11,
-          color: '#6c7a8c'
-        }
-      }, React.createElement("span", {
-        style: {
-          width: 12,
-          height: 12,
-          borderRadius: 4,
-          background: b.color
-        }
-      }), b.label))));
-    })());
+      }, code) : null);
+    })))))), R && React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 14,
+        flexWrap: 'wrap',
+        padding: '10px 14px',
+        borderTop: '1px solid rgba(125,145,180,.18)'
+      }
+    }, R.BUCKETS.map(b => React.createElement("span", {
+      key: b.id,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 11,
+        color: '#6c7a8c'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 12,
+        height: 12,
+        borderRadius: 4,
+        background: b.color
+      }
+    }), b.label)))));
   }
   function CollectorProfile({
     user,
@@ -12733,7 +13055,7 @@
         fontSize: 11.5,
         color: '#6c7a8c'
       }
-    }, "Read-only \u2014 staff records are maintained in Nurse Management by the CNS.")), React.createElement("span", {
+    }, "Read-only \u2014 staff records are maintained in Staff Management by the CNS.")), React.createElement("span", {
       style: {
         flex: 1
       }
@@ -13154,12 +13476,12 @@
           borderRadius: 9,
           padding: '8px 11px'
         }
-      }, "Not recorded on the staff register yet: ", React.createElement("b", null, gaps.join(', ')), ". Ask the CNS to update this record in Nurse Management.") : React.createElement("div", {
+      }, "Not recorded on the staff register yet: ", React.createElement("b", null, gaps.join(', ')), ". Ask the CNS to update this record in Staff Management.") : React.createElement("div", {
         style: {
           fontSize: 11,
           color: '#9aa6b4'
         }
-      }, "Read-only \u2014 staff records are maintained in Nurse Management by the CNS.");
+      }, "Read-only \u2014 staff records are maintained in Staff Management by the CNS.");
     })())));
   }
   function CpStaffTable({

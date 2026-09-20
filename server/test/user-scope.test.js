@@ -69,6 +69,7 @@ const PORTAL_ROLES = ['collector', 'incharge', 'nurse', 'pca'];
 stub('../access', {
   PORTAL_ROLES, ACCESS_MODULES: [],
   cleanStaffScope: (v) => (['all', 'departments', 'self'].indexOf(v) >= 0 ? v : 'all'),
+  cleanRosterScope: (v) => (['all', 'departments'].indexOf(v) >= 0 ? v : null),
   forRequest: async () => ({ unrestricted: true }),
   invalidate: () => {},
 });
@@ -437,6 +438,43 @@ async function call(route, { params = {}, body = {} } = {}) {
       const c2 = await call('POST /api/users', { body: { username: 'q3', password: 'secret1', role: 'User' } });
       assert.equal(c2.status, 500); assert.equal(c2.body.error, 'Could not create user.');
     } finally { console.error = origErr; } }
+
+  /* 16. The duty-roster assignment: its own grant, stored on the account, never
+     inferred from the staff-register scope and never widened by an unrelated edit. */
+  reset();
+  { let r = await call('POST /api/users', { body: { username: 'ccu.lead', password: 'secret1', name: 'CCU Lead', role: 'User',
+      perms: { roster: ['view', 'edit'] }, staffScope: 'all', rosterScope: 'departments', rosterDepartments: ['ccu', 'micu'] } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    let u = user('ccu.lead');
+    assert.equal(u.rosterScope, 'departments');
+    assert.deepEqual(u.rosterDepartments, ['ccu', 'micu'], 'several units on one account');
+    assert.equal(u.staffScope, 'all', 'the staff-register scope is untouched by the roster grant');
+    assert.deepEqual(r.body.user.rosterDepartments, ['ccu', 'micu'], 'the API reads the assignment back');
+
+    // An edit that does not carry the fields leaves the assignment alone — a password
+    // reset or a name change must never silently widen or clear who rosters what.
+    r = await call('PATCH /api/users/:username', { params: { username: 'ccu.lead' }, body: { name: 'CCU Lead 2' } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(user('ccu.lead').rosterDepartments, ['ccu', 'micu'], 'an unrelated edit keeps the units');
+
+    // Narrowing to one unit, then opening it up.
+    await call('PATCH /api/users/:username', { params: { username: 'ccu.lead' }, body: { rosterScope: 'departments', rosterDepartments: ['ccu'] } });
+    assert.deepEqual(user('ccu.lead').rosterDepartments, ['ccu']);
+    await call('PATCH /api/users/:username', { params: { username: 'ccu.lead' }, body: { rosterScope: 'all', rosterDepartments: [] } });
+    assert.equal(user('ccu.lead').rosterScope, 'all');
+
+    // A NEW account that says nothing about rosters gets 'all' — the module permission
+    // is what decides whether it reaches the roster at all.
+    r = await call('POST /api/users', { body: { username: 'plain', password: 'secret1', name: 'Plain', role: 'User' } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(user('plain').rosterScope, 'all');
+    assert.deepEqual(user('plain').rosterDepartments, []);
+
+    // Administrators hold every unit, whatever the body asks for.
+    colOf('users').docs.push({ username: 'boss', role: 'Administrator', active: true, name: 'Boss' });
+    await call('PATCH /api/users/:username', { params: { username: 'boss' }, body: { rosterScope: 'departments', rosterDepartments: ['ccu'] } });
+    assert.equal(user('boss').rosterScope, 'all', 'an administrator is never narrowed to units');
+    assert.deepEqual(user('boss').rosterDepartments, []); }
 
   console.log('user-scope tests: all passed');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -3957,130 +3957,307 @@
     );
   }
 
-  /* ---- Duty roster, read-only ----------------------------------------------------
-     The collector sees the PUBLISHED sheet for their unit; they never edit it, and the
-     server only ever hands them an approved one.
+  /* ---- Duty roster ----------------------------------------------------------------
+     Two screens in one, and the SERVER decides which:
+       - every portal account sees the published sheet for its own unit, read only;
+       - a ward in-charge an administrator granted `rosterEdit` also builds it here —
+         paint the month, save drafts, hand it in for approval.
 
-     The month picker is driven by the roster INDEX rather than by the department list.
-     That is not a stylistic choice: a roster document is keyed by the department NAME
-     the roster module uses (a staff `current_department` string such as "Emergency" or
-     "CT ICU"), while dcAllDepts() yields statistics slugs ("er", "ctvs"). Building the
-     URL from a slug asks for a document that cannot exist, and every month would read
-     as "not drafted yet" even where an approved sheet is sitting in the database. */
+     Approving is deliberately NOT here. The server refuses any status but 'submitted'
+     from a non-administrator and locks an approved sheet against further saves, so the
+     published roster is always something an administrator signed.
+
+     /api/rosters/scope is the one authority for which screen this is, and for the unit
+     list. The unit a roster is filed under is the free text typed on a staff record, so
+     only the server can say which sheets are ours — the renderer must not re-decide it. */
+  const CP_ROS_STATUS = { draft: ['Draft', '#6c7a8c'], submitted: ['Waiting for approval', '#e08a1e'], approved: ['Published', '#1f9d57'] };
+  const cpRosChip = (st) => {
+    const t = CP_ROS_STATUS[st] || CP_ROS_STATUS.draft;
+    return { fontSize: 10.5, fontWeight: 700, padding: '3px 11px', borderRadius: 12, color: t[1], background: t[1] + '1a', whiteSpace: 'nowrap' };
+  };
   function CollectorRoster() {
-    const [index, setIndex] = useState(null);       // published rosters visible to me
-    const [pick, setPick] = useState(null);         // { dept, year, month }
-    const [doc, setDoc] = useState(undefined);
     const R = window.UNICO_ROSTER;
-
+    const [scope, setScope] = useState(null);        // { units, can } from the server
+    const [index, setIndex] = useState(null);        // the sheets I may open
+    const [pick, setPick] = useState(null);          // { dept, year, month }
+    const [doc, setDoc] = useState(undefined);       // loaded sheet; null = none for this month
+    const [staff, setStaff] = useState(null);        // unit register, to seed a new sheet
+    const [draft, setDraft] = useState(null);        // { grid, order, names, dirty } while editing
+    const [brush, setBrush] = useState('');
+    const [busy, setBusy] = useState('');
+    const [note, setNote] = useState(null);          // { tone, text }
     const mine = useMemo(() => dcMyRosterUnitKeys(), []);
+    const can = (scope && scope.can) || {};
+    const canEdit = !!can.edit;
+    const locked = !!(doc && doc.status === 'approved');
+
+    const loadIndex = (mayEdit) => dcApi.get('/api/rosters')
+      .then((r) => {
+        const list = (r && r.ok ? (r.rosters || []) : [])
+          .filter((x) => x && dcRosterIsMine(x, mine) && (mayEdit || x.status === 'approved'))
+          .sort((x, y) => (y.year - x.year) || (y.month - x.month));
+        setIndex(list);
+        return list;
+      })
+      .catch(() => { setIndex([]); return []; });
+
     useEffect(() => {
-      dcApi.get('/api/rosters')
-        .then((r) => {
-          const list = (r && r.ok ? (r.rosters || []) : [])
-            .filter((x) => x && x.status === 'approved' && dcRosterIsMine(x, mine))
-            .sort((x, y) => (y.year - x.year) || (y.month - x.month));
-          setIndex(list);
-          if (list.length) setPick({ dept: list[0].dept, year: list[0].year, month: list[0].month });
-        })
-        .catch(() => setIndex([]));
+      let dead = false;
+      dcApi.get('/api/rosters/scope')
+        .then((r) => (r && r.ok ? r : { can: {}, units: [] }))
+        .catch(() => ({ can: {}, units: [] }))
+        .then((sc) => {
+          if (dead) return null;
+          setScope(sc);
+          return loadIndex(!!(sc.can && sc.can.edit)).then((list) => {
+            if (dead || !list.length) return;
+            setPick({ dept: list[0].dept, year: list[0].year, month: list[0].month });
+          });
+        });
+      return () => { dead = true; };
     }, []);
 
     useEffect(() => {
       if (!pick) return;
-      setDoc(undefined);
+      setDoc(undefined); setDraft(null); setBrush(''); setNote(null);
       dcApi.get('/api/rosters/' + encodeURIComponent(pick.dept) + '/' + pick.year + '/' + pick.month)
         .then((r) => setDoc(r && r.ok ? r.roster : null)).catch(() => setDoc(null));
     }, [pick && pick.dept, pick && pick.year, pick && pick.month]);
 
+    // The people who go on a NEW sheet. /api/rosters/staff is the roster module's own
+    // register read, so it works for an in-charge who holds no 'staff' permission.
+    useEffect(() => {
+      if (!canEdit || staff !== null) return;
+      dcApi.get('/api/rosters/staff').then((r) => setStaff(r && r.ok ? (r.staff || []) : [])).catch(() => setStaff([]));
+    }, [canEdit]);
+
     const selStyle = { padding: '8px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12.5, outline: 'none' };
+    const btn = (kind) => ({
+      border: kind === 'ghost' ? '1px solid rgba(125,145,180,.4)' : 0,
+      background: kind === 'ghost' ? '#fff' : (kind === 'go' ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,#3ab5a7,#12776c)'),
+      color: kind === 'ghost' ? '#3c4858' : '#fff',
+      padding: '8px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+    });
     const monthName = (m) => (R ? R.MONTHS[m] : String(m + 1));
-    const units = index ? Array.from(new Set(index.map((x) => x.dept))) : [];
+    const indexUnits = index ? Array.from(new Set(index.map((x) => x.dept))) : [];
+    const units = (scope && scope.units && scope.units.length) ? scope.units : indexUnits;
     const monthsFor = (dept) => (index || []).filter((x) => x.dept === dept);
+    // An editor picks any month; a reader only the months that were actually published.
+    const monthWindow = (function () {
+      const now = new Date(), out = [];
+      for (let k = 12; k >= -2; k--) { const d = new Date(now.getFullYear(), now.getMonth() - k, 1); out.push({ year: d.getFullYear(), month: d.getMonth() }); }
+      return out.reverse();
+    }());
+    const statusOfMonth = (dept, year, month) => {
+      const hit = (index || []).find((x) => x.dept === dept && x.year === year && x.month === month);
+      return hit ? hit.status : null;
+    };
+    const rowsForUnit = (dept) => (staff || []).filter((p) => cpSquash(p.current_department) === cpSquash(dept));
+
+    const startEdit = () => {
+      if (!pick) return;
+      const base = doc || {};
+      const grid = JSON.parse(JSON.stringify(base.grid || {}));
+      const names = Object.assign({}, base.names || {});
+      const order = (base.order || []).slice();
+      // Everyone posted to the unit today, plus anyone already on the sheet who has since
+      // moved — dropping them would erase cells they are already rostered for.
+      rowsForUnit(pick.dept).forEach((p) => {
+        const key = String(p.emp_id || ('S' + p.id));
+        if (!names[key]) names[key] = p.name;
+        if (order.indexOf(key) < 0) order.push(key);
+      });
+      Object.keys(grid).forEach((k) => { if (order.indexOf(k) < 0) order.push(k); });
+      setDraft({ grid, order, names, dirty: false });
+      setNote(order.length ? null : { tone: 'bad', text: 'Nobody is posted to this unit on the staff register, so there is no one to roster. Ask your administrator to set the department on their records.' });
+    };
+
+    const setCell = (emp, d) => {
+      if (!draft || !brush) return;
+      setDraft((s) => {
+        const row = Object.assign({}, s.grid[emp] || {});
+        if (row[d] === brush) delete row[d]; else row[d] = brush;
+        return Object.assign({}, s, { grid: Object.assign({}, s.grid, { [emp]: row }), dirty: true });
+      });
+    };
+
+    const save = (submit) => {
+      if (!draft || !pick) return;
+      setBusy(submit ? 'submit' : 'save'); setNote(null);
+      const body = {
+        dept: pick.dept, deptName: (doc && doc.deptName) || pick.dept,
+        year: pick.year, month: pick.month,
+        grid: draft.grid, order: draft.order, names: draft.names,
+        // The lost-update guard: the server refuses the save if anyone else stored a
+        // revision since this month was opened, rather than overwriting their work.
+        baseRevision: (doc && doc.revision) || 0,
+      };
+      dcApi.put('/api/rosters', body)
+        .then((r) => {
+          if (!r || !r.ok) throw new Error((r && r.error) || 'The roster could not be saved.');
+          if (!submit) {
+            setDoc(r.roster);
+            setDraft((s) => (s ? Object.assign({}, s, { dirty: false }) : s));
+            setNote({ tone: 'ok', text: 'Draft saved. It stays yours until you send it for approval.' });
+            return null;
+          }
+          return dcApi.post('/api/rosters/' + encodeURIComponent(r.roster.id) + '/status', { status: 'submitted' }).then((x) => {
+            if (!x || !x.ok) throw new Error((x && x.error) || 'The roster could not be sent for approval.');
+            setDoc(x.roster); setDraft(null);
+            setNote({ tone: 'ok', text: 'Sent for approval. An administrator publishes it; you can still edit it until they do.' });
+          });
+        })
+        .catch((e) => setNote({ tone: 'bad', text: (e && e.message) || 'Something went wrong.' }))
+        .then(() => { setBusy(''); return loadIndex(canEdit); });
+    };
+
+    const palette = (function () {
+      if (!R) return [];
+      const out = [];
+      R.SHIFTS.forEach((x) => { if (out.indexOf(x.code) < 0) out.push(x.code); });
+      R.OFF_CODES.concat(R.LEAVE_CODES).forEach((c) => { if (out.indexOf(c) < 0) out.push(c); });
+      return out;
+    }());
+    const codeColor = (code) => (code && R ? (R.BUCKET_COLOR[R.bucketOf(code)] || '#8aa0b8') : '#8aa0b8');
+    const codeLabel = (code) => (R && R.BY_CODE[code] ? R.BY_CODE[code].label : code);
+
+    const view = draft || doc;
+    const days = view && R ? R.daysIn(pick.year, pick.month) : 31;
+    const dayNums = Array.from({ length: days }, (_, i) => i + 1);
+    const people = draft ? draft.order : ((doc && doc.order && doc.order.length) ? doc.order : Object.keys((doc && doc.grid) || {}));
+    const names = draft ? draft.names : ((doc && doc.names) || {});
+    const gridOf = draft ? draft.grid : ((doc && doc.grid) || {});
 
     return (
       <div style={{ maxWidth: 1240, margin: '0 auto' }}>
         <div style={Object.assign({}, CP_CARD, { padding: '13px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 })}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e' }}>Duty roster</div>
-            <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>Published sheets only — read only. Drafts stay with the roster office until they are approved.</div>
+            <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>
+              {canEdit
+                ? 'Prepare your unit’s roster and send it for approval. An administrator publishes it; an approved sheet is locked.'
+                : 'Published sheets only — read only. Drafts stay with the roster office until they are approved.'}
+            </div>
           </div>
           <span style={{ flex: 1 }} />
-          {index && index.length > 0 && pick && (
+          {canEdit && units.length > 0 ? (
+            <React.Fragment>
+              <select value={(pick && pick.dept) || ''} onChange={(e) => setPick({ dept: e.target.value, year: (pick || monthWindow[monthWindow.length - 1]).year, month: (pick || monthWindow[monthWindow.length - 1]).month })} style={selStyle}>
+                {units.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <select value={pick ? pick.year + '|' + pick.month : ''} onChange={(e) => { const p = e.target.value.split('|'); setPick({ dept: (pick && pick.dept) || units[0], year: +p[0], month: +p[1] }); }} style={Object.assign({}, selStyle, { fontFamily: "'IBM Plex Mono',monospace" })}>
+                {monthWindow.map((x) => {
+                  const st = pick ? statusOfMonth(pick.dept, x.year, x.month) : null;
+                  return <option key={x.year + '|' + x.month} value={x.year + '|' + x.month}>{monthName(x.month) + ' ' + x.year + (st ? ' · ' + (CP_ROS_STATUS[st] || [st])[0].toLowerCase() : '')}</option>;
+                })}
+              </select>
+            </React.Fragment>
+          ) : index && index.length > 0 && pick ? (
             <React.Fragment>
               <select value={pick.dept} onChange={(e) => { const d = e.target.value; const first = monthsFor(d)[0]; setPick({ dept: d, year: first.year, month: first.month }); }} style={selStyle}>
-                {units.map((u) => <option key={u} value={u}>{u}</option>)}
+                {indexUnits.map((u) => <option key={u} value={u}>{u}</option>)}
               </select>
               <select value={pick.year + '|' + pick.month} onChange={(e) => { const p = e.target.value.split('|'); setPick({ dept: pick.dept, year: +p[0], month: +p[1] }); }} style={Object.assign({}, selStyle, { fontFamily: "'IBM Plex Mono',monospace" })}>
                 {monthsFor(pick.dept).map((x) => <option key={x.year + '|' + x.month} value={x.year + '|' + x.month}>{monthName(x.month) + ' ' + x.year}</option>)}
               </select>
             </React.Fragment>
-          )}
+          ) : null}
         </div>
-        {index === null ? <div style={Object.assign({}, CP_CARD, { padding: 26, textAlign: 'center', color: '#6c7a8c' })}>Loading…</div>
-          : index.length === 0 ? (
+
+        {note && (
+          <div style={Object.assign({}, CP_CARD, { padding: '10px 14px', marginBottom: 14, fontSize: 12.5, fontWeight: 600, color: note.tone === 'ok' ? '#12776c' : '#a92c42', background: note.tone === 'ok' ? 'rgba(58,181,167,.12)' : 'rgba(210,58,82,.1)' })}>{note.text}</div>
+        )}
+
+        {index === null || scope === null ? <div style={Object.assign({}, CP_CARD, { padding: 26, textAlign: 'center', color: '#6c7a8c' })}>Loading…</div>
+          : !canEdit && index.length === 0 ? (
             <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>
               <div style={{ fontSize: 13.5, fontWeight: 700, color: '#16202e', marginBottom: 5 }}>No published roster yet</div>
               <div style={{ fontSize: 12 }}>{mine.size ? 'Nothing has been approved for your department yet. Its roster appears here the moment it is published.' : 'No department is assigned to your account, so no roster can be shown. Ask an administrator to assign your department.'}</div>
             </div>
+          ) : canEdit && units.length === 0 ? (
+            <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: '#16202e', marginBottom: 5 }}>No unit assigned</div>
+              <div style={{ fontSize: 12 }}>Your account has no unit to roster. Ask an administrator to assign your department.</div>
+            </div>
           ) : doc === undefined ? <div style={Object.assign({}, CP_CARD, { padding: 26, textAlign: 'center', color: '#6c7a8c' })}>Loading the sheet…</div>
-            : !doc ? <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>That sheet is no longer published.</div>
-              : (() => {
-                const days = R ? R.daysIn(doc.year, doc.month) : 31;
-                const dayNums = Array.from({ length: days }, (_, i) => i + 1);
-                const people = (doc.order && doc.order.length ? doc.order : Object.keys(doc.grid || {}));
-                const names = doc.names || {};
-                return (
-                  <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px', borderBottom: '1px solid rgba(125,145,180,.18)', flexWrap: 'wrap' }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 700, color: '#16202e' }}>{doc.deptName || doc.dept}</div>
-                      <span style={{ fontSize: 11.5, color: '#9aa6b4', fontFamily: "'IBM Plex Mono',monospace" }}>{monthName(doc.month) + ' ' + doc.year}</span>
-                      <span style={{ flex: 1 }} />
-                      <span style={cpChipStyle('Approved')}>Published{doc.revision ? ' · rev ' + doc.revision : ''}</span>
-                      {doc.approvedBy ? <span style={{ fontSize: 11, color: '#6c7a8c' }}>Approved by {doc.approvedBy}</span> : null}
-                    </div>
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ borderCollapse: 'collapse', fontSize: 11.5 }}>
-                        <thead>
-                          <tr>
-                            <th style={{ position: 'sticky', left: 0, background: 'rgba(240,247,255,.97)', textAlign: 'left', padding: '8px 12px', minWidth: 180, borderBottom: '1px solid rgba(125,145,180,.25)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.5px', color: '#7d8ea8', zIndex: 1 }}>Staff</th>
-                            {dayNums.map((d) => (
-                              <th key={d} style={{ padding: '6px 3px', minWidth: 30, borderBottom: '1px solid rgba(125,145,180,.25)', fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5, color: '#7d8ea8' }}>{d}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {people.map((emp) => (
-                            <tr key={emp}>
-                              <td title={'Emp ID ' + emp} style={{ position: 'sticky', left: 0, background: 'rgba(250,252,255,.97)', padding: '5px 12px', borderBottom: '1px solid rgba(125,145,180,.12)', whiteSpace: 'nowrap', fontWeight: 600, color: '#16202e', zIndex: 1 }}>
-                                {names[emp] || emp}
-                              </td>
-                              {dayNums.map((d) => {
-                                const code = (doc.grid && doc.grid[emp] && doc.grid[emp][d]) || '';
-                                const col = code && R ? (R.BUCKET_COLOR[R.bucketOf(code)] || '#8aa0b8') : null;
-                                return (
-                                  <td key={d} style={{ padding: '3px 2px', textAlign: 'center', borderBottom: '1px solid rgba(125,145,180,.12)' }}>
-                                    {code ? <span title={(R && R.BY_CODE[code] ? R.BY_CODE[code].label : code)} style={{ display: 'inline-block', minWidth: 26, padding: '3px 4px', borderRadius: 7, background: col, color: '#fff', fontWeight: 700, fontSize: 10, fontFamily: "'IBM Plex Mono',monospace" }}>{code}</span> : null}
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    {R && (
-                      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', padding: '10px 14px', borderTop: '1px solid rgba(125,145,180,.18)' }}>
-                        {R.BUCKETS.map((b) => (
-                          <span key={b.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#6c7a8c' }}>
-                            <span style={{ width: 12, height: 12, borderRadius: 4, background: b.color }} />{b.label}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+            : !doc && !draft ? (
+              <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: '#16202e', marginBottom: 5 }}>{canEdit ? 'Not started yet' : 'That sheet is no longer published.'}</div>
+                {canEdit && <div style={{ fontSize: 12, marginBottom: 14 }}>No roster exists for {pick ? monthName(pick.month) + ' ' + pick.year : 'this month'}. Start it here, then send it for approval.</div>}
+                {canEdit && <button onClick={startEdit} disabled={staff === null} style={Object.assign({}, btn('go'), staff === null ? { opacity: .6, cursor: 'default' } : null)}>{staff === null ? 'Loading the unit…' : 'Start this roster'}</button>}
+              </div>
+            ) : (
+              <div style={Object.assign({}, CP_CARD, { overflow: 'hidden' })}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px', borderBottom: '1px solid rgba(125,145,180,.18)', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: '#16202e' }}>{(doc && (doc.deptName || doc.dept)) || (pick && pick.dept)}</div>
+                  <span style={{ fontSize: 11.5, color: '#9aa6b4', fontFamily: "'IBM Plex Mono',monospace" }}>{pick ? monthName(pick.month) + ' ' + pick.year : ''}</span>
+                  <span style={cpRosChip(doc ? doc.status : 'draft')}>{(CP_ROS_STATUS[doc ? doc.status : 'draft'] || CP_ROS_STATUS.draft)[0]}{doc && doc.revision ? ' · rev ' + doc.revision : ''}</span>
+                  {doc && doc.approvedBy ? <span style={{ fontSize: 11, color: '#6c7a8c' }}>Approved by {doc.approvedBy}</span> : null}
+                  <span style={{ flex: 1 }} />
+                  {canEdit && locked && <span style={{ fontSize: 11.5, color: '#6c7a8c' }}>Published and locked — an administrator can reopen it.</span>}
+                  {canEdit && !locked && !draft && <button onClick={startEdit} disabled={staff === null} style={btn('go')}>Edit this roster</button>}
+                  {draft && (
+                    <React.Fragment>
+                      <button onClick={() => { setDraft(null); setBrush(''); setNote(null); }} disabled={!!busy} style={btn('ghost')}>Cancel</button>
+                      <button onClick={() => save(false)} disabled={!!busy} style={btn('go')}>{busy === 'save' ? 'Saving…' : 'Save draft'}</button>
+                      {can.submit && <button onClick={() => save(true)} disabled={!!busy} style={btn('ok')}>{busy === 'submit' ? 'Sending…' : 'Send for approval'}</button>}
+                    </React.Fragment>
+                  )}
+                </div>
+
+                {draft && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid rgba(125,145,180,.18)', background: 'rgba(240,247,255,.6)' }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: '#3c4858' }}>Pick a code, then tap the days:</span>
+                    {palette.map((c) => (
+                      <button key={c} onClick={() => setBrush(brush === c ? '' : c)} title={codeLabel(c)}
+                        style={{ border: brush === c ? '2px solid #16202e' : '1px solid rgba(125,145,180,.35)', background: brush === c ? codeColor(c) : '#fff', color: brush === c ? '#fff' : '#3c4858', padding: '4px 10px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'IBM Plex Mono',monospace" }}>{c}</button>
+                    ))}
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 11, color: '#6c7a8c' }}>{brush ? 'Tap a day to set ' + brush + ', tap it again to clear.' : 'Nothing selected.'}{draft.dirty ? ' · unsaved changes' : ''}</span>
                   </div>
-                );
-              })()}
+                )}
+
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ borderCollapse: 'collapse', fontSize: 11.5 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ position: 'sticky', left: 0, background: 'rgba(240,247,255,.97)', textAlign: 'left', padding: '8px 12px', minWidth: 180, borderBottom: '1px solid rgba(125,145,180,.25)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.5px', color: '#7d8ea8', zIndex: 1 }}>Staff</th>
+                        {dayNums.map((d) => (
+                          <th key={d} style={{ padding: '6px 3px', minWidth: 30, borderBottom: '1px solid rgba(125,145,180,.25)', fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5, color: '#7d8ea8' }}>{d}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {people.map((emp) => (
+                        <tr key={emp}>
+                          <td title={'Emp ID ' + emp} style={{ position: 'sticky', left: 0, background: 'rgba(250,252,255,.97)', padding: '5px 12px', borderBottom: '1px solid rgba(125,145,180,.12)', whiteSpace: 'nowrap', fontWeight: 600, color: '#16202e', zIndex: 1 }}>
+                            {names[emp] || emp}
+                          </td>
+                          {dayNums.map((d) => {
+                            const code = (gridOf[emp] && gridOf[emp][d]) || '';
+                            return (
+                              <td key={d} onClick={draft ? () => setCell(emp, d) : null}
+                                style={{ padding: '3px 2px', textAlign: 'center', borderBottom: '1px solid rgba(125,145,180,.12)', cursor: draft ? (brush ? 'crosshair' : 'default') : 'default', background: draft && !code ? 'rgba(125,145,180,.05)' : null }}>
+                                {code ? <span title={codeLabel(code)} style={{ display: 'inline-block', minWidth: 26, padding: '3px 4px', borderRadius: 7, background: codeColor(code), color: '#fff', fontWeight: 700, fontSize: 10, fontFamily: "'IBM Plex Mono',monospace" }}>{code}</span> : null}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {R && (
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', padding: '10px 14px', borderTop: '1px solid rgba(125,145,180,.18)' }}>
+                    {R.BUCKETS.map((b) => (
+                      <span key={b.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#6c7a8c' }}>
+                        <span style={{ width: 12, height: 12, borderRadius: 4, background: b.color }} />{b.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
       </div>
     );
   }
@@ -5045,7 +5222,7 @@
      and personal notes are withheld, so there is deliberately no Phone column here
      even though the paper form has one.
 
-     Read-only on purpose: staff records are maintained in Nurse Management by the CNS.
+     Read-only on purpose: staff records are maintained in Staff Management by the CNS.
 
      "Hep-B complete" is tested for EXACTLY "Completed". The register also contains
      "Not Completed", which a loose /complete/i match would score as compliant -- the
@@ -5101,7 +5278,7 @@
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e' }}>My unit&#39;s staff</div>
-              <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>Read-only — staff records are maintained in Nurse Management by the CNS.</div>
+              <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>Read-only — staff records are maintained in Staff Management by the CNS.</div>
             </div>
             <span style={{ flex: 1 }} />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, ID, designation…"
@@ -5229,8 +5406,8 @@
                 .filter((g) => !g[1]).map((g) => g[0]);
               return gaps.length
                 ? <div style={{ fontSize: 11.5, color: '#8a5a00', background: '#fff8e9', border: '1px solid #f1d49a', borderRadius: 9, padding: '8px 11px' }}>
-                  Not recorded on the staff register yet: <b>{gaps.join(', ')}</b>. Ask the CNS to update this record in Nurse Management.</div>
-                : <div style={{ fontSize: 11, color: '#9aa6b4' }}>Read-only — staff records are maintained in Nurse Management by the CNS.</div>;
+                  Not recorded on the staff register yet: <b>{gaps.join(', ')}</b>. Ask the CNS to update this record in Staff Management.</div>
+                : <div style={{ fontSize: 11, color: '#9aa6b4' }}>Read-only — staff records are maintained in Staff Management by the CNS.</div>;
             })()}
           </div>
         </div>
@@ -5303,7 +5480,7 @@
      is the ward's own history — including what came back and why. */
   const CP_REQ_STATUS = { pending: 'Pending', changes: 'Changes requested', approved: 'Approved', rejected: 'Rejected' };
   /* OFFICIAL blank staff registration form (A4 portrait, flows onto a 2nd sheet). Same sections and
-     option lists as Nurse Management → Add new Nurse / PCA (window.STAFF), plus admin-defined
+     option lists as Staff Management → Add new Nurse / PCA (window.STAFF), plus admin-defined
      custom staff fields, so what is filled in by hand maps 1:1 onto the register. Printed through
      #pdf-root + body.pdf-export-mode like every other export. */
   function UnicoStaffRegForm({ role, onDone }) {

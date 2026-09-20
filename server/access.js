@@ -40,7 +40,26 @@ const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'r
 // granted actions (e.g. ['view','delete'] = delete without add); both are supported,
 // exactly as unicoCan() does in the renderer, so the two gates never disagree.
 const PERM_RANK = { none: 0, view: 1, edit: 2, add: 3, delete: 4 };
-const ACTIONS = ['view', 'edit', 'add', 'delete'];
+/* 'print' IS NOT ON THE LADDER. view<edit<add<delete is an escalation of how much harm
+   you can do to the record; printing is a different axis entirely — it takes the record
+   OUT of the system, onto paper that leaves the building. Somebody may be trusted to
+   correct a phone number and not to walk out with an appraisal file, and the reverse is
+   just as common. So it is an independent action, granted on its own, and a legacy
+   escalating LEVEL STRING never implies it: no level ever meant "may print", so reading
+   one as though it did would hand out a permission nobody was given.
+
+   ⚠️ THAT IS A SILENT CAPABILITY REMOVAL for one shape of account, and the diff that
+   introduced it reads as purely additive. An account whose perms[mid] is the STRING
+   'edit' / 'add' / 'delete' passed a print check before this existed and fails it now.
+   Measured against the live register when it shipped (2026-09-19) that was nobody:
+   administrators are unrestricted, portal roles are refused by can() anyway, and no
+   remaining account held staff or perf at edit or above. The exposure is future-facing —
+   an account CREATED LATER, or RESTORED FROM A BACKUP taken before the action existed,
+   can arrive carrying a legacy level string and will have no Print button with nothing
+   on screen to explain why. The fix in that case is to open the account in Users & Roles
+   and tick Print; do NOT "repair" it by making a level imply print, which would hand
+   printing to every legacy account at once. */
+const ACTIONS = ['view', 'edit', 'add', 'delete', 'print'];
 
 // Which module owns each key of the shared app-state blob (the localStorage mirror).
 // A key that is not listed is DENIED to restricted users and preserved untouched on
@@ -102,12 +121,33 @@ function cleanStaffScope(v) {
   return STAFF_SCOPES.indexOf(s) >= 0 ? s : 'all';
 }
 
+/* ----------------------------------------------------------- roster scope --- */
+
+// Which units' duty rosters one account may open, and write to once the `roster`
+// module permission lets it write at all.
+//
+// Deliberately its OWN assignment rather than a reuse of staffScope. "Run the duty
+// roster for MICU and CCU" and "see MICU and CCU personnel files" are different
+// grants: tying them together meant a roster could only be scoped by ALSO narrowing
+// the staff register, and every account left on the default staffScope 'all' — which
+// is most of them — silently held every unit's roster.
+//   all         — every unit
+//   departments — only the units listed in rosterDepartments
+// null (the field absent) = NOT SET: the account predates this field, so it keeps the
+// behaviour it had before — see rosterDeptNames(). Nothing an existing account could
+// reach yesterday disappears because this shipped.
+const ROSTER_SCOPES = ['all', 'departments'];
+function cleanRosterScope(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  return ROSTER_SCOPES.indexOf(s) >= 0 ? s : null;
+}
+
 /* ----------------------------------------------------------------- access --- */
 
 // Resolved authority for one request. `unrestricted` covers open local-PC mode
 // (REQUIRE_AUTH=false) and the Administrator role — both may do anything.
 function unrestricted(user) {
-  return { unrestricted: true, username: (user && user.sub) || null, role: (user && user.role) || null, staffScope: 'all' };
+  return { unrestricted: true, username: (user && user.sub) || null, role: (user && user.role) || null, staffScope: 'all', rosterScope: 'all', rosterDepartments: [], rosterEdit: true };
 }
 
 // Permissions come from the DATABASE, never from the JWT. The token carries only
@@ -180,7 +220,7 @@ async function forRequest(req) {
   // out here would bounce them to a /login that cannot reach the database either, so a
   // brief outage became a lockout. An empty perms map is the safe reading of "unknown".
   if (u === DB_UNREACHABLE) {
-    return { unrestricted: false, degraded: true, username: claims.sub, name: claims.name, role: 'User', perms: {}, departments: [], qualityAreas: [], staffScope: 'self', staffId: null, staffEmpId: '' };
+    return { unrestricted: false, degraded: true, username: claims.sub, name: claims.name, role: 'User', perms: {}, departments: [], qualityAreas: [], staffScope: 'self', staffId: null, staffEmpId: '', rosterScope: 'departments', rosterDepartments: [], rosterEdit: false };
   }
   if (!u || u.active === false) return null;              // deactivated -> session dies now
   // Session revocation: bumping sessionEpoch on the user doc invalidates every token
@@ -203,6 +243,14 @@ async function forRequest(req) {
     staffScope: cleanStaffScope(u.staffScope),
     staffId: (u.staffId === 0 || u.staffId) ? u.staffId : null,
     staffEmpId: u.staffEmpId ? String(u.staffEmpId).trim() : '',
+    // Duty-roster assignment, independent of the staff-register scope above.
+    // null = never assigned, which rosterDeptNames() reads as "keep the old rule".
+    rosterScope: cleanRosterScope(u.rosterScope),
+    rosterDepartments: Array.isArray(u.rosterDepartments) ? u.rosterDepartments : [],
+    // May a WARD IN-CHARGE build their own unit's roster in the portal? Off unless an
+    // administrator grants it, and meaningless for every other role: a console account
+    // is governed by the `roster` module permission, not by this flag.
+    rosterEdit: u.rosterEdit === true,
   };
 }
 
@@ -212,6 +260,20 @@ async function forRequest(req) {
    with a ward to run -- same data scoping, more of the ward's own screens. */
 const PORTAL_ROLES = ['collector', 'incharge', 'nurse', 'pca'];
 function isPortal(access) { return !!access && PORTAL_ROLES.indexOf(access.role) >= 0; }
+
+/* May this PORTAL account build a duty roster for its own unit?
+
+   A portal account holds no perms map -- can() denies it every module by design -- so
+   without this it could never write a roster at all, which is why roster editing has
+   lived only in the nurse app. The grant is deliberately narrow:
+     - the in-charge role only: a collector, nurse or PCA never edits a sheet;
+     - `rosterEdit` explicitly granted by an administrator, never a role default;
+     - and the unit scoping (rosterDeptNames) still applies on top, so this says WHETHER
+       they may edit, never WHICH units.
+   Approval is NOT included: publishing the sheet stays with an administrator. */
+function portalMayEditRoster(access) {
+  return !!access && !access.unrestricted && access.role === 'incharge' && access.rosterEdit === true;
+}
 
 /* The unit's own staff, for a portal account.
 
@@ -294,10 +356,13 @@ function can(access, mid, action) {
     if (act === 'view') return val.length > 0; // any granted action implies "may open it"
     return val.indexOf(act) >= 0;
   }
+  // Legacy level string: printing was never one of its rungs, so it is not granted.
+  if (act === 'print') return false;
   return (PERM_RANK[val || 'none'] || 0) >= (PERM_RANK[act] || PERM_RANK.view);
 }
 // May they change anything at all in this module?
 function canWrite(access, mid) {
+  // Printing is not writing: it changes nothing in the record.
   return can(access, mid, 'edit') || can(access, mid, 'add') || can(access, mid, 'delete');
 }
 
@@ -471,6 +536,42 @@ async function scopedDeptNames(access, opts) {
   return keys;
 }
 
+/* The units whose duty rosters this access may open, as comparison keys.
+   `null` means EVERY unit — deliberately distinct from an empty Set, which means the
+   account is scoped to departments and has been assigned none (so: no rosters at all).
+
+   The three readings of rosterScope:
+     'all'          — every unit.
+     'departments'  — exactly rosterDepartments, and nothing derived from anywhere
+                      else. Quality areas do NOT unlock a roster: a hospital-wide
+                      infection-control role holds every area, which used to hand it
+                      every ward's roster.
+     null (not set) — the account predates the field, so it keeps the rule that was in
+                      force before: a portal account is held to its own ward, a console
+                      account narrowed to departments for the staff register is held to
+                      the same units, and anything else sees every roster. */
+async function rosterDeptNames(access) {
+  if (!access || access.unrestricted) return null;
+  const scope = access.rosterScope;
+  if (scope === 'all') return null;
+  if (scope === 'departments') {
+    return scopedDeptNames({ departments: access.rosterDepartments || [] }, { departmentsOnly: true });
+  }
+  if (isPortal(access) || (access.staffScope || 'all') === 'departments') {
+    return scopedDeptNames(access, { departmentsOnly: true });
+  }
+  return null;
+}
+
+// Is one roster's department string inside `deptKeys` (from rosterDeptNames)? The
+// department is free text typed on the sheet, matched with the same vocabulary — ids,
+// canonical names, aliases, the Level-N rule — that staff scoping uses.
+function rosterVisible(deptKeys, dept) {
+  if (!deptKeys) return true;          // null = every unit
+  if (!deptKeys.size) return false;    // scoped to departments, assigned none
+  return deptsOfStaff({ current_department: dept }).some((k) => deptKeys.has(k));
+}
+
 // Is one staff record visible to this access?
 function staffVisible(access, rec, deptNames) {
   if (!access || access.unrestricted) return true;
@@ -642,8 +743,9 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent) {
 }
 
 module.exports = {
-  PORTAL_ROLES, isPortal, portalStaff,
+  PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster,
   ACCESS_MODULES, ACTIONS, PERM_RANK, STAFF_SCOPES, cleanStaffScope,
+  ROSTER_SCOPES, cleanRosterScope, rosterDeptNames, rosterVisible,
   KEY_MODULE, moduleOfKey,
   forRequest, attach, requirePerm, requireModule, actionForMethod, can, canWrite, invalidate,
   filterStaff, staffVisible, scopedDeptNames, deptsOfStaff,

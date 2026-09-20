@@ -22,6 +22,490 @@ function unicoTenure(doj){
   return {months, years, mo, decimalYears:Math.round(months/12*10)/10, text};
 }
 
+/* ---------------- Official staff record — print / PDF ----------------
+   THE PRINT BUTTON USED TO PRINT THE SCREEN. window.print() on the profile handed the
+   office a screenshot of a web page: glass cards, chips, a barcode, whatever happened
+   to be scrolled into view, and — worse — the performance file on every copy, whether
+   or not that was what the sheet was for.
+
+   This is a document instead: an A4 office record, and a dialog that asks WHICH PARTS
+   go on it. A copy for a personnel file, a copy for a department head and a copy for a
+   disciplinary meeting are not the same sheet, and the person printing it is the only
+   one who knows which one they are making.
+
+   CONFIDENTIAL SECTIONS ARE GATED, NOT JUST UNTICKED. Performance, achievements and
+   incidents are personal-file material: without the 'perf' module they are not offered
+   at all, and the data was never fetched (useStaffPerf refuses without it), so there is
+   nothing to leak even if the boxes were forced on.
+
+   Printed through #pdf-root + body.pdf-export-mode like every other export in the app. */
+const REC_SECTIONS = [
+  ['identity',     'Identity & contact',        'Name, employee no., role, department, date of joining, phone, NID, emergency contact', 'staff'],
+  ['employment',   'Employment & experience',   'Designation history, UNICO tenure, prior service, total experience',                   'staff'],
+  ['credentials',  'Qualifications & licence',  'Qualification, BNMC registration, special training, vaccination',                      'staff'],
+  ['privileges',   'Clinical privileges',       'Activities granted, by privilege area',                                                'staff'],
+  ['performance',  'Performance appraisals',    'Latest grade, every filed cycle, Part H action taken',                                 'perf'],
+  ['achievements', 'Achievements & awards',     'The recognition register for this staff member',                                       'perf'],
+  ['incidents',    'Mistakes & incidents',      'The incident register for this staff member',                                          'perf'],
+  ['notes',        'Internal notes',            'Notes kept on the record by the nursing office',                                       'staff'],
+];
+// What a fresh dialog offers. Notes are OFF: they are the office's own working remarks,
+// not part of a record anybody outside it should be handed by default.
+const REC_DEFAULT = { identity:true, employment:true, credentials:true, privileges:true,
+  performance:true, achievements:true, incidents:true, notes:false,
+  photo:true, signatures:true, confidential:true };
+// Ready-made sheets, because "which boxes" is really "what is this copy for".
+const REC_PRESETS = [
+  ['Full record',       { identity:1, employment:1, credentials:1, privileges:1, performance:1, achievements:1, incidents:1, notes:0 }],
+  ['Profile only',      { identity:1, employment:1, credentials:1, privileges:1, performance:0, achievements:0, incidents:0, notes:0 }],
+  ['Performance file',  { identity:1, employment:0, credentials:0, privileges:0, performance:1, achievements:1, incidents:1, notes:0 }],
+  ['Credentials',       { identity:1, employment:0, credentials:1, privileges:1, performance:0, achievements:0, incidents:0, notes:0 }],
+];
+
+function StaffRecordPrint({ e, perf, tenure, onClose }){
+  const [sel,setSel]=React.useState(REC_DEFAULT);
+  const [printing,setPrinting]=React.useState(false);
+  // A section needs BOTH: the module (may they see it at all) and that module's print
+  // grant (may it leave on paper). Offering a box that the sheet would then refuse would
+  // be worse than not offering it.
+  const allowed=REC_SECTIONS.filter(s=>s[3]!=='perf'||canPrintPerf());
+  const on=(k)=>!!sel[k];
+  const flip=(k)=>setSel(s=>Object.assign({},s,{[k]:!s[k]}));
+  const preset=(map)=>setSel(s=>Object.assign({},s,REC_SECTIONS.reduce((m,x)=>(m[x[0]]=!!map[x[0]],m),{})));
+  const chosen=allowed.filter(s=>on(s[0])).length;
+
+  React.useEffect(()=>{
+    const k=(ev)=>{ if(ev.key==='Escape'&&!printing) onClose(); };
+    document.addEventListener('keydown',k);
+    return ()=>document.removeEventListener('keydown',k);
+  },[onClose,printing]);
+
+  if(printing) return <StaffRecordSheet e={e} perf={perf} tenure={tenure} sel={sel} onDone={onClose}/>;
+
+  const box=(k,label,sub)=>(
+    <label key={k} style={{display:'flex',gap:9,alignItems:'flex-start',padding:'8px 10px',borderRadius:9,cursor:'pointer',
+      border:'1px solid '+(on(k)?'var(--blue)':'var(--line-2)'),background:on(k)?'var(--blue-50)':'var(--panel-2)'}}>
+      <input type="checkbox" checked={on(k)} onChange={()=>flip(k)} style={{marginTop:2,width:15,height:15,accentColor:'#0090ca',flexShrink:0}}/>
+      <span style={{minWidth:0}}>
+        <span style={{display:'block',fontSize:12.5,fontWeight:700,color:'var(--ink)'}}>{label}</span>
+        {sub&&<span style={{display:'block',fontSize:11,color:'var(--muted)',lineHeight:1.45,marginTop:1}}>{sub}</span>}
+      </span>
+    </label>
+  );
+
+  return (
+    <div onMouseDown={onClose} style={{position:'fixed',inset:0,background:'rgba(16,32,46,.45)',zIndex:600,display:'grid',placeItems:'center',padding:'clamp(8px,3vw,22px)'}}>
+      <div onMouseDown={ev=>ev.stopPropagation()} className="card"
+        style={{width:'min(620px,100%)',maxHeight:'92vh',display:'flex',flexDirection:'column',background:'var(--panel)'}}>
+        <div className="card-h" style={{alignItems:'flex-start'}}>
+          <span style={{display:'inline-grid',placeItems:'center',width:30,height:30,borderRadius:9,background:'var(--blue-50)',color:'var(--blue)',marginRight:8}}><Ic d={I.print} s={16}/></span>
+          <div style={{flex:1,minWidth:0}}>
+            <h3>Print staff record</h3>
+            <div className="sub">{e.name} · {e.emp_id||e.id} — tick what goes on the sheet</div>
+          </div>
+          <button className="icon-btn" title="Close" onClick={onClose}><Ic d={I.x} s={15}/></button>
+        </div>
+
+        <div className="card-b" style={{display:'flex',flexDirection:'column',gap:12,overflowY:'auto'}}>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+            <span style={{fontSize:10.5,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',color:'var(--muted)'}}>Preset</span>
+            {REC_PRESETS.map(([label,map])=>(
+              <button key={label} className="btn sm" onClick={()=>preset(map)}>{label}</button>
+            ))}
+          </div>
+
+          <div style={{display:'grid',gap:7}}>
+            {allowed.map(s=>box(s[0],s[1],s[2]))}
+          </div>
+
+          {!canPrintPerf()&&(
+            <div style={{fontSize:11,color:'var(--muted)',lineHeight:1.5,background:'var(--panel-2)',borderRadius:8,padding:'8px 10px'}}>
+              Appraisals, achievements and incidents are personal-file material.
+              {canSeePerf()
+                ? ' This account may read them but has no print permission for the Performance module, so they cannot be put on a sheet.'
+                : ' This account does not hold the Performance module, so they are not on this sheet.'}
+            </div>
+          )}
+
+          <div>
+            <div style={{fontSize:10.5,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',color:'var(--muted)',marginBottom:6}}>Sheet options</div>
+            <div style={{display:'grid',gap:7,gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))'}}>
+              {box('photo','Photograph','Print the staff photo in the header')}
+              {box('signatures','Signature block','Prepared by / verified by / authorised lines at the foot')}
+              {box('confidential','Confidential marking','“Confidential — personal file” on every page')}
+            </div>
+          </div>
+        </div>
+
+        <div className="card-h" style={{borderTop:'1px solid var(--line-2)',borderBottom:0,justifyContent:'flex-end',gap:8}}>
+          <span style={{flex:1,fontSize:11.5,color:chosen?'var(--muted)':'#d23a52'}}>
+            {chosen?chosen+' section'+(chosen===1?'':'s')+' selected':'Tick at least one section.'}
+          </span>
+          <button className="btn sm" onClick={onClose}>Cancel</button>
+          <button className="btn pri sm" disabled={!chosen} onClick={()=>setPrinting(true)}>
+            <Ic d={I.print} s={14}/>Print / Save as PDF
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* The document itself. A4 portrait, flowing onto as many sheets as the ticked sections
+   need — deliberately NOT sized to a fixed page count, because how much there is to say
+   about somebody depends on how long they have worked here. */
+function StaffRecordSheet({ e, perf, tenure, sel, onDone }){
+  /* WAIT FOR THE PHOTOGRAPH BEFORE PRINTING. The staff photo is a remote Cloudinary
+     URL, and print() captures the page as it stands at that instant — so a fixed
+     350 ms delay printed an empty box for anybody whose picture had not arrived yet,
+     which on a hospital link is most of them. The image is fetched first and the print
+     waits on it, with a 4 s ceiling so a dead CDN can never hold the dialog hostage.
+
+     'fail' is a real outcome, not an error: a record with no photo on file, or a URL
+     that no longer resolves, prints the initials tile below rather than the browser's
+     broken-image glyph. */
+  const rawPhoto=(e&&e.photo&&e.photo.url)||'';
+  // A print needs the big derivative, not the 96px avatar one.
+  const photoUrl=rawPhoto&&window.MK&&window.MK.cdnPhoto?window.MK.cdnPhoto(rawPhoto,320,'fit'):rawPhoto;
+  const wantPhoto=!!(sel&&sel.photo);
+  const [photo,setPhoto]=React.useState(()=>(wantPhoto&&photoUrl)?'wait':'fail');
+
+  React.useEffect(()=>{
+    let live=true;
+    if(photo!=='wait') return;
+    const img=new Image();
+    const settle=(ok)=>{ if(live) setPhoto(ok?'ok':'fail'); };
+    img.onload=()=>settle(true);
+    img.onerror=()=>settle(false);
+    img.src=photoUrl;
+    // Already in the browser cache: onload may have fired before these handlers were set.
+    if(img.complete&&img.naturalWidth) settle(true);
+    const cap=setTimeout(()=>settle(false),4000);
+    return ()=>{ live=false; clearTimeout(cap); img.onload=img.onerror=null; };
+  },[photo,photoUrl]);
+
+  React.useEffect(()=>{
+    if(photo==='wait') return;            // hold the print until the picture is settled
+    const body=document.body;
+    let done=false;
+    const finish=()=>{ if(done) return; done=true;
+      body.classList.remove('pdf-export-mode','regform-print');
+      window.removeEventListener('afterprint',finish);
+      if(onDone) onDone(); };
+    // regform-print hides every other body-level node (background layers, toast and modal
+    // portals) — without it they print as blank sheets before and after the record.
+    body.classList.add('pdf-export-mode','regform-print');
+    window.addEventListener('afterprint',finish);
+    const t=setTimeout(()=>{ try{ window.print(); }catch(err){} setTimeout(finish,800); },250);
+    return ()=>{ clearTimeout(t); window.removeEventListener('afterprint',finish);
+      body.classList.remove('pdf-export-mode','regform-print'); };
+  },[photo]);
+  const root=typeof document!=='undefined'&&document.getElementById('pdf-root');
+  if(!root||typeof ReactDOM==='undefined'||!ReactDOM.createPortal) return null;
+
+  const S=window.STAFF||{};
+  const A=window.UNICO_APPRAISAL;
+  const ink='#111a26', line='#8e9aa8', soft='#4f5d6e', head='#1f3b5a';
+  const on=(k)=>!!sel[k];
+  const now=new Date();
+  const today=now.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  // Printed-on stamp: the date AND the time, because a personal file collects more than
+  // one copy of the same sheet and "which of these is the current one" is decided by it.
+  const printedAt=today+' '+now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  const txt=(v)=>{ const s=String(v==null?'':v).trim(); return s||'—'; };
+  const listOf=(v)=>String(v||'').split(/[,;]/).map(x=>x.trim()).filter(Boolean);
+  const desig=(window.staffCanonDesig?window.staffCanonDesig(e.designation):e.designation)||'';
+  const deptText=(window.staffDeptShow?window.staffDeptShow(e.current_department):e.current_department)||'';
+  const st=(perf&&A&&A.standing)?A.standing(e,perf.appraisals,new Date()):null;
+
+  let n=0;
+  const Sec=({title,children})=>{ n+=1; const no=n; return (
+    <section style={{marginTop:9,breakInside:'avoid',pageBreakInside:'avoid'}}>
+      <div style={{background:head,color:'#fff',fontSize:'8.6pt',fontWeight:700,letterSpacing:'.4px',padding:'3px 8px',
+        textTransform:'uppercase',WebkitPrintColorAdjust:'exact',printColorAdjust:'exact'}}>{no}. {title}</div>
+      <div style={{border:'1px solid '+line,borderTop:0,padding:'6px 8px 7px'}}>{children}</div>
+    </section>
+  ); };
+  // Label above value, in a wrapping grid — the shape a filled office form has.
+  const F=({label,value,span})=>(
+    <div style={{gridColumn:span?'span '+span:'auto',minWidth:0}}>
+      <div style={{fontSize:'6.8pt',fontWeight:700,letterSpacing:'.5px',textTransform:'uppercase',color:soft}}>{label}</div>
+      <div style={{fontSize:'9pt',fontWeight:600,color:ink,borderBottom:'1px dotted '+line,paddingBottom:2,minHeight:14,wordBreak:'break-word'}}>{txt(value)}</div>
+    </div>
+  );
+  const Grid=({cols,children})=>(
+    <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) '.repeat(cols||3).trim(),columnGap:11,rowGap:7}}>{children}</div>
+  );
+  const Tbl=({cols,rows,empty})=>(
+    rows.length===0
+      ? <div style={{fontSize:'8pt',color:soft,padding:'3px 0'}}>{empty}</div>
+      : <table style={{width:'100%',borderCollapse:'collapse',fontSize:'8pt',marginTop:2}}>
+          <thead><tr>{cols.map((c,i)=>(
+            <th key={i} style={{textAlign:c[2]||'left',borderBottom:'1px solid '+line,padding:'3px 4px',
+              fontSize:'7pt',fontWeight:700,letterSpacing:'.3px',textTransform:'uppercase',color:soft,width:c[3]||'auto'}}>{c[0]}</th>
+          ))}</tr></thead>
+          <tbody>{rows.map((r,ri)=>(
+            <tr key={ri}>{cols.map((c,ci)=>(
+              <td key={ci} style={{textAlign:c[2]||'left',borderBottom:'1px dotted '+line,padding:'3px 4px',color:ink,verticalAlign:'top'}}>{c[1](r)}</td>
+            ))}</tr>
+          ))}</tbody>
+        </table>
+  );
+
+  const priorEntries=Array.isArray(e.prior_experience_entries)?e.prior_experience_entries:[];
+  const privGroups=(()=>{
+    try{
+      if(!S.privilegeGroupsFor||!S.privKey) return [];
+      const granted=e.privileges||{};
+      return (S.privilegeGroupsFor(e.role||'Nurse')||[]).map(g=>({
+        group:g.group,
+        items:(g.items||[]).filter(it=>granted[S.privKey(g.group,it)]),
+      })).filter(g=>g.items.length);
+    }catch(err){ return []; }
+  })();
+  const achievements=(perf&&perf.achievements)||[];
+  const incidents=(perf&&perf.incidents)||[];
+  const notes=Array.isArray(e.notes)?e.notes:[];
+
+  return ReactDOM.createPortal(
+    <div className="pdf-doc portrait">
+      {/* Its own @page rule rather than .pdf-page's named page: a named page forces a
+          break, which added an empty first sheet. */}
+      {/* The bottom @page margin is the strip the running footer sits in — without the
+          extra room a fixed footer prints on top of the last lines of each sheet. */}
+      <style>{"@media print{@page{size:A4 portrait;margin:8mm 8mm 13mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .staffrec-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}.staffrec-foot{position:fixed;bottom:0;left:0;right:0;display:flex !important}}.staffrec-foot{display:none}"}</style>
+
+      {/* Fixed, so it repeats on EVERY sheet: a page that gets separated from the rest
+          must still say who it is about and when it was printed. */}
+      <div className="staffrec-foot" style={{gap:10,alignItems:'baseline',fontSize:'6.6pt',color:soft,
+        borderTop:'1px solid '+line,padding:'2px 8mm 0'}}>
+        <span>{txt(e.name)} · {txt(e.emp_id||e.id)}</span>
+        {on('confidential')&&<span style={{fontWeight:700}}>CONFIDENTIAL — personal file</span>}
+        <span style={{flex:1}}/>
+        <span>Printed {printedAt}</span>
+      </div>
+      <section className="staffrec-sheet" style={{fontFamily:"'IBM Plex Sans',system-ui,'Segoe UI',sans-serif",color:ink,padding:'6mm 8mm'}}>
+
+        {/* letterhead */}
+        <header style={{display:'flex',alignItems:'center',gap:11,borderBottom:'2px solid '+head,paddingBottom:6}}>
+          <img src="unico/logo.svg" alt="UNICO Hospitals" style={{height:34}}/>
+          <div style={{flex:1,textAlign:'center',minWidth:0}}>
+            <div style={{fontSize:'8pt',fontWeight:700,letterSpacing:'1px',color:soft,textTransform:'uppercase'}}>UNICO Hospitals PLC · Nursing Services</div>
+            <div style={{fontSize:'13pt',fontWeight:800,marginTop:1}}>Staff Record — {e.role==='PCA'?'Patient Care Assistant':'Nurse'}</div>
+            <div style={{fontSize:'7.6pt',color:soft,marginTop:2}}>
+              Employee no. <b style={{color:ink}}>{txt(e.emp_id||e.id)}</b> · printed {printedAt}
+              {on('confidential')?' · CONFIDENTIAL — personal file':''}
+            </div>
+          </div>
+          {on('photo')&&(photo==='ok'
+            ? <img src={photoUrl} alt={txt(e.name)} crossOrigin="anonymous"
+                style={{width:'23mm',height:'28mm',objectFit:'cover',border:'1px solid '+line,flexShrink:0,
+                  WebkitPrintColorAdjust:'exact',printColorAdjust:'exact'}}/>
+            : <div style={{width:'23mm',height:'28mm',border:'1px solid '+line,display:'grid',placeItems:'center',
+                textAlign:'center',flexShrink:0,background:'#eef3f8',
+                WebkitPrintColorAdjust:'exact',printColorAdjust:'exact'}}>
+                {/* Initials, not an empty frame — a record still has to identify somebody. */}
+                <div>
+                  <div style={{fontSize:'17pt',fontWeight:800,color:head,lineHeight:1}}>
+                    {String(e.name||'?').split(/\s+/).map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()||'?'}
+                  </div>
+                  <div style={{fontSize:'6pt',color:soft,marginTop:3}}>{rawPhoto?'photo unavailable':'no photo on file'}</div>
+                </div>
+              </div>
+          )}
+        </header>
+
+        {/* the person, above the numbered sections — a record is about somebody */}
+        <div style={{display:'flex',alignItems:'baseline',gap:10,flexWrap:'wrap',padding:'6px 0 2px'}}>
+          <div style={{fontSize:'14pt',fontWeight:800}}>{txt(e.name)}</div>
+          <div style={{fontSize:'9.5pt',fontWeight:700,color:head}}>{txt(desig||e.role)}</div>
+          <div style={{flex:1}}/>
+          <div style={{fontSize:'8pt',color:soft}}>{txt(deptText)}{e.is_active===false?' · INACTIVE':''}</div>
+        </div>
+
+        {on('identity')&&<Sec title="Identity & contact">
+          <Grid cols={3}>
+            <F label="Full name" value={e.name}/>
+            <F label="Employee no." value={e.emp_id||e.id}/>
+            <F label="Role" value={e.role||'Nurse'}/>
+            <F label="Designation" value={desig}/>
+            <F label="Department(s)" value={deptText} span={2}/>
+            <F label="Date of joining" value={e.doj}/>
+            <F label="Date of birth" value={e.dob}/>
+            <F label="Gender" value={e.gender}/>
+            <F label="Mobile" value={e.phone}/>
+            <F label="Blood group" value={e.blood_group}/>
+            <F label="NID / passport" value={e.nid}/>
+            <F label="Emergency contact" value={e.emergency_contact}/>
+            <F label="Relation" value={e.emergency_relation}/>
+            <F label="Languages" value={e.languages}/>
+            <F label="Present address" value={e.address||e.present_address} span={3}/>
+          </Grid>
+        </Sec>}
+
+        {on('employment')&&<Sec title="Employment & experience">
+          <Grid cols={3}>
+            <F label="Service at UNICO" value={tenure?tenure.text:''}/>
+            <F label="Total experience" value={S.expLabel?S.expLabel(e):e.total_experience_text}/>
+            <F label="Status" value={e.is_active===false?'Inactive / former':'Active on roster'}/>
+          </Grid>
+          <div style={{fontSize:'7pt',fontWeight:700,letterSpacing:'.5px',textTransform:'uppercase',color:soft,marginTop:8}}>Prior service</div>
+          <Tbl cols={[
+              ['Organisation',x=>txt(x.org),'left'],
+              ['Department',x=>txt(x.dept),'left'],
+              ['Duration',x=>S.fmtYM?S.fmtYM((parseFloat(x.years)||0)+(parseFloat(x.months)||0)/12):txt(x.years),'right','22%'],
+            ]} rows={priorEntries}
+            empty={e.previous_experience?String(e.previous_experience):'No prior service recorded.'}/>
+        </Sec>}
+
+        {on('credentials')&&<Sec title="Qualifications, registration & training">
+          <Grid cols={2}>
+            <F label="Qualification" value={listOf(e.qualification).join(', ')}/>
+            <F label="Hepatitis-B vaccination" value={e.hepatitis_b_vaccination}/>
+            <F label="BNMC / licence no." value={e.licence_no}/>
+            <F label="Licence valid until" value={e.licence_expiry}/>
+            <F label="Special training" value={listOf(e.special_training).join(', ')} span={2}/>
+            <F label="Extracurricular activities" value={listOf(e.extracurricular).join(', ')} span={2}/>
+          </Grid>
+          {e.licence_verified&&(()=>{ const v=e.licence_verified,pr=v.primary||{};
+            return <div style={{fontSize:'7.6pt',color:soft,marginTop:6,borderTop:'1px dotted '+line,paddingTop:4}}>
+              Verified against the BNMC register on {String(v.at||'').slice(0,10)||'—'}
+              {pr.regNo?' — registration '+pr.regNo:''}{pr.status?', '+pr.status:''}
+              {pr.expired?' (EXPIRED)':''}{pr.renewUpto?', renewable up to '+pr.renewUpto:''}.
+            </div>; })()}
+        </Sec>}
+
+        {on('privileges')&&<Sec title="Clinical privileges">
+          {privGroups.length===0
+            ? <div style={{fontSize:'8pt',color:soft}}>No clinical privileges recorded on this file.</div>
+            : privGroups.map((g,i)=>(
+                <div key={i} style={{marginBottom:5,breakInside:'avoid'}}>
+                  <div style={{fontSize:'7.6pt',fontWeight:700,color:head}}>{g.group}</div>
+                  <div style={{fontSize:'8pt',color:ink,lineHeight:1.45}}>{g.items.join(' · ')}</div>
+                </div>
+              ))}
+        </Sec>}
+
+        {on('performance')&&canPrintPerf()&&<Sec title="Performance appraisals">
+          <Grid cols={4}>
+            <F label="Latest grade" value={st&&st.last?st.last.grade:''}/>
+            <F label="Latest score" value={st&&st.last&&st.last.score!=null?st.last.score+' / 100':''}/>
+            <F label="Appraisals filed" value={st?String(st.history.length):'0'}/>
+            <F label="Current window" value={st&&st.cycle?st.cycle.label:''}/>
+          </Grid>
+          <div style={{fontSize:'7pt',fontWeight:700,letterSpacing:'.5px',textTransform:'uppercase',color:soft,marginTop:8}}>Filed cycles</div>
+          <Tbl cols={[
+              ['Period',x=>txt(x.cycleLabel||x.cycleId),'left'],
+              ['Score',x=>x.score==null?'—':String(x.score),'right','12%'],
+              ['Grade',x=>txt(x.grade),'center','12%'],
+              ['Action taken (Part H)',x=>(x.actions||[]).map(id=>((A&&A.CNS_ACTIONS||[]).find(y=>y.id===id)||{}).label||id).join(' · ')||'—','left','38%'],
+            ]} rows={st?st.history:[]}
+            empty={'No appraisal has been filed yet'+(e.doj?' — the first falls six months after joining ('+e.doj+').':'.')}/>
+          {st&&st.overdue&&<div style={{fontSize:'7.6pt',color:'#a32c41',marginTop:5,fontWeight:700}}>
+            The {st.lastClosed?st.lastClosed.label:'last'} appraisal window closed with no appraisal filed.
+          </div>}
+        </Sec>}
+
+        {on('achievements')&&canPrintPerf()&&<Sec title="Achievements & awards">
+          <Tbl cols={[
+              ['Date',x=>txt(x.date),'left','15%'],
+              ['Achievement',x=>txt(x.what),'left'],
+              ['Category',x=>[x.category,x.level].filter(Boolean).join(' · ')||'—','left','26%'],
+              ['Points',x=>x.points?'+'+x.points:'—','right','10%'],
+            ]} rows={achievements}
+            empty="No achievement or award is recorded on this file."/>
+        </Sec>}
+
+        {on('incidents')&&canPrintPerf()&&<Sec title="Mistakes & incidents">
+          <Tbl cols={[
+              ['Date',x=>txt(x.date),'left','15%'],
+              ['Incident',x=>txt(x.what),'left'],
+              ['Category',x=>[x.category,x.severity].filter(Boolean).join(' · ')||'—','left','26%'],
+              ['Points',x=>x.points?'−'+x.points:'—','right','10%'],
+            ]} rows={incidents}
+            empty="Clean record — no error, lapse or disciplinary entry on this file."/>
+        </Sec>}
+
+        {on('notes')&&<Sec title="Internal notes">
+          {notes.length===0
+            ? <div style={{fontSize:'8pt',color:soft}}>No notes on this record.</div>
+            : notes.slice().reverse().map(x=>(
+                <div key={x.id} style={{fontSize:'8pt',marginBottom:4,breakInside:'avoid'}}>
+                  <span style={{color:soft}}>{new Date(x.ts).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})} · {txt(x.author)} — </span>
+                  {txt(x.text)}
+                </div>
+              ))}
+        </Sec>}
+
+        {on('signatures')&&(
+          <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)',gap:16,marginTop:18,breakInside:'avoid'}}>
+            {['Prepared by','Verified by','Chief Nursing Superintendent'].map(l=>(
+              <div key={l}>
+                <div style={{borderBottom:'1px solid '+ink,height:26}}/>
+                <div style={{fontSize:'7.4pt',fontWeight:700,color:soft,marginTop:3}}>{l}</div>
+                <div style={{fontSize:'6.8pt',color:soft}}>Name, signature &amp; date</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <footer style={{marginTop:12,borderTop:'1px solid '+line,paddingTop:4,display:'flex',gap:10,fontSize:'6.8pt',color:soft}}>
+          <span>UNICO Hospitals PLC — Nursing Services · staff record for {txt(e.name)} ({txt(e.emp_id||e.id)})</span>
+          <span style={{flex:1}}/>
+          <span>{on('confidential')?'Confidential — personal file · ':''}Printed {printedAt}</span>
+        </footer>
+      </section>
+    </div>, root);
+}
+
+/* ---------------- The performance record, on the staff record ----------------
+   THERE IS ONE PAGE PER PERSON. The Performance module used to open its own
+   "Performance Record" screen — a second identity card, a second set of dates, a
+   second place to look — for somebody whose personnel record already existed here.
+   The two are one page now: this file draws the whole record (trend, section
+   breakdown, filed history, conduct) and the Performance module keeps what is
+   genuinely its own, the appraisal FORM.
+
+   Drawn locally rather than borrowed from window.PerfUI: those helpers ship in the
+   performance chunk, which a profile opened straight from the roster has not loaded
+   — and must not have to, only to render a sparkline. */
+function ApprTrend({points}){
+  if(!points.length) return null;
+  const W=100, H=44, pad=4;
+  const xs=(i)=>points.length<2?W/2:pad+(i*(W-pad*2))/(points.length-1);
+  const ys=(v)=>H-pad-((Math.max(0,Math.min(100,Number(v)||0))/100)*(H-pad*2));
+  const d=points.map((p,i)=>(i?'L':'M')+xs(i).toFixed(1)+' '+ys(p.v).toFixed(1)).join(' ');
+  const area=d+' L '+xs(points.length-1).toFixed(1)+' '+(H-pad)+' L '+xs(0).toFixed(1)+' '+(H-pad)+' Z';
+  const gc=(g)=>(window.MK&&window.MK.GC&&window.MK.GC[g])||'#0090ca';
+  return (
+    <div>
+      <svg viewBox={'0 0 '+W+' '+H} preserveAspectRatio="none" style={{width:'100%',height:96,display:'block'}}>
+        {[25,50,75].map(y=><line key={y} x1={0} x2={W} y1={ys(y)} y2={ys(y)} stroke="var(--line-2)" strokeWidth=".4"/>)}
+        {points.length>1&&<path d={area} fill="rgba(0,144,202,.10)" stroke="none"/>}
+        {points.length>1&&<path d={d} fill="none" stroke="#0090ca" strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round"/>}
+        {points.map((p,i)=><circle key={i} cx={xs(i)} cy={ys(p.v)} r={points.length>12?1.1:1.8} fill={gc(p.grade)} stroke="#fff" strokeWidth=".6"/>)}
+      </svg>
+      <div style={{display:'flex',justifyContent:'space-between',gap:6,marginTop:4}}>
+        {points.map((p,i)=>(
+          <div key={i} style={{flex:1,minWidth:0,textAlign:'center'}}>
+            <div className="num" style={{fontSize:11.5,fontWeight:700,color:gc(p.grade)}}>{p.v}</div>
+            <div style={{fontSize:9.5,color:'var(--muted)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+// The three figures that used to sit beside the grade on the Performance Record.
+function ApprStat({label,value,tone}){
+  return (
+    <div style={{background:'var(--panel-2)',border:'1px solid var(--line-2)',borderRadius:9,padding:'7px 11px',minWidth:88}}>
+      <div style={{fontSize:9,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',color:'var(--muted)'}}>{label}</div>
+      <div className="num" style={{fontSize:14,fontWeight:800,color:tone||'var(--ink)',marginTop:2}}>{value}</div>
+    </div>
+  );
+}
+
 /* ---------------- Profile (read-only + notes) ---------------- */
 /* One person's performance file: their appraisals, and the achievements and
    incidents recorded against them. Loaded here rather than passed in because the
@@ -46,6 +530,15 @@ const canAddPerf=()=>{ try{ return window.unicoCan?window.unicoCan('perf','add')
 // Removing an entry takes points back off somebody's appraisal, so it is a 'perf'
 // DELETE — a step above being allowed to file one.
 const canDelPerf=()=>{ try{ return window.unicoCan?window.unicoCan('perf','delete'):true; }catch(e){ return true; } };
+/* PRINTING IS ITS OWN PERMISSION. A printed record leaves the system: it goes into a
+   folder, a meeting, an envelope, and nothing in the app can withdraw it afterwards.
+   So 'may read this on screen' and 'may take it away on paper' are separate grants —
+   canPrintStaff() puts the button on the profile at all, and canPrintPerf() decides
+   whether the appraisal, achievement and incident sections may go on the sheet. A ward
+   manager who can read an appraisal is not automatically someone who may hand a copy
+   of it to somebody else. */
+const canPrintStaff=()=>{ try{ return window.unicoCan?window.unicoCan('staff','print'):true; }catch(e){ return true; } };
+const canPrintPerf=()=>{ try{ return window.unicoCan?(window.unicoCan('perf','view')&&window.unicoCan('perf','print')):true; }catch(e){ return true; } };
 
 /* UNDO A MISTAKEN ENTRY. Filed against the wrong person, or simply wrong — it is
    deleted outright rather than marked void, because an achievement or an incident that
@@ -310,6 +803,7 @@ function StaffProfile({store, empId, setRoute}){
   const [note,setNote]=React.useState('');
   const [discontinuing,setDiscontinuing]=React.useState(false);
   const [conduct,setConduct]=React.useState(null);   // 'achievement' | 'incident' | null
+  const [printing,setPrinting]=React.useState(false); // the official record sheet + its section picker
   // Resolved before the early return below, so the hook order never changes.
   const perfId=e?(e.emp_id||String(e.id)):null;
   const perf=useStaffPerf(perfId);
@@ -401,7 +895,8 @@ function StaffProfile({store, empId, setRoute}){
         {e.is_active&&(!window.unicoCan||window.unicoCan('staff','edit'))&&
           <button className="btn sm" title="Discontinue — record the exit reason & move to Previous Staff (feeds the attrition rate)"
             style={{color:'#d23a52',borderColor:'#f1c6cd',fontWeight:700}} onClick={()=>setDiscontinuing(true)}>⚠ Discontinue</button>}
-        <button className="btn sm" title="Print / Save as PDF" onClick={()=>window.print()}><Ic d={I.print} s={15}/>Print</button>
+        {canPrintStaff()&&<button className="btn sm" title="Print the official staff record — choose which sections go on the sheet"
+          onClick={()=>setPrinting(true)}><Ic d={I.print} s={15}/>Print</button>}
         {/* Gated like Directory/Manage: a view-only account used to get "Staff record
             deleted" / "saved" for a change the server silently discarded. */}
         {(!window.unicoCan||window.unicoCan('staff','delete'))&&<button className="btn sm" title="Delete permanently" style={{color:'#d23a52',borderColor:'#f1c6cd'}} onClick={async()=>{
@@ -414,6 +909,7 @@ function StaffProfile({store, empId, setRoute}){
         already={(perf?(conduct==='achievement'?perf.achievements:perf.incidents):[]).reduce((n,x)=>n+(Number(x.points)||0),0)}
         onClose={()=>setConduct(null)}
         onSaved={()=>{ setConduct(null); if(perf&&perf.reload) perf.reload(); }}/>}
+      {printing&&<StaffRecordPrint e={e} perf={perf} tenure={tenure} onClose={()=>setPrinting(false)}/>}
       {discontinuing&&<DiscontinueDialog e={e} onClose={()=>setDiscontinuing(false)}
         onDone={(reasonText)=>{ setDiscontinuing(false); store.remove(empId,reasonText);
           window.UI&&window.UI.toast&&window.UI.toast(e.name+' discontinued — moved to Previous Staff & filed in Attrition & Exits','success');
@@ -709,80 +1205,131 @@ function StaffProfile({store, empId, setRoute}){
             </div>
           </div>
 
-          {/* Performance — the appraisal record, read from the same file the
-              Performance module writes. Deliberately read-only here: this page is the
-              personnel record, and an appraisal is filed through its own form.
+          {/* Performance — the WHOLE appraisal record, not a summary of one held
+              elsewhere. This is the page the Performance module used to open as its own
+              "Performance Record" screen: the same trend, the same section breakdown,
+              the same filed history, now on the personnel record they belong to.
+
+              Read-only on the facts, but the way IN to the form is here too — an
+              appraisal is still filled on HR-NUR-PA-01 in the Performance module.
 
               CONFIDENTIAL: this card and the conduct card below exist only for a
               session that holds the 'perf' module. Anyone else opening this profile
               sees the personnel record with no performance section at all — not an
               empty one, which would both advertise the file and misreport it. */}
-          {canSeePerf()&&<div className="card" style={{borderLeft:'4px solid #0072a3'}}>
-            {secHead(I.trend,'Performance','appraisal record',{bg:'#eef8fc',fg:'#0072a3'})}
-            <div className="card-b">
-              {perf===null ? <div style={{color:'var(--muted)',fontSize:12.5}}>Loading the performance file…</div>
-                : (()=>{
-                  const A=window.UNICO_APPRAISAL;
-                  // 'actioned' is the only status that means the cycle is closed and the
-                  // grade is final. Every appraisal comes back with a numeric `score`
-                  // attached by the server, so testing for one would count untouched drafts.
-                  const done=(perf.appraisals||[]).filter(a=>a&&a.status==='actioned')
-                    .sort((x,y)=>String(x.cycleId||'')<String(y.cycleId||'')?-1:1);
-                  const last=done[done.length-1];
-                  // cycleOf() returns Date objects; printing one straight into JSX gives the
-                  // browser's full toString ("Sat Sep 19 2026 06:00:00 GMT+0600 (…)").
-                  const nextDue=(A&&A.cycleOf&&e.doj)?(function(){ try{ const c=A.cycleOf(e.doj,new Date()); if(!c||!c.end) return null;
-                    const d=c.end; return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }catch(err){ return null; } })():null;
-                  if(!last) return (
-                    <div>
-                      <div style={{fontSize:13,fontWeight:700,color:'var(--ink)'}}>No appraisal filed yet</div>
-                      <div style={{fontSize:12,color:'var(--muted)',marginTop:3,lineHeight:1.6}}>
-                        The first appraisal falls six months after joining{e.doj?' ('+e.doj+')':''}.{nextDue?' Current window closes '+nextDue+'.':''}
+          {canSeePerf()&&(()=>{
+            const A=window.UNICO_APPRAISAL;
+            // standing() is the ONE rule for "which window, which form, is it late" —
+            // shared with the roster and the directory column so the three cannot
+            // disagree about the same person (appraisal-spec.js).
+            const st=(perf&&A&&A.standing)?A.standing(e,perf.appraisals,new Date()):null;
+            const done=st?st.history.slice().reverse():[];   // oldest first, for the trend
+            const last=st?st.last:null;
+            const cyc=st?st.cycle:null;
+            const gc=(g)=>(window.MK&&window.MK.GC&&window.MK.GC[g])||'#0072a3';
+            const band=last?A.gradeFor(last.score):null;
+            const fmtD=(d)=>{ try{ return A.fmtDay(d); }catch(err){ return ''; } };
+            const startLabel=(!st||!cyc)?null
+              :st.appraisal?(st.status==='actioned'?'View appraisal':'Continue appraisal')
+              :'+ Start '+cyc.label+' appraisal';
+            return <div className="card" style={{borderLeft:'4px solid #0072a3'}}>
+              {secHead(I.trend,'Performance',
+                e.doj?('every 6 months from joining ('+e.doj+')'):'every 6 months from the date of joining',
+                {bg:'#eef8fc',fg:'#0072a3'},
+                (canAddPerf()&&startLabel)?<button className="btn sm pri" onClick={()=>setRoute({view:'perfForm',emp:perfId})}>{startLabel}</button>:null)}
+              <div className="card-b" style={{display:'flex',flexDirection:'column',gap:16}}>
+                {perf===null ? <div style={{color:'var(--muted)',fontSize:12.5}}>Loading the performance file…</div> : <>
+
+                  {/* latest grade + the three figures */}
+                  <div style={{display:'flex',gap:16,alignItems:'center',flexWrap:'wrap'}}>
+                    <div style={{flex:1,minWidth:230}}>
+                      <div style={{fontSize:10.5,textTransform:'uppercase',letterSpacing:.5,color:'var(--muted)',fontWeight:700}}>
+                        {last?('Latest grade · '+(last.cycleLabel||last.cycleId||'')):'No appraisal filed yet'}
                       </div>
-                      <button className="btn sm" style={{marginTop:11}} onClick={()=>setRoute({view:'perfStaff',emp:perfId})}>Open performance record</button>
-                    </div>
-                  );
-                  const pct=Math.max(0,Math.min(100,Number(last.score)||0));
-                  const gc=(window.MK&&window.MK.GC&&window.MK.GC[last.grade])||'#0072a3';
-                  return (
-                    <div style={{display:'flex',flexDirection:'column',gap:12}}>
-                      <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
-                        <div style={{display:'flex',alignItems:'baseline',gap:9}}>
-                          <span style={{fontSize:34,fontWeight:800,color:gc,lineHeight:1}}>{last.grade||'—'}</span>
-                          <span className="num" style={{fontSize:20,fontWeight:800,color:'var(--ink)'}}>{last.score==null?'—':last.score}</span>
+                      {last?<>
+                        <div style={{display:'flex',alignItems:'baseline',gap:10,marginTop:3}}>
+                          <span style={{fontSize:36,fontWeight:800,lineHeight:1,color:gc(last.grade)}}>{last.grade||'—'}</span>
+                          <span className="num" style={{fontSize:19,fontWeight:800,color:'var(--ink)'}}>{last.score==null?'—':last.score}</span>
                           <span className="num" style={{fontSize:13,color:'var(--muted)'}}>/ 100</span>
                         </div>
-                        <div style={{minWidth:170,flex:1}}>
-                          <div style={{fontSize:10.5,textTransform:'uppercase',letterSpacing:.5,color:'var(--muted)',fontWeight:700}}>latest cycle</div>
-                          <div style={{fontSize:12.5,fontWeight:600,color:'var(--ink-2)'}}>{last.cycleLabel||last.cycleId||'—'}</div>
-                        </div>
-                        <div style={{textAlign:'right'}}>
-                          <div style={{fontSize:10.5,textTransform:'uppercase',letterSpacing:.5,color:'var(--muted)',fontWeight:700}}>appraisals</div>
-                          <div className="num" style={{fontSize:15,fontWeight:800,color:'var(--ink)'}}>{done.length}</div>
-                        </div>
-                      </div>
-                      <div style={{height:9,borderRadius:6,background:'var(--panel-2)',overflow:'hidden'}}>
-                        <div style={{width:pct+'%',height:'100%',borderRadius:6,background:gc,transition:'width .9s cubic-bezier(.2,.7,.3,1)'}}/>
-                      </div>
-                      {done.length>1 && (
-                        <div style={{display:'flex',alignItems:'flex-end',gap:7,height:52}}>
-                          {done.slice(-6).map((a,i)=>{ const h=Math.max(6,Math.round((Number(a.score)||0)/100*46));
-                            const c=(window.MK&&window.MK.GC&&window.MK.GC[a.grade])||'#0090ca';
-                            return <div key={i} title={(a.cycleLabel||a.cycleId||'')+' — '+(a.score==null?'—':a.score)} style={{flex:1,minWidth:12}}>
-                              <div style={{height:h,borderRadius:5,background:c,opacity:i===done.slice(-6).length-1?1:.55}}/>
-                            </div>; })}
+                        {band&&<div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>{band.rating} — {band.interp}</div>}
+                      </>:(
+                        <div style={{fontSize:12.5,color:'var(--muted)',marginTop:4,lineHeight:1.6}}>
+                          The first appraisal falls six months after joining{e.doj?' ('+e.doj+')':''}.
+                          {cyc?' The current window is '+cyc.label+'.':''}
                         </div>
                       )}
-                      <div style={{display:'flex',gap:9,flexWrap:'wrap',alignItems:'center',borderTop:'1px solid var(--line-2)',paddingTop:11}}>
-                        <span style={{fontSize:12,color:'var(--muted)'}}>{nextDue?'Next appraisal window closes '+nextDue+'.':'Appraisals run every six months from the date of joining.'}</span>
-                        <span style={{flex:1}}/>
-                        <button className="btn sm" onClick={()=>setRoute({view:'perfStaff',emp:perfId})}>Open performance record</button>
-                      </div>
                     </div>
-                  );
-                })()}
-            </div>
-          </div>}
+                    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                      <ApprStat label="Appraisals" value={st?st.history.length:0}/>
+                      {done.length>1&&(()=>{ const d=done[done.length-1].score-done[0].score;
+                        return <ApprStat label={'Since '+String(done[0].cycleLabel||'').slice(-4)}
+                          value={(d>=0?'▲ ':'▼ ')+Math.abs(d)+' pts'} tone={d>=0?'#1f9d57':'#d23a52'}/>; })()}
+                      <ApprStat label="Next due" value={cyc?fmtD(cyc.due):'—'} tone={(st&&st.overdue)?'#d23a52':null}/>
+                    </div>
+                  </div>
+                  {last&&<div style={{height:9,borderRadius:6,background:'var(--panel-2)',overflow:'hidden'}}>
+                    <div style={{width:Math.max(0,Math.min(100,Number(last.score)||0))+'%',height:'100%',borderRadius:6,background:gc(last.grade),transition:'width .9s cubic-bezier(.2,.7,.3,1)'}}/>
+                  </div>}
+                  {st&&st.overdue&&<div style={{fontSize:12,fontWeight:600,color:'#d23a52',background:'#d23a5212',border:'1px solid #d23a5230',borderRadius:8,padding:'8px 11px'}}>
+                    The {st.lastClosed?st.lastClosed.label:'last'} window closed with no appraisal filed.
+                  </div>}
+
+                  {/* score trend */}
+                  {done.length>0&&<div>
+                    {lbl('Score trend · '+done.length+' cycle'+(done.length===1?'':'s'))}
+                    <ApprTrend points={done.map(h=>({label:h.cycleLabel||h.cycleId||'',v:Number(h.score)||0,grade:h.grade}))}/>
+                  </div>}
+
+                  {/* latest breakdown, by section of the form */}
+                  {last&&(()=>{ let secs=[]; try{ secs=A.tally(last.scores).sections; }catch(err){ secs=[]; }
+                    if(!secs.length) return null;
+                    return <div>
+                      {lbl('Latest breakdown · '+(last.cycleLabel||'')+' · by section')}
+                      <div style={{display:'flex',flexDirection:'column',gap:7}}>
+                        {secs.map(sc=>{ const p=sc.max?(sc.sub/sc.max)*100:0;
+                          const c=(window.MK&&window.MK.barColor)?window.MK.barColor(p):(p>=80?'#1f9d57':p>=60?'#e08a1e':'#d23a52');
+                          return <div key={sc.no} style={{display:'flex',alignItems:'center',gap:9}}>
+                            <div style={{width:150,flexShrink:0,fontSize:11.5,color:'var(--ink-2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}
+                              title={sc.title}>{sc.title.charAt(0)+sc.title.slice(1).toLowerCase()}</div>
+                            <div style={{flex:1,height:8,borderRadius:5,background:'var(--panel-2)',overflow:'hidden'}}>
+                              <div style={{width:Math.max(0,Math.min(100,p))+'%',height:'100%',borderRadius:5,background:c}}/>
+                            </div>
+                            <div className="num" style={{width:48,textAlign:'right',fontSize:11.5,fontWeight:700,color:'var(--ink)'}}>{sc.sub}/{sc.max}</div>
+                          </div>; })}
+                      </div>
+                    </div>; })()}
+
+                  {/* every filed appraisal — the personal file */}
+                  <div>
+                    {lbl('Appraisal history · confidential')}
+                    {(!st||st.history.length===0)
+                      ? <div style={{fontSize:12,color:'var(--faint)'}}>No appraisal has been filed yet.</div>
+                      : <div style={{overflowX:'auto'}}>
+                          <table className="tbl">
+                            <thead><tr><th style={{textAlign:'left'}}>Period</th><th>Score</th><th style={{textAlign:'left'}}>Grade</th><th style={{textAlign:'left'}}>Part H action</th><th></th></tr></thead>
+                            <tbody>
+                              {st.history.map(h=>(
+                                <tr key={h.id}>
+                                  <td style={{textAlign:'left'}}>{h.cycleLabel||h.cycleId||'—'}</td>
+                                  <td className="num">{h.score==null?'—':h.score}</td>
+                                  <td style={{textAlign:'left'}}><span style={{fontWeight:800,color:gc(h.grade)}}>{h.grade||'—'}</span></td>
+                                  <td style={{textAlign:'left',fontSize:11.5,color:'var(--muted)'}}>
+                                    {(h.actions||[]).map(id=>((A.CNS_ACTIONS||[]).find(x=>x.id===id)||{}).label||id).join(' · ')||'—'}
+                                  </td>
+                                  <td style={{textAlign:'right'}}>
+                                    {canPrintPerf()&&<button className="btn sm" onClick={()=>setRoute({view:'perfPrint',emp:perfId,cycleId:h.cycleId})}>Print</button>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>}
+                  </div>
+                </>}
+              </div>
+            </div>;
+          })()}
 
           {/* Conduct — the achievements and incidents on this person's file. Shown
               side by side on purpose: a register that only lists what went wrong is
@@ -1492,13 +2039,21 @@ function DeptPrivilegesSettings({ depts }){
   // set (checked = assigned to EVERY selected department; toggling applies to ALL of
   // them at once) — the fast path for departments that should carry the same list,
   // e.g. all ICUs, or every general ward.
-  const [deptStr,setDeptStr]=React.useState(deptNames[0]||'');
+  // Starts EMPTY, on purpose. Seeding it with deptNames[0] opened the panel already
+  // pointed at whichever department happened to sort first (Infection control and
+  // prevention), which reads as "this is the one you are editing" for a choice nobody
+  // made — and any Select all / zone button then applied to it. With nothing selected
+  // the editor falls into its noTarget mode, which lists the whole catalogue and
+  // assigns an activity to departments from the other direction.
+  const [deptStr,setDeptStr]=React.useState('');
   const [role,setRole]=React.useState('Nurse');
   const [copyFrom,setCopyFrom]=React.useState('');
   const [,force]=React.useState(0); const rerender=()=>force(x=>x+1);
   const [newGroup,setNewGroup]=React.useState('');
   const [newItem,setNewItem]=React.useState('');
-  React.useEffect(()=>{ if(!deptStr&&deptNames.length) setDeptStr(deptNames[0]); },[deptNames.join('|')]); // eslint-disable-line
+  // (No effect re-seeds deptStr. One used to, which meant clearing the last chip with
+  // its × put the department straight back the next time the department list settled —
+  // the selection could not actually be cleared.)
 
   const selDepts=String(deptStr||'').split(',').map(x=>x.trim()).filter(Boolean);
   // Display = intersection (only ticked when every selected department has it), so
@@ -1768,7 +2323,7 @@ function StaffPhotoLibrary({ f, set, store, empId, editing, onClose }){
           )}
         </div>
         <div style={{padding:'10px 18px',borderTop:'1px solid var(--line-2)',fontSize:11,color:'var(--muted)'}}>
-          Only accounts with <b>edit</b> access to Nurse Management can open this library. Accounts with no staff access are never sent staff photos.
+          Only accounts with <b>edit</b> access to Staff Management can open this library. Accounts with no staff access are never sent staff photos.
         </div>
       </div>
     </div>
@@ -2699,13 +3254,22 @@ function StaffForm({store, empId, setRoute, role, depts}){
           {sec('Privileges',<>
             <div style={{gridColumn:'1 / -1'}}>
               {(()=>{
-                const selDepts=chipsOf('current_department');
+                /* THE RECORD AND THE CATALOGUE SPEAK DIFFERENT DIALECTS. A staff record
+                   holds whatever was typed or imported — "MICU", "CCU", "CT ICU" — while
+                   Department Privileges is keyed by the Statistics department NAME
+                   ("Medical ICU", "Coronary Care Unit"). Matching the raw string found
+                   nothing for most of the roster, so an existing nurse's checklist came up
+                   empty and told them their own department was unrecognised. Resolve
+                   through the same canonical map the rest of the app displays with. */
+                const selRaw=chipsOf('current_department');
+                const resolveDept=(d)=>{ try{ return (window.staffDeptShow?window.staffDeptShow(d):d)||d; }catch(e){ return d; } };
+                const selDepts=[...new Set(selRaw.map(resolveDept).filter(Boolean))];
                 const allowedKeys=(S.deptPrivilegeKeysFor)?S.deptPrivilegeKeysFor(selDepts,f.role||'Nurse'):null;
-                // A department typed/saved before the catalogue existed (or renamed since)
-                // won't match anything in Settings — call that out explicitly rather than
-                // showing the same "nothing assigned yet" message for a totally different
-                // problem (this string just isn't a recognised department any more).
-                const unknownDepts=selDepts.filter(d=>!deptOpts.includes(d));
+                // Still worth calling out a department that resolves to nothing the
+                // catalogue knows (deleted or renamed since the record was written) —
+                // but only AFTER the alias has been tried, and naming what is on the
+                // record rather than what it resolved to.
+                const unknownDepts=selRaw.filter(d=>!deptOpts.includes(resolveDept(d)));
                 const hint=selDepts.length===0
                   ? 'Select a department above first — privileges are assigned per department, in Settings → Department Privileges.'
                   : unknownDepts.length
@@ -2781,4 +3345,5 @@ function StaffSavedOverlay({title, sub, onClose}){
   );
 }
 
-Object.assign(window,{ StaffProfile, StaffForm, StaffFormRail, StaffSavedOverlay, PrivilegesEditor, PrivilegeDeptMatrix, DeptPrivilegesSettings });
+Object.assign(window,{ StaffProfile, StaffForm, StaffFormRail, StaffSavedOverlay, PrivilegesEditor, PrivilegeDeptMatrix, DeptPrivilegesSettings,
+  StaffRecordPrint, StaffRecordSheet });

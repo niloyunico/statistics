@@ -13,6 +13,12 @@
  * the Administrator role (deliberate: full delegation), so grant Administration only to
  * people you would make administrators anyway.
  *
+ * Account levels: every account is created at a level -- admin / manager / incharge, or
+ * portal for the phone and collector logins. The level is not an authority; `perms` stays
+ * the only thing access.js enforces. It is the CEILING those perms are clamped to, so the
+ * hierarchy holds no matter how the request was built. There are no saved permission
+ * templates any more: an account holds exactly what an administrator ticked for it.
+ *
  * Mounted by web.js:  require('./users-admin').mount(app, { requireApi })
  */
 const db = require('./db');
@@ -54,13 +60,205 @@ const mirrorFailed = (e) => { try { console.error('[users] responsible mirror fa
 // cleanPerms() dropped the key. Kept in step with access.ACCESS_MODULES.
 const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine'];
 
+/* ---- Account tiers: the hospital's own hierarchy ----
+   A tier is a named RANK with a module CEILING, defined by an administrator in
+   Settings -> Users & Roles -> Hierarchy. Two of them are fixed because they are backend
+   roles rather than choices: 'admin' (the Administrator role, unrestricted) and 'portal'
+   (collector / in-charge / nurse / PCA, who hold no modules at all and carry a
+   data-collection scope instead). Everything between them is the hospital's own ladder --
+   CNS, Nurse Manager, Ward In-charge, whatever they call it.
+
+   A tier CAPS access. It never grants it. That asymmetry is the whole difference between
+   this and the role templates it replaced:
+     · assigning a tier to an account grants nothing -- every action is still ticked by
+       hand, per account, and an account starts with none;
+     · WIDENING a tier grants its members nothing, it only makes more modules tickable;
+     · NARROWING a tier is the one edit that reaches existing accounts, and it can only
+       ever remove -- so no edit here can escalate anybody.
+   That is why there is no "apply to members": there is nothing to push. */
+const TIERS = 'accountTiers';
+const TIER_ADMIN = 'admin';
+const TIER_PORTAL = 'portal';
+const ADMIN_RANK = 0;
+const PORTAL_RANK = 9999;   // always the floor of the ladder, whatever is added above it
+// Seeded on first use into an empty collection, so a fresh database already has a working
+// ladder and there is no separate migration step that could half-fail. The two fixed tiers
+// are also re-supplied from here if the collection somehow loses them.
+const BUILTIN_TIERS = [
+  { id: TIER_ADMIN, name: 'Administrator', rank: ADMIN_RANK, fixed: true,
+    description: 'System administrator. Every module, nothing to tick.' },
+  { id: 'cns', name: 'Chief of Nursing Services', rank: 10, fixed: false,
+    description: 'Head of the nursing department — the main HOD, and the final approver.',
+    modules: ACCESS_MODULES, signoff: 'approve' },
+  { id: 'nurse-manager', name: 'Nurse Manager', rank: 20, fixed: false,
+    description: 'Runs a cluster of wards: their people, rosters, appraisals and numbers.',
+    modules: ACCESS_MODULES.filter((m) => m !== 'users'), signoff: 'check' },
+  { id: 'ward-incharge', name: 'Ward In-charge', rank: 30, fixed: false,
+    description: 'Runs one unit: its roster, its submissions and its supervision.',
+    modules: ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'perf', 'roster'], signoff: 'prepare' },
+  { id: TIER_PORTAL, name: 'Portal account', rank: PORTAL_RANK, fixed: true,
+    description: 'Signs in to the collection portal or the staff app. Created and scoped in Data Collection.' },
+];
+/* The seed is versioned so a database seeded with an earlier ladder still receives the
+   tiers added since. It is ADDITIVE: a tier that already exists is never overwritten, so
+   an administrator's own edits and their own tiers always survive. */
+const TIER_SEED_VERSION = 3;
+const SEED_DOC = '__seed';
+// The v1 placeholders, replaced by the nursing ladder above. Cleared on the upgrade ONLY
+// while still untouched and unoccupied — an edited or occupied tier is somebody's
+// decision, not ours, and it stays.
+const RETIRED_SEED_TIERS = ['manager', 'incharge'];
+const tierKind = (id) => (id === TIER_ADMIN ? 'admin' : id === TIER_PORTAL ? 'portal' : 'console');
+/* Where a tier sits in a document's sign-off chain: who drafts it, who checks it, who
+   signs it off. Naming the chain on the LADDER rather than in each module means the
+   roster, and anything else that needs three signatures, asks the same question --
+   "which tier approves?" -- instead of hard-coding a job title it cannot keep in step
+   when the hospital renames one. '' = takes no part. */
+const SIGNOFF_ROLES = ['prepare', 'check', 'approve'];
+const cleanSignoff = (v) => (SIGNOFF_ROLES.indexOf(String(v || '')) >= 0 ? String(v) : '');
+const cleanModules = (v) => (Array.isArray(v) ? ACCESS_MODULES.filter((m) => v.indexOf(m) >= 0) : []);
+const tierRank = (t) => (t.id === TIER_ADMIN ? ADMIN_RANK : t.id === TIER_PORTAL ? PORTAL_RANK
+  : Math.max(1, Math.min(PORTAL_RANK - 1, Number(t.rank) || 10)));
+function shapeTier(t) {
+  const kind = tierKind(t.id);
+  return {
+    id: t.id,
+    name: String(t.name || t.id).slice(0, 60),
+    description: String(t.description || '').slice(0, 300),
+    rank: tierRank(t),
+    kind,
+    // Fixed tiers cannot be deleted or renumbered: they ARE the Administrator role and the
+    // portal roles, so the ladder can never end up without a top or a bottom.
+    fixed: kind !== 'console',
+    // The ceiling. An Administrator holds everything and a portal account holds nothing, so
+    // neither carries a meaningful list of its own.
+    modules: kind === 'admin' ? ACCESS_MODULES.slice() : kind === 'portal' ? [] : cleanModules(t.modules),
+    signoff: cleanSignoff(t.signoff),
+  };
+}
+const tierSort = (a, b) => a.rank - b.rank || String(a.name).localeCompare(String(b.name));
+async function tierCol() { const d = await db.getDbHandle(); return d ? d.collection(TIERS) : null; }
+// How many accounts sit AT a tier id (not counting the ones the fallback covers) — used to
+// decide whether a retired placeholder is safe to clear.
+async function usersAtTier(id) {
+  try {
+    const users = await db.getUsers();
+    if (typeof users.find !== 'function') return 1;   // unknown: assume occupied, change nothing
+    return (await users.find({ level: id }).toArray()).length;
+  } catch (e) { return 1; }
+}
+/* Bring the stored ladder up to TIER_SEED_VERSION. Adds what is missing, never replaces
+   what is there, and returns the rows to carry on with. A failure here is not fatal: the
+   caller still serves the code defaults, so the ladder is never empty. */
+async function seedTiers(c, stored) {
+  const marker = stored.find((d) => d._id === SEED_DOC);
+  if (marker && Number(marker.v || 0) >= TIER_SEED_VERSION) return stored;
+  const have = new Set(stored.filter((d) => d._id !== SEED_DOC).map((d) => d.id));
+  for (const t of BUILTIN_TIERS) {
+    if (have.has(t.id)) continue;
+    await c.insertOne(Object.assign({ _id: t.id, createdAt: Date.now(), updatedAt: Date.now() }, shapeTier(t)));
+  }
+  // A ladder seeded before the sign-off chain existed has the tiers but not their place
+  // in it. Fill that in where the field is simply ABSENT — that adds information the row
+  // never carried, and never overrides a choice an administrator has made.
+  for (const t of BUILTIN_TIERS) {
+    const row = stored.find((d) => d._id === t.id);
+    if (!row || row.signoff !== undefined || !t.signoff) continue;
+    await c.updateOne({ id: t.id }, { $set: { signoff: t.signoff, updatedAt: Date.now() } });
+  }
+  for (const id of RETIRED_SEED_TIERS) {
+    const row = stored.find((d) => d._id === id);
+    if (!row || row.updatedBy) continue;      // edited by an administrator: theirs now
+    if (await usersAtTier(id)) continue;      // somebody is placed there: leave it alone
+    await c.deleteOne({ id });
+  }
+  const stamp = { _id: SEED_DOC, id: SEED_DOC, v: TIER_SEED_VERSION, at: Date.now() };
+  if (marker) await c.updateOne({ _id: SEED_DOC }, { $set: stamp });
+  else await c.insertOne(stamp);
+  return c.find({}).toArray();
+}
+async function listTiers() {
+  let stored = [];
+  try {
+    const c = await tierCol();
+    if (c) {
+      stored = await c.find({}).toArray();
+      try { stored = await seedTiers(c, stored); } catch (e) { /* defaults below still apply */ }
+    }
+  } catch (e) { stored = []; }
+  stored = stored.filter((d) => d && d._id !== SEED_DOC);
+  const out = stored.map(shapeTier);
+  // No console tier stored at all -- a fresh database, or a seed that could not be written.
+  // Serve the defaults so the ladder is never empty and nobody is left unplaceable. (Once
+  // ANY console tier is stored the defaults stay out of it: an administrator who deleted
+  // them meant it, and they must not reappear.)
+  if (!out.some((t) => t.kind === 'console')) {
+    BUILTIN_TIERS.filter((t) => tierKind(t.id) === 'console').forEach((t) => out.push(shapeTier(t)));
+  }
+  // The two backend-role tiers ARE the Administrator role and the portal roles, so they
+  // always exist whatever the collection holds.
+  BUILTIN_TIERS.filter((t) => tierKind(t.id) !== 'console')
+    .forEach((t) => { if (!out.some((x) => x.id === t.id)) out.push(shapeTier(t)); });
+  return out.sort(tierSort);
+}
+// The widest console tier: the one a legacy account, or a save that names no tier, lands
+// on. WIDEST, never narrowest -- introducing or reshaping the ladder must not take a
+// module away from an account that is in use today.
+function widestTier(tiers) {
+  const con = tiers.filter((t) => t.kind === 'console');
+  if (!con.length) return null;
+  return con.reduce((a, b) => (b.modules.length > a.modules.length ? b : a));
+}
+// Which modules an account at this tier may hold at all.
+function ceilingOf(levelId, tiers) {
+  const t = tiers.find((x) => x.id === levelId);
+  if (t) return t.kind === 'console' ? t.modules : (t.kind === 'admin' ? ACCESS_MODULES : []);
+  const w = widestTier(tiers);
+  return w ? w.modules : ACCESS_MODULES;   // no console tier defined: cap nothing
+}
+// The tier a stored account reads as. null = never assigned (a row written before the
+// hierarchy existed); readers resolve that to the widest console tier.
+function levelOf(u) {
+  const role = (u && u.role) || 'User';
+  if (role === 'Administrator') return TIER_ADMIN;
+  if (ROLES_PORTAL.indexOf(role) >= 0) return TIER_PORTAL;
+  return String((u && u.level) || '') || null;
+}
+// The tier a save lands on. Administrators and portal accounts take theirs from their
+// role, so the two can never disagree; only a console account is a real choice. An
+// unknown id falls back to the widest console tier, never the narrowest.
+function cleanLevel(v, role, tiers) {
+  if (role === 'Administrator') return TIER_ADMIN;
+  if (ROLES_PORTAL.indexOf(role) >= 0) return TIER_PORTAL;
+  const hit = tiers.find((t) => t.id === String(v || '') && t.kind === 'console');
+  if (hit) return hit.id;
+  const w = widestTier(tiers);
+  return w ? w.id : null;
+}
+// Enforce the ceiling. The dialog already hides what a tier may not hold; doing it here
+// too is what makes the hierarchy real -- a hand-built POST cannot grant Administration to
+// a Ward In-charge.
+function clampPerms(perms, levelId, tiers) {
+  const allowed = ceilingOf(levelId, tiers);
+  // Written as an explicit 'none', not dropped: cleanPerms() hands back a COMPLETE map
+  // over every module, and every reader (safe(), access.js) expects that shape. A missing
+  // key and 'none' deny the same thing, but only one of them says so.
+  const out = {};
+  Object.keys(perms || {}).forEach((k) => { out[k] = allowed.indexOf(k) >= 0 ? perms[k] : 'none'; });
+  return out;
+}
+// Does this account hold anything its tier may not? (Used when a tier is narrowed.)
+const exceedsCeiling = (perms, allowed) => !!perms && typeof perms === 'object' && !Array.isArray(perms)
+  && Object.keys(perms).some((k) => allowed.indexOf(k) < 0 && String(perms[k] || 'none') !== 'none' && !(Array.isArray(perms[k]) && !perms[k].length));
+
 // How much of the personnel register this account may see. Row-level scope, applied
 // on the server by access.filterStaff(); see server/access.js.
 const cleanStaffScope = access.cleanStaffScope;
+const cleanRosterScope = access.cleanRosterScope;
 
 // Changing any of these must invalidate every token the account already holds —
 // otherwise a revoked permission stays live for the rest of the 12h token TTL.
-const SECURITY_FIELDS = ['role', 'active', 'perms', 'roleTemplate', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId'];
+const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit'];
 // Compare only what actually CHANGED. The update object always carries a few scope
 // fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
 // mere presence signed a user out every time an admin fixed a typo in their name.
@@ -78,7 +276,11 @@ function stampRevocation(set, before) {
 //   add    → may modify + create new
 //   delete → full control (modify + create + delete)
 const PERM_LEVELS = ['none', 'view', 'edit', 'add', 'delete'];
-const PERM_ACTIONS = ['view', 'edit', 'add', 'delete'];
+// Kept in step with access.ACTIONS. 'print' is independent — see the note there; it is
+// never produced from a legacy level string, so no existing account is silently granted
+// it and an administrator has to tick it deliberately.
+const PERM_ACTIONS = ['view', 'edit', 'add', 'delete', 'print'];
+const PERM_LEVEL_ACTIONS = ['view', 'edit', 'add', 'delete'];
 const fullPerms = () => ACCESS_MODULES.reduce((m, k) => (m[k] = 'delete', m), {});
 const nonePerms = () => ACCESS_MODULES.reduce((m, k) => (m[k] = 'none', m), {});
 // Normalise an incoming perms object to a complete map over the known modules. Each
@@ -135,11 +337,18 @@ function safe(u) {
     staffScope: role === 'Administrator' ? 'all' : cleanStaffScope(u.staffScope),
     staffId: (u.staffId === 0 || u.staffId) ? u.staffId : null,
     staffEmpId: u.staffEmpId || null,
-    // Which admin-defined role template this account was granted from. A LABEL only:
-    // `perms` above is what the server actually enforces, so a template that is later
-    // edited or deleted cannot change what this account may do until an administrator
-    // explicitly re-applies it.
-    roleTemplate: u.roleTemplate || null,
+    // Duty-roster assignment: which units' sheets this account may open and edit. Its
+    // own grant, NOT a reuse of staffScope (see server/access.js). null = never
+    // assigned, which the server reads as "keep what this account could already reach".
+    rosterScope: role === 'Administrator' ? 'all' : cleanRosterScope(u.rosterScope),
+    rosterDepartments: Array.isArray(u.rosterDepartments) ? u.rosterDepartments : [],
+    // May a ward in-charge BUILD their unit's roster in the portal (never approve it)?
+    // Off unless granted; an administrator needs no grant.
+    rosterEdit: role === 'Administrator' ? true : u.rosterEdit === true,
+    // Which tier of the hierarchy this account sits at (see BUILTIN_TIERS). A ceiling,
+    // not a grant: `perms` above is what the server enforces. null = a row written before
+    // the hierarchy existed; readers resolve it to the widest console tier.
+    level: levelOf(u),
     // Profile picture (set by the account owner via /api/upload kind=profile).
     // Only the CDN url is exposed — publicId stays server-side.
     photo: (u.photo && u.photo.url) ? { url: u.photo.url } : null,
@@ -221,7 +430,7 @@ async function usersModuleActions(req) {
   const val = p.users;
   if (Array.isArray(val)) return PERM_ACTIONS.filter((x) => val.indexOf(x) >= 0);
   const i = PERM_LEVELS.indexOf(String(val || 'none'));   // legacy escalating level string
-  return i <= 0 ? [] : PERM_ACTIONS.slice(0, i);
+  return i <= 0 ? [] : PERM_LEVEL_ACTIONS.slice(0, i);   // a level never grants 'print'
 }
 
 function mount(app, opts) {
@@ -241,157 +450,170 @@ function mount(app, opts) {
   };
   const guard = (action) => [requireApi, need(action)];
 
-  /* ---------------- Role templates (custom, admin-defined) -----------------
-     A role template is a NAMED set of per-module actions -- "Nurse Manager",
-     "Ward In-charge", "Acting In-charge" -- that an administrator can create,
-     edit and delete without a code change. Assigning one to an account COPIES
-     its perms onto that account.
+  /* ---------------- The hierarchy: admin-defined account tiers ----------------
+     Role templates are gone: nothing here defines a permission SET that gets copied onto
+     people. A tier is a rank and a ceiling. Assigning one grants nothing, widening one
+     grants nothing, and the only edit that reaches a live account is a narrowing -- which
+     can only remove. So no change on this screen can escalate anybody, which is exactly
+     what the old "apply this template to its members" button could do.
 
-     The copy is deliberate. `users.perms` stays the single authority the server
-     enforces (access.js), so a template is a convenience for granting, never a
-     second place where permission is decided -- a template that was edited or
-     deleted could otherwise silently change what a live session may do. Editing
-     a template therefore does nothing on its own; "Apply to members" re-pushes
-     it to the accounts stamped with it, which is explicit and logged.
-
-     Built-ins are editable but NOT deletable, so the dropdown can never end up
-     empty. Nothing here removes an account or its permissions: deleting a
-     template only clears the `roleTemplate` label. */
-  const BUILTIN_TEMPLATES = [
-    { id: 'nurse-manager', name: 'Nurse Manager', description: 'Runs the nursing service - full roster and staffing control, appraisals, and read access to the hospital numbers.',
-      perms: { stats: 'view', quality: 'add', supervisor: 'add', staff: 'add', datacol: 'add', reports: 'view', users: 'none', perf: 'delete', roster: 'delete', medicine: 'view' } },
-    { id: 'ward-incharge', name: 'Ward In-charge', description: 'Runs one unit: builds and maintains its duty roster, submits its data, records its supervision.',
-      perms: { stats: 'view', quality: 'add', supervisor: 'add', staff: 'edit', datacol: 'add', reports: 'view', users: 'none', perf: 'edit', roster: 'add', medicine: 'view' } },
-    { id: 'acting-incharge', name: 'Acting In-charge', description: 'Covering an in-charge: the same day-to-day screens, but cannot delete a published roster.',
-      perms: { stats: 'view', quality: 'edit', supervisor: 'add', staff: 'view', datacol: 'add', reports: 'view', users: 'none', perf: 'view', roster: 'edit', medicine: 'view' } },
-    { id: 'manager', name: 'Manager', description: 'Cross-department oversight - may edit most registers, may not administer accounts.',
-      perms: { stats: 'edit', quality: 'edit', supervisor: 'edit', staff: 'edit', datacol: 'edit', reports: 'edit', users: 'view', perf: 'edit', roster: 'edit', medicine: 'view' } },
-    { id: 'department-head', name: 'Department Head', description: 'Owns one department, its indicators and its people.',
-      perms: { stats: 'view', quality: 'add', supervisor: 'add', staff: 'edit', datacol: 'add', reports: 'view', users: 'none', perf: 'edit', roster: 'view', medicine: 'view' } },
-    { id: 'data-entry', name: 'Data Entry', description: 'Submits the monthly numbers and nothing else.',
-      perms: { stats: 'view', quality: 'add', supervisor: 'add', staff: 'none', datacol: 'add', reports: 'view', users: 'none', perf: 'none', roster: 'none', medicine: 'none' } },
-    { id: 'read-only', name: 'Read-only', description: 'Can look at everything it is scoped to, can change nothing.',
-      perms: { stats: 'view', quality: 'view', supervisor: 'view', staff: 'view', datacol: 'view', reports: 'view', users: 'none', perf: 'view', roster: 'view', medicine: 'view' } },
-  ];
-  const TEMPLATES = 'roleTemplates';
-  const tmplCol = async () => { const d = await db.getDbHandle(); return d ? d.collection(TEMPLATES) : null; };
+     The stored `roleTemplates` collection from that feature is left alone; nothing reads
+     it (deployments never delete live data). */
   const slugId = (v) => String(v || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
-  const shapeTemplate = (t) => ({
-    id: t.id, name: t.name, description: String(t.description || ''),
-    perms: cleanPerms(t.perms), builtin: !!t.builtin,
-    updatedAt: t.updatedAt || 0, updatedBy: t.updatedBy || null,
-  });
-  // A stored row wins over the built-in default (a built-in may be re-tuned), and any
-  // built-in with no stored row is served from code -- so a fresh database already has
-  // a usable set of roles, with no seeding step that could half-fail.
-  async function listTemplates() {
-    let stored = [];
-    try { const c = await tmplCol(); if (c) stored = await c.find({}).toArray(); } catch (e) { stored = []; }
-    const byId = new Map(stored.map((t) => [t.id, t]));
-    const out = BUILTIN_TEMPLATES.map((b) => shapeTemplate(Object.assign({}, b, byId.get(b.id) || {}, { builtin: true })));
-    stored.filter((t) => !BUILTIN_TEMPLATES.some((b) => b.id === t.id))
-      .forEach((t) => out.push(shapeTemplate(Object.assign({}, t, { builtin: false }))));
-    return out;
-  }
-  // How many accounts carry each template -- shown in the panel so an administrator can
-  // see what an edit is about to affect BEFORE applying it.
-  async function templateCounts() {
+  // How many accounts sit at each tier. A row with no tier assigned counts toward the
+  // widest console tier, which is the one that actually applies to it.
+  async function tierCounts(tiers) {
     const counts = {};
+    const fallback = (widestTier(tiers) || {}).id || null;
     try {
       const users = await db.getUsers();
       if (typeof users.find === 'function') {
-        (await users.find({}).toArray()).forEach((u) => { if (u && u.roleTemplate) counts[u.roleTemplate] = (counts[u.roleTemplate] || 0) + 1; });
+        (await users.find({}).toArray()).forEach((u) => {
+          const id = levelOf(u) || fallback;
+          if (id) counts[id] = (counts[id] || 0) + 1;
+        });
       }
     } catch (e) { /* counts are informational only */ }
     return counts;
   }
 
-  app.get('/api/roles', guard('view'), async (req, res) => {
-    try { res.json({ ok: true, templates: await listTemplates(), counts: await templateCounts(), modules: ACCESS_MODULES, actions: PERM_ACTIONS }); }
-    catch (e) { res.status(500).json({ ok: false, error: 'Could not load role templates.' }); }
+  app.get('/api/tiers', guard('view'), async (req, res) => {
+    try { const tiers = await listTiers(); res.json({ ok: true, tiers, counts: await tierCounts(tiers), modules: ACCESS_MODULES }); }
+    catch (e) { res.status(500).json({ ok: false, error: 'Could not load the hierarchy.' }); }
   });
 
-  app.post('/api/roles', guard('add'), async (req, res) => {
+  app.post('/api/tiers', guard('add'), async (req, res) => {
     const b = req.body || {};
     const name = String(b.name || '').trim().slice(0, 60);
-    if (!name) return res.status(400).json({ ok: false, error: 'Role name is required.' });
+    if (!name) return res.status(400).json({ ok: false, error: 'A tier name is required.' });
     const id = slugId(b.id || name);
-    if (!id) return res.status(400).json({ ok: false, error: 'The role name must contain a letter or a number.' });
+    if (!id) return res.status(400).json({ ok: false, error: 'The tier name must contain a letter or a number.' });
+    if (tierKind(id) !== 'console') return res.status(400).json({ ok: false, error: 'That name is reserved. Pick another.' });
     try {
-      const c = await tmplCol();
-      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable - cannot save role templates.' });
-      if ((await listTemplates()).some((t) => t.id === id)) return res.status(409).json({ ok: false, error: 'A role called "' + name + '" already exists.' });
-      const doc = { id, name, description: String(b.description || '').trim().slice(0, 300), perms: cleanPerms(b.perms), builtin: false, createdAt: Date.now(), updatedAt: Date.now(), updatedBy: meOf(req) };
-      await c.insertOne(doc);
-      activity.log(req, 'role_template_created', { target: id, name });
-      res.json({ ok: true, template: shapeTemplate(doc) });
-    } catch (e) { res.status(500).json({ ok: false, error: 'Could not create the role template.' }); }
+      const c = await tierCol();
+      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable - cannot save the hierarchy.' });
+      const tiers = await listTiers();
+      if (tiers.some((t) => t.id === id)) return res.status(409).json({ ok: false, error: 'A tier called "' + name + '" already exists.' });
+      // New tiers land at the bottom of the console ladder unless a rank is given, so
+      // adding one never silently reorders the tiers above it.
+      const below = tiers.filter((t) => t.kind === 'console').reduce((m, t) => Math.max(m, t.rank), 0);
+      const doc = shapeTier({ id, name, description: b.description, rank: b.rank != null ? b.rank : below + 10, modules: b.modules, signoff: b.signoff });
+      await c.insertOne(Object.assign({ _id: id, createdAt: Date.now(), updatedAt: Date.now(), updatedBy: meOf(req) }, doc));
+      activity.log(req, 'tier_created', { target: id, detail: name + ' · ' + doc.modules.length + ' modules' });
+      res.json({ ok: true, tier: doc });
+    } catch (e) {
+      if (isDupKey(e)) return res.status(409).json({ ok: false, error: 'A tier with that name already exists.' });
+      res.status(500).json({ ok: false, error: 'Could not create the tier.' });
+    }
   });
 
-  app.put('/api/roles/:id', guard('edit'), async (req, res) => {
+  /* Update a tier. Widening its ceiling changes nothing for anybody -- it only makes more
+     modules tickable on the next edit. NARROWING it is the one thing that reaches live
+     accounts: everyone at the tier loses what the tier may no longer hold, immediately and
+     with a forced sign-out, because leaving them holding it would make the ceiling a
+     fiction. The response says how many were affected so the panel can report it. */
+  app.put('/api/tiers/:id', guard('edit'), async (req, res) => {
     const id = slugId(req.params.id);
     const b = req.body || {};
     try {
-      const c = await tmplCol();
-      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable - cannot save role templates.' });
-      const builtin = BUILTIN_TEMPLATES.find((t) => t.id === id);
-      const cur = await c.findOne({ id });
-      if (!builtin && !cur) return res.status(404).json({ ok: false, error: 'That role template no longer exists.' });
-      const base = Object.assign({}, builtin || {}, cur || {});
-      const set = {
+      const c = await tierCol();
+      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable - cannot save the hierarchy.' });
+      const tiers = await listTiers();
+      const cur = tiers.find((t) => t.id === id);
+      if (!cur) return res.status(404).json({ ok: false, error: 'That tier no longer exists.' });
+      const next = shapeTier({
         id,
-        name: b.name != null ? (String(b.name).trim().slice(0, 60) || base.name) : base.name,
-        description: b.description != null ? String(b.description).trim().slice(0, 300) : (base.description || ''),
-        perms: cleanPerms(b.perms != null ? b.perms : base.perms),
-        builtin: !!builtin,
-        updatedAt: Date.now(), updatedBy: meOf(req),
-      };
-      await c.updateOne({ id }, { $set: set, $setOnInsert: { createdAt: Date.now() } }, { upsert: true });
-      activity.log(req, 'role_template_updated', { target: id, name: set.name });
-      res.json({ ok: true, template: shapeTemplate(set) });
-    } catch (e) { res.status(500).json({ ok: false, error: 'Could not update the role template.' }); }
-  });
-
-  app.delete('/api/roles/:id', guard('delete'), async (req, res) => {
-    const id = slugId(req.params.id);
-    if (BUILTIN_TEMPLATES.some((t) => t.id === id)) return res.status(400).json({ ok: false, error: 'Built-in roles cannot be deleted. Edit their permissions instead.' });
-    try {
-      const c = await tmplCol();
-      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable.' });
-      const r = await c.deleteOne({ id });
-      if (!r.deletedCount) return res.status(404).json({ ok: false, error: 'That role template no longer exists.' });
-      // Accounts keep every permission they already hold; they simply stop being
-      // labelled with a template that no longer exists. Deleting a role must never
-      // take access away from a person who is working today.
-      let unstamped = 0;
-      try {
+        name: b.name != null ? b.name : cur.name,
+        description: b.description != null ? b.description : cur.description,
+        // A fixed tier keeps its place at the top or the bottom of the ladder.
+        rank: cur.fixed ? cur.rank : (b.rank != null ? b.rank : cur.rank),
+        modules: cur.fixed ? cur.modules : (b.modules != null ? b.modules : cur.modules),
+        signoff: b.signoff !== undefined ? b.signoff : cur.signoff,
+      });
+      await c.updateOne({ id }, { $set: Object.assign({}, next, { updatedAt: Date.now(), updatedBy: meOf(req) }), $setOnInsert: { _id: id, createdAt: Date.now() } }, { upsert: true });
+      let clamped = 0;
+      const lost = cur.modules.filter((m) => next.modules.indexOf(m) < 0);
+      if (next.kind === 'console' && lost.length) {
         const users = await db.getUsers();
-        if (typeof users.updateMany === 'function') unstamped = (await users.updateMany({ roleTemplate: id }, { $set: { roleTemplate: null } })).modifiedCount || 0;
-      } catch (e) { /* the label is cosmetic */ }
-      activity.log(req, 'role_template_deleted', { target: id, unstamped });
-      res.json({ ok: true, unstamped });
-    } catch (e) { res.status(500).json({ ok: false, error: 'Could not delete the role template.' }); }
+        if (typeof users.find === 'function') {
+          const fallback = (widestTier(tiers) || {}).id || null;
+          for (const u of await users.find({ role: 'User' }).toArray()) {
+            if ((levelOf(u) || fallback) !== id) continue;
+            if (!exceedsCeiling(u.perms, next.modules)) continue;
+            await users.updateOne({ username: u.username }, { $set: { perms: clampPerms(cleanPerms(u.perms), id, [next]), sessionEpoch: Date.now(), updatedAt: Date.now() } });
+            access.invalidate(u.username);
+            clamped++;
+          }
+        }
+      }
+      activity.log(req, 'tier_updated', { target: id, detail: next.name + (lost.length ? ' · removed ' + lost.join(', ') + ' from ' + clamped + ' account(s)' : '') });
+      res.json({ ok: true, tier: next, clamped, removed: lost });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not update the tier.' }); }
   });
 
-  // Push a template's permissions onto every account stamped with it. Explicit and
-  // logged, because it CHANGES what live sessions may do -- hence the epoch bump.
-  app.post('/api/roles/:id/apply', guard('edit'), async (req, res) => {
+  /* Delete a tier. Refused while anyone is at it: a tier is the ceiling its members are
+     held to, so dropping it would leave those accounts capped by nothing in particular.
+     Move them first -- that is an explicit decision about each person. */
+  app.delete('/api/tiers/:id', guard('delete'), async (req, res) => {
     const id = slugId(req.params.id);
     try {
-      const t = (await listTemplates()).find((x) => x.id === id);
-      if (!t) return res.status(404).json({ ok: false, error: 'That role template no longer exists.' });
-      const users = await db.getUsers();
-      if (typeof users.find !== 'function') return res.status(503).json({ ok: false, error: 'Database unavailable.' });
-      const targets = await users.find({ roleTemplate: id, role: 'User' }).toArray();
-      let n = 0;
-      for (const u of targets) {
-        await users.updateOne({ username: u.username }, { $set: { perms: cleanPerms(t.perms), sessionEpoch: Date.now(), updatedAt: Date.now() } });
-        access.invalidate(u.username);
-        n++;
+      const tiers = await listTiers();
+      const cur = tiers.find((t) => t.id === id);
+      if (!cur) return res.status(404).json({ ok: false, error: 'That tier no longer exists.' });
+      if (cur.fixed) return res.status(400).json({ ok: false, error: 'Administrator and Portal account are built in and cannot be removed.' });
+      if (tiers.filter((t) => t.kind === 'console').length <= 1) return res.status(400).json({ ok: false, error: 'This is the last tier between Administrator and Portal — add another before removing it.' });
+      const counts = await tierCounts(tiers);
+      if (counts[id]) return res.status(400).json({ ok: false, error: 'Move its ' + counts[id] + ' account' + (counts[id] === 1 ? '' : 's') + ' to another tier first.' });
+      const c = await tierCol();
+      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable.' });
+      await c.deleteOne({ id });
+      activity.log(req, 'tier_deleted', { target: id, detail: cur.name });
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not delete the tier.' }); }
+  });
+
+  /* Reorder the console ladder. Rank is presentation and seniority only -- it changes no
+     ceiling, so nobody's access moves. */
+  app.post('/api/tiers/reorder', guard('edit'), async (req, res) => {
+    const order = Array.isArray((req.body || {}).order) ? req.body.order.map(slugId) : [];
+    if (!order.length) return res.status(400).json({ ok: false, error: 'No order was sent.' });
+    try {
+      const c = await tierCol();
+      if (!c) return res.status(503).json({ ok: false, error: 'Database unavailable.' });
+      const tiers = await listTiers();
+      let rank = 10;
+      for (const id of order) {
+        const t = tiers.find((x) => x.id === id && x.kind === 'console');
+        if (!t) continue;
+        await c.updateOne({ id }, { $set: Object.assign({}, t, { rank, updatedAt: Date.now(), updatedBy: meOf(req) }), $setOnInsert: { _id: id, createdAt: Date.now() } }, { upsert: true });
+        rank += 10;
       }
-      activity.log(req, 'role_template_applied', { target: id, users: n });
-      res.json({ ok: true, updated: n });
-    } catch (e) { res.status(500).json({ ok: false, error: 'Could not apply the role template.' }); }
+      activity.log(req, 'tier_reordered', { detail: order.join(' > ') });
+      res.json({ ok: true, tiers: await listTiers() });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not reorder the hierarchy.' }); }
+  });
+
+  app.get('/api/signatories', requireApi, async (req, res) => {
+    try {
+      const a = await access.forRequest(req);
+      if (!a) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+      const tiers = await listTiers();
+      const fallback = (widestTier(tiers) || {}).id || null;
+      const byId = {}; tiers.forEach((t) => { byId[t.id] = t; });
+      const users = await db.getUsers();
+      let list = [];
+      if (typeof users.find === 'function') list = await users.find({ active: { $ne: false } }).toArray();
+      const out = list
+        .filter((u) => (u.role || 'User') === 'User' || u.role === 'Administrator')
+        .map((u) => {
+          const id = levelOf(u) || fallback;
+          const t = byId[id] || null;
+          return { name: u.name || u.username, title: u.title || (t ? t.name : ''), level: id, levelName: t ? t.name : '', signoff: t ? t.signoff : '' };
+        })
+        .filter((x) => x.name)
+        .sort((x, y) => String(x.name).localeCompare(String(y.name)));
+      res.json({ ok: true, signatories: out, tiers: tiers.map((t) => ({ id: t.id, name: t.name, rank: t.rank, signoff: t.signoff })) });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not load signatories.' }); }
   });
 
   // List every account.
@@ -413,6 +635,8 @@ function mount(app, opts) {
     if (!/^[a-z0-9._-]{2,40}$/.test(username)) return res.status(400).json({ ok: false, error: 'Username may use letters, numbers, dot, dash, underscore (2–40 chars).' });
     if (password.length < 6) return res.status(400).json({ ok: false, error: 'Password must be at least 6 characters.' });
     const role = ROLES.includes(b.role) ? b.role : 'User';
+    const tiers = await listTiers();
+    const level = cleanLevel(b.level, role, tiers);
     try {
       if (dc().NO_DATA_ROLES.indexOf(role) >= 0 && hasScope(b)) return res.status(400).json({ ok: false, error: dc().NURSE_PCA_SCOPE_ERROR });
       const users = await db.getUsers();
@@ -444,13 +668,19 @@ function mount(app, opts) {
         qualityIndicators: scope ? scope.qualityIndicators : {}, // specific-indicator access
         // Per-module access levels — only meaningful for the 'User' role. Admins are
         // full (null => resolved to full in safe()); collectors use the collector portal.
-        perms: role === 'User' ? cleanPerms(b.perms) : null,
-        roleTemplate: role === 'User' ? (String(b.roleTemplate || '').trim() || null) : null,
+        perms: role === 'User' ? clampPerms(cleanPerms(b.perms), level, tiers) : null,
+        level,
         // Row-level staff scope + the personnel record this login belongs to (needed
         // for scope 'self', where the account may see only its own file).
         staffScope: role === 'Administrator' ? 'all' : cleanStaffScope(b.staffScope),
         staffId: (b.staffId === 0 || b.staffId) ? b.staffId : null,
         staffEmpId: String(b.staffEmpId || '').trim() || null,
+        // Duty-roster units. A NEW account gets 'all' when the dialog sends nothing:
+        // the `roster` module permission is what decides whether they reach the module
+        // at all, and a blank field here would otherwise read as "assigned no units".
+        rosterScope: role === 'Administrator' ? 'all' : (cleanRosterScope(b.rosterScope) || 'all'),
+        rosterDepartments: cleanList(b.rosterDepartments),
+        rosterEdit: role === 'Administrator' ? true : b.rosterEdit === true,
         passwordHash: await auth.hash(password),
         // Bumped whenever access changes; every issued token carries the value it was
         // signed with, so raising it signs the account out everywhere.
@@ -459,7 +689,7 @@ function mount(app, opts) {
       };
       if (plan && plan.responsibleId) doc.responsibleId = plan.responsibleId;
       await users.insertOne(doc);
-      activity.log(req, 'user_created', { target: username, detail: 'role: ' + role });
+      activity.log(req, 'user_created', { target: username, detail: 'role: ' + role + ' · level: ' + level });
       if (plan) {
         try { await dc().applyResponsibleSync(plan, doc, scope); }
         catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(doc) }); }
@@ -527,21 +757,37 @@ function mount(app, opts) {
       // Row-level staff scope. Administrators are always unrestricted.
       if (role === 'Administrator') {
         set.staffScope = 'all';
+        set.rosterScope = 'all'; set.rosterDepartments = []; set.rosterEdit = true;
       } else {
         if (b.staffScope !== undefined) set.staffScope = cleanStaffScope(b.staffScope);
         if (b.staffId !== undefined) set.staffId = (b.staffId === 0 || b.staffId) ? b.staffId : null;
         if (b.staffEmpId !== undefined) set.staffEmpId = String(b.staffEmpId || '').trim() || null;
+        // Duty-roster units. Absent = untouched, so an edit that does not carry the
+        // field (an older dialog, a password reset) never widens or clears the grant.
+        // An unrecognised value falls back to 'all' rather than to null, which would
+        // silently revert a deliberate assignment to the legacy staffScope rule.
+        if (b.rosterScope !== undefined) set.rosterScope = cleanRosterScope(b.rosterScope) || 'all';
+        if (b.rosterDepartments !== undefined) set.rosterDepartments = cleanList(b.rosterDepartments);
+        if (b.rosterEdit !== undefined) set.rosterEdit = b.rosterEdit === true;
       }
 
       // Per-module access levels. Only the 'User' role carries a perms map; Administrators
       // and collectors are cleared to null (full / portal). Absent leaves it untouched.
+      const tiers = await listTiers();
+      const level = cleanLevel(b.level !== undefined ? b.level : u.level, role, tiers);
+      set.level = level;
       if (role === 'User') {
-        if (b.perms !== undefined) set.perms = cleanPerms(b.perms);
-        if (b.roleTemplate !== undefined) set.roleTemplate = String(b.roleTemplate || '').trim() || null;
+        if (b.perms !== undefined) set.perms = clampPerms(cleanPerms(b.perms), level, tiers);
+        // A level change with no grant attached re-clamps what is already stored, so
+        // demoting a Manager to In-charge drops Administration in that same save instead
+        // of leaving it behind. A legacy account whose perms are still null is left null
+        // (safe() reads that as unrestricted) -- materialising {} here would revoke
+        // everything from someone who is working today.
+        else if (level !== levelOf(u) && u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) set.perms = clampPerms(cleanPerms(u.perms), level, tiers);
       } else {
         set.perms = null;
-        set.roleTemplate = null;
       }
+      if (u.roleTemplate) set.roleTemplate = null;   // retired label, cleared on the next save
 
       // Never strand the system without an active administrator.
       // Only an ACTIVE administrator counts toward the total, so only demoting/deactivating

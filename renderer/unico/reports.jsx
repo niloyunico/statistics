@@ -1711,82 +1711,123 @@ function Reports({depts}){
    default open local mode these endpoints are unguarded (local PC admin); with
    REQUIRE_AUTH=true they require an Administrator session. ---- */
 const UCOLORS=['#0090ca','#3ab5a7','#6a52d4','#e08a1e','#d23a52','#1f9d57'];
-// Module ids match server ACCESS_MODULES + renderer unicoAccessModuleOf().
-const USER_MODS=[['stats','Hospital Statistics'],['quality','Quality Indicators'],['supervisor','Supervisor Reports'],['staff','Staff Management'],['datacol','Data Collection'],['reports','Reports'],['users','Administration'],['perf','Performance Appraisal'],['roster','Duty Roster'],['medicine','Medicine & Rx']];
+/* Module ids match server ACCESS_MODULES + renderer unicoAccessModuleOf(). The LABEL,
+   GROUP and ORDER are the sidebar's own (UNICO_WS in ui.jsx): an administrator ticking
+   "Settings" is ticking the row they can actually see in the menu, not a second name for
+   it. `where` names the place a module lives when it is not a sidebar destination of its
+   own — Performance and Duty Roster are tabs inside Staff Management.
+
+   Leaving a module at None does not merely refuse the screen: ui.jsx drops the row from
+   the sidebar altogether (rows at UNICO_WS.map, tabs at unicoWorkspaceSub), so the person
+   never sees the button. */
+const USER_MODS=[
+  ['stats','Overview & Departments','Clinical',''],
+  ['quality','Quality','Clinical',''],
+  ['supervisor','Supervisor Reports','Clinical',''],
+  ['medicine','Medicine & Rx','Clinical',''],
+  ['datacol','Data Collection','Data',''],
+  ['reports','Reports','Data',''],
+  ['staff','Staff Management','Administer',''],
+  ['perf','Performance','Administer','inside Staff Management'],
+  ['roster','Duty Roster','Administer','inside Staff Management'],
+  ['users','Settings','Administer',''],
+];
+// The sidebar's section order, so the grid reads top-to-bottom like the menu does.
+const MOD_GROUPS=['Clinical','Data','Administer'];
+const modsGrouped=(list)=>MOD_GROUPS.map(g=>[g,list.filter(m=>m[2]===g)]).filter(([,ms])=>ms.length);
 const PERM_LEVELS=[['none','None'],['view','View'],['edit','Edit'],['add','Add'],['delete','Delete']];
 const PERM_RANK={none:0,view:1,edit:2,add:3,delete:4};
 // New model: each module grants an independent SET of actions (View/Edit/Add/Delete),
 // so e.g. Delete without Add is possible. These helpers bridge the legacy escalating
 // level strings (view<edit<add<delete) to action arrays and back.
-const PERM_ACTS=[['view','View'],['edit','Edit'],['add','Add'],['delete','Delete']];
-const PERM_ORDER=['view','edit','add','delete'];
-function levelToActions(lv){ const i=['none','view','edit','add','delete'].indexOf(lv); return i<=0?[]:PERM_ORDER.slice(0,i); }
+// 'Print' is deliberately last and deliberately separate: it is not more power over the
+// record than Delete, it is a different kind — the record leaves the system on paper.
+// A legacy level string never granted it, so levelToActions() must not invent one.
+const PERM_ACTS=[['view','View'],['edit','Edit'],['add','Add'],['delete','Delete'],['print','Print']];
+const PERM_ORDER=['view','edit','add','delete','print'];
+const PERM_LEVEL_ORDER=['view','edit','add','delete'];
+function levelToActions(lv){ const i=['none','view','edit','add','delete'].indexOf(lv); return i<=0?[]:PERM_LEVEL_ORDER.slice(0,i); }
 function asActions(v){ if(Array.isArray(v)) return PERM_ORDER.filter(a=>v.indexOf(a)>=0); return levelToActions(v||'none'); }
-function sameActs(a,b){ a=asActions(a); b=asActions(b); return a.length===b.length&&a.every((x,i)=>x===b[i]); }
-// Access templates → default per-module levels. 'Administrator' maps to the backend
-// Administrator role (unrestricted); the rest store as role 'User' with these presets.
-const ROLE_PRESETS={
-  'Administrator':{stats:'delete',quality:'delete',supervisor:'delete',staff:'delete',datacol:'delete',reports:'delete',users:'delete'},
-  'Manager':{stats:'edit',quality:'edit',supervisor:'edit',staff:'edit',datacol:'edit',reports:'edit',users:'view'},
-  'Department Head':{stats:'view',quality:'add',supervisor:'add',staff:'edit',datacol:'add',reports:'view',users:'none'},
-  'Data Entry':{stats:'view',quality:'add',supervisor:'add',staff:'none',datacol:'add',reports:'view',users:'none'},
-  'Read-only':{stats:'view',quality:'view',supervisor:'view',staff:'view',datacol:'view',reports:'view',users:'none'},
-};
-const USER_ROLES=Object.keys(ROLE_PRESETS);
 // PORTAL backend roles (server/access.js PORTAL_ROLES) → the dropdown label. Only
 // 'collector' used to be known here, so an in-charge/nurse/PCA opened as 'Custom', saved
 // as role 'User' and lost their portal, ward and quality areas on a mere rename.
 const PORTAL_ROLE_LABEL={collector:'Data Collector',incharge:'In-charge (portal)',nurse:'Nurse (portal)',pca:'PCA (portal)'};
-const portalRoleOfLabel=l=>Object.keys(PORTAL_ROLE_LABEL).find(k=>PORTAL_ROLE_LABEL[k]===l)||null;
-/* ---- Role templates, admin-defined (server/users-admin.js /api/roles) ----
-   ROLE_PRESETS above is now only the OFFLINE FALLBACK — the real list is loaded from
-   the server, where an administrator can add, edit and delete roles ("Nurse Manager",
-   "Ward In-charge", "Acting In-charge") without a code change.
+/* ---- The hierarchy: admin-defined account tiers (server/users-admin.js) ----
+   The hospital defines its own ladder in Settings → Users & Roles → Hierarchy: L1
+   Administrator, then whatever tiers it runs on — CNS, Nurse Manager, Ward In-charge.
+   Creating a user is "assign a rank, then tick what they get".
 
-   A template is a granting convenience, never a second authority: picking one COPIES
-   its actions into this account's own perms map, which is the only thing the server
-   enforces. That is why editing a template does not silently re-permission anyone —
-   the panel has an explicit "Apply to members" for that. */
-let ROLE_TMPL=null;          // cached list, null until the first load
-let ROLE_TMPL_P=null;        // in-flight request, so N mounts make one call
-const tmplFallback=()=>USER_ROLES.filter(r=>r!=='Administrator').map(r=>({
-  id:r.toLowerCase().replace(/[^a-z0-9]+/g,'-'),name:r,description:'',perms:ROLE_PRESETS[r],builtin:true}));
-function loadRoleTemplates(force){
-  if(!force&&ROLE_TMPL) return Promise.resolve(ROLE_TMPL);
-  if(!force&&ROLE_TMPL_P) return ROLE_TMPL_P;
-  ROLE_TMPL_P=usersApi('GET','/api/roles')
-    .then(j=>{ ROLE_TMPL=(j.templates||[]).length?j.templates:tmplFallback(); ROLE_TMPL_P=null; return ROLE_TMPL; })
-    // A read failure must not leave the Role dropdown empty — fall back to the built-ins
-    // so an administrator can still grant access while the API is unreachable.
-    .catch(()=>{ ROLE_TMPL=tmplFallback(); ROLE_TMPL_P=null; return ROLE_TMPL; });
-  return ROLE_TMPL_P;
+   A tier CAPS access, it never grants it. That is the whole difference between this and
+   the role templates it replaced: picking a tier gives an account nothing, and widening a
+   tier gives its members nothing — every action is still ticked per account, and every
+   account starts with none. Narrowing a tier is the one edit that reaches live accounts,
+   and it can only ever remove. `perms` remains the only thing the server enforces
+   (server/access.js), and the ceiling is applied again there on every save.
+
+   PORTAL accounts (collector / in-charge / nurse / PCA) are NOT a rank on this ladder.
+   They sign in to the collection portal or the staff app, and they are created and scoped
+   in Data Collection — a console account reaches the same submissions by being granted the
+   Data Collection module. Existing portal accounts still open here so their assignment can
+   be edited, but this dialog never creates one and never converts an account into or out
+   of one. */
+const TIER_ADMIN='admin', TIER_PORTAL='portal';
+// Served when /api/tiers cannot be reached, so an administrator can still place an account
+// while the API is down. Mirrors BUILTIN_TIERS in server/users-admin.js.
+const TIER_FALLBACK=()=>[
+  {id:TIER_ADMIN,name:'Administrator',rank:0,kind:'admin',fixed:true,description:'Runs the system. Every module, nothing to tick.',modules:USER_MODS.map(([k])=>k)},
+  {id:'cns',name:'Chief of Nursing Services',rank:10,kind:'console',fixed:false,description:'Head of the nursing department — the main HOD, and the final approver.',modules:USER_MODS.map(([k])=>k)},
+  {id:'nurse-manager',name:'Nurse Manager',rank:20,kind:'console',fixed:false,description:'Runs a cluster of wards: their people, rosters, appraisals and numbers.',modules:USER_MODS.map(([k])=>k).filter(k=>k!=='users')},
+  {id:'ward-incharge',name:'Ward In-charge',rank:30,kind:'console',fixed:false,description:'Runs one unit: its roster, its submissions and its supervision.',modules:['stats','quality','supervisor','staff','datacol','perf','roster']},
+  {id:TIER_PORTAL,name:'Portal account',rank:9999,kind:'portal',fixed:true,description:'Signs in to the collection portal or the staff app. Created and scoped in Data Collection.',modules:[]},
+];
+let TIER_CACHE=null;     // the loaded ladder, null until the first read
+let TIER_REQ=null;       // in-flight request, so N mounts make one call
+function loadTiers(force){
+  if(!force&&TIER_CACHE) return Promise.resolve(TIER_CACHE);
+  if(!force&&TIER_REQ) return TIER_REQ;
+  TIER_REQ=usersApi('GET','/api/tiers')
+    .then(j=>{ TIER_CACHE=(j.tiers||[]).length?j.tiers:TIER_FALLBACK(); TIER_REQ=null; return TIER_CACHE; })
+    .catch(()=>{ TIER_CACHE=TIER_FALLBACK(); TIER_REQ=null; return TIER_CACHE; });
+  return TIER_REQ;
 }
-function useRoleTemplates(){
-  const [t,setT]=React.useState(ROLE_TMPL);
-  React.useEffect(()=>{ let live=true; loadRoleTemplates().then(x=>{ if(live) setT(x); }); return ()=>{live=false;}; },[]);
-  return t||ROLE_TMPL||tmplFallback();
+function useTiers(){
+  const [t,setT]=React.useState(TIER_CACHE);
+  React.useEffect(()=>{ let live=true; loadTiers().then(x=>{ if(live) setT(x); }); return ()=>{live=false;}; },[]);
+  return t||TIER_CACHE||TIER_FALLBACK();
 }
+const byRank=(a,b)=>a.rank-b.rank||String(a.name).localeCompare(String(b.name));
+// The tiers an account can be PLACED at: Administrator plus the hospital's console ladder.
+// Portal is not a rank, so it never appears in the picker.
+const placeableTiers=ts=>ts.filter(t=>t.kind!=='portal').slice().sort(byRank);
+const tierById=(ts,id)=>ts.find(t=>t.id===id)||null;
+// Widest console tier — what a row written before the hierarchy existed reads as. WIDEST,
+// never narrowest, so opening an old account can't quietly take a module away from someone
+// who is working today.
+const widestTier=ts=>{ const c=ts.filter(t=>t.kind==='console'); return c.length?c.reduce((a,b)=>(b.modules||[]).length>(a.modules||[]).length?b:a):null; };
+const tierOfUser=(u,ts)=>{ if(!u) return null; if(u.role==='Administrator') return TIER_ADMIN; if(PORTAL_ROLE_LABEL[u.role]) return TIER_PORTAL;
+  const hit=u.level&&tierById(ts,u.level); return hit?hit.id:((widestTier(ts)||{}).id||null); };
+const tierName=(ts,id)=>((tierById(ts,id)||{}).name)||'—';
+// The module rows a tier may be granted. An Administrator holds everything, so its ceiling
+// is the full list rather than a stored one.
+const modsForTier=t=>{ if(!t) return []; if(t.kind==='admin') return USER_MODS; const a=t.modules||[]; return USER_MODS.filter(([k])=>a.indexOf(k)>=0); };
 const FULL_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]=[...PERM_ORDER],m),{});
 const NONE_PERMS=()=>USER_MODS.reduce((m,[k])=>(m[k]=[],m),{});
 const inits=n=>(n||'?').split(' ').map(x=>x[0]).slice(0,2).join('').toUpperCase();
-// Which template a perms map matches (for the Role dropdown); 'Custom' if none.
-// 'Administrator' is a BACKEND ROLE, not an access template — never infer it from a perms
-// map. It used to be matched here, so a plain 'User' who happened to hold every action on
-// every module opened with Role = Administrator preselected, and the next save (even just
-// a name fix) silently PROMOTED them to a real administrator. Full-access Users now read
-// as 'Custom'; promoting is only ever an explicit pick from the dropdown.
-const detectTemplate=p=>{ for(const r of USER_ROLES){ if(r==='Administrator') continue; const pr=ROLE_PRESETS[r]; if(USER_MODS.every(([k])=>sameActs(p[k],pr[k]))) return r; } return 'Custom'; };
 // A 'User' with NO perms map can do nothing at runtime — unicoUserPerms() (ui.jsx) turns a
 // missing map into {}, so every module is denied. This read 'Full access', so the list
 // claimed the exact opposite of what such an account could actually do. (Administrators and
 // collectors never reach here; summaryOf() short-circuits them.)
-const permSummary=p=>{ if(!p) return 'No access'; const acts=USER_MODS.map(([k])=>asActions(p[k])); const on=acts.filter(a=>a.length).length; if(!on) return 'No access'; if(acts.every(a=>a.length===4)) return 'Full access'; const ed=acts.filter(a=>a.indexOf('edit')>=0||a.indexOf('add')>=0||a.indexOf('delete')>=0).length; return `${on} module${on!==1?'s':''}${ed?' · '+ed+' editable':''}`; };
+const permSummary=p=>{ if(!p) return 'No access'; const acts=USER_MODS.map(([k])=>asActions(p[k])); const on=acts.filter(a=>a.length).length; if(!on) return 'No access'; if(acts.every(a=>a.length===PERM_ORDER.length)) return 'Full access'; const ed=acts.filter(a=>a.indexOf('edit')>=0||a.indexOf('add')>=0||a.indexOf('delete')>=0).length; return `${on} module${on!==1?'s':''}${ed?' · '+ed+' editable':''}`; };
 
 function usersApi(method,path,body){
   return fetch(path,{method,headers:{'Content-Type':'application/json'},credentials:'same-origin',body:body?JSON.stringify(body):undefined})
     .then(async r=>{ let j=null; try{j=await r.json();}catch(e){} if(!r.ok||!j||j.ok===false){ throw new Error((j&&j.error)||(r.status===401?'Sign in as an administrator to manage users.':r.status===403?'Administrator access required.':'Request failed ('+r.status+').')); } return j; });
 }
 function uToast(m,k){ try{ if(window.UI&&window.UI.toast) window.UI.toast(m,k||'success'); }catch(e){} }
+// The Administration module can be delegated with a per-action level, and the API enforces
+// it — so only offer controls this session can actually use, instead of buttons that come
+// back 403. (No unicoCan at all = open local mode: allow.)
+const mayUsers=(a)=>{ try{ return typeof window.unicoCan!=='function'||window.unicoCan('users',a); }catch(e){ return true; } };
 
 // Areas granted DIRECTLY (beyond the departments' own) for an account or responsible record.
 // Prefers the stored split; legacy rows without it: hospital-wide => none, else the stored
@@ -1802,7 +1843,145 @@ function uCustomAreasOf(r){
 
 // Stable "not loaded yet" list for DcScopeEditor's `persons`: a fresh [] every render re-ran its effect on each keystroke.
 const U_NO_RESPS=[];
-function UserModal({initial,onClose,onSaved,depts}){
+/* ============ Duty roster access — the units one account may roster ============
+
+   Its own grant, deliberately not a reuse of the staff-register scope above it (see
+   server/access.js): "runs the roster for MICU and CCU" and "may open MICU and CCU
+   personnel files" are different permissions.
+
+   The design job here is that a roster is SHARED work. Several people legitimately hold
+   one unit — a ward lead, their deputy, the night supervisor — and they all edit the
+   same monthly sheet. So the picker does not just take a list of ticks: every unit shows
+   how many other accounts already roster it and names them on hover, which is the one
+   thing an administrator cannot work out from this screen otherwise.
+
+   Selected units always sort to the front: with eighteen departments in a scroll box,
+   the ticks an administrator had just made were scrolling out of sight. */
+function RosterScopeEditor({scope,departments,onScope,onDepartments,depts,users,exceptUsername,hasRosterPerm,staffScope}){
+  const {useState,useMemo}=React;
+  const [q,setQ]=useState('');
+  const all=depts||[];
+  const selected=departments||[];
+  const isOn=(id)=>selected.indexOf(id)>=0;
+  const toggle=(id)=>onDepartments(isOn(id)?selected.filter(x=>x!==id):[...selected,id]);
+
+  // Department zones (All Critical / ICU, All OT …) are the SAME groups Settings →
+  // Department Privileges uses, so an administrator learns the hospital's zones once.
+  // Groups are stored by department NAME; this picker works in ids, hence the lookup.
+  const groups=useMemo(()=>{
+    try{
+      const raw=(window.STAFF&&window.STAFF.deptGroupsFor)?window.STAFF.deptGroupsFor(all.map(d=>({name:d.name,group:''}))):[];
+      const byName={}; all.forEach(d=>{ byName[String(d.name||'').trim().toLowerCase()]=d.id; });
+      return (raw||[]).map(g=>({name:g.name,ids:[...new Set((g.depts||[]).map(n=>byName[String(n).trim().toLowerCase()]).filter(Boolean))]})).filter(g=>g.ids.length);
+    }catch(e){ return []; }
+  },[all]);
+
+  /* Who ELSE rosters each unit. Only accounts explicitly assigned that unit are counted:
+     an account on "all units" would otherwise appear on every chip, which says nothing.
+     Administrators are excluded for the same reason — they hold every unit by definition.
+     An account with no Duty Roster permission is not a holder either, however its units
+     are set: it cannot open the module at all. */
+  // Another account that actually reaches the module. Legacy accounts store perms as an
+  // escalating level STRING rather than an action array, so both shapes are read here —
+  // testing only for an array quietly left every older account out of the hints.
+  const otherRosterer=(u)=>{
+    if(!u||u.username===exceptUsername||u.active===false||u.role==='Administrator') return false;
+    const acts=u.perms&&u.perms.roster;
+    return Array.isArray(acts)?acts.length>0:(!!acts&&acts!=='none');
+  };
+  const holders=useMemo(()=>{
+    const m={};
+    (users||[]).forEach(u=>{
+      if(!otherRosterer(u)||u.rosterScope!=='departments') return;
+      (u.rosterDepartments||[]).forEach(id=>{ (m[id]=m[id]||[]).push(u.name||u.username); });
+    });
+    return m;
+  },[users,exceptUsername]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Accounts that hold EVERY unit — reported as a count, never as a badge on all 18 chips.
+  const wide=useMemo(()=>(users||[]).filter(u=>otherRosterer(u)&&u.rosterScope==='all').length,[users,exceptUsername]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const qn=q.trim().toLowerCase();
+  const shown=useMemo(()=>{
+    const list=qn?all.filter(d=>isOn(d.id)||String(d.name||'').toLowerCase().includes(qn)):all;
+    return list.slice().sort((a,b)=>(isOn(b.id)?1:0)-(isOn(a.id)?1:0));
+  },[all,qn,selected]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const unset=!scope;
+  const pill=(on,extra)=>({display:'inline-flex',alignItems:'center',gap:5,cursor:'pointer',userSelect:'none',padding:'5px 10px',borderRadius:999,fontSize:12,fontWeight:600,
+    border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--ink-2)',...(extra||{})});
+  const names=(id)=>holders[id]||[];
+  const shared=selected.filter(id=>names(id).length).length;
+  const nameOf=(id)=>((all.find(d=>d.id===id)||{}).name)||id;
+
+  return (
+    <div style={{borderTop:'1px solid var(--line-2)',paddingTop:14,opacity:hasRosterPerm?1:.62}}>
+      <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap',marginBottom:3}}>
+        <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)'}}>Duty roster access</div>
+        <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· which units' rosters this account may open</span>
+        <span style={{flex:1}}/>
+        {scope==='departments'&&<span className="num" style={{fontSize:11,fontWeight:700,color:selected.length?'var(--blue-700)':'var(--rose)'}}>{selected.length} / {all.length} units</span>}
+      </div>
+      <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>
+        <b>Duty Roster</b> in the matrix above decides what they may <i>do</i>; this decides <b>which units</b> they may do it in. Several people can hold the same unit — they all edit the one monthly sheet. Publishing a roster stays administrator-only.
+      </div>
+      {!hasRosterPerm&&<div style={{fontSize:11,color:'var(--muted)',marginBottom:9}}>No Duty Roster permission granted above yet, so nothing here takes effect until you tick one.</div>}
+      {unset&&<div style={{fontSize:11,color:'#8a5a00',background:'#fff8e9',border:'1px solid #f1d49a',borderRadius:8,padding:'8px 10px',marginBottom:9}}>
+        Never assigned. Until you choose below, this account keeps the reach it already had ({staffScope==='departments'?'the departments picked above':'every unit'}).
+      </div>}
+
+      <div style={{display:'inline-flex',gap:3,padding:3,borderRadius:9,background:'rgba(125,145,180,.16)',marginBottom:scope==='departments'?11:0}}>
+        {[['all','All units','Every unit in the hospital, including any added later'],
+          ['departments','Selected units','Only the units ticked below']].map(([v,l,tip])=>{
+          const on=scope===v;
+          return <button key={v} type="button" title={tip} onClick={()=>onScope(v)}
+            style={{border:0,cursor:'pointer',font:'inherit',fontSize:12,fontWeight:700,padding:'7px 16px',borderRadius:7,
+              color:on?'#fff':'var(--muted)',background:on?'linear-gradient(135deg,#27a8db,#0072a3)':'transparent'}}>{l}</button>;
+        })}
+      </div>
+
+      {scope==='departments'&&(
+        <div>
+          {!!groups.length&&(
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:9}}>
+              <span style={{fontSize:10,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4}}>Zones</span>
+              {groups.map(g=>{
+                const done=g.ids.every(id=>isOn(id));
+                return <button key={g.name} type="button" title={(done?'Remove':'Add')+' these units: '+g.ids.map(nameOf).join(', ')}
+                  onClick={()=>onDepartments(done?selected.filter(x=>g.ids.indexOf(x)<0):[...new Set([...selected,...g.ids])])}
+                  style={{...pill(done),border:'1px dashed '+(done?'var(--blue)':'var(--line)')}}>{g.name}<span className="num" style={{opacity:.65}}>{g.ids.length}</span></button>;
+              })}
+              <button type="button" onClick={()=>onDepartments(selected.length===all.length?[]:all.map(d=>d.id))}
+                style={{...pill(false),border:'1px dashed var(--line)',color:'var(--muted)'}}>{selected.length===all.length?'Clear all':'All hospital'}</button>
+            </div>
+          )}
+          {all.length>12&&<input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search units…"
+            style={{width:'100%',padding:'7px 10px',border:'1px solid var(--line)',borderRadius:7,fontSize:12.5,fontFamily:'inherit',outline:'none',marginBottom:8}}/>}
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',maxHeight:172,overflow:'auto',padding:2}}>
+            {shown.map(d=>{
+              const on=isOn(d.id); const who=names(d.id);
+              return (
+                <span key={d.id} onClick={()=>toggle(d.id)} title={who.length?'Also rostered by '+who.join(', '):'No one else rosters this unit yet'} style={pill(on)}>
+                  {d.name}
+                  {who.length>0&&<span style={{fontSize:9.5,fontWeight:700,borderRadius:999,padding:'1px 6px',background:on?'var(--blue)':'var(--panel-2)',color:on?'#fff':'var(--muted)',border:'1px solid '+(on?'var(--blue)':'var(--line)')}}>{who.length}</span>}
+                </span>
+              );
+            })}
+            {!shown.length&&<span style={{fontSize:11.5,color:'var(--muted)'}}>{all.length?'No unit matches that search.':'No departments loaded.'}</span>}
+          </div>
+          <div style={{fontSize:10.5,color:selected.length?'var(--muted)':'var(--rose)',marginTop:8,lineHeight:1.6}}>
+            {!selected.length
+              ? <b>No units selected — the module will open empty for them.</b>
+              : <>Rosters <b style={{color:'var(--ink-2)'}}>{selected.map(nameOf).join(', ')}</b>.
+                  {shared>0&&' Shares '+shared+' of them with other staff (hover a unit to see who).'}
+                  {wide>0&&' '+wide+(wide===1?' other account holds':' other accounts hold')+' every unit.'}</>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UserModal({initial,onClose,onSaved,depts,onManageTiers,allUsers}){
   const {useState}=React;
   const editing=!!initial;
   const [username,setUsername]=useState(editing?initial.username:'');
@@ -1810,21 +1989,21 @@ function UserModal({initial,onClose,onSaved,depts}){
   const [email,setEmail]=useState(editing?(initial.email||''):'');
   const [password,setPassword]=useState('');
   const [status,setStatus]=useState(editing?(initial.active!==false?'active':'inactive'):'active');
-  const templates=useRoleTemplates();
-  // Which template this account currently reads as: the stamp it was granted from if
-  // its permissions still match it, otherwise whichever template does, otherwise Custom.
-  // The stamp alone is not trusted — an admin may have hand-edited the matrix since.
-  const tmplMatch=(pm)=>{ const t=templates.find(x=>USER_MODS.every(([k])=>sameActs(pm[k],x.perms&&x.perms[k]))); return t?t.name:'Custom'; };
-  const initTemplate=editing
-    ? (initial.role==='Administrator' ? 'Administrator'
-       : PORTAL_ROLE_LABEL[initial.role] ? PORTAL_ROLE_LABEL[initial.role]
-       : (initial.perms ? tmplMatch(initial.perms) : 'Custom'))
-    : 'Custom';
-  const [role,setRole]=useState(initTemplate);
-  const [roleTmpl,setRoleTmpl]=useState(editing?(initial.roleTemplate||null):null);
-  // Templates arrive after the first render, so re-derive the selection once they land
-  // (only while the admin has not touched the matrix — hence the 'Custom' guard).
-  React.useEffect(()=>{ if(editing&&initial.perms&&role==='Custom'&&templates.length) { const m=tmplMatch(initial.perms); if(m!=='Custom') setRole(m); } },[templates.length]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const tiers=useTiers();
+  // A portal account is not a rank: it is created and scoped in Data Collection. An
+  // existing one still opens here so its assignment can be edited, but the ladder is
+  // hidden and its role is never touched by this dialog.
+  const isPortalAcct=editing&&!!PORTAL_ROLE_LABEL[initial.role];
+  const portalRole=isPortalAcct?initial.role:null;
+  // Where this account sits in the hierarchy. It decides which module rows are offered
+  // below. null until the ladder has loaded — resolved in the effect just under here, so a
+  // slow request can never place an account on a tier narrower than its own.
+  const [level,setLevel]=useState(editing&&initial.role==='Administrator'?TIER_ADMIN:(editing?(initial.level||null):null));
+  // Only a level the account actually HAS is restored; nothing is pre-picked. An unplaced
+  // account stays unplaced on screen until somebody chooses, so saving one can never
+  // promote a person by accident.
+  React.useEffect(()=>{ if(!isPortalAcct&&level&&!tierById(tiers,level)&&tiers.length) setLevel(null); },[tiers]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const tier=isPortalAcct?null:tierById(tiers,level);
   // Default to NO access (start from nothing, grant only what's explicitly set). A blank
   // default of FULL_PERMS silently granted every module a User's perms map didn't mention.
   // perms is a {module: actions[]} map. Legacy level strings (from older accounts /
@@ -1841,6 +2020,17 @@ function UserModal({initial,onClose,onSaved,depts}){
   // this decides WHOSE records they see once inside.
   const [staffScope,setStaffScope]=useState(editing?(initial.staffScope||'all'):'all');
   const [staffDepts,setStaffDepts]=useState(editing&&Array.isArray(initial.departments)?initial.departments:[]);
+  // Duty-roster assignment — which units' sheets this account may open and edit. A
+  // SEPARATE grant from the staff scope above: "runs the roster for MICU and CCU" and
+  // "may open MICU and CCU personnel files" are different things, and an account left
+  // on the default staff scope used to hold every unit's roster by accident.
+  // A stored null means the account was never assigned; the server keeps its old reach
+  // until this is set, so the dialog shows that honestly rather than pretending 'all'.
+  const [rosterScope,setRosterScope]=useState(editing?(initial.rosterScope||null):'all');
+  const [rosterDepts,setRosterDepts]=useState(editing&&Array.isArray(initial.rosterDepartments)?initial.rosterDepartments:[]);
+  // A ward in-charge may also be trusted to BUILD their own unit's roster in the portal.
+  // Never to approve it — that stays with an administrator, and the server enforces it.
+  const [rosterEdit,setRosterEdit]=useState(editing&&initial.rosterEdit===true);
   const [staffId,setStaffId]=useState(editing&&(initial.staffId===0||initial.staffId)?initial.staffId:'');
   const allDepts=React.useMemo(()=>{
     try{ if(window.buildDepts){ const ov=JSON.parse(localStorage.getItem('unico_store_v3')||'{}')||{}; const m=window.buildDepts(ov);
@@ -1850,12 +2040,14 @@ function UserModal({initial,onClose,onSaved,depts}){
   const allStaff=React.useMemo(()=>{ const s=window.STAFF_SEED||window.__UNICO_STAFF__||[]; return Array.isArray(s)?s.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))):[]; },[]);
   const toggleDept=(id)=>setStaffDepts(ds=>ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds,id]);
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
-  const isAdmin=role==='Administrator';
-  const portalRole=portalRoleOfLabel(role);   // 'collector'|'incharge'|'nurse'|'pca' or null
-  const isColl=!!portalRole;
+  const isAdmin=!!tier&&tier.kind==='admin';
+  const isColl=isPortalAcct;
   // Only collectors and in-charges submit data. Nurse/PCA portal accounts sign in to the staff
   // app: they carry no collection scope (the server rejects one), so none is edited or sent.
-  const collects=portalRole==='collector'||portalRole==='incharge';
+  const collects=isPortalAcct&&(portalRole==='collector'||portalRole==='incharge');
+  // Only the in-charge portal role builds a roster. A console account is governed by the
+  // Duty Roster module instead, and collector/nurse/PCA logins never touch one.
+  const rosterEditable=isPortalAcct&&portalRole==='incharge';
   // Data-collection scope of a collecting account, edited here with the shared DcScopeEditor
   // (data-collection.jsx). Loaded from the /api/users row; the server mirrors every save into
   // the responsible record the Indicator Access matrix reads.
@@ -1911,20 +2103,28 @@ function UserModal({initial,onClose,onSaved,depts}){
   },[collects]);  // eslint-disable-line react-hooks/exhaustive-deps
   const linkedRespId=editing?(initial.responsibleId||((resps||[]).find(r=>String(r.empId||'').toLowerCase()===initial.username)||{}).id||null):null;
   const ScopeEditor=window.DcScopeEditor;
-  const pickRole=r=>{
-    setRole(r);
-    if(r==='Administrator'||portalRoleOfLabel(r)||r==='Custom'){ setRoleTmpl(null); return; }
-    const t=templates.find(x=>x.name===r);
-    if(t){ setRoleTmpl(t.id); setPerms(USER_MODS.reduce((m,[k])=>(m[k]=asActions(t.perms&&t.perms[k]),m),{})); }
-    else if(ROLE_PRESETS[r]){ setRoleTmpl(null); setPerms(USER_MODS.reduce((m,[k])=>(m[k]=levelToActions(ROLE_PRESETS[r][k]||'none'),m),{})); }
+  // Moving the level re-applies its ceiling immediately, so what is ticked on screen is
+  // always exactly what a save would send — a Manager demoted to In-charge loses
+  // Administration here, in front of the administrator, not silently on the server.
+  const pickLevel=(id)=>{
+    const from=tier;
+    setLevel(id);
+    const next=tierById(tiers,id);
+    if(!next||next.kind!=='console') return;
+    // Coming DOWN from Administrator there is no console grant to carry over — an
+    // administrator holds no perms map at all. Starting from what the matrix happened to be
+    // showing would hand a demoted administrator every module on a single click; they start
+    // from nothing, like any other new grant.
+    if(from&&from.kind==='admin'){ setPerms(NONE_PERMS()); return; }
+    // Otherwise keep what is ticked, minus whatever the new tier may not hold, so the
+    // matrix on screen is always exactly what a save would send.
+    const allow=next.modules||[];
+    setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=allow.indexOf(k)>=0?asActions(p[k]):[],m),{}));
   };
   // Toggle one action for a module (independent). Granting edit/add/delete auto-adds view.
   const toggleAct=(mid,act)=>{ setPerms(p=>{ const cur=asActions(p[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
-    if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); setRole('Custom'); setRoleTmpl(null); };
-  const clearMod=(mid)=>{ setPerms(p=>({...p,[mid]:[]})); setRole('Custom'); setRoleTmpl(null); };
-  // Administrator and Data Collector are BACKEND roles, not templates — they stay in the
-  // list. Everything between them is admin-defined and can change at any time.
-  const roleOpts=['Administrator',...templates.map(t=>t.name),...Object.values(PORTAL_ROLE_LABEL),'Custom'];
+    if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); };
+  const clearMod=(mid)=>{ setPerms(p=>({...p,[mid]:[]})); };
 
   const save=async()=>{
     setErr('');
@@ -1933,24 +2133,29 @@ function UserModal({initial,onClose,onSaved,depts}){
       if(password.length<6) return setErr('Password must be at least 6 characters.');
     }
     if(!name.trim()) return setErr('Full name is required.');
+    if(!isPortalAcct&&!level) return setErr('Choose a hierarchy level for this account.');
     if(email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
     // A failed load means we never saw the stored assignment: send no scope, so nothing is wiped.
     const sendScope=collects&&!!ScopeEditor&&!!window.dcScopePayload&&!scopeLoadFailed;
     if(sendScope&&!scopeReady) return setErr('Still loading this account’s data collection scope — try again in a moment.');
     setBusy(true);
     try{
-      const backendRole=isAdmin?'Administrator':(portalRole||'User');
+      const backendRole=isAdmin?'Administrator':(isPortalAcct?portalRole:'User');
+      // Only the modules this tier may hold are sent. pickLevel already cleared the rest,
+      // but an account opened at a tier narrower than the one it was granted at (a legacy
+      // row, or a tier narrowed since) must not re-post what it may no longer hold.
+      const granted=((tier&&tier.modules)||[]).reduce((m,k)=>(m[k]=asActions(perms[k]),m),{});
       // Collector / in-charge accounts send their data-collection scope from the editor below. Only
       // the directly-granted extras go as customQualityAreas; the server derives qualityAreas and
       // mirrors the result into the responsible record. (If the editor is not loaded the scope
       // fields are omitted, and the backend keeps the stored assignment as before.) Nurse/PCA
       // accounts never send scope fields.
       const payload={ name:name.trim(), email:email.trim().toLowerCase(),
-        title:(isAdmin||isColl)?null:(role==='Custom'?'Custom access':role), active:status==='active',
-        perms:(isAdmin||isColl)?null:perms,
-        // The template this grant came from. A label for the panel and the target of
-        // "Apply to members"; `perms` above is still what gets enforced.
-        roleTemplate:(isAdmin||isColl)?null:(roleTmpl||null) };
+        title:(isAdmin||isColl)?null:tierName(tiers,level), active:status==='active',
+        perms:(isAdmin||isColl)?null:granted,
+        // A ceiling the server re-applies, never a grant of its own. A portal account takes
+        // its tier from its role, so there is nothing to send for one.
+        level:isPortalAcct?undefined:level };
       // Send `role` only when the admin actually changed it: an account the form cannot
       // represent must never be silently re-roled by an unrelated edit.
       if(!editing||backendRole!==(initial.role||'User')) payload.role=backendRole;
@@ -1965,10 +2170,17 @@ function UserModal({initial,onClose,onSaved,depts}){
         // collector it is their collection assignment and must not be overwritten here.
         payload.staffScope=staffScope;
         payload.departments=staffScope==='departments'?staffDepts:[];
+        // Roster units. Only sent once an administrator has actually chosen one, so
+        // opening and saving an unrelated field on a legacy account never silently
+        // converts its inherited reach into an explicit grant.
+        if(rosterScope){ payload.rosterScope=rosterScope; payload.rosterDepartments=rosterScope==='departments'?rosterDepts:[]; }
         payload.staffId=staffScope==='self'&&staffId!==''?Number(staffId):null;
         const rec=allStaff.find(x=>String(x.id)===String(staffId));
         payload.staffEmpId=(staffScope==='self'&&rec&&rec.emp_id)?rec.emp_id:'';
       }
+      // Sent only for the one role the toggle is shown for, so no other kind of account is
+      // handed roster rights by an unrelated edit.
+      if(rosterEditable) payload.rosterEdit=rosterEdit;
       if(editing){
         await usersApi('PATCH','/api/users/'+encodeURIComponent(initial.username),payload);
         if(password){ if(password.length<6){ setBusy(false); return setErr('New password must be at least 6 characters.'); } await usersApi('POST','/api/users/'+encodeURIComponent(initial.username)+'/password',{password}); }
@@ -1980,7 +2192,9 @@ function UserModal({initial,onClose,onSaved,depts}){
     finally{ setBusy(false); }
   };
 
-  const lvlColor={none:'var(--muted)',view:'#0090ca',edit:'#3ab5a7',add:'#e08a1e',delete:'#d23a52'};
+  // Print is violet, not another shade of the write colours: it is a different kind of
+  // permission — the record leaves the system on paper — not a bigger one.
+  const lvlColor={none:'var(--muted)',view:'#0090ca',edit:'#3ab5a7',add:'#e08a1e',delete:'#d23a52',print:'#6a52d4'};
   const toBody = (n) => (typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
   return toBody(
     <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
@@ -2001,8 +2215,42 @@ function UserModal({initial,onClose,onSaved,depts}){
             <div className="field"><label>Email <span style={{fontWeight:400,color:'var(--muted)'}}>· optional</span></label><input value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@unicohospitals.com"/></div>
             <div className="field"><label>{editing?'Reset password':'Password'} {editing&&<span style={{fontWeight:400,color:'var(--muted)'}}>· blank = keep</span>}</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters"/></div>
           </div>
+          {isPortalAcct ? (
+            <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'flex-start'}}>
+              <Ic d={I.user} s={16} c="var(--blue)" style={{flexShrink:0,marginTop:1}}/>
+              <span><b>{PORTAL_ROLE_LABEL[portalRole]}.</b> A portal login is not a rank in the hierarchy — it signs in to the collection portal or the staff app, and its departments and indicators are set below. New ones are made in <b>Data Collection</b>; a console account reaches the same submissions by being granted the <b>Data Collection</b> module.</span>
+            </div>
+          ) : (
+          <div>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6,flexWrap:'wrap'}}>
+              <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)'}}>Hierarchy level <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· the rank decides which modules this account can be given at all</span></div>
+              <span className="spacer" style={{flex:1}}/>
+              {mayUsers('edit')&&<button className="btn sm" title="Add, rename or re-rank the tiers" onClick={()=>onManageTiers&&onManageTiers()}><Ic d={I.gear} s={13}/>Manage hierarchy</button>}
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:6,border:'1px solid var(--line)',borderRadius:10,overflow:'hidden'}}>
+              {placeableTiers(tiers).map((t,i)=>{ const on=level===t.id; const n=modsForTier(t).length;
+                return (
+                <div key={t.id} onClick={()=>pickLevel(t.id)} role="button"
+                  style={{display:'flex',alignItems:'flex-start',gap:10,padding:'9px 12px',cursor:'pointer',borderTop:i?'1px solid var(--line-2)':0,background:on?'var(--blue-50)':'transparent'}}>
+                  <span style={{width:15,height:15,borderRadius:'50%',display:'grid',placeItems:'center',flexShrink:0,marginTop:1,border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff'}}>{on&&<Ic d={I.check} s={10} c="#fff" sw={3}/>}</span>
+                  <span style={{fontFamily:'var(--mono, monospace)',fontSize:11,fontWeight:700,color:on?'var(--blue-700)':'var(--muted)',flexShrink:0,marginTop:1,minWidth:18}}>L{i+1}</span>
+                  <span style={{minWidth:0,flex:1}}>
+                    <span style={{display:'block',fontSize:13,fontWeight:700,color:on?'var(--blue-700)':'var(--ink)'}}>{t.name}</span>
+                    {t.description&&<span style={{display:'block',fontSize:10.5,color:'var(--muted)',marginTop:1}}>{t.description}</span>}
+                  </span>
+                  <span className="tag" style={{flexShrink:0,color:'var(--ink-2)'}} title={t.kind==='admin'?'Administrators hold every module automatically':'The most this rank can be given. You still tick each one below.'}>{t.kind==='admin'?'all · automatic':(n?'up to '+n+' module'+(n!==1?'s':''):'no modules')}</span>
+                </div>
+              );})}
+            </div>
+            <div style={{fontSize:10.5,color:level?'var(--muted)':'var(--rose)',marginTop:7}}>
+              {level
+                ? <span>The rank sets a <b>limit</b>, it grants nothing. Whichever you pick, every module below still starts at <b>None</b> and you tick what this person gets.</span>
+                : <span>Not placed yet — pick a rank to continue. Nothing is chosen for you, so no one is promoted by accident.</span>}
+            </div>
+          </div>
+          )}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            <div className="field"><label>Role / template</label><select value={role} onChange={e=>pickRole(e.target.value)}>{roleOpts.map(r=><option key={r}>{r}</option>)}</select></div>
+            <div/>
             <div className="field"><label>Status</label><select value={status} onChange={e=>setStatus(e.target.value)}><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
           </div>
           {isAdmin ? (
@@ -2011,11 +2259,11 @@ function UserModal({initial,onClose,onSaved,depts}){
             </div>
           ) : isColl&&!collects ? (
             <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'center'}}>
-              <Ic d={I.user} s={16} c="var(--blue)"/><span><b>{role}.</b> Nurse/PCA accounts sign in to the staff app; they don't submit data.</span>
+              <Ic d={I.user} s={16} c="var(--blue)"/><span><b>{PORTAL_ROLE_LABEL[portalRole]}.</b> Nurse/PCA accounts sign in to the staff app; they don't submit data.</span>
             </div>
           ) : isColl ? (
             <div>
-              <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Data collection scope <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· {role} — signs in to the portal only</span></div>
+              <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Data collection scope <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· {PORTAL_ROLE_LABEL[portalRole]} — signs in to the portal only</span></div>
               <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>The departments they report, the quality areas those give (plus any extra), and optionally which indicators. Saved with the account and shown in <b>Indicator Access</b>.</div>
               {!ScopeEditor ? (
                 <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px'}}>The data collection module is not loaded, so the scope cannot be edited here. The current assignment is kept when you save.</div>
@@ -2029,18 +2277,22 @@ function UserModal({initial,onClose,onSaved,depts}){
             </div>
           ) : (
           <div>
-            <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Module permissions <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· a template sets defaults; fine-tune per module</span></div>
-            <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Tick any combination — <b>Edit</b>, <b>Add</b> and <b>Delete</b> are independent (e.g. grant Delete without Add). Selecting any of them includes View automatically.</div>
+            <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Module access <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· these are their sidebar menu items{tier&&tier.kind==='console'?' — “'+tier.name+'” only sets the limit':''}</span></div>
+            <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Tick any combination — <b>Edit</b>, <b>Add</b>, <b>Delete</b> and <b>Print</b> are independent (e.g. grant Delete without Add, or read-only access that may not print). Selecting any of them includes View automatically. <b>Print</b> is what lets them put a record on paper or save it as a PDF; it is not implied by any other tick, so it starts off. Anything left at <b>None</b> is hidden from their sidebar entirely — they never see the menu item.{tier&&tier.kind==='console'&&modsForTier(tier).length<USER_MODS.length&&<span> This rank cannot be given <b>{USER_MODS.filter(([k])=>(tier.modules||[]).indexOf(k)<0).map(([,l])=>l).join(', ')}</b> — change that in <b>Manage hierarchy</b>.</span>}</div>
+            {!tier&&<div style={{fontSize:12,color:'var(--muted)',background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:9,padding:'11px 13px'}}>Pick a hierarchy level above first — it decides which of these an account may be given.</div>}
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              {USER_MODS.map(([id,label])=>{
+              {modsGrouped(modsForTier(tier)).map(([grp,ms])=>(
+              <React.Fragment key={grp}>
+                <div style={{fontSize:10,fontWeight:700,color:'var(--faint)',textTransform:'uppercase',letterSpacing:.5,marginTop:4}}>{grp}</div>
+                {ms.map(([id,label,,where])=>{
                 const acts=asActions(perms[id]); const none=acts.length===0;
                 return (
                 <div key={id} style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-                  <span style={{flex:'1 1 140px',fontSize:12.5,color:'var(--ink-2)',fontWeight:600}}>{label}</span>
+                  <span style={{flex:'1 1 140px',fontSize:12.5,color:'var(--ink-2)',fontWeight:600}}>{label}{where&&<span style={{display:'block',fontWeight:500,fontSize:10,color:'var(--faint)'}}>{where}</span>}</span>
                   <div style={{display:'flex',gap:6,flexShrink:0,flexWrap:'wrap'}}>
                     <button onClick={()=>clearMod(id)} style={{padding:'5px 12px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(none?'var(--muted)':'var(--line)'),background:none?'var(--panel-2)':'#fff',color:none?'var(--ink)':'var(--muted)'}}>None</button>
                     {PERM_ACTS.map(([v,l])=>{ const on=acts.indexOf(v)>=0; const c=lvlColor[v]; return (
-                      <button key={v} onClick={()=>toggleAct(id,v)} title={v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':'Can delete'}
+                      <button key={v} onClick={()=>toggleAct(id,v)} title={v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':v==='delete'?'Can delete':'Can print / save as PDF — take the record out of the system on paper'}
                         style={{display:'inline-flex',alignItems:'center',gap:6,padding:'5px 11px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?c:'var(--line)'),background:on?c:'#fff',color:on?'#fff':'var(--ink-2)'}}>
                         <span style={{width:13,height:13,borderRadius:4,display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(on?'#fff':'var(--line)'),background:on?'rgba(255,255,255,.25)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff" sw={3}/>}</span>
                         {l}
@@ -2049,6 +2301,8 @@ function UserModal({initial,onClose,onSaved,depts}){
                   </div>
                 </div>
               );})}
+              </React.Fragment>
+              ))}
             </div>
           </div>
           )}
@@ -2094,6 +2348,28 @@ function UserModal({initial,onClose,onSaved,depts}){
             )}
           </div>
           )}
+          {/* Shown for every console account, not only those already holding the module:
+              an administrator granting Duty Roster above needs to pick the units in the
+              same pass, and hiding the block until the grant was saved made that two trips. */}
+          {!isAdmin&&!isColl&&(
+            <RosterScopeEditor
+              scope={rosterScope} departments={rosterDepts}
+              onScope={setRosterScope} onDepartments={setRosterDepts}
+              depts={allDepts} users={allUsers} exceptUsername={editing?initial.username:null}
+              hasRosterPerm={asActions(perms.roster).length>0} staffScope={staffScope}/>
+          )}
+          {rosterEditable&&(
+          <div style={{borderTop:'1px solid var(--line-2)',paddingTop:14}}>
+            <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Duty roster <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· whether this in-charge prepares their own unit's sheet</span></div>
+            <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>The in-charge can prepare and submit the roster for their assigned units, from the collection portal. <b>Approving it stays with an administrator.</b></div>
+            <button type="button" onClick={()=>setRosterEdit(v=>!v)}
+              style={{display:'inline-flex',alignItems:'center',gap:7,padding:'7px 13px',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(rosterEdit?'var(--blue)':'var(--line)'),background:rosterEdit?'var(--blue)':'#fff',color:rosterEdit?'#fff':'var(--ink-2)'}}>
+              <span style={{width:13,height:13,borderRadius:4,display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(rosterEdit?'#fff':'var(--line)'),background:rosterEdit?'rgba(255,255,255,.25)':'#fff'}}>{rosterEdit&&<Ic d={I.check} s={9} c="#fff" sw={3}/>}</span>
+              Can build this unit’s duty roster
+            </button>
+            <div style={{fontSize:10.5,color:'var(--muted)',marginTop:8,lineHeight:1.6}}>{rosterEdit?<>They get <b style={{color:'var(--ink-2)'}}>Duty roster</b> in the portal for the departments set above, and send each month’s sheet for approval.</>:'Off — they only submit data. Their roster is prepared by an administrator or a console account granted Duty Roster.'}</div>
+          </div>
+          )}
           {err&&<div style={{fontSize:12,color:'var(--rose)',fontWeight:600,background:'var(--neg-bg)',borderRadius:7,padding:'8px 10px'}}>{err}</div>}
           <div style={{display:'flex',gap:10,borderTop:'1px solid var(--line-2)',paddingTop:14}}>
             <span className="spacer" style={{flex:1}}/>
@@ -2107,169 +2383,204 @@ function UserModal({initial,onClose,onSaved,depts}){
 }
 
 function uAvatarColor(s){ let h=0; for(const ch of s||'') h=(h*31+ch.charCodeAt(0))>>>0; return UCOLORS[h%UCOLORS.length]; }
-/* ============ Role templates — add / edit / delete privilege sets ============
-   The "role-wise" half of the privileges area. An administrator defines a named set
-   of module actions here (Nurse Manager, Ward In-charge, Acting In-charge, or anything
-   they invent), and the Add/Manage-user dialog grants it in one pick.
 
-   Two rules this panel is built around:
-   · Saving a template changes NOBODY on its own. Permissions live on the account, so
-     an edit here only takes effect where an administrator presses "Apply to members" —
-     which signs those people out so the new access is picked up immediately.
-   · Deleting a template never takes access away. It removes the label; the accounts
-     keep exactly the permissions they were granted. Built-in roles cannot be deleted
-     at all, so the list can never end up empty. ---- */
-function RoleTemplatesPanel(){
+/* ============ Hierarchy — the hospital's own account ladder ============
+   An administrator defines the tiers they actually run on (CNS, Nurse Manager, Ward
+   In-charge, …), ranks them, and sets the CEILING of each: which modules an account at
+   that tier may be granted at all.
+
+   The one rule this panel is built around: a tier can only ever take access away, never
+   give it. Assigning a tier grants nothing; widening one grants nothing — it just makes
+   more modules tickable next time somebody edits that account by hand. Narrowing one is
+   the single edit that reaches live accounts, and it removes. That is why there is no
+   "apply to members" button here: there is nothing to push, which is exactly the trap the
+   old role templates had. ---- */
+function HierarchyPanel(){
   const {useState,useEffect}=React;
   const [list,setList]=useState(null);
   const [counts,setCounts]=useState({});
-  const [open,setOpen]=useState(null);       // expanded template id
-  const [draft,setDraft]=useState(null);     // {name,description,perms} being edited
+  const [open,setOpen]=useState(null);        // expanded tier id, or '__new'
+  const [draft,setDraft]=useState(null);      // {name,description,modules[]}
   const [busy,setBusy]=useState(false);
   const [err,setErr]=useState('');
-  const may=(a)=>{ try{ return typeof window.unicoCan!=='function'||window.unicoCan('users',a); }catch(e){ return true; } };
   const load=()=>{ setErr('');
-    usersApi('GET','/api/roles')
-      .then(j=>{ setList(j.templates||[]); setCounts(j.counts||{}); ROLE_TMPL=j.templates||null; })
-      .catch(e=>{ setList([]); setErr(e.message||'Could not load role templates.'); }); };
+    usersApi('GET','/api/tiers')
+      .then(j=>{ setList(j.tiers||[]); setCounts(j.counts||{}); TIER_CACHE=j.tiers||null; })
+      .catch(e=>{ setList([]); setErr(e.message||'Could not load the hierarchy.'); }); };
   useEffect(load,[]);
+  const done=(msg)=>{ uToast(msg); setOpen(null); setDraft(null); loadTiers(true); load(); };
 
-  const startEdit=(t)=>{ setOpen(t.id); setDraft({name:t.name,description:t.description||'',
-    perms:USER_MODS.reduce((m,[k])=>(m[k]=asActions(t.perms&&t.perms[k]),m),{})}); };
-  const startNew=()=>{ setOpen('__new'); setDraft({name:'',description:'',perms:NONE_PERMS()}); };
-  const toggle=(mid,act)=>setDraft(d=>{ const cur=asActions(d.perms[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
-    if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view');
-    next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...d,perms:{...d.perms,[mid]:next}}; });
-  const setAll=(v)=>setDraft(d=>({...d,perms:USER_MODS.reduce((m,[k])=>(m[k]=v?[...PERM_ORDER]:[],m),{})}));
+  const startEdit=(t)=>{ setOpen(t.id); setErr(''); setDraft({name:t.name,description:t.description||'',modules:(t.modules||[]).slice(),signoff:t.signoff||''}); };
+  const startNew=()=>{ setOpen('__new'); setErr(''); setDraft({name:'',description:'',modules:[],signoff:''}); };
+  const toggleMod=(k)=>setDraft(d=>({...d,modules:d.modules.indexOf(k)>=0?d.modules.filter(x=>x!==k):[...d.modules,k]}));
+  const setAll=(on)=>setDraft(d=>({...d,modules:on?USER_MODS.map(([k])=>k):[]}));
 
   const save=async(t)=>{
     if(!draft) return;
-    if(!draft.name.trim()){ setErr('Role name is required.'); return; }
+    if(!draft.name.trim()) return setErr('A tier name is required.');
+    // Narrowing reaches people. Say who, and what they lose, before it happens.
+    if(t&&t.kind==='console'){
+      const lost=(t.modules||[]).filter(k=>draft.modules.indexOf(k)<0);
+      const n=counts[t.id]||0;
+      if(lost.length&&n){
+        const names=USER_MODS.filter(([k])=>lost.indexOf(k)>=0).map(([,l])=>l).join(', ');
+        const ok=await window.UI.confirm({title:'Take '+names+' away from '+n+' account'+(n===1?'':'s')+'?',
+          message:'Everyone at “'+t.name+'” loses that access immediately and is signed out so it takes effect at once. Nothing else they hold changes.',
+          danger:true,confirmLabel:'Narrow the tier'});
+        if(!ok) return;
+      }
+    }
     setBusy(true); setErr('');
     try{
-      if(t) await usersApi('PUT','/api/roles/'+encodeURIComponent(t.id),draft);
-      else await usersApi('POST','/api/roles',draft);
-      uToast(t?'Role “'+draft.name.trim()+'” saved':'Role “'+draft.name.trim()+'” created');
-      setOpen(null); setDraft(null); loadRoleTemplates(true); load();
-    }catch(e){ setErr(e.message||'Could not save the role.'); }
-    finally{ setBusy(false); }
-  };
-  const apply=async(t)=>{
-    const n=counts[t.id]||0;
-    const ok=await window.UI.confirm({title:'Apply “'+t.name+'” to '+n+' account'+(n===1?'':'s')+'?',
-      message:'Each account stamped with this role gets exactly these permissions, replacing what it holds now. They will be signed out so the change takes effect immediately.',
-      confirmLabel:'Apply to '+n});
-    if(!ok) return;
-    setBusy(true);
-    try{ const r=await usersApi('POST','/api/roles/'+encodeURIComponent(t.id)+'/apply'); uToast('Applied to '+(r.updated||0)+' account'+((r.updated||0)===1?'':'s')); }
-    catch(e){ uToast(e.message||'Failed','error'); }
+      const body={name:draft.name.trim(),description:draft.description,modules:draft.modules,signoff:draft.signoff||''};
+      const r=t ? await usersApi('PUT','/api/tiers/'+encodeURIComponent(t.id),body)
+                : await usersApi('POST','/api/tiers',body);
+      done(r&&r.clamped ? 'Saved · '+r.clamped+' account'+(r.clamped===1?'':'s')+' narrowed' : (t?'Tier saved':'Tier created'));
+    }catch(e){ setErr(e.message||'Could not save the tier.'); }
     finally{ setBusy(false); }
   };
   const del=async(t)=>{
-    const n=counts[t.id]||0;
-    const ok=await window.UI.confirm({title:'Delete the role “'+t.name+'”?',
-      message:n?('It is used by '+n+' account'+(n===1?'':'s')+'. They keep every permission they already have — only the label is removed.'):'It is not used by any account.',
-      danger:true,confirmLabel:'Delete role'});
+    const ok=await window.UI.confirm({title:'Remove the tier “'+t.name+'”?',
+      message:'It is not used by any account. The ranks below it move up one.',danger:true,confirmLabel:'Remove tier'});
     if(!ok) return;
-    try{ await usersApi('DELETE','/api/roles/'+encodeURIComponent(t.id)); uToast('Role removed'); loadRoleTemplates(true); load(); }
+    try{ await usersApi('DELETE','/api/tiers/'+encodeURIComponent(t.id)); done('Tier removed'); }
+    catch(e){ uToast(e.message||'Failed','error'); }
+  };
+  // Rank is seniority and reading order only — it moves no ceiling, so nobody's access changes.
+  const move=async(t,dir)=>{
+    const con=(list||[]).filter(x=>x.kind==='console').sort(byRank);
+    const i=con.findIndex(x=>x.id===t.id); const j=i+dir;
+    if(i<0||j<0||j>=con.length) return;
+    const order=con.map(x=>x.id); order.splice(j,0,order.splice(i,1)[0]);
+    try{ const r=await usersApi('POST','/api/tiers/reorder',{order}); setList(r.tiers||list); TIER_CACHE=r.tiers||null; loadTiers(true); }
     catch(e){ uToast(e.message||'Failed','error'); }
   };
 
-  const summary=(perms)=>{ const acts=USER_MODS.map(([k])=>asActions(perms&&perms[k]));
-    const on=acts.filter(a=>a.length).length; if(!on) return 'No access';
-    const ed=acts.filter(a=>a.length>1).length;
-    return on+' module'+(on!==1?'s':'')+(ed?' · '+ed+' editable':' · read-only'); };
+  const ceilingLine=(t)=>{
+    if(t.kind==='admin') return 'Every module';
+    if(t.kind==='portal') return 'No modules · a collection scope instead';
+    const n=(t.modules||[]).length;
+    if(!n) return 'Nothing may be granted';
+    if(n===USER_MODS.length) return 'May be given any module';
+    return 'May be given '+n+' of '+USER_MODS.length+' · not '+USER_MODS.filter(([k])=>(t.modules||[]).indexOf(k)<0).map(([,l])=>l).join(', ');
+  };
 
-  const matrix=(d,t)=>(
+  const editor=(d,t)=>(
     <div style={{borderTop:'1px solid var(--line-2)',marginTop:11,paddingTop:12}}>
       <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:11}}>
-        <input value={d.name} onChange={e=>setDraft(x=>({...x,name:e.target.value}))} placeholder="Role name — e.g. Nurse Manager"
+        <input value={d.name} onChange={e=>setDraft(x=>({...x,name:e.target.value}))} placeholder="Tier name — e.g. Nurse Manager"
           style={{flex:'1 1 210px',padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',outline:'none'}}/>
-        <input value={d.description} onChange={e=>setDraft(x=>({...x,description:e.target.value}))} placeholder="What this role is for (shown to administrators)"
+        <input value={d.description} onChange={e=>setDraft(x=>({...x,description:e.target.value}))} placeholder="What this tier is (shown when placing an account)"
           style={{flex:'2 1 300px',padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',outline:'none'}}/>
       </div>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
-        <span style={{fontSize:11,color:'var(--muted)',fontWeight:600,textTransform:'uppercase',letterSpacing:.4}}>Module privileges</span>
-        <span className="spacer" style={{flex:1}}/>
-        <button className="btn sm" onClick={()=>setAll(true)}>Grant all</button>
-        <button className="btn sm" onClick={()=>setAll(false)}>Clear all</button>
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:11,color:'var(--muted)',fontWeight:600,textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>Place in the sign-off chain</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          {[['','Takes no part'],['prepare','Prepares'],['check','Checks'],['approve','Approves']].map(([v,l])=>{ const on=(d.signoff||'')===v; return (
+            <span key={v||'none'} onClick={()=>setDraft(x=>({...x,signoff:v}))} style={{cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,padding:'5px 11px',borderRadius:16,fontSize:11.5,fontWeight:600,
+              border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>
+              <span style={{width:12,height:12,borderRadius:'50%',display:'grid',placeItems:'center',border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff'}}>{on&&<Ic d={I.check} s={8} c="#fff"/>}</span>
+              {l}
+            </span>
+          );})}
+        </div>
+        <div style={{fontSize:10.5,color:'var(--muted)',marginTop:7}}>
+          Who signs a duty roster: the <b>Prepares</b> tier drafts it, the <b>Checks</b> tier reviews it, and the <b>Approves</b> tier signs it off and locks it. The roster's Sign-off boxes list the people at each of those tiers.
+        </div>
       </div>
-      <div style={{border:'1px solid var(--line)',borderRadius:9,overflow:'hidden'}}>
-        {USER_MODS.map(([mid,label],i)=>{
-          const acts=asActions(d.perms[mid]);
-          return (
-            <div key={mid} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 11px',flexWrap:'wrap',
-              borderTop:i?'1px solid var(--line-2)':0,background:acts.length?'var(--panel-2)':'transparent'}}>
-              <span style={{flex:'1 1 160px',fontSize:12.5,fontWeight:600,color:acts.length?'var(--ink)':'var(--muted)'}}>{label}</span>
-              {PERM_ACTS.map(([a,al])=>{ const on=acts.indexOf(a)>=0; return (
-                <span key={a} onClick={()=>toggle(mid,a)} style={{cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:16,fontSize:11.5,fontWeight:600,
-                  border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>
-                  <span style={{width:12,height:12,borderRadius:3,display:'grid',placeItems:'center',border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff"/>}</span>
-                  {al}
-                </span>
-              );})}
-            </div>
-          );
-        })}
-      </div>
+      {t&&t.fixed ? (
+        <div style={{fontSize:11.5,color:'var(--muted)'}}>This tier is built in: {t.kind==='admin'?'an Administrator holds every module':'a portal login holds none'}, so there is no ceiling to set.</div>
+      ) : (
+        <div>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+            <span style={{fontSize:11,color:'var(--muted)',fontWeight:600,textTransform:'uppercase',letterSpacing:.4}}>Modules an account at this tier may be given</span>
+            <span className="spacer" style={{flex:1}}/>
+            <button className="btn sm" onClick={()=>setAll(true)}>All</button>
+            <button className="btn sm" onClick={()=>setAll(false)}>None</button>
+          </div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {USER_MODS.map(([k,label,grp])=>{ const on=d.modules.indexOf(k)>=0; return (
+              <span key={k} onClick={()=>toggleMod(k)} style={{cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,padding:'5px 11px',borderRadius:16,fontSize:11.5,fontWeight:600,
+                border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>
+                <span style={{width:12,height:12,borderRadius:3,display:'grid',placeItems:'center',border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff"/>}</span>
+                {label}
+              </span>
+            );})}
+          </div>
+          <div style={{fontSize:10.5,color:'var(--muted)',marginTop:9}}>
+            Ticking a module here grants nobody anything — it only makes that module <b>tickable</b> on an account placed at this tier. Unticking one <b>removes</b> it from everyone already at this tier.
+          </div>
+        </div>
+      )}
       <div style={{display:'flex',gap:9,marginTop:12,flexWrap:'wrap'}}>
-        <span style={{fontSize:11.5,color:'var(--muted)',flex:1,minWidth:180,alignSelf:'center'}}>
-          Saving updates the role only. Existing accounts keep their current permissions until you press <b>Apply to members</b>.
-        </span>
+        <span className="spacer" style={{flex:1}}/>
         <button className="btn" onClick={()=>{setOpen(null);setDraft(null);setErr('');}}>Cancel</button>
-        <button className="btn pri" disabled={busy} onClick={()=>save(t)}>{busy?'Saving…':(t?'Save role':'Create role')}</button>
+        <button className="btn pri" disabled={busy} onClick={()=>save(t)}>{busy?'Saving…':(t?'Save tier':'Create tier')}</button>
       </div>
     </div>
   );
 
+  const ordered=(list||[]).slice().sort(byRank);
+  const consoleIds=ordered.filter(t=>t.kind==='console').map(t=>t.id);
   return (
-    <div style={{marginTop:22,borderTop:'1px solid var(--line)',paddingTop:18}}>
+    <div>
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4,flexWrap:'wrap'}}>
         <div>
-          <div style={{fontSize:14,fontWeight:700}}>Role templates</div>
-          <div style={{fontSize:11.5,color:'var(--muted)'}}>Named privilege sets you can grant in one pick — Nurse Manager, Ward In-charge, or your own.</div>
+          <div style={{fontSize:14,fontWeight:700}}>Hierarchy</div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>Your own ladder — the rank an account is placed at, and the modules that rank may be given.</div>
         </div>
         <span className="spacer" style={{flex:1}}/>
         <button className="btn sm" onClick={load}><Ic d={I.search} s={14}/>Refresh</button>
-        {may('add')&&<button className="btn pri sm" onClick={startNew}><Ic d={I.plus} s={14}/>Add role</button>}
+        {mayUsers('add')&&<button className="btn pri sm" onClick={startNew}><Ic d={I.plus} s={14}/>Add tier</button>}
+      </div>
+      <div style={{fontSize:11.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'10px 12px',margin:'12px 0'}}>
+        A tier is a <b>ceiling, not a grant</b>. Placing an account at a tier gives it nothing — every module is still ticked by hand in the account itself. Widening a tier gives its members nothing either; only narrowing one takes access away.
       </div>
       {err&&<div style={{fontSize:12.5,color:'#b32339',background:'var(--neg-bg)',border:'1px solid var(--line)',borderRadius:9,padding:'10px 12px',margin:'10px 0'}}>{err}</div>}
       {open==='__new'&&draft&&(
         <div style={{border:'1px solid var(--blue-100)',borderRadius:10,padding:'12px 14px',marginTop:10,background:'var(--blue-50)'}}>
-          <div style={{fontSize:13,fontWeight:700,color:'var(--blue-700)'}}>New role</div>
-          {matrix(draft,null)}
+          <div style={{fontSize:13,fontWeight:700,color:'var(--blue-700)'}}>New tier</div>
+          {editor(draft,null)}
         </div>
       )}
       <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:10}}>
         {list===null&&<div style={{textAlign:'center',color:'var(--faint)',padding:'18px',fontSize:13}}>Loading…</div>}
-        {(list||[]).map(t=>{
+        {ordered.map((t,i)=>{
           const n=counts[t.id]||0; const isOpen=open===t.id;
+          const ci=consoleIds.indexOf(t.id);
           return (
             <div key={t.id} style={{border:'1px solid '+(isOpen?'var(--blue-100)':'var(--line)'),borderRadius:10,padding:'11px 13px'}}>
               <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                <span style={{fontFamily:'var(--mono, monospace)',fontSize:11.5,fontWeight:700,color:'var(--muted)',flexShrink:0}}>L{i+1}</span>
                 <div style={{minWidth:0,flex:'1 1 200px'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                     <span style={{fontSize:13.5,fontWeight:700}}>{t.name}</span>
-                    {t.builtin&&<span className="tag" style={{background:'var(--panel-2)',color:'var(--muted)'}}>Built-in</span>}
+                    {t.fixed&&<span className="tag" style={{background:'var(--panel-2)',color:'var(--muted)'}}>Built-in</span>}
                   </div>
                   {t.description&&<div style={{fontSize:11.5,color:'var(--muted)',marginTop:2}}>{t.description}</div>}
                 </div>
-                <span className="tag" style={{minWidth:120,justifyContent:'center',color:'var(--ink-2)'}}>{summary(t.perms)}</span>
-                <span className="tag" style={{minWidth:78,justifyContent:'center'}}>{n} member{n===1?'':'s'}</span>
-                {may('edit')&&<button className="btn sm" onClick={()=>isOpen?(setOpen(null),setDraft(null)):startEdit(t)}><Ic d={I.edit} s={13}/>{isOpen?'Close':'Edit'}</button>}
-                {may('edit')&&<button className="btn sm" disabled={!n||busy} title={n?'Push these permissions onto its members':'No account uses this role yet'} onClick={()=>apply(t)}><Ic d={I.check} s={13}/>Apply to members</button>}
-                {may('delete')&&!t.builtin&&<button className="icon-btn danger" title="Delete role" onClick={()=>del(t)}><Ic d={I.x} s={14}/></button>}
+                <span className="tag" style={{minWidth:130,justifyContent:'center',color:'var(--ink-2)'}}>{ceilingLine(t)}</span>
+                {t.signoff&&<span className="tag" style={{justifyContent:'center',color:'var(--blue-700)',background:'var(--blue-50)'}}>{t.signoff==='approve'?'Approves':t.signoff==='check'?'Checks':'Prepares'}</span>}
+                <span className="tag" style={{minWidth:82,justifyContent:'center'}}>{n} account{n===1?'':'s'}</span>
+                {mayUsers('edit')&&t.kind==='console'&&(
+                  <span style={{display:'inline-flex',gap:2}}>
+                    <button className="icon-btn" title="Move up — more senior" disabled={ci<=0} onClick={()=>move(t,-1)}><span style={{display:'grid',placeItems:'center',transform:'rotate(-90deg)'}}><Ic d={I.chevR} s={13}/></span></button>
+                    <button className="icon-btn" title="Move down — more junior" disabled={ci<0||ci>=consoleIds.length-1} onClick={()=>move(t,1)}><span style={{display:'grid',placeItems:'center',transform:'rotate(90deg)'}}><Ic d={I.chevR} s={13}/></span></button>
+                  </span>
+                )}
+                {mayUsers('edit')&&<button className="btn sm" onClick={()=>isOpen?(setOpen(null),setDraft(null)):startEdit(t)}><Ic d={I.edit} s={13}/>{isOpen?'Close':'Edit'}</button>}
+                {mayUsers('delete')&&!t.fixed&&<button className="icon-btn danger" title={n?'Move its accounts to another tier first':'Remove tier'} disabled={!!n} onClick={()=>del(t)}><Ic d={I.x} s={14}/></button>}
               </div>
-              {isOpen&&draft&&matrix(draft,t)}
+              {isOpen&&draft&&editor(draft,t)}
             </div>
           );
         })}
-        {list!==null&&list.length===0&&<div style={{textAlign:'center',color:'var(--faint)',padding:'18px',fontSize:13}}>No role templates yet.</div>}
+        {list!==null&&!ordered.length&&<div style={{textAlign:'center',color:'var(--faint)',padding:'18px',fontSize:13}}>No tiers yet.</div>}
       </div>
     </div>
   );
 }
-window.RoleTemplatesPanel=RoleTemplatesPanel;
+window.HierarchyPanel=HierarchyPanel;
 
 /* Users & Roles — ONE module for who can sign in AND what they collect. A portal account's
    departments / quality areas / indicators are edited inside its own Manage dialog (the shared
@@ -2280,28 +2591,30 @@ function UsersAndRoles({depts}){
   const [sub,setSub]=React.useState(()=>{
     const s=(typeof window!=='undefined'&&window.__UNICO_USERS_SUBTAB__)||'accounts';
     try{ delete window.__UNICO_USERS_SUBTAB__; }catch(e){}
-    return s==='access'?'access':'accounts';
+    return s==='access'?'access':s==='hierarchy'?'hierarchy':'accounts';
   });
   const hasDC=typeof DataResponsibles!=='undefined';
-  const TABS=[['accounts','Accounts',I.user],['access','Indicator Access',I.check]];
+  const TABS=[['accounts','Accounts',I.user],['hierarchy','Hierarchy',I.layers],['access','Indicator Access',I.check]];
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
       <div className="card"><div className="card-b" style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
         <div style={{flex:1,minWidth:220}}>
           <div style={{fontSize:15,fontWeight:700,color:'var(--ink)'}}>Users &amp; Roles</div>
-          <div style={{fontSize:11.5,color:'var(--muted)'}}>Sign-in accounts and roles. A collector’s or in-charge’s departments, quality areas and indicators are set in their account (Manage).</div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>Sign-in accounts. Each one is created at a level and granted module access explicitly, in its own dialog — a collector’s or in-charge’s departments, quality areas and indicators are set there too (Manage).</div>
         </div>
         <div className="seg">{TABS.map(([id,l,ic])=><button key={id} className={sub===id?'on':''} onClick={()=>setSub(id)} style={{display:'inline-flex',alignItems:'center',gap:6}}><Ic d={ic} s={13}/>{l}</button>)}</div>
       </div></div>
-      {sub==='accounts'&&<div className="card"><div className="card-b"><UserManagement depts={depts}/></div></div>}
+      {sub==='accounts'&&<div className="card"><div className="card-b"><UserManagement depts={depts} onManageTiers={()=>setSub('hierarchy')}/></div></div>}
+      {sub==='hierarchy'&&<div className="card"><div className="card-b"><HierarchyPanel/></div></div>}
       {sub==='access'&&(hasDC?<DataResponsibles key="access" depts={depts} embedded initialView="access"/>:null)}
     </div>
   );
 }
 
-function UserManagement({depts}={}){
+function UserManagement({depts,onManageTiers}={}){
   const {useState,useEffect}=React;
   const toBody = (n) => (typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
+  const tiers=useTiers();
   const [users,setUsers]=useState(null); // null = loading
   const [err,setErr]=useState('');
   const [q,setQ]=useState('');
@@ -2312,7 +2625,7 @@ function UserManagement({depts}={}){
   useEffect(load,[]);
   const all=users||[];
   const admins=all.filter(u=>u.role==='Administrator'&&u.active!==false).length;
-  const filtered=all.filter(u=>!q||`${u.name} ${u.username} ${u.email||''} ${u.title||u.role}`.toLowerCase().includes(q.toLowerCase()));
+  const filtered=all.filter(u=>!q||`${u.name} ${u.username} ${u.email||''} ${roleLabel(u)} ${tierLabel(u)}`.toLowerCase().includes(q.toLowerCase()));
   const toggle=async(u)=>{ try{ await usersApi('PATCH','/api/users/'+encodeURIComponent(u.username),{active:u.active===false}); uToast(u.active===false?'Activated':'Deactivated'); load(); }catch(e){ uToast(e.message||'Failed','error'); } };
   const del=async(u)=>{ try{ await usersApi('DELETE','/api/users/'+encodeURIComponent(u.username)); uToast('User removed'); setConfirm(null); load(); }catch(e){ uToast(e.message||'Failed','error'); setConfirm(null); } };
   // The Administration module can be delegated to a 'User' with a per-action level, and the
@@ -2320,7 +2633,20 @@ function UserManagement({depts}={}){
   // showing buttons that come back 403.
   const may=(a)=>{ try{ return typeof window.unicoCan!=='function' || window.unicoCan('users',a); }catch(e){ return true; } };
   const mayAdd=may('add'), mayEdit=may('edit'), mayDel=may('delete');
-  const roleLabel=u=> u.role==='Administrator'?'Administrator':(PORTAL_ROLE_LABEL[u.role]||(u.title||'User'));
+  // The staff register, keyed by employee id — a login is named after the emp id, or
+  // carries the linked one in staffEmpId.
+  const staffByEmp=React.useMemo(()=>{
+    const src=window.STAFF_SEED||window.__UNICO_STAFF__||[];
+    const m={};
+    (Array.isArray(src)?src:[]).forEach(e=>{ const k=String(e.emp_id||'').trim().toLowerCase(); if(k) m[k]=e; });
+    return m;
+  },[users]);
+  const staffOf=u=>staffByEmp[String(u.staffEmpId||u.username||'').trim().toLowerCase()]||null;
+  const designationOf=u=>{ const r=staffOf(u); return (r&&String(r.designation||'').trim())||''; };
+  // What this account IS: an Administrator, a portal login, or a person with a job title.
+  const roleLabel=u=> u.role==='Administrator'?'Administrator':(PORTAL_ROLE_LABEL[u.role]||designationOf(u)||'Staff account');
+  // Where they sit in the hierarchy — only ever what was actually assigned.
+  const tierLabel=u=>{ if(u.role==='Administrator'||PORTAL_ROLE_LABEL[u.role]) return ''; return u.level?tierName(tiers,u.level):'Not placed'; };
   // Surface the row-level staff scope in the list too, so "who can see whose records"
   // is answerable at a glance instead of only inside the edit modal.
   const staffScopeLabel=u=>{ const sc=u.staffScope||'all'; if(sc==='self') return 'own record only'; if(sc==='departments') return (u.departments&&u.departments.length?u.departments.length+' dept':'no dept')+' staff'; return ''; };
@@ -2374,6 +2700,7 @@ function UserManagement({depts}={}){
               {scopeLine(u)&&<div style={{fontSize:11,color:'var(--ink-2)',marginTop:2}} title="Data collection scope (edit in Manage)">{scopeLine(u)}</div>}
             </div>
             <span className="tag" style={{minWidth:96,justifyContent:'center'}}>{roleLabel(u)}</span>
+            {tierLabel(u)&&<span className="tag" style={{minWidth:96,justifyContent:'center',color:u.level?'var(--blue-700)':'var(--muted)',background:u.level?'var(--blue-50)':'var(--panel-2)'}} title={u.level?'Hierarchy level':'No hierarchy level assigned — open Manage to place this account'}>{tierLabel(u)}</span>}
             <span className="tag" style={{minWidth:96,justifyContent:'center',color:'var(--ink-2)'}}>{summaryOf(u)}</span>
             {active?<span className="chip pos">● Active</span>:<span className="chip flat">○ Inactive</span>}
             {mayEdit&&<button className="btn sm" onClick={()=>setModal({user:u})}>Manage</button>}
@@ -2384,8 +2711,7 @@ function UserManagement({depts}={}){
         })}
         {users!==null&&filtered.length===0&&<div style={{textAlign:'center',color:'var(--faint)',padding:'24px',fontSize:13}}>No users{q?' match the search':' yet'}.</div>}
       </div>
-      <RoleTemplatesPanel/>
-      {modal&&<UserModal initial={modal.user} depts={depts} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load();}}/>}
+      {modal&&<UserModal initial={modal.user} depts={depts} allUsers={all} onManageTiers={onManageTiers} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load();}}/>}
       {confirm&&toBody(
         <div className="modal-bg" onMouseDown={e=>{if(e.target===e.currentTarget)setConfirm(null);}}>
           <div className="modal" style={{width:'min(400px,92vw)'}}><div style={{padding:'22px'}}>

@@ -65,7 +65,10 @@ const UNICO_MODULE_VIEWS = {
   supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
-  perf:   ['perfHome','perfDirectory','perfForm','perfPrint','perfStaff','perfAchievements','perfIncidents','perfCompare','perfAttrition','perfRisk','perfBoard'],
+  // perfDirectory / perfStaff are GONE: the staff directory and the per-person record
+  // belong to Nurse / PCA Management, which already owns the roster. app.jsx rewrites
+  // the two old route names onto the staff module so old links still land somewhere.
+  perf:   ['perfHome','perfForm','perfPrint','perfAchievements','perfIncidents','perfCompare','perfAttrition','perfRisk','perfBoard'],
   roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','manpower'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
@@ -108,6 +111,12 @@ function unicoModuleLevel(mid){ const p=unicoUserPerms(); if(!p) return 'delete'
 // Perms per module are either an ARRAY of independently-granted actions (new model,
 // e.g. ['view','edit','delete'] — Delete without Add) or a legacy escalating LEVEL
 // string (none<view<edit<add<delete). Any granted action implies module 'view'.
+/* 'print' is an INDEPENDENT action, not a rung on the view<edit<add<delete ladder:
+   it takes the record out of the system and onto paper. A legacy level string never
+   granted it, so it is never read out of one — an account has to be given it.
+   ⚠️ An account still stored as a level STRING therefore has no Print button anywhere,
+   and nothing on screen says why: tick Print for it in Users & Roles. The reasoning, and
+   why this must not be "fixed" by making a level imply print, is in server/access.js. */
 function unicoCan(mid, action){
   const p=unicoUserPerms(); if(!p) return true;   // admin / open local mode -> full
   const val=p[mid];
@@ -115,6 +124,7 @@ function unicoCan(mid, action){
     if(action==='view') return val.length>0;       // any granted action lets them open it
     return val.indexOf(action)>=0;
   }
+  if(action==='print') return false;
   return (UNICO_PERM_RANK[val||'none']||0) >= (UNICO_PERM_RANK[action]||UNICO_PERM_RANK.view);
 }
 function unicoCanAccessModule(mid){ return unicoCan(mid,'view'); }
@@ -174,8 +184,14 @@ function unicoSidebarGroups(moduleId){
     ]},
   ];
   if(moduleId==='staff') return [
-    {sec:'Nurse Management', items:[{id:'nurseHome',label:'Dashboard',icon:I.grid},{id:'nurses',label:'Directory',icon:I.layers},{id:'nurseCompliance',label:'Compliance',icon:I.heart}]},
-    {sec:'PCA Management',   items:[{id:'pcaHome',label:'Dashboard',icon:I.grid},{id:'pca',label:'Directory',icon:I.layers},{id:'pcaCompliance',label:'Compliance',icon:I.heart}]},
+    // One workspace, role as a filter — mirrors unicoWorkspaceSub() below, which is
+    // what the live Sidebar actually renders.
+    {sec:'Staff Management', items:[{id:'nurseHome',label:'Dashboard',icon:I.grid,match:['nurseHome','pcaHome']},
+      {id:'nurses',label:'Directory',icon:I.layers,match:['nurses','pca']},
+      {id:'nurseCompliance',label:'Compliance',icon:I.heart,match:['nurseCompliance','pcaCompliance']},
+      {id:'staffPrevious',label:'Previous Staff',icon:I.doc},
+      {id:'perfHome',label:'Performance',icon:I.trend},
+      {id:'rosterHome',label:'Duty Roster',icon:I.grid}]},
   ];
   // Quality module (window.QualityView) now renders inside the global shell; these
   // are its views. Each id is a route.view that app.jsx maps to a quality view.
@@ -298,21 +314,76 @@ const UNICO_WS = [
     { id:'reports',     label:'Reports',         icon:I.doc,    home:'reports',     on:v=>unicoModuleOf(v)==='reports' },
   ]},
   { sec:'Administer', items:[
-    // Nurse and PCA are SEPARATE destinations (own dashboard/directory/compliance),
-    // though both belong to the 'staff' access module. staffProfile/staffForm/previous
-    // are shared and default to highlighting Nurse Management.
-    { id:'nurses',      label:'Nurse Management', icon:I.steth, home:'nurseHome',   on:v=>['nurseHome','nurses','nurseCompliance','staffPrevious','staffProfile','staffForm'].indexOf(v)>=0 },
-    { id:'pca',         label:'PCA Management',   icon:I.bed,   home:'pcaHome',     on:v=>['pcaHome','pca','pcaCompliance'].indexOf(v)>=0 },
-    // 6-monthly individual appraisal (Form HR-NUR-PA-01) + the achievement and
-    // incident registers whose points feed into it.
-    { id:'perf',        label:'Performance',      icon:I.doc,   home:'perfHome',    on:v=>unicoModuleOf(v)==='perf', tag:'NEW' },
-    // Duty roster — the monthly shift sheet, one per unit.
-    { id:'roster',      label:'Duty Roster',      icon:I.grid,  home:'rosterHome',  on:v=>unicoModuleOf(v)==='roster', tag:'NEW' },
+    /* ONE STAFF DESTINATION. Nurse Management, PCA Management, Performance and Duty
+       Roster used to be four sidebar entries over ONE roster — the same people filtered
+       by role, plus their appraisals and their shifts. Four doors to one room meant the
+       role was something you navigated to rather than something you filtered by, and a
+       colleague's record, their appraisal and their duty sat in three different places.
+
+       Each of those keeps its own PERMISSION ('perf' — the appraisal file is
+       confidential and the server gates it; 'roster' likewise), it just no longer keeps
+       its own destination: `mods` lists every module this one row can open, and the
+       sub-items below carry the module each of them needs. */
+    { id:'staff',       label:'Staff Management', icon:I.steth, home:'nurseHome', mods:['staff','perf','roster'],
+      on:v=>['staff','perf','roster'].indexOf(unicoModuleOf(v))>=0 },
     // Settings is the admin HUB (Departments config, Users & Roles, Responsible Persons,
     // Form Fields, Data & Export) — the scattered admin submodules fold into its tabs.
     { id:'settings',    label:'Settings',        icon:I.gear,   home:'settings',    on:v=>v==='settings'||unicoModuleOf(v)==='users' },
   ]},
 ];
+/* SECTION TABS — the screens INSIDE a sidebar destination.
+
+   The sidebar names the places in the app; it does not enumerate every screen. When
+   Nurse Management, PCA Management, Performance and Duty Roster became one Staff
+   Management destination, listing all of their screens made a menu you had to scroll —
+   so each of those groups carries its own tab strip on the page instead, the way
+   Settings always has.
+
+   It lives here, and the shell renders it, because a group's screens can come from
+   SEVERAL components: the roster's three tabs are RosterView, window.ManpowerOverview
+   and window.RosterReviewFull, so no single component could host the strip. */
+const UNICO_VIEW_TABS = [
+  { mod:'perf', hide:['perfForm','perfPrint'], parent:{ perfRisk:'perfAttrition' }, tabs:[
+    ['perfHome','Overview'], ['perfAchievements','Achievements'], ['perfIncidents','Incidents'],
+    ['perfBoard','Recognition'], ['perfAttrition','Attrition & Exits'], ['perfCompare','By Department'],
+  ]},
+  { mod:'roster', hide:['rosterPrint'], parent:{ rosterGrid:'rosterHome', rosterReview:'rosterHome' }, tabs:[
+    ['rosterHome','Rosters'], ['manpower','Manpower'], ['rosterFullReview','Full Review'],
+  ]},
+];
+function unicoViewTabs(view){
+  for(let i=0;i<UNICO_VIEW_TABS.length;i++){
+    const g=UNICO_VIEW_TABS[i];
+    if(unicoModuleOf(view)!==g.mod) continue;
+    if((g.hide||[]).indexOf(view)>=0) return null;     // a leaf screen, not a section
+    return { cur:(g.parent&&g.parent[view])||view, tabs:g.tabs };
+  }
+  return null;
+}
+function ViewTabs({ view, setRoute }){
+  const g = unicoViewTabs(view);
+  if(!g) return null;
+  return (
+    <div className="seg" style={{alignSelf:'flex-start',maxWidth:'100%',flexWrap:'wrap',marginBottom:12}}>
+      {g.tabs.map(([v,label])=>(
+        <button key={v} className={g.cur===v?'on':''} onClick={()=>{ if(g.cur!==v) setRoute({view:v}); }}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
+// Where a sidebar row lands. Normally its own `home`; for a row fronting several
+// permissions (`mods`), the home of the first one this session can open.
+function wsHome(it){
+  if(!it.mods) return it.home;
+  if(unicoCanAccessModule(unicoAccessModuleOf(it.home))) return it.home;
+  for(let i=0;i<it.mods.length;i++){
+    const h=UNICO_MODULE_VIEWS[it.mods[i]] && UNICO_MODULE_VIEWS[it.mods[i]][0];
+    if(h && unicoCanAccessModule(it.mods[i])) return h;
+  }
+  return it.home;
+}
+
 // Secondary views shown (indented) under the ACTIVE primary destination.
 function unicoWorkspaceSub(view){
   const mod = unicoModuleOf(view);
@@ -340,18 +411,29 @@ function unicoWorkspaceSub(view){
     { label:'History',         view:'supHistory' },
     { label:'Generate Report', view:'supReport' },
   ];
-  if(mod==='perf') return [
-    { label:'Staff Directory',   view:'perfDirectory', match:['perfDirectory','perfForm','perfPrint','perfStaff'] },
-    { label:'Achievements',      view:'perfAchievements' },
-    { label:'Incidents',         view:'perfIncidents' },
-    { label:'Recognition Board', view:'perfBoard' },
-    { label:'Attrition & Exits',  view:'perfAttrition', match:['perfAttrition','perfRisk'] },
-    { label:'Department Compare',view:'perfCompare' },
-  ];
-  if(mod==='roster') return [
-    { label:'All Rosters',       view:'rosterHome', match:['rosterHome','rosterGrid','rosterReview','rosterPrint'] },
-    { label:'Manpower Overview', view:'manpower' },
-    { label:'Full Review',       view:'rosterFullReview' },
+  /* STAFF MANAGEMENT — the roster and the appraisal work under one destination.
+     There is no "Staff Directory" under Performance: there is ONE staff directory in
+     this app, it is the Nurses / PCA rows below, the appraisal status rides on those
+     rows and the full record opens on the staff profile. What follows the divider is
+     what Performance alone owns — the registers and the roll-ups.
+
+     `mod` names the permission a row needs. A session holding 'staff' but not 'perf'
+     sees the roster half only; one holding 'perf' but not 'staff' sees the appraisal
+     half. The Sidebar filters on it. */
+  /* FIVE ROWS, NOT ELEVEN. The sidebar names the PLACES in this workspace; it does not
+     enumerate every screen. Nurses and PCA are the same directory with the role
+     switched, so they are one row — and the six Performance screens are tabs on the
+     Performance page itself (PerfTabs in performance.jsx), the way Settings has always
+     carried its own tabs. A sidebar you have to scroll is a menu, not a map. */
+  if(mod==='staff' || mod==='perf' || mod==='roster') return [
+    { label:'Dashboard',      view:'nurseHome',       mod:'staff', match:['nurseHome','pcaHome'] },
+    { label:'Directory',      view:'nurses',          mod:'staff', match:['nurses','pca'] },
+    { label:'Compliance',     view:'nurseCompliance', mod:'staff', match:['nurseCompliance','pcaCompliance'] },
+    { label:'Previous Staff', view:'staffPrevious',   mod:'staff' },
+    { label:'Performance',    view:'perfHome',        mod:'perf', divider:true,
+      match:UNICO_MODULE_VIEWS.perf },
+    { label:'Duty Roster',    view:'rosterHome',      mod:'roster',
+      match:UNICO_MODULE_VIEWS.roster },
   ];
   if(mod==='medicine') return [
     { label:'Medicine Info',     view:'medInfo' },
@@ -377,20 +459,6 @@ function unicoWorkspaceSub(view){
     { label:'Department Setup',    view:'dcSettings' },
     { label:'Share Links',         view:'dcShare' },
   ];
-  if(mod==='staff'){
-    const isPca=['pcaHome','pca','pcaCompliance'].indexOf(view)>=0;
-    return isPca ? [
-      { label:'Dashboard',      view:'pcaHome' },
-      { label:'Directory',      view:'pca' },
-      { label:'Compliance',     view:'pcaCompliance' },
-      { label:'Previous Staff', view:'staffPrevious' },
-    ] : [
-      { label:'Dashboard',      view:'nurseHome' },
-      { label:'Directory',      view:'nurses' },
-      { label:'Compliance',     view:'nurseCompliance' },
-      { label:'Previous Staff', view:'staffPrevious' },
-    ];
-  }
   return [];
 }
 
@@ -479,7 +547,10 @@ function Sidebar({route, setRoute, collapsed, depts}){
   },[]);
   const qBadge = React.useMemo(()=>(window.UNICO_Q?unicoQualityBreachCount():0),[chunkTick]);
   const supBadge = React.useMemo(()=>unicoSupAlertCount(),[view,chunkTick]);
-  const sub = unicoWorkspaceSub(view);
+  // A sub-item can need a permission of its own — Staff Management lists the roster
+  // ('staff') and the appraisal screens ('perf') together, and an account may hold
+  // only one of them.
+  const sub = unicoWorkspaceSub(view).filter(s=>!s.mod || unicoCanAccessModule(s.mod));
   const subOn = s => s.match ? s.match.indexOf(view)>=0 : view===s.view;
   return (
     <aside className="sb">
@@ -491,7 +562,13 @@ function Sidebar({route, setRoute, collapsed, depts}){
         {UNICO_WS.map((g,gi)=>{
           // Show only the workspaces this session is allowed to open. A section whose
           // items are all gated away is dropped entirely (no empty header).
-          const items = g.items.filter(it=>it.always || unicoCanAccessModule(unicoAccessModuleOf(it.home)));
+          // `mods` = a destination that fronts SEVERAL permissions (Staff Management
+          // fronts 'staff' and 'perf'). It shows when ANY of them is granted, and opens
+          // at the landing of the first one this session can actually use — otherwise an
+          // account with Performance but no roster clicked through to a forbidden view.
+          const items = g.items.filter(it=>it.always || (it.mods
+            ? it.mods.some(m=>unicoCanAccessModule(m))
+            : unicoCanAccessModule(unicoAccessModuleOf(it.home))));
           if(!items.length) return null;
           return (
           <React.Fragment key={gi}>
@@ -502,7 +579,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
               const badge = badgeN>0 ? badgeN : null;
               return (
                 <React.Fragment key={it.id}>
-                  <div className={'sb-item'+(active?' active':'')} onClick={()=>setRoute({view:it.home})} title={it.label}>
+                  <div className={'sb-item'+(active?' active':'')} onClick={()=>setRoute({view:wsHome(it)})} title={it.label}>
                     <Ic d={it.icon} s={18}/><span className="lbl">{it.label}</span>
                     {it.tag && <span className="lbl" style={{marginLeft:6,fontSize:8.6,fontWeight:800,letterSpacing:.6,padding:'2px 6px',borderRadius:5,color:'#0d1b2e',background:'linear-gradient(135deg,#5fd3c4,#3ab5a7)'}}>{it.tag}</span>}
                     {badge!=null && <span className="badge alert num">{badge}</span>}
@@ -510,8 +587,9 @@ function Sidebar({route, setRoute, collapsed, depts}){
                   {/* secondary views nest under the active destination */}
                   {active && sub.length>0 && (
                     <div className="sb-sub">
-                      {sub.map(s=>(
-                        <div key={s.view} className={'sb-sub-item'+(subOn(s)?' active':'')} onClick={()=>setRoute({view:s.view})}>
+                      {sub.map((s,si)=>(
+                        <div key={s.view} className={'sb-sub-item'+(subOn(s)?' active':'')} onClick={()=>setRoute({view:s.view})}
+                          style={s.divider&&si>0?{marginTop:7,paddingTop:9,borderTop:'1px solid rgba(255,255,255,.10)'}:null}>
                           <span className="dot"/><span className="lbl">{s.label}</span>
                         </div>
                       ))}
@@ -674,7 +752,11 @@ function TopBar({route, setRoute, onBurger, crumbs, actions, depts=[], onFill, p
             </div>
           )}
         </div>
-        <button className="tb-icon" title="Print" onClick={()=>window.print()}><Ic d={I.print} s={17}/></button>
+        {/* Printing takes the record off the screen and out of the building, so it follows
+            the Print permission of whatever workspace is open — not merely the right to look
+            at it. Administrators and the open local session are unrestricted. */}
+        {(()=>{ let ok=true; try{ ok=!window.unicoCan||window.unicoCan(window.unicoAccessModuleOf?window.unicoAccessModuleOf(route&&route.view):'stats','print'); }catch(e){ ok=true; }
+          return ok ? <button className="tb-icon" title="Print" onClick={()=>window.print()}><Ic d={I.print} s={17}/></button> : null; })()}
         {window.unicoLock&&window.unicoLock.isEnabled()&&(
           <button className="tb-icon" title="Lock now" onClick={()=>window.dispatchEvent(new Event('unico:lock'))}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/><circle cx="12" cy="16" r="1.1"/></svg>
@@ -705,6 +787,6 @@ function SectionTitle({icon,title,sub,right}){
   );
 }
 
-Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, ModuleSwitch, unicoModuleOf,
+Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, ModuleSwitch, ViewTabs, unicoViewTabs, unicoModuleOf,
   UNICO_ACCESS_MODULES, unicoAccessModuleOf, unicoAllowedModules, unicoCanAccessModule, unicoCanAccessView, unicoFirstAllowedHome,
   unicoCan, unicoModuleLevel, unicoUserPerms, unicoRefreshPerms });

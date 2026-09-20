@@ -12,10 +12,8 @@
  *
  * Views (rendered one at a time inside the global shell, like QualityView):
  *   perfHome         dashboard — cycle progress, department progress, grade mix, reminders
- *   perfDirectory    every staff member with their appraisal status for this cycle
  *   perfForm         the appraisal form itself (10 sections, 20 parameters, live total)
  *   perfPrint        printable form, 1:1 with the paper original
- *   perfStaff        one person's performance record — trend, history, points, conduct
  *   perfAchievements achievement register (bonus points, capped) + per-staff Achievement
  *                    History, a sub-screen of the register
  *   perfIncidents    incident register (deductions, capped) + per-staff Incident History
@@ -32,6 +30,16 @@
  * the individual's own date of joining, so a new joiner's first appraisal falls six
  * months after they start rather than at the next org-wide season. All of that lives
  * in appraisal-spec.js (window.UNICO_APPRAISAL) — this file only renders it.
+ *
+ * THERE IS NO STAFF DIRECTORY AND NO PERSON PAGE HERE. Both used to be: perfDirectory
+ * listed the whole roster with an appraisal column, and perfStaff drew one person's
+ * record. Nurse / PCA Management already owns the roster and already has a record page
+ * per person, so keeping second copies here meant two answers to "who works here" and
+ * two half-complete pages about the same colleague. The appraisal status now rides on
+ * the staff directory's rows and the whole record renders on the staff profile
+ * (staff.jsx / staff-profile.jsx, both reading UNICO_APPRAISAL.standing() — the same
+ * rule useRoster below reads, so they cannot disagree). app.jsx rewrites the two
+ * retired route names onto the staff module for anything still pointing at them.
  *
  * Data: server/staff-performance.js (/api/performance). Staff records come from the
  * existing window.useStaffStore(), so there is ONE roster in the app, not two.
@@ -235,46 +243,20 @@ function useRoster(staffStore, perf) {
 
     const byEmp = {};
     const rows = list.map((e) => {
+      // WHICH WINDOW, WHICH FORM, AND IS IT LATE — answered once, in appraisal-spec.js,
+      // because the Nurse / PCA directory and the staff record ask the same question and
+      // must not answer it differently. This file adds only what the registers say.
+      // Handed this person's OWN slice, not the whole register: standing() filters on
+      // the employee key, and passing all of them back would undo the grouping above.
       const empId = e.emp_id || String(e.id);
-      const cyc = A.cycleOf(e.doj, now);
-      const mineAppr = apprOf[String(empId)] || [];
-      const current = mineAppr.find((x) => cyc && x.cycleId === cyc.id) || null;
-      // A form still open from an EARLIER window stays this person's appraisal until it is
-      // filed. Matching only the current window made a completed form awaiting Part H
-      // vanish from the queue, the dashboard and the form screen the day the next window
-      // opened — so it could never be actioned. An abandoned old DRAFT does not hide the
-      // current window's form.
-      const earlier = mineAppr.filter((x) => x.status !== 'actioned' && !(cyc && x.cycleId === cyc.id))
-        .sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)))[0] || null;
-      const apr = (earlier && earlier.status !== 'draft') ? earlier : (current || earlier);
-      const history = mineAppr.filter((x) => x.status === 'actioned')
-        .sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)));
-      const last = history[0] || null;
-      const regCycle = apr ? apr.cycleId : (cyc && cyc.id);   // the registers belonging to the form shown
+      const st = A.standing(e, apprOf[String(empId)] || [], now);
+      const regCycle = st.appraisal ? st.appraisal.cycleId : (st.cycle && st.cycle.id);   // the registers belonging to the form shown
       const inc = (incOf[String(empId)] || []).filter((x) => regCycle && x.cycleId === regCycle);
       const ach = (achOf[String(empId)] || []).filter((x) => regCycle && x.cycleId === regCycle);
-      const firstDue = e.doj ? A.addMonths(A.parseDate(e.doj) || now, 6) : null;
-      const neverAppraised = history.length === 0;
-      /* OVERDUE = a window that has already CLOSED with nothing filed against it.
-
-         cycleOf() only ever returns the window CONTAINING today, whose due date is by
-         definition still in the future — so testing it can never be true. The closed
-         windows come from cyclesSince(), newest first. Testing the open window instead
-         would flag the entire roster the morning a new cycle starts, which is what the
-         two earlier versions of this line did in opposite directions. */
-      const lastClosed = e.doj ? (A.cyclesSince(e.doj, now, 1) || [])[0] : null;
-      const missedClosed = !!(lastClosed && !mineAppr.some((x) => x.cycleId === lastClosed.id));
-      const row = {
-        emp: e, empId, role: roleOf(e), name: e.name, designation: e.designation, dept: e.current_department,
-        doj: e.doj, cycle: cyc, appraisal: apr, status: apr ? apr.status : 'none',
-        history, last, incidents: inc, achievements: ach,
-        firstDue, neverAppraised,
-        lastClosed,
-      overdue: missedClosed,
-      // Never appraised AND past their first six months: the new-joiner reminder,
-      // which is a different question from "a window closed unappraised".
-      newJoinerDue: !!(neverAppraised && firstDue && firstDue <= now),
-      };
+      const row = Object.assign({}, st, {
+        emp: e, role: roleOf(e), name: e.name, designation: e.designation, dept: e.current_department,
+        doj: e.doj, incidents: inc, achievements: ach,
+      });
       byEmp[empId] = row;
       return row;
     });
@@ -369,7 +351,7 @@ function Modal({ title, sub, onClose, children, wide, footer }) {
 }
 
 /* ================= 1. DASHBOARD ================= */
-function PerfDashboard({ roster, perf, setRoute }) {
+function PerfDashboard({ roster, perf, setRoute, role }) {
   const rows = roster.rows;
   const done = rows.filter((r) => r.status === 'actioned').length;
   const prog = rows.filter((r) => ['draft', 'submitted', 'discussed'].indexOf(r.status) >= 0).length;
@@ -404,12 +386,19 @@ function PerfDashboard({ roster, perf, setRoute }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={MK.iconBadge('blue', 34)}><Ic d={I.doc} s={17} /></div>
         <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontWeight: 600, fontSize: 15.5, color: MK.INK }}>Individual Performance &mdash; Nursing &amp; PCA</div>
+          <div style={{ fontWeight: 600, fontSize: 15.5, color: MK.INK }}>
+            Individual Performance &mdash; {role === 'PCA' ? 'Patient Care Assistants' : role === 'Nurse' ? 'Nurses' : 'Nursing & PCA'}
+          </div>
           <div style={{ fontSize: 11.5, color: MK.MUTED }}>6-monthly per individual &mdash; anchored to each date of joining &middot; 20 parameters &middot; out of 100</div>
         </div>
-        <button className="btn" onClick={() => setRoute({ view: 'perfCompare' })}>Compare</button>
-        <button className="btn" onClick={() => setRoute({ view: 'perfDirectory' })}>Rankings</button>
-        {perfCan('add') && <button className="btn pri" onClick={() => setRoute({ view: 'perfDirectory' })}>+ New Appraisal</button>}
+        {/* No Compare / Rankings buttons here: both opened the By Department tab that now
+            sits directly above this header — a button whose only job is to go where the
+            tab beside it already goes is one more thing to read, not one more way in.
+
+            THE ROSTER IS IN STAFF MANAGEMENT. An appraisal starts from the person's row
+            in the Directory (or their profile), not from a staff list this module keeps
+            of its own — there is only one staff list in the app now. */}
+        {perfCan('add') && <button className="btn pri" onClick={() => setRoute({ view: 'nurses' })}>+ New Appraisal</button>}
       </div>
 
       {/* current-cycle band */}
@@ -521,7 +510,7 @@ function PerfDashboard({ roster, perf, setRoute }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 14 }}>
         <QuickCard icon={I.doc} title="Appraisals to file" sub="completed — Part H not yet recorded"
-          n={rows.filter((r) => r.status === 'discussed' || r.status === 'submitted').length} onClick={() => setRoute({ view: 'perfDirectory' })} />
+          n={rows.filter((r) => r.status === 'discussed' || r.status === 'submitted').length} onClick={() => setRoute({ view: 'nurses' })} />
         <QuickCard icon={I.heart} title="Achievements" sub={'Bonus points, capped at ' + A.BONUS_CAP + ' per cycle'}
           n={perf.achievements.length} onClick={() => setRoute({ view: 'perfAchievements' })} />
         <QuickCard icon={I.alert || I.pulse} title="Incidents" sub={'Deductions, capped at ' + A.PENALTY_CAP + ' per cycle'}
@@ -550,194 +539,16 @@ function QuickCard({ icon, title, sub, n, onClick }) {
   );
 }
 
-/* ================= 2. DIRECTORY ================= */
-// The mockup's quick-chip row. Each chip is a predicate over a roster row rather than a
-// precomputed bucket, so a chip can never disagree with the table underneath it.
-const DIR_CHIPS = [
-  ['all', 'All', () => true],
-  ['fav', '★ Favorites', (r) => !!(r.emp && r.emp.fav)],
-  ['pending', '⚠ No appraisal yet', (r) => r.status === 'none'],
-  ['done', '✓ Appraisal completed', (r) => r.status === 'actioned'],
-  ['newhire', 'New hire ≤ 6 mo', (r) => {
-    const d = r.doj ? A.parseDate(r.doj) : null;
-    return !!(d && A.addMonths(d, 6) > new Date());
-  }],
-];
-const dirChipStyle = (on) => ({
-  padding: '7px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
-  fontFamily: 'inherit', transition: 'all .15s',
-  border: '1px solid ' + (on ? '#0090ca' : 'rgba(255,255,255,.8)'),
-  background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(255,255,255,.5)',
-  color: on ? '#fff' : MK.BODY,
-  boxShadow: on ? '0 4px 12px rgba(0,144,202,.35)' : 'none',
-});
-const dirSegStyle = (on) => ({
-  border: 0, background: on ? '#fff' : 'transparent', color: on ? '#0090ca' : MK.MUTED,
-  padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-  fontFamily: 'inherit', boxShadow: on ? '0 1px 2px rgba(20,32,46,.06)' : 'none',
-});
-// Total experience is the staff module's own calculation (prior service + UNICO tenure).
-const expOf = (e) => { try { return (window.STAFF && window.STAFF.expLabel) ? window.STAFF.expLabel(e) : '—'; } catch (x) { return '—'; } };
+/* ================= 2. (THE DIRECTORY MOVED) =================
+   There WAS a staff directory here: every nurse and PCA, with a search, a department
+   filter and an appraisal-status column. It was a second roster — the same people the
+   Nurse and PCA Management screens already list — kept only because the appraisal
+   status had nowhere else to live.
 
-function PerfDirectory({ roster, staffStore, setRoute }) {
-  const [q, setQ] = useState('');
-  const [dept, setDept] = useState('');
-  const [st, setSt] = useState('');
-  const [sort, setSort] = useState('name');
-  const [chip, setChip] = useState('all');
-  /* HOW MANY ROWS ARE ON SCREEN AT ONCE. The whole roster used to render in one go:
-     every row carries an avatar, a status chip and two buttons, and the table sits
-     inside a glass card (a 26px backdrop-filter), so ~130 rows made scrolling and even
-     typing in the filter stutter. A page at a time keeps it smooth, and the filters
-     above still search the WHOLE roster - only the drawing is limited. */
-  const PAGE = 40;
-  const [shown, setShown] = useState(PAGE);
-  // Nurses by default — the appraisal roster is overwhelmingly nursing, and landing on
-  // a mixed list made it look as though the filter was not working at all.
-  const [role, setRole] = useState('Nurse');
-
-  const depts = useMemo(() => [...new Set(roster.rows.map((r) => r.dept).filter(Boolean))].sort(), [roster.rows]);
-  const list = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const chipDef = DIR_CHIPS.find((c) => c[0] === chip) || DIR_CHIPS[0];
-    let out = roster.rows.filter((r) => {
-      if (!chipDef[2](r)) return false;
-      if (role && (r.role || roleOf(r.emp)) !== role) return false;
-      if (dept && r.dept !== dept) return false;
-      if (st && r.status !== st) return false;
-      if (!needle) return true;
-      return [r.name, r.empId, r.designation, r.dept].some((v) => String(v || '').toLowerCase().includes(needle));
-    });
-    out = out.slice().sort((a, b) => {
-      if (sort === 'score') return (b.last ? b.last.score : -1) - (a.last ? a.last.score : -1);
-      if (sort === 'dept') return String(a.dept).localeCompare(String(b.dept)) || String(a.name).localeCompare(String(b.name));
-      return String(a.name).localeCompare(String(b.name));
-    });
-    return out;
-  }, [roster.rows, q, dept, st, sort, chip, role]);
-
-  // A new filter means a new result set: start it at the top rather than keeping a
-  // window scrolled open from the previous search.
-  useEffect(() => { setShown(PAGE); }, [q, dept, st, sort, chip, role]);
-  const page = list.slice(0, shown);
-
-  const nurses = list.filter((r) => !isPcaRow(r)).length;
-  // Segment counts come from the WHOLE roster, not the filtered list — a count that
-  // only ever read "0 PCA" because the PCA tab was not open told you nothing.
-  const allNurses = roster.rows.filter((r) => !isPcaRow(r)).length;
-  const allPca = roster.rows.length - allNurses;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {DIR_CHIPS.map(([id, label]) => (
-          <button key={id} style={dirChipStyle(chip === id)} onClick={() => setChip(id)}>{label}</button>
-        ))}
-      </div>
-
-      {/* NO BACKDROP BLUR ON THIS ONE CARD. Every .card in the app is a glass panel
-          (backdrop-filter: blur(26px) saturate(1.75), mockup-ui.js), which the browser
-          must re-composite against everything behind it as you scroll. That is cheap on
-          a dashboard tile and expensive on a card holding a long staff table. An opaque
-          panel here scrolls smoothly and reads the same; `contain` keeps the table's
-          layout work from spilling into the rest of the page. */}
-      <div className="card" style={{ backdropFilter: 'none', WebkitBackdropFilter: 'none', background: 'rgba(252,254,255,.97)', contain: 'content' }}>
-      <div className="card-h" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={MK.iconBadge('blue', 32)}><Ic d={I.user} s={16} /></div>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <h3>Staff directory</h3>
-          <div className="sub">{list.length} shown · {nurses} nurses · {list.length - nurses} PCA · appraisal status for each person's current window</div>
-        </div>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name / Emp ID…" style={{ minWidth: 190 }} />
-        <div style={{ display: 'inline-flex', background: 'rgba(255,255,255,.4)', border: '1px solid rgba(255,255,255,.8)', borderRadius: 9, padding: 3, gap: 2 }}>
-          {[['', 'All (' + roster.rows.length + ')'], ['Nurse', 'Nurses (' + allNurses + ')'], ['PCA', 'PCA (' + allPca + ')']].map(([v, l]) => (
-            <button key={v} style={dirSegStyle(role === v)} onClick={() => setRole(v)}>{l}</button>
-          ))}
-        </div>
-        <select value={dept} onChange={(e) => setDept(e.target.value)}><option value="">All departments</option>{depts.map((d) => <option key={d}>{d}</option>)}</select>
-        <select value={st} onChange={(e) => setSt(e.target.value)}>
-          <option value="">Any status</option>
-          {Object.keys(STATUS_META).map((k) => <option key={k} value={k}>{STATUS_META[k].label}</option>)}
-        </select>
-        <select value={sort} onChange={(e) => setSort(e.target.value)}>
-          <option value="name">Sort: name</option><option value="dept">Sort: department</option><option value="score">Sort: last score</option>
-        </select>
-      </div>
-      <div className="card-b" style={{ overflow: 'auto' }}>
-        {list.length === 0 ? <Empty icon={I.user} title="No staff match these filters" sub="Clear a filter to widen the search." /> : (
-          <table className="tbl" style={{ width: '100%' }}>
-            <thead>
-              <tr>
-                <th style={{ width: 34, textAlign: 'center' }}>★</th>
-                <th>Staff</th><th>Emp ID</th><th>Designation</th><th>Department</th>
-                <th style={{ textAlign: 'right' }}>Experience</th>
-                <th>Appraisal window</th>
-                <th style={{ textAlign: 'right' }}>Last appraisal</th>
-                <th>Appraisal status</th><th style={{ width: 150 }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {page.map((r) => (
-                <tr key={r.empId}>
-                  <td style={{ textAlign: 'center' }}>
-                    <span title={r.emp && r.emp.fav ? 'Remove from favourites' : 'Mark as a favourite'}
-                      onClick={() => staffStore && staffStore.toggleFav(r.emp.id)}
-                      style={{ cursor: 'pointer', fontSize: 15, color: (r.emp && r.emp.fav) ? '#e0a81e' : '#c4ccd6' }}>
-                      {(r.emp && r.emp.fav) ? '★' : '☆'}
-                    </span>
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <MK.Av name={r.name} emp={r.emp} empId={r.empId} size={26} />
-                      <span style={{ fontWeight: 600, cursor: 'pointer' }} onClick={() => setRoute({ view: 'perfStaff', emp: r.empId })}>{r.name}</span>
-                      {isPcaRow(r) && <span style={MK.roleChip('PCA')}>PCA</span>}
-                      {r.overdue && <span className="tag" style={{ color: '#d23a52', borderColor: '#d23a5255', background: '#d23a5214' }}>overdue</span>}
-                    </div>
-                  </td>
-                  <td className="num">{r.empId}</td>
-                  <td>{r.designation}</td>
-                  <td>{r.dept}</td>
-                  <td className="num" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{expOf(r.emp)}</td>
-                  <td className="sub">{r.cycle ? r.cycle.label : '—'}</td>
-                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {r.last ? (
-                      <span>
-                        <span className="num" style={{ fontWeight: 700, color: MK.INK }}>{r.last.score}</span>
-                        <span style={{ marginLeft: 6 }}><span style={MK.gchip(r.last.grade)}>{r.last.grade}</span></span>
-                      </span>
-                    ) : <span className="sub">—</span>}
-                  </td>
-                  <td><StatusChip st={r.status} /></td>
-                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button className="btn" onClick={() => setRoute({ view: 'perfStaff', emp: r.empId })}>Record</button>{' '}
-                    {perfCan('edit') && r.cycle && (
-                      <button className="btn pri" onClick={() => setRoute({ view: 'perfForm', emp: r.empId })}>
-                        {r.appraisal ? (r.status === 'actioned' ? 'View' : 'Continue') : 'Start'}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {list.length > page.length && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 2px 2px', flexWrap: 'wrap' }}>
-            <button className="btn" onClick={() => setShown((n) => n + PAGE)}>
-              Show {Math.min(PAGE, list.length - page.length)} more
-            </button>
-            <button className="btn" onClick={() => setShown(list.length)}>Show all {list.length}</button>
-            <span style={{ fontSize: 11.5, color: MK.FAINT }}>showing {page.length} of {list.length}</span>
-          </div>
-        )}
-        <div style={{ paddingTop: 10, fontSize: 11, color: MK.FAINT }}>
-          Click a staff member to open their profile and full appraisal history. Appraisal windows run every 6 months from each individual's date of joining.
-        </div>
-      </div>
-      </div>
-    </div>
-  );
-}
+   It does now. The status rides on the Nurse / PCA directory itself (staff.jsx, the
+   Appraisal column), computed from the same UNICO_APPRAISAL.standing() this module
+   uses, and "Start appraisal" sits on the row beside the person. One roster, one
+   answer to who works here.  */
 
 /* ================= 3. THE APPRAISAL FORM ================= */
 // Each section gets its own accent, cycling blue -> teal -> violet, so the numbered
@@ -815,8 +626,8 @@ function PerfForm({ roster, perf, empId, setRoute }) {
   const settled = A.finalScore(t.total, pointsBonus, pointsPenalty);
   const grade = A.gradeFor(settled.score);
 
-  if (!row) return <Empty icon={I.user} title="Staff member not found" sub="They may have left the roster." action={<button className="btn" onClick={() => setRoute({ view: 'perfDirectory' })}>Back to directory</button>} />;
-  if (!row.cycle) return <Empty icon={I.doc} title="No appraisal window yet" sub={'The first window opens six months after the date of joining' + (row.doj ? ' (' + A.fmtDay(A.parseDate(row.doj)) + ').' : '.')} action={<button className="btn" onClick={() => setRoute({ view: 'perfDirectory' })}>Back</button>} />;
+  if (!row) return <Empty icon={I.user} title="Staff member not found" sub="They may have left the roster." action={<button className="btn" onClick={() => setRoute({ view: 'nurses' })}>Back to the roster</button>} />;
+  if (!row.cycle) return <Empty icon={I.doc} title="No appraisal window yet" sub={'The first window opens six months after the date of joining' + (row.doj ? ' (' + A.fmtDay(A.parseDate(row.doj)) + ').' : '.')} action={<button className="btn" onClick={() => setRoute({ view: 'nurses' })}>Back</button>} />;
 
   const setScore = (sl, v) => { if (locked) return; setScores((s) => ({ ...s, [sl]: v })); setDirty(true); };
   const setRemark = (sl, v) => { if (locked) return; setRemarks((r) => ({ ...r, [sl]: v })); setDirty(true); };
@@ -843,7 +654,7 @@ function PerfForm({ roster, perf, empId, setRoute }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* back bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <button className="btn" onClick={() => setRoute({ view: 'perfDirectory' })}>‹ Performance</button>
+        <button className="btn" onClick={() => setRoute({ view: 'staffProfile', emp: row.emp.id })}>‹ Staff record</button>
         <span style={{ fontSize: 11.5, color: MK.FAINT }}>Individual Performance Appraisal · Form {A.FORM_ID}</span>
       </div>
 
@@ -916,7 +727,7 @@ function PerfForm({ roster, perf, empId, setRoute }) {
           applicable, an incident or counselling reference. Sub-totals carry to the Score Summary automatically; the
           form is marked out of 100, so the total obtained is the percentage.
         </div>
-        <button className="btn" onClick={() => setRoute({ view: 'perfPrint', emp: row.empId })}>Printable form ›</button>
+        {perfCan('print') && <button className="btn" onClick={() => setRoute({ view: 'perfPrint', emp: row.empId })}>Printable form ›</button>}
       </div>
 
       {/* sections + rating key strip */}
@@ -1127,8 +938,19 @@ function PartH({ row, saved, perf, live, complete, dirty, setRoute }) {
   const [next, setNext] = useState((a && a.nextReview) || '');
   const [memo, setMemo] = useState((a && a.memoNo) || '');
   const [busy, setBusy] = useState(false);
+  /* HAS THE CNS TYPED IN PART H YET. Without this, every save of the SCORES bumped
+     updatedAt and the effect below overwrote Part H with the server's copy — which is
+     empty until the action is filed. So a decision typed here vanished the moment the
+     assessor saved the form above it, and everything typed before the appraisal
+     existed at all vanished on its very first save. */
+  const touched = useRef(false);
+  const mark = (fn) => (v) => { touched.current = true; fn(v); };
 
   useEffect(() => {
+    // Take the server's copy for a DIFFERENT form, or once this one is filed. Never
+    // over a decision in progress.
+    if (touched.current && !filed) return;
+    touched.current = false;
     setAction(null);
     setRemarks((a && a.authorityRemarks) || '');
     setNext((a && a.nextReview) || '');
@@ -1146,11 +968,13 @@ function PartH({ row, saved, perf, live, complete, dirty, setRoute }) {
         {g ? <span style={MK.gchip(g)}>{g}</span> : null}
       </div>
       <div className="card-b" style={{ display: 'grid', gap: 10 }}>
-        {!a ? (
-          <div style={{ fontSize: 11.6, color: MK.MUTED }}>
-            Save the appraisal first — the action is filed against the saved form.
-          </div>
-        ) : filed ? (
+        {/* THE FIELDS ARE HERE FROM THE START. Part H used to be a single line —
+            "save the appraisal first" — until a form existed on the server, so the CNS
+            could not so much as note the action they had decided on while reading the
+            scores. The action, the remarks, the review date and the memo number are
+            editable straight away; only FILING waits for a saved form, because filing
+            freezes the score the action was taken on. */}
+        {filed ? (
           <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(31,157,87,.1)', fontSize: 11.6, color: '#1f7a48', lineHeight: 1.55 }}>
             ✓ Action recorded — {(a.actions || []).map((id) => (A.CNS_ACTIONS.find((x) => x.id === id) || {}).label || id).join(' · ') || '—'}.
             Form locked and filed to the personal record.
@@ -1166,7 +990,7 @@ function PartH({ row, saved, perf, live, complete, dirty, setRoute }) {
             <div style={{ fontSize: 11.6, color: MK.MUTED }}>
               Grade {g || '—'} — guidance: <b style={{ color: MK.INK }}>{guide.interp}</b>
             </div>
-            {a.discussedOn ? (
+            {(a && a.discussedOn) ? (
               <div style={{ padding: '9px 12px', borderRadius: 10, background: 'rgba(31,157,87,.1)', color: '#1f7a48', fontSize: 11.5, lineHeight: 1.5 }}>
                 ✓ Discussed with the staff member on <b>{a.discussedOn}</b>.
               </div>
@@ -1176,30 +1000,36 @@ function PartH({ row, saved, perf, live, complete, dirty, setRoute }) {
               </div>
             )}
             <label style={{ display: 'grid', gap: 4 }}><span className="sub">Action</span>
-              <select value={chosen} onChange={(e) => setAction(e.target.value)}>
+              <select value={chosen} onChange={(e) => mark(setAction)(e.target.value)}>
                 <option value="">Select action…</option>
                 {A.CNS_ACTIONS.map((x) => (
                   <option key={x.id} value={x.id}>{x.label}{x.suggest.indexOf(g) >= 0 ? '  (suggested)' : ''}</option>
                 ))}
               </select></label>
             <label style={{ display: 'grid', gap: 4 }}><span className="sub">Remarks / directions to the Nursing Office</span>
-              <textarea rows="3" value={remarks} onChange={(e) => setRemarks(e.target.value)} /></label>
+              <textarea rows="3" value={remarks} onChange={(e) => mark(setRemarks)(e.target.value)} /></label>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <label style={{ display: 'grid', gap: 4 }}><span className="sub">Date of next review</span>
-                <input type="date" value={next} onChange={(e) => setNext(e.target.value)} /></label>
+                <input type="date" value={next} onChange={(e) => mark(setNext)(e.target.value)} /></label>
               <label style={{ display: 'grid', gap: 4 }}><span className="sub">Memo no.</span>
-                <input value={memo} onChange={(e) => setMemo(e.target.value)} /></label>
+                <input value={memo} onChange={(e) => mark(setMemo)(e.target.value)} /></label>
             </div>
-            {dirty && (
-              <div style={{ fontSize: 11.2, color: '#b5670a' }}>
-                There are unsaved changes on the form. Save them first — the action is filed against the scores the server holds.
-              </div>
-            )}
+            {/* ONE reason at a time, in the order they have to be dealt with, so the
+                disabled button is never a mystery. */}
+            {(() => {
+              const blocked = !a ? 'Save the appraisal above first — the action is filed against the scores the server holds, so there has to be a saved form to file it against.'
+                : dirty ? 'There are unsaved changes on the form. Save them first — the action is filed against the scores the server holds.'
+                : !complete ? 'Rate all 20 parameters, with a remark on any rated 1–2, before filing.'
+                : !chosen ? 'Choose the action to be taken.'
+                : '';
+              return blocked ? <div style={{ fontSize: 11.2, color: '#b5670a' }}>{blocked}</div> : null;
+            })()}
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn" onClick={() => setRoute({ view: 'perfPrint', emp: row.empId })}>Printable form</button>
+              {/* The paper form is a print, so it needs the print grant — not merely the
+                  right to read the appraisal on screen. */}
+              {perfCan('print') && <button className="btn" disabled={!a} onClick={() => setRoute({ view: 'perfPrint', emp: row.empId })}>Printable form</button>}
               <button className="btn pri" style={{ flex: 1, justifyContent: 'center' }}
-                disabled={busy || !chosen || !complete || dirty}
-                title={complete ? '' : 'Rate all 20 parameters and add remarks for any 1–2 first'}
+                disabled={busy || !a || !chosen || !complete || dirty}
                 onClick={() => {
                   setBusy(true);
                   perf.recordAction(a.id, { actions: [chosen], authorityRemarks: remarks, nextReview: next, memoNo: memo })
@@ -1256,7 +1086,7 @@ function PerfPrint({ roster, empId, cycleId, setRoute }) {
           <button className="btn" onClick={() => setRoute({ view: 'perfForm', emp: empId })}>‹ Back to the form</button>
           <div style={{ flex: 1 }} />
           <span className="sub">1:1 with the paper form · Form {A.FORM_ID}</span>
-          <button className="btn pri" onClick={() => window.print()}>Print / Save as PDF</button>
+          {perfCan('print') && <button className="btn pri" onClick={() => window.print()}>Print / Save as PDF</button>}
         </div>
       </div>
 
@@ -1381,264 +1211,17 @@ function SectionHead({ children }) {
   return <div style={{ background: '#16202e', color: '#fff', padding: '4px 8px', fontSize: 10.5, fontWeight: 700, letterSpacing: .4, marginBottom: 6 }}>{children}</div>;
 }
 
-/* ================= 5. STAFF PERFORMANCE RECORD ================= */
-// A deterministic barcode strip from the employee id — the ID card in the mockup has
-// one, and deriving it from the id means it is stable and actually identifies them.
-function Barcode({ value }) {
-  const v = String(value || '');
-  let h = 7;
-  for (let i = 0; i < v.length; i++) h = (h * 31 + v.charCodeAt(i)) % 100000;
-  const bars = [];
-  let seed = h;
-  for (let i = 0; i < 46; i++) {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
-    bars.push(1 + (seed % 3));
-  }
-  return (
-    <div style={{ textAlign: 'center' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 1.5, height: 42, justifyContent: 'center' }}>
-        {bars.map((w, i) => <div key={i} style={{ width: w, height: '100%', background: i % 2 ? 'transparent' : '#16202e' }} />)}
-      </div>
-      <div className="num" style={{ fontSize: 10.5, letterSpacing: 2, color: MK.BODY, marginTop: 4 }}>{v}</div>
-    </div>
-  );
-}
+/* ================= 5. (THE PERFORMANCE RECORD MOVED) =================
+   One person's record — ID card, score trend, section breakdown, filed history and
+   their achievements and incidents — used to be a screen of its own here. A member of
+   staff already has a record page: their profile under Nurse / PCA Management. Two
+   pages about one person meant two identity cards, two sets of dates and two places to
+   look, and neither ever carried everything.
 
-function MiniStat({ label, value, tone }) {
-  return (
-    <div style={{ padding: '7px 12px', borderRadius: 10, background: 'rgba(255,255,255,.6)', border: '1px solid rgba(125,145,180,.2)', minWidth: 92 }}>
-      <div style={{ fontSize: 8.8, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: MK.FAINT }}>{label}</div>
-      <div className="num" style={{ fontSize: 14, fontWeight: 700, color: tone || MK.INK, marginTop: 2 }}>{value}</div>
-    </div>
-  );
-}
+   The whole layout now renders on that profile (staff-profile.jsx). This module keeps
+   what is genuinely its own: the appraisal FORM, the printable form, the registers and
+   the roll-ups.  */
 
-function PerfStaffRecord({ roster, perf, empId, setRoute }) {
-  const row = roster.byEmp[empId];
-  if (!row) return <Empty icon={I.user} title="Staff member not found" />;
-  const hist = row.history.slice().reverse();
-  const latest = row.last;
-  const isPca = isPcaRow(row);
-  const idRow = (k, v) => (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 0', borderBottom: '1px solid rgba(125,145,180,.14)' }}>
-      <span style={{ flex: 1, fontSize: 9.6, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: MK.FAINT }}>{k}</span>
-      <span className="num" style={{ fontSize: 11.6, fontWeight: 700, color: MK.INK, textAlign: 'right' }}>{v || '—'}</span>
-    </div>
-  );
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <button className="btn" onClick={() => setRoute({ view: 'perfDirectory' })}>‹ Performance</button>
-        <span style={{ fontSize: 11.5, color: MK.FAINT }}>Staff performance record</span>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '320px minmax(0,1fr)', gap: 14, alignItems: 'start' }}>
-        {/* ---- ID card ---- */}
-        <div className="card" style={{ position: 'sticky', top: 12 }}>
-          <div style={{ display: 'grid', placeItems: 'center', paddingTop: 8 }}>
-            <div style={{ width: 46, height: 4, borderRadius: 3, background: 'rgba(125,145,180,.3)' }} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px' }}>
-            <img src="unico/logo.svg" alt="UNICO" style={{ height: 26 }} />
-            <div style={{ flex: 1 }} />
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 9.6, fontWeight: 700, letterSpacing: .6, padding: '4px 9px', borderRadius: 7, color: '#fff', background: 'linear-gradient(135deg,#27a8db,#0072a3)' }}>
-              <Ic d={I.steth || I.user} s={11} />{isPca ? 'PCA ID' : 'NURSE ID'}
-            </span>
-          </div>
-          <div style={{ height: 3, background: 'linear-gradient(90deg,#3ab5a7,#27a8db)' }} />
-
-          <div style={{ padding: '16px 18px 14px', textAlign: 'center' }}>
-            <div style={{ width: 132, height: 132, margin: '0 auto', borderRadius: '50%', overflow: 'hidden', border: '4px solid #fff', boxShadow: '0 8px 24px rgba(31,59,90,.16)', background: 'linear-gradient(160deg,#eaf4fb,#dceaf5)' }}>
-              <MK.Av name={row.name} emp={row.emp} empId={row.empId} size={132} radius={0} style={{ width: '100%', height: '100%', fontSize: 44 }} />
-            </div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: MK.INK, marginTop: 11 }}>{row.name}</div>
-            <div style={{ fontSize: 12.4, fontWeight: 600, color: '#0090ca', marginTop: 1 }}>{row.designation || '—'}</div>
-            <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginTop: 8 }}>
-              <span style={MK.roleChip(isPca ? 'PCA' : 'Nurse')}>{isPca ? 'PCA' : 'Nurse'}</span>
-              <span style={MK.stChip('Actioned')}>
-                <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor', marginRight: 5 }} />Active
-              </span>
-            </div>
-          </div>
-
-          <div style={{ padding: '0 18px 12px' }}>
-            {idRow('ID no.', row.empId)}
-            {idRow('Department', row.dept)}
-            {idRow('Joined', row.doj)}
-            {idRow('Experience', row.emp && row.emp.total_experience_text)}
-            {idRow('Phone', row.emp && row.emp.phone)}
-          </div>
-          <div style={{ padding: '10px 18px 16px', borderTop: '1px solid ' + MK.LINE }}>
-            <Barcode value={row.empId} />
-          </div>
-        </div>
-
-        {/* ---- right column ---- */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
-          <div className="card" style={{ borderLeft: '3px solid #0090ca' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 16px' }}>
-              <div style={MK.iconBadge('blue', 32)}><Ic d={I.doc} s={16} /></div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: MK.INK }}>Performance</span>
-                <span style={{ fontSize: 11.5, color: MK.MUTED, marginLeft: 8 }}>
-                  every 6 months from DOJ ({A.fmtDay(A.parseDate(row.doj))})
-                </span>
-              </div>
-              {perfCan('edit') && row.cycle && (
-                <button className="btn pri" onClick={() => setRoute({ view: 'perfForm', emp: row.empId })}>
-                  {row.appraisal ? (row.status === 'actioned' ? 'View appraisal' : 'Continue appraisal') : '+ Start ' + row.cycle.label + ' appraisal'}
-                </button>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap', padding: '0 16px 14px' }}>
-              <div style={{ flex: 1, minWidth: 230 }}>
-                <div style={{ fontSize: 9.6, fontWeight: 700, letterSpacing: .6, textTransform: 'uppercase', color: MK.FAINT }}>
-                  {latest ? 'Latest grade · ' + latest.cycleLabel : 'No appraisal filed yet'}
-                </div>
-                {latest ? (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 3 }}>
-                      <span style={{ fontSize: 38, fontWeight: 700, lineHeight: 1, color: gradeColor(latest.grade) }}>{latest.grade}</span>
-                      <span className="num" style={{ fontSize: 19, fontWeight: 700, color: MK.INK }}>{latest.score}</span>
-                      <span className="num" style={{ fontSize: 14, color: MK.FAINT }}>/ 100</span>
-                    </div>
-                    <div style={{ fontSize: 11.8, color: MK.MUTED, marginTop: 2 }}>{A.gradeFor(latest.score).rating} — {A.gradeFor(latest.score).interp}</div>
-                  </>
-                ) : (
-                  <div style={{ fontSize: 12, color: MK.MUTED, marginTop: 4 }}>
-                    The first appraisal falls six months after joining{row.cycle ? ' — current window ' + row.cycle.label : ''}.
-                  </div>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <MiniStat label="Appraisals" value={row.history.length} />
-                {hist.length > 1 && <MiniStat label={'Since ' + String(hist[0].cycleLabel).slice(-4)} value={(function(){ var d = hist[hist.length - 1].score - hist[0].score; return (d >= 0 ? '▲ ' : '▼ ') + Math.abs(d) + ' pts'; }())} tone={hist[hist.length - 1].score - hist[0].score >= 0 ? '#1f9d57' : '#d23a52'} />}
-                <MiniStat label="Next due" value={row.cycle ? A.fmtDay(row.cycle.due) : '—'} />
-              </div>
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-h"><h3>Score trend</h3><span className="sub">{hist.length ? hist.length + ' appraisal cycle(s)' : 'no cycles yet'}</span></div>
-            <div className="card-b">
-              {hist.length === 0
-                ? <Empty title="No completed appraisals yet" sub="The trend appears once the first form is filed." />
-                : <Trend points={hist.map((h) => ({ label: h.cycleLabel, v: h.score, grade: h.grade }))} />}
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 14 }}>
-            <div className="card">
-              <div className="card-h"><h3>Latest breakdown</h3><span className="sub">{latest ? latest.cycleLabel + ' · by section' : '—'}</span></div>
-              <div className="card-b">
-                {!latest ? <Empty title="Nothing to break down yet" /> : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {A.tally(latest.scores).sections.map((sc) => (
-                      <div key={sc.no} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                        <div style={{ width: 128, fontSize: 11.2, color: MK.BODY }}>{sc.title.charAt(0) + sc.title.slice(1).toLowerCase()}</div>
-                        <div style={{ flex: 1 }}><Bar value={sc.sub} max={sc.max} color={MK.barColor((sc.sub / sc.max) * 100)} /></div>
-                        <div className="num" style={{ width: 46, textAlign: 'right', fontSize: 11.5, fontWeight: 700 }}>{sc.sub}/{sc.max}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="card">
-              <div className="card-h"><h3>Appraisal history</h3><span className="sub">confidential — personal file</span></div>
-              <div className="card-b" style={{ overflow: 'auto' }}>
-                {row.history.length === 0 ? <Empty title="No filed appraisals" /> : (
-                  <table className="tbl">
-                    <thead><tr><th>Period</th><th>Score</th><th>Grade</th><th>Part H</th><th></th></tr></thead>
-                    <tbody>
-                      {row.history.map((h) => (
-                        <tr key={h.id}>
-                          <td>{h.cycleLabel}</td>
-                          <td className="num">{h.score}</td>
-                          <td><GradePill grade={h.grade} /></td>
-                          <td className="sub">{(h.actions || []).map((id) => (A.CNS_ACTIONS.find((x) => x.id === id) || {}).label || id).join(' · ') || '—'}</td>
-                          <td style={{ textAlign: 'right' }}><button className="btn" onClick={() => setRoute({ view: 'perfPrint', emp: row.empId })}>Print</button></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 14 }}>
-            <EntryList title="Achievements and awards" sub={'Cap is ' + capsOf(perf).bonus + ' bonus points per cycle'} tone="#1f9d57" tint="green" icon={I.heart}
-              rows={row.achievements} empty="No achievements recorded for this staff member yet."
-              onOpen={() => setRoute({ view: 'perfAchievements', emp: row.empId })} />
-            <EntryList title="Mistakes and incidents" sub={'Cap is ' + capsOf(perf).penalty + ' points per cycle'} tone="#d23a52" tint="red" icon={I.alert || I.pulse} negative
-              rows={row.incidents} empty="Clean record for this cycle — no error, lapse or disciplinary entry on file."
-              onOpen={() => setRoute({ view: 'perfIncidents', emp: row.empId })} />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EntryList({ title, sub, rows, empty, tone, tint, icon, negative, onOpen }) {
-  return (
-    <div className="card">
-      <div className="card-h" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <div style={MK.iconBadge(tint || 'slate', 30)}><Ic d={icon || I.doc} s={15} /></div>
-        <div style={{ flex: 1 }}><h3>{title}</h3><div className="sub">{sub}</div></div>
-        <button className="btn" onClick={onOpen}>Open register ›</button>
-      </div>
-      <div className="card-b">
-        {rows.length === 0 ? <div className="sub" style={{ padding: '14px 0', textAlign: 'center' }}>{empty}</div> : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {rows.map((r) => (
-              <div key={r.id} style={{ display: 'flex', gap: 9, alignItems: 'flex-start', paddingBottom: 7, borderBottom: '1px solid var(--line,#eef2f7)' }}>
-                <span className="tag num" style={{ color: tone, borderColor: tone + '55', background: tone + '14' }}>{negative ? '−' : '+'}{r.points}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12.2, fontWeight: 600 }}>{r.what}</div>
-                  <div className="sub" style={{ fontSize: 11 }}>{r.category}{r.level ? ' · ' + r.level : ''}{r.severity ? ' · ' + r.severity : ''} · {r.date}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Small inline line chart — no dependency, prints cleanly.
-function Trend({ points }) {
-  if (!points.length) return null;
-  const w = 320, h = 130, pad = 24;
-  const max = 100, min = Math.max(0, Math.min(...points.map((p) => p.v)) - 10);
-  const x = (i) => pad + (points.length === 1 ? (w - pad * 2) / 2 : (i * (w - pad * 2)) / (points.length - 1));
-  const y = (v) => h - pad - ((v - min) / (max - min)) * (h - pad * 2);
-  const d = points.map((p, i) => (i ? 'L' : 'M') + x(i) + ' ' + y(p.v)).join(' ');
-  return (
-    <div>
-      <svg viewBox={'0 0 ' + w + ' ' + h} style={{ width: '100%', height: 150 }}>
-        {[min, Math.round((min + max) / 2), max].map((v) => (
-          <g key={v}><line x1={pad} x2={w - pad} y1={y(v)} y2={y(v)} stroke="rgba(130,150,175,.22)" strokeDasharray="3 3" />
-            <text x={2} y={y(v) + 3} style={{ fontSize: 8, fill: '#8aa0b8' }}>{v}</text></g>
-        ))}
-        <path d={d} fill="none" stroke="#27a8db" strokeWidth="2.2" strokeLinecap="round" />
-        {points.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.v)} r="4" fill={gradeColor(p.grade)} stroke="#fff" strokeWidth="1.6" />)}
-      </svg>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#8aa0b8', gap: 4 }}>
-        {points.map((p, i) => <span key={i} style={{ flex: 1, textAlign: 'center' }}>{String(p.label).split(' - ')[0]}</span>)}
-      </div>
-      {points.length > 1 && (
-        <div className="sub" style={{ textAlign: 'center', marginTop: 6, fontSize: 11.5 }}>
-          {(() => { const d2 = points[points.length - 1].v - points[0].v; return (d2 >= 0 ? '▲ ' : '▼ ') + Math.abs(d2) + ' points since ' + String(points[0].label).split(' - ')[0]; })()}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /* ================= 6. REGISTERS (achievements / incidents) ================= */
 // The categories and the severity ramp are SHARED SPEC (appraisal-spec.js), not this
@@ -2167,10 +1750,10 @@ function PerfEntryHistory({ kind, roster, perf, empId, caps, onBack, onCert, set
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <button className="btn" onClick={onBack}>‹ {isAch ? 'Register' : 'Incident register'}</button>
         <div style={{ flex: 1 }} />
-        <button className="btn" onClick={() => setRoute({ view: 'perfStaff', emp: row.empId })}>Full performance record</button>
+        <button className="btn" onClick={() => setRoute({ view: 'staffProfile', emp: row.emp.id })}>Full performance record</button>
         {isAch
           ? <button className="btn" disabled={!all.length} onClick={() => onCert(all[0])}>Award certificate</button>
-          : <button className="btn" onClick={() => window.print()}>Print record</button>}
+          : (perfCan('print') && <button className="btn" onClick={() => window.print()}>Print record</button>)}
       </div>
 
       {/* identity header */}
@@ -2324,61 +1907,73 @@ function CategoryManager({ kind, perf, onClose }) {
     });
   };
 
+  /* ONE LINE PER CATEGORY, not one card. Six achievement categories, each a card with
+     its levels stacked one per row, made a dialog four screens tall to edit a list of
+     six words. The name and its levels sit on ONE wrapping row now, levels as compact
+     name+points pairs, so the whole list is visible at once and a rename does not mean
+     a scroll hunt. */
+  const rowStyle = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+    padding: '8px 10px', borderRadius: 10, background: 'rgba(255,255,255,.55)', border: '1px solid rgba(125,145,180,.18)' };
+
   return (
     <Modal wide title="Manage categories" sub="what an achievement or an incident can be filed under" onClose={onClose}
       footer={<>
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn pri" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save categories'}</button>
       </>}>
-      <div style={{ display: 'grid', gap: 12 }}>
-        <div style={{ display: 'inline-flex', gap: 2, padding: 3, borderRadius: 11, background: 'rgba(125,145,180,.14)', justifySelf: 'start' }}>
-          {[['ach', 'Achievements (' + ach.length + ')'], ['inc', 'Incidents (' + inc.length + ')']].map(([k, l]) => (
-            <button key={k} onClick={() => setTab(k)} style={{
-              border: 0, cursor: 'pointer', font: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '5px 13px', borderRadius: 9,
-              color: tab === k ? MK.INK : MK.MUTED, background: tab === k ? '#fff' : 'transparent',
-            }}>{l}</button>
-          ))}
+      <div style={{ display: 'grid', gap: 9 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'inline-flex', gap: 2, padding: 3, borderRadius: 11, background: 'rgba(125,145,180,.14)' }}>
+            {[['ach', 'Achievements (' + ach.length + ')'], ['inc', 'Incidents (' + inc.length + ')']].map(([k, l]) => (
+              <button key={k} onClick={() => setTab(k)} style={{
+                border: 0, cursor: 'pointer', font: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '5px 13px', borderRadius: 9,
+                color: tab === k ? MK.INK : MK.MUTED, background: tab === k ? '#fff' : 'transparent',
+              }}>{l}</button>
+            ))}
+          </div>
+          <div style={{ flex: 1 }} />
+          <button className="btn" onClick={add}>+ Add category</button>
         </div>
 
-        <div style={{ fontSize: 11.5, color: MK.MUTED, lineHeight: 1.55 }}>
+        <div style={{ fontSize: 11, color: MK.MUTED, lineHeight: 1.5 }}>
           {isAch
-            ? 'Each achievement category carries its own levels, and the level sets the bonus points. Nothing may award more than ' + cap + ' — the per-cycle cap.'
-            : 'Incident categories classify what happened. The points come from the severity chosen when the entry is filed, not from the category.'}
-          {' '}Entries already on file keep the category they were saved with, so editing this list never changes past records.
+            ? 'A level sets the bonus points; nothing may award more than ' + cap + ', the per-cycle cap.'
+            : 'The points come from the severity chosen when an entry is filed, not from the category.'}
+          {' '}Entries already on file keep the category they were saved with — editing this list never changes past records.
         </div>
+
+        {rows.length === 0 && (
+          <div style={{ fontSize: 12, color: MK.FAINT, padding: '10px 2px' }}>No categories yet — add the first one above.</div>
+        )}
 
         {rows.map((c, i) => (
-          <div key={i} className="card" style={{ background: 'rgba(255,255,255,.55)' }}>
-            <div className="card-b" style={{ display: 'grid', gap: 9 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <input value={c.label} onChange={(e) => edit(i, { label: e.target.value })}
-                  placeholder="Category name" style={{ flex: 1, fontWeight: 600 }} />
-                <button className="icon-btn danger" title="Remove this category" onClick={() => drop(i)}>×</button>
-              </div>
-              {isAch && (
-                <div style={{ display: 'grid', gap: 6 }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: .5, textTransform: 'uppercase', color: MK.FAINT }}>Levels &amp; points</div>
-                  {(c.levels || []).map((l, li) => (
-                    <div key={li} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <input value={l[0]} onChange={(e) => editLevel(i, li, { name: e.target.value })}
-                        placeholder="e.g. Hospital" style={{ flex: 1 }} />
-                      <input type="number" min="0" max={cap} value={l[1]}
-                        onChange={(e) => editLevel(i, li, { pts: Math.max(0, Math.min(cap, Number(e.target.value) || 0)) })}
-                        style={{ width: 74 }} />
-                      <span style={{ fontSize: 11, color: MK.FAINT }}>pts</span>
-                      <button className="icon-btn danger" title="Remove this level" onClick={() => dropLevel(i, li)}>×</button>
-                    </div>
-                  ))}
-                  <button className="btn" style={{ justifySelf: 'start' }} onClick={() => addLevel(i)}>+ Add a level</button>
-                </div>
-              )}
-            </div>
+          <div key={i} style={rowStyle}>
+            <input value={c.label} onChange={(e) => edit(i, { label: e.target.value })}
+              placeholder="Category name" style={{ width: 188, fontWeight: 600, flexShrink: 0 }} />
+            {isAch && (c.levels || []).map((l, li) => (
+              /* name + points as one control, so a level costs ~150px of a row instead
+                 of a row of its own. */
+              <span key={li} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '2px 2px 2px 4px', borderRadius: 8, background: 'rgba(125,145,180,.10)' }}>
+                <input value={l[0]} onChange={(e) => editLevel(i, li, { name: e.target.value })}
+                  placeholder="Level" style={{ width: 104 }} />
+                <input type="number" min="0" max={cap} value={l[1]} title="Bonus points for this level"
+                  onChange={(e) => editLevel(i, li, { pts: Math.max(0, Math.min(cap, Number(e.target.value) || 0)) })}
+                  style={{ width: 52 }} />
+                <button className="icon-btn danger" title={'Remove the "' + (l[0] || 'unnamed') + '" level'}
+                  style={{ width: 22, height: 22 }} onClick={() => dropLevel(i, li)}>×</button>
+              </span>
+            ))}
+            {isAch && (
+              <button className="btn" style={{ padding: '4px 9px', fontSize: 11.5 }} onClick={() => addLevel(i)}
+                title="Add a level to this category">+ level</button>
+            )}
+            <div style={{ flex: 1, minWidth: 0 }} />
+            <button className="icon-btn danger" title={'Remove the "' + (c.label || 'unnamed') + '" category'}
+              onClick={() => drop(i)}>×</button>
           </div>
         ))}
 
-        <button className="btn" style={{ justifySelf: 'start' }} onClick={add}>
-          + Add {isAch ? 'an achievement' : 'an incident'} category
-        </button>
         {err && <div style={{ fontSize: 12, color: '#d23a52', fontWeight: 600 }}>{err}</div>}
         <div style={{ fontSize: 11, color: MK.FAINT }}>
           Both lists are saved together, whichever tab you are on.
@@ -2495,7 +2090,7 @@ function EntryModal({ kind, roster, perf, onClose }) {
 function CertificateModal({ entry, onClose }) {
   return (
     <Modal wide title="Certificate of appreciation" onClose={onClose}
-      footer={<><button className="btn" onClick={onClose}>Close</button><button className="btn pri" onClick={() => window.print()}>Print certificate</button></>}>
+      footer={<><button className="btn" onClick={onClose}>Close</button>{perfCan('print') && <button className="btn pri" onClick={() => window.print()}>Print certificate</button>}</>}>
       <div id="pdf-root" style={{ background: '#fff', color: '#16202e', padding: '36px 40px', textAlign: 'center', border: '3px double #0072a3', borderRadius: 6 }}>
         <img src="unico/logo.svg" alt="UNICO" style={{ height: 34, marginBottom: 14 }} />
         <div style={{ fontSize: 11, letterSpacing: 3, color: '#0072a3', fontWeight: 700 }}>CERTIFICATE OF APPRECIATION</div>
@@ -2619,7 +2214,7 @@ function PerfCompare({ roster, setRoute }) {
               <thead><tr><th style={{ width: 34 }}>#</th><th>Staff</th><th>Department</th><th>Period</th><th>Score</th><th>Grade</th></tr></thead>
               <tbody>
                 {top.map((r, i) => (
-                  <tr key={r.empId} style={{ cursor: 'pointer' }} onClick={() => setRoute({ view: 'perfStaff', emp: r.empId })}>
+                  <tr key={r.empId} style={{ cursor: 'pointer' }} onClick={() => setRoute({ view: 'staffProfile', emp: r.emp.id })}>
                     <td className="num">{i + 1}</td>
                     <td><b>{r.name}</b><div className="sub" style={{ fontSize: 11 }}>{r.designation}</div></td>
                     <td>{r.dept}</td><td className="sub">{r.last.cycleLabel}</td>
@@ -2749,7 +2344,7 @@ function PerfDeptAttrition({ unit, units, flagged, onFlag, onBack, onLeaver }) {
         <button className="btn" title="Marks the unit for this session only — not saved to the record"
           style={flagged ? { borderColor: 'rgba(210,58,82,.4)', background: 'rgba(210,58,82,.12)', color: '#d23a52' } : null}
           onClick={() => onFlag(u.dept)}>{flagged ? 'Flagged for HR review' : 'Flag for HR review'}</button>
-        <button className="btn" onClick={() => window.print()}>Print</button>
+        {perfCan('print') && <button className="btn" onClick={() => window.print()}>Print</button>}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 14 }}>
@@ -2831,7 +2426,7 @@ function PerfLeaverRecord({ empId, leavers, onBack }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <button className="btn" onClick={onBack}>‹ Exits register</button>
         <div style={{ flex: 1 }} />
-        <button className="btn" onClick={() => window.print()}>Print record</button>
+        {perfCan('print') && <button className="btn" onClick={() => window.print()}>Print record</button>}
       </div>
 
       <div className="card" style={{ padding: '18px 22px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -2983,27 +2578,84 @@ function PerfSkeleton() {
   );
 }
 
+/* The Performance sections used to be six sidebar rows; they are tabs now, declared
+   once in ui.jsx (UNICO_VIEW_TABS) and drawn by the shell above every view's body —
+   the Duty Roster's tabs come from three different components, so the strip had to
+   live somewhere that is not any one of them. */
+
+/* NURSES AND PCA ARE DIFFERENT JOBS, SCORED ON THE SAME FORM. Every screen here read
+   the whole roster at once — 191 people, "Nursing & PCA" — so a Chief of Nursing Service
+   looking at nursing performance was reading a figure with care assistants mixed into
+   it, and the PCA side was never visible on its own at all. The two are separated here,
+   once, and every section below inherits it: the cycle band, the tiles, the reminder
+   list, the registers, the attrition roll-up and the department comparison.
+
+   NURSES BY DEFAULT. The appraisal roster is overwhelmingly nursing; landing on a mixed
+   list made the filter look as though it were not working. "All" is one click away for
+   anyone who wants the hospital-wide figure.
+
+   Module-scoped rather than component state: the choice has to survive moving between
+   the tabs, which unmount each other. */
+const PERF_ROLE = { v: 'Nurse' };
+function PerfRoleSwitch({ role, setRole, all }) {
+  const nurses = all.filter((r) => !isPcaRow(r)).length;
+  const counts = { '': all.length, Nurse: nurses, PCA: all.length - nurses };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: .6, textTransform: 'uppercase', color: MK.FAINT }}>Showing</span>
+      <div style={{ display: 'inline-flex', gap: 2, padding: 3, borderRadius: 11, background: 'rgba(125,145,180,.14)' }}>
+        {[['Nurse', 'Nurses'], ['PCA', 'PCA'], ['', 'All']].map(([v, l]) => (
+          <button key={v} onClick={() => setRole(v)} style={{
+            border: 0, cursor: 'pointer', font: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '5px 13px', borderRadius: 9,
+            color: role === v ? MK.INK : MK.MUTED, background: role === v ? '#fff' : 'transparent',
+            boxShadow: role === v ? '0 1px 2px rgba(20,32,46,.07)' : 'none',
+          }}>{l} <span className="num" style={{ opacity: .65 }}>{counts[v]}</span></button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PerformanceView({ view, emp, cycleId, setRoute }) {
   const staffStore = window.useStaffStore();
   const perf = usePerfStore();
-  const roster = useRoster(staffStore, perf);
+  const full = useRoster(staffStore, perf);
+  const [role, setRoleState] = useState(PERF_ROLE.v);
+  const setRole = (v) => { PERF_ROLE.v = v; setRoleState(v); };
+  /* THE FORM AND THE PRINTABLE FORM GET THE WHOLE ROSTER. They look one person up by
+     employee number, and filtering them by role turned "open this PCA's appraisal" into
+     "staff member not found" whenever the switch happened to be on Nurses. */
+  const scoped = view === 'perfForm' || view === 'perfPrint';
+  const roster = useMemo(() => {
+    if (scoped || !role) return full;
+    const rows = full.rows.filter((r) => (isPcaRow(r) ? 'PCA' : 'Nurse') === role);
+    const byEmp = {};
+    rows.forEach((r) => { byEmp[r.empId] = r; });
+    return { rows, byEmp };
+  }, [full, role, scoped]);
+  /* Attrition, retention risk and the recognition board count the STAFF LIST, not the
+     roster rows — they have to be scoped too, or the switch would silently stop working
+     the moment you opened one of those tabs. */
+  const store = useMemo(() => {
+    if (scoped || !role) return staffStore;
+    return Object.assign({}, staffStore, { staff: (staffStore.staff || []).filter((e) => roleOf(e) === role) });
+  }, [staffStore, role, scoped]);
 
   /* A SKELETON, NOT A BLANK WAIT. One centred sentence on an empty page reads as "this
      is broken" long before it reads as "this is loading" — and it threw away the fact
      that the shape of the screen is already known. The page draws itself immediately
      and fills in, so the wait is visibly a wait. */
+  const inner = (() => {
+  // The skeleton and the error both keep the tab strip below: losing the navigation
+  // while the data loads makes a slow link look like a broken screen.
   if (perf.loading) return <PerfSkeleton />;
   if (perf.error) {
     return <Empty icon={I.alert || I.pulse} title="Could not load performance records" sub={perf.error}
       action={<button className="btn pri" onClick={perf.reload}>Try again</button>} />;
   }
-
-  const inner = (() => {
   switch (view) {
-    case 'perfDirectory': return <PerfDirectory roster={roster} staffStore={staffStore} setRoute={setRoute} />;
     case 'perfForm': return <PerfForm roster={roster} perf={perf} empId={emp} setRoute={setRoute} />;
     case 'perfPrint': return <PerfPrint roster={roster} empId={emp} cycleId={cycleId} setRoute={setRoute} />;
-    case 'perfStaff': return <PerfStaffRecord roster={roster} perf={perf} empId={emp} setRoute={setRoute} />;
     // Keyed so the two registers are distinct instances. Sharing one meant a category
     // filter picked on Incidents silently emptied Achievements, with no chip to explain it.
     case 'perfAchievements': return <PerfRegister key={'ach|' + (emp || '')} kind="ach" roster={roster} perf={perf} setRoute={setRoute} focusEmp={emp} />;
@@ -3011,16 +2663,24 @@ function PerformanceView({ view, emp, cycleId, setRoute }) {
     case 'perfCompare': return <PerfCompare roster={roster} setRoute={setRoute} />;
     // Attrition keeps its overview in performance-hr.jsx but its drill-ins here, so the
     // route goes through a local host rather than straight to window.PerfAttrition.
-    case 'perfAttrition': return <PerfAttritionRoute roster={roster} perf={perf} staffStore={staffStore} setRoute={setRoute} />;
+    case 'perfAttrition': return <PerfAttritionRoute roster={roster} perf={perf} staffStore={store} setRoute={setRoute} />;
     case 'perfRisk': case 'perfBoard': {
       // Resolved through window because performance-hr.jsx is a separate bundled file.
       const C = window[{ perfRisk: 'PerfRisk', perfBoard: 'PerfBoard' }[view]];
-      return C ? <C roster={roster} perf={perf} staffStore={staffStore} setRoute={setRoute} /> : null;
+      return C ? <C roster={roster} perf={perf} staffStore={store} setRoute={setRoute} /> : null;
     }
-    default: return <PerfDashboard roster={roster} perf={perf} setRoute={setRoute} />;
+    default: return <PerfDashboard roster={roster} perf={perf} setRoute={setRoute} role={role} />;
   }
   })();
-  return <div className="mk-scope">{inner}</div>;
+  // Not on the form or the printable form: those are one named person's appraisal, and a
+  // roster filter above them would be a control that changes nothing on the page.
+  const showRole = !scoped && !perf.loading && !perf.error;
+  return (
+    <div className="mk-scope" style={showRole ? { display: 'flex', flexDirection: 'column', gap: 12 } : null}>
+      {showRole && <PerfRoleSwitch role={role} setRole={setRole} all={full.rows} />}
+      {inner}
+    </div>
+  );
 }
 
 window.PerformanceView = PerformanceView;
@@ -3043,20 +2703,9 @@ function PerfBands({ role, setRoute }) {
     const now = new Date();
     return (staffStore.staff || [])
       .filter((e) => e.is_active !== false && !e.former && (!role || (e.role || 'Nurse') === role))
-      .map((e) => {
-        const empId = e.emp_id || String(e.id);
-        const cyc = A.cycleOf(e.doj, now);
-        const apr = data ? (data.appraisals || []).find((x) => x.empId === empId && cyc && x.cycleId === cyc.id) : null;
-        const firstDue = e.doj ? A.addMonths(A.parseDate(e.doj) || now, 6) : null;
-        // Same rule as useRoster, deliberately: a dashboard band that disagrees with
-        // the module it links to is worse than no band at all.
-        const lastClosed = e.doj ? (A.cyclesSince(e.doj, now, 1) || [])[0] : null;
-        // In this component the records arrive as `data`, not the module's `perf`.
-        const all = (data && data.appraisals) || [];
-        const missedClosed = !!(lastClosed && !all.some((x) => x.empId === empId && x.cycleId === lastClosed.id));
-        return { empId, cycle: cyc, apr, status: apr ? apr.status : 'none', overdue: missedClosed,
-          newJoinerDue: !!(firstDue && firstDue <= now && !all.some((x) => x.empId === empId)) };
-      });
+      // The same standing() the roster and the directory use, deliberately: a dashboard
+      // band that disagrees with the module it links to is worse than no band at all.
+      .map((e) => A.standing(e, (data && data.appraisals) || [], now));
   }, [staffStore.staff, data, role]);
 
   if (!data) return null;
@@ -3124,7 +2773,8 @@ window.PerfBands = PerfBands;
 // performance-hr.jsx builds on; it destructures them at load time, which is why
 // performance.jsx must come first in the MANIFEST.
 window.PerfUI = {
-  Stat, AccentStat, Bar, Gauge, Empty, Modal, GradePill, StatusChip, Trend, QuickCard, EntryList,
+  Stat, AccentStat, Bar, Gauge, Empty, Modal, GradePill, StatusChip, QuickCard,
+  PerfRoleSwitch, PerfDashboard, isPcaRow, roleOf,
   initials, pct, gradeColor, todayISO, perfApi, perfToast, perfIsAdmin, perfCan, perfPortal,
   capsOf,
   // The attrition drill-ins and their data, for performance-hr.jsx: its "By unit" table

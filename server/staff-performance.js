@@ -319,6 +319,50 @@ async function listAll(name) {
    Read-modify-write paths pass { fresh: true } and skip the cache on the way in, so an
    edit is never computed from a stale baseline. */
 const REGISTER_TTL = 30000;
+
+/* ALL FOUR REGISTERS IN ONE ROUND TRIP.
+
+   The cost of opening this module is not the size of the data — the registers hold a
+   handful of documents — it is the distance to the database. Measured from the hospital
+   against the live cluster, an EMPTY collection still takes 400-1300 ms to answer,
+   because that is one network round trip. Four separate reads meant four of them before
+   the first pixel.
+
+   $unionWith stitches the four into a single query, so the whole module costs one trip
+   instead of four. Each branch tags its rows so they can be separated again here; the
+   tag never reaches the client. */
+const UNION_TAG = '__reg';
+async function readRegistersOnce() {
+  const c = await col(APPRAISALS);
+  if (!c) return null;                         // dev/in-memory: caller reads the usual way
+  const branch = (coll, tag) => ({ $unionWith: { coll, pipeline: [{ $addFields: { [UNION_TAG]: tag } }] } });
+  const rows = await c.aggregate([
+    { $addFields: { [UNION_TAG]: 'appraisals' } },
+    branch(INCIDENTS, 'incidents'),
+    branch(ACHIEVEMENTS, 'achievements'),
+    branch(EXITS, 'exits'),
+  ]).toArray();
+  const out = { appraisals: [], incidents: [], achievements: [], exits: [] };
+  rows.forEach((r) => {
+    const k = r[UNION_TAG];
+    if (!out[k]) return;
+    delete r[UNION_TAG];
+    out[k].push(outDoc(r));
+  });
+  // listAll() sorted by _id and screens rely on that order, so keep it.
+  Object.keys(out).forEach((k) => out[k].sort((a, b) => String(a.id).localeCompare(String(b.id))));
+  return out;
+}
+
+// The cached form of the above: one trip on a miss, none at all on a hit.
+function readRegistersCached(opts) {
+  if (!process.env.MONGODB_URI) return Promise.resolve(null);
+  return cache.read(
+    'perf:registers',
+    { coll: APPRAISALS, freshMs: REGISTER_TTL, fresh: !!(opts && opts.fresh) },
+    () => readRegistersOnce()
+  );
+}
 function listCached(name, opts) {
   if (!process.env.MONGODB_URI) return listAll(name);
   return cache.read(
@@ -415,9 +459,10 @@ function mount(app, opts) {
   // rather than three, which matters on a cold serverless instance.
   app.get('/api/performance', guard, async (req, res) => {
     try {
-      const [appraisals, incidents, achievements, exits, categories] = await Promise.all([
-        listCached(APPRAISALS), listCached(INCIDENTS), listCached(ACHIEVEMENTS), listCached(EXITS), loadCategories(),
-      ]);
+      const [registers, categories] = await Promise.all([readRegistersCached(), loadCategories()]);
+      const [appraisals, incidents, achievements, exits] = registers
+        ? [registers.appraisals, registers.incidents, registers.achievements, registers.exits]
+        : await Promise.all([listCached(APPRAISALS), listCached(INCIDENTS), listCached(ACHIEVEMENTS), listCached(EXITS)]);
       // Settle every appraisal against its own cycle's registers.
       const byKey = {};
       incidents.forEach((x) => { const k = x.empId + '|' + x.cycleId; (byKey[k] = byKey[k] || { b: 0, p: 0 }).p += Number(x.points) || 0; });

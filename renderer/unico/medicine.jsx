@@ -514,7 +514,7 @@ function MedGeneric({ id, setRoute }) {
       <GenericHeader generic={g} extra={
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <FavStar entry={{ id: g.id, kind: 'generic', name: g.name, sub: g.drugClass }} fav={fav} />
-          <button style={MK.btnGhost} onClick={() => window.print()}><Ic d={I.print} s={14} />Print</button>
+          {medCan('print') && <button style={MK.btnGhost} onClick={() => window.print()}><Ic d={I.print} s={14} />Print</button>}
           <button style={MK.btnPri} onClick={() => setRoute({ view: 'medRxNew', id: g.id })}><Ic d={I.plus} s={14} />Prescribe</button>
         </div>
       } />
@@ -1132,7 +1132,7 @@ function MedRxPrint({ rxId, setRoute }) {
     <div style={MK.page}>
       <div style={{ display: 'flex', gap: 9, marginBottom: 13, flexWrap: 'wrap' }} className="no-print">
         <button style={MK.btnGhost} onClick={() => setRoute({ view: 'medRxList' })}>← Prescriptions</button>
-        <button style={MK.btnPri} onClick={() => window.print()}><Ic d={I.print} s={14} />Print / Save as PDF</button>
+        {medCan('print') && <button style={MK.btnPri} onClick={() => window.print()}><Ic d={I.print} s={14} />Print / Save as PDF</button>}
       </div>
 
       <div id="pdf-root" style={{ background: '#fff', color: '#111', padding: '26px 30px', borderRadius: 8, maxWidth: 860, margin: '0 auto', fontSize: 13 }}>

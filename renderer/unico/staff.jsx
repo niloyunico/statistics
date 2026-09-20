@@ -33,6 +33,84 @@ function RoleBadge({role}){
   return <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:10.5,fontWeight:700,padding:'2px 8px',borderRadius:5,color:c,background:c+'16',letterSpacing:.3}}>{role||'Nurse'}</span>;
 }
 
+/* NURSE OR PCA IS A FILTER, NOT A DESTINATION. Nurse Management and PCA Management
+   were two sidebar entries over one roster; they are one Staff Management workspace
+   now, so the screens that are still written per role (the dashboard and the
+   compliance board) carry the switch themselves. The sub-nav points at the Nurse view
+   and this flips it — nobody has to go back out to the sidebar to change role. */
+function RoleSwitch({role, setRoute, views}){
+  return (
+    <div className="seg" style={{flexShrink:0}} title="Nurses or PCA">
+      {[['Nurse','Nurses'],['PCA','PCA']].map(([v,l])=>(
+        <button key={v} className={role===v?'on':''} onClick={()=>{ if(role!==v) setRoute({view:views[v]}); }}>{l}</button>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------- Appraisal standing (Performance, folded in here) ----------------
+   THE APPRAISAL LIVES ON THE STAFF RECORD, NOT IN A SECOND DIRECTORY. The Performance
+   module used to carry its own copy of the roster — the same people, the same search,
+   the same filters — purely so it had somewhere to show appraisal status. Two staff
+   directories meant two answers to "who works here", and the one inside Performance
+   was always the stale one. It is gone: the status rides on the Nurse / PCA directory
+   below, and the full record opens in the staff profile.
+
+   CONFIDENTIAL. Appraisal scores are personal-file material and the server refuses
+   /api/performance without the 'perf' module (access.requireModule('perf')). Without
+   it the request is NEVER MADE, so no column is drawn at all — an empty one would both
+   advertise the file and misreport it.
+
+   ONE FETCH FOR THE WHOLE MODULE. Every directory, band and profile mounting its own
+   request hammered /api/performance on each navigation; this shares one in-flight
+   promise and re-reads at most every 30 s. */
+const APPR_SHARED = { at: 0, inflight: null, data: null };
+function apprCanSee(){ try{ return window.unicoCan ? window.unicoCan('perf','view') : true; }catch(e){ return true; } }
+function apprCanEdit(){ try{ return window.unicoCan ? window.unicoCan('perf','edit') : true; }catch(e){ return true; } }
+function useStaffAppraisals(){
+  const [, bump] = React.useState(0);
+  React.useEffect(()=>{
+    if(!apprCanSee()) return;
+    if(APPR_SHARED.data && Date.now()-APPR_SHARED.at < 30000) return;
+    let live=true;
+    if(!APPR_SHARED.inflight){
+      APPR_SHARED.inflight = fetch('/api/performance',{credentials:'same-origin',headers:{accept:'application/json'}})
+        .then(r=>r.json())
+        .then(j=>{ APPR_SHARED.data=(j&&j.ok)?j:{appraisals:[],incidents:[],achievements:[]}; APPR_SHARED.at=Date.now(); })
+        .catch(()=>{ APPR_SHARED.data={appraisals:[],incidents:[],achievements:[]}; APPR_SHARED.at=Date.now(); })
+        .then(()=>{ APPR_SHARED.inflight=null; });
+    }
+    APPR_SHARED.inflight.then(()=>{ if(live) bump(n=>n+1); });
+    return ()=>{ live=false; };
+  });
+  if(!apprCanSee()) return null;
+  return APPR_SHARED.data;   // null while the first read is in flight
+}
+// The status vocabulary, shared with the Performance module's own screens.
+const APPR_STATUS={
+  none:      {label:'Not started',  c:'#8a93a3'},
+  draft:     {label:'In progress',  c:'#e08a1e'},
+  submitted: {label:'Scored',       c:'#0090ca'},
+  discussed: {label:'Discussed',    c:'#6a52d4'},
+  actioned:  {label:'Completed',    c:'#1f9d57'},
+};
+function ApprCell({st}){
+  if(!st) return <span style={{color:'var(--faint)'}}>—</span>;
+  const meta=APPR_STATUS[st.status]||APPR_STATUS.none;
+  const c=st.overdue?'#d23a52':meta.c;
+  const label=st.overdue&&st.status==='none'?'Overdue':meta.label;
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:7,whiteSpace:'nowrap'}}>
+      <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:11,fontWeight:600,padding:'2px 9px',borderRadius:20,color:c,background:c+'1c'}}>
+        <i style={{width:6,height:6,borderRadius:'50%',background:c}}/>{label}
+      </span>
+      {st.last&&<span className="num" style={{fontSize:11.5,fontWeight:700,color:'var(--ink-2)'}} title={'Last filed: '+(st.last.cycleLabel||'')}>
+        {st.last.grade||''} {st.last.score==null?'':st.last.score}
+      </span>}
+    </div>
+  );
+}
+
 /* ---------------- Export (Excel / Word / CSV / Print) ---------------- */
 const STAFF_EXPORT_COLS=[['Emp ID','emp_id'],['Name','name'],['Role','role'],['Designation','designation'],['Department','current_department'],['Qualification','qualification'],['DOJ','doj'],['Experience','total_experience_text'],['Special Training','special_training'],['Extracurricular Activities','extracurricular'],['Hep-B Vaccination','hepatitis_b_vaccination'],['Phone','phone'],['Remarks','remarks']];
 function esc(v){return ((v==null?'':v)+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -416,7 +494,8 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
     <div className="grid" style={{gap:16}}>
       {window.PerfBands && <window.PerfBands role={role} setRoute={setRoute}/>}
       <SectionTitle icon={role==='PCA'?I.bed:I.steth} title={`${role==='PCA'?'PCA':'Nurse'} Dashboard`} sub={`Live overview of the ${role} roster`}
-        right={<><button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#b8860b',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
+        right={<><RoleSwitch role={role} setRoute={setRoute} views={{Nurse:'nurseHome',PCA:'pcaHome'}}/>
+          <button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#b8860b',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
           <button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>
           <button className="btn sm" onClick={()=>setRoute({view:compView})}><Ic d={I.heart} s={15}/>Compliance</button>
           <button className="btn sm" disabled={store.refreshing} onClick={()=>store.refresh()}><Ic d={I.activity} s={15}/>{store.refreshing?'Refreshing…':'Refresh'}</button>
@@ -670,7 +749,8 @@ function StaffCompliance({store, setRoute, role='Nurse'}){
   );
   return (
     <div className="grid" style={{gap:16}}>
-      <SectionTitle icon={I.heart} title={`${role==='PCA'?'PCA':'Nurse'} Compliance`} sub={`${role} records that need attention — click to open the profile or fix`}/>
+      <SectionTitle icon={I.heart} title={`${role==='PCA'?'PCA':'Nurse'} Compliance`} sub={`${role} records that need attention — click to open the profile or fix`}
+        right={<RoleSwitch role={role} setRoute={setRoute} views={{Nurse:'nurseCompliance',PCA:'pcaCompliance'}}/>}/>
       <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(300px,1fr))'}}>
         {card('Missing Hep-B Vaccination',I.heart,'#d23a52',comp.missing_vaccination,'All staff vaccinated','vacc')}
         {card('No Special Training',I.activity,'#e08a1e',comp.missing_training,'All staff have training','training')}
@@ -713,6 +793,26 @@ function ManageStaff({store, setRoute, role}){
   },[]);  // eslint-disable-line
   const tone= role==='PCA'?'#6a52d4':'#0090ca';
   const all=store.staff.filter(e=>(e.role||'Nurse')===role);
+  /* Appraisal standing, merged in from the Performance module — the reason that module
+     no longer keeps a staff directory of its own. Null for an account without 'perf',
+     and the column, the chips and the sort all disappear with it. */
+  const apprData=useStaffAppraisals();
+  const A_=window.UNICO_APPRAISAL;
+  const apprOn=!!(apprData&&A_&&A_.standing);
+  // Keyed on store.staff, NOT on `all`: that array is rebuilt by .filter() on every
+  // render, so depending on it would recompute ~200 standings on every keystroke in the
+  // search box.
+  const standing=React.useMemo(()=>{
+    if(!apprOn) return null;
+    // Index the register once, then look each person up — scanning the whole list per
+    // row is staff x records, and this roster is ~200 people against a growing register.
+    const by={}; (apprData.appraisals||[]).forEach(x=>{ const k=String(x&&x.empId); (by[k]||(by[k]=[])).push(x); });
+    const now=new Date(); const m={};
+    store.staff.forEach(e=>{ if((e.role||'Nurse')!==role) return;
+      m[e.id]=A_.standing(e,by[String(e.emp_id||e.id)]||[],now); });
+    return m;
+  },[apprOn,apprData,store.staff,role]);
+  const stOf=(e)=>standing?standing[e.id]:null;
   const active=all.filter(e=>e.is_active);
   const base=all.filter(e=>showInactive||e.is_active);
   const now=Date.now();
@@ -725,6 +825,8 @@ function ManageStaff({store, setRoute, role}){
       case 'emergency': return /emerg|\ber\b/i.test(d);
       case 'otcath': return /\bot\b|cath|theatre/i.test(d);
       case 'newhire': return e.doj && (now-new Date(e.doj))< 220*86400000;
+      case 'apprOverdue': { const s=stOf(e); return !!(s&&s.overdue); }
+      case 'apprDue': { const s=stOf(e); return !!(s&&s.status!=='actioned'); }
       default: return true;
     }
   };
@@ -749,6 +851,9 @@ function ManageStaff({store, setRoute, role}){
   const sorted=[...filtered].sort((a,b)=>{
     if(sortBy==='exp'){const ya=S.expYears(a),yb=S.expYears(b);
       return (yb==null?-1:yb)-(ya==null?-1:ya)||(a.name||'').localeCompare(b.name||'');}
+    if(sortBy==='appraisal'){const sa=stOf(a),sb=stOf(b);
+      const va=(sa&&sa.last)?sa.last.score:-1, vb=(sb&&sb.last)?sb.last.score:-1;
+      return vb-va||(a.name||'').localeCompare(b.name||'');}
     if(sortBy==='doj')return (b.doj||'').localeCompare(a.doj||'');
     if(sortBy==='dept')return (a.current_department||'').localeCompare(b.current_department||'')||(a.name||'').localeCompare(b.name||'');
     return (a.name||'').localeCompare(b.name||'');
@@ -757,7 +862,8 @@ function ManageStaff({store, setRoute, role}){
   const desigOpts=[...new Set(all.map(e=>staffCanonDesig(e.designation)).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const qualOpts=S.uniqueVals(all,'qualification');
   const sel={padding:'9px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:12.5,fontFamily:'inherit',background:'#fff'};
-  const chips=[['all','All'],['fav','★ Favorites'],['missing','⚠ Missing vaccination'],['icu','ICU staff'],['emergency','Emergency / ER'],['otcath','OT / Cath Lab'],['newhire','New hire']];
+  const chips=[['all','All'],['fav','★ Favorites'],['missing','⚠ Missing vaccination'],['icu','ICU staff'],['emergency','Emergency / ER'],['otcath','OT / Cath Lab'],['newhire','New hire']]
+    .concat(apprOn?[['apprDue','◷ Appraisal due'],['apprOverdue','⚠ Appraisal overdue']]:[]);
   const anyFilter=q||dept||desig||vacc||qual||expB||training||chip!=='all';
   return (
     <div className="grid" style={{gap:14}}>
@@ -765,6 +871,7 @@ function ManageStaff({store, setRoute, role}){
         <div style={{flexShrink:0}}><div style={{fontSize:22,fontWeight:800,color:'var(--ink)',letterSpacing:'-.3px',whiteSpace:'nowrap'}}>{role==='PCA'?'PCA':'Nurse'} Employees</div>
           <div style={{fontSize:12,color:'var(--muted)'}}>Dedicated {role} roster{all.length>active.length?` · ${all.length-active.length} inactive hidden`:''}</div></div>
         <span className="spacer" style={{flex:1}}/>
+        <RoleSwitch role={role} setRoute={setRoute} views={{Nurse:'nurses',PCA:'pca'}}/>
         <button className="btn sm" onClick={()=>setShowInactive(v=>!v)}>{showInactive?'Hide inactive':'Show inactive'}</button>
         {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role})}><Ic d={I.plus} s={15}/>Add {role}</button>}
         <span className="num" style={{fontSize:12.5,color:'var(--muted)',fontWeight:600}}>{active.length} employee(s)</span>
@@ -788,7 +895,7 @@ function ManageStaff({store, setRoute, role}){
         {qualOpts.length>0&&<select style={sel} value={qual} onChange={e=>setQual(e.target.value)}><option value="">All Qualifications</option>{qualOpts.map(d=><option key={d}>{d}</option>)}</select>}
         <select style={sel} value={expB} onChange={e=>setExpB(e.target.value)}><option value="">All Experience</option>{['<1','1-3','3-5','5-10','10+'].map(x=><option key={x} value={x}>{x} yrs</option>)}</select>
         <select style={sel} value={training} onChange={e=>setTraining(e.target.value)}><option value="">Any Training</option><option value="has">Has training</option><option value="none">No training</option></select>
-        <select style={sel} value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="name">Sort: Name</option><option value="exp">Sort: Experience</option><option value="doj">Sort: Newest hire</option><option value="dept">Sort: Department</option></select>
+        <select style={sel} value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="name">Sort: Name</option><option value="exp">Sort: Experience</option><option value="doj">Sort: Newest hire</option><option value="dept">Sort: Department</option>{apprOn&&<option value="appraisal">Sort: Appraisal score</option>}</select>
         <button className="btn pri sm" style={{opacity:anyFilter?1:.5}} onClick={()=>{setQ('');setDept('');setDesig('');setVacc('');setQual('');setExpB('');setTraining('');setChip('all');}}>Clear filters</button>
         <ExportMenu rows={sorted} role={role}/>
       </div>
@@ -797,7 +904,7 @@ function ManageStaff({store, setRoute, role}){
       <div className="card" style={{overflow:'hidden'}}>
         <div style={{overflowX:'auto'}}>
           <table className="tbl">
-            <thead><tr><th style={{textAlign:'center',width:34}}>★</th><th style={{textAlign:'left'}}>Emp ID</th><th style={{textAlign:'left'}}>Name</th><th style={{textAlign:'left'}}>Designation</th><th style={{textAlign:'left'}}>Department</th><th>Experience</th><th style={{textAlign:'left'}}>Vaccination</th><th style={{textAlign:'left'}}>Phone</th><th style={{textAlign:'right'}}>Manage</th></tr></thead>
+            <thead><tr><th style={{textAlign:'center',width:34}}>★</th><th style={{textAlign:'left'}}>Emp ID</th><th style={{textAlign:'left'}}>Name</th><th style={{textAlign:'left'}}>Designation</th><th style={{textAlign:'left'}}>Department</th><th>Experience</th><th style={{textAlign:'left'}}>Vaccination</th>{apprOn&&<th style={{textAlign:'left'}}>Appraisal</th>}<th style={{textAlign:'left'}}>Phone</th><th style={{textAlign:'right'}}>Manage</th></tr></thead>
             <tbody>
               {sorted.map(e=>(
                 <tr key={e.id} style={{opacity:e.is_active?1:.55}}>
@@ -815,8 +922,18 @@ function ManageStaff({store, setRoute, role}){
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}><span style={{color:vaccColor(e.hepatitis_b_vaccination),fontWeight:600}}>{e.hepatitis_b_vaccination||'Unknown'}</span></td>
+                  {apprOn&&<td style={{textAlign:'left',cursor:'pointer'}} title="Open the performance record on this profile"
+                    onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><ApprCell st={stOf(e)}/></td>}
                   <td style={{textAlign:'left'}}>{e.phone||<span style={{color:'var(--rose)'}}>—</span>}</td>
                   <td><div style={{display:'flex',gap:6,justifyContent:'flex-end'}}>
+                    {/* THE APPRAISAL STARTS FROM THE ROSTER. The Performance module's own
+                        directory existed mainly to host this one button; it is here now,
+                        beside the person it is about. The form itself is still the
+                        Performance module's (HR-NUR-PA-01) — only the way in moved. */}
+                    {apprOn&&apprCanEdit()&&(()=>{ const st=stOf(e); if(!st||!st.cycle) return null;
+                      return <button className="icon-btn" title={st.appraisal?'Continue the '+(st.appraisal.cycleLabel||'current')+' appraisal':'Start the '+st.cycle.label+' appraisal'}
+                        onClick={()=>setRoute({view:'perfForm',emp:e.emp_id||String(e.id)})}
+                        style={st.overdue?{color:'#d23a52',background:'#d23a5214',border:'1px solid #d23a5240'}:null}><Ic d={I.doc} s={14}/></button>; })()}
                     {(!window.unicoCan||window.unicoCan('staff','edit'))&&<button className="icon-btn" title="Edit" onClick={()=>setRoute({view:'staffForm',emp:e.id})}><Ic d={I.edit} s={14}/></button>}
                     {(!window.unicoCan||window.unicoCan('staff','edit'))&&(e.is_active
                       ? <button className="icon-btn danger" title="Deactivate" onClick={async()=>{
@@ -895,4 +1012,7 @@ function PreviousStaff({store, setRoute}){
   );
 }
 
-Object.assign(window,{ Avatar, VaccBadge, RoleBadge, vaccColor, WorkforceDashboard, StaffDirectory, StaffCompliance, ManageStaff, PreviousStaff });
+// staff-profile.jsx rides in its own chunk and every file is IIFE-wrapped, so window is
+// the only way it can reach the appraisal helpers defined here.
+Object.assign(window,{ Avatar, VaccBadge, RoleBadge, RoleSwitch, vaccColor, WorkforceDashboard, StaffDirectory, StaffCompliance, ManageStaff, PreviousStaff,
+  useStaffAppraisals, ApprCell, APPR_STATUS, apprCanSee, apprCanEdit });

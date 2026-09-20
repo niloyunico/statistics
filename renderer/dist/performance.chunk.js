@@ -269,41 +269,20 @@ function useRoster(staffStore, perf) {
     const byEmp = {};
     const rows = list.map(e => {
       const empId = e.emp_id || String(e.id);
-      const cyc = A.cycleOf(e.doj, now);
-      const mineAppr = apprOf[String(empId)] || [];
-      const current = mineAppr.find(x => cyc && x.cycleId === cyc.id) || null;
-      const earlier = mineAppr.filter(x => x.status !== 'actioned' && !(cyc && x.cycleId === cyc.id)).sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)))[0] || null;
-      const apr = earlier && earlier.status !== 'draft' ? earlier : current || earlier;
-      const history = mineAppr.filter(x => x.status === 'actioned').sort((a, b) => String(b.cycleStart).localeCompare(String(a.cycleStart)));
-      const last = history[0] || null;
-      const regCycle = apr ? apr.cycleId : cyc && cyc.id;
+      const st = A.standing(e, apprOf[String(empId)] || [], now);
+      const regCycle = st.appraisal ? st.appraisal.cycleId : st.cycle && st.cycle.id;
       const inc = (incOf[String(empId)] || []).filter(x => regCycle && x.cycleId === regCycle);
       const ach = (achOf[String(empId)] || []).filter(x => regCycle && x.cycleId === regCycle);
-      const firstDue = e.doj ? A.addMonths(A.parseDate(e.doj) || now, 6) : null;
-      const neverAppraised = history.length === 0;
-      const lastClosed = e.doj ? (A.cyclesSince(e.doj, now, 1) || [])[0] : null;
-      const missedClosed = !!(lastClosed && !mineAppr.some(x => x.cycleId === lastClosed.id));
-      const row = {
+      const row = Object.assign({}, st, {
         emp: e,
-        empId,
         role: roleOf(e),
         name: e.name,
         designation: e.designation,
         dept: e.current_department,
         doj: e.doj,
-        cycle: cyc,
-        appraisal: apr,
-        status: apr ? apr.status : 'none',
-        history,
-        last,
         incidents: inc,
-        achievements: ach,
-        firstDue,
-        neverAppraised,
-        lastClosed,
-        overdue: missedClosed,
-        newJoinerDue: !!(neverAppraised && firstDue && firstDue <= now)
-      };
+        achievements: ach
+      });
       byEmp[empId] = row;
       return row;
     });
@@ -563,7 +542,8 @@ function Modal({
 function PerfDashboard({
   roster,
   perf,
-  setRoute
+  setRoute,
+  role
 }) {
   const rows = roster.rows;
   const done = rows.filter(r => r.status === 'actioned').length;
@@ -632,25 +612,15 @@ function PerfDashboard({
       fontSize: 15.5,
       color: MK.INK
     }
-  }, "Individual Performance \u2014 Nursing & PCA"), React.createElement("div", {
+  }, "Individual Performance \u2014 ", role === 'PCA' ? 'Patient Care Assistants' : role === 'Nurse' ? 'Nurses' : 'Nursing & PCA'), React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: MK.MUTED
     }
-  }, "6-monthly per individual \u2014 anchored to each date of joining \xB7 20 parameters \xB7 out of 100")), React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'perfCompare'
-    })
-  }, "Compare"), React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'perfDirectory'
-    })
-  }, "Rankings"), perfCan('add') && React.createElement("button", {
+  }, "6-monthly per individual \u2014 anchored to each date of joining \xB7 20 parameters \xB7 out of 100")), perfCan('add') && React.createElement("button", {
     className: "btn pri",
     onClick: () => setRoute({
-      view: 'perfDirectory'
+      view: 'nurses'
     })
   }, "+ New Appraisal")), React.createElement("div", {
     className: "card",
@@ -980,7 +950,7 @@ function PerfDashboard({
     sub: "completed \u2014 Part H not yet recorded",
     n: rows.filter(r => r.status === 'discussed' || r.status === 'submitted').length,
     onClick: () => setRoute({
-      view: 'perfDirectory'
+      view: 'nurses'
     })
   }), React.createElement(QuickCard, {
     icon: I.heart,
@@ -1076,318 +1046,6 @@ function QuickCard({
       fontWeight: 700
     }
   }, n));
-}
-const DIR_CHIPS = [['all', 'All', () => true], ['fav', '★ Favorites', r => !!(r.emp && r.emp.fav)], ['pending', '⚠ No appraisal yet', r => r.status === 'none'], ['done', '✓ Appraisal completed', r => r.status === 'actioned'], ['newhire', 'New hire ≤ 6 mo', r => {
-  const d = r.doj ? A.parseDate(r.doj) : null;
-  return !!(d && A.addMonths(d, 6) > new Date());
-}]];
-const dirChipStyle = on => ({
-  padding: '7px 14px',
-  borderRadius: 9,
-  fontSize: 12.5,
-  fontWeight: 600,
-  cursor: 'pointer',
-  fontFamily: 'inherit',
-  transition: 'all .15s',
-  border: '1px solid ' + (on ? '#0090ca' : 'rgba(255,255,255,.8)'),
-  background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(255,255,255,.5)',
-  color: on ? '#fff' : MK.BODY,
-  boxShadow: on ? '0 4px 12px rgba(0,144,202,.35)' : 'none'
-});
-const dirSegStyle = on => ({
-  border: 0,
-  background: on ? '#fff' : 'transparent',
-  color: on ? '#0090ca' : MK.MUTED,
-  padding: '5px 12px',
-  borderRadius: 6,
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: 'pointer',
-  fontFamily: 'inherit',
-  boxShadow: on ? '0 1px 2px rgba(20,32,46,.06)' : 'none'
-});
-const expOf = e => {
-  try {
-    return window.STAFF && window.STAFF.expLabel ? window.STAFF.expLabel(e) : '—';
-  } catch (x) {
-    return '—';
-  }
-};
-function PerfDirectory({
-  roster,
-  staffStore,
-  setRoute
-}) {
-  const [q, setQ] = useState('');
-  const [dept, setDept] = useState('');
-  const [st, setSt] = useState('');
-  const [sort, setSort] = useState('name');
-  const [chip, setChip] = useState('all');
-  const PAGE = 40;
-  const [shown, setShown] = useState(PAGE);
-  const [role, setRole] = useState('Nurse');
-  const depts = useMemo(() => [...new Set(roster.rows.map(r => r.dept).filter(Boolean))].sort(), [roster.rows]);
-  const list = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const chipDef = DIR_CHIPS.find(c => c[0] === chip) || DIR_CHIPS[0];
-    let out = roster.rows.filter(r => {
-      if (!chipDef[2](r)) return false;
-      if (role && (r.role || roleOf(r.emp)) !== role) return false;
-      if (dept && r.dept !== dept) return false;
-      if (st && r.status !== st) return false;
-      if (!needle) return true;
-      return [r.name, r.empId, r.designation, r.dept].some(v => String(v || '').toLowerCase().includes(needle));
-    });
-    out = out.slice().sort((a, b) => {
-      if (sort === 'score') return (b.last ? b.last.score : -1) - (a.last ? a.last.score : -1);
-      if (sort === 'dept') return String(a.dept).localeCompare(String(b.dept)) || String(a.name).localeCompare(String(b.name));
-      return String(a.name).localeCompare(String(b.name));
-    });
-    return out;
-  }, [roster.rows, q, dept, st, sort, chip, role]);
-  useEffect(() => {
-    setShown(PAGE);
-  }, [q, dept, st, sort, chip, role]);
-  const page = list.slice(0, shown);
-  const nurses = list.filter(r => !isPcaRow(r)).length;
-  const allNurses = roster.rows.filter(r => !isPcaRow(r)).length;
-  const allPca = roster.rows.length - allNurses;
-  return React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      flexWrap: 'wrap'
-    }
-  }, DIR_CHIPS.map(([id, label]) => React.createElement("button", {
-    key: id,
-    style: dirChipStyle(chip === id),
-    onClick: () => setChip(id)
-  }, label))), React.createElement("div", {
-    className: "card",
-    style: {
-      backdropFilter: 'none',
-      WebkitBackdropFilter: 'none',
-      background: 'rgba(252,254,255,.97)',
-      contain: 'content'
-    }
-  }, React.createElement("div", {
-    className: "card-h",
-    style: {
-      display: 'flex',
-      gap: 8,
-      flexWrap: 'wrap',
-      alignItems: 'center'
-    }
-  }, React.createElement("div", {
-    style: MK.iconBadge('blue', 32)
-  }, React.createElement(Ic, {
-    d: I.user,
-    s: 16
-  })), React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 200
-    }
-  }, React.createElement("h3", null, "Staff directory"), React.createElement("div", {
-    className: "sub"
-  }, list.length, " shown \xB7 ", nurses, " nurses \xB7 ", list.length - nurses, " PCA \xB7 appraisal status for each person's current window")), React.createElement("input", {
-    value: q,
-    onChange: e => setQ(e.target.value),
-    placeholder: "Search name / Emp ID\u2026",
-    style: {
-      minWidth: 190
-    }
-  }), React.createElement("div", {
-    style: {
-      display: 'inline-flex',
-      background: 'rgba(255,255,255,.4)',
-      border: '1px solid rgba(255,255,255,.8)',
-      borderRadius: 9,
-      padding: 3,
-      gap: 2
-    }
-  }, [['', 'All (' + roster.rows.length + ')'], ['Nurse', 'Nurses (' + allNurses + ')'], ['PCA', 'PCA (' + allPca + ')']].map(([v, l]) => React.createElement("button", {
-    key: v,
-    style: dirSegStyle(role === v),
-    onClick: () => setRole(v)
-  }, l))), React.createElement("select", {
-    value: dept,
-    onChange: e => setDept(e.target.value)
-  }, React.createElement("option", {
-    value: ""
-  }, "All departments"), depts.map(d => React.createElement("option", {
-    key: d
-  }, d))), React.createElement("select", {
-    value: st,
-    onChange: e => setSt(e.target.value)
-  }, React.createElement("option", {
-    value: ""
-  }, "Any status"), Object.keys(STATUS_META).map(k => React.createElement("option", {
-    key: k,
-    value: k
-  }, STATUS_META[k].label))), React.createElement("select", {
-    value: sort,
-    onChange: e => setSort(e.target.value)
-  }, React.createElement("option", {
-    value: "name"
-  }, "Sort: name"), React.createElement("option", {
-    value: "dept"
-  }, "Sort: department"), React.createElement("option", {
-    value: "score"
-  }, "Sort: last score"))), React.createElement("div", {
-    className: "card-b",
-    style: {
-      overflow: 'auto'
-    }
-  }, list.length === 0 ? React.createElement(Empty, {
-    icon: I.user,
-    title: "No staff match these filters",
-    sub: "Clear a filter to widen the search."
-  }) : React.createElement("table", {
-    className: "tbl",
-    style: {
-      width: '100%'
-    }
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
-    style: {
-      width: 34,
-      textAlign: 'center'
-    }
-  }, "\u2605"), React.createElement("th", null, "Staff"), React.createElement("th", null, "Emp ID"), React.createElement("th", null, "Designation"), React.createElement("th", null, "Department"), React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "Experience"), React.createElement("th", null, "Appraisal window"), React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "Last appraisal"), React.createElement("th", null, "Appraisal status"), React.createElement("th", {
-    style: {
-      width: 150
-    }
-  }))), React.createElement("tbody", null, page.map(r => React.createElement("tr", {
-    key: r.empId
-  }, React.createElement("td", {
-    style: {
-      textAlign: 'center'
-    }
-  }, React.createElement("span", {
-    title: r.emp && r.emp.fav ? 'Remove from favourites' : 'Mark as a favourite',
-    onClick: () => staffStore && staffStore.toggleFav(r.emp.id),
-    style: {
-      cursor: 'pointer',
-      fontSize: 15,
-      color: r.emp && r.emp.fav ? '#e0a81e' : '#c4ccd6'
-    }
-  }, r.emp && r.emp.fav ? '★' : '☆')), React.createElement("td", null, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, React.createElement(MK.Av, {
-    name: r.name,
-    emp: r.emp,
-    empId: r.empId,
-    size: 26
-  }), React.createElement("span", {
-    style: {
-      fontWeight: 600,
-      cursor: 'pointer'
-    },
-    onClick: () => setRoute({
-      view: 'perfStaff',
-      emp: r.empId
-    })
-  }, r.name), isPcaRow(r) && React.createElement("span", {
-    style: MK.roleChip('PCA')
-  }, "PCA"), r.overdue && React.createElement("span", {
-    className: "tag",
-    style: {
-      color: '#d23a52',
-      borderColor: '#d23a5255',
-      background: '#d23a5214'
-    }
-  }, "overdue"))), React.createElement("td", {
-    className: "num"
-  }, r.empId), React.createElement("td", null, r.designation), React.createElement("td", null, r.dept), React.createElement("td", {
-    className: "num",
-    style: {
-      textAlign: 'right',
-      whiteSpace: 'nowrap'
-    }
-  }, expOf(r.emp)), React.createElement("td", {
-    className: "sub"
-  }, r.cycle ? r.cycle.label : '—'), React.createElement("td", {
-    style: {
-      textAlign: 'right',
-      whiteSpace: 'nowrap'
-    }
-  }, r.last ? React.createElement("span", null, React.createElement("span", {
-    className: "num",
-    style: {
-      fontWeight: 700,
-      color: MK.INK
-    }
-  }, r.last.score), React.createElement("span", {
-    style: {
-      marginLeft: 6
-    }
-  }, React.createElement("span", {
-    style: MK.gchip(r.last.grade)
-  }, r.last.grade))) : React.createElement("span", {
-    className: "sub"
-  }, "\u2014")), React.createElement("td", null, React.createElement(StatusChip, {
-    st: r.status
-  })), React.createElement("td", {
-    style: {
-      textAlign: 'right',
-      whiteSpace: 'nowrap'
-    }
-  }, React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'perfStaff',
-      emp: r.empId
-    })
-  }, "Record"), ' ', perfCan('edit') && r.cycle && React.createElement("button", {
-    className: "btn pri",
-    onClick: () => setRoute({
-      view: 'perfForm',
-      emp: r.empId
-    })
-  }, r.appraisal ? r.status === 'actioned' ? 'View' : 'Continue' : 'Start')))))), list.length > page.length && React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      padding: '11px 2px 2px',
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("button", {
-    className: "btn",
-    onClick: () => setShown(n => n + PAGE)
-  }, "Show ", Math.min(PAGE, list.length - page.length), " more"), React.createElement("button", {
-    className: "btn",
-    onClick: () => setShown(list.length)
-  }, "Show all ", list.length), React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      color: MK.FAINT
-    }
-  }, "showing ", page.length, " of ", list.length)), React.createElement("div", {
-    style: {
-      paddingTop: 10,
-      fontSize: 11,
-      color: MK.FAINT
-    }
-  }, "Click a staff member to open their profile and full appraisal history. Appraisal windows run every 6 months from each individual's date of joining."))));
 }
 const SEC_ACCENT = ['#0090ca', '#3ab5a7', '#6a52d4'];
 const secAccent = n => SEC_ACCENT[(n - 1) % SEC_ACCENT.length];
@@ -1535,9 +1193,9 @@ function PerfForm({
     action: React.createElement("button", {
       className: "btn",
       onClick: () => setRoute({
-        view: 'perfDirectory'
+        view: 'nurses'
       })
-    }, "Back to directory")
+    }, "Back to the roster")
   });
   if (!row.cycle) return React.createElement(Empty, {
     icon: I.doc,
@@ -1546,7 +1204,7 @@ function PerfForm({
     action: React.createElement("button", {
       className: "btn",
       onClick: () => setRoute({
-        view: 'perfDirectory'
+        view: 'nurses'
       })
     }, "Back")
   });
@@ -1610,9 +1268,10 @@ function PerfForm({
   }, React.createElement("button", {
     className: "btn",
     onClick: () => setRoute({
-      view: 'perfDirectory'
+      view: 'staffProfile',
+      emp: row.emp.id
     })
-  }, "\u2039 Performance"), React.createElement("span", {
+  }, "\u2039 Staff record"), React.createElement("span", {
     style: {
       fontSize: 11.5,
       color: MK.FAINT
@@ -1833,7 +1492,7 @@ function PerfForm({
       color: MK.BODY,
       lineHeight: 1.55
     }
-  }, "Rate on ", React.createElement("b", null, "documented observation over the whole period"), ", not isolated incidents. Tick one rating per parameter \u2014 no parameter may be left blank. A rating of ", React.createElement("b", null, "1 or 2 requires a written remark"), " and, where applicable, an incident or counselling reference. Sub-totals carry to the Score Summary automatically; the form is marked out of 100, so the total obtained is the percentage."), React.createElement("button", {
+  }, "Rate on ", React.createElement("b", null, "documented observation over the whole period"), ", not isolated incidents. Tick one rating per parameter \u2014 no parameter may be left blank. A rating of ", React.createElement("b", null, "1 or 2 requires a written remark"), " and, where applicable, an incident or counselling reference. Sub-totals carry to the Score Summary automatically; the form is marked out of 100, so the total obtained is the percentage."), perfCan('print') && React.createElement("button", {
     className: "btn",
     onClick: () => setRoute({
       view: 'perfPrint',
@@ -2389,7 +2048,14 @@ function PartH({
   const [next, setNext] = useState(a && a.nextReview || '');
   const [memo, setMemo] = useState(a && a.memoNo || '');
   const [busy, setBusy] = useState(false);
+  const touched = useRef(false);
+  const mark = fn => v => {
+    touched.current = true;
+    fn(v);
+  };
   useEffect(() => {
+    if (touched.current && !filed) return;
+    touched.current = false;
     setAction(null);
     setRemarks(a && a.authorityRemarks || '');
     setNext(a && a.nextReview || '');
@@ -2416,12 +2082,7 @@ function PartH({
       display: 'grid',
       gap: 10
     }
-  }, !a ? React.createElement("div", {
-    style: {
-      fontSize: 11.6,
-      color: MK.MUTED
-    }
-  }, "Save the appraisal first \u2014 the action is filed against the saved form.") : filed ? React.createElement("div", {
+  }, filed ? React.createElement("div", {
     style: {
       padding: '10px 12px',
       borderRadius: 10,
@@ -2454,7 +2115,7 @@ function PartH({
     style: {
       color: MK.INK
     }
-  }, guide.interp)), a.discussedOn ? React.createElement("div", {
+  }, guide.interp)), a && a.discussedOn ? React.createElement("div", {
     style: {
       padding: '9px 12px',
       borderRadius: 10,
@@ -2481,7 +2142,7 @@ function PartH({
     className: "sub"
   }, "Action"), React.createElement("select", {
     value: chosen,
-    onChange: e => setAction(e.target.value)
+    onChange: e => mark(setAction)(e.target.value)
   }, React.createElement("option", {
     value: ""
   }, "Select action\u2026"), A.CNS_ACTIONS.map(x => React.createElement("option", {
@@ -2497,7 +2158,7 @@ function PartH({
   }, "Remarks / directions to the Nursing Office"), React.createElement("textarea", {
     rows: "3",
     value: remarks,
-    onChange: e => setRemarks(e.target.value)
+    onChange: e => mark(setRemarks)(e.target.value)
   })), React.createElement("div", {
     style: {
       display: 'grid',
@@ -2514,7 +2175,7 @@ function PartH({
   }, "Date of next review"), React.createElement("input", {
     type: "date",
     value: next,
-    onChange: e => setNext(e.target.value)
+    onChange: e => mark(setNext)(e.target.value)
   })), React.createElement("label", {
     style: {
       display: 'grid',
@@ -2524,19 +2185,23 @@ function PartH({
     className: "sub"
   }, "Memo no."), React.createElement("input", {
     value: memo,
-    onChange: e => setMemo(e.target.value)
-  }))), dirty && React.createElement("div", {
-    style: {
-      fontSize: 11.2,
-      color: '#b5670a'
-    }
-  }, "There are unsaved changes on the form. Save them first \u2014 the action is filed against the scores the server holds."), React.createElement("div", {
+    onChange: e => mark(setMemo)(e.target.value)
+  }))), (() => {
+    const blocked = !a ? 'Save the appraisal above first — the action is filed against the scores the server holds, so there has to be a saved form to file it against.' : dirty ? 'There are unsaved changes on the form. Save them first — the action is filed against the scores the server holds.' : !complete ? 'Rate all 20 parameters, with a remark on any rated 1–2, before filing.' : !chosen ? 'Choose the action to be taken.' : '';
+    return blocked ? React.createElement("div", {
+      style: {
+        fontSize: 11.2,
+        color: '#b5670a'
+      }
+    }, blocked) : null;
+  })(), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8
     }
-  }, React.createElement("button", {
+  }, perfCan('print') && React.createElement("button", {
     className: "btn",
+    disabled: !a,
     onClick: () => setRoute({
       view: 'perfPrint',
       emp: row.empId
@@ -2547,8 +2212,7 @@ function PartH({
       flex: 1,
       justifyContent: 'center'
     },
-    disabled: busy || !chosen || !complete || dirty,
-    title: complete ? '' : 'Rate all 20 parameters and add remarks for any 1–2 first',
+    disabled: busy || !a || !chosen || !complete || dirty,
     onClick: () => {
       setBusy(true);
       perf.recordAction(a.id, {
@@ -2624,7 +2288,7 @@ function PerfPrint({
     }
   }), React.createElement("span", {
     className: "sub"
-  }, "1:1 with the paper form \xB7 Form ", A.FORM_ID), React.createElement("button", {
+  }, "1:1 with the paper form \xB7 Form ", A.FORM_ID), perfCan('print') && React.createElement("button", {
     className: "btn pri",
     onClick: () => window.print()
   }, "Print / Save as PDF"))), React.createElement("div", {
@@ -3012,690 +2676,6 @@ function SectionHead({
       marginBottom: 6
     }
   }, children);
-}
-function Barcode({
-  value
-}) {
-  const v = String(value || '');
-  let h = 7;
-  for (let i = 0; i < v.length; i++) h = (h * 31 + v.charCodeAt(i)) % 100000;
-  const bars = [];
-  let seed = h;
-  for (let i = 0; i < 46; i++) {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
-    bars.push(1 + seed % 3);
-  }
-  return React.createElement("div", {
-    style: {
-      textAlign: 'center'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'flex-end',
-      gap: 1.5,
-      height: 42,
-      justifyContent: 'center'
-    }
-  }, bars.map((w, i) => React.createElement("div", {
-    key: i,
-    style: {
-      width: w,
-      height: '100%',
-      background: i % 2 ? 'transparent' : '#16202e'
-    }
-  }))), React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 10.5,
-      letterSpacing: 2,
-      color: MK.BODY,
-      marginTop: 4
-    }
-  }, v));
-}
-function MiniStat({
-  label,
-  value,
-  tone
-}) {
-  return React.createElement("div", {
-    style: {
-      padding: '7px 12px',
-      borderRadius: 10,
-      background: 'rgba(255,255,255,.6)',
-      border: '1px solid rgba(125,145,180,.2)',
-      minWidth: 92
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 8.8,
-      fontWeight: 700,
-      letterSpacing: .5,
-      textTransform: 'uppercase',
-      color: MK.FAINT
-    }
-  }, label), React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 14,
-      fontWeight: 700,
-      color: tone || MK.INK,
-      marginTop: 2
-    }
-  }, value));
-}
-function PerfStaffRecord({
-  roster,
-  perf,
-  empId,
-  setRoute
-}) {
-  const row = roster.byEmp[empId];
-  if (!row) return React.createElement(Empty, {
-    icon: I.user,
-    title: "Staff member not found"
-  });
-  const hist = row.history.slice().reverse();
-  const latest = row.last;
-  const isPca = isPcaRow(row);
-  const idRow = (k, v) => React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'baseline',
-      gap: 10,
-      padding: '7px 0',
-      borderBottom: '1px solid rgba(125,145,180,.14)'
-    }
-  }, React.createElement("span", {
-    style: {
-      flex: 1,
-      fontSize: 9.6,
-      fontWeight: 700,
-      letterSpacing: .5,
-      textTransform: 'uppercase',
-      color: MK.FAINT
-    }
-  }, k), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 11.6,
-      fontWeight: 700,
-      color: MK.INK,
-      textAlign: 'right'
-    }
-  }, v || '—'));
-  return React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12
-    }
-  }, React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'perfDirectory'
-    })
-  }, "\u2039 Performance"), React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      color: MK.FAINT
-    }
-  }, "Staff performance record")), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: '320px minmax(0,1fr)',
-      gap: 14,
-      alignItems: 'start'
-    }
-  }, React.createElement("div", {
-    className: "card",
-    style: {
-      position: 'sticky',
-      top: 12
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'grid',
-      placeItems: 'center',
-      paddingTop: 8
-    }
-  }, React.createElement("div", {
-    style: {
-      width: 46,
-      height: 4,
-      borderRadius: 3,
-      background: 'rgba(125,145,180,.3)'
-    }
-  })), React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      padding: '10px 16px'
-    }
-  }, React.createElement("img", {
-    src: "unico/logo.svg",
-    alt: "UNICO",
-    style: {
-      height: 26
-    }
-  }), React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("span", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 5,
-      fontSize: 9.6,
-      fontWeight: 700,
-      letterSpacing: .6,
-      padding: '4px 9px',
-      borderRadius: 7,
-      color: '#fff',
-      background: 'linear-gradient(135deg,#27a8db,#0072a3)'
-    }
-  }, React.createElement(Ic, {
-    d: I.steth || I.user,
-    s: 11
-  }), isPca ? 'PCA ID' : 'NURSE ID')), React.createElement("div", {
-    style: {
-      height: 3,
-      background: 'linear-gradient(90deg,#3ab5a7,#27a8db)'
-    }
-  }), React.createElement("div", {
-    style: {
-      padding: '16px 18px 14px',
-      textAlign: 'center'
-    }
-  }, React.createElement("div", {
-    style: {
-      width: 132,
-      height: 132,
-      margin: '0 auto',
-      borderRadius: '50%',
-      overflow: 'hidden',
-      border: '4px solid #fff',
-      boxShadow: '0 8px 24px rgba(31,59,90,.16)',
-      background: 'linear-gradient(160deg,#eaf4fb,#dceaf5)'
-    }
-  }, React.createElement(MK.Av, {
-    name: row.name,
-    emp: row.emp,
-    empId: row.empId,
-    size: 132,
-    radius: 0,
-    style: {
-      width: '100%',
-      height: '100%',
-      fontSize: 44
-    }
-  })), React.createElement("div", {
-    style: {
-      fontSize: 17,
-      fontWeight: 700,
-      color: MK.INK,
-      marginTop: 11
-    }
-  }, row.name), React.createElement("div", {
-    style: {
-      fontSize: 12.4,
-      fontWeight: 600,
-      color: '#0090ca',
-      marginTop: 1
-    }
-  }, row.designation || '—'), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 6,
-      justifyContent: 'center',
-      marginTop: 8
-    }
-  }, React.createElement("span", {
-    style: MK.roleChip(isPca ? 'PCA' : 'Nurse')
-  }, isPca ? 'PCA' : 'Nurse'), React.createElement("span", {
-    style: MK.stChip('Actioned')
-  }, React.createElement("span", {
-    style: {
-      width: 5,
-      height: 5,
-      borderRadius: '50%',
-      background: 'currentColor',
-      marginRight: 5
-    }
-  }), "Active"))), React.createElement("div", {
-    style: {
-      padding: '0 18px 12px'
-    }
-  }, idRow('ID no.', row.empId), idRow('Department', row.dept), idRow('Joined', row.doj), idRow('Experience', row.emp && row.emp.total_experience_text), idRow('Phone', row.emp && row.emp.phone)), React.createElement("div", {
-    style: {
-      padding: '10px 18px 16px',
-      borderTop: '1px solid ' + MK.LINE
-    }
-  }, React.createElement(Barcode, {
-    value: row.empId
-  }))), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 14,
-      minWidth: 0
-    }
-  }, React.createElement("div", {
-    className: "card",
-    style: {
-      borderLeft: '3px solid #0090ca'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 11,
-      padding: '13px 16px'
-    }
-  }, React.createElement("div", {
-    style: MK.iconBadge('blue', 32)
-  }, React.createElement(Ic, {
-    d: I.doc,
-    s: 16
-  })), React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 0
-    }
-  }, React.createElement("span", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700,
-      color: MK.INK
-    }
-  }, "Performance"), React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      color: MK.MUTED,
-      marginLeft: 8
-    }
-  }, "every 6 months from DOJ (", A.fmtDay(A.parseDate(row.doj)), ")")), perfCan('edit') && row.cycle && React.createElement("button", {
-    className: "btn pri",
-    onClick: () => setRoute({
-      view: 'perfForm',
-      emp: row.empId
-    })
-  }, row.appraisal ? row.status === 'actioned' ? 'View appraisal' : 'Continue appraisal' : '+ Start ' + row.cycle.label + ' appraisal')), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 18,
-      alignItems: 'center',
-      flexWrap: 'wrap',
-      padding: '0 16px 14px'
-    }
-  }, React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 230
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 9.6,
-      fontWeight: 700,
-      letterSpacing: .6,
-      textTransform: 'uppercase',
-      color: MK.FAINT
-    }
-  }, latest ? 'Latest grade · ' + latest.cycleLabel : 'No appraisal filed yet'), latest ? React.createElement(React.Fragment, null, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'baseline',
-      gap: 10,
-      marginTop: 3
-    }
-  }, React.createElement("span", {
-    style: {
-      fontSize: 38,
-      fontWeight: 700,
-      lineHeight: 1,
-      color: gradeColor(latest.grade)
-    }
-  }, latest.grade), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 19,
-      fontWeight: 700,
-      color: MK.INK
-    }
-  }, latest.score), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 14,
-      color: MK.FAINT
-    }
-  }, "/ 100")), React.createElement("div", {
-    style: {
-      fontSize: 11.8,
-      color: MK.MUTED,
-      marginTop: 2
-    }
-  }, A.gradeFor(latest.score).rating, " \u2014 ", A.gradeFor(latest.score).interp)) : React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: MK.MUTED,
-      marginTop: 4
-    }
-  }, "The first appraisal falls six months after joining", row.cycle ? ' — current window ' + row.cycle.label : '', ".")), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement(MiniStat, {
-    label: "Appraisals",
-    value: row.history.length
-  }), hist.length > 1 && React.createElement(MiniStat, {
-    label: 'Since ' + String(hist[0].cycleLabel).slice(-4),
-    value: function () {
-      var d = hist[hist.length - 1].score - hist[0].score;
-      return (d >= 0 ? '▲ ' : '▼ ') + Math.abs(d) + ' pts';
-    }(),
-    tone: hist[hist.length - 1].score - hist[0].score >= 0 ? '#1f9d57' : '#d23a52'
-  }), React.createElement(MiniStat, {
-    label: "Next due",
-    value: row.cycle ? A.fmtDay(row.cycle.due) : '—'
-  })))), React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Score trend"), React.createElement("span", {
-    className: "sub"
-  }, hist.length ? hist.length + ' appraisal cycle(s)' : 'no cycles yet')), React.createElement("div", {
-    className: "card-b"
-  }, hist.length === 0 ? React.createElement(Empty, {
-    title: "No completed appraisals yet",
-    sub: "The trend appears once the first form is filed."
-  }) : React.createElement(Trend, {
-    points: hist.map(h => ({
-      label: h.cycleLabel,
-      v: h.score,
-      grade: h.grade
-    }))
-  }))), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))',
-      gap: 14
-    }
-  }, React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Latest breakdown"), React.createElement("span", {
-    className: "sub"
-  }, latest ? latest.cycleLabel + ' · by section' : '—')), React.createElement("div", {
-    className: "card-b"
-  }, !latest ? React.createElement(Empty, {
-    title: "Nothing to break down yet"
-  }) : React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 8
-    }
-  }, A.tally(latest.scores).sections.map(sc => React.createElement("div", {
-    key: sc.no,
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 9
-    }
-  }, React.createElement("div", {
-    style: {
-      width: 128,
-      fontSize: 11.2,
-      color: MK.BODY
-    }
-  }, sc.title.charAt(0) + sc.title.slice(1).toLowerCase()), React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }, React.createElement(Bar, {
-    value: sc.sub,
-    max: sc.max,
-    color: MK.barColor(sc.sub / sc.max * 100)
-  })), React.createElement("div", {
-    className: "num",
-    style: {
-      width: 46,
-      textAlign: 'right',
-      fontSize: 11.5,
-      fontWeight: 700
-    }
-  }, sc.sub, "/", sc.max)))))), React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Appraisal history"), React.createElement("span", {
-    className: "sub"
-  }, "confidential \u2014 personal file")), React.createElement("div", {
-    className: "card-b",
-    style: {
-      overflow: 'auto'
-    }
-  }, row.history.length === 0 ? React.createElement(Empty, {
-    title: "No filed appraisals"
-  }) : React.createElement("table", {
-    className: "tbl"
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Period"), React.createElement("th", null, "Score"), React.createElement("th", null, "Grade"), React.createElement("th", null, "Part H"), React.createElement("th", null))), React.createElement("tbody", null, row.history.map(h => React.createElement("tr", {
-    key: h.id
-  }, React.createElement("td", null, h.cycleLabel), React.createElement("td", {
-    className: "num"
-  }, h.score), React.createElement("td", null, React.createElement(GradePill, {
-    grade: h.grade
-  })), React.createElement("td", {
-    className: "sub"
-  }, (h.actions || []).map(id => (A.CNS_ACTIONS.find(x => x.id === id) || {}).label || id).join(' · ') || '—'), React.createElement("td", {
-    style: {
-      textAlign: 'right'
-    }
-  }, React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'perfPrint',
-      emp: row.empId
-    })
-  }, "Print"))))))))), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))',
-      gap: 14
-    }
-  }, React.createElement(EntryList, {
-    title: "Achievements and awards",
-    sub: 'Cap is ' + capsOf(perf).bonus + ' bonus points per cycle',
-    tone: "#1f9d57",
-    tint: "green",
-    icon: I.heart,
-    rows: row.achievements,
-    empty: "No achievements recorded for this staff member yet.",
-    onOpen: () => setRoute({
-      view: 'perfAchievements',
-      emp: row.empId
-    })
-  }), React.createElement(EntryList, {
-    title: "Mistakes and incidents",
-    sub: 'Cap is ' + capsOf(perf).penalty + ' points per cycle',
-    tone: "#d23a52",
-    tint: "red",
-    icon: I.alert || I.pulse,
-    negative: true,
-    rows: row.incidents,
-    empty: "Clean record for this cycle \u2014 no error, lapse or disciplinary entry on file.",
-    onOpen: () => setRoute({
-      view: 'perfIncidents',
-      emp: row.empId
-    })
-  })))));
-}
-function EntryList({
-  title,
-  sub,
-  rows,
-  empty,
-  tone,
-  tint,
-  icon,
-  negative,
-  onOpen
-}) {
-  return React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-h",
-    style: {
-      display: 'flex',
-      gap: 10,
-      alignItems: 'center'
-    }
-  }, React.createElement("div", {
-    style: MK.iconBadge(tint || 'slate', 30)
-  }, React.createElement(Ic, {
-    d: icon || I.doc,
-    s: 15
-  })), React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }, React.createElement("h3", null, title), React.createElement("div", {
-    className: "sub"
-  }, sub)), React.createElement("button", {
-    className: "btn",
-    onClick: onOpen
-  }, "Open register \u203A")), React.createElement("div", {
-    className: "card-b"
-  }, rows.length === 0 ? React.createElement("div", {
-    className: "sub",
-    style: {
-      padding: '14px 0',
-      textAlign: 'center'
-    }
-  }, empty) : React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 7
-    }
-  }, rows.map(r => React.createElement("div", {
-    key: r.id,
-    style: {
-      display: 'flex',
-      gap: 9,
-      alignItems: 'flex-start',
-      paddingBottom: 7,
-      borderBottom: '1px solid var(--line,#eef2f7)'
-    }
-  }, React.createElement("span", {
-    className: "tag num",
-    style: {
-      color: tone,
-      borderColor: tone + '55',
-      background: tone + '14'
-    }
-  }, negative ? '−' : '+', r.points), React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 0
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 12.2,
-      fontWeight: 600
-    }
-  }, r.what), React.createElement("div", {
-    className: "sub",
-    style: {
-      fontSize: 11
-    }
-  }, r.category, r.level ? ' · ' + r.level : '', r.severity ? ' · ' + r.severity : '', " \xB7 ", r.date)))))));
-}
-function Trend({
-  points
-}) {
-  if (!points.length) return null;
-  const w = 320,
-    h = 130,
-    pad = 24;
-  const max = 100,
-    min = Math.max(0, Math.min(...points.map(p => p.v)) - 10);
-  const x = i => pad + (points.length === 1 ? (w - pad * 2) / 2 : i * (w - pad * 2) / (points.length - 1));
-  const y = v => h - pad - (v - min) / (max - min) * (h - pad * 2);
-  const d = points.map((p, i) => (i ? 'L' : 'M') + x(i) + ' ' + y(p.v)).join(' ');
-  return React.createElement("div", null, React.createElement("svg", {
-    viewBox: '0 0 ' + w + ' ' + h,
-    style: {
-      width: '100%',
-      height: 150
-    }
-  }, [min, Math.round((min + max) / 2), max].map(v => React.createElement("g", {
-    key: v
-  }, React.createElement("line", {
-    x1: pad,
-    x2: w - pad,
-    y1: y(v),
-    y2: y(v),
-    stroke: "rgba(130,150,175,.22)",
-    strokeDasharray: "3 3"
-  }), React.createElement("text", {
-    x: 2,
-    y: y(v) + 3,
-    style: {
-      fontSize: 8,
-      fill: '#8aa0b8'
-    }
-  }, v))), React.createElement("path", {
-    d: d,
-    fill: "none",
-    stroke: "#27a8db",
-    strokeWidth: "2.2",
-    strokeLinecap: "round"
-  }), points.map((p, i) => React.createElement("circle", {
-    key: i,
-    cx: x(i),
-    cy: y(p.v),
-    r: "4",
-    fill: gradeColor(p.grade),
-    stroke: "#fff",
-    strokeWidth: "1.6"
-  }))), React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      fontSize: 10,
-      color: '#8aa0b8',
-      gap: 4
-    }
-  }, points.map((p, i) => React.createElement("span", {
-    key: i,
-    style: {
-      flex: 1,
-      textAlign: 'center'
-    }
-  }, String(p.label).split(' - ')[0]))), points.length > 1 && React.createElement("div", {
-    className: "sub",
-    style: {
-      textAlign: 'center',
-      marginTop: 6,
-      fontSize: 11.5
-    }
-  }, (() => {
-    const d2 = points[points.length - 1].v - points[0].v;
-    return (d2 >= 0 ? '▲ ' : '▼ ') + Math.abs(d2) + ' points since ' + String(points[0].label).split(' - ')[0];
-  })()));
 }
 const ACH_CATEGORIES = A.ACH_CATEGORIES;
 const INC_CATEGORIES = A.INC_CATEGORIES;
@@ -4747,14 +3727,14 @@ function PerfEntryHistory({
   }), React.createElement("button", {
     className: "btn",
     onClick: () => setRoute({
-      view: 'perfStaff',
-      emp: row.empId
+      view: 'staffProfile',
+      emp: row.emp.id
     })
   }, "Full performance record"), isAch ? React.createElement("button", {
     className: "btn",
     disabled: !all.length,
     onClick: () => onCert(all[0])
-  }, "Award certificate") : React.createElement("button", {
+  }, "Award certificate") : perfCan('print') && React.createElement("button", {
     className: "btn",
     onClick: () => window.print()
   }, "Print record")), React.createElement("div", {
@@ -5075,6 +4055,16 @@ function CategoryManager({
       if (r && r.ok) onClose();else setErr(r && r.error || 'That did not save.');
     });
   };
+  const rowStyle = {
+    display: 'flex',
+    gap: 8,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    padding: '8px 10px',
+    borderRadius: 10,
+    background: 'rgba(255,255,255,.55)',
+    border: '1px solid rgba(125,145,180,.18)'
+  };
   return React.createElement(Modal, {
     wide: true,
     title: "Manage categories",
@@ -5091,7 +4081,14 @@ function CategoryManager({
   }, React.createElement("div", {
     style: {
       display: 'grid',
-      gap: 12
+      gap: 9
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
     }
   }, React.createElement("div", {
     style: {
@@ -5099,8 +4096,7 @@ function CategoryManager({
       gap: 2,
       padding: 3,
       borderRadius: 11,
-      background: 'rgba(125,145,180,.14)',
-      justifySelf: 'start'
+      background: 'rgba(125,145,180,.14)'
     }
   }, [['ach', 'Achievements (' + ach.length + ')'], ['inc', 'Incidents (' + inc.length + ')']].map(([k, l]) => React.createElement("button", {
     key: k,
@@ -5118,28 +4114,26 @@ function CategoryManager({
     }
   }, l))), React.createElement("div", {
     style: {
-      fontSize: 11.5,
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn",
+    onClick: add
+  }, "+ Add category")), React.createElement("div", {
+    style: {
+      fontSize: 11,
       color: MK.MUTED,
-      lineHeight: 1.55
+      lineHeight: 1.5
     }
-  }, isAch ? 'Each achievement category carries its own levels, and the level sets the bonus points. Nothing may award more than ' + cap + ' — the per-cycle cap.' : 'Incident categories classify what happened. The points come from the severity chosen when the entry is filed, not from the category.', ' ', "Entries already on file keep the category they were saved with, so editing this list never changes past records."), rows.map((c, i) => React.createElement("div", {
+  }, isAch ? 'A level sets the bonus points; nothing may award more than ' + cap + ', the per-cycle cap.' : 'The points come from the severity chosen when an entry is filed, not from the category.', ' ', "Entries already on file keep the category they were saved with \u2014 editing this list never changes past records."), rows.length === 0 && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: MK.FAINT,
+      padding: '10px 2px'
+    }
+  }, "No categories yet \u2014 add the first one above."), rows.map((c, i) => React.createElement("div", {
     key: i,
-    className: "card",
-    style: {
-      background: 'rgba(255,255,255,.55)'
-    }
-  }, React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'grid',
-      gap: 9
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      alignItems: 'center'
-    }
+    style: rowStyle
   }, React.createElement("input", {
     value: c.label,
     onChange: e => edit(i, {
@@ -5147,75 +4141,67 @@ function CategoryManager({
     }),
     placeholder: "Category name",
     style: {
-      flex: 1,
-      fontWeight: 600
+      width: 188,
+      fontWeight: 600,
+      flexShrink: 0
     }
-  }), React.createElement("button", {
-    className: "icon-btn danger",
-    title: "Remove this category",
-    onClick: () => drop(i)
-  }, "\xD7")), isAch && React.createElement("div", {
-    style: {
-      display: 'grid',
-      gap: 6
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 10,
-      fontWeight: 700,
-      letterSpacing: .5,
-      textTransform: 'uppercase',
-      color: MK.FAINT
-    }
-  }, "Levels & points"), (c.levels || []).map((l, li) => React.createElement("div", {
+  }), isAch && (c.levels || []).map((l, li) => React.createElement("span", {
     key: li,
     style: {
-      display: 'flex',
-      gap: 8,
-      alignItems: 'center'
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+      padding: '2px 2px 2px 4px',
+      borderRadius: 8,
+      background: 'rgba(125,145,180,.10)'
     }
   }, React.createElement("input", {
     value: l[0],
     onChange: e => editLevel(i, li, {
       name: e.target.value
     }),
-    placeholder: "e.g. Hospital",
+    placeholder: "Level",
     style: {
-      flex: 1
+      width: 104
     }
   }), React.createElement("input", {
     type: "number",
     min: "0",
     max: cap,
     value: l[1],
+    title: "Bonus points for this level",
     onChange: e => editLevel(i, li, {
       pts: Math.max(0, Math.min(cap, Number(e.target.value) || 0))
     }),
     style: {
-      width: 74
+      width: 52
     }
-  }), React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: MK.FAINT
-    }
-  }, "pts"), React.createElement("button", {
+  }), React.createElement("button", {
     className: "icon-btn danger",
-    title: "Remove this level",
+    title: 'Remove the "' + (l[0] || 'unnamed') + '" level',
+    style: {
+      width: 22,
+      height: 22
+    },
     onClick: () => dropLevel(i, li)
-  }, "\xD7"))), React.createElement("button", {
+  }, "\xD7"))), isAch && React.createElement("button", {
     className: "btn",
     style: {
-      justifySelf: 'start'
+      padding: '4px 9px',
+      fontSize: 11.5
     },
-    onClick: () => addLevel(i)
-  }, "+ Add a level"))))), React.createElement("button", {
-    className: "btn",
+    onClick: () => addLevel(i),
+    title: "Add a level to this category"
+  }, "+ level"), React.createElement("div", {
     style: {
-      justifySelf: 'start'
-    },
-    onClick: add
-  }, "+ Add ", isAch ? 'an achievement' : 'an incident', " category"), err && React.createElement("div", {
+      flex: 1,
+      minWidth: 0
+    }
+  }), React.createElement("button", {
+    className: "icon-btn danger",
+    title: 'Remove the "' + (c.label || 'unnamed') + '" category',
+    onClick: () => drop(i)
+  }, "\xD7"))), err && React.createElement("div", {
     style: {
       fontSize: 12,
       color: '#d23a52',
@@ -5467,7 +4453,7 @@ function CertificateModal({
     footer: React.createElement(React.Fragment, null, React.createElement("button", {
       className: "btn",
       onClick: onClose
-    }, "Close"), React.createElement("button", {
+    }, "Close"), perfCan('print') && React.createElement("button", {
       className: "btn pri",
       onClick: () => window.print()
     }, "Print certificate"))
@@ -5799,8 +4785,8 @@ function PerfCompare({
       cursor: 'pointer'
     },
     onClick: () => setRoute({
-      view: 'perfStaff',
-      emp: r.empId
+      view: 'staffProfile',
+      emp: r.emp.id
     })
   }, React.createElement("td", {
     className: "num"
@@ -6005,7 +4991,7 @@ function PerfDeptAttrition({
       color: '#d23a52'
     } : null,
     onClick: () => onFlag(u.dept)
-  }, flagged ? 'Flagged for HR review' : 'Flag for HR review'), React.createElement("button", {
+  }, flagged ? 'Flagged for HR review' : 'Flag for HR review'), perfCan('print') && React.createElement("button", {
     className: "btn",
     onClick: () => window.print()
   }, "Print")), React.createElement("div", {
@@ -6159,7 +5145,7 @@ function PerfLeaverRecord({
     style: {
       flex: 1
     }
-  }), React.createElement("button", {
+  }), perfCan('print') && React.createElement("button", {
     className: "btn",
     onClick: () => window.print()
   }, "Print record")), React.createElement("div", {
@@ -6526,6 +5512,65 @@ function PerfSkeleton() {
     }
   }, "Loading performance records\u2026"));
 }
+const PERF_ROLE = {
+  v: 'Nurse'
+};
+function PerfRoleSwitch({
+  role,
+  setRole,
+  all
+}) {
+  const nurses = all.filter(r => !isPcaRow(r)).length;
+  const counts = {
+    '': all.length,
+    Nurse: nurses,
+    PCA: all.length - nurses
+  };
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: .6,
+      textTransform: 'uppercase',
+      color: MK.FAINT
+    }
+  }, "Showing"), React.createElement("div", {
+    style: {
+      display: 'inline-flex',
+      gap: 2,
+      padding: 3,
+      borderRadius: 11,
+      background: 'rgba(125,145,180,.14)'
+    }
+  }, [['Nurse', 'Nurses'], ['PCA', 'PCA'], ['', 'All']].map(([v, l]) => React.createElement("button", {
+    key: v,
+    onClick: () => setRole(v),
+    style: {
+      border: 0,
+      cursor: 'pointer',
+      font: 'inherit',
+      fontSize: 11.5,
+      fontWeight: 600,
+      padding: '5px 13px',
+      borderRadius: 9,
+      color: role === v ? MK.INK : MK.MUTED,
+      background: role === v ? '#fff' : 'transparent',
+      boxShadow: role === v ? '0 1px 2px rgba(20,32,46,.07)' : 'none'
+    }
+  }, l, " ", React.createElement("span", {
+    className: "num",
+    style: {
+      opacity: .65
+    }
+  }, counts[v])))));
+}
 function PerformanceView({
   view,
   emp,
@@ -6534,27 +5579,45 @@ function PerformanceView({
 }) {
   const staffStore = window.useStaffStore();
   const perf = usePerfStore();
-  const roster = useRoster(staffStore, perf);
-  if (perf.loading) return React.createElement(PerfSkeleton, null);
-  if (perf.error) {
-    return React.createElement(Empty, {
-      icon: I.alert || I.pulse,
-      title: "Could not load performance records",
-      sub: perf.error,
-      action: React.createElement("button", {
-        className: "btn pri",
-        onClick: perf.reload
-      }, "Try again")
+  const full = useRoster(staffStore, perf);
+  const [role, setRoleState] = useState(PERF_ROLE.v);
+  const setRole = v => {
+    PERF_ROLE.v = v;
+    setRoleState(v);
+  };
+  const scoped = view === 'perfForm' || view === 'perfPrint';
+  const roster = useMemo(() => {
+    if (scoped || !role) return full;
+    const rows = full.rows.filter(r => (isPcaRow(r) ? 'PCA' : 'Nurse') === role);
+    const byEmp = {};
+    rows.forEach(r => {
+      byEmp[r.empId] = r;
     });
-  }
+    return {
+      rows,
+      byEmp
+    };
+  }, [full, role, scoped]);
+  const store = useMemo(() => {
+    if (scoped || !role) return staffStore;
+    return Object.assign({}, staffStore, {
+      staff: (staffStore.staff || []).filter(e => roleOf(e) === role)
+    });
+  }, [staffStore, role, scoped]);
   const inner = (() => {
+    if (perf.loading) return React.createElement(PerfSkeleton, null);
+    if (perf.error) {
+      return React.createElement(Empty, {
+        icon: I.alert || I.pulse,
+        title: "Could not load performance records",
+        sub: perf.error,
+        action: React.createElement("button", {
+          className: "btn pri",
+          onClick: perf.reload
+        }, "Try again")
+      });
+    }
     switch (view) {
-      case 'perfDirectory':
-        return React.createElement(PerfDirectory, {
-          roster: roster,
-          staffStore: staffStore,
-          setRoute: setRoute
-        });
       case 'perfForm':
         return React.createElement(PerfForm, {
           roster: roster,
@@ -6567,13 +5630,6 @@ function PerformanceView({
           roster: roster,
           empId: emp,
           cycleId: cycleId,
-          setRoute: setRoute
-        });
-      case 'perfStaff':
-        return React.createElement(PerfStaffRecord, {
-          roster: roster,
-          perf: perf,
-          empId: emp,
           setRoute: setRoute
         });
       case 'perfAchievements':
@@ -6603,7 +5659,7 @@ function PerformanceView({
         return React.createElement(PerfAttritionRoute, {
           roster: roster,
           perf: perf,
-          staffStore: staffStore,
+          staffStore: store,
           setRoute: setRoute
         });
       case 'perfRisk':
@@ -6616,7 +5672,7 @@ function PerformanceView({
           return C ? React.createElement(C, {
             roster: roster,
             perf: perf,
-            staffStore: staffStore,
+            staffStore: store,
             setRoute: setRoute
           }) : null;
         }
@@ -6624,13 +5680,24 @@ function PerformanceView({
         return React.createElement(PerfDashboard, {
           roster: roster,
           perf: perf,
-          setRoute: setRoute
+          setRoute: setRoute,
+          role: role
         });
     }
   })();
+  const showRole = !scoped && !perf.loading && !perf.error;
   return React.createElement("div", {
-    className: "mk-scope"
-  }, inner);
+    className: "mk-scope",
+    style: showRole ? {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    } : null
+  }, showRole && React.createElement(PerfRoleSwitch, {
+    role: role,
+    setRole: setRole,
+    all: full.rows
+  }), inner);
 }
 window.PerformanceView = PerformanceView;
 function PerfBands({
@@ -6651,23 +5718,7 @@ function PerfBands({
   const org = A.orgCycle(new Date());
   const rows = useMemo(() => {
     const now = new Date();
-    return (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (!role || (e.role || 'Nurse') === role)).map(e => {
-      const empId = e.emp_id || String(e.id);
-      const cyc = A.cycleOf(e.doj, now);
-      const apr = data ? (data.appraisals || []).find(x => x.empId === empId && cyc && x.cycleId === cyc.id) : null;
-      const firstDue = e.doj ? A.addMonths(A.parseDate(e.doj) || now, 6) : null;
-      const lastClosed = e.doj ? (A.cyclesSince(e.doj, now, 1) || [])[0] : null;
-      const all = data && data.appraisals || [];
-      const missedClosed = !!(lastClosed && !all.some(x => x.empId === empId && x.cycleId === lastClosed.id));
-      return {
-        empId,
-        cycle: cyc,
-        apr,
-        status: apr ? apr.status : 'none',
-        overdue: missedClosed,
-        newJoinerDue: !!(firstDue && firstDue <= now && !all.some(x => x.empId === empId))
-      };
-    });
+    return (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (!role || (e.role || 'Nurse') === role)).map(e => A.standing(e, data && data.appraisals || [], now));
   }, [staffStore.staff, data, role]);
   if (!data) return null;
   const ach = data.achievements || [],
@@ -6854,9 +5905,11 @@ window.PerfUI = {
   Modal,
   GradePill,
   StatusChip,
-  Trend,
   QuickCard,
-  EntryList,
+  PerfRoleSwitch,
+  PerfDashboard,
+  isPcaRow,
+  roleOf,
   initials,
   pct,
   gradeColor,
@@ -7192,7 +6245,7 @@ function PerfAttrition({
     onClick: () => setRoute({
       view: 'perfRisk'
     })
-  }, "Retention risk"), React.createElement("button", {
+  }, "Retention risk"), perfCan('print') && React.createElement("button", {
     className: "btn",
     onClick: () => window.print()
   }, "PDF"), perfCan('add') && React.createElement("button", {
@@ -8660,7 +7713,7 @@ function PerfBoard({
     onClick: () => setRoute({
       view: 'perfAchievements'
     })
-  }, "Achievement register"), React.createElement("button", {
+  }, "Achievement register"), perfCan('print') && React.createElement("button", {
     className: "btn",
     onClick: () => window.print()
   }, "Print for notice board")), React.createElement("div", {

@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=42993845c3","reports":"/dist/reports.chunk.js?v=a80869c1b7","quality":"/dist/quality.chunk.js?v=1e13271f23","datacollection":"/dist/datacollection.chunk.js?v=c86cef96bb","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=292b7cbebc","roster":"/dist/roster.chunk.js?v=5939783407","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=f1a9dd1019"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=0608404d2f","reports":"/dist/reports.chunk.js?v=9e4c428dd2","quality":"/dist/quality.chunk.js?v=1e13271f23","datacollection":"/dist/datacollection.chunk.js?v=c820cd982d","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7161,6 +7161,56 @@ window.QI_CORRECTIONS_BY_DEFID = {
     };
   }
 
+  /* ONE PERSON'S APPRAISAL STANDING — which window they are in, which form counts as
+     theirs, what has been filed against them, and whether a closed window went by
+     unappraised.
+
+     It lives in the spec because THREE screens now ask the same question and must give
+     the same answer: the Performance module's roster, the Appraisal column on the
+     Nurse / PCA directory, and the performance section of the staff record. Three
+     copies of this arithmetic drift the moment one of them is corrected, and a
+     directory reading "overdue" beside a module reading "due" is worse than no column
+     at all.
+
+     `appraisals` is the WHOLE register — it is filtered here on the employee key, so
+     no caller has to know that a form is filed under `emp_id || String(id)`. */
+  function standing(emp, appraisals, at) {
+    var now = parseDate(at) || new Date();
+    var empId = emp ? (emp.emp_id || String(emp.id)) : '';
+    var doj = emp && emp.doj;
+    var mine = (appraisals || []).filter(function (x) { return x && String(x.empId) === String(empId); });
+    var cyc = cycleOf(doj, now);
+    var current = mine.filter(function (x) { return cyc && x.cycleId === cyc.id; })[0] || null;
+    // A form still open from an EARLIER window stays this person's appraisal until it
+    // is filed. Matching only the current window made a completed form awaiting Part H
+    // vanish from the queue the day the next window opened — so it could never be
+    // actioned. An abandoned old DRAFT does not hide the current window's form.
+    var earlier = mine.filter(function (x) { return x.status !== 'actioned' && !(cyc && x.cycleId === cyc.id); })
+      .sort(function (a, b) { return String(b.cycleStart).localeCompare(String(a.cycleStart)); })[0] || null;
+    var appraisal = (earlier && earlier.status !== 'draft') ? earlier : (current || earlier);
+    var history = mine.filter(function (x) { return x.status === 'actioned'; })
+      .sort(function (a, b) { return String(b.cycleStart).localeCompare(String(a.cycleStart)); });
+    var firstDue = doj ? addMonths(parseDate(doj) || now, 6) : null;
+    var neverAppraised = history.length === 0;
+    /* OVERDUE = a window that has already CLOSED with nothing filed against it.
+
+       cycleOf() only ever returns the window CONTAINING today, whose due date is by
+       definition still in the future — so testing that one can never be true. The
+       closed windows come from cyclesSince(), newest first. Testing the open window
+       instead would flag the whole roster the morning a new cycle starts. */
+    var lastClosed = doj ? (cyclesSince(doj, now, 1) || [])[0] : null;
+    var missedClosed = !!(lastClosed && !mine.some(function (x) { return x.cycleId === lastClosed.id; }));
+    return {
+      empId: empId, cycle: cyc, appraisal: appraisal, status: appraisal ? appraisal.status : 'none',
+      mine: mine, history: history, last: history[0] || null,
+      firstDue: firstDue, neverAppraised: neverAppraised, lastClosed: lastClosed,
+      overdue: missedClosed,
+      // Never appraised AND past their first six months: the new-joiner reminder,
+      // which is a different question from "a window closed unappraised".
+      newJoinerDue: !!(neverAppraised && firstDue && firstDue <= now),
+    };
+  }
+
   /* WHAT AN ACHIEVEMENT OR AN INCIDENT CAN BE, and what each is worth. These live in
      the shared spec rather than in the Performance module because the staff profile
      records conduct against a person too (Recognition & conduct) — two copies of this
@@ -7218,6 +7268,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     cycleOf: cycleOf,
     cyclesSince: cyclesSince,
     orgCycle: orgCycle,
+    standing: standing,
     finalScore: finalScore,
     addMonths: addMonths,
     parseDate: parseDate,
@@ -9669,7 +9720,7 @@ const UNICO_MODULE_VIEWS = {
   supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport'],
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
   users: ['users'],
-  perf: ['perfHome', 'perfDirectory', 'perfForm', 'perfPrint', 'perfStaff', 'perfAchievements', 'perfIncidents', 'perfCompare', 'perfAttrition', 'perfRisk', 'perfBoard'],
+  perf: ['perfHome', 'perfForm', 'perfPrint', 'perfAchievements', 'perfIncidents', 'perfCompare', 'perfAttrition', 'perfRisk', 'perfBoard'],
   roster: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint', 'rosterFullReview', 'manpower'],
   medicine: ['medHome', 'medInfo', 'medBrowse', 'medBrand', 'medGeneric', 'medRxNew', 'medRxList', 'medRxPrint', 'medTemplates', 'medCatalog', 'medInteractions', 'medCalc', 'medAnalytics']
 };
@@ -9712,6 +9763,7 @@ function unicoCan(mid, action) {
     if (action === 'view') return val.length > 0;
     return val.indexOf(action) >= 0;
   }
+  if (action === 'print') return false;
   return (UNICO_PERM_RANK[val || 'none'] || 0) >= (UNICO_PERM_RANK[action] || UNICO_PERM_RANK.view);
 }
 function unicoCanAccessModule(mid) {
@@ -9800,34 +9852,34 @@ function unicoSidebarGroups(moduleId) {
     }]
   }];
   if (moduleId === 'staff') return [{
-    sec: 'Nurse Management',
+    sec: 'Staff Management',
     items: [{
       id: 'nurseHome',
       label: 'Dashboard',
-      icon: I.grid
+      icon: I.grid,
+      match: ['nurseHome', 'pcaHome']
     }, {
       id: 'nurses',
       label: 'Directory',
-      icon: I.layers
+      icon: I.layers,
+      match: ['nurses', 'pca']
     }, {
       id: 'nurseCompliance',
       label: 'Compliance',
-      icon: I.heart
-    }]
-  }, {
-    sec: 'PCA Management',
-    items: [{
-      id: 'pcaHome',
-      label: 'Dashboard',
+      icon: I.heart,
+      match: ['nurseCompliance', 'pcaCompliance']
+    }, {
+      id: 'staffPrevious',
+      label: 'Previous Staff',
+      icon: I.doc
+    }, {
+      id: 'perfHome',
+      label: 'Performance',
+      icon: I.trend
+    }, {
+      id: 'rosterHome',
+      label: 'Duty Roster',
       icon: I.grid
-    }, {
-      id: 'pca',
-      label: 'Directory',
-      icon: I.layers
-    }, {
-      id: 'pcaCompliance',
-      label: 'Compliance',
-      icon: I.heart
     }]
   }];
   if (moduleId === 'quality') return [{
@@ -10073,31 +10125,12 @@ const UNICO_WS = [{
 }, {
   sec: 'Administer',
   items: [{
-    id: 'nurses',
-    label: 'Nurse Management',
+    id: 'staff',
+    label: 'Staff Management',
     icon: I.steth,
     home: 'nurseHome',
-    on: v => ['nurseHome', 'nurses', 'nurseCompliance', 'staffPrevious', 'staffProfile', 'staffForm'].indexOf(v) >= 0
-  }, {
-    id: 'pca',
-    label: 'PCA Management',
-    icon: I.bed,
-    home: 'pcaHome',
-    on: v => ['pcaHome', 'pca', 'pcaCompliance'].indexOf(v) >= 0
-  }, {
-    id: 'perf',
-    label: 'Performance',
-    icon: I.doc,
-    home: 'perfHome',
-    on: v => unicoModuleOf(v) === 'perf',
-    tag: 'NEW'
-  }, {
-    id: 'roster',
-    label: 'Duty Roster',
-    icon: I.grid,
-    home: 'rosterHome',
-    on: v => unicoModuleOf(v) === 'roster',
-    tag: 'NEW'
+    mods: ['staff', 'perf', 'roster'],
+    on: v => ['staff', 'perf', 'roster'].indexOf(unicoModuleOf(v)) >= 0
   }, {
     id: 'settings',
     label: 'Settings',
@@ -10106,6 +10139,67 @@ const UNICO_WS = [{
     on: v => v === 'settings' || unicoModuleOf(v) === 'users'
   }]
 }];
+const UNICO_VIEW_TABS = [{
+  mod: 'perf',
+  hide: ['perfForm', 'perfPrint'],
+  parent: {
+    perfRisk: 'perfAttrition'
+  },
+  tabs: [['perfHome', 'Overview'], ['perfAchievements', 'Achievements'], ['perfIncidents', 'Incidents'], ['perfBoard', 'Recognition'], ['perfAttrition', 'Attrition & Exits'], ['perfCompare', 'By Department']]
+}, {
+  mod: 'roster',
+  hide: ['rosterPrint'],
+  parent: {
+    rosterGrid: 'rosterHome',
+    rosterReview: 'rosterHome'
+  },
+  tabs: [['rosterHome', 'Rosters'], ['manpower', 'Manpower'], ['rosterFullReview', 'Full Review']]
+}];
+function unicoViewTabs(view) {
+  for (let i = 0; i < UNICO_VIEW_TABS.length; i++) {
+    const g = UNICO_VIEW_TABS[i];
+    if (unicoModuleOf(view) !== g.mod) continue;
+    if ((g.hide || []).indexOf(view) >= 0) return null;
+    return {
+      cur: g.parent && g.parent[view] || view,
+      tabs: g.tabs
+    };
+  }
+  return null;
+}
+function ViewTabs({
+  view,
+  setRoute
+}) {
+  const g = unicoViewTabs(view);
+  if (!g) return null;
+  return React.createElement("div", {
+    className: "seg",
+    style: {
+      alignSelf: 'flex-start',
+      maxWidth: '100%',
+      flexWrap: 'wrap',
+      marginBottom: 12
+    }
+  }, g.tabs.map(([v, label]) => React.createElement("button", {
+    key: v,
+    className: g.cur === v ? 'on' : '',
+    onClick: () => {
+      if (g.cur !== v) setRoute({
+        view: v
+      });
+    }
+  }, label)));
+}
+function wsHome(it) {
+  if (!it.mods) return it.home;
+  if (unicoCanAccessModule(unicoAccessModuleOf(it.home))) return it.home;
+  for (let i = 0; i < it.mods.length; i++) {
+    const h = UNICO_MODULE_VIEWS[it.mods[i]] && UNICO_MODULE_VIEWS[it.mods[i]][0];
+    if (h && unicoCanAccessModule(it.mods[i])) return h;
+  }
+  return it.home;
+}
 function unicoWorkspaceSub(view) {
   const mod = unicoModuleOf(view);
   if (view === 'home') return [];
@@ -10151,37 +10245,36 @@ function unicoWorkspaceSub(view) {
     label: 'Generate Report',
     view: 'supReport'
   }];
-  if (mod === 'perf') return [{
-    label: 'Staff Directory',
-    view: 'perfDirectory',
-    match: ['perfDirectory', 'perfForm', 'perfPrint', 'perfStaff']
+  if (mod === 'staff' || mod === 'perf' || mod === 'roster') return [{
+    label: 'Dashboard',
+    view: 'nurseHome',
+    mod: 'staff',
+    match: ['nurseHome', 'pcaHome']
   }, {
-    label: 'Achievements',
-    view: 'perfAchievements'
+    label: 'Directory',
+    view: 'nurses',
+    mod: 'staff',
+    match: ['nurses', 'pca']
   }, {
-    label: 'Incidents',
-    view: 'perfIncidents'
+    label: 'Compliance',
+    view: 'nurseCompliance',
+    mod: 'staff',
+    match: ['nurseCompliance', 'pcaCompliance']
   }, {
-    label: 'Recognition Board',
-    view: 'perfBoard'
+    label: 'Previous Staff',
+    view: 'staffPrevious',
+    mod: 'staff'
   }, {
-    label: 'Attrition & Exits',
-    view: 'perfAttrition',
-    match: ['perfAttrition', 'perfRisk']
+    label: 'Performance',
+    view: 'perfHome',
+    mod: 'perf',
+    divider: true,
+    match: UNICO_MODULE_VIEWS.perf
   }, {
-    label: 'Department Compare',
-    view: 'perfCompare'
-  }];
-  if (mod === 'roster') return [{
-    label: 'All Rosters',
+    label: 'Duty Roster',
     view: 'rosterHome',
-    match: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint']
-  }, {
-    label: 'Manpower Overview',
-    view: 'manpower'
-  }, {
-    label: 'Full Review',
-    view: 'rosterFullReview'
+    mod: 'roster',
+    match: UNICO_MODULE_VIEWS.roster
   }];
   if (mod === 'medicine') return [{
     label: 'Medicine Info',
@@ -10242,34 +10335,6 @@ function unicoWorkspaceSub(view) {
     label: 'Share Links',
     view: 'dcShare'
   }];
-  if (mod === 'staff') {
-    const isPca = ['pcaHome', 'pca', 'pcaCompliance'].indexOf(view) >= 0;
-    return isPca ? [{
-      label: 'Dashboard',
-      view: 'pcaHome'
-    }, {
-      label: 'Directory',
-      view: 'pca'
-    }, {
-      label: 'Compliance',
-      view: 'pcaCompliance'
-    }, {
-      label: 'Previous Staff',
-      view: 'staffPrevious'
-    }] : [{
-      label: 'Dashboard',
-      view: 'nurseHome'
-    }, {
-      label: 'Directory',
-      view: 'nurses'
-    }, {
-      label: 'Compliance',
-      view: 'nurseCompliance'
-    }, {
-      label: 'Previous Staff',
-      view: 'staffPrevious'
-    }];
-  }
   return [];
 }
 function MyAccount({
@@ -10591,7 +10656,7 @@ function Sidebar({
   }, []);
   const qBadge = React.useMemo(() => window.UNICO_Q ? unicoQualityBreachCount() : 0, [chunkTick]);
   const supBadge = React.useMemo(() => unicoSupAlertCount(), [view, chunkTick]);
-  const sub = unicoWorkspaceSub(view);
+  const sub = unicoWorkspaceSub(view).filter(s => !s.mod || unicoCanAccessModule(s.mod));
   const subOn = s => s.match ? s.match.indexOf(view) >= 0 : view === s.view;
   return React.createElement("aside", {
     className: "sb"
@@ -10608,7 +10673,7 @@ function Sidebar({
   })), React.createElement("div", {
     className: "sb-scroll"
   }, UNICO_WS.map((g, gi) => {
-    const items = g.items.filter(it => it.always || unicoCanAccessModule(unicoAccessModuleOf(it.home)));
+    const items = g.items.filter(it => it.always || (it.mods ? it.mods.some(m => unicoCanAccessModule(m)) : unicoCanAccessModule(unicoAccessModuleOf(it.home))));
     if (!items.length) return null;
     return React.createElement(React.Fragment, {
       key: gi
@@ -10623,7 +10688,7 @@ function Sidebar({
       }, React.createElement("div", {
         className: 'sb-item' + (active ? ' active' : ''),
         onClick: () => setRoute({
-          view: it.home
+          view: wsHome(it)
         }),
         title: it.label
       }, React.createElement(Ic, {
@@ -10647,12 +10712,17 @@ function Sidebar({
         className: "badge alert num"
       }, badge)), active && sub.length > 0 && React.createElement("div", {
         className: "sb-sub"
-      }, sub.map(s => React.createElement("div", {
+      }, sub.map((s, si) => React.createElement("div", {
         key: s.view,
         className: 'sb-sub-item' + (subOn(s) ? ' active' : ''),
         onClick: () => setRoute({
           view: s.view
-        })
+        }),
+        style: s.divider && si > 0 ? {
+          marginTop: 7,
+          paddingTop: 9,
+          borderTop: '1px solid rgba(255,255,255,.10)'
+        } : null
       }, React.createElement("span", {
         className: "dot"
       }), React.createElement("span", {
@@ -11175,14 +11245,22 @@ function TopBar({
   }, React.createElement(Ic, {
     d: I.input,
     s: 14
-  }), "Enter ", monthFull(currentKey), " data")))), React.createElement("button", {
-    className: "tb-icon",
-    title: "Print",
-    onClick: () => window.print()
-  }, React.createElement(Ic, {
-    d: I.print,
-    s: 17
-  })), window.unicoLock && window.unicoLock.isEnabled() && React.createElement("button", {
+  }), "Enter ", monthFull(currentKey), " data")))), (() => {
+    let ok = true;
+    try {
+      ok = !window.unicoCan || window.unicoCan(window.unicoAccessModuleOf ? window.unicoAccessModuleOf(route && route.view) : 'stats', 'print');
+    } catch (e) {
+      ok = true;
+    }
+    return ok ? React.createElement("button", {
+      className: "tb-icon",
+      title: "Print",
+      onClick: () => window.print()
+    }, React.createElement(Ic, {
+      d: I.print,
+      s: 17
+    })) : null;
+  })(), window.unicoLock && window.unicoLock.isEnabled() && React.createElement("button", {
     className: "tb-icon",
     title: "Lock now",
     onClick: () => window.dispatchEvent(new Event('unico:lock'))
@@ -11269,6 +11347,8 @@ Object.assign(window, {
   Delta,
   SectionTitle,
   ModuleSwitch,
+  ViewTabs,
+  unicoViewTabs,
   unicoModuleOf,
   UNICO_ACCESS_MODULES,
   unicoAccessModuleOf,
@@ -12544,148 +12624,6 @@ Object.assign(window, {
       d: I.check,
       s: 14
     }), busy ? 'Saving…' : 'Save changes')))), React.createElement("div", {
-      className: "card"
-    }, React.createElement("div", {
-      className: "card-h"
-    }, React.createElement("h3", null, "Access"), React.createElement("span", {
-      className: "sub"
-    }, "what this account can open")), React.createElement("div", {
-      className: "card-b",
-      style: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12
-      }
-    }, access.unrestricted ? React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 11,
-        padding: '10px 12px',
-        borderRadius: 9,
-        background: 'var(--blue-50)',
-        border: '1px solid var(--blue-100)'
-      }
-    }, React.createElement(Ic, {
-      d: I.check,
-      s: 17,
-      c: "var(--blue-700)"
-    }), React.createElement("div", null, React.createElement("div", {
-      style: {
-        fontSize: 13,
-        fontWeight: 700,
-        color: 'var(--ink)'
-      }
-    }, "Full access"), React.createElement("div", {
-      style: {
-        fontSize: 11.5,
-        color: 'var(--muted)'
-      }
-    }, "Every workspace, every action."))) : access.rows.length === 0 ? React.createElement("div", {
-      style: {
-        fontSize: 12.5,
-        color: 'var(--muted)'
-      }
-    }, "No workspaces are assigned to this account yet. An administrator grants them from Settings \u2192 Users & Roles.") : React.createElement("div", null, access.rows.map(r => React.createElement("div", {
-      key: r.id,
-      className: "wsrow"
-    }, React.createElement("span", {
-      style: {
-        fontSize: 12.5,
-        fontWeight: 600,
-        color: 'var(--ink)',
-        flex: 1,
-        minWidth: 0
-      }
-    }, r.label), React.createElement("span", {
-      style: {
-        display: 'flex',
-        gap: 5,
-        flexWrap: 'wrap',
-        justifyContent: 'flex-end'
-      }
-    }, r.actions.map(a => React.createElement("span", {
-      key: a,
-      style: Object.assign({}, mono, {
-        fontSize: 9.5,
-        fontWeight: 700,
-        letterSpacing: '.4px',
-        padding: '2px 7px',
-        borderRadius: 5,
-        color: a === 'delete' ? '#a92c42' : 'var(--blue-700)',
-        background: a === 'delete' ? 'rgba(210,58,82,.10)' : 'var(--blue-50)'
-      })
-    }, ACTION_LABEL[a])))))), React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 18,
-        paddingTop: 2
-      }
-    }, React.createElement("div", {
-      style: {
-        minWidth: 150
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 9.5,
-        textTransform: 'uppercase',
-        letterSpacing: '.7px',
-        color: 'var(--muted)',
-        fontWeight: 700
-      }
-    }, "Staff visible"), React.createElement("div", {
-      style: {
-        fontSize: 12.5,
-        fontWeight: 600,
-        marginTop: 3
-      }
-    }, scopeText)), React.createElement("div", {
-      style: {
-        minWidth: 150,
-        flex: 1
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 9.5,
-        textTransform: 'uppercase',
-        letterSpacing: '.7px',
-        color: 'var(--muted)',
-        fontWeight: 700
-      }
-    }, "Departments"), React.createElement("div", {
-      style: {
-        marginTop: 4,
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 5
-      }
-    }, deptNames.length === 0 ? React.createElement("span", {
-      style: {
-        fontSize: 12.5,
-        fontWeight: 600,
-        color: 'var(--faint)'
-      }
-    }, "Hospital-wide") : deptNames.map(d => React.createElement("span", {
-      key: d,
-      style: {
-        fontSize: 11,
-        fontWeight: 600,
-        padding: '2px 9px',
-        borderRadius: 11,
-        background: 'var(--panel-2)',
-        border: '1px solid var(--line-2)',
-        color: 'var(--ink-2)'
-      }
-    }, d))))), React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: 'var(--faint)',
-        lineHeight: 1.6,
-        borderTop: '1px solid var(--line-2)',
-        paddingTop: 10
-      }
-    }, "Role, workspaces and department scope are set by an administrator. Ask them if anything here is wrong \u2014 this page cannot change them."))), React.createElement("div", {
       className: "card"
     }, React.createElement("div", {
       className: "card-h"
@@ -17903,6 +17841,155 @@ function RoleBadge({
     }
   }, role || 'Nurse');
 }
+function RoleSwitch({
+  role,
+  setRoute,
+  views
+}) {
+  return React.createElement("div", {
+    className: "seg",
+    style: {
+      flexShrink: 0
+    },
+    title: "Nurses or PCA"
+  }, [['Nurse', 'Nurses'], ['PCA', 'PCA']].map(([v, l]) => React.createElement("button", {
+    key: v,
+    className: role === v ? 'on' : '',
+    onClick: () => {
+      if (role !== v) setRoute({
+        view: views[v]
+      });
+    }
+  }, l)));
+}
+const APPR_SHARED = {
+  at: 0,
+  inflight: null,
+  data: null
+};
+function apprCanSee() {
+  try {
+    return window.unicoCan ? window.unicoCan('perf', 'view') : true;
+  } catch (e) {
+    return true;
+  }
+}
+function apprCanEdit() {
+  try {
+    return window.unicoCan ? window.unicoCan('perf', 'edit') : true;
+  } catch (e) {
+    return true;
+  }
+}
+function useStaffAppraisals() {
+  const [, bump] = React.useState(0);
+  React.useEffect(() => {
+    if (!apprCanSee()) return;
+    if (APPR_SHARED.data && Date.now() - APPR_SHARED.at < 30000) return;
+    let live = true;
+    if (!APPR_SHARED.inflight) {
+      APPR_SHARED.inflight = fetch('/api/performance', {
+        credentials: 'same-origin',
+        headers: {
+          accept: 'application/json'
+        }
+      }).then(r => r.json()).then(j => {
+        APPR_SHARED.data = j && j.ok ? j : {
+          appraisals: [],
+          incidents: [],
+          achievements: []
+        };
+        APPR_SHARED.at = Date.now();
+      }).catch(() => {
+        APPR_SHARED.data = {
+          appraisals: [],
+          incidents: [],
+          achievements: []
+        };
+        APPR_SHARED.at = Date.now();
+      }).then(() => {
+        APPR_SHARED.inflight = null;
+      });
+    }
+    APPR_SHARED.inflight.then(() => {
+      if (live) bump(n => n + 1);
+    });
+    return () => {
+      live = false;
+    };
+  });
+  if (!apprCanSee()) return null;
+  return APPR_SHARED.data;
+}
+const APPR_STATUS = {
+  none: {
+    label: 'Not started',
+    c: '#8a93a3'
+  },
+  draft: {
+    label: 'In progress',
+    c: '#e08a1e'
+  },
+  submitted: {
+    label: 'Scored',
+    c: '#0090ca'
+  },
+  discussed: {
+    label: 'Discussed',
+    c: '#6a52d4'
+  },
+  actioned: {
+    label: 'Completed',
+    c: '#1f9d57'
+  }
+};
+function ApprCell({
+  st
+}) {
+  if (!st) return React.createElement("span", {
+    style: {
+      color: 'var(--faint)'
+    }
+  }, "\u2014");
+  const meta = APPR_STATUS[st.status] || APPR_STATUS.none;
+  const c = st.overdue ? '#d23a52' : meta.c;
+  const label = st.overdue && st.status === 'none' ? 'Overdue' : meta.label;
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      fontSize: 11,
+      fontWeight: 600,
+      padding: '2px 9px',
+      borderRadius: 20,
+      color: c,
+      background: c + '1c'
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 6,
+      height: 6,
+      borderRadius: '50%',
+      background: c
+    }
+  }), label), st.last && React.createElement("span", {
+    className: "num",
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: 'var(--ink-2)'
+    },
+    title: 'Last filed: ' + (st.last.cycleLabel || '')
+  }, st.last.grade || '', " ", st.last.score == null ? '' : st.last.score));
+}
 const STAFF_EXPORT_COLS = [['Emp ID', 'emp_id'], ['Name', 'name'], ['Role', 'role'], ['Designation', 'designation'], ['Department', 'current_department'], ['Qualification', 'qualification'], ['DOJ', 'doj'], ['Experience', 'total_experience_text'], ['Special Training', 'special_training'], ['Extracurricular Activities', 'extracurricular'], ['Hep-B Vaccination', 'hepatitis_b_vaccination'], ['Phone', 'phone'], ['Remarks', 'remarks']];
 function esc(v) {
   return ((v == null ? '' : v) + '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -18801,7 +18888,14 @@ function WorkforceDashboard({
     icon: role === 'PCA' ? I.bed : I.steth,
     title: `${role === 'PCA' ? 'PCA' : 'Nurse'} Dashboard`,
     sub: `Live overview of the ${role} roster`,
-    right: React.createElement(React.Fragment, null, React.createElement("button", {
+    right: React.createElement(React.Fragment, null, React.createElement(RoleSwitch, {
+      role: role,
+      setRoute: setRoute,
+      views: {
+        Nurse: 'nurseHome',
+        PCA: 'pcaHome'
+      }
+    }), React.createElement("button", {
       className: "btn sm",
       onClick: () => setShowHi(true),
       style: {
@@ -19805,7 +19899,15 @@ function StaffCompliance({
   }, React.createElement(SectionTitle, {
     icon: I.heart,
     title: `${role === 'PCA' ? 'PCA' : 'Nurse'} Compliance`,
-    sub: `${role} records that need attention — click to open the profile or fix`
+    sub: `${role} records that need attention — click to open the profile or fix`,
+    right: React.createElement(RoleSwitch, {
+      role: role,
+      setRoute: setRoute,
+      views: {
+        Nurse: 'nurseCompliance',
+        PCA: 'pcaCompliance'
+      }
+    })
   }), React.createElement("div", {
     className: "grid",
     style: {
@@ -19869,6 +19971,25 @@ function ManageStaff({
   }, []);
   const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
   const all = store.staff.filter(e => (e.role || 'Nurse') === role);
+  const apprData = useStaffAppraisals();
+  const A_ = window.UNICO_APPRAISAL;
+  const apprOn = !!(apprData && A_ && A_.standing);
+  const standing = React.useMemo(() => {
+    if (!apprOn) return null;
+    const by = {};
+    (apprData.appraisals || []).forEach(x => {
+      const k = String(x && x.empId);
+      (by[k] || (by[k] = [])).push(x);
+    });
+    const now = new Date();
+    const m = {};
+    store.staff.forEach(e => {
+      if ((e.role || 'Nurse') !== role) return;
+      m[e.id] = A_.standing(e, by[String(e.emp_id || e.id)] || [], now);
+    });
+    return m;
+  }, [apprOn, apprData, store.staff, role]);
+  const stOf = e => standing ? standing[e.id] : null;
   const active = all.filter(e => e.is_active);
   const base = all.filter(e => showInactive || e.is_active);
   const now = Date.now();
@@ -19887,6 +20008,16 @@ function ManageStaff({
         return /\bot\b|cath|theatre/i.test(d);
       case 'newhire':
         return e.doj && now - new Date(e.doj) < 220 * 86400000;
+      case 'apprOverdue':
+        {
+          const s = stOf(e);
+          return !!(s && s.overdue);
+        }
+      case 'apprDue':
+        {
+          const s = stOf(e);
+          return !!(s && s.status !== 'actioned');
+        }
       default:
         return true;
     }
@@ -19920,6 +20051,13 @@ function ManageStaff({
         yb = S.expYears(b);
       return (yb == null ? -1 : yb) - (ya == null ? -1 : ya) || (a.name || '').localeCompare(b.name || '');
     }
+    if (sortBy === 'appraisal') {
+      const sa = stOf(a),
+        sb = stOf(b);
+      const va = sa && sa.last ? sa.last.score : -1,
+        vb = sb && sb.last ? sb.last.score : -1;
+      return vb - va || (a.name || '').localeCompare(b.name || '');
+    }
     if (sortBy === 'doj') return (b.doj || '').localeCompare(a.doj || '');
     if (sortBy === 'dept') return (a.current_department || '').localeCompare(b.current_department || '') || (a.name || '').localeCompare(b.name || '');
     return (a.name || '').localeCompare(b.name || '');
@@ -19935,7 +20073,7 @@ function ManageStaff({
     fontFamily: 'inherit',
     background: '#fff'
   };
-  const chips = [['all', 'All'], ['fav', '★ Favorites'], ['missing', '⚠ Missing vaccination'], ['icu', 'ICU staff'], ['emergency', 'Emergency / ER'], ['otcath', 'OT / Cath Lab'], ['newhire', 'New hire']];
+  const chips = [['all', 'All'], ['fav', '★ Favorites'], ['missing', '⚠ Missing vaccination'], ['icu', 'ICU staff'], ['emergency', 'Emergency / ER'], ['otcath', 'OT / Cath Lab'], ['newhire', 'New hire']].concat(apprOn ? [['apprDue', '◷ Appraisal due'], ['apprOverdue', '⚠ Appraisal overdue']] : []);
   const anyFilter = q || dept || desig || vacc || qual || expB || training || chip !== 'all';
   return React.createElement("div", {
     className: "grid",
@@ -19970,6 +20108,13 @@ function ManageStaff({
     className: "spacer",
     style: {
       flex: 1
+    }
+  }), React.createElement(RoleSwitch, {
+    role: role,
+    setRoute: setRoute,
+    views: {
+      Nurse: 'nurses',
+      PCA: 'pca'
     }
   }), React.createElement("button", {
     className: "btn sm",
@@ -20119,7 +20264,9 @@ function ManageStaff({
     value: "doj"
   }, "Sort: Newest hire"), React.createElement("option", {
     value: "dept"
-  }, "Sort: Department")), React.createElement("button", {
+  }, "Sort: Department"), apprOn && React.createElement("option", {
+    value: "appraisal"
+  }, "Sort: Appraisal score")), React.createElement("button", {
     className: "btn pri sm",
     style: {
       opacity: anyFilter ? 1 : .5
@@ -20173,7 +20320,11 @@ function ManageStaff({
     style: {
       textAlign: 'left'
     }
-  }, "Vaccination"), React.createElement("th", {
+  }, "Vaccination"), apprOn && React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Appraisal"), React.createElement("th", {
     style: {
       textAlign: 'left'
     }
@@ -20292,7 +20443,19 @@ function ManageStaff({
       color: vaccColor(e.hepatitis_b_vaccination),
       fontWeight: 600
     }
-  }, e.hepatitis_b_vaccination || 'Unknown')), React.createElement("td", {
+  }, e.hepatitis_b_vaccination || 'Unknown')), apprOn && React.createElement("td", {
+    style: {
+      textAlign: 'left',
+      cursor: 'pointer'
+    },
+    title: "Open the performance record on this profile",
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    })
+  }, React.createElement(ApprCell, {
+    st: stOf(e)
+  })), React.createElement("td", {
     style: {
       textAlign: 'left'
     }
@@ -20306,7 +20469,26 @@ function ManageStaff({
       gap: 6,
       justifyContent: 'flex-end'
     }
-  }, (!window.unicoCan || window.unicoCan('staff', 'edit')) && React.createElement("button", {
+  }, apprOn && apprCanEdit() && (() => {
+    const st = stOf(e);
+    if (!st || !st.cycle) return null;
+    return React.createElement("button", {
+      className: "icon-btn",
+      title: st.appraisal ? 'Continue the ' + (st.appraisal.cycleLabel || 'current') + ' appraisal' : 'Start the ' + st.cycle.label + ' appraisal',
+      onClick: () => setRoute({
+        view: 'perfForm',
+        emp: e.emp_id || String(e.id)
+      }),
+      style: st.overdue ? {
+        color: '#d23a52',
+        background: '#d23a5214',
+        border: '1px solid #d23a5240'
+      } : null
+    }, React.createElement(Ic, {
+      d: I.doc,
+      s: 14
+    }));
+  })(), (!window.unicoCan || window.unicoCan('staff', 'edit')) && React.createElement("button", {
     className: "icon-btn",
     title: "Edit",
     onClick: () => setRoute({
@@ -20557,12 +20739,18 @@ Object.assign(window, {
   Avatar,
   VaccBadge,
   RoleBadge,
+  RoleSwitch,
   vaccColor,
   WorkforceDashboard,
   StaffDirectory,
   StaffCompliance,
   ManageStaff,
-  PreviousStaff
+  PreviousStaff,
+  useStaffAppraisals,
+  ApprCell,
+  APPR_STATUS,
+  apprCanSee,
+  apprCanEdit
 });
 })();
 ;
@@ -23526,7 +23714,7 @@ function App() {
   const store = window.useDeptStore();
   const staff = window.useStaffStore();
   const depts = store.depts;
-  const [route, setRoute] = useState(() => {
+  const [route, setRouteRaw] = useState(() => {
     const init = typeof window !== 'undefined' && window.__UNICO_INITIAL_ROUTE__ || {
       view: 'home'
     };
@@ -23538,6 +23726,28 @@ function App() {
     }
     return init;
   });
+  const staffRef = React.useRef(staff);
+  staffRef.current = staff;
+  const fixRoute = React.useCallback(r => {
+    if (!r || typeof r !== 'object') return r;
+    if (r.view === 'perfDirectory') return Object.assign({}, r, {
+      view: 'nurses'
+    });
+    if (r.view === 'perfStaff') {
+      const list = staffRef.current && staffRef.current.staff || [];
+      const rec = list.find(e => String(e.emp_id || e.id) === String(r.emp)) || list.find(e => String(e.id) === String(r.emp));
+      return rec ? {
+        view: 'staffProfile',
+        emp: rec.id
+      } : {
+        view: r.role === 'PCA' ? 'pca' : 'nurses'
+      };
+    }
+    return r;
+  }, []);
+  const setRoute = React.useCallback(r => {
+    setRouteRaw(typeof r === 'function' ? prev => fixRoute(r(prev)) : fixRoute(r));
+  }, [fixRoute]);
   const [collapsed, setCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 820);
   const [layout, setLayout] = useState('executive');
   const [period, setPeriod] = useState({
@@ -23614,6 +23824,11 @@ function App() {
     };
   }, []);
   useEffect(() => {
+    if (route.view !== 'perfStaff' && route.view !== 'perfDirectory') return;
+    if (!staff.staff || !staff.staff.length) return;
+    setRoute(route);
+  }, [route.view, route.emp, staff.staff.length]);
+  useEffect(() => {
     if (window.unicoCanAccessView && !window.unicoCanAccessView(route.view)) {
       const home = window.unicoFirstAllowedHome && window.unicoFirstAllowedHome();
       if (home && home !== route.view) setRoute({
@@ -23633,7 +23848,7 @@ function App() {
     if (s.indexOf('quality') === 0 || s === 'reportsQuality' || s === 'gallery') return 'quality';
     if (s.indexOf('dc') === 0) return 'datacollection';
     if (s === 'reports' || s === 'settings') return 'reports';
-    if (s === 'staffProfile' || s === 'staffForm') return 'staffprofile';
+    if (s === 'staffProfile' || s === 'staffForm' || s === 'perfStaff') return 'staffprofile';
     if (s.indexOf('perf') === 0) return 'performance';
     if (s.indexOf('roster') === 0) return 'roster';
     if (s.indexOf('sup') === 0) return 'supervisor';
@@ -23883,71 +24098,71 @@ function App() {
       title: "User Management"
     });
   } else if (route.view === 'nurseHome') {
-    crumbs = ['UNICO', 'Nurse Management', 'Dashboard'];
+    crumbs = ['UNICO', 'Staff Management', 'Nurse Dashboard'];
     body = React.createElement(WorkforceDashboard, {
       store: staff,
       setRoute: setRoute,
       role: "Nurse"
     });
   } else if (route.view === 'pcaHome') {
-    crumbs = ['UNICO', 'PCA Management', 'Dashboard'];
+    crumbs = ['UNICO', 'Staff Management', 'PCA Dashboard'];
     body = React.createElement(WorkforceDashboard, {
       store: staff,
       setRoute: setRoute,
       role: "PCA"
     });
   } else if (route.view === 'nurses') {
-    crumbs = ['UNICO', 'Nurse Management', 'Directory'];
+    crumbs = ['UNICO', 'Staff Management', 'Nurses'];
     body = React.createElement(ManageStaff, {
       store: staff,
       setRoute: setRoute,
       role: "Nurse"
     });
   } else if (route.view === 'pca') {
-    crumbs = ['UNICO', 'PCA Management', 'Directory'];
+    crumbs = ['UNICO', 'Staff Management', 'PCA'];
     body = React.createElement(ManageStaff, {
       store: staff,
       setRoute: setRoute,
       role: "PCA"
     });
   } else if (route.view === 'nurseCompliance') {
-    crumbs = ['UNICO', 'Nurse Management', 'Compliance'];
+    crumbs = ['UNICO', 'Staff Management', 'Nurse Compliance'];
     body = React.createElement(StaffCompliance, {
       store: staff,
       setRoute: setRoute,
       role: "Nurse"
     });
   } else if (route.view === 'pcaCompliance') {
-    crumbs = ['UNICO', 'PCA Management', 'Compliance'];
+    crumbs = ['UNICO', 'Staff Management', 'PCA Compliance'];
     body = React.createElement(StaffCompliance, {
       store: staff,
       setRoute: setRoute,
       role: "PCA"
     });
   } else if (route.view === 'staffPrevious') {
-    crumbs = ['UNICO', 'Staff', 'Previous Staff'];
+    crumbs = ['UNICO', 'Staff Management', 'Previous Staff'];
     body = React.createElement(PreviousStaff, {
       store: staff,
       setRoute: setRoute
     });
   } else if (route.view === 'manpower' && typeof window !== 'undefined' && window.ManpowerOverview) {
-    crumbs = ['UNICO', 'Duty Roster', 'Manpower Overview'];
+    crumbs = ['UNICO', 'Staff Management', 'Manpower Overview'];
     body = React.createElement(window.ManpowerOverview, {
       setRoute: setRoute
     });
   } else if (route.view === 'rosterFullReview' && typeof window !== 'undefined' && window.RosterReviewFull) {
-    crumbs = ['UNICO', 'Duty Roster', 'Full Review'];
+    crumbs = ['UNICO', 'Staff Management', 'Roster Full Review'];
     body = React.createElement(window.RosterReviewFull, {
       setRoute: setRoute
     });
   } else if (route.view && route.view.indexOf('roster') === 0 && typeof RosterView !== 'undefined') {
     const RV_TITLE = {
-      rosterHome: 'All Rosters',
+      rosterHome: 'Duty Roster',
       rosterGrid: 'Monthly Grid',
       rosterReview: 'Coverage & Rules',
       rosterPrint: 'Print Sheet'
     };
-    crumbs = ['UNICO', 'Duty Roster', RV_TITLE[route.view] || 'All Rosters'];
+    crumbs = ['UNICO', 'Staff Management', RV_TITLE[route.view] || 'Duty Roster'];
     body = React.createElement(RosterView, {
       view: route.view,
       dept: route.dept,
@@ -23976,13 +24191,22 @@ function App() {
       q: route.q,
       setRoute: setRoute
     });
+  } else if (route.view === 'perfStaff' || route.view === 'perfDirectory') {
+    crumbs = ['UNICO', 'Staff Management'];
+    body = React.createElement("div", {
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        height: '50vh',
+        color: 'var(--muted)',
+        fontSize: 13
+      }
+    }, "Opening the staff record\u2026");
   } else if (route.view && route.view.indexOf('perf') === 0 && typeof PerformanceView !== 'undefined') {
     const PV_TITLE = {
-      perfHome: 'Dashboard',
-      perfDirectory: 'Staff Directory',
+      perfHome: 'Performance',
       perfForm: 'Appraisal Form',
       perfPrint: 'Printable Form',
-      perfStaff: 'Performance Record',
       perfAchievements: 'Achievements',
       perfIncidents: 'Incidents',
       perfCompare: 'Department Comparison',
@@ -23990,7 +24214,7 @@ function App() {
       perfRisk: 'Retention Risk',
       perfBoard: 'Recognition Board'
     };
-    crumbs = ['UNICO', 'Performance', PV_TITLE[route.view] || 'Dashboard'];
+    crumbs = ['UNICO', 'Staff Management', PV_TITLE[route.view] || 'Performance'];
     body = React.createElement(PerformanceView, {
       view: route.view,
       emp: route.emp,
@@ -23999,14 +24223,14 @@ function App() {
     });
   } else if (route.view === 'staffProfile') {
     const emp = staff.get(route.emp);
-    crumbs = ['UNICO', 'Staff', emp ? emp.name : 'Profile'];
+    crumbs = ['UNICO', 'Staff Management', emp ? emp.name : 'Profile'];
     body = React.createElement(StaffProfile, {
       store: staff,
       empId: route.emp,
       setRoute: setRoute
     });
   } else if (route.view === 'staffForm') {
-    crumbs = ['UNICO', 'Staff', route.emp ? 'Edit Staff' : `Add ${route.role || 'Staff'}`];
+    crumbs = ['UNICO', 'Staff Management', route.emp ? 'Edit Staff' : `Add ${route.role || 'Staff'}`];
     body = React.createElement(StaffForm, {
       store: staff,
       empId: route.emp,
@@ -24086,7 +24310,10 @@ function App() {
   }), React.createElement("div", {
     className: "content",
     key: route.view + (route.dept || '') + (route.emp || '') + layout
-  }, body)));
+  }, typeof ViewTabs !== 'undefined' && React.createElement(ViewTabs, {
+    view: route.view,
+    setRoute: setRoute
+  }), body)));
 }
 function ModuleLoading({
   failed,

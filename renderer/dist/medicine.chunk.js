@@ -3162,7 +3162,7 @@ function MedGeneric({
         sub: g.drugClass
       },
       fav: fav
-    }), React.createElement("button", {
+    }), medCan('print') && React.createElement("button", {
       style: MK.btnGhost,
       onClick: () => window.print()
     }, React.createElement(Ic, {
@@ -4831,7 +4831,7 @@ function MedRxPrint({
     onClick: () => setRoute({
       view: 'medRxList'
     })
-  }, "\u2190 Prescriptions"), React.createElement("button", {
+  }, "\u2190 Prescriptions"), medCan('print') && React.createElement("button", {
     style: MK.btnPri,
     onClick: () => window.print()
   }, React.createElement(Ic, {

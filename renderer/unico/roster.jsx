@@ -34,7 +34,39 @@ const rosApi = {
 };
 const rosToast = (m, t) => { try { window.UI && window.UI.toast && window.UI.toast(m, t || 'success'); } catch (e) {} };
 const rosCan = (a) => { try { return window.unicoCan ? window.unicoCan('roster', a) : true; } catch (e) { return true; } };
-const rosIsAdmin = () => { try { const u = window.__UNICO_USER__; return !u || u.role === 'Administrator'; } catch (e) { return true; } };
+// Publishing (approve-and-lock) and reopening are the roster's most privileged actions, so
+// they follow its top PERMISSION rather than the backend role -- a Chief of Nursing Services
+// granted full Duty Roster access signs off her own rosters. Mirrors the same test in
+// server/duty-roster.js; unicoCan returns true for administrators and open local mode.
+const rosMayApprove = () => { try { return window.unicoCan ? window.unicoCan('roster', 'delete') : true; } catch (e) { return true; } };
+
+/* ---- WHO SIGNS ----
+   The three sign-off boxes used to name job titles in the markup ("CNS", "Chief of
+   Nursing Services"), which meant the roster carried its own idea of the hierarchy and
+   could not follow the hospital when it renamed a tier. Each box now asks the LADDER:
+   the tier marked "Prepares" drafts, the one marked "Checks" reviews, the one marked
+   "Approves" signs. Settings → Users & Roles → Hierarchy is where those marks live.
+   Names + titles only (/api/signatories), so a ward in-charge filling the boxes in does
+   not need Administration rights. */
+let ROS_SIGNERS = null, ROS_SIGNERS_REQ = null;
+function rosLoadSigners() {
+  if (ROS_SIGNERS) return Promise.resolve(ROS_SIGNERS);
+  if (ROS_SIGNERS_REQ) return ROS_SIGNERS_REQ;
+  ROS_SIGNERS_REQ = fetch('/api/signatories', { credentials: 'same-origin' })
+    .then((r) => r.json())
+    .then((j) => { ROS_SIGNERS = (j && j.ok) ? j : { signatories: [], tiers: [] }; ROS_SIGNERS_REQ = null; return ROS_SIGNERS; })
+    // Unreachable (or not permitted): fall back to the open list below, never an empty box.
+    .catch(() => { ROS_SIGNERS = { signatories: [], tiers: [] }; ROS_SIGNERS_REQ = null; return ROS_SIGNERS; });
+  return ROS_SIGNERS_REQ;
+}
+function useRosSigners() {
+  const [v, setV] = React.useState(ROS_SIGNERS);
+  React.useEffect(() => { let live = true; rosLoadSigners().then((x) => { if (live) setV(x); }); return () => { live = false; }; }, []);
+  return v || ROS_SIGNERS || { signatories: [], tiers: [] };
+}
+// The tier that holds a given place in the chain, and the people at it.
+const rosTierFor = (sg, role) => (sg.tiers || []).find((t) => t.signoff === role) || null;
+const rosNamesFor = (sg, role) => (sg.signatories || []).filter((u) => u.signoff === role).map((u) => u.name);
 
 const ROS_STATUS = {
   draft: { label: 'Draft', color: '#e0a12a' },
@@ -251,6 +283,59 @@ function useRosterIndex() {
   return { ...state, reload: load };
 }
 
+/* What this account may do in the module, and in which units.
+
+   The unit a roster is filed under is the free text on a staff record, so deciding
+   which of those strings falls inside someone's assignment needs the department map,
+   the alias table and the Level-N rule — all server-side, and they must stay there or
+   the screen and the API would disagree about who may open what. So the server answers
+   with the literal unit strings (/api/rosters/scope) and this only compares them.
+
+   `units === null` means "not answered yet / every unit" — never render a narrowed
+   list from it, or an older server (no such route) would show an empty module. */
+function useRosterScope() {
+  const [state, setState] = useState({ units: null, scope: 'all', can: null, loading: true });
+  useEffect(() => {
+    let live = true;
+    rosApi.get('/api/rosters/scope').then((r) => {
+      if (!live) return;
+      if (r && r.ok) setState({ units: Array.isArray(r.units) ? r.units : null, scope: r.scope || 'all', can: r.can || null, loading: false });
+      else setState((s) => ({ ...s, loading: false }));
+    }).catch(() => { if (live) setState((s) => ({ ...s, loading: false })); });
+    return () => { live = false; };
+  }, []);
+  // A Set only when the account is actually narrowed — 'all' must never build one, or a
+  // unit the register spells slightly differently would drop off its own roster list.
+  const allowed = useMemo(() => (state.scope === 'departments' && state.units ? new Set(state.units) : null), [state.scope, state.units]);
+  return { ...state, allowed, inScope: (d) => !allowed || allowed.has(d) };
+}
+
+/* The people the sheet is built from.
+
+   Normally the shared staff register (window.useStaffStore), which is live, shared with
+   every other module and already mirrored in the browser. But the roster can be granted
+   WITHOUT the staff register — that is the whole point of a separate assignment — and in
+   that case the store is useless here: its refresh bails out on unicoCan('staff','view')
+   and its empty-state falls back to the DEMO SEED, so the in-charge meant to fill the
+   roster in would have seen a grid of fictional nurses.
+
+   So: no staff permission -> take the unit's people from the roster module's own thin
+   feed (/api/rosters/staff), which carries a name, a number and a designation and
+   nothing else about a colleague. */
+function useRosterStaff() {
+  const store = window.useStaffStore();
+  const mayStaff = (() => { try { return window.unicoCan ? window.unicoCan('staff', 'view') : true; } catch (e) { return true; } })();
+  const [own, setOwn] = useState(null);
+  useEffect(() => {
+    if (mayStaff) return undefined;
+    let live = true;
+    rosApi.get('/api/rosters/staff').then((r) => { if (live && r && r.ok && Array.isArray(r.staff)) setOwn(r.staff); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [mayStaff]);
+  return useMemo(() => (mayStaff ? store : { ...store, staff: own || [] }), [mayStaff, store, own]);
+}
+
 /* ---------------- the shift legend, exactly as designed ----------------
    legendRows: one card per bucket — 3px colour spine, uppercase bucket label with a
    square dot, then every code the bucket owns with its printed time string. */
@@ -303,17 +388,34 @@ function RosStatusChip({ st }) {
 }
 
 /* ================= 1. HOME / INDEX ================= */
-function RosterHome({ index, staffStore, setRoute }) {
+function RosterHome({ index, staffStore, scope, setRoute }) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
+  const sc = scope || { inScope: () => true, scope: 'all', loading: false, units: null };
+  /* Two views. "My units" is the working one and stays the default for everyone,
+     including an administrator — the oversight screen is for reviewing, not for the
+     daily job of building a sheet, and defaulting to it would put a wall of other
+     people's units in front of someone who just wants to open their own. */
+  const mayReview = !!(sc.can && sc.can.review);
+  const [tab, setTab] = useState('mine');
+  if (mayReview && tab === 'access') return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RosterViewSwitch tab={tab} setTab={setTab} />
+      <RosterAccessReview setRoute={setRoute} />
+    </div>
+  );
 
   const depts = useMemo(() => {
     const m = {};
     (staffStore.staff || []).filter((e) => e.is_active !== false && !e.former)
       .forEach((e) => { const d = e.current_department || 'Unassigned'; m[d] = (m[d] || 0) + 1; });
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [staffStore.staff]);
+    // The server lists the units this account is assigned; a unit it names but whose
+    // staff are all archived still belongs on the list, so it gets a row with no count
+    // rather than vanishing along with the last nurse on it.
+    if (sc.scope === 'departments' && sc.units) sc.units.forEach((u) => { if (!(u in m)) m[u] = 0; });
+    return Object.entries(m).filter(([d]) => sc.inScope(d)).sort((a, b) => b[1] - a[1]);
+  }, [staffStore.staff, sc.units, sc.scope]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const byKey = useMemo(() => {
     const m = {};
@@ -325,6 +427,7 @@ function RosterHome({ index, staffStore, setRoute }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {mayReview && <RosterViewSwitch tab={tab} setTab={setTab} />}
       <div className="card">
         <div className="card-h" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={MK.iconBadge('teal', 32)}><Ic d={I.grid} s={16} /></div>
@@ -340,7 +443,18 @@ function RosterHome({ index, staffStore, setRoute }) {
           </select>
         </div>
         <div className="card-b">
-          <div className="sub" style={{ marginBottom: 9 }}>Pick a unit to open or start its {R.MONTHS[month]} {year} roster.</div>
+          <div className="sub" style={{ marginBottom: 9 }}>
+            {sc.scope === 'departments'
+              ? 'The units your account is assigned. Pick one to open or start its ' + R.MONTHS[month] + ' ' + year + ' roster.'
+              : 'Pick a unit to open or start its ' + R.MONTHS[month] + ' ' + year + ' roster.'}
+          </div>
+          {!depts.length && !sc.loading && (
+            <div style={{ display: 'grid', placeItems: 'center', padding: 30, textAlign: 'center', gap: 6 }}>
+              <div style={{ opacity: .35 }}><Ic d={I.grid} s={30} /></div>
+              <div style={{ fontWeight: 600 }}>No units assigned to you</div>
+              <div className="sub" style={{ maxWidth: 420 }}>An administrator assigns the units you roster under <b>Users &amp; Roles → Manage → Duty roster units</b>.</div>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 10 }}>
             {depts.map(([d, n]) => {
               const ex = byKey[d + '|' + year + '|' + month];
@@ -402,11 +516,187 @@ function RosterHome({ index, staffStore, setRoute }) {
   );
 }
 
+// The module's two views. Only rendered for an account that may review them all, so a
+// ward lead never sees a tab that would only ever refuse them.
+function RosterViewSwitch({ tab, setTab }) {
+  return (
+    <div style={{ display: 'inline-flex', gap: 3, padding: 3, borderRadius: 9, background: 'rgba(125,145,180,.16)', alignSelf: 'flex-start' }}>
+      {[['mine', 'My units', 'Build and open the rosters you are assigned'],
+        ['access', 'Access & coverage', 'Every unit, who may roster it, and what is missing']].map(([v, l, tip]) => {
+        const on = tab === v;
+        return <button key={v} type="button" title={tip} onClick={() => setTab(v)}
+          style={{ border: 0, cursor: 'pointer', font: 'inherit', fontSize: 12, fontWeight: 700, padding: '7px 16px', borderRadius: 7,
+            color: on ? '#fff' : '#6c7a8c', background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent' }}>{l}</button>;
+      })}
+    </div>
+  );
+}
+
+/* ================= 1b. ACCESS & COVERAGE (oversight) =================
+   The second view of the module. "My units" is where a roster gets built; this is where
+   the person accountable for the rosters being done at all can see the whole hospital at
+   once — who may roster each unit, and which units nobody is looking after.
+
+   Gated on the same right as publishing (can.review), not on the Administrator role: the
+   tier that signs rosters off is a nursing one.
+
+   The two failures it is built to surface, in this order:
+     · a unit with NO ONE who may edit it — nobody will build that sheet, and the gap is
+       invisible from every other screen in the app,
+     · a unit with no sheet for the current month.
+   Everything else on the screen is supporting detail. */
+function RosterAccessReview({ setRoute }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(true);
+  const [q, setQ] = useState('');
+  const [only, setOnly] = useState('all');   // 'all' | 'nobody' | 'nosheet'
+
+  const load = React.useCallback(() => {
+    setBusy(true); setErr('');
+    return rosApi.get('/api/rosters/access').then((r) => {
+      if (r && r.ok) setData(r); else setErr((r && r.error) || 'Could not load the review.');
+    }).catch(() => setErr('Could not reach the server.')).finally(() => setBusy(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const rows = (data && data.departments) || [];
+  const people = (data && data.people) || [];
+  const orphans = (data && data.orphans) || [];
+  const noEditor = rows.filter((r) => !r.editors);
+  const noSheet = rows.filter((r) => !r.current);
+  const qn = q.trim().toLowerCase();
+  const shown = rows.filter((r) => {
+    if (only === 'nobody' && r.editors) return false;
+    if (only === 'nosheet' && r.current) return false;
+    if (!qn) return true;
+    return String(r.name).toLowerCase().includes(qn) || (r.holders || []).some((h) => String(h.name).toLowerCase().includes(qn));
+  });
+
+  const tile = (n, label, tone, active, onClick) => (
+    <div onClick={onClick} style={{ flex: '1 1 150px', cursor: onClick ? 'pointer' : 'default', padding: '11px 13px', borderRadius: 10, background: '#fff',
+      border: '1px solid ' + (active ? tone : 'rgba(125,145,180,.22)'), borderLeft: '3px solid ' + tone, boxShadow: active ? '0 0 0 2px ' + tone + '22' : 'none' }}>
+      <div className="num" style={{ fontSize: 21, fontWeight: 800, color: n ? tone : '#8b98ab', lineHeight: 1.1 }}>{n}</div>
+      <div style={{ fontSize: 10.5, color: '#6c7a8c', marginTop: 2, lineHeight: 1.4 }}>{label}</div>
+    </div>
+  );
+  const actionDot = (h) => {
+    const may = (a) => (h.actions || []).indexOf(a) >= 0;
+    return may('delete') ? ['Full', '#1f9d63'] : may('add') || may('edit') ? ['Edits', '#0090ca'] : ['Reads', '#8b98ab'];
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div className="card">
+        <div className="card-h" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={MK.iconBadge('teal', 32)}><Ic d={I.users || I.user} s={16} /></div>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontWeight: 600, fontSize: 15.5, color: MK.INK }}>Access &amp; coverage</div>
+            <div className="sub">Every unit, who may roster it, and where {data ? R.MONTHS[data.month] + ' ' + data.year : 'this month'} has no sheet yet</div>
+          </div>
+          <button className="btn" onClick={load} disabled={busy}>{busy ? 'Loading…' : 'Refresh'}</button>
+        </div>
+        <div className="card-b">
+          {err && <div style={{ fontSize: 12.5, color: '#b3261e', background: '#fdecea', border: '1px solid #f5c6c2', borderRadius: 8, padding: '9px 11px', marginBottom: 11 }}>{err}</div>}
+          <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', marginBottom: 12 }}>
+            {tile(rows.length, 'Units in the hospital', '#27a8db', only === 'all', () => setOnly('all'))}
+            {tile(noEditor.length, 'Nobody can edit the roster', '#d23a52', only === 'nobody', () => setOnly('nobody'))}
+            {tile(noSheet.length, 'No sheet this month', '#e0a12a', only === 'nosheet', () => setOnly('nosheet'))}
+            {tile(people.length, 'Accounts with roster access', '#1f9d63')}
+          </div>
+          {noEditor.length > 0 && only !== 'nobody' && (
+            <div style={{ fontSize: 11.5, color: '#8a2733', background: '#fdecea', border: '1px solid #f5c6c2', borderRadius: 8, padding: '9px 11px', marginBottom: 11 }}>
+              <b>{noEditor.length} unit{noEditor.length === 1 ? '' : 's'} have nobody who may edit the roster</b> — {noEditor.slice(0, 5).map((r) => r.name).join(', ')}{noEditor.length > 5 ? ' and ' + (noEditor.length - 5) + ' more' : ''}. Assign someone in Users &amp; Roles → Manage → Duty roster access.
+            </div>
+          )}
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a unit or a person…"
+            style={{ width: '100%', padding: '8px 11px', border: '1px solid rgba(125,145,180,.3)', borderRadius: 8, fontSize: 12.5, fontFamily: 'inherit', outline: 'none', marginBottom: 10 }} />
+          <div style={{ overflow: 'auto' }}>
+            <table className="tbl" style={{ width: '100%' }}>
+              <thead><tr><th>Unit</th><th>This month</th><th>Sheets</th><th>Who may roster it</th><th></th></tr></thead>
+              <tbody>
+                {shown.map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{r.name}</td>
+                    <td>{r.current ? <RosStatusChip st={r.current.status} /> : <span className="tag" style={{ opacity: .6 }}>not drafted</span>}</td>
+                    <td className="num">{r.sheets || 0}</td>
+                    <td>
+                      {!r.holders.length
+                        ? <span style={{ fontSize: 11.5, fontWeight: 700, color: '#d23a52' }}>Nobody</span>
+                        : <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                            {r.holders.map((h) => { const [lbl, c] = actionDot(h); return (
+                              <span key={h.username} title={h.name + ' · ' + lbl.toLowerCase() + (h.scope === 'all' ? ' · holds every unit' : '') + (h.inherited ? ' · never assigned units, so it inherits this reach' : '')}
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: '#fff', border: '1px solid ' + c + '55', color: '#4a5768' }}>
+                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: c, flexShrink: 0 }} />
+                                {h.name}{h.scope === 'all' && <span style={{ fontSize: 9, opacity: .6 }}>ALL</span>}{h.inherited && <span title="Never assigned any units — it still reaches this one" style={{ fontSize: 9, color: '#e0a12a' }}>!</span>}
+                              </span>
+                            ); })}
+                          </div>}
+                    </td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button className="btn" onClick={() => setRoute({ view: 'rosterGrid', dept: r.name, year: data.year, month: data.month })}>Open</button>
+                    </td>
+                  </tr>
+                ))}
+                {!shown.length && !busy && <tr><td colSpan={5} style={{ textAlign: 'center', padding: 24 }} className="sub">Nothing matches that filter.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="sub" style={{ fontSize: 10.5, marginTop: 9, lineHeight: 1.6 }}>
+            <b style={{ color: '#1f9d63' }}>●</b> full access (may publish) · <b style={{ color: '#0090ca' }}>●</b> may build and submit · <b style={{ color: '#8b98ab' }}>●</b> read only.
+            <b>ALL</b> = the account holds every unit. <b style={{ color: '#e0a12a' }}>!</b> = never assigned any units, so it still reaches this one — set it explicitly in Users &amp; Roles.
+          </div>
+        </div>
+      </div>
+
+      {orphans.length > 0 && (
+        <div className="card">
+          <div className="card-h"><h3>Sheets outside any unit</h3><div className="sub">filed under a name no department matches</div></div>
+          <div className="card-b">
+            <div className="sub" style={{ marginBottom: 9 }}>Only an account holding <i>every</i> unit can open these — a unit-scoped account cannot, however it is assigned. Usually a department renamed after the sheet was written.</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {orphans.map((o) => (
+                <span key={o.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, fontSize: 11.5, fontWeight: 600, background: '#fff8e9', border: '1px solid #f1d49a', color: '#8a5a00' }}>
+                  {o.dept} <span style={{ opacity: .7, fontWeight: 500 }}>{R.MONTHS[o.month]} {o.year}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-h"><h3>Accounts with roster access</h3><div className="sub">{people.length} sign-in{people.length === 1 ? '' : 's'} that can open the module</div></div>
+        <div className="card-b" style={{ overflow: 'auto' }}>
+          <table className="tbl" style={{ width: '100%' }}>
+            <thead><tr><th>Person</th><th>Can</th><th>Units</th></tr></thead>
+            <tbody>
+              {people.map((p) => { const [lbl, c] = actionDot(p); return (
+                <tr key={p.username}>
+                  <td style={{ fontWeight: 600 }}>{p.name}<span className="sub" style={{ fontWeight: 400 }}> · {p.username}</span></td>
+                  <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: '#4a5768' }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: c }} />{lbl}</span></td>
+                  <td className="sub">
+                    {p.covers === null
+                      ? <b style={{ color: MK.INK }}>Every unit{p.inherited ? ' (never assigned — inherited)' : ''}</b>
+                      : !p.covers.length ? <b style={{ color: '#d23a52' }}>None — the module opens empty</b>
+                      : p.covers.map((id) => (rows.find((r) => r.id === id) || {}).name || id).join(', ')}
+                  </td>
+                </tr>
+              ); })}
+              {!people.length && !busy && <tr><td colSpan={3} style={{ textAlign: 'center', padding: 22 }} className="sub">No account has Duty Roster access yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ================= 2. THE ROSTER SCREEN =================
    One component, nine views — exactly the design's Component. The monthly grid is the
    editor; every other view reads the SAME live grid, so an edit shows everywhere at
    once, before it is even saved. */
-function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialView }) {
+function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, initialView }) {
   rosInjectCss();
   const days = R.daysIn(year, month);
   const [view, setView] = useState(initialView || 'month');
@@ -456,6 +746,7 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
 
   // sign-off
   const [sign, setSign] = useState({});
+  const signers = useRosSigners();   // who prepares / checks / approves, per the hierarchy
   const [approvedAt, setApprovedAt] = useState(null);
 
   const history = useRef([]);
@@ -488,9 +779,15 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
     return out;
   }, [staff, order, grid, storedNames]);
 
+  // The unit switcher offers only units this account is assigned — picking one it is
+  // not would open an editor whose every save comes back 403.
+  const inScope = (scope && scope.inScope) || (() => true);
   const depts = useMemo(() => [...new Set((staffStore.staff || [])
     .filter((e) => e.is_active !== false && !e.former)
-    .map((e) => e.current_department || 'Unassigned'))].sort(), [staffStore.staff]);
+    .map((e) => e.current_department || 'Unassigned'))]
+    // The unit being viewed always stays in the list, even if nobody is on it right
+    // now — dropping it would leave the switcher showing a different unit than the grid.
+    .filter((d) => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
 
   useEffect(() => {
     setLoading(true); setLoadError(''); setConflict('');
@@ -539,7 +836,8 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
   const canEdit = !locked && !loadError && !conflict && rosCan('edit');
   const editBlocked = () => {
     rosToast(conflict ? 'Someone else saved this roster. Reload the month before editing.'
-      : locked ? 'Approved and locked — reopen it to edit.' : 'You do not have edit rights on the roster.', 'info');
+      : locked ? (rosMayApprove() ? 'Published and locked — click “Published” at the top to reopen it for editing.' : 'Published and locked — ask someone with full Duty Roster access to reopen it.')
+      : 'You do not have edit rights on the roster.', 'info');
   };
 
   // push() — one history entry per gesture, so a whole paint stroke is ONE undo.
@@ -757,7 +1055,7 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
 
   // Publish — approve-and-lock; clicking again reopens (admin only, like the design's toggle).
   const publish = () => {
-    if (!rosIsAdmin()) { rosToast('Only an administrator can publish the roster.', 'info'); return; }
+    if (!rosMayApprove()) { rosToast('Publishing and reopening need full Duty Roster access (Delete). You can still send it for approval.', 'info'); return; }
     if (locked) { setStatusRemote('draft'); return; }
     // Cancel a pending autosave: firing after the approval it would hit the lock (and,
     // before the server guard, used to un-publish the roster).
@@ -1802,16 +2100,8 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
         );
       })()}
 
-      {/* ---- footer: rule checks · float pool · sign-off ---- */}
+      {/* ---- footer: rule checks · sign-off ---- */}
       {showFooter && (() => {
-        const floatPool = (staffStore.staff || [])
-          .filter((e) => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') !== dept)
-          .sort((a, b) => String(a.name).localeCompare(String(b.name)))
-          .slice(0, 3)
-          .map((e) => {
-            const ind = /Senior|Team|Charge|In-charge/i.test(e.designation || '');
-            return { name: e.name, empId: rosKey(e), home: e.current_department || 'Unassigned', level: ind ? 'Independent' : 'Supervised', lvlShort: ind ? 'IND' : 'SUP', c: ind ? '#157a43' : '#b5670a', bg: ind ? 'rgba(31,157,87,.13)' : 'rgba(224,138,30,.14)' };
-          });
         const allNames = [...new Set((staffStore.staff || []).filter((e) => e.is_active !== false && !e.former).map((e) => e.name).filter(Boolean))].sort();
         const approver = sign['Approved by'];
         const ready = approver && approver !== '—';
@@ -1840,35 +2130,28 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
               </div>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))', backdropFilter: 'blur(24px) saturate(1.7)', WebkitBackdropFilter: 'blur(24px) saturate(1.7)', border: '1px solid rgba(255,255,255,.92)', borderRadius: 16, boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)', padding: '14px 16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 11 }}>
-                  <span style={rosBadge('rgba(106,82,212,.12)', '#5b45c4', 26)}><Ic d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM19 8v6M22 11h-6" s={14} sw={1.9} /></span>
-                  <h3 style={ROS_H3}>Float pool suggestions</h3>
-                </div>
-                <div style={{ fontSize: 11.5, color: '#6c7a8c', lineHeight: 1.6, marginBottom: 10 }}>Staff from other units marked <b>available for redeployment</b> and competent in {dept}.</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {floatPool.map((f) => (
-                    <div key={f.empId} style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'rgba(255,255,255,.6)', border: '1px solid rgba(255,255,255,.9)', borderRadius: 10, padding: '8px 10px' }}>
-                      <MK.Av name={f.name} empId={f.empId} size={30} radius={rosAvRadius(30)} />
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.name}</div>
-                        <div style={{ fontSize: 10, color: '#9aa6b4' }}>{f.home} · {f.level} in {dept}</div>
-                      </div>
-                      <span style={rosChipS(f.c, f.bg)}>{f.lvlShort}</span>
-                    </div>
-                  ))}
-                  {floatPool.length === 0 && <div style={{ fontSize: 11.5, color: '#9aa6b4' }}>No other units have staff on the register yet.</div>}
-                </div>
-              </div>
               <div style={{ background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))', backdropFilter: 'blur(24px) saturate(1.7)', WebkitBackdropFilter: 'blur(24px) saturate(1.7)', border: '1px solid rgba(255,255,255,.92)', borderRadius: 16, boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
                 <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, marginBottom: 4 }}>
                   <span style={rosBadge('rgba(0,144,202,.12)', '#0072a3', 24, 7)}><Ic d="M4 20h16M6 16l10-10 3 3-10 10H6z" s={13} sw={1.9} /></span>
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e' }}>Sign-off</span>
                   <span style={{ fontSize: 10.5, color: '#9aa6b4' }}>pick the names, then approve</span>
                 </div>
-                {[['Prepared by', 'Nurse In-charge, ' + dept], ['Checked by', 'CNS'], ['Approved by', 'Chief of Nursing Services']].map(([role, title]) => {
+                {[['Prepared by', 'prepare'], ['Checked by', 'check'], ['Approved by', 'approve']].map(([role, chainRole]) => {
                   const val = sign[role] !== undefined && sign[role] !== '' ? sign[role] : '—';
-                  const pool = role === 'Prepared by' ? ['—'].concat(rows.map((r) => r.name)) : ['—'].concat(allNames);
+                  const tier = rosTierFor(signers, chainRole);
+                  const atTier = rosNamesFor(signers, chainRole);
+                  /* Prepared by is the person who built this sheet, so the unit's own
+                     rostered staff come first — an in-charge, an acting in-charge or a
+                     staff nurse is whoever actually drafted it. Checked and Approved are
+                     the people AT those tiers. With no tier marked (or the list
+                     unreachable) every name stays available, so the boxes never become
+                     unfillable because the ladder is not set up yet. */
+                  const tierPool = atTier.length ? atTier : (chainRole === 'prepare' ? rows.map((r) => r.name) : allNames);
+                  const base = chainRole === 'prepare'
+                    ? rows.map((r) => r.name).concat(tierPool.filter((n) => !rows.some((r) => r.name === n)))
+                    : tierPool;
+                  const title = tier ? tier.name + (chainRole === 'prepare' ? ' · ' + dept : '') : (chainRole === 'prepare' ? 'Prepared in ' + dept : 'No tier marked in Hierarchy');
+                  const pool = ['—'].concat(base);
                   const opts = pool.indexOf(val) >= 0 ? pool : [val].concat(pool);
                   const stamped = role === 'Approved by' ? !!approvedAt : val !== '—';
                   return (
@@ -1889,7 +2172,9 @@ function RosterGrid({ staffStore, dept, year, month, setRoute, onSaved, initialV
                 })}
                 <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', borderTop: '1px solid rgba(125,145,180,.18)', paddingTop: 11, marginTop: 4 }}>
                   <div style={{ fontSize: 10.5, color: '#9aa6b4', flex: 1, minWidth: 180 }}>
-                    {approvedAt ? 'Approved on ' + approvedAt + ' — the roster is locked for publication.' : (ready ? 'Ready for the CNS to sign.' : 'Choose an approver above to enable signing.')}
+                    {approvedAt ? 'Approved on ' + approvedAt + ' — the roster is locked for publication.'
+                      : ready ? ('Ready for ' + ((rosTierFor(signers, 'approve') || {}).name || 'the approver') + ' to sign.')
+                      : 'Choose an approver above to enable signing.'}
                   </div>
                   <button onClick={() => { if (!ready || approvedAt) return; Promise.resolve(save('submitted', true)).then((ok) => { if (ok !== false) setStatusRemote('approved', { approvedBy: approver }); }); }}
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(255,255,255,.4)', background: approvedAt ? 'linear-gradient(135deg,#2fbf7f,#157a43)' : ready ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,#9fb3c8,#7d8ea8)', color: '#fff', padding: '8px 14px', borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: ready ? 'pointer' : 'default', fontFamily: 'inherit', boxShadow: ready && !approvedAt ? '0 7px 18px rgba(0,144,202,.35)' : 'none', opacity: ready || approvedAt ? 1 : .6, flexShrink: 0 }}>
@@ -2199,7 +2484,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
           <button className="btn" onClick={() => setRoute({ view: 'rosterGrid', dept, year, month })}>‹ Back to the grid</button>
           <div style={{ flex: 1 }} />
           <span className="sub">1:1 with the roster workbook</span>
-          <button className="btn pri" onClick={() => window.print()}>Print / Save as PDF</button>
+          {rosCan('print') && <button className="btn pri" onClick={() => window.print()}>Print / Save as PDF</button>}
         </div>
       </div>
 
@@ -2263,23 +2548,44 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
 
 /* ================= root ================= */
 function RosterView({ view, dept, year, month, setRoute }) {
-  const staffStore = window.useStaffStore();
+  const staffStore = useRosterStaff();
   const index = useRosterIndex();
+  const scope = useRosterScope();
   const now = new Date();
   const y = Number(year) || now.getFullYear();
   const m = Number.isInteger(Number(month)) ? Number(month) : now.getMonth();
 
   const inner = (() => {
-    if (view !== 'rosterHome' && !dept) return <RosterHome index={index} staffStore={staffStore} setRoute={setRoute} />;
+    if (view !== 'rosterHome' && !dept) return <RosterHome index={index} staffStore={staffStore} scope={scope} setRoute={setRoute} />;
+    // A unit outside the assignment. The server refuses it anyway (403 on every roster
+    // route), but a bookmark or a stale link would otherwise land on an editor that
+    // fails silently on save — say so plainly instead. Only once the scope is known:
+    // while it loads every unit is treated as allowed, so a slow answer never blocks.
+    if (dept && !scope.loading && !scope.inScope(dept)) return <RosterNoAccess dept={dept} setRoute={setRoute} />;
     switch (view) {
-      case 'rosterGrid': return <RosterGrid key={dept + '|' + y + '|' + m} staffStore={staffStore} dept={dept} year={y} month={m} setRoute={setRoute} onSaved={index.reload} />;
+      case 'rosterGrid': return <RosterGrid key={dept + '|' + y + '|' + m} staffStore={staffStore} scope={scope} dept={dept} year={y} month={m} setRoute={setRoute} onSaved={index.reload} />;
       // The old coverage-and-rules route now lands on the same screen, open on Rules & policy.
-      case 'rosterReview': return <RosterGrid key={dept + '|' + y + '|' + m + '|rules'} staffStore={staffStore} dept={dept} year={y} month={m} setRoute={setRoute} onSaved={index.reload} initialView="rules" />;
+      case 'rosterReview': return <RosterGrid key={dept + '|' + y + '|' + m + '|rules'} staffStore={staffStore} scope={scope} dept={dept} year={y} month={m} setRoute={setRoute} onSaved={index.reload} initialView="rules" />;
       case 'rosterPrint': return <RosterPrint staffStore={staffStore} dept={dept} year={y} month={m} setRoute={setRoute} />;
-      default: return <RosterHome index={index} staffStore={staffStore} setRoute={setRoute} />;
+      default: return <RosterHome index={index} staffStore={staffStore} scope={scope} setRoute={setRoute} />;
     }
   })();
   return <div className="mk-scope">{inner}</div>;
+}
+
+// A unit this account is not assigned. Deliberately names the unit: "you are not
+// assigned to it" is actionable (ask an administrator for it), "access denied" is not.
+function RosterNoAccess({ dept, setRoute }) {
+  return (
+    <div className="card">
+      <div className="card-b" style={{ display: 'grid', placeItems: 'center', padding: 44, textAlign: 'center', gap: 8 }}>
+        <div style={{ opacity: .35 }}><Ic d={I.lock || I.grid} s={32} /></div>
+        <div style={{ fontWeight: 700, fontSize: 14.5 }}>You are not assigned to {dept}</div>
+        <div className="sub" style={{ maxWidth: 420 }}>Your account holds the duty roster for other units. An administrator can add {dept} to it under <b>Users &amp; Roles → Manage → Duty roster units</b>.</div>
+        <button className="btn pri" style={{ marginTop: 6 }} onClick={() => setRoute({ view: 'rosterHome' })}>Back to my units</button>
+      </div>
+    </div>
+  );
 }
 
 window.RosterView = RosterView;

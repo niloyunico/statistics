@@ -3840,7 +3840,9 @@ function Reports({
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
-const USER_MODS = [['stats', 'Hospital Statistics'], ['quality', 'Quality Indicators'], ['supervisor', 'Supervisor Reports'], ['staff', 'Staff Management'], ['datacol', 'Data Collection'], ['reports', 'Reports'], ['users', 'Administration'], ['perf', 'Performance Appraisal'], ['roster', 'Duty Roster'], ['medicine', 'Medicine & Rx']];
+const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Settings', 'Administer', '']];
+const MOD_GROUPS = ['Clinical', 'Data', 'Administer'];
+const modsGrouped = list => MOD_GROUPS.map(g => [g, list.filter(m => m[2] === g)]).filter(([, ms]) => ms.length);
 const PERM_LEVELS = [['none', 'None'], ['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
 const PERM_RANK = {
   none: 0,
@@ -3849,129 +3851,125 @@ const PERM_RANK = {
   add: 3,
   delete: 4
 };
-const PERM_ACTS = [['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
-const PERM_ORDER = ['view', 'edit', 'add', 'delete'];
+const PERM_ACTS = [['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete'], ['print', 'Print']];
+const PERM_ORDER = ['view', 'edit', 'add', 'delete', 'print'];
+const PERM_LEVEL_ORDER = ['view', 'edit', 'add', 'delete'];
 function levelToActions(lv) {
   const i = ['none', 'view', 'edit', 'add', 'delete'].indexOf(lv);
-  return i <= 0 ? [] : PERM_ORDER.slice(0, i);
+  return i <= 0 ? [] : PERM_LEVEL_ORDER.slice(0, i);
 }
 function asActions(v) {
   if (Array.isArray(v)) return PERM_ORDER.filter(a => v.indexOf(a) >= 0);
   return levelToActions(v || 'none');
 }
-function sameActs(a, b) {
-  a = asActions(a);
-  b = asActions(b);
-  return a.length === b.length && a.every((x, i) => x === b[i]);
-}
-const ROLE_PRESETS = {
-  'Administrator': {
-    stats: 'delete',
-    quality: 'delete',
-    supervisor: 'delete',
-    staff: 'delete',
-    datacol: 'delete',
-    reports: 'delete',
-    users: 'delete'
-  },
-  'Manager': {
-    stats: 'edit',
-    quality: 'edit',
-    supervisor: 'edit',
-    staff: 'edit',
-    datacol: 'edit',
-    reports: 'edit',
-    users: 'view'
-  },
-  'Department Head': {
-    stats: 'view',
-    quality: 'add',
-    supervisor: 'add',
-    staff: 'edit',
-    datacol: 'add',
-    reports: 'view',
-    users: 'none'
-  },
-  'Data Entry': {
-    stats: 'view',
-    quality: 'add',
-    supervisor: 'add',
-    staff: 'none',
-    datacol: 'add',
-    reports: 'view',
-    users: 'none'
-  },
-  'Read-only': {
-    stats: 'view',
-    quality: 'view',
-    supervisor: 'view',
-    staff: 'view',
-    datacol: 'view',
-    reports: 'view',
-    users: 'none'
-  }
-};
-const USER_ROLES = Object.keys(ROLE_PRESETS);
 const PORTAL_ROLE_LABEL = {
   collector: 'Data Collector',
   incharge: 'In-charge (portal)',
   nurse: 'Nurse (portal)',
   pca: 'PCA (portal)'
 };
-const portalRoleOfLabel = l => Object.keys(PORTAL_ROLE_LABEL).find(k => PORTAL_ROLE_LABEL[k] === l) || null;
-let ROLE_TMPL = null;
-let ROLE_TMPL_P = null;
-const tmplFallback = () => USER_ROLES.filter(r => r !== 'Administrator').map(r => ({
-  id: r.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-  name: r,
-  description: '',
-  perms: ROLE_PRESETS[r],
-  builtin: true
-}));
-function loadRoleTemplates(force) {
-  if (!force && ROLE_TMPL) return Promise.resolve(ROLE_TMPL);
-  if (!force && ROLE_TMPL_P) return ROLE_TMPL_P;
-  ROLE_TMPL_P = usersApi('GET', '/api/roles').then(j => {
-    ROLE_TMPL = (j.templates || []).length ? j.templates : tmplFallback();
-    ROLE_TMPL_P = null;
-    return ROLE_TMPL;
+const TIER_ADMIN = 'admin',
+  TIER_PORTAL = 'portal';
+const TIER_FALLBACK = () => [{
+  id: TIER_ADMIN,
+  name: 'Administrator',
+  rank: 0,
+  kind: 'admin',
+  fixed: true,
+  description: 'Runs the system. Every module, nothing to tick.',
+  modules: USER_MODS.map(([k]) => k)
+}, {
+  id: 'cns',
+  name: 'Chief of Nursing Services',
+  rank: 10,
+  kind: 'console',
+  fixed: false,
+  description: 'Head of the nursing department — the main HOD, and the final approver.',
+  modules: USER_MODS.map(([k]) => k)
+}, {
+  id: 'nurse-manager',
+  name: 'Nurse Manager',
+  rank: 20,
+  kind: 'console',
+  fixed: false,
+  description: 'Runs a cluster of wards: their people, rosters, appraisals and numbers.',
+  modules: USER_MODS.map(([k]) => k).filter(k => k !== 'users')
+}, {
+  id: 'ward-incharge',
+  name: 'Ward In-charge',
+  rank: 30,
+  kind: 'console',
+  fixed: false,
+  description: 'Runs one unit: its roster, its submissions and its supervision.',
+  modules: ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'perf', 'roster']
+}, {
+  id: TIER_PORTAL,
+  name: 'Portal account',
+  rank: 9999,
+  kind: 'portal',
+  fixed: true,
+  description: 'Signs in to the collection portal or the staff app. Created and scoped in Data Collection.',
+  modules: []
+}];
+let TIER_CACHE = null;
+let TIER_REQ = null;
+function loadTiers(force) {
+  if (!force && TIER_CACHE) return Promise.resolve(TIER_CACHE);
+  if (!force && TIER_REQ) return TIER_REQ;
+  TIER_REQ = usersApi('GET', '/api/tiers').then(j => {
+    TIER_CACHE = (j.tiers || []).length ? j.tiers : TIER_FALLBACK();
+    TIER_REQ = null;
+    return TIER_CACHE;
   }).catch(() => {
-    ROLE_TMPL = tmplFallback();
-    ROLE_TMPL_P = null;
-    return ROLE_TMPL;
+    TIER_CACHE = TIER_FALLBACK();
+    TIER_REQ = null;
+    return TIER_CACHE;
   });
-  return ROLE_TMPL_P;
+  return TIER_REQ;
 }
-function useRoleTemplates() {
-  const [t, setT] = React.useState(ROLE_TMPL);
+function useTiers() {
+  const [t, setT] = React.useState(TIER_CACHE);
   React.useEffect(() => {
     let live = true;
-    loadRoleTemplates().then(x => {
+    loadTiers().then(x => {
       if (live) setT(x);
     });
     return () => {
       live = false;
     };
   }, []);
-  return t || ROLE_TMPL || tmplFallback();
+  return t || TIER_CACHE || TIER_FALLBACK();
 }
+const byRank = (a, b) => a.rank - b.rank || String(a.name).localeCompare(String(b.name));
+const placeableTiers = ts => ts.filter(t => t.kind !== 'portal').slice().sort(byRank);
+const tierById = (ts, id) => ts.find(t => t.id === id) || null;
+const widestTier = ts => {
+  const c = ts.filter(t => t.kind === 'console');
+  return c.length ? c.reduce((a, b) => (b.modules || []).length > (a.modules || []).length ? b : a) : null;
+};
+const tierOfUser = (u, ts) => {
+  if (!u) return null;
+  if (u.role === 'Administrator') return TIER_ADMIN;
+  if (PORTAL_ROLE_LABEL[u.role]) return TIER_PORTAL;
+  const hit = u.level && tierById(ts, u.level);
+  return hit ? hit.id : (widestTier(ts) || {}).id || null;
+};
+const tierName = (ts, id) => (tierById(ts, id) || {}).name || '—';
+const modsForTier = t => {
+  if (!t) return [];
+  if (t.kind === 'admin') return USER_MODS;
+  const a = t.modules || [];
+  return USER_MODS.filter(([k]) => a.indexOf(k) >= 0);
+};
 const FULL_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = [...PERM_ORDER], m), {});
 const NONE_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = [], m), {});
 const inits = n => (n || '?').split(' ').map(x => x[0]).slice(0, 2).join('').toUpperCase();
-const detectTemplate = p => {
-  for (const r of USER_ROLES) {
-    if (r === 'Administrator') continue;
-    const pr = ROLE_PRESETS[r];
-    if (USER_MODS.every(([k]) => sameActs(p[k], pr[k]))) return r;
-  }
-  return 'Custom';
-};
 const permSummary = p => {
   if (!p) return 'No access';
   const acts = USER_MODS.map(([k]) => asActions(p[k]));
   const on = acts.filter(a => a.length).length;
   if (!on) return 'No access';
-  if (acts.every(a => a.length === 4)) return 'Full access';
+  if (acts.every(a => a.length === PERM_ORDER.length)) return 'Full access';
   const ed = acts.filter(a => a.indexOf('edit') >= 0 || a.indexOf('add') >= 0 || a.indexOf('delete') >= 0).length;
   return `${on} module${on !== 1 ? 's' : ''}${ed ? ' · ' + ed + ' editable' : ''}`;
 };
@@ -3999,6 +3997,13 @@ function uToast(m, k) {
     if (window.UI && window.UI.toast) window.UI.toast(m, k || 'success');
   } catch (e) {}
 }
+const mayUsers = a => {
+  try {
+    return typeof window.unicoCan !== 'function' || window.unicoCan('users', a);
+  } catch (e) {
+    return true;
+  }
+};
 function uCustomAreasOf(r) {
   if (!r) return [];
   if (window.dcCustomAreas) return window.dcCustomAreas(r).slice();
@@ -4008,11 +4013,279 @@ function uCustomAreasOf(r) {
   return (r.qualityAreas || []).filter(k => auto.indexOf(k) < 0);
 }
 const U_NO_RESPS = [];
+function RosterScopeEditor({
+  scope,
+  departments,
+  onScope,
+  onDepartments,
+  depts,
+  users,
+  exceptUsername,
+  hasRosterPerm,
+  staffScope
+}) {
+  const {
+    useState,
+    useMemo
+  } = React;
+  const [q, setQ] = useState('');
+  const all = depts || [];
+  const selected = departments || [];
+  const isOn = id => selected.indexOf(id) >= 0;
+  const toggle = id => onDepartments(isOn(id) ? selected.filter(x => x !== id) : [...selected, id]);
+  const groups = useMemo(() => {
+    try {
+      const raw = window.STAFF && window.STAFF.deptGroupsFor ? window.STAFF.deptGroupsFor(all.map(d => ({
+        name: d.name,
+        group: ''
+      }))) : [];
+      const byName = {};
+      all.forEach(d => {
+        byName[String(d.name || '').trim().toLowerCase()] = d.id;
+      });
+      return (raw || []).map(g => ({
+        name: g.name,
+        ids: [...new Set((g.depts || []).map(n => byName[String(n).trim().toLowerCase()]).filter(Boolean))]
+      })).filter(g => g.ids.length);
+    } catch (e) {
+      return [];
+    }
+  }, [all]);
+  const otherRosterer = u => {
+    if (!u || u.username === exceptUsername || u.active === false || u.role === 'Administrator') return false;
+    const acts = u.perms && u.perms.roster;
+    return Array.isArray(acts) ? acts.length > 0 : !!acts && acts !== 'none';
+  };
+  const holders = useMemo(() => {
+    const m = {};
+    (users || []).forEach(u => {
+      if (!otherRosterer(u) || u.rosterScope !== 'departments') return;
+      (u.rosterDepartments || []).forEach(id => {
+        (m[id] = m[id] || []).push(u.name || u.username);
+      });
+    });
+    return m;
+  }, [users, exceptUsername]);
+  const wide = useMemo(() => (users || []).filter(u => otherRosterer(u) && u.rosterScope === 'all').length, [users, exceptUsername]);
+  const qn = q.trim().toLowerCase();
+  const shown = useMemo(() => {
+    const list = qn ? all.filter(d => isOn(d.id) || String(d.name || '').toLowerCase().includes(qn)) : all;
+    return list.slice().sort((a, b) => (isOn(b.id) ? 1 : 0) - (isOn(a.id) ? 1 : 0));
+  }, [all, qn, selected]);
+  const unset = !scope;
+  const pill = (on, extra) => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    cursor: 'pointer',
+    userSelect: 'none',
+    padding: '5px 10px',
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 600,
+    border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+    background: on ? 'var(--blue-50)' : '#fff',
+    color: on ? 'var(--blue-700)' : 'var(--ink-2)',
+    ...(extra || {})
+  });
+  const names = id => holders[id] || [];
+  const shared = selected.filter(id => names(id).length).length;
+  const nameOf = id => (all.find(d => d.id === id) || {}).name || id;
+  return React.createElement("div", {
+    style: {
+      borderTop: '1px solid var(--line-2)',
+      paddingTop: 14,
+      opacity: hasRosterPerm ? 1 : .62
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginBottom: 3
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "Duty roster access"), React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 which units' rosters this account may open"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), scope === 'departments' && React.createElement("span", {
+    className: "num",
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: selected.length ? 'var(--blue-700)' : 'var(--rose)'
+    }
+  }, selected.length, " / ", all.length, " units")), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginBottom: 9
+    }
+  }, React.createElement("b", null, "Duty Roster"), " in the matrix above decides what they may ", React.createElement("i", null, "do"), "; this decides ", React.createElement("b", null, "which units"), " they may do it in. Several people can hold the same unit \u2014 they all edit the one monthly sheet. Publishing a roster stays administrator-only."), !hasRosterPerm && React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginBottom: 9
+    }
+  }, "No Duty Roster permission granted above yet, so nothing here takes effect until you tick one."), unset && React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: '#8a5a00',
+      background: '#fff8e9',
+      border: '1px solid #f1d49a',
+      borderRadius: 8,
+      padding: '8px 10px',
+      marginBottom: 9
+    }
+  }, "Never assigned. Until you choose below, this account keeps the reach it already had (", staffScope === 'departments' ? 'the departments picked above' : 'every unit', ")."), React.createElement("div", {
+    style: {
+      display: 'inline-flex',
+      gap: 3,
+      padding: 3,
+      borderRadius: 9,
+      background: 'rgba(125,145,180,.16)',
+      marginBottom: scope === 'departments' ? 11 : 0
+    }
+  }, [['all', 'All units', 'Every unit in the hospital, including any added later'], ['departments', 'Selected units', 'Only the units ticked below']].map(([v, l, tip]) => {
+    const on = scope === v;
+    return React.createElement("button", {
+      key: v,
+      type: "button",
+      title: tip,
+      onClick: () => onScope(v),
+      style: {
+        border: 0,
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: 12,
+        fontWeight: 700,
+        padding: '7px 16px',
+        borderRadius: 7,
+        color: on ? '#fff' : 'var(--muted)',
+        background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent'
+      }
+    }, l);
+  })), scope === 'departments' && React.createElement("div", null, !!groups.length && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      marginBottom: 9
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .4
+    }
+  }, "Zones"), groups.map(g => {
+    const done = g.ids.every(id => isOn(id));
+    return React.createElement("button", {
+      key: g.name,
+      type: "button",
+      title: (done ? 'Remove' : 'Add') + ' these units: ' + g.ids.map(nameOf).join(', '),
+      onClick: () => onDepartments(done ? selected.filter(x => g.ids.indexOf(x) < 0) : [...new Set([...selected, ...g.ids])]),
+      style: {
+        ...pill(done),
+        border: '1px dashed ' + (done ? 'var(--blue)' : 'var(--line)')
+      }
+    }, g.name, React.createElement("span", {
+      className: "num",
+      style: {
+        opacity: .65
+      }
+    }, g.ids.length));
+  }), React.createElement("button", {
+    type: "button",
+    onClick: () => onDepartments(selected.length === all.length ? [] : all.map(d => d.id)),
+    style: {
+      ...pill(false),
+      border: '1px dashed var(--line)',
+      color: 'var(--muted)'
+    }
+  }, selected.length === all.length ? 'Clear all' : 'All hospital')), all.length > 12 && React.createElement("input", {
+    value: q,
+    onChange: e => setQ(e.target.value),
+    placeholder: "Search units\u2026",
+    style: {
+      width: '100%',
+      padding: '7px 10px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      outline: 'none',
+      marginBottom: 8
+    }
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      maxHeight: 172,
+      overflow: 'auto',
+      padding: 2
+    }
+  }, shown.map(d => {
+    const on = isOn(d.id);
+    const who = names(d.id);
+    return React.createElement("span", {
+      key: d.id,
+      onClick: () => toggle(d.id),
+      title: who.length ? 'Also rostered by ' + who.join(', ') : 'No one else rosters this unit yet',
+      style: pill(on)
+    }, d.name, who.length > 0 && React.createElement("span", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 700,
+        borderRadius: 999,
+        padding: '1px 6px',
+        background: on ? 'var(--blue)' : 'var(--panel-2)',
+        color: on ? '#fff' : 'var(--muted)',
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)')
+      }
+    }, who.length));
+  }), !shown.length && React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, all.length ? 'No unit matches that search.' : 'No departments loaded.')), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: selected.length ? 'var(--muted)' : 'var(--rose)',
+      marginTop: 8,
+      lineHeight: 1.6
+    }
+  }, !selected.length ? React.createElement("b", null, "No units selected \u2014 the module will open empty for them.") : React.createElement(React.Fragment, null, "Rosters ", React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, selected.map(nameOf).join(', ')), ".", shared > 0 && ' Shares ' + shared + ' of them with other staff (hover a unit to see who).', wide > 0 && ' ' + wide + (wide === 1 ? ' other account holds' : ' other accounts hold') + ' every unit.'))));
+}
 function UserModal({
   initial,
   onClose,
   onSaved,
-  depts
+  depts,
+  onManageTiers,
+  allUsers
 }) {
   const {
     useState
@@ -4023,20 +4296,14 @@ function UserModal({
   const [email, setEmail] = useState(editing ? initial.email || '' : '');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState(editing ? initial.active !== false ? 'active' : 'inactive' : 'active');
-  const templates = useRoleTemplates();
-  const tmplMatch = pm => {
-    const t = templates.find(x => USER_MODS.every(([k]) => sameActs(pm[k], x.perms && x.perms[k])));
-    return t ? t.name : 'Custom';
-  };
-  const initTemplate = editing ? initial.role === 'Administrator' ? 'Administrator' : PORTAL_ROLE_LABEL[initial.role] ? PORTAL_ROLE_LABEL[initial.role] : initial.perms ? tmplMatch(initial.perms) : 'Custom' : 'Custom';
-  const [role, setRole] = useState(initTemplate);
-  const [roleTmpl, setRoleTmpl] = useState(editing ? initial.roleTemplate || null : null);
+  const tiers = useTiers();
+  const isPortalAcct = editing && !!PORTAL_ROLE_LABEL[initial.role];
+  const portalRole = isPortalAcct ? initial.role : null;
+  const [level, setLevel] = useState(editing && initial.role === 'Administrator' ? TIER_ADMIN : editing ? initial.level || null : null);
   React.useEffect(() => {
-    if (editing && initial.perms && role === 'Custom' && templates.length) {
-      const m = tmplMatch(initial.perms);
-      if (m !== 'Custom') setRole(m);
-    }
-  }, [templates.length]);
+    if (!isPortalAcct && level && !tierById(tiers, level) && tiers.length) setLevel(null);
+  }, [tiers]);
+  const tier = isPortalAcct ? null : tierById(tiers, level);
   const [perms, setPerms] = useState(() => {
     if (editing && initial.role === 'Administrator') return FULL_PERMS();
     const src = editing && initial.perms ? {
@@ -4047,6 +4314,9 @@ function UserModal({
   });
   const [staffScope, setStaffScope] = useState(editing ? initial.staffScope || 'all' : 'all');
   const [staffDepts, setStaffDepts] = useState(editing && Array.isArray(initial.departments) ? initial.departments : []);
+  const [rosterScope, setRosterScope] = useState(editing ? initial.rosterScope || null : 'all');
+  const [rosterDepts, setRosterDepts] = useState(editing && Array.isArray(initial.rosterDepartments) ? initial.rosterDepartments : []);
+  const [rosterEdit, setRosterEdit] = useState(editing && initial.rosterEdit === true);
   const [staffId, setStaffId] = useState(editing && (initial.staffId === 0 || initial.staffId) ? initial.staffId : '');
   const allDepts = React.useMemo(() => {
     try {
@@ -4071,10 +4341,10 @@ function UserModal({
   const toggleDept = id => setStaffDepts(ds => ds.indexOf(id) >= 0 ? ds.filter(x => x !== id) : [...ds, id]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const isAdmin = role === 'Administrator';
-  const portalRole = portalRoleOfLabel(role);
-  const isColl = !!portalRole;
-  const collects = portalRole === 'collector' || portalRole === 'incharge';
+  const isAdmin = !!tier && tier.kind === 'admin';
+  const isColl = isPortalAcct;
+  const collects = isPortalAcct && (portalRole === 'collector' || portalRole === 'incharge');
+  const rosterEditable = isPortalAcct && portalRole === 'incharge';
   const scopeInit = !!(editing && (initial.role === 'collector' || initial.role === 'incharge'));
   const scope0 = React.useRef(null);
   if (!scope0.current) scope0.current = {
@@ -4142,20 +4412,17 @@ function UserModal({
   }, [collects]);
   const linkedRespId = editing ? initial.responsibleId || ((resps || []).find(r => String(r.empId || '').toLowerCase() === initial.username) || {}).id || null : null;
   const ScopeEditor = window.DcScopeEditor;
-  const pickRole = r => {
-    setRole(r);
-    if (r === 'Administrator' || portalRoleOfLabel(r) || r === 'Custom') {
-      setRoleTmpl(null);
+  const pickLevel = id => {
+    const from = tier;
+    setLevel(id);
+    const next = tierById(tiers, id);
+    if (!next || next.kind !== 'console') return;
+    if (from && from.kind === 'admin') {
+      setPerms(NONE_PERMS());
       return;
     }
-    const t = templates.find(x => x.name === r);
-    if (t) {
-      setRoleTmpl(t.id);
-      setPerms(USER_MODS.reduce((m, [k]) => (m[k] = asActions(t.perms && t.perms[k]), m), {}));
-    } else if (ROLE_PRESETS[r]) {
-      setRoleTmpl(null);
-      setPerms(USER_MODS.reduce((m, [k]) => (m[k] = levelToActions(ROLE_PRESETS[r][k] || 'none'), m), {}));
-    }
+    const allow = next.modules || [];
+    setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = allow.indexOf(k) >= 0 ? asActions(p[k]) : [], m), {}));
   };
   const toggleAct = (mid, act) => {
     setPerms(p => {
@@ -4168,18 +4435,13 @@ function UserModal({
         [mid]: next
       };
     });
-    setRole('Custom');
-    setRoleTmpl(null);
   };
   const clearMod = mid => {
     setPerms(p => ({
       ...p,
       [mid]: []
     }));
-    setRole('Custom');
-    setRoleTmpl(null);
   };
-  const roleOpts = ['Administrator', ...templates.map(t => t.name), ...Object.values(PORTAL_ROLE_LABEL), 'Custom'];
   const save = async () => {
     setErr('');
     if (!editing) {
@@ -4187,19 +4449,21 @@ function UserModal({
       if (password.length < 6) return setErr('Password must be at least 6 characters.');
     }
     if (!name.trim()) return setErr('Full name is required.');
+    if (!isPortalAcct && !level) return setErr('Choose a hierarchy level for this account.');
     if (email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
     const sendScope = collects && !!ScopeEditor && !!window.dcScopePayload && !scopeLoadFailed;
     if (sendScope && !scopeReady) return setErr('Still loading this account’s data collection scope — try again in a moment.');
     setBusy(true);
     try {
-      const backendRole = isAdmin ? 'Administrator' : portalRole || 'User';
+      const backendRole = isAdmin ? 'Administrator' : isPortalAcct ? portalRole : 'User';
+      const granted = (tier && tier.modules || []).reduce((m, k) => (m[k] = asActions(perms[k]), m), {});
       const payload = {
         name: name.trim(),
         email: email.trim().toLowerCase(),
-        title: isAdmin || isColl ? null : role === 'Custom' ? 'Custom access' : role,
+        title: isAdmin || isColl ? null : tierName(tiers, level),
         active: status === 'active',
-        perms: isAdmin || isColl ? null : perms,
-        roleTemplate: isAdmin || isColl ? null : roleTmpl || null
+        perms: isAdmin || isColl ? null : granted,
+        level: isPortalAcct ? undefined : level
       };
       if (!editing || backendRole !== (initial.role || 'User')) payload.role = backendRole;
       if (sendScope) {
@@ -4213,10 +4477,15 @@ function UserModal({
       if (!isAdmin && !isColl) {
         payload.staffScope = staffScope;
         payload.departments = staffScope === 'departments' ? staffDepts : [];
+        if (rosterScope) {
+          payload.rosterScope = rosterScope;
+          payload.rosterDepartments = rosterScope === 'departments' ? rosterDepts : [];
+        }
         payload.staffId = staffScope === 'self' && staffId !== '' ? Number(staffId) : null;
         const rec = allStaff.find(x => String(x.id) === String(staffId));
         payload.staffEmpId = staffScope === 'self' && rec && rec.emp_id ? rec.emp_id : '';
       }
+      if (rosterEditable) payload.rosterEdit = rosterEdit;
       if (editing) {
         await usersApi('PATCH', '/api/users/' + encodeURIComponent(initial.username), payload);
         if (password) {
@@ -4248,7 +4517,8 @@ function UserModal({
     view: '#0090ca',
     edit: '#3ab5a7',
     add: '#e08a1e',
-    delete: '#d23a52'
+    delete: '#d23a52',
+    print: '#6a52d4'
   };
   const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
   return toBody(React.createElement("div", {
@@ -4359,20 +4629,150 @@ function UserModal({
     value: password,
     onChange: e => setPassword(e.target.value),
     placeholder: "At least 6 characters"
-  }))), React.createElement("div", {
+  }))), isPortalAcct ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--ink-2)',
+      background: 'var(--blue-50)',
+      border: '1px solid var(--blue-100)',
+      borderRadius: 9,
+      padding: '12px 14px',
+      display: 'flex',
+      gap: 9,
+      alignItems: 'flex-start'
+    }
+  }, React.createElement(Ic, {
+    d: I.user,
+    s: 16,
+    c: "var(--blue)",
+    style: {
+      flexShrink: 0,
+      marginTop: 1
+    }
+  }), React.createElement("span", null, React.createElement("b", null, PORTAL_ROLE_LABEL[portalRole], "."), " A portal login is not a rank in the hierarchy \u2014 it signs in to the collection portal or the staff app, and its departments and indicators are set below. New ones are made in ", React.createElement("b", null, "Data Collection"), "; a console account reaches the same submissions by being granted the ", React.createElement("b", null, "Data Collection"), " module.")) : React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 6,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "Hierarchy level ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 the rank decides which modules this account can be given at all")), React.createElement("span", {
+    className: "spacer",
+    style: {
+      flex: 1
+    }
+  }), mayUsers('edit') && React.createElement("button", {
+    className: "btn sm",
+    title: "Add, rename or re-rank the tiers",
+    onClick: () => onManageTiers && onManageTiers()
+  }, React.createElement(Ic, {
+    d: I.gear,
+    s: 13
+  }), "Manage hierarchy")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      overflow: 'hidden'
+    }
+  }, placeableTiers(tiers).map((t, i) => {
+    const on = level === t.id;
+    const n = modsForTier(t).length;
+    return React.createElement("div", {
+      key: t.id,
+      onClick: () => pickLevel(t.id),
+      role: "button",
+      style: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 10,
+        padding: '9px 12px',
+        cursor: 'pointer',
+        borderTop: i ? '1px solid var(--line-2)' : 0,
+        background: on ? 'var(--blue-50)' : 'transparent'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 15,
+        height: 15,
+        borderRadius: '50%',
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0,
+        marginTop: 1,
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue)' : '#fff'
+      }
+    }, on && React.createElement(Ic, {
+      d: I.check,
+      s: 10,
+      c: "#fff",
+      sw: 3
+    })), React.createElement("span", {
+      style: {
+        fontFamily: 'var(--mono, monospace)',
+        fontSize: 11,
+        fontWeight: 700,
+        color: on ? 'var(--blue-700)' : 'var(--muted)',
+        flexShrink: 0,
+        marginTop: 1,
+        minWidth: 18
+      }
+    }, "L", i + 1), React.createElement("span", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 13,
+        fontWeight: 700,
+        color: on ? 'var(--blue-700)' : 'var(--ink)'
+      }
+    }, t.name), t.description && React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginTop: 1
+      }
+    }, t.description)), React.createElement("span", {
+      className: "tag",
+      style: {
+        flexShrink: 0,
+        color: 'var(--ink-2)'
+      },
+      title: t.kind === 'admin' ? 'Administrators hold every module automatically' : 'The most this rank can be given. You still tick each one below.'
+    }, t.kind === 'admin' ? 'all · automatic' : n ? 'up to ' + n + ' module' + (n !== 1 ? 's' : '') : 'no modules'));
+  })), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: level ? 'var(--muted)' : 'var(--rose)',
+      marginTop: 7
+    }
+  }, level ? React.createElement("span", null, "The rank sets a ", React.createElement("b", null, "limit"), ", it grants nothing. Whichever you pick, every module below still starts at ", React.createElement("b", null, "None"), " and you tick what this person gets.") : React.createElement("span", null, "Not placed yet \u2014 pick a rank to continue. Nothing is chosen for you, so no one is promoted by accident."))), React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
       gap: 12
     }
-  }, React.createElement("div", {
-    className: "field"
-  }, React.createElement("label", null, "Role / template"), React.createElement("select", {
-    value: role,
-    onChange: e => pickRole(e.target.value)
-  }, roleOpts.map(r => React.createElement("option", {
-    key: r
-  }, r)))), React.createElement("div", {
+  }, React.createElement("div", null), React.createElement("div", {
     className: "field"
   }, React.createElement("label", null, "Status"), React.createElement("select", {
     value: status,
@@ -4413,7 +4813,7 @@ function UserModal({
     d: I.user,
     s: 16,
     c: "var(--blue)"
-  }), React.createElement("span", null, React.createElement("b", null, role, "."), " Nurse/PCA accounts sign in to the staff app; they don't submit data.")) : isColl ? React.createElement("div", null, React.createElement("div", {
+  }), React.createElement("span", null, React.createElement("b", null, PORTAL_ROLE_LABEL[portalRole], "."), " Nurse/PCA accounts sign in to the staff app; they don't submit data.")) : isColl ? React.createElement("div", null, React.createElement("div", {
     style: {
       fontSize: 12.5,
       fontWeight: 700,
@@ -4426,7 +4826,7 @@ function UserModal({
       color: 'var(--muted)',
       fontSize: 11
     }
-  }, "\xB7 ", role, " \u2014 signs in to the portal only")), React.createElement("div", {
+  }, "\xB7 ", PORTAL_ROLE_LABEL[portalRole], " \u2014 signs in to the portal only")), React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--muted)',
@@ -4469,25 +4869,45 @@ function UserModal({
       color: 'var(--ink)',
       marginBottom: 3
     }
-  }, "Module permissions ", React.createElement("span", {
+  }, "Module access ", React.createElement("span", {
     style: {
       fontWeight: 500,
       color: 'var(--muted)',
       fontSize: 11
     }
-  }, "\xB7 a template sets defaults; fine-tune per module")), React.createElement("div", {
+  }, "\xB7 these are their sidebar menu items", tier && tier.kind === 'console' ? ' — “' + tier.name + '” only sets the limit' : '')), React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--muted)',
       marginBottom: 9
     }
-  }, "Tick any combination \u2014 ", React.createElement("b", null, "Edit"), ", ", React.createElement("b", null, "Add"), " and ", React.createElement("b", null, "Delete"), " are independent (e.g. grant Delete without Add). Selecting any of them includes View automatically."), React.createElement("div", {
+  }, "Tick any combination \u2014 ", React.createElement("b", null, "Edit"), ", ", React.createElement("b", null, "Add"), ", ", React.createElement("b", null, "Delete"), " and ", React.createElement("b", null, "Print"), " are independent (e.g. grant Delete without Add, or read-only access that may not print). Selecting any of them includes View automatically. ", React.createElement("b", null, "Print"), " is what lets them put a record on paper or save it as a PDF; it is not implied by any other tick, so it starts off. Anything left at ", React.createElement("b", null, "None"), " is hidden from their sidebar entirely \u2014 they never see the menu item.", tier && tier.kind === 'console' && modsForTier(tier).length < USER_MODS.length && React.createElement("span", null, " This rank cannot be given ", React.createElement("b", null, USER_MODS.filter(([k]) => (tier.modules || []).indexOf(k) < 0).map(([, l]) => l).join(', ')), " \u2014 change that in ", React.createElement("b", null, "Manage hierarchy"), ".")), !tier && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)',
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      padding: '11px 13px'
+    }
+  }, "Pick a hierarchy level above first \u2014 it decides which of these an account may be given."), React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
       gap: 8
     }
-  }, USER_MODS.map(([id, label]) => {
+  }, modsGrouped(modsForTier(tier)).map(([grp, ms]) => React.createElement(React.Fragment, {
+    key: grp
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: 'var(--faint)',
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      marginTop: 4
+    }
+  }, grp), ms.map(([id, label,, where]) => {
     const acts = asActions(perms[id]);
     const none = acts.length === 0;
     return React.createElement("div", {
@@ -4505,7 +4925,14 @@ function UserModal({
         color: 'var(--ink-2)',
         fontWeight: 600
       }
-    }, label), React.createElement("div", {
+    }, label, where && React.createElement("span", {
+      style: {
+        display: 'block',
+        fontWeight: 500,
+        fontSize: 10,
+        color: 'var(--faint)'
+      }
+    }, where)), React.createElement("div", {
       style: {
         display: 'flex',
         gap: 6,
@@ -4530,7 +4957,7 @@ function UserModal({
       return React.createElement("button", {
         key: v,
         onClick: () => toggleAct(id, v),
-        title: v === 'view' ? 'Can open / read' : v === 'edit' ? 'Can modify existing' : v === 'add' ? 'Can create new' : 'Can delete',
+        title: v === 'view' ? 'Can open / read' : v === 'edit' ? 'Can modify existing' : v === 'add' ? 'Can create new' : v === 'delete' ? 'Can delete' : 'Can print / save as PDF — take the record out of the system on paper',
         style: {
           display: 'inline-flex',
           alignItems: 'center',
@@ -4562,7 +4989,7 @@ function UserModal({
         sw: 3
       })), l);
     })));
-  }))), !isAdmin && !isColl && React.createElement("div", {
+  }))))), !isAdmin && !isColl && React.createElement("div", {
     style: {
       borderTop: '1px solid var(--line-2)',
       paddingTop: 14
@@ -4689,7 +5116,84 @@ function UserModal({
       color: staffId === '' ? 'var(--rose)' : 'var(--muted)',
       marginTop: 5
     }
-  }, staffId === '' ? 'Not linked yet — until you pick a person, this account will see no staff records at all.' : 'They will see this one record and nothing else.'))), err && React.createElement("div", {
+  }, staffId === '' ? 'Not linked yet — until you pick a person, this account will see no staff records at all.' : 'They will see this one record and nothing else.'))), !isAdmin && !isColl && React.createElement(RosterScopeEditor, {
+    scope: rosterScope,
+    departments: rosterDepts,
+    onScope: setRosterScope,
+    onDepartments: setRosterDepts,
+    depts: allDepts,
+    users: allUsers,
+    exceptUsername: editing ? initial.username : null,
+    hasRosterPerm: asActions(perms.roster).length > 0,
+    staffScope: staffScope
+  }), rosterEditable && React.createElement("div", {
+    style: {
+      borderTop: '1px solid var(--line-2)',
+      paddingTop: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 3
+    }
+  }, "Duty roster ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 whether this in-charge prepares their own unit's sheet")), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginBottom: 9
+    }
+  }, "The in-charge can prepare and submit the roster for their assigned units, from the collection portal. ", React.createElement("b", null, "Approving it stays with an administrator.")), React.createElement("button", {
+    type: "button",
+    onClick: () => setRosterEdit(v => !v),
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 7,
+      padding: '7px 13px',
+      borderRadius: 8,
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: 'pointer',
+      border: '1px solid ' + (rosterEdit ? 'var(--blue)' : 'var(--line)'),
+      background: rosterEdit ? 'var(--blue)' : '#fff',
+      color: rosterEdit ? '#fff' : 'var(--ink-2)'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 13,
+      height: 13,
+      borderRadius: 4,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0,
+      border: '1px solid ' + (rosterEdit ? '#fff' : 'var(--line)'),
+      background: rosterEdit ? 'rgba(255,255,255,.25)' : '#fff'
+    }
+  }, rosterEdit && React.createElement(Ic, {
+    d: I.check,
+    s: 9,
+    c: "#fff",
+    sw: 3
+  })), "Can build this unit\u2019s duty roster"), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginTop: 8,
+      lineHeight: 1.6
+    }
+  }, rosterEdit ? React.createElement(React.Fragment, null, "They get ", React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, "Duty roster"), " in the portal for the departments set above, and send each month\u2019s sheet for approval.") : 'Off — they only submit data. Their roster is prepared by an administrator or a console account granted Duty Roster.')), err && React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--rose)',
@@ -4728,7 +5232,7 @@ function uAvatarColor(s) {
   for (const ch of s || '') h = h * 31 + ch.charCodeAt(0) >>> 0;
   return UCOLORS[h % UCOLORS.length];
 }
-function RoleTemplatesPanel() {
+function HierarchyPanel() {
   const {
     useState,
     useEffect
@@ -4739,123 +5243,129 @@ function RoleTemplatesPanel() {
   const [draft, setDraft] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const may = a => {
-    try {
-      return typeof window.unicoCan !== 'function' || window.unicoCan('users', a);
-    } catch (e) {
-      return true;
-    }
-  };
   const load = () => {
     setErr('');
-    usersApi('GET', '/api/roles').then(j => {
-      setList(j.templates || []);
+    usersApi('GET', '/api/tiers').then(j => {
+      setList(j.tiers || []);
       setCounts(j.counts || {});
-      ROLE_TMPL = j.templates || null;
+      TIER_CACHE = j.tiers || null;
     }).catch(e => {
       setList([]);
-      setErr(e.message || 'Could not load role templates.');
+      setErr(e.message || 'Could not load the hierarchy.');
     });
   };
   useEffect(load, []);
+  const done = msg => {
+    uToast(msg);
+    setOpen(null);
+    setDraft(null);
+    loadTiers(true);
+    load();
+  };
   const startEdit = t => {
     setOpen(t.id);
+    setErr('');
     setDraft({
       name: t.name,
       description: t.description || '',
-      perms: USER_MODS.reduce((m, [k]) => (m[k] = asActions(t.perms && t.perms[k]), m), {})
+      modules: (t.modules || []).slice(),
+      signoff: t.signoff || ''
     });
   };
   const startNew = () => {
     setOpen('__new');
+    setErr('');
     setDraft({
       name: '',
       description: '',
-      perms: NONE_PERMS()
+      modules: [],
+      signoff: ''
     });
   };
-  const toggle = (mid, act) => setDraft(d => {
-    const cur = asActions(d.perms[mid]);
-    let next = cur.indexOf(act) >= 0 ? cur.filter(a => a !== act) : [...cur, act];
-    if (next.some(a => a !== 'view') && next.indexOf('view') < 0) next.push('view');
-    next = PERM_ORDER.filter(a => next.indexOf(a) >= 0);
-    return {
-      ...d,
-      perms: {
-        ...d.perms,
-        [mid]: next
-      }
-    };
-  });
-  const setAll = v => setDraft(d => ({
+  const toggleMod = k => setDraft(d => ({
     ...d,
-    perms: USER_MODS.reduce((m, [k]) => (m[k] = v ? [...PERM_ORDER] : [], m), {})
+    modules: d.modules.indexOf(k) >= 0 ? d.modules.filter(x => x !== k) : [...d.modules, k]
+  }));
+  const setAll = on => setDraft(d => ({
+    ...d,
+    modules: on ? USER_MODS.map(([k]) => k) : []
   }));
   const save = async t => {
     if (!draft) return;
-    if (!draft.name.trim()) {
-      setErr('Role name is required.');
-      return;
+    if (!draft.name.trim()) return setErr('A tier name is required.');
+    if (t && t.kind === 'console') {
+      const lost = (t.modules || []).filter(k => draft.modules.indexOf(k) < 0);
+      const n = counts[t.id] || 0;
+      if (lost.length && n) {
+        const names = USER_MODS.filter(([k]) => lost.indexOf(k) >= 0).map(([, l]) => l).join(', ');
+        const ok = await window.UI.confirm({
+          title: 'Take ' + names + ' away from ' + n + ' account' + (n === 1 ? '' : 's') + '?',
+          message: 'Everyone at “' + t.name + '” loses that access immediately and is signed out so it takes effect at once. Nothing else they hold changes.',
+          danger: true,
+          confirmLabel: 'Narrow the tier'
+        });
+        if (!ok) return;
+      }
     }
     setBusy(true);
     setErr('');
     try {
-      if (t) await usersApi('PUT', '/api/roles/' + encodeURIComponent(t.id), draft);else await usersApi('POST', '/api/roles', draft);
-      uToast(t ? 'Role “' + draft.name.trim() + '” saved' : 'Role “' + draft.name.trim() + '” created');
-      setOpen(null);
-      setDraft(null);
-      loadRoleTemplates(true);
-      load();
+      const body = {
+        name: draft.name.trim(),
+        description: draft.description,
+        modules: draft.modules,
+        signoff: draft.signoff || ''
+      };
+      const r = t ? await usersApi('PUT', '/api/tiers/' + encodeURIComponent(t.id), body) : await usersApi('POST', '/api/tiers', body);
+      done(r && r.clamped ? 'Saved · ' + r.clamped + ' account' + (r.clamped === 1 ? '' : 's') + ' narrowed' : t ? 'Tier saved' : 'Tier created');
     } catch (e) {
-      setErr(e.message || 'Could not save the role.');
-    } finally {
-      setBusy(false);
-    }
-  };
-  const apply = async t => {
-    const n = counts[t.id] || 0;
-    const ok = await window.UI.confirm({
-      title: 'Apply “' + t.name + '” to ' + n + ' account' + (n === 1 ? '' : 's') + '?',
-      message: 'Each account stamped with this role gets exactly these permissions, replacing what it holds now. They will be signed out so the change takes effect immediately.',
-      confirmLabel: 'Apply to ' + n
-    });
-    if (!ok) return;
-    setBusy(true);
-    try {
-      const r = await usersApi('POST', '/api/roles/' + encodeURIComponent(t.id) + '/apply');
-      uToast('Applied to ' + (r.updated || 0) + ' account' + ((r.updated || 0) === 1 ? '' : 's'));
-    } catch (e) {
-      uToast(e.message || 'Failed', 'error');
+      setErr(e.message || 'Could not save the tier.');
     } finally {
       setBusy(false);
     }
   };
   const del = async t => {
-    const n = counts[t.id] || 0;
     const ok = await window.UI.confirm({
-      title: 'Delete the role “' + t.name + '”?',
-      message: n ? 'It is used by ' + n + ' account' + (n === 1 ? '' : 's') + '. They keep every permission they already have — only the label is removed.' : 'It is not used by any account.',
+      title: 'Remove the tier “' + t.name + '”?',
+      message: 'It is not used by any account. The ranks below it move up one.',
       danger: true,
-      confirmLabel: 'Delete role'
+      confirmLabel: 'Remove tier'
     });
     if (!ok) return;
     try {
-      await usersApi('DELETE', '/api/roles/' + encodeURIComponent(t.id));
-      uToast('Role removed');
-      loadRoleTemplates(true);
-      load();
+      await usersApi('DELETE', '/api/tiers/' + encodeURIComponent(t.id));
+      done('Tier removed');
     } catch (e) {
       uToast(e.message || 'Failed', 'error');
     }
   };
-  const summary = perms => {
-    const acts = USER_MODS.map(([k]) => asActions(perms && perms[k]));
-    const on = acts.filter(a => a.length).length;
-    if (!on) return 'No access';
-    const ed = acts.filter(a => a.length > 1).length;
-    return on + ' module' + (on !== 1 ? 's' : '') + (ed ? ' · ' + ed + ' editable' : ' · read-only');
+  const move = async (t, dir) => {
+    const con = (list || []).filter(x => x.kind === 'console').sort(byRank);
+    const i = con.findIndex(x => x.id === t.id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= con.length) return;
+    const order = con.map(x => x.id);
+    order.splice(j, 0, order.splice(i, 1)[0]);
+    try {
+      const r = await usersApi('POST', '/api/tiers/reorder', {
+        order
+      });
+      setList(r.tiers || list);
+      TIER_CACHE = r.tiers || null;
+      loadTiers(true);
+    } catch (e) {
+      uToast(e.message || 'Failed', 'error');
+    }
   };
-  const matrix = (d, t) => React.createElement("div", {
+  const ceilingLine = t => {
+    if (t.kind === 'admin') return 'Every module';
+    if (t.kind === 'portal') return 'No modules · a collection scope instead';
+    const n = (t.modules || []).length;
+    if (!n) return 'Nothing may be granted';
+    if (n === USER_MODS.length) return 'May be given any module';
+    return 'May be given ' + n + ' of ' + USER_MODS.length + ' · not ' + USER_MODS.filter(([k]) => (t.modules || []).indexOf(k) < 0).map(([, l]) => l).join(', ');
+  };
+  const editor = (d, t) => React.createElement("div", {
     style: {
       borderTop: '1px solid var(--line-2)',
       marginTop: 11,
@@ -4874,7 +5384,7 @@ function RoleTemplatesPanel() {
       ...x,
       name: e.target.value
     })),
-    placeholder: "Role name \u2014 e.g. Nurse Manager",
+    placeholder: "Tier name \u2014 e.g. Nurse Manager",
     style: {
       flex: '1 1 210px',
       padding: '9px 11px',
@@ -4890,7 +5400,7 @@ function RoleTemplatesPanel() {
       ...x,
       description: e.target.value
     })),
-    placeholder: "What this role is for (shown to administrators)",
+    placeholder: "What this tier is (shown when placing an account)",
     style: {
       flex: '2 1 300px',
       padding: '9px 11px',
@@ -4902,10 +5412,77 @@ function RoleTemplatesPanel() {
     }
   })), React.createElement("div", {
     style: {
+      marginBottom: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      fontWeight: 600,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      marginBottom: 6
+    }
+  }, "Place in the sign-off chain"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, [['', 'Takes no part'], ['prepare', 'Prepares'], ['check', 'Checks'], ['approve', 'Approves']].map(([v, l]) => {
+    const on = (d.signoff || '') === v;
+    return React.createElement("span", {
+      key: v || 'none',
+      onClick: () => setDraft(x => ({
+        ...x,
+        signoff: v
+      })),
+      style: {
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '5px 11px',
+        borderRadius: 16,
+        fontSize: 11.5,
+        fontWeight: 600,
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue-50)' : '#fff',
+        color: on ? 'var(--blue-700)' : 'var(--muted)'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 12,
+        height: 12,
+        borderRadius: '50%',
+        display: 'grid',
+        placeItems: 'center',
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue)' : '#fff'
+      }
+    }, on && React.createElement(Ic, {
+      d: I.check,
+      s: 8,
+      c: "#fff"
+    })), l);
+  })), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginTop: 7
+    }
+  }, "Who signs a duty roster: the ", React.createElement("b", null, "Prepares"), " tier drafts it, the ", React.createElement("b", null, "Checks"), " tier reviews it, and the ", React.createElement("b", null, "Approves"), " tier signs it off and locks it. The roster's Sign-off boxes list the people at each of those tiers.")), t && t.fixed ? React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "This tier is built in: ", t.kind === 'admin' ? 'an Administrator holds every module' : 'a portal login holds none', ", so there is no ceiling to set.") : React.createElement("div", null, React.createElement("div", {
+    style: {
       display: 'flex',
       alignItems: 'center',
       gap: 8,
-      marginBottom: 8
+      marginBottom: 8,
+      flexWrap: 'wrap'
     }
   }, React.createElement("span", {
     style: {
@@ -4915,7 +5492,7 @@ function RoleTemplatesPanel() {
       textTransform: 'uppercase',
       letterSpacing: .4
     }
-  }, "Module privileges"), React.createElement("span", {
+  }, "Modules an account at this tier may be given"), React.createElement("span", {
     className: "spacer",
     style: {
       flex: 1
@@ -4923,70 +5500,55 @@ function RoleTemplatesPanel() {
   }), React.createElement("button", {
     className: "btn sm",
     onClick: () => setAll(true)
-  }, "Grant all"), React.createElement("button", {
+  }, "All"), React.createElement("button", {
     className: "btn sm",
     onClick: () => setAll(false)
-  }, "Clear all")), React.createElement("div", {
+  }, "None")), React.createElement("div", {
     style: {
-      border: '1px solid var(--line)',
-      borderRadius: 9,
-      overflow: 'hidden'
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
     }
-  }, USER_MODS.map(([mid, label], i) => {
-    const acts = asActions(d.perms[mid]);
-    return React.createElement("div", {
-      key: mid,
+  }, USER_MODS.map(([k, label, grp]) => {
+    const on = d.modules.indexOf(k) >= 0;
+    return React.createElement("span", {
+      key: k,
+      onClick: () => toggleMod(k),
       style: {
-        display: 'flex',
+        cursor: 'pointer',
+        display: 'inline-flex',
         alignItems: 'center',
-        gap: 10,
-        padding: '8px 11px',
-        flexWrap: 'wrap',
-        borderTop: i ? '1px solid var(--line-2)' : 0,
-        background: acts.length ? 'var(--panel-2)' : 'transparent'
+        gap: 6,
+        padding: '5px 11px',
+        borderRadius: 16,
+        fontSize: 11.5,
+        fontWeight: 600,
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue-50)' : '#fff',
+        color: on ? 'var(--blue-700)' : 'var(--muted)'
       }
     }, React.createElement("span", {
       style: {
-        flex: '1 1 160px',
-        fontSize: 12.5,
-        fontWeight: 600,
-        color: acts.length ? 'var(--ink)' : 'var(--muted)'
+        width: 12,
+        height: 12,
+        borderRadius: 3,
+        display: 'grid',
+        placeItems: 'center',
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue)' : '#fff'
       }
-    }, label), PERM_ACTS.map(([a, al]) => {
-      const on = acts.indexOf(a) >= 0;
-      return React.createElement("span", {
-        key: a,
-        onClick: () => toggle(mid, a),
-        style: {
-          cursor: 'pointer',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '4px 10px',
-          borderRadius: 16,
-          fontSize: 11.5,
-          fontWeight: 600,
-          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-          background: on ? 'var(--blue-50)' : '#fff',
-          color: on ? 'var(--blue-700)' : 'var(--muted)'
-        }
-      }, React.createElement("span", {
-        style: {
-          width: 12,
-          height: 12,
-          borderRadius: 3,
-          display: 'grid',
-          placeItems: 'center',
-          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-          background: on ? 'var(--blue)' : '#fff'
-        }
-      }, on && React.createElement(Ic, {
-        d: I.check,
-        s: 9,
-        c: "#fff"
-      })), al);
-    }));
+    }, on && React.createElement(Ic, {
+      d: I.check,
+      s: 9,
+      c: "#fff"
+    })), label);
   })), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginTop: 9
+    }
+  }, "Ticking a module here grants nobody anything \u2014 it only makes that module ", React.createElement("b", null, "tickable"), " on an account placed at this tier. Unticking one ", React.createElement("b", null, "removes"), " it from everyone already at this tier.")), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 9,
@@ -4994,14 +5556,11 @@ function RoleTemplatesPanel() {
       flexWrap: 'wrap'
     }
   }, React.createElement("span", {
+    className: "spacer",
     style: {
-      fontSize: 11.5,
-      color: 'var(--muted)',
-      flex: 1,
-      minWidth: 180,
-      alignSelf: 'center'
+      flex: 1
     }
-  }, "Saving updates the role only. Existing accounts keep their current permissions until you press ", React.createElement("b", null, "Apply to members"), "."), React.createElement("button", {
+  }), React.createElement("button", {
     className: "btn",
     onClick: () => {
       setOpen(null);
@@ -5012,14 +5571,10 @@ function RoleTemplatesPanel() {
     className: "btn pri",
     disabled: busy,
     onClick: () => save(t)
-  }, busy ? 'Saving…' : t ? 'Save role' : 'Create role')));
-  return React.createElement("div", {
-    style: {
-      marginTop: 22,
-      borderTop: '1px solid var(--line)',
-      paddingTop: 18
-    }
-  }, React.createElement("div", {
+  }, busy ? 'Saving…' : t ? 'Save tier' : 'Create tier')));
+  const ordered = (list || []).slice().sort(byRank);
+  const consoleIds = ordered.filter(t => t.kind === 'console').map(t => t.id);
+  return React.createElement("div", null, React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -5032,12 +5587,12 @@ function RoleTemplatesPanel() {
       fontSize: 14,
       fontWeight: 700
     }
-  }, "Role templates"), React.createElement("div", {
+  }, "Hierarchy"), React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, "Named privilege sets you can grant in one pick \u2014 Nurse Manager, Ward In-charge, or your own.")), React.createElement("span", {
+  }, "Your own ladder \u2014 the rank an account is placed at, and the modules that rank may be given.")), React.createElement("span", {
     className: "spacer",
     style: {
       flex: 1
@@ -5048,13 +5603,23 @@ function RoleTemplatesPanel() {
   }, React.createElement(Ic, {
     d: I.search,
     s: 14
-  }), "Refresh"), may('add') && React.createElement("button", {
+  }), "Refresh"), mayUsers('add') && React.createElement("button", {
     className: "btn pri sm",
     onClick: startNew
   }, React.createElement(Ic, {
     d: I.plus,
     s: 14
-  }), "Add role")), err && React.createElement("div", {
+  }), "Add tier")), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--ink-2)',
+      background: 'var(--blue-50)',
+      border: '1px solid var(--blue-100)',
+      borderRadius: 9,
+      padding: '10px 12px',
+      margin: '12px 0'
+    }
+  }, "A tier is a ", React.createElement("b", null, "ceiling, not a grant"), ". Placing an account at a tier gives it nothing \u2014 every module is still ticked by hand in the account itself. Widening a tier gives its members nothing either; only narrowing one takes access away."), err && React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: '#b32339',
@@ -5078,7 +5643,7 @@ function RoleTemplatesPanel() {
       fontWeight: 700,
       color: 'var(--blue-700)'
     }
-  }, "New role"), matrix(draft, null)), React.createElement("div", {
+  }, "New tier"), editor(draft, null)), React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -5092,9 +5657,10 @@ function RoleTemplatesPanel() {
       padding: '18px',
       fontSize: 13
     }
-  }, "Loading\u2026"), (list || []).map(t => {
+  }, "Loading\u2026"), ordered.map((t, i) => {
     const n = counts[t.id] || 0;
     const isOpen = open === t.id;
+    const ci = consoleIds.indexOf(t.id);
     return React.createElement("div", {
       key: t.id,
       style: {
@@ -5109,7 +5675,15 @@ function RoleTemplatesPanel() {
         gap: 10,
         flexWrap: 'wrap'
       }
-    }, React.createElement("div", {
+    }, React.createElement("span", {
+      style: {
+        fontFamily: 'var(--mono, monospace)',
+        fontSize: 11.5,
+        fontWeight: 700,
+        color: 'var(--muted)',
+        flexShrink: 0
+      }
+    }, "L", i + 1), React.createElement("div", {
       style: {
         minWidth: 0,
         flex: '1 1 200px'
@@ -5118,14 +5692,15 @@ function RoleTemplatesPanel() {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 8
+        gap: 8,
+        flexWrap: 'wrap'
       }
     }, React.createElement("span", {
       style: {
         fontSize: 13.5,
         fontWeight: 700
       }
-    }, t.name), t.builtin && React.createElement("span", {
+    }, t.name), t.fixed && React.createElement("span", {
       className: "tag",
       style: {
         background: 'var(--panel-2)',
@@ -5140,48 +5715,81 @@ function RoleTemplatesPanel() {
     }, t.description)), React.createElement("span", {
       className: "tag",
       style: {
-        minWidth: 120,
+        minWidth: 130,
         justifyContent: 'center',
         color: 'var(--ink-2)'
       }
-    }, summary(t.perms)), React.createElement("span", {
+    }, ceilingLine(t)), t.signoff && React.createElement("span", {
       className: "tag",
       style: {
-        minWidth: 78,
+        justifyContent: 'center',
+        color: 'var(--blue-700)',
+        background: 'var(--blue-50)'
+      }
+    }, t.signoff === 'approve' ? 'Approves' : t.signoff === 'check' ? 'Checks' : 'Prepares'), React.createElement("span", {
+      className: "tag",
+      style: {
+        minWidth: 82,
         justifyContent: 'center'
       }
-    }, n, " member", n === 1 ? '' : 's'), may('edit') && React.createElement("button", {
+    }, n, " account", n === 1 ? '' : 's'), mayUsers('edit') && t.kind === 'console' && React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        gap: 2
+      }
+    }, React.createElement("button", {
+      className: "icon-btn",
+      title: "Move up \u2014 more senior",
+      disabled: ci <= 0,
+      onClick: () => move(t, -1)
+    }, React.createElement("span", {
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        transform: 'rotate(-90deg)'
+      }
+    }, React.createElement(Ic, {
+      d: I.chevR,
+      s: 13
+    }))), React.createElement("button", {
+      className: "icon-btn",
+      title: "Move down \u2014 more junior",
+      disabled: ci < 0 || ci >= consoleIds.length - 1,
+      onClick: () => move(t, 1)
+    }, React.createElement("span", {
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        transform: 'rotate(90deg)'
+      }
+    }, React.createElement(Ic, {
+      d: I.chevR,
+      s: 13
+    })))), mayUsers('edit') && React.createElement("button", {
       className: "btn sm",
       onClick: () => isOpen ? (setOpen(null), setDraft(null)) : startEdit(t)
     }, React.createElement(Ic, {
       d: I.edit,
       s: 13
-    }), isOpen ? 'Close' : 'Edit'), may('edit') && React.createElement("button", {
-      className: "btn sm",
-      disabled: !n || busy,
-      title: n ? 'Push these permissions onto its members' : 'No account uses this role yet',
-      onClick: () => apply(t)
-    }, React.createElement(Ic, {
-      d: I.check,
-      s: 13
-    }), "Apply to members"), may('delete') && !t.builtin && React.createElement("button", {
+    }), isOpen ? 'Close' : 'Edit'), mayUsers('delete') && !t.fixed && React.createElement("button", {
       className: "icon-btn danger",
-      title: "Delete role",
+      title: n ? 'Move its accounts to another tier first' : 'Remove tier',
+      disabled: !!n,
       onClick: () => del(t)
     }, React.createElement(Ic, {
       d: I.x,
       s: 14
-    }))), isOpen && draft && matrix(draft, t));
-  }), list !== null && list.length === 0 && React.createElement("div", {
+    }))), isOpen && draft && editor(draft, t));
+  }), list !== null && !ordered.length && React.createElement("div", {
     style: {
       textAlign: 'center',
       color: 'var(--faint)',
       padding: '18px',
       fontSize: 13
     }
-  }, "No role templates yet.")));
+  }, "No tiers yet.")));
 }
-window.RoleTemplatesPanel = RoleTemplatesPanel;
+window.HierarchyPanel = HierarchyPanel;
 function UsersAndRoles({
   depts
 }) {
@@ -5190,10 +5798,10 @@ function UsersAndRoles({
     try {
       delete window.__UNICO_USERS_SUBTAB__;
     } catch (e) {}
-    return s === 'access' ? 'access' : 'accounts';
+    return s === 'access' ? 'access' : s === 'hierarchy' ? 'hierarchy' : 'accounts';
   });
   const hasDC = typeof DataResponsibles !== 'undefined';
-  const TABS = [['accounts', 'Accounts', I.user], ['access', 'Indicator Access', I.check]];
+  const TABS = [['accounts', 'Accounts', I.user], ['hierarchy', 'Hierarchy', I.layers], ['access', 'Indicator Access', I.check]];
   return React.createElement("div", {
     style: {
       display: 'flex',
@@ -5226,7 +5834,7 @@ function UsersAndRoles({
       fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, "Sign-in accounts and roles. A collector\u2019s or in-charge\u2019s departments, quality areas and indicators are set in their account (Manage).")), React.createElement("div", {
+  }, "Sign-in accounts. Each one is created at a level and granted module access explicitly, in its own dialog \u2014 a collector\u2019s or in-charge\u2019s departments, quality areas and indicators are set there too (Manage).")), React.createElement("div", {
     className: "seg"
   }, TABS.map(([id, l, ic]) => React.createElement("button", {
     key: id,
@@ -5245,8 +5853,13 @@ function UsersAndRoles({
   }, React.createElement("div", {
     className: "card-b"
   }, React.createElement(UserManagement, {
-    depts: depts
-  }))), sub === 'access' && (hasDC ? React.createElement(DataResponsibles, {
+    depts: depts,
+    onManageTiers: () => setSub('hierarchy')
+  }))), sub === 'hierarchy' && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b"
+  }, React.createElement(HierarchyPanel, null))), sub === 'access' && (hasDC ? React.createElement(DataResponsibles, {
     key: "access",
     depts: depts,
     embedded: true,
@@ -5254,13 +5867,15 @@ function UsersAndRoles({
   }) : null));
 }
 function UserManagement({
-  depts
+  depts,
+  onManageTiers
 } = {}) {
   const {
     useState,
     useEffect
   } = React;
   const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
+  const tiers = useTiers();
   const [users, setUsers] = useState(null);
   const [err, setErr] = useState('');
   const [q, setQ] = useState('');
@@ -5277,7 +5892,7 @@ function UserManagement({
   useEffect(load, []);
   const all = users || [];
   const admins = all.filter(u => u.role === 'Administrator' && u.active !== false).length;
-  const filtered = all.filter(u => !q || `${u.name} ${u.username} ${u.email || ''} ${u.title || u.role}`.toLowerCase().includes(q.toLowerCase()));
+  const filtered = all.filter(u => !q || `${u.name} ${u.username} ${u.email || ''} ${roleLabel(u)} ${tierLabel(u)}`.toLowerCase().includes(q.toLowerCase()));
   const toggle = async u => {
     try {
       await usersApi('PATCH', '/api/users/' + encodeURIComponent(u.username), {
@@ -5310,7 +5925,25 @@ function UserManagement({
   const mayAdd = may('add'),
     mayEdit = may('edit'),
     mayDel = may('delete');
-  const roleLabel = u => u.role === 'Administrator' ? 'Administrator' : PORTAL_ROLE_LABEL[u.role] || u.title || 'User';
+  const staffByEmp = React.useMemo(() => {
+    const src = window.STAFF_SEED || window.__UNICO_STAFF__ || [];
+    const m = {};
+    (Array.isArray(src) ? src : []).forEach(e => {
+      const k = String(e.emp_id || '').trim().toLowerCase();
+      if (k) m[k] = e;
+    });
+    return m;
+  }, [users]);
+  const staffOf = u => staffByEmp[String(u.staffEmpId || u.username || '').trim().toLowerCase()] || null;
+  const designationOf = u => {
+    const r = staffOf(u);
+    return r && String(r.designation || '').trim() || '';
+  };
+  const roleLabel = u => u.role === 'Administrator' ? 'Administrator' : PORTAL_ROLE_LABEL[u.role] || designationOf(u) || 'Staff account';
+  const tierLabel = u => {
+    if (u.role === 'Administrator' || PORTAL_ROLE_LABEL[u.role]) return '';
+    return u.level ? tierName(tiers, u.level) : 'Not placed';
+  };
   const staffScopeLabel = u => {
     const sc = u.staffScope || 'all';
     if (sc === 'self') return 'own record only';
@@ -5496,7 +6129,16 @@ function UserManagement({
         minWidth: 96,
         justifyContent: 'center'
       }
-    }, roleLabel(u)), React.createElement("span", {
+    }, roleLabel(u)), tierLabel(u) && React.createElement("span", {
+      className: "tag",
+      style: {
+        minWidth: 96,
+        justifyContent: 'center',
+        color: u.level ? 'var(--blue-700)' : 'var(--muted)',
+        background: u.level ? 'var(--blue-50)' : 'var(--panel-2)'
+      },
+      title: u.level ? 'Hierarchy level' : 'No hierarchy level assigned — open Manage to place this account'
+    }, tierLabel(u)), React.createElement("span", {
       className: "tag",
       style: {
         minWidth: 96,
@@ -5536,9 +6178,11 @@ function UserManagement({
       padding: '24px',
       fontSize: 13
     }
-  }, "No users", q ? ' match the search' : ' yet', ".")), React.createElement(RoleTemplatesPanel, null), modal && React.createElement(UserModal, {
+  }, "No users", q ? ' match the search' : ' yet', ".")), modal && React.createElement(UserModal, {
     initial: modal.user,
     depts: depts,
+    allUsers: all,
+    onManageTiers: onManageTiers,
     onClose: () => setModal(null),
     onSaved: () => {
       setModal(null);

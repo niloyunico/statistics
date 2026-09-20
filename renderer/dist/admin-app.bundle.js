@@ -8268,6 +8268,7 @@
     };
     roleOf = u => this.state.roles.find(r => r.id === (u.roleId || u.role)) || this.state.roles.find(r => r.kind === (u.role === 'Administrator' ? 'admin' : u.role === 'User' ? 'console' : 'portal')) || this.state.roles[0];
     kindToLegacy = role => role.kind === 'admin' ? 'Administrator' : role.kind === 'console' ? 'User' : PORTAL_ROLES.includes(role.id) ? role.id : 'nurse';
+    kindToLevel = role => role.kind === 'admin' ? 'admin' : role.kind === 'console' ? this.levelOf(role) >= 2 ? 'incharge' : 'manager' : 'portal';
     editRole = r => this.setState({
       screen: 'roleEdit',
       re: JSON.parse(JSON.stringify(r)),
@@ -11603,9 +11604,6 @@
             screen: 'roles',
             re: null
           });
-          if (!s.demo && re.kind === 'console' && !re.system) api('/api/roles/' + encodeURIComponent(re.id), {
-            method: 'DELETE'
-          }).then(() => this.toastMsg('Role deleted on the server')).catch(e => this.toastMsg(e.message || 'The server kept the role'));
         },
         reIsAdmin: re.kind === 'admin',
         reIsConsole: re.kind === 'console',
@@ -12185,7 +12183,7 @@
           [k]: v
         })
       }));
-      const [depts, staff, users, roles, log, subs, pend, meds] = await Promise.all([tryApi('/api/departments'), tryApi('/api/staff'), tryApi('/api/users'), tryApi('/api/roles'), tryApi('/api/activity?limit=120'), pageAll('/api/submissions?limit=1000', 'submissions', 2), pageAll('/api/submissions?status=pending&limit=500', 'submissions', 10), tryApi('/api/med/browse?per=60&page=1')]);
+      const [depts, staff, users, log, subs, pend, meds] = await Promise.all([tryApi('/api/departments'), tryApi('/api/staff'), tryApi('/api/users'), tryApi('/api/activity?limit=120'), pageAll('/api/submissions?limit=1000', 'submissions', 2), pageAll('/api/submissions?status=pending&limit=500', 'submissions', 10), tryApi('/api/med/browse?per=60&page=1')]);
       const deptList = depts && depts.ok && Array.isArray(depts.departments) ? depts.departments : null;
       const staffList = staff && staff.ok && Array.isArray(staff.staff) ? staff.staff : [];
       const userList = users && users.ok && Array.isArray(users.users) && users.users.length ? users.users : null;
@@ -12222,25 +12220,6 @@
           stDept: info[st.stDept] ? st.stDept : first,
           stCompare: st.stCompare.filter(d => info[d]).length ? st.stCompare.filter(d => info[d]) : Object.keys(info).slice(0, 3)
         }));
-      }
-      if (roles && roles.ok && Array.isArray(roles.templates)) {
-        const extra = roles.templates.filter(t => !this.state.roles.some(r => r.label.toLowerCase() === String(t.name || '').toLowerCase())).map(t => ({
-          id: t.name,
-          label: t.name,
-          desc: t.description || 'Server role template',
-          kind: 'console',
-          system: false,
-          color: '#0072a3',
-          perms: permsFromLevels(t.perms),
-          appFeats: {},
-          scope: 'departments',
-          parent: 'CNS',
-          live: true
-        }));
-        if (extra.length) this.setState(s => ({
-          roles: [...s.roles, ...extra]
-        }));
-        patch('roles', roles.templates);
       }
       if (userList) {
         const mapped = userList.map(u => liveUser(u, this.state.roles, deptIdToShort));
@@ -12396,7 +12375,7 @@
         }).catch(e => this.toastMsg(e.message || 'Settings were not saved.'));
       }, 600);
     }
-    saveRole(rec, exists) {
+    saveRole(rec) {
       if (this.state.demo) return;
       if (rec.kind === 'portal') {
         const feats = Object.assign({}, this.state.aaPublished);
@@ -12410,32 +12389,7 @@
         return;
       }
       if (rec.kind !== 'console') return;
-      const body = {
-        name: rec.label,
-        description: rec.desc || '',
-        perms: levelsFromPerms(rec.perms)
-      };
-      const p = exists && rec.live !== false && (this.state.live.roles || []).some(x => x.id === rec.id || String(x.name).toLowerCase() === String(rec.label).toLowerCase()) ? api('/api/roles/' + encodeURIComponent(rec.id), {
-        method: 'PUT',
-        body
-      }) : api('/api/roles', {
-        method: 'POST',
-        body: Object.assign({
-          id: rec.id
-        }, body)
-      });
-      p.then(r => {
-        if (r && r.template) this.setState(st => ({
-          roles: st.roles.map(x => x.id === rec.id ? Object.assign({}, x, {
-            id: r.template.id,
-            live: true
-          }) : x),
-          live: Object.assign({}, st.live, {
-            roles: (st.live.roles || []).filter(x => x.id !== r.template.id).concat([r.template])
-          })
-        }));
-        this.toastMsg('Role saved on the server');
-      }).catch(e => this.toastMsg(e.message || 'The server did not save the role.'));
+      this.toastMsg('Saved. Module access is granted per account, in the account itself.');
     }
     post(path, body, after) {
       return api(path, {
@@ -12677,7 +12631,7 @@
         departments: (ud.depts || []).map(x => shortToId[x] || x),
         staffScope: ud.scope || 'departments',
         perms: levelsFromPerms(ud.perms),
-        roleTemplate: ud.roleId || null,
+        level: this.kindToLevel(roleObj || this.roleOf(ud)),
         staffEmpId: ud.emp && ud.emp !== '—' ? ud.emp : null
       };
       let p;
@@ -13126,7 +13080,7 @@
     const legacy = u.role || 'User';
     let roleId = legacy === 'Administrator' ? 'Administrator' : legacy === 'incharge' ? 'incharge' : legacy === 'collector' ? 'collector' : null;
     if (!roleId) {
-      const t = String(u.roleTemplate || u.title || '');
+      const t = String(u.level === 'incharge' ? 'incharge' : u.roleTemplate || u.title || '');
       const hit = roles.find(r => r.kind === 'console' && (r.id === t || r.label.toLowerCase() === t.toLowerCase()));
       roleId = hit ? hit.id : u.perms ? 'Manager' : 'Manager';
     }

@@ -41,6 +41,10 @@ class AdminApp extends React.Component {
   levelOf = (role, depth=0) => { if (!role || !role.parent || depth>8) return 0; const p = this.state.roles.find(r=>r.id===role.parent); return p ? 1+this.levelOf(p,depth+1) : 0; };
   roleOf = (u) => this.state.roles.find(r=>r.id===(u.roleId||u.role)) || this.state.roles.find(r=>r.kind===(u.role==='Administrator'?'admin':u.role==='User'?'console':'portal')) || this.state.roles[0];
   kindToLegacy = (role) => role.kind==='admin'?'Administrator':role.kind==='console'?'User':(PORTAL_ROLES.includes(role.id)?role.id:'nurse');
+  /* The account level the server clamps this account's module access to (users-admin.js
+     LEVEL_MODULES). A console role that sits below the Nurse Manager tier is an
+     'incharge': it may hold any module except Administration. */
+  kindToLevel = (role) => role.kind==='admin' ? 'admin' : role.kind==='console' ? (this.levelOf(role) >= 2 ? 'incharge' : 'manager') : 'portal';
   editRole = (r) => this.setState({screen:'roleEdit',re:JSON.parse(JSON.stringify(r)),reTab:'basics',reToast:'',drawerOpen:false});
   newRoleFn = (base) => this.editRole(base ? {...base,id:null,label:base.label+' copy',system:false} : {id:null,label:'',desc:'',kind:'console',system:false,color:'#0072a3',perms:preset({}),appFeats:featDefaults(0),scope:'departments',parent:'Nurse Manager'});
   aaToastMsg = (msg) => { this.setState({aaToast:msg}); setTimeout(()=>this.setState({aaToast:''}),2400); };
@@ -468,7 +472,7 @@ class AdminApp extends React.Component {
       reColors:ROLE_COLORS.map(c=>({go:()=>setRe({color:c}),style:`width:30px;height:30px;border-radius:50%;border:3px solid ${re.color===c?'#16202e':'#fff'};background:${c};cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.15)`})),
       reIsPortal:re.kind==='portal', reScopes:[['all','All'],['departments','Own departments'],['self','Own record']].map(([k,l])=>({label:l,go:()=>setRe({scope:k}),style:pillBtn(re.scope===k).replace('padding:7px 10px','padding:6px 9px').replace('font-size:12px','font-size:11px')})),
       reCanDelete:!!re.id&&!re.system&&!reMembers.length, reCannotDelete:!!re.id&&(re.system||reMembers.length>0), reDeleteHint:re.system?'System roles cannot be deleted.':`Move its ${reMembers.length} member${reMembers.length===1?'':'s'} to another role first.`,
-      reDelete:()=>{ this.setState({roles:roles.filter(r=>r.id!==re.id),screen:'roles',re:null}); if(!s.demo&&re.kind==='console'&&!re.system) api('/api/roles/'+encodeURIComponent(re.id),{method:'DELETE'}).then(()=>this.toastMsg('Role deleted on the server')).catch(e=>this.toastMsg(e.message||'The server kept the role')); },
+      reDelete:()=>{ this.setState({roles:roles.filter(r=>r.id!==re.id),screen:'roles',re:null}); },
       reIsAdmin:re.kind==='admin', reIsConsole:re.kind==='console',
       rePresetChips:ROLE_TEMPLATES.map(t=>({label:t.label,go:()=>setRe({perms:JSON.parse(JSON.stringify(t.perms))}),style:chip(JSON.stringify(re.perms)===JSON.stringify(t.perms))})),
       rePermRows:MODULES.map(([k,label])=>{ const acts=(re.perms&&re.perms[k])||[]; return {label,summary:acts.length?acts.map(a=>a[0].toUpperCase()+a.slice(1)).join(' · '):'No access',cells:ACTS.map(a=>({on:reHas(k,a),go:()=>reToggle(k,a),style:`width:30px;height:30px;border-radius:9px;cursor:pointer;display:grid;place-items:center;margin:0 auto;border:1.5px solid ${reHas(k,a)?'transparent':'rgba(125,145,180,.35)'};background:${reHas(k,a)?(a==='delete'?'linear-gradient(140deg,#d23a52,#a8253c)':'linear-gradient(140deg,#6a52d4,#0072a3)'):'rgba(255,255,255,.7)'}`}))}; }),
@@ -578,8 +582,8 @@ class AdminApp extends React.Component {
     const patch = (k, v) => this.setState((s) => ({ live: Object.assign({}, s.live, { [k]: v }) }));
     // Submissions page through nextOffset: the pending queue on its own (?status=pending, so a
     // long history cannot push it off page one) and every status for coverage / analytics.
-    const [depts, staff, users, roles, log, subs, pend, meds] = await Promise.all([
-      tryApi('/api/departments'), tryApi('/api/staff'), tryApi('/api/users'), tryApi('/api/roles'), tryApi('/api/activity?limit=120'), pageAll('/api/submissions?limit=1000', 'submissions', 2), pageAll('/api/submissions?status=pending&limit=500', 'submissions', 10), tryApi('/api/med/browse?per=60&page=1'),
+    const [depts, staff, users, log, subs, pend, meds] = await Promise.all([
+      tryApi('/api/departments'), tryApi('/api/staff'), tryApi('/api/users'), tryApi('/api/activity?limit=120'), pageAll('/api/submissions?limit=1000', 'submissions', 2), pageAll('/api/submissions?status=pending&limit=500', 'submissions', 10), tryApi('/api/med/browse?per=60&page=1'),
     ]);
     const deptList = depts && depts.ok && Array.isArray(depts.departments) ? depts.departments : null;
     const staffList = staff && staff.ok && Array.isArray(staff.staff) ? staff.staff : [];
@@ -597,11 +601,6 @@ class AdminApp extends React.Component {
       });
       patch('depts', { list: Object.keys(info), info });
       const first = Object.keys(info)[0]; if (first) this.setState((st) => ({ selDept: info[st.selDept] ? st.selDept : first, aaDept: info[st.aaDept] ? st.aaDept : first, pvDept: info[st.pvDept] ? st.pvDept : first, stDept: info[st.stDept] ? st.stDept : first, stCompare: st.stCompare.filter((d) => info[d]).length ? st.stCompare.filter((d) => info[d]) : Object.keys(info).slice(0, 3) }));
-    }
-    if (roles && roles.ok && Array.isArray(roles.templates)) {
-      const extra = roles.templates.filter((t) => !this.state.roles.some((r) => r.label.toLowerCase() === String(t.name || '').toLowerCase())).map((t) => ({ id: t.name, label: t.name, desc: t.description || 'Server role template', kind: 'console', system: false, color: '#0072a3', perms: permsFromLevels(t.perms), appFeats: {}, scope: 'departments', parent: 'CNS', live: true }));
-      if (extra.length) this.setState((s) => ({ roles: [...s.roles, ...extra] }));
-      patch('roles', roles.templates);
     }
     if (userList) {
       const mapped = userList.map((u) => liveUser(u, this.state.roles, deptIdToShort));
@@ -681,18 +680,16 @@ class AdminApp extends React.Component {
       api('/api/phone/settings', { method: 'PUT', body: this.settingsDoc() }).then((r) => { if (r && r.settings) this.setState((s) => ({ live: Object.assign({}, s.live, { settings: r.settings }) })); }).catch((e) => this.toastMsg(e.message || 'Settings were not saved.'));
     }, 600);
   }
-  // A console role is a server role template (name, description, module levels). A portal
-  // role's feature set is the phone settings' feature matrix for that role.
-  saveRole(rec, exists) {
+  /* A portal role's feature set is the phone settings' feature matrix for that role.
+     A CONSOLE role is now only a label and a place in the hierarchy: module access is
+     granted account by account, in the account's own dialog, capped by its account level
+     (server/users-admin.js LEVEL_MODULES). There is no second, server-side permission
+     set that an edit here could silently push onto people. */
+  saveRole(rec) {
     if (this.state.demo) return;
     if (rec.kind === 'portal') { const feats = Object.assign({}, this.state.aaPublished); Object.keys(rec.appFeats || {}).forEach((fid) => { feats[fid + ':' + rec.id] = !!rec.appFeats[fid]; }); this.setState({ aaFeat: Object.assign({}, this.state.aaFeat, feats), aaPublished: feats }); return; }
     if (rec.kind !== 'console') return;
-    const body = { name: rec.label, description: rec.desc || '', perms: levelsFromPerms(rec.perms) };
-    const p = exists && rec.live !== false && (this.state.live.roles || []).some((x) => x.id === rec.id || String(x.name).toLowerCase() === String(rec.label).toLowerCase())
-      ? api('/api/roles/' + encodeURIComponent(rec.id), { method: 'PUT', body })
-      : api('/api/roles', { method: 'POST', body: Object.assign({ id: rec.id }, body) });
-    p.then((r) => { if (r && r.template) this.setState((st) => ({ roles: st.roles.map((x) => (x.id === rec.id ? Object.assign({}, x, { id: r.template.id, live: true }) : x)), live: Object.assign({}, st.live, { roles: (st.live.roles || []).filter((x) => x.id !== r.template.id).concat([r.template]) }) })); this.toastMsg('Role saved on the server'); })
-     .catch((e) => this.toastMsg(e.message || 'The server did not save the role.'));
+    this.toastMsg('Saved. Module access is granted per account, in the account itself.');
   }
   /* ---- write actions on the phone-app stores (each one re-reads its queue) ---- */
   post(path, body, after) { return api(path, { method: 'POST', body: body || {} }).then((r) => { if (after) after(r); this.refreshQueues(); return r; }).catch((e) => { this.toastMsg(e.message || 'The server rejected that.'); return null; }); }
@@ -770,7 +767,7 @@ class AdminApp extends React.Component {
   liveUser(kind, ud, roleObj) {
     if (!this.state.live.users) return;
     const shortToId = {}; const d = this.state.live.depts; if (d) Object.keys(d.info).forEach((sh) => { shortToId[sh] = d.info[sh].id; });
-    const body = { name: ud.name, role: this.kindToLegacy(roleObj || this.roleOf(ud)), title: (roleObj || this.roleOf(ud)).label, active: ud.active !== false, departments: (ud.depts || []).map((x) => shortToId[x] || x), staffScope: ud.scope || 'departments', perms: levelsFromPerms(ud.perms), roleTemplate: ud.roleId || null, staffEmpId: ud.emp && ud.emp !== '—' ? ud.emp : null };
+    const body = { name: ud.name, role: this.kindToLegacy(roleObj || this.roleOf(ud)), title: (roleObj || this.roleOf(ud)).label, active: ud.active !== false, departments: (ud.depts || []).map((x) => shortToId[x] || x), staffScope: ud.scope || 'departments', perms: levelsFromPerms(ud.perms), level: this.kindToLevel(roleObj || this.roleOf(ud)), staffEmpId: ud.emp && ud.emp !== '—' ? ud.emp : null };
     let p;
     if (kind === 'create') p = api('/api/users', { method: 'POST', body: Object.assign({ username: ud.username, password: ud.pw || Math.random().toString(36).slice(2, 10) }, body) });
     else if (kind === 'update' || kind === 'active') p = api('/api/users/' + encodeURIComponent(ud.username), { method: 'PATCH', body: kind === 'active' ? { active: ud.active } : body });
@@ -888,7 +885,7 @@ function levelsFromPerms(p) { const out = {}; MODULES.forEach(([k]) => { const a
 function liveUser(u, roles, deptMap) {
   const legacy = u.role || 'User';
   let roleId = legacy === 'Administrator' ? 'Administrator' : legacy === 'incharge' ? 'incharge' : legacy === 'collector' ? 'collector' : null;
-  if (!roleId) { const t = String(u.roleTemplate || u.title || ''); const hit = roles.find((r) => r.kind === 'console' && (r.id === t || r.label.toLowerCase() === t.toLowerCase())); roleId = hit ? hit.id : (u.perms ? 'Manager' : 'Manager'); }
+  if (!roleId) { const t = String(u.level === 'incharge' ? 'incharge' : (u.roleTemplate || u.title || '')); const hit = roles.find((r) => r.kind === 'console' && (r.id === t || r.label.toLowerCase() === t.toLowerCase())); roleId = hit ? hit.id : (u.perms ? 'Manager' : 'Manager'); }
   return { username: u.username, name: u.name || u.username, role: legacy, roleId, title: u.title || roleId, active: u.active !== false, emp: u.staffEmpId || '—', depts: (u.departments || []).map((id) => deptMap[id] || id), scope: u.staffScope || (legacy === 'Administrator' ? 'all' : 'departments'), perms: legacy === 'User' ? permsFromLevels(u.perms || {}) : {}, online: false, lastLogin: u.lastLogin ? fmtWhen(u.lastLogin) : '—', created: u.createdAt ? fmtWhen(u.createdAt) : '—', twofa: false, sessions: 0, email: u.email || null, live: true };
 }
 function fmtWhen(t) { if (!t) return ''; const d = new Date(t); if (isNaN(d)) return String(t); const M3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']; const now = new Date(); const same = d.toDateString() === now.toDateString(); const hm = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); return same ? 'Today ' + hm : d.getDate() + ' ' + M3[d.getMonth()] + ' ' + hm; }

@@ -15,6 +15,21 @@ const USERS = {
   icu: { unrestricted: false, role: 'User', perms: { roster: ['view', 'edit'] }, departments: ['micu'], qualityAreas: [], staffScope: 'departments' },
   // A ward in-charge who also holds hospital-wide quality areas.
   incharge: { unrestricted: false, role: 'incharge', perms: {}, departments: ['micu'], qualityAreas: ['CCU', 'Overall Hospital'] },
+  /* The roster assignment proper: a person who rosters CCU and nothing else, while
+     their STAFF access is wide open. Before rosterScope existed this account fell
+     through to staffScope 'all' and quietly held every unit's roster — the exact hole
+     that made a per-unit roster grant impossible to express. */
+  ccuLead: { unrestricted: false, role: 'User', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'departments', rosterDepartments: ['ccu'] },
+  // Assigned the module but no units: an empty list means NO rosters, never all of them.
+  noUnits: { unrestricted: false, role: 'User', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'departments', rosterDepartments: [] },
+  // Two people on the SAME unit — the point of the feature: both work one sheet.
+  ccuMate: { unrestricted: false, role: 'User', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'departments', rosterDepartments: ['ccu', 'micu'] },
+  /* The ward in-charge an administrator TRUSTED with their own sheet: same portal role
+     as `incharge` above, plus rosterEdit. They build and hand in one unit's roster and
+     nothing more — no approving, no other unit, no delete. */
+  wardLead: { unrestricted: false, role: 'incharge', perms: {}, departments: ['ccu'], qualityAreas: ['Overall Hospital'], rosterEdit: true },
+  // Never assigned (no rosterScope at all) + unrestricted staff scope = the old reach.
+  legacy: { unrestricted: false, role: 'User', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all' },
 };
 const app = express();
 app.use(express.json());
@@ -71,6 +86,69 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.equal((await call('GET', '/api/rosters/CCU/2026/8', null, 'incharge')).status, 403, 'quality-area access does not unlock another unit');
     assert.deepEqual((await call('GET', '/api/rosters', null, 'incharge')).body.rosters.map((x) => x.dept), ['MICU'], 'an in-charge lists only own unit');
 
-    console.log('DUTY_ROSTER_TEST_PASS: approved lock, revision guard, kept note/status/names, no approve-by-save, department scoping');
+    /* ---- the roster's OWN department assignment ---- */
+    // Scoped to CCU while holding every staff record: the roster grant decides, not staffScope.
+    assert.equal((await call('GET', '/api/rosters/CCU/2026/8', null, 'ccuLead')).status, 200, 'an assigned unit is readable');
+    assert.equal((await call('GET', '/api/rosters/MICU/2026/8', null, 'ccuLead')).status, 403, 'an unassigned unit is refused even with full staff access');
+    assert.deepEqual((await call('GET', '/api/rosters', null, 'ccuLead')).body.rosters.map((x) => x.dept), ['CCU'], 'the index lists only assigned units');
+
+    // Several people may hold the same unit — that is the whole point of the assignment.
+    const mate = (await call('GET', '/api/rosters', null, 'ccuMate')).body.rosters.map((x) => x.dept).sort();
+    assert.deepEqual(mate, ['CCU', 'MICU'], 'a second account holds the same unit, plus its own');
+    assert.equal((await put({ dept: 'CCU', year: 2026, month: 9, grid: { S9: { 3: 'M' } } }, 'ccuMate')).status, 200, 'both accounts write the same unit');
+
+    // Assigned the module but no units: nothing, rather than everything.
+    assert.deepEqual((await call('GET', '/api/rosters', null, 'noUnits')).body.rosters, [], 'no units assigned means no rosters');
+    assert.equal((await call('GET', '/api/rosters/CCU/2026/8', null, 'noUnits')).status, 403, 'no units assigned refuses every unit');
+
+    // An account that predates the field keeps exactly the reach it had.
+    assert.equal((await call('GET', '/api/rosters/CCU/2026/8', null, 'legacy')).status, 200, 'an unassigned legacy account is not narrowed');
+    assert.equal((await call('GET', '/api/rosters/MICU/2026/8', null, 'legacy')).status, 200);
+
+    /* ---- the scope route the renderer builds its unit list from ---- */
+    let sc = (await call('GET', '/api/rosters/scope', null, 'ccuLead')).body;
+    assert.equal(sc.scope, 'departments');
+    assert.deepEqual(sc.units, ['CCU'], 'the scope route names the assigned units');
+    assert.equal(sc.can.edit, true); assert.equal(sc.can.approve, false, 'approval stays administrator-only');
+    sc = (await call('GET', '/api/rosters/scope', null, 'admin')).body;
+    assert.equal(sc.scope, 'all'); assert.equal(sc.can.approve, true);
+    assert.deepEqual((await call('GET', '/api/rosters/scope', null, 'noUnits')).body.units, [], 'no units assigned lists none');
+    // A collector only ever receives published sheets, so it must not be offered an editor.
+    assert.equal((await call('GET', '/api/rosters/scope', null, 'incharge')).body.can.edit, false, 'a portal account is read-only here');
+
+    /* ---- the ward in-charge who may build their own unit's sheet ---- */
+    sc = (await call('GET', '/api/rosters/scope', null, 'wardLead')).body;
+    assert.equal(sc.can.edit, true, 'a granted in-charge is offered the editor');
+    assert.equal(sc.can.submit, true, 'and may hand the sheet in');
+    assert.equal(sc.can.approve, false, 'but never approves it');
+    assert.equal(sc.can.delete, false, 'and never deletes one');
+    assert.deepEqual(sc.units, ['CCU'], 'only their own unit');
+
+    // An UNPUBLISHED sheet: hidden from a plain portal account, visible to the person
+    // whose job is to write it (otherwise a draft vanished the moment it was saved).
+    await put({ dept: 'MICU', year: 2026, month: 10, grid: { S1: { 1: 'M' } }, status: 'draft' });
+    assert.equal((await call('GET', '/api/rosters/MICU/2026/10', null, 'incharge')).body.roster, null, 'an ungranted in-charge sees no draft');
+    assert.equal((await call('GET', '/api/rosters/CCU/2026/9', null, 'wardLead')).body.roster.status, 'draft', 'the roster builder sees their own draft');
+    assert.deepEqual((await call('GET', '/api/rosters', null, 'incharge')).body.rosters.map((x) => x.status), ['approved'], 'the ungranted index is published sheets only');
+
+    // Writing: own unit yes, any other unit no.
+    assert.equal((await put({ dept: 'CCU', year: 2026, month: 10, grid: { S9: { 1: 'M3' } } }, 'wardLead')).status, 200, 'own unit is writable');
+    assert.equal((await put({ dept: 'MICU', year: 2026, month: 10, grid: {} }, 'wardLead')).status, 403, 'another unit is refused');
+
+    // The one status move they hold is "hand it in".
+    const ccuOct = encodeURIComponent('ros-CCU-2026-10');
+    assert.equal((await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'approved' }, 'wardLead')).status, 403, 'an in-charge cannot approve their own roster');
+    assert.equal((await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'draft' }, 'wardLead')).status, 403, 'nor reopen one');
+    let sub = await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'submitted' }, 'wardLead');
+    assert.equal(sub.status, 200); assert.equal(sub.body.roster.status, 'submitted', 'submitted for approval');
+    assert.equal((await call('POST', '/api/rosters/' + encodeURIComponent('ros-MICU-2026-10') + '/status', { status: 'submitted' }, 'wardLead')).status, 403, 'and only for their own unit');
+
+    // Once an administrator publishes it, it is locked against them like everyone else.
+    await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'approved' });
+    assert.equal((await put({ dept: 'CCU', year: 2026, month: 10, grid: {} }, 'wardLead')).status, 409, 'an approved sheet is locked');
+    assert.equal((await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'submitted' }, 'wardLead')).status, 409, 'and cannot be re-submitted');
+    assert.equal((await call('GET', '/api/rosters/CCU/2026/10')).body.roster.grid.S9['1'], 'M3', 'the published cells survive');
+
+    console.log('DUTY_ROSTER_TEST_PASS: approved lock, revision guard, kept note/status/names, no approve-by-save, per-unit roster assignment, in-charge build+submit without approve');
   } finally { server.close(); }
 })().catch((e) => { console.error(e); process.exitCode = 1; });
