@@ -7460,9 +7460,9 @@ function StaffForm({
       gap: 8,
       alignItems: 'center'
     }
-  }, !editing && window.UnicoStaffRegForm && (!window.__UNICO_USER__ || window.__UNICO_USER__.role === 'Administrator') && React.createElement("button", {
+  }, !editing && window.UnicoStaffRegForm && (!window.unicoCan || window.unicoCan('staff', 'add')) && React.createElement("button", {
     className: "btn sm",
-    title: "Print the official registration form to fill in by hand",
+    title: "Print the blank staff information form to fill in by hand",
     onClick: () => setPrintForm(true)
   }, React.createElement(Ic, {
     d: I.doc,

@@ -500,7 +500,7 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
   return (
     <div className="grid" style={{gap:16}}>
       <SectionTitle icon={role==='PCA'?I.bed:I.steth} title={`${role==='PCA'?'PCA':'Nurse'} Dashboard`} sub={`Live overview of the ${role} roster`}
-        right={<>{(!window.__UNICO_USER__||window.__UNICO_USER__.role==='Administrator')&&
+        right={<>{(!window.unicoCan||window.unicoCan('staff','add'))&&
             <button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={openBlankForm}><Ic d={I.print} s={15}/>Print staff information</button>}
           {printForm&&window.UnicoStaffRegForm&&React.createElement(window.UnicoStaffRegForm,{role,onDone:()=>setPrintForm(false)})}
           <RoleSwitch role={role} setRoute={setRoute} views={{Nurse:'nurseHome',PCA:'pcaHome'}}/>

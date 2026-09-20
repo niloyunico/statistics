@@ -3126,9 +3126,10 @@ function StaffForm({store, empId, setRoute, role, depts}){
           {/* Official A4 registration form, printed blank for handwritten fill-up
               (window.UnicoStaffRegForm, data-collection.jsx). It portals into #pdf-root
               and prints itself on mount, so where it is rendered here does not matter. */}
-          {/* Administrators only (user decision 2026-09-15). No signed-in user means the
-              open local mode, where the whole app is unrestricted anyway. */}
-          {!editing && window.UnicoStaffRegForm && (!window.__UNICO_USER__ || window.__UNICO_USER__.role==='Administrator') && <button className="btn sm" title="Print the official registration form to fill in by hand" onClick={()=>setPrintForm(true)}><Ic d={I.doc} s={14}/>Print blank form</button>}
+          {/* Gated on the staff ADD permission from the access module (user, 2026-09-20):
+              whoever may create a staff record may print the blank form. No signed-in user
+              means the open local mode, where the whole app is unrestricted anyway. */}
+          {!editing && window.UnicoStaffRegForm && (!window.unicoCan || window.unicoCan('staff','add')) && <button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={()=>setPrintForm(true)}><Ic d={I.doc} s={14}/>Print blank form</button>}
           {printForm && window.UnicoStaffRegForm && React.createElement(window.UnicoStaffRegForm,{role:f.role||'Nurse',onDone:()=>setPrintForm(false)})}
           <button className="btn sm" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
           <button className="btn pri sm" disabled={saving} onClick={save}><Ic d={I.check} s={15} sw={2.4}/>{saving?'Saving?':editing?'Save changes':'Create staff'}</button>
