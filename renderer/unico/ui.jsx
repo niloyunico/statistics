@@ -28,6 +28,7 @@ const I = {
   arrowR:'M5 12h14M13 6l6 6-6 6',
   grip:'M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01',
   star:'M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4 6.1 20.5l1.2-6.5-4.8-4.6 6.6-.9z',
+  shield:'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4',
   phone:'M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.8 19.8 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0122 16.92z',
 };
 function Ic({d,s=18,sw=1.9,c='currentColor',fill='none',style}){
@@ -52,15 +53,18 @@ const UNICO_MODULES = [
   { id:'quality', label:'Quality Indicators', short:'Quality',    icon:I.heart, home:'quality' },
   { id:'supervisor', label:'Supervisor Reports', short:'Supervisor', icon:I.doc, home:'supHome' },
   { id:'reports', label:'Reports',            short:'Reports',    icon:I.doc,   home:'reports' },
-  { id:'users',   label:'User Management',    short:'Users',      icon:I.user,  home:'users' },
+  { id:'users',   label:'Access Control',     short:'Access',     icon:I.shield,home:'users' },
   { id:'perf',    label:'Performance',        short:'Performance',icon:I.doc,   home:'perfHome' },
   { id:'roster',  label:'Duty Roster',        short:'Roster',     icon:I.grid,  home:'rosterHome' },
   { id:'medicine',label:'Medicine & Rx',      short:'Medicine',   icon:I.heart, home:'medHome' },
+  // Data Submission: reporting a unit's own figures — what the /collect portal used to be,
+  // now a module any account can be given, for the departments set on that person.
+  { id:'datasubmit',label:'Data Submission', short:'Submit',     icon:I.upload,home:'dsHome' },
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
   datacol:['dcReview','dcPatient','dcQuality','input','dcSettings','dcShare','dcFields','dcAnalytics'],
-  staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm'],
+  staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
@@ -70,8 +74,35 @@ const UNICO_MODULE_VIEWS = {
   // the two old route names onto the staff module so old links still land somewhere.
   perf:   ['perfHome','perfForm','perfPrint','perfAchievements','perfIncidents','perfCompare','perfAttrition','perfRisk','perfBoard'],
   roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','manpower'],
+  datasubmit:['dsHome','dsMissing','dsStatus','dsQuality','dsPatient','dsHistory'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
+/* Data Submission's screens — each its own route and its own sidebar sub-item, and each
+   grantable per person (Access Control → Data Submission → "Screens they can open").
+   [screen id (server/access.js DS_SCREENS), route view, label]. The rule that decides which
+   a person may open is the server's dsScreensOf(), mirrored here for the menu. */
+// Only DATA screens: the roster is the Duty Roster module, a unit's staff and nurse / PCA
+// requests are Staff Management.
+const UNICO_DS_SCREENS = [
+  ['missing','dsMissing','Missing data'], ['status','dsStatus','Submission status'],
+  ['quality','dsQuality','Quality data'], ['patient','dsPatient','Patient statistics'],
+  ['history','dsHistory','My submissions'],
+];
+function unicoDsScreens(){
+  const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
+  const all=UNICO_DS_SCREENS.map(s=>s[0]);
+  if(!u || u.role==='Administrator' || ['collector','incharge','nurse','pca'].indexOf(u.role)>=0) return all;
+  const k=u.submitKinds||{};
+  const list=Array.isArray(u.dsScreens) ? all.filter(s=>u.dsScreens.indexOf(s)>=0)
+    : all.filter(s=>(s!=='patient'||k.patient!==false) && ((s!=='quality'&&s!=='status')||k.quality!==false));
+  // A screen with nothing in it is not offered: no assigned departments → no patient
+  // statistics; no quality areas → no quality data / submission status.
+  const hasDepts=Array.isArray(u.departments)&&u.departments.length>0;
+  const hasAreas=!!u.allQualityAreas||(Array.isArray(u.qualityAreas)&&u.qualityAreas.length>0);
+  return list.filter(s=>(s!=='patient'||hasDepts)&&((s!=='quality'&&s!=='status')||hasAreas));
+}
+const unicoDsViewOf=(screen)=>{ const r=UNICO_DS_SCREENS.find(s=>s[0]===screen); return r?r[1]:'dsHome'; };
+const unicoDsScreenOf=(view)=>{ const r=UNICO_DS_SCREENS.find(s=>s[1]===view); return r?r[0]:null; };
 function unicoModuleOf(view){
   for(let i=0;i<UNICO_MODULES.length;i++){ const m=UNICO_MODULES[i]; if((UNICO_MODULE_VIEWS[m.id]||[]).indexOf(view)>=0) return m.id; }
   return 'stats';
@@ -84,7 +115,8 @@ function unicoModuleOf(view){
    open local-PC session are unrestricted; collectors render their own portal, so
    they are never gated here. `modules` null/absent = unrestricted (legacy accounts
    keep full access until an admin assigns modules). ---- */
-const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','roster','medicine'];
+// 'staffapp' is grantable too, but it is the phone app only — it has no screen in here.
+const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','roster','medicine','datasubmit','staffapp'];
 // The workspace a route.view belongs to for ACCESS purposes. Settings is the admin
 // hub, so it is gated under 'users' rather than 'stats'.
 function unicoAccessModuleOf(view){
@@ -132,7 +164,10 @@ function unicoCanAccessModule(mid){ return unicoCan(mid,'view'); }
 // is not a privilege, and a collector granted exactly one form must still reach it.
 // 'dcResponsibles' is only a legacy redirect (app.jsx) that renders nothing and picks a
 // destination this session can open, which gates itself — gating the redirect would bounce first.
-function unicoCanAccessView(view){ if(view==='profile'||view==='home'||view==='dcResponsibles') return true; return unicoCanAccessModule(unicoAccessModuleOf(view)); }
+function unicoCanAccessView(view){ if(view==='profile'||view==='home'||view==='dcResponsibles') return true;
+  // A Data Submission screen also needs that screen granted to this person.
+  const ds=unicoDsScreenOf(view); if(ds && unicoDsScreens().indexOf(ds)<0) return false;
+  return unicoCanAccessModule(unicoAccessModuleOf(view)); }
 // Viewable module ids, or null when unrestricted. [] => the user has no access at all.
 function unicoAllowedModules(){ const p=unicoUserPerms(); if(!p) return null; return UNICO_ACCESS_MODULES.filter(m=>unicoCan(m,'view')); }
 // The landing view for the first workspace this session can open (sidebar order).
@@ -144,7 +179,7 @@ function unicoFirstAllowedHome(){
   // 'home' is not in this list on purpose: it is ungated, so unicoCanAccessView()
   // never sends anyone here looking for a fallback. This list answers a different
   // question — which WORKSPACE to open when a restricted account needs one.
-  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['perf','perfHome'],['roster','rosterHome'],['reports','reports'],['users','settings']];
+  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['roster','rosterHome'],['reports','reports'],['users','settings']];
   for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return homes[i][1]; }
   return null;
 }
@@ -218,8 +253,8 @@ function unicoSidebarGroups(moduleId){
     ]},
   ];
   if(moduleId==='users') return [
-    {sec:'User Management', items:[
-      {id:'users',label:'All Users & Roles',icon:I.user},
+    {sec:'Access Control', items:[
+      {id:'users',label:'People & Access',icon:I.shield},
     ]},
   ];
   return [
@@ -310,6 +345,7 @@ const UNICO_WS = [
     { id:'medicine',    label:'Medicine & Rx',   icon:I.syringe,home:'medHome',     on:v=>unicoModuleOf(v)==='medicine', tag:'NEW' },
   ]},
   { sec:'Data', items:[
+    { id:'datasubmit',  label:'Data Submission', icon:I.upload, home:'dsHome',      on:v=>unicoModuleOf(v)==='datasubmit', badge:'ds' },
     { id:'datacol',     label:'Data Collection', icon:I.input,  home:'dcReview',    on:v=>unicoModuleOf(v)==='datacol' },
     { id:'reports',     label:'Reports',         icon:I.doc,    home:'reports',     on:v=>unicoModuleOf(v)==='reports' },
   ]},
@@ -326,9 +362,12 @@ const UNICO_WS = [
        sub-items below carry the module each of them needs. */
     { id:'staff',       label:'Staff Management', icon:I.steth, home:'nurseHome', mods:['staff','perf','roster'],
       on:v=>['staff','perf','roster'].indexOf(unicoModuleOf(v))>=0 },
-    // Settings is the admin HUB (Departments config, Users & Roles, Responsible Persons,
-    // Form Fields, Data & Export) — the scattered admin submodules fold into its tabs.
-    { id:'settings',    label:'Settings',        icon:I.gear,   home:'settings',    on:v=>v==='settings'||unicoModuleOf(v)==='users' },
+    // Access Control — accounts and per-person access (access-control.jsx). Same 'users'
+    // permission as Settings; it just has its own door now instead of a Settings tab.
+    { id:'access',      label:'Access Control',  icon:I.shield, home:'users',       on:v=>unicoModuleOf(v)==='users' },
+    // Settings is the admin HUB (Departments config, Form Fields, Data & Export) — the
+    // scattered admin submodules fold into its tabs.
+    { id:'settings',    label:'Settings',        icon:I.gear,   home:'settings',    on:v=>v==='settings' },
   ]},
 ];
 /* SECTION TABS — the screens INSIDE a sidebar destination.
@@ -430,11 +469,14 @@ function unicoWorkspaceSub(view){
     { label:'Directory',      view:'nurses',          mod:'staff', match:['nurses','pca'] },
     { label:'Compliance',     view:'nurseCompliance', mod:'staff', match:['nurseCompliance','pcaCompliance'] },
     { label:'Previous Staff', view:'staffPrevious',   mod:'staff' },
+    { label:'Nurse / PCA requests', view:'staffRequests', mod:'staff' },
     { label:'Performance',    view:'perfHome',        mod:'perf', divider:true,
       match:UNICO_MODULE_VIEWS.perf },
     { label:'Duty Roster',    view:'rosterHome',      mod:'roster',
       match:UNICO_MODULE_VIEWS.roster },
   ];
+  // Data Submission: one sub-item per screen this person may open.
+  if(mod==='datasubmit'){ const ok=unicoDsScreens(); return UNICO_DS_SCREENS.filter(s=>ok.indexOf(s[0])>=0).map(([,v,label])=>({ label, view:v })); }
   if(mod==='medicine') return [
     { label:'Medicine Info',     view:'medInfo' },
     { label:'Drug Index',        view:'medBrowse', match:['medBrowse','medBrand','medGeneric'] },
@@ -547,11 +589,25 @@ function Sidebar({route, setRoute, collapsed, depts}){
   },[]);
   const qBadge = React.useMemo(()=>(window.UNICO_Q?unicoQualityBreachCount():0),[chunkTick]);
   const supBadge = React.useMemo(()=>unicoSupAlertCount(),[view,chunkTick]);
+  // Data Submission: this person's missing count, published by the top-bar bell.
+  const [dsBadge,setDsBadge]=React.useState(()=>window.__UNICO_DS_MISSING__||0);
+  React.useEffect(()=>{ const h=(e)=>setDsBadge((e&&e.detail)||0); window.addEventListener('unico:ds-missing',h); return ()=>window.removeEventListener('unico:ds-missing',h); },[]);
   // A sub-item can need a permission of its own — Staff Management lists the roster
   // ('staff') and the appraisal screens ('perf') together, and an account may hold
   // only one of them.
   const sub = unicoWorkspaceSub(view).filter(s=>!s.mod || unicoCanAccessModule(s.mod));
   const subOn = s => s.match ? s.match.indexOf(view)>=0 : view===s.view;
+  /* Destinations whose sub-menu is open from the start, wherever you are (Data Submission:
+     its screens ARE the work, so they should not hide behind a click). The arrow folds it;
+     the choice is remembered in this browser. */
+  const AUTO_OPEN = { datasubmit: 'dsHome' };
+  const [folded,setFolded]=React.useState(()=>{ try{ return JSON.parse(localStorage.getItem('unico_sb_folded_v1')||'{}')||{}; }catch(e){ return {}; } });
+  const toggleFold=(id)=>setFolded(f=>{ const n=Object.assign({},f,{[id]:!f[id]}); try{ localStorage.setItem('unico_sb_folded_v1',JSON.stringify(n)); }catch(e){} return n; });
+  const subFor = (it, active) => {
+    if (active) return sub;
+    if (!AUTO_OPEN[it.id] || folded[it.id]) return [];
+    return unicoWorkspaceSub(AUTO_OPEN[it.id]).filter(x=>!x.mod || unicoCanAccessModule(x.mod));
+  };
   return (
     <aside className="sb">
       <div className="sb-brand">
@@ -575,22 +631,29 @@ function Sidebar({route, setRoute, collapsed, depts}){
             {g.sec && <div className="sb-sec">{g.sec}</div>}
             {items.map(it=>{
               const active = it.on(view);
-              const badgeN = it.badge==='sup' ? supBadge : (it.badge ? qBadge : 0);
+              const badgeN = it.badge==='sup' ? supBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
               const badge = badgeN>0 ? badgeN : null;
+              const auto = !!AUTO_OPEN[it.id];
+              const itSub = auto && folded[it.id] ? [] : subFor(it, active);
               return (
                 <React.Fragment key={it.id}>
                   <div className={'sb-item'+(active?' active':'')} onClick={()=>setRoute({view:wsHome(it)})} title={it.label}>
                     <Ic d={it.icon} s={18}/><span className="lbl">{it.label}</span>
                     {it.tag && <span className="lbl" style={{marginLeft:6,fontSize:8.6,fontWeight:800,letterSpacing:.6,padding:'2px 6px',borderRadius:5,color:'#0d1b2e',background:'linear-gradient(135deg,#5fd3c4,#3ab5a7)'}}>{it.tag}</span>}
                     {badge!=null && <span className="badge alert num">{badge}</span>}
+                    {auto && <span className="lbl" role="button" aria-label={folded[it.id]?'Show sub-menu':'Hide sub-menu'} title={folded[it.id]?'Show sub-menu':'Hide sub-menu'}
+                      onClick={(e)=>{ e.stopPropagation(); toggleFold(it.id); }}
+                      style={{marginLeft:badge!=null?6:'auto',display:'inline-grid',placeItems:'center',width:20,height:20,borderRadius:6,cursor:'pointer',opacity:.7,transform:folded[it.id]?'rotate(-90deg)':'none',transition:'transform .15s'}}>
+                      <Ic d={I.chevR} s={12} style={{transform:'rotate(90deg)'}}/></span>}
                   </div>
                   {/* secondary views nest under the active destination */}
-                  {active && sub.length>0 && (
+                  {itSub.length>0 && (
                     <div className="sb-sub">
-                      {sub.map((s,si)=>(
+                      {itSub.map((s,si)=>(
                         <div key={s.view} className={'sb-sub-item'+(subOn(s)?' active':'')} onClick={()=>setRoute({view:s.view})}
                           style={s.divider&&si>0?{marginTop:7,paddingTop:9,borderTop:'1px solid rgba(255,255,255,.10)'}:null}>
                           <span className="dot"/><span className="lbl">{s.label}</span>
+                          {s.view==='dsMissing'&&dsBadge>0&&<span className="badge alert num" style={{marginLeft:'auto'}}>{dsBadge}</span>}
                         </div>
                       ))}
                     </div>
@@ -692,6 +755,25 @@ function TopBar({route, setRoute, onBurger, crumbs, actions, depts=[], onFill, p
   const nexts=reporting.map(d=>nextMonthKey(d.latest.month));
   const currentKey=nexts.length?nexts.reduce((a,b)=>mnum(b)<mnum(a)?b:a):null;
   const missing=currentKey?reporting.filter(d=>!d.months.includes(currentKey)):[];
+  /* Data Submission reminders: what THIS person still owes (their own departments and
+     indicators), from the same rule as Data Submission → Missing data. Only for accounts
+     that submit data; refreshed every 2 minutes and whenever data is refreshed. */
+  const [dsMiss,setDsMiss]=React.useState(null);
+  const submitter=(()=>{ const u=window.__UNICO_USER__; const v=u&&u.perms&&u.perms.datasubmit; return !!u&&(u.role||'User')==='User'&&(Array.isArray(v)?v.length>0:(!!v&&v!=='none')); })();
+  React.useEffect(()=>{
+    if(!submitter) return;
+    let live=true;
+    const run=()=>{
+      const go=()=>window.dcMissingSummary&&window.dcMissingSummary().then(x=>{ if(live) setDsMiss(x); try{ window.__UNICO_DS_MISSING__=x.total||0; window.dispatchEvent(new CustomEvent('unico:ds-missing',{detail:x.total||0})); }catch(e){} }).catch(()=>{});
+      if(window.dcMissingSummary) go(); else if(window.unicoLoadChunk) window.unicoLoadChunk('datacollection').then(go).catch(()=>{});
+    };
+    run();
+    const t=setInterval(run,120000);
+    window.addEventListener('unico:data-refreshed',run);
+    return ()=>{ live=false; clearInterval(t); window.removeEventListener('unico:data-refreshed',run); };
+  },[submitter]);
+  const dsTotal=(dsMiss&&dsMiss.total)||0;
+  const bellCount=missing.length+dsTotal;
   return (
     <div className="topbar">
       <button className="tb-burger" onClick={onBurger} title="Toggle menu"><Ic d={I.grid} s={16}/></button>
@@ -718,21 +800,56 @@ function TopBar({route, setRoute, onBurger, crumbs, actions, depts=[], onFill, p
       <div className="tb-right">
         {actions}
         {route.view==='dashboard'&&setPeriod&&<PeriodPill period={period} setPeriod={setPeriod} depts={depts}/>}
+        {/* Always-visible reminder for a data submitter: how much they still owe, one click
+            to Missing data. The bell carries the month-by-month list. */}
+        {submitter&&dsTotal>0&&route.view!=='dsMissing'&&(
+          <button type="button" className="tb-dsmiss" onClick={()=>setRoute({view:'dsMissing'})} title={dsTotal+' data entries still missing — open Missing data'}
+            style={{display:'inline-flex',alignItems:'center',gap:8,height:34,padding:'0 12px 0 10px',borderRadius:10,cursor:'pointer',fontFamily:'inherit',
+              border:'1px solid rgba(210,58,82,.35)',background:'linear-gradient(135deg,#fff1f3,#ffe3e8)',color:'#a92c42',fontSize:12.5,fontWeight:700,whiteSpace:'nowrap',
+              boxShadow:'0 4px 14px rgba(210,58,82,.18)',animation:'tbDsPulse 2.4s ease-in-out infinite'}}>
+            <style>{'@keyframes tbDsPulse{0%,100%{box-shadow:0 4px 14px rgba(210,58,82,.18)}50%{box-shadow:0 4px 20px rgba(210,58,82,.38)}}@media (max-width:720px){.tb-dsmiss .tb-dsmiss-t{display:none}}@media (prefers-reduced-motion:reduce){.tb-dsmiss{animation:none!important}}'}</style>
+            <Ic d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01" s={15} c="#d23a52"/>
+            <span className="num" style={{background:'#d23a52',color:'#fff',borderRadius:8,padding:'1px 7px',fontSize:11.5,fontWeight:800}}>{dsTotal}</span>
+            <span className="tb-dsmiss-t">missing data · {(dsMiss.months||[]).length} month{(dsMiss.months||[]).length===1?'':'s'}</span>
+            <span className="tb-dsmiss-t" style={{color:'#d23a52',textDecoration:'underline'}}>Submit now</span>
+          </button>
+        )}
         <div style={{position:'relative'}}>
-          <button className="tb-icon" onClick={()=>setNotifOpen(o=>!o)} title="Reminders"><Ic d={I.bell} s={17}/>{missing.length>0&&<span className="tb-dot"/>}</button>
+          <button className="tb-icon" onClick={()=>setNotifOpen(o=>!o)} title="Reminders"><Ic d={I.bell} s={17}/>{bellCount>0&&(dsTotal>0
+            ? <span className="num" style={{position:'absolute',top:-4,right:-4,minWidth:18,height:18,padding:'0 5px',borderRadius:9,background:'#d23a52',color:'#fff',fontSize:10,fontWeight:800,display:'grid',placeItems:'center',boxSizing:'border-box',border:'2px solid #fff'}}>{dsTotal>99?'99+':dsTotal}</span>
+            : <span className="tb-dot"/>)}</button>
           {notifOpen&&(
             <div onMouseLeave={()=>setNotifOpen(false)} style={{position:'absolute',right:0,top:'118%',zIndex:200,width:320,background:'rgba(255,255,255,.88)',backdropFilter:'blur(24px) saturate(1.6)',WebkitBackdropFilter:'blur(24px) saturate(1.6)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 22px 56px rgba(31,59,90,.26)',borderRadius:12,overflow:'hidden'}}>
               <div style={{padding:'13px 15px',borderBottom:'1px solid var(--line-2)',display:'flex',alignItems:'center',gap:8}}>
                 <Ic d={I.bell} s={16} c="var(--blue)"/><div style={{fontSize:13.5,fontWeight:700}}>Reminders</div>
-                <span className="spacer"/>{missing.length>0&&<span className="chip neg">{missing.length}</span>}
+                <span className="spacer"/>{bellCount>0&&<span className="chip neg">{bellCount}</span>}
               </div>
+              {submitter&&(
+                <div style={{borderBottom:'1px solid var(--line-2)'}}>
+                  <div style={{padding:'10px 15px 6px',fontSize:11,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',color:dsTotal?'#a92c42':'var(--muted)'}}>Data you still owe{dsTotal?' · '+dsTotal:''}</div>
+                  {dsMiss===null ? <div style={{padding:'4px 15px 12px',fontSize:12,color:'var(--muted)'}}>Checking…</div>
+                    : !dsTotal ? <div style={{padding:'4px 15px 12px',fontSize:12,color:'var(--pos)',fontWeight:600}}>Nothing missing — all your data is in.</div>
+                    : <div style={{maxHeight:200,overflowY:'auto'}}>
+                        {dsMiss.months.slice(0,8).map(m=>(
+                          <div key={m.month} onClick={()=>{ setRoute({view:'dsMissing'}); setNotifOpen(false); }} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 15px',cursor:'pointer'}}
+                            onMouseEnter={e=>e.currentTarget.style.background='var(--panel-2)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                            <div style={{width:28,height:28,borderRadius:8,background:'var(--neg-bg)',color:'var(--neg)',display:'grid',placeItems:'center',flexShrink:0}}><Ic d={I.cal} s={14}/></div>
+                            <div style={{flex:1,fontSize:12.5,fontWeight:600,color:'var(--ink)'}}>{m.label}</div>
+                            <span className="chip neg">{m.count} missing</span>
+                          </div>
+                        ))}
+                        {dsMiss.months.length>8&&<div style={{padding:'4px 15px 8px',fontSize:11,color:'var(--muted)'}}>and {dsMiss.months.length-8} more month{dsMiss.months.length-8===1?'':'s'}</div>}
+                      </div>}
+                  {dsTotal>0&&<div style={{padding:'6px 12px 12px'}}><button className="btn pri sm" style={{width:'100%',justifyContent:'center'}} onClick={()=>{ setRoute({view:'dsMissing'}); setNotifOpen(false); }}><Ic d={I.upload} s={14}/>Open Missing data</button></div>}
+                </div>
+              )}
               {currentKey&&(
                 <div style={{padding:'10px 15px',background:'var(--blue-50)',borderBottom:'1px solid var(--line-2)',fontSize:11.5,color:'var(--ink-2)'}}>
                   Running month · <b>{monthFull(currentKey)}</b>
                 </div>
               )}
               <div style={{maxHeight:300,overflowY:'auto'}}>
-                {missing.length===0?(
+                {missing.length===0?(!reporting.length ? null :
                   <div style={{padding:'26px 16px',textAlign:'center',color:'var(--pos)',fontSize:12.5}}><Ic d={I.check} s={24} c="#1f9d57"/><div style={{marginTop:6}}>All departments up to date.</div></div>
                 ):missing.map(d=>(
                   <div key={d.id} onClick={()=>{onFill&&onFill(d.id);setNotifOpen(false);}} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 15px',borderBottom:'1px solid var(--line-2)',cursor:'pointer'}}
@@ -790,3 +907,5 @@ function SectionTitle({icon,title,sub,right}){
 Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, ModuleSwitch, ViewTabs, unicoViewTabs, unicoModuleOf,
   UNICO_ACCESS_MODULES, unicoAccessModuleOf, unicoAllowedModules, unicoCanAccessModule, unicoCanAccessView, unicoFirstAllowedHome,
   unicoCan, unicoModuleLevel, unicoUserPerms, unicoRefreshPerms });
+// Data Submission screens: read by app.jsx (routes) and data-collection.jsx (the screens).
+Object.assign(window,{ UNICO_DS_SCREENS, unicoDsScreens, unicoDsViewOf, unicoDsScreenOf });

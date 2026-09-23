@@ -70,6 +70,8 @@ stub('../access', {
   PORTAL_ROLES, ACCESS_MODULES: [],
   cleanStaffScope: (v) => (['all', 'departments', 'self'].indexOf(v) >= 0 ? v : 'all'),
   cleanRosterScope: (v) => (['all', 'departments'].indexOf(v) >= 0 ? v : null),
+  cleanSubmitKinds: (v) => ({ patient: !(v && v.patient === false), quality: !(v && v.quality === false) }),
+  cleanDsScreens: (v) => (Array.isArray(v) ? v : null),
   forRequest: async () => ({ unrestricted: true }),
   invalidate: () => {},
 });
@@ -120,8 +122,9 @@ async function call(route, { params = {}, body = {} } = {}) {
     assert.equal(user('11223').role, 'incharge', 'an in-charge must not be demoted to collector');
     assert.deepEqual(user('11223').qualityAreas, ['ICU', 'CCU']);
     assert.deepEqual(user('11223').customQualityAreas, [], 'department-derived areas are not custom'); }
-  // 1b. Every portal role is kept; a role-less legacy account (or a new login) becomes a collector;
-  //     any other existing role is refused, never converted.
+  // 1b. Every legacy portal role is kept. Data Submission is a MODULE now: a normal account
+  //     given an assignment keeps its role and everything it holds, and gains the module;
+  //     a role-less legacy account or a new login becomes a normal account holding it.
   reset();
   { for (const role of PORTAL_ROLES) {
       colOf('users').docs.push({ username: 'p-' + role, role, active: true });
@@ -129,14 +132,18 @@ async function call(route, { params = {}, body = {} } = {}) {
       assert.equal(user('p-' + role).role, role, role + ' keeps its role');
     }
     colOf('users').docs.push({ username: 'plain', role: 'User', active: true, perms: { staff: 'edit' } });
-    await assert.rejects(dc.upsertCollectorUser({ empId: 'plain', name: 'Plain', departments: [] }), { message: USER_ROLE_MSG });
+    await dc.upsertCollectorUser({ empId: 'plain', name: 'Plain', departments: [], active: false });
     assert.equal(user('plain').role, 'User', 'a User account is not turned into a collector');
-    assert.deepEqual(user('plain').perms, { staff: 'edit' });
+    assert.equal(user('plain').perms.staff, 'edit', 'what it held is kept');
+    assert.deepEqual(user('plain').perms.datasubmit, ['view', 'edit', 'add'], 'and it gains Data Submission');
+    assert.equal(user('plain').active, true, 'a matrix record never switches a normal account off');
     colOf('users').docs.push({ username: 'legacy', active: true });
     await dc.upsertCollectorUser({ empId: 'legacy', name: 'Legacy', departments: [] });
-    assert.equal(user('legacy').role, 'collector', 'a role-less legacy account is made a collector');
+    assert.equal(user('legacy').role, 'User', 'a role-less legacy account becomes a normal account');
+    assert.deepEqual(user('legacy').perms.datasubmit, ['view', 'edit', 'add']);
     await dc.upsertCollectorUser({ empId: 'newbie', password: 'secret1', name: 'New' });
-    assert.equal(user('newbie').role, 'collector', 'a new login is a collector'); }
+    assert.equal(user('newbie').role, 'User', 'a new login is a normal account');
+    assert.deepEqual(user('newbie').perms, { datasubmit: ['view', 'edit', 'add'] }, 'holding only Data Submission'); }
 
   // 2. An Administrator id is still refused by the collector upsert (and by saveResponsible).
   reset();
@@ -320,12 +327,14 @@ async function call(route, { params = {}, body = {} } = {}) {
     assert.deepEqual(rec.qualityIndicators, { ICU: ['falls'] }); assert.equal(rec.phone, '5');
     assert.equal(resps().length, 1, 'nothing deleted or created');
     const perms = clone(user('mgr1').perms);
-    // The matrix toggle on that row: refused (POST /api/responsibles maps this throw to 400).
-    await assert.rejects(dc.saveResponsible({ ...rec, id: 'resp-m', customQualityAreas: ['CCU'] }), { message: USER_ROLE_MSG });
+    // The matrix toggle on that row now GIVES the account Data Submission (a module), and
+    // never a portal role: its other grants and its sign-in stay exactly as they were.
+    await dc.saveResponsible({ ...rec, id: 'resp-m', customQualityAreas: ['CCU'] });
     assert.equal(user('mgr1').role, 'User', 'not re-promoted to collector');
-    assert.deepEqual(user('mgr1').perms, perms, 'perms untouched');
-    assert.deepEqual(user('mgr1').qualityAreas, [], 'no scope written to the account');
-    assert.deepEqual(respById('resp-m'), rec, 'the refused save writes nothing to the record'); }
+    assert.equal(user('mgr1').perms.staff, perms.staff); assert.equal(user('mgr1').perms.roster, perms.roster);
+    assert.deepEqual(user('mgr1').perms.datasubmit, ['view', 'edit', 'add'], 'gains the module');
+    assert.deepEqual(user('mgr1').qualityAreas, ['ICU', 'CCU'], 'the scope is written to the account');
+    assert.equal(user('mgr1').active, true, 'an inactive record does not switch the login off'); }
   // 10b. Portal → Administrator also deactivates; a portal → portal change does not.
   reset();
   { colOf('users').docs.push({ username: 'boss', role: 'collector', active: true, name: 'Boss', departments: ['icu'], responsibleId: 'resp-b' });
@@ -475,6 +484,88 @@ async function call(route, { params = {}, body = {} } = {}) {
     await call('PATCH /api/users/:username', { params: { username: 'boss' }, body: { rosterScope: 'departments', rosterDepartments: ['ccu'] } });
     assert.equal(user('boss').rosterScope, 'all', 'an administrator is never narrowed to units');
     assert.deepEqual(user('boss').rosterDepartments, []); }
+
+  // 20. Data Submission is a MODULE on a normal account: creating one with it stores the
+  //     derived scope on the account and mirrors a record into the Indicator Access matrix.
+  reset();
+  { const r = await call('POST /api/users', { body: { username: 'ds.user', password: 'secret1', name: 'DS User', role: 'User',
+      perms: { datasubmit: ['view', 'add'], staff: ['view'] }, departments: ['icu'], unitLead: true, rosterEdit: true } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const u = user('ds.user');
+    assert.equal(u.role, 'User', 'no portal role');
+    assert.deepEqual(u.qualityAreas, ['ICU'], 'areas derived from its departments');
+    assert.equal(u.unitLead, true); assert.equal(u.rosterEdit, true);
+    assert.ok(u.responsibleId, 'linked to a matrix record');
+    const rec = respById(u.responsibleId);
+    assert.ok(rec && rec.active !== false, 'the record is active');
+    assert.deepEqual(rec.departments, ['icu']);
+    // Unticking Data Submission takes it out of the matrix (kept, marked inactive).
+    const p = await call('PATCH /api/users/:username', { params: { username: 'ds.user' }, body: { perms: { staff: ['view'] } } });
+    assert.equal(p.status, 200, JSON.stringify(p.body));
+    assert.equal(respById(u.responsibleId).active, false, 'the record stops listing them');
+    assert.equal(resps().length, 1, 'nothing deleted'); }
+  // 20b. A normal account WITHOUT Data Submission keeps the old rule: no quality scope stored.
+  reset();
+  { const r = await call('POST /api/users', { body: { username: 'plain2', password: 'secret1', name: 'P2', role: 'User', perms: { staff: ['view'] }, departments: ['icu'] } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(user('plain2').qualityAreas, [], 'no data-collection scope');
+    assert.equal(resps().length, 0, 'no matrix record'); }
+
+  // 22. Converting the old portal logins: a preview first, then role -> module, scope kept.
+  reset();
+  { colOf('users').docs.push(
+      { username: 'c1', role: 'collector', active: true, name: 'C1', departments: ['icu'], qualityAreas: ['ICU'], responsibleId: 'resp-c1', sessionEpoch: 1 },
+      { username: 'i1', role: 'incharge', active: true, name: 'I1', departments: ['ccu'], qualityAreas: ['CCU'], rosterEdit: true, sessionEpoch: 1 },
+      { username: 'n1', role: 'nurse', active: true, name: 'N1', sessionEpoch: 1 },
+      { username: 'p1', role: 'pca', active: true, name: 'P1', sessionEpoch: 1 });
+    const pre = await call('POST /api/users/convert-portal', { body: {} });
+    assert.equal(pre.status, 200, JSON.stringify(pre.body));
+    assert.equal(pre.body.apply, false); assert.equal(pre.body.count, 4);
+    assert.equal(user('c1').role, 'collector', 'a preview changes nothing');
+    const r = await call('POST /api/users/convert-portal', { body: { apply: true } });
+    assert.equal(r.body.converted, 4, JSON.stringify(r.body));
+    const c1 = user('c1');
+    assert.equal(c1.role, 'User'); assert.equal(c1.convertedFrom, 'collector');
+    assert.deepEqual(c1.perms.datasubmit, ['view', 'edit', 'add']);
+    assert.deepEqual(c1.departments, ['icu'], 'scope kept'); assert.deepEqual(c1.qualityAreas, ['ICU']);
+    assert.equal(c1.responsibleId, 'resp-c1', 'matrix link kept');
+    assert.ok(c1.sessionEpoch > 1, 'signed out once');
+    assert.equal(user('i1').unitLead, true); assert.equal(user('i1').rosterEdit, true, 'roster building kept');
+    assert.deepEqual(user('n1').perms.staffapp, ['view']); assert.equal(user('n1').appRole, 'nurse');
+    assert.equal(user('p1').appRole, 'pca');
+    const again = await call('POST /api/users/convert-portal', { body: { apply: true } });
+    assert.equal(again.body.converted, 0, 'a second run converts nothing'); }
+
+  // 21. The access rules that replace the portal roles (server/access.js).
+  { // This file stubs ../access for users-admin; load the REAL module for its rules.
+    const acc = (() => { const p = require.resolve('../access'); const stubbed = require.cache[p]; delete require.cache[p];
+      try { return require('../access'); } finally { require.cache[p] = stubbed; } })();
+    const U = (perms, extra) => Object.assign({ unrestricted: false, role: 'User', perms }, extra || {});
+    assert.equal(acc.submitsData(U({ datasubmit: ['view', 'add'] })), true);
+    assert.equal(acc.submitsData(U({ staff: ['view'] })), false);
+    assert.equal(acc.submitsData({ unrestricted: false, role: 'collector' }), true, 'legacy collector still submits');
+    assert.equal(acc.dataScoped(U({ datasubmit: ['view', 'add'] })), true, 'a submitter is held to its own scope');
+    assert.equal(acc.dataScoped(U({ datasubmit: ['view', 'add'], datacol: ['view'] })), false, 'the Data Collection reviewer sees everything');
+    assert.equal(acc.dataScoped({ unrestricted: true }), false);
+    assert.equal(acc.isUnitLead(U({ datasubmit: ['view'] }, { unitLead: true })), true);
+    assert.equal(acc.isUnitLead(U({ staff: ['view'] }, { unitLead: true })), false, 'unit lead means nothing without Data Submission');
+    assert.equal(acc.portalMayEditRoster(U({ datasubmit: ['view'] }, { unitLead: true, rosterEdit: true })), false, 'a normal account builds rosters through the Duty Roster module only');
+    assert.equal(acc.portalMayEditRoster({ unrestricted: false, role: 'incharge', rosterEdit: true }), true, 'the legacy in-charge portal role is unchanged');
+    assert.equal(acc.can(U({ datasubmit: ['view', 'add'] }), 'stats', 'view'), false, 'Data Submission opens no other module');
+    // What they may submit: both by default; each kind can be switched off per person.
+    assert.equal(acc.maySubmitKind(U({ datasubmit: ['view', 'add'] }), 'patient'), true, 'absent = both kinds');
+    const qOnly = U({ datasubmit: ['view', 'add'] }, { submitKinds: { patient: false, quality: true } });
+    assert.equal(acc.maySubmitKind(qOnly, 'patient'), false, 'patient statistics switched off');
+    assert.equal(acc.maySubmitKind(qOnly, 'quality'), true);
+    assert.equal(acc.maySubmitKind(U({ staff: ['view'] }), 'quality'), false, 'no Data Submission, nothing to send');
+    assert.equal(acc.maySubmitKind({ unrestricted: false, role: 'collector' }, 'patient'), true, 'legacy collector unchanged');
+    // Only DATA screens live in Data Submission; defaults follow the kinds, a checklist narrows them.
+    assert.deepEqual(acc.dsScreensOf(U({ datasubmit: ['view'] })), ['missing', 'status', 'quality', 'patient', 'history'], 'default screens');
+    assert.deepEqual(acc.dsScreensOf(U({ datasubmit: ['view'] }, { submitKinds: { patient: false } })), ['missing', 'status', 'quality', 'history'], 'no patient kind, no patient screens');
+    const picked = U({ datasubmit: ['view'] }, { dsScreens: ['missing', 'quality', 'roster', 'requests'] });
+    assert.deepEqual(acc.dsScreensOf(picked), ['missing', 'quality'], 'roster / staff screens are not part of Data Submission');
+    assert.equal(acc.maySubmitKind(picked, 'patient'), false, 'no patient screen, no patient submissions');
+    assert.equal(acc.maySubmitKind(picked, 'quality'), true); }
 
   console.log('user-scope tests: all passed');
 })().catch((e) => { console.error(e); process.exit(1); });

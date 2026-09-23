@@ -3920,10 +3920,150 @@ function QCReportBuilder({depts}){
 function QCReports({depts}){ return <QCReportBuilder depts={depts}/>; }
 
 /* ===== part: mod-incidents.jsx ===== */
+/* ---- NSI incidence by department ------------------------------------------------
+   Needle-stick injury is reported ONCE, on Overall Hospital, and every incident names the
+   department it happened in. This view counts them per department per month. Months
+   from before the switch still sit on the departments' own NSI indicators (now marked
+   not measured, history kept), so those counts are added under that department. A
+   count with fewer incident forms than injuries puts the rest under "Department not
+   recorded" (hospital-wide) or the department itself, so totals match what was reported. */
+const QC_NSI_ID='ind-needle-stick-injury';
+function qcIsNsi(ind){ return !!ind && (ind.id===QC_NSI_ID || /needle[\s-]*stick|\bnsi\b/i.test(String(ind.name||''))); }
+function qcIsHospitalArea(d){ return !!d && (d.key==='Overall Hospital' || d.deptId==='__hospital__' || /overall hospital/i.test(String(d.name||''))); }
+function qcNsiCount(ind, mk){
+  const f=(ind&&ind.formula)||'direct';
+  const n=ind.mNum&&ind.mNum[mk];
+  if(n!=null&&n!==''&&!isNaN(Number(n))) return Number(n);
+  if(f==='direct'||f==='count'){ const v=ind.months&&ind.months[mk]; if(v!=null&&v!==''&&!isNaN(Number(v))) return Number(v); }
+  return null;
+}
+function qcNsiDeptName(id){
+  if(!id) return '';
+  const DM=window.DEPTMAP; return (DM&&DM.nameFromId&&DM.nameFromId(id))||id;
+}
+function QCNsiReport({depts,fy}){
+  const MONTHS=fyAxis(fy);
+  const NOT_REC='Department not recorded';
+  const data=useMemo(()=>{
+    const grid={};      // dept -> { mk: count }
+    const list=[];      // incident rows
+    const add=(dept,mk,c)=>{ if(!c) return; const g=(grid[dept]=grid[dept]||{}); g[mk]=(g[mk]||0)+c; };
+    (depts||[]).forEach(d=>{
+      const hosp=qcIsHospitalArea(d);
+      (d.indicators||[]).filter(qcIsNsi).forEach(ind=>{
+        MONTHS.forEach(([mk,label])=>{
+          const incs=(ind.incidents&&Array.isArray(ind.incidents[mk]))?ind.incidents[mk].filter(x=>x&&Object.values(x).some(v=>v)):[];
+          const reported=qcNsiCount(ind,mk);
+          incs.forEach(x=>{
+            const dn=hosp?(qcNsiDeptName(x.department)||NOT_REC):d.name;
+            add(dn,mk,1);
+            list.push({mk,label,dept:dn,x});
+          });
+          // Injuries counted but not written up one by one.
+          const rest=(reported!=null?reported:0)-incs.length;
+          if(rest>0) add(hosp?NOT_REC:d.name,mk,rest);
+        });
+      });
+    });
+    const rows=Object.keys(grid).map(dept=>{ const m=grid[dept]; const total=MONTHS.reduce((a,[mk])=>a+(m[mk]||0),0); return {dept,m,total}; })
+      .filter(r=>r.total>0).sort((a,b)=>((a.dept===NOT_REC)-(b.dept===NOT_REC))||(b.total-a.total)||a.dept.localeCompare(b.dept));
+    const colTot=MONTHS.map(([mk])=>rows.reduce((a,r)=>a+(r.m[mk]||0),0));
+    const total=colTot.reduce((a,b)=>a+b,0);
+    const idx=mk=>MONTHS.findIndex(m=>m[0]===mk);
+    list.sort((a,b)=>(idx(a.mk)-idx(b.mk))||String(a.x.incidentDate||'').localeCompare(String(b.x.incidentDate||'')));
+    return {rows,colTot,total,list};
+  },[depts,fy]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const exportCsv=()=>{
+    const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+    const lines=[['Department'].concat(MONTHS.map(m=>m[1])).concat(['Total']).map(q).join(',')];
+    data.rows.forEach(r=>lines.push([r.dept].concat(MONTHS.map(([mk])=>r.m[mk]||0)).concat([r.total]).map(q).join(',')));
+    lines.push(['Hospital total'].concat(data.colTot).concat([data.total]).map(q).join(','));
+    lines.push('');
+    lines.push(['Month','Date','Department','Injured staff','Staff ID','Source patient','UHID','What happened','Action taken'].map(q).join(','));
+    data.list.forEach(r=>{ const x=r.x; lines.push([r.label,x.incidentDate,r.dept,x.victimName,x.victimId,x.patientName,x.uhid,x.details||x.finding,x.corrective||x.preventive].map(q).join(',')); });
+    qcDownload(lines.join('\n'),'NSI-incidence-'+fy+'.csv','text/csv');
+  };
+
+  const top=data.rows.find(r=>r.dept!==NOT_REC);
+  const monthsWith=data.colTot.filter(Boolean).length;
+  const th={padding:'8px 8px',fontSize:10.5,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'.3px',borderBottom:'1px solid '+P.line,background:P.panel2,whiteSpace:'nowrap'};
+  const td={padding:'8px 8px',fontSize:12.5,borderBottom:'1px solid '+P.line2,textAlign:'center',fontFamily:MONO};
+  const heat=v=>!v?'transparent':v>=3?'rgba(210,58,82,.22)':v===2?'rgba(210,58,82,.14)':'rgba(210,58,82,.07)';
+  const card={background:'#fff',border:'1px solid '+P.line,borderRadius:12,padding:'12px 14px',flex:'1 1 170px',minWidth:0};
+  const cap={fontSize:10.5,fontWeight:700,color:P.muted,textTransform:'uppercase'};
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:14}}>
+      <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+        <div style={card}><div style={cap}>NSI incidents</div><div style={{fontFamily:MONO,fontSize:24,fontWeight:800,color:data.total?P.rose:P.green}}>{data.total}</div><div style={{fontSize:11,color:P.faint}}>{fyLabelOf(fy)}</div></div>
+        <div style={card}><div style={cap}>Departments affected</div><div style={{fontFamily:MONO,fontSize:24,fontWeight:800,color:P.ink}}>{data.rows.filter(r=>r.dept!==NOT_REC).length}</div><div style={{fontSize:11,color:P.faint}}>with at least one injury</div></div>
+        <div style={card}><div style={cap}>Most injuries</div><div style={{fontSize:15,fontWeight:800,color:P.ink,marginTop:4,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{top?top.dept:'—'}</div><div style={{fontSize:11,color:P.faint}}>{top?top.total+' incident'+(top.total===1?'':'s'):'none recorded'}</div></div>
+        <div style={card}><div style={cap}>Months with an injury</div><div style={{fontFamily:MONO,fontSize:24,fontWeight:800,color:P.ink}}>{monthsWith}<span style={{fontSize:13,color:P.faint}}> / 12</span></div><div style={{fontSize:11,color:P.faint}}>&nbsp;</div></div>
+      </div>
+
+      <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,overflow:'hidden'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,padding:'11px 14px',borderBottom:'1px solid '+P.line}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:P.ink}}>Incidence by department and month</div>
+          <span style={{flex:1}}/>
+          <button className="btn sm" onClick={exportCsv} disabled={!data.total}>Export CSV</button>
+        </div>
+        {!data.total ? (
+          <div style={{padding:36,textAlign:'center',color:P.green,fontWeight:600,fontSize:13}}>✓ No needle-stick injuries recorded in {fyLabelOf(fy)}.</div>
+        ) : (
+          <div style={{overflowX:'auto'}}>
+            <table style={{borderCollapse:'collapse',width:'100%',minWidth:760}}>
+              <thead><tr><th style={Object.assign({},th,{textAlign:'left',position:'sticky',left:0})}>Department</th>{MONTHS.map(m=><th key={m[0]} style={th}>{m[1].split(' ')[0]}</th>)}<th style={th}>Total</th></tr></thead>
+              <tbody>
+                {data.rows.map(r=>(
+                  <tr key={r.dept}>
+                    <td style={Object.assign({},td,{textAlign:'left',fontFamily:'inherit',fontWeight:600,color:r.dept===NOT_REC?P.muted:P.ink,fontStyle:r.dept===NOT_REC?'italic':'normal',background:'#fff',position:'sticky',left:0})}>{r.dept}</td>
+                    {MONTHS.map(([mk])=><td key={mk} style={Object.assign({},td,{background:heat(r.m[mk]),color:r.m[mk]?P.rose:P.faint,fontWeight:r.m[mk]?700:400})}>{r.m[mk]||'·'}</td>)}
+                    <td style={Object.assign({},td,{fontWeight:800,color:P.ink})}>{r.total}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td style={Object.assign({},td,{textAlign:'left',fontFamily:'inherit',fontWeight:800,background:P.panel2,position:'sticky',left:0})}>Hospital total</td>
+                  {data.colTot.map((v,i)=><td key={i} style={Object.assign({},td,{fontWeight:800,background:P.panel2,color:v?P.ink:P.faint})}>{v||'·'}</td>)}
+                  <td style={Object.assign({},td,{fontWeight:800,background:P.panel2,color:P.rose})}>{data.total}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {data.list.length>0&&(
+        <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,overflow:'hidden'}}>
+          <div style={{padding:'11px 14px',borderBottom:'1px solid '+P.line,fontSize:13.5,fontWeight:700,color:P.ink}}>Incident register <span style={{fontSize:11.5,color:P.muted,fontWeight:500}}>· {data.list.length} written up</span></div>
+          <div style={{overflowX:'auto'}}>
+            <table style={{borderCollapse:'collapse',width:'100%',minWidth:760}}>
+              <thead><tr>{['Month','Date','Department','Injured staff','Source patient','What happened','Action taken'].map(h=><th key={h} style={Object.assign({},th,{textAlign:'left'})}>{h}</th>)}</tr></thead>
+              <tbody>
+                {data.list.map((r,i)=>{ const x=r.x; const c=Object.assign({},td,{textAlign:'left',fontFamily:'inherit',fontSize:12,verticalAlign:'top'}); return (
+                  <tr key={i}>
+                    <td style={c}>{r.label}</td>
+                    <td style={Object.assign({},c,{fontFamily:MONO,whiteSpace:'nowrap'})}>{x.incidentDate||'—'}</td>
+                    <td style={Object.assign({},c,{fontWeight:600,color:r.dept===NOT_REC?P.muted:P.ink})}>{r.dept}</td>
+                    <td style={c}>{x.victimName||'—'}{x.victimId?<div style={{fontSize:10.5,color:P.faint,fontFamily:MONO}}>{x.victimId}</div>:null}</td>
+                    <td style={c}>{x.patientName||'—'}{x.uhid?<div style={{fontSize:10.5,color:P.faint,fontFamily:MONO}}>{x.uhid}</div>:null}</td>
+                    <td style={Object.assign({},c,{maxWidth:280})}>{x.details||x.finding||'—'}</td>
+                    <td style={Object.assign({},c,{maxWidth:240})}>{x.corrective||x.preventive||'—'}</td>
+                  </tr>
+                ); })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function QCIncidents({depts,Q}){
   const [dept,setDept]=useState('all');
   const [sel,setSel]=useState(null);
   const [fy,setFy]=useState(()=>defaultFy(depts));
+  const [tab,setTab]=useState('all');
   const MONTHS=fyAxis(fy);
 
   const list=useMemo(()=>{
@@ -4004,19 +4144,25 @@ function QCIncidents({depts,Q}){
         </div>
         <div style={{flex:1,minWidth:0}}>
           <h1 style={{margin:0,fontSize:21,fontWeight:700,color:P.ink,letterSpacing:'-.3px'}}>Incident Reports</h1>
-          <div style={{fontSize:12.5,color:P.muted,marginTop:2}}><b style={{color:P.rose}}>{list.length}</b> benchmark breaches &amp; logged incidents in {fyLabelOf(fy)} — each needs review</div>
+          <div style={{fontSize:12.5,color:P.muted,marginTop:2}}>{tab==='nsi'?<span>Needle-stick injuries by the department they happened in · {fyLabelOf(fy)}</span>:<span><b style={{color:P.rose}}>{list.length}</b> benchmark breaches &amp; logged incidents in {fyLabelOf(fy)} — each needs review</span>}</div>
+        </div>
+        <div role="tablist" style={{display:'inline-flex',padding:3,borderRadius:9,background:P.panel2,border:'1px solid '+P.line}}>
+          {[['all','All incidents'],['nsi','NSI by department']].map(([k,l])=>(
+            <button key={k} role="tab" aria-selected={tab===k} onClick={()=>setTab(k)} style={{border:0,borderRadius:7,padding:'6px 12px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',background:tab===k?'#fff':'transparent',color:tab===k?P.blue700:P.muted,boxShadow:tab===k?'0 1px 4px rgba(31,59,90,.12)':'none'}}>{l}</button>
+          ))}
         </div>
         <QCFyPicker fy={fy} setFy={setFy} depts={depts}/>
-        <select value={dept} onChange={e=>setDept(e.target.value)} style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,fontWeight:600,background:'#fff',color:P.ink,outline:'none'}}>
+        {tab==='all'&&<select value={dept} onChange={e=>setDept(e.target.value)} style={{padding:'8px 11px',border:'1px solid '+P.line,borderRadius:8,fontSize:12.5,fontWeight:600,background:'#fff',color:P.ink,outline:'none'}}>
           {options.map(o=>(<option key={o.key} value={o.key}>{o.label}</option>))}
-        </select>
+        </select>}
       </div>
 
-      {empty && (
+      {tab==='nsi' && <QCNsiReport depts={depts} fy={fy}/>}
+      {tab==='all' && empty && (
         <div style={{background:'#fff',border:'1px solid '+P.line,borderRadius:12,padding:50,textAlign:'center',color:P.green,fontWeight:600}}>✓ No breaches or logged incidents in scope — all reported indicators on benchmark.</div>
       )}
 
-      <div style={{display:'flex',flexDirection:'column',gap:9}}>
+      {tab==='all' && <div style={{display:'flex',flexDirection:'column',gap:9}}>
         {rows.map((x,i)=>(
           <div key={x.deptKey+'|'+x.ind+'|'+x.month+'|'+i} onClick={()=>setSel(x)} onMouseEnter={e=>{e.currentTarget.style.boxShadow='0 22px 54px rgba(31,59,90,.2),0 8px 24px rgba(0,144,202,.16)';e.currentTarget.style.borderColor=P.rose;}} onMouseLeave={e=>{e.currentTarget.style.boxShadow='0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)';e.currentTarget.style.borderColor=P.line;}} style={{cursor:'pointer',background:'linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',borderLeft:'3px solid '+(x.breach?P.rose:'#e0a300'),borderRadius:10,boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95)',padding:'12px 15px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',transition:'box-shadow .12s,border-color .12s'}}>
             <div style={{width:34,height:34,borderRadius:9,background:'#fbe9ec',color:P.rose,display:'grid',placeItems:'center',flexShrink:0}}>
@@ -4044,7 +4190,7 @@ function QCIncidents({depts,Q}){
             <span style={{fontSize:11.5,fontWeight:600,color:P.blue,whiteSpace:'nowrap'}}>View report ›</span>
           </div>
         ))}
-      </div>
+      </div>}
     </div>
   );
 }

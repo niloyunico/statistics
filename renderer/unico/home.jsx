@@ -199,16 +199,24 @@
     // employee id, then the full name. The name match is last and exact (case- and
     // space-insensitive only) — it is a convenience for accounts like "admin" whose
     // username is not an employee id, and it must never beat an explicit link.
-    const me = useMemo(() => {
+    const meLocal = useMemo(() => {
       const list = (typeof window !== 'undefined' && window.STAFF_SEED) || [];
       if (!u) return list[0] || null;
-      const norm = (x) => String(x == null ? '' : x).trim().toLowerCase().replace(/\s+/g, ' ');
-      if (u.staffId != null) { const hit = list.find((s) => String(s.id) === String(u.staffId)); if (hit) return hit; }
-      if (u.staffEmpId) { const hit = list.find((s) => norm(s.emp_id) === norm(u.staffEmpId)); if (hit) return hit; }
-      return list.find((s) => norm(s.emp_id) && norm(s.emp_id) === norm(u.username))
-        || (u.name ? list.find((s) => norm(s.name) === norm(u.name)) : null)
-        || null;
+      // Same rule as the server (server/account-staff.js): an employee number only counts
+      // when the name agrees — the register and the accounts have had numbers swapped.
+      return window.unicoStaffOfAccount ? window.unicoStaffOfAccount(u, list) : null;
     }, [u]);
+    // An account without the staff module (e.g. Data Submission only) never receives the
+    // register, so ask the server for this person's OWN record instead.
+    const [meSrv, setMeSrv] = useState(null);
+    useEffect(() => {
+      if (meLocal || !u) return;
+      let live = true;
+      fetch('/api/me/staff', { credentials: 'same-origin', cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null)).then((j) => { if (live && j && j.staff) setMeSrv(j.staff); }).catch(() => {});
+      return () => { live = false; };
+    }, [meLocal]);  // eslint-disable-line react-hooks/exhaustive-deps
+    const me = meLocal || meSrv;
     // Birthdays across the whole roster. Everyone reaches Home, so this is where a
     // reminder actually gets seen — the Nurse/PCA dashboards carry the same list but
     // only managers open those. Source is the staff record's `dob`, via STAFF.birthdays
@@ -221,9 +229,12 @@
     }, [now.getDate()]);  // eslint-disable-line react-hooks/exhaustive-deps
     const staffName = (u && u.name) || (me && me.name) || 'UNICO staff';
     const designation = (u && u.designation) || (me && me.designation) || (u && u.role === 'incharge' ? 'In-charge' : 'Staff');
-    const unit = (me && me.current_department) || 'Nursing Service';
+    const unit = (u && u.workDepartment) || (me && me.current_department) || 'Nursing Service';
     const staffId = (me && me.emp_id) || (u && u.username) || '—';
     const initials = initialsOf(staffName);
+    const avatarUrl = (u && u.photo && u.photo.url) || (me && me.photo && (typeof me.photo === 'string' ? me.photo : me.photo.url)) || (me && me.photo_url) || '';
+    const [avatarDead, setAvatarDead] = useState(false);
+    useEffect(() => { setAvatarDead(false); }, [avatarUrl]);
 
     // Find MY roster, not my department's. Matching on the department name was wrong in
     // both directions: someone rostered on a unit other than the one on their staff
@@ -503,7 +514,7 @@
     const idFacts = [
       { label: 'Staff ID', value: staffId },
       { label: 'Date of joining', value: (me && me.doj) || 'Not recorded' },
-      { label: 'Role', value: designation || (!u ? 'Local session' : (u.role === 'incharge' ? 'In-charge' : (u.role === 'collector' ? 'Data Collector' : (u.role || 'Staff')))) },
+      { label: 'Designation', value: designation || (!u ? 'Local session' : (u.role === 'incharge' ? 'In-charge' : (u.role === 'collector' ? 'Data Collector' : (u.role || 'Staff')))) },
       { label: 'Department', value: unit },
     ];
     const nextOff = week.find((w) => w.off && w.code && w.full >= now);
@@ -653,7 +664,7 @@
           <div onClick={celebrate} title="Shift progress · click me"
             style={fs('position:relative;z-index:4;width:74px;height:74px;padding:4px;border-radius:20px;flex-shrink:0;display:grid;place-items:center;background:conic-gradient(#3ddc97 ' + pct.toFixed(1) + '%,' + (night ? 'rgba(255,255,255,.18)' : 'rgba(12,28,52,.14)') + ' 0);' + (on ? 'animation:ringGlow 3s ease-in-out infinite;' : '') + 'transition:background .8s,transform .25s;cursor:pointer')}>
             <div style={sx('width:66px;height:66px;border-radius:16px;background:linear-gradient(135deg,#3ab5a7,#0090ca);color:#fff;display:grid;place-items:center;font-weight:800;font-size:23px;overflow:hidden')}>
-              {u && u.photo && u.photo.url ? <img src={u.photo.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials}
+              {avatarUrl && !avatarDead ? <img src={(window.MK && window.MK.cdnPhoto) ? window.MK.cdnPhoto(avatarUrl, 66) : avatarUrl} alt="" onError={() => setAvatarDead(true)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials}
             </div>
           </div>
           {/* z-index above the sun's 3 so the disc can never sit ON the headline;

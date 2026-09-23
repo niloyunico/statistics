@@ -1,12 +1,10 @@
-// Account tiers: the admin-defined hierarchy in server/users-admin.js.
+// Per-person access + the retired tier ladder in server/users-admin.js.
 //
-// A tier is a CEILING, never a grant. `perms` stays the only thing access.js enforces;
-// the tier decides which modules a grant may name at all, and the server re-applies that
-// on every write so the dialog is not the only thing holding the line.
-//
-// The asymmetry that separates this from the role templates it replaced: assigning a tier
-// grants nothing, widening a tier grants nothing, and only narrowing one reaches a live
-// account -- and that can only remove.
+// Access is set PERSON BY PERSON (Access Control, 2026-09): `perms` is stored exactly as
+// ticked and is the only thing access.js enforces. The tier ladder is still stored and
+// served (nothing is deleted), but it neither grants nor caps: placing, moving, widening
+// or narrowing a tier never changes anybody's grant. Report sign-off is set per person;
+// an account never given one still reads its old tier's.
 //
 // In-memory only: db, access, auth, session, throttle and the activity log are stubbed, so
 // nothing here touches a database, the network or the file system.
@@ -61,6 +59,8 @@ stub('../access', {
   PORTAL_ROLES: ['collector', 'incharge', 'nurse', 'pca'], ACCESS_MODULES: [],
   cleanStaffScope: (v) => (['all', 'departments', 'self'].indexOf(v) >= 0 ? v : 'all'),
   cleanRosterScope: (v) => (['all', 'departments'].indexOf(v) >= 0 ? v : null),
+  cleanSubmitKinds: (v) => ({ patient: !(v && v.patient === false), quality: !(v && v.quality === false) }),
+  cleanDsScreens: (v) => (Array.isArray(v) ? v : null),
   forRequest: async () => ({ unrestricted: true }),
   invalidate: () => {},
 });
@@ -124,15 +124,14 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     assert.deepEqual(user('m.rahman').perms.users, ['view', 'edit', 'add', 'delete'], 'a Manager keeps Administration');
     assert.deepEqual(user('m.rahman').perms.stats, ['view', 'edit', 'add', 'delete']); }
 
-  /* 3. An In-charge may hold anything EXCEPT Administration — and the server strips it,
-        so a hand-built request cannot grant what the dialog does not offer. */
+  /* 3. No ceiling: whatever tier an old row names, the grant is stored exactly as ticked. */
   reset();
   { const r = await create({ username: 's.akter', name: 'S Akter', level: 'nurse-manager', perms: FULL });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const u = user('s.akter');
     assert.equal(u.level, 'nurse-manager');
-    assert.equal(u.perms.users, 'none', 'Administration must never reach an In-charge');
-    assert.deepEqual(u.perms.staff, ['view', 'edit'], 'every other module is granted as ticked');
+    assert.deepEqual(u.perms.users, ['view', 'edit', 'add', 'delete'], 'a tier no longer strips a module');
+    assert.deepEqual(u.perms.staff, ['view', 'edit'], 'every module is granted as ticked');
     assert.equal(r.body.user.level, 'nurse-manager', 'the level is returned to the dialog'); }
 
   /* 4. Nothing is granted by default: an account created with no perms holds nothing. */
@@ -142,19 +141,22 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     assert.ok(p && Object.keys(p).length, 'the perms map is written, not left absent');
     assert.ok(Object.values(p).every((v) => v === 'none'), 'a new account starts with no access at all: ' + JSON.stringify(p)); }
 
-  /* 5. Demoting a Manager to In-charge drops Administration in that same save, even when
-        the request carries no perms of its own. */
+  /* 5. Moving an account's stored tier changes nothing it holds. */
   reset();
   { await create({ username: 'demote', name: 'D', level: 'cns', perms: FULL });
-    user('demote').sessionEpoch = 1;   // a known-old stamp: Date.now() can repeat within a ms
-    const epoch = 1;
+    const before = JSON.stringify(user('demote').perms);
     const r = await patch('demote', { level: 'nurse-manager' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const u = user('demote');
     assert.equal(u.level, 'nurse-manager');
-    assert.equal(u.perms.users, 'none', 'the ceiling is re-applied on a level change alone');
-    assert.deepEqual(u.perms.staff, ['view', 'edit'], 'the rest of the grant survives');
-    assert.ok(u.sessionEpoch > epoch, 'losing a module signs the account out now, not in 12h'); }
+    assert.equal(JSON.stringify(u.perms), before, 'a level change alone never touches the grant'); }
+  // ...while a real grant change still signs the account out at once.
+  reset();
+  { await create({ username: 'rev', name: 'R', perms: FULL });
+    user('rev').sessionEpoch = 1;   // a known-old stamp: Date.now() can repeat within a ms
+    await patch('rev', { perms: { staff: ['view'] } });
+    assert.equal(user('rev').perms.users, 'none', 'an unticked module is removed');
+    assert.ok(user('rev').sessionEpoch > 1, 'losing a module signs the account out now, not in 12h'); }
 
   /* 6. A legacy account (no level, perms never assigned => unrestricted) is not revoked by
         a level change. Materialising {} here would take everything from someone working. */
@@ -169,10 +171,8 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     const list = await call('GET /api/users');
     assert.equal(list.body.users.find((u) => u.username === 'old').level, null,
       'a row written before the hierarchy existed reports no tier, rather than guessing one');
-    // ...and it is held to the WIDEST tier, not the narrowest: re-saving its grant keeps
-    // Administration, which only the widest seeded tier allows.
     await patch('old', { perms: { users: ['view'] } });
-    assert.deepEqual(user('old').perms.users, ['view'], 'an unplaced account is capped at the widest tier'); }
+    assert.deepEqual(user('old').perms.users, ['view'], 'an unplaced account keeps what it is given'); }
 
   /* 7. Administrators and portal accounts take their level from their role, so the two can
         never disagree — and neither carries a perms map. */
@@ -184,16 +184,15 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     assert.equal(user('coll').level, 'portal');
     assert.equal(user('coll').perms, null); }
 
-  /* 8. Promoting an In-charge to Manager does not hand back Administration by itself —
-        it only becomes grantable. */
+  /* 8. A tier never GRANTS either: moving an account up hands it nothing. */
   reset();
-  { await create({ username: 'up', name: 'Up', level: 'nurse-manager', perms: FULL });
+  { await create({ username: 'up', name: 'Up', level: 'nurse-manager', perms: { staff: ['view'] } });
     await patch('up', { level: 'cns' });
     assert.equal(user('up').level, 'cns');
     assert.equal(user('up').perms.users, 'none', 'a promotion grants nothing on its own');
-    const r = await patch('up', { level: 'cns', perms: { users: ['view'] } });
+    const r = await patch('up', { perms: { staff: ['view'], users: ['view'] } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.deepEqual(user('up').perms.users, ['view'], 'now it can be granted, explicitly'); }
+    assert.deepEqual(user('up').perms.users, ['view'], 'it is granted explicitly, on the person'); }
 
   /* 9. The retired roleTemplate stamp is cleared as accounts are saved, and never written. */
   reset();
@@ -229,9 +228,8 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     assert.equal(c.status, 200, JSON.stringify(c.body));
     const u = user('w.lead');
     assert.equal(u.level, 'ward-in-charge');
-    assert.deepEqual(u.perms.stats, ['view', 'edit', 'add', 'delete'], 'a module the tier allows is granted as ticked');
-    assert.equal(u.perms.staff, 'none', 'a module the tier does not allow cannot be granted');
-    assert.equal(u.perms.users, 'none'); }
+    assert.deepEqual(u.perms.stats, ['view', 'edit', 'add', 'delete'], 'granted as ticked');
+    assert.deepEqual(u.perms.staff, ['view', 'edit'], 'a module outside the tier is granted too: no ceiling'); }
 
   /* 12. Widening a tier grants its members NOTHING -- it only makes more modules tickable.
          This is the property that makes a tier different from a role template. */
@@ -244,22 +242,15 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     assert.equal(r.body.clamped, 0, 'widening touches nobody');
     assert.equal(JSON.stringify(user('u1').perms), before, 'a member gains nothing from a widened tier'); }
 
-  /* 13. Narrowing a tier is the one edit that reaches live accounts -- and it only removes.
-         Everyone at the tier loses it at once, and is signed out so it takes effect now. */
+  /* 13. Narrowing a tier no longer reaches anybody: access lives on the person. */
   reset();
   { await call('POST /api/tiers', { body: { name: 'Unit Lead', modules: ['stats', 'staff', 'roster'] } });
     await create({ username: 'u1', name: 'U1', level: 'unit-lead', perms: { stats: ['view'], staff: ['view', 'edit'], roster: ['view'] } });
-    await create({ username: 'u2', name: 'U2', level: 'unit-lead', perms: { stats: ['view'] } });
-    user('u1').sessionEpoch = 1;   // as above
-    const epoch = 1;
+    const before = JSON.stringify(user('u1').perms);
     const r = await call('PUT /api/tiers/:id', { params: { id: 'unit-lead' }, body: { modules: ['stats'] } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.deepEqual(r.body.removed.sort(), ['roster', 'staff']);
-    assert.equal(r.body.clamped, 1, 'only the account that actually held one of them is touched');
-    assert.equal(user('u1').perms.staff, 'none', 'the removed module is gone');
-    assert.deepEqual(user('u1').perms.stats, ['view'], 'what the tier still allows survives');
-    assert.ok(user('u1').sessionEpoch > epoch, 'the loss takes effect now, not in 12h');
-    assert.deepEqual(user('u2').perms.stats, ['view'], 'an unaffected member is left alone'); }
+    assert.equal(r.body.clamped, 0, 'nobody is clamped');
+    assert.equal(JSON.stringify(user('u1').perms), before, 'the member keeps exactly what they were given'); }
 
   /* 14. A tier in use cannot be deleted, and the built-in top and bottom never can. */
   reset();
@@ -328,6 +319,36 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     assert.equal(by['Ward Lead'].signoff, 'prepare');
     assert.ok(!('email' in by['Elizabeth Jothi']), 'no email is exposed');
     assert.ok(!('perms' in by['Elizabeth Jothi']), 'no permissions are exposed'); }
+
+  /* 20. Sign-off set on the PERSON wins over the old tier, and '' means "takes no part". */
+  reset();
+  { await create({ username: 'e.jothi', name: 'Elizabeth Jothi', level: 'ward-incharge', signoff: 'approve', perms: { roster: ['view'] } });
+    await create({ username: 'quiet', name: 'Quiet One', level: 'cns', signoff: '', perms: { roster: ['view'] } });
+    colOf('users').docs.push({ username: 'legacy2', role: 'User', active: true, name: 'Legacy Two', level: 'nurse-manager', perms: { roster: ['view'] } });
+    const r = await call('GET /api/signatories');
+    const by = {}; r.body.signatories.forEach((u) => { by[u.name] = u; });
+    assert.equal(by['Elizabeth Jothi'].signoff, 'approve', 'the person\'s own sign-off wins');
+    assert.equal(by['Quiet One'].signoff, '', 'an explicit none is kept, not filled from the tier');
+    assert.equal(by['Legacy Two'].signoff, 'check', 'never set: still reads the old tier');
+    await patch('e.jothi', { signoff: 'check' });
+    assert.equal(user('e.jothi').signoff, 'check');
+    await patch('e.jothi', { signoff: 'nonsense' });
+    assert.equal(user('e.jothi').signoff, '', 'an unknown value is dropped');
+    const list = await call('GET /api/users');
+    const lg = list.body.users.find((u) => u.username === 'legacy2');
+    assert.equal(lg.signoff, 'check'); assert.equal(lg.signoffInherited, true); }
+
+  /* 21. Sign out everywhere bumps the epoch and nothing else. */
+  reset();
+  { await create({ username: 'so', name: 'SO', perms: { stats: ['view'] } });
+    user('so').sessionEpoch = 1;
+    const before = JSON.stringify(user('so').perms);
+    const r = await call('POST /api/users/:username/signout', { params: { username: 'so' } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.ok(user('so').sessionEpoch > 1);
+    assert.equal(JSON.stringify(user('so').perms), before);
+    const miss = await call('POST /api/users/:username/signout', { params: { username: 'nobody' } });
+    assert.equal(miss.status, 404); }
 
   console.log('account-levels tests: all passed');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -10880,6 +10880,405 @@ function QCReports({
     depts: depts
   });
 }
+const QC_NSI_ID = 'ind-needle-stick-injury';
+function qcIsNsi(ind) {
+  return !!ind && (ind.id === QC_NSI_ID || /needle[\s-]*stick|\bnsi\b/i.test(String(ind.name || '')));
+}
+function qcIsHospitalArea(d) {
+  return !!d && (d.key === 'Overall Hospital' || d.deptId === '__hospital__' || /overall hospital/i.test(String(d.name || '')));
+}
+function qcNsiCount(ind, mk) {
+  const f = ind && ind.formula || 'direct';
+  const n = ind.mNum && ind.mNum[mk];
+  if (n != null && n !== '' && !isNaN(Number(n))) return Number(n);
+  if (f === 'direct' || f === 'count') {
+    const v = ind.months && ind.months[mk];
+    if (v != null && v !== '' && !isNaN(Number(v))) return Number(v);
+  }
+  return null;
+}
+function qcNsiDeptName(id) {
+  if (!id) return '';
+  const DM = window.DEPTMAP;
+  return DM && DM.nameFromId && DM.nameFromId(id) || id;
+}
+function QCNsiReport({
+  depts,
+  fy
+}) {
+  const MONTHS = fyAxis(fy);
+  const NOT_REC = 'Department not recorded';
+  const data = useMemo(() => {
+    const grid = {};
+    const list = [];
+    const add = (dept, mk, c) => {
+      if (!c) return;
+      const g = grid[dept] = grid[dept] || {};
+      g[mk] = (g[mk] || 0) + c;
+    };
+    (depts || []).forEach(d => {
+      const hosp = qcIsHospitalArea(d);
+      (d.indicators || []).filter(qcIsNsi).forEach(ind => {
+        MONTHS.forEach(([mk, label]) => {
+          const incs = ind.incidents && Array.isArray(ind.incidents[mk]) ? ind.incidents[mk].filter(x => x && Object.values(x).some(v => v)) : [];
+          const reported = qcNsiCount(ind, mk);
+          incs.forEach(x => {
+            const dn = hosp ? qcNsiDeptName(x.department) || NOT_REC : d.name;
+            add(dn, mk, 1);
+            list.push({
+              mk,
+              label,
+              dept: dn,
+              x
+            });
+          });
+          const rest = (reported != null ? reported : 0) - incs.length;
+          if (rest > 0) add(hosp ? NOT_REC : d.name, mk, rest);
+        });
+      });
+    });
+    const rows = Object.keys(grid).map(dept => {
+      const m = grid[dept];
+      const total = MONTHS.reduce((a, [mk]) => a + (m[mk] || 0), 0);
+      return {
+        dept,
+        m,
+        total
+      };
+    }).filter(r => r.total > 0).sort((a, b) => (a.dept === NOT_REC) - (b.dept === NOT_REC) || b.total - a.total || a.dept.localeCompare(b.dept));
+    const colTot = MONTHS.map(([mk]) => rows.reduce((a, r) => a + (r.m[mk] || 0), 0));
+    const total = colTot.reduce((a, b) => a + b, 0);
+    const idx = mk => MONTHS.findIndex(m => m[0] === mk);
+    list.sort((a, b) => idx(a.mk) - idx(b.mk) || String(a.x.incidentDate || '').localeCompare(String(b.x.incidentDate || '')));
+    return {
+      rows,
+      colTot,
+      total,
+      list
+    };
+  }, [depts, fy]);
+  const exportCsv = () => {
+    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['Department'].concat(MONTHS.map(m => m[1])).concat(['Total']).map(q).join(',')];
+    data.rows.forEach(r => lines.push([r.dept].concat(MONTHS.map(([mk]) => r.m[mk] || 0)).concat([r.total]).map(q).join(',')));
+    lines.push(['Hospital total'].concat(data.colTot).concat([data.total]).map(q).join(','));
+    lines.push('');
+    lines.push(['Month', 'Date', 'Department', 'Injured staff', 'Staff ID', 'Source patient', 'UHID', 'What happened', 'Action taken'].map(q).join(','));
+    data.list.forEach(r => {
+      const x = r.x;
+      lines.push([r.label, x.incidentDate, r.dept, x.victimName, x.victimId, x.patientName, x.uhid, x.details || x.finding, x.corrective || x.preventive].map(q).join(','));
+    });
+    qcDownload(lines.join('\n'), 'NSI-incidence-' + fy + '.csv', 'text/csv');
+  };
+  const top = data.rows.find(r => r.dept !== NOT_REC);
+  const monthsWith = data.colTot.filter(Boolean).length;
+  const th = {
+    padding: '8px 8px',
+    fontSize: 10.5,
+    fontWeight: 700,
+    color: P.muted,
+    textTransform: 'uppercase',
+    letterSpacing: '.3px',
+    borderBottom: '1px solid ' + P.line,
+    background: P.panel2,
+    whiteSpace: 'nowrap'
+  };
+  const td = {
+    padding: '8px 8px',
+    fontSize: 12.5,
+    borderBottom: '1px solid ' + P.line2,
+    textAlign: 'center',
+    fontFamily: MONO
+  };
+  const heat = v => !v ? 'transparent' : v >= 3 ? 'rgba(210,58,82,.22)' : v === 2 ? 'rgba(210,58,82,.14)' : 'rgba(210,58,82,.07)';
+  const card = {
+    background: '#fff',
+    border: '1px solid ' + P.line,
+    borderRadius: 12,
+    padding: '12px 14px',
+    flex: '1 1 170px',
+    minWidth: 0
+  };
+  const cap = {
+    fontSize: 10.5,
+    fontWeight: 700,
+    color: P.muted,
+    textTransform: 'uppercase'
+  };
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: card
+  }, React.createElement("div", {
+    style: cap
+  }, "NSI incidents"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 24,
+      fontWeight: 800,
+      color: data.total ? P.rose : P.green
+    }
+  }, data.total), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, fyLabelOf(fy))), React.createElement("div", {
+    style: card
+  }, React.createElement("div", {
+    style: cap
+  }, "Departments affected"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 24,
+      fontWeight: 800,
+      color: P.ink
+    }
+  }, data.rows.filter(r => r.dept !== NOT_REC).length), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, "with at least one injury")), React.createElement("div", {
+    style: card
+  }, React.createElement("div", {
+    style: cap
+  }, "Most injuries"), React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 800,
+      color: P.ink,
+      marginTop: 4,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, top ? top.dept : '—'), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, top ? top.total + ' incident' + (top.total === 1 ? '' : 's') : 'none recorded')), React.createElement("div", {
+    style: card
+  }, React.createElement("div", {
+    style: cap
+  }, "Months with an injury"), React.createElement("div", {
+    style: {
+      fontFamily: MONO,
+      fontSize: 24,
+      fontWeight: 800,
+      color: P.ink
+    }
+  }, monthsWith, React.createElement("span", {
+    style: {
+      fontSize: 13,
+      color: P.faint
+    }
+  }, " / 12")), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: P.faint
+    }
+  }, "\xA0"))), React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '11px 14px',
+      borderBottom: '1px solid ' + P.line
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, "Incidence by department and month"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: exportCsv,
+    disabled: !data.total
+  }, "Export CSV")), !data.total ? React.createElement("div", {
+    style: {
+      padding: 36,
+      textAlign: 'center',
+      color: P.green,
+      fontWeight: 600,
+      fontSize: 13
+    }
+  }, "\u2713 No needle-stick injuries recorded in ", fyLabelOf(fy), ".") : React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      width: '100%',
+      minWidth: 760
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: Object.assign({}, th, {
+      textAlign: 'left',
+      position: 'sticky',
+      left: 0
+    })
+  }, "Department"), MONTHS.map(m => React.createElement("th", {
+    key: m[0],
+    style: th
+  }, m[1].split(' ')[0])), React.createElement("th", {
+    style: th
+  }, "Total"))), React.createElement("tbody", null, data.rows.map(r => React.createElement("tr", {
+    key: r.dept
+  }, React.createElement("td", {
+    style: Object.assign({}, td, {
+      textAlign: 'left',
+      fontFamily: 'inherit',
+      fontWeight: 600,
+      color: r.dept === NOT_REC ? P.muted : P.ink,
+      fontStyle: r.dept === NOT_REC ? 'italic' : 'normal',
+      background: '#fff',
+      position: 'sticky',
+      left: 0
+    })
+  }, r.dept), MONTHS.map(([mk]) => React.createElement("td", {
+    key: mk,
+    style: Object.assign({}, td, {
+      background: heat(r.m[mk]),
+      color: r.m[mk] ? P.rose : P.faint,
+      fontWeight: r.m[mk] ? 700 : 400
+    })
+  }, r.m[mk] || '·')), React.createElement("td", {
+    style: Object.assign({}, td, {
+      fontWeight: 800,
+      color: P.ink
+    })
+  }, r.total))), React.createElement("tr", null, React.createElement("td", {
+    style: Object.assign({}, td, {
+      textAlign: 'left',
+      fontFamily: 'inherit',
+      fontWeight: 800,
+      background: P.panel2,
+      position: 'sticky',
+      left: 0
+    })
+  }, "Hospital total"), data.colTot.map((v, i) => React.createElement("td", {
+    key: i,
+    style: Object.assign({}, td, {
+      fontWeight: 800,
+      background: P.panel2,
+      color: v ? P.ink : P.faint
+    })
+  }, v || '·')), React.createElement("td", {
+    style: Object.assign({}, td, {
+      fontWeight: 800,
+      background: P.panel2,
+      color: P.rose
+    })
+  }, data.total)))))), data.list.length > 0 && React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid ' + P.line,
+      borderRadius: 12,
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '11px 14px',
+      borderBottom: '1px solid ' + P.line,
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: P.ink
+    }
+  }, "Incident register ", React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: P.muted,
+      fontWeight: 500
+    }
+  }, "\xB7 ", data.list.length, " written up")), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      width: '100%',
+      minWidth: 760
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, ['Month', 'Date', 'Department', 'Injured staff', 'Source patient', 'What happened', 'Action taken'].map(h => React.createElement("th", {
+    key: h,
+    style: Object.assign({}, th, {
+      textAlign: 'left'
+    })
+  }, h)))), React.createElement("tbody", null, data.list.map((r, i) => {
+    const x = r.x;
+    const c = Object.assign({}, td, {
+      textAlign: 'left',
+      fontFamily: 'inherit',
+      fontSize: 12,
+      verticalAlign: 'top'
+    });
+    return React.createElement("tr", {
+      key: i
+    }, React.createElement("td", {
+      style: c
+    }, r.label), React.createElement("td", {
+      style: Object.assign({}, c, {
+        fontFamily: MONO,
+        whiteSpace: 'nowrap'
+      })
+    }, x.incidentDate || '—'), React.createElement("td", {
+      style: Object.assign({}, c, {
+        fontWeight: 600,
+        color: r.dept === NOT_REC ? P.muted : P.ink
+      })
+    }, r.dept), React.createElement("td", {
+      style: c
+    }, x.victimName || '—', x.victimId ? React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: P.faint,
+        fontFamily: MONO
+      }
+    }, x.victimId) : null), React.createElement("td", {
+      style: c
+    }, x.patientName || '—', x.uhid ? React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: P.faint,
+        fontFamily: MONO
+      }
+    }, x.uhid) : null), React.createElement("td", {
+      style: Object.assign({}, c, {
+        maxWidth: 280
+      })
+    }, x.details || x.finding || '—'), React.createElement("td", {
+      style: Object.assign({}, c, {
+        maxWidth: 240
+      })
+    }, x.corrective || x.preventive || '—'));
+  }))))));
+}
 function QCIncidents({
   depts,
   Q
@@ -10887,6 +11286,7 @@ function QCIncidents({
   const [dept, setDept] = useState('all');
   const [sel, setSel] = useState(null);
   const [fy, setFy] = useState(() => defaultFy(depts));
+  const [tab, setTab] = useState('all');
   const MONTHS = fyAxis(fy);
   const list = useMemo(() => {
     const out = [];
@@ -11008,15 +11408,41 @@ function QCIncidents({
       color: P.muted,
       marginTop: 2
     }
-  }, React.createElement("b", {
+  }, tab === 'nsi' ? React.createElement("span", null, "Needle-stick injuries by the department they happened in \xB7 ", fyLabelOf(fy)) : React.createElement("span", null, React.createElement("b", {
     style: {
       color: P.rose
     }
-  }, list.length), " benchmark breaches & logged incidents in ", fyLabelOf(fy), " \u2014 each needs review")), React.createElement(QCFyPicker, {
+  }, list.length), " benchmark breaches & logged incidents in ", fyLabelOf(fy), " \u2014 each needs review"))), React.createElement("div", {
+    role: "tablist",
+    style: {
+      display: 'inline-flex',
+      padding: 3,
+      borderRadius: 9,
+      background: P.panel2,
+      border: '1px solid ' + P.line
+    }
+  }, [['all', 'All incidents'], ['nsi', 'NSI by department']].map(([k, l]) => React.createElement("button", {
+    key: k,
+    role: "tab",
+    "aria-selected": tab === k,
+    onClick: () => setTab(k),
+    style: {
+      border: 0,
+      borderRadius: 7,
+      padding: '6px 12px',
+      fontSize: 12,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      background: tab === k ? '#fff' : 'transparent',
+      color: tab === k ? P.blue700 : P.muted,
+      boxShadow: tab === k ? '0 1px 4px rgba(31,59,90,.12)' : 'none'
+    }
+  }, l))), React.createElement(QCFyPicker, {
     fy: fy,
     setFy: setFy,
     depts: depts
-  }), React.createElement("select", {
+  }), tab === 'all' && React.createElement("select", {
     value: dept,
     onChange: e => setDept(e.target.value),
     style: {
@@ -11032,7 +11458,10 @@ function QCIncidents({
   }, options.map(o => React.createElement("option", {
     key: o.key,
     value: o.key
-  }, o.label)))), empty && React.createElement("div", {
+  }, o.label)))), tab === 'nsi' && React.createElement(QCNsiReport, {
+    depts: depts,
+    fy: fy
+  }), tab === 'all' && empty && React.createElement("div", {
     style: {
       background: '#fff',
       border: '1px solid ' + P.line,
@@ -11042,7 +11471,7 @@ function QCIncidents({
       color: P.green,
       fontWeight: 600
     }
-  }, "\u2713 No breaches or logged incidents in scope \u2014 all reported indicators on benchmark."), React.createElement("div", {
+  }, "\u2713 No breaches or logged incidents in scope \u2014 all reported indicators on benchmark."), tab === 'all' && React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',

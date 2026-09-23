@@ -76,7 +76,7 @@
   // An incident row counts only when something was typed into it — the same rule the server
   // uses to keep it. Counting blank rows ("Add incident" clicked twice, one filled) submitted
   // a count of 2 while only 1 incident was stored, so count and register disagreed for good.
-  const DC_INCIDENT_FIELDS = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'details', 'finding', 'corrective', 'preventive', 'remark'];
+  const DC_INCIDENT_FIELDS = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'department', 'details', 'finding', 'corrective', 'preventive', 'remark'];
   const dcIncidentFilled = (x) => !!x && DC_INCIDENT_FIELDS.some((k) => String(x[k] == null ? '' : x[k]).trim() !== '');
   // The server returns every submission touching a collector's ASSIGNMENTS (colleagues on the
   // same ward, or the whole hospital for an infection-control role). That full list is right
@@ -95,7 +95,11 @@
   // alone treated an in-charge as an administrator: it got the custom-field manager, a free
   // responsible-person field and the admin-owned denominators.
   const DC_PORTAL_ROLES = ['collector', 'incharge', 'nurse', 'pca'];
-  const dcIsPortalRole = (me) => !!(me && DC_PORTAL_ROLES.indexOf(me.role) >= 0);
+  // ...and a normal account holding Data Submission without Data Collection: it reports as
+  // itself, held to its own scope, exactly like a portal account (server/access.js dataScoped).
+  const dcHolds = (perms, mod) => { const v = perms && perms[mod]; return Array.isArray(v) ? v.length > 0 : (!!v && v !== 'none'); };
+  const dcIsPortalRole = (me) => !!(me && (DC_PORTAL_ROLES.indexOf(me.role) >= 0
+    || ((me.role || 'User') === 'User' && dcHolds(me.perms, 'datasubmit') && !dcHolds(me.perms, 'datacol'))));
   const dcIsAdminUser = () => { const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null; return !me || me.role === 'Administrator'; };
   // Areas granted DIRECTLY to a responsible person (beyond department-derived / hospital-wide).
   // Older records lack the field: derive it from the stored union minus today's derived areas.
@@ -1122,7 +1126,8 @@
       if (idx >= 0) { setCmp({ prior: { values: (dept.data && dept.data[idx]) || {} } }); return; }
       send(false, '');
     };
-    const send = (corr, why) => {
+    const send = (corr, why) => { dcConfirmOldMonths([month]).then((ok) => { if (ok) sendNow(corr, why); }); };
+    const sendNow = (corr, why) => {
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/patient', {
@@ -1140,7 +1145,7 @@
     };
 
     return (
-      <div className="grid" style={{ gap: 14, maxWidth: 760 }}>
+      <div className="grid" style={{ gap: 14, maxWidth: onSubmitted ? "none" : 760 }}>
         <SectionTitle icon={I.input} title="Submit Patient Statistics" sub="Fill in a department's monthly numbers — saved straight to the database and logged." />
         {flash && <DcSuccessPopup key={flash.ts} title={flash.title} sub={flash.sub} onClose={() => setFlash(null)} />}
         {cmp && <DcCompareModal title={'Data already recorded for ' + (dept ? dept.name : '') + ' · ' + monthLabel(month)} rows={dcPatientCompareRows(cols, (cmp.prior && cmp.prior.values) || {}, values).concat(dcTextRows('note', 'Note', ((subs || []).find((x) => x.type === 'patient' && x.department === (dept && dept.id) && x.month === month && x.status === 'approved') || {}).note, note))} reason={reason} setReason={setReason} busy={busy} onEdit={() => setCmp(null)} onSend={() => send(true, reason.trim())} />}
@@ -1365,7 +1370,8 @@
     // Some denominators are a hospital-wide figure the ADMIN owns (e.g. NSI's "Total
     // healthcare workers"): data collectors see it read-only and enter only the numerator.
     const denAdminOnly = !!def.denAdminOnly;
-    const denLockedForCollector = denAdminOnly && lockResp;
+    // ...unless an administrator allowed this person to enter them (Access Control → Data Submission).
+    const denLockedForCollector = denAdminOnly && lockResp && !(me && me.enterDen === true);
     const numDef = def.numeratorDef || '';
     const denDef = def.denominatorDef || (isRate ? ('Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.') : '');
     const indNameQ = (def.name || newInd.name) || 'Result';
@@ -1418,7 +1424,15 @@
     // NSI (needle-stick injury) logs BOTH the source patient AND the injured staff member
     // (victim) + their employee id — enabled per-indicator via the `victimField` flag.
     const victimField = !!def.victimField;
-    const blankIncident = () => ({ patientName: '', uhid: '', age: '', gender: '', diagnosis: '', incidentDate: '', admissionDate: '', victimName: '', victimId: '', details: '', finding: '', corrective: '', preventive: '', remark: '' });
+    // A hospital-wide area (Overall Hospital): each incident records the department it
+    // happened in, so incidence can still be reported by department (Reports → NSI incidence).
+    const hospitalWide = !!area && (area.key === 'Overall Hospital' || area.deptId === '__hospital__' || /overall hospital/i.test(String(area.name || '')));
+    const incidentDepts = useMemo(() => {
+      const DM = window.DEPTMAP;
+      const ids = (DM && DM.patientDeptIds) ? DM.patientDeptIds() : dcAllDepts().map((d) => d.id);
+      return ids.map((id) => ({ id, name: (DM && DM.nameFromId && DM.nameFromId(id)) || id })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    }, [dataRev]);
+    const blankIncident = () => ({ patientName: '', uhid: '', age: '', gender: '', diagnosis: '', incidentDate: '', admissionDate: '', victimName: '', victimId: '', department: '', details: '', finding: '', corrective: '', preventive: '', remark: '' });
     const addIncident = () => setIncidents((a) => [...a, blankIncident()]);
     const setIncidentField = (i, k, v) => setIncidents((a) => a.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
     const delIncident = (i) => setIncidents((a) => a.filter((_, j) => j !== i));
@@ -1500,7 +1514,7 @@
       setCapa(cp && typeof cp === 'object' ? { finding: cp.finding || '', corrective: cp.corrective || '', preventive: cp.preventive || '' } : { finding: '', corrective: '', preventive: '' });
       // Load any incident reports already recorded for this indicator × month.
       const incs = (curInd.incidents && Array.isArray(curInd.incidents[month])) ? curInd.incidents[month] : [];
-      const toInc = (x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', incidentDate: x.incidentDate || '', admissionDate: x.admissionDate || '', victimName: x.victimName || '', victimId: x.victimId || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' });
+      const toInc = (x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', incidentDate: x.incidentDate || '', admissionDate: x.admissionDate || '', victimName: x.victimName || '', victimId: x.victimId || '', department: x.department || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' });
       setIncidents(incs.map(toInc));
       // "Fix & resubmit": overlay the REJECTED submission's own figures on top — the live record
       // never held them, so the form used to open blank. Applied once per rejected row, so
@@ -1563,10 +1577,12 @@
         const explicitZero = !(Number(numerator) > 0) && String(den == null ? '' : den).trim() !== '' && Number(den) === 0;
         if (!explicitZero) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error'); return; }
       }
+      if (hospitalWide && !notObserved && incidents.some((x) => dcIncidentFilled(x) && !x.department)) { toast('Choose the department where each incident happened.', 'error'); return; }
       if (qCorrection) { setQCmp({ prior: qPriorLocal() }); return; }
       sendQ(false, '');
     };
-    const sendQ = (corr, why) => {
+    const sendQ = (corr, why) => { dcConfirmOldMonths([month]).then((ok) => { if (ok) sendQNow(corr, why); }); };
+    const sendQNow = (corr, why) => {
       const matched = resps.find((r) => r.name === responsible);
       setBusy(true); setDone(null);
       dcApi.post('/api/submissions/quality', {
@@ -1588,7 +1604,7 @@
         // them on the indicator's month; the count above already reflects how many.
         // An edit request that REMOVES every incident sends [] (the server then clears the month's
         // list) — otherwise the comparison showed "2 → 0" but approval kept the two on record.
-        incidents: (!notObserved && incidents.length) ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, incidentDate: x.incidentDate, admissionDate: x.admissionDate, victimName: x.victimName, victimId: x.victimId, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : ((!notObserved && corr) ? [] : undefined),
+        incidents: (!notObserved && incidents.length) ? incidents.map((x) => ({ patientName: x.patientName, uhid: x.uhid, age: x.age, gender: x.gender, diagnosis: x.diagnosis, incidentDate: x.incidentDate, admissionDate: x.admissionDate, victimName: x.victimName, victimId: x.victimId, department: x.department, details: x.details, finding: x.finding, corrective: x.corrective, preventive: x.preventive, remark: x.remark })) : ((!notObserved && corr) ? [] : undefined),
         // The not-observed reason IS the month's note ("Not observed — why"); any general
         // remark typed below is appended in brackets so nothing the collector wrote is lost.
         remark: notObserved ? ('Not observed — ' + noReason.trim() + (remark.trim() ? ' (' + remark.trim() + ')' : '')) : remark,
@@ -1604,7 +1620,7 @@
 
     const showEntry = (indId && !isNew) || (isNew && newInd.name);
     return (
-      <div className="grid" style={{ gap: 14, maxWidth: 760 }}>
+      <div className="grid" style={{ gap: 14, maxWidth: onSubmitted ? "none" : 760 }}>
         <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Enter the month's value — by staff group (Nurse / Doctor / PCA / Other) or directly — the count / rate is calculated automatically." />
         {flash && <DcSuccessPopup key={flash.ts} title={flash.title} sub={flash.sub} onClose={() => setFlash(null)} />}
         {qCmp && <DcCompareModal title={'Data already recorded for ' + (area ? area.name : '') + ' · ' + ((curInd && curInd.name) || '') + ' · ' + monthLabel(month)} rows={dcQualityCompareRows(qCmp.prior, qNext(), numLabel, denLabel)} reason={qReason} setReason={setQReason} busy={busy} onEdit={() => setQCmp(null)} onSend={() => sendQ(true, qReason.trim())} />}
@@ -1838,6 +1854,14 @@
                         <Field label="Admission date"><input type="date" style={inputStyle} value={x.admissionDate} onChange={(e) => setIncidentField(i, 'admissionDate', e.target.value)} /></Field>
                         <Field label="Diagnosis"><input style={inputStyle} value={x.diagnosis} onChange={(e) => setIncidentField(i, 'diagnosis', e.target.value)} placeholder="Diagnosis" /></Field>
                       </div>
+                      {hospitalWide && (
+                        <Field label={<span>Department where it happened <span style={{ color: 'var(--rose)' }}>*</span></span>}>
+                          <select style={inputStyle} value={x.department || ''} onChange={(e) => setIncidentField(i, 'department', e.target.value)}>
+                            <option value="">— choose the department —</option>
+                            {incidentDepts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                          </select>
+                        </Field>
+                      )}
                       {victimField && (
                         <div style={{ marginBottom: 4, padding: '9px 11px', borderRadius: 8, background: 'var(--warn-bg,#fff4e0)', border: '1px solid #f0d9a8' }}>
                           <div style={{ fontSize: 10.5, fontWeight: 700, color: '#9a6b00', textTransform: 'uppercase', letterSpacing: .3, marginBottom: 6 }}>Injured staff member (victim)</div>
@@ -3094,6 +3118,11 @@
     const [view, setView] = useState('patient');
     const [status, setStatus] = useState('All');   // All | Pending | Approved | Rejected
     const mode = 'timeline';     // Timeline only (the Table view was removed at the user's request)
+    // Month-wise by default: every submission under the REPORTING month it is for, newest
+    // month first, each month with its own counts. "By date sent" keeps the old timeline.
+    const [groupBy, setGroupBy] = useState('month');   // 'month' | 'day'
+    const [monthPick, setMonthPick] = useState('all');
+    const [closedMonths, setClosedMonths] = useState({});
     const [detailMode, setDetailMode] = useState(null);   // 'resend' opens the detail straight into Fix & resend
     // A collector may edit only their OWN still-PENDING submission (values only).
     const ownsSub = (s) => !!s && s.status === 'pending' && dcIsMine(s);
@@ -3186,7 +3215,10 @@
     const FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Withdrawn'];
     const inFilter = (s, f) => f === 'All' || (f === 'Rejected' ? openRej.has(s.id) : s.status === f.toLowerCase());
     const countFor = (f) => shown.filter((s) => inFilter(s, f)).length;
-    const listed = shown.filter((s) => inFilter(s, status));
+    const monthKeyNum = (k) => { const q = String(k || '').split('-'); const mi = MONS_ABBR.indexOf(q[0]); return mi < 0 || !q[1] ? -1 : (Number(q[1]) * 12 + mi); };
+    const monthsIn = Array.from(new Set(shown.map((x) => x.month).filter(Boolean))).sort((a, b) => monthKeyNum(b) - monthKeyNum(a));
+    const monthSel = monthPick !== 'all' && monthsIn.indexOf(monthPick) < 0 ? 'all' : monthPick;
+    const listed = shown.filter((s) => inFilter(s, status) && (monthSel === 'all' || s.month === monthSel));
     const cpTab = (on) => ({ border: 0, background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent', color: on ? '#fff' : '#6c7a8c', padding: '6px 13px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all .2s', boxShadow: on ? '0 4px 12px rgba(0,144,202,.35)' : 'none' });
     const segWrap = { display: 'inline-flex', background: 'rgba(255,255,255,.5)', border: '1px solid rgba(255,255,255,.85)', borderRadius: 10, padding: 3, gap: 2 };
     const cntStyle = (on) => ({ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, background: on ? 'rgba(255,255,255,.22)' : 'rgba(125,145,180,.18)', padding: '1px 6px', borderRadius: 8 });
@@ -3247,6 +3279,17 @@
       return out;
     })();
 
+    const monthGroups = (() => {
+      const by = {};
+      listed.forEach((x) => { const k = x.month || '—'; (by[k] = by[k] || []).push(x); });
+      return Object.keys(by).sort((a, b) => monthKeyNum(b) - monthKeyNum(a)).map((k) => {
+        const rs = by[k];
+        const c = (st) => rs.filter((x) => x.status === st).length;
+        return { key: k, label: k === '—' ? 'No month' : monthLabel(k), rows: rs, approved: c('approved'), pending: c('pending'), rejected: c('rejected'), onRecord: c('reported') };
+      });
+    })();
+    const groups = groupBy === 'month' ? monthGroups : dayGroups.map((g) => ({ key: g.label, label: g.label, rows: g.rows }));
+
     return (
       <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 14, marginBottom: 14 }}>
@@ -3285,6 +3328,17 @@
             <button key={f} onClick={() => setStatus(f)} style={cpTab(status === f)}>{f}<span style={cntStyle(status === f)}>{countFor(f)}</span></button>
           ))}
         </div>
+        <span style={{ flex: 1 }} />
+        <div style={segWrap}>
+          {[['month', 'By month'], ['day', 'By date sent']].map(([k, l]) => (
+            <button key={k} onClick={() => setGroupBy(k)} style={cpTab(groupBy === k)}>{l}</button>
+          ))}
+        </div>
+        <select value={monthSel} onChange={(e) => setMonthPick(e.target.value)} title="Reporting month"
+          style={{ padding: '7px 10px', borderRadius: 10, border: '1px solid rgba(255,255,255,.85)', background: 'rgba(255,255,255,.65)', fontSize: 12, fontWeight: 700, color: '#3c4858', fontFamily: 'inherit', outline: 'none' }}>
+          <option value="all">All months ({monthsIn.length})</option>
+          {monthsIn.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
       </div>
 
       <Card style={{ padding: 0, overflow: 'hidden' }}>
@@ -3305,9 +3359,24 @@
             : listed.length === 0 ? <div style={{ padding: 28, color: 'var(--muted)', textAlign: 'center' }}>Nothing in this tab is {status.toLowerCase()}.</div>
               : mode === 'timeline'
                 ? <div style={{ padding: '18px 20px' }}>
-                  {dayGroups.map((g) => (
-                    <div key={g.label}>
-                      <div style={{ fontSize: 10.5, letterSpacing: '.6px', textTransform: 'uppercase', color: '#7d8ea8', fontWeight: 700, margin: '0 0 9px' }}>{g.label}</div>
+                  {groups.map((g) => { const isM = groupBy === 'month'; const closed = isM && !!closedMonths[g.key]; return (
+                    <div key={g.key} style={isM ? { border: '1px solid rgba(125,145,180,.2)', borderRadius: 12, marginBottom: 12, background: 'rgba(255,255,255,.55)', overflow: 'hidden' } : null}>
+                      {isM ? (
+                        <button type="button" onClick={() => setClosedMonths((o) => Object.assign({}, o, { [g.key]: !o[g.key] }))} aria-expanded={!closed}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', border: 0, background: 'rgba(236,247,255,.7)', padding: '10px 14px', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', flexWrap: 'wrap', borderBottom: closed ? 0 : '1px solid rgba(125,145,180,.18)' }}>
+                          <span style={{ display: 'inline-block', transform: closed ? 'rotate(-90deg)' : 'none', transition: 'transform .15s', color: '#7d8ea8', fontSize: 11 }}>▼</span>
+                          <span style={{ fontSize: 13.5, fontWeight: 800, color: '#16202e' }}>{g.label}</span>
+                          <span style={{ fontSize: 11, color: '#6c7a8c', fontFamily: "'IBM Plex Mono',monospace" }}>{g.rows.length} item{g.rows.length === 1 ? '' : 's'}</span>
+                          <span style={{ flex: 1 }} />
+                          {g.approved > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'var(--pos-bg)', color: 'var(--pos)' }}>{g.approved} approved</span>}
+                          {g.pending > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#fff4e0', color: '#9a6b00' }}>{g.pending} pending</span>}
+                          {g.rejected > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'var(--neg-bg)', color: 'var(--rose)' }}>{g.rejected} returned</span>}
+                          {g.onRecord > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{g.onRecord} on record</span>}
+                        </button>
+                      ) : (
+                        <div style={{ fontSize: 10.5, letterSpacing: '.6px', textTransform: 'uppercase', color: '#7d8ea8', fontWeight: 700, margin: '0 0 9px' }}>{g.label}</div>
+                      )}
+                      {!closed && <div style={isM ? { padding: '12px 14px 0' } : null}>
                       {g.rows.map((s) => {
                         const dot = { pending: '#e08a1e', approved: '#1f9d57', rejected: '#d23a52', withdrawn: '#9aa6b4' }[s.status] || '#0090ca';
                         const halo = { pending: 'rgba(224,138,30,.16)', approved: 'rgba(31,157,87,.16)', rejected: 'rgba(210,58,82,.16)', withdrawn: 'rgba(154,166,180,.18)' }[s.status] || 'rgba(0,144,202,.16)';
@@ -3326,7 +3395,7 @@
                               </div>
                               <div style={{ fontSize: 11, color: '#6c7a8c', marginTop: 3 }}>
                                 {refOf(s) ? <span style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{refOf(s)}{' · '}</span> : null}
-                                {monthLabel(s.month)}
+                                {groupBy === 'month' ? (s.submittedAt ? 'sent ' + new Date(s.submittedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : 'already on record') : monthLabel(s.month)}
                                 {s.type === 'quality' && s.value != null && s.value !== '' ? <React.Fragment>{' · value '}<b style={{ color: '#3c4858', fontFamily: "'IBM Plex Mono',monospace" }}>{String(s.value)}</b></React.Fragment> : null}
                                 {' · ' + ago(s.submittedAt)}
                               </div>
@@ -3335,8 +3404,9 @@
                           </div>
                         );
                       })}
+                      </div>}
                     </div>
-                  ))}
+                  ); })}
                   <div style={{ fontSize: 11, color: '#9aa6b4' }}>Returned submissions show the administrator's reason — use Fix &amp; resend to correct and send them again. A pending one can still be edited or withdrawn.</div>
                 </div>
                 : <React.Fragment>
@@ -3456,7 +3526,6 @@
   const CP_NAV_COLLECT = [
     ['missing', 'Missing data', 'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01'],
     ['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'],
-    ['quick', 'Quick entry', 'M13 2L4 14h7l-1 8 9-12h-7z'],
     ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'],
     ['patient', 'Patient statistics', 'M4 4h16v16H4zM4 9h16M9 4v16'],
   ];
@@ -3525,6 +3594,16 @@
   const dcMonthRank = (k) => {
     const p = String(k || '').split('-'); const mi = MONS_ABBR.indexOf(p[0]); const yy = parseInt(p[1], 10);
     return (mi < 0 || isNaN(yy)) ? null : (2000 + yy) * 12 + mi;
+  };
+  /* Warn before sending data for a month more than 12 months ago. A wrong YEAR in the month
+     picker ("Jul-24" for "Jul-26") silently back-dates a report, and every month since then
+     then counts as missing (2026-09-23: 8 such entries). Real catch-up is still allowed. */
+  const dcConfirmOldMonths = (months) => {
+    const now = new Date(); const cur = now.getFullYear() * 12 + now.getMonth();
+    const old = (months || []).filter((m) => { const r = dcMonthRank(m); return r != null && cur - r > 12; });
+    if (!old.length) return Promise.resolve(true);
+    const msg = 'You are sending data for ' + old.map(monthLabel).join(', ') + ' — more than a year ago. Please check the month AND the year are right before sending.';
+    return (window.UI && window.UI.confirm) ? Promise.resolve(window.UI.confirm({ title: 'Check the month and year', message: msg, confirmLabel: 'Yes, the month is right' })) : Promise.resolve(window.confirm(msg));
   };
   const dcMonthKey = (r) => MONS_ABBR[((r % 12) + 12) % 12] + '-' + String(Math.floor(r / 12) % 100).padStart(2, '0');
   // Month picker for a DATA COLLECTOR / IN-CHARGE: only real reporting months. The pickers used a
@@ -3722,6 +3801,22 @@
     }));
     return rows;
   };
+  /* The signed-in person's missing Data Submission items, grouped by month — for the
+     top-bar bell (ui.jsx TopBar). The same rule as the Missing data page: their own
+     departments / areas (the server scopes both), what they may submit (submitKinds), the
+     Department Setup start months and "not measured" indicators. */
+  const dcMissingSummary = () => {
+    const user = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
+    const kinds = user.submitKinds || {};
+    const depts = kinds.patient === false ? [] : dcAllDepts();
+    const areas = kinds.quality === false ? [] : (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length);
+    return Promise.resolve(dcLoadCollectionSettings()).catch(() => null).then(() => dcSubmissionResponse()).then((r) => {
+      const rows = dcMissingList(depts, areas, r.ok ? (r.submissions || []) : []);
+      const by = {};
+      rows.forEach((x) => { by[x.month] = by[x.month] || { month: x.month, label: monthLabel(x.month), rank: x.rank, count: 0 }; by[x.month].count++; });
+      return { total: rows.length, months: Object.values(by).sort((a, b) => b.rank - a.rank) };
+    });
+  };
 
   /* Sparkline over the six months ending at `month`. Returns null when there is not
      enough history to draw a line — an invented flat line would read as "stable". */
@@ -3834,7 +3929,8 @@
       sendMonths(touched, [], '');
     };
     const valuesFor = (m) => { const values = {}; cols.forEach((c) => { const v = cellVal(m, c.id); if (String(v).trim() !== '') values[c.id] = Number(v); }); return values; };
-    const sendMonths = (months, corrMonths, why) => {
+    const sendMonths = (months, corrMonths, why) => { dcConfirmOldMonths(months).then((ok) => { if (ok) sendMonthsNow(months, corrMonths, why); }); };
+    const sendMonthsNow = (months, corrMonths, why) => {
       setBusy(true);
       // One submission per month, so the admin reviews and applies them exactly as if
       // they had been sent from the single-month form.
@@ -4599,7 +4695,9 @@
   }
 
   /* ---- The dashboard the portal opens on ---------------------------------------- */
-  function CollectorDash({ month, setMonth, onNav, onFill, user }) {
+  function CollectorDash({ month, setMonth, onNav, onFill, user, can }) {
+    // Screens this person may open (Data Submission access). No prop = everything, as before.
+    const may = (v) => !can || can(v);
     const dataRev = useDcDataRev();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
     const depts = useMemo(() => dcAllDepts(), [dataRev]);
@@ -4672,14 +4770,13 @@
       { val: rejected, lbl: 'Needs correction', foot: rejected ? 'rejected — fix and resubmit' : 'nothing rejected', icd: 'M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01', bg: 'rgba(210,58,82,.13)', c: '#a92c42' },
     ];
     const QUICK = [
-      { go: 'quick', label: 'Quick entry', sub: 'Spreadsheet grid for department statistics', cta: 'Open grid', tone: '#0072a3', glow: 'rgba(0,144,202,.22)', badge: statGap > 0 ? statGap + ' missing' : '', icd: 'M13 2L4 14h7l-1 8 9-12h-7z', bg: 'rgba(0,144,202,.12)', c: '#0072a3' },
       { go: 'quality', label: 'Quality data', sub: 'One indicator at a time with the HQI guide', cta: 'Enter data', tone: '#1f9d57', glow: 'rgba(58,181,167,.22)', badge: missing.length ? missing.length + ' missing' : '', icd: 'M22 12h-4l-3 8-4-16-3 8H2', bg: 'rgba(58,181,167,.16)', c: '#12776c' },
       { go: 'patient', label: 'Patient statistics', sub: 'Monthly figures per department', cta: 'Fill month', tone: '#5b45c4', glow: 'rgba(106,82,212,.2)', badge: statGap > 0 ? statGap + ' left' : '', icd: 'M4 4h16v16H4zM4 9h16M9 4v16', bg: 'rgba(106,82,212,.14)', c: '#5b45c4' },
       { go: 'history', label: 'My submissions', sub: 'Everything you have sent and its status', cta: 'Open list', tone: '#b5670a', glow: 'rgba(224,138,30,.2)', badge: awaiting ? awaiting + ' pending' : '', icd: 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7', bg: 'rgba(224,138,30,.14)', c: '#b5670a' },
     ];
     const CAL = [
       { lbl: 'Quality indicators', val: done + '/' + totalInd, p: totalInd ? done / totalInd : 0, c: 'linear-gradient(90deg,#3ab5a7,#1f9d57)' },
-      { lbl: 'Department stats', val: deptDone + '/' + pDepts.length, p: pDepts.length ? deptDone / pDepts.length : 0, c: 'linear-gradient(90deg,#27a8db,#0072a3)' },
+      ...(may('patient') ? [{ lbl: 'Department stats', val: deptDone + '/' + pDepts.length, p: pDepts.length ? deptDone / pDepts.length : 0, c: 'linear-gradient(90deg,#27a8db,#0072a3)' }] : []),
       { lbl: 'Awaiting review', val: awaiting + '/' + mineN, p: mineN ? awaiting / mineN : 0, c: 'linear-gradient(90deg,#8f7ce0,#5b45c4)' },
     ];
     const activity = S.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).slice(0, 6);
@@ -4717,10 +4814,15 @@
               {monthOpts.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
             </select>
             <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-              <button onClick={() => onNav('quick')} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.4)', background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
-                {CP_ICON('M13 2L4 14h7l-1 8 9-12h-7z', 14)}Quick entry{statGap ? ' (' + statGap + ')' : ''}
+              {may('patient') ? (
+              <button onClick={() => onNav('patient')} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.4)', background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
+                {CP_ICON('M4 4h16v16H4zM4 9h16M9 4v16', 14)}Patient statistics{statGap ? ' (' + statGap + ')' : ''}
               </button>
-              <button onClick={() => onNav('patient')} style={{ border: '1px solid rgba(255,255,255,.85)', background: 'rgba(255,255,255,.6)', color: '#3c4858', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Patient statistics</button>
+              ) : may('quality') ? (
+              <button onClick={() => onNav('quality')} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.4)', background: 'linear-gradient(135deg,#3ab5a7,#12776c)', color: '#fff', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(18,119,108,.35)' }}>
+                {CP_ICON('M22 12h-4l-3 8-4-16-3 8H2', 14)}Quality data{missing.length ? ' (' + missing.length + ')' : ''}
+              </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -4762,7 +4864,7 @@
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(168px,1fr))', gap: 12, marginBottom: 14 }}>
-          {QUICK.map((n) => (
+          {QUICK.filter((n) => may(n.go)).map((n) => (
             <div key={n.go} onClick={() => onNav(n.go)} style={Object.assign({}, CP_CARD, { position: 'relative', overflow: 'hidden', padding: '14px 16px', cursor: 'pointer' })}>
               <div style={{ position: 'absolute', right: -30, top: -34, width: 110, height: 100, borderRadius: '50%', background: 'radial-gradient(circle,' + n.glow + ',transparent 70%)', filter: 'blur(8px)', pointerEvents: 'none' }} />
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -5029,8 +5131,8 @@
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: '#8fa6c0', marginTop: 5 }}>{pct}% reported</div>
           </div>
           <div style={{ position: 'relative', display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-            <button onClick={() => onNav('quick')} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.35)', background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
-              {CP_ICON('M13 2L4 14h7l-1 8 9-12h-7z', 14)}Quick entry
+            <button onClick={() => onNav('patient')} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.35)', background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
+              {CP_ICON('M4 4h16v16H4zM4 9h16M9 4v16', 14)}Patient statistics
             </button>
             <button onClick={() => onNav('roster')} style={{ border: '1px solid rgba(255,255,255,.22)', background: 'rgba(255,255,255,.1)', color: '#cfe0f0', padding: '9px 15px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Open duty roster</button>
           </div>
@@ -5829,7 +5931,7 @@
 
     return (
       <div style={{ maxWidth: 1100, margin: '0 auto' }}>
-        <style>{'@media (max-width:640px){.cp-mm-overlay{padding:0!important}.cp-mm-box{max-height:none!important;min-height:100%;border-radius:0!important;padding:10px 12px 18px!important}}'}</style>
+        <style>{'@media (max-width:640px){.cp-mm-overlay{padding:0!important}.cp-mm-box{max-height:100%!important;height:100%;border-radius:0!important}.cp-mm-body{padding:10px 8px 18px!important}}'}</style>
         {loadError && <div role="alert" style={{ padding: 12, color: 'var(--rose)' }}>{loadError} <button className="btn sm" onClick={() => load(true)}>Retry</button></div>}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12, marginBottom: 14 }}>
@@ -5922,23 +6024,29 @@
 
         {fix && <SubmissionDetail key={'fix/' + fix.from.id} s={fix.from} canEdit={false} fullEdit={false} initialMode="resend" onClose={() => setFix(null)}
           onSaved={() => { const row = fix; setFix(null); setSent((s) => ({ ...s, [row.key]: true })); load(true).then((ok) => { if (ok) setSent({}); }); }} />}
-        {open && (
+        {/* Drawn on <body>: inside the main app the page content is animated (a transform),
+            which traps a fixed overlay inside it — the pop-up sat off-centre and the sidebar
+            stayed un-dimmed. */}
+        {open && ((n) => (typeof ReactDOM !== 'undefined' && ReactDOM.createPortal && typeof document !== 'undefined') ? ReactDOM.createPortal(n, document.body) : n)(
           <div className="cp-mm-overlay"
             onMouseDown={(e) => { downOnBackdrop.current = e.target === e.currentTarget; }}
             onClick={(e) => { if (e.target === e.currentTarget && downOnBackdrop.current) setOpen(null); }}
-            style={{ position: 'fixed', inset: 0, zIndex: 2500, background: 'rgba(13,27,46,.45)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '4vh 16px', overflowY: 'auto', boxSizing: 'border-box' }}>
+            style={{ position: 'fixed', inset: 0, zIndex: 2500, background: 'rgba(13,27,46,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3vh 12px', boxSizing: 'border-box' }}>
             <div className="cp-mm-box" role="dialog" aria-modal="true" aria-label="Submit missing data"
-              style={{ width: '100%', maxWidth: 900, maxHeight: '92vh', overflowY: 'auto', background: '#f3f8fd', borderRadius: 16, boxShadow: '0 24px 70px rgba(5,12,24,.35)', padding: '14px 18px 20px', boxSizing: 'border-box' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              style={{ width: '100%', maxWidth: 880, maxHeight: '94vh', display: 'flex', flexDirection: 'column', background: '#f3f8fd', borderRadius: 16, boxShadow: '0 24px 70px rgba(5,12,24,.35)', overflow: 'hidden', boxSizing: 'border-box' }}>
+              {/* Pinned header: what is being submitted stays in view while the form scrolls. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px 12px', background: '#fff', borderBottom: '1px solid rgba(125,145,180,.2)', flexShrink: 0 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: '#b5670a', textTransform: 'uppercase', letterSpacing: '.4px' }}>{open.status === 'rejected' ? 'Returned — fix and resubmit' : 'Missing data'}</div>
                   <div style={{ fontSize: 14, fontWeight: 700, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{(open.kind === 'quality' ? open.ind.name + ' · ' + open.unit : open.unit + ' · Patient statistics') + ' · ' + monthLabel(open.month)}</div>
                 </div>
                 <button onClick={() => setOpen(null)} title="Close (Esc)" aria-label="Close" style={{ display: 'grid', placeItems: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(125,145,180,.3)', background: '#fff', color: '#3c4858', cursor: 'pointer', flexShrink: 0, fontSize: 16 }}>✕</button>
               </div>
+              <div className="cp-mm-body" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 14px 18px' }}>
               {open.kind === 'quality'
                 ? <DataQualityForm key={'mq/' + open.key} prefill={{ responsible: user.name, area: open.areaKey, indicatorId: open.ind.id, month: open.month, from: open.from }} onSubmitted={() => submitted(open)} />
                 : <DataPatientForm key={'mp/' + open.key} depts={depts} prefill={{ responsible: user.name, dept: open.deptId, month: open.month, from: open.from }} onSubmitted={() => submitted(open)} />}
+              </div>
             </div>
           </div>
         )}
@@ -6138,11 +6246,21 @@
     );
   }
 
-  function CollectorPortal() {
+  /* The Data Submission screens. Two shells over ONE set of screens:
+       · full page (the legacy /collect portal, for accounts not yet converted), with its
+         own sidebar and header;
+       · embedded (props.embedded) inside the main app, as the Data Submission module --
+         the app's own sidebar and header stay, and the screens become a tab strip. */
+  function CollectorPortal(props) {
+    const embedded = !!(props && props.embedded);
     const user = (typeof window !== 'undefined' && window.__UNICO_USER__) || {};
     const dataRev = useDcDataRev();
-    const depts = useMemo(() => dcAllDepts(), [dataRev]);
-    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
+    // What this person is set up to send (Access Control → Data Submission): a kind that is
+    // switched off has no screens, no missing-data count and no deadline. The server refuses
+    // it too (access.maySubmitKind). Absent = both, as before.
+    const kinds = user.submitKinds || {};
+    const depts = useMemo(() => (kinds.patient === false ? [] : dcAllDepts()), [dataRev, kinds.patient]);
+    const areas = useMemo(() => (kinds.quality === false ? [] : (window.qualityData ? window.qualityData() : [])), [dataRev, kinds.quality]);
     const collRev = useDcCollectionRev();
     const hasPatient = depts.length > 0;
     const hasQuality = areas.some((a) => a && a.indicators && a.indicators.length);
@@ -6150,8 +6268,20 @@
     // An in-charge is a collector who also runs a ward: same data scoping, more of the
     // ward's own screens. The role decides which, and it is the SERVER's role claim --
     // the extra screens are all backed by routes that check it again.
-    const inCharge = user.role === 'incharge';
-    const [view, setView] = useState(inCharge ? 'home' : (hasQuality ? 'status' : 'patient'));
+    // Runs a unit: the old in-charge role, or a Data Submission holder marked unit lead
+    // (server/access.js isUnitLead). Every screen it opens is re-checked by the server.
+    const inCharge = user.role === 'incharge' || user.unitLead === true;
+    const [viewState, setView] = useState((props && props.initialView) || (inCharge ? 'home' : (hasQuality ? 'status' : 'patient')));
+    // Embedded, the ROUTE decides the screen (one sidebar sub-item per screen) and moving to
+    // another screen goes back through it; the full-page portal keeps its own state.
+    const view = embedded && props.view ? props.view : viewState;
+    const toView = (v) => { if (embedded && props.onNav) props.onNav(v); else setView(v); };
+    // Screens this person may open (Access Control → Data Submission). Legacy portal: all.
+    const allowedScreens = (embedded && window.unicoDsScreens) ? window.unicoDsScreens() : null;
+    const screenOk = (v) => !allowedScreens || allowedScreens.indexOf(v) >= 0;
+    // The unit screens: the in-charge role on the full-page portal; inside the main app the
+    // per-person screen list (which already requires running a unit) decides.
+    const unitScreens = inCharge || !!allowedScreens;
     const [month, setMonth] = useState(dcDefaultMonth());
     const [jump, setJump] = useState(null);
     const [q, setQ] = useState('');
@@ -6190,14 +6320,14 @@
 
     const donePct = subCount.total ? Math.round((subCount.total - subCount.missing) * 100 / subCount.total) : 0;
     // `from` = the rejected submission being fixed; the form refills its figures.
-    const fillFor = (area, indicatorId, m, from) => { setJump({ area, indicatorId, month: m, from: from || null }); setView('quality'); setSidebarOpen(false); };
+    const fillFor = (area, indicatorId, m, from) => { setJump({ area, indicatorId, month: m, from: from || null }); toView('quality'); setSidebarOpen(false); };
     // The patient twin of fillFor. "My submissions" needs it to reopen a REJECTED
     // statistics sheet at the right department + month; DataPatientForm already
     // reads prefill.dept / prefill.month, it just had nothing feeding them.
-    const fillStat = (deptId, m, from) => { setJump({ dept: deptId, month: m, from: from || null }); setView('patient'); setSidebarOpen(false); };
-    const go = (v) => { setView(v); setJump(null); setSidebarOpen(false); };
+    const fillStat = (deptId, m, from) => { setJump({ dept: deptId, month: m, from: from || null }); toView('patient'); setSidebarOpen(false); };
+    const go = (v) => { toView(v); setJump(null); setSidebarOpen(false); };
 
-    const badgeFor = (v) => (v === 'missing' ? String(subCount.allMissing || '') : v === 'quick' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '');
+    const badgeFor = (v) => (v === 'missing' ? String(subCount.allMissing || '') : v === 'patient' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '');
     // Same .sb-item / .sb-sec / .badge classes the admin sidebar (Sidebar in ui.jsx)
     // uses — the Collector Portal used to skin its own glassy/glowing nav instead of
     // matching the rest of the app; this makes the two visually one system.
@@ -6228,7 +6358,7 @@
     const missRows = (subCount.missingRows || []).slice().sort((a, b) => b.rank - a.rank);
     const missByMonth = []; missRows.forEach((r) => { const g = missByMonth.find((x) => x.month === r.month); if (g) g.rows.push(r); else missByMonth.push({ month: r.month, rows: [r] }); });
     const crumb = ({ missing: 'Missing data', home: 'Dashboard', unit: "My unit's staff", requests: 'Add nurse / PCA', status: 'Submission status', quick: 'Quick entry', quality: 'Quality data', patient: 'Patient statistics', history: 'My submissions', roster: 'Duty roster', profile: 'My profile', dept: 'Department & staff' })[view] || 'Submission status';
-    const collectNav = CP_NAV_COLLECT.filter(([v]) => (v === 'missing' ? (hasPatient || hasQuality) : v === 'patient' ? hasPatient : v === 'quick' ? hasPatient : hasQuality));
+    const collectNav = CP_NAV_COLLECT.filter(([v]) => (v === 'missing' ? (hasPatient || hasQuality) : v === 'patient' ? hasPatient : hasQuality));
     const dl = cpDeadline(month);
     // Overdue only while something is still owed, and from the first second past the deadline
     // (Math.floor read day 1 as on schedule). Missing statistics count too, or a
@@ -6239,23 +6369,22 @@
     const dueTone = overdueDays > 0 ?['#a92c42', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.28)'] : ['#12776c', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.3)'];
     const pill = (c) => ({ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, padding: '5px 11px', borderRadius: 12, color: c[0], background: c[1], border: '1px solid ' + c[2], whiteSpace: 'nowrap', flexShrink: 0 });
 
-    return (
-      <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'transparent' }}>
-        <style>{'@media (max-width:900px){.cp-aside{position:fixed!important;z-index:200;height:100vh;transform:translateX(-100%);transition:transform .22s ease}.cp-aside.cp-open{transform:none}.cp-burger{display:grid!important}}'}</style>
+    const alertEl = (
+      <React.Fragment>
         {missAlert && (
-          <div onClick={() => setMissAlert(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(13,27,46,.45)', zIndex: 400, display: 'grid', placeItems: 'center', padding: 16 }}>
-            <div role="alertdialog" aria-labelledby="dc-miss-title" onClick={(e) => e.stopPropagation()} style={Object.assign({}, CP_CARD, { width: 'min(480px,100%)', maxHeight: '86vh', overflowY: 'auto', padding: '20px 22px', background: '#fff', borderLeft: '5px solid #d23a52' })}>
+          <div onClick={() => setMissAlert(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(13,27,46,.45)', zIndex: 1200, display: 'grid', placeItems: 'center', padding: 16 }}>
+            <div role="alertdialog" aria-labelledby="dc-miss-title" onClick={(e) => e.stopPropagation()} style={Object.assign({}, CP_CARD, { width: 'min(480px,100%)', maxHeight: '86vh', overflowY: 'auto', overflowX: 'hidden', boxSizing: 'border-box', padding: '20px 22px', background: '#fff', borderLeft: '5px solid #d23a52' })}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 8 }}>
                 <span style={{ display: 'inline-grid', placeItems: 'center', width: 38, height: 38, borderRadius: 11, background: 'rgba(210,58,82,.13)', color: '#a92c42', flexShrink: 0 }}>{CP_ICON('M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01', 19)}</span>
                 <div id="dc-miss-title" style={{ fontSize: 16, fontWeight: 800, color: '#16202e' }}>{subCount.allMissing} missing data submission{subCount.allMissing === 1 ? '' : 's'}</div>
               </div>
               <div style={{ fontSize: 12.5, color: '#3c4858', lineHeight: 1.55, marginBottom: 12 }}>Data you are assigned to report has not been sent for {missByMonth.length} month{missByMonth.length === 1 ? '' : 's'}. Please submit it so the reports are complete.</div>
-              <div style={{ display: 'grid', gap: 7, marginBottom: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 7, marginBottom: 16 }}>
                 {missByMonth.slice(0, 6).map((g) => (
-                  <div key={g.month} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 11px', borderRadius: 9, background: 'rgba(210,58,82,.06)', border: '1px solid rgba(210,58,82,.16)' }}>
+                  <div key={g.month} style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0, flexWrap: 'wrap', padding: '8px 11px', borderRadius: 9, background: 'rgba(210,58,82,.06)', border: '1px solid rgba(210,58,82,.16)' }}>
                     <b style={{ fontSize: 12.5, color: '#16202e', minWidth: 96 }}>{monthLabel(g.month)}</b>
                     <span style={{ fontSize: 12, color: '#a92c42', fontWeight: 700, whiteSpace: 'nowrap' }}>{g.rows.length} missing</span>
-                    <span style={{ fontSize: 11.5, color: '#6c7a8c', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[...new Set(g.rows.map((r) => r.unit))].join(', ')}</span>
+                    <span title={[...new Set(g.rows.map((r) => r.unit))].join(', ')} style={{ flex: '1 1 160px', fontSize: 11.5, color: '#6c7a8c', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[...new Set(g.rows.map((r) => r.unit))].join(', ')}</span>
                   </div>
                 ))}
                 {missByMonth.length > 6 && <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>and {missByMonth.length - 6} more month{missByMonth.length - 6 === 1 ? '' : 's'}</div>}
@@ -6267,6 +6396,51 @@
             </div>
           </div>
         )}
+      </React.Fragment>
+    );
+    const screens = (
+      <React.Fragment>
+            {!hasPatient && !hasQuality && (
+              <div style={Object.assign({}, CP_CARD, { maxWidth: 620, margin: '40px auto', padding: 30, textAlign: 'center' })}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e', marginBottom: 6 }}>Nothing is assigned to you yet</div>
+                <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>Your administrator has not given you a department or quality area to report on. Once they do, it appears here.</div>
+              </div>
+            )}
+            {view === 'missing' && (hasPatient || hasQuality) && <CollectorMissing depts={depts} areas={areas} month={month} user={user} />}
+            {view === 'status' && hasQuality && <CollectorDash month={month} setMonth={setMonth} onNav={go} onFill={fillFor} user={user} can={(v) => (v === 'patient' ? hasPatient : v === 'quality' ? hasQuality : true) && screenOk(v)} />}
+            {view === 'quality' && hasQuality && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month, from: jump && jump.from }} /></div>}
+            {view === 'patient' && hasPatient && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataPatientForm key={jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'p'} depts={depts} prefill={{ responsible: user.name, dept: jump && jump.dept, month: jump && jump.dept ? jump.month : null, from: jump && jump.from }} /></div>}
+            {view === 'history' && <div style={{ maxWidth: 1240, margin: '0 auto' }}><CollectorHistory month={month} onFixQuality={fillFor} onFixPatient={fillStat} /></div>}
+            {view === 'roster' && <CollectorRoster />}
+            {view === 'profile' && <CollectorProfile user={user} onNav={go} />}
+            {view === 'home' && unitScreens && <CollectorHome user={user} month={month} onNav={go} />}
+            {view === 'unit' && unitScreens && <CollectorUnitStaff />}
+            {view === 'requests' && unitScreens && <CollectorStaffRequests depts={depts} />}
+            {view === 'dept' && <CollectorDeptStaff />}
+      </React.Fragment>
+    );
+    if (embedded) {
+      const portalEl = (n) => (typeof ReactDOM !== 'undefined' && ReactDOM.createPortal && typeof document !== 'undefined') ? ReactDOM.createPortal(n, document.body) : n;
+      // The sidebar lists this module's screens (ui.jsx unicoWorkspaceSub), so the page keeps
+      // only the deadline and the connection state.
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {missAlert ? portalEl(alertEl) : null}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <div style={pill(dueTone)} title="Submission deadline">{CP_ICON('M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', 14)}<span>{dueTxt}</span></div>
+            <div style={pill(online ? ['#12776c', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.3)'] : ['#a92c42', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.28)'])} title="Connection">
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: online ? '#3ddc97' : '#d23a52' }} />{online ? 'Online' : 'Offline'}
+            </div>
+          </div>
+          {screenOk(view) ? <div>{screens}</div>
+            : <div style={Object.assign({}, CP_CARD, { padding: 24, color: '#6c7a8c', fontSize: 13 })}>This screen is not part of your Data Submission access. Ask an administrator in Access Control.</div>}
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'transparent' }}>
+        {alertEl}
+        <style>{'@media (max-width:900px){.cp-aside{position:fixed!important;z-index:200;height:100vh;transform:translateX(-100%);transition:transform .22s ease}.cp-aside.cp-open{transform:none}.cp-burger{display:grid!important}}'}</style>
         {sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(13,27,46,.4)', zIndex: 150 }} />}
         <aside className={'sb cp-aside' + (sidebarOpen ? ' cp-open' : '')} style={{ width: 248, flexShrink: 0 }}>
           <div className="sb-brand">
@@ -6352,24 +6526,7 @@
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '22px 26px 64px' }}>
-            {!hasPatient && !hasQuality && (
-              <div style={Object.assign({}, CP_CARD, { maxWidth: 620, margin: '40px auto', padding: 30, textAlign: 'center' })}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e', marginBottom: 6 }}>Nothing is assigned to you yet</div>
-                <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>Your administrator has not given you a department or quality area to report on. Once they do, it appears here.</div>
-              </div>
-            )}
-            {view === 'missing' && (hasPatient || hasQuality) && <CollectorMissing depts={depts} areas={areas} month={month} user={user} />}
-            {view === 'status' && hasQuality && <CollectorDash month={month} setMonth={setMonth} onNav={go} onFill={fillFor} user={user} />}
-            {view === 'quick' && hasPatient && <CollectorQuickGrid depts={depts} onDone={() => go('history')} />}
-            {view === 'quality' && hasQuality && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month, from: jump && jump.from }} /></div>}
-            {view === 'patient' && hasPatient && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataPatientForm key={jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'p'} depts={depts} prefill={{ responsible: user.name, dept: jump && jump.dept, month: jump && jump.dept ? jump.month : null, from: jump && jump.from }} /></div>}
-            {view === 'history' && <div style={{ maxWidth: 1240, margin: '0 auto' }}><CollectorHistory month={month} onFixQuality={fillFor} onFixPatient={fillStat} /></div>}
-            {view === 'roster' && <CollectorRoster />}
-            {view === 'profile' && <CollectorProfile user={user} onNav={go} />}
-            {view === 'home' && inCharge && <CollectorHome user={user} month={month} onNav={go} />}
-            {view === 'unit' && inCharge && <CollectorUnitStaff />}
-            {view === 'requests' && inCharge && <CollectorStaffRequests depts={depts} />}
-            {view === 'dept' && <CollectorDeptStaff />}
+            {screens}
           </div>
         </div>
       </div>
@@ -6652,5 +6809,5 @@
     );
   }
 
-  Object.assign(window, { DcScopeEditor, dcScopePayload, dcScopeBase, dcScopeAreas, dcCustomAreas, DataResponsibles, DataPatientForm, DataQualityForm, DataReview, DataShareLinks, CollectorPortal, SubmissionAnalytics, DataCollectionSettings });
+  Object.assign(window, { dcMissingSummary, CollectorStaffRequests, DcScopeEditor, dcScopePayload, dcScopeBase, dcScopeAreas, dcCustomAreas, DataResponsibles, DataPatientForm, DataQualityForm, DataReview, DataShareLinks, CollectorPortal, SubmissionAnalytics, DataCollectionSettings });
 })();

@@ -96,6 +96,9 @@ const MANIFEST = [
   { file: 'data-collection.jsx', jsx: true, chunk: 'datacollection' },
   { file: 'supervisor.jsx', jsx: true, chunk: 'supervisor' },
   { file: 'user-admin.jsx', jsx: true, chunk: 'reports' },
+  // Access Control (route 'users') — per-person access. Rides the reports chunk because it
+  // shares the account editor (window.UserModal) with reports.jsx.
+  { file: 'access-control.jsx', jsx: true, chunk: 'reports' },
   { file: 'data-fields.jsx', jsx: true, chunk: 'datacollection' },
   { file: 'performance.jsx', jsx: true, chunk: 'performance' },      // publishes window.PerfUI (shared helpers) first
   { file: 'performance-hr.jsx', jsx: true, chunk: 'performance' },   // attrition / retention risk / recognition board

@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=08eb088ada","reports":"/dist/reports.chunk.js?v=9e4c428dd2","quality":"/dist/quality.chunk.js?v=1e13271f23","datacollection":"/dist/datacollection.chunk.js?v=880373738e","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=08eb088ada","reports":"/dist/reports.chunk.js?v=fde44a4a57","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=f8f6f20da4","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -18,7 +18,7 @@ function start(){var idle=window.requestIdleCallback||function(f){return setTime
 if(document.readyState==="complete")start();else window.addEventListener("load",start);
 })();
 /* ===== placeholders for code-split components ===== */
-(function(){var N=["StaffProfile","StaffForm","UserManagement","Reports","Settings","QualityView","QualityReportsPanel","ChartsGallery","DataFields","DataPatientForm","DataQualityForm","DataReview","DataShareLinks","CollectorPortal","SubmissionAnalytics","DataCollectionSettings","SupervisorView","PerformanceView","RosterView","MedicineView"];
+(function(){var N=["StaffProfile","StaffForm","Reports","Settings","AccessControl","QualityView","QualityReportsPanel","ChartsGallery","DataFields","CollectorStaffRequests","DataPatientForm","DataQualityForm","DataReview","DataShareLinks","CollectorPortal","SubmissionAnalytics","DataCollectionSettings","SupervisorView","PerformanceView","RosterView","MedicineView"];
 function ph(){return (window.React&&window.React.createElement)?window.React.createElement("div",{style:{display:"grid",placeItems:"center",height:"50vh",color:"var(--muted)",fontSize:13}},"Loading this screen\u2026"):null;}
 for(var i=0;i<N.length;i++){if(typeof window[N[i]]==="undefined"){window[N[i]]=ph;window[N[i]].__unicoPlaceholder=true;}}
 })();
@@ -2200,6 +2200,69 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     }catch(err){}
   }
   publishPhotos(load()||[]);   // modules can render before any staff view mounts
+  /* Which staff record a login account belongs to — a COPY of server/account-staff.js
+     (change both together). An employee number only counts when the name agrees. */
+  const unicoStaffOfAccount=(()=>{
+    const TITLES = new Set(['md', 'mst', 'mohammad', 'mohammed', 'muhammad', 'mohd', 'mrs', 'mr', 'ms', 'dr', 'miss']);
+    const norm = (x) => String(x == null ? '' : x).trim().toLowerCase().replace(/\s+/g, ' ');
+    function tokens(name) {
+      return norm(name).replace(/[^a-zঀ-৿ ]+/g, ' ').split(' ').filter((t) => t.length >= 3 && !TITLES.has(t));
+    }
+    function lev(a, b) {
+      if (a === b) return 0;
+      const m = a.length, n = b.length; if (!m || !n) return m || n;
+      let prev = Array.from({ length: n + 1 }, (_, j) => j);
+      for (let i = 1; i <= m; i++) {
+        const cur = [i];
+        for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        prev = cur;
+      }
+      return prev[n];
+    }
+    const tokSame = (a, b) => a === b || (Math.min(a.length, b.length) >= 4 && lev(a, b) <= 2);
+    // Some token in common (typo-tolerant): enough to CONFIRM a number match.
+    function nameAgrees(a, b) {
+      const A = tokens(a), B = tokens(b);
+      if (!A.length || !B.length) return true;          // nothing to contradict
+      return A.some((x) => B.some((y) => tokSame(x, y)));
+    }
+    // Every token of the shorter name found in the longer one: strong enough to match on NAME alone.
+    function nameClose(a, b) {
+      const A = tokens(a), B = tokens(b);
+      if (!A.length || !B.length) return false;
+      const [s, l] = A.length <= B.length ? [A, B] : [B, A];
+      return s.every((x) => l.some((y) => tokSame(x, y)));
+    }
+    const only = (arr) => (arr.length === 1 ? arr[0] : null);
+
+    function staffOfAccount(acct, list) {
+      if (!acct) return null;
+      const rows = (list || []).filter((r) => r && !r.former);
+      if (acct.staffId != null && acct.staffId !== '') {
+        const hit = rows.find((r) => String(r.id) === String(acct.staffId));
+        if (hit) return hit;
+      }
+      const empOf = (v) => (norm(v) ? rows.filter((r) => norm(r.emp_id) === norm(v)) : []);
+      let hit = only(empOf(acct.staffEmpId));
+      if (hit) return hit;
+      hit = only(empOf(acct.username).filter((r) => nameAgrees(r.name, acct.name)));
+      if (hit) return hit;
+      if (acct.name) {
+        // A username that IS an employee number vetoes a record carrying a DIFFERENT number:
+        // two "Rabbi Miah"s (11223, 11230) are two people, not one spelled twice.
+        const numU = /^\d{3,}$/.test(norm(acct.username)) ? norm(acct.username) : '';
+        const numOk = (r) => !numU || !norm(r.emp_id) || norm(r.emp_id) === numU;
+        hit = only(rows.filter((r) => norm(r.name) === norm(acct.name)).filter(numOk));
+        if (hit) return hit;
+        hit = only(rows.filter((r) => nameClose(r.name, acct.name)).filter(numOk));
+        if (hit) return hit;
+      }
+      return null;
+    }
+
+    return staffOfAccount;
+  })();
+  window.unicoStaffOfAccount=unicoStaffOfAccount;
   /* ONE roster per page, shared by every useStaffStore() call.
 
      The hook is called by the app shell, the header search (always mounted), Performance,
@@ -9608,6 +9671,7 @@ const I = {
   arrowR: 'M5 12h14M13 6l6 6-6 6',
   grip: 'M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01',
   star: 'M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4 6.1 20.5l1.2-6.5-4.8-4.6 6.6-.9z',
+  shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4',
   phone: 'M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.8 19.8 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0122 16.92z'
 };
 function Ic({
@@ -9689,9 +9753,9 @@ const UNICO_MODULES = [{
   home: 'reports'
 }, {
   id: 'users',
-  label: 'User Management',
-  short: 'Users',
-  icon: I.user,
+  label: 'Access Control',
+  short: 'Access',
+  icon: I.shield,
   home: 'users'
 }, {
   id: 'perf',
@@ -9711,18 +9775,44 @@ const UNICO_MODULES = [{
   short: 'Medicine',
   icon: I.heart,
   home: 'medHome'
+}, {
+  id: 'datasubmit',
+  label: 'Data Submission',
+  short: 'Submit',
+  icon: I.upload,
+  home: 'dsHome'
 }];
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
   datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
-  staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm'],
+  staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
   supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport'],
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
   users: ['users'],
   perf: ['perfHome', 'perfForm', 'perfPrint', 'perfAchievements', 'perfIncidents', 'perfCompare', 'perfAttrition', 'perfRisk', 'perfBoard'],
   roster: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint', 'rosterFullReview', 'manpower'],
+  datasubmit: ['dsHome', 'dsMissing', 'dsStatus', 'dsQuality', 'dsPatient', 'dsHistory'],
   medicine: ['medHome', 'medInfo', 'medBrowse', 'medBrand', 'medGeneric', 'medRxNew', 'medRxList', 'medRxPrint', 'medTemplates', 'medCatalog', 'medInteractions', 'medCalc', 'medAnalytics']
+};
+const UNICO_DS_SCREENS = [['missing', 'dsMissing', 'Missing data'], ['status', 'dsStatus', 'Submission status'], ['quality', 'dsQuality', 'Quality data'], ['patient', 'dsPatient', 'Patient statistics'], ['history', 'dsHistory', 'My submissions']];
+function unicoDsScreens() {
+  const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+  const all = UNICO_DS_SCREENS.map(s => s[0]);
+  if (!u || u.role === 'Administrator' || ['collector', 'incharge', 'nurse', 'pca'].indexOf(u.role) >= 0) return all;
+  const k = u.submitKinds || {};
+  const list = Array.isArray(u.dsScreens) ? all.filter(s => u.dsScreens.indexOf(s) >= 0) : all.filter(s => (s !== 'patient' || k.patient !== false) && (s !== 'quality' && s !== 'status' || k.quality !== false));
+  const hasDepts = Array.isArray(u.departments) && u.departments.length > 0;
+  const hasAreas = !!u.allQualityAreas || Array.isArray(u.qualityAreas) && u.qualityAreas.length > 0;
+  return list.filter(s => (s !== 'patient' || hasDepts) && (s !== 'quality' && s !== 'status' || hasAreas));
+}
+const unicoDsViewOf = screen => {
+  const r = UNICO_DS_SCREENS.find(s => s[0] === screen);
+  return r ? r[1] : 'dsHome';
+};
+const unicoDsScreenOf = view => {
+  const r = UNICO_DS_SCREENS.find(s => s[1] === view);
+  return r ? r[0] : null;
 };
 function unicoModuleOf(view) {
   for (let i = 0; i < UNICO_MODULES.length; i++) {
@@ -9731,7 +9821,7 @@ function unicoModuleOf(view) {
   }
   return 'stats';
 }
-const UNICO_ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine'];
+const UNICO_ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine', 'datasubmit', 'staffapp'];
 function unicoAccessModuleOf(view) {
   if (view === 'settings') return 'users';
   return unicoModuleOf(view);
@@ -9771,6 +9861,8 @@ function unicoCanAccessModule(mid) {
 }
 function unicoCanAccessView(view) {
   if (view === 'profile' || view === 'home' || view === 'dcResponsibles') return true;
+  const ds = unicoDsScreenOf(view);
+  if (ds && unicoDsScreens().indexOf(ds) < 0) return false;
   return unicoCanAccessModule(unicoAccessModuleOf(view));
 }
 function unicoAllowedModules() {
@@ -9779,7 +9871,7 @@ function unicoAllowedModules() {
   return UNICO_ACCESS_MODULES.filter(m => unicoCan(m, 'view'));
 }
 function unicoFirstAllowedHome() {
-  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['medicine', 'medHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['perf', 'perfHome'], ['roster', 'rosterHome'], ['reports', 'reports'], ['users', 'settings']];
+  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['medicine', 'medHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['datasubmit', 'dsHome'], ['perf', 'perfHome'], ['roster', 'rosterHome'], ['reports', 'reports'], ['users', 'settings']];
   for (let i = 0; i < homes.length; i++) {
     if (unicoCanAccessModule(homes[i][0])) return homes[i][1];
   }
@@ -9939,11 +10031,11 @@ function unicoSidebarGroups(moduleId) {
     }]
   }];
   if (moduleId === 'users') return [{
-    sec: 'User Management',
+    sec: 'Access Control',
     items: [{
       id: 'users',
-      label: 'All Users & Roles',
-      icon: I.user
+      label: 'People & Access',
+      icon: I.shield
     }]
   }];
   return [{
@@ -10110,6 +10202,13 @@ const UNICO_WS = [{
 }, {
   sec: 'Data',
   items: [{
+    id: 'datasubmit',
+    label: 'Data Submission',
+    icon: I.upload,
+    home: 'dsHome',
+    on: v => unicoModuleOf(v) === 'datasubmit',
+    badge: 'ds'
+  }, {
     id: 'datacol',
     label: 'Data Collection',
     icon: I.input,
@@ -10132,11 +10231,17 @@ const UNICO_WS = [{
     mods: ['staff', 'perf', 'roster'],
     on: v => ['staff', 'perf', 'roster'].indexOf(unicoModuleOf(v)) >= 0
   }, {
+    id: 'access',
+    label: 'Access Control',
+    icon: I.shield,
+    home: 'users',
+    on: v => unicoModuleOf(v) === 'users'
+  }, {
     id: 'settings',
     label: 'Settings',
     icon: I.gear,
     home: 'settings',
-    on: v => v === 'settings' || unicoModuleOf(v) === 'users'
+    on: v => v === 'settings'
   }]
 }];
 const UNICO_VIEW_TABS = [{
@@ -10265,6 +10370,10 @@ function unicoWorkspaceSub(view) {
     view: 'staffPrevious',
     mod: 'staff'
   }, {
+    label: 'Nurse / PCA requests',
+    view: 'staffRequests',
+    mod: 'staff'
+  }, {
     label: 'Performance',
     view: 'perfHome',
     mod: 'perf',
@@ -10276,6 +10385,13 @@ function unicoWorkspaceSub(view) {
     mod: 'roster',
     match: UNICO_MODULE_VIEWS.roster
   }];
+  if (mod === 'datasubmit') {
+    const ok = unicoDsScreens();
+    return UNICO_DS_SCREENS.filter(s => ok.indexOf(s[0]) >= 0).map(([, v, label]) => ({
+      label,
+      view: v
+    }));
+  }
   if (mod === 'medicine') return [{
     label: 'Medicine Info',
     view: 'medInfo'
@@ -10656,8 +10772,38 @@ function Sidebar({
   }, []);
   const qBadge = React.useMemo(() => window.UNICO_Q ? unicoQualityBreachCount() : 0, [chunkTick]);
   const supBadge = React.useMemo(() => unicoSupAlertCount(), [view, chunkTick]);
+  const [dsBadge, setDsBadge] = React.useState(() => window.__UNICO_DS_MISSING__ || 0);
+  React.useEffect(() => {
+    const h = e => setDsBadge(e && e.detail || 0);
+    window.addEventListener('unico:ds-missing', h);
+    return () => window.removeEventListener('unico:ds-missing', h);
+  }, []);
   const sub = unicoWorkspaceSub(view).filter(s => !s.mod || unicoCanAccessModule(s.mod));
   const subOn = s => s.match ? s.match.indexOf(view) >= 0 : view === s.view;
+  const AUTO_OPEN = {
+    datasubmit: 'dsHome'
+  };
+  const [folded, setFolded] = React.useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('unico_sb_folded_v1') || '{}') || {};
+    } catch (e) {
+      return {};
+    }
+  });
+  const toggleFold = id => setFolded(f => {
+    const n = Object.assign({}, f, {
+      [id]: !f[id]
+    });
+    try {
+      localStorage.setItem('unico_sb_folded_v1', JSON.stringify(n));
+    } catch (e) {}
+    return n;
+  });
+  const subFor = (it, active) => {
+    if (active) return sub;
+    if (!AUTO_OPEN[it.id] || folded[it.id]) return [];
+    return unicoWorkspaceSub(AUTO_OPEN[it.id]).filter(x => !x.mod || unicoCanAccessModule(x.mod));
+  };
   return React.createElement("aside", {
     className: "sb"
   }, React.createElement("div", {
@@ -10681,8 +10827,10 @@ function Sidebar({
       className: "sb-sec"
     }, g.sec), items.map(it => {
       const active = it.on(view);
-      const badgeN = it.badge === 'sup' ? supBadge : it.badge ? qBadge : 0;
+      const badgeN = it.badge === 'sup' ? supBadge : it.badge === 'ds' ? dsBadge : it.badge ? qBadge : 0;
       const badge = badgeN > 0 ? badgeN : null;
+      const auto = !!AUTO_OPEN[it.id];
+      const itSub = auto && folded[it.id] ? [] : subFor(it, active);
       return React.createElement(React.Fragment, {
         key: it.id
       }, React.createElement("div", {
@@ -10710,9 +10858,36 @@ function Sidebar({
         }
       }, it.tag), badge != null && React.createElement("span", {
         className: "badge alert num"
-      }, badge)), active && sub.length > 0 && React.createElement("div", {
+      }, badge), auto && React.createElement("span", {
+        className: "lbl",
+        role: "button",
+        "aria-label": folded[it.id] ? 'Show sub-menu' : 'Hide sub-menu',
+        title: folded[it.id] ? 'Show sub-menu' : 'Hide sub-menu',
+        onClick: e => {
+          e.stopPropagation();
+          toggleFold(it.id);
+        },
+        style: {
+          marginLeft: badge != null ? 6 : 'auto',
+          display: 'inline-grid',
+          placeItems: 'center',
+          width: 20,
+          height: 20,
+          borderRadius: 6,
+          cursor: 'pointer',
+          opacity: .7,
+          transform: folded[it.id] ? 'rotate(-90deg)' : 'none',
+          transition: 'transform .15s'
+        }
+      }, React.createElement(Ic, {
+        d: I.chevR,
+        s: 12,
+        style: {
+          transform: 'rotate(90deg)'
+        }
+      }))), itSub.length > 0 && React.createElement("div", {
         className: "sb-sub"
-      }, sub.map((s, si) => React.createElement("div", {
+      }, itSub.map((s, si) => React.createElement("div", {
         key: s.view,
         className: 'sb-sub-item' + (subOn(s) ? ' active' : ''),
         onClick: () => setRoute({
@@ -10727,7 +10902,12 @@ function Sidebar({
         className: "dot"
       }), React.createElement("span", {
         className: "lbl"
-      }, s.label)))));
+      }, s.label), s.view === 'dsMissing' && dsBadge > 0 && React.createElement("span", {
+        className: "badge alert num",
+        style: {
+          marginLeft: 'auto'
+        }
+      }, dsBadge)))));
     }));
   })), React.createElement("div", {
     className: "sb-foot"
@@ -11019,6 +11199,38 @@ function TopBar({
   const nexts = reporting.map(d => nextMonthKey(d.latest.month));
   const currentKey = nexts.length ? nexts.reduce((a, b) => mnum(b) < mnum(a) ? b : a) : null;
   const missing = currentKey ? reporting.filter(d => !d.months.includes(currentKey)) : [];
+  const [dsMiss, setDsMiss] = React.useState(null);
+  const submitter = (() => {
+    const u = window.__UNICO_USER__;
+    const v = u && u.perms && u.perms.datasubmit;
+    return !!u && (u.role || 'User') === 'User' && (Array.isArray(v) ? v.length > 0 : !!v && v !== 'none');
+  })();
+  React.useEffect(() => {
+    if (!submitter) return;
+    let live = true;
+    const run = () => {
+      const go = () => window.dcMissingSummary && window.dcMissingSummary().then(x => {
+        if (live) setDsMiss(x);
+        try {
+          window.__UNICO_DS_MISSING__ = x.total || 0;
+          window.dispatchEvent(new CustomEvent('unico:ds-missing', {
+            detail: x.total || 0
+          }));
+        } catch (e) {}
+      }).catch(() => {});
+      if (window.dcMissingSummary) go();else if (window.unicoLoadChunk) window.unicoLoadChunk('datacollection').then(go).catch(() => {});
+    };
+    run();
+    const t = setInterval(run, 120000);
+    window.addEventListener('unico:data-refreshed', run);
+    return () => {
+      live = false;
+      clearInterval(t);
+      window.removeEventListener('unico:data-refreshed', run);
+    };
+  }, [submitter]);
+  const dsTotal = dsMiss && dsMiss.total || 0;
+  const bellCount = missing.length + dsTotal;
   return React.createElement("div", {
     className: "topbar"
   }, React.createElement("button", {
@@ -11096,7 +11308,54 @@ function TopBar({
     period: period,
     setPeriod: setPeriod,
     depts: depts
-  }), React.createElement("div", {
+  }), submitter && dsTotal > 0 && route.view !== 'dsMissing' && React.createElement("button", {
+    type: "button",
+    className: "tb-dsmiss",
+    onClick: () => setRoute({
+      view: 'dsMissing'
+    }),
+    title: dsTotal + ' data entries still missing — open Missing data',
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 8,
+      height: 34,
+      padding: '0 12px 0 10px',
+      borderRadius: 10,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      border: '1px solid rgba(210,58,82,.35)',
+      background: 'linear-gradient(135deg,#fff1f3,#ffe3e8)',
+      color: '#a92c42',
+      fontSize: 12.5,
+      fontWeight: 700,
+      whiteSpace: 'nowrap',
+      boxShadow: '0 4px 14px rgba(210,58,82,.18)',
+      animation: 'tbDsPulse 2.4s ease-in-out infinite'
+    }
+  }, React.createElement("style", null, '@keyframes tbDsPulse{0%,100%{box-shadow:0 4px 14px rgba(210,58,82,.18)}50%{box-shadow:0 4px 20px rgba(210,58,82,.38)}}@media (max-width:720px){.tb-dsmiss .tb-dsmiss-t{display:none}}@media (prefers-reduced-motion:reduce){.tb-dsmiss{animation:none!important}}'), React.createElement(Ic, {
+    d: "M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01",
+    s: 15,
+    c: "#d23a52"
+  }), React.createElement("span", {
+    className: "num",
+    style: {
+      background: '#d23a52',
+      color: '#fff',
+      borderRadius: 8,
+      padding: '1px 7px',
+      fontSize: 11.5,
+      fontWeight: 800
+    }
+  }, dsTotal), React.createElement("span", {
+    className: "tb-dsmiss-t"
+  }, "missing data \xB7 ", (dsMiss.months || []).length, " month", (dsMiss.months || []).length === 1 ? '' : 's'), React.createElement("span", {
+    className: "tb-dsmiss-t",
+    style: {
+      color: '#d23a52',
+      textDecoration: 'underline'
+    }
+  }, "Submit now")), React.createElement("div", {
     style: {
       position: 'relative'
     }
@@ -11107,9 +11366,28 @@ function TopBar({
   }, React.createElement(Ic, {
     d: I.bell,
     s: 17
-  }), missing.length > 0 && React.createElement("span", {
+  }), bellCount > 0 && (dsTotal > 0 ? React.createElement("span", {
+    className: "num",
+    style: {
+      position: 'absolute',
+      top: -4,
+      right: -4,
+      minWidth: 18,
+      height: 18,
+      padding: '0 5px',
+      borderRadius: 9,
+      background: '#d23a52',
+      color: '#fff',
+      fontSize: 10,
+      fontWeight: 800,
+      display: 'grid',
+      placeItems: 'center',
+      boxSizing: 'border-box',
+      border: '2px solid #fff'
+    }
+  }, dsTotal > 99 ? '99+' : dsTotal) : React.createElement("span", {
     className: "tb-dot"
-  })), notifOpen && React.createElement("div", {
+  }))), notifOpen && React.createElement("div", {
     onMouseLeave: () => setNotifOpen(false),
     style: {
       position: 'absolute',
@@ -11144,9 +11422,105 @@ function TopBar({
     }
   }, "Reminders"), React.createElement("span", {
     className: "spacer"
-  }), missing.length > 0 && React.createElement("span", {
+  }), bellCount > 0 && React.createElement("span", {
     className: "chip neg"
-  }, missing.length)), currentKey && React.createElement("div", {
+  }, bellCount)), submitter && React.createElement("div", {
+    style: {
+      borderBottom: '1px solid var(--line-2)'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '10px 15px 6px',
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      color: dsTotal ? '#a92c42' : 'var(--muted)'
+    }
+  }, "Data you still owe", dsTotal ? ' · ' + dsTotal : ''), dsMiss === null ? React.createElement("div", {
+    style: {
+      padding: '4px 15px 12px',
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Checking\u2026") : !dsTotal ? React.createElement("div", {
+    style: {
+      padding: '4px 15px 12px',
+      fontSize: 12,
+      color: 'var(--pos)',
+      fontWeight: 600
+    }
+  }, "Nothing missing \u2014 all your data is in.") : React.createElement("div", {
+    style: {
+      maxHeight: 200,
+      overflowY: 'auto'
+    }
+  }, dsMiss.months.slice(0, 8).map(m => React.createElement("div", {
+    key: m.month,
+    onClick: () => {
+      setRoute({
+        view: 'dsMissing'
+      });
+      setNotifOpen(false);
+    },
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '8px 15px',
+      cursor: 'pointer'
+    },
+    onMouseEnter: e => e.currentTarget.style.background = 'var(--panel-2)',
+    onMouseLeave: e => e.currentTarget.style.background = 'transparent'
+  }, React.createElement("div", {
+    style: {
+      width: 28,
+      height: 28,
+      borderRadius: 8,
+      background: 'var(--neg-bg)',
+      color: 'var(--neg)',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.cal,
+    s: 14
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: 'var(--ink)'
+    }
+  }, m.label), React.createElement("span", {
+    className: "chip neg"
+  }, m.count, " missing"))), dsMiss.months.length > 8 && React.createElement("div", {
+    style: {
+      padding: '4px 15px 8px',
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "and ", dsMiss.months.length - 8, " more month", dsMiss.months.length - 8 === 1 ? '' : 's')), dsTotal > 0 && React.createElement("div", {
+    style: {
+      padding: '6px 12px 12px'
+    }
+  }, React.createElement("button", {
+    className: "btn pri sm",
+    style: {
+      width: '100%',
+      justifyContent: 'center'
+    },
+    onClick: () => {
+      setRoute({
+        view: 'dsMissing'
+      });
+      setNotifOpen(false);
+    }
+  }, React.createElement(Ic, {
+    d: I.upload,
+    s: 14
+  }), "Open Missing data"))), currentKey && React.createElement("div", {
     style: {
       padding: '10px 15px',
       background: 'var(--blue-50)',
@@ -11159,7 +11533,7 @@ function TopBar({
       maxHeight: 300,
       overflowY: 'auto'
     }
-  }, missing.length === 0 ? React.createElement("div", {
+  }, missing.length === 0 ? !reporting.length ? null : React.createElement("div", {
     style: {
       padding: '26px 16px',
       textAlign: 'center',
@@ -11360,6 +11734,12 @@ Object.assign(window, {
   unicoModuleLevel,
   unicoUserPerms,
   unicoRefreshPerms
+});
+Object.assign(window, {
+  UNICO_DS_SCREENS,
+  unicoDsScreens,
+  unicoDsViewOf,
+  unicoDsScreenOf
 });
 })();
 ;
@@ -11813,6 +12193,10 @@ Object.assign(window, {
     const [cfg, setCfg] = React.useState(null);
     const [cropSrc, setCropSrc] = React.useState(null);
     const [viewing, setViewing] = React.useState(false);
+    const [broken, setBroken] = React.useState(false);
+    React.useEffect(() => {
+      setBroken(false);
+    }, [value && value.url]);
     const inputRef = React.useRef(null);
     const px = size || 96;
     React.useEffect(() => {
@@ -11944,10 +12328,11 @@ Object.assign(window, {
         letterSpacing: '.5px',
         cursor: zoomable && value && value.url && !busy ? 'zoom-in' : undefined
       }
-    }, value && value.url ? React.createElement("img", {
+    }, value && value.url && !broken ? React.createElement("img", {
       src: window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(value.url, Math.max(W, H), 'fit') : value.url,
       alt: name || 'Photo',
       decoding: "async",
+      onError: () => setBroken(true),
       style: {
         width: '100%',
         height: '100%',
@@ -12099,6 +12484,14 @@ Object.assign(window, {
       style: base
     }, initials || 'U');
   }
+  if (typeof document !== 'undefined' && !window.__UNICO_IMG_NET__) {
+    window.__UNICO_IMG_NET__ = true;
+    document.addEventListener('error', e => {
+      const el = e.target;
+      if (!el || el.tagName !== 'IMG' || el.onerror || el.dataset.noNet) return;
+      el.style.visibility = 'hidden';
+    }, true);
+  }
   Object.assign(window, {
     PhotoPicker,
     PhotoLightbox,
@@ -12242,6 +12635,7 @@ Object.assign(window, {
     const [designation, setDesignation] = useState(u && u.designation || '');
     const [email, setEmail] = useState(u && u.email || '');
     const [phone, setPhone] = useState(u && u.phone || '');
+    const [workDept, setWorkDept] = useState(u && u.workDepartment || '');
     const [cur, setCur] = useState('');
     const [nw, setNw] = useState('');
     const [nw2, setNw2] = useState('');
@@ -12252,7 +12646,32 @@ Object.assign(window, {
     useEffect(() => {
       document.title = 'My Profile · UNICO';
     }, []);
-    const dirty = u ? name !== (u.name || '') || email !== (u.email || '') || phone !== (u.phone || '') || designation !== (u.designation || '') : false;
+    const [staff, setStaff] = useState(undefined);
+    useEffect(() => {
+      if (!u) {
+        setStaff(null);
+        return;
+      }
+      let live = true;
+      fetch('/api/me/staff', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      }).then(r => r.ok ? r.json() : null).then(j => {
+        if (!live) return;
+        const st = j && j.staff || null;
+        setStaff(st);
+        if (st && !(u && u.designation) && st.designation) setDesignation(v => v || st.designation);
+        if (st && !(u && u.workDepartment) && st.current_department) setWorkDept(v => v || st.current_department);
+      }).catch(() => {
+        if (live) setStaff(null);
+      });
+      return () => {
+        live = false;
+      };
+    }, []);
+    const baseDesig = u && u.designation || staff && staff.designation || '';
+    const baseDept = u && u.workDepartment || staff && staff.current_department || '';
+    const dirty = u ? name !== (u.name || '') || email !== (u.email || '') || phone !== (u.phone || '') || designation !== baseDesig || workDept !== baseDept : false;
     async function saveProfile() {
       setMsg(null);
       setBusy(true);
@@ -12263,13 +12682,15 @@ Object.assign(window, {
           name,
           email,
           phone: cleanPhone,
-          designation
+          designation,
+          workDepartment: workDept
         });
         if (window.__UNICO_USER__) Object.assign(window.__UNICO_USER__, {
           name,
           email,
           phone: cleanPhone,
-          designation
+          designation,
+          workDepartment: workDept
         });
         setMsg({
           kind: 'ok',
@@ -12317,7 +12738,7 @@ Object.assign(window, {
       }
     }
     const roleLabel = !u ? 'Local session' : u.role === 'collector' ? 'Data Collector' : u.role === 'incharge' ? 'In-charge' : u.role || 'User';
-    const idText = u && u.username || '— — — —';
+    const idText = staff && staff.emp_id || u && u.username || '— — — —';
     const access = useMemo(() => {
       const perms = window.unicoUserPerms ? window.unicoUserPerms() : null;
       if (!perms) return {
@@ -12340,6 +12761,14 @@ Object.assign(window, {
       if (!ids.length) return [];
       return ids.map(id => map && map.byId && map.byId[id] && map.byId[id].name || id);
     }, [u]);
+    const deptOptions = useMemo(() => {
+      const DM = window.DEPTMAP;
+      const ids = DM && DM.patientDeptIds ? DM.patientDeptIds() : [];
+      const names = ids.map(id => DM.nameFromId && DM.nameFromId(id) || id);
+      const q = (window.QUALITY_SEED || []).map(a => a && a.name).filter(Boolean);
+      return Array.from(new Set(['Nursing Service', staff && staff.current_department].concat(deptNames, names, q).filter(Boolean)));
+    }, [staff, deptNames]);
+    const desigOptions = useMemo(() => Array.from(new Set([staff && staff.designation, 'Director of Nursing', 'Deputy Director of Nursing', 'Nursing Supervisor', 'Nurse In-charge', 'Infection Control Nurse', 'Quality Nurse', 'Senior Staff Nurse', 'Staff Nurse', 'Junior Staff Nurse', 'Patient Care Assistant'].filter(Boolean))), [staff]);
     const scopeText = !u ? 'All staff' : u.staffScope === 'self' ? 'Own record only' : u.staffScope === 'departments' ? 'Own departments' : 'All staff';
     const txt = {
       padding: '9px 11px',
@@ -12483,11 +12912,11 @@ Object.assign(window, {
         fontWeight: 700,
         textAlign: 'center'
       }
-    }, designation || roleLabel)), React.createElement("div", {
+    }, designation || staff && staff.designation || roleLabel)), React.createElement("div", {
       style: {
         padding: '10px 22px 0'
       }
-    }, [['ID No.', idText], ['Role', roleLabel], ['Phone', phone || 'Not recorded'], ['Email', email || 'Not recorded']].map(([l, v], i) => React.createElement("div", {
+    }, [['ID No.', idText], ['Role', roleLabel], ['Dept.', workDept || staff && staff.current_department || 'Not recorded'], ...(staff ? [['Joined', staff.doj || 'Not recorded']] : []), ['Phone', phone || 'Not recorded'], ['Email', email || 'Not recorded']].map(([l, v], i) => React.createElement("div", {
       key: l,
       style: {
         display: 'flex',
@@ -12541,7 +12970,64 @@ Object.assign(window, {
         flexDirection: 'column',
         gap: 16
       }
+    }, u && React.createElement("div", {
+      className: "card"
     }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "Staff information"), React.createElement("span", {
+      className: "sub",
+      style: {
+        marginLeft: 'auto'
+      }
+    }, "From the staff register")), React.createElement("div", {
+      className: "card-b"
+    }, staff === undefined ? React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--muted)'
+      }
+    }, "Loading your staff record\u2026") : !staff ? React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: '#8a5a00',
+        background: 'var(--warn-bg,#fff4e0)',
+        border: '1px solid #f0d9a8',
+        borderRadius: 8,
+        padding: '10px 12px'
+      }
+    }, "Your account is not linked to a staff record yet. Ask the administrator to link it (Access Control \u2192 your account), or check that your employee ID is on the staff register.") : React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "duo"
+    }, [['Employee ID', staff.emp_id], ['Designation', staff.designation], ['Department', staff.current_department], ['Primary department', staff.primary_department], ['Date of joining', staff.doj], ['Category', staff.role || staff.category || staff.staff_type], ['Qualification', staff.qualification || staff.education], ['Date of birth', staff.dob], ['Gender', staff.gender], ['Blood group', staff.blood_group], ['Phone (register)', staff.phone || staff.mobile], ['Registration / licence', [staff.licence_no, staff.licence_expiry && 'expires ' + staff.licence_expiry].filter(Boolean).join(' · ')], ['Hepatitis B', staff.hepatitis_b_vaccination]].filter(([, v]) => v != null && String(v).trim() !== '').map(([l, v]) => React.createElement("div", {
+      key: l,
+      style: {
+        background: 'var(--panel-2)',
+        borderRadius: 9,
+        padding: '8px 11px',
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        textTransform: 'uppercase',
+        letterSpacing: '.6px',
+        color: 'var(--muted)',
+        fontWeight: 700,
+        marginBottom: 3
+      }
+    }, l), React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 600,
+        color: 'var(--ink)',
+        overflowWrap: 'anywhere'
+      }
+    }, String(v))))), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        marginTop: 10
+      }
+    }, "Something wrong here? Nursing Services updates the staff register.")))), React.createElement("div", {
       className: "card"
     }, React.createElement("div", {
       className: "card-h"
@@ -12575,18 +13061,43 @@ Object.assign(window, {
       onChange: e => setName(e.target.value),
       placeholder: "Your full name",
       disabled: !u
-    })), React.createElement(Field, {
+    })), React.createElement("div", {
+      className: "duo"
+    }, React.createElement(Field, {
+      label: "Department",
+      hint: "Where you work. Pick from the list or type. Does not affect your access."
+    }, React.createElement("input", {
+      style: txt,
+      name: "workdept",
+      list: "unico-prof-depts",
+      autoComplete: "off",
+      value: workDept,
+      onChange: e => setWorkDept(e.target.value),
+      placeholder: "e.g. Nursing Service",
+      disabled: !u
+    }), React.createElement("datalist", {
+      id: "unico-prof-depts"
+    }, deptOptions.map(d => React.createElement("option", {
+      key: d,
+      value: d
+    })))), React.createElement(Field, {
       label: "Designation",
-      hint: "Free text, e.g. Nursing Supervisor. Does not affect your access."
+      hint: "Your job title, e.g. Nursing Supervisor. Does not affect your access."
     }, React.createElement("input", {
       style: txt,
       name: "designation",
+      list: "unico-prof-desigs",
       autoComplete: "organization-title",
       value: designation,
       onChange: e => setDesignation(e.target.value),
       placeholder: "Your job title",
       disabled: !u
-    })), React.createElement("div", {
+    }), React.createElement("datalist", {
+      id: "unico-prof-desigs"
+    }, desigOptions.map(d => React.createElement("option", {
+      key: d,
+      value: d
+    }))))), React.createElement("div", {
       className: "duo"
     }, React.createElement(Field, {
       label: "Email"
@@ -12951,20 +13462,26 @@ Object.assign(window, {
       const t = setInterval(() => setNow(new Date()), 1000);
       return () => clearInterval(t);
     }, []);
-    const me = useMemo(() => {
+    const meLocal = useMemo(() => {
       const list = typeof window !== 'undefined' && window.STAFF_SEED || [];
       if (!u) return list[0] || null;
-      const norm = x => String(x == null ? '' : x).trim().toLowerCase().replace(/\s+/g, ' ');
-      if (u.staffId != null) {
-        const hit = list.find(s => String(s.id) === String(u.staffId));
-        if (hit) return hit;
-      }
-      if (u.staffEmpId) {
-        const hit = list.find(s => norm(s.emp_id) === norm(u.staffEmpId));
-        if (hit) return hit;
-      }
-      return list.find(s => norm(s.emp_id) && norm(s.emp_id) === norm(u.username)) || (u.name ? list.find(s => norm(s.name) === norm(u.name)) : null) || null;
+      return window.unicoStaffOfAccount ? window.unicoStaffOfAccount(u, list) : null;
     }, [u]);
+    const [meSrv, setMeSrv] = useState(null);
+    useEffect(() => {
+      if (meLocal || !u) return;
+      let live = true;
+      fetch('/api/me/staff', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      }).then(r => r.ok ? r.json() : null).then(j => {
+        if (live && j && j.staff) setMeSrv(j.staff);
+      }).catch(() => {});
+      return () => {
+        live = false;
+      };
+    }, [meLocal]);
+    const me = meLocal || meSrv;
     const bdays = useMemo(() => {
       const list = typeof window !== 'undefined' && window.STAFF_SEED || [];
       if (!list.length) return [];
@@ -12973,9 +13490,14 @@ Object.assign(window, {
     }, [now.getDate()]);
     const staffName = u && u.name || me && me.name || 'UNICO staff';
     const designation = u && u.designation || me && me.designation || (u && u.role === 'incharge' ? 'In-charge' : 'Staff');
-    const unit = me && me.current_department || 'Nursing Service';
+    const unit = u && u.workDepartment || me && me.current_department || 'Nursing Service';
     const staffId = me && me.emp_id || u && u.username || '—';
     const initials = initialsOf(staffName);
+    const avatarUrl = u && u.photo && u.photo.url || me && me.photo && (typeof me.photo === 'string' ? me.photo : me.photo.url) || me && me.photo_url || '';
+    const [avatarDead, setAvatarDead] = useState(false);
+    useEffect(() => {
+      setAvatarDead(false);
+    }, [avatarUrl]);
     useEffect(() => {
       let live = true;
       const y = now.getFullYear(),
@@ -13423,7 +13945,7 @@ Object.assign(window, {
       label: 'Date of joining',
       value: me && me.doj || 'Not recorded'
     }, {
-      label: 'Role',
+      label: 'Designation',
       value: designation || (!u ? 'Local session' : u.role === 'incharge' ? 'In-charge' : u.role === 'collector' ? 'Data Collector' : u.role || 'Staff')
     }, {
       label: 'Department',
@@ -13941,9 +14463,10 @@ Object.assign(window, {
       style: fs('position:relative;z-index:4;width:74px;height:74px;padding:4px;border-radius:20px;flex-shrink:0;display:grid;place-items:center;background:conic-gradient(#3ddc97 ' + pct.toFixed(1) + '%,' + (night ? 'rgba(255,255,255,.18)' : 'rgba(12,28,52,.14)') + ' 0);' + (on ? 'animation:ringGlow 3s ease-in-out infinite;' : '') + 'transition:background .8s,transform .25s;cursor:pointer')
     }, React.createElement("div", {
       style: sx('width:66px;height:66px;border-radius:16px;background:linear-gradient(135deg,#3ab5a7,#0090ca);color:#fff;display:grid;place-items:center;font-weight:800;font-size:23px;overflow:hidden')
-    }, u && u.photo && u.photo.url ? React.createElement("img", {
-      src: u.photo.url,
+    }, avatarUrl && !avatarDead ? React.createElement("img", {
+      src: window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(avatarUrl, 66) : avatarUrl,
       alt: "",
+      onError: () => setAvatarDead(true),
       style: {
         width: '100%',
         height: '100%',
@@ -23865,14 +24388,15 @@ function App() {
     const s = String(v || '');
     if (s === 'qualityDeptManage') return null;
     if (s.indexOf('quality') === 0 || s === 'reportsQuality' || s === 'gallery') return 'quality';
-    if (s.indexOf('dc') === 0) return 'datacollection';
-    if (s === 'reports' || s === 'settings') return 'reports';
+    if (s.indexOf('dc') === 0 || s.indexOf('ds') === 0) return 'datacollection';
+    if (s === 'reports' || s === 'settings' || s === 'users') return 'reports';
     if (s === 'staffProfile' || s === 'staffForm' || s === 'perfStaff') return 'staffprofile';
     if (s.indexOf('perf') === 0) return 'performance';
     if (s.indexOf('roster') === 0) return 'roster';
     if (s.indexOf('sup') === 0) return 'supervisor';
     if (s.indexOf('med') === 0) return 'medicine';
     if (s === 'manpower') return 'manpower';
+    if (s === 'staffRequests') return 'datacollection';
     return null;
   };
   const [chunkTick, setChunkTick] = useState(0);
@@ -24057,6 +24581,26 @@ function App() {
       depts: depts,
       setRoute: setRoute
     });
+  } else if (route.view && route.view.indexOf('ds') === 0) {
+    const allowed = window.unicoDsScreens ? window.unicoDsScreens() : [];
+    const screen = route.view === 'dsHome' ? allowed[0] : window.unicoDsScreenOf && window.unicoDsScreenOf(route.view);
+    const label = ((window.UNICO_DS_SCREENS || []).find(x => x[0] === screen) || [])[2];
+    crumbs = ['UNICO', 'Data Submission'].concat(label ? [label] : []);
+    body = !screen ? React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-b",
+      style: {
+        color: 'var(--muted)'
+      }
+    }, "No Data Submission screens are set up for your account yet. Ask an administrator to choose them in Access Control.")) : typeof CollectorPortal !== 'undefined' ? React.createElement(CollectorPortal, {
+      key: "ds",
+      embedded: true,
+      view: screen,
+      onNav: v => setRoute({
+        view: window.unicoDsViewOf(v)
+      })
+    }) : null;
   } else if (route.view === 'dcPatient') {
     crumbs = ['UNICO', 'Data Collection', 'Patient Statistics'];
     body = React.createElement(DataPatientForm, {
@@ -24076,16 +24620,16 @@ function App() {
       }
     });
   } else if (route.view === 'dcResponsibles') {
-    const toSettings = !window.unicoCanAccessView || window.unicoCanAccessView('settings');
-    if (toSettings) {
+    const toAccess = !window.unicoCanAccessView || window.unicoCanAccessView('users');
+    if (toAccess) {
       try {
-        window.__UNICO_SETTINGS_TAB__ = 'responsibles';
+        window.__UNICO_ACCESS_TAB__ = 'indicators';
       } catch (e) {}
     }
     setTimeout(() => setRoute({
-      view: toSettings ? 'settings' : 'dcReview'
+      view: toAccess ? 'users' : 'dcReview'
     }), 0);
-    crumbs = toSettings ? ['UNICO', 'Settings', 'Users & Roles'] : ['UNICO', 'Data Collection', 'Review & History'];
+    crumbs = toAccess ? ['UNICO', 'Access Control', 'Indicator Access'] : ['UNICO', 'Data Collection', 'Review & History'];
     body = null;
   } else if (route.view === 'dcSettings') {
     crumbs = ['UNICO', 'Data Collection', 'Department Setup'];
@@ -24109,13 +24653,26 @@ function App() {
       setRoute: setRoute
     });
   } else if (route.view === 'users') {
-    crumbs = ['UNICO', 'User Management'];
-    body = typeof UserManagement !== 'undefined' ? React.createElement(UserManagement, {
+    crumbs = ['UNICO', 'Access Control'];
+    body = typeof AccessControl !== 'undefined' ? React.createElement(AccessControl, {
+      depts: safeDepts,
       setRoute: setRoute
     }) : React.createElement(SectionTitle, {
       icon: I.user,
-      title: "User Management"
+      title: "Access Control"
     });
+  } else if (route.view === 'staffRequests') {
+    crumbs = ['UNICO', 'Staff Management', 'Nurse / PCA requests'];
+    const me = window.__UNICO_USER__ || null,
+      DM = window.DEPTMAP;
+    const ids = me && me.staffScope === 'departments' && Array.isArray(me.departments) && me.departments.length ? me.departments : DM && DM.patientDeptIds ? DM.patientDeptIds() : safeDepts.map(d => d.id);
+    const reqDepts = ids.map(id => ({
+      id,
+      name: DM && DM.nameFromId && DM.nameFromId(id) || id
+    }));
+    body = typeof CollectorStaffRequests !== 'undefined' ? React.createElement(CollectorStaffRequests, {
+      depts: reqDepts
+    }) : null;
   } else if (route.view === 'nurseHome') {
     crumbs = ['UNICO', 'Staff Management', 'Nurse Dashboard'];
     body = React.createElement(WorkforceDashboard, {

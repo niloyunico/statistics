@@ -16606,12 +16606,12 @@
       const isIncharge = s.role === 'incharge',
         isNurse = !isIncharge;
       const staffName = me.name || bu.name || '';
-      const designation = me.designation || me.title || bu.roleLabel || (me.role === 'incharge' ? 'Nurse In-charge' : me.role === 'pca' ? 'Patient Care Assistant' : me.role === 'collector' ? 'Data collector' : 'Staff Nurse');
+      const designation = me.designation || me.title || bu.roleLabel || ((bu.role || me.role) === 'incharge' ? 'Nurse In-charge' : (bu.role || me.role) === 'pca' ? 'Patient Care Assistant' : (bu.role || me.role) === 'collector' ? 'Data collector' : 'Staff Nurse');
       const unit = boot.unit || null;
       const units = boot.units || [];
       const dept = unit ? unit.short || unit.name : units.length ? 'All units' : '—';
-      const isRealIncharge = me.role === 'incharge';
-      const qAreas = !unit && !s.demo && me.role === 'collector' ? live.quality || [] : [];
+      const isRealIncharge = bu.isIncharge === true || (bu.role || me.role) === 'incharge';
+      const qAreas = !unit && !s.demo && (bu.role || me.role) === 'collector' ? live.quality || [] : [];
       const qArea = qAreas.find(a => String(a.key) === String(s.dcAreaSel)) || qAreas[0] || null;
       const unitChip = unit ? (unit.short || unit.name) + (units.length > 1 ? ' ▾' : '') : qArea ? (qArea.name || qArea.key) + (qAreas.length > 1 ? ' ▾' : '') : units.length ? 'Choose a unit ▾' : 'No unit assigned';
       const pickUnit = () => {

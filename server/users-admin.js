@@ -13,11 +13,12 @@
  * the Administrator role (deliberate: full delegation), so grant Administration only to
  * people you would make administrators anyway.
  *
- * Account levels: every account is created at a level -- admin / manager / incharge, or
- * portal for the phone and collector logins. The level is not an authority; `perms` stays
- * the only thing access.js enforces. It is the CEILING those perms are clamped to, so the
- * hierarchy holds no matter how the request was built. There are no saved permission
- * templates any more: an account holds exactly what an administrator ticked for it.
+ * Per-person access (Access Control, 2026-09): an account holds exactly what an
+ * administrator ticked for it -- no role, no template, no tier ceiling. `perms` is the
+ * only thing access.js enforces. The old tier ladder (`level`, /api/tiers) is still
+ * stored and still served so nothing written before is lost, but it no longer caps or
+ * clamps anybody's grant. Report sign-off (prepare / check / approve) is set on the
+ * person too; an account never given one still reads its old tier's (signoffOf).
  *
  * Mounted by web.js:  require('./users-admin').mount(app, { requireApi })
  */
@@ -58,7 +59,12 @@ const mirrorFailed = (e) => { try { console.error('[users] responsible mirror fa
 // 'supervisor' was missing here while the renderer listed it, so Shift Supervisor
 // Reports could never be granted to anyone: the panel offered no switch for it and
 // cleanPerms() dropped the key. Kept in step with access.ACCESS_MODULES.
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine'];
+// 'datasubmit' + 'staffapp': submitting data for chosen departments and signing in to the
+// phone staff app are MODULES on a normal account now, not portal roles (access.js).
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine', 'datasubmit', 'staffapp'];
+// Does a perms map grant Data Submission? Such an account carries a data-collection scope
+// (departments / areas / indicators), mirrored into `responsibles` like a collector's was.
+const holdsSubmit = (perms) => { const v = perms && perms.datasubmit; return Array.isArray(v) ? v.length > 0 : (!!v && v !== 'none'); };
 
 /* ---- Account tiers: the hospital's own hierarchy ----
    A tier is a named RANK with a module CEILING, defined by an administrator in
@@ -116,6 +122,16 @@ const tierKind = (id) => (id === TIER_ADMIN ? 'admin' : id === TIER_PORTAL ? 'po
    when the hospital renames one. '' = takes no part. */
 const SIGNOFF_ROLES = ['prepare', 'check', 'approve'];
 const cleanSignoff = (v) => (SIGNOFF_ROLES.indexOf(String(v || '')) >= 0 ? String(v) : '');
+/* A person's place in the sign-off chain. Set on the account itself now; an account that
+   was never given one (null / absent -- every row written before per-person access) keeps
+   what its old tier said, so rosters already in flight still find their signatories. */
+const hasOwnSignoff = (u) => !!u && typeof u.signoff === 'string';
+function signoffOf(u, tiers) {
+  if (hasOwnSignoff(u)) return cleanSignoff(u.signoff);
+  const id = levelOf(u) || ((widestTier(tiers || []) || {}).id || null);
+  const t = (tiers || []).find((x) => x.id === id);
+  return t ? t.signoff : '';
+}
 const cleanModules = (v) => (Array.isArray(v) ? ACCESS_MODULES.filter((m) => v.indexOf(m) >= 0) : []);
 const tierRank = (t) => (t.id === TIER_ADMIN ? ADMIN_RANK : t.id === TIER_PORTAL ? PORTAL_RANK
   : Math.max(1, Math.min(PORTAL_RANK - 1, Number(t.rank) || 10)));
@@ -209,13 +225,6 @@ function widestTier(tiers) {
   if (!con.length) return null;
   return con.reduce((a, b) => (b.modules.length > a.modules.length ? b : a));
 }
-// Which modules an account at this tier may hold at all.
-function ceilingOf(levelId, tiers) {
-  const t = tiers.find((x) => x.id === levelId);
-  if (t) return t.kind === 'console' ? t.modules : (t.kind === 'admin' ? ACCESS_MODULES : []);
-  const w = widestTier(tiers);
-  return w ? w.modules : ACCESS_MODULES;   // no console tier defined: cap nothing
-}
 // The tier a stored account reads as. null = never assigned (a row written before the
 // hierarchy existed); readers resolve that to the widest console tier.
 function levelOf(u) {
@@ -235,22 +244,6 @@ function cleanLevel(v, role, tiers) {
   const w = widestTier(tiers);
   return w ? w.id : null;
 }
-// Enforce the ceiling. The dialog already hides what a tier may not hold; doing it here
-// too is what makes the hierarchy real -- a hand-built POST cannot grant Administration to
-// a Ward In-charge.
-function clampPerms(perms, levelId, tiers) {
-  const allowed = ceilingOf(levelId, tiers);
-  // Written as an explicit 'none', not dropped: cleanPerms() hands back a COMPLETE map
-  // over every module, and every reader (safe(), access.js) expects that shape. A missing
-  // key and 'none' deny the same thing, but only one of them says so.
-  const out = {};
-  Object.keys(perms || {}).forEach((k) => { out[k] = allowed.indexOf(k) >= 0 ? perms[k] : 'none'; });
-  return out;
-}
-// Does this account hold anything its tier may not? (Used when a tier is narrowed.)
-const exceedsCeiling = (perms, allowed) => !!perms && typeof perms === 'object' && !Array.isArray(perms)
-  && Object.keys(perms).some((k) => allowed.indexOf(k) < 0 && String(perms[k] || 'none') !== 'none' && !(Array.isArray(perms[k]) && !perms[k].length));
-
 // How much of the personnel register this account may see. Row-level scope, applied
 // on the server by access.filterStaff(); see server/access.js.
 const cleanStaffScope = access.cleanStaffScope;
@@ -258,7 +251,7 @@ const cleanRosterScope = access.cleanRosterScope;
 
 // Changing any of these must invalidate every token the account already holds —
 // otherwise a revoked permission stays live for the rest of the 12h token TTL.
-const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit'];
+const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'unitLead', 'submitKinds', 'dsScreens', 'enterDen'];
 // Compare only what actually CHANGED. The update object always carries a few scope
 // fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
 // mere presence signed a user out every time an admin fixed a typo in their name.
@@ -345,10 +338,19 @@ function safe(u) {
     // May a ward in-charge BUILD their unit's roster in the portal (never approve it)?
     // Off unless granted; an administrator needs no grant.
     rosterEdit: role === 'Administrator' ? true : u.rosterEdit === true,
+    // Data Submission holder who runs a unit (its staff list, staff requests, dashboard).
+    unitLead: u.unitLead === true,
+    enterDen: u.enterDen === true,
+    appRole: u.appRole === 'pca' ? 'pca' : 'nurse',
+    submitKinds: access.cleanSubmitKinds(u.submitKinds),
+    dsScreens: access.cleanDsScreens(u.dsScreens),
     // Which tier of the hierarchy this account sits at (see BUILTIN_TIERS). A ceiling,
     // not a grant: `perms` above is what the server enforces. null = a row written before
     // the hierarchy existed; readers resolve it to the widest console tier.
     level: levelOf(u),
+    // Report sign-off set on this person. null = never set; GET /api/users fills in what
+    // their old tier said (signoffOf) and flags it signoffInherited.
+    signoff: hasOwnSignoff(u) ? cleanSignoff(u.signoff) : null,
     // Profile picture (set by the account owner via /api/upload kind=profile).
     // Only the CDN url is exposed — publicId stays server-side.
     photo: (u.photo && u.photo.url) ? { url: u.photo.url } : null,
@@ -531,22 +533,11 @@ function mount(app, opts) {
         signoff: b.signoff !== undefined ? b.signoff : cur.signoff,
       });
       await c.updateOne({ id }, { $set: Object.assign({}, next, { updatedAt: Date.now(), updatedBy: meOf(req) }), $setOnInsert: { _id: id, createdAt: Date.now() } }, { upsert: true });
-      let clamped = 0;
+      // Access is per person now: a tier is a stored label, not a ceiling, so editing one
+      // never reaches an account's grant. (It used to strip members on a narrowing.)
+      const clamped = 0;
       const lost = cur.modules.filter((m) => next.modules.indexOf(m) < 0);
-      if (next.kind === 'console' && lost.length) {
-        const users = await db.getUsers();
-        if (typeof users.find === 'function') {
-          const fallback = (widestTier(tiers) || {}).id || null;
-          for (const u of await users.find({ role: 'User' }).toArray()) {
-            if ((levelOf(u) || fallback) !== id) continue;
-            if (!exceedsCeiling(u.perms, next.modules)) continue;
-            await users.updateOne({ username: u.username }, { $set: { perms: clampPerms(cleanPerms(u.perms), id, [next]), sessionEpoch: Date.now(), updatedAt: Date.now() } });
-            access.invalidate(u.username);
-            clamped++;
-          }
-        }
-      }
-      activity.log(req, 'tier_updated', { target: id, detail: next.name + (lost.length ? ' · removed ' + lost.join(', ') + ' from ' + clamped + ' account(s)' : '') });
+      activity.log(req, 'tier_updated', { target: id, detail: next.name });
       res.json({ ok: true, tier: next, clamped, removed: lost });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not update the tier.' }); }
   });
@@ -608,7 +599,7 @@ function mount(app, opts) {
         .map((u) => {
           const id = levelOf(u) || fallback;
           const t = byId[id] || null;
-          return { name: u.name || u.username, title: u.title || (t ? t.name : ''), level: id, levelName: t ? t.name : '', signoff: t ? t.signoff : '' };
+          return { name: u.name || u.username, title: u.title || (t ? t.name : ''), level: id, levelName: t ? t.name : '', signoff: signoffOf(u, tiers) };
         })
         .filter((x) => x.name)
         .sort((x, y) => String(x.name).localeCompare(String(y.name)));
@@ -622,8 +613,99 @@ function mount(app, opts) {
       const users = await db.getUsers();
       let list = [];
       if (typeof users.find === 'function') list = await users.find({}).sort({ role: 1, username: 1 }).toArray();
-      res.json({ ok: true, users: list.map(safe), roles: ROLES });
+      const tiers = await listTiers();
+      // The staff record each account belongs to (same rule as /api/me/staff), for its
+      // photo, employee no. and designation in Access Control. A lookup failure only drops these.
+      let roster = [];
+      try { roster = await require('./staff-roster').loadRoster({ cached: true }); } catch (e) { roster = []; }
+      const { staffOfAccount } = require('./account-staff');
+      const staffBits = (u) => {
+        const r = staffOfAccount(u, roster); if (!r) return { staffMatch: null };
+        const p = r.photo || r.photo_url; const url = p ? (typeof p === 'string' ? p : (p.url || '')) : '';
+        return { staffMatch: { id: r.id, empId: r.emp_id || '', name: r.name || '', designation: r.designation || '', photo: url || null } };
+      };
+      const out = list.map((u) => Object.assign(safe(u), { signoff: signoffOf(u, tiers), signoffInherited: !hasOwnSignoff(u) }, staffBits(u)));
+      res.json({ ok: true, users: out, roles: ROLES });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load users.' }); }
+  });
+
+  /* Last sign-in per account, read from the activity log's `login` rows (no field on the
+     account is written for it). Informational: a trimmed or cleared log just means
+     "unknown", never "never". */
+  app.get('/api/users/last-seen', guard('view'), async (req, res) => {
+    try {
+      const out = {};
+      const h = await db.getDbHandle().catch(() => null);
+      let rows = [];
+      const d1store = (() => { try { return require('./d1-store'); } catch (e) { return null; } })();
+      if (d1store && d1store.enabled('activity')) {
+        const d1 = require('./d1');
+        rows = await d1store.withSchema(() => d1.query("SELECT username, MAX(ts) AS ts FROM activity_log WHERE action = 'login' GROUP BY username", []));
+      } else if (h) {
+        rows = await h.collection('activity_log').aggregate([
+          { $match: { action: 'login' } },
+          { $group: { _id: '$username', ts: { $max: '$ts' } } },
+        ]).toArray();
+        rows = rows.map((r) => ({ username: r._id, ts: r.ts }));
+      }
+      rows.forEach((r) => { const k = norm(r.username); if (k && r.ts) out[k] = Number(r.ts); });
+      res.json({ ok: true, lastSeen: out });
+    } catch (e) { res.json({ ok: true, lastSeen: {}, degraded: true }); }
+  });
+
+  /* Retire the PORTAL roles: every collector / in-charge / nurse / PCA login becomes a normal
+     account whose old role is now a MODULE —
+       collector -> Data Submission            incharge -> Data Submission + runs a unit
+       nurse     -> Staff app (nurse)          pca      -> Staff app (PCA)
+     Additive only: departments, areas, indicators, the linked matrix record, rosterEdit and
+     everything else on the account stay as they are; the old role is kept in
+     `convertedFrom`. Each converted account is signed out once (its token names the old
+     role). `apply: false` (the default) only reports what WOULD change. */
+  const convertPlan = (u) => {
+    const r = u.role;
+    const perms = nonePerms();
+    const set = { role: 'User', convertedFrom: r, convertedAt: Date.now(), staffScope: 'self', updatedAt: Date.now(), sessionEpoch: Date.now() };
+    if (r === 'collector' || r === 'incharge') perms.datasubmit = ['view', 'edit', 'add'];
+    if (r === 'incharge') set.unitLead = true;
+    if (r === 'nurse' || r === 'pca') { perms.staffapp = ['view']; set.appRole = r; }
+    set.perms = perms;
+    return set;
+  };
+  app.post('/api/users/convert-portal', guard('edit'), async (req, res) => {
+    const apply = !!(req.body && req.body.apply === true);
+    try {
+      const users = await db.getUsers();
+      const list = typeof users.find === 'function' ? await users.find({}).toArray() : [];
+      const legacy = list.filter((u) => ROLES_PORTAL.indexOf(u.role) >= 0);
+      const plan = legacy.map((u) => ({ username: u.username, name: u.name || u.username, from: u.role,
+        becomes: u.role === 'nurse' || u.role === 'pca' ? 'Staff app (' + u.role + ')' : 'Data Submission' + (u.role === 'incharge' ? ' · runs a unit' : ''),
+        departments: Array.isArray(u.departments) ? u.departments.length : 0 }));
+      if (!apply) return res.json({ ok: true, apply: false, count: plan.length, accounts: plan });
+      let done = 0; const failed = [];
+      for (const u of legacy) {
+        try {
+          // Conditional on the role still being the legacy one, so a second run (or an edit
+          // made meanwhile) never converts anything twice.
+          const r = await users.updateOne({ username: u.username, role: u.role }, { $set: convertPlan(u) });
+          if (r && r.matchedCount) { done++; access.invalidate(u.username); }
+        } catch (e) { failed.push(u.username); }
+      }
+      activity.log(req, 'users_converted', { detail: done + ' portal login(s) converted to normal accounts' + (failed.length ? ' · failed: ' + failed.join(', ') : '') });
+      res.json({ ok: true, apply: true, converted: done, failed, accounts: plan });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not convert the portal logins.' }); }
+  });
+
+  // Sign one account out of every device: bump its epoch so every token it holds dies.
+  app.post('/api/users/:username/signout', guard('edit'), async (req, res) => {
+    const username = norm(req.params.username);
+    try {
+      const users = await db.getUsers();
+      if (!await users.findOne({ username })) return res.status(404).json({ ok: false, error: 'User not found.' });
+      await users.updateOne({ username }, { $set: { sessionEpoch: Date.now(), updatedAt: Date.now() } });
+      access.invalidate(username);
+      activity.log(req, 'user_signed_out', { target: username });
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not sign the account out.' }); }
   });
 
   // Create an account.
@@ -646,7 +728,9 @@ function mount(app, opts) {
       const departments = (ROLES_PORTAL.indexOf(role) >= 0 || role === 'User') ? cleanList(b.departments) : [];
       // deptmap caches per instance and nothing invalidates it across instances: derive the
       // areas stored below from a FRESH map (a blip falls back to the cached one inside get()).
-      const isPortal = ROLES_PORTAL.indexOf(role) >= 0;
+      // A legacy portal role, or a normal account holding Data Submission: both carry a
+      // data-collection scope.
+      const isPortal = ROLES_PORTAL.indexOf(role) >= 0 || (role === 'User' && holdsSubmit(cleanPerms(b.perms)));
       if (isPortal) await deptmap.get(true).catch(() => null);
       // Portal scope through the SAME derive the Indicator Access matrix uses (data-collection.js).
       // Quality areas = departments' auto areas UNION custom/extra areas, or ALL when hospital-wide.
@@ -666,9 +750,10 @@ function mount(app, opts) {
         customQualityAreas: scope ? scope.customQualityAreas : [],
         qualityAreas: scope ? scope.qualityAreas : [],
         qualityIndicators: scope ? scope.qualityIndicators : {}, // specific-indicator access
-        // Per-module access levels — only meaningful for the 'User' role. Admins are
-        // full (null => resolved to full in safe()); collectors use the collector portal.
-        perms: role === 'User' ? clampPerms(cleanPerms(b.perms), level, tiers) : null,
+        // Per-module access — only meaningful for the 'User' role. Admins are full
+        // (null => resolved to full in safe()); collectors use the collector portal.
+        // Stored exactly as ticked: there is no tier ceiling any more.
+        perms: role === 'User' ? cleanPerms(b.perms) : null,
         level,
         // Row-level staff scope + the personnel record this login belongs to (needed
         // for scope 'self', where the account may see only its own file).
@@ -681,6 +766,14 @@ function mount(app, opts) {
         rosterScope: role === 'Administrator' ? 'all' : (cleanRosterScope(b.rosterScope) || 'all'),
         rosterDepartments: cleanList(b.rosterDepartments),
         rosterEdit: role === 'Administrator' ? true : b.rosterEdit === true,
+        unitLead: role === 'User' && b.unitLead === true,
+        enterDen: role === 'User' && b.enterDen === true,
+        // Staff app holders: the phone feature set they get.
+        appRole: b.appRole === 'pca' ? 'pca' : 'nurse',
+        // Data Submission: which kinds they may send (patient statistics / quality data).
+        submitKinds: access.cleanSubmitKinds(b.submitKinds),
+        // Data Submission: which of its screens they may open (null = the defaults).
+        dsScreens: access.cleanDsScreens(b.dsScreens),
         passwordHash: await auth.hash(password),
         // Bumped whenever access changes; every issued token carries the value it was
         // signed with, so raising it signs the account out everywhere.
@@ -688,6 +781,10 @@ function mount(app, opts) {
         createdAt: Date.now(), updatedAt: Date.now(),
       };
       if (plan && plan.responsibleId) doc.responsibleId = plan.responsibleId;
+      // Place in the report sign-off chain, set per person ('' = takes no part). Only
+      // stored when sent: a caller that never sends one (the phone Admin App) leaves the
+      // account reading its tier's, as before.
+      if (b.signoff !== undefined && (role === 'User' || role === 'Administrator')) doc.signoff = cleanSignoff(b.signoff);
       await users.insertOne(doc);
       activity.log(req, 'user_created', { target: username, detail: 'role: ' + role + ' · level: ' + level });
       if (plan) {
@@ -722,9 +819,15 @@ function mount(app, opts) {
       if (dc().NO_DATA_ROLES.indexOf(role) >= 0 && hasScope(b)) return res.status(400).json({ ok: false, error: dc().NURSE_PCA_SCOPE_ERROR });
       // Leaving the portal roles: the account keeps no data-collection scope, so its record must stop
       // showing as an assignee. Marked inactive after the write below; its scope is left as it was.
-      const leavingPortal = ROLES_PORTAL.indexOf(u.role) >= 0 && !!set.role && ROLES_PORTAL.indexOf(set.role) < 0;
+      // Data Submission on a normal account carries a scope exactly like a portal role did.
+      const nextPerms = role === 'User' ? (b.perms !== undefined ? cleanPerms(b.perms) : u.perms) : null;
+      const submitter = role === 'User' && holdsSubmit(nextPerms);
+      const wasSubmitter = ROLES_PORTAL.indexOf(u.role) >= 0 || ((u.role || 'User') === 'User' && holdsSubmit(u.perms));
+      // Losing the ability to submit (a portal role left, or Data Submission unticked): the record
+      // stops showing as an assignee. Marked inactive after the write; its scope is left as it was.
+      const leavingPortal = wasSubmitter && !(ROLES_PORTAL.indexOf(role) >= 0 || submitter);
       let scope = null;
-      if (ROLES_PORTAL.indexOf(role) >= 0) {
+      if (ROLES_PORTAL.indexOf(role) >= 0 || submitter) {
         await deptmap.get(true).catch(() => null); // stored qualityAreas must not come from a stale per-instance map
         const departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
         const allQualityAreas = (b.allQualityAreas != null) ? !!b.allQualityAreas : !!u.allQualityAreas;
@@ -769,6 +872,11 @@ function mount(app, opts) {
         if (b.rosterScope !== undefined) set.rosterScope = cleanRosterScope(b.rosterScope) || 'all';
         if (b.rosterDepartments !== undefined) set.rosterDepartments = cleanList(b.rosterDepartments);
         if (b.rosterEdit !== undefined) set.rosterEdit = b.rosterEdit === true;
+        if (b.unitLead !== undefined) set.unitLead = role === 'User' && b.unitLead === true;
+        if (b.enterDen !== undefined) set.enterDen = role === 'User' && b.enterDen === true;
+        if (b.appRole !== undefined) set.appRole = b.appRole === 'pca' ? 'pca' : 'nurse';
+        if (b.submitKinds !== undefined) set.submitKinds = access.cleanSubmitKinds(b.submitKinds);
+        if (b.dsScreens !== undefined) set.dsScreens = access.cleanDsScreens(b.dsScreens);
       }
 
       // Per-module access levels. Only the 'User' role carries a perms map; Administrators
@@ -777,16 +885,13 @@ function mount(app, opts) {
       const level = cleanLevel(b.level !== undefined ? b.level : u.level, role, tiers);
       set.level = level;
       if (role === 'User') {
-        if (b.perms !== undefined) set.perms = clampPerms(cleanPerms(b.perms), level, tiers);
-        // A level change with no grant attached re-clamps what is already stored, so
-        // demoting a Manager to In-charge drops Administration in that same save instead
-        // of leaving it behind. A legacy account whose perms are still null is left null
-        // (safe() reads that as unrestricted) -- materialising {} here would revoke
-        // everything from someone who is working today.
-        else if (level !== levelOf(u) && u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) set.perms = clampPerms(cleanPerms(u.perms), level, tiers);
+        // Stored exactly as ticked -- per-person access, no tier ceiling. Absent leaves the
+        // stored grant untouched (a legacy null map stays null).
+        if (b.perms !== undefined) set.perms = cleanPerms(b.perms);
       } else {
         set.perms = null;
       }
+      if (b.signoff !== undefined) set.signoff = cleanSignoff(b.signoff);
       if (u.roleTemplate) set.roleTemplate = null;   // retired label, cleared on the next save
 
       // Never strand the system without an active administrator.
@@ -937,6 +1042,9 @@ function mount(app, opts) {
       // itself. Only ever add self-descriptive fields below.
       if (b.phone != null) set.phone = String(b.phone).trim().slice(0, 40) || null;
       if (b.designation != null) set.designation = String(b.designation).trim().slice(0, 80) || null;
+      // Where they work, as they describe it (e.g. "Nursing Service"). A display label only:
+      // the departments an account may SEE or SUBMIT for stay in `departments`, set by an admin.
+      if (b.workDepartment != null) set.workDepartment = String(b.workDepartment).trim().slice(0, 80) || null;
       await users.updateOne({ username: uname }, { $set: set });
       res.json({ ok: true, user: safe(Object.assign({}, u, set)) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not update your profile.' }); }

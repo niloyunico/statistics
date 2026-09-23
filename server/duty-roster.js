@@ -125,7 +125,13 @@ function mount(app, opts) {
   // when an administrator granted `rosterEdit`, and web.js passes a guard that admits both.
   // Approving is NOT part of it -- see the status route.
   const writeGuard = (opts && opts.requireWrite) || guard;
-  const isCollector = (req) => !!(req.access && require('./access').PORTAL_ROLES.indexOf(req.access.role) >= 0);
+  // A legacy portal account, or a Data Submission holder reading rosters WITHOUT the Duty
+  // Roster module (let in by requireRead's allowCollector): both see published sheets only.
+  const isCollector = (req) => {
+    const acc = require('./access'); const a = req.access;
+    if (!a || a.unrestricted) return false;
+    return acc.isPortal(a) || (acc.submitsData(a) && !acc.can(a, 'roster', 'view'));
+  };
   /* A portal account sees PUBLISHED sheets only -- unless it is the in-charge who builds
      them. Granting `rosterEdit` without this made the editor useless: the moment a draft
      was saved it vanished from its own author's screen, because every unapproved sheet was

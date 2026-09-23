@@ -129,14 +129,15 @@ function App(){
     const s=String(v||'');
     if(s==='qualityDeptManage') return null;                 // the unified manager lives in core
     if(s.indexOf('quality')===0||s==='reportsQuality'||s==='gallery') return 'quality';
-    if(s.indexOf('dc')===0) return 'datacollection';
-    if(s==='reports'||s==='settings') return 'reports';      // Settings renders UsersAndRoles from reports.jsx
+    if(s.indexOf('dc')===0||s.indexOf('ds')===0) return 'datacollection';
+    if(s==='reports'||s==='settings'||s==='users') return 'reports';      // Settings + Access Control live in the reports chunk
     if(s==='staffProfile'||s==='staffForm'||s==='perfStaff') return 'staffprofile';
     if(s.indexOf('perf')===0) return 'performance';
     if(s.indexOf('roster')===0) return 'roster';
     if(s.indexOf('sup')===0) return 'supervisor';
     if(s.indexOf('med')===0) return 'medicine';
     if(s==='manpower') return 'manpower';
+    if(s==='staffRequests') return 'datacollection';   // the request form lives there
     return null;
   };
   const [chunkTick,setChunkTick]=useState(0);
@@ -224,6 +225,17 @@ function App(){
     const SV_TITLE={supHome:'Dashboard',supBoard:'Patient Board',supNew:'New Report',supHistory:'History',supReport:'Generate Report'};
     crumbs=['UNICO','Supervisor Reports',SV_TITLE[route.view]||'Dashboard'];
     body=<SupervisorView view={route.view} id={route.id} shift={route.shift} openAdd={route.openAdd} depts={depts} setRoute={setRoute}/>;
+  } else if(route.view&&route.view.indexOf('ds')===0){
+    // Data Submission — the portal's screens inside the main app, one route (and one sidebar
+    // sub-item) per screen, for the departments, areas and indicators set on this person.
+    // 'dsHome' opens the first screen this person may use. The component keeps one key, so
+    // a "Fill now" jump between its screens keeps its prefill.
+    const allowed=window.unicoDsScreens?window.unicoDsScreens():[];
+    const screen=route.view==='dsHome'?allowed[0]:(window.unicoDsScreenOf&&window.unicoDsScreenOf(route.view));
+    const label=((window.UNICO_DS_SCREENS||[]).find(x=>x[0]===screen)||[])[2];
+    crumbs=['UNICO','Data Submission'].concat(label?[label]:[]);
+    body=!screen ? <div className="card"><div className="card-b" style={{color:'var(--muted)'}}>No Data Submission screens are set up for your account yet. Ask an administrator to choose them in Access Control.</div></div>
+      : (typeof CollectorPortal!=='undefined') ? <CollectorPortal key="ds" embedded view={screen} onNav={(v)=>setRoute({view:window.unicoDsViewOf(v)})}/> : null;
   } else if(route.view==='dcPatient'){
     crumbs=['UNICO','Data Collection','Patient Statistics'];
     body=<DataPatientForm depts={depts} prefill={{dept:route.dept,responsible:route.responsible,month:route.month}}/>;
@@ -231,13 +243,13 @@ function App(){
     crumbs=['UNICO','Data Collection','Quality Data'];
     body=<DataQualityForm prefill={{area:route.area,responsible:route.responsible}}/>;
   } else if(route.view==='dcResponsibles'){
-    // Moved into Settings → Users & Roles (Data collection scope); keep old links working. Settings
-    // is gated under 'users', so a Data Collection-only session goes to Review instead (and the
-    // one-shot Settings tab flag is not left behind for a later visit).
-    const toSettings=!window.unicoCanAccessView||window.unicoCanAccessView('settings');
-    if(toSettings){ try{ window.__UNICO_SETTINGS_TAB__='responsibles'; }catch(e){} }
-    setTimeout(()=>setRoute({view:toSettings?'settings':'dcReview'}),0);
-    crumbs=toSettings?['UNICO','Settings','Users & Roles']:['UNICO','Data Collection','Review & History'];
+    // Moved into Access Control → Indicator Access; keep old links working. Access Control is
+    // gated under 'users', so a Data Collection-only session goes to Review instead (and the
+    // one-shot tab flag is not left behind for a later visit).
+    const toAccess=!window.unicoCanAccessView||window.unicoCanAccessView('users');
+    if(toAccess){ try{ window.__UNICO_ACCESS_TAB__='indicators'; }catch(e){} }
+    setTimeout(()=>setRoute({view:toAccess?'users':'dcReview'}),0);
+    crumbs=toAccess?['UNICO','Access Control','Indicator Access']:['UNICO','Data Collection','Review & History'];
     body=null;
   } else if(route.view==='dcSettings'){
     crumbs=['UNICO','Data Collection','Department Setup'];
@@ -255,10 +267,17 @@ function App(){
     crumbs=['UNICO','Data Collection','Form Fields'];
     body=<DataFields setRoute={setRoute}/>;
   } else if(route.view==='users'){
-    // Single real user-management UI (Settings → Users & Roles). The old standalone
-    // UserAdmin screen is retired; this route renders the same backend-backed panel.
-    crumbs=['UNICO','User Management'];
-    body=(typeof UserManagement!=='undefined') ? <UserManagement setRoute={setRoute}/> : <SectionTitle icon={I.user} title="User Management"/>;
+    // Access Control — accounts and per-person access (access-control.jsx).
+    crumbs=['UNICO','Access Control'];
+    body=(typeof AccessControl!=='undefined') ? <AccessControl depts={safeDepts} setRoute={setRoute}/> : <SectionTitle icon={I.user} title="Access Control"/>;
+  } else if(route.view==='staffRequests'){
+    // Asking for a new nurse or PCA (Staff Management). Departments: this person's own when
+    // their staff access is limited to departments, else every unit.
+    crumbs=['UNICO','Staff Management','Nurse / PCA requests'];
+    const me=window.__UNICO_USER__||null, DM=window.DEPTMAP;
+    const ids=(me&&me.staffScope==='departments'&&Array.isArray(me.departments)&&me.departments.length)?me.departments:(DM&&DM.patientDeptIds?DM.patientDeptIds():safeDepts.map(d=>d.id));
+    const reqDepts=ids.map(id=>({id,name:(DM&&DM.nameFromId&&DM.nameFromId(id))||id}));
+    body=(typeof CollectorStaffRequests!=='undefined') ? <CollectorStaffRequests depts={reqDepts}/> : null;
   } else if(route.view==='nurseHome'){
     crumbs=['UNICO','Staff Management','Nurse Dashboard'];
     body=<WorkforceDashboard store={staff} setRoute={setRoute} role="Nurse"/>;

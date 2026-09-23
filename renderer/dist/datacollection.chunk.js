@@ -109,7 +109,7 @@
     return keys;
   }
   const dcRosterIsMine = (r, keys) => !!r && [r.dept, r.deptName].some(v => v != null && keys.has(dcSquash(v)));
-  const DC_INCIDENT_FIELDS = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'details', 'finding', 'corrective', 'preventive', 'remark'];
+  const DC_INCIDENT_FIELDS = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'department', 'details', 'finding', 'corrective', 'preventive', 'remark'];
   const dcIncidentFilled = x => !!x && DC_INCIDENT_FIELDS.some(k => String(x[k] == null ? '' : x[k]).trim() !== '');
   const dcIsMine = s => {
     if (!s) return false;
@@ -118,7 +118,11 @@
     return [me.name, me.username].filter(Boolean).some(n => n === s.submittedBy || s.responsible && s.responsible.name === n);
   };
   const DC_PORTAL_ROLES = ['collector', 'incharge', 'nurse', 'pca'];
-  const dcIsPortalRole = me => !!(me && DC_PORTAL_ROLES.indexOf(me.role) >= 0);
+  const dcHolds = (perms, mod) => {
+    const v = perms && perms[mod];
+    return Array.isArray(v) ? v.length > 0 : !!v && v !== 'none';
+  };
+  const dcIsPortalRole = me => !!(me && (DC_PORTAL_ROLES.indexOf(me.role) >= 0 || (me.role || 'User') === 'User' && dcHolds(me.perms, 'datasubmit') && !dcHolds(me.perms, 'datacol')));
   const dcIsAdminUser = () => {
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     return !me || me.role === 'Administrator';
@@ -2458,6 +2462,11 @@
       send(false, '');
     };
     const send = (corr, why) => {
+      dcConfirmOldMonths([month]).then(ok => {
+        if (ok) sendNow(corr, why);
+      });
+    };
+    const sendNow = (corr, why) => {
       const matched = resps.find(r => r.name === responsible);
       setBusy(true);
       setDone(null);
@@ -2523,7 +2532,7 @@
       className: "grid",
       style: {
         gap: 14,
-        maxWidth: 760
+        maxWidth: onSubmitted ? "none" : 760
       }
     }, React.createElement(SectionTitle, {
       icon: I.input,
@@ -2881,7 +2890,7 @@
     const numLabel = def.numLabel || (isRate ? 'Cases (incidents)' : 'Numerator');
     const denLabel = def.denLabel || denGuess || 'Denominator';
     const denAdminOnly = !!def.denAdminOnly;
-    const denLockedForCollector = denAdminOnly && lockResp;
+    const denLockedForCollector = denAdminOnly && lockResp && !(me && me.enterDen === true);
     const numDef = def.numeratorDef || '';
     const denDef = def.denominatorDef || (isRate ? 'Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.' : '');
     const indNameQ = def.name || newInd.name || 'Result';
@@ -2972,6 +2981,15 @@
     }, [isHandHygiene, numMode, hhDepartments]);
     const isIncidentType = !isHandHygiene && def.formula !== 'avg' && (def.goalDirection ? def.goalDirection !== 'higher_is_better' : true);
     const victimField = !!def.victimField;
+    const hospitalWide = !!area && (area.key === 'Overall Hospital' || area.deptId === '__hospital__' || /overall hospital/i.test(String(area.name || '')));
+    const incidentDepts = useMemo(() => {
+      const DM = window.DEPTMAP;
+      const ids = DM && DM.patientDeptIds ? DM.patientDeptIds() : dcAllDepts().map(d => d.id);
+      return ids.map(id => ({
+        id,
+        name: DM && DM.nameFromId && DM.nameFromId(id) || id
+      })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    }, [dataRev]);
     const blankIncident = () => ({
       patientName: '',
       uhid: '',
@@ -2982,6 +3000,7 @@
       admissionDate: '',
       victimName: '',
       victimId: '',
+      department: '',
       details: '',
       finding: '',
       corrective: '',
@@ -3127,6 +3146,7 @@
         admissionDate: x.admissionDate || '',
         victimName: x.victimName || '',
         victimId: x.victimId || '',
+        department: x.department || '',
         details: x.details || '',
         finding: x.finding || '',
         corrective: x.corrective || '',
@@ -3231,6 +3251,10 @@
           return;
         }
       }
+      if (hospitalWide && !notObserved && incidents.some(x => dcIncidentFilled(x) && !x.department)) {
+        toast('Choose the department where each incident happened.', 'error');
+        return;
+      }
       if (qCorrection) {
         setQCmp({
           prior: qPriorLocal()
@@ -3240,6 +3264,11 @@
       sendQ(false, '');
     };
     const sendQ = (corr, why) => {
+      dcConfirmOldMonths([month]).then(ok => {
+        if (ok) sendQNow(corr, why);
+      });
+    };
+    const sendQNow = (corr, why) => {
       const matched = resps.find(r => r.name === responsible);
       setBusy(true);
       setDone(null);
@@ -3285,6 +3314,7 @@
           admissionDate: x.admissionDate,
           victimName: x.victimName,
           victimId: x.victimId,
+          department: x.department,
           details: x.details,
           finding: x.finding,
           corrective: x.corrective,
@@ -3373,7 +3403,7 @@
       className: "grid",
       style: {
         gap: 14,
-        maxWidth: 760
+        maxWidth: onSubmitted ? "none" : 760
       }
     }, React.createElement(SectionTitle, {
       icon: I.activity,
@@ -4278,7 +4308,22 @@
       value: x.diagnosis,
       onChange: e => setIncidentField(i, 'diagnosis', e.target.value),
       placeholder: "Diagnosis"
-    }))), victimField && React.createElement("div", {
+    }))), hospitalWide && React.createElement(Field, {
+      label: React.createElement("span", null, "Department where it happened ", React.createElement("span", {
+        style: {
+          color: 'var(--rose)'
+        }
+      }, "*"))
+    }, React.createElement("select", {
+      style: inputStyle,
+      value: x.department || '',
+      onChange: e => setIncidentField(i, 'department', e.target.value)
+    }, React.createElement("option", {
+      value: ""
+    }, "\u2014 choose the department \u2014"), incidentDepts.map(d => React.createElement("option", {
+      key: d.id,
+      value: d.id
+    }, d.name)))), victimField && React.createElement("div", {
       style: {
         marginBottom: 4,
         padding: '9px 11px',
@@ -7808,6 +7853,9 @@
     const [view, setView] = useState('patient');
     const [status, setStatus] = useState('All');
     const mode = 'timeline';
+    const [groupBy, setGroupBy] = useState('month');
+    const [monthPick, setMonthPick] = useState('all');
+    const [closedMonths, setClosedMonths] = useState({});
     const [detailMode, setDetailMode] = useState(null);
     const ownsSub = s => !!s && s.status === 'pending' && dcIsMine(s);
     const load = () => dcSubmissionResponse().then(r => setRows(r.ok ? r.submissions : [])).catch(() => setRows([]));
@@ -7900,7 +7948,14 @@
     const FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Withdrawn'];
     const inFilter = (s, f) => f === 'All' || (f === 'Rejected' ? openRej.has(s.id) : s.status === f.toLowerCase());
     const countFor = f => shown.filter(s => inFilter(s, f)).length;
-    const listed = shown.filter(s => inFilter(s, status));
+    const monthKeyNum = k => {
+      const q = String(k || '').split('-');
+      const mi = MONS_ABBR.indexOf(q[0]);
+      return mi < 0 || !q[1] ? -1 : Number(q[1]) * 12 + mi;
+    };
+    const monthsIn = Array.from(new Set(shown.map(x => x.month).filter(Boolean))).sort((a, b) => monthKeyNum(b) - monthKeyNum(a));
+    const monthSel = monthPick !== 'all' && monthsIn.indexOf(monthPick) < 0 ? 'all' : monthPick;
+    const listed = shown.filter(s => inFilter(s, status) && (monthSel === 'all' || s.month === monthSel));
     const cpTab = on => ({
       border: 0,
       background: on ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent',
@@ -8048,6 +8103,31 @@
       });
       return out;
     })();
+    const monthGroups = (() => {
+      const by = {};
+      listed.forEach(x => {
+        const k = x.month || '—';
+        (by[k] = by[k] || []).push(x);
+      });
+      return Object.keys(by).sort((a, b) => monthKeyNum(b) - monthKeyNum(a)).map(k => {
+        const rs = by[k];
+        const c = st => rs.filter(x => x.status === st).length;
+        return {
+          key: k,
+          label: k === '—' ? 'No month' : monthLabel(k),
+          rows: rs,
+          approved: c('approved'),
+          pending: c('pending'),
+          rejected: c('rejected'),
+          onRecord: c('reported')
+        };
+      });
+    })();
+    const groups = groupBy === 'month' ? monthGroups : dayGroups.map(g => ({
+      key: g.label,
+      label: g.label,
+      rows: g.rows
+    }));
     return React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         display: 'grid',
@@ -8186,7 +8266,37 @@
       style: cpTab(status === f)
     }, f, React.createElement("span", {
       style: cntStyle(status === f)
-    }, countFor(f)))))), React.createElement(Card, {
+    }, countFor(f))))), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("div", {
+      style: segWrap
+    }, [['month', 'By month'], ['day', 'By date sent']].map(([k, l]) => React.createElement("button", {
+      key: k,
+      onClick: () => setGroupBy(k),
+      style: cpTab(groupBy === k)
+    }, l))), React.createElement("select", {
+      value: monthSel,
+      onChange: e => setMonthPick(e.target.value),
+      title: "Reporting month",
+      style: {
+        padding: '7px 10px',
+        borderRadius: 10,
+        border: '1px solid rgba(255,255,255,.85)',
+        background: 'rgba(255,255,255,.65)',
+        fontSize: 12,
+        fontWeight: 700,
+        color: '#3c4858',
+        fontFamily: 'inherit',
+        outline: 'none'
+      }
+    }, React.createElement("option", {
+      value: "all"
+    }, "All months (", monthsIn.length, ")"), monthsIn.map(m => React.createElement("option", {
+      key: m,
+      value: m
+    }, monthLabel(m))))), React.createElement(Card, {
       style: {
         padding: 0,
         overflow: 'hidden'
@@ -8255,109 +8365,208 @@
       style: {
         padding: '18px 20px'
       }
-    }, dayGroups.map(g => React.createElement("div", {
-      key: g.label
-    }, React.createElement("div", {
-      style: {
-        fontSize: 10.5,
-        letterSpacing: '.6px',
-        textTransform: 'uppercase',
-        color: '#7d8ea8',
-        fontWeight: 700,
-        margin: '0 0 9px'
-      }
-    }, g.label), g.rows.map(s => {
-      const dot = {
-        pending: '#e08a1e',
-        approved: '#1f9d57',
-        rejected: '#d23a52',
-        withdrawn: '#9aa6b4'
-      }[s.status] || '#0090ca';
-      const halo = {
-        pending: 'rgba(224,138,30,.16)',
-        approved: 'rgba(31,157,87,.16)',
-        rejected: 'rgba(210,58,82,.16)',
-        withdrawn: 'rgba(154,166,180,.18)'
-      }[s.status] || 'rgba(0,144,202,.16)';
+    }, groups.map(g => {
+      const isM = groupBy === 'month';
+      const closed = isM && !!closedMonths[g.key];
       return React.createElement("div", {
-        key: s.id,
-        onClick: () => setDetail(s),
-        title: "Tap to view",
-        style: {
-          display: 'flex',
-          gap: 14,
-          position: 'relative',
-          paddingBottom: 16,
-          cursor: 'pointer'
-        }
-      }, React.createElement("div", {
-        style: {
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          flexShrink: 0,
-          width: 26
-        }
-      }, React.createElement("span", {
-        style: {
-          width: 12,
-          height: 12,
-          borderRadius: '50%',
-          flexShrink: 0,
-          marginTop: 3,
-          background: dot,
-          boxShadow: '0 0 0 4px ' + halo
-        }
-      }), React.createElement("span", {
-        style: {
-          flex: 1,
-          width: 2,
-          background: 'linear-gradient(180deg,rgba(125,145,180,.3),rgba(125,145,180,.08))',
-          borderRadius: 2,
-          marginTop: 4
-        }
-      })), React.createElement("div", {
-        style: {
-          flex: 1,
-          minWidth: 0,
-          paddingBottom: 4
-        }
-      }, React.createElement("div", {
+        key: g.key,
+        style: isM ? {
+          border: '1px solid rgba(125,145,180,.2)',
+          borderRadius: 12,
+          marginBottom: 12,
+          background: 'rgba(255,255,255,.55)',
+          overflow: 'hidden'
+        } : null
+      }, isM ? React.createElement("button", {
+        type: "button",
+        onClick: () => setClosedMonths(o => Object.assign({}, o, {
+          [g.key]: !o[g.key]
+        })),
+        "aria-expanded": !closed,
         style: {
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
-          flexWrap: 'wrap'
+          gap: 10,
+          width: '100%',
+          border: 0,
+          background: 'rgba(236,247,255,.7)',
+          padding: '10px 14px',
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          textAlign: 'left',
+          flexWrap: 'wrap',
+          borderBottom: closed ? 0 : '1px solid rgba(125,145,180,.18)'
         }
       }, React.createElement("span", {
         style: {
-          fontSize: 12.5,
-          fontWeight: 700,
+          display: 'inline-block',
+          transform: closed ? 'rotate(-90deg)' : 'none',
+          transition: 'transform .15s',
+          color: '#7d8ea8',
+          fontSize: 11
+        }
+      }, "\u25BC"), React.createElement("span", {
+        style: {
+          fontSize: 13.5,
+          fontWeight: 800,
           color: '#16202e'
         }
-      }, targetOf(s)), React.createElement("span", {
-        style: typeChip(s)
-      }, typeOf(s)), statusChip(s.status), React.createElement(FixBtn, {
-        s: s
-      }), React.createElement(PendingBtns, {
-        s: s
-      })), React.createElement("div", {
+      }, g.label), React.createElement("span", {
         style: {
           fontSize: 11,
           color: '#6c7a8c',
-          marginTop: 3
-        }
-      }, refOf(s) ? React.createElement("span", {
-        style: {
           fontFamily: "'IBM Plex Mono',monospace"
         }
-      }, refOf(s), ' · ') : null, monthLabel(s.month), s.type === 'quality' && s.value != null && s.value !== '' ? React.createElement(React.Fragment, null, ' · value ', React.createElement("b", {
+      }, g.rows.length, " item", g.rows.length === 1 ? '' : 's'), React.createElement("span", {
         style: {
-          color: '#3c4858',
-          fontFamily: "'IBM Plex Mono',monospace"
+          flex: 1
         }
-      }, String(s.value))) : null, ' · ' + ago(s.submittedAt)), rejNote(s)));
-    }))), React.createElement("div", {
+      }), g.approved > 0 && React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 999,
+          background: 'var(--pos-bg)',
+          color: 'var(--pos)'
+        }
+      }, g.approved, " approved"), g.pending > 0 && React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 999,
+          background: '#fff4e0',
+          color: '#9a6b00'
+        }
+      }, g.pending, " pending"), g.rejected > 0 && React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 999,
+          background: 'var(--neg-bg)',
+          color: 'var(--rose)'
+        }
+      }, g.rejected, " returned"), g.onRecord > 0 && React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 999,
+          background: 'var(--blue-50)',
+          color: 'var(--blue-700)'
+        }
+      }, g.onRecord, " on record")) : React.createElement("div", {
+        style: {
+          fontSize: 10.5,
+          letterSpacing: '.6px',
+          textTransform: 'uppercase',
+          color: '#7d8ea8',
+          fontWeight: 700,
+          margin: '0 0 9px'
+        }
+      }, g.label), !closed && React.createElement("div", {
+        style: isM ? {
+          padding: '12px 14px 0'
+        } : null
+      }, g.rows.map(s => {
+        const dot = {
+          pending: '#e08a1e',
+          approved: '#1f9d57',
+          rejected: '#d23a52',
+          withdrawn: '#9aa6b4'
+        }[s.status] || '#0090ca';
+        const halo = {
+          pending: 'rgba(224,138,30,.16)',
+          approved: 'rgba(31,157,87,.16)',
+          rejected: 'rgba(210,58,82,.16)',
+          withdrawn: 'rgba(154,166,180,.18)'
+        }[s.status] || 'rgba(0,144,202,.16)';
+        return React.createElement("div", {
+          key: s.id,
+          onClick: () => setDetail(s),
+          title: "Tap to view",
+          style: {
+            display: 'flex',
+            gap: 14,
+            position: 'relative',
+            paddingBottom: 16,
+            cursor: 'pointer'
+          }
+        }, React.createElement("div", {
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            flexShrink: 0,
+            width: 26
+          }
+        }, React.createElement("span", {
+          style: {
+            width: 12,
+            height: 12,
+            borderRadius: '50%',
+            flexShrink: 0,
+            marginTop: 3,
+            background: dot,
+            boxShadow: '0 0 0 4px ' + halo
+          }
+        }), React.createElement("span", {
+          style: {
+            flex: 1,
+            width: 2,
+            background: 'linear-gradient(180deg,rgba(125,145,180,.3),rgba(125,145,180,.08))',
+            borderRadius: 2,
+            marginTop: 4
+          }
+        })), React.createElement("div", {
+          style: {
+            flex: 1,
+            minWidth: 0,
+            paddingBottom: 4
+          }
+        }, React.createElement("div", {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap'
+          }
+        }, React.createElement("span", {
+          style: {
+            fontSize: 12.5,
+            fontWeight: 700,
+            color: '#16202e'
+          }
+        }, targetOf(s)), React.createElement("span", {
+          style: typeChip(s)
+        }, typeOf(s)), statusChip(s.status), React.createElement(FixBtn, {
+          s: s
+        }), React.createElement(PendingBtns, {
+          s: s
+        })), React.createElement("div", {
+          style: {
+            fontSize: 11,
+            color: '#6c7a8c',
+            marginTop: 3
+          }
+        }, refOf(s) ? React.createElement("span", {
+          style: {
+            fontFamily: "'IBM Plex Mono',monospace"
+          }
+        }, refOf(s), ' · ') : null, groupBy === 'month' ? s.submittedAt ? 'sent ' + new Date(s.submittedAt).toLocaleDateString(undefined, {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric'
+        }) : 'already on record' : monthLabel(s.month), s.type === 'quality' && s.value != null && s.value !== '' ? React.createElement(React.Fragment, null, ' · value ', React.createElement("b", {
+          style: {
+            color: '#3c4858',
+            fontFamily: "'IBM Plex Mono',monospace"
+          }
+        }, String(s.value))) : null, ' · ' + ago(s.submittedAt)), rejNote(s)));
+      })));
+    }), React.createElement("div", {
       style: {
         fontSize: 11,
         color: '#9aa6b4'
@@ -8721,7 +8930,7 @@
   };
   const CP_NAV_HOME = ['home', 'Dashboard', 'M3 11l9-8 9 8v9a2 2 0 01-2 2h-4v-7H9v7H5a2 2 0 01-2-2z'];
   const CP_NAV_STAFFREQ = ['requests', 'Add nurse / PCA', 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M19 8v6M22 11h-6'];
-  const CP_NAV_COLLECT = [['missing', 'Missing data', 'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01'], ['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'], ['quick', 'Quick entry', 'M13 2L4 14h7l-1 8 9-12h-7z'], ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'], ['patient', 'Patient statistics', 'M4 4h16v16H4zM4 9h16M9 4v16']];
+  const CP_NAV_COLLECT = [['missing', 'Missing data', 'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01'], ['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'], ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'], ['patient', 'Patient statistics', 'M4 4h16v16H4zM4 9h16M9 4v16']];
   const CP_NAV_UNIT = [['history', 'My submissions', 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7'], ['roster', 'Duty roster', 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4M8 13h3M13 13h3'], ['profile', 'My profile', 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0'], ['dept', 'Department & staff', 'M4 4h16v16H4zM4 9h16M9 4v16']];
   const CP_ICON = (d, s, c) => React.createElement("svg", {
     width: s || 17,
@@ -8795,6 +9004,21 @@
     const mi = MONS_ABBR.indexOf(p[0]);
     const yy = parseInt(p[1], 10);
     return mi < 0 || isNaN(yy) ? null : (2000 + yy) * 12 + mi;
+  };
+  const dcConfirmOldMonths = months => {
+    const now = new Date();
+    const cur = now.getFullYear() * 12 + now.getMonth();
+    const old = (months || []).filter(m => {
+      const r = dcMonthRank(m);
+      return r != null && cur - r > 12;
+    });
+    if (!old.length) return Promise.resolve(true);
+    const msg = 'You are sending data for ' + old.map(monthLabel).join(', ') + ' — more than a year ago. Please check the month AND the year are right before sending.';
+    return window.UI && window.UI.confirm ? Promise.resolve(window.UI.confirm({
+      title: 'Check the month and year',
+      message: msg,
+      confirmLabel: 'Yes, the month is right'
+    })) : Promise.resolve(window.confirm(msg));
   };
   const dcMonthKey = r => MONS_ABBR[(r % 12 + 12) % 12] + '-' + String(Math.floor(r / 12) % 100).padStart(2, '0');
   const dcPortalUser = () => dcIsPortalRole(typeof window !== 'undefined' && window.__UNICO_USER__ || null);
@@ -9065,6 +9289,29 @@
     }));
     return rows;
   };
+  const dcMissingSummary = () => {
+    const user = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
+    const kinds = user.submitKinds || {};
+    const depts = kinds.patient === false ? [] : dcAllDepts();
+    const areas = kinds.quality === false ? [] : (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length);
+    return Promise.resolve(dcLoadCollectionSettings()).catch(() => null).then(() => dcSubmissionResponse()).then(r => {
+      const rows = dcMissingList(depts, areas, r.ok ? r.submissions || [] : []);
+      const by = {};
+      rows.forEach(x => {
+        by[x.month] = by[x.month] || {
+          month: x.month,
+          label: monthLabel(x.month),
+          rank: x.rank,
+          count: 0
+        };
+        by[x.month].count++;
+      });
+      return {
+        total: rows.length,
+        months: Object.values(by).sort((a, b) => b.rank - a.rank)
+      };
+    });
+  };
   function CpSpark({
     ind,
     months
@@ -9238,6 +9485,11 @@
       return values;
     };
     const sendMonths = (months, corrMonths, why) => {
+      dcConfirmOldMonths(months).then(ok => {
+        if (ok) sendMonthsNow(months, corrMonths, why);
+      });
+    };
+    const sendMonthsNow = (months, corrMonths, why) => {
       setBusy(true);
       const jobs = months.map(m => {
         const isCorr = corrMonths.indexOf(m) >= 0;
@@ -11077,8 +11329,10 @@
     setMonth,
     onNav,
     onFill,
-    user
+    user,
+    can
   }) {
+    const may = v => !can || can(v);
     const dataRev = useDcDataRev();
     const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length), [dataRev]);
     const depts = useMemo(() => dcAllDepts(), [dataRev]);
@@ -11202,17 +11456,6 @@
       c: '#a92c42'
     }];
     const QUICK = [{
-      go: 'quick',
-      label: 'Quick entry',
-      sub: 'Spreadsheet grid for department statistics',
-      cta: 'Open grid',
-      tone: '#0072a3',
-      glow: 'rgba(0,144,202,.22)',
-      badge: statGap > 0 ? statGap + ' missing' : '',
-      icd: 'M13 2L4 14h7l-1 8 9-12h-7z',
-      bg: 'rgba(0,144,202,.12)',
-      c: '#0072a3'
-    }, {
       go: 'quality',
       label: 'Quality data',
       sub: 'One indicator at a time with the HQI guide',
@@ -11251,12 +11494,12 @@
       val: done + '/' + totalInd,
       p: totalInd ? done / totalInd : 0,
       c: 'linear-gradient(90deg,#3ab5a7,#1f9d57)'
-    }, {
+    }, ...(may('patient') ? [{
       lbl: 'Department stats',
       val: deptDone + '/' + pDepts.length,
       p: pDepts.length ? deptDone / pDepts.length : 0,
       c: 'linear-gradient(90deg,#27a8db,#0072a3)'
-    }, {
+    }] : []), {
       lbl: 'Awaiting review',
       val: awaiting + '/' + mineN,
       p: mineN ? awaiting / mineN : 0,
@@ -11395,8 +11638,8 @@
         gap: 9,
         flexWrap: 'wrap'
       }
-    }, React.createElement("button", {
-      onClick: () => onNav('quick'),
+    }, may('patient') ? React.createElement("button", {
+      onClick: () => onNav('patient'),
       style: {
         display: 'inline-flex',
         alignItems: 'center',
@@ -11412,20 +11655,24 @@
         fontFamily: 'inherit',
         boxShadow: '0 8px 22px rgba(0,144,202,.4)'
       }
-    }, CP_ICON('M13 2L4 14h7l-1 8 9-12h-7z', 14), "Quick entry", statGap ? ' (' + statGap + ')' : ''), React.createElement("button", {
-      onClick: () => onNav('patient'),
+    }, CP_ICON('M4 4h16v16H4zM4 9h16M9 4v16', 14), "Patient statistics", statGap ? ' (' + statGap + ')' : '') : may('quality') ? React.createElement("button", {
+      onClick: () => onNav('quality'),
       style: {
-        border: '1px solid rgba(255,255,255,.85)',
-        background: 'rgba(255,255,255,.6)',
-        color: '#3c4858',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        border: '1px solid rgba(255,255,255,.4)',
+        background: 'linear-gradient(135deg,#3ab5a7,#12776c)',
+        color: '#fff',
         padding: '9px 15px',
         borderRadius: 10,
         fontSize: 12.5,
         fontWeight: 700,
         cursor: 'pointer',
-        fontFamily: 'inherit'
+        fontFamily: 'inherit',
+        boxShadow: '0 8px 22px rgba(18,119,108,.35)'
       }
-    }, "Patient statistics")))), overdue && React.createElement("div", {
+    }, CP_ICON('M22 12h-4l-3 8-4-16-3 8H2', 14), "Quality data", missing.length ? ' (' + missing.length + ')' : '') : null))), overdue && React.createElement("div", {
       style: {
         background: 'rgba(255,236,238,.7)',
         backdropFilter: 'blur(14px)',
@@ -11579,7 +11826,7 @@
         gap: 12,
         marginBottom: 14
       }
-    }, QUICK.map(n => React.createElement("div", {
+    }, QUICK.filter(n => may(n.go)).map(n => React.createElement("div", {
       key: n.go,
       onClick: () => onNav(n.go),
       style: Object.assign({}, CP_CARD, {
@@ -12323,7 +12570,7 @@
         flexWrap: 'wrap'
       }
     }, React.createElement("button", {
-      onClick: () => onNav('quick'),
+      onClick: () => onNav('patient'),
       style: {
         display: 'inline-flex',
         alignItems: 'center',
@@ -12339,7 +12586,7 @@
         fontFamily: 'inherit',
         boxShadow: '0 8px 22px rgba(0,144,202,.4)'
       }
-    }, CP_ICON('M13 2L4 14h7l-1 8 9-12h-7z', 14), "Quick entry"), React.createElement("button", {
+    }, CP_ICON('M4 4h16v16H4zM4 9h16M9 4v16', 14), "Patient statistics"), React.createElement("button", {
       onClick: () => onNav('roster'),
       style: {
         border: '1px solid rgba(255,255,255,.22)',
@@ -14613,7 +14860,7 @@
         maxWidth: 1100,
         margin: '0 auto'
       }
-    }, React.createElement("style", null, '@media (max-width:640px){.cp-mm-overlay{padding:0!important}.cp-mm-box{max-height:none!important;min-height:100%;border-radius:0!important;padding:10px 12px 18px!important}}'), loadError && React.createElement("div", {
+    }, React.createElement("style", null, '@media (max-width:640px){.cp-mm-overlay{padding:0!important}.cp-mm-box{max-height:100%!important;height:100%;border-radius:0!important}.cp-mm-body{padding:10px 8px 18px!important}}'), loadError && React.createElement("div", {
       role: "alert",
       style: {
         padding: 12,
@@ -14919,7 +15166,7 @@
           if (ok) setSent({});
         });
       }
-    }), open && React.createElement("div", {
+    }), open && (n => typeof ReactDOM !== 'undefined' && ReactDOM.createPortal && typeof document !== 'undefined' ? ReactDOM.createPortal(n, document.body) : n)(React.createElement("div", {
       className: "cp-mm-overlay",
       onMouseDown: e => {
         downOnBackdrop.current = e.target === e.currentTarget;
@@ -14931,12 +15178,11 @@
         position: 'fixed',
         inset: 0,
         zIndex: 2500,
-        background: 'rgba(13,27,46,.45)',
+        background: 'rgba(13,27,46,.5)',
         display: 'flex',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         justifyContent: 'center',
-        padding: '4vh 16px',
-        overflowY: 'auto',
+        padding: '3vh 12px',
         boxSizing: 'border-box'
       }
     }, React.createElement("div", {
@@ -14946,13 +15192,14 @@
       "aria-label": "Submit missing data",
       style: {
         width: '100%',
-        maxWidth: 900,
-        maxHeight: '92vh',
-        overflowY: 'auto',
+        maxWidth: 880,
+        maxHeight: '94vh',
+        display: 'flex',
+        flexDirection: 'column',
         background: '#f3f8fd',
         borderRadius: 16,
         boxShadow: '0 24px 70px rgba(5,12,24,.35)',
-        padding: '14px 18px 20px',
+        overflow: 'hidden',
         boxSizing: 'border-box'
       }
     }, React.createElement("div", {
@@ -14960,7 +15207,10 @@
         display: 'flex',
         alignItems: 'center',
         gap: 10,
-        marginBottom: 8
+        padding: '14px 18px 12px',
+        background: '#fff',
+        borderBottom: '1px solid rgba(125,145,180,.2)',
+        flexShrink: 0
       }
     }, React.createElement("div", {
       style: {
@@ -15001,7 +15251,15 @@
         flexShrink: 0,
         fontSize: 16
       }
-    }, "\u2715")), open.kind === 'quality' ? React.createElement(DataQualityForm, {
+    }, "\u2715")), React.createElement("div", {
+      className: "cp-mm-body",
+      style: {
+        flex: 1,
+        minHeight: 0,
+        overflowY: 'auto',
+        padding: '12px 14px 18px'
+      }
+    }, open.kind === 'quality' ? React.createElement(DataQualityForm, {
       key: 'mq/' + open.key,
       prefill: {
         responsible: user.name,
@@ -15021,7 +15279,7 @@
         from: open.from
       },
       onSubmitted: () => submitted(open)
-    }))));
+    }))))));
   }
   function DcSettingsCard({
     row,
@@ -15501,16 +15759,25 @@
       onSaved: dcSetCollectionSettings
     })));
   }
-  function CollectorPortal() {
+  function CollectorPortal(props) {
+    const embedded = !!(props && props.embedded);
     const user = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
     const dataRev = useDcDataRev();
-    const depts = useMemo(() => dcAllDepts(), [dataRev]);
-    const areas = useMemo(() => window.qualityData ? window.qualityData() : [], [dataRev]);
+    const kinds = user.submitKinds || {};
+    const depts = useMemo(() => kinds.patient === false ? [] : dcAllDepts(), [dataRev, kinds.patient]);
+    const areas = useMemo(() => kinds.quality === false ? [] : window.qualityData ? window.qualityData() : [], [dataRev, kinds.quality]);
     const collRev = useDcCollectionRev();
     const hasPatient = depts.length > 0;
     const hasQuality = areas.some(a => a && a.indicators && a.indicators.length);
-    const inCharge = user.role === 'incharge';
-    const [view, setView] = useState(inCharge ? 'home' : hasQuality ? 'status' : 'patient');
+    const inCharge = user.role === 'incharge' || user.unitLead === true;
+    const [viewState, setView] = useState(props && props.initialView || (inCharge ? 'home' : hasQuality ? 'status' : 'patient'));
+    const view = embedded && props.view ? props.view : viewState;
+    const toView = v => {
+      if (embedded && props.onNav) props.onNav(v);else setView(v);
+    };
+    const allowedScreens = embedded && window.unicoDsScreens ? window.unicoDsScreens() : null;
+    const screenOk = v => !allowedScreens || allowedScreens.indexOf(v) >= 0;
+    const unitScreens = inCharge || !!allowedScreens;
     const [month, setMonth] = useState(dcDefaultMonth());
     const [jump, setJump] = useState(null);
     const [q, setQ] = useState('');
@@ -15567,7 +15834,7 @@
         month: m,
         from: from || null
       });
-      setView('quality');
+      toView('quality');
       setSidebarOpen(false);
     };
     const fillStat = (deptId, m, from) => {
@@ -15576,15 +15843,15 @@
         month: m,
         from: from || null
       });
-      setView('patient');
+      toView('patient');
       setSidebarOpen(false);
     };
     const go = v => {
-      setView(v);
+      toView(v);
       setJump(null);
       setSidebarOpen(false);
     };
-    const badgeFor = v => v === 'missing' ? String(subCount.allMissing || '') : v === 'quick' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '';
+    const badgeFor = v => v === 'missing' ? String(subCount.allMissing || '') : v === 'patient' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '';
     const NavItem = ([v, label, icd]) => {
       const on = view === v,
         badgeVal = badgeFor(v);
@@ -15642,7 +15909,7 @@
       profile: 'My profile',
       dept: 'Department & staff'
     }[view] || 'Submission status';
-    const collectNav = CP_NAV_COLLECT.filter(([v]) => v === 'missing' ? hasPatient || hasQuality : v === 'patient' ? hasPatient : v === 'quick' ? hasPatient : hasQuality);
+    const collectNav = CP_NAV_COLLECT.filter(([v]) => v === 'missing' ? hasPatient || hasQuality : v === 'patient' ? hasPatient : hasQuality);
     const dl = cpDeadline(month);
     const lateMs = dl ? Date.now() - dl.getTime() : 0;
     const overdueDays = lateMs > 0 && (subCount.missing > 0 || subCount.statGap > 0) ? Math.ceil(lateMs / 864e5) : 0;
@@ -15662,20 +15929,13 @@
       whiteSpace: 'nowrap',
       flexShrink: 0
     });
-    return React.createElement("div", {
-      style: {
-        display: 'flex',
-        height: '100vh',
-        overflow: 'hidden',
-        background: 'transparent'
-      }
-    }, React.createElement("style", null, '@media (max-width:900px){.cp-aside{position:fixed!important;z-index:200;height:100vh;transform:translateX(-100%);transition:transform .22s ease}.cp-aside.cp-open{transform:none}.cp-burger{display:grid!important}}'), missAlert && React.createElement("div", {
+    const alertEl = React.createElement(React.Fragment, null, missAlert && React.createElement("div", {
       onClick: () => setMissAlert(false),
       style: {
         position: 'fixed',
         inset: 0,
         background: 'rgba(13,27,46,.45)',
-        zIndex: 400,
+        zIndex: 1200,
         display: 'grid',
         placeItems: 'center',
         padding: 16
@@ -15688,6 +15948,8 @@
         width: 'min(480px,100%)',
         maxHeight: '86vh',
         overflowY: 'auto',
+        overflowX: 'hidden',
+        boxSizing: 'border-box',
         padding: '20px 22px',
         background: '#fff',
         borderLeft: '5px solid #d23a52'
@@ -15727,6 +15989,7 @@
     }, "Data you are assigned to report has not been sent for ", missByMonth.length, " month", missByMonth.length === 1 ? '' : 's', ". Please submit it so the reports are complete."), React.createElement("div", {
       style: {
         display: 'grid',
+        gridTemplateColumns: 'minmax(0,1fr)',
         gap: 7,
         marginBottom: 16
       }
@@ -15736,6 +15999,8 @@
         display: 'flex',
         alignItems: 'baseline',
         gap: 10,
+        minWidth: 0,
+        flexWrap: 'wrap',
         padding: '8px 11px',
         borderRadius: 9,
         background: 'rgba(210,58,82,.06)',
@@ -15755,7 +16020,9 @@
         whiteSpace: 'nowrap'
       }
     }, g.rows.length, " missing"), React.createElement("span", {
+      title: [...new Set(g.rows.map(r => r.unit))].join(', '),
       style: {
+        flex: '1 1 160px',
         fontSize: 11.5,
         color: '#6c7a8c',
         minWidth: 0,
@@ -15806,7 +16073,130 @@
         fontFamily: 'inherit',
         boxShadow: '0 8px 20px rgba(210,58,82,.3)'
       }
-    }, "Submit missing data")))), sidebarOpen && React.createElement("div", {
+    }, "Submit missing data")))));
+    const screens = React.createElement(React.Fragment, null, !hasPatient && !hasQuality && React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        maxWidth: 620,
+        margin: '40px auto',
+        padding: 30,
+        textAlign: 'center'
+      })
+    }, React.createElement("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 700,
+        color: '#16202e',
+        marginBottom: 6
+      }
+    }, "Nothing is assigned to you yet"), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: '#6c7a8c'
+      }
+    }, "Your administrator has not given you a department or quality area to report on. Once they do, it appears here.")), view === 'missing' && (hasPatient || hasQuality) && React.createElement(CollectorMissing, {
+      depts: depts,
+      areas: areas,
+      month: month,
+      user: user
+    }), view === 'status' && hasQuality && React.createElement(CollectorDash, {
+      month: month,
+      setMonth: setMonth,
+      onNav: go,
+      onFill: fillFor,
+      user: user,
+      can: v => (v === 'patient' ? hasPatient : v === 'quality' ? hasQuality : true) && screenOk(v)
+    }), view === 'quality' && hasQuality && React.createElement("div", {
+      style: {
+        maxWidth: 900,
+        margin: '0 auto'
+      }
+    }, React.createElement(DataQualityForm, {
+      key: jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q',
+      prefill: {
+        responsible: user.name,
+        area: jump && jump.area,
+        indicatorId: jump && jump.indicatorId,
+        month: jump && jump.month,
+        from: jump && jump.from
+      }
+    })), view === 'patient' && hasPatient && React.createElement("div", {
+      style: {
+        maxWidth: 900,
+        margin: '0 auto'
+      }
+    }, React.createElement(DataPatientForm, {
+      key: jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'p',
+      depts: depts,
+      prefill: {
+        responsible: user.name,
+        dept: jump && jump.dept,
+        month: jump && jump.dept ? jump.month : null,
+        from: jump && jump.from
+      }
+    })), view === 'history' && React.createElement("div", {
+      style: {
+        maxWidth: 1240,
+        margin: '0 auto'
+      }
+    }, React.createElement(CollectorHistory, {
+      month: month,
+      onFixQuality: fillFor,
+      onFixPatient: fillStat
+    })), view === 'roster' && React.createElement(CollectorRoster, null), view === 'profile' && React.createElement(CollectorProfile, {
+      user: user,
+      onNav: go
+    }), view === 'home' && unitScreens && React.createElement(CollectorHome, {
+      user: user,
+      month: month,
+      onNav: go
+    }), view === 'unit' && unitScreens && React.createElement(CollectorUnitStaff, null), view === 'requests' && unitScreens && React.createElement(CollectorStaffRequests, {
+      depts: depts
+    }), view === 'dept' && React.createElement(CollectorDeptStaff, null));
+    if (embedded) {
+      const portalEl = n => typeof ReactDOM !== 'undefined' && ReactDOM.createPortal && typeof document !== 'undefined' ? ReactDOM.createPortal(n, document.body) : n;
+      return React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14
+        }
+      }, missAlert ? portalEl(alertEl) : null, React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap',
+          justifyContent: 'flex-end'
+        }
+      }, React.createElement("div", {
+        style: pill(dueTone),
+        title: "Submission deadline"
+      }, CP_ICON('M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', 14), React.createElement("span", null, dueTxt)), React.createElement("div", {
+        style: pill(online ? ['#12776c', 'rgba(58,181,167,.14)', 'rgba(58,181,167,.3)'] : ['#a92c42', 'rgba(210,58,82,.13)', 'rgba(210,58,82,.28)']),
+        title: "Connection"
+      }, React.createElement("span", {
+        style: {
+          width: 7,
+          height: 7,
+          borderRadius: '50%',
+          background: online ? '#3ddc97' : '#d23a52'
+        }
+      }), online ? 'Online' : 'Offline')), screenOk(view) ? React.createElement("div", null, screens) : React.createElement("div", {
+        style: Object.assign({}, CP_CARD, {
+          padding: 24,
+          color: '#6c7a8c',
+          fontSize: 13
+        })
+      }, "This screen is not part of your Data Submission access. Ask an administrator in Access Control."));
+    }
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        height: '100vh',
+        overflow: 'hidden',
+        background: 'transparent'
+      }
+    }, alertEl, React.createElement("style", null, '@media (max-width:900px){.cp-aside{position:fixed!important;z-index:200;height:100vh;transform:translateX(-100%);transition:transform .22s ease}.cp-aside.cp-open{transform:none}.cp-burger{display:grid!important}}'), sidebarOpen && React.createElement("div", {
       onClick: () => setSidebarOpen(false),
       style: {
         position: 'fixed',
@@ -16148,86 +16538,7 @@
         overflowY: 'auto',
         padding: '22px 26px 64px'
       }
-    }, !hasPatient && !hasQuality && React.createElement("div", {
-      style: Object.assign({}, CP_CARD, {
-        maxWidth: 620,
-        margin: '40px auto',
-        padding: 30,
-        textAlign: 'center'
-      })
-    }, React.createElement("div", {
-      style: {
-        fontSize: 15,
-        fontWeight: 700,
-        color: '#16202e',
-        marginBottom: 6
-      }
-    }, "Nothing is assigned to you yet"), React.createElement("div", {
-      style: {
-        fontSize: 12.5,
-        color: '#6c7a8c'
-      }
-    }, "Your administrator has not given you a department or quality area to report on. Once they do, it appears here.")), view === 'missing' && (hasPatient || hasQuality) && React.createElement(CollectorMissing, {
-      depts: depts,
-      areas: areas,
-      month: month,
-      user: user
-    }), view === 'status' && hasQuality && React.createElement(CollectorDash, {
-      month: month,
-      setMonth: setMonth,
-      onNav: go,
-      onFill: fillFor,
-      user: user
-    }), view === 'quick' && hasPatient && React.createElement(CollectorQuickGrid, {
-      depts: depts,
-      onDone: () => go('history')
-    }), view === 'quality' && hasQuality && React.createElement("div", {
-      style: {
-        maxWidth: 900,
-        margin: '0 auto'
-      }
-    }, React.createElement(DataQualityForm, {
-      key: jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q',
-      prefill: {
-        responsible: user.name,
-        area: jump && jump.area,
-        indicatorId: jump && jump.indicatorId,
-        month: jump && jump.month,
-        from: jump && jump.from
-      }
-    })), view === 'patient' && hasPatient && React.createElement("div", {
-      style: {
-        maxWidth: 900,
-        margin: '0 auto'
-      }
-    }, React.createElement(DataPatientForm, {
-      key: jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'p',
-      depts: depts,
-      prefill: {
-        responsible: user.name,
-        dept: jump && jump.dept,
-        month: jump && jump.dept ? jump.month : null,
-        from: jump && jump.from
-      }
-    })), view === 'history' && React.createElement("div", {
-      style: {
-        maxWidth: 1240,
-        margin: '0 auto'
-      }
-    }, React.createElement(CollectorHistory, {
-      month: month,
-      onFixQuality: fillFor,
-      onFixPatient: fillStat
-    })), view === 'roster' && React.createElement(CollectorRoster, null), view === 'profile' && React.createElement(CollectorProfile, {
-      user: user,
-      onNav: go
-    }), view === 'home' && inCharge && React.createElement(CollectorHome, {
-      user: user,
-      month: month,
-      onNav: go
-    }), view === 'unit' && inCharge && React.createElement(CollectorUnitStaff, null), view === 'requests' && inCharge && React.createElement(CollectorStaffRequests, {
-      depts: depts
-    }), view === 'dept' && React.createElement(CollectorDeptStaff, null))));
+    }, screens)));
   }
   function SubmissionAnalytics() {
     const [rows, setRows] = useState(null);
@@ -17197,6 +17508,8 @@
     }))))))));
   }
   Object.assign(window, {
+    dcMissingSummary,
+    CollectorStaffRequests,
     DcScopeEditor,
     dcScopePayload,
     dcScopeBase,

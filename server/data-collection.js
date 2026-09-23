@@ -330,11 +330,23 @@ function scopeIsNonEmpty(s) {
 // Why an EXISTING account may not be (re)written as a portal login from the matrix, or null.
 // A non-portal role is refused rather than turned into a collector: an in-charge demoted to a
 // 'User' was otherwise silently re-promoted (and its perms dropped) by the next matrix toggle.
+// A normal account ('User') is accepted since Data Submission became a module: assigning
+// it departments here gives it the module too (upsertCollectorUser), never a role change.
 function portalLoginRefusal(u) {
   if (!u) return null;
   if (u.role === 'Administrator') return 'That ID belongs to an administrator.';
-  if (u.role && accessRoles.PORTAL_ROLES.indexOf(u.role) < 0) return 'That ID belongs to a ' + u.role + ' account. Change its role in Settings → Users & Roles first.';
+  if (u.role && u.role !== 'User' && accessRoles.PORTAL_ROLES.indexOf(u.role) < 0) return 'That ID belongs to a ' + u.role + ' account. Change it in Access Control first.';
   return null;
+}
+// Data Submission as a module: the actions a person needs to report their own data.
+const SUBMIT_ACTIONS = ['view', 'edit', 'add'];
+// A normal account given a data-collection assignment also gets the Data Submission
+// module, or the assignment would do nothing. Everything else it holds is kept.
+function withSubmitModule(perms) {
+  const p = (perms && typeof perms === 'object' && !Array.isArray(perms)) ? Object.assign({}, perms) : {};
+  const cur = Array.isArray(p.datasubmit) ? p.datasubmit : [];
+  if (!cur.length) p.datasubmit = SUBMIT_ACTIONS.slice();
+  return p;
 }
 const isDupKey = (e) => !!e && (e.code === 11000 || /E11000/.test(String(e.message || '')));
 // Records minted FOR an account use this fixed id, so concurrent creates converge on one doc.
@@ -483,11 +495,25 @@ async function upsertCollectorUser(opts) {
   if (existing) {
     const refusal = portalLoginRefusal(existing);
     if (refusal) throw new Error(refusal);
-    if (!existing.role) set.role = 'collector';
+    // A legacy row with no role, or a normal account: a normal account holding Data
+    // Submission. An existing legacy portal role is left as it is until it is converted.
+    if (!existing.role || existing.role === 'User') {
+      set.role = 'User';
+      // A record's "active" is its place in the Indicator Access matrix, not the person's
+      // sign-in: a normal account is switched on and off in Access Control only.
+      if (existing.role === 'User') delete set.active;
+      if (!existing.role || !(Array.isArray((existing.perms || {}).datasubmit) && existing.perms.datasubmit.length)) {
+        set.perms = withSubmitModule(existing.perms);
+        set.sessionEpoch = Date.now();   // a new grant takes effect now, not at token expiry
+      }
+    }
     await users.updateOne({ username: empId }, { $set: set });
   } else {
     if (!opts.password) throw new Error('A password is required to create the login for "' + empId + '".');
-    await users.insertOne({ username: empId, ...set, role: 'collector', created_at: Date.now() });
+    // New people are normal accounts holding Data Submission -- no portal role any more.
+    await users.insertOne({ username: empId, ...set, role: 'User', perms: withSubmitModule(null),
+      // rosterScope left unset: rosterDeptNames then holds them to their own departments.
+      staffScope: 'self', sessionEpoch: Date.now(), created_at: Date.now() });
   }
   return { username: empId };
 }
@@ -514,7 +540,9 @@ async function getUserScope(username) {
   const users = await getUsers();
   const u = await users.findOne({ username: String(username).toLowerCase() });
   if (!u) return null;
-  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: u.role === 'incharge', responsibleId: u.responsibleId || null, departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, photo: u.photo || null, email: u.email || null, phone: u.phone || null, designation: u.designation || null, title: u.title || null };
+  const perms = (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null;
+  const unitLead = u.role === 'incharge' || ((u.role || 'User') === 'User' && u.unitLead === true && !!perms && Array.isArray(perms.datasubmit) && perms.datasubmit.length > 0);
+  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: unitLead, unitLead, rosterEdit: u.rosterEdit === true, enterDen: u.enterDen === true, submitKinds: accessRoles.cleanSubmitKinds(u.submitKinds), dsScreens: accessRoles.cleanDsScreens ? accessRoles.cleanDsScreens(u.dsScreens) : null, responsibleId: u.responsibleId || null, departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, photo: u.photo || null, email: u.email || null, phone: u.phone || null, designation: u.designation || null, title: u.title || null };
 }
 
 async function deleteResponsible(id) {
@@ -651,10 +679,12 @@ async function buildQualitySpec(payload) {
         diagnosis: S(x && x.diagnosis), incidentDate: S(x && x.incidentDate), admissionDate: S(x && x.admissionDate), procedureDate: S(x && x.procedureDate),
         // NSI (needle-stick) also records the injured staff member (victim) + their emp id.
         victimName: S(x && x.victimName), victimId: S(x && x.victimId),
+        // Hospital-wide incidents (e.g. NSI on Overall Hospital): the department it happened in.
+        department: S(x && x.department),
         // narrative + CAPA
         details: S(x && x.details), finding: S(x && x.finding), corrective: S(x && x.corrective), preventive: S(x && x.preventive),
         remark: S(x && x.remark),
-      })).filter((x) => x.details || x.finding || x.corrective || x.preventive || x.uhid || x.patientName || x.diagnosis || x.remark || x.victimName || x.victimId || x.incidentDate)
+      })).filter((x) => x.details || x.finding || x.corrective || x.preventive || x.uhid || x.patientName || x.diagnosis || x.remark || x.victimName || x.victimId || x.incidentDate || x.department)
     : null;
   // Derive a NUMERIC benchmark threshold (dashboards/scorecard flag breaches from
   // benchmarkValue; a display string like "≤ 5%" is not enough). Prefer explicit
@@ -1630,20 +1660,22 @@ function mount(app, opts) {
     return mine.includes(s.submittedBy) || !!(s.responsible && mine.includes(s.responsible.name));
   };
   const sendErr = (res, e, fallback) => res.status(e.status || fallback || 400).json({ ok: false, error: String(e.message || e), code: e.code, prior: e.prior, pendingId: e.pendingId });
+  /* Is this caller held to its own departments / areas / indicators? Every legacy portal
+     account is, and so is a normal account holding Data Submission without Data Collection
+     (access.dataScoped). Judged on the RESOLVED live account (req.access, set by
+     requireModule), falling back to the token's role claim only where no resolution ran. */
+  const scopedReq = (req) => (req.access
+    ? accessRoles.dataScoped(req.access)
+    : !!(req.user && accessRoles.PORTAL_ROLES.indexOf(req.user.role) >= 0));
   const filterSubmissionsForUser = async (req, subs) => {
-    // EVERY portal role, not just 'collector'. When this named one role, adding a
+    // EVERY scoped submitter, not just 'collector'. When this named one role, adding a
     // second (incharge) silently handed that account the whole hospital's submissions.
-    if (!req.user || accessRoles.PORTAL_ROLES.indexOf(req.user.role) < 0) return subs;
+    if (!req.user || !scopedReq(req)) return subs;
     const scope = await getUserScope(req.user.sub);
     const names = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
-    let depts = (scope && scope.departments) || [];
-    try {
-      const map = await deptmap.get();
-      const set = new Set(depts);
-      ((scope && scope.qualityAreas) || []).forEach((ak) => { const id = map && map.qkToId && map.qkToId[ak]; if (id && id !== deptmap.HOSPITAL) set.add(id); });
-      if (scope && scope.allQualityAreas) (map.patientDepts || []).forEach((id) => set.add(id));
-      depts = [...set];
-    } catch (e) { /* keep stored dept scope */ }
+    // Patient statistics: the ASSIGNED departments only — quality areas (even hospital-wide)
+    // give quality data, never a department's statistics (web.js effectiveDeptIds).
+    const depts = (scope && scope.departments) || [];
     const areas = (scope && scope.qualityAreas) || [];
     const me = String(req.user.sub || '').toLowerCase();
     return (subs || []).filter((s) => (s.submittedByUser && String(s.submittedByUser).toLowerCase() === me) || names.includes(s.submittedBy)
@@ -1668,20 +1700,12 @@ function mount(app, opts) {
   // Collectors may only submit for departments/quality areas they are assigned to. Admins
   // and open local mode (no req.user) are unrestricted. Returns an error string, or null.
   const denyIfOutOfScope = async (req, kind, target) => {
-    if (!req.user || accessRoles.PORTAL_ROLES.indexOf(req.user.role) < 0) return null;
+    if (!req.user || !scopedReq(req)) return null;
     const scope = await getUserScope(req.user.sub);
     const what = kind === 'patient' ? 'department' : 'quality area';
     if (!target) return 'A ' + what + ' is required.';
-    let allowed = kind === 'patient' ? ((scope && scope.departments) || []) : ((scope && scope.qualityAreas) || []);
-    if (kind === 'patient') {
-      try {
-        const map = await deptmap.get();
-        const set = new Set(allowed);
-        ((scope && scope.qualityAreas) || []).forEach((ak) => { const id = map && map.qkToId && map.qkToId[ak]; if (id && id !== deptmap.HOSPITAL) set.add(id); });
-        if (scope && scope.allQualityAreas) (map.patientDepts || []).forEach((id) => set.add(id));
-        allowed = [...set];
-      } catch (e) { /* fall back to stored department scope */ }
-    }
+    // Patient statistics: the assigned departments only; quality: the assigned areas.
+    const allowed = kind === 'patient' ? ((scope && scope.departments) || []) : ((scope && scope.qualityAreas) || []);
     if (!allowed.includes(target)) return 'You are not assigned to that ' + what + '.';
     return null;
   };
@@ -1696,7 +1720,7 @@ function mount(app, opts) {
     try { await deleteResponsible(req.params.id); res.json({ ok: true }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
 
-  const isPortalReq = (req) => !!(req.user && accessRoles.PORTAL_ROLES.indexOf(req.user.role) >= 0);
+  const isPortalReq = (req) => !!req.user && scopedReq(req);
   // A portal account reports as ITSELF. The client locked the responsible person for 'collector'
   // only, so an in-charge could file a report under anyone's name — the server now stamps the
   // signed-in person whatever the body says. Admins may still name any responsible person.
@@ -1733,7 +1757,7 @@ function mount(app, opts) {
   });
   app.get('/api/submissions/stats', guard, async (req, res) => {
     try {
-      if (req.user && accessRoles.PORTAL_ROLES.indexOf(req.user.role) >= 0) {
+      if (isPortalReq(req)) {
         let all = [], page, offset = 0;
         do { page = await getSubmissions({ limit: 1000, offset }); all.push(...page); offset += page.length; } while (page.length === 1000);
         const subs = await filterSubmissionsForUser(req, all);
@@ -1744,26 +1768,30 @@ function mount(app, opts) {
   });
   app.post('/api/submissions/patient', guard, async (req, res) => {
     try {
+      if (req.access && !accessRoles.maySubmitKind(req.access, 'patient')) return res.status(403).json({ ok: false, error: 'Your account is not set up to submit patient statistics.' });
       const deny = await denyIfOutOfScope(req, 'patient', String((req.body && req.body.department) || '').trim());
       if (deny) return res.status(403).json({ ok: false, error: deny });
-      const meta = { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req) };
+      const meta ={ submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req) };
       const own = await portalResponsible(req); if (own) meta.responsible = own;
       res.json(await submitPatient(req.body || {}, meta));
     } catch (e) { sendErr(res, e); }
   });
   app.post('/api/submissions/quality', guard, async (req, res) => {
     try {
+      if (req.access && !accessRoles.maySubmitKind(req.access, 'quality')) return res.status(403).json({ ok: false, error: 'Your account is not set up to submit quality indicator data.' });
       const deny = await denyIfOutOfScope(req, 'quality', String((req.body && req.body.area) || '').trim());
       if (deny) return res.status(403).json({ ok: false, error: deny });
       // Area access alone isn't the whole scope: a collector limited to specific indicators
       // (qualityIndicators[area] non-empty) may report only those. Empty/absent = all.
       let indicatorAllowed = null;
-      if (req.user && accessRoles.PORTAL_ROLES.indexOf(req.user.role) >= 0) {
+      if (isPortalReq(req)) {
         const scope = await getUserScope(req.user.sub);
         const qi = (scope && scope.qualityIndicators) || {};
         indicatorAllowed = (area, id) => !(Array.isArray(qi[area]) && qi[area].length) || qi[area].map(String).includes(String(id));
       }
-      const meta = { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req), lockAdminDen: isPortalReq(req) };
+      // Admin-owned denominators stay locked for a submitter unless an admin allowed THIS person (enterDen).
+      const lockDen = isPortalReq(req) && !(((await getUserScope(req.user.sub)) || {}).enterDen);
+      const meta = { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req), lockAdminDen: lockDen };
       const own = await portalResponsible(req); if (own) meta.responsible = own;
       res.json(await submitQuality(req.body || {}, meta, indicatorAllowed));
     } catch (e) { sendErr(res, e); }
@@ -1883,7 +1911,7 @@ function mount(app, opts) {
         if (isAdmin && b.department) { patch.department = String(b.department).trim(); if (b.departmentName) patch.departmentName = String(b.departmentName).trim(); }
       } else if (s.type === 'quality') {
         // Same rule as the submit route: a portal account's edit cannot set an admin-owned denominator.
-        if (isPortalReq(req) && (b.den != null || b.groupsDen != null) && (await denIsAdminOnly(s))) { delete b.den; delete b.groupsDen; }
+        if (isPortalReq(req) && (b.den != null || b.groupsDen != null) && !(((await getUserScope(req.user.sub)) || {}).enterDen) && (await denIsAdminOnly(s))) { delete b.den; delete b.groupsDen; }
         ['value', 'num', 'den'].forEach((key) => { if (b[key] != null && b[key] !== '') numericReading(b[key], key); });
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
         if (b.num != null && b.num !== '' && !isNaN(Number(b.num))) patch.num = Number(b.num);   // rate numerator
@@ -1913,7 +1941,7 @@ function mount(app, opts) {
         if (isAdmin && b.area) { patch.area = String(b.area).trim(); if (b.areaName) patch.areaName = String(b.areaName).trim(); }
         // Edit the incident/patient/CAPA details attached to this quality submission.
         if (Array.isArray(b.incidents)) {
-          const IF = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'details', 'finding', 'corrective', 'preventive', 'remark'];
+          const IF = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'department', 'details', 'finding', 'corrective', 'preventive', 'remark'];
           patch.incidents = b.incidents.map((x) => { const o = {}; IF.forEach((k) => { if (x && x[k] != null && x[k] !== '') o[k] = String(x[k]); }); return o; }).filter((o) => Object.keys(o).length);
         }
       }
@@ -2003,7 +2031,9 @@ function mount(app, opts) {
     if (!signupAllowed()) return res.status(403).type('html').send(signupPage({ error: 'Self sign-up is disabled. Ask an administrator to create your account.' }));
     try {
       const r = await registerCollector({ name: req.body && req.body.name, empId: req.body && req.body.empId, password: req.body && req.body.password });
-      session.setSession(res, auth.sign({ username: r.username, role: 'collector', name: (req.body && req.body.name) || r.username }));
+      // Signed from the STORED account, so the token carries its role and sessionEpoch.
+      const fresh = await (await getUsers()).findOne({ username: r.username });
+      session.setSession(res, auth.sign(fresh || { username: r.username, role: 'User', name: (req.body && req.body.name) || r.username }));
       res.redirect(302, '/collect');
     } catch (e) {
       res.status(400).type('html').send(signupPage({ error: String(e.message || e), name: req.body && req.body.name, empId: req.body && req.body.empId }));

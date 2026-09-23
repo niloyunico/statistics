@@ -107,6 +107,7 @@
     const [designation, setDesignation] = useState((u && u.designation) || '');
     const [email, setEmail] = useState((u && u.email) || '');
     const [phone, setPhone] = useState((u && u.phone) || '');
+    const [workDept, setWorkDept] = useState((u && u.workDepartment) || '');
 
     const [cur, setCur] = useState(''); const [nw, setNw] = useState(''); const [nw2, setNw2] = useState('');
     const [busy, setBusy] = useState(false);
@@ -116,9 +117,28 @@
 
     useEffect(() => { document.title = 'My Profile · UNICO'; }, []);
 
+    // This person's own record on the staff register (designation, department, joining
+    // date, licence …). Read from the server so it shows for every account, including
+    // ones without the staff module. Read-only here: Nursing Services keeps the register.
+    const [staff, setStaff] = useState(undefined);
+    useEffect(() => {
+      if (!u) { setStaff(null); return; }
+      let live = true;
+      fetch('/api/me/staff', { credentials: 'same-origin', cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null)).then((j) => {
+          if (!live) return; const st = (j && j.staff) || null; setStaff(st);
+          if (st && !(u && u.designation) && st.designation) setDesignation((v) => v || st.designation);
+          if (st && !(u && u.workDepartment) && st.current_department) setWorkDept((v) => v || st.current_department);
+        })
+        .catch(() => { if (live) setStaff(null); });
+      return () => { live = false; };
+    }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+    const baseDesig = (u && u.designation) || (staff && staff.designation) || '';
+    const baseDept = (u && u.workDepartment) || (staff && staff.current_department) || '';
     const dirty = u ? (
       name !== (u.name || '') || email !== (u.email || '') ||
-      phone !== (u.phone || '') || designation !== (u.designation || '')
+      phone !== (u.phone || '') || designation !== baseDesig || workDept !== baseDept
     ) : false;
 
     async function saveProfile() {
@@ -129,8 +149,8 @@
         // record the way an earlier version of this page did.
         const cleanPhone = (u && phone && phone.trim().toLowerCase() === String(u.username).toLowerCase()) ? '' : phone;
         if (cleanPhone !== phone) setPhone(cleanPhone);
-        await api('PATCH', '/api/me', { name, email, phone: cleanPhone, designation });
-        if (window.__UNICO_USER__) Object.assign(window.__UNICO_USER__, { name, email, phone: cleanPhone, designation });
+        await api('PATCH', '/api/me', { name, email, phone: cleanPhone, designation, workDepartment: workDept });
+        if (window.__UNICO_USER__) Object.assign(window.__UNICO_USER__, { name, email, phone: cleanPhone, designation, workDepartment: workDept });
         setMsg({ kind: 'ok', text: 'Profile saved.' });
       } catch (e) { setMsg({ kind: 'err', text: String((e && e.message) || e) }); }
       finally { setBusy(false); }
@@ -151,7 +171,7 @@
 
     const roleLabel = !u ? 'Local session'
       : (u.role === 'collector' ? 'Data Collector' : (u.role === 'incharge' ? 'In-charge' : (u.role || 'User')));
-    const idText = (u && u.username) || '— — — —';
+    const idText = (staff && staff.emp_id) || (u && u.username) || '— — — —';
 
     // ---- Access: what this account actually holds, read from the live perms map ----
     const access = useMemo(() => {
@@ -173,6 +193,16 @@
       if (!ids.length) return [];
       return ids.map((id) => (map && map.byId && map.byId[id] && map.byId[id].name) || id);
     }, [u]);
+
+    // Suggestions for the Department / Designation boxes: Nursing Service first, then the
+    // staff record, the account's departments and every department the app knows.
+    const deptOptions = useMemo(() => {
+      const DM = window.DEPTMAP; const ids = (DM && DM.patientDeptIds) ? DM.patientDeptIds() : [];
+      const names = ids.map((id) => (DM.nameFromId && DM.nameFromId(id)) || id);
+      const q = (window.QUALITY_SEED || []).map((a) => a && a.name).filter(Boolean);
+      return Array.from(new Set(['Nursing Service', staff && staff.current_department].concat(deptNames, names, q).filter(Boolean)));
+    }, [staff, deptNames]);
+    const desigOptions = useMemo(() => Array.from(new Set([staff && staff.designation, 'Director of Nursing', 'Deputy Director of Nursing', 'Nursing Supervisor', 'Nurse In-charge', 'Infection Control Nurse', 'Quality Nurse', 'Senior Staff Nurse', 'Staff Nurse', 'Junior Staff Nurse', 'Patient Care Assistant'].filter(Boolean))), [staff]);
 
     const scopeText = !u ? 'All staff'
       : (u.staffScope === 'self' ? 'Own record only' : (u.staffScope === 'departments' ? 'Own departments' : 'All staff'));
@@ -245,7 +275,7 @@
                 {name || (u && u.username) || 'Local Administrator'}
               </h2>
               <div style={{ fontSize: 12.5, color: 'var(--blue-700)', fontWeight: 700, textAlign: 'center' }}>
-                {designation || roleLabel}
+                {designation || (staff && staff.designation) || roleLabel}
               </div>
             </div>
 
@@ -254,6 +284,8 @@
               {[
                 ['ID No.', idText],
                 ['Role', roleLabel],
+                ['Dept.', workDept || (staff && staff.current_department) || 'Not recorded'],
+                ...(staff ? [['Joined', staff.doj || 'Not recorded']] : []),
                 ['Phone', phone || 'Not recorded'],
                 ['Email', email || 'Not recorded'],
               ].map(([l, v], i) => (
@@ -279,6 +311,47 @@
           {/* ============ the quiet column ============ */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
+            {u && (
+              <div className="card">
+                <div className="card-h"><h3>Staff information</h3><span className="sub" style={{ marginLeft: 'auto' }}>From the staff register</span></div>
+                <div className="card-b">
+                  {staff === undefined ? (
+                    <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>Loading your staff record…</div>
+                  ) : !staff ? (
+                    <div style={{ fontSize: 12.5, color: '#8a5a00', background: 'var(--warn-bg,#fff4e0)', border: '1px solid #f0d9a8', borderRadius: 8, padding: '10px 12px' }}>
+                      Your account is not linked to a staff record yet. Ask the administrator to link it (Access Control → your account), or check that your employee ID is on the staff register.
+                    </div>
+                  ) : (
+                    <React.Fragment>
+                      <div className="duo">
+                        {[
+                          ['Employee ID', staff.emp_id],
+                          ['Designation', staff.designation],
+                          ['Department', staff.current_department],
+                          ['Primary department', staff.primary_department],
+                          ['Date of joining', staff.doj],
+                          ['Category', staff.role || staff.category || staff.staff_type],
+                          ['Qualification', staff.qualification || staff.education],
+                          ['Date of birth', staff.dob],
+                          ['Gender', staff.gender],
+                          ['Blood group', staff.blood_group],
+                          ['Phone (register)', staff.phone || staff.mobile],
+                          ['Registration / licence', [staff.licence_no, staff.licence_expiry && ('expires ' + staff.licence_expiry)].filter(Boolean).join(' · ')],
+                          ['Hepatitis B', staff.hepatitis_b_vaccination],
+                        ].filter(([, v]) => v != null && String(v).trim() !== '').map(([l, v]) => (
+                          <div key={l} style={{ background: 'var(--panel-2)', borderRadius: 9, padding: '8px 11px', minWidth: 0 }}>
+                            <div style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.6px', color: 'var(--muted)', fontWeight: 700, marginBottom: 3 }}>{l}</div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', overflowWrap: 'anywhere' }}>{String(v)}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 10 }}>Something wrong here? Nursing Services updates the staff register.</div>
+                    </React.Fragment>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="card">
               <div className="card-h"><h3>Details</h3><span className="sub" style={{ marginLeft: 'auto' }}>{dirty ? 'Unsaved changes' : 'Everything saved'}</span></div>
               <form className="card-b" autoComplete="off" onSubmit={(e) => { e.preventDefault(); if (u && dirty && !busy) saveProfile(); }}
@@ -287,9 +360,16 @@
                 <Field label="Full name" hint="Shown on reports you sign and everywhere your account appears.">
                   <input style={txt} name="fullname" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your full name" disabled={!u} />
                 </Field>
-                <Field label="Designation" hint="Free text, e.g. Nursing Supervisor. Does not affect your access.">
-                  <input style={txt} name="designation" autoComplete="organization-title" value={designation} onChange={(e) => setDesignation(e.target.value)} placeholder="Your job title" disabled={!u} />
-                </Field>
+                <div className="duo">
+                  <Field label="Department" hint="Where you work. Pick from the list or type. Does not affect your access.">
+                    <input style={txt} name="workdept" list="unico-prof-depts" autoComplete="off" value={workDept} onChange={(e) => setWorkDept(e.target.value)} placeholder="e.g. Nursing Service" disabled={!u} />
+                    <datalist id="unico-prof-depts">{deptOptions.map((d) => <option key={d} value={d} />)}</datalist>
+                  </Field>
+                  <Field label="Designation" hint="Your job title, e.g. Nursing Supervisor. Does not affect your access.">
+                    <input style={txt} name="designation" list="unico-prof-desigs" autoComplete="organization-title" value={designation} onChange={(e) => setDesignation(e.target.value)} placeholder="Your job title" disabled={!u} />
+                    <datalist id="unico-prof-desigs">{desigOptions.map((d) => <option key={d} value={d} />)}</datalist>
+                  </Field>
+                </div>
                 <div className="duo">
                   <Field label="Email">
                     <input style={txt} type="email" name="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@unicohospitals.com" disabled={!u} />

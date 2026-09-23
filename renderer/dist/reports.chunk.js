@@ -3840,8 +3840,8 @@ function Reports({
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
-const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Settings', 'Administer', '']];
-const MOD_GROUPS = ['Clinical', 'Data', 'Administer'];
+const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
+const MOD_GROUPS = ['Clinical', 'Data', 'Administer', 'Phone'];
 const modsGrouped = list => MOD_GROUPS.map(g => [g, list.filter(m => m[2] === g)]).filter(([, ms]) => ms.length);
 const PERM_LEVELS = [['none', 'None'], ['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
 const PERM_RANK = {
@@ -3867,99 +3867,6 @@ const PORTAL_ROLE_LABEL = {
   incharge: 'In-charge (portal)',
   nurse: 'Nurse (portal)',
   pca: 'PCA (portal)'
-};
-const TIER_ADMIN = 'admin',
-  TIER_PORTAL = 'portal';
-const TIER_FALLBACK = () => [{
-  id: TIER_ADMIN,
-  name: 'Administrator',
-  rank: 0,
-  kind: 'admin',
-  fixed: true,
-  description: 'Runs the system. Every module, nothing to tick.',
-  modules: USER_MODS.map(([k]) => k)
-}, {
-  id: 'cns',
-  name: 'Chief of Nursing Services',
-  rank: 10,
-  kind: 'console',
-  fixed: false,
-  description: 'Head of the nursing department — the main HOD, and the final approver.',
-  modules: USER_MODS.map(([k]) => k)
-}, {
-  id: 'nurse-manager',
-  name: 'Nurse Manager',
-  rank: 20,
-  kind: 'console',
-  fixed: false,
-  description: 'Runs a cluster of wards: their people, rosters, appraisals and numbers.',
-  modules: USER_MODS.map(([k]) => k).filter(k => k !== 'users')
-}, {
-  id: 'ward-incharge',
-  name: 'Ward In-charge',
-  rank: 30,
-  kind: 'console',
-  fixed: false,
-  description: 'Runs one unit: its roster, its submissions and its supervision.',
-  modules: ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'perf', 'roster']
-}, {
-  id: TIER_PORTAL,
-  name: 'Portal account',
-  rank: 9999,
-  kind: 'portal',
-  fixed: true,
-  description: 'Signs in to the collection portal or the staff app. Created and scoped in Data Collection.',
-  modules: []
-}];
-let TIER_CACHE = null;
-let TIER_REQ = null;
-function loadTiers(force) {
-  if (!force && TIER_CACHE) return Promise.resolve(TIER_CACHE);
-  if (!force && TIER_REQ) return TIER_REQ;
-  TIER_REQ = usersApi('GET', '/api/tiers').then(j => {
-    TIER_CACHE = (j.tiers || []).length ? j.tiers : TIER_FALLBACK();
-    TIER_REQ = null;
-    return TIER_CACHE;
-  }).catch(() => {
-    TIER_CACHE = TIER_FALLBACK();
-    TIER_REQ = null;
-    return TIER_CACHE;
-  });
-  return TIER_REQ;
-}
-function useTiers() {
-  const [t, setT] = React.useState(TIER_CACHE);
-  React.useEffect(() => {
-    let live = true;
-    loadTiers().then(x => {
-      if (live) setT(x);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-  return t || TIER_CACHE || TIER_FALLBACK();
-}
-const byRank = (a, b) => a.rank - b.rank || String(a.name).localeCompare(String(b.name));
-const placeableTiers = ts => ts.filter(t => t.kind !== 'portal').slice().sort(byRank);
-const tierById = (ts, id) => ts.find(t => t.id === id) || null;
-const widestTier = ts => {
-  const c = ts.filter(t => t.kind === 'console');
-  return c.length ? c.reduce((a, b) => (b.modules || []).length > (a.modules || []).length ? b : a) : null;
-};
-const tierOfUser = (u, ts) => {
-  if (!u) return null;
-  if (u.role === 'Administrator') return TIER_ADMIN;
-  if (PORTAL_ROLE_LABEL[u.role]) return TIER_PORTAL;
-  const hit = u.level && tierById(ts, u.level);
-  return hit ? hit.id : (widestTier(ts) || {}).id || null;
-};
-const tierName = (ts, id) => (tierById(ts, id) || {}).name || '—';
-const modsForTier = t => {
-  if (!t) return [];
-  if (t.kind === 'admin') return USER_MODS;
-  const a = t.modules || [];
-  return USER_MODS.filter(([k]) => a.indexOf(k) >= 0);
 };
 const FULL_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = [...PERM_ORDER], m), {});
 const NONE_PERMS = () => USER_MODS.reduce((m, [k]) => (m[k] = [], m), {});
@@ -4284,8 +4191,8 @@ function UserModal({
   onClose,
   onSaved,
   depts,
-  onManageTiers,
-  allUsers
+  allUsers,
+  inline
 }) {
   const {
     useState
@@ -4296,14 +4203,14 @@ function UserModal({
   const [email, setEmail] = useState(editing ? initial.email || '' : '');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState(editing ? initial.active !== false ? 'active' : 'inactive' : 'active');
-  const tiers = useTiers();
-  const isPortalAcct = editing && !!PORTAL_ROLE_LABEL[initial.role];
+  const [converted, setConverted] = useState(false);
+  const isPortalAcct = editing && !!PORTAL_ROLE_LABEL[initial.role] && !converted;
   const portalRole = isPortalAcct ? initial.role : null;
-  const [level, setLevel] = useState(editing && initial.role === 'Administrator' ? TIER_ADMIN : editing ? initial.level || null : null);
-  React.useEffect(() => {
-    if (!isPortalAcct && level && !tierById(tiers, level) && tiers.length) setLevel(null);
-  }, [tiers]);
-  const tier = isPortalAcct ? null : tierById(tiers, level);
+  const [accessType, setAccessType] = useState(editing && initial.role === 'Administrator' ? 'full' : 'custom');
+  const [signoff, setSignoff] = useState(editing && typeof initial.signoff === 'string' ? initial.signoff : '');
+  const [signoffSet, setSignoffSet] = useState(!editing || !initial.signoffInherited);
+  const [copyFrom, setCopyFrom] = useState('');
+  const [sec, setSec] = useState('account');
   const [perms, setPerms] = useState(() => {
     if (editing && initial.role === 'Administrator') return FULL_PERMS();
     const src = editing && initial.perms ? {
@@ -4317,6 +4224,23 @@ function UserModal({
   const [rosterScope, setRosterScope] = useState(editing ? initial.rosterScope || null : 'all');
   const [rosterDepts, setRosterDepts] = useState(editing && Array.isArray(initial.rosterDepartments) ? initial.rosterDepartments : []);
   const [rosterEdit, setRosterEdit] = useState(editing && initial.rosterEdit === true);
+  const [unitLead, setUnitLead] = useState(!!(editing && (initial.role === 'incharge' || initial.unitLead === true)));
+  const [enterDen, setEnterDen] = useState(!!(editing && initial.enterDen === true));
+  const DS_ALL = (window.UNICO_DS_SCREENS || []).map(s => s[0]);
+  const DS_UNIT = [];
+  const [dsScreens, setDsScreens] = useState(() => {
+    if (editing && Array.isArray(initial.dsScreens)) return initial.dsScreens.slice();
+    const k = editing && initial.submitKinds || {};
+    const lead = !!(editing && (initial.role === 'incharge' || initial.unitLead === true));
+    return DS_ALL.filter(s => (s !== 'patient' || k.patient !== false) && (s !== 'quality' && s !== 'status' || k.quality !== false) && (lead || DS_UNIT.indexOf(s) < 0));
+  });
+  const hasScreen = s => dsScreens.indexOf(s) >= 0;
+  const toggleScreen = s => setDsScreens(l => l.indexOf(s) >= 0 ? l.filter(x => x !== s) : DS_ALL.filter(x => x === s || l.indexOf(x) >= 0));
+  const submitKinds = {
+    patient: hasScreen('patient'),
+    quality: hasScreen('quality') || hasScreen('status')
+  };
+  const [appRole, setAppRole] = useState(editing && (initial.role === 'pca' || initial.appRole === 'pca') ? 'pca' : 'nurse');
   const [staffId, setStaffId] = useState(editing && (initial.staffId === 0 || initial.staffId) ? initial.staffId : '');
   const allDepts = React.useMemo(() => {
     try {
@@ -4341,11 +4265,25 @@ function UserModal({
   const toggleDept = id => setStaffDepts(ds => ds.indexOf(id) >= 0 ? ds.filter(x => x !== id) : [...ds, id]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const isAdmin = !!tier && tier.kind === 'admin';
+  const isAdmin = !isPortalAcct && accessType === 'full';
   const isColl = isPortalAcct;
-  const collects = isPortalAcct && (portalRole === 'collector' || portalRole === 'incharge');
+  const submits = !isPortalAcct && !isAdmin && asActions(perms.datasubmit).length > 0;
+  const collects = isPortalAcct && (portalRole === 'collector' || portalRole === 'incharge') || submits;
+  const hasStaffApp = !isPortalAcct && !isAdmin && asActions(perms.staffapp).length > 0;
   const rosterEditable = isPortalAcct && portalRole === 'incharge';
-  const scopeInit = !!(editing && (initial.role === 'collector' || initial.role === 'incharge'));
+  const convert = () => {
+    const r = initial.role;
+    setConverted(true);
+    setAccessType('custom');
+    const next = NONE_PERMS();
+    if (r === 'collector' || r === 'incharge') next.datasubmit = ['view', 'edit', 'add'];
+    if (r === 'nurse' || r === 'pca') next.staffapp = ['view'];
+    setPerms(next);
+    if (r === 'incharge') setUnitLead(true);
+    if (r === 'pca') setAppRole('pca');
+    if (r === 'collector' || r === 'incharge' || r === 'nurse' || r === 'pca') setStaffScope('self');
+  };
+  const scopeInit = !!(editing && (initial.role === 'collector' || initial.role === 'incharge' || (initial.role || 'User') === 'User' && asActions((initial.perms || {}).datasubmit).length > 0));
   const scope0 = React.useRef(null);
   if (!scope0.current) scope0.current = {
     departments: scopeInit && Array.isArray(initial.departments) ? initial.departments.slice() : [],
@@ -4412,17 +4350,28 @@ function UserModal({
   }, [collects]);
   const linkedRespId = editing ? initial.responsibleId || ((resps || []).find(r => String(r.empId || '').toLowerCase() === initial.username) || {}).id || null : null;
   const ScopeEditor = window.DcScopeEditor;
-  const pickLevel = id => {
-    const from = tier;
-    setLevel(id);
-    const next = tierById(tiers, id);
-    if (!next || next.kind !== 'console') return;
-    if (from && from.kind === 'admin') {
-      setPerms(NONE_PERMS());
+  const pickAccess = t => {
+    if (t === accessType) return;
+    if (accessType === 'full') setPerms(NONE_PERMS());
+    setAccessType(t);
+  };
+  const quickSet = kind => {
+    setCopyFrom('');
+    if (kind === 'none') setPerms(NONE_PERMS());else if (kind === 'view') setPerms(USER_MODS.reduce((m, [k]) => (m[k] = ['view'], m), {}));
+  };
+  const copyAccess = uname => {
+    const src = (allUsers || []).find(x => x.username === uname);
+    setCopyFrom(uname);
+    if (!src) return;
+    if (src.role === 'Administrator') {
+      setPerms(FULL_PERMS());
       return;
     }
-    const allow = next.modules || [];
-    setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = allow.indexOf(k) >= 0 ? asActions(p[k]) : [], m), {}));
+    const p = {
+      ...NONE_PERMS(),
+      ...(src.perms || {})
+    };
+    setPerms(USER_MODS.reduce((m, [k]) => (m[k] = asActions(p[k]), m), {}));
   };
   const toggleAct = (mid, act) => {
     setPerms(p => {
@@ -4449,22 +4398,21 @@ function UserModal({
       if (password.length < 6) return setErr('Password must be at least 6 characters.');
     }
     if (!name.trim()) return setErr('Full name is required.');
-    if (!isPortalAcct && !level) return setErr('Choose a hierarchy level for this account.');
     if (email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErr('Enter a valid email (or leave it blank).');
     const sendScope = collects && !!ScopeEditor && !!window.dcScopePayload && !scopeLoadFailed;
     if (sendScope && !scopeReady) return setErr('Still loading this account’s data collection scope — try again in a moment.');
+    if (submits && !dsScreens.length) return setErr('Data Submission: tick at least one screen they can open.');
     setBusy(true);
     try {
       const backendRole = isAdmin ? 'Administrator' : isPortalAcct ? portalRole : 'User';
-      const granted = (tier && tier.modules || []).reduce((m, k) => (m[k] = asActions(perms[k]), m), {});
+      const granted = USER_MODS.reduce((m, [k]) => (m[k] = asActions(perms[k]), m), {});
       const payload = {
         name: name.trim(),
         email: email.trim().toLowerCase(),
-        title: isAdmin || isColl ? null : tierName(tiers, level),
         active: status === 'active',
-        perms: isAdmin || isColl ? null : granted,
-        level: isPortalAcct ? undefined : level
+        perms: isAdmin || isColl ? null : granted
       };
+      if (!isColl && signoffSet) payload.signoff = signoff || '';
       if (!editing || backendRole !== (initial.role || 'User')) payload.role = backendRole;
       if (sendScope) {
         const base = scopeBase.current || (window.dcScopeBase ? window.dcScopeBase(scope0.current) : undefined);
@@ -4476,7 +4424,14 @@ function UserModal({
       }
       if (!isAdmin && !isColl) {
         payload.staffScope = staffScope;
-        payload.departments = staffScope === 'departments' ? staffDepts : [];
+        if (!submits) payload.departments = staffScope === 'departments' ? staffDepts : [];
+        payload.unitLead = submits && unitLead;
+        payload.enterDen = submits && enterDen;
+        if (submits) {
+          payload.dsScreens = dsScreens;
+          payload.submitKinds = submitKinds;
+        }
+        if (hasStaffApp) payload.appRole = appRole;
         if (rosterScope) {
           payload.rosterScope = rosterScope;
           payload.rosterDepartments = rosterScope === 'departments' ? rosterDepts : [];
@@ -4521,7 +4476,273 @@ function UserModal({
     print: '#6a52d4'
   };
   const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
-  return toBody(React.createElement("div", {
+  const scopeBlock = React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 3
+    }
+  }, isColl ? 'Data collection scope' : 'Data Submission — what they report', " ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 ", isColl ? PORTAL_ROLE_LABEL[portalRole] + ' — signs in to the portal only' : 'their departments, areas and indicators')), !isColl && React.createElement("div", {
+    style: {
+      margin: '4px 0 12px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 8,
+      marginBottom: 6,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--ink-2)'
+    }
+  }, "Screens they can open"), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)'
+    }
+  }, "\xB7 each one is a sub-item under Data Submission in their sidebar"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => setDsScreens(DS_ALL.filter(s => unitLead || DS_UNIT.indexOf(s) < 0))
+  }, "All"), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => setDsScreens([])
+  }, "None")), [['Submitting data', ['missing', 'status', 'quality', 'patient', 'history']]].map(([grp, ids]) => React.createElement("div", {
+    key: grp,
+    style: {
+      marginBottom: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: 'var(--faint)',
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      marginBottom: 5
+    }
+  }, grp), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, ids.map(id => {
+    const row = (window.UNICO_DS_SCREENS || []).find(x => x[0] === id);
+    if (!row) return null;
+    const needLead = DS_UNIT.indexOf(id) >= 0 && !unitLead;
+    const on = hasScreen(id) && !needLead;
+    return React.createElement("button", {
+      key: id,
+      type: "button",
+      disabled: needLead,
+      onClick: () => toggleScreen(id),
+      "aria-pressed": on,
+      title: needLead ? 'Turn on “Runs this unit” below first' : '',
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        font: 'inherit',
+        cursor: needLead ? 'not-allowed' : 'pointer',
+        padding: '6px 11px',
+        borderRadius: 8,
+        fontSize: 12,
+        fontWeight: 600,
+        opacity: needLead ? .45 : 1,
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue-50)' : '#fff',
+        color: on ? 'var(--blue-700)' : 'var(--ink-2)'
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 13,
+        height: 13,
+        borderRadius: 4,
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0,
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue)' : '#fff'
+      }
+    }, on && React.createElement(Ic, {
+      d: I.check,
+      s: 9,
+      c: "#fff",
+      sw: 3
+    })), row[2]);
+  })))), submitKinds.quality && React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 10,
+      margin: '4px 0 10px',
+      padding: '10px 12px',
+      borderRadius: 9,
+      border: '1px solid ' + (enterDen ? 'var(--blue-100)' : 'var(--line)'),
+      background: enterDen ? 'var(--blue-50)' : '#fff'
+    }
+  }, React.createElement("button", {
+    type: "button",
+    role: "switch",
+    "aria-checked": enterDen,
+    onClick: () => setEnterDen(v => !v),
+    style: {
+      flexShrink: 0,
+      marginTop: 1,
+      width: 34,
+      height: 19,
+      borderRadius: 10,
+      border: 0,
+      padding: 2,
+      cursor: 'pointer',
+      background: enterDen ? 'var(--blue)' : '#c9d2de',
+      transition: 'background .15s'
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'block',
+      width: 15,
+      height: 15,
+      borderRadius: '50%',
+      background: '#fff',
+      transform: enterDen ? 'translateX(15px)' : 'none',
+      transition: 'transform .15s'
+    }
+  })), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, "May enter administrator-set totals"), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginTop: 2
+    }
+  }, enterDen ? 'On — they can fill figures like “Total healthcare workers” (NSI) themselves.' : 'Off — figures like “Total healthcare workers” (NSI) stay read-only for them; only an administrator sets them.'))), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: dsScreens.length ? 'var(--muted)' : 'var(--rose)',
+      fontWeight: dsScreens.length ? 400 : 600
+    }
+  }, !dsScreens.length ? 'Tick at least one screen.' : 'They may send ' + [submitKinds.patient && 'patient statistics', submitKinds.quality && 'quality indicator data'].filter(Boolean).join(' and ') + (submitKinds.patient || submitKinds.quality ? '' : 'nothing (view only)') + '. The duty roster, their unit’s staff and nurse / PCA requests are the Duty Roster and Staff Management modules above.')), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginBottom: 9
+    }
+  }, "The departments they report, the quality areas those give (plus any extra), and optionally which indicators. Saved with the account and shown in ", React.createElement("b", null, "Indicator Access"), "."), !ScopeEditor ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--ink-2)',
+      background: 'var(--blue-50)',
+      border: '1px solid var(--blue-100)',
+      borderRadius: 9,
+      padding: '12px 14px'
+    }
+  }, "The data collection module is not loaded, so the scope cannot be edited here. The current assignment is kept when you save.") : scopeLoadFailed ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#8a5a00',
+      background: '#fff8e9',
+      border: '1px solid #f1d49a',
+      borderRadius: 9,
+      padding: '12px 14px'
+    }
+  }, "Couldn\u2019t load this account\u2019s current data collection assignment. Close and reopen Manage to edit it \u2014 saving now keeps the stored assignment unchanged.") : !scopeReady ? React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)',
+      padding: '8px 0'
+    }
+  }, "Loading assignment\u2026") : React.createElement(ScopeEditor, {
+    value: scope,
+    onChange: editScope,
+    depts: depts,
+    exceptResponsibleId: linkedRespId,
+    persons: resps || U_NO_RESPS
+  }));
+  const modsOn = USER_MODS.filter(([k]) => asActions(perms[k]).length).length;
+  const SECS = [['account', 'Account', 'Name, password, status, sign-off'], ['access', 'Module access', isAdmin ? 'Full access' : isColl ? 'Old portal login' : modsOn + ' module' + (modsOn === 1 ? '' : 's')], ...(collects ? [['data', 'Data Submission', (dsScreens.length || 0) + ' screen' + (dsScreens.length === 1 ? '' : 's') + ' · ' + (scope && scope.departments || []).length + ' dept']] : []), ...(!isAdmin && !isColl ? [['scope', 'Staff & roster scope', 'Whose records, which units']] : [])];
+  const curSec = SECS.some(x => x[0] === sec) ? sec : 'account';
+  const secBar = React.createElement("div", {
+    role: "tablist",
+    "aria-label": "Account sections",
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+      gap: 6,
+      padding: 4,
+      borderRadius: 12,
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line)'
+    }
+  }, SECS.map(([id, l, sub]) => {
+    const on = curSec === id;
+    return React.createElement("button", {
+      key: id,
+      type: "button",
+      role: "tab",
+      "aria-selected": on,
+      onClick: () => setSec(id),
+      style: {
+        textAlign: 'left',
+        font: 'inherit',
+        cursor: 'pointer',
+        border: 0,
+        borderRadius: 9,
+        padding: '8px 12px',
+        background: on ? '#fff' : 'transparent',
+        boxShadow: on ? '0 1px 4px rgba(31,59,90,.12)' : 'none'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: on ? 'var(--blue-700)' : 'var(--ink-2)'
+      }
+    }, l), React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginTop: 1,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, sub));
+  }));
+  const shell = content => inline ? React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, content) : toBody(React.createElement("div", {
     className: "modal-bg",
     onMouseDown: e => {
       if (e.target === e.currentTarget) onClose();
@@ -4529,11 +4750,12 @@ function UserModal({
   }, React.createElement("div", {
     className: "modal",
     style: {
-      width: collects ? 'min(720px,94vw)' : 'min(560px,94vw)',
+      width: collects ? 'min(720px,94vw)' : 'min(620px,94vw)',
       maxHeight: '92vh',
       overflow: 'auto'
     }
-  }, React.createElement("div", {
+  }, content)));
+  return shell(React.createElement(React.Fragment, null, !inline && React.createElement("div", {
     className: "modal-h"
   }, editing && window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
     name: initial.name || initial.username,
@@ -4572,7 +4794,7 @@ function UserModal({
       flexDirection: 'column',
       gap: 16
     }
-  }, React.createElement("div", {
+  }, secBar, curSec === 'account' && React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
@@ -4629,7 +4851,7 @@ function UserModal({
     value: password,
     onChange: e => setPassword(e.target.value),
     placeholder: "At least 6 characters"
-  }))), isPortalAcct ? React.createElement("div", {
+  })))), isPortalAcct ? curSec === 'account' && React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: 'var(--ink-2)',
@@ -4649,62 +4871,59 @@ function UserModal({
       flexShrink: 0,
       marginTop: 1
     }
-  }), React.createElement("span", null, React.createElement("b", null, PORTAL_ROLE_LABEL[portalRole], "."), " A portal login is not a rank in the hierarchy \u2014 it signs in to the collection portal or the staff app, and its departments and indicators are set below. New ones are made in ", React.createElement("b", null, "Data Collection"), "; a console account reaches the same submissions by being granted the ", React.createElement("b", null, "Data Collection"), " module.")) : React.createElement("div", null, React.createElement("div", {
+  }), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("b", null, PORTAL_ROLE_LABEL[portalRole], " \u2014 old portal login."), " Portal accounts are being retired: convert this one to a normal account and its role becomes a module (", portalRole === 'nurse' || portalRole === 'pca' ? 'Staff app' : 'Data Submission' + (portalRole === 'incharge' ? ', runs a unit' : ''), "), keeping its departments and indicators. Nothing is saved until you press Save."), mayUsers('edit') && React.createElement("button", {
+    type: "button",
+    className: "btn pri sm",
+    onClick: convert,
+    style: {
+      flexShrink: 0
+    }
+  }, "Convert")) : React.createElement("div", {
     style: {
       display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      marginBottom: 6,
-      flexWrap: 'wrap'
+      flexDirection: 'column',
+      gap: 12
     }
-  }, React.createElement("div", {
+  }, curSec === 'access' && React.createElement("div", null, React.createElement("div", {
     style: {
       fontSize: 12.5,
       fontWeight: 700,
-      color: 'var(--ink)'
+      color: 'var(--ink)',
+      marginBottom: 6
     }
-  }, "Hierarchy level ", React.createElement("span", {
+  }, "Access type ", React.createElement("span", {
     style: {
       fontWeight: 500,
       color: 'var(--muted)',
       fontSize: 11
     }
-  }, "\xB7 the rank decides which modules this account can be given at all")), React.createElement("span", {
-    className: "spacer",
+  }, "\xB7 set for this person only")), React.createElement("div", {
     style: {
-      flex: 1
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 8
     }
-  }), mayUsers('edit') && React.createElement("button", {
-    className: "btn sm",
-    title: "Add, rename or re-rank the tiers",
-    onClick: () => onManageTiers && onManageTiers()
-  }, React.createElement(Ic, {
-    d: I.gear,
-    s: 13
-  }), "Manage hierarchy")), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 6,
-      border: '1px solid var(--line)',
-      borderRadius: 10,
-      overflow: 'hidden'
-    }
-  }, placeableTiers(tiers).map((t, i) => {
-    const on = level === t.id;
-    const n = modsForTier(t).length;
-    return React.createElement("div", {
-      key: t.id,
-      onClick: () => pickLevel(t.id),
-      role: "button",
+  }, [['custom', 'Custom access', 'Only the modules and actions ticked below. Nothing is given by default.'], ['full', 'Full access', 'Every module and every action, including Access Control itself.']].map(([v, l, d]) => {
+    const on = accessType === v;
+    return React.createElement("button", {
+      key: v,
+      type: "button",
+      onClick: () => pickAccess(v),
       style: {
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 10,
-        padding: '9px 12px',
+        textAlign: 'left',
+        font: 'inherit',
         cursor: 'pointer',
-        borderTop: i ? '1px solid var(--line-2)' : 0,
-        background: on ? 'var(--blue-50)' : 'transparent'
+        padding: '10px 12px',
+        borderRadius: 10,
+        border: on ? '2px solid var(--blue)' : '1px solid var(--line)',
+        background: on ? 'var(--blue-50)' : '#fff',
+        display: 'flex',
+        gap: 9,
+        alignItems: 'flex-start'
       }
     }, React.createElement("span", {
       style: {
@@ -4714,7 +4933,7 @@ function UserModal({
         display: 'grid',
         placeItems: 'center',
         flexShrink: 0,
-        marginTop: 1,
+        marginTop: 2,
         border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
         background: on ? 'var(--blue)' : '#fff'
       }
@@ -4723,56 +4942,74 @@ function UserModal({
       s: 10,
       c: "#fff",
       sw: 3
-    })), React.createElement("span", {
-      style: {
-        fontFamily: 'var(--mono, monospace)',
-        fontSize: 11,
-        fontWeight: 700,
-        color: on ? 'var(--blue-700)' : 'var(--muted)',
-        flexShrink: 0,
-        marginTop: 1,
-        minWidth: 18
-      }
-    }, "L", i + 1), React.createElement("span", {
-      style: {
-        minWidth: 0,
-        flex: 1
-      }
-    }, React.createElement("span", {
+    })), React.createElement("span", null, React.createElement("span", {
       style: {
         display: 'block',
         fontSize: 13,
         fontWeight: 700,
         color: on ? 'var(--blue-700)' : 'var(--ink)'
       }
-    }, t.name), t.description && React.createElement("span", {
+    }, l), React.createElement("span", {
       style: {
         display: 'block',
         fontSize: 10.5,
         color: 'var(--muted)',
-        marginTop: 1
+        marginTop: 2
       }
-    }, t.description)), React.createElement("span", {
-      className: "tag",
-      style: {
-        flexShrink: 0,
-        color: 'var(--ink-2)'
+    }, d)));
+  }))), curSec === 'account' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 6
+    }
+  }, "Report sign-off ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 their place when a duty roster is signed")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, [['', 'Takes no part'], ['prepare', 'Prepares'], ['check', 'Checks'], ['approve', 'Approves']].map(([v, l]) => {
+    const on = signoff === v;
+    return React.createElement("button", {
+      key: v || 'none',
+      type: "button",
+      onClick: () => {
+        setSignoff(v);
+        setSignoffSet(true);
       },
-      title: t.kind === 'admin' ? 'Administrators hold every module automatically' : 'The most this rank can be given. You still tick each one below.'
-    }, t.kind === 'admin' ? 'all · automatic' : n ? 'up to ' + n + ' module' + (n !== 1 ? 's' : '') : 'no modules'));
-  })), React.createElement("div", {
+      style: {
+        font: 'inherit',
+        cursor: 'pointer',
+        padding: '5px 12px',
+        borderRadius: 16,
+        fontSize: 12,
+        fontWeight: 600,
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue-50)' : '#fff',
+        color: on ? 'var(--blue-700)' : 'var(--muted)'
+      }
+    }, l);
+  }), !signoffSet && React.createElement("span", {
     style: {
       fontSize: 10.5,
-      color: level ? 'var(--muted)' : 'var(--rose)',
-      marginTop: 7
+      color: '#8a5a00'
     }
-  }, level ? React.createElement("span", null, "The rank sets a ", React.createElement("b", null, "limit"), ", it grants nothing. Whichever you pick, every module below still starts at ", React.createElement("b", null, "None"), " and you tick what this person gets.") : React.createElement("span", null, "Not placed yet \u2014 pick a rank to continue. Nothing is chosen for you, so no one is promoted by accident."))), React.createElement("div", {
+  }, "Carried over from the old hierarchy \u2014 pick one to set it on this person.")))), curSec === 'account' && React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
       gap: 12
     }
-  }, React.createElement("div", null), React.createElement("div", {
+  }, React.createElement("div", {
     className: "field"
   }, React.createElement("label", null, "Status"), React.createElement("select", {
     value: status,
@@ -4781,7 +5018,7 @@ function UserModal({
     value: "active"
   }, "Active"), React.createElement("option", {
     value: "inactive"
-  }, "Inactive")))), isAdmin ? React.createElement("div", {
+  }, "Inactive"))), React.createElement("div", null)), curSec !== 'access' ? null : isAdmin ? React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: 'var(--ink-2)',
@@ -4813,56 +5050,12 @@ function UserModal({
     d: I.user,
     s: 16,
     c: "var(--blue)"
-  }), React.createElement("span", null, React.createElement("b", null, PORTAL_ROLE_LABEL[portalRole], "."), " Nurse/PCA accounts sign in to the staff app; they don't submit data.")) : isColl ? React.createElement("div", null, React.createElement("div", {
+  }), React.createElement("span", null, React.createElement("b", null, PORTAL_ROLE_LABEL[portalRole], "."), " Nurse/PCA accounts sign in to the staff app; they don't submit data.")) : isColl ? React.createElement("div", {
     style: {
       fontSize: 12.5,
-      fontWeight: 700,
-      color: 'var(--ink)',
-      marginBottom: 3
+      color: 'var(--ink-2)'
     }
-  }, "Data collection scope ", React.createElement("span", {
-    style: {
-      fontWeight: 500,
-      color: 'var(--muted)',
-      fontSize: 11
-    }
-  }, "\xB7 ", PORTAL_ROLE_LABEL[portalRole], " \u2014 signs in to the portal only")), React.createElement("div", {
-    style: {
-      fontSize: 10.5,
-      color: 'var(--muted)',
-      marginBottom: 9
-    }
-  }, "The departments they report, the quality areas those give (plus any extra), and optionally which indicators. Saved with the account and shown in ", React.createElement("b", null, "Indicator Access"), "."), !ScopeEditor ? React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      color: 'var(--ink-2)',
-      background: 'var(--blue-50)',
-      border: '1px solid var(--blue-100)',
-      borderRadius: 9,
-      padding: '12px 14px'
-    }
-  }, "The data collection module is not loaded, so the scope cannot be edited here. The current assignment is kept when you save.") : scopeLoadFailed ? React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      color: '#8a5a00',
-      background: '#fff8e9',
-      border: '1px solid #f1d49a',
-      borderRadius: 9,
-      padding: '12px 14px'
-    }
-  }, "Couldn\u2019t load this account\u2019s current data collection assignment. Close and reopen Manage to edit it \u2014 saving now keeps the stored assignment unchanged.") : !scopeReady ? React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: 'var(--muted)',
-      padding: '8px 0'
-    }
-  }, "Loading assignment\u2026") : React.createElement(ScopeEditor, {
-    value: scope,
-    onChange: editScope,
-    depts: depts,
-    exceptResponsibleId: linkedRespId,
-    persons: resps || U_NO_RESPS
-  })) : React.createElement("div", null, React.createElement("div", {
+  }, "Their departments and indicators are in the ", React.createElement("b", null, "Data Submission"), " section.") : React.createElement("div", null, React.createElement("div", {
     style: {
       fontSize: 12.5,
       fontWeight: 700,
@@ -4875,28 +5068,61 @@ function UserModal({
       color: 'var(--muted)',
       fontSize: 11
     }
-  }, "\xB7 these are their sidebar menu items", tier && tier.kind === 'console' ? ' — “' + tier.name + '” only sets the limit' : '')), React.createElement("div", {
+  }, "\xB7 these are their sidebar menu items")), React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--muted)',
       marginBottom: 9
     }
-  }, "Tick any combination \u2014 ", React.createElement("b", null, "Edit"), ", ", React.createElement("b", null, "Add"), ", ", React.createElement("b", null, "Delete"), " and ", React.createElement("b", null, "Print"), " are independent (e.g. grant Delete without Add, or read-only access that may not print). Selecting any of them includes View automatically. ", React.createElement("b", null, "Print"), " is what lets them put a record on paper or save it as a PDF; it is not implied by any other tick, so it starts off. Anything left at ", React.createElement("b", null, "None"), " is hidden from their sidebar entirely \u2014 they never see the menu item.", tier && tier.kind === 'console' && modsForTier(tier).length < USER_MODS.length && React.createElement("span", null, " This rank cannot be given ", React.createElement("b", null, USER_MODS.filter(([k]) => (tier.modules || []).indexOf(k) < 0).map(([, l]) => l).join(', ')), " \u2014 change that in ", React.createElement("b", null, "Manage hierarchy"), ".")), !tier && React.createElement("div", {
+  }, "Tick any combination \u2014 ", React.createElement("b", null, "Edit"), ", ", React.createElement("b", null, "Add"), ", ", React.createElement("b", null, "Delete"), " and ", React.createElement("b", null, "Print"), " are independent (e.g. grant Delete without Add, or read-only access that may not print). Selecting any of them includes View automatically. ", React.createElement("b", null, "Print"), " is what lets them put a record on paper or save it as a PDF; it is not implied by any other tick, so it starts off. Anything left at ", React.createElement("b", null, "None"), " is hidden from their sidebar entirely \u2014 they never see the menu item."), React.createElement("div", {
     style: {
-      fontSize: 12,
-      color: 'var(--muted)',
-      background: 'var(--panel-2)',
-      border: '1px solid var(--line)',
-      borderRadius: 9,
-      padding: '11px 13px'
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      marginBottom: 10
     }
-  }, "Pick a hierarchy level above first \u2014 it decides which of these an account may be given."), React.createElement("div", {
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      color: 'var(--faint)',
+      textTransform: 'uppercase',
+      letterSpacing: .5
+    }
+  }, "Quick set"), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => quickSet('none')
+  }, "Clear all"), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => quickSet('view')
+  }, "View only everywhere"), React.createElement("select", {
+    value: copyFrom,
+    onChange: e => copyAccess(e.target.value),
+    "aria-label": "Copy access from another person",
+    style: {
+      padding: '5px 8px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 12,
+      fontFamily: 'inherit',
+      background: '#fff',
+      maxWidth: 220
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, "Copy from a person\u2026"), (allUsers || []).filter(x => x.username !== (editing ? initial.username : '') && !PORTAL_ROLE_LABEL[x.role]).map(x => React.createElement("option", {
+    key: x.username,
+    value: x.username
+  }, x.name || x.username)))), React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
       gap: 8
     }
-  }, modsGrouped(modsForTier(tier)).map(([grp, ms]) => React.createElement(React.Fragment, {
+  }, modsGrouped(USER_MODS).map(([grp, ms]) => React.createElement(React.Fragment, {
     key: grp
   }, React.createElement("div", {
     style: {
@@ -4989,12 +5215,91 @@ function UserModal({
         sw: 3
       })), l);
     })));
-  }))))), !isAdmin && !isColl && React.createElement("div", {
+  }))))), curSec === 'data' && collects && scopeBlock, curSec === 'data' && submits && React.createElement("div", {
     style: {
-      borderTop: '1px solid var(--line-2)',
-      paddingTop: 14
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6
     }
-  }, React.createElement("div", {
+  }, React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      const n = !unitLead;
+      setUnitLead(n);
+      setDsScreens(l => n ? DS_ALL.filter(s => l.indexOf(s) >= 0 || DS_UNIT.indexOf(s) >= 0) : l.filter(s => DS_UNIT.indexOf(s) < 0));
+    },
+    style: {
+      alignSelf: 'flex-start',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 7,
+      padding: '7px 13px',
+      borderRadius: 8,
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: 'pointer',
+      border: '1px solid ' + (unitLead ? 'var(--blue)' : 'var(--line)'),
+      background: unitLead ? 'var(--blue)' : '#fff',
+      color: unitLead ? '#fff' : 'var(--ink-2)'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 13,
+      height: 13,
+      borderRadius: 4,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0,
+      border: '1px solid ' + (unitLead ? '#fff' : 'var(--line)'),
+      background: unitLead ? 'rgba(255,255,255,.25)' : '#fff'
+    }
+  }, unitLead && React.createElement(Ic, {
+    d: I.check,
+    s: 9,
+    c: "#fff",
+    sw: 3
+  })), "In-charge in the phone app"), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)'
+    }
+  }, unitLead ? 'They get the in-charge features in the phone app (approvals, notices, shift reports) for their departments.' : 'Off — the phone app treats them as a data collector.')), curSec === 'access' && hasStaffApp && React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 6
+    }
+  }, "Staff app ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 which phone feature set they get")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, [['nurse', 'Nurse'], ['pca', 'PCA']].map(([v, l]) => {
+    const on = appRole === v;
+    return React.createElement("button", {
+      key: v,
+      type: "button",
+      onClick: () => setAppRole(v),
+      style: {
+        font: 'inherit',
+        cursor: 'pointer',
+        padding: '5px 14px',
+        borderRadius: 16,
+        fontSize: 12,
+        fontWeight: 600,
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue-50)' : '#fff',
+        color: on ? 'var(--blue-700)' : 'var(--muted)'
+      }
+    }, l);
+  }))), curSec === 'scope' && !isAdmin && !isColl && React.createElement("div", null, React.createElement("div", {
     style: {
       fontSize: 12.5,
       fontWeight: 700,
@@ -5056,7 +5361,12 @@ function UserModal({
       c: "#fff",
       sw: 3
     })), l);
-  })), staffScope === 'departments' && React.createElement("div", null, React.createElement("div", {
+  })), staffScope === 'departments' && submits && React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "Uses their ", React.createElement("b", null, "Data Submission"), " departments, set above."), staffScope === 'departments' && !submits && React.createElement("div", null, React.createElement("div", {
     style: {
       fontSize: 11,
       color: 'var(--muted)',
@@ -5116,7 +5426,7 @@ function UserModal({
       color: staffId === '' ? 'var(--rose)' : 'var(--muted)',
       marginTop: 5
     }
-  }, staffId === '' ? 'Not linked yet — until you pick a person, this account will see no staff records at all.' : 'They will see this one record and nothing else.'))), !isAdmin && !isColl && React.createElement(RosterScopeEditor, {
+  }, staffId === '' ? 'Not linked yet — until you pick a person, this account will see no staff records at all.' : 'They will see this one record and nothing else.'))), curSec === 'scope' && !isAdmin && !isColl && React.createElement(RosterScopeEditor, {
     scope: rosterScope,
     departments: rosterDepts,
     onScope: setRosterScope,
@@ -5126,7 +5436,7 @@ function UserModal({
     exceptUsername: editing ? initial.username : null,
     hasRosterPerm: asActions(perms.roster).length > 0,
     staffScope: staffScope
-  }), rosterEditable && React.createElement("div", {
+  }), curSec === 'data' && rosterEditable && React.createElement("div", {
     style: {
       borderTop: '1px solid var(--line-2)',
       paddingTop: 14
@@ -5150,7 +5460,7 @@ function UserModal({
       color: 'var(--muted)',
       marginBottom: 9
     }
-  }, "The in-charge can prepare and submit the roster for their assigned units, from the collection portal. ", React.createElement("b", null, "Approving it stays with an administrator.")), React.createElement("button", {
+  }, "The in-charge can prepare and submit the roster for their assigned units, from Data Submission. ", React.createElement("b", null, "Approving it stays with an administrator.")), React.createElement("button", {
     type: "button",
     onClick: () => setRosterEdit(v => !v),
     style: {
@@ -5206,10 +5516,20 @@ function UserModal({
     style: {
       display: 'flex',
       gap: 10,
+      alignItems: 'center',
       borderTop: '1px solid var(--line-2)',
-      paddingTop: 14
+      padding: '12px 0 2px',
+      position: 'sticky',
+      bottom: 0,
+      background: 'var(--panel, #fff)',
+      zIndex: 2
     }
   }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "Save keeps every section."), React.createElement("span", {
     className: "spacer",
     style: {
       flex: 1
@@ -5225,600 +5545,41 @@ function UserModal({
     d: I.check,
     s: 16,
     sw: 2.4
-  }), busy ? 'Saving…' : editing ? 'Save changes' : 'Create user'))))));
+  }), busy ? 'Saving…' : editing ? 'Save changes' : 'Create user')))));
 }
 function uAvatarColor(s) {
   let h = 0;
   for (const ch of s || '') h = h * 31 + ch.charCodeAt(0) >>> 0;
   return UCOLORS[h % UCOLORS.length];
 }
-function HierarchyPanel() {
-  const {
-    useState,
-    useEffect
-  } = React;
-  const [list, setList] = useState(null);
-  const [counts, setCounts] = useState({});
-  const [open, setOpen] = useState(null);
-  const [draft, setDraft] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  const load = () => {
-    setErr('');
-    usersApi('GET', '/api/tiers').then(j => {
-      setList(j.tiers || []);
-      setCounts(j.counts || {});
-      TIER_CACHE = j.tiers || null;
-    }).catch(e => {
-      setList([]);
-      setErr(e.message || 'Could not load the hierarchy.');
-    });
-  };
-  useEffect(load, []);
-  const done = msg => {
-    uToast(msg);
-    setOpen(null);
-    setDraft(null);
-    loadTiers(true);
-    load();
-  };
-  const startEdit = t => {
-    setOpen(t.id);
-    setErr('');
-    setDraft({
-      name: t.name,
-      description: t.description || '',
-      modules: (t.modules || []).slice(),
-      signoff: t.signoff || ''
-    });
-  };
-  const startNew = () => {
-    setOpen('__new');
-    setErr('');
-    setDraft({
-      name: '',
-      description: '',
-      modules: [],
-      signoff: ''
-    });
-  };
-  const toggleMod = k => setDraft(d => ({
-    ...d,
-    modules: d.modules.indexOf(k) >= 0 ? d.modules.filter(x => x !== k) : [...d.modules, k]
-  }));
-  const setAll = on => setDraft(d => ({
-    ...d,
-    modules: on ? USER_MODS.map(([k]) => k) : []
-  }));
-  const save = async t => {
-    if (!draft) return;
-    if (!draft.name.trim()) return setErr('A tier name is required.');
-    if (t && t.kind === 'console') {
-      const lost = (t.modules || []).filter(k => draft.modules.indexOf(k) < 0);
-      const n = counts[t.id] || 0;
-      if (lost.length && n) {
-        const names = USER_MODS.filter(([k]) => lost.indexOf(k) >= 0).map(([, l]) => l).join(', ');
-        const ok = await window.UI.confirm({
-          title: 'Take ' + names + ' away from ' + n + ' account' + (n === 1 ? '' : 's') + '?',
-          message: 'Everyone at “' + t.name + '” loses that access immediately and is signed out so it takes effect at once. Nothing else they hold changes.',
-          danger: true,
-          confirmLabel: 'Narrow the tier'
-        });
-        if (!ok) return;
-      }
-    }
-    setBusy(true);
-    setErr('');
-    try {
-      const body = {
-        name: draft.name.trim(),
-        description: draft.description,
-        modules: draft.modules,
-        signoff: draft.signoff || ''
-      };
-      const r = t ? await usersApi('PUT', '/api/tiers/' + encodeURIComponent(t.id), body) : await usersApi('POST', '/api/tiers', body);
-      done(r && r.clamped ? 'Saved · ' + r.clamped + ' account' + (r.clamped === 1 ? '' : 's') + ' narrowed' : t ? 'Tier saved' : 'Tier created');
-    } catch (e) {
-      setErr(e.message || 'Could not save the tier.');
-    } finally {
-      setBusy(false);
-    }
-  };
-  const del = async t => {
-    const ok = await window.UI.confirm({
-      title: 'Remove the tier “' + t.name + '”?',
-      message: 'It is not used by any account. The ranks below it move up one.',
-      danger: true,
-      confirmLabel: 'Remove tier'
-    });
-    if (!ok) return;
-    try {
-      await usersApi('DELETE', '/api/tiers/' + encodeURIComponent(t.id));
-      done('Tier removed');
-    } catch (e) {
-      uToast(e.message || 'Failed', 'error');
-    }
-  };
-  const move = async (t, dir) => {
-    const con = (list || []).filter(x => x.kind === 'console').sort(byRank);
-    const i = con.findIndex(x => x.id === t.id);
-    const j = i + dir;
-    if (i < 0 || j < 0 || j >= con.length) return;
-    const order = con.map(x => x.id);
-    order.splice(j, 0, order.splice(i, 1)[0]);
-    try {
-      const r = await usersApi('POST', '/api/tiers/reorder', {
-        order
-      });
-      setList(r.tiers || list);
-      TIER_CACHE = r.tiers || null;
-      loadTiers(true);
-    } catch (e) {
-      uToast(e.message || 'Failed', 'error');
-    }
-  };
-  const ceilingLine = t => {
-    if (t.kind === 'admin') return 'Every module';
-    if (t.kind === 'portal') return 'No modules · a collection scope instead';
-    const n = (t.modules || []).length;
-    if (!n) return 'Nothing may be granted';
-    if (n === USER_MODS.length) return 'May be given any module';
-    return 'May be given ' + n + ' of ' + USER_MODS.length + ' · not ' + USER_MODS.filter(([k]) => (t.modules || []).indexOf(k) < 0).map(([, l]) => l).join(', ');
-  };
-  const editor = (d, t) => React.createElement("div", {
-    style: {
-      borderTop: '1px solid var(--line-2)',
-      marginTop: 11,
-      paddingTop: 12
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 10,
-      flexWrap: 'wrap',
-      marginBottom: 11
-    }
-  }, React.createElement("input", {
-    value: d.name,
-    onChange: e => setDraft(x => ({
-      ...x,
-      name: e.target.value
-    })),
-    placeholder: "Tier name \u2014 e.g. Nurse Manager",
-    style: {
-      flex: '1 1 210px',
-      padding: '9px 11px',
-      border: '1px solid var(--line)',
-      borderRadius: 7,
-      fontSize: 13,
-      fontFamily: 'inherit',
-      outline: 'none'
-    }
-  }), React.createElement("input", {
-    value: d.description,
-    onChange: e => setDraft(x => ({
-      ...x,
-      description: e.target.value
-    })),
-    placeholder: "What this tier is (shown when placing an account)",
-    style: {
-      flex: '2 1 300px',
-      padding: '9px 11px',
-      border: '1px solid var(--line)',
-      borderRadius: 7,
-      fontSize: 13,
-      fontFamily: 'inherit',
-      outline: 'none'
-    }
-  })), React.createElement("div", {
-    style: {
-      marginBottom: 12
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: 'var(--muted)',
-      fontWeight: 600,
-      textTransform: 'uppercase',
-      letterSpacing: .4,
-      marginBottom: 6
-    }
-  }, "Place in the sign-off chain"), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 6,
-      flexWrap: 'wrap'
-    }
-  }, [['', 'Takes no part'], ['prepare', 'Prepares'], ['check', 'Checks'], ['approve', 'Approves']].map(([v, l]) => {
-    const on = (d.signoff || '') === v;
-    return React.createElement("span", {
-      key: v || 'none',
-      onClick: () => setDraft(x => ({
-        ...x,
-        signoff: v
-      })),
-      style: {
-        cursor: 'pointer',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '5px 11px',
-        borderRadius: 16,
-        fontSize: 11.5,
-        fontWeight: 600,
-        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-        background: on ? 'var(--blue-50)' : '#fff',
-        color: on ? 'var(--blue-700)' : 'var(--muted)'
-      }
-    }, React.createElement("span", {
-      style: {
-        width: 12,
-        height: 12,
-        borderRadius: '50%',
-        display: 'grid',
-        placeItems: 'center',
-        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-        background: on ? 'var(--blue)' : '#fff'
-      }
-    }, on && React.createElement(Ic, {
-      d: I.check,
-      s: 8,
-      c: "#fff"
-    })), l);
-  })), React.createElement("div", {
-    style: {
-      fontSize: 10.5,
-      color: 'var(--muted)',
-      marginTop: 7
-    }
-  }, "Who signs a duty roster: the ", React.createElement("b", null, "Prepares"), " tier drafts it, the ", React.createElement("b", null, "Checks"), " tier reviews it, and the ", React.createElement("b", null, "Approves"), " tier signs it off and locks it. The roster's Sign-off boxes list the people at each of those tiers.")), t && t.fixed ? React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      color: 'var(--muted)'
-    }
-  }, "This tier is built in: ", t.kind === 'admin' ? 'an Administrator holds every module' : 'a portal login holds none', ", so there is no ceiling to set.") : React.createElement("div", null, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      marginBottom: 8,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: 'var(--muted)',
-      fontWeight: 600,
-      textTransform: 'uppercase',
-      letterSpacing: .4
-    }
-  }, "Modules an account at this tier may be given"), React.createElement("span", {
-    className: "spacer",
-    style: {
-      flex: 1
-    }
-  }), React.createElement("button", {
-    className: "btn sm",
-    onClick: () => setAll(true)
-  }, "All"), React.createElement("button", {
-    className: "btn sm",
-    onClick: () => setAll(false)
-  }, "None")), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 6,
-      flexWrap: 'wrap'
-    }
-  }, USER_MODS.map(([k, label, grp]) => {
-    const on = d.modules.indexOf(k) >= 0;
-    return React.createElement("span", {
-      key: k,
-      onClick: () => toggleMod(k),
-      style: {
-        cursor: 'pointer',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '5px 11px',
-        borderRadius: 16,
-        fontSize: 11.5,
-        fontWeight: 600,
-        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-        background: on ? 'var(--blue-50)' : '#fff',
-        color: on ? 'var(--blue-700)' : 'var(--muted)'
-      }
-    }, React.createElement("span", {
-      style: {
-        width: 12,
-        height: 12,
-        borderRadius: 3,
-        display: 'grid',
-        placeItems: 'center',
-        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-        background: on ? 'var(--blue)' : '#fff'
-      }
-    }, on && React.createElement(Ic, {
-      d: I.check,
-      s: 9,
-      c: "#fff"
-    })), label);
-  })), React.createElement("div", {
-    style: {
-      fontSize: 10.5,
-      color: 'var(--muted)',
-      marginTop: 9
-    }
-  }, "Ticking a module here grants nobody anything \u2014 it only makes that module ", React.createElement("b", null, "tickable"), " on an account placed at this tier. Unticking one ", React.createElement("b", null, "removes"), " it from everyone already at this tier.")), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 9,
-      marginTop: 12,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("span", {
-    className: "spacer",
-    style: {
-      flex: 1
-    }
-  }), React.createElement("button", {
-    className: "btn",
-    onClick: () => {
-      setOpen(null);
-      setDraft(null);
-      setErr('');
-    }
-  }, "Cancel"), React.createElement("button", {
-    className: "btn pri",
-    disabled: busy,
-    onClick: () => save(t)
-  }, busy ? 'Saving…' : t ? 'Save tier' : 'Create tier')));
-  const ordered = (list || []).slice().sort(byRank);
-  const consoleIds = ordered.filter(t => t.kind === 'console').map(t => t.id);
-  return React.createElement("div", null, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      marginBottom: 4,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("div", null, React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700
-    }
-  }, "Hierarchy"), React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      color: 'var(--muted)'
-    }
-  }, "Your own ladder \u2014 the rank an account is placed at, and the modules that rank may be given.")), React.createElement("span", {
-    className: "spacer",
-    style: {
-      flex: 1
-    }
-  }), React.createElement("button", {
-    className: "btn sm",
-    onClick: load
-  }, React.createElement(Ic, {
-    d: I.search,
-    s: 14
-  }), "Refresh"), mayUsers('add') && React.createElement("button", {
-    className: "btn pri sm",
-    onClick: startNew
-  }, React.createElement(Ic, {
-    d: I.plus,
-    s: 14
-  }), "Add tier")), React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      color: 'var(--ink-2)',
-      background: 'var(--blue-50)',
-      border: '1px solid var(--blue-100)',
-      borderRadius: 9,
-      padding: '10px 12px',
-      margin: '12px 0'
-    }
-  }, "A tier is a ", React.createElement("b", null, "ceiling, not a grant"), ". Placing an account at a tier gives it nothing \u2014 every module is still ticked by hand in the account itself. Widening a tier gives its members nothing either; only narrowing one takes access away."), err && React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      color: '#b32339',
-      background: 'var(--neg-bg)',
-      border: '1px solid var(--line)',
-      borderRadius: 9,
-      padding: '10px 12px',
-      margin: '10px 0'
-    }
-  }, err), open === '__new' && draft && React.createElement("div", {
-    style: {
-      border: '1px solid var(--blue-100)',
-      borderRadius: 10,
-      padding: '12px 14px',
-      marginTop: 10,
-      background: 'var(--blue-50)'
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: 'var(--blue-700)'
-    }
-  }, "New tier"), editor(draft, null)), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 8,
-      marginTop: 10
-    }
-  }, list === null && React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      color: 'var(--faint)',
-      padding: '18px',
-      fontSize: 13
-    }
-  }, "Loading\u2026"), ordered.map((t, i) => {
-    const n = counts[t.id] || 0;
-    const isOpen = open === t.id;
-    const ci = consoleIds.indexOf(t.id);
-    return React.createElement("div", {
-      key: t.id,
-      style: {
-        border: '1px solid ' + (isOpen ? 'var(--blue-100)' : 'var(--line)'),
-        borderRadius: 10,
-        padding: '11px 13px'
-      }
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        flexWrap: 'wrap'
-      }
-    }, React.createElement("span", {
-      style: {
-        fontFamily: 'var(--mono, monospace)',
-        fontSize: 11.5,
-        fontWeight: 700,
-        color: 'var(--muted)',
-        flexShrink: 0
-      }
-    }, "L", i + 1), React.createElement("div", {
-      style: {
-        minWidth: 0,
-        flex: '1 1 200px'
-      }
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        flexWrap: 'wrap'
-      }
-    }, React.createElement("span", {
-      style: {
-        fontSize: 13.5,
-        fontWeight: 700
-      }
-    }, t.name), t.fixed && React.createElement("span", {
-      className: "tag",
-      style: {
-        background: 'var(--panel-2)',
-        color: 'var(--muted)'
-      }
-    }, "Built-in")), t.description && React.createElement("div", {
-      style: {
-        fontSize: 11.5,
-        color: 'var(--muted)',
-        marginTop: 2
-      }
-    }, t.description)), React.createElement("span", {
-      className: "tag",
-      style: {
-        minWidth: 130,
-        justifyContent: 'center',
-        color: 'var(--ink-2)'
-      }
-    }, ceilingLine(t)), t.signoff && React.createElement("span", {
-      className: "tag",
-      style: {
-        justifyContent: 'center',
-        color: 'var(--blue-700)',
-        background: 'var(--blue-50)'
-      }
-    }, t.signoff === 'approve' ? 'Approves' : t.signoff === 'check' ? 'Checks' : 'Prepares'), React.createElement("span", {
-      className: "tag",
-      style: {
-        minWidth: 82,
-        justifyContent: 'center'
-      }
-    }, n, " account", n === 1 ? '' : 's'), mayUsers('edit') && t.kind === 'console' && React.createElement("span", {
-      style: {
-        display: 'inline-flex',
-        gap: 2
-      }
-    }, React.createElement("button", {
-      className: "icon-btn",
-      title: "Move up \u2014 more senior",
-      disabled: ci <= 0,
-      onClick: () => move(t, -1)
-    }, React.createElement("span", {
-      style: {
-        display: 'grid',
-        placeItems: 'center',
-        transform: 'rotate(-90deg)'
-      }
-    }, React.createElement(Ic, {
-      d: I.chevR,
-      s: 13
-    }))), React.createElement("button", {
-      className: "icon-btn",
-      title: "Move down \u2014 more junior",
-      disabled: ci < 0 || ci >= consoleIds.length - 1,
-      onClick: () => move(t, 1)
-    }, React.createElement("span", {
-      style: {
-        display: 'grid',
-        placeItems: 'center',
-        transform: 'rotate(90deg)'
-      }
-    }, React.createElement(Ic, {
-      d: I.chevR,
-      s: 13
-    })))), mayUsers('edit') && React.createElement("button", {
-      className: "btn sm",
-      onClick: () => isOpen ? (setOpen(null), setDraft(null)) : startEdit(t)
-    }, React.createElement(Ic, {
-      d: I.edit,
-      s: 13
-    }), isOpen ? 'Close' : 'Edit'), mayUsers('delete') && !t.fixed && React.createElement("button", {
-      className: "icon-btn danger",
-      title: n ? 'Move its accounts to another tier first' : 'Remove tier',
-      disabled: !!n,
-      onClick: () => del(t)
-    }, React.createElement(Ic, {
-      d: I.x,
-      s: 14
-    }))), isOpen && draft && editor(draft, t));
-  }), list !== null && !ordered.length && React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      color: 'var(--faint)',
-      padding: '18px',
-      fontSize: 13
-    }
-  }, "No tiers yet.")));
-}
-window.HierarchyPanel = HierarchyPanel;
 function UsersAndRoles({
-  depts
+  setRoute
 }) {
-  const [sub, setSub] = React.useState(() => {
-    const s = typeof window !== 'undefined' && window.__UNICO_USERS_SUBTAB__ || 'accounts';
-    try {
-      delete window.__UNICO_USERS_SUBTAB__;
-    } catch (e) {}
-    return s === 'access' ? 'access' : s === 'hierarchy' ? 'hierarchy' : 'accounts';
-  });
-  const hasDC = typeof DataResponsibles !== 'undefined';
-  const TABS = [['accounts', 'Accounts', I.user], ['hierarchy', 'Hierarchy', I.layers], ['access', 'Indicator Access', I.check]];
   return React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 14
-    }
-  }, React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b",
     style: {
       display: 'flex',
       alignItems: 'center',
-      gap: 12,
+      gap: 14,
       flexWrap: 'wrap'
     }
   }, React.createElement("div", {
+    style: {
+      width: 40,
+      height: 40,
+      borderRadius: 11,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.user,
+    s: 19
+  })), React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 220
@@ -5829,414 +5590,37 @@ function UsersAndRoles({
       fontWeight: 700,
       color: 'var(--ink)'
     }
-  }, "Users & Roles"), React.createElement("div", {
+  }, "Users & access now live in Access Control"), React.createElement("div", {
     style: {
-      fontSize: 11.5,
-      color: 'var(--muted)'
-    }
-  }, "Sign-in accounts. Each one is created at a level and granted module access explicitly, in its own dialog \u2014 a collector\u2019s or in-charge\u2019s departments, quality areas and indicators are set there too (Manage).")), React.createElement("div", {
-    className: "seg"
-  }, TABS.map(([id, l, ic]) => React.createElement("button", {
-    key: id,
-    className: sub === id ? 'on' : '',
-    onClick: () => setSub(id),
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6
-    }
-  }, React.createElement(Ic, {
-    d: ic,
-    s: 13
-  }), l))))), sub === 'accounts' && React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-b"
-  }, React.createElement(UserManagement, {
-    depts: depts,
-    onManageTiers: () => setSub('hierarchy')
-  }))), sub === 'hierarchy' && React.createElement("div", {
-    className: "card"
-  }, React.createElement("div", {
-    className: "card-b"
-  }, React.createElement(HierarchyPanel, null))), sub === 'access' && (hasDC ? React.createElement(DataResponsibles, {
-    key: "access",
-    depts: depts,
-    embedded: true,
-    initialView: "access"
-  }) : null));
-}
-function UserManagement({
-  depts,
-  onManageTiers
-} = {}) {
-  const {
-    useState,
-    useEffect
-  } = React;
-  const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
-  const tiers = useTiers();
-  const [users, setUsers] = useState(null);
-  const [err, setErr] = useState('');
-  const [q, setQ] = useState('');
-  const [modal, setModal] = useState(null);
-  const [confirm, setConfirm] = useState(null);
-  const me = typeof window !== 'undefined' && window.__UNICO_USER__ && window.__UNICO_USER__.username || null;
-  const load = () => {
-    setErr('');
-    usersApi('GET', '/api/users').then(j => setUsers(j.users || [])).catch(e => {
-      setUsers([]);
-      setErr(e.message || 'Could not load users.');
-    });
-  };
-  useEffect(load, []);
-  const all = users || [];
-  const admins = all.filter(u => u.role === 'Administrator' && u.active !== false).length;
-  const filtered = all.filter(u => !q || `${u.name} ${u.username} ${u.email || ''} ${roleLabel(u)} ${tierLabel(u)}`.toLowerCase().includes(q.toLowerCase()));
-  const toggle = async u => {
-    try {
-      await usersApi('PATCH', '/api/users/' + encodeURIComponent(u.username), {
-        active: u.active === false
-      });
-      uToast(u.active === false ? 'Activated' : 'Deactivated');
-      load();
-    } catch (e) {
-      uToast(e.message || 'Failed', 'error');
-    }
-  };
-  const del = async u => {
-    try {
-      await usersApi('DELETE', '/api/users/' + encodeURIComponent(u.username));
-      uToast('User removed');
-      setConfirm(null);
-      load();
-    } catch (e) {
-      uToast(e.message || 'Failed', 'error');
-      setConfirm(null);
-    }
-  };
-  const may = a => {
-    try {
-      return typeof window.unicoCan !== 'function' || window.unicoCan('users', a);
-    } catch (e) {
-      return true;
-    }
-  };
-  const mayAdd = may('add'),
-    mayEdit = may('edit'),
-    mayDel = may('delete');
-  const staffByEmp = React.useMemo(() => {
-    const src = window.STAFF_SEED || window.__UNICO_STAFF__ || [];
-    const m = {};
-    (Array.isArray(src) ? src : []).forEach(e => {
-      const k = String(e.emp_id || '').trim().toLowerCase();
-      if (k) m[k] = e;
-    });
-    return m;
-  }, [users]);
-  const staffOf = u => staffByEmp[String(u.staffEmpId || u.username || '').trim().toLowerCase()] || null;
-  const designationOf = u => {
-    const r = staffOf(u);
-    return r && String(r.designation || '').trim() || '';
-  };
-  const roleLabel = u => u.role === 'Administrator' ? 'Administrator' : PORTAL_ROLE_LABEL[u.role] || designationOf(u) || 'Staff account';
-  const tierLabel = u => {
-    if (u.role === 'Administrator' || PORTAL_ROLE_LABEL[u.role]) return '';
-    return u.level ? tierName(tiers, u.level) : 'Not placed';
-  };
-  const staffScopeLabel = u => {
-    const sc = u.staffScope || 'all';
-    if (sc === 'self') return 'own record only';
-    if (sc === 'departments') return (u.departments && u.departments.length ? u.departments.length + ' dept' : 'no dept') + ' staff';
-    return '';
-  };
-  const summaryOf = u => {
-    if (u.role === 'Administrator') return 'Full access';
-    if (PORTAL_ROLE_LABEL[u.role]) return u.role === 'collector' ? 'Data collection' : 'Portal';
-    const base = permSummary(u.perms);
-    const sc = staffScopeLabel(u);
-    return sc && base !== 'No access' ? base + ' · ' + sc : base;
-  };
-  const scopeLine = u => {
-    if (!PORTAL_ROLE_LABEL[u.role]) return '';
-    const DM = window.DEPTMAP;
-    const ds = (u.departments || []).map(id => (DM ? DM.nameFromId(id) : id) || id);
-    const dPart = !ds.length ? 'No department' : ds.length <= 2 ? ds.join(', ') : ds.slice(0, 2).join(', ') + ' +' + (ds.length - 2);
-    const na = (u.qualityAreas || []).length;
-    const aPart = u.allQualityAreas ? 'all areas' : na + ' area' + (na !== 1 ? 's' : '');
-    const qi = u.qualityIndicators || {};
-    const ni = Object.keys(qi).reduce((s, k) => s + (Array.isArray(qi[k]) ? qi[k].length : 0), 0);
-    return [dPart, aPart, ni ? ni + ' indicator' + (ni !== 1 ? 's' : '') + ' limited' : ''].filter(Boolean).join(' · ');
-  };
-  return React.createElement("div", null, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      marginBottom: 14,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("div", null, React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700
-    }
-  }, "Accounts"), React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      color: 'var(--muted)'
-    }
-  }, all.length, " user", all.length !== 1 ? 's' : '', " \xB7 ", admins, " administrator", admins !== 1 ? 's' : '')), React.createElement("span", {
-    className: "spacer",
-    style: {
-      flex: 1
-    }
-  }), React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 7,
-      background: 'var(--panel-2)',
-      border: '1px solid var(--line)',
-      borderRadius: 7,
-      padding: '6px 10px',
-      width: 190,
-      color: 'var(--faint)'
-    }
-  }, React.createElement(Ic, {
-    d: I.search,
-    s: 14
-  }), React.createElement("input", {
-    placeholder: "Search users\u2026",
-    value: q,
-    onChange: e => setQ(e.target.value),
-    style: {
-      border: 0,
-      background: 'transparent',
-      outline: 'none',
-      fontFamily: 'inherit',
-      fontSize: 12.5,
-      color: 'var(--ink)',
-      width: '100%'
-    }
-  })), React.createElement("button", {
-    className: "btn sm",
-    onClick: load
-  }, React.createElement(Ic, {
-    d: I.search,
-    s: 14
-  }), "Refresh"), mayAdd && React.createElement("button", {
-    className: "btn pri sm",
-    onClick: () => setModal({
-      user: null
-    })
-  }, React.createElement(Ic, {
-    d: I.plus,
-    s: 14
-  }), "Add user")), err && React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      color: '#b32339',
-      background: 'var(--neg-bg)',
-      border: '1px solid var(--line)',
-      borderRadius: 9,
-      padding: '11px 13px',
-      marginBottom: 12
-    }
-  }, err, String(err).toLowerCase().includes('administrator') ? '' : ' · Is the server running with a database connection?'), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 8
-    }
-  }, users === null && React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      color: 'var(--faint)',
-      padding: '24px',
-      fontSize: 13
-    }
-  }, "Loading\u2026"), users !== null && filtered.map(u => {
-    const active = u.active !== false;
-    const isMe = me && u.username === me;
-    const isColl = u.role === 'collector';
-    const lastAdmin = u.role === 'Administrator' && u.active !== false && admins <= 1;
-    return React.createElement("div", {
-      key: u.username,
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '11px 13px',
-        border: '1px solid var(--line)',
-        borderRadius: 10,
-        opacity: active ? 1 : .6,
-        flexWrap: 'wrap'
-      }
-    }, window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
-      name: u.name,
-      emp: u,
-      empId: u.staffEmpId,
-      size: 38,
-      radius: 9,
-      style: {
-        fontSize: 14
-      }
-    }) : React.createElement("div", {
-      className: "avatar",
-      style: {
-        background: uAvatarColor(u.username),
-        width: 38,
-        height: 38
-      }
-    }, inits(u.name)), React.createElement("div", {
-      style: {
-        minWidth: 0,
-        flex: '1 1 180px'
-      }
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8
-      }
-    }, React.createElement("span", {
-      style: {
-        fontSize: 13.5,
-        fontWeight: 700
-      }
-    }, u.name), isMe && React.createElement("span", {
-      className: "tag",
-      style: {
-        background: 'var(--pos-bg)',
-        color: 'var(--pos)'
-      }
-    }, "You")), React.createElement("div", {
-      style: {
-        fontSize: 11.5,
-        color: 'var(--muted)'
-      }
-    }, "@", u.username, u.email ? ' · ' + u.email : ''), scopeLine(u) && React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: 'var(--ink-2)',
-        marginTop: 2
-      },
-      title: "Data collection scope (edit in Manage)"
-    }, scopeLine(u))), React.createElement("span", {
-      className: "tag",
-      style: {
-        minWidth: 96,
-        justifyContent: 'center'
-      }
-    }, roleLabel(u)), tierLabel(u) && React.createElement("span", {
-      className: "tag",
-      style: {
-        minWidth: 96,
-        justifyContent: 'center',
-        color: u.level ? 'var(--blue-700)' : 'var(--muted)',
-        background: u.level ? 'var(--blue-50)' : 'var(--panel-2)'
-      },
-      title: u.level ? 'Hierarchy level' : 'No hierarchy level assigned — open Manage to place this account'
-    }, tierLabel(u)), React.createElement("span", {
-      className: "tag",
-      style: {
-        minWidth: 96,
-        justifyContent: 'center',
-        color: 'var(--ink-2)'
-      }
-    }, summaryOf(u)), active ? React.createElement("span", {
-      className: "chip pos"
-    }, "\u25CF Active") : React.createElement("span", {
-      className: "chip flat"
-    }, "\u25CB Inactive"), mayEdit && React.createElement("button", {
-      className: "btn sm",
-      onClick: () => setModal({
-        user: u
-      })
-    }, "Manage"), mayEdit && React.createElement("button", {
-      className: "icon-btn",
-      title: active ? 'Deactivate' : 'Activate',
-      onClick: () => toggle(u),
-      disabled: isMe || lastAdmin
-    }, React.createElement(Ic, {
-      d: active ? I.x : I.check,
-      s: 14
-    })), mayDel && React.createElement("button", {
-      className: "icon-btn danger",
-      title: "Remove",
-      onClick: () => setConfirm(u),
-      disabled: isMe || lastAdmin
-    }, React.createElement(Ic, {
-      d: I.x,
-      s: 14
-    })));
-  }), users !== null && filtered.length === 0 && React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      color: 'var(--faint)',
-      padding: '24px',
-      fontSize: 13
-    }
-  }, "No users", q ? ' match the search' : ' yet', ".")), modal && React.createElement(UserModal, {
-    initial: modal.user,
-    depts: depts,
-    allUsers: all,
-    onManageTiers: onManageTiers,
-    onClose: () => setModal(null),
-    onSaved: () => {
-      setModal(null);
-      load();
-    }
-  }), confirm && toBody(React.createElement("div", {
-    className: "modal-bg",
-    onMouseDown: e => {
-      if (e.target === e.currentTarget) setConfirm(null);
-    }
-  }, React.createElement("div", {
-    className: "modal",
-    style: {
-      width: 'min(400px,92vw)'
-    }
-  }, React.createElement("div", {
-    style: {
-      padding: '22px'
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 15.5,
-      fontWeight: 700
-    }
-  }, "Remove ", confirm.name, "?"), React.createElement("div", {
-    style: {
-      fontSize: 13,
+      fontSize: 12,
       color: 'var(--muted)',
-      marginTop: 4
+      marginTop: 2
     }
-  }, "Permanently deletes the account \u201C@", confirm.username, "\u201D and revokes all access."), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 10,
-      marginTop: 18
-    }
-  }, React.createElement("span", {
-    className: "spacer",
-    style: {
-      flex: 1
-    }
-  }), React.createElement("button", {
-    className: "btn",
-    onClick: () => setConfirm(null)
-  }, "Cancel"), React.createElement("button", {
+  }, "Accounts, each person's module access, the permission matrix and Indicator Access \u2014 set person by person, with no roles or tiers.")), React.createElement("button", {
     className: "btn pri",
-    style: {
-      background: 'var(--rose)',
-      borderColor: 'var(--rose)'
-    },
-    onClick: () => del(confirm)
-  }, "Remove")))))));
+    onClick: () => setRoute && setRoute({
+      view: 'users'
+    })
+  }, "Open Access Control", React.createElement(Ic, {
+    d: I.arrowR,
+    s: 15
+  }))));
 }
-window.UserManagement = UserManagement;
+window.UserModal = UserModal;
+window.UNICO_USERS_KIT = {
+  USER_MODS,
+  MOD_GROUPS,
+  PERM_ACTS,
+  PERM_ORDER,
+  asActions,
+  permSummary,
+  usersApi,
+  uToast,
+  mayUsers,
+  PORTAL_ROLE_LABEL,
+  inits,
+  uAvatarColor
+};
 function StaffFieldsSettings({
   depts,
   setRoute
@@ -8732,7 +8116,7 @@ function Settings({
   }, React.createElement("div", {
     className: "card-b"
   }, "System Monitor is not loaded."))), tab === 'media' && React.createElement(MediaBrowser, null), tab === 'users' && React.createElement(UsersAndRoles, {
-    depts: depts
+    setRoute: setRoute
   }), tab === 'fields' && (typeof DataFields !== 'undefined' ? React.createElement(DataFields, {
     setRoute: setRoute
   }) : null), tab === 'system' && sysTab === 'data' && React.createElement("div", {
@@ -9860,4 +9244,1679 @@ function UserAdmin() {
   }));
 }
 window.UserAdmin = UserAdmin;
+})();
+;
+/* ===== access-control.jsx ===== */
+(function(){
+const AC_SHORT = {
+  stats: 'OV',
+  quality: 'QL',
+  supervisor: 'SR',
+  medicine: 'MX',
+  datacol: 'DC',
+  reports: 'RP',
+  staff: 'ST',
+  perf: 'PF',
+  roster: 'RO',
+  users: 'AC',
+  datasubmit: 'DS',
+  staffapp: 'SA'
+};
+const AC_ACT_LETTER = {
+  view: 'V',
+  edit: 'E',
+  add: 'A',
+  delete: 'D',
+  print: 'P'
+};
+const acKit = () => window.UNICO_USERS_KIT || null;
+function acAccessType(u) {
+  const K = acKit();
+  if (u.role === 'Administrator') return 'full';
+  if (K.PORTAL_ROLE_LABEL[u.role]) return 'portal';
+  const p = u.perms || {};
+  return K.USER_MODS.some(([k]) => K.asActions(p[k]).length) ? 'custom' : 'none';
+}
+function acActs(u, mod) {
+  const K = acKit();
+  if (u.role === 'Administrator') return K.PERM_ORDER.slice();
+  if (K.PORTAL_ROLE_LABEL[u.role]) return [];
+  return K.asActions((u.perms || {})[mod]);
+}
+function acShade(acts) {
+  if (!acts.length) return 'none';
+  if (acts.indexOf('delete') >= 0) return 'full';
+  if (acts.indexOf('edit') >= 0 || acts.indexOf('add') >= 0) return 'edit';
+  return 'view';
+}
+const AC_SHADE = {
+  none: {
+    background: 'var(--panel-2)',
+    border: '1px dashed var(--line)',
+    color: 'transparent'
+  },
+  view: {
+    background: 'var(--blue-50)',
+    border: '1px solid var(--blue-100)',
+    color: 'var(--blue-700)'
+  },
+  edit: {
+    background: '#a9d2f2',
+    border: '1px solid #8cc1ea',
+    color: '#0b3f6e'
+  },
+  full: {
+    background: 'var(--blue)',
+    border: '1px solid var(--blue)',
+    color: '#fff'
+  }
+};
+const AC_TYPE = {
+  full: {
+    label: 'Full access',
+    bg: '#eeeafb',
+    fg: '#4b2fa8'
+  },
+  custom: {
+    label: 'Custom access',
+    bg: 'var(--blue-50)',
+    fg: 'var(--blue-700)'
+  },
+  none: {
+    label: 'No access yet',
+    bg: '#fbf1dc',
+    fg: '#7a5000'
+  },
+  portal: {
+    label: 'Old portal login',
+    bg: '#fbf1dc',
+    fg: '#7a5000'
+  }
+};
+function acAgo(ts) {
+  if (!ts) return '';
+  const d = Date.now() - ts;
+  if (d < 60e3) return 'Just now';
+  if (d < 3600e3) return Math.round(d / 60e3) + ' min ago';
+  if (d < 86400e3) return Math.round(d / 3600e3) + ' h ago';
+  if (d < 2 * 86400e3) return 'Yesterday';
+  if (d < 30 * 86400e3) return Math.round(d / 86400e3) + ' days ago';
+  try {
+    return new Date(ts).toLocaleDateString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    });
+  } catch (e) {
+    return '';
+  }
+}
+const acDate = ts => {
+  if (!ts) return '—';
+  try {
+    return new Date(ts).toLocaleDateString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    });
+  } catch (e) {
+    return '—';
+  }
+};
+function AcAvatar({
+  u,
+  size
+}) {
+  const K = acKit();
+  const s = size || 38;
+  const sm = u.staffMatch || null;
+  const photo = u.photo && u.photo.url || sm && sm.photo || null;
+  if (window.MK && window.MK.Av) return React.createElement(window.MK.Av, {
+    name: u.name,
+    photo: photo,
+    empId: sm ? sm.empId : null,
+    size: s,
+    radius: Math.round(s / 3.4),
+    style: {
+      fontSize: Math.round(s / 2.7)
+    }
+  });
+  return React.createElement("div", {
+    className: "avatar",
+    style: {
+      background: K.uAvatarColor(u.username),
+      width: s,
+      height: s
+    }
+  }, K.inits(u.name));
+}
+function AcTypeChip({
+  t
+}) {
+  const c = AC_TYPE[t];
+  return React.createElement("span", {
+    className: "tag",
+    style: {
+      background: c.bg,
+      color: c.fg,
+      fontWeight: 700
+    }
+  }, c.label);
+}
+function AcStrip({
+  u
+}) {
+  const K = acKit();
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 3
+    }
+  }, K.USER_MODS.map(([k, label]) => {
+    const acts = acActs(u, k);
+    const sh = acShade(acts);
+    return React.createElement("span", {
+      key: k,
+      title: label + ': ' + (acts.length ? acts.join(', ') : 'no access'),
+      style: {
+        width: 20,
+        height: 20,
+        borderRadius: 5,
+        display: 'grid',
+        placeItems: 'center',
+        fontSize: 9.5,
+        fontWeight: 800,
+        boxSizing: 'border-box',
+        ...AC_SHADE[sh]
+      }
+    }, sh === 'none' ? '' : sh === 'full' ? 'F' : sh === 'edit' ? 'E' : 'V');
+  }));
+}
+function AcKpi({
+  label,
+  value,
+  sub,
+  tone
+}) {
+  const warn = tone === 'warn';
+  return React.createElement("div", {
+    className: "card",
+    style: warn ? {
+      background: '#fff8ea',
+      borderColor: '#f1d9a6'
+    } : null
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2,
+      padding: '14px 16px'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      letterSpacing: .6,
+      textTransform: 'uppercase',
+      color: warn ? '#7a5000' : 'var(--muted)'
+    }
+  }, label), React.createElement("span", {
+    className: "num",
+    style: {
+      fontSize: 26,
+      fontWeight: 800,
+      color: warn ? '#7a5000' : 'var(--ink)'
+    }
+  }, value), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: warn ? '#7a5000' : 'var(--muted)'
+    }
+  }, sub)));
+}
+function AcPerson({
+  u,
+  all,
+  lastSeen,
+  depts,
+  designation,
+  me,
+  onBack,
+  reload,
+  admins
+}) {
+  const K = acKit();
+  const [busy, setBusy] = React.useState('');
+  const t = acAccessType(u);
+  const isMe = me && u.username === me;
+  const lastAdmin = u.role === 'Administrator' && u.active !== false && admins <= 1;
+  const Editor = window.UserModal;
+  const run = async (key, fn, msg) => {
+    setBusy(key);
+    try {
+      await fn();
+      K.uToast(msg);
+      reload();
+    } catch (e) {
+      K.uToast(e.message || 'Failed', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+  const signOut = () => run('out', () => K.usersApi('POST', '/api/users/' + encodeURIComponent(u.username) + '/signout'), 'Signed out of every device');
+  const toggle = () => run('act', () => K.usersApi('PATCH', '/api/users/' + encodeURIComponent(u.username), {
+    active: u.active === false
+  }), u.active === false ? 'Account activated' : 'Account deactivated');
+  const del = async () => {
+    const ok = window.UI && window.UI.confirm ? await window.UI.confirm({
+      title: 'Delete ' + (u.name || u.username) + '?',
+      message: 'Permanently deletes the account “@' + u.username + '” and ends every session it has. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Delete account'
+    }) : window.confirm('Delete this account?');
+    if (!ok) return;
+    setBusy('del');
+    try {
+      await K.usersApi('DELETE', '/api/users/' + encodeURIComponent(u.username));
+      K.uToast('Account deleted');
+      onBack();
+      reload();
+    } catch (e) {
+      K.uToast(e.message || 'Failed', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+  const row = (l, v) => React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      gap: 12,
+      fontSize: 12
+    }
+  }, React.createElement("span", {
+    style: {
+      color: 'var(--muted)',
+      fontWeight: 600
+    }
+  }, l), React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      textAlign: 'right',
+      color: 'var(--ink)'
+    }
+  }, v));
+  const act = (key, icon, label, onClick, opts) => React.createElement("button", {
+    type: "button",
+    onClick: onClick,
+    disabled: !!busy || opts && opts.disabled,
+    title: opts && opts.title,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 11,
+      minHeight: 42,
+      padding: '0 12px',
+      border: 0,
+      borderRadius: 9,
+      background: 'transparent',
+      font: 'inherit',
+      fontSize: 13,
+      fontWeight: 700,
+      cursor: 'pointer',
+      textAlign: 'left',
+      width: '100%',
+      color: opts && opts.color || 'var(--ink)',
+      opacity: opts && opts.disabled ? .45 : 1
+    }
+  }, React.createElement(Ic, {
+    d: icon,
+    s: 16
+  }), busy === key ? 'Working…' : label);
+  const granted = K.USER_MODS.map(([k, l]) => [l, acActs(u, k)]).filter(([, a]) => a.length);
+  const seen = lastSeen[u.username];
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("button", {
+    className: "btn sm",
+    onClick: onBack
+  }, React.createElement("span", {
+    style: {
+      display: 'grid',
+      placeItems: 'center',
+      transform: 'rotate(180deg)'
+    }
+  }, React.createElement(Ic, {
+    d: I.chevR,
+    s: 14
+  })), "People"), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: 'var(--muted)'
+    }
+  }, "Access Control / People / ", u.name || u.username)), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(260px,320px) minmax(0,1fr)',
+      gap: 16,
+      alignItems: 'start'
+    },
+    className: "ac-person"
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 14,
+      alignItems: 'center'
+    }
+  }, React.createElement(AcAvatar, {
+    u: u,
+    size: 60
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 18,
+      fontWeight: 800,
+      color: 'var(--ink)'
+    }
+  }, u.name || u.username, isMe && React.createElement("span", {
+    className: "tag",
+    style: {
+      marginLeft: 8,
+      background: 'var(--pos-bg)',
+      color: 'var(--pos)'
+    }
+  }, "You")), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)',
+      fontFamily: 'var(--mono, monospace)'
+    }
+  }, "@", u.username))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement(AcTypeChip, {
+    t: t
+  }), t === 'portal' && React.createElement("span", {
+    className: "tag"
+  }, K.PORTAL_ROLE_LABEL[u.role]), designation && React.createElement("span", {
+    className: "tag"
+  }, designation), u.active !== false ? React.createElement("span", {
+    className: "chip pos"
+  }, "\u25CF Active") : React.createElement("span", {
+    className: "chip flat"
+  }, "\u25CB Inactive")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10,
+      borderTop: '1px solid var(--line-2)',
+      paddingTop: 12
+    }
+  }, row('Email', u.email || '—'), row('Staff record', u.staffEmpId ? 'Emp ' + u.staffEmpId : 'Not linked'), row('Last sign-in', seen ? acAgo(seen) : 'Not recorded'), row('Created', acDate(u.createdAt)), row('Last changed', acDate(u.updatedAt)), t !== 'portal' && row('Report sign-off', {
+    prepare: 'Prepares',
+    check: 'Checks',
+    approve: 'Approves'
+  }[u.signoff] || 'Takes no part')))), K.mayUsers('edit') && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      padding: 8,
+      display: 'flex',
+      flexDirection: 'column'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      letterSpacing: .6,
+      textTransform: 'uppercase',
+      color: 'var(--muted)',
+      padding: '6px 12px'
+    }
+  }, "Account actions"), act('out', I.arrowR, 'Sign out of all devices', signOut), act('act', u.active === false ? I.check : I.x, u.active === false ? 'Activate account' : 'Deactivate account', toggle, {
+    color: '#8a5a00',
+    disabled: isMe || lastAdmin,
+    title: isMe ? 'You cannot deactivate yourself' : lastAdmin ? 'The last active administrator' : ''
+  }), K.mayUsers('delete') && act('del', I.x, 'Delete account', del, {
+    color: 'var(--rose)',
+    disabled: isMe || lastAdmin,
+    title: isMe ? 'You cannot delete yourself' : lastAdmin ? 'The last active administrator' : ''
+  }), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      padding: '6px 12px 4px'
+    }
+  }, "To reset the password, type a new one in the editor and save."))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      letterSpacing: .6,
+      textTransform: 'uppercase',
+      color: 'var(--muted)'
+    }
+  }, "What they can open"), t === 'portal' && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--ink-2)'
+    }
+  }, "The portal only \u2014 its departments and indicators are set in the editor."), t !== 'portal' && !granted.length && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--rose)',
+      fontWeight: 600
+    }
+  }, "Nothing yet. They can sign in but see an empty sidebar."), granted.map(([l, a]) => React.createElement("div", {
+    key: l,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      fontSize: 12
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1,
+      fontWeight: 600,
+      color: 'var(--ink-2)'
+    }
+  }, l), React.createElement("span", {
+    style: {
+      display: 'flex',
+      gap: 2
+    }
+  }, K.PERM_ORDER.map(x => React.createElement("span", {
+    key: x,
+    style: {
+      width: 16,
+      height: 18,
+      borderRadius: 4,
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: 9.5,
+      fontWeight: 800,
+      fontFamily: 'var(--mono, monospace)',
+      background: a.indexOf(x) >= 0 ? x === 'delete' ? 'var(--rose)' : 'var(--blue)' : 'var(--panel-2)',
+      color: a.indexOf(x) >= 0 ? '#fff' : 'var(--faint)'
+    }
+  }, AC_ACT_LETTER[x])))))))), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, Editor ? React.createElement(Editor, {
+    key: u.username + ':' + (u.updatedAt || ''),
+    inline: true,
+    initial: u,
+    depts: depts,
+    allUsers: all,
+    onClose: onBack,
+    onSaved: reload
+  }) : React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      color: 'var(--muted)'
+    }
+  }, "Loading the editor\u2026")))));
+}
+function AcMatrix({
+  users,
+  openPerson
+}) {
+  const K = acKit();
+  const [mod, setMod] = React.useState('staff');
+  const [hideFull, setHideFull] = React.useState(false);
+  const rows = users.filter(u => acAccessType(u) !== 'portal' && (!hideFull || u.role !== 'Administrator'));
+  const modLabel = (K.USER_MODS.find(m => m[0] === mod) || [])[1] || mod;
+  const holders = K.PERM_ORDER.map(a => [a, rows.filter(u => acActs(u, mod).indexOf(a) >= 0)]);
+  const cols = 'minmax(170px,1.2fr) repeat(' + K.USER_MODS.length + ', minmax(58px,1fr))';
+  return React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(0,1fr) 300px',
+      gap: 14,
+      alignItems: 'start'
+    },
+    className: "ac-matrix"
+  }, React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'auto'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      padding: '12px 16px',
+      borderBottom: '1px solid var(--line-2)',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 700,
+      flex: 1
+    }
+  }, "Everyone \xD7 every module"), React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      fontWeight: 600,
+      color: 'var(--ink-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: hideFull,
+    onChange: e => setHideFull(e.target.checked)
+  }), "Hide full-access people"), React.createElement("span", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--muted)'
+    }
+  }, K.PERM_ORDER.map(a => React.createElement("span", {
+    key: a
+  }, AC_ACT_LETTER[a], " = ", a)))), React.createElement("div", {
+    style: {
+      minWidth: 900
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: cols,
+      gap: 4,
+      padding: '10px 16px',
+      background: 'var(--panel-2)',
+      borderBottom: '1px solid var(--line-2)',
+      alignItems: 'end'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      color: 'var(--muted)'
+    }
+  }, "Person"), K.USER_MODS.map(([k, l]) => {
+    const on = k === mod;
+    return React.createElement("button", {
+      key: k,
+      type: "button",
+      onClick: () => setMod(k),
+      title: 'Who holds ' + l,
+      style: {
+        border: 0,
+        borderRadius: 7,
+        padding: '5px 2px',
+        font: 'inherit',
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: .3,
+        textTransform: 'uppercase',
+        cursor: 'pointer',
+        background: on ? 'var(--blue)' : 'transparent',
+        color: on ? '#fff' : 'var(--muted)',
+        lineHeight: 1.25
+      }
+    }, l.split(' ')[0]);
+  })), rows.map(u => React.createElement("div", {
+    key: u.username,
+    style: {
+      display: 'grid',
+      gridTemplateColumns: cols,
+      gap: 4,
+      padding: '6px 16px',
+      borderBottom: '1px solid var(--line-2)',
+      alignItems: 'center'
+    }
+  }, React.createElement("button", {
+    type: "button",
+    onClick: () => openPerson(u.username),
+    style: {
+      border: 0,
+      background: 'transparent',
+      font: 'inherit',
+      textAlign: 'left',
+      cursor: 'pointer',
+      padding: 0,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, u.name || u.username), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)'
+    }
+  }, AC_TYPE[acAccessType(u)].label)), K.USER_MODS.map(([k]) => {
+    const a = acActs(u, k);
+    return React.createElement("div", {
+      key: k,
+      title: a.length ? a.join(', ') : 'no access',
+      style: {
+        display: 'flex',
+        gap: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: 32,
+        borderRadius: 7,
+        background: k === mod ? 'var(--blue-50)' : a.length ? '#f7fbff' : 'transparent',
+        border: a.length ? '1px solid var(--blue-100)' : '1px dashed var(--line)'
+      }
+    }, a.map(x => React.createElement("span", {
+      key: x,
+      style: {
+        width: 11,
+        height: 16,
+        borderRadius: 3,
+        display: 'grid',
+        placeItems: 'center',
+        fontSize: 8.5,
+        fontWeight: 800,
+        fontFamily: 'var(--mono, monospace)',
+        background: x === 'delete' ? 'var(--rose)' : 'var(--blue)',
+        color: '#fff'
+      }
+    }, AC_ACT_LETTER[x])));
+  }))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: cols,
+      gap: 4,
+      padding: '9px 16px',
+      background: 'var(--panel-2)',
+      alignItems: 'center'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      color: 'var(--muted)'
+    }
+  }, "Can delete"), K.USER_MODS.map(([k]) => {
+    const n = rows.filter(u => acActs(u, k).indexOf('delete') >= 0).length;
+    return React.createElement("span", {
+      key: k,
+      className: "num",
+      style: {
+        textAlign: 'center',
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: n ? 'var(--rose)' : 'var(--muted)'
+      }
+    }, n);
+  })))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      letterSpacing: .6,
+      textTransform: 'uppercase',
+      color: 'var(--blue-700)'
+    }
+  }, "Module"), React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 800
+    }
+  }, modLabel), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, rows.filter(u => acActs(u, mod).length).length, " of ", rows.length, " accounts hold it")), holders.map(([a, list]) => React.createElement("div", {
+    key: a,
+    style: {
+      borderTop: '1px solid var(--line-2)',
+      paddingTop: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      fontSize: 12.5,
+      fontWeight: 800,
+      marginBottom: 6,
+      color: a === 'delete' ? 'var(--rose)' : 'var(--ink)'
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1,
+      textTransform: 'capitalize'
+    }
+  }, a), React.createElement("span", {
+    className: "num"
+  }, list.length)), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5
+    }
+  }, list.map(u => React.createElement("button", {
+    key: u.username,
+    type: "button",
+    className: "tag",
+    onClick: () => openPerson(u.username),
+    style: {
+      cursor: 'pointer',
+      border: 0,
+      font: 'inherit',
+      fontSize: 11.5
+    }
+  }, u.name || u.username)), !list.length && React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--faint)'
+    }
+  }, "Nobody")))))));
+}
+function AccessControl({
+  depts,
+  setRoute
+}) {
+  const {
+    useState,
+    useEffect,
+    useMemo
+  } = React;
+  const K = acKit();
+  const [tab, setTab] = useState(() => {
+    const t = window.__UNICO_ACCESS_TAB__;
+    try {
+      delete window.__UNICO_ACCESS_TAB__;
+    } catch (e) {}
+    return t === 'indicators' || t === 'matrix' ? t : 'people';
+  });
+  const [users, setUsers] = useState(null);
+  const [lastSeen, setLastSeen] = useState({});
+  const [seenOk, setSeenOk] = useState(false);
+  const [err, setErr] = useState('');
+  const [person, setPerson] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [q, setQ] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [sel, setSel] = useState([]);
+  const [bulkMod, setBulkMod] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [, setTick] = useState(0);
+  const me = window.__UNICO_USER__ && window.__UNICO_USER__.username || null;
+  const load = () => {
+    if (!K) return;
+    setErr('');
+    K.usersApi('GET', '/api/users').then(j => setUsers(j.users || [])).catch(e => {
+      setUsers([]);
+      setErr(e.message || 'Could not load users.');
+    });
+    K.usersApi('GET', '/api/users/last-seen').then(j => {
+      setLastSeen(j.lastSeen || {});
+      setSeenOk(!j.degraded);
+    }).catch(() => {
+      setLastSeen({});
+      setSeenOk(false);
+    });
+  };
+  useEffect(load, []);
+  useEffect(() => {
+    const h = () => setTick(x => x + 1);
+    window.addEventListener('unico:chunk-loaded', h);
+    return () => window.removeEventListener('unico:chunk-loaded', h);
+  }, []);
+  useEffect(() => {
+    if (!window.DcScopeEditor && window.unicoLoadChunk) window.unicoLoadChunk('datacollection').catch(() => {});
+  }, []);
+  const staffByEmp = useMemo(() => {
+    const src = window.STAFF_SEED || window.__UNICO_STAFF__ || [];
+    const m = {};
+    (Array.isArray(src) ? src : []).forEach(e => {
+      const k = String(e.emp_id || '').trim().toLowerCase();
+      if (k) m[k] = e;
+    });
+    return m;
+  }, [users]);
+  const designationOf = u => {
+    const r = staffByEmp[String(u.staffEmpId || u.username || '').trim().toLowerCase()];
+    return r && String(r.designation || '').trim() || '';
+  };
+  if (!K) return React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      color: 'var(--muted)'
+    }
+  }, "Loading Access Control\u2026"));
+  const all = users || [];
+  const admins = all.filter(u => u.role === 'Administrator' && u.active !== false).length;
+  const typeOf = u => acAccessType(u);
+  const active = all.filter(u => u.active !== false);
+  const cnt = t => active.filter(u => typeOf(u) === t).length;
+  const week = Date.now() - 7 * 86400e3;
+  const signedWeek = active.filter(u => (lastSeen[u.username] || 0) >= week).length;
+  const noAccess = active.filter(u => typeOf(u) === 'none');
+  const canDeleteStaff = active.filter(u => u.role !== 'Administrator' && acActs(u, 'staff').indexOf('delete') >= 0);
+  const neverSeen = seenOk ? active.filter(u => !lastSeen[u.username]) : [];
+  const legacy = all.filter(u => typeOf(u) === 'portal');
+  const attention = noAccess.length + canDeleteStaff.length + legacy.length;
+  const convertAll = async () => {
+    try {
+      const pre = await K.usersApi('POST', '/api/users/convert-portal', {});
+      if (!pre.count) {
+        K.uToast('No old portal logins left');
+        load();
+        return;
+      }
+      const by = f => pre.accounts.filter(a => a.from === f).length;
+      const lines = [['collector', '→ Data Submission'], ['incharge', '→ Data Submission + runs a unit'], ['nurse', '→ Staff app (nurse)'], ['pca', '→ Staff app (PCA)']].filter(([f]) => by(f)).map(([f, t]) => by(f) + ' ' + f + (by(f) === 1 ? '' : 's') + ' ' + t).join(' · ');
+      const ok = window.UI && window.UI.confirm ? await window.UI.confirm({
+        title: 'Convert ' + pre.count + ' old portal login' + (pre.count === 1 ? '' : 's') + '?',
+        message: lines + '. Their departments, areas, indicators and matrix records are kept. Each person is signed out once and signs back in to the main app.',
+        confirmLabel: 'Convert all'
+      }) : window.confirm('Convert ' + pre.count + ' portal logins?');
+      if (!ok) return;
+      const r = await K.usersApi('POST', '/api/users/convert-portal', {
+        apply: true
+      });
+      K.uToast(r.converted + ' converted' + (r.failed && r.failed.length ? ' · ' + r.failed.length + ' failed' : ''), r.failed && r.failed.length ? 'warn' : 'success');
+      load();
+    } catch (e) {
+      K.uToast(e.message || 'Failed', 'error');
+    }
+  };
+  const mayAdd = K.mayUsers('add'),
+    mayEdit = K.mayUsers('edit');
+  const qn = q.trim().toLowerCase();
+  const shown = all.filter(u => {
+    if (filter === 'inactive') {
+      if (u.active !== false) return false;
+    } else {
+      if (u.active === false && filter !== 'all') return false;
+      if (filter !== 'all' && typeOf(u) !== filter) return false;
+    }
+    if (!qn) return true;
+    return (u.name + ' ' + u.username + ' ' + (u.email || '') + ' ' + designationOf(u) + ' ' + (u.staffEmpId || '')).toLowerCase().indexOf(qn) >= 0;
+  });
+  const current = person ? all.find(u => u.username === person) : null;
+  if (person && current) {
+    return React.createElement(AcPerson, {
+      u: current,
+      all: all,
+      lastSeen: lastSeen,
+      depts: depts,
+      designation: designationOf(current),
+      me: me,
+      admins: admins,
+      onBack: () => setPerson(null),
+      reload: load
+    });
+  }
+  const selUsers = all.filter(u => sel.indexOf(u.username) >= 0);
+  const toggleSel = un => setSel(s => s.indexOf(un) >= 0 ? s.filter(x => x !== un) : [...s, un]);
+  const allShownSel = shown.length > 0 && shown.every(u => sel.indexOf(u.username) >= 0);
+  const selectAllShown = () => setSel(allShownSel ? [] : shown.map(u => u.username));
+  const bulk = async (label, fn, filterFn) => {
+    const targets = selUsers.filter(filterFn || (() => true));
+    if (!targets.length) {
+      K.uToast('Nothing to change for the selected people', 'warn');
+      return;
+    }
+    setBulkBusy(true);
+    let ok = 0,
+      fail = 0;
+    for (const u of targets) {
+      try {
+        await fn(u);
+        ok++;
+      } catch (e) {
+        fail++;
+      }
+    }
+    setBulkBusy(false);
+    K.uToast(label + ': ' + ok + ' updated' + (fail ? ', ' + fail + ' failed' : ''), fail ? 'warn' : 'success');
+    load();
+  };
+  const permsWith = (u, mod, acts) => {
+    const p = {};
+    K.USER_MODS.forEach(([k]) => {
+      p[k] = K.asActions((u.perms || {})[k]);
+    });
+    p[mod] = acts;
+    return p;
+  };
+  const onlyCustom = u => u.role === 'User';
+  const grantView = () => bulkMod && bulk('View given', u => {
+    const cur = K.asActions((u.perms || {})[bulkMod]);
+    return K.usersApi('PATCH', '/api/users/' + encodeURIComponent(u.username), {
+      perms: permsWith(u, bulkMod, cur.length ? cur : ['view'])
+    });
+  }, onlyCustom);
+  const revoke = () => bulkMod && bulk('Module removed', u => K.usersApi('PATCH', '/api/users/' + encodeURIComponent(u.username), {
+    perms: permsWith(u, bulkMod, [])
+  }), onlyCustom);
+  const signOutAll = () => bulk('Signed out', u => K.usersApi('POST', '/api/users/' + encodeURIComponent(u.username) + '/signout'));
+  const deactivate = async () => {
+    const ok = window.UI && window.UI.confirm ? await window.UI.confirm({
+      title: 'Deactivate ' + selUsers.length + ' account' + (selUsers.length === 1 ? '' : 's') + '?',
+      message: 'They are signed out and cannot sign in until reactivated. Your own account is skipped.',
+      danger: true,
+      confirmLabel: 'Deactivate'
+    }) : true;
+    if (ok) bulk('Deactivated', u => K.usersApi('PATCH', '/api/users/' + encodeURIComponent(u.username), {
+      active: false
+    }), u => u.username !== me && u.active !== false);
+  };
+  const FILTERS = [['all', 'All'], ['full', 'Full access'], ['custom', 'Custom'], ['portal', 'Portal'], ['none', 'No access'], ['inactive', 'Inactive']];
+  const TABS = [['people', 'People', I.user], ['matrix', 'Permission Matrix', I.grid], ['indicators', 'Indicator Access', I.check]];
+  const COLS = '28px minmax(220px,1.6fr) minmax(150px,1fr) minmax(140px,1fr) 280px 110px 150px';
+  const DR = window.DataResponsibles;
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 240
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 800,
+      color: 'var(--ink)',
+      letterSpacing: -.3
+    }
+  }, "Access Control"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--muted)',
+      maxWidth: 640
+    }
+  }, "Who can sign in, what they can open and what they can change \u2014 set person by person. No roles, no tiers: each account holds exactly what is ticked for it.")), React.createElement("button", {
+    className: "btn sm",
+    onClick: load
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 14
+  }), "Refresh"), mayAdd && React.createElement("button", {
+    className: "btn pri sm",
+    onClick: () => setAdding(true)
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "Add user")), React.createElement("div", {
+    className: "seg",
+    style: {
+      alignSelf: 'flex-start'
+    }
+  }, TABS.map(([id, l, ic]) => React.createElement("button", {
+    key: id,
+    className: tab === id ? 'on' : '',
+    onClick: () => setTab(id),
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, React.createElement(Ic, {
+    d: ic,
+    s: 13
+  }), l, id === 'people' && users ? React.createElement("span", {
+    className: "num",
+    style: {
+      opacity: .7
+    }
+  }, all.length) : null))), err && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#b32339',
+      background: 'var(--neg-bg)',
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      padding: '11px 13px'
+    }
+  }, err), tab === 'matrix' && (users === null ? React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      color: 'var(--faint)'
+    }
+  }, "Loading\u2026")) : React.createElement(AcMatrix, {
+    users: all.filter(u => u.active !== false),
+    openPerson: setPerson
+  })), tab === 'indicators' && (DR ? React.createElement(DR, {
+    key: "access",
+    depts: depts,
+    embedded: true,
+    initialView: "access"
+  }) : React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      color: 'var(--muted)'
+    }
+  }, "Loading Indicator Access\u2026"))), tab === 'people' && React.createElement(React.Fragment, null, React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+      gap: 10
+    }
+  }, React.createElement(AcKpi, {
+    label: "Accounts",
+    value: all.length,
+    sub: active.length + ' active · ' + (all.length - active.length) + ' inactive'
+  }), React.createElement(AcKpi, {
+    label: "Full access",
+    value: cnt('full'),
+    sub: "Every module, every action"
+  }), React.createElement(AcKpi, {
+    label: "Custom access",
+    value: cnt('custom'),
+    sub: "Set person by person"
+  }), React.createElement(AcKpi, {
+    label: "Data Submission",
+    value: active.filter(u => acActs(u, 'datasubmit').length).length,
+    sub: "People who report their unit's data"
+  }), React.createElement(AcKpi, {
+    label: "Signed in \xB7 7 days",
+    value: seenOk ? signedWeek : '—',
+    sub: seenOk ? 'of ' + active.length + ' active' : 'Sign-in log unavailable'
+  }), React.createElement(AcKpi, {
+    label: "Needs attention",
+    value: attention,
+    sub: "See the cards below",
+    tone: attention ? 'warn' : null
+  })), (legacy.length > 0 || noAccess.length > 0 || canDeleteStaff.length > 0 || neverSeen.length > 0) && React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))',
+      gap: 10
+    }
+  }, legacy.length > 0 && React.createElement("div", {
+    className: "card",
+    style: {
+      borderColor: '#f1d9a6'
+    }
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      background: '#fbf1dc',
+      color: '#8a5a00',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.user,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 800
+    }
+  }, legacy.length, " old portal login", legacy.length === 1 ? '' : 's'), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "Convert to normal accounts with Data Submission / Staff app")), mayEdit && React.createElement("button", {
+    className: "btn pri sm",
+    onClick: convertAll
+  }, "Convert all"))), noAccess.length > 0 && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      background: 'var(--neg-bg)',
+      color: 'var(--rose)',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 800
+    }
+  }, noAccess.length, " can sign in but have no modules"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, noAccess.slice(0, 3).map(u => u.name).join(', '), noAccess.length > 3 ? ' …' : '')), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setFilter('none')
+  }, "Show"))), canDeleteStaff.length > 0 && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      background: '#fbf1dc',
+      color: '#8a5a00',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.steth,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 800
+    }
+  }, canDeleteStaff.length, " can delete staff records"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "Check each one still needs it")), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setTab('matrix')
+  }, "Review"))), neverSeen.length > 0 && React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'center'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      background: 'var(--blue-50)',
+      color: 'var(--blue)',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: I.bell,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 800
+    }
+  }, neverSeen.length, " no sign-in on record"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "In the activity log's window"))))), React.createElement("div", {
+    className: "card",
+    style: {
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '12px 16px',
+      borderBottom: '1px solid var(--line-2)',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      background: 'var(--panel-2)',
+      border: '1px solid var(--line)',
+      borderRadius: 8,
+      padding: '7px 10px',
+      width: 280,
+      maxWidth: '100%',
+      color: 'var(--faint)'
+    }
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 14
+  }), React.createElement("input", {
+    "aria-label": "Search people",
+    placeholder: "Name, username, email, emp ID",
+    value: q,
+    onChange: e => setQ(e.target.value),
+    style: {
+      border: 0,
+      background: 'transparent',
+      outline: 'none',
+      fontFamily: 'inherit',
+      fontSize: 12.5,
+      color: 'var(--ink)',
+      width: '100%'
+    }
+  })), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("div", {
+    className: "seg"
+  }, FILTERS.map(([id, l]) => React.createElement("button", {
+    key: id,
+    className: filter === id ? 'on' : '',
+    onClick: () => setFilter(id)
+  }, l)))), mayEdit && sel.length > 0 && React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '9px 16px',
+      background: '#0c1a31',
+      color: '#fff',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 800,
+      marginRight: 6
+    }
+  }, sel.length, " selected"), React.createElement("select", {
+    value: bulkMod,
+    onChange: e => setBulkMod(e.target.value),
+    "aria-label": "Module for bulk change",
+    style: {
+      padding: '6px 8px',
+      borderRadius: 7,
+      border: '1px solid #2b4a75',
+      background: '#16294a',
+      color: '#fff',
+      fontFamily: 'inherit',
+      fontSize: 12
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, "Choose a module\u2026"), K.USER_MODS.map(([k, l]) => React.createElement("option", {
+    key: k,
+    value: k
+  }, l))), React.createElement("button", {
+    className: "btn sm",
+    disabled: !bulkMod || bulkBusy,
+    onClick: grantView
+  }, "Give view"), React.createElement("button", {
+    className: "btn sm",
+    disabled: !bulkMod || bulkBusy,
+    onClick: revoke
+  }, "Remove module"), React.createElement("span", {
+    style: {
+      width: 1,
+      height: 22,
+      background: '#2b4a75'
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    disabled: bulkBusy,
+    onClick: signOutAll
+  }, "Sign out everywhere"), React.createElement("button", {
+    className: "btn sm",
+    disabled: bulkBusy,
+    onClick: deactivate
+  }, "Deactivate"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: '#b8c6da'
+    }
+  }, "Module changes apply to custom-access people only."), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setSel([]),
+    "aria-label": "Clear selection"
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 13
+  }))), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("div", {
+    style: {
+      minWidth: 1130
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: COLS,
+      alignItems: 'center',
+      gap: 10,
+      padding: '9px 16px',
+      background: 'var(--panel-2)',
+      borderBottom: '1px solid var(--line-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    "aria-label": "Select all shown",
+    checked: allShownSel,
+    onChange: selectAllShown,
+    disabled: !mayEdit
+  }), ['Person', 'Access', 'Scope'].map(h => React.createElement("span", {
+    key: h,
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      color: 'var(--muted)'
+    }
+  }, h)), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 3
+    }
+  }, K.USER_MODS.map(([k, l]) => React.createElement("span", {
+    key: k,
+    title: l,
+    style: {
+      width: 20,
+      textAlign: 'center',
+      fontSize: 8.5,
+      fontWeight: 800,
+      color: 'var(--muted)'
+    }
+  }, AC_SHORT[k]))), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      color: 'var(--muted)'
+    }
+  }, "Last sign-in"), React.createElement("span", null)), users === null && React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: 24,
+      fontSize: 13
+    }
+  }, "Loading\u2026"), users !== null && shown.map(u => {
+    const t = typeOf(u);
+    const isMe = me && u.username === me;
+    const seen = lastSeen[u.username];
+    const staffScope = u.role === 'Administrator' ? 'Everything' : t === 'portal' || acActs(u, 'datasubmit').length ? (u.allQualityAreas ? 'All areas' : (u.qualityAreas || []).length + ' area' + ((u.qualityAreas || []).length === 1 ? '' : 's')) + ' · ' + Object.keys(u.qualityIndicators || {}).reduce((s, k) => s + (u.qualityIndicators[k] || []).length, 0) + ' indicators limited' : u.staffScope === 'self' ? 'Staff: own record' : u.staffScope === 'departments' ? 'Staff: ' + (u.departments || []).length + ' dept' : 'Staff: all';
+    return React.createElement("div", {
+      key: u.username,
+      style: {
+        display: 'grid',
+        gridTemplateColumns: COLS,
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 16px',
+        borderBottom: '1px solid var(--line-2)',
+        background: sel.indexOf(u.username) >= 0 ? '#f4f9fe' : 'transparent',
+        opacity: u.active === false ? .6 : 1
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      "aria-label": 'Select ' + (u.name || u.username),
+      checked: sel.indexOf(u.username) >= 0,
+      onChange: () => toggleSel(u.username),
+      disabled: !mayEdit
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        minWidth: 0
+      }
+    }, React.createElement(AcAvatar, {
+      u: u,
+      size: 36
+    }), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6
+      }
+    }, React.createElement("button", {
+      type: "button",
+      onClick: () => setPerson(u.username),
+      style: {
+        border: 0,
+        background: 'transparent',
+        padding: 0,
+        font: 'inherit',
+        fontSize: 13.5,
+        fontWeight: 800,
+        color: 'var(--ink)',
+        cursor: 'pointer',
+        textAlign: 'left'
+      }
+    }, u.name || u.username), isMe && React.createElement("span", {
+      className: "tag",
+      style: {
+        background: 'var(--pos-bg)',
+        color: 'var(--pos)'
+      }
+    }, "You")), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, "@", u.username, designationOf(u) ? ' · ' + designationOf(u) : ''))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3,
+        alignItems: 'flex-start'
+      }
+    }, React.createElement(AcTypeChip, {
+      t: t
+    }), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--ink-2)',
+        fontWeight: 600
+      }
+    }, t === 'full' ? 'All modules · all actions' : t === 'portal' ? K.PORTAL_ROLE_LABEL[u.role] : K.permSummary(u.perms))), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--ink-2)',
+        fontWeight: 600
+      }
+    }, staffScope), React.createElement(AcStrip, {
+      u: u
+    }), React.createElement("span", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: seen ? 'var(--ink)' : 'var(--muted)'
+      }
+    }, seen ? acAgo(seen) : seenOk ? 'Not recorded' : '—'), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        justifyContent: 'flex-end'
+      }
+    }, u.active !== false ? React.createElement("span", {
+      className: "chip pos"
+    }, "\u25CF Active") : React.createElement("span", {
+      className: "chip flat"
+    }, "\u25CB Inactive"), mayEdit && React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setPerson(u.username)
+    }, "Manage")));
+  }), users !== null && !shown.length && React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      color: 'var(--faint)',
+      padding: 24,
+      fontSize: 13
+    }
+  }, "No people ", q ? 'match the search' : 'in this view', "."))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      padding: '10px 16px',
+      background: 'var(--panel-2)',
+      flexWrap: 'wrap',
+      fontSize: 11,
+      fontWeight: 700,
+      color: 'var(--ink-2)'
+    }
+  }, React.createElement("span", null, "Showing ", shown.length, " of ", all.length), [['none', 'None'], ['view', 'View'], ['edit', 'Edit / add'], ['full', 'Full incl. delete']].map(([k, l]) => React.createElement("span", {
+    key: k,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 14,
+      height: 14,
+      borderRadius: 4,
+      boxSizing: 'border-box',
+      ...AC_SHADE[k]
+    }
+  }), l))))), adding && window.UserModal && React.createElement(window.UserModal, {
+    initial: null,
+    depts: depts,
+    allUsers: all,
+    onClose: () => setAdding(false),
+    onSaved: () => {
+      setAdding(false);
+      load();
+    }
+  }));
+}
+window.AccessControl = AccessControl;
 })();

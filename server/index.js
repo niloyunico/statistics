@@ -175,7 +175,7 @@ app.get('/api/me', async (req, res) => {
     const u = users && typeof users.findOne === 'function' ? await users.findOne({ username: claims.sub }) : null;
     if (u) {
       profile = {
-        title: u.title || null, designation: u.designation || null, email: u.email || null, phone: u.phone || null,
+        title: u.title || null, designation: u.designation || null, workDepartment: u.workDepartment || null, email: u.email || null, phone: u.phone || null,
         photo: u.photo || null, empId: u.empId || u.emp_id || null,
         departments: Array.isArray(u.departments) ? u.departments : [],
         qualityAreas: Array.isArray(u.qualityAreas) ? u.qualityAreas : [],

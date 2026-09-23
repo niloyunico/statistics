@@ -320,6 +320,10 @@
     const [cfg, setCfg] = React.useState(null);
     const [cropSrc, setCropSrc] = React.useState(null);   // data URI awaiting framing
     const [viewing, setViewing] = React.useState(false);  // lightbox open?
+    // The stored url can stop loading (the image host was disabled on 2026-09-23 and every
+    // photo answered 401). Fall back to initials instead of the browser's broken-image icon.
+    const [broken, setBroken] = React.useState(false);
+    React.useEffect(() => { setBroken(false); }, [value && value.url]);
     const inputRef = React.useRef(null);
     const px = size || 96;
 
@@ -406,11 +410,11 @@
               color: plain ? '#fff' : ring, letterSpacing: '.5px',
               cursor: (zoomable && value && value.url && !busy) ? 'zoom-in' : undefined,
             }}>
-            {value && value.url
+            {value && value.url && !broken
               // 'fit' derivative: scaled to the display bucket but keeps the aspect
               // ratio the person framed at upload — the badge is not a square crop.
               ? <img src={(window.MK && window.MK.cdnPhoto) ? window.MK.cdnPhoto(value.url, Math.max(W, H), 'fit') : value.url}
-                  alt={name || 'Photo'} decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  alt={name || 'Photo'} decoding="async" onError={() => setBroken(true)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               : <span>{initials || '—'}</span>}
           </div>
           {busy && (
@@ -505,6 +509,15 @@
         style={Object.assign({}, base, { objectFit: 'cover', padding: 0, display: 'block' })} />;
     }
     return <div className={className} style={base}>{initials || 'U'}</div>;
+  }
+
+  if (typeof document !== 'undefined' && !window.__UNICO_IMG_NET__) {
+    window.__UNICO_IMG_NET__ = true;
+    document.addEventListener('error', (e) => {
+      const el = e.target;
+      if (!el || el.tagName !== 'IMG' || el.onerror || el.dataset.noNet) return;   // components with their own fallback handle it
+      el.style.visibility = 'hidden';
+    }, true);
   }
 
   Object.assign(window, {

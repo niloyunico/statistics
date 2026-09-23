@@ -776,15 +776,15 @@
       const bu = boot.user || {};
       const isIncharge = s.role === 'incharge', isNurse = !isIncharge;
       const staffName = me.name || bu.name || '';
-      const designation = me.designation || me.title || bu.roleLabel || (me.role === 'incharge' ? 'Nurse In-charge' : me.role === 'pca' ? 'Patient Care Assistant' : me.role === 'collector' ? 'Data collector' : 'Staff Nurse');
+      const designation = me.designation || me.title || bu.roleLabel || ((bu.role || me.role) === 'incharge' ? 'Nurse In-charge' : (bu.role || me.role) === 'pca' ? 'Patient Care Assistant' : (bu.role || me.role) === 'collector' ? 'Data collector' : 'Staff Nurse');
       const unit = boot.unit || null;
       const units = boot.units || [];
       const dept = unit ? (unit.short || unit.name) : (units.length ? 'All units' : '—');
-      const isRealIncharge = me.role === 'incharge';
+      const isRealIncharge = bu.isIncharge === true || (bu.role || me.role) === 'incharge';
       // A collector scoped only to quality areas (qualityAreas / allQualityAreas, no unit) got an
       // empty dashboard: their items come from the server-scoped /api/quality areas instead,
       // stepped through with the same unit chip.
-      const qAreas = !unit && !s.demo && me.role === 'collector' ? (live.quality || []) : [];
+      const qAreas = !unit && !s.demo && (bu.role || me.role) === 'collector' ? (live.quality || []) : [];
       const qArea = qAreas.find((a) => String(a.key) === String(s.dcAreaSel)) || qAreas[0] || null;
       const unitChip = unit ? (unit.short || unit.name) + (units.length > 1 ? ' ▾' : '') : qArea ? (qArea.name || qArea.key) + (qAreas.length > 1 ? ' ▾' : '') : (units.length ? 'Choose a unit ▾' : 'No unit assigned');
       const pickUnit = () => { if (!unit && qAreas.length > 1) { const i = qAreas.indexOf(qArea); return this.setState({ dcAreaSel: qAreas[(i + 1) % qAreas.length].key }); } if (units.length <= 1) { if (!unit && units[0]) this.setUnit(units[0].id); return; } const i = units.findIndex((x) => unit && x.id === unit.id); this.setUnit(units[(i + 1) % units.length].id); };

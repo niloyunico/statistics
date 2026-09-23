@@ -168,14 +168,12 @@ function scopeDeptOverlay(raw, deptIds) {
 // ever derived quality areas, never the reverse — so a person assigned purely via quality
 // (or hospital-wide) was left with an empty `departments` and saw NO patient-statistics
 // departments at all. Returns a Set of canonical department ids.
-function effectiveDeptIds(scope, deptMap) {
-  const out = new Set(scope && Array.isArray(scope.departments) ? scope.departments : []);
-  const qk = (deptMap && deptMap.qkToId) || {};
-  (scope && scope.qualityAreas || []).forEach((k) => { const id = qk[k]; if (id && id !== deptmap.HOSPITAL) out.add(id); });
-  if (scope && scope.allQualityAreas && deptMap && Array.isArray(deptMap.patientDepts)) {
-    deptMap.patientDepts.forEach((id) => out.add(id));
-  }
-  return out;
+/* 2026-09-23 (user decision): patient statistics are scoped by the ASSIGNED DEPARTMENTS
+   only. Quality areas — and "hospital-wide" quality — give quality indicators, never a
+   department's statistics: an infection-control nurse with every quality area was being
+   handed every department's patient statistics. */
+function effectiveDeptIds(scope) {
+  return new Set(scope && Array.isArray(scope.departments) ? scope.departments : []);
 }
 
 // Shown only when the database is unreachable AND no cached copy exists to stand in
@@ -328,14 +326,35 @@ async function serveIndex(req, res) {
       staff = access.can(a, 'staff', 'view') ? await access.filterStaff(a, staff) : [];
       if (!access.can(a, 'stats', 'view')) depts = [];
       if (!access.can(a, 'quality', 'view')) quality = [];
+      /* Data Submission holders: the departments and quality areas they REPORT, and only
+         those — the same narrowing a portal account got above — for whatever the module
+         grants above do not already cover. Their forms need the definition overlays too. */
+      if (scopeUser && access.submitsData(a)) {
+        const raw = (appRes && appRes.data) || {};
+        if (!access.can(a, 'stats', 'view')) {
+          const daSet = effectiveDeptIds(scopeUser, deptMap);
+          depts = (deptRes || []).filter((d) => daSet.has(d.id));
+          const dov = scopeDeptOverlay(raw['unico_store_v3'], [...daSet]);
+          if (dov) snap['unico_store_v3'] = JSON.stringify(dov);
+        }
+        if (!access.can(a, 'quality', 'view')) {
+          quality = scopeQualityList(qualRes || [], scopeUser);
+          const qi = (scopeUser.qualityIndicators && typeof scopeUser.qualityIndicators === 'object') ? scopeUser.qualityIndicators : {};
+          const qov = scopeQualityOverlay(raw['unico_quality_v2'], scopeUser.qualityAreas || [], qi);
+          if (qov && qov['unico_quality_v2']) snap['unico_quality_v2'] = qov['unico_quality_v2'];
+        }
+      }
     }
   }
 
   const userInject = scopeUser
     ? { username: scopeUser.username, name: scopeUser.name, role: scopeUser.role, departments: scopeUser.departments, qualityAreas: scopeUser.qualityAreas, perms: scopeUser.perms,
+        allQualityAreas: !!scopeUser.allQualityAreas, qualityIndicators: scopeUser.qualityIndicators || {},
+        unitLead: !!scopeUser.unitLead, rosterEdit: !!scopeUser.rosterEdit, enterDen: !!scopeUser.enterDen, submitKinds: scopeUser.submitKinds || { patient: true, quality: true }, dsScreens: scopeUser.dsScreens || null,
         staffScope: restricted ? restricted.staffScope : 'all', staffId: restricted ? restricted.staffId : null,
         photo: scopeUser.photo || null, email: scopeUser.email || null,
-        phone: scopeUser.phone || null, designation: scopeUser.designation || null, title: scopeUser.title || null }
+        phone: scopeUser.phone || null, designation: scopeUser.designation || null, title: scopeUser.title || null,
+        workDepartment: scopeUser.workDepartment || null }
     : (req.user ? { username: req.user.sub, name: req.user.name, role: req.user.role } : null);
 
   // Canonical quality-formula master: the DB catalogue expanded to the
@@ -607,7 +626,8 @@ app.post('/login', async function (req, res) {
     session.setSession(res, auth.sign(user));
     // Honor an explicit return target; else collectors land on /collect, admins on the app.
     // Phone-only roles land on the Nurse App; collectors and in-charges keep /collect.
-    res.redirect(302, next || (user.role === 'nurse' || user.role === 'pca' ? '/app' : access.PORTAL_ROLES.indexOf(user.role) >= 0 ? '/collect' : '/'));
+    // A normal account whose only module is the Staff app has no console either.
+    res.redirect(302, next || (user.role === 'nurse' || user.role === 'pca' || staffAppOnly(user) ? '/app' : access.PORTAL_ROLES.indexOf(user.role) >= 0 ? '/collect' : '/'));
   } catch (e) {
     res.status(500).type('html').send(loginPage({ error: 'Server error. Is the database reachable?', username, next, portal }));
   }
@@ -627,10 +647,24 @@ app.get('/favicon.ico', function (req, res) {
   res.redirect(302, '/unico/logo-mark.svg');
 });
 
+/* Holds the Staff app and no console module at all: the phone app is their whole UNICO,
+   exactly like the old nurse / PCA roles. `u` is a stored account document. */
+function staffAppOnly(u) {
+  if (!u || (u.role || 'User') !== 'User') return false;
+  const pa = { unrestricted: false, role: 'User', perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : {} };
+  if (!access.can(pa, 'staffapp', 'view')) return false;
+  return !access.ACCESS_MODULES.some((m) => m !== 'staffapp' && access.can(pa, m, 'view'));
+}
 // A staff nurse / PCA account has no console; the phone app is their whole UNICO.
-function phoneOnlyToApp(req, res, next) {
+async function phoneOnlyToApp(req, res, next) {
   const u = req.user;
   if (u && (u.role === 'nurse' || u.role === 'pca')) return res.redirect(302, '/app');
+  if (u && (u.role || 'User') === 'User') {
+    try {
+      const doc = await (await getUsers()).findOne({ username: String(u.sub || '').toLowerCase() });
+      if (staffAppOnly(doc)) return res.redirect(302, '/app');
+    } catch (e) { /* unreadable: fall through to the console, which gates itself */ }
+  }
   next();
 }
 app.get('/', session.requirePage, phoneOnlyToApp, serveIndex);
@@ -641,7 +675,9 @@ app.get('/collect', function (req, res) {
   // Logged-out visitors get the collector-branded sign-in and return here after.
   if (session.authRequired() && !session.userFromReq(req)) return res.redirect(302, '/login?portal=collect&next=%2Fcollect');
   req.user = session.authRequired() ? session.userFromReq(req) : null;
-  req.unicoLanding = { view: 'dcPatient' };
+  // A normal account lands on its Data Submission module; a not-yet-converted portal
+  // account keeps its old landing.
+  req.unicoLanding = { view: (req.user && access.PORTAL_ROLES.indexOf(req.user.role) >= 0) ? 'dcPatient' : 'dsHome' };
   return serveIndex(req, res);
 });
 
@@ -667,11 +703,21 @@ app.get(['/admin', '/admin/', '/admin-app'], servePhoneApp('admin-app.html'));
 // refocus) and external tools. MUST apply the SAME collector scoping as the "/"
 // snapshot: the unscoped lists leaked every department/indicator (incl. unassigned
 // ones and their recorded values) back into collector portals on refresh.
-async function collectorScope(req) {
+/* The caller's own data-collection scope when the list it asks for must be narrowed to it,
+   else null (serve the list as the module permission allows). That is every legacy portal
+   account, and a normal account holding Data Submission that does NOT hold `mod` itself --
+   holding Statistics, Quality or Staff is what unlocks the unscoped list, exactly as before. */
+async function collectorScope(req, mod) {
   try {
     if (!(req.user && req.user.sub)) return null;
-    const s = await dataCollection.getUserScope(req.user.sub);
-    return (s && access.PORTAL_ROLES.indexOf(s.role) >= 0) ? s : null;
+    const a = req.access || await access.forRequest(req).catch(() => null);
+    if (!a || a.unrestricted) return null;
+    const legacy = access.isPortal(a);
+    if (!legacy) {
+      if (!access.submitsData(a)) return null;
+      if (mod && access.can(a, mod, 'view')) return null;
+    }
+    return await dataCollection.getUserScope(req.user.sub);
   } catch (e) { return null; }
 }
 // Area + per-indicator narrowing — same rules as serveIndex's snapshot scoping.
@@ -688,7 +734,7 @@ function scopeQualityList(quality, scope) {
 app.get('/api/departments', session.requireApi, access.requirePerm('stats', 'view', { allowCollector: true }), async (req, res) => {
   try {
     let depts = await getDepartments();
-    const scope = await collectorScope(req);
+    const scope = await collectorScope(req, 'stats');
     const out = { ok: true };
     if (scope) {
       const daSet = effectiveDeptIds(scope, await deptmap.get());
@@ -717,7 +763,7 @@ app.get('/api/staff', session.requireApi, access.requirePerm('staff', 'view', { 
     // (access.portalStaff). Its department list is in statistics ids, while a staff
     // record stores the department NAME, so the ids are resolved through the
     // canonical map before matching.
-    const scope = await collectorScope(req);
+    const scope = await collectorScope(req, 'staff');
     if (scope) {
       const map = await deptmap.get();
       // Match on BOTH vocabularies. A staff record's `current_department` is written by
@@ -732,10 +778,31 @@ app.get('/api/staff', session.requireApi, access.requirePerm('staff', 'view', { 
   }
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load staff.' }); }
 });
+// The signed-in person's OWN staff record, whatever their modules. Home and My Profile
+// show designation, department and joining date from it, and an account without the
+// staff module (a Data Submission user) never receives the register to look it up in.
+// Link order is the same as the renderer's: staffId, then an employee number that
+// only ONE record holds (numbers are not unique), then the username as that number,
+// then an exact unique name. An ambiguous match returns nothing rather than a colleague.
+app.get('/api/me/staff', session.requireApi, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const a = req.access || await access.forRequest(req);
+    if (!a || !a.username) return res.status(401).json({ ok: false });
+    const doc = await (await getUsers()).findOne({ username: String(a.username).toLowerCase() });
+    const roster = (await require('./staff-roster').loadRoster({ cached: true })).filter((r) => r && !r.former);
+    // One rule for "which record is this account" (server/account-staff.js): an employee
+    // number only counts when the name agrees, so a mixed-up number never shows a colleague.
+    const acct = Object.assign({ username: a.username, name: a.name, staffId: a.staffId, staffEmpId: a.staffEmpId }, doc || {});
+    if (!acct.staffEmpId && doc) acct.staffEmpId = doc.empId || doc.emp_id || '';
+    const rec = require('./account-staff').staffOfAccount(acct, roster);
+    res.json({ ok: true, staff: rec || null });
+  } catch (e) { res.status(500).json({ ok: false, error: 'Could not load your staff record.' }); }
+});
 app.get('/api/quality', session.requireApi, access.requirePerm('quality', 'view', { allowCollector: true }), async (req, res) => {
   try {
     let quality = await getQuality();
-    const scope = await collectorScope(req);
+    const scope = await collectorScope(req, 'quality');
     const out = { ok: true };
     if (scope) {
       quality = scopeQualityList(quality, scope);
@@ -837,8 +904,18 @@ require('./staff-performance').mount(app, { requireApi: [session.requireApi, acc
 // on 'staff' with the portal roles let through, because the request queue is the one
 // staff-shaped thing a ward IS allowed to touch.
 require('./staff-requests').mount(app, {
-  requireApi: [session.requireApi, access.requirePerm('staff', 'view', { allowCollector: true })],
-  scopeOf: collectorScope,
+  requireApi: [session.requireApi, access.requirePerm('staff', 'view', { allowCollector: true }),
+    // Raising or correcting a request is Staff Management → Nurse / PCA requests: a normal
+    // account needs the Staff Management module (a legacy in-charge keeps its portal screen).
+    (req, res, next) => {
+      const a = req.access;
+      if (req.method !== 'GET' && a && !a.unrestricted && !access.isPortal(a) && !access.can(a, 'staff', 'view')) {
+        return res.status(403).json({ ok: false, error: 'Your account cannot raise staff requests.' });
+      }
+      next();
+    }],
+  // Staff Management holders see the whole queue; a submitter only their own requests.
+  scopeOf: (req) => collectorScope(req, 'staff'),
 });
 
 // Duty Roster module: one sheet per unit per month, with shift codes, coverage and the

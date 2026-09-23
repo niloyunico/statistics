@@ -34,7 +34,10 @@ const { getUsers } = require('./db');
 // renderer/unico/ui.jsx and ACCESS_MODULES in server/users-admin.js — the three
 // lists are the same list, and 'supervisor' was previously missing from the two
 // server-side ones, so Shift Supervisor Reports could never actually be granted.
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine'];
+// 'datasubmit' (Data Submission) and 'staffapp' (the phone staff app) replace the old
+// PORTAL roles: submitting data for chosen departments, and signing in to the staff app,
+// are modules a normal account is given, not separate kinds of account.
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine', 'datasubmit', 'staffapp'];
 
 // Escalating legacy level strings. The newer model stores an ARRAY of independently
 // granted actions (e.g. ['view','delete'] = delete without add); both are supported,
@@ -251,6 +254,15 @@ async function forRequest(req) {
     // administrator grants it, and meaningless for every other role: a console account
     // is governed by the `roster` module permission, not by this flag.
     rosterEdit: u.rosterEdit === true,
+    // Data Submission extras, set per person: runs a unit (its staff list, staff requests,
+    // unit dashboard). Meaningful only alongside the 'datasubmit' module.
+    unitLead: u.unitLead === true,
+    // Staff app holders: which phone feature set they get ('nurse' | 'pca').
+    appRole: u.appRole === 'pca' ? 'pca' : 'nurse',
+    // Data Submission: WHICH kinds this person may send. Absent = both (every account
+    // written before the choice existed keeps what it could do).
+    submitKinds: cleanSubmitKinds(u.submitKinds),
+    dsScreens: cleanDsScreens(u.dsScreens),
   };
 }
 
@@ -272,7 +284,97 @@ function isPortal(access) { return !!access && PORTAL_ROLES.indexOf(access.role)
        they may edit, never WHICH units.
    Approval is NOT included: publishing the sheet stays with an administrator. */
 function portalMayEditRoster(access) {
+  // The legacy in-charge portal role only. A normal account builds rosters through the Duty
+  // Roster module permission, like anyone else.
   return !!access && !access.unrestricted && access.role === 'incharge' && access.rosterEdit === true;
+}
+
+/* ---- Data Submission, as a MODULE on a normal account ----
+   The portal roles are being retired: "submits data for these departments" is the
+   'datasubmit' module plus the account's own department / area / indicator selection,
+   the same fields a collector always carried. The legacy roles keep working until every
+   account is converted (scripts/convert-portal-accounts.js), so each check below answers
+   for both shapes. */
+const LEGACY_SUBMIT_ROLES = ['collector', 'incharge'];
+/* The two kinds of data a Data Submission holder may send: monthly patient statistics
+   and quality-indicator data. Set per person; absent means both. */
+const SUBMIT_KINDS = ['patient', 'quality'];
+function cleanSubmitKinds(v) {
+  const o = (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+  return { patient: o.patient !== false, quality: o.quality !== false };
+}
+/* The screens of the Data Submission module, each grantable on its own (Access Control →
+   a person → Data Submission → "Screens they can open"). Only DATA screens: the roster,
+   the unit's staff and staff requests are the Duty Roster and Staff Management modules.
+   `dsScreens` absent = the defaults below, so an account saved before the checklist
+   existed keeps what it had. */
+const DS_SCREENS = ['missing', 'status', 'quality', 'patient', 'history'];   // 'quick' (Quick entry) removed 2026-09-23
+function cleanDsScreens(v) {
+  if (!Array.isArray(v)) return null;
+  return DS_SCREENS.filter((s) => v.indexOf(s) >= 0);
+}
+// The screens this account may open (legacy portal and administrators: all of them).
+function dsScreensOf(access) {
+  if (!access || access.unrestricted || isPortal(access)) return DS_SCREENS.slice();
+  const kinds = cleanSubmitKinds(access.submitKinds);
+  return cleanDsScreens(access.dsScreens) || DS_SCREENS.filter((s) =>
+    (s !== 'patient' || kinds.patient) && (s !== 'quality' && s !== 'status' || kinds.quality));
+}
+const mayOpenDsScreen = (access, screen) => dsScreensOf(access).indexOf(screen) >= 0;
+// May this account send data of this kind ('patient' | 'quality')? Administrators, the Data
+// Collection module and legacy portal accounts always may; a Data Submission holder only
+// the kinds ticked for it.
+function maySubmitKind(access, kind) {
+  if (!access || access.unrestricted) return true;
+  if (isPortal(access)) return true;
+  if (can(access, 'datacol', 'add')) return true;
+  if (!submitsData(access)) return false;
+  if (cleanSubmitKinds(access.submitKinds)[kind] === false) return false;
+  // With a screen checklist, the kind also needs one of its screens.
+  const screens = cleanDsScreens(access.dsScreens);
+  if (!screens) return true;
+  return kind === 'patient' ? screens.indexOf('patient') >= 0
+    : (screens.indexOf('quality') >= 0 || screens.indexOf('status') >= 0);
+}
+// May this account submit data at all?
+function submitsData(access) {
+  if (!access) return false;
+  if (access.unrestricted) return true;
+  if (LEGACY_SUBMIT_ROLES.indexOf(access.role) >= 0) return true;
+  return access.role === 'User' && can(access, 'datasubmit', 'view');
+}
+/* Is this account held to its OWN departments / areas / indicators when it submits and
+   reads submissions? Every legacy portal account is. A normal account is when it holds Data
+   Submission but NOT Data Collection -- Data Collection is the reviewer's module and sees
+   the whole hospital, exactly as before. */
+function dataScoped(access) {
+  if (!access || access.unrestricted) return false;
+  if (isPortal(access)) return true;
+  if (access.role !== 'User') return false;
+  if (can(access, 'datacol', 'view')) return false;
+  return can(access, 'datasubmit', 'view');
+}
+// Runs a unit: the old in-charge role, or a Data Submission holder marked unit lead.
+function isUnitLead(access) {
+  if (!access || access.unrestricted) return false;
+  if (access.role === 'incharge') return true;
+  return access.role === 'User' && access.unitLead === true && can(access, 'datasubmit', 'view');
+}
+/* Which column of the phone app's feature table a person uses: 'admin', 'console' (the
+   in-charge feature set, the rule for console accounts since the app shipped), or one of
+   the old portal columns. A normal account reads it from its MODULES: runs a unit ->
+   'incharge'; any console module -> 'console'; only Data Submission -> 'collector'; only the
+   Staff app -> 'nurse' or 'pca' (appRole, set with the module). */
+const CONSOLE_MODULES = ACCESS_MODULES.filter((m) => m !== 'datasubmit' && m !== 'staffapp');
+function phoneRoleOf(access) {
+  if (!access) return 'nurse';
+  if (access.unrestricted) return 'admin';
+  if (isPortal(access)) return access.role;
+  if (isUnitLead(access)) return 'incharge';
+  if (CONSOLE_MODULES.some((m) => can(access, m, 'view'))) return 'console';
+  if (can(access, 'datasubmit', 'view')) return 'collector';
+  if (can(access, 'staffapp', 'view')) return access.appRole === 'pca' ? 'pca' : 'nurse';
+  return 'console';
 }
 
 /* The unit's own staff, for a portal account.
@@ -383,7 +485,9 @@ function requirePerm(mid, action, opts) {
       const access = await forRequest(req);
       if (!access) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
       req.access = access;
-      if (allowCollector && isPortal(access)) return next();
+      // The handler scopes these callers itself (web.js collectorScope). A Data Submission
+      // holder is let through the same way a portal account always was.
+      if (allowCollector && (isPortal(access) || (submitsData(access) && !can(access, mid, action || 'view')))) return next();
       if (!can(access, mid, action || 'view')) {
         return res.status(403).json({ ok: false, error: 'You do not have access to this.' });
       }
@@ -431,6 +535,10 @@ function requireModule(mid) {
         return res.status(403).json({ ok: false, error: 'You do not have access to this.' });
       }
       if (!can(a, mid, actionForMethod(req.method))) {
+        // The submissions API (mounted on 'datacol') is also the Data Submission module's:
+        // its holder reads and sends its own, row-scoped inside data-collection.js, and
+        // every admin-only route there still checks adminOnly on top.
+        if (mid === 'datacol' && submitsData(a)) return next();
         return res.status(403).json({ ok: false, error: 'You do not have access to this.' });
       }
       next();
@@ -557,7 +665,7 @@ async function rosterDeptNames(access) {
   if (scope === 'departments') {
     return scopedDeptNames({ departments: access.rosterDepartments || [] }, { departmentsOnly: true });
   }
-  if (isPortal(access) || (access.staffScope || 'all') === 'departments') {
+  if (dataScoped(access) || (access.staffScope || 'all') === 'departments') {
     return scopedDeptNames(access, { departmentsOnly: true });
   }
   return null;
@@ -744,6 +852,9 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent) {
 
 module.exports = {
   PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster,
+  LEGACY_SUBMIT_ROLES, submitsData, dataScoped, isUnitLead, phoneRoleOf, CONSOLE_MODULES,
+  SUBMIT_KINDS, cleanSubmitKinds, maySubmitKind,
+  DS_SCREENS, cleanDsScreens, dsScreensOf, mayOpenDsScreen,
   ACCESS_MODULES, ACTIONS, PERM_RANK, STAFF_SCOPES, cleanStaffScope,
   ROSTER_SCOPES, cleanRosterScope, rosterDeptNames, rosterVisible,
   KEY_MODULE, moduleOfKey,

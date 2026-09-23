@@ -181,17 +181,22 @@ async function ctxOf(req) {
   if (!Object.keys(byId).length) {
     try { const rows = await getDepartments(); byId = {}; (Array.isArray(rows) ? rows : []).forEach((d) => { const id = String(d.id || d._id); if (id) byId[id] = { id, name: d.name || id, short: d.short || null }; }); } catch (e) { byId = {}; }
   }
-  const role = a.unrestricted ? 'Administrator' : (a.role || 'User');
-  const isPortal = access.PORTAL_ROLES.indexOf(role) >= 0;
+  // The feature column: a legacy portal role, or read from a normal account's MODULES
+  // (access.phoneRoleOf) -- a unit lead is an in-charge, a Data Submission holder a
+  // collector, a Staff app holder a nurse / PCA, anyone with a console module 'console'.
+  const phoneRole = a.unrestricted ? 'admin' : access.phoneRoleOf(a);
+  const isPortal = ROLE_ORDER.indexOf(phoneRole) >= 0;
+  const role = a.unrestricted ? 'Administrator' : (isPortal ? phoneRole : (a.role || 'User'));
   const own = arr(a.departments).map(String);
   const allIds = Object.keys(byId).filter((id) => id !== deptmap.HOSPITAL);
   const allDepts = !!a.unrestricted || (!isPortal && own.length === 0);
   const username = a.username || (req.user && req.user.sub) || 'local';
   return {
     a, username, name: a.name || (req.user && req.user.name) || username, role, isAdmin: !!a.unrestricted, isPortal,
-    isIncharge: role === 'incharge', isConsole: role === 'User', depts: allDepts ? allIds : own, own, allDepts, byId,
+    isIncharge: phoneRole === 'incharge', isConsole: phoneRole === 'console', depts: allDepts ? allIds : own, own, allDepts, byId,
     deptName: (id) => (byId[id] && byId[id].name) || id,
-    can: (m, act) => !!a.unrestricted || (!isPortal && access.can(a, m, act || 'view')),
+    // A legacy portal role holds no perms map; a normal account keeps every module it holds.
+    can: (m, act) => !!a.unrestricted || (!access.isPortal(a) && access.can(a, m, act || 'view')),
     inDept: (id) => allDepts || own.indexOf(String(id)) >= 0,
   };
 }
@@ -204,7 +209,9 @@ async function accountList() {
   try {
     const users = await getUsers();
     const rows = typeof users.find === 'function' ? await users.find({ active: { $ne: false } }).toArray() : [];
-    return rows.map((u) => ({ username: u.username, name: u.name || u.username, role: u.role || 'User', departments: arr(u.departments).map(String), designation: u.designation || u.title || null, photo: u.photo || null, staffEmpId: u.staffEmpId || null }));
+    return rows.map((u) => ({ username: u.username, name: u.name || u.username, role: u.role || 'User', departments: arr(u.departments).map(String),
+      // Runs a unit: the old in-charge role, or a Data Submission holder marked unit lead.
+      unitLead: u.role === 'incharge' || ((u.role || 'User') === 'User' && u.unitLead === true && Array.isArray((u.perms || {}).datasubmit) && u.perms.datasubmit.length > 0), designation: u.designation || u.title || null, photo: u.photo || null, staffEmpId: u.staffEmpId || null }));
   } catch (e) { return []; }
 }
 const roleLabel = (r) => ({ Administrator: 'Administrator', User: 'Manager', incharge: 'Nurse in-charge', collector: 'Data collector', nurse: 'Staff nurse', pca: 'PCA' }[r] || r);
@@ -242,7 +249,7 @@ function mount(app, opts) {
       const needsAck = notices.filter((n) => n.needsAck && arr(n.acks).indexOf(ctx.username) < 0).length;
       const pending = ctx.isIncharge || ctx.isAdmin || ctx.isConsole ? (await list('requests', { status: 'pending', dept: { $in: ctx.depts } }).catch(() => [])).length : 0;
       const accounts = await accountList().catch(() => []);
-      const incharge = unit ? accounts.find((u) => u.role === 'incharge' && u.departments.indexOf(String(unit.id)) >= 0) : null;
+      const incharge = unit ? accounts.find((u) => u.unitLead && u.departments.indexOf(String(unit.id)) >= 0) : null;
       res.json({ ok: true, user: { username: ctx.username, name: ctx.name, role: ctx.role, roleLabel: roleLabel(ctx.role), isAdmin: ctx.isAdmin, isIncharge: ctx.isIncharge, canManage: ctx.isAdmin || ctx.isConsole }, unit: unit ? Object.assign(unit, { incharge: incharge ? incharge.name : null }) : null, units, features, hospital: settings.hospital, policy: settings.policy, phonebook: settings.phonebook, prefs: state.prefs || {}, favs: arr(state.favs), counts: { unreadNotices: unread, needsAck, pendingRequests: pending } });
     } catch (e) { console.error('[phone] bootstrap failed for', req.ctx && req.ctx.username, e && e.message); fail(res, 500, 'Could not load the app profile.'); }
   });
@@ -274,7 +281,7 @@ function mount(app, opts) {
   async function reachOf(n) {
     const accounts = await accountList();
     if (n.audience === 'all') return accounts.length;
-    if (n.audience === 'incharges') return accounts.filter((u) => u.role === 'incharge').length;
+    if (n.audience === 'incharges') return accounts.filter((u) => u.unitLead).length;
     return accounts.filter((u) => u.departments.some((d) => arr(n.depts).indexOf(d) >= 0)).length;
   }
   const noticeOut = (n, ctx, state) => Object.assign({}, n, {
@@ -767,7 +774,7 @@ function mount(app, opts) {
     try {
       const ctx = req.ctx, accounts = await accountList(), online = await presence();
       const rows = accounts.filter((u) => u.username !== ctx.username && (ctx.allDepts || u.role === 'Administrator' || u.departments.some((x) => ctx.own.indexOf(x) >= 0)))
-        .map((u) => ({ username: u.username, name: u.name, role: u.role, roleLabel: u.designation || roleLabel(u.role), departments: u.departments.map((x) => ctx.deptName(x)), online: online.has(u.username), photo: u.photo || null, staffEmpId: u.staffEmpId || null }));
+        .map((u) => ({ username: u.username, name: u.name, role: u.unitLead ? 'incharge' : u.role, roleLabel: u.designation || roleLabel(u.unitLead ? 'incharge' : u.role), departments: u.departments.map((x) => ctx.deptName(x)), online: online.has(u.username), photo: u.photo || null, staffEmpId: u.staffEmpId || null }));
       res.json({ ok: true, accounts: rows });
     } catch (e) { fail(res, 500, 'Could not load the directory.'); }
   });
