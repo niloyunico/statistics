@@ -281,6 +281,21 @@ const staffArr = [
   eq('PATCH', access.actionForMethod('PATCH'), 'edit');
   eq('DELETE', access.actionForMethod('DELETE'), 'delete');
 
+  console.log('\n== a scoped submitter never mirrors its narrowed overlays back ==');
+  // Data Submission WITHOUT Data Collection: held to its own departments/areas, so the copy
+  // of unico_quality_v2 / unico_store_v3 it received is partial. Even with quality/stats EDIT
+  // granted, that copy must never replace the hospital's full overlay.
+  const submitter = { unrestricted: false, username: 'icn', role: 'User', perms: { datasubmit: ['view', 'edit', 'add'], quality: ['view', 'edit'], stats: ['view', 'edit'] }, departments: ['micu'], qualityAreas: ['MICU'], staffScope: 'self', staffId: null, staffEmpId: '' };
+  const reviewer = { ...submitter, perms: { ...submitter.perms, datacol: ['view', 'edit'] } };
+  ok('Data Submission without Data Collection is dataScoped', access.dataScoped(submitter));
+  ok('...with Data Collection it is not', !access.dataScoped(reviewer));
+  // CAPA status is per area too, so it is protected alongside the two data overlays.
+  const full = { unico_quality_v2: 'FULL', unico_store_v3: 'FULL-STORE', unico_capa_v1: 'FULL-CAPA', unico_manual_meta: 'old' };
+  const narrowed = { unico_quality_v2: 'PARTIAL', unico_store_v3: 'PARTIAL-STORE', unico_capa_v1: 'PARTIAL-CAPA', unico_manual_meta: 'new' };
+  eq('scoped submitter: overlays kept, other writable keys still saved', await access.mergeAppData(submitter, narrowed, full), { unico_quality_v2: 'FULL', unico_store_v3: 'FULL-STORE', unico_capa_v1: 'FULL-CAPA', unico_manual_meta: 'new' });
+  eq('scoped submitter: omitting the overlays does not delete them', await access.mergeAppData(submitter, { unico_manual_meta: 'x' }, full), { unico_quality_v2: 'FULL', unico_store_v3: 'FULL-STORE', unico_capa_v1: 'FULL-CAPA', unico_manual_meta: 'x' });
+  eq('reviewer (Data Collection) still writes the overlays', (await access.mergeAppData(reviewer, narrowed, full)).unico_quality_v2, 'PARTIAL');
+
   console.log('\n' + (fail ? 'FAILED ' + fail + ' / ' + (pass + fail) : 'ALL ' + pass + ' PASSED'));
   process.exit(fail ? 1 : 0);
 })();

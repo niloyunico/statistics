@@ -152,7 +152,7 @@ function AcPerson({u,all,lastSeen,depts,designation,me,onBack,reload,admins}){
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:10,borderTop:'1px solid var(--line-2)',paddingTop:12}}>
               {row('Email',u.email||'—')}
-              {row('Staff record',u.staffEmpId?('Emp '+u.staffEmpId):'Not linked')}
+              {row('Staff record',u.staffMatch?((u.staffMatch.empId?'Emp '+u.staffMatch.empId:'#'+u.staffMatch.id)+' · '+u.staffMatch.name):(u.staffEmpId?('Emp '+u.staffEmpId):'Not linked'))}
               {row('Last sign-in',seen?acAgo(seen):'Not recorded')}
               {row('Created',acDate(u.createdAt))}
               {row('Last changed',acDate(u.updatedAt))}
@@ -313,7 +313,7 @@ function AccessControl({depts,setRoute}){
   const canDeleteStaff=active.filter(u=>u.role!=='Administrator'&&acActs(u,'staff').indexOf('delete')>=0);
   const neverSeen=seenOk?active.filter(u=>!lastSeen[u.username]):[];
   const legacy=all.filter(u=>typeOf(u)==='portal');
-  const attention=noAccess.length+canDeleteStaff.length+legacy.length;
+  const attention=noAccess.length+canDeleteStaff.length+legacy.filter(u=>u.active!==false).length;
   /* Retire the portal logins: preview what changes, then convert (server/users-admin.js
      /api/users/convert-portal). Each becomes a normal account; its role becomes a module. */
   const convertAll=async()=>{
@@ -404,7 +404,7 @@ function AccessControl({depts,setRoute}){
           <AcKpi label="Accounts" value={all.length} sub={active.length+' active · '+(all.length-active.length)+' inactive'}/>
           <AcKpi label="Full access" value={cnt('full')} sub="Every module, every action"/>
           <AcKpi label="Custom access" value={cnt('custom')} sub="Set person by person"/>
-          <AcKpi label="Data Submission" value={active.filter(u=>acActs(u,'datasubmit').length).length} sub="People who report their unit's data"/>
+          <AcKpi label="Data Submission" value={active.filter(u=>acActs(u,'datasubmit').length||u.role==='collector'||u.role==='incharge').length} sub="People who report their unit's data"/>
           <AcKpi label="Signed in · 7 days" value={seenOk?signedWeek:'—'} sub={seenOk?'of '+active.length+' active':'Sign-in log unavailable'}/>
           <AcKpi label="Needs attention" value={attention} sub="See the cards below" tone={attention?'warn':null}/>
         </div>
@@ -448,7 +448,9 @@ function AccessControl({depts,setRoute}){
               <select value={bulkMod} onChange={e=>setBulkMod(e.target.value)} aria-label="Module for bulk change"
                 style={{padding:'6px 8px',borderRadius:7,border:'1px solid #2b4a75',background:'#16294a',color:'#fff',fontFamily:'inherit',fontSize:12}}>
                 <option value="">Choose a module…</option>
-                {K.USER_MODS.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+                {/* Data Submission needs a per-person scope, the staff app is a phone login and Access
+                    Control lists every account — none of them is a sensible one-click bulk grant. */}
+                {K.USER_MODS.filter(([k])=>['datasubmit','staffapp','users'].indexOf(k)<0).map(([k,l])=><option key={k} value={k}>{l}</option>)}
               </select>
               <button className="btn sm" disabled={!bulkMod||bulkBusy} onClick={grantView}>Give view</button>
               <button className="btn sm" disabled={!bulkMod||bulkBusy} onClick={revoke}>Remove module</button>
@@ -473,8 +475,11 @@ function AccessControl({depts,setRoute}){
               {users===null&&<div style={{textAlign:'center',color:'var(--faint)',padding:24,fontSize:13}}>Loading…</div>}
               {users!==null&&shown.map(u=>{
                 const t=typeOf(u); const isMe=me&&u.username===me; const seen=lastSeen[u.username];
-                const staffScope=u.role==='Administrator'?'Everything':(t==='portal'||acActs(u,'datasubmit').length)
-                  ? ((u.allQualityAreas?'All areas':(u.qualityAreas||[]).length+' area'+((u.qualityAreas||[]).length===1?'':'s'))+' · '+Object.keys(u.qualityIndicators||{}).reduce((s,k)=>s+((u.qualityIndicators[k]||[]).length),0)+' indicators limited')
+                const nLim=Object.keys(u.qualityIndicators||{}).reduce((s,k)=>s+((u.qualityIndicators[k]||[]).length),0);
+                const staffScope=u.role==='Administrator'?'Everything'
+                  :(u.role==='nurse'||u.role==='pca')?'Staff app · own record'
+                  :(t==='portal'||acActs(u,'datasubmit').length)
+                  ? ((u.departments||[]).length+' dept · '+(u.allQualityAreas?'all areas':(u.qualityAreas||[]).length+' area'+((u.qualityAreas||[]).length===1?'':'s'))+(nLim?' · '+nLim+' indicators limited':''))
                   : (u.staffScope==='self'?'Staff: own record':u.staffScope==='departments'?'Staff: '+(u.departments||[]).length+' dept':'Staff: all');
                 return (
                   <div key={u.username} style={{display:'grid',gridTemplateColumns:COLS,alignItems:'center',gap:10,padding:'10px 16px',borderBottom:'1px solid var(--line-2)',background:sel.indexOf(u.username)>=0?'#f4f9fe':'transparent',opacity:u.active===false?.6:1}}>

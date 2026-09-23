@@ -150,13 +150,15 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     const u = user('demote');
     assert.equal(u.level, 'nurse-manager');
     assert.equal(JSON.stringify(u.perms), before, 'a level change alone never touches the grant'); }
-  // ...while a real grant change still signs the account out at once.
+  // ...and a grant change takes effect at once WITHOUT signing the account out: the grant is
+  // read from the live account on every request (access.forRequest), so revoking the token
+  // only threw the person out of an open session. Only role / active changes revoke.
   reset();
   { await create({ username: 'rev', name: 'R', perms: FULL });
     user('rev').sessionEpoch = 1;   // a known-old stamp: Date.now() can repeat within a ms
     await patch('rev', { perms: { staff: ['view'] } });
     assert.equal(user('rev').perms.users, 'none', 'an unticked module is removed');
-    assert.ok(user('rev').sessionEpoch > 1, 'losing a module signs the account out now, not in 12h'); }
+    assert.equal(user('rev').sessionEpoch, 1, 'losing a module does not sign the account out (rights are read live)'); }
 
   /* 6. A legacy account (no level, perms never assigned => unrestricted) is not revoked by
         a level change. Materialising {} here would take everything from someone working. */
@@ -349,6 +351,26 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     assert.equal(JSON.stringify(user('so').perms), before);
     const miss = await call('POST /api/users/:username/signout', { params: { username: 'nobody' } });
     assert.equal(miss.status, 404); }
+
+  // Saving somebody's ACCESS must not sign them out: permissions and scopes are re-read from
+  // the live account on every request, so only a role or active change revokes the token.
+  { colOf('users').docs.push({ username: 'mithila', role: 'User', active: true, name: 'Mithila', perms: { datasubmit: ['view'] }, departments: [], staffScope: 'self' });
+    const before = colOf('users').docs.find((d) => d.username === 'mithila');
+    assert.equal(before.sessionEpoch, undefined);
+    let r = await patch('mithila', { perms: { datasubmit: ['view', 'edit'], quality: ['view'] }, departments: ['micu'], staffScope: 'all', dsScreens: ['missing', 'quality'] });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    let d = colOf('users').docs.find((x) => x.username === 'mithila');
+    assert.deepEqual(d.perms.quality, ['view'], 'grant stored');
+    assert.equal(d.sessionEpoch, undefined, 'a permission / scope change does NOT revoke the session');
+    r = await patch('mithila', { active: false });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    d = colOf('users').docs.find((x) => x.username === 'mithila');
+    assert.ok(d.sessionEpoch > 0, 'deactivating DOES revoke the session');
+    const ep = d.sessionEpoch; await new Promise((res) => setTimeout(res, 2));
+    r = await patch('mithila', { active: true, role: 'Administrator' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    d = colOf('users').docs.find((x) => x.username === 'mithila');
+    assert.ok(d.sessionEpoch > ep, 'a role change DOES revoke the session'); }
 
   console.log('account-levels tests: all passed');
 })().catch((e) => { console.error(e); process.exit(1); });

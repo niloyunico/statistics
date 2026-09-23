@@ -1980,7 +1980,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   // on the default staff scope used to hold every unit's roster by accident.
   // A stored null means the account was never assigned; the server keeps its old reach
   // until this is set, so the dialog shows that honestly rather than pretending 'all'.
-  const [rosterScope,setRosterScope]=useState(editing?(initial.rosterScope||null):'all');
+  const [rosterScope,setRosterScope]=useState(editing?(initial.rosterScope||null):null);
   const [rosterDepts,setRosterDepts]=useState(editing&&Array.isArray(initial.rosterDepartments)?initial.rosterDepartments:[]);
   // A ward in-charge may also be trusted to BUILD their own unit's roster in the portal.
   // Never to approve it — that stays with an administrator, and the server enforces it.
@@ -2008,7 +2008,8 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   const submitKinds={patient:hasScreen('patient'),quality:hasScreen('quality')||hasScreen('status')};
   // Staff app: which phone feature set — nurse or PCA.
   const [appRole,setAppRole]=useState(editing&&(initial.role==='pca'||initial.appRole==='pca')?'pca':'nurse');
-  const [staffId,setStaffId]=useState(editing&&(initial.staffId===0||initial.staffId)?initial.staffId:'');
+  const [staffId,setStaffId]=useState(editing&&(initial.staffId===0||initial.staffId)?initial.staffId:(editing&&initial.staffMatch&&initial.staffMatch.id!=null?initial.staffMatch.id:''));
+  const [staffLinkDirty,setStaffLinkDirty]=useState(false);   // only a changed picker is saved
   const allDepts=React.useMemo(()=>{
     try{ if(window.buildDepts){ const ov=JSON.parse(localStorage.getItem('unico_store_v3')||'{}')||{}; const m=window.buildDepts(ov);
       if(Array.isArray(m)&&m.length) return m.map(d=>({id:d.id,name:d.name})); } }catch(e){}
@@ -2038,6 +2039,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     if(r==='nurse'||r==='pca') next.staffapp=['view'];
     setPerms(next);
     if(r==='incharge') setUnitLead(true);
+    if(r==='incharge'&&initial.rosterEdit===true){ next.roster=['view','edit','add']; setRosterScope('departments'); setRosterDepts(Array.isArray(initial.departments)?initial.departments:[]); }
     if(r==='pca') setAppRole('pca');
     if(r==='collector'||r==='incharge'||r==='nurse'||r==='pca') setStaffScope('self');
   };
@@ -2099,10 +2101,16 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   // Coming DOWN from Full access there is no grant to carry over — an administrator holds no
   // perms map at all. Starting from what the matrix happened to show would hand a demoted
   // administrator every module on one click; they start from nothing, like any new grant.
-  const pickAccess=(t)=>{ if(t===accessType) return; if(accessType==='full') setPerms(NONE_PERMS()); setAccessType(t); };
+  const keptPerms=React.useRef(null);
+  const pickAccess=(t)=>{ if(t===accessType) return;
+    if(t==='full') keptPerms.current=perms;                       // remember the ticks
+    else if(accessType==='full') setPerms(keptPerms.current&&initial.role!=='Administrator'?keptPerms.current:NONE_PERMS());   // back down: restore them
+    setAccessType(t); };
   const quickSet=(kind)=>{ setCopyFrom('');
     if(kind==='none') setPerms(NONE_PERMS());
-    else if(kind==='view') setPerms(USER_MODS.reduce((m,[k])=>(m[k]=['view'],m),{})); };
+    // Console modules only: Data Submission needs a scope, the staff app is a phone login and
+    // Access Control lists every account — none of those is a harmless "view".
+    else if(kind==='view') setPerms(USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol'].indexOf(k)>=0?[]:['view']),m),{})); };
   // Start from what another person holds. Copies the ticks only; their scope stays theirs.
   const copyAccess=(uname)=>{
     const src=(allUsers||[]).find(x=>x.username===uname); setCopyFrom(uname); if(!src) return;
@@ -2166,9 +2174,10 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
         // opening and saving an unrelated field on a legacy account never silently
         // converts its inherited reach into an explicit grant.
         if(rosterScope){ payload.rosterScope=rosterScope; payload.rosterDepartments=rosterScope==='departments'?rosterDepts:[]; }
-        payload.staffId=staffScope==='self'&&staffId!==''?Number(staffId):null;
-        const rec=allStaff.find(x=>String(x.id)===String(staffId));
-        payload.staffEmpId=(staffScope==='self'&&rec&&rec.emp_id)?rec.emp_id:'';
+        // The link to the staff record is sent only when the picker was changed: saving
+        // anything else used to clear it (staffId:null) whenever the scope was not "self" or
+        // the record was missing from this administrator's own staff list.
+        if(staffLinkDirty){ payload.staffId=staffId!==''?Number(staffId):null; const rec=allStaff.find(x=>String(x.id)===String(staffId)); payload.staffEmpId=(rec&&rec.emp_id)?rec.emp_id:''; }
       }
       // Sent only for the one role the toggle is shown for, so no other kind of account is
       // handed roster rights by an unrelated edit.
@@ -2254,7 +2263,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   const SECS=[
     ['account','Account','Name, password, status, sign-off'],
     ['access','Module access',isAdmin?'Full access':isColl?'Old portal login':(modsOn+' module'+(modsOn===1?'':'s'))],
-    ...((collects)?[['data','Data Submission',(dsScreens.length||0)+' screen'+(dsScreens.length===1?'':'s')+' · '+((scope&&scope.departments)||[]).length+' dept']]:[]),
+    ...((collects)?[['data','Data Submission',isColl?(((scope&&scope.departments)||[]).length+' dept · departments & indicators'):((dsScreens.length||0)+' screen'+(dsScreens.length===1?'':'s')+' · '+((scope&&scope.departments)||[]).length+' dept')]]:[]),
     ...((!isAdmin&&!isColl)?[['scope','Staff & roster scope','Whose records, which units']]:[]),
   ];
   const curSec=SECS.some(x=>x[0]===sec)?sec:'account';
@@ -2442,7 +2451,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
             {staffScope==='self'&&(
               <div className="field">
                 <label>Which staff member is this login?</label>
-                <select value={staffId===null?'':String(staffId)} onChange={e=>setStaffId(e.target.value)}>
+                <select value={staffId===null?'':String(staffId)} onChange={e=>{ setStaffId(e.target.value); setStaffLinkDirty(true); }}>
                   <option value="">— not linked —</option>
                   {allStaff.map(x=><option key={x.id} value={x.id}>{x.name}{x.emp_id?' · '+x.emp_id:''}{x.current_department?' · '+x.current_department:''}</option>)}
                 </select>

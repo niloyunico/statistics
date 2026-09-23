@@ -504,7 +504,8 @@ async function upsertCollectorUser(opts) {
       if (existing.role === 'User') delete set.active;
       if (!existing.role || !(Array.isArray((existing.perms || {}).datasubmit) && existing.perms.datasubmit.length)) {
         set.perms = withSubmitModule(existing.perms);
-        set.sessionEpoch = Date.now();   // a new grant takes effect now, not at token expiry
+        // No session revocation: permissions are read from the live account on every request,
+        // so the grant takes effect at once without signing the person out of an open session.
       }
     }
     await users.updateOne({ username: empId }, { $set: set });
@@ -1678,8 +1679,9 @@ function mount(app, opts) {
     const depts = (scope && scope.departments) || [];
     const areas = (scope && scope.qualityAreas) || [];
     const me = String(req.user.sub || '').toLowerCase();
-    return (subs || []).filter((s) => (s.submittedByUser && String(s.submittedByUser).toLowerCase() === me) || names.includes(s.submittedBy)
-      || (s.responsible && names.includes(s.responsible.name))
+    // Rows stamped with the account (submittedByUser) match on THAT only; the name fallback is
+    // for older rows, so a namesake's submissions are not shown as this person's.
+    return (subs || []).filter((s) => (s.submittedByUser ? String(s.submittedByUser).toLowerCase() === me : (names.includes(s.submittedBy) || (s.responsible && names.includes(s.responsible.name))))
       || (s.type === 'patient' && depts.includes(s.department))
       || (s.type === 'quality' && ((scope && scope.allQualityAreas) || areas.includes(s.area))));
   };
@@ -1700,7 +1702,8 @@ function mount(app, opts) {
   // Collectors may only submit for departments/quality areas they are assigned to. Admins
   // and open local mode (no req.user) are unrestricted. Returns an error string, or null.
   const denyIfOutOfScope = async (req, kind, target) => {
-    if (!req.user || !scopedReq(req)) return null;
+    // scopedReq = reads are narrowed; submitScoped = sends are (also a Data Collection VIEWER who submits).
+    if (!req.user || !(scopedReq(req) || (req.access && accessRoles.submitScoped && accessRoles.submitScoped(req.access)))) return null;
     const scope = await getUserScope(req.user.sub);
     const what = kind === 'patient' ? 'department' : 'quality area';
     if (!target) return 'A ' + what + ' is required.';
@@ -1710,8 +1713,23 @@ function mount(app, opts) {
     return null;
   };
 
-  app.get('/api/responsibles', guard, async (req, res) => {
-    try { res.json({ ok: true, responsibles: await getResponsibles() }); } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
+  app.get('/api/responsibles', session.requireApi, accessRoles.attach, async (req, res) => {
+    try {
+      const a = req.access;
+      if (!a) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+      const list = await getResponsibles();
+      // Reviewers (Data Collection) and Access Control editors need the whole matrix.
+      if (a.unrestricted || accessRoles.can(a, 'datacol', 'view') || accessRoles.can(a, 'users', 'edit')) return res.json({ ok: true, responsibles: list });
+      // A submitter (or legacy portal login) sees its OWN record only — never colleagues'
+      // phone numbers and assignments.
+      if (accessRoles.submitsData(a)) {
+        const scope = await getUserScope(req.user.sub);
+        const me = String(req.user.sub || '').toLowerCase();
+        const mine = (list || []).filter((r) => (scope && scope.responsibleId && String(r.id) === String(scope.responsibleId)) || (r.empId && String(r.empId).toLowerCase() === me));
+        return res.json({ ok: true, responsibles: mine, own: true });
+      }
+      res.status(403).json({ ok: false, error: 'You do not have access to this.' });
+    } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.post('/api/responsibles', guard, adminOnly, async (req, res) => {
     try { res.json({ ok: true, responsible: await saveResponsible(req.body || {}) }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }

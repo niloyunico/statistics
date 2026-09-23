@@ -215,7 +215,10 @@ app.get('/api/data', requireAuth, access.attach, async (req, res) => {
     // Everyone else used to receive the ENTIRE blob — every module's overlay in one
     // response — regardless of their per-module access. Hand back only the keys this
     // session may read, with the staff roster narrowed to its own rows.
-    const data = await access.scopeSnapshot(req.access, d.data);
+    let data = await access.scopeSnapshot(req.access, d.data);
+    // A dataScoped submitter gets the definition overlays narrowed to their own
+    // departments / areas (web.js sets this up; absent in unit tests).
+    if (typeof app.locals.scopeSubmitterData === 'function') data = await app.locals.scopeSubmitterData(req.access, req, data);
     res.json({ ok: true, data, updatedAt: d.updatedAt });
   }
   catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }

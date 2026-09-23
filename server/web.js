@@ -112,6 +112,18 @@ function safeJSON(value) {
 // the Quality console. Build a minimal `unico_quality_v2` overlay for the snapshot:
 // only the collector's own areas, and only DEFINITION fields (value fields like
 // months/incidents are stripped so recorded data and the entry lock are untouched).
+// CAPA status overlay, keyed '<area key>/<indicator id>': keep only the scope's areas.
+function scopeCapaOverlay(raw, scope) {
+  try {
+    const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!o || typeof o !== 'object') return null;
+    if (scope && scope.allQualityAreas) return JSON.stringify(o);
+    const areas = new Set((scope && scope.qualityAreas) || []);
+    const out = {};
+    Object.keys(o).forEach((k) => { if (areas.has(k.split('/')[0])) out[k] = o[k]; });
+    return JSON.stringify(out);
+  } catch (e) { return null; }
+}
 function scopeQualityOverlay(raw, qualityAreas, qualityIndicators) {
   try {
     const ov = typeof raw === 'string' ? JSON.parse(raw) : (raw && typeof raw === 'object' ? raw : null);
@@ -331,17 +343,25 @@ async function serveIndex(req, res) {
          grants above do not already cover. Their forms need the definition overlays too. */
       if (scopeUser && access.submitsData(a)) {
         const raw = (appRes && appRes.data) || {};
-        if (!access.can(a, 'stats', 'view')) {
+        // Held to their assignment even when they hold the console module: the module opens
+        // the screen, the assignment decides the data (Quality: View + "60 indicators limited"
+        // used to hand over all 18 areas with every indicator).
+        const held = access.dataScoped(a);
+        if (held || !access.can(a, 'stats', 'view')) {
           const daSet = effectiveDeptIds(scopeUser, deptMap);
           depts = (deptRes || []).filter((d) => daSet.has(d.id));
           const dov = scopeDeptOverlay(raw['unico_store_v3'], [...daSet]);
           if (dov) snap['unico_store_v3'] = JSON.stringify(dov);
         }
-        if (!access.can(a, 'quality', 'view')) {
+        if (held || !access.can(a, 'quality', 'view')) {
           quality = scopeQualityList(qualRes || [], scopeUser);
           const qi = (scopeUser.qualityIndicators && typeof scopeUser.qualityIndicators === 'object') ? scopeUser.qualityIndicators : {};
           const qov = scopeQualityOverlay(raw['unico_quality_v2'], scopeUser.qualityAreas || [], qi);
           if (qov && qov['unico_quality_v2']) snap['unico_quality_v2'] = qov['unico_quality_v2'];
+          if (snap['unico_capa_v1'] != null) {
+            const c = scopeCapaOverlay(snap['unico_capa_v1'], scopeUser);
+            if (c == null) delete snap['unico_capa_v1']; else snap['unico_capa_v1'] = c;
+          }
         }
       }
     }
@@ -707,6 +727,34 @@ app.get(['/admin', '/admin/', '/admin-app'], servePhoneApp('admin-app.html'));
    else null (serve the list as the module permission allows). That is every legacy portal
    account, and a normal account holding Data Submission that does NOT hold `mod` itself --
    holding Statistics, Quality or Staff is what unlocks the unscoped list, exactly as before. */
+// /api/data lives in index.js (which this file requires, so it cannot require us back):
+// hand it the overlay narrowing used by the page inject through app.locals.
+const SUBMITTER_OVERLAYS = ['unico_quality_v2', 'unico_store_v3', 'unico_capa_v1'];
+app.locals.scopeSubmitterData = async (a, req, data) => {
+  // Fail CLOSED: if the assignment cannot be read, the hospital-wide overlays are withheld.
+  const withheld = () => { const o = Object.assign({}, data || {}); SUBMITTER_OVERLAYS.forEach((k) => { delete o[k]; }); return o; };
+  try {
+    if (!a || a.unrestricted || !access.dataScoped(a)) return data;
+    if (!(req.user && req.user.sub)) return withheld();
+    const scope = await dataCollection.getUserScope(req.user.sub);
+    if (!scope) return withheld();
+    const out = Object.assign({}, data || {});
+    if (out.unico_capa_v1 != null) {
+      const c = scopeCapaOverlay(out.unico_capa_v1, scope);
+      if (c == null) delete out.unico_capa_v1; else out.unico_capa_v1 = c;
+    }
+    if (out.unico_quality_v2 != null) {
+      const qi = (scope.qualityIndicators && typeof scope.qualityIndicators === 'object') ? scope.qualityIndicators : {};
+      const qov = scopeQualityOverlay(out.unico_quality_v2, scope.qualityAreas || [], qi);
+      if (qov && qov.unico_quality_v2 != null) out.unico_quality_v2 = qov.unico_quality_v2; else delete out.unico_quality_v2;
+    }
+    if (out.unico_store_v3 != null) {
+      const dov = scopeDeptOverlay(out.unico_store_v3, [...effectiveDeptIds(scope, await deptmap.get())]);
+      if (dov) out.unico_store_v3 = JSON.stringify(dov); else delete out.unico_store_v3;
+    }
+    return out;
+  } catch (e) { return withheld(); }
+};
 async function collectorScope(req, mod) {
   try {
     if (!(req.user && req.user.sub)) return null;
@@ -715,7 +763,11 @@ async function collectorScope(req, mod) {
     const legacy = access.isPortal(a);
     if (!legacy) {
       if (!access.submitsData(a)) return null;
-      if (mod && access.can(a, mod, 'view')) return null;
+      // A console module grant does not lift the assignment for a dataScoped submitter —
+      // for the DATA modules. The staff register keeps its own row scope (staffScope:
+      // all / departments / self, access.filterStaff), so 'staff' is never narrowed here.
+      const heldData = access.dataScoped(a) && (mod === 'stats' || mod === 'quality');
+      if (mod && access.can(a, mod, 'view') && !heldData) return null;
     }
     return await dataCollection.getUserScope(req.user.sub);
   } catch (e) { return null; }

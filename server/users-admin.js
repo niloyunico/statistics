@@ -256,8 +256,17 @@ const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas
 // fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
 // mere presence signed a user out every time an admin fixed a typo in their name.
 const sameVal = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+/* Only a ROLE or ACTIVE change signs the person out. Everything else in SECURITY_FIELDS
+   (permissions, departments, areas, screens, scopes) is re-read from the live account on
+   EVERY request (access.forRequest) and the open tab re-reads it too (unicoRefreshPerms),
+   so a new grant already takes effect at once. Revoking the token for those changes only
+   made the person's open session die on their next reload — an admin saving Mithila's
+   access while she was signed in logged her out each time. The token's role claim,
+   however, IS trusted in a few places (portal-role gates), so a role change must still
+   invalidate it; and a deactivated account must stop at once. */
+const REVOKE_FIELDS = ['role', 'active'];
 function stampRevocation(set, before) {
-  const changed = SECURITY_FIELDS.some((k) => (k in set) && !sameVal(set[k], before && before[k]));
+  const changed = REVOKE_FIELDS.some((k) => (k in set) && !sameVal(set[k], before && before[k]));
   if (changed) set.sessionEpoch = Date.now();
   return set;
 }
@@ -667,6 +676,9 @@ function mount(app, opts) {
     const set = { role: 'User', convertedFrom: r, convertedAt: Date.now(), staffScope: 'self', updatedAt: Date.now(), sessionEpoch: Date.now() };
     if (r === 'collector' || r === 'incharge') perms.datasubmit = ['view', 'edit', 'add'];
     if (r === 'incharge') set.unitLead = true;
+    // An in-charge trusted to build its unit's roster keeps that: the Duty Roster module,
+    // scoped to the same departments (portalMayEditRoster only knew the old role).
+    if (r === 'incharge' && u.rosterEdit === true) { perms.roster = ['view', 'edit', 'add']; set.rosterScope = 'departments'; set.rosterDepartments = Array.isArray(u.departments) ? u.departments : []; }
     if (r === 'nurse' || r === 'pca') { perms.staffapp = ['view']; set.appRole = r; }
     set.perms = perms;
     return set;
@@ -740,6 +752,10 @@ function mount(app, opts) {
       // Resolve the responsibles record BEFORE the account exists, so a lookup failure refuses
       // the save instead of leaving an account whose scope the matrix cannot see.
       const plan = (isPortal && carriesScope(b)) ? await dc().planResponsibleSync({ username, responsibleId: null }, { create: hasScope(b) }) : null;
+      // Only an account that holds Duty Roster defaults to every unit; anyone else stays
+      // "never assigned" (null), which rosterDeptNames reads as their own departments.
+      const rp0 = role === 'User' ? ((cleanPerms(b.perms) || {}).roster) : null;
+      const rosterHeld = Array.isArray(rp0) ? rp0.length > 0 : (typeof rp0 === 'string' && rp0 !== 'none');
       const doc = {
         username, name: String(b.name || username).trim(), role,
         email: String(b.email || '').trim().toLowerCase() || null,
@@ -763,7 +779,7 @@ function mount(app, opts) {
         // Duty-roster units. A NEW account gets 'all' when the dialog sends nothing:
         // the `roster` module permission is what decides whether they reach the module
         // at all, and a blank field here would otherwise read as "assigned no units".
-        rosterScope: role === 'Administrator' ? 'all' : (cleanRosterScope(b.rosterScope) || 'all'),
+        rosterScope: role === 'Administrator' ? 'all' : (cleanRosterScope(b.rosterScope) || (rosterHeld ? 'all' : null)),
         rosterDepartments: cleanList(b.rosterDepartments),
         rosterEdit: role === 'Administrator' ? true : b.rosterEdit === true,
         unitLead: role === 'User' && b.unitLead === true,
@@ -829,7 +845,10 @@ function mount(app, opts) {
       let scope = null;
       if (ROLES_PORTAL.indexOf(role) >= 0 || submitter) {
         await deptmap.get(true).catch(() => null); // stored qualityAreas must not come from a stale per-instance map
-        const departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
+        let departments = (b.departments != null) ? cleanList(b.departments) : (Array.isArray(u.departments) ? u.departments : []);
+        // Just gaining Data Submission with nothing picked yet: keep the departments the account
+        // already had (its staff-register scope) rather than storing an empty list.
+        if (!wasSubmitter && submitter && !departments.length && Array.isArray(u.departments) && u.departments.length) departments = u.departments;
         const allQualityAreas = (b.allQualityAreas != null) ? !!b.allQualityAreas : !!u.allQualityAreas;
         // Custom = ONLY the directly-granted extras (see resolveCustomAreas) — never the
         // posted union, or a removed department's area would be re-saved as "custom".

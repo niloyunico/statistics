@@ -472,12 +472,17 @@ async function call(route, { params = {}, body = {} } = {}) {
     await call('PATCH /api/users/:username', { params: { username: 'ccu.lead' }, body: { rosterScope: 'all', rosterDepartments: [] } });
     assert.equal(user('ccu.lead').rosterScope, 'all');
 
-    // A NEW account that says nothing about rosters gets 'all' — the module permission
-    // is what decides whether it reaches the roster at all.
+    // A NEW account that says nothing about rosters: WITHOUT the Duty Roster module it stays
+    // "never assigned" (null — rosterDeptNames then holds a submitter to its own units; a
+    // Data Submission holder used to be handed every unit's published roster). WITH the
+    // module it defaults to every unit, as before.
     r = await call('POST /api/users', { body: { username: 'plain', password: 'secret1', name: 'Plain', role: 'User' } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(user('plain').rosterScope, 'all');
+    assert.equal(user('plain').rosterScope, null, 'no Duty Roster module -> never assigned');
     assert.deepEqual(user('plain').rosterDepartments, []);
+    r = await call('POST /api/users', { body: { username: 'rosterer', password: 'secret1', name: 'R', role: 'User', perms: { roster: ['view'] } } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(user('rosterer').rosterScope, 'all', 'Duty Roster holder -> every unit by default');
 
     // Administrators hold every unit, whatever the body asks for.
     colOf('users').docs.push({ username: 'boss', role: 'Administrator', active: true, name: 'Boss' });
@@ -562,10 +567,18 @@ async function call(route, { params = {}, body = {} } = {}) {
     // Only DATA screens live in Data Submission; defaults follow the kinds, a checklist narrows them.
     assert.deepEqual(acc.dsScreensOf(U({ datasubmit: ['view'] })), ['missing', 'status', 'quality', 'patient', 'history'], 'default screens');
     assert.deepEqual(acc.dsScreensOf(U({ datasubmit: ['view'] }, { submitKinds: { patient: false } })), ['missing', 'status', 'quality', 'history'], 'no patient kind, no patient screens');
-    const picked = U({ datasubmit: ['view'] }, { dsScreens: ['missing', 'quality', 'roster', 'requests'] });
+    const picked = U({ datasubmit: ['view', 'add'] }, { dsScreens: ['missing', 'quality', 'roster', 'requests'] });
     assert.deepEqual(acc.dsScreensOf(picked), ['missing', 'quality'], 'roster / staff screens are not part of Data Submission');
     assert.equal(acc.maySubmitKind(picked, 'patient'), false, 'no patient screen, no patient submissions');
-    assert.equal(acc.maySubmitKind(picked, 'quality'), true); }
+    assert.equal(acc.maySubmitKind(picked, 'quality'), true);
+    // Sending is the ADD action: a view-only Data Submission holder reads its screens but sends nothing.
+    assert.equal(acc.maySubmitKind(U({ datasubmit: ['view'] }), 'quality'), false, 'view-only Data Submission cannot send');
+    assert.equal(acc.maySubmitKind(U({ datasubmit: ['view', 'edit'] }), 'patient'), false, 'edit without add cannot send new data');
+    // Who is held to their assignment when SENDING: every submitter that is not a full reviewer.
+    assert.equal(acc.submitScoped(U({ datasubmit: ['view', 'add'] })), true, 'plain submitter is scoped');
+    assert.equal(acc.submitScoped(U({ datasubmit: ['view', 'add'], datacol: ['view'] })), true, 'a Data Collection VIEWER who submits is still scoped');
+    assert.equal(acc.submitScoped(U({ datasubmit: ['view', 'add'], datacol: ['view', 'add'] })), false, 'a reviewer who may add anywhere is not');
+    assert.equal(acc.submitScoped(U({ staff: ['view'] })), false, 'non-submitter: nothing to scope'); }
 
   console.log('user-scope tests: all passed');
 })().catch((e) => { console.error(e); process.exit(1); });

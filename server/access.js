@@ -329,6 +329,8 @@ function maySubmitKind(access, kind) {
   if (isPortal(access)) return true;
   if (can(access, 'datacol', 'add')) return true;
   if (!submitsData(access)) return false;
+  // Sending is the 'add' action of Data Submission; 'view' alone reads its own screens.
+  if (!can(access, 'datasubmit', 'add')) return false;
   if (cleanSubmitKinds(access.submitKinds)[kind] === false) return false;
   // With a screen checklist, the kind also needs one of its screens.
   const screens = cleanDsScreens(access.dsScreens);
@@ -353,6 +355,15 @@ function dataScoped(access) {
   if (access.role !== 'User') return false;
   if (can(access, 'datacol', 'view')) return false;
   return can(access, 'datasubmit', 'view');
+}
+/* Is this account held to its assignment when it SENDS data? Wider than dataScoped: a Data
+   Collection VIEWER who also submits still reads the whole hospital, but may only send for
+   its own departments/areas — only a reviewer who may ADD there (or an admin) sends anywhere. */
+function submitScoped(access) {
+  if (!access || access.unrestricted) return false;
+  if (isPortal(access)) return true;
+  if (!submitsData(access)) return false;
+  return !can(access, 'datacol', 'add');
 }
 // Runs a unit: the old in-charge role, or a Data Submission holder marked unit lead.
 function isUnitLead(access) {
@@ -538,7 +549,11 @@ function requireModule(mid) {
         // The submissions API (mounted on 'datacol') is also the Data Submission module's:
         // its holder reads and sends its own, row-scoped inside data-collection.js, and
         // every admin-only route there still checks adminOnly on top.
-        if (mid === 'datacol' && submitsData(a)) return next();
+        if (mid === 'datacol' && submitsData(a)) {
+          // Reads always; a write needs the matching Data Submission action (POST=add, PATCH=edit…).
+          const act = actionForMethod(req.method);
+          if (act === 'view' || can(a, 'datasubmit', act)) return next();
+        }
         return res.status(403).json({ ok: false, error: 'You do not have access to this.' });
       }
       next();
@@ -706,7 +721,9 @@ async function filterStaff(access, staff) {
   if (!can(access, 'staff', 'view')) return [];
   const scope = access.staffScope || 'all';
   if (scope === 'all') return staff || [];
-  const deptNames = scope === 'departments' ? await scopedDeptNames(access) : null;
+  // departmentsOnly: the staff register follows the ASSIGNED departments, never the quality
+  // areas (a hospital-wide quality submitter holds every area, which used to mean every ward).
+  const deptNames = scope === 'departments' ? await scopedDeptNames(access, { departmentsOnly: true }) : null;
   return (staff || []).filter((r) => staffVisible(access, r, deptNames));
 }
 
@@ -774,8 +791,14 @@ async function mergeAppData(access, incoming, current) {
   if (access && access.unrestricted) return inc; // admin / local mode: full mirror, unchanged
 
   const out = Object.assign({}, cur);
+  // A dataScoped submitter only ever RECEIVED a narrowed copy of these overlays (their own
+  // departments / areas). Mirroring that copy back would erase everyone else's values, so
+  // they are never written from such a session — real data goes through /api/submissions.
+  const SUBMITTER_READ_ONLY = ['unico_store_v3', 'unico_quality_v2', 'unico_capa_v1'];
+  const held = dataScoped(access);
   for (const key of Object.keys(inc)) {
     if (!mayWriteKey(access, key)) continue;
+    if (held && SUBMITTER_READ_ONLY.indexOf(key) >= 0) continue;
     if (key === 'unico_staff_v3') {
       out[key] = await mergeStaffOverlay(access, inc[key], cur[key]);
       continue;
@@ -785,6 +808,7 @@ async function mergeAppData(access, incoming, current) {
   // A key the session MAY write and deliberately dropped is a real deletion.
   for (const key of Object.keys(cur)) {
     if (key === 'unico_staff_v3') continue; // handled by the row merge above
+    if (held && SUBMITTER_READ_ONLY.indexOf(key) >= 0) continue;
     if (mayWriteKey(access, key) && !(key in inc)) delete out[key];
   }
   return out;
@@ -803,7 +827,9 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent) {
 
   const scope = (access && access.staffScope) || 'all';
   if (access && access.unrestricted) return JSON.stringify(incoming);
-  const deptNames = scope === 'departments' ? await scopedDeptNames(access) : null;
+  // departmentsOnly: the staff register follows the ASSIGNED departments, never the quality
+  // areas (a hospital-wide quality submitter holds every area, which used to mean every ward).
+  const deptNames = scope === 'departments' ? await scopedDeptNames(access, { departmentsOnly: true }) : null;
 
   const incomingById = new Map();
   incoming.forEach((r) => { if (r && r.id != null) incomingById.set(String(r.id), r); });
@@ -858,7 +884,7 @@ module.exports = {
   ACCESS_MODULES, ACTIONS, PERM_RANK, STAFF_SCOPES, cleanStaffScope,
   ROSTER_SCOPES, cleanRosterScope, rosterDeptNames, rosterVisible,
   KEY_MODULE, moduleOfKey,
-  forRequest, attach, requirePerm, requireModule, actionForMethod, can, canWrite, invalidate,
+  forRequest, attach, requirePerm, requireModule, actionForMethod, can, canWrite, invalidate, submitScoped,
   filterStaff, staffVisible, scopedDeptNames, deptsOfStaff,
   scopeSnapshot, mergeAppData, mergeStaffOverlay, mayReadKey, mayWriteKey,
 };

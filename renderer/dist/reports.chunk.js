@@ -4221,7 +4221,7 @@ function UserModal({
   });
   const [staffScope, setStaffScope] = useState(editing ? initial.staffScope || 'all' : 'all');
   const [staffDepts, setStaffDepts] = useState(editing && Array.isArray(initial.departments) ? initial.departments : []);
-  const [rosterScope, setRosterScope] = useState(editing ? initial.rosterScope || null : 'all');
+  const [rosterScope, setRosterScope] = useState(editing ? initial.rosterScope || null : null);
   const [rosterDepts, setRosterDepts] = useState(editing && Array.isArray(initial.rosterDepartments) ? initial.rosterDepartments : []);
   const [rosterEdit, setRosterEdit] = useState(editing && initial.rosterEdit === true);
   const [unitLead, setUnitLead] = useState(!!(editing && (initial.role === 'incharge' || initial.unitLead === true)));
@@ -4241,7 +4241,8 @@ function UserModal({
     quality: hasScreen('quality') || hasScreen('status')
   };
   const [appRole, setAppRole] = useState(editing && (initial.role === 'pca' || initial.appRole === 'pca') ? 'pca' : 'nurse');
-  const [staffId, setStaffId] = useState(editing && (initial.staffId === 0 || initial.staffId) ? initial.staffId : '');
+  const [staffId, setStaffId] = useState(editing && (initial.staffId === 0 || initial.staffId) ? initial.staffId : editing && initial.staffMatch && initial.staffMatch.id != null ? initial.staffMatch.id : '');
+  const [staffLinkDirty, setStaffLinkDirty] = useState(false);
   const allDepts = React.useMemo(() => {
     try {
       if (window.buildDepts) {
@@ -4280,6 +4281,11 @@ function UserModal({
     if (r === 'nurse' || r === 'pca') next.staffapp = ['view'];
     setPerms(next);
     if (r === 'incharge') setUnitLead(true);
+    if (r === 'incharge' && initial.rosterEdit === true) {
+      next.roster = ['view', 'edit', 'add'];
+      setRosterScope('departments');
+      setRosterDepts(Array.isArray(initial.departments) ? initial.departments : []);
+    }
     if (r === 'pca') setAppRole('pca');
     if (r === 'collector' || r === 'incharge' || r === 'nurse' || r === 'pca') setStaffScope('self');
   };
@@ -4350,14 +4356,15 @@ function UserModal({
   }, [collects]);
   const linkedRespId = editing ? initial.responsibleId || ((resps || []).find(r => String(r.empId || '').toLowerCase() === initial.username) || {}).id || null : null;
   const ScopeEditor = window.DcScopeEditor;
+  const keptPerms = React.useRef(null);
   const pickAccess = t => {
     if (t === accessType) return;
-    if (accessType === 'full') setPerms(NONE_PERMS());
+    if (t === 'full') keptPerms.current = perms;else if (accessType === 'full') setPerms(keptPerms.current && initial.role !== 'Administrator' ? keptPerms.current : NONE_PERMS());
     setAccessType(t);
   };
   const quickSet = kind => {
     setCopyFrom('');
-    if (kind === 'none') setPerms(NONE_PERMS());else if (kind === 'view') setPerms(USER_MODS.reduce((m, [k]) => (m[k] = ['view'], m), {}));
+    if (kind === 'none') setPerms(NONE_PERMS());else if (kind === 'view') setPerms(USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol'].indexOf(k) >= 0 ? [] : ['view'], m), {}));
   };
   const copyAccess = uname => {
     const src = (allUsers || []).find(x => x.username === uname);
@@ -4436,9 +4443,11 @@ function UserModal({
           payload.rosterScope = rosterScope;
           payload.rosterDepartments = rosterScope === 'departments' ? rosterDepts : [];
         }
-        payload.staffId = staffScope === 'self' && staffId !== '' ? Number(staffId) : null;
-        const rec = allStaff.find(x => String(x.id) === String(staffId));
-        payload.staffEmpId = staffScope === 'self' && rec && rec.emp_id ? rec.emp_id : '';
+        if (staffLinkDirty) {
+          payload.staffId = staffId !== '' ? Number(staffId) : null;
+          const rec = allStaff.find(x => String(x.id) === String(staffId));
+          payload.staffEmpId = rec && rec.emp_id ? rec.emp_id : '';
+        }
       }
       if (rosterEditable) payload.rosterEdit = rosterEdit;
       if (editing) {
@@ -4686,7 +4695,7 @@ function UserModal({
     persons: resps || U_NO_RESPS
   }));
   const modsOn = USER_MODS.filter(([k]) => asActions(perms[k]).length).length;
-  const SECS = [['account', 'Account', 'Name, password, status, sign-off'], ['access', 'Module access', isAdmin ? 'Full access' : isColl ? 'Old portal login' : modsOn + ' module' + (modsOn === 1 ? '' : 's')], ...(collects ? [['data', 'Data Submission', (dsScreens.length || 0) + ' screen' + (dsScreens.length === 1 ? '' : 's') + ' · ' + (scope && scope.departments || []).length + ' dept']] : []), ...(!isAdmin && !isColl ? [['scope', 'Staff & roster scope', 'Whose records, which units']] : [])];
+  const SECS = [['account', 'Account', 'Name, password, status, sign-off'], ['access', 'Module access', isAdmin ? 'Full access' : isColl ? 'Old portal login' : modsOn + ' module' + (modsOn === 1 ? '' : 's')], ...(collects ? [['data', 'Data Submission', isColl ? (scope && scope.departments || []).length + ' dept · departments & indicators' : (dsScreens.length || 0) + ' screen' + (dsScreens.length === 1 ? '' : 's') + ' · ' + (scope && scope.departments || []).length + ' dept']] : []), ...(!isAdmin && !isColl ? [['scope', 'Staff & roster scope', 'Whose records, which units']] : [])];
   const curSec = SECS.some(x => x[0] === sec) ? sec : 'account';
   const secBar = React.createElement("div", {
     role: "tablist",
@@ -5414,7 +5423,10 @@ function UserModal({
     className: "field"
   }, React.createElement("label", null, "Which staff member is this login?"), React.createElement("select", {
     value: staffId === null ? '' : String(staffId),
-    onChange: e => setStaffId(e.target.value)
+    onChange: e => {
+      setStaffId(e.target.value);
+      setStaffLinkDirty(true);
+    }
   }, React.createElement("option", {
     value: ""
   }, "\u2014 not linked \u2014"), allStaff.map(x => React.createElement("option", {
@@ -9686,7 +9698,7 @@ function AcPerson({
       borderTop: '1px solid var(--line-2)',
       paddingTop: 12
     }
-  }, row('Email', u.email || '—'), row('Staff record', u.staffEmpId ? 'Emp ' + u.staffEmpId : 'Not linked'), row('Last sign-in', seen ? acAgo(seen) : 'Not recorded'), row('Created', acDate(u.createdAt)), row('Last changed', acDate(u.updatedAt)), t !== 'portal' && row('Report sign-off', {
+  }, row('Email', u.email || '—'), row('Staff record', u.staffMatch ? (u.staffMatch.empId ? 'Emp ' + u.staffMatch.empId : '#' + u.staffMatch.id) + ' · ' + u.staffMatch.name : u.staffEmpId ? 'Emp ' + u.staffEmpId : 'Not linked'), row('Last sign-in', seen ? acAgo(seen) : 'Not recorded'), row('Created', acDate(u.createdAt)), row('Last changed', acDate(u.updatedAt)), t !== 'portal' && row('Report sign-off', {
     prepare: 'Prepares',
     check: 'Checks',
     approve: 'Approves'
@@ -10160,7 +10172,7 @@ function AccessControl({
   const canDeleteStaff = active.filter(u => u.role !== 'Administrator' && acActs(u, 'staff').indexOf('delete') >= 0);
   const neverSeen = seenOk ? active.filter(u => !lastSeen[u.username]) : [];
   const legacy = all.filter(u => typeOf(u) === 'portal');
-  const attention = noAccess.length + canDeleteStaff.length + legacy.length;
+  const attention = noAccess.length + canDeleteStaff.length + legacy.filter(u => u.active !== false).length;
   const convertAll = async () => {
     try {
       const pre = await K.usersApi('POST', '/api/users/convert-portal', {});
@@ -10388,7 +10400,7 @@ function AccessControl({
     sub: "Set person by person"
   }), React.createElement(AcKpi, {
     label: "Data Submission",
-    value: active.filter(u => acActs(u, 'datasubmit').length).length,
+    value: active.filter(u => acActs(u, 'datasubmit').length || u.role === 'collector' || u.role === 'incharge').length,
     sub: "People who report their unit's data"
   }), React.createElement(AcKpi, {
     label: "Signed in \xB7 7 days",
@@ -10654,7 +10666,7 @@ function AccessControl({
     }
   }, React.createElement("option", {
     value: ""
-  }, "Choose a module\u2026"), K.USER_MODS.map(([k, l]) => React.createElement("option", {
+  }, "Choose a module\u2026"), K.USER_MODS.filter(([k]) => ['datasubmit', 'staffapp', 'users'].indexOf(k) < 0).map(([k, l]) => React.createElement("option", {
     key: k,
     value: k
   }, l))), React.createElement("button", {
@@ -10762,7 +10774,8 @@ function AccessControl({
     const t = typeOf(u);
     const isMe = me && u.username === me;
     const seen = lastSeen[u.username];
-    const staffScope = u.role === 'Administrator' ? 'Everything' : t === 'portal' || acActs(u, 'datasubmit').length ? (u.allQualityAreas ? 'All areas' : (u.qualityAreas || []).length + ' area' + ((u.qualityAreas || []).length === 1 ? '' : 's')) + ' · ' + Object.keys(u.qualityIndicators || {}).reduce((s, k) => s + (u.qualityIndicators[k] || []).length, 0) + ' indicators limited' : u.staffScope === 'self' ? 'Staff: own record' : u.staffScope === 'departments' ? 'Staff: ' + (u.departments || []).length + ' dept' : 'Staff: all';
+    const nLim = Object.keys(u.qualityIndicators || {}).reduce((s, k) => s + (u.qualityIndicators[k] || []).length, 0);
+    const staffScope = u.role === 'Administrator' ? 'Everything' : u.role === 'nurse' || u.role === 'pca' ? 'Staff app · own record' : t === 'portal' || acActs(u, 'datasubmit').length ? (u.departments || []).length + ' dept · ' + (u.allQualityAreas ? 'all areas' : (u.qualityAreas || []).length + ' area' + ((u.qualityAreas || []).length === 1 ? '' : 's')) + (nLim ? ' · ' + nLim + ' indicators limited' : '') : u.staffScope === 'self' ? 'Staff: own record' : u.staffScope === 'departments' ? 'Staff: ' + (u.departments || []).length + ' dept' : 'Staff: all';
     return React.createElement("div", {
       key: u.username,
       style: {
