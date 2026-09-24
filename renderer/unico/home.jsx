@@ -233,8 +233,7 @@
     const staffId = (me && me.emp_id) || (u && u.username) || '—';
     const initials = initialsOf(staffName);
     const avatarUrl = (u && u.photo && u.photo.url) || (me && me.photo && (typeof me.photo === 'string' ? me.photo : me.photo.url)) || (me && me.photo_url) || '';
-    const [avatarDead, setAvatarDead] = useState(false);
-    useEffect(() => { setAvatarDead(false); }, [avatarUrl]);
+    const avatarImage = window.MK.usePhoto(avatarUrl, 66);
 
     // Find MY roster, not my department's. Matching on the department name was wrong in
     // both directions: someone rostered on a unit other than the one on their staff
@@ -664,7 +663,7 @@
           <div onClick={celebrate} title="Shift progress · click me"
             style={fs('position:relative;z-index:4;width:74px;height:74px;padding:4px;border-radius:20px;flex-shrink:0;display:grid;place-items:center;background:conic-gradient(#3ddc97 ' + pct.toFixed(1) + '%,' + (night ? 'rgba(255,255,255,.18)' : 'rgba(12,28,52,.14)') + ' 0);' + (on ? 'animation:ringGlow 3s ease-in-out infinite;' : '') + 'transition:background .8s,transform .25s;cursor:pointer')}>
             <div style={sx('width:66px;height:66px;border-radius:16px;background:linear-gradient(135deg,#3ab5a7,#0090ca);color:#fff;display:grid;place-items:center;font-weight:800;font-size:23px;overflow:hidden')}>
-              {avatarUrl && !avatarDead ? <img src={(window.MK && window.MK.cdnPhoto) ? window.MK.cdnPhoto(avatarUrl, 66) : avatarUrl} alt="" onError={() => setAvatarDead(true)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials}
+              {avatarUrl && !avatarImage.failed ? <img src={avatarImage.src} data-no-net="true" alt="" onError={avatarImage.onError} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials}
             </div>
           </div>
           {/* z-index above the sun's 3 so the disc can never sit ON the headline;

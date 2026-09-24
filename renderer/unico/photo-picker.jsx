@@ -322,8 +322,8 @@
     const [viewing, setViewing] = React.useState(false);  // lightbox open?
     // The stored url can stop loading (the image host was disabled on 2026-09-23 and every
     // photo answered 401). Fall back to initials instead of the browser's broken-image icon.
-    const [broken, setBroken] = React.useState(false);
-    React.useEffect(() => { setBroken(false); }, [value && value.url]);
+    value = typeof value === 'string' ? { url: value } : value;
+    const image = window.MK.usePhoto(value && value.url, Math.max(w || size || 96, h || size || 96), 'fit');
     const inputRef = React.useRef(null);
     const px = size || 96;
 
@@ -410,11 +410,11 @@
               color: plain ? '#fff' : ring, letterSpacing: '.5px',
               cursor: (zoomable && value && value.url && !busy) ? 'zoom-in' : undefined,
             }}>
-            {value && value.url && !broken
+            {value && value.url && !image.failed
               // 'fit' derivative: scaled to the display bucket but keeps the aspect
               // ratio the person framed at upload — the badge is not a square crop.
-              ? <img src={(window.MK && window.MK.cdnPhoto) ? window.MK.cdnPhoto(value.url, Math.max(W, H), 'fit') : value.url}
-                  alt={name || 'Photo'} decoding="async" onError={() => setBroken(true)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ? <img src={image.src} data-no-net="true"
+                  alt={name || 'Photo'} decoding="async" onError={image.onError} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               : <span>{initials || '—'}</span>}
           </div>
           {busy && (
@@ -491,20 +491,20 @@
     // Re-read from the account object on every broadcast, so a sidebar mounted long
     // before the upload still catches up without a reload.
     const [live, setLive] = React.useState(photo === undefined ? ((window.__UNICO_USER__ || {}).photo || null) : photo);
-    const [dead, setDead] = React.useState(false);
-    React.useEffect(() => { if (photo !== undefined) { setLive(photo); setDead(false); } }, [photo]);
+    React.useEffect(() => { if (photo !== undefined) setLive(photo); }, [photo]);
     React.useEffect(() => {
       if (photo !== undefined) return;                 // caller drives this one
-      const h = (e) => { setLive(e.detail || null); setDead(false); };
+      const h = (e) => { setLive(e.detail || null); };
       window.addEventListener('unico:profile-photo', h);
       return () => window.removeEventListener('unico:profile-photo', h);
     }, [photo]);
 
     const px = size || 34;
+    const url = typeof live === 'string' ? live : live && live.url;
+    const image = window.MK.usePhoto(url, px);
     const base = Object.assign({ width: px, height: px, borderRadius: radius == null ? 9 : radius }, style || {});
-    if (live && live.url && !dead) {
-      const src = (window.MK && window.MK.cdnPhoto) ? window.MK.cdnPhoto(live.url, px) : live.url;
-      return <img className={className} src={src} alt={initials || ''} onError={() => setDead(true)}
+    if (url && !image.failed) {
+      return <img className={className} src={image.src} data-no-net="true" alt={initials || ''} onError={image.onError}
         loading="lazy" decoding="async"
         style={Object.assign({}, base, { objectFit: 'cover', padding: 0, display: 'block' })} />;
     }

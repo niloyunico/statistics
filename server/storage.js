@@ -20,6 +20,8 @@ const KEY = process.env.CLOUDINARY_API_KEY;
 const SECRET = process.env.CLOUDINARY_API_SECRET;
 
 let _configured = false;
+const imagekit = require('./storage-imagekit');
+const useImageKit = () => (process.env.PHOTO_STORAGE_PROVIDER || (process.env.IMAGEKIT_PRIVATE_KEY ? 'imagekit' : 'cloudinary')) === 'imagekit';
 
 function configure() {
   if (!cloudinary || !CLOUD || !KEY || !SECRET) return false;
@@ -34,6 +36,7 @@ const ALLOWED_FORMATS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf'];
 
 // Upload a raw file Buffer. Returns the public CDN URL + public id.
 async function uploadBuffer(buf, opts = {}) {
+  if (useImageKit()) return imagekit.uploadBuffer(buf, opts);
   if (!buf || !buf.length) throw new Error('Empty upload.');
   if (!configure()) throw new Error('Storage is not configured (set CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET in server/.env).');
   const folder = String(opts.folder || 'unico').replace(/[^A-Za-z0-9_/-]/g, '');
@@ -58,6 +61,7 @@ async function uploadBuffer(buf, opts = {}) {
 
 // Remove a previously uploaded asset by its public id (best-effort).
 async function deleteByPublicId(publicId) {
+  if (imagekit.isImageKitId(publicId)) return imagekit.deleteByPublicId(publicId);
   if (!publicId) return { ok: false, error: 'Missing publicId.' };
   if (!configure()) return { ok: false, error: 'Storage is not configured.' };
   try {
@@ -67,6 +71,7 @@ async function deleteByPublicId(publicId) {
 }
 
 function status() {
+  if (useImageKit()) return { provider: 'imagekit', configured: !!(process.env.IMAGEKIT_PRIVATE_KEY && process.env.IMAGEKIT_URL_ENDPOINT), cloudName: process.env.IMAGEKIT_URL_ENDPOINT || '' };
   const configured = !!(cloudinary && CLOUD && KEY && SECRET);
   return { provider: 'cloudinary', configured, cloudName: CLOUD || '' };
 }
@@ -74,6 +79,7 @@ function status() {
 // Live connectivity check — calls Cloudinary's ping endpoint to confirm the
 // credentials actually work (not just that they are present).
 async function ping() {
+  if (useImageKit()) return imagekit.ping();
   if (!configure()) return { ok: false, error: 'not configured' };
   try {
     const r = await cloudinary.api.ping();
@@ -91,6 +97,7 @@ async function ping() {
 
 // Folders directly under `path` (or the top level when path is empty).
 async function listFolders(path) {
+  if (useImageKit()) return imagekit.listFolders(path);
   if (!configure()) throw new Error('Storage is not configured (set CLOUDINARY_* in server/.env).');
   const p = String(path || '').replace(/^\/+|\/+$/g, '');
   const r = p ? await cloudinary.api.sub_folders(p) : await cloudinary.api.root_folders();
@@ -101,6 +108,7 @@ async function listFolders(path) {
 // files in SEPARATE resource types, so a single listing has to ask for the one
 // the caller wants — the panel offers all three.
 async function listAssets(opts) {
+  if (useImageKit()) return imagekit.listAssets(opts);
   if (!configure()) throw new Error('Storage is not configured (set CLOUDINARY_* in server/.env).');
   const o = opts || {};
   const folder = String(o.folder || '').replace(/^\/+|\/+$/g, '');
@@ -136,6 +144,7 @@ async function listAssets(opts) {
 
 // Plan consumption — the numbers that matter on the free tier.
 async function usage() {
+  if (useImageKit()) return imagekit.usage();
   if (!configure()) throw new Error('Storage is not configured (set CLOUDINARY_* in server/.env).');
   const u = await cloudinary.api.usage();
   const pick = (v) => (v && typeof v === 'object' ? { usage: v.usage || 0, limit: v.limit || 0 } : { usage: v || 0, limit: 0 });
@@ -149,4 +158,5 @@ async function usage() {
   };
 }
 
-module.exports = { uploadBuffer, deleteByPublicId, status, ping, listFolders, listAssets, usage };
+module.exports = { uploadBuffer, deleteByPublicId, status, ping, listFolders, listAssets, usage,
+  isImageKitId: imagekit.isImageKitId, getAsset: imagekit.getAsset };

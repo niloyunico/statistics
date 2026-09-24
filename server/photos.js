@@ -24,10 +24,8 @@
  * WHO WRITES THE DATABASE
  *   - profile: this route writes users.photo itself — the account document is not
  *     something the renderer may patch.
- *   - staff:   this route does NOT write the staff record. Staff edits flow through
- *     the app's existing overlay sync (unico_staff_v3 -> PUT /api/data), and a second
- *     writer on the same record is exactly how concurrent edits get lost. The caller
- *     stores the returned url on the record through the normal store.
+ *   - staff: this route saves the photo field on existing staff records before
+ *     confirming success. New, unsaved forms carry it in the normal roster save.
  */
 const storage = require('./storage');
 const activity = require('./activity-log');
@@ -56,14 +54,22 @@ async function setStaffPhoto(staffId, empId, photo) {
   const filter = require('./staff-roster').staffIdFilter(staffId);
   if (!filter) return false;
   const upd = photo ? { $set: { photo } } : { $unset: { photo: '' } };
-  const r = await dbh.collection('staff').updateOne(filter, upd);
+  let r = await dbh.collection('staff').updateOne(filter, upd);
+  if (!r.matchedCount) {
+    // Staff added through the app may exist only in the saved overlay. Create
+    // their backing document using the exact record id, never an employee number.
+    const roster = await require('./staff-roster').loadRoster();
+    const row = roster.find(x => String(x.id) === String(staffId));
+    if (!row) return false;
+    r = await dbh.collection('staff').updateOne({ id: row.id }, upd, { upsert: true });
+  }
   // Invalidate EXPLICITLY rather than trusting the instrumented write to do it.
   // A portrait that reaches the database but not the cached `staff` copy is invisible:
   // __UNICO_STAFF__ is built from that copy, so the browser is handed a roster with no
   // picture and the client-side merge has nothing to restore. Exactly that happened to
   // one record — the document had the photo, the cached read did not.
   try { await cache.bump('staff'); } catch (e) { /* best effort */ }
-  return r.matchedCount > 0;
+  return r.matchedCount > 0 || r.upsertedCount > 0;
 }
 
 // Generous for a portrait the client has already resized; small enough that a stray
@@ -78,7 +84,7 @@ const KINDS = {
 function notConfigured(res) {
   return res.status(503).json({
     ok: false,
-    error: 'Photo storage is not set up. Add CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET to the server environment.',
+    error: 'Photo storage is not set up. Configure ImageKit or Cloudinary in the server environment.',
   });
 }
 
@@ -136,25 +142,22 @@ function mount(app, opts) {
         if (who) {
           const users = await getUsers();
           const prev = await users.findOne({ username: who }, { projection: { photo: 1 } });
-          await users.updateOne({ username: who }, {
+          const saved = await users.updateOne({ username: who }, {
             $set: { photo: { url: up.url, publicId: up.publicId, updatedAt: Date.now() } },
           });
+          if (!saved.matchedCount) throw new Error('Account photo could not be saved. Please sign in again.');
           // Replacing a picture orphans the old asset; Cloudinary has no recycle bin
           // and no cleanup job, so drop it now. Best-effort: a failure here must not
           // fail an upload that already succeeded.
           const old = prev && prev.photo && prev.photo.publicId;
           if (old && old !== up.publicId) storage.deleteByPublicId(old).catch(() => {});
-        }
+        } else throw new Error('Sign in before uploading an account photo.');
       }
 
-      // Staff portrait: store the url on the staff document too, so it survives a
-      // cleared browser, another device and a redeploy. Best effort — a failure here
-      // must not fail an upload that already succeeded, and the overlay still carries
-      // it as before.
-      if (kind.folder === KINDS.staff.folder && (body.staffId != null || body.empId)) {
-        try {
-          await setStaffPhoto(body.staffId, body.empId, { url: up.url, publicId: up.publicId, updatedAt: Date.now() });
-        } catch (e) { /* keep the upload successful */ }
+      // An existing record must be durable before the UI announces success.
+      if (kind.folder === KINDS.staff.folder && body.staffId != null) {
+        const saved = await setStaffPhoto(body.staffId, body.empId, { url: up.url, publicId: up.publicId, updatedAt: Date.now() });
+        if (!saved) throw new Error('Photo could not be saved to the staff record. Save the record and try again.');
       }
 
       activity.record(Object.assign({}, activity.actorOf(req), {
@@ -194,6 +197,7 @@ function mount(app, opts) {
     }
 
     try {
+      if (storage.isImageKitId(publicId)) await storage.getAsset(publicId);
       if (kind.folder === KINDS.profile.folder) {
         const who = req.user && (req.user.sub || req.user.username);
         if (who) await (await getUsers()).updateOne({ username: who }, { $unset: { photo: '' } });
@@ -274,7 +278,8 @@ function mount(app, opts) {
     if (publicId.indexOf(kind.folder + '/') !== 0) return res.status(400).json({ ok: false, error: 'That is not a staff portrait.' });
     if (body.staffId == null && !body.empId) return res.status(400).json({ ok: false, error: 'Save the staff record first, then attach a photo to it.' });
     try {
-      const url = String(body.url || '');
+      const url = storage.isImageKitId(publicId)
+        ? (await storage.getAsset(publicId)).url : String(body.url || '');
       const photo = { url, publicId, updatedAt: Date.now() };
       const ok = await setStaffPhoto(body.staffId, body.empId, photo);
       if (!ok) return res.status(404).json({ ok: false, error: 'That staff member has no saved record yet — save the record first.' });

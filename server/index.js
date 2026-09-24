@@ -50,7 +50,7 @@ app.use((req, res, next) => {
     // happily — and a blocked <img> silently renders its alt text, which reads as
     // "the wrong picture is showing" rather than "the image was refused".
     // res.cloudinary.com only: no wildcard, so this opens nothing else.
-    "img-src 'self' data: blob: https://res.cloudinary.com",   // + charts / PDF rasterisation
+    "img-src 'self' data: blob: https://res.cloudinary.com https://ik.imagekit.io",   // + charts / PDF rasterisation
     "font-src 'self'",
     "connect-src 'self'",
     "worker-src 'self' blob:",                        // html2canvas / jsPDF
@@ -71,6 +71,7 @@ app.use((req, res, next) => {
 // public caching. Set before every route; a route that sets its own Cache-Control later wins.
 app.use('/api', (req, res, next) => { res.set('Cache-Control', 'private, no-store'); next(); });
 
+require('./imagekit-webhook').mount(app); // Raw signed payload must precede JSON parsing.
 app.use(express.json({ limit: '12mb' })); // app-state snapshots can be sizable
 
 // Record every successful WRITE on /api/* to the Activity Log (see server/audit.js:

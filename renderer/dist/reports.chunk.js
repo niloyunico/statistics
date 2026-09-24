@@ -7340,7 +7340,7 @@ function MediaBrowser() {
   const del = async a => {
     const ok = await window.UI.confirm({
       title: 'Delete this file?',
-      message: 'Permanently removes “' + a.publicId + '” from Cloudinary. Anything still pointing at it will show a broken image. This cannot be undone.',
+      message: 'Permanently removes “' + a.publicId + '” from photo storage. Anything still pointing at it will show a broken image. This cannot be undone.',
       danger: true,
       confirmLabel: 'Delete file'
     });
@@ -7376,7 +7376,7 @@ function MediaBrowser() {
       color: 'var(--muted)',
       lineHeight: 1.6
     }
-  }, "Cloudinary is not connected, so uploaded photos and files are not stored on the CDN.", React.createElement("div", {
+  }, "Photo storage is not connected.", React.createElement("div", {
     style: {
       marginTop: 10,
       fontFamily: 'IBM Plex Mono',
@@ -7416,7 +7416,7 @@ function MediaBrowser() {
       fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, "Cloudinary", info && info.cloudName ? ' · ' + info.cloudName : '', usage ? ' · ' + usage.resources + ' files · ' + kb(usage.storage.usage) + ' stored' : '', usage && usage.credits && usage.credits.limit ? ' · ' + usage.credits.usage.toFixed(2) + '/' + usage.credits.limit + ' credits used' : '')), React.createElement("div", {
+  }, info && info.provider === 'imagekit' ? 'ImageKit' : 'Cloudinary', info && info.cloudName ? ' · ' + info.cloudName : '', usage ? ' · ' + (usage.resources != null ? usage.resources + ' files · ' : '') + kb(usage.storage.usage) + ' stored' : '', usage && usage.credits && usage.credits.limit ? ' · ' + usage.credits.usage.toFixed(2) + '/' + usage.credits.limit + ' credits used' : '')), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6
@@ -7599,7 +7599,7 @@ function MediaBrowser() {
       color: 'var(--rose)',
       borderColor: '#f1c6cd'
     },
-    title: "Delete from Cloudinary",
+    title: "Delete from photo storage",
     onClick: () => del(a)
   }, React.createElement(Ic, {
     d: I.x,

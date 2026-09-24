@@ -13,15 +13,14 @@ function VaccBadge({status}){
 // name-coloured initials otherwise — including when the url is dead or blocked, so a
 // list can never show the browser's broken-image glyph.
 function Avatar({name,size=34,fontSize,photo}){
-  const [dead,setDead]=React.useState(false);
-  React.useEffect(()=>{setDead(false);},[photo&&photo.url]);
+  const url=typeof photo==='string'?photo:photo&&photo.url;
+  const image=window.MK.usePhoto(url,size);
   const parts=(name||'?').split(' '); const ini=(parts[0][0]||'')+(parts.length>1?parts[parts.length-1][0]:'');
   let h=0; for(const ch of name||'') h=(h*31+ch.charCodeAt(0))%360;
   const box={width:size,height:size,borderRadius:'50%',flexShrink:0};
-  if(photo&&photo.url&&!dead){
+  if(url&&!image.failed){
     // Small CDN derivative + lazy load: a 26px avatar must not pull the 640px original.
-    const src=(window.MK&&window.MK.cdnPhoto)?window.MK.cdnPhoto(photo.url,size):photo.url;
-    return <img src={src} alt={ini.toUpperCase()} title={name||''} onError={()=>setDead(true)}
+    return <img src={image.src} data-no-net="true" alt={ini.toUpperCase()} title={name||''} onError={image.onError}
       loading="lazy" decoding="async"
       style={{...box,objectFit:'cover',display:'block',background:'#e8eef5'}}/>;
   }

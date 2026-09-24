@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=08eb088ada","reports":"/dist/reports.chunk.js?v=0a18b93015","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=f8f6f20da4","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=08eb088ada","reports":"/dist/reports.chunk.js?v=9548427b4e","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=f8f6f20da4","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7667,6 +7667,13 @@ window.QI_CORRECTIONS_BY_DEFID = {
        mode 'fit'            — scale down only, keeps the uploaded aspect ratio */
   function cdnPhoto(url, px, mode) {
     try {
+      if (url && /^https:\/\/ik\.imagekit\.io\//.test(url)) {
+        var ikUrl = new URL(url);
+        if (ikUrl.searchParams.has('tr') || ikUrl.pathname.indexOf('/tr:') >= 0 || ikUrl.searchParams.has('ik-s')) return url;
+        var ikWidth = (px || 32) <= 48 ? 96 : 320;
+        ikUrl.searchParams.set('tr', mode === 'fit' ? 'w-' + ikWidth + ',c-at_max,q-80' : 'w-' + ikWidth + ',h-' + ikWidth + ',q-80');
+        return ikUrl.toString();
+      }
       if (!url || url.indexOf('res.cloudinary.com') < 0 || url.indexOf('/upload/') < 0) return url;
       if (/\/upload\/[a-z]+_[^/]*\//.test(url)) return url;          // already a derivative
       var w = (px || 32) <= 48 ? 96 : 320;                            // 2x for retina, 2 buckets only
@@ -7679,15 +7686,31 @@ window.QI_CORRECTIONS_BY_DEFID = {
     if (!m) return '';
     return (empId != null && m['id:' + String(empId).trim()]) || (name && m['nm:' + String(name).trim().toLowerCase()]) || '';
   }
+  // Try the original when a CDN derivative fails. Retry once after a transient
+  // failure, and again when connectivity returns, without changing the saved URL.
+  function usePhoto(url, px, mode) {
+    var state = React.useState(0), attempt = state[0], setAttempt = state[1];
+    React.useEffect(function () { setAttempt(0); }, [url]);
+    React.useEffect(function () {
+      function retry() { setAttempt(0); }
+      window.addEventListener('online', retry);
+      var timer = attempt === 2 ? setTimeout(function () { setAttempt(3); }, 15000) : null;
+      return function () { window.removeEventListener('online', retry); clearTimeout(timer); };
+    }, [url, attempt]);
+    return { src: url && (attempt === 0 ? cdnPhoto(url, px, mode) : url),
+      failed: attempt === 2 || attempt >= 4,
+      onError: function () { setAttempt(function (n) {
+        return n === 0 && cdnPhoto(url, px, mode) === url ? 2 : Math.min(n + 1, 4);
+      }); } };
+  }
   function Av(props) {
     var name = props.name, size = props.size || 28;
     var url = photoUrlOf(props.emp) || photoUrlOf(props) || photoLookup(props.empId, name);
-    var st = React.useState(false); var dead = st[0], setDead = st[1];
-    React.useEffect(function () { setDead(false); }, [url]);   // eslint-disable-line
+    var image = usePhoto(url, size);
     var radius = props.radius == null ? '50%' : props.radius;
-    if (url && !dead) {
+    if (url && !image.failed) {
       return React.createElement('img', {
-        src: cdnPhoto(url, size), alt: name || '', onError: function () { setDead(true); },
+        src: image.src, alt: name || '', onError: image.onError, 'data-no-net': 'true',
         loading: 'lazy', decoding: 'async',
         style: Object.assign({ width: size, height: size, borderRadius: radius, objectFit: 'cover', flexShrink: 0, display: 'block' }, props.style || {}),
       });
@@ -7749,7 +7772,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     MONO: MONO, ANIM: ANIM, INK: INK, BODY: BODY, MUTED: MUTED, FAINT: FAINT, LINE: LINE,
     GC: GC, RT: RT, ST: ST, TINT: TINT,
     card: card, cardHead: cardHead, cardBody: cardBody, h3: h3, sub: sub, page: page,
-    hue: hue, av: av, ini: ini, initials: initials, Av: Av, photoUrlOf: photoUrlOf, cdnPhoto: cdnPhoto, roleChip: roleChip, gchip: gchip, stChip: stChip,
+    hue: hue, av: av, ini: ini, initials: initials, Av: Av, photoUrlOf: photoUrlOf, cdnPhoto: cdnPhoto, usePhoto: usePhoto, roleChip: roleChip, gchip: gchip, stChip: stChip,
     ratingPill: ratingPill, iconBadge: iconBadge, barColor: barColor, progColor: progColor,
     track: track, fill: fill, btnPri: btnPri, btnGhost: btnGhost, btnTone: btnTone,
   };
@@ -12193,10 +12216,10 @@ Object.assign(window, {
     const [cfg, setCfg] = React.useState(null);
     const [cropSrc, setCropSrc] = React.useState(null);
     const [viewing, setViewing] = React.useState(false);
-    const [broken, setBroken] = React.useState(false);
-    React.useEffect(() => {
-      setBroken(false);
-    }, [value && value.url]);
+    value = typeof value === 'string' ? {
+      url: value
+    } : value;
+    const image = window.MK.usePhoto(value && value.url, Math.max(w || size || 96, h || size || 96), 'fit');
     const inputRef = React.useRef(null);
     const px = size || 96;
     React.useEffect(() => {
@@ -12328,11 +12351,12 @@ Object.assign(window, {
         letterSpacing: '.5px',
         cursor: zoomable && value && value.url && !busy ? 'zoom-in' : undefined
       }
-    }, value && value.url && !broken ? React.createElement("img", {
-      src: window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(value.url, Math.max(W, H), 'fit') : value.url,
+    }, value && value.url && !image.failed ? React.createElement("img", {
+      src: image.src,
+      "data-no-net": "true",
       alt: name || 'Photo',
       decoding: "async",
-      onError: () => setBroken(true),
+      onError: image.onError,
       style: {
         width: '100%',
         height: '100%',
@@ -12441,35 +12465,32 @@ Object.assign(window, {
     style
   }) {
     const [live, setLive] = React.useState(photo === undefined ? (window.__UNICO_USER__ || {}).photo || null : photo);
-    const [dead, setDead] = React.useState(false);
     React.useEffect(() => {
-      if (photo !== undefined) {
-        setLive(photo);
-        setDead(false);
-      }
+      if (photo !== undefined) setLive(photo);
     }, [photo]);
     React.useEffect(() => {
       if (photo !== undefined) return;
       const h = e => {
         setLive(e.detail || null);
-        setDead(false);
       };
       window.addEventListener('unico:profile-photo', h);
       return () => window.removeEventListener('unico:profile-photo', h);
     }, [photo]);
     const px = size || 34;
+    const url = typeof live === 'string' ? live : live && live.url;
+    const image = window.MK.usePhoto(url, px);
     const base = Object.assign({
       width: px,
       height: px,
       borderRadius: radius == null ? 9 : radius
     }, style || {});
-    if (live && live.url && !dead) {
-      const src = window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(live.url, px) : live.url;
+    if (url && !image.failed) {
       return React.createElement("img", {
         className: className,
-        src: src,
+        src: image.src,
+        "data-no-net": "true",
         alt: initials || '',
-        onError: () => setDead(true),
+        onError: image.onError,
         loading: "lazy",
         decoding: "async",
         style: Object.assign({}, base, {
@@ -13494,10 +13515,7 @@ Object.assign(window, {
     const staffId = me && me.emp_id || u && u.username || '—';
     const initials = initialsOf(staffName);
     const avatarUrl = u && u.photo && u.photo.url || me && me.photo && (typeof me.photo === 'string' ? me.photo : me.photo.url) || me && me.photo_url || '';
-    const [avatarDead, setAvatarDead] = useState(false);
-    useEffect(() => {
-      setAvatarDead(false);
-    }, [avatarUrl]);
+    const avatarImage = window.MK.usePhoto(avatarUrl, 66);
     useEffect(() => {
       let live = true;
       const y = now.getFullYear(),
@@ -14463,10 +14481,11 @@ Object.assign(window, {
       style: fs('position:relative;z-index:4;width:74px;height:74px;padding:4px;border-radius:20px;flex-shrink:0;display:grid;place-items:center;background:conic-gradient(#3ddc97 ' + pct.toFixed(1) + '%,' + (night ? 'rgba(255,255,255,.18)' : 'rgba(12,28,52,.14)') + ' 0);' + (on ? 'animation:ringGlow 3s ease-in-out infinite;' : '') + 'transition:background .8s,transform .25s;cursor:pointer')
     }, React.createElement("div", {
       style: sx('width:66px;height:66px;border-radius:16px;background:linear-gradient(135deg,#3ab5a7,#0090ca);color:#fff;display:grid;place-items:center;font-weight:800;font-size:23px;overflow:hidden')
-    }, avatarUrl && !avatarDead ? React.createElement("img", {
-      src: window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(avatarUrl, 66) : avatarUrl,
+    }, avatarUrl && !avatarImage.failed ? React.createElement("img", {
+      src: avatarImage.src,
+      "data-no-net": "true",
       alt: "",
-      onError: () => setAvatarDead(true),
+      onError: avatarImage.onError,
       style: {
         width: '100%',
         height: '100%',
@@ -18301,10 +18320,8 @@ function Avatar({
   fontSize,
   photo
 }) {
-  const [dead, setDead] = React.useState(false);
-  React.useEffect(() => {
-    setDead(false);
-  }, [photo && photo.url]);
+  const url = typeof photo === 'string' ? photo : photo && photo.url;
+  const image = window.MK.usePhoto(url, size);
   const parts = (name || '?').split(' ');
   const ini = (parts[0][0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '');
   let h = 0;
@@ -18315,13 +18332,13 @@ function Avatar({
     borderRadius: '50%',
     flexShrink: 0
   };
-  if (photo && photo.url && !dead) {
-    const src = window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(photo.url, size) : photo.url;
+  if (url && !image.failed) {
     return React.createElement("img", {
-      src: src,
+      src: image.src,
+      "data-no-net": "true",
       alt: ini.toUpperCase(),
       title: name || '',
-      onError: () => setDead(true),
+      onError: image.onError,
       loading: "lazy",
       decoding: "async",
       style: {

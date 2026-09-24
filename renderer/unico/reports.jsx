@@ -3083,7 +3083,7 @@ function MediaBrowser(){
   const kb=(n)=>n>=1048576?(n/1048576).toFixed(1)+' MB':n>=1024?(n/1024).toFixed(0)+' KB':n+' B';
 
   const del=async(a)=>{
-    const ok=await window.UI.confirm({title:'Delete this file?',message:'Permanently removes “'+a.publicId+'” from Cloudinary. Anything still pointing at it will show a broken image. This cannot be undone.',danger:true,confirmLabel:'Delete file'});
+    const ok=await window.UI.confirm({title:'Delete this file?',message:'Permanently removes “'+a.publicId+'” from photo storage. Anything still pointing at it will show a broken image. This cannot be undone.',danger:true,confirmLabel:'Delete file'});
     if(!ok) return;
     fetch('/api/media/asset?publicId='+encodeURIComponent(a.publicId),{method:'DELETE',credentials:'same-origin'})
       .then(r=>r.json()).then(j=>{
@@ -3097,7 +3097,7 @@ function MediaBrowser(){
     <div className="card"><div className="card-b">
       <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)',marginBottom:4}}>Media</div>
       <div style={{fontSize:12.5,color:'var(--muted)',lineHeight:1.6}}>
-        Cloudinary is not connected, so uploaded photos and files are not stored on the CDN.
+        Photo storage is not connected.
         <div style={{marginTop:10,fontFamily:'IBM Plex Mono',fontSize:11.5,background:'var(--panel-2)',border:'1px solid var(--line-2)',borderRadius:7,padding:'10px 12px',whiteSpace:'pre-wrap'}}>{info.hint}</div>
       </div>
     </div></div>
@@ -3109,8 +3109,8 @@ function MediaBrowser(){
         <div style={{flex:1,minWidth:160}}>
           <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)'}}>Media</div>
           <div style={{fontSize:11.5,color:'var(--muted)'}}>
-            Cloudinary{info&&info.cloudName?' · '+info.cloudName:''}
-            {usage?' · '+usage.resources+' files · '+kb(usage.storage.usage)+' stored':''}
+            {info&&info.provider==='imagekit'?'ImageKit':'Cloudinary'}{info&&info.cloudName?' · '+info.cloudName:''}
+            {usage?' · '+(usage.resources!=null?usage.resources+' files · ':'')+kb(usage.storage.usage)+' stored':''}
             {usage&&usage.credits&&usage.credits.limit?' · '+usage.credits.usage.toFixed(2)+'/'+usage.credits.limit+' credits used':''}
           </div>
         </div>
@@ -3163,7 +3163,7 @@ function MediaBrowser(){
                 <div style={{fontSize:10.5,color:'var(--muted)',fontFamily:'IBM Plex Mono'}}>{kb(a.bytes)}{a.width?' · '+a.width+'×'+a.height:''}</div>
                 <div style={{display:'flex',gap:6,marginTop:7}}>
                   <a className="btn sm" href={a.url} target="_blank" rel="noreferrer" style={{flex:1,textAlign:'center',textDecoration:'none'}}>Open</a>
-                  <button className="btn sm" style={{color:'var(--rose)',borderColor:'#f1c6cd'}} title="Delete from Cloudinary" onClick={()=>del(a)}><Ic d={I.x} s={13}/></button>
+                  <button className="btn sm" style={{color:'var(--rose)',borderColor:'#f1c6cd'}} title="Delete from photo storage" onClick={()=>del(a)}><Ic d={I.x} s={13}/></button>
                 </div>
               </div>
             </div>

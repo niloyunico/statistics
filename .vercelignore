@@ -25,3 +25,7 @@ __pycache__/
 *.png
 !renderer/**/*.png
 .claude/
+.env
+.env.*
+**/.env
+**/.env.*

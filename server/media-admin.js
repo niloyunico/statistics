@@ -39,7 +39,7 @@ function mount(app, opts) {
 
   const notConfigured = (res) => res.json({
     ok: true, configured: false, folders: [], assets: [],
-    hint: 'Set CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET in server/.env to store photos and files on Cloudinary instead of in the database.',
+    hint: 'Configure ImageKit or Cloudinary in the server environment to store photos and files.',
   });
 
   // Folder tree, one level at a time (?path= empty for the top level).
@@ -48,7 +48,7 @@ function mount(app, opts) {
     if (!st.configured) return notConfigured(res);
     try {
       const folders = await storage.listFolders(req.query.path || '');
-      res.json({ ok: true, configured: true, cloudName: st.cloudName, path: String(req.query.path || ''), folders });
+      res.json({ ok: true, configured: true, provider: st.provider, cloudName: st.cloudName, path: String(req.query.path || ''), folders });
     } catch (e) {
       res.status(500).json({ ok: false, error: String((e && e.message) || e) });
     }
@@ -80,12 +80,12 @@ function mount(app, opts) {
 
   // Permanently remove one asset.
   app.delete('/api/media/asset', guard, async (req, res) => {
-    if (!storage.status().configured) return res.status(400).json({ ok: false, error: 'Cloudinary is not configured.' });
+    if (!storage.status().configured) return res.status(400).json({ ok: false, error: 'Photo storage is not configured.' });
     const publicId = String(req.query.publicId || '');
     if (!publicId) return res.status(400).json({ ok: false, error: 'Missing publicId.' });
     const r = await storage.deleteByPublicId(publicId);
-    if (!r.ok) return res.status(500).json({ ok: false, error: r.error || 'Cloudinary refused the delete.' });
-    activity.log(req, 'media_deleted', { target: publicId, detail: 'Deleted from Cloudinary' });
+    if (!r.ok) return res.status(500).json({ ok: false, error: r.error || 'Storage refused the delete.' });
+    activity.log(req, 'media_deleted', { target: publicId, detail: 'Deleted from photo storage' });
     res.json({ ok: true });
   });
 

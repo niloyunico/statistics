@@ -104,6 +104,13 @@
        mode 'fit'            — scale down only, keeps the uploaded aspect ratio */
   function cdnPhoto(url, px, mode) {
     try {
+      if (url && /^https:\/\/ik\.imagekit\.io\//.test(url)) {
+        var ikUrl = new URL(url);
+        if (ikUrl.searchParams.has('tr') || ikUrl.pathname.indexOf('/tr:') >= 0 || ikUrl.searchParams.has('ik-s')) return url;
+        var ikWidth = (px || 32) <= 48 ? 96 : 320;
+        ikUrl.searchParams.set('tr', mode === 'fit' ? 'w-' + ikWidth + ',c-at_max,q-80' : 'w-' + ikWidth + ',h-' + ikWidth + ',q-80');
+        return ikUrl.toString();
+      }
       if (!url || url.indexOf('res.cloudinary.com') < 0 || url.indexOf('/upload/') < 0) return url;
       if (/\/upload\/[a-z]+_[^/]*\//.test(url)) return url;          // already a derivative
       var w = (px || 32) <= 48 ? 96 : 320;                            // 2x for retina, 2 buckets only
@@ -116,15 +123,31 @@
     if (!m) return '';
     return (empId != null && m['id:' + String(empId).trim()]) || (name && m['nm:' + String(name).trim().toLowerCase()]) || '';
   }
+  // Try the original when a CDN derivative fails. Retry once after a transient
+  // failure, and again when connectivity returns, without changing the saved URL.
+  function usePhoto(url, px, mode) {
+    var state = React.useState(0), attempt = state[0], setAttempt = state[1];
+    React.useEffect(function () { setAttempt(0); }, [url]);
+    React.useEffect(function () {
+      function retry() { setAttempt(0); }
+      window.addEventListener('online', retry);
+      var timer = attempt === 2 ? setTimeout(function () { setAttempt(3); }, 15000) : null;
+      return function () { window.removeEventListener('online', retry); clearTimeout(timer); };
+    }, [url, attempt]);
+    return { src: url && (attempt === 0 ? cdnPhoto(url, px, mode) : url),
+      failed: attempt === 2 || attempt >= 4,
+      onError: function () { setAttempt(function (n) {
+        return n === 0 && cdnPhoto(url, px, mode) === url ? 2 : Math.min(n + 1, 4);
+      }); } };
+  }
   function Av(props) {
     var name = props.name, size = props.size || 28;
     var url = photoUrlOf(props.emp) || photoUrlOf(props) || photoLookup(props.empId, name);
-    var st = React.useState(false); var dead = st[0], setDead = st[1];
-    React.useEffect(function () { setDead(false); }, [url]);   // eslint-disable-line
+    var image = usePhoto(url, size);
     var radius = props.radius == null ? '50%' : props.radius;
-    if (url && !dead) {
+    if (url && !image.failed) {
       return React.createElement('img', {
-        src: cdnPhoto(url, size), alt: name || '', onError: function () { setDead(true); },
+        src: image.src, alt: name || '', onError: image.onError, 'data-no-net': 'true',
         loading: 'lazy', decoding: 'async',
         style: Object.assign({ width: size, height: size, borderRadius: radius, objectFit: 'cover', flexShrink: 0, display: 'block' }, props.style || {}),
       });
@@ -186,7 +209,7 @@
     MONO: MONO, ANIM: ANIM, INK: INK, BODY: BODY, MUTED: MUTED, FAINT: FAINT, LINE: LINE,
     GC: GC, RT: RT, ST: ST, TINT: TINT,
     card: card, cardHead: cardHead, cardBody: cardBody, h3: h3, sub: sub, page: page,
-    hue: hue, av: av, ini: ini, initials: initials, Av: Av, photoUrlOf: photoUrlOf, cdnPhoto: cdnPhoto, roleChip: roleChip, gchip: gchip, stChip: stChip,
+    hue: hue, av: av, ini: ini, initials: initials, Av: Av, photoUrlOf: photoUrlOf, cdnPhoto: cdnPhoto, usePhoto: usePhoto, roleChip: roleChip, gchip: gchip, stChip: stChip,
     ratingPill: ratingPill, iconBadge: iconBadge, barColor: barColor, progColor: progColor,
     track: track, fill: fill, btnPri: btnPri, btnGhost: btnGhost, btnTone: btnTone,
   };
