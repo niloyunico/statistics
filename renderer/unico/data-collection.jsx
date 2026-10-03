@@ -5763,24 +5763,21 @@ function StaffPrintOptions({role,onDone}){
     const ink = '#111a26', line = '#8e9aa8', soft = '#4f5d6e';
     const MatchSymbols = ({ pairCode }) => {
       const hex = pairCode.slice(5);
-      return <span aria-label="Matching OMR symbols" style={{ display: 'flex', alignItems: 'center', gap: 1, padding: '2px 4px', border: '1px solid black', background: 'white', flexShrink: 0 }}>
-        <span style={{ width: 4, height: 16, background: 'black', marginRight: 3 }} />
-        {Array.from({ length: 12 }, (_, i) => {
-          const code = parseInt(hex[i], 16), shape = code % 8;
-          const polygons = { 2:'12,4 21,20 3,20', 3:'12,3 21,12 12,21 3,12', 4:'9,3 15,3 15,9 21,9 21,15 15,15 15,21 9,21 9,15 3,15 3,9 9,9', 5:'12,2 15,8 22,9 17,14 18,21 12,18 6,21 7,14 2,9 9,8', 6:'7,4 17,4 22,12 17,20 7,20 2,12', 7:'4,4 20,4 14,12 20,20 4,20 10,12' };
-          return <svg key={i} data-block-symbol={code} width="18" height="22" viewBox="0 0 24 24" aria-hidden="true" style={{ display: 'block' }}>
-            <g fill={code < 8 ? 'black' : 'white'} stroke="black" strokeWidth="1.6" strokeLinejoin="miter">
-              {shape === 0 ? <rect x="5" y="5" width="14" height="14" /> : shape === 1 ? <circle cx="12" cy="12" r="7.5" /> : <polygon points={polygons[shape]} />}
+      return <span aria-label="Matching OMR symbols" style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '5px 7px', border: '1px solid black', background: 'white', flexShrink: 0 }}>
+        {Array.from({ length: 24 }, (_, i) => {
+          const code = (parseInt(hex[Math.floor(i / 2)], 16) >> (i % 2 ? 0 : 2)) & 3;
+          return <svg key={i} data-block-symbol={code} width="10" height="12" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block' }}>
+            <g fill={code & 2 ? 'black' : 'white'} stroke="black" strokeWidth="1.4">
+              {code & 1 ? <circle cx="8" cy="8" r="5.5" /> : <rect x="2.5" y="2.5" width="11" height="11" />}
             </g>
           </svg>;
         })}
-        <span style={{ width: 4, height: 16, background: 'black', marginLeft: 3 }} />
       </span>;
     };
     const PageMatch = ({ page, pairCode, number }) => (
-      <div data-form-pair={pairCode} style={{ border: '1.5px solid ' + ink, padding: '3px 7px', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 8, color: ink, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+      <div data-form-pair={pairCode} style={{ border: '1px solid ' + ink, padding: '6px 8px', marginBottom: 7, display: 'flex', alignItems: 'center', gap: 12, color: ink, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
         <MatchSymbols pairCode={pairCode} />
-        <span style={{ fontSize: '7.5pt' }}>Match these symbols on both pages<br />Form no.: <b style={{ fontFamily: 'monospace' }}>{number}</b></span>
+        <span style={{ fontSize: '7pt', lineHeight: 1.5 }}><span style={{ fontSize: '6.5pt', fontWeight: 700, letterSpacing: '.5px' }}>PAGE MATCH</span><br />Form no.: <b style={{ fontFamily: 'monospace', fontWeight: 600 }}>{number}</b></span>
         <span style={{ marginLeft: 'auto', fontSize: '8pt', fontWeight: 700 }}>Page {page} of 2</span>
       </div>
     );

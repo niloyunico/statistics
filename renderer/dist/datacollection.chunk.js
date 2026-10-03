@@ -14214,66 +14214,40 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         style: {
           display: 'flex',
           alignItems: 'center',
-          gap: 1,
-          padding: '2px 4px',
+          gap: 2,
+          padding: '5px 7px',
           border: '1px solid black',
           background: 'white',
           flexShrink: 0
         }
-      }, React.createElement("span", {
-        style: {
-          width: 4,
-          height: 16,
-          background: 'black',
-          marginRight: 3
-        }
-      }), Array.from({
-        length: 12
+      }, Array.from({
+        length: 24
       }, (_, i) => {
-        const code = parseInt(hex[i], 16),
-          shape = code % 8;
-        const polygons = {
-          2: '12,4 21,20 3,20',
-          3: '12,3 21,12 12,21 3,12',
-          4: '9,3 15,3 15,9 21,9 21,15 15,15 15,21 9,21 9,15 3,15 3,9 9,9',
-          5: '12,2 15,8 22,9 17,14 18,21 12,18 6,21 7,14 2,9 9,8',
-          6: '7,4 17,4 22,12 17,20 7,20 2,12',
-          7: '4,4 20,4 14,12 20,20 4,20 10,12'
-        };
+        const code = parseInt(hex[Math.floor(i / 2)], 16) >> (i % 2 ? 0 : 2) & 3;
         return React.createElement("svg", {
           key: i,
           "data-block-symbol": code,
-          width: "18",
-          height: "22",
-          viewBox: "0 0 24 24",
+          width: "10",
+          height: "12",
+          viewBox: "0 0 16 16",
           "aria-hidden": "true",
           style: {
             display: 'block'
           }
         }, React.createElement("g", {
-          fill: code < 8 ? 'black' : 'white',
+          fill: code & 2 ? 'black' : 'white',
           stroke: "black",
-          strokeWidth: "1.6",
-          strokeLinejoin: "miter"
-        }, shape === 0 ? React.createElement("rect", {
-          x: "5",
-          y: "5",
-          width: "14",
-          height: "14"
-        }) : shape === 1 ? React.createElement("circle", {
-          cx: "12",
-          cy: "12",
-          r: "7.5"
-        }) : React.createElement("polygon", {
-          points: polygons[shape]
+          strokeWidth: "1.4"
+        }, code & 1 ? React.createElement("circle", {
+          cx: "8",
+          cy: "8",
+          r: "5.5"
+        }) : React.createElement("rect", {
+          x: "2.5",
+          y: "2.5",
+          width: "11",
+          height: "11"
         })));
-      }), React.createElement("span", {
-        style: {
-          width: 4,
-          height: 16,
-          background: 'black',
-          marginLeft: 3
-        }
       }));
     };
     const PageMatch = ({
@@ -14283,12 +14257,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }) => React.createElement("div", {
       "data-form-pair": pairCode,
       style: {
-        border: '1.5px solid ' + ink,
-        padding: '3px 7px',
-        marginBottom: 5,
+        border: '1px solid ' + ink,
+        padding: '6px 8px',
+        marginBottom: 7,
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
+        gap: 12,
         color: ink,
         breakInside: 'avoid',
         pageBreakInside: 'avoid'
@@ -14297,11 +14271,19 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       pairCode: pairCode
     }), React.createElement("span", {
       style: {
-        fontSize: '7.5pt'
+        fontSize: '7pt',
+        lineHeight: 1.5
       }
-    }, "Match these symbols on both pages", React.createElement("br", null), "Form no.: ", React.createElement("b", {
+    }, React.createElement("span", {
       style: {
-        fontFamily: 'monospace'
+        fontSize: '6.5pt',
+        fontWeight: 700,
+        letterSpacing: '.5px'
+      }
+    }, "PAGE MATCH"), React.createElement("br", null), "Form no.: ", React.createElement("b", {
+      style: {
+        fontFamily: 'monospace',
+        fontWeight: 600
       }
     }, number)), React.createElement("span", {
       style: {

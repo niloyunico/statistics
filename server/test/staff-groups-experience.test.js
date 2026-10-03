@@ -96,9 +96,9 @@ const numbers=[...batch.matchAll(/UF-[A-Z0-9]+-\d{3}/g)].map(m=>m[0]);
 assert.equal(new Set(numbers).size,3,'each form has a unique number');
 assert.equal(numbers.length,6,'both pages show the form number');
 const symbols=[...batch.matchAll(/data-block-symbol="(\d+)"/g)].map(m=>m[1]);
-assert.equal(symbols.length,72,'each of six pages carries twelve OMR symbols');
-for(let i=0;i<3;i++) assert.deepEqual(symbols.slice(i*24,i*24+12),symbols.slice(i*24+12,i*24+24),'paired pages have identical symbols');
-assert.equal(new Set([0,1,2].map(i=>symbols.slice(i*24,i*24+12).join(','))).size,3,'separate forms have distinct symbol sequences');
+assert.equal(symbols.length,144,'each of six pages carries twenty-four OMR marks');
+for(let i=0;i<3;i++) assert.deepEqual(symbols.slice(i*48,i*48+24),symbols.slice(i*48+24,i*48+48),'paired pages have identical symbols');
+assert.equal(new Set([0,1,2].map(i=>symbols.slice(i*48,i*48+24).join(','))).size,3,'separate forms have distinct symbol sequences');
 assert.ok(!batch.includes('Pair code:'),'matching uses symbols instead of a printed code');
 // Exercise the dashboard button including the lazy chunk load and its options dialog.
 (async()=>{
