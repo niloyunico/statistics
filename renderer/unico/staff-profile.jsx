@@ -2936,7 +2936,7 @@ function StaffPrintOptions({role,onDone}){
     <div className="card" style={{padding:24,width:'min(420px,100%)'}}>
       <h3 style={{marginTop:0}}>Print staff forms</h3>
       <label>Number of forms<input autoFocus type="number" min="1" max="100" step="1" aria-label="Number of staff forms" value={quantity} onChange={ev=>setQuantity(ev.target.value)} style={{display:'block',width:'100%',marginTop:8}} /></label>
-      <p style={{fontSize:13,color:'var(--muted)'}}>Each form has two pages with its own form number and matching pair code. Choose 1–100 forms.</p>
+      <p style={{fontSize:13,color:'var(--muted)'}}>Each form has two pages with its own form number and matching block symbols. Choose 1–100 forms.</p>
       <p style={{fontSize:13}}>Total: {valid?count*2:'—'} pages. Keep Copies set to 1 in the print dialog so form numbers stay unique.</p>
       <div style={{display:'flex',justifyContent:'flex-end',gap:10}}><button className="btn" onClick={onDone}>Cancel</button><button className="btn pri" disabled={!valid} onClick={()=>setPrinting(true)}>Print {valid?count:''} forms</button></div>
     </div>

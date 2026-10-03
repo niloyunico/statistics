@@ -81,4 +81,9 @@ for(let i=0;i<batchCodes.length;i+=2) assert.equal(batchCodes[i],batchCodes[i+1]
 const numbers=[...batch.matchAll(/UF-[A-Z0-9]+-\d{3}/g)].map(m=>m[0]);
 assert.equal(new Set(numbers).size,3,'each form has a unique number');
 assert.equal(numbers.length,6,'both pages show the form number');
+const symbols=[...batch.matchAll(/data-block-symbol="(\d+)"/g)].map(m=>m[1]);
+assert.equal(symbols.length,36,'each of six pages carries six block symbols');
+for(let i=0;i<3;i++) assert.deepEqual(symbols.slice(i*12,i*12+6),symbols.slice(i*12+6,i*12+12),'paired pages have identical symbols');
+assert.equal(new Set([0,1,2].map(i=>symbols.slice(i*12,i*12+6).join(','))).size,3,'separate forms have distinct symbol sequences');
+assert.ok(!batch.includes('Pair code:'),'matching uses symbols instead of a printed code');
 console.log('Staff grouping, trainee directory/dashboard and date-based experience checks passed.');

@@ -5712,7 +5712,7 @@
     const [forms] = React.useState(() => {
       const token = () => (window.crypto && window.crypto.randomUUID
         ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 12)
-        : Date.now().toString(36) + Math.random().toString(36).slice(2, 7)).toUpperCase();
+        : Array.from({ length: 12 }, () => Math.floor(Math.random() * 16).toString(16)).join('')).toUpperCase();
       const batch = token();
       const count = Math.max(1, Math.min(100, Math.floor(Number(quantity)) || 1));
       return Array.from({ length: count }, (_, i) => ({ number: 'UF-' + batch + '-' + String(i + 1).padStart(3, '0'), pairCode: 'PAIR-' + token() }));
@@ -5742,10 +5742,23 @@
     const depts = statDepts.length ? statDepts : uniq(S.DEPARTMENTS);
     const custom = (S.customFields && S.customFields()) || [];
     const ink = '#111a26', line = '#8e9aa8', soft = '#4f5d6e';
+    const MatchSymbols = ({ pairCode }) => {
+      const hex = pairCode.slice(5);
+      return <span aria-label="Matching block symbols" style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+        {Array.from({ length: 6 }, (_, i) => {
+          const bits = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+          return <svg key={i} data-block-symbol={bits} width="28" height="28" viewBox="0 0 34 34" aria-hidden="true" style={{ display: 'block' }}>
+            <rect x=".5" y=".5" width="33" height="33" fill="white" stroke="black" />
+            {Array.from({ length: 9 }, (_, cell) => (cell === 4 || (bits & (1 << (cell < 4 ? cell : cell - 1))))
+              ? <rect key={cell} x={2 + (cell % 3) * 10} y={2 + Math.floor(cell / 3) * 10} width="10" height="10" fill="black" /> : null)}
+          </svg>;
+        })}
+      </span>;
+    };
     const PageMatch = ({ page, pairCode, number }) => (
       <div data-form-pair={pairCode} style={{ border: '1.5px solid ' + ink, padding: '3px 7px', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 8, color: ink, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
-        <svg width="22" height="22" viewBox="0 0 24 24" aria-label="Matching form pages" style={{ flexShrink: 0 }}><rect x="3" y="3" width="12" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" /><rect x="9" y="6" width="12" height="15" fill="white" stroke="currentColor" strokeWidth="1.5" /><path d="M12 11h6m-6 4h6" stroke="currentColor" strokeWidth="1.5" /></svg>
-        <span style={{ fontSize: '7.5pt' }}>Form number: <b style={{ fontFamily: 'monospace' }}>{number}</b><br />Pair code: <b style={{ fontFamily: 'monospace', fontSize: '9pt', letterSpacing: '.5px' }}>{pairCode}</b></span>
+        <MatchSymbols pairCode={pairCode} />
+        <span style={{ fontSize: '7.5pt' }}>Match these symbols on both pages<br />Form no.: <b style={{ fontFamily: 'monospace' }}>{number}</b></span>
         <span style={{ marginLeft: 'auto', fontSize: '8pt', fontWeight: 700 }}>Page {page} of 2</span>
       </div>
     );

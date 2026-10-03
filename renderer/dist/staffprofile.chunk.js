@@ -7092,7 +7092,7 @@ function StaffPrintOptions({
       fontSize: 13,
       color: 'var(--muted)'
     }
-  }, "Each form has two pages with its own form number and matching pair code. Choose 1\u2013100 forms."), React.createElement("p", {
+  }, "Each form has two pages with its own form number and matching block symbols. Choose 1\u2013100 forms."), React.createElement("p", {
     style: {
       fontSize: 13
     }

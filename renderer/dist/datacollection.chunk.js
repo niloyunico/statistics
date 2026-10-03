@@ -14078,7 +14078,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     quantity = 1
   }) {
     const [forms] = React.useState(() => {
-      const token = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 12) : Date.now().toString(36) + Math.random().toString(36).slice(2, 7)).toUpperCase();
+      const token = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 12) : Array.from({
+        length: 12
+      }, () => Math.floor(Math.random() * 16).toString(16)).join('')).toUpperCase();
       const batch = token();
       const count = Math.max(1, Math.min(100, Math.floor(Number(quantity)) || 1));
       return Array.from({
@@ -14128,6 +14130,50 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const ink = '#111a26',
       line = '#8e9aa8',
       soft = '#4f5d6e';
+    const MatchSymbols = ({
+      pairCode
+    }) => {
+      const hex = pairCode.slice(5);
+      return React.createElement("span", {
+        "aria-label": "Matching block symbols",
+        style: {
+          display: 'flex',
+          gap: 5,
+          flexShrink: 0
+        }
+      }, Array.from({
+        length: 6
+      }, (_, i) => {
+        const bits = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+        return React.createElement("svg", {
+          key: i,
+          "data-block-symbol": bits,
+          width: "28",
+          height: "28",
+          viewBox: "0 0 34 34",
+          "aria-hidden": "true",
+          style: {
+            display: 'block'
+          }
+        }, React.createElement("rect", {
+          x: ".5",
+          y: ".5",
+          width: "33",
+          height: "33",
+          fill: "white",
+          stroke: "black"
+        }), Array.from({
+          length: 9
+        }, (_, cell) => cell === 4 || bits & 1 << (cell < 4 ? cell : cell - 1) ? React.createElement("rect", {
+          key: cell,
+          x: 2 + cell % 3 * 10,
+          y: 2 + Math.floor(cell / 3) * 10,
+          width: "10",
+          height: "10",
+          fill: "black"
+        }) : null));
+      }));
+    };
     const PageMatch = ({
       page,
       pairCode,
@@ -14145,49 +14191,17 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         breakInside: 'avoid',
         pageBreakInside: 'avoid'
       }
-    }, React.createElement("svg", {
-      width: "22",
-      height: "22",
-      viewBox: "0 0 24 24",
-      "aria-label": "Matching form pages",
-      style: {
-        flexShrink: 0
-      }
-    }, React.createElement("rect", {
-      x: "3",
-      y: "3",
-      width: "12",
-      height: "15",
-      fill: "none",
-      stroke: "currentColor",
-      strokeWidth: "1.5"
-    }), React.createElement("rect", {
-      x: "9",
-      y: "6",
-      width: "12",
-      height: "15",
-      fill: "white",
-      stroke: "currentColor",
-      strokeWidth: "1.5"
-    }), React.createElement("path", {
-      d: "M12 11h6m-6 4h6",
-      stroke: "currentColor",
-      strokeWidth: "1.5"
-    })), React.createElement("span", {
+    }, React.createElement(MatchSymbols, {
+      pairCode: pairCode
+    }), React.createElement("span", {
       style: {
         fontSize: '7.5pt'
       }
-    }, "Form number: ", React.createElement("b", {
+    }, "Match these symbols on both pages", React.createElement("br", null), "Form no.: ", React.createElement("b", {
       style: {
         fontFamily: 'monospace'
       }
-    }, number), React.createElement("br", null), "Pair code: ", React.createElement("b", {
-      style: {
-        fontFamily: 'monospace',
-        fontSize: '9pt',
-        letterSpacing: '.5px'
-      }
-    }, pairCode)), React.createElement("span", {
+    }, number)), React.createElement("span", {
       style: {
         marginLeft: 'auto',
         fontSize: '8pt',
