@@ -14,10 +14,10 @@
 
   const dcApi = {
     get: (url) => fetch(url, { headers: { accept: 'application/json' } }).then((r) => r.json()),
-    post: (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { _dcAllCache = null; window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
+    post: (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { dcInvalidateSubs(); window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
     // An edit changes the submission lists too (and an approved edit changes live data), so it
     // must drop the cached history exactly like a POST does, or every list keeps the old row.
-    patch: (url, body) => fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { _dcAllCache = null; window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
+    patch: (url, body) => fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { dcInvalidateSubs(); window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
     del: (url) => fetch(url, { method: 'DELETE' }).then((r) => r.json()),
     put: (url, body) => fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()),
   };
@@ -28,12 +28,18 @@
   // database (a cause of "failed database" errors when several collectors submit at
   // once). Concurrent callers share one in-flight request; results cache for 8s.
   let _dcAllCache = null, _dcAllAt = 0, _dcAllPromise = null;
+  // Generation: bumped on every change. A fetch that STARTED before a submit/edit must not be
+  // cached (or handed to a new caller) as current — it refilled the cache with the old rows,
+  // so a just-sent month showed as not submitted for the next 8 s.
+  let _dcGen = 0, _dcPromiseGen = -1;
+  function dcInvalidateSubs() { _dcAllCache = null; _dcGen++; }
   const dcAllSubmissions = (force) => {
     const now = Date.now();
     if (!force && _dcAllCache && (now - _dcAllAt) < 8000) return Promise.resolve(_dcAllCache);
     // A FORCED reload (after an approve/edit) must not reuse a fetch that started BEFORE the
     // change — it returned the old rows, so approved items still showed as pending.
-    if (_dcAllPromise) return force ? _dcAllPromise.catch(() => {}).then(() => dcAllSubmissions(true)) : _dcAllPromise;
+    if (_dcAllPromise) return (!force && _dcPromiseGen === _dcGen) ? _dcAllPromise : _dcAllPromise.catch(() => {}).then(() => dcAllSubmissions(true));
+    const gen = _dcGen; _dcPromiseGen = gen;
     _dcAllPromise = (async () => {
       const rows = new Map();
       let offset = 0;
@@ -43,15 +49,17 @@
         (r.submissions || []).forEach(s => rows.set(s.id, s));
         offset = r.nextOffset;
       } while (offset != null);
-      _dcAllCache = [...rows.values()]; _dcAllAt = Date.now();
-      return _dcAllCache;
+      const list = [...rows.values()];
+      if (gen === _dcGen) { _dcAllCache = list; _dcAllAt = Date.now(); }
+      return list;
     })().finally(() => { _dcAllPromise = null; });
     return _dcAllPromise;
   };
   const dcSubmissionResponse = (status, force) => dcAllSubmissions(force).then(submissions => ({
-    ok: true, submissions: !status || status === 'all' ? submissions : submissions.filter(s => s.status === status),
+    // 'pending' includes 'approving' (an approval that died mid-apply stays so until retried).
+    ok: true, submissions: !status || status === 'all' ? submissions : submissions.filter(s => s.status === status || (status === 'pending' && s.status === 'approving')),
   }));
-  if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => { _dcAllCache = null; });
+  if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', dcInvalidateSubs);
   // A duty roster belongs to ONE department. The portal used to show the first roster the
   // server returned — and an in-charge with quality access to many areas is allowed to read many
   // units — so every in-charge saw the same (other) department's sheet. Match rosters against the
@@ -98,8 +106,43 @@
   // ...and a normal account holding Data Submission without Data Collection: it reports as
   // itself, held to its own scope, exactly like a portal account (server/access.js dataScoped).
   const dcHolds = (perms, mod) => { const v = perms && perms[mod]; return Array.isArray(v) ? v.length > 0 : (!!v && v !== 'none'); };
+  // Can `perms` do `act` in `mod`? Same rule as ui.jsx unicoCan (action array, or legacy level).
+  const DC_RANK = { none: 0, view: 1, edit: 2, add: 3, delete: 4 };
+  const dcCanAct = (perms, mod, act) => { const v = perms && perms[mod]; return Array.isArray(v) ? (act === 'view' ? v.length > 0 : v.indexOf(act) >= 0) : (DC_RANK[v || 'none'] || 0) >= (DC_RANK[act] || 1); };
+  // Sends are held to the person's own assignment unless they may ADD in Data Collection — the
+  // server's submitScoped. A Data Collection VIEWER who submits used to get the admin form here
+  // (free responsible person, admin-owned denominators, every month) and was refused on send.
   const dcIsPortalRole = (me) => !!(me && (DC_PORTAL_ROLES.indexOf(me.role) >= 0
-    || ((me.role || 'User') === 'User' && dcHolds(me.perms, 'datasubmit') && !dcHolds(me.perms, 'datacol'))));
+    || ((me.role || 'User') === 'User' && dcHolds(me.perms, 'datasubmit') && !dcCanAct(me.perms, 'datacol', 'add'))));
+  // What a held sender may SEND to — the server's denyIfOutOfScope / indicatorAllowed /
+  // refuseOutsideCollection, so the forms never offer a target the server will refuse. A Data
+  // Collection viewer is served every department and area (it may read them all), and the forms
+  // listed them all; each send outside the assignment then failed. Not-measured indicators
+  // (Department Setup) are left out too. Admins / Data Collection adders: lists unchanged.
+  const dcSendDepts = (list) => {
+    const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
+    if (!dcIsPortalRole(me) || !Array.isArray(me.departments)) return list || [];
+    const own = new Set(me.departments.map(String));
+    return (list || []).filter((d) => d && own.has(String(d.id)));
+  };
+  const dcSendAreas = (list) => {
+    const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
+    if (!dcIsPortalRole(me)) return list || [];
+    const qa = Array.isArray(me.qualityAreas) ? new Set(me.qualityAreas.map(String)) : null;
+    const qi = (me.qualityIndicators && typeof me.qualityIndicators === 'object') ? me.qualityIndicators : {};
+    return (list || []).filter((a) => a && (me.allQualityAreas || !qa || qa.has(String(a.key)))).map((a) => {
+      const allow = Array.isArray(qi[a.key]) && qi[a.key].length ? new Set(qi[a.key].map(String)) : null;
+      const inds = (a.indicators || []).filter((ind) => ind && (!allow || allow.has(String(ind.id))) && !dcNotMeasured(a, ind));
+      return inds.length === (a.indicators || []).length ? a : Object.assign({}, a, { indicators: inds });
+    });
+  };
+  // May this person SEND (Data Submission "Add")? Admins / Data Collection adders always; legacy
+  // portal roles always (the server lets them through by role).
+  const dcMaySend = () => {
+    const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
+    if (!me || me.role === 'Administrator' || DC_PORTAL_ROLES.indexOf(me.role) >= 0) return true;
+    return dcCanAct(me.perms, 'datacol', 'add') || dcCanAct(me.perms, 'datasubmit', 'add');
+  };
   const dcIsAdminUser = () => { const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null; return !me || me.role === 'Administrator'; };
   // Areas granted DIRECTLY to a responsible person (beyond department-derived / hospital-wide).
   // Older records lack the field: derive it from the stored union minus today's derived areas.
@@ -114,6 +157,9 @@
   // stays for ever, so count DISTINCT targets whose NEWEST row (anyone's) is a real rejection
   // — an auto-rejected duplicate is not something the collector got wrong.
   const dcTargetKey = (x) => (x.type === 'quality' ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '') : 'p|' + x.department) + '|' + x.month;
+  // The earlier returns of a row that was fixed and RESENT as the same record (server PATCH pushes
+  // each one onto history[]). Auto-rejected duplicates never get here (they cannot be resent).
+  const dcPastRejections = (s) => (Array.isArray(s && s.history) ? s.history.filter((h) => h && h.status === 'rejected') : []);
   const dcOpenRejections = (subs) => {
     const newest = {};
     // A withdrawn copy was never sent, so it does not close an older rejection.
@@ -174,7 +220,10 @@
   // Quality-only units (mapped in via a quality area) must never count as "missing stats".
   const dcPatientDepts = (depts, subs) => {
     const ever = new Set((subs || []).filter((s) => s.type === 'patient').map((s) => s.department));
-    return (depts || []).filter((d) => (d.series || []).length > 0 || ever.has(d.id));
+    // ...or set up to start reporting (Department Setup start month) with statistics columns: a
+    // newly assigned unit has neither data nor submissions yet, so it was never "missing".
+    const started = (d) => { const api = _dcCollById && _dcCollById[d.id]; return !!(dcDeptSettings(d.id).startMonth && !(api && api.qualityOnly) && (d.cols || []).length); };
+    return (depts || []).filter((d) => (d.series || []).length > 0 || ever.has(d.id) || started(d));
   };
 
   // ---- shared helpers ----
@@ -233,8 +282,11 @@
     if (dept && dept.months && dept.months.length) {
       const last = dept.months[dept.months.length - 1];
       const i = order.indexOf(last);
-      if (i >= 0 && i + 1 < order.length) return order[i + 1];
-      return last;
+      // Never past the last COMPLETED month: a unit up to date on 1 Oct defaulted to October
+      // itself, and half a month's statistics went in as the month's report.
+      const cap = dcMonthRank(dcDefaultMonth());
+      if (i >= 0 && i + 1 < order.length && !(dcMonthRank(order[i + 1]) > cap)) return order[i + 1];
+      return (dcMonthRank(last) > cap) ? dcDefaultMonth() : last;
     }
     // no data yet — default to the last COMPLETED reporting month (previous calendar month
     // relative to today), falling back to the newest catalog month. Date-relative so the
@@ -384,6 +436,8 @@
      WHO collects it as person chips (hover = how the access is granted); ✕ on a chip
      revokes, “+ Assign” grants — writing the SAME /api/responsibles records the People
      editor saves (the server re-derives areas and mirrors the collector login). */
+  // Indicator Access is saved by an administrator-only route; others may look, not change.
+  const DC_RESP_ADMIN_MSG = 'Only an administrator can change who reports what (Indicator Access). Nothing was changed.';
   function AccessMatrix({ persons: allPersons, areas, areaInds, onChanged, onEditPerson }) {
     // An inactive record (its account was deleted or moved off a portal role) keeps its scope for a
     // later restore but grants nothing, so it is never an assignee, a candidate or a head count.
@@ -410,6 +464,7 @@
     // from a stale stored union. `busy` stays on until the reload lands — otherwise a quick
     // second click posts the OLD record and silently undoes the first change.
     const saveRec = (rec, okMsg) => {
+      if (!dcIsAdminUser()) { toast(DC_RESP_ADMIN_MSG, 'error'); return Promise.resolve(); }
       setBusy(true);
       const body = { ...rec, customQualityAreas: Array.isArray(rec.customQualityAreas) ? rec.customQualityAreas : dcCustomAreas(rec) };
       return dcApi.post('/api/responsibles', body).then((res) => {
@@ -720,15 +775,17 @@
       editorRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' });
     }, [editing]);
     const save = () => {
+      if (!dcIsAdminUser()) { toast(DC_RESP_ADMIN_MSG, 'error'); return; }
       if (!editing.name.trim()) { toast('Name is required', 'error'); return; }
       dcApi.post('/api/responsibles', { ...editing, ...dcScopePayload(editing, scopeBase.current) }).then((r) => {
         if (r.ok) { toast('Responsible person saved', 'success'); setEditing(null); load(); }
         else toast(r.error || 'Could not save', 'error');
-      });
+      }).catch(() => toast('Could not save — check your connection and try again.', 'error'));
     };
     const remove = (id) => {
-      const go = () => dcApi.del('/api/responsibles/' + encodeURIComponent(id)).then(() => load());
-      if (window.UI && window.UI.confirm) window.UI.confirm('Remove this responsible person?').then((ok) => ok && go());
+      if (!dcIsAdminUser()) { toast(DC_RESP_ADMIN_MSG, 'error'); return; }
+      const go = () => dcApi.del('/api/responsibles/' + encodeURIComponent(id)).then((r) => { if (r && r.ok === false) toast(r.error || 'Could not remove', 'error'); load(); }).catch(() => toast('Could not remove — check your connection.', 'error'));
+      if (window.UI && window.UI.confirm) window.UI.confirm({ title: 'Remove responsible person', message: 'Remove this responsible person? Their submitted data is kept.', confirmLabel: 'Remove' }).then((ok) => ok && go());
       else if (window.confirm('Remove this responsible person?')) go();
     };
     const toggle = (key, arr, val) => setEditing((e) => { const has = e[key].includes(val); return { ...e, [key]: has ? e[key].filter((x) => x !== val) : [...e[key], val] }; });
@@ -1279,21 +1336,28 @@
 
   function DataQualityForm({ prefill, onSubmitted }) {
     const dataRev = useDcDataRev();
-    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []), [dataRev]);
+    const collRevQ = useDcCollectionRev();
+    const areas = useMemo(() => dcSendAreas(window.qualityData ? window.qualityData() : []), [dataRev, collRevQ]);
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
     const lockResp = dcIsPortalRole(me);   // responsible person + admin-owned denominators locked for every portal role
     // Months = the quality FY (Jun-25…May-26), read from the store so it stays in
     // sync with the dashboard/quarters; default to the latest FY month.
     const fyMonths = (window.QUALITY_QUARTER_MONTHS) ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
-    const monthOpts = dcPortalUser() ? dcRealMonthOpts(areas.flatMap((a) => dcAreaStarts(a, [])), [prefill && prefill.month]) : dcWideMonths();
-    const defMonth = dcDefaultMonth() || ((fyMonths && fyMonths.length) ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
     // Default to the first area that actually HAS indicators (so a collector never
     // lands on an empty area), falling back to the first area.
     const [areaKey, setAreaKey] = useState((prefill && prefill.area) || ((areas.find((a) => a.indicators && a.indicators.length) || areas[0] || {}).key) || '');
     const area = useMemo(() => areas.find((a) => a.key === areaKey) || areas[0], [areas, areaKey]);
+    // The SELECTED area's start months — built from every assigned area, a unit that started later
+    // offered months before its start, and the server refused them.
+    const monthOpts = dcPortalUser() ? dcRealMonthOpts(dcAreaStarts(area, []), [prefill && prefill.month]) : dcWideMonths();
+    const defMonth = dcDefaultMonth() || ((fyMonths && fyMonths.length) ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
     const [indId, setIndId] = useState((prefill && prefill.indicatorId) || '');
     const [newInd, setNewInd] = useState({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' });
     const [month, setMonth] = useState((prefill && prefill.month) || defMonth);
+    // Switching to an area that starts later: a month outside its list would still be sent while
+    // the picker showed another — move to the newest month that area owes.
+    const monthKeyQ = monthOpts.join(',');
+    useEffect(() => { if (monthOpts.length && monthOpts.indexOf(month) < 0) setMonth(monthOpts[0]); }, [monthKeyQ]); // eslint-disable-line
     const [den, setDen] = useState('');
     // Numerator entry: either broken down BY STAFF GROUP (Nurse / Doctor / PCA /
     // Other) which add up to the total, or typed DIRECTLY. For rate/% indicators each
@@ -1514,7 +1578,7 @@
       setCapa(cp && typeof cp === 'object' ? { finding: cp.finding || '', corrective: cp.corrective || '', preventive: cp.preventive || '' } : { finding: '', corrective: '', preventive: '' });
       // Load any incident reports already recorded for this indicator × month.
       const incs = (curInd.incidents && Array.isArray(curInd.incidents[month])) ? curInd.incidents[month] : [];
-      const toInc = (x) => ({ patientName: x.patientName || '', uhid: x.uhid || '', age: x.age || '', gender: x.gender || '', diagnosis: x.diagnosis || '', incidentDate: x.incidentDate || '', admissionDate: x.admissionDate || '', victimName: x.victimName || '', victimId: x.victimId || '', department: x.department || '', details: x.details || '', finding: x.finding || '', corrective: x.corrective || '', preventive: x.preventive || '', remark: x.remark || '' });
+      const toInc = (x) => DC_INCIDENT_FIELDS.reduce((o, k) => (o[k] = x[k] == null ? '' : String(x[k]), o), {});
       setIncidents(incs.map(toInc));
       // "Fix & resubmit": overlay the REJECTED submission's own figures on top — the live record
       // never held them, so the form used to open blank. Applied once per rejected row, so
@@ -1574,7 +1638,12 @@
         // Zero-exposure month (e.g. "no surgical discharges"): 0 events over an EXPLICIT 0
         // denominator is a legitimate report — only refuse when events exist without a base,
         // or the denominator was left blank (a deliberate 0 must be typed).
-        const explicitZero = !(Number(numerator) > 0) && String(den == null ? '' : den).trim() !== '' && Number(den) === 0;
+        // In the breakdown modes the single den field is unused: there every denominator cell that
+        // was filled must be a typed 0 (at least one typed), or a 0/0 Hand Hygiene month was refused.
+        const typed = (v) => String(v == null ? '' : v).trim() !== '';
+        const denCells = numMode === 'group' ? GROUP_KEYS.map(([k]) => groupsDen[k])
+          : numMode === 'dept' ? [].concat.apply([], deptRows.map((r) => GROUP_KEYS.map(([k]) => r.g && r.g[k] && r.g[k].d))) : [den];
+        const explicitZero = !(Number(numerator) > 0) && denCells.some(typed) && denCells.filter(typed).every((v) => Number(v) === 0);
         if (!explicitZero) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error'); return; }
       }
       if (hospitalWide && !notObserved && incidents.some((x) => dcIncidentFilled(x) && !x.department)) { toast('Choose the department where each incident happened.', 'error'); return; }
@@ -1611,7 +1680,7 @@
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setQCmp(null); setQReason(''); setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: corr ? 'Edit request sent!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast(corr ? 'Edit request sent for review' : 'Saved monthly value', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
+        if (r.ok) { setQCmp(null); setQReason(''); setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: corr ? 'Edit request sent!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); if (!denLockedForCollector) setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast(corr ? 'Edit request sent for review' : 'Saved monthly value', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
         else if (r.code === 'exists') setQCmp({ prior: r.prior || {} });
         else if (r.code === 'pending') { setQCmp(null); setQPending({ id: r.pendingId, message: r.error }); }
         else toast(r.error || 'Submission failed', 'error');
@@ -2009,7 +2078,7 @@
           {qCorrection && <div style={{ fontSize: 11.5, color: '#9a6b00', fontWeight: 600, margin: '0 0 10px' }}>{monthLabel(month)} is already on record — submitting shows your changes next to it, asks for a reason and sends an edit request.</div>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>
-            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); setDone(null); }}>Clear</button>
+            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); if (!denLockedForCollector) setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); setDone(null); }}>Clear</button>
           </div>
         </Card>
       </div>
@@ -2074,6 +2143,23 @@
   }
   // Full submission viewer. Admins can correct a PENDING submission's values
   // (PATCH /api/submissions/:id) before approving; collectors see it read-only.
+  // Same rule as server data-collection.js mapPatientValues: same id, else the one same-named field.
+  const dcMapPatientValues = (values, fromCols, toCols) => {
+    const norm = (x) => String(x == null ? '' : x).toLowerCase().replace(/^c_/, '').replace(/[^a-z0-9]+/g, '');
+    const to = Array.isArray(toCols) ? toCols : [];
+    const toIds = new Set(to.map((c) => c && c.id));
+    const labelOf = (k) => { const c = (fromCols || []).find((x) => x && x.id === k); return (c && c.label) || k; };
+    const out = {}, unmapped = [];
+    Object.keys(values || {}).forEach((k) => {
+      const v = values[k];
+      if (v === '' || v == null) return;
+      let id = toIds.has(k) ? k : null;
+      if (!id) { const hit = to.filter((c) => c && (norm(c.label) === norm(labelOf(k)) || norm(c.id) === norm(k))); if (hit.length === 1) id = hit[0].id; }
+      if (!id || Object.prototype.hasOwnProperty.call(out, id)) { unmapped.push(labelOf(k)); return; }
+      out[id] = v;
+    });
+    return { values: out, unmapped };
+  };
   function SubmissionDetail({ s, canEdit, fullEdit = true, onClose, onSaved, initialMode }) {
     const iOwn = dcIsMine(s);
     // On their OWN rows a collector may: edit or WITHDRAW a pending one, FIX & RESEND a returned
@@ -2089,10 +2175,15 @@
     // collectors edit their OWN pending record directly, or REQUEST an edit on a recorded one.
     // A withdrawn row is closed for everyone.
     const editable = s.status !== 'withdrawn' && ((canEdit && (fullEdit || s.status === 'pending')) || correcting || resending);
-    const dept = s.type === 'patient' ? (dcAllDepts().find((d) => d.id === s.department)) : null;
-    const cols = (dept && dept.cols) || (s.values ? Object.keys(s.values).map((id) => ({ id, label: id })) : []);
-    const pctOf = {}; ((dept && dept.cols) || []).forEach((c) => { pctOf[c.id] = !!c.pct; });
+    // Admin re-assign target (department / area). Declared here: the shown fields follow it.
+    const [target, setTarget] = useState(s.type === 'patient' ? (s.department || '') : (s.area || ''));
+    const dept = s.type === 'patient' ? (dcAllDepts().find((d) => d.id === (target || s.department))) : null;
     const [vals, setVals] = useState(() => Object.assign({}, s.values || {}));
+    // The department's columns, PLUS any figure this submission carries under a column no longer
+    // defined (a removed custom field / legacy id): it was hidden from the reviewer yet still sent
+    // on Save and applied on approval.
+    const cols = (() => { const base = (dept && dept.cols) || []; const known = new Set(base.map((c) => c.id)); const extra = Object.keys(vals || {}).filter((id) => !known.has(id)).map((id) => ({ id, label: id + ' (not a current column)' })); return base.concat(extra); })();
+    const pctOf = {}; ((dept && dept.cols) || []).forEach((c) => { pctOf[c.id] = !!c.pct; });
     const [qval, setQval] = useState(s.value == null ? '' : s.value);
     // Rate/% indicators store a numerator + denominator; show/edit those too (the "full data").
     const isRate = s.type === 'quality' && (s.entryMode === 'rate' || s.formula === 'rate1000' || s.formula === 'pct' || s.num != null || s.den != null);
@@ -2133,7 +2224,6 @@
     const qStillNotObserved = s.type === 'quality' && !!s.notObserved && (isRate ? (effNum === '' || effNum == null) : (qval === '' || qval == null));
     // Admin can also fix the MONTH, RE-ASSIGN the department/area, and edit incident details.
     const [month, setMonth] = useState(s.month || '');
-    const [target, setTarget] = useState(s.type === 'patient' ? (s.department || '') : (s.area || ''));
     const [incidents, setIncidents] = useState(() => (s.type === 'quality' && Array.isArray(s.incidents)) ? s.incidents.map((x) => Object.assign({}, x)) : []);
     const monthOpts = (function () {
       // Wide reporting-month range (2024 → 2032) for both types, so an admin can move a
@@ -2144,6 +2234,15 @@
     const areaOptsRev = useDcDataRev();
     const areaOpts = React.useMemo(() => (window.qualityData ? window.qualityData() : []).map((d) => ({ key: d.key, name: d.name })), [areaOptsRev]);
     const deptOpts = React.useMemo(() => dcAllDepts(), []);
+    // Moving a sheet to another department re-keys its figures onto THAT department's fields (same
+    // rule as the server): it used to keep the old ids, which became stray columns on approval.
+    const moveToDept = (id) => {
+      if (!id || id === target) return;
+      const to = deptOpts.find((d) => d.id === id);
+      const m = dcMapPatientValues(vals, (dept && dept.cols) || [], (to && to.cols) || []);
+      if (m.unmapped.length) { toast(((to && to.name) || id) + ' has no matching field for: ' + m.unmapped.join(', ') + '. Add the field there first, or clear those figures.', 'error'); return; }
+      setVals(m.values); setTarget(id);
+    };
     const setInc = (i, k, v) => setIncidents((a) => a.map((x, j) => (j === i ? Object.assign({}, x, { [k]: v }) : x)));
     const INC_FIELDS = [['uhid', 'UHID'], ['patientName', 'Patient name'], ['diagnosis', 'Diagnosis'], ['details', 'What happened'], ['finding', 'Root cause / finding'], ['corrective', 'Corrective action'], ['preventive', 'Preventive action']];
     const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
@@ -2154,10 +2253,12 @@
       const body = { note, month };
       if (s.type === 'patient') { body.values = vals; if (target && target !== s.department) { body.department = target; body.departmentName = (deptOpts.find((d) => d.id === target) || {}).name || target; } }
       else {
-        body.value = isRate ? (typeof shownVal === 'number' ? shownVal : undefined) : qval; body.remark = remark;
+        // A COUNT broken down by staff group is the sum of its groups (the group cells were editable
+        // but the stored value stayed the old total).
+        body.value = isRate ? (typeof shownVal === 'number' ? shownVal : undefined) : (hasGrp ? grpTot.n : qval); body.remark = remark;
         if (isRate) { body.num = effNum; body.den = effDen; }        // totals derive from the breakdown
         if (hasDeptBreak) body.deptBreakdown = deptBreak;
-        if (hasGrp) { body.groups = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {}); body.groupsDen = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {}); }
+        if (hasGrp) { body.groups = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {}); if (isRate) body.groupsDen = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {}); }
         if (target && target !== s.area) { body.area = target; body.areaName = (areaOpts.find((a) => a.key === target) || {}).name || target; }
         if (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) body.incidents = incidents;
       }
@@ -2314,7 +2415,7 @@
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <label style={{ fontSize: 11.5, color: 'var(--muted)' }}>Re-assign {s.type === 'patient' ? 'department' : 'quality area'}</label>
                   {s.type === 'patient'
-                    ? <select style={inputStyle} value={target} onChange={(e) => setTarget(e.target.value)}>{deptOpts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
+                    ? <select style={inputStyle} value={target} onChange={(e) => moveToDept(e.target.value)}>{deptOpts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
                     : <select style={inputStyle} value={target} onChange={(e) => setTarget(e.target.value)}>{areaOpts.map((a) => <option key={a.key} value={a.key}>{a.name}</option>)}</select>}
                 </div>
               </div>
@@ -2462,7 +2563,7 @@
               {resendCmp && <DcCompareModal title={'Data already recorded for ' + (s.type === 'quality' ? (s.areaName || '') + ' · ' + (s.indicatorName || '') : (s.departmentName || '')) + ' · ' + monthLabel(s.month)}
                 rows={cmpRowsVs(Object.assign({}, resendCmp.prior, { note: s.note }))}
                 reason={resendReason} setReason={setResendReason} busy={busy} onEdit={() => setResendCmp(null)} onSend={() => save(resendReason.trim())} />}
-              {canEdit && fullEdit && !correcting && s.status === 'pending' && <button className="btn sm" onClick={approveNow} disabled={busy} style={{ background: 'var(--pos)', borderColor: 'var(--pos)', color: '#fff' }}><Ic d={I.check} s={14} />{busy ? 'Approving…' : 'Approve'}</button>}
+              {canEdit && fullEdit && !correcting && dcOpen(s) && <button className="btn sm" onClick={approveNow} disabled={busy} style={{ background: 'var(--pos)', borderColor: 'var(--pos)', color: '#fff' }}><Ic d={I.check} s={14} />{busy ? 'Approving…' : 'Approve'}</button>}
               {canEdit && fullEdit && !correcting && s.status === 'approved' && <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--pos)', alignSelf: 'center' }}>✓ Approved — edits re-apply live on save</span>}
             </div>
           </div>
@@ -2599,7 +2700,10 @@
     useEffect(() => { load(); const h = () => load(); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
     const respOf = (s) => (s.responsible && s.responsible.name) || s.submittedBy || '—';
     const byPerson = {};
-    (subs || []).filter((s) => s.status !== 'withdrawn').forEach((s) => { const p = respOf(s); const r = byPerson[p] = byPerson[p] || { name: p, total: 0, pending: 0, approved: 0, rejected: 0, patient: 0, quality: 0, last: 0 }; r.total++; r[s.status] = (r[s.status] || 0) + 1; r[s.type] = (r[s.type] || 0) + 1; if ((s.submittedAt || 0) > r.last) r.last = s.submittedAt; });
+    // Counted rows = the ones in the table (withdrawn excluded). Mid-approval counts as pending; an
+    // auto-rejected duplicate is not the person's wrong data, so it is not a rejection.
+    const counted = (subs || []).filter((s) => s.status !== 'withdrawn');
+    counted.forEach((s) => { const p = respOf(s); const r = byPerson[p] = byPerson[p] || { name: p, total: 0, pending: 0, approved: 0, rejected: 0, patient: 0, quality: 0, last: 0 }; r.total++; const st = s.status === 'approving' ? 'pending' : s.status; if (!(st === 'rejected' && s.autoRejected)) r[st] = (r[st] || 0) + 1; r.rejected += dcPastRejections(s).length; r[s.type] = (r[s.type] || 0) + 1; if ((s.submittedAt || 0) > r.last) r.last = s.submittedAt; });
     let people = Object.values(byPerson);
     people.sort((a, b) => sortBy === 'name' ? a.name.localeCompare(b.name) : sortBy === 'pending' ? b.pending - a.pending : sortBy === 'last' ? b.last - a.last : b.total - a.total);
     const ago = (ts) => { if (!ts) return 'never'; const m = Math.floor((Date.now() - ts) / 60000); if (m < 1) return 'just now'; if (m < 60) return m + 'm ago'; const h = Math.floor(m / 60); if (h < 24) return h + 'h ago'; return Math.floor(h / 24) + 'd ago'; };
@@ -2610,7 +2714,7 @@
       <Card style={{ padding: '12px 16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', cursor: 'pointer' }} onClick={() => setOpen((v) => !v)}>
           <Ic d={I.user} s={16} c="var(--blue)" /><b style={{ fontSize: 13.5 }}>Collector progress</b>
-          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>{people.length} people · {(subs || []).length} submissions</span>
+          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>{people.length} people · {counted.length} submissions</span>
           <span style={{ flex: 1 }} />
           <Ic d={I.chevR} s={16} style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s', opacity: .6 }} />
         </div>
@@ -2654,7 +2758,12 @@
     );
   }
 
+  // Open = waiting for a decision: pending, or claimed by an approval that may have died mid-apply.
+  const dcOpen = (s) => !!s && (s.status === 'pending' || s.status === 'approving');
   function DataReview() {
+    // Approve / reject / edit-any are ADMIN routes on the server: a Data Collection viewer was shown
+    // the buttons and every click failed 'Administrator access required'.
+    const reviewer = dcIsAdminUser();
     const [rows, setRows] = useState(null);
     const [stats, setStats] = useState(null);
     const [filter, setFilter] = useState('pending');
@@ -2716,7 +2825,7 @@
           else if (!firstErr) firstErr = (r && r.error) || 'Request failed';
         } catch (e) { if (!firstErr) firstErr = 'Network error'; }
       }
-      _dcAllCache = null; window.dispatchEvent(new Event('unico:data-refreshed'));
+      dcInvalidateSubs(); window.dispatchEvent(new Event('unico:data-refreshed'));
       setBusy(''); setSel({}); setRejectFor(null);
       // Keep the duplicate-compare dialog in step. dupGroup is a SNAPSHOT taken when the ⚠
       // badge was clicked and nothing here refreshed it, so a submission REJECTED from inside
@@ -2783,8 +2892,11 @@
       setTimeout(() => { try { document.body.removeChild(a); } catch (e) {} URL.revokeObjectURL(a.href); }, 0);
       toast(filtered.length + ' row' + (filtered.length !== 1 ? 's' : '') + ' exported', 'success');
     };
-    const dupCount = {}; filtered.forEach((s) => { if (s.status === 'withdrawn') return; const k = dupKey(s); dupCount[k] = (dupCount[k] || 0) + 1; });
-    const pendingRows = filtered.filter((s) => s.status === 'pending');
+    // A duplicate is an UNRESOLVED pair: open rows, plus at most one approved row they compete with.
+    // Counting approved + auto-rejected flagged every settled pair as a duplicate for good.
+    const dupCount = {}, dupApproved = {}; filtered.forEach((s) => { const k = dupKey(s); if (dcOpen(s)) dupCount[k] = (dupCount[k] || 0) + 1; else if (s.status === 'approved') dupApproved[k] = 1; });
+    Object.keys(dupApproved).forEach((k) => { if (dupCount[k]) dupCount[k] += 1; });
+    const pendingRows = reviewer ? filtered.filter(dcOpen) : [];
     const selIds = pendingRows.filter((s) => sel[s.id]).map((s) => s.id);
     const allSelected = pendingRows.length > 0 && selIds.length === pendingRows.length;
     const groups = {}; filtered.forEach((s) => { const k = groupKey(s); (groups[k] = groups[k] || []).push(s); });
@@ -2799,7 +2911,7 @@
     // accent comes from the type class; pending / withdrawn tints come from data-status.
     const submissionRow = (s) => (
       <tr key={s.id} className={'dcr-row ' + s.type} data-status={s.status} onClick={() => setDetail(s)} title="Open to view / edit">
-        <td className="dcr-sel" onClick={stopRowClick}>{s.status === 'pending' ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
+        <td className="dcr-sel" onClick={stopRowClick}>{reviewer && dcOpen(s) ? <input type="checkbox" checked={!!sel[s.id]} onChange={(e) => setSel((m) => Object.assign({}, m, { [s.id]: e.target.checked }))} /> : null}</td>
         <td className="dcr-when" data-label="Submitted"><div className="dcr-date">{whenDate(s.submittedAt)}</div><div className="dcr-time num">{whenTime(s.submittedAt)}</div></td>
         <td className="dcr-type" data-label="Type"><span className="chip" style={{ background: s.type === 'quality' ? 'var(--blue-50)' : 'var(--pos-bg)', color: s.type === 'quality' ? 'var(--blue-700,#0b6aa2)' : 'var(--pos)', fontWeight: 700 }}>{s.type === 'quality' ? 'Quality' : 'Patient'}</span></td>
         <td className="dcr-target" data-label="Target">
@@ -2825,9 +2937,9 @@
         <td className="dcr-act" onClick={stopRowClick}>
           <div className="dcr-actions">
             <button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View</button>
-            {s.status === 'pending' && (
+            {reviewer && dcOpen(s) && (
               <>
-                <button className="btn sm pri" disabled={busy === s.id || busy === 'bulk'} onClick={() => act(s.id, 'approve')}><Ic d={I.check} s={13} />Approve</button>
+                <button className="btn sm pri" disabled={busy === s.id || busy === 'bulk'} onClick={() => act(s.id, 'approve')} title={s.status === 'approving' ? 'An approval started but did not finish — approve again to retry' : undefined}><Ic d={I.check} s={13} />Approve</button>
                 <button className="btn sm" disabled={busy === s.id || busy === 'bulk'} onClick={() => act(s.id, 'reject')}>Reject</button>
               </>
             )}
@@ -2837,7 +2949,7 @@
     );
 
     const statusChip = (st) => {
-      const map = { pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'], withdrawn: ['Withdrawn', 'var(--panel-2)', 'var(--muted)'] };
+      const map = { pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'], approving: ['Approving…', 'var(--warn-bg,#fff4e0)', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'], withdrawn: ['Withdrawn', 'var(--panel-2)', 'var(--muted)'] };
       const m = map[st] || ['—', 'var(--panel-2)', 'var(--muted)'];
       return <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: m[1], color: m[2] }}>{m[0]}</span>;
     };
@@ -2921,7 +3033,7 @@
                 <tbody>
                   {grouped
                     ? groupNames.map((g) => {
-                      const pend = groups[g].filter((s) => s.status === 'pending').length;
+                      const pend = groups[g].filter(dcOpen).length;
                       return (
                         <React.Fragment key={g}>
                           <tr className={'dcr-group' + (collapsed[g] ? ' collapsed' : '')} onClick={() => setCollapsed((c) => Object.assign({}, c, { [g]: !c[g] }))} title={collapsed[g] ? 'Show this department' : 'Hide this department'}>
@@ -2935,7 +3047,7 @@
                 </tbody>
               </table>}
         </Card>
-        {detail && <SubmissionDetail s={detail} canEdit={true} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}
+        {detail && <SubmissionDetail s={detail} canEdit={reviewer || (dcOpen(detail) && dcIsMine(detail))} fullEdit={reviewer} onClose={() => setDetail(null)} onSaved={() => { setDetail(null); load(); }} />}
         {rejectFor && <RejectModal ids={rejectFor.ids} busy={busy === 'bulk'} onCancel={() => setRejectFor(null)} onConfirm={(reason) => runAction(rejectFor.ids, 'reject', reason)} />}
         {dupGroup && (() => {
           const g = [...dupGroup].sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
@@ -2975,7 +3087,7 @@
                       <div style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>{valuesSummaryEl(s)}</div>
                       <div style={{ display: 'flex', gap: 6, marginTop: 9, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                         <button className="btn sm" onClick={() => setDetail(s)}><Ic d={I.search} s={13} />View / edit</button>
-                        {s.status === 'pending' && <>
+                        {reviewer && dcOpen(s) && <>
                           <button className="btn sm pri" disabled={busy === 'bulk'} onClick={() => runAction([s.id], 'approve')}><Ic d={I.check} s={13} />Keep (approve)</button>
                           <button className="btn sm" style={{ color: 'var(--rose)' }} disabled={busy === 'bulk'} onClick={() => setRejectFor({ ids: [s.id] })}><Ic d={I.x} s={13} />Reject</button>
                         </>}
@@ -3011,7 +3123,7 @@
       dcApi.post('/api/shortlinks', body).then((r) => { if (r.ok) { toast('Share link created', 'success'); setForm({ ...form, label: '' }); load(); } else toast(r.error || 'Could not create', 'error'); });
     };
     const copy = (code) => { try { navigator.clipboard.writeText(fullUrl(code)); toast('Link copied to clipboard', 'success'); } catch (e) { window.prompt('Copy this link:', fullUrl(code)); } };
-    const remove = (code) => { const go = () => dcApi.del('/api/shortlinks/' + encodeURIComponent(code)).then(load); if (window.UI && window.UI.confirm) window.UI.confirm('Delete this share link?').then((ok) => ok && go()); else if (window.confirm('Delete this share link?')) go(); };
+    const remove = (code) => { const go = () => dcApi.del('/api/shortlinks/' + encodeURIComponent(code)).then(load); if (window.UI && window.UI.confirm) window.UI.confirm({ title: 'Delete share link', message: 'Delete this share link? Anyone holding it can no longer submit.', confirmLabel: 'Delete' }).then((ok) => ok && go()); else if (window.confirm('Delete this share link?')) go(); };
 
     const canReportArea = (r, ak) => {
       if (!r || !ak) return false;
@@ -3154,7 +3266,7 @@
       } catch (e) { return '—'; }
     };
     const statusChip = (st) => {
-      const m = { pending: ['Pending', '#fff4e0', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'], withdrawn: ['Withdrawn', '#eef1f5', '#6c7a8c'], reported: ['On record', 'var(--blue-50)', 'var(--blue-700)'] }[st] || ['—', '#eef1f5', '#789'];
+      const m = { pending: ['Pending', '#fff4e0', '#9a6b00'], approving: ['Approving…', '#fff4e0', '#9a6b00'], approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'], rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'], withdrawn: ['Withdrawn', '#eef1f5', '#6c7a8c'], reported: ['On record', 'var(--blue-50)', 'var(--blue-700)'] }[st] || ['—', '#eef1f5', '#789'];
       return <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: m[1], color: m[2] }}>{m[0]}</span>;
     };
     // Merge the collector's submissions with existing on-record data, de-duped by
@@ -4695,14 +4807,17 @@
   }
 
   /* ---- The dashboard the portal opens on ---------------------------------------- */
-  function CollectorDash({ month, setMonth, onNav, onFill, user, can }) {
+  function CollectorDash({ month, setMonth, onNav, onFill, user, can, depts: deptsIn, areas: areasIn }) {
     // Screens this person may open (Data Submission access). No prop = everything, as before.
     const may = (v) => !can || can(v);
     const dataRev = useDcDataRev();
-    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter((a) => a && a.indicators && a.indicators.length), [dataRev]);
-    const depts = useMemo(() => dcAllDepts(), [dataRev]);
+    // The portal's own lists (what this person may send, by kind) — building its own counted
+    // patient months for a quality-only sender, so this page and the Missing page disagreed.
+    const areas = useMemo(() => (areasIn || (window.qualityData ? window.qualityData() : [])).filter((a) => a && a.indicators && a.indicators.length), [dataRev, areasIn]);
+    const depts = useMemo(() => deptsIn || dcAllDepts(), [dataRev, deptsIn]);
     const [subs, setSubs] = useState(null);
     const [loadError, setLoadError] = useState('');
+    const [fixRow, setFixRow] = useState(null);   // my own returned row being fixed & resent
     const load = () => dcSubmissionResponse().then((r) => { setSubs(r.submissions); setLoadError(''); }).catch(() => setLoadError('Submission history could not be refreshed. Please retry; missing-data counts are not current.'));
     useEffect(() => { load(); }, []);
     useEffect(() => {
@@ -4714,7 +4829,11 @@
     const S = subs || [];
     const hasData = (ind, m) => { const f = (o) => o && o[m] != null && o[m] !== ''; return f(ind.mNum) || f(ind.mDen) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0); };
     const pendingFor = (areaKey, ind, m) => S.some((s) => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
-    const statusOf = (areaKey, ind, m) => ({ recorded: 'Recorded', pending: 'Submitted', notobs: 'Not observed', rejected: 'Missing', none: 'Missing' })[cpSubmissionStatus(S, areaKey, ind, m)];
+    // My own RETURNED row for the target + month: fixed and resent as the SAME record (as on the
+    // Missing data page) — 'Fill now' opened a blank new report and lost the returned figures.
+    const openRej = useMemo(() => dcOpenRejections(S), [subs]);
+    const returnedFor = (areaKey, ind, m) => openRej.find((x) => x.type === 'quality' && x.area === areaKey && x.month === m && (x.indicatorId === ind.id || (x.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim())) || null;
+    const statusOf = (areaKey, ind, m) => { const st = cpSubmissionStatus(S, areaKey, ind, m); if (st === 'rejected' && returnedFor(areaKey, ind, m)) return 'Returned'; return ({ recorded: 'Recorded', pending: 'Submitted', notobs: 'Not observed', rejected: 'Missing', none: 'Missing' })[st]; };
 
     const collRev = useDcCollectionRev();
     // Only what is OWED for the month: not-measured indicators and months before the
@@ -4726,7 +4845,7 @@
       if (!dueOf(a, ind)) return;
       totalInd++;
       const st = statusOf(a.key, ind, month);
-      if (st === 'Missing') missing.push({ area: a.key, ind }); else done++;
+      if (st === 'Missing' || st === 'Returned') missing.push({ area: a.key, ind }); else done++;
     }));
     const pct = totalInd ? Math.round(done * 100 / totalInd) : 0;
     const awaiting = S.filter((s) => s.status === 'pending' && dcIsMine(s)).length;
@@ -4789,6 +4908,7 @@
 
     return (
       <div style={{ maxWidth: 1260, margin: '0 auto' }}>
+        {fixRow && <SubmissionDetail key={'fix/' + fixRow.id} s={fixRow} canEdit={false} fullEdit={false} initialMode="resend" onClose={() => setFixRow(null)} onSaved={() => { setFixRow(null); dcSubmissionResponse(null, true).then((r) => { if (r.ok) setSubs(r.submissions); }).catch(() => {}); }} />}
         {loadError && <div role="alert" style={{padding:12,color:'var(--rose)'}}>{loadError}</div>}
         <div style={heroStyle}>
           <div style={{ position: 'absolute', right: -60, top: -70, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle,rgba(0,144,202,.2),transparent 70%)', filter: 'blur(10px)', pointerEvents: 'none' }} />
@@ -4938,7 +5058,7 @@
           : areas.length === 0 ? <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center', color: '#6c7a8c' })}>No quality indicators are assigned to you yet.</div>
             : areas.map((a) => {
               let ok = 0, owed = 0;
-              a.indicators.forEach((ind) => { if (!dueOf(a, ind)) return; owed++; if (statusOf(a.key, ind, month) !== 'Missing') ok++; });
+              a.indicators.forEach((ind) => { if (!dueOf(a, ind)) return; owed++; const so = statusOf(a.key, ind, month); if (so !== 'Missing' && so !== 'Returned') ok++; });
               const apct = owed ? Math.round(ok * 100 / owed) : 100;
               const tone = apct === 100 ? '#1f9d57' : apct >= 50 ? '#0090ca' : apct > 0 ? '#e08a1e' : '#d23a52';
               return (
@@ -4963,6 +5083,9 @@
                         <CpSpark ind={ind} months={win} />
                         {tr != null ? <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 12, fontFamily: "'IBM Plex Mono',monospace", color: cpImproved(ind, 0, tr) ? '#1f9d57' : '#d23a52', background: (cpImproved(ind, 0, tr) ? '#1f9d57' : '#d23a52') + '1a' }}>{(tr > 0 ? '+' : '') + tr}%</span> : <span style={{ width: 46 }} />}
                         <span style={cpChipStyle(st)}>{st}</span>
+                        {st === 'Returned' && (
+                          <button onClick={() => setFixRow(returnedFor(a.key, ind, month))} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid rgba(181,103,10,.35)', background: 'rgba(181,103,10,.08)', color: '#b5670a', padding: '5px 12px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>Fix &amp; resend ›</button>
+                        )}
                         {st === 'Missing' && (
                           <button onClick={() => onFill(a.key, ind.id, month)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid rgba(0,144,202,.3)', background: 'rgba(0,144,202,.08)', color: '#0072a3', padding: '5px 12px', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>Fill now ›</button>
                         )}
@@ -5870,6 +5993,9 @@
     const [open, setOpen] = useState(null);     // the row being submitted in the pop-up
     const [sent, setSent] = useState({});       // rows sent since the last fresh reload
     const [fix, setFix] = useState(null);       // my own RETURNED row being fixed & resent as the same record
+    // The pop-up form unmounts the moment it reports success, taking its own success pop-up with
+    // it — so the confirmation collectors rely on (or they re-send) is shown from here instead.
+    const [flash, setFlash] = useState(null);
     const downOnBackdrop = React.useRef(false);
     const load = (force) => dcSubmissionResponse(null, force)
       .then((r) => { setSubs(r.submissions); setLoadError(''); return true; })
@@ -5902,6 +6028,7 @@
 
     const submitted = (row) => {
       setOpen(null);
+      setFlash({ ts: Date.now(), title: 'Data submitted successfully!', sub: (row.kind === 'quality' ? row.ind.name : row.unit + ' statistics') + ' · ' + monthLabel(row.month) });
       setSent((s) => ({ ...s, [row.key]: true }));
       toast((row.kind === 'quality' ? row.ind.name : row.unit + ' statistics') + ' · ' + monthLabel(row.month) + ' sent for review', 'success');
       // A FORCED reload returns the new pending row, which is what removes it for good.
@@ -5931,6 +6058,7 @@
 
     return (
       <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+        {flash && <DcSuccessPopup key={flash.ts} title={flash.title} sub={flash.sub} onClose={() => setFlash(null)} />}
         <style>{'@media (max-width:640px){.cp-mm-overlay{padding:0!important}.cp-mm-box{max-height:100%!important;height:100%;border-radius:0!important}.cp-mm-body{padding:10px 8px 18px!important}}'}</style>
         {loadError && <div role="alert" style={{ padding: 12, color: 'var(--rose)' }}>{loadError} <button className="btn sm" onClick={() => load(true)}>Retry</button></div>}
 
@@ -6201,7 +6329,9 @@
   function DataCollectionSettings({ depts }) {
     const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
     // The server accepts Administrators only; anyone else sees the page read-only.
-    const canSave = !me || me.role === 'Administrator' || (!dcIsPortalRole(me) && !!(window.unicoCan && window.unicoCan('datacol', 'edit')));
+    // The save route is administrator-only on the server; offering edits to a Data Collection
+    // editor ended in "Administrator access required" on every Save, with no read-only notice.
+    const canSave = !me || me.role === 'Administrator';
     const dataRev = useDcDataRev();
     useDcCollectionRev();
     const [loaded, setLoaded] = useState(false);
@@ -6259,9 +6389,9 @@
     // switched off has no screens, no missing-data count and no deadline. The server refuses
     // it too (access.maySubmitKind). Absent = both, as before.
     const kinds = user.submitKinds || {};
-    const depts = useMemo(() => (kinds.patient === false ? [] : dcAllDepts()), [dataRev, kinds.patient]);
-    const areas = useMemo(() => (kinds.quality === false ? [] : (window.qualityData ? window.qualityData() : [])), [dataRev, kinds.quality]);
     const collRev = useDcCollectionRev();
+    const depts = useMemo(() => (kinds.patient === false ? [] : dcSendDepts(dcAllDepts())), [dataRev, kinds.patient]);
+    const areas = useMemo(() => (kinds.quality === false ? [] : dcSendAreas(window.qualityData ? window.qualityData() : [])), [dataRev, kinds.quality, collRev]);
     const hasPatient = depts.length > 0;
     const hasQuality = areas.some((a) => a && a.indicators && a.indicators.length);
 
@@ -6320,11 +6450,15 @@
 
     const donePct = subCount.total ? Math.round((subCount.total - subCount.missing) * 100 / subCount.total) : 0;
     // `from` = the rejected submission being fixed; the form refills its figures.
-    const fillFor = (area, indicatorId, m, from) => { setJump({ area, indicatorId, month: m, from: from || null }); toView('quality'); setSidebarOpen(false); };
+    // A jump belongs to the screen it was made for: reaching a screen any other way (the app
+    // sidebar, a later click) starts that form fresh instead of re-filling an old jump.
+    const jumpTo = React.useRef(null);
+    useEffect(() => { if (jumpTo.current !== view) setJump(null); jumpTo.current = null; }, [view]);
+    const fillFor = (area, indicatorId, m, from) => { jumpTo.current = 'quality'; setJump({ area, indicatorId, month: m, from: from || null }); toView('quality'); setSidebarOpen(false); };
     // The patient twin of fillFor. "My submissions" needs it to reopen a REJECTED
     // statistics sheet at the right department + month; DataPatientForm already
     // reads prefill.dept / prefill.month, it just had nothing feeding them.
-    const fillStat = (deptId, m, from) => { setJump({ dept: deptId, month: m, from: from || null }); toView('patient'); setSidebarOpen(false); };
+    const fillStat = (deptId, m, from) => { jumpTo.current = 'patient'; setJump({ dept: deptId, month: m, from: from || null }); toView('patient'); setSidebarOpen(false); };
     const go = (v) => { toView(v); setJump(null); setSidebarOpen(false); };
 
     const badgeFor = (v) => (v === 'missing' ? String(subCount.allMissing || '') : v === 'patient' ? String(subCount.statGap || '') : v === 'quality' ? String(subCount.missing || '') : v === 'history' ? String(subCount.pending || '') : '');
@@ -6406,8 +6540,19 @@
                 <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>Your administrator has not given you a department or quality area to report on. Once they do, it appears here.</div>
               </div>
             )}
+            {(hasPatient || hasQuality) && !dcMaySend() && ['missing', 'status', 'quality', 'patient', 'history'].indexOf(view) >= 0 && (
+              <div style={Object.assign({}, CP_CARD, { maxWidth: 1240, margin: '0 auto 14px', padding: '12px 16px', borderLeft: '4px solid #d9a21b', fontSize: 12.5, color: '#5b4a12' })}>
+                <b>View only.</b> Your Data Submission access does not include sending — the forms open, but Submit is refused. Ask the administrator to tick <b>Add</b> for Data Submission in Access Control.
+              </div>
+            )}
+            {(hasPatient || hasQuality) && ((view === 'status' && !hasQuality) || (view === 'quality' && !hasQuality) || (view === 'patient' && !hasPatient)) && (
+              <div style={Object.assign({}, CP_CARD, { maxWidth: 620, margin: '40px auto', padding: 30, textAlign: 'center' })}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e', marginBottom: 6 }}>{view === 'patient' ? 'No department statistics are assigned to you' : 'No quality indicators are assigned to you'}</div>
+                <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>{view === 'patient' ? 'Use Quality data or Missing data for what you report, or ask the administrator to add a department.' : 'Use Patient statistics or Missing data for what you report, or ask the administrator to add a quality area.'}</div>
+              </div>
+            )}
             {view === 'missing' && (hasPatient || hasQuality) && <CollectorMissing depts={depts} areas={areas} month={month} user={user} />}
-            {view === 'status' && hasQuality && <CollectorDash month={month} setMonth={setMonth} onNav={go} onFill={fillFor} user={user} can={(v) => (v === 'patient' ? hasPatient : v === 'quality' ? hasQuality : true) && screenOk(v)} />}
+            {view === 'status' && hasQuality && <CollectorDash depts={depts} areas={areas} month={month} setMonth={setMonth} onNav={go} onFill={fillFor} user={user} can={(v) => (v === 'patient' ? hasPatient : v === 'quality' ? hasQuality : true) && screenOk(v)} />}
             {view === 'quality' && hasQuality && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month, from: jump && jump.from }} /></div>}
             {view === 'patient' && hasPatient && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataPatientForm key={jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'p'} depts={depts} prefill={{ responsible: user.name, dept: jump && jump.dept, month: jump && jump.dept ? jump.month : null, from: jump && jump.from }} /></div>}
             {view === 'history' && <div style={{ maxWidth: 1240, margin: '0 auto' }}><CollectorHistory month={month} onFixQuality={fillFor} onFixPatient={fillStat} /></div>}
@@ -6581,7 +6726,10 @@
         p.total++; if (s.type === 'patient') p.patient++; else p.quality++;
         if (s.status === 'approved') p.approved++;
         else if (s.status === 'rejected') { if (s.autoRejected) p.autoRej++; else { p.rejected++; const rr = (String(s.rejectReason || '').trim()) || 'Unspecified'; reasons[rr] = (reasons[rr] || 0) + 1; } }
-        else if (s.status === 'pending') p.pending++;
+        else if (s.status === 'pending' || s.status === 'approving') p.pending++;
+        // Earlier returns of a row that was FIXED AND RESENT (the same record: the rejection moved into
+        // history[]) are still wrong data that was sent — they vanished from these figures once fixed.
+        dcPastRejections(s).forEach((h) => { p.rejected++; const rr = (String(h.rejectReason || '').trim()) || 'Unspecified'; reasons[rr] = (reasons[rr] || 0) + 1; });
         if (s.isCorrection) p.corrections++;
         if ((s.submittedAt || 0) > p.last) p.last = s.submittedAt;
         const me2 = monthEndTs(s.month), dl = deadlineTs(s.month);
@@ -6603,7 +6751,9 @@
       // LOCAL date, not toISOString (UTC): anything sent 00:00–06:00 Bangladesh time was counted on the previous day — or the previous month on the 1st.
       const key = (ts) => { const d = new Date(ts); return (d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')).slice(0, monthly ? 7 : 10); };
       const bucket = {};
-      all.forEach((s) => { if (!s.submittedAt) return; const kk = key(s.submittedAt); const b = bucket[kk] || (bucket[kk] = { k: kk, total: 0, approved: 0, rejected: 0, pending: 0 }); b.total++; if (s.status === 'approved') b.approved++; else if (s.status === 'rejected') b.rejected++; else b.pending++; });
+      all.forEach((s) => { if (!s.submittedAt) return; const kk = key(s.submittedAt); const b = bucket[kk] || (bucket[kk] = { k: kk, total: 0, approved: 0, rejected: 0, pending: 0 }); b.total++; if (s.status === 'approved') b.approved++; else if (s.status === 'rejected') b.rejected++; else b.pending++;
+        // each earlier return of a resent row, on the day it was returned
+        dcPastRejections(s).forEach((h) => { const t = h.reviewedAt || h.at; if (!t) return; const hk = key(t); const hb = bucket[hk] || (bucket[hk] = { k: hk, total: 0, approved: 0, rejected: 0, pending: 0 }); hb.total++; hb.rejected++; }); });
       const timeline = Object.keys(bucket).map((k2) => bucket[k2]).sort((a, b) => a.k < b.k ? -1 : 1).slice(-48);
       return { all, list, tot, reasonList, timeline, monthly, statCount: statTargets.size, qualCount: qualTargets.size, recent: all.slice().sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0)).slice(0, 12) };
     }, [rows, days, fType, q]);
@@ -6792,9 +6942,9 @@
                             <td style={{ ...td, textTransform: 'capitalize' }}>{s.type}</td>
                             <td style={{ ...td }}>{targetOf(s)}</td>
                             <td style={{ ...td, whiteSpace: 'nowrap' }}>{monthLabel(s.month)}</td>
-                            <td style={{ ...td, color: c, fontWeight: 700, textTransform: 'capitalize' }}>{s.status}{s.autoRejected ? ' (dup)' : ''}</td>
+                            <td style={{ ...td, color: c, fontWeight: 700, textTransform: 'capitalize' }}>{s.status}{s.autoRejected ? ' (dup)' : ''}{dcPastRejections(s).length ? <div style={{ color: 'var(--rose)', fontWeight: 600, fontSize: 10.5, textTransform: 'none' }}>returned {dcPastRejections(s).length}× before</div> : null}</td>
                             <td style={{ ...td, color: 'var(--muted)', fontSize: 11, whiteSpace: 'nowrap' }}>{when(s.submittedAt)}</td>
-                            <td style={{ ...td, color: 'var(--ink-2)', fontSize: 11.5 }}>{s.rejectReason || s.correctionReason || s.note || (s.isCorrection ? 'Edit request' : '—')}</td>
+                            <td style={{ ...td, color: 'var(--ink-2)', fontSize: 11.5 }}>{s.rejectReason || s.correctionReason || s.note || (s.isCorrection ? 'Edit request' : '—')}{dcPastRejections(s).map((h, i) => <div key={i} style={{ color: 'var(--rose)', fontSize: 10.5 }}>Returned: {h.rejectReason || 'no reason given'}</div>)}</td>
                           </tr>
                         );
                       })}

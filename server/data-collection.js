@@ -44,12 +44,13 @@ function computeQuartersFor(ind, QM) {
   if (f && f !== 'direct') {
     const needDen = f !== 'count';
     Object.keys(QM).forEach((q) => {
-      const ms = QM[q] || [];
+      const ms = (QM[q] || []).filter((m) => !(ind.mNotObserved || {})[m]);
       const have = ms.some((m) => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
       let v = null;
       if (have) {
-        const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
-        const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+        const complete = ms.filter((m) => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || Number((ind.mDen || {})[m]) > 0));
+        const num = complete.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+        const den = complete.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
         v = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
       }
       if (v == null) {
@@ -61,7 +62,7 @@ function computeQuartersFor(ind, QM) {
   } else {
     const months = ind.months || {};
     Object.keys(QM).forEach((q) => {
-      const vals = (QM[q] || []).map((m) => months[m]).filter((v) => v != null && v !== '').map(Number);
+      const vals = (QM[q] || []).filter((m) => !(ind.mNotObserved || {})[m]).map((m) => months[m]).filter((v) => v != null && v !== '').map(Number);
       if (!vals.length) return;
       out[q] = indIsPct(ind) ? avgVals(vals) : vals.reduce((s, x) => s + x, 0);
     });
@@ -136,14 +137,17 @@ function genId(prefix) { return (prefix || 'id') + '-' + Date.now().toString(36)
 // non-empty array scopes an area, preserving BACKWARD-COMPAT full-area access.
 function normQualityIndicators(qi) { const out = {}; if (!qi || typeof qi !== 'object' || Array.isArray(qi)) return out; Object.keys(qi).forEach((k) => { const key = String(k); const list = qi[k]; if (!Array.isArray(list)) return; const ids = list.map((x) => String(x == null ? '' : x).trim()).filter(Boolean); if (ids.length) out[key] = ids; }); return out; }
 // Sanitize a per-staff-group breakdown (e.g. { nurse, doctor, pca, other }) to numbers.
-function sanitizeGroupMap(g) { if (!g || typeof g !== 'object' || Array.isArray(g)) return null; const out = {}; let any = false; Object.keys(g).forEach((k) => { const n = Number(g[k]); out[String(k)] = isNaN(n) ? 0 : n; any = true; }); return any ? out : null; }
+function breakdownReading(value, label) { return value == null || value === '' ? 0 : numericReading(value, label); }
+function sanitizeGroupMap(g) { if (!g || typeof g !== 'object' || Array.isArray(g)) return null; const out = {}; let any = false; Object.keys(g).forEach((k) => { out[String(k)] = breakdownReading(g[k], k); any = true; }); return any ? out : null; }
+const INCIDENT_FIELDS = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'department', 'details', 'finding', 'corrective', 'preventive', 'remark'];
+const incidentFilled = (x) => !!x && INCIDENT_FIELDS.some((k) => String(x[k] == null ? '' : x[k]).trim() !== '');
 // Sanitize a department × staff-group matrix: [{ dept, g:{ group:{n,d} } }].
 function sanitizeDeptBreakdown(arr) {
   if (!Array.isArray(arr)) return null;
   const out = arr.map((r) => {
     const g = (r && r.g && typeof r.g === 'object' && !Array.isArray(r.g)) ? r.g : {};
     const gg = {};
-    Object.keys(g).forEach((k) => { const c = g[k] || {}; gg[String(k)] = { n: Number(c.n) || 0, d: Number(c.d) || 0 }; });
+    Object.keys(g).forEach((k) => { const c = g[k] || {}; gg[String(k)] = { n: breakdownReading(c.n, k + ' numerator'), d: breakdownReading(c.d, k + ' denominator') }; });
     return { dept: String((r && r.dept) || '').slice(0, 80), g: gg };
   }).filter((r) => r.dept || Object.keys(r.g).some((k) => r.g[k].n || r.g[k].d));
   return out.length ? out : null;
@@ -317,7 +321,7 @@ async function saveResponsible(input) {
 
 // Nurse / PCA are portal roles WITHOUT the datacol module (access.js), so they cannot submit data.
 const NO_DATA_ROLES = ['nurse', 'pca'];
-const NURSE_PCA_SCOPE_ERROR = 'Nurse/PCA accounts cannot submit data. Change the role to Data collector or In-charge in Settings → Users & Roles.';
+const NURSE_PCA_SCOPE_ERROR = 'Nurse/PCA phone accounts cannot submit data. Give the person the Data Submission module in Access Control instead.';
 // True when a scope (a derived one, or a request body) actually grants something. An empty
 // departments list etc. is "no scope": it must not mint a record or trip the nurse/PCA refusal.
 function scopeIsNonEmpty(s) {
@@ -565,6 +569,61 @@ function numericReading(value, label) {
   }
   return Number(value);
 }
+/* Custom departments (Manage Departments → add) live ONLY in the app overlay
+   (unico_store_v3.custom), never in the `departments` collection — so every submission to one
+   failed "Unknown department". The overlay copy is the definition; on the first approval it is
+   PROMOTED into the collection under the same id (empty months: the overlay keeps its own figures
+   and store.js buildDepts folds them in, the collection copy winning only for approved months). */
+async function overlayStore() {
+  try {
+    const snap = await getAppData();
+    let ov = snap && snap.data && snap.data.unico_store_v3;
+    if (typeof ov === 'string') ov = JSON.parse(ov);
+    return (ov && typeof ov === 'object') ? ov : null;
+  } catch (e) { return null; }
+}
+async function overlayCustomDept(deptId) {
+  const ov = await overlayStore();
+  if (!ov || (Array.isArray(ov.deleted) && ov.deleted.indexOf(deptId) >= 0)) return null;
+  const cd = (Array.isArray(ov.custom) ? ov.custom : []).find((d) => d && String(d.id) === String(deptId));
+  if (!cd) return null;
+  const rn = ((ov.renames || {})[deptId]) || {};
+  const out = Object.assign({}, cd, rn);
+  out.id = String(cd.id);
+  out.cols = (Array.isArray(out.cols) ? out.cols : []).filter((c) => c && c.id).map((c) => Object.assign({}, c));
+  out.months = Array.isArray(cd.months) ? cd.months.slice() : [];
+  out.data = (Array.isArray(cd.data) ? cd.data : []).map((r) => Object.assign({}, r || {}));
+  // Data Entry rows typed for it sit in overlay entries (merged on top, as in buildDepts).
+  (Array.isArray(ov.entries) ? ov.entries : []).forEach((e) => {
+    if (!e || String(e.dept) !== String(deptId) || !e.month) return;
+    const row = {}; Object.keys(e.row || {}).forEach((k) => { const v = e.row[k]; if (v !== null && v !== '' && v !== undefined) row[k] = v; });
+    if (!Object.keys(row).length) return;
+    const i = out.months.indexOf(e.month);
+    if (i >= 0) out.data[i] = Object.assign({}, out.data[i], row); else { out.months.push(e.month); out.data.push(row); }
+  });
+  return out;
+}
+// The department doc: the collection's, else the overlay's custom definition (not written).
+async function findDept(c, deptId) {
+  const d = await c.findOne({ _id: String(deptId) });
+  if (d) return d;
+  const cd = await overlayCustomDept(deptId);
+  return cd ? Object.assign({ _id: cd.id, overlayOnly: true }, cd) : null;
+}
+// Create the collection copy of a custom department (additive; a concurrent promote is fine).
+async function promoteCustomDept(c, deptId) {
+  const cd = await overlayCustomDept(deptId);
+  if (!cd) return null;
+  const doc = {
+    _id: cd.id, id: cd.id, name: cd.name || cd.id, short: cd.short || '', group: cd.group || 'General', desc: cd.desc || '',
+    primary: cd.primary || ((cd.cols[0] || {}).id) || '', primaryLabel: cd.primaryLabel || ((cd.cols[0] || {}).label) || '',
+    cols: cd.cols, months: [], data: [], order: Number.isFinite(Number(cd.order)) ? Number(cd.order) : 9000,
+    promotedFrom: 'unico_store_v3', promotedAt: Date.now(),
+  };
+  try { await c.insertOne(doc); } catch (e) { if (!/E11000|duplicate/i.test(String((e && e.message) || e))) throw e; }
+  return c.findOne({ _id: cd.id });
+}
+
 async function buildPatientSpec(payload) {
   const deptId = String((payload && payload.department) || '').trim();
   const month = String((payload && payload.month) || '').trim();
@@ -574,7 +633,7 @@ async function buildPatientSpec(payload) {
   validateReportingMonth(month);
   const c = await col('departments');
   if (!c) throw new Error('Database not available.');
-  const dept = await c.findOne({ _id: deptId });
+  const dept = await findDept(c, deptId);
   if (!dept) throw new Error('Unknown department: ' + deptId);
   const row = {};
   Object.keys(rawValues).forEach((k) => {
@@ -650,6 +709,7 @@ async function buildQualitySpec(payload) {
     const hasNum = payload && payload.num != null && payload.num !== '' && !isNaN(Number(payload.num));
     const hasDen = payload && payload.den != null && payload.den !== '' && !isNaN(Number(payload.den));
     const hasDirectValue = payload && payload.value != null && payload.value !== '' && !isNaN(Number(payload.value));
+    if (!hasNum && !hasDirectValue) throw new Error('Enter the numerator — type 0 for a measured zero, or mark the month "Not observed".');
     if (!hasNum && !hasDen && hasDirectValue) {
       // Shared/public links may submit an already-computed rate/average value only.
       // Keep it as the month value; applyQuality will use months{} fallback for rollups.
@@ -663,7 +723,13 @@ async function buildQualitySpec(payload) {
     }
   } else {
     const rawVal = payload && payload.value;
-    value = (rawVal === '' || rawVal == null) ? 0 : (Number(rawVal) || 0);
+    if (rawVal === '' || rawVal == null) {
+      // A blank count is not a measured zero (the patient path refuses it the same way). Counts
+      // derived from logged incidents take the number logged; otherwise a value is required.
+      const logged = Array.isArray(payload && payload.incidents) ? payload.incidents.filter(incidentFilled).length : 0;
+      if (!logged) throw new Error('Enter the value — type 0 if there were none this month, or mark the month "Not observed".');
+      value = logged;
+    } else value = Number(rawVal) || 0;
   }
   // Optional incident / CAPA block (filled when an incident occurred this month).
   const capaIn = payload && payload.capa;
@@ -685,7 +751,7 @@ async function buildQualitySpec(payload) {
         // narrative + CAPA
         details: S(x && x.details), finding: S(x && x.finding), corrective: S(x && x.corrective), preventive: S(x && x.preventive),
         remark: S(x && x.remark),
-      })).filter((x) => x.details || x.finding || x.corrective || x.preventive || x.uhid || x.patientName || x.diagnosis || x.remark || x.victimName || x.victimId || x.incidentDate || x.department)
+      })).filter(incidentFilled)
     : null;
   // Derive a NUMERIC benchmark threshold (dashboards/scorecard flag breaches from
   // benchmarkValue; a display string like "≤ 5%" is not enough). Prefer explicit
@@ -727,7 +793,8 @@ async function applyPatient(spec) {
   const c = await col('departments');
   if (!c) throw new Error('Database not available.');
   for (let attempt = 0; attempt < 8; attempt++) {
-    const dept = await c.findOne({ _id: spec.department });
+    // A custom department gets its collection copy on its first approval.
+    const dept = (await c.findOne({ _id: spec.department })) || (await promoteCustomDept(c, spec.department));
     if (!dept) throw new Error('Department no longer exists: ' + spec.department);
     const set = await mergePatient(dept, spec);
     const unchanged = (f) => (dept[f] === undefined ? { $exists: false } : dept[f]);
@@ -737,6 +804,26 @@ async function applyPatient(spec) {
     if (r.matchedCount) return;
   }
   throw new Error('The department was being updated by someone else — please approve again.');
+}
+/* Re-key a patient sheet's figures onto ANOTHER department's columns: same id, else the column
+   with the same name. A move used to keep the source department's ids, so approval auto-registered
+   them as stray columns on the target and its real columns stayed empty. Returns { values,
+   unmapped:[labels] } — nothing is guessed: an unmatched or doubly-matched figure is reported. */
+function mapPatientValues(values, fromCols, toCols) {
+  const norm = (x) => String(x == null ? '' : x).toLowerCase().replace(/^c_/, '').replace(/[^a-z0-9]+/g, '');
+  const to = Array.isArray(toCols) ? toCols : [];
+  const toIds = new Set(to.map((c) => c && c.id));
+  const labelOf = (k) => { const c = (Array.isArray(fromCols) ? fromCols : []).find((x) => x && x.id === k); return (c && c.label) || k; };
+  const out = {}, unmapped = [];
+  Object.keys(values || {}).forEach((k) => {
+    const v = values[k];
+    if (v === '' || v == null) return;
+    let id = toIds.has(k) ? k : null;
+    if (!id) { const hit = to.filter((c) => c && (norm(c.label) === norm(labelOf(k)) || norm(c.id) === norm(k))); if (hit.length === 1) id = hit[0].id; }
+    if (!id || Object.prototype.hasOwnProperty.call(out, id)) { unmapped.push(labelOf(k)); return; }
+    out[id] = v;
+  });
+  return { values: out, unmapped };
 }
 async function mergePatient(dept, spec) {
   const months = Array.isArray(dept.months) ? dept.months.slice() : [];
@@ -867,6 +954,9 @@ function mergeQuality(orig, spec) {
     const mlt = Number(spec.mult) || 100;
     if ((num == null || num === '') && spec.value != null && spec.value !== '') {
       ind.months = Object.assign({}, ind.months || {}, { [spec.month]: spec.value });
+      // A direct-value correction replaces the old fraction. Leaving that fraction in place
+      // made quarter rollups silently use the superseded numerator and denominator.
+      ['mNum', 'mDen'].forEach((k) => { if (ind[k]) { ind[k] = Object.assign({}, ind[k]); delete ind[k][spec.month]; } });
       if (spec.remark) ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [spec.month]: spec.remark });
       if (spec.capa) ind.capa = Object.assign({}, ind.capa || {}, { [spec.month]: Object.assign({ value: spec.value, recordedAt: Date.now() }, spec.capa) });
       recomputeQuarters(ind);
@@ -877,19 +967,23 @@ function mergeQuality(orig, spec) {
     // month's own mDen, else the last non-empty mDen, so the rate still computes.
     const submittedDen = (spec.den != null && spec.den !== '' && Number(spec.den) > 0) ? Number(spec.den) : null;
     const monthDen = (ind.mDen && ind.mDen[spec.month] != null && ind.mDen[spec.month] !== '') ? Number(ind.mDen[spec.month]) : null;
-    const carryDen = ind.mDen ? Object.keys(ind.mDen).map(k => ind.mDen[k]).filter(v => v != null && v !== '').map(Number).filter(v => v > 0).pop() : null;
+    const carryKey = ind.mDen ? Object.keys(ind.mDen).filter(k => monthRank(k) < monthRank(spec.month) && Number(ind.mDen[k]) > 0).sort((a, b) => monthRank(a) - monthRank(b)).pop() : null;
+    const carryDen = carryKey ? Number(ind.mDen[carryKey]) : null;
     const den = submittedDen != null ? submittedDen : (monthDen != null ? monthDen : (carryDen != null ? carryDen : 0));
     // den 0 with events logged -> rate is UNKNOWN (null), never a false on-benchmark 0.
-    const computed = den > 0 ? Math.round((Number(num) / den) * mlt * 100) / 100 : (Number(num) > 0 ? null : 0);
+    let computed = den > 0 ? Math.round((Number(num) / den) * mlt * 100) / 100 : (Number(num) > 0 ? null : 0);
     // Admin value-only correction while pending: back-solve the numerator from the edited value.
     // Only when the submission carried its OWN denominator — a value is only meaningful against
     // the base it was computed on. Without one (NSI cases against the admin headcount) a stored
     // value of 0 is a placeholder, and back-solving from it erased every logged case to 0.
     if (submittedDen != null && spec.value != null && spec.value !== '' && Number(spec.value) !== computed) {
       num = Math.round((Number(spec.value) / mlt) * den * 100) / 100;
+      // The month value follows the back-solved numerator — it used to keep the OLD figure, so
+      // months[] disagreed with mNum/quarters and the correction vanished from monthly views.
+      computed = Math.round((Number(num) / den) * mlt * 100) / 100;
     }
     ind.mNum = Object.assign({}, ind.mNum || {}, { [spec.month]: num });
-    if (submittedDen != null) ind.mDen = Object.assign({}, ind.mDen || {}, { [spec.month]: submittedDen });
+    if (den > 0) ind.mDen = Object.assign({}, ind.mDen || {}, { [spec.month]: den });
     spec.value = computed; // store the correctly computed monthly value (not a false 0)
   }
   ind.months = Object.assign({}, ind.months || {}, { [spec.month]: spec.value });
@@ -1081,12 +1175,21 @@ async function createSubmission(spec, meta) {
   return Object.assign({ id: _id }, rec);
 }
 // Server-authoritative "old value" snapshot for a correction (never trust the client's old value).
+// The live row for a department + month: the collection's, else (custom departments) the
+// overlay copy's — those months are on screen and on record too, just not in the collection.
+async function patientRowOnRecord(deptId, month) {
+  const c = await col('departments'); if (!c) return null;
+  const d = await c.findOne({ _id: String(deptId) });
+  const idx = d ? (d.months || []).indexOf(month) : -1;
+  if (idx >= 0) return Object.assign({}, (d.data || [])[idx] || {});
+  const cd = await overlayCustomDept(deptId);
+  const j = cd ? cd.months.indexOf(month) : -1;
+  return j >= 0 ? Object.assign({}, cd.data[j] || {}) : null;
+}
 async function snapshotPatientPrior(spec) {
   try {
-    const c = await col('departments'); if (!c) return null;
-    const d = await c.findOne({ _id: String(spec.department) }); if (!d) return null;
-    const idx = (d.months || []).indexOf(spec.month); if (idx < 0) return null;
-    return { values: Object.assign({}, (d.data || [])[idx] || {}) };
+    const row = await patientRowOnRecord(spec.department, spec.month);
+    return row ? { values: row } : null;
   } catch (e) { return null; }
 }
 async function snapshotQualityPrior(spec) {
@@ -1105,13 +1208,12 @@ async function snapshotQualityPrior(spec) {
 async function onRecordPrior(spec) {
   const filled = (v) => v != null && v !== '';
   if (spec.type === 'patient') {
-    const c = await col('departments'); if (!c) return null;
-    const d = await c.findOne({ _id: String(spec.department) }); if (!d) return null;
-    const idx = (d.months || []).indexOf(spec.month); const row = idx >= 0 ? (d.data || [])[idx] : null;
+    const row = await patientRowOnRecord(spec.department, spec.month);
     if (!row || !Object.keys(row).some((k) => k !== 'month' && k !== 'full' && filled(row[k]))) return null;
-    return { values: Object.assign({}, row) };
+    return { values: row };
   }
-  if (spec.isNewIndicator) return null;
+  // No early return for spec.isNewIndicator: a resend reuses the flag from its FIRST send, and
+  // the indicator may exist by now — the lookup below finds nothing for a truly new one.
   const m = spec.month;
   const area = await qArea(spec.area);
   const ind = area && (area.indicators || []).find((i) => i.id === spec.indicatorId);
@@ -1162,7 +1264,7 @@ async function submitPatient(payload, meta) {
   await refuseIfPending(spec);
   const m = Object.assign({}, payload, meta);
   if (m.isCorrection) { requireCorrectionReason(m); m.priorValues = await snapshotPatientPrior(spec); }
-  else { const prior = await onRecordPrior(spec); if (prior) refuseExists(spec, prior); }
+  else { const prior = await onRecordPrior(spec); if (prior) refuseExists(spec, prior); m.priorValues = null; m.correctionFor = null; }
   return { ok: true, submission: await createSubmission(spec, m) };
 }
 async function submitQuality(payload, meta, indicatorAllowed) {
@@ -1176,13 +1278,14 @@ async function submitQuality(payload, meta, indicatorAllowed) {
   if (meta && meta.enforceCollection) await refuseOutsideCollection(spec);
   // Checked on the RESOLVED indicator (buildQualitySpec maps a typed name onto an existing
   // id), so a collector limited to specific indicators can't report one outside the list.
-  if (indicatorAllowed && !spec.isNewIndicator && !indicatorAllowed(spec.area, spec.indicatorId)) {
-    const err = new Error('You are not assigned to report "' + spec.indicatorName + '".'); err.status = 403; throw err;
+  // A NEW indicator counts too: a person limited to a list may not add others to the area.
+  if (indicatorAllowed && !indicatorAllowed(spec.area, spec.indicatorId)) {
+    const err = new Error(spec.isNewIndicator ? 'You may report only the indicators assigned to you in this area — ask the administrator to add "' + spec.indicatorName + '".' : 'You are not assigned to report "' + spec.indicatorName + '".'); err.status = 403; throw err;
   }
   await refuseIfPending(spec);
   const m = Object.assign({}, payload, meta);
   if (m.isCorrection) { requireCorrectionReason(m); m.priorValues = await snapshotQualityPrior(spec); }
-  else { const prior = await onRecordPrior(spec); if (prior) refuseExists(spec, prior); }
+  else { const prior = await onRecordPrior(spec); if (prior) refuseExists(spec, prior); m.priorValues = null; m.correctionFor = null; }
   return { ok: true, submission: await createSubmission(spec, m) };
 }
 
@@ -1237,7 +1340,9 @@ async function autoRejectDuplicates(s, by) {
   // OLDER duplicates only. Rejecting every other pending row let approval ORDER decide which
   // data survived: approving the original first auto-rejected the collector's later
   // correction, and the stale figures went live. A NEWER pending row stays for review.
-  const older = (x) => (x.submittedAt || 0) <= (s.submittedAt || 0);
+  // A resent row counts from its RESEND time, not its first send.
+  const sentAt = (x) => x.resubmittedAt || x.submittedAt || 0;
+  const older = (x) => sentAt(x) <= sentAt(s);
   const c = await col('submissions');
   if (!c) {
     let n = 0;
@@ -1318,13 +1423,16 @@ async function getSubmissions(query) {
   const status = query && query.status && query.status !== 'all' ? String(query.status) : null;
   const n = Math.min(Math.max(parseInt(query && query.limit, 10) || 200, 1), 1000);
   const offset = Math.max(0, parseInt(query && query.offset, 10) || 0);
+  // "Pending" includes rows mid-approval: one whose approval died stays 'approving' until it is
+  // approved again, and filtering exactly 'pending' hid it from the review queue for good.
+  const statuses = status === 'pending' ? ['pending', 'approving'] : (status ? [status] : null);
   const c = await col('submissions');
   if (!c) {
     let arr = mem.submissions.slice();
-    if (status) arr = arr.filter((s) => s.status === status);
+    if (statuses) arr = arr.filter((s) => statuses.includes(s.status));
     return arr.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0) || String(b.id).localeCompare(String(a.id))).slice(offset, offset + n);
   }
-  const filter = status ? { status } : {};
+  const filter = statuses ? { status: { $in: statuses } } : {};
   const docs = await c.find(filter).sort({ submittedAt: -1, _id: -1 }).skip(offset).limit(n).toArray();
   return docs.map((d) => { const { _id, ...r } = d; return { id: _id, ...r }; });
 }
@@ -1333,10 +1441,10 @@ async function getStats() {
   const c = await col('submissions');
   if (!c) {
     const by = (f) => mem.submissions.filter(f).length;
-    return { total: mem.submissions.length, pending: by((s) => s.status === 'pending'), approved: by((s) => s.status === 'approved'), rejected: by((s) => s.status === 'rejected'), withdrawn: by((s) => s.status === 'withdrawn'), patient: by((s) => s.type === 'patient'), quality: by((s) => s.type === 'quality'), lastSubmittedAt: mem.submissions[0] ? mem.submissions[0].submittedAt : null };
+    return { total: mem.submissions.length, pending: by((s) => s.status === 'pending' || s.status === 'approving'), approved: by((s) => s.status === 'approved'), rejected: by((s) => s.status === 'rejected'), withdrawn: by((s) => s.status === 'withdrawn'), patient: by((s) => s.type === 'patient'), quality: by((s) => s.type === 'quality'), lastSubmittedAt: mem.submissions[0] ? mem.submissions[0].submittedAt : null };
   }
   const [total, pending, approved, rejected, withdrawn, patient, quality] = await Promise.all([
-    c.countDocuments({}), c.countDocuments({ status: 'pending' }), c.countDocuments({ status: 'approved' }),
+    c.countDocuments({}), c.countDocuments({ status: { $in: ['pending', 'approving'] } }), c.countDocuments({ status: 'approved' }),
     c.countDocuments({ status: 'rejected' }), c.countDocuments({ status: 'withdrawn' }), c.countDocuments({ type: 'patient' }), c.countDocuments({ type: 'quality' }),
   ]);
   const lastArr = await c.find({}).sort({ submittedAt: -1 }).limit(1).toArray();
@@ -1422,7 +1530,9 @@ async function shortlinkMeta(code) {
 async function shortlinkSubmit(code, body) {
   const link = await getShortlink(code);
   if (!link) throw new Error('Invalid or expired link.');
-  const meta = { responsible: link.responsible, submittedBy: (link.responsible && link.responsible.name) || 'shared-link', source: 'shortlink' };
+  // enforceCollection: a public link is held to Department Setup (start month, not-measured
+  // indicators) like any signed-in submitter — only admins backfill.
+  const meta = { responsible: link.responsible, submittedBy: (link.responsible && link.responsible.name) || 'shared-link', source: 'shortlink', enforceCollection: true };
   const b = body || {};
   // The SAME guards as the signed-in forms (submitPatient / submitQuality): one pending row per
   // target + month (409 'pending'), no plain second report for a month on record (409 'exists'
@@ -1564,7 +1674,17 @@ const SAFE_FIELD_KEY = /^[A-Za-z0-9_\-:@+~]+$/;   // becomes a Mongo field path:
 async function getCollectionSettings() {
   const c = await col('departments'); if (!c) return [];
   const deps = await c.find({}, { projection: { id: 1, name: 1, qualityKey: 1, 'quality.key': 1, qualityOnly: 1, collection: 1 } }).toArray();
-  return deps.map((d) => ({ id: d._id, name: d.name || d._id, qualityKey: (d.quality && d.quality.key) || d.qualityKey || null, qualityOnly: !!d.qualityOnly, collection: d.collection || {} }));
+  const out = deps.map((d) => ({ id: d._id, name: d.name || d._id, qualityKey: (d.quality && d.quality.key) || d.qualityKey || null, qualityOnly: !!d.qualityOnly, collection: d.collection || {} }));
+  // Custom departments not yet in the collection (overlay-only) can be set up too.
+  const ov = await overlayStore();
+  const have = new Set(out.map((d) => String(d.id)));
+  const gone = new Set((ov && Array.isArray(ov.deleted)) ? ov.deleted.map(String) : []);
+  ((ov && Array.isArray(ov.custom)) ? ov.custom : []).forEach((cd) => {
+    if (!cd || !cd.id || have.has(String(cd.id)) || gone.has(String(cd.id))) return;
+    const rn = ((ov.renames || {})[cd.id]) || {};
+    out.push({ id: String(cd.id), name: rn.name || cd.name || String(cd.id), qualityKey: null, qualityOnly: false, collection: {}, custom: true });
+  });
+  return out;
 }
 async function saveCollectionSettings(deptId, body, by) {
   const c = await col('departments'); if (!c) throw new Error('Database not available.');
@@ -1587,7 +1707,9 @@ async function saveCollectionSettings(deptId, body, by) {
   }
   const update = { $set };
   if (Object.keys($unset).length) update.$unset = $unset;
-  const r = await c.updateOne({ _id: String(deptId) }, update);
+  let r = await c.updateOne({ _id: String(deptId) }, update);
+  // A custom department's settings need its collection copy: promote it, then save.
+  if (!r.matchedCount && (await promoteCustomDept(c, String(deptId)))) r = await c.updateOne({ _id: String(deptId) }, update);
   if (!r.matchedCount) { const e = new Error('Department not found.'); e.status = 404; throw e; }
   const d = await c.findOne({ _id: String(deptId) }, { projection: { collection: 1 } });
   return (d && d.collection) || {};
@@ -1679,18 +1801,20 @@ function mount(app, opts) {
     const depts = (scope && scope.departments) || [];
     const areas = (scope && scope.qualityAreas) || [];
     const me = String(req.user.sub || '').toLowerCase();
+    // An indicator-limited person sees only those indicators' rows (as /api/quality shows them).
+    const indOk = indicatorAllowedFor(scope);
     // Rows stamped with the account (submittedByUser) match on THAT only; the name fallback is
     // for older rows, so a namesake's submissions are not shown as this person's.
     return (subs || []).filter((s) => (s.submittedByUser ? String(s.submittedByUser).toLowerCase() === me : (names.includes(s.submittedBy) || (s.responsible && names.includes(s.responsible.name))))
       || (s.type === 'patient' && depts.includes(s.department))
-      || (s.type === 'quality' && ((scope && scope.allQualityAreas) || areas.includes(s.area))));
+      || (s.type === 'quality' && ((scope && scope.allQualityAreas) || areas.includes(s.area)) && indOk(s.area, s.indicatorId)));
   };
   const statsFromSubmissions = (subs) => {
     const arr = subs || [];
     const by = (f) => arr.filter(f).length;
     return {
       total: arr.length,
-      pending: by((s) => s.status === 'pending'),
+      pending: by((s) => s.status === 'pending' || s.status === 'approving'),
       approved: by((s) => s.status === 'approved'),
       rejected: by((s) => s.status === 'rejected'),
       withdrawn: by((s) => s.status === 'withdrawn'),
@@ -1701,15 +1825,28 @@ function mount(app, opts) {
   };
   // Collectors may only submit for departments/quality areas they are assigned to. Admins
   // and open local mode (no req.user) are unrestricted. Returns an error string, or null.
+  // Is this SEND held to the sender's own assignment? scopedReq = reads are narrowed;
+  // submitScoped = sends are (also a Data Collection VIEWER who submits). Every send-time rule
+  // (assignment, indicator list, start month / not measured, admin denominator, reporting as
+  // oneself) keys off this ONE test — they used to key off scopedReq, so a viewer-submitter
+  // passed the assignment check and then skipped all the others.
+  // qualityIndicators[area] non-empty = that area's allow-list; empty/absent = every indicator.
+  const indicatorAllowedFor = (scope) => {
+    const qi = (scope && scope.qualityIndicators) || {};
+    return (area, id) => !(Array.isArray(qi[area]) && qi[area].length) || qi[area].map(String).includes(String(id));
+  };
+  const submitHeld = (req) => !!req.user && (scopedReq(req) || !!(req.access && accessRoles.submitScoped && accessRoles.submitScoped(req.access)));
   const denyIfOutOfScope = async (req, kind, target) => {
-    // scopedReq = reads are narrowed; submitScoped = sends are (also a Data Collection VIEWER who submits).
-    if (!req.user || !(scopedReq(req) || (req.access && accessRoles.submitScoped && accessRoles.submitScoped(req.access)))) return null;
+    if (!submitHeld(req)) return null;
     const scope = await getUserScope(req.user.sub);
     const what = kind === 'patient' ? 'department' : 'quality area';
     if (!target) return 'A ' + what + ' is required.';
-    // Patient statistics: the assigned departments only; quality: the assigned areas.
+    // Patient statistics: the assigned departments only; quality: the assigned areas — or every
+    // area for a hospital-wide account (the stored list is not refreshed when an area is added,
+    // so such a person could see a new area's data but was refused when sending to it).
+    if (kind !== 'patient' && scope && scope.allQualityAreas) return null;
     const allowed = kind === 'patient' ? ((scope && scope.departments) || []) : ((scope && scope.qualityAreas) || []);
-    if (!allowed.includes(target)) return 'You are not assigned to that ' + what + '.';
+    if (!allowed.includes(target)) return 'You are not assigned to that ' + what + ' — ask the administrator to add it to your Data Submission assignment.';
     return null;
   };
 
@@ -1743,7 +1880,7 @@ function mount(app, opts) {
   // only, so an in-charge could file a report under anyone's name — the server now stamps the
   // signed-in person whatever the body says. Admins may still name any responsible person.
   const portalResponsible = async (req) => {
-    if (!isPortalReq(req)) return null;
+    if (!submitHeld(req)) return null;
     const scope = await getUserScope(req.user.sub);
     return { id: (scope && scope.responsibleId) || null, name: (scope && scope.name) || req.user.name || req.user.sub, title: '' };
   };
@@ -1789,7 +1926,7 @@ function mount(app, opts) {
       if (req.access && !accessRoles.maySubmitKind(req.access, 'patient')) return res.status(403).json({ ok: false, error: 'Your account is not set up to submit patient statistics.' });
       const deny = await denyIfOutOfScope(req, 'patient', String((req.body && req.body.department) || '').trim());
       if (deny) return res.status(403).json({ ok: false, error: deny });
-      const meta ={ submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req) };
+      const meta ={ submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: submitHeld(req) };
       const own = await portalResponsible(req); if (own) meta.responsible = own;
       res.json(await submitPatient(req.body || {}, meta));
     } catch (e) { sendErr(res, e); }
@@ -1801,15 +1938,15 @@ function mount(app, opts) {
       if (deny) return res.status(403).json({ ok: false, error: deny });
       // Area access alone isn't the whole scope: a collector limited to specific indicators
       // (qualityIndicators[area] non-empty) may report only those. Empty/absent = all.
-      let indicatorAllowed = null;
-      if (isPortalReq(req)) {
+      let indicatorAllowed = null, lockDen = false;
+      const held = submitHeld(req);
+      if (held) {
         const scope = await getUserScope(req.user.sub);
-        const qi = (scope && scope.qualityIndicators) || {};
-        indicatorAllowed = (area, id) => !(Array.isArray(qi[area]) && qi[area].length) || qi[area].map(String).includes(String(id));
+        indicatorAllowed = indicatorAllowedFor(scope);
+        // Admin-owned denominators stay locked for a submitter unless an admin allowed THIS person (enterDen).
+        lockDen = !((scope || {}).enterDen);
       }
-      // Admin-owned denominators stay locked for a submitter unless an admin allowed THIS person (enterDen).
-      const lockDen = isPortalReq(req) && !(((await getUserScope(req.user.sub)) || {}).enterDen);
-      const meta = { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: isPortalReq(req), lockAdminDen: lockDen };
+      const meta = { submittedBy: who(req), submittedByUser: (req.user && req.user.sub) || null, source: 'app', enforceCollection: held, lockAdminDen: lockDen };
       const own = await portalResponsible(req); if (own) meta.responsible = own;
       res.json(await submitQuality(req.body || {}, meta, indicatorAllowed));
     } catch (e) { sendErr(res, e); }
@@ -1910,8 +2047,18 @@ function mount(app, opts) {
         return res.status(400).json({ ok: false, error: 'Approved submissions can only have their values/details edited. Create a new correction to change department, area, or month.' });
       }
       if (!isAdmin && !(await ownsSubmission(req, s))) return res.status(403).json({ ok: false, error: 'You can only edit your own submissions.' });
+      const held = submitHeld(req);
       if (resend) {
-        if (isPortalReq(req)) await refuseOutsideCollection(s);
+        if (held) {
+          await refuseOutsideCollection(s);
+          // The assignment is checked again: someone taken off a department / indicator since the
+          // row was returned must not send it back in.
+          const deny = await denyIfOutOfScope(req, s.type, s.type === 'patient' ? s.department : s.area);
+          if (deny) return res.status(403).json({ ok: false, error: deny });
+          if (s.type === 'quality' && !indicatorAllowedFor(await getUserScope(req.user.sub))(s.area, s.indicatorId)) {
+            return res.status(403).json({ ok: false, error: 'You are no longer assigned to report "' + (s.indicatorName || s.indicatorId) + '".' });
+          }
+        }
         await refuseIfPending(s, s.id);
       }
       const b = req.body || {};
@@ -1926,10 +2073,21 @@ function mount(app, opts) {
           patch.values = out;
         }
         // Re-assign to a different department (admin only).
-        if (isAdmin && b.department) { patch.department = String(b.department).trim(); if (b.departmentName) patch.departmentName = String(b.departmentName).trim(); }
+        if (isAdmin && b.department && String(b.department).trim() !== String(s.department || '')) {
+          // The figures move WITH the department: re-keyed onto the target's own columns.
+          const dc = await col('departments');
+          const to = dc && (await findDept(dc, String(b.department).trim()));
+          if (!to) return res.status(400).json({ ok: false, error: 'Unknown department: ' + b.department });
+          const from = dc && (await findDept(dc, s.department));
+          const m = mapPatientValues(patch.values || s.values || {}, (from && from.cols) || [], to.cols || []);
+          if (m.unmapped.length) return res.status(400).json({ ok: false, error: (to.name || b.department) + ' has no matching field for: ' + m.unmapped.join(', ') + '. Add the field there first, or clear those figures before moving.' });
+          if (!Object.keys(m.values).length) return res.status(400).json({ ok: false, error: 'Nothing to move — enter at least one statistic.' });
+          patch.values = m.values;
+          patch.department = to.id || String(b.department).trim(); patch.departmentName = String(b.departmentName || to.name || patch.department).trim();
+        }
       } else if (s.type === 'quality') {
         // Same rule as the submit route: a portal account's edit cannot set an admin-owned denominator.
-        if (isPortalReq(req) && (b.den != null || b.groupsDen != null) && !(((await getUserScope(req.user.sub)) || {}).enterDen) && (await denIsAdminOnly(s))) { delete b.den; delete b.groupsDen; }
+        if (held && (b.den != null || b.groupsDen != null) && !(((await getUserScope(req.user.sub)) || {}).enterDen) && (await denIsAdminOnly(s))) { delete b.den; delete b.groupsDen; }
         ['value', 'num', 'den'].forEach((key) => { if (b[key] != null && b[key] !== '') numericReading(b[key], key); });
         if (b.value != null && b.value !== '' && !isNaN(Number(b.value))) patch.value = Number(b.value);
         if (b.num != null && b.num !== '' && !isNaN(Number(b.num))) patch.num = Number(b.num);   // rate numerator
@@ -1956,7 +2114,19 @@ function mount(app, opts) {
         if (b.groupsDen) { const gd = sanitizeGroupMap(b.groupsDen); if (gd) patch.groupsDen = gd; }
         if (b.remark != null) patch.remark = String(b.remark);
         // Re-assign to a different quality area (admin only).
-        if (isAdmin && b.area) { patch.area = String(b.area).trim(); if (b.areaName) patch.areaName = String(b.areaName).trim(); }
+        if (isAdmin && b.area && String(b.area).trim() !== String(s.area || '')) {
+          // The indicator moves WITH the area: keeping the old area's indicatorId made approval
+          // push a stray copy of the indicator into the target area and leave its real one empty.
+          const target = await qArea(String(b.area).trim());
+          if (!target) return res.status(400).json({ ok: false, error: 'Unknown quality area: ' + b.area });
+          const inds = target.indicators || [];
+          const wantId = b.indicatorId ? String(b.indicatorId) : String(s.indicatorId || '');
+          const nm = (x) => String(x || '').trim().toLowerCase();
+          const ind = inds.find((i) => String(i.id) === wantId) || inds.find((i) => nm(i.name) === nm(b.indicatorName || s.indicatorName));
+          if (!ind) return res.status(400).json({ ok: false, error: (target.name || b.area) + ' has no indicator "' + (s.indicatorName || s.indicatorId) + '" — add it to that area first, or keep the submission where it is.' });
+          patch.area = String(b.area).trim(); patch.areaName = String(b.areaName || target.name || patch.area).trim();
+          patch.indicatorId = ind.id; patch.indicatorName = ind.name;
+        }
         // Edit the incident/patient/CAPA details attached to this quality submission.
         if (Array.isArray(b.incidents)) {
           const IF = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'department', 'details', 'finding', 'corrective', 'preventive', 'remark'];
@@ -1978,6 +2148,13 @@ function mount(app, opts) {
             if (!why) refuseExists(spec, prior);
             Object.assign(patch, { isCorrection: true, correctionReason: why, priorValues: prior });
           }
+        } else {
+          // A resent EDIT REQUEST compares against what is on record NOW, not at its first send.
+          const spec = Object.assign({}, s, patch);
+          const fresh = s.type === 'patient' ? await snapshotPatientPrior(spec) : await snapshotQualityPrior(spec);
+          patch.priorValues = fresh || null;
+          const why = String(b.correctionReason == null ? '' : b.correctionReason).trim();
+          if (why) patch.correctionReason = why;
         }
         Object.assign(patch, { status: 'pending', resubmittedAt: now, lastRejectReason: s.rejectReason || '', rejectReason: '', reviewedBy: null, reviewedAt: null });
         updated = await updateSubmissionIf(req.params.id, 'rejected', patch, { history: { status: 'rejected', rejectReason: s.rejectReason || '', reviewedBy: s.reviewedBy || null, reviewedAt: s.reviewedAt || null, at: now } });
@@ -1986,13 +2163,45 @@ function mount(app, opts) {
       }
       // A collector's pending edit is conditional too: it must not land on a row an admin just
       // approved, rejected or the collector withdrew in another tab.
+      // An admin moving a not-yet-approved row to another month / department / area gets the
+      // same guards as a new report: one open row per target + month, and a target already ON
+      // RECORD turns it into an edit request with the server's snapshot (no blind overwrite).
+      const retarget = isAdmin && s.status !== 'approved' && ['month', 'department', 'area', 'indicatorId'].some((k) => patch[k] != null && String(patch[k]) !== String(s[k] == null ? '' : s[k]));
+      if (retarget) {
+        const spec = Object.assign({}, s, patch);
+        await refuseIfPending(spec, s.id);
+        if (!s.isCorrection) {
+          const prior = await onRecordPrior(spec);
+          if (prior) Object.assign(patch, { isCorrection: true, correctionReason: String(b.correctionReason || '').trim() || 'Moved by ' + who(req) + ' to a month already on record', priorValues: prior });
+        } else patch.priorValues = (s.type === 'patient' ? await snapshotPatientPrior(spec) : await snapshotQualityPrior(spec)) || null;
+      }
+      // Re-applying an APPROVED row to live data: only when its figures changed (a note fix must not
+      // rewrite live data) and only when no NEWER approved report for the same target + month exists
+      // — re-applying an old one put its stale figures back over the later correction.
+      const DATA_KEYS = s.type === 'patient' ? ['values'] : ['value', 'num', 'den', 'notObserved', 'groups', 'groupsDen', 'deptBreakdown', 'incidents', 'remark'];
+      const canon = (v) => (Array.isArray(v) ? v.map(canon) : (v && typeof v === 'object') ? Object.keys(v).sort().reduce((o, k) => (o[k] = canon(v[k]), o), {}) : (v == null ? null : v));
+      const figuresChanged = DATA_KEYS.some((k) => Object.prototype.hasOwnProperty.call(patch, k) && JSON.stringify(canon(patch[k])) !== JSON.stringify(canon(s[k])));
+      if (isAdmin && s.status === 'approved' && figuresChanged) {
+        const key = dupKeyOf(s);
+        const sc = await col('submissions');
+        const same = sc
+          ? (await sc.find(s.type === 'patient' ? { status: 'approved', type: s.type, month: s.month, department: s.department } : { status: 'approved', type: s.type, month: s.month, area: s.area }).toArray()).map((d) => Object.assign({ id: d._id }, d))
+          : mem.submissions.filter((x) => x.status === 'approved');
+        const newer = same.find((x) => String(x.id) !== String(s.id) && dupKeyOf(x) === key && (x.reviewedAt || 0) > (s.reviewedAt || 0));
+        if (newer) return res.status(409).json({ ok: false, error: 'A newer approved report for this ' + (s.type === 'patient' ? 'department' : 'indicator') + ' and month is on record — edit that one instead. Nothing was changed.', newerId: String(newer.id) });
+      }
       if (!isAdmin) {
         updated = await updateSubmissionIf(req.params.id, 'pending', patch);
         if (!updated) { const cur = await getSubmissionById(req.params.id); return res.status(409).json({ ok: false, error: (NOT_PENDING_MSG[cur && cur.status] || 'This submission is no longer pending.') + ' Your edit was not saved.' }); }
-      } else updated = await setSubmissionStatus(req.params.id, patch);
+      } else {
+        // Conditional on the status read above: an approval claiming the row in between would
+        // otherwise end "approved" with figures that never reached live data.
+        updated = await updateSubmissionIf(req.params.id, s.status, patch);
+        if (!updated) return res.status(409).json({ ok: false, error: 'This submission changed while you were editing it (it may have just been approved) — refresh and try again. Your edit was not saved.' });
+      }
       // An APPROVED submission was already written to the canonical (live) collections at approve
       // time; an admin editing it later must RE-APPLY so the dashboard reflects the correction.
-      if (updated && updated.status === 'approved') {
+      if (updated && updated.status === 'approved' && figuresChanged) {
         try {
           // Figures the admin cleared on this already-live sheet come off the live row too.
           const removeKeys = (s.status === 'approved' && patch.values) ? Object.keys(s.values || {}).filter((k) => !Object.prototype.hasOwnProperty.call(patch.values, k)) : [];
@@ -2005,16 +2214,13 @@ function mount(app, opts) {
   });
 
   // Shareable short links — management (admin) ...
-  app.get('/api/shortlinks', guard, async (req, res) => {
-    if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
+  app.get('/api/shortlinks', guard, adminOnly, async (req, res) => {
     try { res.json({ ok: true, links: await getShortlinks() }); } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
-  app.post('/api/shortlinks', guard, async (req, res) => {
-    if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
+  app.post('/api/shortlinks', guard, adminOnly, async (req, res) => {
     try { res.json({ ok: true, link: await createShortlink(req.body || {}, who(req)) }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
-  app.delete('/api/shortlinks/:code', guard, async (req, res) => {
-    if (req.user && req.user.role && req.user.role !== 'Administrator') return res.status(403).json({ ok: false, error: 'Administrator access required.' });
+  app.delete('/api/shortlinks/:code', guard, adminOnly, async (req, res) => {
     try { await deleteShortlink(req.params.code); res.json({ ok: true }); } catch (e) { res.status(400).json({ ok: false, error: String(e.message || e) }); }
   });
 
@@ -2062,7 +2268,7 @@ function mount(app, opts) {
 module.exports = {
   mount, getResponsibles, saveResponsible, getSubmissions, getStats,
   submitPatient, submitQuality, approveSubmission, rejectSubmission, withdrawSubmission,
-  buildPatientSpec, buildQualitySpec, createSubmission,
+  buildPatientSpec, buildQualitySpec, createSubmission, mapPatientValues,
   createShortlink, getShortlinks, deleteShortlink, shortlinkMeta, shortlinkSubmit,
   registerCollector, upsertCollectorUser, getUserScope, recomputeQuarters,
   deriveAssignment, planResponsibleSync, applyResponsibleSync, deactivateResponsibleFor,

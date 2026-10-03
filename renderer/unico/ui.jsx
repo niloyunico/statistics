@@ -194,7 +194,12 @@ function unicoRefreshPerms(){
     // degraded = the server could not read the account: its empty perms are not a revocation.
     if(!j||!j.ok||j.degraded||!j.perms||typeof j.perms!=='object'||Array.isArray(j.perms)) return false;
     const staffScope=j.staffScope||u.staffScope;
-    if(JSON.stringify(j.perms)===JSON.stringify(u.perms||null) && staffScope===u.staffScope) return false;
+    // The Data Submission assignment travels too (departments, areas, indicators, screens, kinds,
+    // enterDen): changing it no longer signs the person out, so the tab must pick it up live.
+    const ds=(j.user&&j.user.dsScope&&typeof j.user.dsScope==='object')?j.user.dsScope:null;
+    const DS_KEYS=['departments','qualityAreas','allQualityAreas','qualityIndicators','submitKinds','dsScreens','enterDen'];
+    const dsChanged=!!ds&&DS_KEYS.some(k=>JSON.stringify(ds[k]==null?null:ds[k])!==JSON.stringify(u[k]==null?null:u[k]));
+    if(JSON.stringify(j.perms)===JSON.stringify(u.perms||null) && staffScope===u.staffScope && !dsChanged) return false;
     const appJob=window.unicoRefreshAppData ? window.unicoRefreshAppData({includeNew:true}) : Promise.resolve([]);
     const jobs=[appJob];
     try{ if(window.UNICO&&window.UNICO.refreshDepartments) jobs.push(window.UNICO.refreshDepartments()); }catch(e){}
@@ -202,6 +207,7 @@ function unicoRefreshPerms(){
     return Promise.all(jobs.map(p=>Promise.resolve(p).catch(()=>null))).then(res=>{
       if(res[0]===null) return false;   // overlay not refreshed: keep the old grant, retry next round
       Object.assign(u,{perms:j.perms,staffScope});
+      if(ds) DS_KEYS.forEach(k=>{ if(Object.prototype.hasOwnProperty.call(ds,k)) u[k]=ds[k]; });
       try{ window.dispatchEvent(new CustomEvent('unico:perms-changed',{detail:{perms:j.perms}})); }catch(e){}
       return true;
     });
@@ -609,7 +615,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
     return unicoWorkspaceSub(AUTO_OPEN[it.id]).filter(x=>!x.mod || unicoCanAccessModule(x.mod));
   };
   return (
-    <aside className="sb">
+    <aside className="sb" id="workspace-sidebar">
       <div className="sb-brand">
         <img className="sb-logo-img sb-logo-full" src="unico/logo.svg" alt="UNICO — Hands of Care Hospitals"/>
         <img className="sb-logo-img sb-logo-mark" src="unico/logo-mark.svg" alt="UNICO"/>
@@ -749,7 +755,7 @@ function PeriodPill({period, setPeriod, depts=[]}){
   );
 }
 
-function TopBar({route, setRoute, onBurger, crumbs, actions, depts=[], onFill, period, setPeriod}){
+function TopBar({route, setRoute, onBurger, menuExpanded, crumbs, actions, depts=[], onFill, period, setPeriod}){
   const [notifOpen,setNotifOpen]=React.useState(false);
   const reporting=depts.filter(d=>d.months&&d.months.length&&d.latest&&d.latest.month);
   const nexts=reporting.map(d=>nextMonthKey(d.latest.month));
@@ -776,7 +782,7 @@ function TopBar({route, setRoute, onBurger, crumbs, actions, depts=[], onFill, p
   const bellCount=missing.length+dsTotal;
   return (
     <div className="topbar">
-      <button className="tb-burger" onClick={onBurger} title="Toggle menu"><Ic d={I.grid} s={16}/></button>
+      <button className="tb-burger" onClick={onBurger} title="Toggle menu" aria-label="Toggle menu" aria-expanded={menuExpanded} aria-controls="workspace-sidebar"><Ic d={I.grid} s={16}/></button>
       <div className="crumb">
         {crumbs.map((c,i)=>(
           <React.Fragment key={i}>

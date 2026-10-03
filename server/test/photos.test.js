@@ -29,6 +29,7 @@ async function persistence() {
     return res;
   }
   assert.equal((await upload({staffId:7})).body.ok,true);
+  assert.equal((await upload({staffId:7,image:'data:image/avif;base64,YQ=='})).body.ok,true,'native AVIF uploads are accepted');
   fail=true;
   assert.equal((await upload({staffId:7})).code,500,'failed persistence must not announce success');
   fail=false;matched=false;

@@ -2110,7 +2110,9 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     if(kind==='none') setPerms(NONE_PERMS());
     // Console modules only: Data Submission needs a scope, the staff app is a phone login and
     // Access Control lists every account — none of those is a harmless "view".
-    else if(kind==='view') setPerms(USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol'].indexOf(k)>=0?[]:['view']),m),{})); };
+    // Those modules are LEFT as they are (not cleared): clearing Data Submission on Save also wiped
+    // the person's departments / areas and switched off their Indicator Access record.
+    else if(kind==='view') setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol'].indexOf(k)>=0?asActions(p[k]):['view']),m),{})); };
   // Start from what another person holds. Copies the ticks only; their scope stays theirs.
   const copyAccess=(uname)=>{
     const src=(allUsers||[]).find(x=>x.username===uname); setCopyFrom(uname); if(!src) return;
@@ -2119,7 +2121,10 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     setPerms(USER_MODS.reduce((m,[k])=>(m[k]=asActions(p[k]),m),{}));
   };
   // Toggle one action for a module (independent). Granting edit/add/delete auto-adds view.
+  // Data Submission exists to SEND: ticking it on from nothing grants view+edit+add, or the person
+  // saw every form and each Submit was refused (sending = Add, fixing own = Edit). Untick to narrow.
   const toggleAct=(mid,act)=>{ setPerms(p=>{ const cur=asActions(p[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
+    if(mid==='datasubmit'&&!cur.length&&act==='view') next=['view','edit','add'];
     if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); };
   const clearMod=(mid)=>{ setPerms(p=>({...p,[mid]:[]})); };
 
@@ -3109,7 +3114,7 @@ function MediaBrowser(){
         <div style={{flex:1,minWidth:160}}>
           <div style={{fontSize:13.5,fontWeight:700,color:'var(--ink)'}}>Media</div>
           <div style={{fontSize:11.5,color:'var(--muted)'}}>
-            {info&&info.provider==='imagekit'?'ImageKit':'Cloudinary'}{info&&info.cloudName?' · '+info.cloudName:''}
+            {info&&info.provider==='vercel-blob'?'Vercel Blob':info&&info.provider==='imagekit'?'ImageKit':'Cloudinary'}{info&&info.cloudName&&info.cloudName!=='Vercel Blob'?' · '+info.cloudName:''}
             {usage?' · '+(usage.resources!=null?usage.resources+' files · ':'')+kb(usage.storage.usage)+' stored':''}
             {usage&&usage.credits&&usage.credits.limit?' · '+usage.credits.usage.toFixed(2)+'/'+usage.credits.limit+' credits used':''}
           </div>

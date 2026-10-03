@@ -29,7 +29,8 @@ async function uploadBuffer(buf, opts = {}) {
     buf.subarray(0, 4).equals(Buffer.from([137,80,78,71])) ? 'png' :
     buf.subarray(0, 4).toString() === 'RIFF' ? 'webp' :
     buf.subarray(0, 3).toString() === 'GIF' ? 'gif' :
-    buf.subarray(0, 4).toString() === '%PDF' ? 'pdf' : null;
+    buf.subarray(0, 4).toString() === '%PDF' ? 'pdf' :
+    buf.subarray(4, 8).toString() === 'ftyp' && /avif|avis/.test(buf.subarray(8, 32).toString()) ? 'avif' : null;
   if (!ext) throw new Error('Unsupported image or file format.');
   const fileName = randomUUID() + '.' + ext;
   const result = await client().files.upload({ file: await ImageKit.toFile(buf, fileName),

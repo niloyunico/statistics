@@ -41,7 +41,7 @@
   // (meaning: use the directly-entered quarter value).
   function rollupQuarter(ind, q) {
     const months = (ind && ind.months) || {};
-    const ms = QUARTER_MONTHS[q] || [];
+    const ms = (QUARTER_MONTHS[q] || []).filter(m => !(ind.mNotObserved || {})[m]);
     const vals = ms.map(m => months[m]).filter(v => v != null && v !== '');
     if (!vals.length) return undefined;
     const nums = vals.map(Number);
@@ -56,12 +56,13 @@
     if (f && f !== 'direct') {
       const needDen = f !== 'count';
       Object.keys(QM).forEach(q => {
-        const ms = QM[q] || [];
+        const ms = (QM[q] || []).filter(m => !(ind.mNotObserved || {})[m]);
         const have = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
         let v = null;
         if (have) {
-          const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
-          const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+          const complete = ms.filter(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || Number((ind.mDen || {})[m]) > 0));
+          const num = complete.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+          const den = complete.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
           v = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
         }
         if (v == null) {
@@ -76,7 +77,7 @@
     } else {
       const months = ind.months || {};
       Object.keys(QM).forEach(q => {
-        const vals = (QM[q] || []).map(m => months[m]).filter(v => v != null && v !== '').map(Number);
+        const vals = (QM[q] || []).filter(m => !(ind.mNotObserved || {})[m]).map(m => months[m]).filter(v => v != null && v !== '').map(Number);
         if (!vals.length) return;
         out[q] = isPct(ind) ? Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100 : vals.reduce((s, x) => s + x, 0);
       });
@@ -181,15 +182,16 @@
       const q2 = Object.assign({}, ind.quarters || {});
       const needDen = f !== 'count'; // rate/pct/rate1000 require a denominator to be meaningful
       QS.forEach(q => {
-        const ms = QUARTER_MONTHS[q] || [];
+        const ms = (QUARTER_MONTHS[q] || []).filter(m => !(ind.mNotObserved || {})[m]);
         // A month only counts toward the rollup if it has a numerator AND (for rate/pct) a
         // denominator — otherwise summing empty denominators yields den=0 → a false on-benchmark 0.
         const haveMonths = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''
           && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
         let num, den, hadInput = haveMonths;
         if (haveMonths) {
-          num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
-          den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+          const complete = ms.filter(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || Number((ind.mDen || {})[m]) > 0));
+          num = complete.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+          den = complete.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
         } else {
           const n = (ind.qNum || {})[q];
           if (n != null && n !== '') { hadInput = true; num = n; den = (ind.qDen || {})[q]; }

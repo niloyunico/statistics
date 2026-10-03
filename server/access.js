@@ -553,6 +553,14 @@ function requireModule(mid) {
           // Reads always; a write needs the matching Data Submission action (POST=add, PATCH=edit…).
           const act = actionForMethod(req.method);
           if (act === 'view' || can(a, 'datasubmit', act)) return next();
+          // Fixing / re-sending one's OWN report is part of sending it: a sender (add) may PATCH
+          // too — ownership and pending/returned status are checked by the route itself.
+          if (act === 'edit' && can(a, 'datasubmit', 'add')) return next();
+          // Say WHY: the bare "no access" left a person who could see every form unable to tell
+          // that their Data Submission access is view-only.
+          return res.status(403).json({ ok: false, code: 'ds-readonly', error: act === 'add' || act === 'edit'
+            ? 'Your Data Submission access is view-only, so nothing can be sent. Ask the administrator to tick "Add" for Data Submission in Access Control.'
+            : 'Your Data Submission access does not allow this. Ask the administrator to update it in Access Control.' });
         }
         return res.status(403).json({ ok: false, error: 'You do not have access to this.' });
       }

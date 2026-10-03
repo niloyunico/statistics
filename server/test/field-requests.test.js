@@ -262,7 +262,7 @@ const norm = (s) => String(s).toLowerCase().replace(/\s+/g, '');
     assert.ok(!(sub(id).den > 0), 'an edit cannot set it either');
     await dc.approveSubmission(id, 'admin');
     const nsi = dept().quality.indicators.find((i) => i.id === 'nsi');
-    assert.equal(nsi.mDen['Aug-26'], undefined, 'stored denominator unchanged');
+    assert.equal(nsi.mDen['Aug-26'], 138, 'approval records the carried admin headcount, never the collector input');
     assert.equal(nsi.mDen['Jul-26'], 138);
     assert.equal(nsi.mNum['Aug-26'], 3);
     assert.equal(nsi.months['Aug-26'], 2.17, 'the rate uses the admin headcount'); }

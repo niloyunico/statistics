@@ -75,4 +75,20 @@ function sandbox(extra) {
   assert.equal(row({ ...base, entries: [], removed: { sicu: ['Jul-26'] }, removedAt: { sicu: { 'Jul-26': T_NEW } } }, 'Jul-26'), null, 'a deletion made after the approval still hides it');
 }
 
+// Quarterly calculations on screen must match the server's complete-observation rule.
+{
+  const reading = {
+    id: 'audit', name: 'Audit', formula: 'pct',
+    months: { 'Jul-26': 80, 'Aug-26': 50, 'Jun-25': 80 },
+    mNum: { 'Jul-26': 8, 'Sep-26': 50, 'Aug-26': 50, 'Jun-25': 8, 'Aug-25': 50 },
+    mDen: { 'Jul-26': 10, 'Aug-26': 100, 'Jun-25': 10, 'Jul-25': 100 },
+    mNotObserved: { 'Aug-26': true },
+  };
+  const { ctx, win } = sandbox({ QUALITY_SEED: [{ key: 'test', indicators: [reading] }] });
+  vm.runInContext(read('quality-store.js'), ctx);
+  const result = win.qualityData()[0].indicators[0];
+  assert.equal(result.quartersByFy['2026'].Q3, 80, 'unobserved and incomplete months cannot distort the displayed rate');
+  assert.equal(result.quarters.Q1, 80, 'legacy quarter uses the same complete observations');
+}
+
 console.log('Overlay newest-wins regression checks passed.');

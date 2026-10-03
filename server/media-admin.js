@@ -39,7 +39,7 @@ function mount(app, opts) {
 
   const notConfigured = (res) => res.json({
     ok: true, configured: false, folders: [], assets: [],
-    hint: 'Configure ImageKit or Cloudinary in the server environment to store photos and files.',
+    hint: 'Configure Vercel Blob, ImageKit or Cloudinary in the server environment to store photos and files.',
   });
 
   // Folder tree, one level at a time (?path= empty for the top level).

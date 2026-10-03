@@ -4364,7 +4364,7 @@ function UserModal({
   };
   const quickSet = kind => {
     setCopyFrom('');
-    if (kind === 'none') setPerms(NONE_PERMS());else if (kind === 'view') setPerms(USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol'].indexOf(k) >= 0 ? [] : ['view'], m), {}));
+    if (kind === 'none') setPerms(NONE_PERMS());else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
   };
   const copyAccess = uname => {
     const src = (allUsers || []).find(x => x.username === uname);
@@ -4384,6 +4384,7 @@ function UserModal({
     setPerms(p => {
       const cur = asActions(p[mid]);
       let next = cur.indexOf(act) >= 0 ? cur.filter(a => a !== act) : [...cur, act];
+      if (mid === 'datasubmit' && !cur.length && act === 'view') next = ['view', 'edit', 'add'];
       if (next.some(a => a !== 'view') && next.indexOf('view') < 0) next.push('view');
       next = PERM_ORDER.filter(a => next.indexOf(a) >= 0);
       return {
@@ -7416,7 +7417,7 @@ function MediaBrowser() {
       fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, info && info.provider === 'imagekit' ? 'ImageKit' : 'Cloudinary', info && info.cloudName ? ' · ' + info.cloudName : '', usage ? ' · ' + (usage.resources != null ? usage.resources + ' files · ' : '') + kb(usage.storage.usage) + ' stored' : '', usage && usage.credits && usage.credits.limit ? ' · ' + usage.credits.usage.toFixed(2) + '/' + usage.credits.limit + ' credits used' : '')), React.createElement("div", {
+  }, info && info.provider === 'vercel-blob' ? 'Vercel Blob' : info && info.provider === 'imagekit' ? 'ImageKit' : 'Cloudinary', info && info.cloudName && info.cloudName !== 'Vercel Blob' ? ' · ' + info.cloudName : '', usage ? ' · ' + (usage.resources != null ? usage.resources + ' files · ' : '') + kb(usage.storage.usage) + ' stored' : '', usage && usage.credits && usage.credits.limit ? ' · ' + usage.credits.usage.toFixed(2) + '/' + usage.credits.limit + ' credits used' : '')), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6

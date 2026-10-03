@@ -46,8 +46,20 @@ function App(){
     }
     return r;
   },[]);
-  const setRoute=React.useCallback((r)=>{ setRouteRaw(typeof r==='function'?(prev=>fixRoute(r(prev))):fixRoute(r)); },[fixRoute]);
   const [collapsed,setCollapsed]=useState(()=> typeof window!=='undefined' && window.innerWidth<=820);
+  const setRoute=React.useCallback((r)=>{
+    setRouteRaw(typeof r==='function'?(prev=>fixRoute(r(prev))):fixRoute(r));
+    if(window.innerWidth<=820) setCollapsed(true);
+  },[fixRoute]);
+  // Close the mobile drawer on navigation, when entering mobile size, or Escape.
+  useEffect(()=>{
+    const mobile=window.matchMedia('(max-width:820px)');
+    const resize=(e)=>setCollapsed(e.matches);
+    const escape=(e)=>{ if(e.key==='Escape' && mobile.matches) setCollapsed(true); };
+    mobile.addEventListener('change',resize);
+    window.addEventListener('keydown',escape);
+    return ()=>{ mobile.removeEventListener('change',resize); window.removeEventListener('keydown',escape); };
+  },[]);
   const [layout,setLayout]=useState('executive');
   const [period,setPeriod]=useState({mode:'all'});
   const [locked,setLocked]=useState(()=>!!(window.unicoLock&&window.unicoLock.isEnabled()));
@@ -384,14 +396,17 @@ function App(){
     <div className={'app'+(collapsed?' collapsed':'')}>
       <GlobalSearch setRoute={setRoute} depts={depts}/>
       <Sidebar route={route} setRoute={setRoute} collapsed={collapsed} depts={depts}/>
+      {!collapsed && <button className="sb-backdrop" aria-label="Close menu" onClick={()=>setCollapsed(true)}/>}
       <div className="main">
-        <TopBar route={route} setRoute={setRoute} onBurger={()=>setCollapsed(c=>!c)} crumbs={crumbs} actions={actions} depts={depts} onFill={(id)=>setRoute({view:'input',dept:id})} period={period} setPeriod={setPeriod}/>
+        <TopBar route={route} setRoute={setRoute} menuExpanded={!collapsed} onBurger={()=>setCollapsed(c=>!c)} crumbs={crumbs} actions={actions} depts={depts} onFill={(id)=>setRoute({view:'input',dept:id})} period={period} setPeriod={setPeriod}/>
         {/* Section tabs for the screens inside a destination (ui.jsx UNICO_VIEW_TABS).
             OUTSIDE the keyed body on purpose: the key remounts on every view change, and
             a strip that remounted with it lost its place for a frame on each tab click.
             It is also above the body rather than inside it because one group's tabs are
             rendered by three different components. */}
-        <div className="content" key={route.view+(route.dept||'')+(route.emp||'')+layout}>
+        {/* Every Data Submission screen shares ONE key: keyed by view, a "Fill now" / "Fix & resubmit"
+            jump remounted the portal and the form opened blank (no indicator, month or figures). */}
+        <div className="content" key={((route.view&&route.view.indexOf('ds')===0)?'ds':route.view)+(route.dept||'')+(route.emp||'')+layout}>
           {typeof ViewTabs!=='undefined' && <ViewTabs view={route.view} setRoute={setRoute}/>}
           {body}
         </div>

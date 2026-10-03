@@ -28,7 +28,7 @@
       body: JSON.stringify(body || {})
     }).then(r => r.json()).then(r => {
       if (r.ok && url.indexOf('/api/submissions') === 0) {
-        _dcAllCache = null;
+        dcInvalidateSubs();
         window.dispatchEvent(new Event('unico:data-refreshed'));
       }
       return r;
@@ -41,7 +41,7 @@
       body: JSON.stringify(body || {})
     }).then(r => r.json()).then(r => {
       if (r.ok && url.indexOf('/api/submissions') === 0) {
-        _dcAllCache = null;
+        dcInvalidateSubs();
         window.dispatchEvent(new Event('unico:data-refreshed'));
       }
       return r;
@@ -60,10 +60,18 @@
   let _dcAllCache = null,
     _dcAllAt = 0,
     _dcAllPromise = null;
+  let _dcGen = 0,
+    _dcPromiseGen = -1;
+  function dcInvalidateSubs() {
+    _dcAllCache = null;
+    _dcGen++;
+  }
   const dcAllSubmissions = force => {
     const now = Date.now();
     if (!force && _dcAllCache && now - _dcAllAt < 8000) return Promise.resolve(_dcAllCache);
-    if (_dcAllPromise) return force ? _dcAllPromise.catch(() => {}).then(() => dcAllSubmissions(true)) : _dcAllPromise;
+    if (_dcAllPromise) return !force && _dcPromiseGen === _dcGen ? _dcAllPromise : _dcAllPromise.catch(() => {}).then(() => dcAllSubmissions(true));
+    const gen = _dcGen;
+    _dcPromiseGen = gen;
     _dcAllPromise = (async () => {
       const rows = new Map();
       let offset = 0;
@@ -73,9 +81,12 @@
         (r.submissions || []).forEach(s => rows.set(s.id, s));
         offset = r.nextOffset;
       } while (offset != null);
-      _dcAllCache = [...rows.values()];
-      _dcAllAt = Date.now();
-      return _dcAllCache;
+      const list = [...rows.values()];
+      if (gen === _dcGen) {
+        _dcAllCache = list;
+        _dcAllAt = Date.now();
+      }
+      return list;
     })().finally(() => {
       _dcAllPromise = null;
     });
@@ -83,11 +94,9 @@
   };
   const dcSubmissionResponse = (status, force) => dcAllSubmissions(force).then(submissions => ({
     ok: true,
-    submissions: !status || status === 'all' ? submissions : submissions.filter(s => s.status === status)
+    submissions: !status || status === 'all' ? submissions : submissions.filter(s => s.status === status || status === 'pending' && s.status === 'approving')
   }));
-  if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', () => {
-    _dcAllCache = null;
-  });
+  if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', dcInvalidateSubs);
   const dcSquash = s => String(s == null ? '' : s).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '');
   function dcMyRosterUnitKeys() {
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
@@ -122,7 +131,42 @@
     const v = perms && perms[mod];
     return Array.isArray(v) ? v.length > 0 : !!v && v !== 'none';
   };
-  const dcIsPortalRole = me => !!(me && (DC_PORTAL_ROLES.indexOf(me.role) >= 0 || (me.role || 'User') === 'User' && dcHolds(me.perms, 'datasubmit') && !dcHolds(me.perms, 'datacol')));
+  const DC_RANK = {
+    none: 0,
+    view: 1,
+    edit: 2,
+    add: 3,
+    delete: 4
+  };
+  const dcCanAct = (perms, mod, act) => {
+    const v = perms && perms[mod];
+    return Array.isArray(v) ? act === 'view' ? v.length > 0 : v.indexOf(act) >= 0 : (DC_RANK[v || 'none'] || 0) >= (DC_RANK[act] || 1);
+  };
+  const dcIsPortalRole = me => !!(me && (DC_PORTAL_ROLES.indexOf(me.role) >= 0 || (me.role || 'User') === 'User' && dcHolds(me.perms, 'datasubmit') && !dcCanAct(me.perms, 'datacol', 'add')));
+  const dcSendDepts = list => {
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    if (!dcIsPortalRole(me) || !Array.isArray(me.departments)) return list || [];
+    const own = new Set(me.departments.map(String));
+    return (list || []).filter(d => d && own.has(String(d.id)));
+  };
+  const dcSendAreas = list => {
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    if (!dcIsPortalRole(me)) return list || [];
+    const qa = Array.isArray(me.qualityAreas) ? new Set(me.qualityAreas.map(String)) : null;
+    const qi = me.qualityIndicators && typeof me.qualityIndicators === 'object' ? me.qualityIndicators : {};
+    return (list || []).filter(a => a && (me.allQualityAreas || !qa || qa.has(String(a.key)))).map(a => {
+      const allow = Array.isArray(qi[a.key]) && qi[a.key].length ? new Set(qi[a.key].map(String)) : null;
+      const inds = (a.indicators || []).filter(ind => ind && (!allow || allow.has(String(ind.id))) && !dcNotMeasured(a, ind));
+      return inds.length === (a.indicators || []).length ? a : Object.assign({}, a, {
+        indicators: inds
+      });
+    });
+  };
+  const dcMaySend = () => {
+    const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+    if (!me || me.role === 'Administrator' || DC_PORTAL_ROLES.indexOf(me.role) >= 0) return true;
+    return dcCanAct(me.perms, 'datacol', 'add') || dcCanAct(me.perms, 'datasubmit', 'add');
+  };
   const dcIsAdminUser = () => {
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     return !me || me.role === 'Administrator';
@@ -135,6 +179,7 @@
     return (r.qualityAreas || []).filter(k => !auto.includes(k));
   };
   const dcTargetKey = x => (x.type === 'quality' ? 'q|' + x.area + '|' + (x.indicatorId || x.indicatorName || '') : 'p|' + x.department) + '|' + x.month;
+  const dcPastRejections = s => Array.isArray(s && s.history) ? s.history.filter(h => h && h.status === 'rejected') : [];
   const dcOpenRejections = subs => {
     const newest = {};
     (subs || []).forEach(x => {
@@ -240,7 +285,11 @@
   };
   const dcPatientDepts = (depts, subs) => {
     const ever = new Set((subs || []).filter(s => s.type === 'patient').map(s => s.department));
-    return (depts || []).filter(d => (d.series || []).length > 0 || ever.has(d.id));
+    const started = d => {
+      const api = _dcCollById && _dcCollById[d.id];
+      return !!(dcDeptSettings(d.id).startMonth && !(api && api.qualityOnly) && (d.cols || []).length);
+    };
+    return (depts || []).filter(d => (d.series || []).length > 0 || ever.has(d.id) || started(d));
   };
   const dcRefreshLive = () => {
     try {
@@ -367,8 +416,9 @@
     if (dept && dept.months && dept.months.length) {
       const last = dept.months[dept.months.length - 1];
       const i = order.indexOf(last);
-      if (i >= 0 && i + 1 < order.length) return order[i + 1];
-      return last;
+      const cap = dcMonthRank(dcDefaultMonth());
+      if (i >= 0 && i + 1 < order.length && !(dcMonthRank(order[i + 1]) > cap)) return order[i + 1];
+      return dcMonthRank(last) > cap ? dcDefaultMonth() : last;
     }
     const MMM = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const now = new Date();
@@ -749,6 +799,7 @@
       value: n
     }))));
   }
+  const DC_RESP_ADMIN_MSG = 'Only an administrator can change who reports what (Indicator Access). Nothing was changed.';
   function AccessMatrix({
     persons: allPersons,
     areas,
@@ -773,6 +824,10 @@
       return r.name + (r.title ? ' · ' + r.title : '') + (r.empId ? ' · ' + r.empId : '') + ' — ' + via + (sel.length ? ' · restricted to ' + sel.length + ' indicator' + (sel.length > 1 ? 's' : '') : ' · all indicators of this area');
     };
     const saveRec = (rec, okMsg) => {
+      if (!dcIsAdminUser()) {
+        toast(DC_RESP_ADMIN_MSG, 'error');
+        return Promise.resolve();
+      }
       setBusy(true);
       const body = {
         ...rec,
@@ -1477,6 +1532,10 @@
       });
     }, [editing]);
     const save = () => {
+      if (!dcIsAdminUser()) {
+        toast(DC_RESP_ADMIN_MSG, 'error');
+        return;
+      }
       if (!editing.name.trim()) {
         toast('Name is required', 'error');
         return;
@@ -1490,11 +1549,22 @@
           setEditing(null);
           load();
         } else toast(r.error || 'Could not save', 'error');
-      });
+      }).catch(() => toast('Could not save — check your connection and try again.', 'error'));
     };
     const remove = id => {
-      const go = () => dcApi.del('/api/responsibles/' + encodeURIComponent(id)).then(() => load());
-      if (window.UI && window.UI.confirm) window.UI.confirm('Remove this responsible person?').then(ok => ok && go());else if (window.confirm('Remove this responsible person?')) go();
+      if (!dcIsAdminUser()) {
+        toast(DC_RESP_ADMIN_MSG, 'error');
+        return;
+      }
+      const go = () => dcApi.del('/api/responsibles/' + encodeURIComponent(id)).then(r => {
+        if (r && r.ok === false) toast(r.error || 'Could not remove', 'error');
+        load();
+      }).catch(() => toast('Could not remove — check your connection.', 'error'));
+      if (window.UI && window.UI.confirm) window.UI.confirm({
+        title: 'Remove responsible person',
+        message: 'Remove this responsible person? Their submitted data is kept.',
+        confirmLabel: 'Remove'
+      }).then(ok => ok && go());else if (window.confirm('Remove this responsible person?')) go();
     };
     const toggle = (key, arr, val) => setEditing(e => {
       const has = e[key].includes(val);
@@ -2804,14 +2874,15 @@
     onSubmitted
   }) {
     const dataRev = useDcDataRev();
-    const areas = useMemo(() => window.qualityData ? window.qualityData() : [], [dataRev]);
+    const collRevQ = useDcCollectionRev();
+    const areas = useMemo(() => dcSendAreas(window.qualityData ? window.qualityData() : []), [dataRev, collRevQ]);
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     const lockResp = dcIsPortalRole(me);
     const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
-    const monthOpts = dcPortalUser() ? dcRealMonthOpts(areas.flatMap(a => dcAreaStarts(a, [])), [prefill && prefill.month]) : dcWideMonths();
-    const defMonth = dcDefaultMonth() || (fyMonths && fyMonths.length ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
     const [areaKey, setAreaKey] = useState(prefill && prefill.area || (areas.find(a => a.indicators && a.indicators.length) || areas[0] || {}).key || '');
     const area = useMemo(() => areas.find(a => a.key === areaKey) || areas[0], [areas, areaKey]);
+    const monthOpts = dcPortalUser() ? dcRealMonthOpts(dcAreaStarts(area, []), [prefill && prefill.month]) : dcWideMonths();
+    const defMonth = dcDefaultMonth() || (fyMonths && fyMonths.length ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
     const [indId, setIndId] = useState(prefill && prefill.indicatorId || '');
     const [newInd, setNewInd] = useState({
       name: '',
@@ -2821,6 +2892,10 @@
       unit: ''
     });
     const [month, setMonth] = useState(prefill && prefill.month || defMonth);
+    const monthKeyQ = monthOpts.join(',');
+    useEffect(() => {
+      if (monthOpts.length && monthOpts.indexOf(month) < 0) setMonth(monthOpts[0]);
+    }, [monthKeyQ]);
     const [den, setDen] = useState('');
     const [numMode, setNumMode] = useState('direct');
     const [groups, setGroups] = useState({
@@ -3136,23 +3211,7 @@
         preventive: ''
       });
       const incs = curInd.incidents && Array.isArray(curInd.incidents[month]) ? curInd.incidents[month] : [];
-      const toInc = x => ({
-        patientName: x.patientName || '',
-        uhid: x.uhid || '',
-        age: x.age || '',
-        gender: x.gender || '',
-        diagnosis: x.diagnosis || '',
-        incidentDate: x.incidentDate || '',
-        admissionDate: x.admissionDate || '',
-        victimName: x.victimName || '',
-        victimId: x.victimId || '',
-        department: x.department || '',
-        details: x.details || '',
-        finding: x.finding || '',
-        corrective: x.corrective || '',
-        preventive: x.preventive || '',
-        remark: x.remark || ''
-      });
+      const toInc = x => DC_INCIDENT_FIELDS.reduce((o, k) => (o[k] = x[k] == null ? '' : String(x[k]), o), {});
       setIncidents(incs.map(toInc));
       const fr = prefill && prefill.from;
       if (fr && fr.id && fromAppliedRef.current !== fr.id && fr.area === areaKey && fr.indicatorId === indId && fr.month === month) {
@@ -3245,7 +3304,9 @@
         return;
       }
       if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
-        const explicitZero = !(Number(numerator) > 0) && String(den == null ? '' : den).trim() !== '' && Number(den) === 0;
+        const typed = v => String(v == null ? '' : v).trim() !== '';
+        const denCells = numMode === 'group' ? GROUP_KEYS.map(([k]) => groupsDen[k]) : numMode === 'dept' ? [].concat.apply([], deptRows.map(r => GROUP_KEYS.map(([k]) => r.g && r.g[k] && r.g[k].d))) : [den];
+        const explicitZero = !(Number(numerator) > 0) && denCells.some(typed) && denCells.filter(typed).every(v => Number(v) === 0);
         if (!explicitZero) {
           toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error');
           return;
@@ -3364,7 +3425,7 @@
             preventive: ''
           });
           setIncidents([]);
-          setDen('');
+          if (!denLockedForCollector) setDen('');
           setRemark('');
           setNotObserved(false);
           setNoReason('');
@@ -4842,7 +4903,8 @@
           corrective: '',
           preventive: ''
         });
-        setDen('');
+        setIncidents([]);
+        if (!denLockedForCollector) setDen('');
         setRemark('');
         setNotObserved(false);
         setNoReason('');
@@ -4964,6 +5026,35 @@
       className: "dcr-sub"
     }, "(no values)"));
   }
+  const dcMapPatientValues = (values, fromCols, toCols) => {
+    const norm = x => String(x == null ? '' : x).toLowerCase().replace(/^c_/, '').replace(/[^a-z0-9]+/g, '');
+    const to = Array.isArray(toCols) ? toCols : [];
+    const toIds = new Set(to.map(c => c && c.id));
+    const labelOf = k => {
+      const c = (fromCols || []).find(x => x && x.id === k);
+      return c && c.label || k;
+    };
+    const out = {},
+      unmapped = [];
+    Object.keys(values || {}).forEach(k => {
+      const v = values[k];
+      if (v === '' || v == null) return;
+      let id = toIds.has(k) ? k : null;
+      if (!id) {
+        const hit = to.filter(c => c && (norm(c.label) === norm(labelOf(k)) || norm(c.id) === norm(k)));
+        if (hit.length === 1) id = hit[0].id;
+      }
+      if (!id || Object.prototype.hasOwnProperty.call(out, id)) {
+        unmapped.push(labelOf(k));
+        return;
+      }
+      out[id] = v;
+    });
+    return {
+      values: out,
+      unmapped
+    };
+  };
   function SubmissionDetail({
     s,
     canEdit,
@@ -4981,16 +5072,22 @@
     const [resending, setResending] = useState(initialMode === 'resend' && canResend);
     const [cmpOpen, setCmpOpen] = useState(false);
     const editable = s.status !== 'withdrawn' && (canEdit && (fullEdit || s.status === 'pending') || correcting || resending);
-    const dept = s.type === 'patient' ? dcAllDepts().find(d => d.id === s.department) : null;
-    const cols = dept && dept.cols || (s.values ? Object.keys(s.values).map(id => ({
-      id,
-      label: id
-    })) : []);
+    const [target, setTarget] = useState(s.type === 'patient' ? s.department || '' : s.area || '');
+    const dept = s.type === 'patient' ? dcAllDepts().find(d => d.id === (target || s.department)) : null;
+    const [vals, setVals] = useState(() => Object.assign({}, s.values || {}));
+    const cols = (() => {
+      const base = dept && dept.cols || [];
+      const known = new Set(base.map(c => c.id));
+      const extra = Object.keys(vals || {}).filter(id => !known.has(id)).map(id => ({
+        id,
+        label: id + ' (not a current column)'
+      }));
+      return base.concat(extra);
+    })();
     const pctOf = {};
     (dept && dept.cols || []).forEach(c => {
       pctOf[c.id] = !!c.pct;
     });
-    const [vals, setVals] = useState(() => Object.assign({}, s.values || {}));
     const [qval, setQval] = useState(s.value == null ? '' : s.value);
     const isRate = s.type === 'quality' && (s.entryMode === 'rate' || s.formula === 'rate1000' || s.formula === 'pct' || s.num != null || s.den != null);
     const [qnum, setQnum] = useState(s.num == null ? '' : s.num);
@@ -5055,7 +5152,6 @@
     const [resendReason, setResendReason] = useState('');
     const qStillNotObserved = s.type === 'quality' && !!s.notObserved && (isRate ? effNum === '' || effNum == null : qval === '' || qval == null);
     const [month, setMonth] = useState(s.month || '');
-    const [target, setTarget] = useState(s.type === 'patient' ? s.department || '' : s.area || '');
     const [incidents, setIncidents] = useState(() => s.type === 'quality' && Array.isArray(s.incidents) ? s.incidents.map(x => Object.assign({}, x)) : []);
     const monthOpts = function () {
       const base = dcWideMonths();
@@ -5067,6 +5163,17 @@
       name: d.name
     })), [areaOptsRev]);
     const deptOpts = React.useMemo(() => dcAllDepts(), []);
+    const moveToDept = id => {
+      if (!id || id === target) return;
+      const to = deptOpts.find(d => d.id === id);
+      const m = dcMapPatientValues(vals, dept && dept.cols || [], to && to.cols || []);
+      if (m.unmapped.length) {
+        toast((to && to.name || id) + ' has no matching field for: ' + m.unmapped.join(', ') + '. Add the field there first, or clear those figures.', 'error');
+        return;
+      }
+      setVals(m.values);
+      setTarget(id);
+    };
     const setInc = (i, k, v) => setIncidents(a => a.map((x, j) => j === i ? Object.assign({}, x, {
       [k]: v
     }) : x));
@@ -5104,7 +5211,7 @@
           body.departmentName = (deptOpts.find(d => d.id === target) || {}).name || target;
         }
       } else {
-        body.value = isRate ? typeof shownVal === 'number' ? shownVal : undefined : qval;
+        body.value = isRate ? typeof shownVal === 'number' ? shownVal : undefined : hasGrp ? grpTot.n : qval;
         body.remark = remark;
         if (isRate) {
           body.num = effNum;
@@ -5113,7 +5220,7 @@
         if (hasDeptBreak) body.deptBreakdown = deptBreak;
         if (hasGrp) {
           body.groups = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {});
-          body.groupsDen = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {});
+          if (isRate) body.groupsDen = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {});
         }
         if (target && target !== s.area) {
           body.area = target;
@@ -5606,7 +5713,7 @@
     }, "Re-assign ", s.type === 'patient' ? 'department' : 'quality area'), s.type === 'patient' ? React.createElement("select", {
       style: inputStyle,
       value: target,
-      onChange: e => setTarget(e.target.value)
+      onChange: e => moveToDept(e.target.value)
     }, deptOpts.map(d => React.createElement("option", {
       key: d.id,
       value: d.id
@@ -6144,7 +6251,7 @@
       busy: busy,
       onEdit: () => setResendCmp(null),
       onSend: () => save(resendReason.trim())
-    }), canEdit && fullEdit && !correcting && s.status === 'pending' && React.createElement("button", {
+    }), canEdit && fullEdit && !correcting && dcOpen(s) && React.createElement("button", {
       className: "btn sm",
       onClick: approveNow,
       disabled: busy,
@@ -6514,7 +6621,8 @@
     }, []);
     const respOf = s => s.responsible && s.responsible.name || s.submittedBy || '—';
     const byPerson = {};
-    (subs || []).filter(s => s.status !== 'withdrawn').forEach(s => {
+    const counted = (subs || []).filter(s => s.status !== 'withdrawn');
+    counted.forEach(s => {
       const p = respOf(s);
       const r = byPerson[p] = byPerson[p] || {
         name: p,
@@ -6527,7 +6635,9 @@
         last: 0
       };
       r.total++;
-      r[s.status] = (r[s.status] || 0) + 1;
+      const st = s.status === 'approving' ? 'pending' : s.status;
+      if (!(st === 'rejected' && s.autoRejected)) r[st] = (r[st] || 0) + 1;
+      r.rejected += dcPastRejections(s).length;
       r[s.type] = (r[s.type] || 0) + 1;
       if ((s.submittedAt || 0) > r.last) r.last = s.submittedAt;
     });
@@ -6580,7 +6690,7 @@
         fontSize: 11.5,
         color: 'var(--muted)'
       }
-    }, people.length, " people \xB7 ", (subs || []).length, " submissions"), React.createElement("span", {
+    }, people.length, " people \xB7 ", counted.length, " submissions"), React.createElement("span", {
       style: {
         flex: 1
       }
@@ -6755,7 +6865,9 @@
       }
     }, "No submissions yet."))))));
   }
+  const dcOpen = s => !!s && (s.status === 'pending' || s.status === 'approving');
   function DataReview() {
+    const reviewer = dcIsAdminUser();
     const [rows, setRows] = useState(null);
     const [stats, setStats] = useState(null);
     const [filter, setFilter] = useState('pending');
@@ -6841,7 +6953,7 @@
           if (!firstErr) firstErr = 'Network error';
         }
       }
-      _dcAllCache = null;
+      dcInvalidateSubs();
       window.dispatchEvent(new Event('unico:data-refreshed'));
       setBusy('');
       setSel({});
@@ -6922,13 +7034,16 @@
       }, 0);
       toast(filtered.length + ' row' + (filtered.length !== 1 ? 's' : '') + ' exported', 'success');
     };
-    const dupCount = {};
+    const dupCount = {},
+      dupApproved = {};
     filtered.forEach(s => {
-      if (s.status === 'withdrawn') return;
       const k = dupKey(s);
-      dupCount[k] = (dupCount[k] || 0) + 1;
+      if (dcOpen(s)) dupCount[k] = (dupCount[k] || 0) + 1;else if (s.status === 'approved') dupApproved[k] = 1;
     });
-    const pendingRows = filtered.filter(s => s.status === 'pending');
+    Object.keys(dupApproved).forEach(k => {
+      if (dupCount[k]) dupCount[k] += 1;
+    });
+    const pendingRows = reviewer ? filtered.filter(dcOpen) : [];
     const selIds = pendingRows.filter(s => sel[s.id]).map(s => s.id);
     const allSelected = pendingRows.length > 0 && selIds.length === pendingRows.length;
     const groups = {};
@@ -6969,7 +7084,7 @@
     }, React.createElement("td", {
       className: "dcr-sel",
       onClick: stopRowClick
-    }, s.status === 'pending' ? React.createElement("input", {
+    }, reviewer && dcOpen(s) ? React.createElement("input", {
       type: "checkbox",
       checked: !!sel[s.id],
       onChange: e => setSel(m => Object.assign({}, m, {
@@ -7040,10 +7155,11 @@
     }, React.createElement(Ic, {
       d: I.search,
       s: 13
-    }), "View"), s.status === 'pending' && React.createElement(React.Fragment, null, React.createElement("button", {
+    }), "View"), reviewer && dcOpen(s) && React.createElement(React.Fragment, null, React.createElement("button", {
       className: "btn sm pri",
       disabled: busy === s.id || busy === 'bulk',
-      onClick: () => act(s.id, 'approve')
+      onClick: () => act(s.id, 'approve'),
+      title: s.status === 'approving' ? 'An approval started but did not finish — approve again to retry' : undefined
     }, React.createElement(Ic, {
       d: I.check,
       s: 13
@@ -7055,6 +7171,7 @@
     const statusChip = st => {
       const map = {
         pending: ['Pending', 'var(--warn-bg,#fff4e0)', '#9a6b00'],
+        approving: ['Approving…', 'var(--warn-bg,#fff4e0)', '#9a6b00'],
         approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'],
         rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'],
         withdrawn: ['Withdrawn', 'var(--panel-2)', 'var(--muted)']
@@ -7329,7 +7446,7 @@
     }, "Status", sortCaret('status')), React.createElement("th", {
       className: "dcr-act"
     }))), React.createElement("tbody", null, grouped ? groupNames.map(g => {
-      const pend = groups[g].filter(s => s.status === 'pending').length;
+      const pend = groups[g].filter(dcOpen).length;
       return React.createElement(React.Fragment, {
         key: g
       }, React.createElement("tr", {
@@ -7353,7 +7470,8 @@
       }, "\u25BE")))), !collapsed[g] && groups[g].map(submissionRow));
     }) : filtered.map(submissionRow)))), detail && React.createElement(SubmissionDetail, {
       s: detail,
-      canEdit: true,
+      canEdit: reviewer || dcOpen(detail) && dcIsMine(detail),
+      fullEdit: reviewer,
       onClose: () => setDetail(null),
       onSaved: () => {
         setDetail(null);
@@ -7553,7 +7671,7 @@
       }, React.createElement(Ic, {
         d: I.search,
         s: 13
-      }), "View / edit"), s.status === 'pending' && React.createElement(React.Fragment, null, React.createElement("button", {
+      }), "View / edit"), reviewer && dcOpen(s) && React.createElement(React.Fragment, null, React.createElement("button", {
         className: "btn sm pri",
         disabled: busy === 'bulk',
         onClick: () => runAction([s.id], 'approve')
@@ -7634,7 +7752,11 @@
     };
     const remove = code => {
       const go = () => dcApi.del('/api/shortlinks/' + encodeURIComponent(code)).then(load);
-      if (window.UI && window.UI.confirm) window.UI.confirm('Delete this share link?').then(ok => ok && go());else if (window.confirm('Delete this share link?')) go();
+      if (window.UI && window.UI.confirm) window.UI.confirm({
+        title: 'Delete share link',
+        message: 'Delete this share link? Anyone holding it can no longer submit.',
+        confirmLabel: 'Delete'
+      }).then(ok => ok && go());else if (window.confirm('Delete this share link?')) go();
     };
     const canReportArea = (r, ak) => {
       if (!r || !ak) return false;
@@ -7904,6 +8026,7 @@
     const statusChip = st => {
       const m = {
         pending: ['Pending', '#fff4e0', '#9a6b00'],
+        approving: ['Approving…', '#fff4e0', '#9a6b00'],
         approved: ['Approved', 'var(--pos-bg)', 'var(--pos)'],
         rejected: ['Returned', 'var(--neg-bg)', 'var(--rose)'],
         withdrawn: ['Withdrawn', '#eef1f5', '#6c7a8c'],
@@ -11330,14 +11453,17 @@
     onNav,
     onFill,
     user,
-    can
+    can,
+    depts: deptsIn,
+    areas: areasIn
   }) {
     const may = v => !can || can(v);
     const dataRev = useDcDataRev();
-    const areas = useMemo(() => (window.qualityData ? window.qualityData() : []).filter(a => a && a.indicators && a.indicators.length), [dataRev]);
-    const depts = useMemo(() => dcAllDepts(), [dataRev]);
+    const areas = useMemo(() => (areasIn || (window.qualityData ? window.qualityData() : [])).filter(a => a && a.indicators && a.indicators.length), [dataRev, areasIn]);
+    const depts = useMemo(() => deptsIn || dcAllDepts(), [dataRev, deptsIn]);
     const [subs, setSubs] = useState(null);
     const [loadError, setLoadError] = useState('');
+    const [fixRow, setFixRow] = useState(null);
     const load = () => dcSubmissionResponse().then(r => {
       setSubs(r.submissions);
       setLoadError('');
@@ -11358,13 +11484,19 @@
       return f(ind.mNum) || f(ind.mDen) || f(ind.months) || ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
     };
     const pendingFor = (areaKey, ind, m) => S.some(s => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
-    const statusOf = (areaKey, ind, m) => ({
-      recorded: 'Recorded',
-      pending: 'Submitted',
-      notobs: 'Not observed',
-      rejected: 'Missing',
-      none: 'Missing'
-    })[cpSubmissionStatus(S, areaKey, ind, m)];
+    const openRej = useMemo(() => dcOpenRejections(S), [subs]);
+    const returnedFor = (areaKey, ind, m) => openRej.find(x => x.type === 'quality' && x.area === areaKey && x.month === m && (x.indicatorId === ind.id || (x.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim())) || null;
+    const statusOf = (areaKey, ind, m) => {
+      const st = cpSubmissionStatus(S, areaKey, ind, m);
+      if (st === 'rejected' && returnedFor(areaKey, ind, m)) return 'Returned';
+      return {
+        recorded: 'Recorded',
+        pending: 'Submitted',
+        notobs: 'Not observed',
+        rejected: 'Missing',
+        none: 'Missing'
+      }[st];
+    };
     const collRev = useDcCollectionRev();
     const dueOf = (a, ind) => dcIndDue(a, ind, month, S);
     let totalInd = 0,
@@ -11374,7 +11506,7 @@
       if (!dueOf(a, ind)) return;
       totalInd++;
       const st = statusOf(a.key, ind, month);
-      if (st === 'Missing') missing.push({
+      if (st === 'Missing' || st === 'Returned') missing.push({
         area: a.key,
         ind
       });else done++;
@@ -11525,7 +11657,20 @@
         maxWidth: 1260,
         margin: '0 auto'
       }
-    }, loadError && React.createElement("div", {
+    }, fixRow && React.createElement(SubmissionDetail, {
+      key: 'fix/' + fixRow.id,
+      s: fixRow,
+      canEdit: false,
+      fullEdit: false,
+      initialMode: "resend",
+      onClose: () => setFixRow(null),
+      onSaved: () => {
+        setFixRow(null);
+        dcSubmissionResponse(null, true).then(r => {
+          if (r.ok) setSubs(r.submissions);
+        }).catch(() => {});
+      }
+    }), loadError && React.createElement("div", {
       role: "alert",
       style: {
         padding: 12,
@@ -12106,7 +12251,8 @@
       a.indicators.forEach(ind => {
         if (!dueOf(a, ind)) return;
         owed++;
-        if (statusOf(a.key, ind, month) !== 'Missing') ok++;
+        const so = statusOf(a.key, ind, month);
+        if (so !== 'Missing' && so !== 'Returned') ok++;
       });
       const apct = owed ? Math.round(ok * 100 / owed) : 100;
       const tone = apct === 100 ? '#1f9d57' : apct >= 50 ? '#0090ca' : apct > 0 ? '#e08a1e' : '#d23a52';
@@ -12219,7 +12365,24 @@
           }
         }), React.createElement("span", {
           style: cpChipStyle(st)
-        }, st), st === 'Missing' && React.createElement("button", {
+        }, st), st === 'Returned' && React.createElement("button", {
+          onClick: () => setFixRow(returnedFor(a.key, ind, month)),
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            border: '1px solid rgba(181,103,10,.35)',
+            background: 'rgba(181,103,10,.08)',
+            color: '#b5670a',
+            padding: '5px 12px',
+            borderRadius: 8,
+            fontSize: 11.5,
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            flexShrink: 0
+          }
+        }, "Fix & resend \u203A"), st === 'Missing' && React.createElement("button", {
           onClick: () => onFill(a.key, ind.id, month),
           style: {
             display: 'inline-flex',
@@ -14738,6 +14901,7 @@
     const [open, setOpen] = useState(null);
     const [sent, setSent] = useState({});
     const [fix, setFix] = useState(null);
+    const [flash, setFlash] = useState(null);
     const downOnBackdrop = React.useRef(false);
     const load = force => dcSubmissionResponse(null, force).then(r => {
       setSubs(r.submissions);
@@ -14784,6 +14948,11 @@
     const oldest = rows.reduce((o, r) => !o || r.rank < o.rank ? r : o, null);
     const submitted = row => {
       setOpen(null);
+      setFlash({
+        ts: Date.now(),
+        title: 'Data submitted successfully!',
+        sub: (row.kind === 'quality' ? row.ind.name : row.unit + ' statistics') + ' · ' + monthLabel(row.month)
+      });
       setSent(s => ({
         ...s,
         [row.key]: true
@@ -14860,7 +15029,12 @@
         maxWidth: 1100,
         margin: '0 auto'
       }
-    }, React.createElement("style", null, '@media (max-width:640px){.cp-mm-overlay{padding:0!important}.cp-mm-box{max-height:100%!important;height:100%;border-radius:0!important}.cp-mm-body{padding:10px 8px 18px!important}}'), loadError && React.createElement("div", {
+    }, flash && React.createElement(DcSuccessPopup, {
+      key: flash.ts,
+      title: flash.title,
+      sub: flash.sub,
+      onClose: () => setFlash(null)
+    }), React.createElement("style", null, '@media (max-width:640px){.cp-mm-overlay{padding:0!important}.cp-mm-box{max-height:100%!important;height:100%;border-radius:0!important}.cp-mm-body{padding:10px 8px 18px!important}}'), loadError && React.createElement("div", {
       role: "alert",
       style: {
         padding: 12,
@@ -15664,7 +15838,7 @@
     depts
   }) {
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
-    const canSave = !me || me.role === 'Administrator' || !dcIsPortalRole(me) && !!(window.unicoCan && window.unicoCan('datacol', 'edit'));
+    const canSave = !me || me.role === 'Administrator';
     const dataRev = useDcDataRev();
     useDcCollectionRev();
     const [loaded, setLoaded] = useState(false);
@@ -15764,9 +15938,9 @@
     const user = typeof window !== 'undefined' && window.__UNICO_USER__ || {};
     const dataRev = useDcDataRev();
     const kinds = user.submitKinds || {};
-    const depts = useMemo(() => kinds.patient === false ? [] : dcAllDepts(), [dataRev, kinds.patient]);
-    const areas = useMemo(() => kinds.quality === false ? [] : window.qualityData ? window.qualityData() : [], [dataRev, kinds.quality]);
     const collRev = useDcCollectionRev();
+    const depts = useMemo(() => kinds.patient === false ? [] : dcSendDepts(dcAllDepts()), [dataRev, kinds.patient]);
+    const areas = useMemo(() => kinds.quality === false ? [] : dcSendAreas(window.qualityData ? window.qualityData() : []), [dataRev, kinds.quality, collRev]);
     const hasPatient = depts.length > 0;
     const hasQuality = areas.some(a => a && a.indicators && a.indicators.length);
     const inCharge = user.role === 'incharge' || user.unitLead === true;
@@ -15827,7 +16001,13 @@
       };
     }, [month, dataRev, view, collRev]);
     const donePct = subCount.total ? Math.round((subCount.total - subCount.missing) * 100 / subCount.total) : 0;
+    const jumpTo = React.useRef(null);
+    useEffect(() => {
+      if (jumpTo.current !== view) setJump(null);
+      jumpTo.current = null;
+    }, [view]);
     const fillFor = (area, indicatorId, m, from) => {
+      jumpTo.current = 'quality';
       setJump({
         area,
         indicatorId,
@@ -15838,6 +16018,7 @@
       setSidebarOpen(false);
     };
     const fillStat = (deptId, m, from) => {
+      jumpTo.current = 'patient';
       setJump({
         dept: deptId,
         month: m,
@@ -16093,12 +16274,42 @@
         fontSize: 12.5,
         color: '#6c7a8c'
       }
-    }, "Your administrator has not given you a department or quality area to report on. Once they do, it appears here.")), view === 'missing' && (hasPatient || hasQuality) && React.createElement(CollectorMissing, {
+    }, "Your administrator has not given you a department or quality area to report on. Once they do, it appears here.")), (hasPatient || hasQuality) && !dcMaySend() && ['missing', 'status', 'quality', 'patient', 'history'].indexOf(view) >= 0 && React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        maxWidth: 1240,
+        margin: '0 auto 14px',
+        padding: '12px 16px',
+        borderLeft: '4px solid #d9a21b',
+        fontSize: 12.5,
+        color: '#5b4a12'
+      })
+    }, React.createElement("b", null, "View only."), " Your Data Submission access does not include sending \u2014 the forms open, but Submit is refused. Ask the administrator to tick ", React.createElement("b", null, "Add"), " for Data Submission in Access Control."), (hasPatient || hasQuality) && (view === 'status' && !hasQuality || view === 'quality' && !hasQuality || view === 'patient' && !hasPatient) && React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        maxWidth: 620,
+        margin: '40px auto',
+        padding: 30,
+        textAlign: 'center'
+      })
+    }, React.createElement("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 700,
+        color: '#16202e',
+        marginBottom: 6
+      }
+    }, view === 'patient' ? 'No department statistics are assigned to you' : 'No quality indicators are assigned to you'), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: '#6c7a8c'
+      }
+    }, view === 'patient' ? 'Use Quality data or Missing data for what you report, or ask the administrator to add a department.' : 'Use Patient statistics or Missing data for what you report, or ask the administrator to add a quality area.')), view === 'missing' && (hasPatient || hasQuality) && React.createElement(CollectorMissing, {
       depts: depts,
       areas: areas,
       month: month,
       user: user
     }), view === 'status' && hasQuality && React.createElement(CollectorDash, {
+      depts: depts,
+      areas: areas,
       month: month,
       setMonth: setMonth,
       onNav: go,
@@ -16631,7 +16842,12 @@
             const rr = String(s.rejectReason || '').trim() || 'Unspecified';
             reasons[rr] = (reasons[rr] || 0) + 1;
           }
-        } else if (s.status === 'pending') p.pending++;
+        } else if (s.status === 'pending' || s.status === 'approving') p.pending++;
+        dcPastRejections(s).forEach(h => {
+          p.rejected++;
+          const rr = String(h.rejectReason || '').trim() || 'Unspecified';
+          reasons[rr] = (reasons[rr] || 0) + 1;
+        });
         if (s.isCorrection) p.corrections++;
         if ((s.submittedAt || 0) > p.last) p.last = s.submittedAt;
         const me2 = monthEndTs(s.month),
@@ -16710,6 +16926,20 @@
         });
         b.total++;
         if (s.status === 'approved') b.approved++;else if (s.status === 'rejected') b.rejected++;else b.pending++;
+        dcPastRejections(s).forEach(h => {
+          const t = h.reviewedAt || h.at;
+          if (!t) return;
+          const hk = key(t);
+          const hb = bucket[hk] || (bucket[hk] = {
+            k: hk,
+            total: 0,
+            approved: 0,
+            rejected: 0,
+            pending: 0
+          });
+          hb.total++;
+          hb.rejected++;
+        });
       });
       const timeline = Object.keys(bucket).map(k2 => bucket[k2]).sort((a, b) => a.k < b.k ? -1 : 1).slice(-48);
       return {
@@ -17491,7 +17721,14 @@
           fontWeight: 700,
           textTransform: 'capitalize'
         }
-      }, s.status, s.autoRejected ? ' (dup)' : ''), React.createElement("td", {
+      }, s.status, s.autoRejected ? ' (dup)' : '', dcPastRejections(s).length ? React.createElement("div", {
+        style: {
+          color: 'var(--rose)',
+          fontWeight: 600,
+          fontSize: 10.5,
+          textTransform: 'none'
+        }
+      }, "returned ", dcPastRejections(s).length, "\xD7 before") : null), React.createElement("td", {
         style: {
           ...td,
           color: 'var(--muted)',
@@ -17504,7 +17741,13 @@
           color: 'var(--ink-2)',
           fontSize: 11.5
         }
-      }, s.rejectReason || s.correctionReason || s.note || (s.isCorrection ? 'Edit request' : '—')));
+      }, s.rejectReason || s.correctionReason || s.note || (s.isCorrection ? 'Edit request' : '—'), dcPastRejections(s).map((h, i) => React.createElement("div", {
+        key: i,
+        style: {
+          color: 'var(--rose)',
+          fontSize: 10.5
+        }
+      }, "Returned: ", h.rejectReason || 'no reason given'))));
     }))))))));
   }
   Object.assign(window, {

@@ -105,6 +105,10 @@
     // Snapshot the current state before every change so it can be undone.
     const commit=(updater)=>{ hist.current=[...hist.current.slice(-49), store]; setCanUndo(true); setStore(typeof updater==='function'?updater(store):updater); };
 
+    // A custom department that was PROMOTED into the departments collection (its first approved
+    // submission, server data-collection.js promoteCustomDept) exists in both layers: the server copy
+    // wins for its months/name, so changes must also reach the layer that is on screen.
+    const baseHas=(id)=>((window.UNICO&&window.UNICO.DEPARTMENTS)||[]).some(d=>d.id===id);
     const api={
       depts,
       entries:store.entries||[],
@@ -114,12 +118,15 @@
       addDept:(def)=>commit(s=>({...s, custom:[...(s.custom||[]), def], order:[...(s.order||[]), def.id]})),
       updateDept:(id,patch)=>commit(s=>{
         const isCustom=(s.custom||[]).some(d=>d.id===id);
-        if(isCustom) return {...s, custom:s.custom.map(d=>d.id===id?{...d,...patch}:d)};
+        if(isCustom&&!baseHas(id)) return {...s, custom:s.custom.map(d=>d.id===id?{...d,...patch}:d)};
+        if(isCustom) s={...s, custom:s.custom.map(d=>d.id===id?{...d,...patch}:d)};   // promoted: keep both in step
         return {...s, renames:{...(s.renames||{}), [id]:{...(s.renames||{})[id], ...patch}}};
       }),
       deleteDept:(id)=>commit(s=>{
         const isCustom=(s.custom||[]).some(d=>d.id===id);
-        if(isCustom) return {...s, custom:s.custom.filter(d=>d.id!==id), entries:(s.entries||[]).filter(e=>e.dept!==id)};
+        if(isCustom&&!baseHas(id)) return {...s, custom:s.custom.filter(d=>d.id!==id), entries:(s.entries||[]).filter(e=>e.dept!==id)};
+        // Promoted: HIDE it (both copies — the list filter applies after the merge) and keep the overlay
+        // copy, so Undelete brings back its overlay-only months too.
         return {...s, deleted:[...(s.deleted||[]), id]};
       }),
       // Deleting a built-in department only HIDES it (its data stays saved); this brings it back.
@@ -130,9 +137,12 @@
       deleteMonth:(id,month)=>commit(s=>{
         const isCustom=(s.custom||[]).some(d=>d.id===id);
         const entries=(s.entries||[]).filter(e=>!(e.dept===id&&e.month===month));
-        if(isCustom){
+        // Promoted custom dept whose month is (also) in the server copy: hide it there too.
+        const inBase=baseHas(id)&&(((window.UNICO.DEPARTMENTS||[]).find(d=>d.id===id)||{}).months||[]).indexOf(month)>=0;
+        if(isCustom&&!inBase){
           return {...s, entries, custom:s.custom.map(d=>{ if(d.id!==id) return d; const idx=(d.months||[]).indexOf(month); if(idx<0) return d; return {...d, months:d.months.filter((_,i)=>i!==idx), data:(d.data||[]).filter((_,i)=>i!==idx)}; })};
         }
+        if(isCustom) s={...s, custom:s.custom.map(d=>{ if(d.id!==id) return d; const idx=(d.months||[]).indexOf(month); if(idx<0) return d; return {...d, months:d.months.filter((_,i)=>i!==idx), data:(d.data||[]).filter((_,i)=>i!==idx)}; })};
         const removed={...(s.removed||{})}; removed[id]=[...(removed[id]||[]).filter(m=>m!==month), month];
         const removedAt={...(s.removedAt||{})}; removedAt[id]={...(removedAt[id]||{}), [month]:Date.now()};
         return {...s, entries, removed, removedAt};

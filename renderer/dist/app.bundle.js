@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=08eb088ada","reports":"/dist/reports.chunk.js?v=9548427b4e","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=f8f6f20da4","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=08eb088ada","reports":"/dist/reports.chunk.js?v=9ee597f2ec","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=3f62e91b5f","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -1646,6 +1646,10 @@ window.UNICO.refreshDepartments = function () {
     // Snapshot the current state before every change so it can be undone.
     const commit=(updater)=>{ hist.current=[...hist.current.slice(-49), store]; setCanUndo(true); setStore(typeof updater==='function'?updater(store):updater); };
 
+    // A custom department that was PROMOTED into the departments collection (its first approved
+    // submission, server data-collection.js promoteCustomDept) exists in both layers: the server copy
+    // wins for its months/name, so changes must also reach the layer that is on screen.
+    const baseHas=(id)=>((window.UNICO&&window.UNICO.DEPARTMENTS)||[]).some(d=>d.id===id);
     const api={
       depts,
       entries:store.entries||[],
@@ -1655,12 +1659,15 @@ window.UNICO.refreshDepartments = function () {
       addDept:(def)=>commit(s=>({...s, custom:[...(s.custom||[]), def], order:[...(s.order||[]), def.id]})),
       updateDept:(id,patch)=>commit(s=>{
         const isCustom=(s.custom||[]).some(d=>d.id===id);
-        if(isCustom) return {...s, custom:s.custom.map(d=>d.id===id?{...d,...patch}:d)};
+        if(isCustom&&!baseHas(id)) return {...s, custom:s.custom.map(d=>d.id===id?{...d,...patch}:d)};
+        if(isCustom) s={...s, custom:s.custom.map(d=>d.id===id?{...d,...patch}:d)};   // promoted: keep both in step
         return {...s, renames:{...(s.renames||{}), [id]:{...(s.renames||{})[id], ...patch}}};
       }),
       deleteDept:(id)=>commit(s=>{
         const isCustom=(s.custom||[]).some(d=>d.id===id);
-        if(isCustom) return {...s, custom:s.custom.filter(d=>d.id!==id), entries:(s.entries||[]).filter(e=>e.dept!==id)};
+        if(isCustom&&!baseHas(id)) return {...s, custom:s.custom.filter(d=>d.id!==id), entries:(s.entries||[]).filter(e=>e.dept!==id)};
+        // Promoted: HIDE it (both copies — the list filter applies after the merge) and keep the overlay
+        // copy, so Undelete brings back its overlay-only months too.
         return {...s, deleted:[...(s.deleted||[]), id]};
       }),
       // Deleting a built-in department only HIDES it (its data stays saved); this brings it back.
@@ -1671,9 +1678,12 @@ window.UNICO.refreshDepartments = function () {
       deleteMonth:(id,month)=>commit(s=>{
         const isCustom=(s.custom||[]).some(d=>d.id===id);
         const entries=(s.entries||[]).filter(e=>!(e.dept===id&&e.month===month));
-        if(isCustom){
+        // Promoted custom dept whose month is (also) in the server copy: hide it there too.
+        const inBase=baseHas(id)&&(((window.UNICO.DEPARTMENTS||[]).find(d=>d.id===id)||{}).months||[]).indexOf(month)>=0;
+        if(isCustom&&!inBase){
           return {...s, entries, custom:s.custom.map(d=>{ if(d.id!==id) return d; const idx=(d.months||[]).indexOf(month); if(idx<0) return d; return {...d, months:d.months.filter((_,i)=>i!==idx), data:(d.data||[]).filter((_,i)=>i!==idx)}; })};
         }
+        if(isCustom) s={...s, custom:s.custom.map(d=>{ if(d.id!==id) return d; const idx=(d.months||[]).indexOf(month); if(idx<0) return d; return {...d, months:d.months.filter((_,i)=>i!==idx), data:(d.data||[]).filter((_,i)=>i!==idx)}; })};
         const removed={...(s.removed||{})}; removed[id]=[...(removed[id]||[]).filter(m=>m!==month), month];
         const removedAt={...(s.removedAt||{})}; removedAt[id]={...(removedAt[id]||{}), [month]:Date.now()};
         return {...s, entries, removed, removedAt};
@@ -6304,7 +6314,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
   // (meaning: use the directly-entered quarter value).
   function rollupQuarter(ind, q) {
     const months = (ind && ind.months) || {};
-    const ms = QUARTER_MONTHS[q] || [];
+    const ms = (QUARTER_MONTHS[q] || []).filter(m => !(ind.mNotObserved || {})[m]);
     const vals = ms.map(m => months[m]).filter(v => v != null && v !== '');
     if (!vals.length) return undefined;
     const nums = vals.map(Number);
@@ -6319,12 +6329,13 @@ window.QI_CORRECTIONS_BY_DEFID = {
     if (f && f !== 'direct') {
       const needDen = f !== 'count';
       Object.keys(QM).forEach(q => {
-        const ms = QM[q] || [];
+        const ms = (QM[q] || []).filter(m => !(ind.mNotObserved || {})[m]);
         const have = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
         let v = null;
         if (have) {
-          const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
-          const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+          const complete = ms.filter(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || Number((ind.mDen || {})[m]) > 0));
+          const num = complete.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+          const den = complete.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
           v = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
         }
         if (v == null) {
@@ -6339,7 +6350,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     } else {
       const months = ind.months || {};
       Object.keys(QM).forEach(q => {
-        const vals = (QM[q] || []).map(m => months[m]).filter(v => v != null && v !== '').map(Number);
+        const vals = (QM[q] || []).filter(m => !(ind.mNotObserved || {})[m]).map(m => months[m]).filter(v => v != null && v !== '').map(Number);
         if (!vals.length) return;
         out[q] = isPct(ind) ? Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 100) / 100 : vals.reduce((s, x) => s + x, 0);
       });
@@ -6444,15 +6455,16 @@ window.QI_CORRECTIONS_BY_DEFID = {
       const q2 = Object.assign({}, ind.quarters || {});
       const needDen = f !== 'count'; // rate/pct/rate1000 require a denominator to be meaningful
       QS.forEach(q => {
-        const ms = QUARTER_MONTHS[q] || [];
+        const ms = (QUARTER_MONTHS[q] || []).filter(m => !(ind.mNotObserved || {})[m]);
         // A month only counts toward the rollup if it has a numerator AND (for rate/pct) a
         // denominator — otherwise summing empty denominators yields den=0 → a false on-benchmark 0.
         const haveMonths = ms.some(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== ''
           && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
         let num, den, hadInput = haveMonths;
         if (haveMonths) {
-          num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
-          den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+          const complete = ms.filter(m => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || Number((ind.mDen || {})[m]) > 0));
+          num = complete.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+          den = complete.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
         } else {
           const n = (ind.qNum || {})[q];
           if (n != null && n !== '') { hadInput = true; num = n; den = (ind.qDen || {})[q]; }
@@ -9909,7 +9921,10 @@ function unicoRefreshPerms() {
   }).then(r => r.ok ? r.json() : null).then(j => {
     if (!j || !j.ok || j.degraded || !j.perms || typeof j.perms !== 'object' || Array.isArray(j.perms)) return false;
     const staffScope = j.staffScope || u.staffScope;
-    if (JSON.stringify(j.perms) === JSON.stringify(u.perms || null) && staffScope === u.staffScope) return false;
+    const ds = j.user && j.user.dsScope && typeof j.user.dsScope === 'object' ? j.user.dsScope : null;
+    const DS_KEYS = ['departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'submitKinds', 'dsScreens', 'enterDen'];
+    const dsChanged = !!ds && DS_KEYS.some(k => JSON.stringify(ds[k] == null ? null : ds[k]) !== JSON.stringify(u[k] == null ? null : u[k]));
+    if (JSON.stringify(j.perms) === JSON.stringify(u.perms || null) && staffScope === u.staffScope && !dsChanged) return false;
     const appJob = window.unicoRefreshAppData ? window.unicoRefreshAppData({
       includeNew: true
     }) : Promise.resolve([]);
@@ -9925,6 +9940,9 @@ function unicoRefreshPerms() {
       Object.assign(u, {
         perms: j.perms,
         staffScope
+      });
+      if (ds) DS_KEYS.forEach(k => {
+        if (Object.prototype.hasOwnProperty.call(ds, k)) u[k] = ds[k];
       });
       try {
         window.dispatchEvent(new CustomEvent('unico:perms-changed', {
@@ -10828,7 +10846,8 @@ function Sidebar({
     return unicoWorkspaceSub(AUTO_OPEN[it.id]).filter(x => !x.mod || unicoCanAccessModule(x.mod));
   };
   return React.createElement("aside", {
-    className: "sb"
+    className: "sb",
+    id: "workspace-sidebar"
   }, React.createElement("div", {
     className: "sb-brand"
   }, React.createElement("img", {
@@ -11210,6 +11229,7 @@ function TopBar({
   route,
   setRoute,
   onBurger,
+  menuExpanded,
   crumbs,
   actions,
   depts = [],
@@ -11259,7 +11279,10 @@ function TopBar({
   }, React.createElement("button", {
     className: "tb-burger",
     onClick: onBurger,
-    title: "Toggle menu"
+    title: "Toggle menu",
+    "aria-label": "Toggle menu",
+    "aria-expanded": menuExpanded,
+    "aria-controls": "workspace-sidebar"
   }, React.createElement(Ic, {
     d: I.grid,
     s: 16
@@ -12412,7 +12435,7 @@ Object.assign(window, {
     })))), React.createElement("input", {
       ref: inputRef,
       type: "file",
-      accept: "image/jpeg,image/png,image/webp",
+      accept: "image/jpeg,image/png,image/webp,image/avif",
       onChange: pick,
       style: {
         display: 'none'
@@ -24304,10 +24327,24 @@ function App() {
     }
     return r;
   }, []);
+  const [collapsed, setCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 820);
   const setRoute = React.useCallback(r => {
     setRouteRaw(typeof r === 'function' ? prev => fixRoute(r(prev)) : fixRoute(r));
+    if (window.innerWidth <= 820) setCollapsed(true);
   }, [fixRoute]);
-  const [collapsed, setCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 820);
+  useEffect(() => {
+    const mobile = window.matchMedia('(max-width:820px)');
+    const resize = e => setCollapsed(e.matches);
+    const escape = e => {
+      if (e.key === 'Escape' && mobile.matches) setCollapsed(true);
+    };
+    mobile.addEventListener('change', resize);
+    window.addEventListener('keydown', escape);
+    return () => {
+      mobile.removeEventListener('change', resize);
+      window.removeEventListener('keydown', escape);
+    };
+  }, []);
   const [layout, setLayout] = useState('executive');
   const [period, setPeriod] = useState({
     mode: 'all'
@@ -24885,11 +24922,16 @@ function App() {
     setRoute: setRoute,
     collapsed: collapsed,
     depts: depts
+  }), !collapsed && React.createElement("button", {
+    className: "sb-backdrop",
+    "aria-label": "Close menu",
+    onClick: () => setCollapsed(true)
   }), React.createElement("div", {
     className: "main"
   }, React.createElement(TopBar, {
     route: route,
     setRoute: setRoute,
+    menuExpanded: !collapsed,
     onBurger: () => setCollapsed(c => !c),
     crumbs: crumbs,
     actions: actions,
@@ -24902,7 +24944,7 @@ function App() {
     setPeriod: setPeriod
   }), React.createElement("div", {
     className: "content",
-    key: route.view + (route.dept || '') + (route.emp || '') + layout
+    key: (route.view && route.view.indexOf('ds') === 0 ? 'ds' : route.view) + (route.dept || '') + (route.emp || '') + layout
   }, typeof ViewTabs !== 'undefined' && React.createElement(ViewTabs, {
     view: route.view,
     setRoute: setRoute

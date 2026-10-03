@@ -26,5 +26,24 @@ const { buildPatientSpec, buildQualitySpec } = require('../data-collection');
   assert.equal(rate.value, 5);
   const unobserved = await buildQualitySpec({ ...quality, notObserved: true });
   assert.equal(unobserved.value, null);
+  for (const inputs of [{}, { num: '', den: '' }, { den: 400 }]) {
+    await assert.rejects(buildQualitySpec({ ...quality, formula: 'pct', value: undefined, ...inputs }), /Enter the numerator/);
+  }
+  assert.equal((await buildQualitySpec({ ...quality, formula: 'pct', value: undefined, num: 0 })).value, 0);
+  assert.equal((await buildQualitySpec({ ...quality, formula: 'pct', value: 12.5 })).value, 12.5);
+  for (const invalid of [-1, Infinity, 'abc', true, ' ']) {
+    await assert.rejects(buildQualitySpec({ ...quality, groups: { nurse: invalid } }), /finite, non-negative/);
+    await assert.rejects(buildQualitySpec({ ...quality, groupsDen: { nurse: invalid } }), /finite, non-negative/);
+    await assert.rejects(buildQualitySpec({ ...quality, deptBreakdown: [{ dept: 'ICU', g: { nurse: { n: 0, d: invalid } } }] }), /finite, non-negative/);
+  }
+  const blankGroups = await buildQualitySpec({ ...quality, groups: { nurse: '', doctor: 0 } });
+  assert.deepEqual(blankGroups.groups, { nurse: 0, doctor: 0 });
+  for (const field of ['age', 'gender', 'admissionDate', 'procedureDate']) {
+    const incident = await buildQualitySpec({ ...quality, value: undefined, incidents: [{ [field]: 'test' }, { details: '  ' }] });
+    assert.equal(incident.value, 1);
+    assert.equal(incident.incidents.length, 1);
+    assert.equal(incident.incidents[0][field], 'test');
+  }
+  await assert.rejects(buildQualitySpec({ ...quality, value: undefined, incidents: [{ unknownField: 'test' }] }), /Enter the value/);
   console.log('Submission validation regression checks passed.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

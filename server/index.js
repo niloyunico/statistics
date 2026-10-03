@@ -182,6 +182,15 @@ app.get('/api/me', async (req, res) => {
         qualityAreas: Array.isArray(u.qualityAreas) ? u.qualityAreas : [],
         createdAt: u.createdAt || u.created_at || null, // seed-admin.js accounts store `created_at`
       };
+      // The Data Submission assignment, live: a scope change no longer signs the person out, so an
+      // open tab kept offering removed screens / areas (refused on send) and missed added ones.
+      profile.dsScope = {
+        departments: profile.departments, qualityAreas: profile.qualityAreas, allQualityAreas: !!u.allQualityAreas,
+        qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {},
+        submitKinds: access.cleanSubmitKinds ? (access.cleanSubmitKinds(u.submitKinds) || { patient: true, quality: true }) : (u.submitKinds || { patient: true, quality: true }),
+        dsScreens: access.cleanDsScreens ? access.cleanDsScreens(u.dsScreens) : (u.dsScreens || null),
+        enterDen: u.enterDen === true,
+      };
     }
   } catch (e) { /* extras only */ }
   res.json({

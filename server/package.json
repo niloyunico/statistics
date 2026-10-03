@@ -17,8 +17,9 @@
     "d1-rows": "node d1-rows.js",
     "test": "node test/auth.test.js && node test/access.test.js && node test/staff-roster.test.js && node test/staff-sync.test.js && node test/cache.test.js && node test/loadbalancer.test.js && node test/cache-race.test.js && node test/cache-mongo.test.js && node test/staff-performance.test.js && node test/medicines.test.js && node test/d1-store.test.js && node test/d1-admin.test.js",
     "test:med": "node test/medicines.test.js",
-    "test:photos": "node test/photos.test.js && node test/imagekit.test.js",
+    "test:photos": "node test/photos.test.js && node test/imagekit.test.js && node test/blob.test.js",
     "test:access": "node test/access.test.js",
+    "test:data": "node test/submissions.test.js && node test/approval-integrity.test.js && node test/submission-dashboard.test.js && node test/overlay-newest-wins.test.js && node test/field-requests.test.js && node test/user-scope.test.js",
     "test:cache": "node test/cache.test.js",
     "test:lb": "node test/loadbalancer.test.js",
     "test:race": "node test/cache-race.test.js",
@@ -30,6 +31,7 @@
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.12.1",
+    "@vercel/blob": "^2.8.0",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.11.0",
     "compression": "^1.8.1",
@@ -38,6 +40,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
-    "mongodb": "^6.8.0"
+    "mongodb": "^6.8.0",
+    "sharp": "^0.35.5"
   }
 }

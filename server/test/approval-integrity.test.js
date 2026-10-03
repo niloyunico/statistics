@@ -83,11 +83,12 @@ function fakeCollection() {
 }
 let cols = {};
 const colOf = (name) => (cols[name] = cols[name] || fakeCollection());
+let appDataFake = () => ({ data: {} });   // swapped per scenario (the module keeps its own reference)
 const dbPath = require.resolve('../db');
 require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
   getDbHandle: async () => ({ collection: colOf }),
   getUsers: async () => colOf('users'),
-  getAppData: async () => ({ data: {} }),
+  getAppData: async () => appDataFake(),
 } };
 const dc = require(process.env.DC_MODULE || '../data-collection');
 
@@ -470,6 +471,152 @@ const quality = async (payload) => (await dc.submitQuality(Object.assign({ area:
     const r3 = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 1, incidents: [], isCorrection: true, correctionReason: 'Logged in error' });
     await approve(r3.id);
     assert.deepEqual(ind('falls').incidents['Jul-26'], [], 'an edit request can clear the incidents'); }
+
+  // 24. A value-only admin correction on a rate stores the NEW value (months, mNum and quarters agree).
+  reset();
+  { const a = await quality({ month: 'Jul-26', indicatorId: 'hh', num: 2, den: 100 });
+    const p = await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { value: 5 } });
+    assert.equal(p.status, 200, JSON.stringify(p.body));
+    await approve(a.id);
+    assert.equal(ind('hh').mNum['Jul-26'], 5);
+    assert.equal(ind('hh').months['Jul-26'], 5, 'the month value follows the back-solved numerator'); }
+
+  // 25. Editing an OLD approved report: a note fix does not touch live data, and figures are refused
+  //     while a newer approved report for the same month is on record.
+  reset();
+  { const a = await patient('Jul-26', { adm: 10 }); await approve(a.id);
+    const b = await dc.submitPatient({ department: 'icu', month: 'Jul-26', values: { adm: 12 }, isCorrection: true, correctionReason: 'recount' }, { submittedBy: 'nurse' });
+    sub(b.submission.id).submittedAt += 1; await approve(b.submission.id);
+    sub(b.submission.id).reviewedAt = sub(a.id).reviewedAt + 10;
+    assert.equal(liveRow('Jul-26').adm, 12);
+    const note = await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { note: 'typo fixed', values: { adm: 10 } } });
+    assert.equal(note.status, 200, JSON.stringify(note.body));
+    assert.equal(liveRow('Jul-26').adm, 12, 'a note-only edit of an old row does not re-apply its stale figures');
+    const fig = await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { values: { adm: 11 } } });
+    assert.equal(fig.status, 409, 'figures on a superseded approved row are refused');
+    assert.equal(liveRow('Jul-26').adm, 12); assert.equal(sub(a.id).values.adm, 10, 'nothing was saved'); }
+
+  // 26. A Data Collection VIEWER who submits is held to every send rule, not only the area check.
+  reset();
+  { colOf('users').docs.push({ username: 'v1', name: 'Viewer One', role: 'User', departments: [], qualityAreas: ['ICU'], qualityIndicators: { ICU: ['falls', 'nsi'] }, perms: { datasubmit: ['view', 'edit', 'add'], datacol: ['view'] } });
+    const as = { user: { sub: 'v1', role: 'User', name: 'Viewer One' }, access: { unrestricted: false, role: 'User', perms: { datasubmit: ['view', 'edit', 'add'], datacol: ['view'] } } };
+    const off = await call('POST /api/submissions/quality', { body: { area: 'ICU', month: 'Jul-26', indicatorId: 'hh', num: 1, den: 2 }, as });
+    assert.equal(off.status, 403, 'indicator outside the list is refused');
+    const fresh = await call('POST /api/submissions/quality', { body: { area: 'ICU', month: 'Jul-26', indicatorName: 'Brand new thing', value: 1 }, as });
+    assert.equal(fresh.status, 403, 'an indicator-limited sender cannot add new indicators either');
+    const ok = await call('POST /api/submissions/quality', { body: { area: 'ICU', month: 'Jul-26', indicatorId: 'nsi', entryMode: 'rate', num: 2, den: 999, responsible: { name: 'Someone Else' } }, as });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    const s = sub(ok.body.submission.id);
+    assert.equal(s.responsible.name, 'Viewer One', 'reports as itself');
+    assert.ok(s.den == null || s.den === 0, 'the admin-owned denominator is not taken from the sender'); }
+
+  // 27. A hospital-wide quality sender may send to an area added after their account was saved.
+  reset();
+  { colOf('users').docs.push({ username: 'hw', name: 'HW', role: 'User', departments: [], qualityAreas: ['OTHER'], allQualityAreas: true, qualityIndicators: {}, perms: { datasubmit: ['view', 'edit', 'add'] } });
+    const as = { user: { sub: 'hw', role: 'User', name: 'HW' }, access: { unrestricted: false, role: 'User', perms: { datasubmit: ['view', 'edit', 'add'] } } };
+    const r = await call('POST /api/submissions/quality', { body: { area: 'ICU', month: 'Jul-26', indicatorId: 'falls', value: 0 }, as });
+    assert.equal(r.status, 200, JSON.stringify(r.body)); }
+
+  // 28. A blank count is not a measured zero.
+  reset();
+  { await assert.rejects(quality({ month: 'Jul-26', indicatorId: 'falls' }), /type 0 if there were none/);
+    const z = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 0 });
+    assert.equal(z.value, 0, 'a typed 0 stays valid'); }
+
+  // 29. "Pending" lists and counts include a row stuck mid-approval.
+  reset();
+  { const a = await patient('Jul-26', { adm: 3 });
+    sub(a.id).status = 'approving'; sub(a.id).approvingAt = Date.now() - 10 * 60 * 1000;
+    const list = await dc.getSubmissions({ status: 'pending' });
+    assert.equal(list.length, 1, 'a stuck approval is still in the review queue');
+    assert.equal((await dc.getStats()).pending, 1);
+    await approve(a.id);
+    assert.equal(sub(a.id).status, 'approved', 'and it can be approved again'); }
+
+  // 30. Moving a pending quality row to another area takes the matching indicator with it.
+  reset();
+  { colOf('departments').docs.push({ _id: 'ccu', id: 'ccu', name: 'CCU', months: [], data: [], cols: [], quality: { key: 'CCU', name: 'CCU', indicators: [{ id: 'falls-ccu', name: 'Falls', formula: 'count', months: {} }] } });
+    const a = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 2 });
+    const mv = await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { area: 'CCU' } });
+    assert.equal(mv.status, 200, JSON.stringify(mv.body));
+    assert.equal(sub(a.id).indicatorId, 'falls-ccu');
+    const none = await quality({ month: 'Aug-26', indicatorId: 'nsi', entryMode: 'rate', num: 1 });
+    const bad = await call('PATCH /api/submissions/:id', { params: { id: none.id }, body: { area: 'CCU' } });
+    assert.equal(bad.status, 400, 'no matching indicator in the target area -> refused'); }
+
+  // 31. Moving a patient sheet to another department re-keys its figures onto that department's fields.
+  reset();
+  { colOf('departments').docs.push({ _id: 'ccu', id: 'ccu', name: 'CCU', months: [], data: [], cols: [{ id: 'c_admit', label: 'Admissions' }, { id: 'dis', label: 'Discharges' }] });
+    const a = await patient('Jul-26', { adm: 4, dis: 1 });
+    const mv = await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { department: 'ccu', values: { adm: 4, dis: 1 } } });
+    assert.equal(mv.status, 200, JSON.stringify(mv.body));
+    assert.deepEqual(sub(a.id).values, { c_admit: 4, dis: 1 }, 'matched by id, else by field name');
+    await approve(a.id);
+    const ccu = colOf('departments').docs.find((d) => d._id === 'ccu');
+    assert.equal(ccu.cols.length, 2, 'no stray columns registered on the target');
+    assert.equal(ccu.data[ccu.months.indexOf('Jul-26')].c_admit, 4);
+    colOf('departments').docs.find((d) => d._id === 'ccu').cols = [{ id: 'other', label: 'Other' }];
+    const b = await patient('Aug-26', { adm: 2 });
+    const bad = await call('PATCH /api/submissions/:id', { params: { id: b.id }, body: { department: 'ccu' } });
+    assert.equal(bad.status, 400, 'a figure with no matching field refuses the move');
+    assert.equal(sub(b.id).department, 'icu'); }
+
+  // 32. A custom (overlay-only) department takes submissions; approval promotes it, overlay months stay "on record".
+  reset();
+  { const ov = { custom: [{ id: 'cust_x', name: 'Cath Lab 2', cols: [{ id: 'proc', label: 'Procedures' }], months: ['Jun-26'], data: [{ proc: 7 }] }], renames: {}, deleted: [], entries: [], order: [] };
+    appDataFake = () => ({ data: { unico_store_v3: JSON.stringify(ov) } });
+    const s1 = (await dc.submitPatient({ department: 'cust_x', month: 'Jul-26', values: { proc: 9 } }, { submittedBy: 'nurse' })).submission;
+    assert.equal(s1.departmentName, 'Cath Lab 2');
+    await assert.rejects(dc.submitPatient({ department: 'cust_x', month: 'Jun-26', values: { proc: 8 } }, { submittedBy: 'nurse' }), (e) => e.code === 'exists' && e.prior.values.proc === 7, 'an overlay month is on record');
+    await approve(s1.id);
+    const doc = colOf('departments').docs.find((d) => d._id === 'cust_x');
+    assert.ok(doc, 'promoted into the collection on approval');
+    assert.deepEqual(doc.months, ['Jul-26'], 'only the approved month — the overlay keeps its own');
+    assert.equal(doc.data[0].proc, 9);
+    const settings = await dc.getCollectionSettings();
+    assert.ok(settings.some((d) => d.id === 'cust_x'));
+    appDataFake = () => ({ data: {} });
+    await assert.rejects(dc.submitPatient({ department: 'cust_gone', month: 'Jul-26', values: { proc: 1 } }, {}), /Unknown department/); }
+
+  // Direct rate corrections replace the old fraction used by the quarterly dashboard.
+  reset();
+  { const a = await quality({ month: 'Jul-26', indicatorId: 'hh', num: 20, den: 100 });
+    await approve(a.id);
+    const b = await quality({ month: 'Jul-26', indicatorId: 'hh', value: 75, isCorrection: true, correctionReason: 'Correct measured rate' });
+    await approve(b.id);
+    assert.equal(ind('hh').months['Jul-26'], 75);
+    assert.equal(ind('hh').mNum['Jul-26'], undefined);
+    assert.equal(ind('hh').mDen['Jul-26'], undefined);
+    assert.equal(ind('hh').quartersByFy['2026'].Q3, 75); }
+
+  // Breakdown validation also applies to edits; an invalid edit leaves the row unchanged.
+  reset();
+  { const a = await quality({ month: 'Jul-26', indicatorId: 'hh', num: 20, den: 100, groups: { nurse: 20 } });
+    const bad = await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { groups: { nurse: -1 } } });
+    assert.equal(bad.status, 400);
+    assert.deepEqual(sub(a.id).groups, { nurse: 20 }); }
+
+  // A denominator alone (including a month marked not observed) cannot dilute a rate.
+  reset();
+  { const h = ind('hh');
+    Object.assign(h, { months: { 'Jul-26': 80 }, mNum: { 'Jul-26': 8, 'Sep-26': 50 }, mDen: { 'Jul-26': 10, 'Aug-26': 100 }, mNotObserved: { 'Aug-26': true } });
+    dc.recomputeQuarters(h);
+    assert.equal(h.quartersByFy['2026'].Q3, 80, 'roll up only complete observations'); }
+
+  // Headcounts carry forward chronologically, and the chosen base persists for rollups.
+  reset();
+  { ind('nsi').mDen = { 'Sep-26': 900, 'Jun-26': 100, 'Jul-26': 200, 'May-26': 50 };
+    const a = await quality({ month: 'Aug-26', indicatorId: 'nsi', num: 2 });
+    await approve(a.id);
+    assert.equal(ind('nsi').months['Aug-26'], 1, 'use the closest earlier month, never a future month or insertion order');
+    assert.equal(ind('nsi').mDen['Aug-26'], 200, 'store the actual base used to compute the month');
+    assert.equal(ind('nsi').quartersByFy['2026'].Q3, 1); }
+
+  reset();
+  { ind('nsi').mDen = { 'Sep-26': 900 };
+    const a = await quality({ month: 'Aug-26', indicatorId: 'nsi', num: 2 });
+    await approve(a.id);
+    assert.equal(ind('nsi').months['Aug-26'], null, 'a future headcount cannot compute a past reading'); }
 
   console.log('Approval integrity regression checks passed.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -439,7 +439,7 @@
           )}
         </div>
 
-        <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={pick} style={{ display: 'none' }} />
+        <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,image/avif" onChange={pick} style={{ display: 'none' }} />
 
         {viewing && value && value.url && (
           <PhotoLightbox src={value.url} name={name} sub={zoomSub} onClose={() => setViewing(false)} />

@@ -96,7 +96,7 @@ function reset() {
 const user = (username) => colOf('users').docs.find((u) => u.username === username);
 const resps = () => colOf('responsibles').docs;
 const respById = (id) => resps().find((r) => r._id === id);
-const NURSE_MSG = 'Nurse/PCA accounts cannot submit data. Change the role to Data collector or In-charge in Settings → Users & Roles.';
+const NURSE_MSG = 'Nurse/PCA phone accounts cannot submit data. Give the person the Data Submission module in Access Control instead.';
 const USER_ROLE_MSG = 'That ID belongs to a User account. Change its role in Settings → Users & Roles first.';
 
 const routes = {};

@@ -75,7 +75,7 @@ async function setStaffPhoto(staffId, empId, photo) {
 // Generous for a portrait the client has already resized; small enough that a stray
 // 12 MP phone photo is refused with a clear message instead of a timeout.
 const IMG_MAX = 2 * 1024 * 1024;
-const IMG_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const IMG_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif'];
 const KINDS = {
   staff: { folder: 'unico/staff', module: 'staff' },
   profile: { folder: 'unico/profiles', module: null },
@@ -84,7 +84,7 @@ const KINDS = {
 function notConfigured(res) {
   return res.status(503).json({
     ok: false,
-    error: 'Photo storage is not set up. Configure ImageKit or Cloudinary in the server environment.',
+    error: 'Photo storage is not set up. Configure Vercel Blob, ImageKit or Cloudinary in the server environment.',
   });
 }
 
@@ -94,7 +94,7 @@ function decodeImage(dataUri) {
   const m = String(dataUri || '').match(/^data:([a-z/+-]+);base64,([A-Za-z0-9+/=\s]+)$/i);
   if (!m) return { error: 'Send the image as a base64 data URI.', code: 400 };
   const mime = m[1].toLowerCase();
-  if (IMG_TYPES.indexOf(mime) < 0) return { error: 'JPEG, PNG or WebP only.', code: 400 };
+  if (IMG_TYPES.indexOf(mime) < 0) return { error: 'JPEG, PNG, WebP or AVIF only.', code: 400 };
   const buf = Buffer.from(m[2].replace(/\s/g, ''), 'base64');
   if (!buf.length) return { error: 'The image is empty.', code: 400 };
   if (buf.length > IMG_MAX) {
@@ -197,7 +197,7 @@ function mount(app, opts) {
     }
 
     try {
-      if (storage.isImageKitId(publicId)) await storage.getAsset(publicId);
+      if (storage.isImageKitId(publicId) || (storage.isBlobId && storage.isBlobId(publicId))) await storage.getAsset(publicId);
       if (kind.folder === KINDS.profile.folder) {
         const who = req.user && (req.user.sub || req.user.username);
         if (who) await (await getUsers()).updateOne({ username: who }, { $unset: { photo: '' } });
@@ -278,7 +278,7 @@ function mount(app, opts) {
     if (publicId.indexOf(kind.folder + '/') !== 0) return res.status(400).json({ ok: false, error: 'That is not a staff portrait.' });
     if (body.staffId == null && !body.empId) return res.status(400).json({ ok: false, error: 'Save the staff record first, then attach a photo to it.' });
     try {
-      const url = storage.isImageKitId(publicId)
+      const url = (storage.isImageKitId(publicId) || (storage.isBlobId && storage.isBlobId(publicId)))
         ? (await storage.getAsset(publicId)).url : String(body.url || '');
       const photo = { url, publicId, updatedAt: Date.now() };
       const ok = await setStaffPhoto(body.staffId, body.empId, photo);

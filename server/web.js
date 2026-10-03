@@ -351,13 +351,16 @@ async function serveIndex(req, res) {
           const daSet = effectiveDeptIds(scopeUser, deptMap);
           depts = (deptRes || []).filter((d) => daSet.has(d.id));
           const dov = scopeDeptOverlay(raw['unico_store_v3'], [...daSet]);
-          if (dov) snap['unico_store_v3'] = JSON.stringify(dov);
+          // Nothing of theirs in the overlay -> none of it (as scopeSubmitterData does): leaving the
+          // whole hospital's overlay listed other units' custom departments in the patient form,
+          // and every send to them was refused "not assigned".
+          if (dov) snap['unico_store_v3'] = JSON.stringify(dov); else delete snap['unico_store_v3'];
         }
         if (held || !access.can(a, 'quality', 'view')) {
           quality = scopeQualityList(qualRes || [], scopeUser);
           const qi = (scopeUser.qualityIndicators && typeof scopeUser.qualityIndicators === 'object') ? scopeUser.qualityIndicators : {};
           const qov = scopeQualityOverlay(raw['unico_quality_v2'], scopeUser.qualityAreas || [], qi);
-          if (qov && qov['unico_quality_v2']) snap['unico_quality_v2'] = qov['unico_quality_v2'];
+          if (qov && qov['unico_quality_v2']) snap['unico_quality_v2'] = qov['unico_quality_v2']; else delete snap['unico_quality_v2'];
           if (snap['unico_capa_v1'] != null) {
             const c = scopeCapaOverlay(snap['unico_capa_v1'], scopeUser);
             if (c == null) delete snap['unico_capa_v1']; else snap['unico_capa_v1'] = c;
