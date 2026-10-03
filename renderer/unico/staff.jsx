@@ -39,8 +39,8 @@ function RoleBadge({role}){
    and this flips it — nobody has to go back out to the sidebar to change role. */
 function RoleSwitch({role, setRoute, views}){
   return (
-    <div className="seg" style={{flexShrink:0}} title="Nurses or PCA">
-      {[['Nurse','Nurses'],['PCA','PCA']].map(([v,l])=>(
+    <div className="seg" style={{flexShrink:0,flexWrap:'wrap'}} title="Staff group">
+      {Object.keys(views).map(v=>[v,({All:'All Staff',Nurse:'Nurses',Trainee:'Trainee Nurses',PCA:'PCA'})[v]||v]).map(([v,l])=>(
         <button key={v} className={role===v?'on':''} onClick={()=>{ if(role!==v) setRoute({view:views[v]}); }}>{l}</button>
       ))}
     </div>
@@ -300,7 +300,7 @@ function StaffDeptChart({list, setRoute, tone='#0090ca', role='Nurse'}){
   const rows=Object.entries(members).map(([label,arr])=>({label,value:arr.length}));
   const total=rows.reduce((s,r)=>s+r.value,0)||1;
   const max=Math.max(1,...rows.map(r=>r.value));
-  const noun=role==='PCA'?'PCA':'nurses';
+  const noun=role==='PCA'?'PCA':role==='All'?'staff':role==='Trainee'?'trainee nurses':'nurses';
   const ql=q.trim().toLowerCase();
   let shown=rows.filter(r=>(!ql||r.label.toLowerCase().includes(ql)||staffDeptLabel(r.label).toLowerCase().includes(ql))&&(!pick||r.label===pick));
   shown=sortMode==='name'?[...shown].sort((a,b)=>staffDeptLabel(a.label).localeCompare(staffDeptLabel(b.label))):[...shown].sort((a,b)=>b.value-a.value);
@@ -381,7 +381,7 @@ function StaffExpChart({list, setRoute, role='Nurse'}){
   list.forEach(e=>{ const y=S.expYears(e); if(y==null) return; for(let i=0;i<BUCKETS.length;i++){ if(y>=BUCKETS[i][1]&&y<BUCKETS[i][2]){ members[i].push(e); break; } } });
   const data=BUCKETS.map(([label],i)=>({label,value:members[i].length}));
   const total=data.reduce((s,d)=>s+d.value,0)||1;
-  const noun=role==='PCA'?'PCA':'nurses';
+  const noun=role==='PCA'?'PCA':role==='All'?'staff':role==='Trainee'?'trainee nurses':'nurses';
   const cur=sel>=0?members[sel]:null;
   return (
     <div className="card">
@@ -428,7 +428,7 @@ function StaffDesigChart({list, setRoute, role='Nurse'}){
   // like Acting Charge Nurse, Infection Control Nurse, etc. are always visible. Colours
   // reuse the brand palette, then fall back to distinct generated hues beyond it.
   const donut=all.map(([label,value],i)=>({label,value,color:PALETTE[i]||`hsl(${(i*67)%360} 58% 52%)`}));
-  const noun=role==='PCA'?'PCA':'nurses';
+  const noun=role==='PCA'?'PCA':role==='All'?'staff':role==='Trainee'?'trainee nurses':'nurses';
   let curLabel=null, curList=null;
   if(sel){ curLabel=sel; curList=members[sel]||[]; }
   return (
@@ -463,11 +463,18 @@ function StaffDesigChart({list, setRoute, role='Nurse'}){
 }
 
 /* ---------------- Workforce Dashboard (NEMS-style) ---------------- */
-function WorkforceDashboard({store, setRoute, role='Nurse'}){
+function WorkforceDashboard({store, setRoute, role='Nurse', group=role}){
   const S=window.STAFF;
   // Active roster only — inactive / former staff never count in the dashboard charts,
   // drill-down lists or KPIs (they live in the Directory's "Show inactive" and Previous Staff).
-  const list=store.staff.filter(e=>(e.role||'Nurse')===role && e.is_active && !e.former);
+  const [department,setDepartment]=React.useState('');
+  const roster=store.staff.filter(e=>e.is_active&&!e.former);
+  const departmentOptions=[...new Set(roster.flatMap(staffDeptList))].sort();
+  const scoped=roster.filter(e=>!department||staffDeptList(e).includes(department));
+  const counts=S.staffCounts(scoped);
+  const list=scoped.filter(e=>S.matchesStaffGroup(e,group));
+  const label=({All:'All Staff',Nurse:'Nurse',Trainee:'Trainee Nurse',PCA:'PCA'})[group];
+  const dashboardViews={All:'staffHome',Nurse:'nurseHome',Trainee:'traineeHome',PCA:'pcaHome'};
   const [showHi,setShowHi]=React.useState(false);
   // Blank A4 staff information form (window.UnicoStaffRegForm, data-collection.jsx). It lives
   // in the datacollection CHUNK, so the click loads that chunk before rendering the sheet.
@@ -477,7 +484,7 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
     if(window.UnicoStaffRegForm) setPrintForm(true);
   };
   const tone=role==='PCA'?'#6a52d4':'#0090ca';
-  const listView=role==='PCA'?'pca':'nurses';
+  const listView=({All:'staffAll',Nurse:'nurses',Trainee:'trainees',PCA:'pca'})[group];
   const compView=role==='PCA'?'pcaCompliance':'nurseCompliance';
   const homeView=role==='PCA'?'pcaHome':'nurseHome';
   const k=S.kpis(list);
@@ -498,39 +505,42 @@ function WorkforceDashboard({store, setRoute, role='Nurse'}){
   );
   return (
     <div className="grid" style={{gap:16}}>
-      <SectionTitle icon={role==='PCA'?I.bed:I.steth} title={`${role==='PCA'?'PCA':'Nurse'} Dashboard`} sub={`Live overview of the ${role} roster`}
+      <SectionTitle icon={role==='PCA'?I.bed:I.steth} title={`${label} Dashboard`} sub={`${list.length} active staff${department?' · '+staffDeptLabel(department):' · all departments'}`}
         right={<>{(!window.unicoCan||window.unicoCan('staff','add'))&&
             <button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={openBlankForm}><Ic d={I.print} s={15}/>Print staff information</button>}
           {printForm&&window.UnicoStaffRegForm&&React.createElement(window.UnicoStaffRegForm,{role,onDone:()=>setPrintForm(false)})}
-          <RoleSwitch role={role} setRoute={setRoute} views={{Nurse:'nurseHome',PCA:'pcaHome'}}/>
+          <RoleSwitch role={group} setRoute={setRoute} views={dashboardViews}/>
           <button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#b8860b',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
           <button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>
-          <button className="btn sm" onClick={()=>setRoute({view:compView})}><Ic d={I.heart} s={15}/>Compliance</button>
+          {(group==='Nurse'||group==='PCA')&&<button className="btn sm" onClick={()=>setRoute({view:compView})}><Ic d={I.heart} s={15}/>Compliance</button>}
           <button className="btn sm" disabled={store.refreshing} onClick={()=>store.refresh()}><Ic d={I.activity} s={15}/>{store.refreshing?'Refreshing…':'Refresh'}</button>
-          {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role})}><Ic d={I.plus} s={15}/>Add {role==='PCA'?'PCA':'Nurse'}</button>}</>}/>
+          {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role,designation:group==='Trainee'?'Trainee Nurse':''})}><Ic d={I.plus} s={15}/>Add {group==='Trainee'?'Trainee Nurse':role}</button>}</>}/>
       {store.refreshError&&<div role="alert" style={{color:'#b4232f',fontSize:13}}>{store.refreshError}</div>}
+      <div className="card" style={{padding:'12px 14px'}}><label>Department <select aria-label="Dashboard department" value={department} onChange={e=>setDepartment(e.target.value)}><option value="">All departments</option>{departmentOptions.map(d=><option key={d} value={d}>{staffDeptLabel(d)}</option>)}</select></label></div>
+      <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))'}}>
+        {Object.entries({All:'All Staff',Nurse:'Nurses',Trainee:'Trainee Nurses',PCA:'PCA'}).map(([key,name])=><button key={key} aria-label={`View ${name} dashboard`} onClick={()=>setRoute({view:dashboardViews[key]})} style={{border:0,padding:0,background:'transparent',textAlign:'left',font:'inherit',cursor:'pointer'}}><Kpi label={name} val={fmt(counts[key])} foot={key==='All'?'includes nurses, trainees and PCA':'active staff in selected departments'} color={key==='Trainee'?'#e08a1e':key==='PCA'?'#6a52d4':'#0090ca'}/></button>)}
+      </div>
       <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))'}}>
-        <Kpi label={`Total ${role==='PCA'?'PCAs':'Nurses'}`} val={fmt(k.total_staff)} foot={`active ${role} on roster`} color={tone}/>
         <Kpi label="Departments" val={fmt(new Set(list.map(e=>staffCanonDept(e.current_department))).size)} foot="distinct units staffed" color="#6a52d4"/>
         <Kpi label="Vaccinated" val={k.vaccinated_pct+'%'} foot="Hep-B completed / vaccinated" color="#1f9d57"/>
         <Kpi label="Compliance Issues" val={fmt(compIssues)} foot={`${comp.missing_vaccination.length} vacc · ${comp.missing_training.length} training · click for details`} color="#d23a52"/>
       </div>
 
       <div className="grid" style={{gridTemplateColumns:'1.25fr 1fr'}}>
-        <StaffDeptChart list={list} setRoute={setRoute} tone={tone} role={role}/>
-        <StaffDesigChart list={list} setRoute={setRoute} role={role}/>
+        <StaffDeptChart list={list} setRoute={setRoute} tone={tone} role={group}/>
+        <StaffDesigChart list={list} setRoute={setRoute} role={group}/>
       </div>
 
       {/* Recognition + appraisal bands sit BELOW the roster charts: the dashboard should open on
          the roster numbers, not on the performance cycle (user, 2026-09-20). */}
-      {window.PerfBands && <window.PerfBands role={role} setRoute={setRoute}/>}
+      {(group==='Nurse'||group==='PCA')&&window.PerfBands && <window.PerfBands role={role} setRoute={setRoute}/>}
 
       <div className="grid" style={{gridTemplateColumns:'1fr 1.25fr'}}>
         <div className="card">
           <div className="card-h"><h3>Hep-B Vaccination</h3><span className="spacer"/></div>
           <div className="card-b" style={{display:'grid',placeItems:'center'}}><Donut data={vacc} size={172} centerValue={k.vaccinated_pct+'%'} centerLabel="compliant"/></div>
         </div>
-        <StaffExpChart list={list} setRoute={setRoute} role={role}/>
+        <StaffExpChart list={list} setRoute={setRoute} role={group}/>
       </div>
 
       <div className="grid" style={{gridTemplateColumns:'1fr 1fr'}}>
@@ -778,9 +788,9 @@ function StaffCompliance({store, setRoute, role='Nurse'}){
 // it, and "back" dumped you at the top of an unfiltered list. Filters + scroll are
 // remembered here (per role, module scope: survives navigation, resets on reload).
 const DIR_MEMO = {};
-function ManageStaff({store, setRoute, role}){
+function ManageStaff({store, setRoute, role, group=role}){
   const S=window.STAFF;
-  const M=DIR_MEMO[role]||{};
+  const M=DIR_MEMO[group]||{};
   const [q,setQ]=React.useState(M.q||'');
   const [chip,setChip]=React.useState(M.chip||'all');
   const [dept,setDept]=React.useState(M.dept||'');
@@ -792,19 +802,20 @@ function ManageStaff({store, setRoute, role}){
   const [sortBy,setSortBy]=React.useState(M.sortBy||'name');
   const [showInactive,setShowInactive]=React.useState(!!M.showInactive);
   // Remember the filters as they change…
-  React.useEffect(()=>{ DIR_MEMO[role]=Object.assign({},DIR_MEMO[role],{q,chip,dept,desig,vacc,qual,expB,training,sortBy,showInactive}); });
+  React.useEffect(()=>{ DIR_MEMO[group]=Object.assign({},DIR_MEMO[group],{q,chip,dept,desig,vacc,qual,expB,training,sortBy,showInactive}); });
   // …and the scroll position, tracked live (an unmount-time read is too late: the
   // list is gone and .content has already collapsed by the time cleanup runs).
   React.useEffect(()=>{
     const el=document.querySelector('.content'); if(!el) return;
-    const saved=(DIR_MEMO[role]||{}).scroll||0;
+    const saved=(DIR_MEMO[group]||{}).scroll||0;
     if(saved){ let tries=0; const restore=()=>{ el.scrollTop=saved; if(Math.abs(el.scrollTop-saved)>4&&++tries<12) requestAnimationFrame(restore); }; requestAnimationFrame(restore); }
-    const onScroll=()=>{ DIR_MEMO[role]=Object.assign({},DIR_MEMO[role],{scroll:el.scrollTop}); };
+    const onScroll=()=>{ DIR_MEMO[group]=Object.assign({},DIR_MEMO[group],{scroll:el.scrollTop}); };
     el.addEventListener('scroll',onScroll,{passive:true});
     return ()=>el.removeEventListener('scroll',onScroll);
   },[]);  // eslint-disable-line
   const tone= role==='PCA'?'#6a52d4':'#0090ca';
-  const all=store.staff.filter(e=>(e.role||'Nurse')===role);
+  const all=store.staff.filter(e=>S.matchesStaffGroup(e,group));
+  const label=({All:'All Staff',Nurse:'Nurse',Trainee:'Trainee Nurse',PCA:'PCA'})[group];
   /* Appraisal standing, merged in from the Performance module — the reason that module
      no longer keeps a staff directory of its own. Null for an account without 'perf',
      and the column, the chips and the sort all disappear with it. */
@@ -820,13 +831,13 @@ function ManageStaff({store, setRoute, role}){
     // row is staff x records, and this roster is ~200 people against a growing register.
     const by={}; (apprData.appraisals||[]).forEach(x=>{ const k=String(x&&x.empId); (by[k]||(by[k]=[])).push(x); });
     const now=new Date(); const m={};
-    store.staff.forEach(e=>{ if((e.role||'Nurse')!==role) return;
+    store.staff.forEach(e=>{ if(!S.matchesStaffGroup(e,group)) return;
       m[e.id]=A_.standing(e,by[String(e.emp_id||e.id)]||[],now); });
     return m;
-  },[apprOn,apprData,store.staff,role]);
+  },[apprOn,apprData,store.staff,group]);
   const stOf=(e)=>standing?standing[e.id]:null;
-  const active=all.filter(e=>e.is_active);
-  const base=all.filter(e=>showInactive||e.is_active);
+  const active=all.filter(e=>e.is_active&&!e.former);
+  const base=all.filter(e=>showInactive||(e.is_active&&!e.former));
   const now=Date.now();
   const matchChip=(e)=>{
     const d=(e.current_department||'');
@@ -880,12 +891,12 @@ function ManageStaff({store, setRoute, role}){
   return (
     <div className="grid" style={{gap:14}}>
       <div style={{display:'flex',alignItems:'flex-end',gap:12,flexWrap:'wrap'}}>
-        <div style={{flexShrink:0}}><div style={{fontSize:22,fontWeight:800,color:'var(--ink)',letterSpacing:'-.3px',whiteSpace:'nowrap'}}>{role==='PCA'?'PCA':'Nurse'} Employees</div>
-          <div style={{fontSize:12,color:'var(--muted)'}}>Dedicated {role} roster{all.length>active.length?` · ${all.length-active.length} inactive hidden`:''}</div></div>
+        <div style={{flexShrink:0}}><div style={{fontSize:22,fontWeight:800,color:'var(--ink)',letterSpacing:'-.3px',whiteSpace:'nowrap'}}>{label} Directory</div>
+          <div style={{fontSize:12,color:'var(--muted)'}}>Dedicated {label} roster{!showInactive&&all.length>active.length?` · ${all.length-active.length} inactive hidden`:''}</div></div>
         <span className="spacer" style={{flex:1}}/>
-        <RoleSwitch role={role} setRoute={setRoute} views={{Nurse:'nurses',PCA:'pca'}}/>
+        <RoleSwitch role={group} setRoute={setRoute} views={{All:'staffAll',Nurse:'nurses',Trainee:'trainees',PCA:'pca'}}/>
         <button className="btn sm" onClick={()=>setShowInactive(v=>!v)}>{showInactive?'Hide inactive':'Show inactive'}</button>
-        {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role})}><Ic d={I.plus} s={15}/>Add {role}</button>}
+        {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role,designation:group==='Trainee'?'Trainee Nurse':''})}><Ic d={I.plus} s={15}/>Add {group==='Trainee'?'Trainee Nurse':role}</button>}
         <span className="num" style={{fontSize:12.5,color:'var(--muted)',fontWeight:600}}>{active.length} employee(s)</span>
       </div>
 
@@ -909,7 +920,7 @@ function ManageStaff({store, setRoute, role}){
         <select style={sel} value={training} onChange={e=>setTraining(e.target.value)}><option value="">Any Training</option><option value="has">Has training</option><option value="none">No training</option></select>
         <select style={sel} value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="name">Sort: Name</option><option value="exp">Sort: Experience</option><option value="doj">Sort: Newest hire</option><option value="dept">Sort: Department</option>{apprOn&&<option value="appraisal">Sort: Appraisal score</option>}</select>
         <button className="btn pri sm" style={{opacity:anyFilter?1:.5}} onClick={()=>{setQ('');setDept('');setDesig('');setVacc('');setQual('');setExpB('');setTraining('');setChip('all');}}>Clear filters</button>
-        <ExportMenu rows={sorted} role={role}/>
+        <ExportMenu rows={sorted} role={label}/>
       </div>
 
       {/* table */}

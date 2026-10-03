@@ -284,6 +284,21 @@
   function byRole(list){ const m={}; list.filter(e=>e.is_active).forEach(e=>{const k=e.role||'Nurse';m[k]=(m[k]||0)+1;}); return Object.entries(m); }
   function uniqueVals(list,key){ return [...new Set(list.filter(e=>e.is_active&&e[key]&&e[key].trim()).map(e=>e[key].trim()))].sort(); }
 
+  // Trainee nurses remain Nurse records; designation determines their roster group.
+  function staffGroupOf(person){
+    const role=String((person&&person.role)||'Nurse').trim().toLowerCase();
+    if(role==='pca') return 'PCA';
+    const designation=String((person&&person.designation)||'').toLowerCase().replace(/[^a-z]+/g,' ').trim();
+    if((role==='nurse' && /\btrainee\b/.test(designation) && /\bnurs(?:e|ing)\b/.test(designation)) || /^(trainee nurse|nurse trainee)$/.test(role)) return 'Trainee';
+    return role==='nurse'?'Nurse':(person&&person.role)||'Nurse';
+  }
+  function matchesStaffGroup(person,group){ return group==='All' || staffGroupOf(person)===group; }
+  function staffCounts(list){
+    const counts={All:0,Nurse:0,Trainee:0,PCA:0};
+    list.filter(e=>e.is_active&&!e.former).forEach(e=>{counts.All++;const group=staffGroupOf(e);if(group in counts&&group!=='All') counts[group]++;});
+    return counts;
+  }
+
   // ---------- analytics (mirror services/analytics.py) ----------
   const VACC_OK=["Completed","3rd Dose"];
   function kpis(list){
@@ -323,11 +338,36 @@
   }
   // Sum of the structured prior-experience entries, in years. Returns null when no
   // structured prior was ever entered (so the legacy fallback path is used).
+  function experienceDate(value){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(String(value||''))) return null;
+    const date=new Date(value+'T00:00:00Z');
+    return !isNaN(date)&&date.toISOString().slice(0,10)===value?date:null;
+  }
+  function experienceUsesDates(entry){ return !!entry&&(entry.mode==='dates'||(!entry.mode&&(entry.fromDate||entry.toDate))); }
+  function experienceDateError(entry,doj){
+    if(!experienceUsesDates(entry)) return '';
+    const from=experienceDate(entry.fromDate),to=experienceDate(entry.toDate);
+    if(!from||!to) return 'Enter valid From and To dates for each previous role.';
+    if(to<from) return 'The To date cannot be before the From date.';
+    if(to>new Date()) return 'Previous experience cannot end in the future.';
+    const joined=experienceDate(doj);
+    if(joined&&to>joined) return 'Previous experience must end on or before joining UNICO.';
+    return '';
+  }
+  function experienceYearsOf(entry){
+    if(experienceUsesDates(entry)){
+      const from=experienceDate(entry.fromDate),to=experienceDate(entry.toDate);
+      if(!from||!to||to<from) return 0;
+      let months=(to.getUTCFullYear()-from.getUTCFullYear())*12+to.getUTCMonth()-from.getUTCMonth();
+      if(to.getUTCDate()<from.getUTCDate()) months--;
+      return Math.max(0,months)/12;
+    }
+    return Math.max(0,parseFloat(entry&&entry.years)||0)+Math.max(0,parseFloat(entry&&entry.months)||0)/12;
+  }
   function priorYearsOf(e){
     if(!e) return null;
     if(Array.isArray(e.prior_experience_entries) && e.prior_experience_entries.length){
-      return e.prior_experience_entries.reduce((s,x)=>
-        s + (parseFloat(x&&x.years)||0) + (parseFloat(x&&x.months)||0)/12, 0);
+      return e.prior_experience_entries.reduce((s,x)=>s+experienceYearsOf(x),0);
     }
     if(e.prior_experience_years!=null && e.prior_experience_years!=='' && !isNaN(e.prior_experience_years))
       return +e.prior_experience_years;
@@ -668,6 +708,6 @@
     deptGroupsFor,setDeptGroups,
     fieldOptList,addFieldOpt,removeFieldOpt,
     customFields,addCustomField,removeCustomField,renameCustomField,addCustomFieldOption,removeCustomFieldOption,
-    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,birthdays,byRole,uniqueVals};
+    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,birthdays,byRole,uniqueVals,staffGroupOf,matchesStaffGroup,staffCounts,experienceUsesDates,experienceDateError,experienceYearsOf};
   window.useStaffStore=useStaffStore;
 })();

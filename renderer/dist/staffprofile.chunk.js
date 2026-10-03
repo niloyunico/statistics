@@ -711,7 +711,7 @@ function StaffRecordSheet({
       marginTop: 8
     }
   }, "Prior service"), React.createElement(Tbl, {
-    cols: [['Organisation', x => txt(x.org), 'left'], ['Department', x => txt(x.dept), 'left'], ['Duration', x => S.fmtYM ? S.fmtYM((parseFloat(x.years) || 0) + (parseFloat(x.months) || 0) / 12) : txt(x.years), 'right', '22%']],
+    cols: [['Organisation', x => txt(x.org), 'left'], ['Department', x => txt(x.dept), 'left'], ['From date', x => txt(x.fromDate), 'left'], ['To date', x => txt(x.toDate), 'left'], ['Duration', x => S.fmtYM ? S.fmtYM(S.experienceYearsOf(x)) : txt(x.years), 'right', '18%']],
     rows: priorEntries,
     empty: e.previous_experience ? String(e.previous_experience) : 'No prior service recorded.'
   })), on('credentials') && React.createElement(Sec, {
@@ -1750,7 +1750,8 @@ function StaffProfile({
     })
   }, "Back to roster"));
   const tenure = unicoTenure(e.doj);
-  const backView = e.role === 'PCA' ? 'pca' : 'nurses';
+  const trainee = window.STAFF.staffGroupOf(e) === 'Trainee';
+  const backView = e.role === 'PCA' ? 'pca' : trainee ? 'trainees' : 'nurses';
   const priorY = S.priorYearsOf(e);
   const totalY = S.expYears(e);
   const totalText = S.fmtYM(totalY);
@@ -2042,7 +2043,7 @@ function StaffProfile({
     style: {
       transform: 'rotate(180deg)'
     }
-  }), e.role === 'PCA' ? 'PCA' : 'Nurses'), React.createElement("span", {
+  }), e.role === 'PCA' ? 'PCA' : trainee ? 'Trainee Nurses' : 'Nurses'), React.createElement("span", {
     className: "spacer",
     style: {
       flex: 1
@@ -2896,14 +2897,20 @@ function StaffProfile({
       color: 'var(--ink-2)',
       marginTop: 1
     }
-  }, x.dept) : null, React.createElement("div", {
+  }, x.dept) : null, (x.fromDate || x.toDate) && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--ink-2)',
+      marginTop: 2
+    }
+  }, x.fromDate || '—', " to ", x.toDate || '—'), React.createElement("div", {
     className: "num",
     style: {
       fontSize: 12,
       color: 'var(--muted)',
       marginTop: 1
     }
-  }, S.fmtYM((parseFloat(x.years) || 0) + (parseFloat(x.months) || 0) / 12))))))), React.createElement("div", {
+  }, S.fmtYM(S.experienceYearsOf(x)))))))), React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--muted)',
@@ -7035,6 +7042,7 @@ function StaffForm({
   empId,
   setRoute,
   role,
+  designation,
   depts
 }) {
   const editing = !!empId;
@@ -7048,7 +7056,7 @@ function StaffForm({
     name: '',
     phone: '',
     qualification: '',
-    designation: '',
+    designation: designation || '',
     current_department: '',
     doj: '',
     prior_experience_entries: [],
@@ -7301,7 +7309,7 @@ function StaffForm({
     }
   }, t);
   const entries = f.prior_experience_entries || [];
-  const entYears = x => (parseFloat(x && x.years) || 0) + (parseFloat(x && x.months) || 0) / 12;
+  const entYears = S.experienceYearsOf;
   const setEntry = (i, k, v) => set('prior_experience_entries', entries.map((x, j) => j === i ? {
     ...x,
     [k]: v
@@ -7309,12 +7317,15 @@ function StaffForm({
   const addEntry = () => set('prior_experience_entries', [...entries, {
     org: '',
     dept: '',
+    mode: 'dates',
+    fromDate: '',
+    toDate: '',
     years: '',
     months: ''
   }]);
   const delEntry = i => set('prior_experience_entries', entries.filter((_, j) => j !== i));
   const rowsPriorSum = entries.reduce((s, x) => s + entYears(x), 0);
-  const hasRows = entries.some(x => entYears(x) > 0);
+  const hasRows = entries.some(x => entYears(x) > 0 || S.experienceUsesDates(x) && x.fromDate && x.toDate);
   const directPrior = (parseFloat(dpY) || 0) + (parseFloat(dpM) || 0) / 12;
   const priorSum = hasRows ? rowsPriorSum : directPrior;
   const unicoY = S.unicoYearsOf(f);
@@ -7344,8 +7355,15 @@ function StaffForm({
       fail('Date of Joining must be YYYY-MM-DD');
       return;
     }
-    const cleanEntries = entries.filter(x => entYears(x) > 0 || x.org && x.org.trim() || x.dept && x.dept.trim());
-    const rowsHave = cleanEntries.some(x => entYears(x) > 0);
+    const cleanEntries = entries.filter(x => entYears(x) > 0 || x.fromDate || x.toDate || x.org && x.org.trim() || x.dept && x.dept.trim());
+    for (const entry of cleanEntries) {
+      const dateError = S.experienceDateError(entry, f.doj);
+      if (dateError) {
+        fail(dateError);
+        return;
+      }
+    }
+    const rowsHave = cleanEntries.some(x => entYears(x) > 0 || S.experienceUsesDates(x) && x.fromDate && x.toDate);
     const pSum = rowsHave ? cleanEntries.reduce((s, x) => s + entYears(x), 0) : directPrior;
     const total = Math.round((pSum + S.unicoYearsOf(f)) * 10) / 10;
     const data = {
@@ -7355,7 +7373,7 @@ function StaffForm({
       prior_experience_years: Math.round(pSum * 100) / 100,
       total_experience_years: total,
       total_experience_text: S.fmtYM(total),
-      previous_experience: rowsHave ? cleanEntries.map(x => `${[x.org || 'Prior role', (x.dept || '').trim()].filter(Boolean).join(' — ')} (${S.fmtYM(entYears(x))})`).join('; ') : f.previous_experience || ''
+      previous_experience: rowsHave ? cleanEntries.map(x => `${[x.org || 'Prior role', (x.dept || '').trim()].filter(Boolean).join(' — ')} (${S.experienceUsesDates(x) ? x.fromDate + ' to ' + x.toDate + ' · ' : ''}${S.fmtYM(entYears(x))})`).join('; ') : f.previous_experience || ''
     };
     saveLock.current = true;
     setSaving(true);
@@ -7390,7 +7408,7 @@ function StaffForm({
       view: 'staffProfile',
       emp: empId
     } : {
-      view: (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
+      view: S.staffGroupOf(f) === 'Trainee' ? 'trainees' : (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
     });
   };
   const sec = (title, kids) => React.createElement("div", {
@@ -7476,7 +7494,7 @@ function StaffForm({
       view: 'staffProfile',
       emp: empId
     } : {
-      view: (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
+      view: S.staffGroupOf(f) === 'Trainee' ? 'trainees' : (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
     })
   }, "Cancel"), React.createElement("button", {
     className: "btn pri sm",
@@ -7623,7 +7641,7 @@ function StaffForm({
       fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, "Enter total experience ", React.createElement("b", null, "before joining UNICO"), " below \u2014 or itemise it by organisation. UNICO tenure (from Date of Joining) is then added to give total experience."), React.createElement("div", {
+  }, "Record your career journey ", React.createElement("b", null, "before joining UNICO"), " using From and To dates for each organisation. Duration is calculated automatically. If dates are unavailable, choose Years / months. UNICO tenure is added from Date of Joining."), React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'flex-end',
@@ -7646,7 +7664,7 @@ function StaffForm({
       color: 'var(--ink-2)',
       fontWeight: 600
     }
-  }, "Previous experience (excl. UNICO)"), React.createElement("div", {
+  }, "Alternative: total previous experience (excl. UNICO)"), React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -7700,64 +7718,85 @@ function StaffForm({
       color: 'var(--muted)',
       marginTop: 2
     }
-  }, "Optional \u2014 break the above down by organisation / role:"), entries.length === 0 && React.createElement("div", {
+  }, "Career journey by organisation / role:"), entries.length === 0 && React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: 'var(--faint)',
       padding: '2px 0'
     }
-  }, "No itemised roles added."), entries.length > 0 && React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: '1fr 1fr 78px 78px 32px',
-      gap: 8,
-      fontSize: 10.5,
-      color: 'var(--muted)',
-      textTransform: 'uppercase',
-      letterSpacing: .4,
-      fontWeight: 600
-    }
-  }, React.createElement("span", null, "Organization"), React.createElement("span", null, "Department / role"), React.createElement("span", null, "Years"), React.createElement("span", null, "Months"), React.createElement("span", null)), entries.map((x, i) => React.createElement("div", {
+  }, "No itemised roles added."), entries.map((x, i) => React.createElement("div", {
     key: i,
+    className: "card",
     style: {
+      padding: 12,
       display: 'grid',
-      gridTemplateColumns: '1fr 1fr 78px 78px 32px',
+      gridTemplateColumns: '1fr 1fr',
       gap: 8,
       alignItems: 'center'
     }
-  }, React.createElement("input", {
+  }, React.createElement("label", null, "Organisation", React.createElement("input", {
+    "aria-label": `Experience ${i + 1} organisation`,
     value: x.org || '',
     onChange: ev => setEntry(i, 'org', ev.target.value),
-    placeholder: "Organisation \u2014 e.g. City Hospital",
+    placeholder: "e.g. City Hospital",
     style: rowInp
-  }), React.createElement(ComboInput, {
+  })), React.createElement(ComboInput, {
     value: x.dept || '',
     onChange: v => setEntry(i, 'dept', v),
     options: deptOpts,
     labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
     placeholder: "Department / role \u2014 type anything",
     style: rowInp
-  }), React.createElement("input", {
+  }), React.createElement("label", null, "Experience entry", React.createElement("select", {
+    "aria-label": `Experience ${i + 1} entry method`,
+    value: S.experienceUsesDates(x) ? 'dates' : 'duration',
+    onChange: ev => set('prior_experience_entries', entries.map((row, j) => j === i ? {
+      ...row,
+      mode: ev.target.value,
+      fromDate: ev.target.value === 'duration' ? '' : row.fromDate,
+      toDate: ev.target.value === 'duration' ? '' : row.toDate,
+      years: ev.target.value === 'duration' ? String(Math.floor(entYears(row))) : row.years,
+      months: ev.target.value === 'duration' ? String(Math.round(entYears(row) % 1 * 12)) : row.months
+    } : row)),
+    style: rowInp
+  }, React.createElement("option", {
+    value: "dates"
+  }, "From date / To date (default)"), React.createElement("option", {
+    value: "duration"
+  }, "Years / months"))), React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Duration: ", S.fmtYM(entYears(x))), S.experienceUsesDates(x) ? React.createElement(React.Fragment, null, React.createElement("label", null, "From date", React.createElement("input", {
+    "aria-label": `Experience ${i + 1} from date`,
+    type: "date",
+    value: x.fromDate || '',
+    onChange: ev => setEntry(i, 'fromDate', ev.target.value),
+    style: rowInp
+  })), React.createElement("label", null, "To date", React.createElement("input", {
+    "aria-label": `Experience ${i + 1} to date`,
+    type: "date",
+    min: x.fromDate || undefined,
+    max: f.doj || undefined,
+    value: x.toDate || '',
+    onChange: ev => setEntry(i, 'toDate', ev.target.value),
+    style: rowInp
+  }))) : React.createElement(React.Fragment, null, React.createElement("label", null, "Years", React.createElement("input", {
+    "aria-label": `Experience ${i + 1} years`,
     value: x.years || '',
     onChange: ev => setEntry(i, 'years', ev.target.value.replace(/[^\d.]/g, '')),
     placeholder: "0",
     inputMode: "decimal",
-    style: {
-      ...rowInp,
-      textAlign: 'center',
-      fontFamily: 'IBM Plex Mono'
-    }
-  }), React.createElement("input", {
+    style: rowInp
+  })), React.createElement("label", null, "Months", React.createElement("input", {
+    "aria-label": `Experience ${i + 1} months`,
     value: x.months || '',
     onChange: ev => setEntry(i, 'months', ev.target.value.replace(/[^\d]/g, '')),
     placeholder: "0",
     inputMode: "numeric",
-    style: {
-      ...rowInp,
-      textAlign: 'center',
-      fontFamily: 'IBM Plex Mono'
-    }
-  }), React.createElement("button", {
+    style: rowInp
+  }))), React.createElement("button", {
     className: "icon-btn danger",
     title: "Remove",
     onClick: () => delEntry(i),
@@ -7958,7 +7997,7 @@ function StaffForm({
       view: 'staffProfile',
       emp: empId
     } : {
-      view: (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
+      view: S.staffGroupOf(f) === 'Trainee' ? 'trainees' : (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
     })
   }, "Cancel")))))), React.createElement(StaffFormRail, {
     f: f,

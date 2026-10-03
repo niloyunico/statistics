@@ -14396,20 +14396,20 @@
         fontSize: '8pt',
         marginTop: 2
       }
-    }, React.createElement("thead", null, React.createElement("tr", null, ['#', 'Organisation / hospital', 'Department / role', 'Years', 'Months'].map((h, i) => React.createElement("th", {
+    }, React.createElement("thead", null, React.createElement("tr", null, ['#', 'Organisation / hospital', 'Department / role', 'From date', 'To date', 'Years', 'Months'].map((h, i) => React.createElement("th", {
       key: h,
       style: {
         border: '1px solid ' + line,
         padding: '2px 5px',
         background: '#eef2f6',
         textAlign: i > 2 ? 'center' : 'left',
-        width: i === 0 ? '5%' : i > 2 ? '10%' : 'auto',
+        width: i === 0 ? '4%' : i === 3 || i === 4 ? '14%' : i > 4 ? '8%' : 'auto',
         WebkitPrintColorAdjust: 'exact',
         printColorAdjust: 'exact'
       }
     }, h)))), React.createElement("tbody", null, [1, 2, 3, 4, 5, 6, 7, 8].map(i => React.createElement("tr", {
       key: i
-    }, [0, 1, 2, 3, 4].map(c => React.createElement("td", {
+    }, [0, 1, 2, 3, 4, 5, 6].map(c => React.createElement("td", {
       key: c,
       style: {
         border: '1px solid ' + line,

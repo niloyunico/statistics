@@ -290,6 +290,18 @@ function App(){
     const ids=(me&&me.staffScope==='departments'&&Array.isArray(me.departments)&&me.departments.length)?me.departments:(DM&&DM.patientDeptIds?DM.patientDeptIds():safeDepts.map(d=>d.id));
     const reqDepts=ids.map(id=>({id,name:(DM&&DM.nameFromId&&DM.nameFromId(id))||id}));
     body=(typeof CollectorStaffRequests!=='undefined') ? <CollectorStaffRequests depts={reqDepts}/> : null;
+  } else if(route.view==='staffHome'){
+    crumbs=['UNICO','Staff Management','All Staff Dashboard'];
+    body=<WorkforceDashboard store={staff} setRoute={setRoute} role="Nurse" group="All"/>;
+  } else if(route.view==='traineeHome'){
+    crumbs=['UNICO','Staff Management','Trainee Nurse Dashboard'];
+    body=<WorkforceDashboard store={staff} setRoute={setRoute} role="Nurse" group="Trainee"/>;
+  } else if(route.view==='staffAll'){
+    crumbs=['UNICO','Staff Management','All Staff Directory'];
+    body=<ManageStaff store={staff} setRoute={setRoute} role="Nurse" group="All"/>;
+  } else if(route.view==='trainees'){
+    crumbs=['UNICO','Staff Management','Trainee Nurses'];
+    body=<ManageStaff store={staff} setRoute={setRoute} role="Nurse" group="Trainee"/>;
   } else if(route.view==='nurseHome'){
     crumbs=['UNICO','Staff Management','Nurse Dashboard'];
     body=<WorkforceDashboard store={staff} setRoute={setRoute} role="Nurse"/>;
@@ -353,7 +365,7 @@ function App(){
     body=<StaffProfile store={staff} empId={route.emp} setRoute={setRoute}/>;
   } else if(route.view==='staffForm'){
     crumbs=['UNICO','Staff Management',route.emp?'Edit Staff':`Add ${route.role||'Staff'}`];
-    body=<StaffForm store={staff} empId={route.emp} setRoute={setRoute} role={route.role} depts={depts}/>;
+    body=<StaffForm store={staff} empId={route.emp} setRoute={setRoute} role={route.role} designation={route.designation} depts={depts}/>;
   }
 
   if(window.unicoSession && window.unicoSession.configured() && !authed){ return <CloudLogin onLogin={()=>setAuthed(true)}/>; }

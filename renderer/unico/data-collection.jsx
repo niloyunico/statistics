@@ -5805,8 +5805,8 @@
 
           <Sec n={3} title="Previous experience (before joining UNICO)">
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8pt', marginTop: 2 }}>
-              <thead><tr>{['#', 'Organisation / hospital', 'Department / role', 'Years', 'Months'].map((h, i) => <th key={h} style={{ border: '1px solid ' + line, padding: '2px 5px', background: '#eef2f6', textAlign: i > 2 ? 'center' : 'left', width: i === 0 ? '5%' : i > 2 ? '10%' : 'auto', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>{h}</th>)}</tr></thead>
-              <tbody>{[1, 2, 3, 4, 5, 6, 7, 8].map((i) => <tr key={i}>{[0, 1, 2, 3, 4].map((c) => <td key={c} style={{ border: '1px solid ' + line, height: 17, textAlign: 'center', fontSize: '8pt', color: soft }}>{c === 0 ? i : ''}</td>)}</tr>)}</tbody>
+              <thead><tr>{['#', 'Organisation / hospital', 'Department / role', 'From date', 'To date', 'Years', 'Months'].map((h, i) => <th key={h} style={{ border: '1px solid ' + line, padding: '2px 5px', background: '#eef2f6', textAlign: i > 2 ? 'center' : 'left', width: i === 0 ? '4%' : i === 3 || i === 4 ? '14%' : i > 4 ? '8%' : 'auto', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' }}>{h}</th>)}</tr></thead>
+              <tbody>{[1, 2, 3, 4, 5, 6, 7, 8].map((i) => <tr key={i}>{[0, 1, 2, 3, 4, 5, 6].map((c) => <td key={c} style={{ border: '1px solid ' + line, height: 17, textAlign: 'center', fontSize: '8pt', color: soft }}>{c === 0 ? i : ''}</td>)}</tr>)}</tbody>
             </table>
             <Row>
               <div style={{ flex: '0 0 auto', fontSize: '8.5pt', fontWeight: 600, marginTop: 5, alignSelf: 'flex-end', whiteSpace: 'nowrap' }}>Total previous experience: ____ yrs ____ mo</div>

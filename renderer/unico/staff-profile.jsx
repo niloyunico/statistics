@@ -353,7 +353,9 @@ function StaffRecordSheet({ e, perf, tenure, sel, onDone }){
           <Tbl cols={[
               ['Organisation',x=>txt(x.org),'left'],
               ['Department',x=>txt(x.dept),'left'],
-              ['Duration',x=>S.fmtYM?S.fmtYM((parseFloat(x.years)||0)+(parseFloat(x.months)||0)/12):txt(x.years),'right','22%'],
+              ['From date',x=>txt(x.fromDate),'left'],
+              ['To date',x=>txt(x.toDate),'left'],
+              ['Duration',x=>S.fmtYM?S.fmtYM(S.experienceYearsOf(x)):txt(x.years),'right','18%'],
             ]} rows={priorEntries}
             empty={e.previous_experience?String(e.previous_experience):'No prior service recorded.'}/>
         </Sec>}
@@ -809,7 +811,8 @@ function StaffProfile({store, empId, setRoute}){
   const perf=useStaffPerf(perfId);
   if(!e) return <div style={{padding:40}}>Staff not found. <button className="btn sm" onClick={()=>setRoute({view:'nurses'})}>Back to roster</button></div>;
   const tenure=unicoTenure(e.doj);
-  const backView=e.role==='PCA'?'pca':'nurses';
+  const trainee=window.STAFF.staffGroupOf(e)==='Trainee';
+  const backView=e.role==='PCA'?'pca':trainee?'trainees':'nurses';
   const priorY=S.priorYearsOf(e);                     // null if no structured prior
   const totalY=S.expYears(e);
   const totalText=S.fmtYM(totalY);                    // TOTAL = prior + UNICO
@@ -890,7 +893,7 @@ function StaffProfile({store, empId, setRoute}){
     <div className="grid" style={{gap:16}}>
       {/* action bar */}
       <div style={{display:'flex',alignItems:'center',gap:10}}>
-        <button className="btn sm" onClick={()=>setRoute({view:backView})}><Ic d={I.chevR} s={14} style={{transform:'rotate(180deg)'}}/>{e.role==='PCA'?'PCA':'Nurses'}</button>
+        <button className="btn sm" onClick={()=>setRoute({view:backView})}><Ic d={I.chevR} s={14} style={{transform:'rotate(180deg)'}}/>{e.role==='PCA'?'PCA':trainee?'Trainee Nurses':'Nurses'}</button>
         <span className="spacer" style={{flex:1}}/>
         {e.is_active&&(!window.unicoCan||window.unicoCan('staff','edit'))&&
           <button className="btn sm" title="Discontinue — record the exit reason & move to Previous Staff (feeds the attrition rate)"
@@ -1195,7 +1198,8 @@ function StaffProfile({store, empId, setRoute}){
                         <div style={{fontSize:13,fontWeight:700,color:'var(--ink)'}}>{x.org||'Prior role'}</div>
                         {/* dept is optional — rows captured before the column existed have none */}
                         {x.dept?<div style={{fontSize:11.5,color:'var(--ink-2)',marginTop:1}}>{x.dept}</div>:null}
-                        <div className="num" style={{fontSize:12,color:'var(--muted)',marginTop:1}}>{S.fmtYM((parseFloat(x.years)||0)+(parseFloat(x.months)||0)/12)}</div>
+                        {(x.fromDate||x.toDate)&&<div style={{fontSize:11.5,color:'var(--ink-2)',marginTop:2}}>{x.fromDate||'—'} to {x.toDate||'—'}</div>}
+                        <div className="num" style={{fontSize:12,color:'var(--muted)',marginTop:1}}>{S.fmtYM(S.experienceYearsOf(x))}</div>
                       </div>
                     </div>
                   ))}
@@ -2922,11 +2926,11 @@ function BnmcVerify({ f, set, store, empId, editing }){
   );
 }
 
-function StaffForm({store, empId, setRoute, role, depts}){
+function StaffForm({store, empId, setRoute, role, designation, depts}){
   const editing=!!empId;
   const existing=editing?store.get(empId):null;
   const [f,setF]=React.useState(()=> existing? {...existing, prior_experience_entries:initPriorEntries(existing)} : {
-    role:role||'Nurse',emp_id:'',name:'',phone:'',qualification:'',designation:'',current_department:'',doj:'',
+    role:role||'Nurse',emp_id:'',name:'',phone:'',qualification:'',designation:designation||'',current_department:'',doj:'',
     prior_experience_entries:[],previous_experience:'',special_training:'',extracurricular:'',hepatitis_b_vaccination:'',remarks:'',privileges:{}
   });
   const [err,setErr]=React.useState('');
@@ -3041,12 +3045,12 @@ function StaffForm({store, empId, setRoute, role, depts}){
 
   // ---- dynamic previous-experience rows + live totals ----
   const entries=f.prior_experience_entries||[];
-  const entYears=(x)=>(parseFloat(x&&x.years)||0)+(parseFloat(x&&x.months)||0)/12;
+  const entYears=S.experienceYearsOf;
   const setEntry=(i,k,v)=>set('prior_experience_entries',entries.map((x,j)=>j===i?{...x,[k]:v}:x));
-  const addEntry=()=>set('prior_experience_entries',[...entries,{org:'',dept:'',years:'',months:''}]);
+  const addEntry=()=>set('prior_experience_entries',[...entries,{org:'',dept:'',mode:'dates',fromDate:'',toDate:'',years:'',months:''}]);
   const delEntry=(i)=>set('prior_experience_entries',entries.filter((_,j)=>j!==i));
   const rowsPriorSum=entries.reduce((s,x)=>s+entYears(x),0);
-  const hasRows=entries.some(x=>entYears(x)>0);
+  const hasRows=entries.some(x=>entYears(x)>0||(S.experienceUsesDates(x)&&x.fromDate&&x.toDate));
   const directPrior=(parseFloat(dpY)||0)+(parseFloat(dpM)||0)/12;
   // Itemised rows win when present; otherwise use the direct field.
   const priorSum=hasRows?rowsPriorSum:directPrior;
@@ -3061,8 +3065,9 @@ function StaffForm({store, empId, setRoute, role, depts}){
     const fail=(m)=>{ setErr(m); try{ window.UI&&window.UI.toast&&window.UI.toast(m,'error'); }catch(e){} };
     if(!f.name||!f.name.trim()){ fail('Name is required'); return; }
     if(f.doj && isNaN(new Date(f.doj))){ fail('Date of Joining must be YYYY-MM-DD'); return; }
-    const cleanEntries=entries.filter(x=>entYears(x)>0||(x.org&&x.org.trim())||(x.dept&&x.dept.trim()));
-    const rowsHave=cleanEntries.some(x=>entYears(x)>0);
+    const cleanEntries=entries.filter(x=>entYears(x)>0||x.fromDate||x.toDate||(x.org&&x.org.trim())||(x.dept&&x.dept.trim()));
+    for(const entry of cleanEntries){ const dateError=S.experienceDateError(entry,f.doj); if(dateError){fail(dateError);return;} }
+    const rowsHave=cleanEntries.some(x=>entYears(x)>0||(S.experienceUsesDates(x)&&x.fromDate&&x.toDate));
     const pSum=rowsHave?cleanEntries.reduce((s,x)=>s+entYears(x),0):directPrior;
     const total=Math.round((pSum+S.unicoYearsOf(f))*10)/10;
     const data={...f, role:f.role||'Nurse',
@@ -3071,7 +3076,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
       total_experience_years:total,
       total_experience_text:S.fmtYM(total),
       previous_experience: rowsHave
-        ? cleanEntries.map(x=>`${[x.org||'Prior role',(x.dept||'').trim()].filter(Boolean).join(' — ')} (${S.fmtYM(entYears(x))})`).join('; ')
+        ? cleanEntries.map(x=>`${[x.org||'Prior role',(x.dept||'').trim()].filter(Boolean).join(' — ')} (${S.experienceUsesDates(x)?x.fromDate+' to '+x.toDate+' · ':''}${S.fmtYM(entYears(x))})`).join('; ')
         : (f.previous_experience||'')};
     // A failed write must NOT look like a success: only the confirmation path routes away.
     saveLock.current=true; setSaving(true);
@@ -3099,7 +3104,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
   // screen swaps out from under it.
   const leaveAfterSave=()=>{
     setSaved(null);
-    setRoute(editing?{view:'staffProfile',emp:empId}:{view:(f.role||'Nurse')==='PCA'?'pca':'nurses'});
+    setRoute(editing?{view:'staffProfile',emp:empId}:{view:S.staffGroupOf(f)==='Trainee'?'trainees':(f.role||'Nurse')==='PCA'?'pca':'nurses'});
   };
 
   const sec=(title,kids)=>(
@@ -3131,7 +3136,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
               means the open local mode, where the whole app is unrestricted anyway. */}
           {!editing && window.UnicoStaffRegForm && (!window.unicoCan || window.unicoCan('staff','add')) && <button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={()=>setPrintForm(true)}><Ic d={I.doc} s={14}/>Print blank form</button>}
           {printForm && window.UnicoStaffRegForm && React.createElement(window.UnicoStaffRegForm,{role:f.role||'Nurse',onDone:()=>setPrintForm(false)})}
-          <button className="btn sm" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
+          <button className="btn sm" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:S.staffGroupOf(f)==='Trainee'?'trainees':(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
           <button className="btn pri sm" disabled={saving} onClick={save}><Ic d={I.check} s={15} sw={2.4}/>{saving?'Saving?':editing?'Save changes':'Create staff'}</button>
         </div>
         {!editing && (
@@ -3196,11 +3201,11 @@ function StaffForm({store, empId, setRoute, role, depts}){
           </>)}
           {sec('Previous Experience',<>
             <div style={{gridColumn:'1 / -1',display:'flex',flexDirection:'column',gap:9}}>
-              <span style={{fontSize:11.5,color:'var(--muted)'}}>Enter total experience <b>before joining UNICO</b> below — or itemise it by organisation. UNICO tenure (from Date of Joining) is then added to give total experience.</span>
+              <span style={{fontSize:11.5,color:'var(--muted)'}}>Record your career journey <b>before joining UNICO</b> using From and To dates for each organisation. Duration is calculated automatically. If dates are unavailable, choose Years / months. UNICO tenure is added from Date of Joining.</span>
               {/* Direct pre-UNICO experience — used unless itemised rows are added below. */}
               <div style={{display:'flex',alignItems:'flex-end',gap:10,flexWrap:'wrap',background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:9,padding:'11px 14px'}}>
                 <div style={{display:'flex',flexDirection:'column',gap:4}}>
-                  <label style={{fontSize:11,color:'var(--ink-2)',fontWeight:600}}>Previous experience (excl. UNICO)</label>
+                  <label style={{fontSize:11,color:'var(--ink-2)',fontWeight:600}}>Alternative: total previous experience (excl. UNICO)</label>
                   <div style={{display:'flex',alignItems:'center',gap:6}}>
                     <input value={hasRows?String(Math.floor(rowsPriorSum)||''):dpY} disabled={hasRows} onChange={ev=>setDpY(ev.target.value.replace(/[^\d.]/g,''))} placeholder="0" inputMode="decimal" style={{...rowInp,width:64,textAlign:'center',fontFamily:'IBM Plex Mono',opacity:hasRows?.6:1}}/>
                     <span style={{fontSize:11.5,color:'var(--muted)'}}>yrs</span>
@@ -3210,20 +3215,25 @@ function StaffForm({store, empId, setRoute, role, depts}){
                 </div>
                 {hasRows&&<span style={{fontSize:11,color:'var(--muted)',paddingBottom:6}}>Auto-summed from the organisation breakdown below.</span>}
               </div>
-              <span style={{fontSize:11.5,color:'var(--muted)',marginTop:2}}>Optional — break the above down by organisation / role:</span>
+              <span style={{fontSize:11.5,color:'var(--muted)',marginTop:2}}>Career journey by organisation / role:</span>
               {entries.length===0&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'2px 0'}}>No itemised roles added.</div>}
-              {entries.length>0&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr 78px 78px 32px',gap:8,fontSize:10.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,fontWeight:600}}>
-                <span>Organization</span><span>Department / role</span><span>Years</span><span>Months</span><span/></div>}
               {entries.map((x,i)=>(
-                <div key={i} style={{display:'grid',gridTemplateColumns:'1fr 1fr 78px 78px 32px',gap:8,alignItems:'center'}}>
-                  <input value={x.org||''} onChange={ev=>setEntry(i,'org',ev.target.value)} placeholder="Organisation — e.g. City Hospital" style={rowInp}/>
+                <div key={i} className="card" style={{padding:12,display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,alignItems:'center'}}>
+                  <label>Organisation<input aria-label={`Experience ${i+1} organisation`} value={x.org||''} onChange={ev=>setEntry(i,'org',ev.target.value)} placeholder="e.g. City Hospital" style={rowInp}/></label>
                   {/* Free-text allowed: a previous employer's unit is often not a UNICO one.
                       Rows saved before this column existed simply have no `dept`. */}
                   <ComboInput value={x.dept||''} onChange={v=>setEntry(i,'dept',v)} options={deptOpts}
                     labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel}
                     placeholder="Department / role — type anything" style={rowInp}/>
-                  <input value={x.years||''} onChange={ev=>setEntry(i,'years',ev.target.value.replace(/[^\d.]/g,''))} placeholder="0" inputMode="decimal" style={{...rowInp,textAlign:'center',fontFamily:'IBM Plex Mono'}}/>
-                  <input value={x.months||''} onChange={ev=>setEntry(i,'months',ev.target.value.replace(/[^\d]/g,''))} placeholder="0" inputMode="numeric" style={{...rowInp,textAlign:'center',fontFamily:'IBM Plex Mono'}}/>
+                  <label>Experience entry<select aria-label={`Experience ${i+1} entry method`} value={S.experienceUsesDates(x)?'dates':'duration'} onChange={ev=>set('prior_experience_entries',entries.map((row,j)=>j===i?{...row,mode:ev.target.value,fromDate:ev.target.value==='duration'?'':row.fromDate,toDate:ev.target.value==='duration'?'':row.toDate,years:ev.target.value==='duration'?String(Math.floor(entYears(row))):row.years,months:ev.target.value==='duration'?String(Math.round((entYears(row)%1)*12)):row.months}:row))} style={rowInp}><option value="dates">From date / To date (default)</option><option value="duration">Years / months</option></select></label>
+                  <span style={{fontSize:12,color:'var(--muted)'}}>Duration: {S.fmtYM(entYears(x))}</span>
+                  {S.experienceUsesDates(x)?<>
+                    <label>From date<input aria-label={`Experience ${i+1} from date`} type="date" value={x.fromDate||''} onChange={ev=>setEntry(i,'fromDate',ev.target.value)} style={rowInp}/></label>
+                    <label>To date<input aria-label={`Experience ${i+1} to date`} type="date" min={x.fromDate||undefined} max={f.doj||undefined} value={x.toDate||''} onChange={ev=>setEntry(i,'toDate',ev.target.value)} style={rowInp}/></label>
+                  </>:<>
+                    <label>Years<input aria-label={`Experience ${i+1} years`} value={x.years||''} onChange={ev=>setEntry(i,'years',ev.target.value.replace(/[^\d.]/g,''))} placeholder="0" inputMode="decimal" style={rowInp}/></label>
+                    <label>Months<input aria-label={`Experience ${i+1} months`} value={x.months||''} onChange={ev=>setEntry(i,'months',ev.target.value.replace(/[^\d]/g,''))} placeholder="0" inputMode="numeric" style={rowInp}/></label>
+                  </>}
                   <button className="icon-btn danger" title="Remove" onClick={()=>delEntry(i)} style={{justifySelf:'center'}}><Ic d={I.x} s={14}/></button>
                 </div>
               ))}
@@ -3314,7 +3324,7 @@ function StaffForm({store, empId, setRoute, role, depts}){
           {err&&<div style={{fontSize:12.5,color:'var(--rose)',fontWeight:600}}>{err}</div>}
           <div style={{display:'flex',gap:10,borderTop:'1px solid var(--line-2)',paddingTop:14}}>
             <button className="btn pri" disabled={saving} onClick={save}><Ic d={I.check} s={16} sw={2.4}/>{saving?'Saving?':editing?'Save changes':'Create staff'}</button>
-            <button className="btn" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
+            <button className="btn" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:S.staffGroupOf(f)==='Trainee'?'trainees':(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
           </div>
         </div></div>
       </div>

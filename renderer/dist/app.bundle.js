@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=08eb088ada","reports":"/dist/reports.chunk.js?v=9ee597f2ec","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=3f62e91b5f","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=81a436b7b3","reports":"/dist/reports.chunk.js?v=9ee597f2ec","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=324b6abb6f","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -1995,6 +1995,21 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   function byRole(list){ const m={}; list.filter(e=>e.is_active).forEach(e=>{const k=e.role||'Nurse';m[k]=(m[k]||0)+1;}); return Object.entries(m); }
   function uniqueVals(list,key){ return [...new Set(list.filter(e=>e.is_active&&e[key]&&e[key].trim()).map(e=>e[key].trim()))].sort(); }
 
+  // Trainee nurses remain Nurse records; designation determines their roster group.
+  function staffGroupOf(person){
+    const role=String((person&&person.role)||'Nurse').trim().toLowerCase();
+    if(role==='pca') return 'PCA';
+    const designation=String((person&&person.designation)||'').toLowerCase().replace(/[^a-z]+/g,' ').trim();
+    if((role==='nurse' && /\btrainee\b/.test(designation) && /\bnurs(?:e|ing)\b/.test(designation)) || /^(trainee nurse|nurse trainee)$/.test(role)) return 'Trainee';
+    return role==='nurse'?'Nurse':(person&&person.role)||'Nurse';
+  }
+  function matchesStaffGroup(person,group){ return group==='All' || staffGroupOf(person)===group; }
+  function staffCounts(list){
+    const counts={All:0,Nurse:0,Trainee:0,PCA:0};
+    list.filter(e=>e.is_active&&!e.former).forEach(e=>{counts.All++;const group=staffGroupOf(e);if(group in counts&&group!=='All') counts[group]++;});
+    return counts;
+  }
+
   // ---------- analytics (mirror services/analytics.py) ----------
   const VACC_OK=["Completed","3rd Dose"];
   function kpis(list){
@@ -2034,11 +2049,36 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   }
   // Sum of the structured prior-experience entries, in years. Returns null when no
   // structured prior was ever entered (so the legacy fallback path is used).
+  function experienceDate(value){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(String(value||''))) return null;
+    const date=new Date(value+'T00:00:00Z');
+    return !isNaN(date)&&date.toISOString().slice(0,10)===value?date:null;
+  }
+  function experienceUsesDates(entry){ return !!entry&&(entry.mode==='dates'||(!entry.mode&&(entry.fromDate||entry.toDate))); }
+  function experienceDateError(entry,doj){
+    if(!experienceUsesDates(entry)) return '';
+    const from=experienceDate(entry.fromDate),to=experienceDate(entry.toDate);
+    if(!from||!to) return 'Enter valid From and To dates for each previous role.';
+    if(to<from) return 'The To date cannot be before the From date.';
+    if(to>new Date()) return 'Previous experience cannot end in the future.';
+    const joined=experienceDate(doj);
+    if(joined&&to>joined) return 'Previous experience must end on or before joining UNICO.';
+    return '';
+  }
+  function experienceYearsOf(entry){
+    if(experienceUsesDates(entry)){
+      const from=experienceDate(entry.fromDate),to=experienceDate(entry.toDate);
+      if(!from||!to||to<from) return 0;
+      let months=(to.getUTCFullYear()-from.getUTCFullYear())*12+to.getUTCMonth()-from.getUTCMonth();
+      if(to.getUTCDate()<from.getUTCDate()) months--;
+      return Math.max(0,months)/12;
+    }
+    return Math.max(0,parseFloat(entry&&entry.years)||0)+Math.max(0,parseFloat(entry&&entry.months)||0)/12;
+  }
   function priorYearsOf(e){
     if(!e) return null;
     if(Array.isArray(e.prior_experience_entries) && e.prior_experience_entries.length){
-      return e.prior_experience_entries.reduce((s,x)=>
-        s + (parseFloat(x&&x.years)||0) + (parseFloat(x&&x.months)||0)/12, 0);
+      return e.prior_experience_entries.reduce((s,x)=>s+experienceYearsOf(x),0);
     }
     if(e.prior_experience_years!=null && e.prior_experience_years!=='' && !isNaN(e.prior_experience_years))
       return +e.prior_experience_years;
@@ -2379,7 +2419,7 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     deptGroupsFor,setDeptGroups,
     fieldOptList,addFieldOpt,removeFieldOpt,
     customFields,addCustomField,removeCustomField,renameCustomField,addCustomFieldOption,removeCustomFieldOption,
-    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,birthdays,byRole,uniqueVals};
+    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,birthdays,byRole,uniqueVals,staffGroupOf,matchesStaffGroup,staffCounts,experienceUsesDates,experienceDateError,experienceYearsOf};
   window.useStaffStore=useStaffStore;
 })();
 
@@ -9767,7 +9807,7 @@ const UNICO_MODULES = [{
   label: 'Staff Management',
   short: 'Staff',
   icon: I.steth,
-  home: 'nurseHome'
+  home: 'staffHome'
 }, {
   id: 'quality',
   label: 'Quality Indicators',
@@ -9820,7 +9860,7 @@ const UNICO_MODULES = [{
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
   datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
-  staff: ['nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests'],
+  staff: ['staffHome', 'staffAll', 'traineeHome', 'trainees', 'nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
   supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport'],
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
@@ -9987,15 +10027,20 @@ function unicoSidebarGroups(moduleId) {
   if (moduleId === 'staff') return [{
     sec: 'Staff Management',
     items: [{
-      id: 'nurseHome',
+      id: 'staffHome',
       label: 'Dashboard',
       icon: I.grid,
-      match: ['nurseHome', 'pcaHome']
+      match: ['staffHome', 'nurseHome', 'pcaHome']
     }, {
-      id: 'nurses',
+      id: 'staffAll',
       label: 'Directory',
       icon: I.layers,
-      match: ['nurses', 'pca']
+      match: ['staffAll', 'nurses', 'pca']
+    }, {
+      id: 'traineeHome',
+      label: 'Trainee Nurses',
+      icon: I.steth,
+      match: ['traineeHome', 'trainees']
     }, {
       id: 'nurseCompliance',
       label: 'Compliance',
@@ -10268,7 +10313,7 @@ const UNICO_WS = [{
     id: 'staff',
     label: 'Staff Management',
     icon: I.steth,
-    home: 'nurseHome',
+    home: 'staffHome',
     mods: ['staff', 'perf', 'roster'],
     on: v => ['staff', 'perf', 'roster'].indexOf(unicoModuleOf(v)) >= 0
   }, {
@@ -10286,6 +10331,10 @@ const UNICO_WS = [{
   }]
 }];
 const UNICO_VIEW_TABS = [{
+  mod: 'staff',
+  only: ['traineeHome', 'trainees'],
+  tabs: [['traineeHome', 'Trainee Dashboard'], ['trainees', 'Trainee Directory']]
+}, {
   mod: 'perf',
   hide: ['perfForm', 'perfPrint'],
   parent: {
@@ -10305,6 +10354,7 @@ function unicoViewTabs(view) {
   for (let i = 0; i < UNICO_VIEW_TABS.length; i++) {
     const g = UNICO_VIEW_TABS[i];
     if (unicoModuleOf(view) !== g.mod) continue;
+    if (g.only && !g.only.includes(view)) continue;
     if ((g.hide || []).indexOf(view) >= 0) return null;
     return {
       cur: g.parent && g.parent[view] || view,
@@ -10393,14 +10443,19 @@ function unicoWorkspaceSub(view) {
   }];
   if (mod === 'staff' || mod === 'perf' || mod === 'roster') return [{
     label: 'Dashboard',
-    view: 'nurseHome',
+    view: 'staffHome',
     mod: 'staff',
-    match: ['nurseHome', 'pcaHome']
+    match: ['staffHome', 'nurseHome', 'pcaHome']
   }, {
     label: 'Directory',
-    view: 'nurses',
+    view: 'staffAll',
     mod: 'staff',
-    match: ['nurses', 'pca']
+    match: ['staffAll', 'nurses', 'pca']
+  }, {
+    label: 'Trainee Nurses',
+    view: 'traineeHome',
+    mod: 'staff',
+    match: ['traineeHome', 'trainees']
   }, {
     label: 'Compliance',
     view: 'nurseCompliance',
@@ -18412,10 +18467,16 @@ function RoleSwitch({
   return React.createElement("div", {
     className: "seg",
     style: {
-      flexShrink: 0
+      flexShrink: 0,
+      flexWrap: 'wrap'
     },
-    title: "Nurses or PCA"
-  }, [['Nurse', 'Nurses'], ['PCA', 'PCA']].map(([v, l]) => React.createElement("button", {
+    title: "Staff group"
+  }, Object.keys(views).map(v => [v, {
+    All: 'All Staff',
+    Nurse: 'Nurses',
+    Trainee: 'Trainee Nurses',
+    PCA: 'PCA'
+  }[v] || v]).map(([v, l]) => React.createElement("button", {
     key: v,
     className: role === v ? 'on' : '',
     onClick: () => {
@@ -18837,7 +18898,7 @@ function StaffDeptChart({
   }));
   const total = rows.reduce((s, r) => s + r.value, 0) || 1;
   const max = Math.max(1, ...rows.map(r => r.value));
-  const noun = role === 'PCA' ? 'PCA' : 'nurses';
+  const noun = role === 'PCA' ? 'PCA' : role === 'All' ? 'staff' : role === 'Trainee' ? 'trainee nurses' : 'nurses';
   const ql = q.trim().toLowerCase();
   let shown = rows.filter(r => (!ql || r.label.toLowerCase().includes(ql) || staffDeptLabel(r.label).toLowerCase().includes(ql)) && (!pick || r.label === pick));
   shown = sortMode === 'name' ? [...shown].sort((a, b) => staffDeptLabel(a.label).localeCompare(staffDeptLabel(b.label))) : [...shown].sort((a, b) => b.value - a.value);
@@ -19118,7 +19179,7 @@ function StaffExpChart({
     value: members[i].length
   }));
   const total = data.reduce((s, d) => s + d.value, 0) || 1;
-  const noun = role === 'PCA' ? 'PCA' : 'nurses';
+  const noun = role === 'PCA' ? 'PCA' : role === 'All' ? 'staff' : role === 'Trainee' ? 'trainee nurses' : 'nurses';
   const cur = sel >= 0 ? members[sel] : null;
   return React.createElement("div", {
     className: "card"
@@ -19260,7 +19321,7 @@ function StaffDesigChart({
     value,
     color: PALETTE[i] || `hsl(${i * 67 % 360} 58% 52%)`
   }));
-  const noun = role === 'PCA' ? 'PCA' : 'nurses';
+  const noun = role === 'PCA' ? 'PCA' : role === 'All' ? 'staff' : role === 'Trainee' ? 'trainee nurses' : 'nurses';
   let curLabel = null,
     curList = null;
   if (sel) {
@@ -19382,10 +19443,28 @@ function StaffDesigChart({
 function WorkforceDashboard({
   store,
   setRoute,
-  role = 'Nurse'
+  role = 'Nurse',
+  group = role
 }) {
   const S = window.STAFF;
-  const list = store.staff.filter(e => (e.role || 'Nurse') === role && e.is_active && !e.former);
+  const [department, setDepartment] = React.useState('');
+  const roster = store.staff.filter(e => e.is_active && !e.former);
+  const departmentOptions = [...new Set(roster.flatMap(staffDeptList))].sort();
+  const scoped = roster.filter(e => !department || staffDeptList(e).includes(department));
+  const counts = S.staffCounts(scoped);
+  const list = scoped.filter(e => S.matchesStaffGroup(e, group));
+  const label = {
+    All: 'All Staff',
+    Nurse: 'Nurse',
+    Trainee: 'Trainee Nurse',
+    PCA: 'PCA'
+  }[group];
+  const dashboardViews = {
+    All: 'staffHome',
+    Nurse: 'nurseHome',
+    Trainee: 'traineeHome',
+    PCA: 'pcaHome'
+  };
   const [showHi, setShowHi] = React.useState(false);
   const [printForm, setPrintForm] = React.useState(false);
   const openBlankForm = async () => {
@@ -19397,7 +19476,12 @@ function WorkforceDashboard({
     if (window.UnicoStaffRegForm) setPrintForm(true);
   };
   const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
-  const listView = role === 'PCA' ? 'pca' : 'nurses';
+  const listView = {
+    All: 'staffAll',
+    Nurse: 'nurses',
+    Trainee: 'trainees',
+    PCA: 'pca'
+  }[group];
   const compView = role === 'PCA' ? 'pcaCompliance' : 'nurseCompliance';
   const homeView = role === 'PCA' ? 'pcaHome' : 'nurseHome';
   const k = S.kpis(list);
@@ -19455,8 +19539,8 @@ function WorkforceDashboard({
     }
   }, React.createElement(SectionTitle, {
     icon: role === 'PCA' ? I.bed : I.steth,
-    title: `${role === 'PCA' ? 'PCA' : 'Nurse'} Dashboard`,
-    sub: `Live overview of the ${role} roster`,
+    title: `${label} Dashboard`,
+    sub: `${list.length} active staff${department ? ' · ' + staffDeptLabel(department) : ' · all departments'}`,
     right: React.createElement(React.Fragment, null, (!window.unicoCan || window.unicoCan('staff', 'add')) && React.createElement("button", {
       className: "btn sm",
       title: "Print the blank staff information form to fill in by hand",
@@ -19468,12 +19552,9 @@ function WorkforceDashboard({
       role,
       onDone: () => setPrintForm(false)
     }), React.createElement(RoleSwitch, {
-      role: role,
+      role: group,
       setRoute: setRoute,
-      views: {
-        Nurse: 'nurseHome',
-        PCA: 'pcaHome'
-      }
+      views: dashboardViews
     }), React.createElement("button", {
       className: "btn sm",
       onClick: () => setShowHi(true),
@@ -19492,7 +19573,7 @@ function WorkforceDashboard({
     }, React.createElement(Ic, {
       d: I.layers,
       s: 15
-    }), "Directory"), React.createElement("button", {
+    }), "Directory"), (group === 'Nurse' || group === 'PCA') && React.createElement("button", {
       className: "btn sm",
       onClick: () => setRoute({
         view: compView
@@ -19515,12 +19596,13 @@ function WorkforceDashboard({
       },
       onClick: () => setRoute({
         view: 'staffForm',
-        role
+        role,
+        designation: group === 'Trainee' ? 'Trainee Nurse' : ''
       })
     }, React.createElement(Ic, {
       d: I.plus,
       s: 15
-    }), "Add ", role === 'PCA' ? 'PCA' : 'Nurse'))
+    }), "Add ", group === 'Trainee' ? 'Trainee Nurse' : role))
   }), store.refreshError && React.createElement("div", {
     role: "alert",
     style: {
@@ -19528,16 +19610,54 @@ function WorkforceDashboard({
       fontSize: 13
     }
   }, store.refreshError), React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '12px 14px'
+    }
+  }, React.createElement("label", null, "Department ", React.createElement("select", {
+    "aria-label": "Dashboard department",
+    value: department,
+    onChange: e => setDepartment(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "All departments"), departmentOptions.map(d => React.createElement("option", {
+    key: d,
+    value: d
+  }, staffDeptLabel(d)))))), React.createElement("div", {
+    className: "grid",
+    style: {
+      gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))'
+    }
+  }, Object.entries({
+    All: 'All Staff',
+    Nurse: 'Nurses',
+    Trainee: 'Trainee Nurses',
+    PCA: 'PCA'
+  }).map(([key, name]) => React.createElement("button", {
+    key: key,
+    "aria-label": `View ${name} dashboard`,
+    onClick: () => setRoute({
+      view: dashboardViews[key]
+    }),
+    style: {
+      border: 0,
+      padding: 0,
+      background: 'transparent',
+      textAlign: 'left',
+      font: 'inherit',
+      cursor: 'pointer'
+    }
+  }, React.createElement(Kpi, {
+    label: name,
+    val: fmt(counts[key]),
+    foot: key === 'All' ? 'includes nurses, trainees and PCA' : 'active staff in selected departments',
+    color: key === 'Trainee' ? '#e08a1e' : key === 'PCA' ? '#6a52d4' : '#0090ca'
+  })))), React.createElement("div", {
     className: "grid",
     style: {
       gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))'
     }
   }, React.createElement(Kpi, {
-    label: `Total ${role === 'PCA' ? 'PCAs' : 'Nurses'}`,
-    val: fmt(k.total_staff),
-    foot: `active ${role} on roster`,
-    color: tone
-  }), React.createElement(Kpi, {
     label: "Departments",
     val: fmt(new Set(list.map(e => staffCanonDept(e.current_department))).size),
     foot: "distinct units staffed",
@@ -19561,12 +19681,12 @@ function WorkforceDashboard({
     list: list,
     setRoute: setRoute,
     tone: tone,
-    role: role
+    role: group
   }), React.createElement(StaffDesigChart, {
     list: list,
     setRoute: setRoute,
-    role: role
-  })), window.PerfBands && React.createElement(window.PerfBands, {
+    role: group
+  })), (group === 'Nurse' || group === 'PCA') && window.PerfBands && React.createElement(window.PerfBands, {
     role: role,
     setRoute: setRoute
   }), React.createElement("div", {
@@ -19594,7 +19714,7 @@ function WorkforceDashboard({
   }))), React.createElement(StaffExpChart, {
     list: list,
     setRoute: setRoute,
-    role: role
+    role: group
   })), React.createElement("div", {
     className: "grid",
     style: {
@@ -20501,10 +20621,11 @@ const DIR_MEMO = {};
 function ManageStaff({
   store,
   setRoute,
-  role
+  role,
+  group = role
 }) {
   const S = window.STAFF;
-  const M = DIR_MEMO[role] || {};
+  const M = DIR_MEMO[group] || {};
   const [q, setQ] = React.useState(M.q || '');
   const [chip, setChip] = React.useState(M.chip || 'all');
   const [dept, setDept] = React.useState(M.dept || '');
@@ -20516,7 +20637,7 @@ function ManageStaff({
   const [sortBy, setSortBy] = React.useState(M.sortBy || 'name');
   const [showInactive, setShowInactive] = React.useState(!!M.showInactive);
   React.useEffect(() => {
-    DIR_MEMO[role] = Object.assign({}, DIR_MEMO[role], {
+    DIR_MEMO[group] = Object.assign({}, DIR_MEMO[group], {
       q,
       chip,
       dept,
@@ -20532,7 +20653,7 @@ function ManageStaff({
   React.useEffect(() => {
     const el = document.querySelector('.content');
     if (!el) return;
-    const saved = (DIR_MEMO[role] || {}).scroll || 0;
+    const saved = (DIR_MEMO[group] || {}).scroll || 0;
     if (saved) {
       let tries = 0;
       const restore = () => {
@@ -20542,7 +20663,7 @@ function ManageStaff({
       requestAnimationFrame(restore);
     }
     const onScroll = () => {
-      DIR_MEMO[role] = Object.assign({}, DIR_MEMO[role], {
+      DIR_MEMO[group] = Object.assign({}, DIR_MEMO[group], {
         scroll: el.scrollTop
       });
     };
@@ -20552,7 +20673,13 @@ function ManageStaff({
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
   const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
-  const all = store.staff.filter(e => (e.role || 'Nurse') === role);
+  const all = store.staff.filter(e => S.matchesStaffGroup(e, group));
+  const label = {
+    All: 'All Staff',
+    Nurse: 'Nurse',
+    Trainee: 'Trainee Nurse',
+    PCA: 'PCA'
+  }[group];
   const apprData = useStaffAppraisals();
   const A_ = window.UNICO_APPRAISAL;
   const apprOn = !!(apprData && A_ && A_.standing);
@@ -20566,14 +20693,14 @@ function ManageStaff({
     const now = new Date();
     const m = {};
     store.staff.forEach(e => {
-      if ((e.role || 'Nurse') !== role) return;
+      if (!S.matchesStaffGroup(e, group)) return;
       m[e.id] = A_.standing(e, by[String(e.emp_id || e.id)] || [], now);
     });
     return m;
-  }, [apprOn, apprData, store.staff, role]);
+  }, [apprOn, apprData, store.staff, group]);
   const stOf = e => standing ? standing[e.id] : null;
-  const active = all.filter(e => e.is_active);
-  const base = all.filter(e => showInactive || e.is_active);
+  const active = all.filter(e => e.is_active && !e.former);
+  const base = all.filter(e => showInactive || e.is_active && !e.former);
   const now = Date.now();
   const matchChip = e => {
     const d = e.current_department || '';
@@ -20681,21 +20808,23 @@ function ManageStaff({
       letterSpacing: '-.3px',
       whiteSpace: 'nowrap'
     }
-  }, role === 'PCA' ? 'PCA' : 'Nurse', " Employees"), React.createElement("div", {
+  }, label, " Directory"), React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--muted)'
     }
-  }, "Dedicated ", role, " roster", all.length > active.length ? ` · ${all.length - active.length} inactive hidden` : '')), React.createElement("span", {
+  }, "Dedicated ", label, " roster", !showInactive && all.length > active.length ? ` · ${all.length - active.length} inactive hidden` : '')), React.createElement("span", {
     className: "spacer",
     style: {
       flex: 1
     }
   }), React.createElement(RoleSwitch, {
-    role: role,
+    role: group,
     setRoute: setRoute,
     views: {
+      All: 'staffAll',
       Nurse: 'nurses',
+      Trainee: 'trainees',
       PCA: 'pca'
     }
   }), React.createElement("button", {
@@ -20709,12 +20838,13 @@ function ManageStaff({
     },
     onClick: () => setRoute({
       view: 'staffForm',
-      role
+      role,
+      designation: group === 'Trainee' ? 'Trainee Nurse' : ''
     })
   }, React.createElement(Ic, {
     d: I.plus,
     s: 15
-  }), "Add ", role), React.createElement("span", {
+  }), "Add ", group === 'Trainee' ? 'Trainee Nurse' : role), React.createElement("span", {
     className: "num",
     style: {
       fontSize: 12.5,
@@ -20865,7 +20995,7 @@ function ManageStaff({
     }
   }, "Clear filters"), React.createElement(ExportMenu, {
     rows: sorted,
-    role: role
+    role: label
   })), React.createElement("div", {
     className: "card",
     style: {
@@ -24727,6 +24857,38 @@ function App() {
     body = typeof CollectorStaffRequests !== 'undefined' ? React.createElement(CollectorStaffRequests, {
       depts: reqDepts
     }) : null;
+  } else if (route.view === 'staffHome') {
+    crumbs = ['UNICO', 'Staff Management', 'All Staff Dashboard'];
+    body = React.createElement(WorkforceDashboard, {
+      store: staff,
+      setRoute: setRoute,
+      role: "Nurse",
+      group: "All"
+    });
+  } else if (route.view === 'traineeHome') {
+    crumbs = ['UNICO', 'Staff Management', 'Trainee Nurse Dashboard'];
+    body = React.createElement(WorkforceDashboard, {
+      store: staff,
+      setRoute: setRoute,
+      role: "Nurse",
+      group: "Trainee"
+    });
+  } else if (route.view === 'staffAll') {
+    crumbs = ['UNICO', 'Staff Management', 'All Staff Directory'];
+    body = React.createElement(ManageStaff, {
+      store: staff,
+      setRoute: setRoute,
+      role: "Nurse",
+      group: "All"
+    });
+  } else if (route.view === 'trainees') {
+    crumbs = ['UNICO', 'Staff Management', 'Trainee Nurses'];
+    body = React.createElement(ManageStaff, {
+      store: staff,
+      setRoute: setRoute,
+      role: "Nurse",
+      group: "Trainee"
+    });
   } else if (route.view === 'nurseHome') {
     crumbs = ['UNICO', 'Staff Management', 'Nurse Dashboard'];
     body = React.createElement(WorkforceDashboard, {
@@ -24866,6 +25028,7 @@ function App() {
       empId: route.emp,
       setRoute: setRoute,
       role: route.role,
+      designation: route.designation,
       depts: depts
     });
   }

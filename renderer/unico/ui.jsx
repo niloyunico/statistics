@@ -49,7 +49,7 @@ const DEPT_ICON = { er:I.pulse, opd:I.user, nicu:I.heart, endoscopy:I.activity, 
 const UNICO_MODULES = [
   { id:'stats',   label:'Statistics',         short:'Statistics', icon:I.grid,  home:'dashboard' },
   { id:'datacol', label:'Data Collection',    short:'Data',       icon:I.input, home:'dcReview' },
-  { id:'staff',   label:'Staff Management',   short:'Staff',      icon:I.steth, home:'nurseHome' },
+  { id:'staff',   label:'Staff Management',   short:'Staff',      icon:I.steth, home:'staffHome' },
   { id:'quality', label:'Quality Indicators', short:'Quality',    icon:I.heart, home:'quality' },
   { id:'supervisor', label:'Supervisor Reports', short:'Supervisor', icon:I.doc, home:'supHome' },
   { id:'reports', label:'Reports',            short:'Reports',    icon:I.doc,   home:'reports' },
@@ -64,7 +64,7 @@ const UNICO_MODULES = [
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
   datacol:['dcReview','dcPatient','dcQuality','input','dcSettings','dcShare','dcFields','dcAnalytics'],
-  staff:  ['nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests'],
+  staff:  ['staffHome','staffAll','traineeHome','trainees','nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
@@ -227,8 +227,9 @@ function unicoSidebarGroups(moduleId){
   if(moduleId==='staff') return [
     // One workspace, role as a filter — mirrors unicoWorkspaceSub() below, which is
     // what the live Sidebar actually renders.
-    {sec:'Staff Management', items:[{id:'nurseHome',label:'Dashboard',icon:I.grid,match:['nurseHome','pcaHome']},
-      {id:'nurses',label:'Directory',icon:I.layers,match:['nurses','pca']},
+    {sec:'Staff Management', items:[{id:'staffHome',label:'Dashboard',icon:I.grid,match:['staffHome','nurseHome','pcaHome']},
+      {id:'staffAll',label:'Directory',icon:I.layers,match:['staffAll','nurses','pca']},
+      {id:'traineeHome',label:'Trainee Nurses',icon:I.steth,match:['traineeHome','trainees']},
       {id:'nurseCompliance',label:'Compliance',icon:I.heart,match:['nurseCompliance','pcaCompliance']},
       {id:'staffPrevious',label:'Previous Staff',icon:I.doc},
       {id:'perfHome',label:'Performance',icon:I.trend},
@@ -366,7 +367,7 @@ const UNICO_WS = [
        confidential and the server gates it; 'roster' likewise), it just no longer keeps
        its own destination: `mods` lists every module this one row can open, and the
        sub-items below carry the module each of them needs. */
-    { id:'staff',       label:'Staff Management', icon:I.steth, home:'nurseHome', mods:['staff','perf','roster'],
+    { id:'staff',       label:'Staff Management', icon:I.steth, home:'staffHome', mods:['staff','perf','roster'],
       on:v=>['staff','perf','roster'].indexOf(unicoModuleOf(v))>=0 },
     // Access Control — accounts and per-person access (access-control.jsx). Same 'users'
     // permission as Settings; it just has its own door now instead of a Settings tab.
@@ -388,6 +389,7 @@ const UNICO_WS = [
    SEVERAL components: the roster's three tabs are RosterView, window.ManpowerOverview
    and window.RosterReviewFull, so no single component could host the strip. */
 const UNICO_VIEW_TABS = [
+  { mod:'staff', only:['traineeHome','trainees'], tabs:[['traineeHome','Trainee Dashboard'],['trainees','Trainee Directory']] },
   { mod:'perf', hide:['perfForm','perfPrint'], parent:{ perfRisk:'perfAttrition' }, tabs:[
     ['perfHome','Overview'], ['perfAchievements','Achievements'], ['perfIncidents','Incidents'],
     ['perfBoard','Recognition'], ['perfAttrition','Attrition & Exits'], ['perfCompare','By Department'],
@@ -400,6 +402,7 @@ function unicoViewTabs(view){
   for(let i=0;i<UNICO_VIEW_TABS.length;i++){
     const g=UNICO_VIEW_TABS[i];
     if(unicoModuleOf(view)!==g.mod) continue;
+    if(g.only && !g.only.includes(view)) continue;
     if((g.hide||[]).indexOf(view)>=0) return null;     // a leaf screen, not a section
     return { cur:(g.parent&&g.parent[view])||view, tabs:g.tabs };
   }
@@ -471,8 +474,9 @@ function unicoWorkspaceSub(view){
      Performance page itself (PerfTabs in performance.jsx), the way Settings has always
      carried its own tabs. A sidebar you have to scroll is a menu, not a map. */
   if(mod==='staff' || mod==='perf' || mod==='roster') return [
-    { label:'Dashboard',      view:'nurseHome',       mod:'staff', match:['nurseHome','pcaHome'] },
-    { label:'Directory',      view:'nurses',          mod:'staff', match:['nurses','pca'] },
+    { label:'Dashboard',      view:'staffHome',       mod:'staff', match:['staffHome','nurseHome','pcaHome'] },
+    { label:'Directory',      view:'staffAll',        mod:'staff', match:['staffAll','nurses','pca'] },
+    { label:'Trainee Nurses', view:'traineeHome',     mod:'staff', match:['traineeHome','trainees'] },
     { label:'Compliance',     view:'nurseCompliance', mod:'staff', match:['nurseCompliance','pcaCompliance'] },
     { label:'Previous Staff', view:'staffPrevious',   mod:'staff' },
     { label:'Nurse / PCA requests', view:'staffRequests', mod:'staff' },
