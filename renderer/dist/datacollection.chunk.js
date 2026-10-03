@@ -1,5 +1,6 @@
 /* ===== data-collection.jsx ===== */
 (function(){
+function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 (function () {
   const {
     useState,
@@ -14073,11 +14074,19 @@
   };
   function UnicoStaffRegForm({
     role,
-    onDone
+    onDone,
+    quantity = 1
   }) {
-    const [pairCode] = React.useState(() => {
-      const token = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 12) : Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-      return 'UF-' + token.toUpperCase();
+    const [forms] = React.useState(() => {
+      const token = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 12) : Date.now().toString(36) + Math.random().toString(36).slice(2, 7)).toUpperCase();
+      const batch = token();
+      const count = Math.max(1, Math.min(100, Math.floor(Number(quantity)) || 1));
+      return Array.from({
+        length: count
+      }, (_, i) => ({
+        number: 'UF-' + batch + '-' + String(i + 1).padStart(3, '0'),
+        pairCode: 'PAIR-' + token()
+      }));
     });
     useEffect(() => {
       const body = document.body;
@@ -14120,7 +14129,9 @@
       line = '#8e9aa8',
       soft = '#4f5d6e';
     const PageMatch = ({
-      page
+      page,
+      pairCode,
+      number
     }) => React.createElement("div", {
       "data-form-pair": pairCode,
       style: {
@@ -14164,9 +14175,13 @@
       strokeWidth: "1.5"
     })), React.createElement("span", {
       style: {
-        fontSize: '8pt'
+        fontSize: '7.5pt'
       }
-    }, "Form matching code: ", React.createElement("b", {
+    }, "Form number: ", React.createElement("b", {
+      style: {
+        fontFamily: 'monospace'
+      }
+    }, number), React.createElement("br", null), "Pair code: ", React.createElement("b", {
       style: {
         fontFamily: 'monospace',
         fontSize: '9pt',
@@ -14340,16 +14355,19 @@
     }, React.createElement(Box, null), x)));
     return ReactDOM.createPortal(React.createElement("div", {
       className: "pdf-doc portrait"
-    }, React.createElement("style", null, "@media print{@page{size:A4 portrait;margin:6mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .regform-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}}"), React.createElement("section", {
+    }, React.createElement("style", null, "@media print{@page{size:A4 portrait;margin:6mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .regform-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}}"), forms.map((form, index) => React.createElement("section", {
+      key: form.number,
       className: "regform-sheet",
       style: {
         fontFamily: "'IBM Plex Sans',system-ui,'Segoe UI',sans-serif",
         color: ink,
-        padding: '7mm 9mm'
+        padding: '7mm 9mm',
+        breakBefore: index ? 'page' : 'auto',
+        pageBreakBefore: index ? 'always' : 'auto'
       }
-    }, React.createElement(PageMatch, {
+    }, React.createElement(PageMatch, _extends({
       page: 1
-    }), React.createElement("div", {
+    }, form)), React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -14504,9 +14522,9 @@
         breakBefore: 'page',
         pageBreakBefore: 'always'
       }
-    }, React.createElement(PageMatch, {
+    }, React.createElement(PageMatch, _extends({
       page: 2
-    }), React.createElement(Sec, {
+    }, form)), React.createElement(Sec, {
       n: 4,
       title: "Compliance & registration"
     }, React.createElement(Ticks, {
@@ -14620,7 +14638,7 @@
         display: 'flex',
         justifyContent: 'space-between'
       }
-    }, React.createElement("span", null, "UNICO Hospitals PLC \xB7 Staff Information Form (", isPCA ? 'PCA' : 'Nurse', ") \xB7 HR-NUR-REG-01"), React.createElement("span", null, "Printed ", today))))), root);
+    }, React.createElement("span", null, "UNICO Hospitals PLC \xB7 Staff Information Form (", isPCA ? 'PCA' : 'Nurse', ") \xB7 HR-NUR-REG-01"), React.createElement("span", null, "Printed ", today)))))), root);
   }
   if (typeof window !== 'undefined') window.UnicoStaffRegForm = UnicoStaffRegForm;
   function CollectorStaffRequests({

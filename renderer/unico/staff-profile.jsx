@@ -2926,6 +2926,23 @@ function BnmcVerify({ f, set, store, empId, editing }){
   );
 }
 
+function StaffPrintOptions({role,onDone}){
+  const [quantity,setQuantity]=React.useState('1');
+  const [printing,setPrinting]=React.useState(false);
+  const count=Number(quantity);
+  const valid=Number.isInteger(count)&&count>=1&&count<=100;
+  if(printing) return React.createElement(window.UnicoStaffRegForm,{role,quantity:count,onDone});
+  return <div role="dialog" aria-modal="true" aria-label="Print staff forms" style={{position:'fixed',inset:0,zIndex:10000,background:'rgba(0,0,0,.45)',display:'grid',placeItems:'center',padding:20}}>
+    <div className="card" style={{padding:24,width:'min(420px,100%)'}}>
+      <h3 style={{marginTop:0}}>Print staff forms</h3>
+      <label>Number of forms<input autoFocus type="number" min="1" max="100" step="1" aria-label="Number of staff forms" value={quantity} onChange={ev=>setQuantity(ev.target.value)} style={{display:'block',width:'100%',marginTop:8}} /></label>
+      <p style={{fontSize:13,color:'var(--muted)'}}>Each form has two pages with its own form number and matching pair code. Choose 1–100 forms.</p>
+      <p style={{fontSize:13}}>Total: {valid?count*2:'—'} pages. Keep Copies set to 1 in the print dialog so form numbers stay unique.</p>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:10}}><button className="btn" onClick={onDone}>Cancel</button><button className="btn pri" disabled={!valid} onClick={()=>setPrinting(true)}>Print {valid?count:''} forms</button></div>
+    </div>
+  </div>;
+}
+
 function StaffForm({store, empId, setRoute, role, designation, depts}){
   const editing=!!empId;
   const existing=editing?store.get(empId):null;
@@ -3135,7 +3152,7 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
               whoever may create a staff record may print the blank form. No signed-in user
               means the open local mode, where the whole app is unrestricted anyway. */}
           {!editing && window.UnicoStaffRegForm && (!window.unicoCan || window.unicoCan('staff','add')) && <button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={()=>setPrintForm(true)}><Ic d={I.doc} s={14}/>Print blank form</button>}
-          {printForm && window.UnicoStaffRegForm && React.createElement(window.UnicoStaffRegForm,{role:f.role||'Nurse',onDone:()=>setPrintForm(false)})}
+          {printForm && window.UnicoStaffRegForm && <StaffPrintOptions role={f.role||'Nurse'} onDone={()=>setPrintForm(false)}/>}
           <button className="btn sm" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:S.staffGroupOf(f)==='Trainee'?'trainees':(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
           <button className="btn pri sm" disabled={saving} onClick={save}><Ic d={I.check} s={15} sw={2.4}/>{saving?'Saving?':editing?'Save changes':'Create staff'}</button>
         </div>
