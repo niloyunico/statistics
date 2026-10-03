@@ -480,8 +480,8 @@ function WorkforceDashboard({store, setRoute, role='Nurse', group=role}){
   // in the datacollection CHUNK, so the click loads that chunk before rendering the sheet.
   const [printForm,setPrintForm]=React.useState(false);
   const openBlankForm=async()=>{
-    if(!window.UnicoStaffRegForm&&window.unicoLoadChunk){ try{ await window.unicoLoadChunk('datacollection'); }catch(e){} }
-    if(window.UnicoStaffRegForm) setPrintForm(true);
+    if(!window.StaffPrintOptions&&window.unicoLoadChunk){ try{ await window.unicoLoadChunk('datacollection'); }catch(e){} }
+    if(window.StaffPrintOptions) setPrintForm(true);
   };
   const tone=role==='PCA'?'#6a52d4':'#0090ca';
   const listView=({All:'staffAll',Nurse:'nurses',Trainee:'trainees',PCA:'pca'})[group];
@@ -508,7 +508,7 @@ function WorkforceDashboard({store, setRoute, role='Nurse', group=role}){
       <SectionTitle icon={role==='PCA'?I.bed:I.steth} title={`${label} Dashboard`} sub={`${list.length} active staff${department?' · '+staffDeptLabel(department):' · all departments'}`}
         right={<>{(!window.unicoCan||window.unicoCan('staff','add'))&&
             <button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={openBlankForm}><Ic d={I.print} s={15}/>Print staff information</button>}
-          {printForm&&window.UnicoStaffRegForm&&React.createElement(window.UnicoStaffRegForm,{role,onDone:()=>setPrintForm(false)})}
+          {printForm&&window.StaffPrintOptions&&React.createElement(window.StaffPrintOptions,{role,onDone:()=>setPrintForm(false)})}
           <RoleSwitch role={group} setRoute={setRoute} views={dashboardViews}/>
           <button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#b8860b',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
           <button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>

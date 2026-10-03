@@ -14072,6 +14072,81 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     approved: 'Approved',
     rejected: 'Rejected'
   };
+  function StaffPrintOptions({
+    role,
+    onDone
+  }) {
+    const [quantity, setQuantity] = React.useState('1');
+    const [printing, setPrinting] = React.useState(false);
+    const count = Number(quantity);
+    const valid = Number.isInteger(count) && count >= 1 && count <= 100;
+    if (printing) return React.createElement(window.UnicoStaffRegForm, {
+      role,
+      quantity: count,
+      onDone
+    });
+    return React.createElement("div", {
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": "Print staff forms",
+      style: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 10000,
+        background: 'rgba(0,0,0,.45)',
+        display: 'grid',
+        placeItems: 'center',
+        padding: 20
+      }
+    }, React.createElement("div", {
+      className: "card",
+      style: {
+        padding: 24,
+        width: 'min(420px,100%)'
+      }
+    }, React.createElement("h3", {
+      style: {
+        marginTop: 0
+      }
+    }, "Print staff forms"), React.createElement("label", null, "Number of forms", React.createElement("input", {
+      autoFocus: true,
+      type: "number",
+      min: "1",
+      max: "100",
+      step: "1",
+      "aria-label": "Number of staff forms",
+      value: quantity,
+      onChange: ev => setQuantity(ev.target.value),
+      style: {
+        display: 'block',
+        width: '100%',
+        marginTop: 8
+      }
+    })), React.createElement("p", {
+      style: {
+        fontSize: 13,
+        color: 'var(--muted)'
+      }
+    }, "Each form has two pages with its own form number and matching block symbols. Choose 1\u2013100 forms."), React.createElement("p", {
+      style: {
+        fontSize: 13
+      }
+    }, "Total: ", valid ? count * 2 : '—', " pages. Keep Copies set to 1 in the print dialog so form numbers stay unique."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'flex-end',
+        gap: 10
+      }
+    }, React.createElement("button", {
+      className: "btn",
+      onClick: onDone
+    }, "Cancel"), React.createElement("button", {
+      className: "btn pri",
+      disabled: !valid,
+      onClick: () => setPrinting(true)
+    }, "Print ", valid ? count : '', " forms"))));
+  }
+  if (typeof window !== 'undefined') window.StaffPrintOptions = StaffPrintOptions;
   function UnicoStaffRegForm({
     role,
     onDone,

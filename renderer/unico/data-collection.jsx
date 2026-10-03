@@ -5708,6 +5708,25 @@
      option lists as Staff Management → Add new Nurse / PCA (window.STAFF), plus admin-defined
      custom staff fields, so what is filled in by hand maps 1:1 onto the register. Printed through
      #pdf-root + body.pdf-export-mode like every other export. */
+function StaffPrintOptions({role,onDone}){
+  const [quantity,setQuantity]=React.useState('1');
+  const [printing,setPrinting]=React.useState(false);
+  const count=Number(quantity);
+  const valid=Number.isInteger(count)&&count>=1&&count<=100;
+  if(printing) return React.createElement(window.UnicoStaffRegForm,{role,quantity:count,onDone});
+  return <div role="dialog" aria-modal="true" aria-label="Print staff forms" style={{position:'fixed',inset:0,zIndex:10000,background:'rgba(0,0,0,.45)',display:'grid',placeItems:'center',padding:20}}>
+    <div className="card" style={{padding:24,width:'min(420px,100%)'}}>
+      <h3 style={{marginTop:0}}>Print staff forms</h3>
+      <label>Number of forms<input autoFocus type="number" min="1" max="100" step="1" aria-label="Number of staff forms" value={quantity} onChange={ev=>setQuantity(ev.target.value)} style={{display:'block',width:'100%',marginTop:8}} /></label>
+      <p style={{fontSize:13,color:'var(--muted)'}}>Each form has two pages with its own form number and matching block symbols. Choose 1–100 forms.</p>
+      <p style={{fontSize:13}}>Total: {valid?count*2:'—'} pages. Keep Copies set to 1 in the print dialog so form numbers stay unique.</p>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:10}}><button className="btn" onClick={onDone}>Cancel</button><button className="btn pri" disabled={!valid} onClick={()=>setPrinting(true)}>Print {valid?count:''} forms</button></div>
+    </div>
+  </div>;
+}
+
+  if (typeof window !== 'undefined') window.StaffPrintOptions = StaffPrintOptions;
+
   function UnicoStaffRegForm({ role, onDone, quantity = 1 }) {
     const [forms] = React.useState(() => {
       const token = () => (window.crypto && window.crypto.randomUUID

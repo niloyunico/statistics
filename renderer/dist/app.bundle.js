@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=39397ab8a7","reports":"/dist/reports.chunk.js?v=9ee597f2ec","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=6c7a70c969","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=67cb96583a","reports":"/dist/reports.chunk.js?v=9ee597f2ec","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=75d769f2c0","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -19468,12 +19468,12 @@ function WorkforceDashboard({
   const [showHi, setShowHi] = React.useState(false);
   const [printForm, setPrintForm] = React.useState(false);
   const openBlankForm = async () => {
-    if (!window.UnicoStaffRegForm && window.unicoLoadChunk) {
+    if (!window.StaffPrintOptions && window.unicoLoadChunk) {
       try {
         await window.unicoLoadChunk('datacollection');
       } catch (e) {}
     }
-    if (window.UnicoStaffRegForm) setPrintForm(true);
+    if (window.StaffPrintOptions) setPrintForm(true);
   };
   const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
   const listView = {
@@ -19548,7 +19548,7 @@ function WorkforceDashboard({
     }, React.createElement(Ic, {
       d: I.print,
       s: 15
-    }), "Print staff information"), printForm && window.UnicoStaffRegForm && React.createElement(window.UnicoStaffRegForm, {
+    }), "Print staff information"), printForm && window.StaffPrintOptions && React.createElement(window.StaffPrintOptions, {
       role,
       onDone: () => setPrintForm(false)
     }), React.createElement(RoleSwitch, {

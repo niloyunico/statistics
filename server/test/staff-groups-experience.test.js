@@ -59,7 +59,7 @@ assert.ok(form.includes('Experience 1 to date')&&form.includes('2022-04-15'));
 assert.ok(form.includes('Years / months'),'the manual alternative remains available');
 // Render the actual local two-page print form, without its unrelated collection screens.
 const printSource=source('data-collection.jsx');
-const printStart=printSource.indexOf('  function UnicoStaffRegForm(');
+const printStart=printSource.indexOf('function StaffPrintOptions(');
 const printEnd=printSource.indexOf('  function CollectorStaffRequests(',printStart);
 context.useEffect=React.useEffect;
 context.document={getElementById:()=>({})};
@@ -86,4 +86,37 @@ assert.equal(symbols.length,36,'each of six pages carries six block symbols');
 for(let i=0;i<3;i++) assert.deepEqual(symbols.slice(i*12,i*12+6),symbols.slice(i*12+6,i*12+12),'paired pages have identical symbols');
 assert.equal(new Set([0,1,2].map(i=>symbols.slice(i*12,i*12+6).join(','))).size,3,'separate forms have distinct symbol sequences');
 assert.ok(!batch.includes('Pair code:'),'matching uses symbols instead of a printed code');
-console.log('Staff grouping, trainee directory/dashboard and date-based experience checks passed.');
+// Exercise the dashboard button including the lazy chunk load and its options dialog.
+(async()=>{
+  const options=window.StaffPrintOptions;
+  const states=[];
+  let cursor=0,loaded=false;
+  context.React={...React,useState:initial=>{
+    const index=cursor++;
+    if(!(index in states)) states[index]=typeof initial==='function'?initial():initial;
+    return [states[index],value=>{states[index]=value;}];
+  }};
+  const find=(node,predicate)=>{
+    if(!node||typeof node!=='object') return null;
+    if(Array.isArray(node)){for(const child of node){const found=find(child,predicate);if(found)return found;}return null;}
+    if(predicate(node)) return node;
+    return node.props&&(find(node.props.children,predicate)||find(node.props.right,predicate));
+  };
+  window.unicoCan=()=>true;
+  delete window.StaffPrintOptions;
+  window.unicoLoadChunk=async name=>{assert.equal(name,'datacollection');loaded=true;window.StaffPrintOptions=options;};
+  const props={store,role:'Nurse',group:'All',setRoute:noop};
+  const initial=window.WorkforceDashboard(props);
+  const button=find(initial,node=>node.type==='button'&&JSON.stringify(node.props.children).includes('Print staff information'));
+  assert.ok(button,'dashboard print button is available');
+  await button.props.onClick();
+  assert.ok(loaded,'the dashboard loads the shared print dialog chunk');
+  cursor=0;
+  const opened=window.WorkforceDashboard(props);
+  const dialog=find(opened,node=>node.type===options);
+  assert.ok(dialog,'dashboard opens quantity options instead of printing immediately');
+  context.React=React;
+  const markup=renderToStaticMarkup(dialog);
+  assert.ok(markup.includes('Number of staff forms')&&markup.includes('role="dialog"'));
+  console.log('Staff grouping, date experience, paired print forms and dashboard quantity dialog checks passed.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
