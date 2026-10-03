@@ -57,4 +57,20 @@ const form=renderToStaticMarkup(React.createElement(window.StaffForm,{store:form
 assert.ok(form.includes('Experience 1 from date')&&form.includes('2020-01-15'));
 assert.ok(form.includes('Experience 1 to date')&&form.includes('2022-04-15'));
 assert.ok(form.includes('Years / months'),'the manual alternative remains available');
+// Render the actual local two-page print form, without its unrelated collection screens.
+const printSource=source('data-collection.jsx');
+const printStart=printSource.indexOf('  function UnicoStaffRegForm(');
+const printEnd=printSource.indexOf('  function CollectorStaffRequests(',printStart);
+context.useEffect=React.useEffect;
+context.document={getElementById:()=>({})};
+context.ReactDOM={createPortal:node=>node};
+vm.runInContext(Babel.transform(printSource.slice(printStart,printEnd),{presets:['react']}).code,context);
+const printForm=()=>renderToStaticMarkup(React.createElement(window.UnicoStaffRegForm,{role:'Nurse'}));
+const printed=printForm();
+const pairCodes=[...printed.matchAll(/data-form-pair="([^"]+)"/g)].map(m=>m[1]);
+assert.equal(pairCodes.length,2,'both printed pages carry a matching box');
+assert.equal(pairCodes[0],pairCodes[1],'pages share the same form identifier');
+assert.notEqual(pairCodes[0],[...printForm().matchAll(/data-form-pair="([^"]+)"/g)][0][1],'separate forms have distinct identifiers');
+assert.ok(printed.includes('Page 1 of 2')&&printed.includes('Page 2 of 2'));
+assert.ok(printed.includes('From date')&&printed.includes('To date'));
 console.log('Staff grouping, trainee directory/dashboard and date-based experience checks passed.');

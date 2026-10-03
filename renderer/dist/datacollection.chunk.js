@@ -14075,6 +14075,10 @@
     role,
     onDone
   }) {
+    const [pairCode] = React.useState(() => {
+      const token = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 12) : Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      return 'UF-' + token.toUpperCase();
+    });
     useEffect(() => {
       const body = document.body;
       let finished = false;
@@ -14115,6 +14119,66 @@
     const ink = '#111a26',
       line = '#8e9aa8',
       soft = '#4f5d6e';
+    const PageMatch = ({
+      page
+    }) => React.createElement("div", {
+      "data-form-pair": pairCode,
+      style: {
+        border: '1.5px solid ' + ink,
+        padding: '3px 7px',
+        marginBottom: 5,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        color: ink,
+        breakInside: 'avoid',
+        pageBreakInside: 'avoid'
+      }
+    }, React.createElement("svg", {
+      width: "22",
+      height: "22",
+      viewBox: "0 0 24 24",
+      "aria-label": "Matching form pages",
+      style: {
+        flexShrink: 0
+      }
+    }, React.createElement("rect", {
+      x: "3",
+      y: "3",
+      width: "12",
+      height: "15",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.5"
+    }), React.createElement("rect", {
+      x: "9",
+      y: "6",
+      width: "12",
+      height: "15",
+      fill: "white",
+      stroke: "currentColor",
+      strokeWidth: "1.5"
+    }), React.createElement("path", {
+      d: "M12 11h6m-6 4h6",
+      stroke: "currentColor",
+      strokeWidth: "1.5"
+    })), React.createElement("span", {
+      style: {
+        fontSize: '8pt'
+      }
+    }, "Form matching code: ", React.createElement("b", {
+      style: {
+        fontFamily: 'monospace',
+        fontSize: '9pt',
+        letterSpacing: '.5px'
+      }
+    }, pairCode)), React.createElement("span", {
+      style: {
+        marginLeft: 'auto',
+        fontSize: '8pt',
+        fontWeight: 700
+      }
+    }, "Page ", page, " of 2"));
     if (!isPCA && !desigs.some(d => d.toLowerCase() === 'trainee nurse')) desigs.push('Trainee Nurse');
     const today = new Date().toLocaleDateString('en-GB', {
       day: '2-digit',
@@ -14283,7 +14347,9 @@
         color: ink,
         padding: '7mm 9mm'
       }
-    }, React.createElement("div", {
+    }, React.createElement(PageMatch, {
+      page: 1
+    }), React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -14438,7 +14504,9 @@
         breakBefore: 'page',
         pageBreakBefore: 'always'
       }
-    }, React.createElement(Sec, {
+    }, React.createElement(PageMatch, {
+      page: 2
+    }), React.createElement(Sec, {
       n: 4,
       title: "Compliance & registration"
     }, React.createElement(Ticks, {

@@ -5709,6 +5709,12 @@
      custom staff fields, so what is filled in by hand maps 1:1 onto the register. Printed through
      #pdf-root + body.pdf-export-mode like every other export. */
   function UnicoStaffRegForm({ role, onDone }) {
+    const [pairCode] = React.useState(() => {
+      const token = window.crypto && window.crypto.randomUUID
+        ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+        : Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      return 'UF-' + token.toUpperCase();
+    });
     useEffect(() => {
       const body = document.body;
       let finished = false;
@@ -5734,6 +5740,13 @@
     const depts = statDepts.length ? statDepts : uniq(S.DEPARTMENTS);
     const custom = (S.customFields && S.customFields()) || [];
     const ink = '#111a26', line = '#8e9aa8', soft = '#4f5d6e';
+    const PageMatch = ({ page }) => (
+      <div data-form-pair={pairCode} style={{ border: '1.5px solid ' + ink, padding: '3px 7px', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 8, color: ink, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-label="Matching form pages" style={{ flexShrink: 0 }}><rect x="3" y="3" width="12" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" /><rect x="9" y="6" width="12" height="15" fill="white" stroke="currentColor" strokeWidth="1.5" /><path d="M12 11h6m-6 4h6" stroke="currentColor" strokeWidth="1.5" /></svg>
+        <span style={{ fontSize: '8pt' }}>Form matching code: <b style={{ fontFamily: 'monospace', fontSize: '9pt', letterSpacing: '.5px' }}>{pairCode}</b></span>
+        <span style={{ marginLeft: 'auto', fontSize: '8pt', fontWeight: 700 }}>Page {page} of 2</span>
+      </div>
+    );
     // Nurse designations always offer "Trainee Nurse" (added once, even before STAFF.DESIGNATIONS carries it).
     if (!isPCA && !desigs.some((d) => d.toLowerCase() === 'trainee nurse')) desigs.push('Trainee Nurse');
     const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -5775,6 +5788,7 @@
             break, which added an empty first sheet. */}
         <style>{"@media print{@page{size:A4 portrait;margin:6mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .regform-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}}"}</style>
         <section className="regform-sheet" style={{ fontFamily: "'IBM Plex Sans',system-ui,'Segoe UI',sans-serif", color: ink, padding: '7mm 9mm' }}>
+          <PageMatch page={1} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, borderBottom: '2px solid #1f3b5a', paddingBottom: 6 }}>
             <img src="unico/logo.svg" alt="UNICO Hospitals" style={{ height: 36 }} />
             <div style={{ flex: 1, textAlign: 'center' }}>
@@ -5815,6 +5829,7 @@
           </Sec>
 
           <div style={{ breakBefore: 'page', pageBreakBefore: 'always' }}>
+            <PageMatch page={2} />
             <Sec n={4} title="Compliance & registration">
               <Ticks label="Special training" items={trains} cols={5} />
               <One label="Hepatitis-B vaccination:" items={vacc} />
