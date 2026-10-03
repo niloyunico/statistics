@@ -7868,7 +7868,7 @@ function StaffForm({
     style: {
       gridColumn: '1 / -1'
     }
-  }, field('Special Training' + (chipsOf('special_training').length ? ' · ' + chipsOf('special_training').length + ' selected' : ''), multiChk('special_training', S.TRAININGS.filter(Boolean), customT, setCustomT, 'Add another training…'))), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), field('Registration / Licence No.', inp('licence_no', 'e.g. BNMC-12345'), f.licence_verified ? React.createElement("span", {
+  }, field('Special Training' + (chipsOf('special_training').length ? ' · ' + chipsOf('special_training').length + ' selected' : ''), multiChk('special_training', S.TRAININGS.filter(Boolean), customT, setCustomT, 'Add another training…'))), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), f.role !== 'PCA' && React.createElement(React.Fragment, null, field('Registration / Licence No.', inp('licence_no', 'e.g. BNMC-12345'), f.licence_verified ? React.createElement("span", {
     style: {
       fontSize: 11,
       fontWeight: 700,
@@ -7893,7 +7893,7 @@ function StaffForm({
     store: store,
     empId: empId,
     editing: editing
-  }), React.createElement("div", {
+  })), React.createElement("div", {
     style: {
       gridColumn: '1 / -1'
     }

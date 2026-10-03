@@ -5828,7 +5828,7 @@ function StaffPrintOptions({role,onDone}){
             <div style={{ flex: 1, textAlign: 'center' }}>
               <div style={{ fontSize: '8.5pt', fontWeight: 700, letterSpacing: '1px', color: soft, textTransform: 'uppercase' }}>UNICO Hospitals PLC · Nursing Services</div>
               <div style={{ fontSize: '13.5pt', fontWeight: 800, marginTop: 1 }}>Staff Information Form — {isPCA ? 'Patient Care Assistant (PCA)' : 'Nurse'}</div>
-              <div style={{ fontSize: '7.8pt', color: soft, marginTop: 2 }}>Write in BLOCK LETTERS · tick (✓) the boxes that apply · attach copies of certificates, NID and BNMC registration</div>
+              <div style={{ fontSize: '7.8pt', color: soft, marginTop: 2 }}>Write in BLOCK LETTERS · tick (✓) the boxes that apply · attach copies of certificates and NID{!isPCA && ', and BNMC registration'}</div>
             </div>
             <div style={{ width: '25mm', height: '30mm', border: '1.1px dashed ' + ink, display: 'grid', placeItems: 'center', textAlign: 'center', fontSize: '7.5pt', color: soft, flexShrink: 0 }}>Affix recent<br />passport-size<br />photograph</div>
           </div>
@@ -5865,10 +5865,10 @@ function StaffPrintOptions({role,onDone}){
           <footer style={{ marginTop: 'auto', paddingTop: '5mm' }}><PageMatch page={1} {...form} /></footer>
           </section>
           <section className="regform-sheet" style={{ ...sheetStyle, breakBefore: 'page', pageBreakBefore: 'always' }}>
-            <Sec n={4} title="Compliance & registration">
+            <Sec n={4} title={isPCA ? 'Compliance & training' : 'Compliance & registration'}>
               <Ticks label="Special training" items={trains} cols={5} />
               <One label="Hepatitis-B vaccination:" items={vacc} />
-              <Row><Ln label="BNMC registration / licence no.:" w={1.5} /><Ln label="Licence expiry (DD/MM/YYYY):" w={1} /></Row>
+              {!isPCA && <Row><Ln label="BNMC registration / licence no.:" w={1.5} /><Ln label="Licence expiry (DD/MM/YYYY):" w={1} /></Row>}
               <Ln label="Remarks:" />
             </Sec>
 
@@ -5899,7 +5899,7 @@ function StaffPrintOptions({role,onDone}){
               <Row><Ln label="Primary department (if more than one):" w={1} /></Row>
               <div style={{ fontSize: '8.5pt', marginTop: 5, display: 'flex', alignItems: 'flex-start' }}><Box />Can be floated to other units when they are short</div>
               <Row><Ln label="Employee ID assigned:" w={1} /><Ln label="Entered in staff register on:" w={1} /><Ln label="By:" w={0.8} /></Row>
-              <Row><Ln label="BNMC verified:  ☐ Yes  ☐ No   ·   Verified on:" w={1} /><Ln label="Documents received:  ☐ NID  ☐ Certificates  ☐ BNMC  ☐ Photo" w={0.4} /></Row>
+              <Row>{!isPCA && <Ln label="BNMC verified:  ☐ Yes  ☐ No   ·   Verified on:" w={1} />}<Ln label={'Documents received:  ☐ NID  ☐ Certificates' + (isPCA ? '' : '  ☐ BNMC') + '  ☐ Photo'} w={isPCA ? 1 : 0.4} /></Row>
             </div>
 
             <footer style={{ marginTop: 'auto', paddingTop: '5mm' }}>

@@ -14510,7 +14510,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         color: soft,
         marginTop: 2
       }
-    }, "Write in BLOCK LETTERS \xB7 tick (\u2713) the boxes that apply \xB7 attach copies of certificates, NID and BNMC registration")), React.createElement("div", {
+    }, "Write in BLOCK LETTERS \xB7 tick (\u2713) the boxes that apply \xB7 attach copies of certificates and NID", !isPCA && ', and BNMC registration')), React.createElement("div", {
       style: {
         width: '25mm',
         height: '30mm',
@@ -14637,7 +14637,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }, React.createElement(Sec, {
       n: 4,
-      title: "Compliance & registration"
+      title: isPCA ? 'Compliance & training' : 'Compliance & registration'
     }, React.createElement(Ticks, {
       label: "Special training",
       items: trains,
@@ -14645,7 +14645,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }), React.createElement(One, {
       label: "Hepatitis-B vaccination:",
       items: vacc
-    }), React.createElement(Row, null, React.createElement(Ln, {
+    }), !isPCA && React.createElement(Row, null, React.createElement(Ln, {
       label: "BNMC registration / licence no.:",
       w: 1.5
     }), React.createElement(Ln, {
@@ -14733,12 +14733,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }), React.createElement(Ln, {
       label: "By:",
       w: 0.8
-    })), React.createElement(Row, null, React.createElement(Ln, {
+    })), React.createElement(Row, null, !isPCA && React.createElement(Ln, {
       label: "BNMC verified:  \u2610 Yes  \u2610 No   \xB7   Verified on:",
       w: 1
     }), React.createElement(Ln, {
-      label: "Documents received:  \u2610 NID  \u2610 Certificates  \u2610 BNMC  \u2610 Photo",
-      w: 0.4
+      label: 'Documents received:  ☐ NID  ☐ Certificates' + (isPCA ? '' : '  ☐ BNMC') + '  ☐ Photo',
+      w: isPCA ? 1 : 0.4
     }))), React.createElement("footer", {
       style: {
         marginTop: 'auto',

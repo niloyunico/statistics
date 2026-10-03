@@ -3253,6 +3253,7 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
           {sec('Compliance',<>
             <div style={{gridColumn:'1 / -1'}}>{field('Special Training'+(chipsOf('special_training').length?' · '+chipsOf('special_training').length+' selected':''),multiChk('special_training',S.TRAININGS.filter(Boolean),customT,setCustomT,'Add another training…'))}</div>
             {field('Hepatitis B Vaccination',cmb('hepatitis_b_vaccination',S.VACCINATION_STATES))}
+            {f.role!=='PCA'&&<>
             {field('Registration / Licence No.',inp('licence_no','e.g. BNMC-12345'),
               f.licence_verified?<span style={{fontSize:11,fontWeight:700,color:'#157a43',display:'inline-flex',alignItems:'center',gap:3}}><Ic d={I.check} s={12} c="#157a43"/>BNMC verified</span>:null)}
             {/* An expired licence is a rostering problem, so it is flagged the moment
@@ -3262,6 +3263,7 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
             {/* Checks the number above against the council's public register and keeps
                 the whole answer on the record. See the note above BnmcVerify. */}
             <BnmcVerify f={f} set={set} store={store} empId={empId} editing={editing}/>
+            </>}
             <div style={{gridColumn:'1 / -1'}}>{field('Remarks',inp('remarks','Any notes'))}</div>
           </>)}
           {sec('Privileges',<>
