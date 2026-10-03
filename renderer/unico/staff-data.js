@@ -143,7 +143,20 @@
   const DEPT_PRIV_KEY='unico_dept_privileges_v1';
   function loadDeptPrivileges(){ try{const o=JSON.parse(localStorage.getItem(DEPT_PRIV_KEY)); return (o&&typeof o==='object'&&!Array.isArray(o))?o:{}; }catch(e){return {};} }
   function saveDeptPrivileges(o){ try{localStorage.setItem(DEPT_PRIV_KEY,JSON.stringify(o));}catch(e){} }
-  function deptPrivilegeMap(dept,role){ const o=loadDeptPrivileges(); const d=o[dept]; return (d&&d[roleKey(role)])?d[roleKey(role)]:{}; }
+  function deptPrivilegeMap(dept,role){
+    const o=loadDeptPrivileges();
+    const canon=d=>{
+      const value=window.staffDeptShow?window.staffDeptShow(d):d;
+      return String(value||'').toLowerCase().replace(/[^a-z0-9]+/g,'');
+    };
+    const result={};
+    Object.keys(o).filter(d=>d===dept||canon(d)===canon(dept)).forEach(d=>{
+      const map=o[d]&&o[d][roleKey(role)];
+      if(Array.isArray(map)) map.forEach(k=>{if(typeof k==='string'&&k.includes('||'))result[k]=true;});
+      else if(map&&typeof map==='object') Object.keys(map).forEach(k=>{if(map[k])result[k]=true;});
+    });
+    return result;
+  }
   function setDeptPrivilegeMap(dept,role,map){ if(!dept) return; const o=loadDeptPrivileges(); o[dept]=o[dept]||{}; o[dept][roleKey(role)]=map; saveDeptPrivileges(o); }
   // Union of assigned activity keys across every department in `depts`, for one role —
   // what the staff form's checklist is allowed to show once department(s) are picked.

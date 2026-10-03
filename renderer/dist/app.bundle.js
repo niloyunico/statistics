@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=67cb96583a","reports":"/dist/reports.chunk.js?v=9ee597f2ec","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=75d769f2c0","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=76abbfb2fc","reports":"/dist/reports.chunk.js?v=9ee597f2ec","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=ac49adff8a","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -1854,7 +1854,20 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   const DEPT_PRIV_KEY='unico_dept_privileges_v1';
   function loadDeptPrivileges(){ try{const o=JSON.parse(localStorage.getItem(DEPT_PRIV_KEY)); return (o&&typeof o==='object'&&!Array.isArray(o))?o:{}; }catch(e){return {};} }
   function saveDeptPrivileges(o){ try{localStorage.setItem(DEPT_PRIV_KEY,JSON.stringify(o));}catch(e){} }
-  function deptPrivilegeMap(dept,role){ const o=loadDeptPrivileges(); const d=o[dept]; return (d&&d[roleKey(role)])?d[roleKey(role)]:{}; }
+  function deptPrivilegeMap(dept,role){
+    const o=loadDeptPrivileges();
+    const canon=d=>{
+      const value=window.staffDeptShow?window.staffDeptShow(d):d;
+      return String(value||'').toLowerCase().replace(/[^a-z0-9]+/g,'');
+    };
+    const result={};
+    Object.keys(o).filter(d=>d===dept||canon(d)===canon(dept)).forEach(d=>{
+      const map=o[d]&&o[d][roleKey(role)];
+      if(Array.isArray(map)) map.forEach(k=>{if(typeof k==='string'&&k.includes('||'))result[k]=true;});
+      else if(map&&typeof map==='object') Object.keys(map).forEach(k=>{if(map[k])result[k]=true;});
+    });
+    return result;
+  }
   function setDeptPrivilegeMap(dept,role,map){ if(!dept) return; const o=loadDeptPrivileges(); o[dept]=o[dept]||{}; o[dept][roleKey(role)]=map; saveDeptPrivileges(o); }
   // Union of assigned activity keys across every department in `depts`, for one role —
   // what the staff form's checklist is allowed to show once department(s) are picked.
@@ -19610,11 +19623,13 @@ function WorkforceDashboard({
       fontSize: 13
     }
   }, store.refreshError), React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '12px 14px'
-    }
-  }, React.createElement("label", null, "Department ", React.createElement("select", {
+    className: "card staff-dashboard-filters"
+  }, React.createElement("div", {
+    className: "field staff-dashboard-department"
+  }, React.createElement("label", {
+    htmlFor: "staff-dashboard-department"
+  }, "Department"), React.createElement("select", {
+    id: "staff-dashboard-department",
     "aria-label": "Dashboard department",
     value: department,
     onChange: e => setDepartment(e.target.value)
@@ -19623,7 +19638,12 @@ function WorkforceDashboard({
   }, "All departments"), departmentOptions.map(d => React.createElement("option", {
     key: d,
     value: d
-  }, staffDeptLabel(d)))))), React.createElement("div", {
+  }, staffDeptLabel(d))))), React.createElement("span", {
+    className: "staff-dashboard-filter-summary"
+  }, "Showing ", React.createElement("b", null, fmt(list.length)), " active ", group === 'Trainee' ? 'trainee nurses' : group === 'PCA' ? 'PCA' : group === 'Nurse' ? 'nurses' : 'staff', department ? ' in ' + staffDeptLabel(department) : ' across all departments'), department && React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setDepartment('')
+  }, "Clear filter")), React.createElement("div", {
     className: "grid",
     style: {
       gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))'

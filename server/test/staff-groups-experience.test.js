@@ -57,6 +57,20 @@ const form=renderToStaticMarkup(React.createElement(window.StaffForm,{store:form
 assert.ok(form.includes('Experience 1 from date')&&form.includes('2020-01-15'));
 assert.ok(form.includes('Experience 1 to date')&&form.includes('2022-04-15'));
 assert.ok(form.includes('Years / months'),'the manual alternative remains available');
+const blankForm=renderToStaticMarkup(React.createElement(window.StaffForm,{store,role:'Nurse',setRoute:noop,depts:[]}));
+assert.ok(blankForm.includes('Experience 1 from date')&&blankForm.includes('Experience 1 to date'),'new records immediately show date inputs');
+const emptyEdit=renderToStaticMarkup(React.createElement(window.StaffForm,{store:{...store,get:()=>people[1]},empId:2,setRoute:noop,depts:[]}));
+assert.ok(emptyEdit.includes('Experience 1 from date'),'existing records without itemized experience show the date format');
+const legacyEdit=renderToStaticMarkup(React.createElement(window.StaffForm,{store:{...store,get:()=>({...people[1],prior_experience_entries:[{org:'Previous Hospital',years:2,months:6}]})},empId:2,setRoute:noop,depts:[]}));
+assert.ok(legacyEdit.includes('Experience 1 from date')&&legacyEdit.includes('Experience 1 years'),'legacy entries show date inputs while preserving their duration');
+const privilege=S.privilegeGroupsFor('Nurse')[0];
+const privilegeKey=S.privKey(privilege.group,privilege.items[0]);
+const savedPrivilege=renderToStaticMarkup(React.createElement(window.StaffForm,{store:{...store,get:()=>({...people[1],privileges:{[privilegeKey]:true}})},empId:2,setRoute:noop,depts:[]}));
+assert.ok(savedPrivilege.includes(privilege.items[0]),'saved grants remain editable when department assignments are absent');
+const originalStorage=context.localStorage;
+context.localStorage={getItem:k=>k==='unico_dept_privileges_v1'?JSON.stringify({MICU:{Nurse:{[privilegeKey]:true}}}):null};
+assert.ok(S.deptPrivilegeKeysFor(['Medical ICU (MICU)'],'Nurse').has(privilegeKey),'department aliases resolve stored privilege assignments');
+context.localStorage=originalStorage;
 // Render the actual local two-page print form, without its unrelated collection screens.
 const printSource=source('data-collection.jsx');
 const printStart=printSource.indexOf('function StaffPrintOptions(');
@@ -82,9 +96,9 @@ const numbers=[...batch.matchAll(/UF-[A-Z0-9]+-\d{3}/g)].map(m=>m[0]);
 assert.equal(new Set(numbers).size,3,'each form has a unique number');
 assert.equal(numbers.length,6,'both pages show the form number');
 const symbols=[...batch.matchAll(/data-block-symbol="(\d+)"/g)].map(m=>m[1]);
-assert.equal(symbols.length,36,'each of six pages carries six block symbols');
-for(let i=0;i<3;i++) assert.deepEqual(symbols.slice(i*12,i*12+6),symbols.slice(i*12+6,i*12+12),'paired pages have identical symbols');
-assert.equal(new Set([0,1,2].map(i=>symbols.slice(i*12,i*12+6).join(','))).size,3,'separate forms have distinct symbol sequences');
+assert.equal(symbols.length,72,'each of six pages carries twelve OMR symbols');
+for(let i=0;i<3;i++) assert.deepEqual(symbols.slice(i*24,i*24+12),symbols.slice(i*24+12,i*24+24),'paired pages have identical symbols');
+assert.equal(new Set([0,1,2].map(i=>symbols.slice(i*24,i*24+12).join(','))).size,3,'separate forms have distinct symbol sequences');
 assert.ok(!batch.includes('Pair code:'),'matching uses symbols instead of a printed code');
 // Exercise the dashboard button including the lazy chunk load and its options dialog.
 (async()=>{

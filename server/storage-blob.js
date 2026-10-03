@@ -1,13 +1,13 @@
-// Vercel Blob adapter for the existing public photo/file storage contract.
+// Private Vercel Blob storage. Browser URLs point to the authenticated app route.
 // The read/write token stays on the server. IDs retain the upload-kind folder.
 const blob = require('@vercel/blob');
 const sharp = require('sharp');
 const { randomUUID } = require('node:crypto');
 
-const configured = () => !!process.env.BLOB_READ_WRITE_TOKEN;
+const configured = () => !!process.env.PRIVATE_READ_WRITE_TOKEN;
 function options(extra = {}) {
-  if (!configured()) throw new Error('Vercel Blob is not configured (set BLOB_READ_WRITE_TOKEN).');
-  return { token: process.env.BLOB_READ_WRITE_TOKEN, ...extra };
+  if (!configured()) throw new Error('Private Vercel Blob is not configured (set PRIVATE_READ_WRITE_TOKEN).');
+  return { token: process.env.PRIVATE_READ_WRITE_TOKEN, ...extra };
 }
 function folderOf(value) {
   const parts = String(value || '').replace(/^\/+|\/+$/g, '').split('/');
@@ -18,12 +18,13 @@ function isBlobId(value) {
   return /^(?:[A-Za-z0-9_-]+\/)+blob_[a-f0-9-]+\.(jpg|png|webp|gif|avif|pdf)$/.test(String(value || ''));
 }
 function resourceType(path) { return /\.(jpg|jpeg|png|webp|gif|avif)$/i.test(path) ? 'image' : 'raw'; }
+function appUrl(pathname) { return '/api/media/file?pathname=' + encodeURIComponent(pathname); }
 function mapFile(file) {
-  return { publicId: file.pathname, url: file.url, name: file.pathname.split('/').pop(),
+  return { publicId: file.pathname, url: appUrl(file.pathname), name: file.pathname.split('/').pop(),
     folder: file.pathname.split('/').slice(0, -1).join('/'), format: file.pathname.split('.').pop(),
     resourceType: resourceType(file.pathname), bytes: file.size || 0,
     createdAt: file.uploadedAt ? new Date(file.uploadedAt).toISOString() : '',
-    thumbUrl: resourceType(file.pathname) === 'image' ? file.url : '' };
+    thumbUrl: resourceType(file.pathname) === 'image' ? appUrl(file.pathname) : '' };
 }
 async function uploadBuffer(buf, opts = {}) {
   if (!Buffer.isBuffer(buf) || !buf.length) throw new Error('Empty upload.');
@@ -49,7 +50,7 @@ async function uploadBuffer(buf, opts = {}) {
     } else dimensions = { width: meta.width, height: meta.pageHeight || meta.height };
   }
   const pathname = folder + '/blob_' + randomUUID() + '.' + ext;
-  const result = await blob.put(pathname, buf, options({ access: 'public', addRandomSuffix: false,
+  const result = await blob.put(pathname, buf, options({ access: 'private', addRandomSuffix: false,
     allowOverwrite: false, contentType: ext === 'pdf' ? 'application/pdf' : 'image/' + (ext === 'jpg' ? 'jpeg' : ext) }));
   return { ...mapFile({ ...result, size: buf.length }), ...dimensions, bytes: buf.length };
 }
@@ -60,7 +61,7 @@ async function getAsset(publicId) {
   return mapFile(file);
 }
 async function deleteByPublicId(publicId) {
-  try { const asset = await getAsset(publicId); await blob.del(asset.url, options()); return { ok: true }; }
+  try { await getAsset(publicId); await blob.del(publicId, options()); return { ok: true }; }
   catch (e) { return { ok: false, error: String(e.message || e) }; }
 }
 async function listAssets(opts = {}) {
@@ -100,4 +101,8 @@ async function usage() {
   return { plan: 'Vercel Blob', storage: { usage: bytes, limit: 0 }, resources };
 }
 function status() { return { provider: 'vercel-blob', configured: configured(), cloudName: 'Vercel Blob' }; }
-module.exports = { uploadBuffer, deleteByPublicId, getAsset, isBlobId, listAssets, listFolders, ping, usage, status };
+async function readAsset(pathname) {
+  if (!isBlobId(pathname) || !pathname.startsWith('unico/')) throw new Error('Invalid Vercel Blob asset.');
+  return blob.get(pathname, options({ access: 'private', useCache: false }));
+}
+module.exports = { uploadBuffer, deleteByPublicId, getAsset, isBlobId, listAssets, listFolders, ping, usage, status, readAsset, appUrl };

@@ -1453,7 +1453,8 @@ function StaffProfile({store, empId, setRoute}){
    − UNICO tenure and pre-fill one row, so editing never silently drops experience. */
 function initPriorEntries(ex){
   const S=window.STAFF;
-  if(!ex) return [];
+  const blank=()=>({org:'',dept:'',mode:'dates',fromDate:'',toDate:'',years:'',months:''});
+  if(!ex) return [blank()];
   if(Array.isArray(ex.prior_experience_entries)&&ex.prior_experience_entries.length) return ex.prior_experience_entries;
   const unico=S.unicoYearsOf(ex);
   const total=S.expYears(ex);                       // legacy total (prior path is null here)
@@ -1462,7 +1463,7 @@ function initPriorEntries(ex){
     const yr=Math.floor(prior+1e-6), mo=Math.round((prior-yr)*12);
     return [{org: ex.previous_experience || 'Experience before UNICO', years:String(yr||''), months:String(mo||'')}];
   }
-  return [];
+  return [blank()];
 }
 
 /* Collapsed multi-select DROPDOWN with a checkbox list + search + add-custom.
@@ -1670,7 +1671,7 @@ function PrivilegesEditor({ role, value, onChange, allowedKeys, emptyHint, deptN
           const items=qn?g.items.filter(it=>it.toLowerCase().includes(qn)):g.items;
           if(qn&&items.length===0) return null;
           const gGranted=g.items.filter(it=>p[S.privKey(g.group,it)]).length;
-          const open=qn?true:(allowedKeys?true:openG.has(g.group));
+          const open=qn?true:openG.has(g.group);
           return (
             <div key={g.group} style={{background:'#fff',border:'1px solid var(--line-2)',borderRadius:8}}>
               <div onClick={()=>toggleOpen(g.group)} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 11px',cursor:'pointer'}}>
@@ -2931,7 +2932,7 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
   const existing=editing?store.get(empId):null;
   const [f,setF]=React.useState(()=> existing? {...existing, prior_experience_entries:initPriorEntries(existing)} : {
     role:role||'Nurse',emp_id:'',name:'',phone:'',qualification:'',designation:designation||'',current_department:'',doj:'',
-    prior_experience_entries:[],previous_experience:'',special_training:'',extracurricular:'',hepatitis_b_vaccination:'',remarks:'',privileges:{}
+    prior_experience_entries:initPriorEntries(null),previous_experience:'',special_training:'',extracurricular:'',hepatitis_b_vaccination:'',remarks:'',privileges:{}
   });
   const [err,setErr]=React.useState('');
   const [saved,setSaved]=React.useState(null);      // {title,sub} once the write succeeded
@@ -3047,6 +3048,7 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
   const entries=f.prior_experience_entries||[];
   const entYears=S.experienceYearsOf;
   const setEntry=(i,k,v)=>set('prior_experience_entries',entries.map((x,j)=>j===i?{...x,[k]:v}:x));
+  const setEntryDate=(i,k,v)=>set('prior_experience_entries',entries.map((x,j)=>j===i?{...x,[k]:v,mode:v?'dates':x.mode}:x));
   const addEntry=()=>set('prior_experience_entries',[...entries,{org:'',dept:'',mode:'dates',fromDate:'',toDate:'',years:'',months:''}]);
   const delEntry=(i)=>set('prior_experience_entries',entries.filter((_,j)=>j!==i));
   const rowsPriorSum=entries.reduce((s,x)=>s+entYears(x),0);
@@ -3227,10 +3229,10 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
                     placeholder="Department / role — type anything" style={rowInp}/>
                   <label>Experience entry<select aria-label={`Experience ${i+1} entry method`} value={S.experienceUsesDates(x)?'dates':'duration'} onChange={ev=>set('prior_experience_entries',entries.map((row,j)=>j===i?{...row,mode:ev.target.value,fromDate:ev.target.value==='duration'?'':row.fromDate,toDate:ev.target.value==='duration'?'':row.toDate,years:ev.target.value==='duration'?String(Math.floor(entYears(row))):row.years,months:ev.target.value==='duration'?String(Math.round((entYears(row)%1)*12)):row.months}:row))} style={rowInp}><option value="dates">From date / To date (default)</option><option value="duration">Years / months</option></select></label>
                   <span style={{fontSize:12,color:'var(--muted)'}}>Duration: {S.fmtYM(entYears(x))}</span>
-                  {S.experienceUsesDates(x)?<>
-                    <label>From date<input aria-label={`Experience ${i+1} from date`} type="date" value={x.fromDate||''} onChange={ev=>setEntry(i,'fromDate',ev.target.value)} style={rowInp}/></label>
-                    <label>To date<input aria-label={`Experience ${i+1} to date`} type="date" min={x.fromDate||undefined} max={f.doj||undefined} value={x.toDate||''} onChange={ev=>setEntry(i,'toDate',ev.target.value)} style={rowInp}/></label>
-                  </>:<>
+                  <label>From date<input aria-label={`Experience ${i+1} from date`} type="date" value={x.fromDate||''} onChange={ev=>setEntryDate(i,'fromDate',ev.target.value)} style={rowInp}/></label>
+                  <label>To date<input aria-label={`Experience ${i+1} to date`} type="date" min={x.fromDate||undefined} max={f.doj||undefined} value={x.toDate||''} onChange={ev=>setEntryDate(i,'toDate',ev.target.value)} style={rowInp}/></label>
+                  {!S.experienceUsesDates(x)&&<>
+                    <span style={{gridColumn:'1 / -1',fontSize:11.5,color:'var(--muted)'}}>Saved duration is preserved. Enter both dates above to calculate it automatically, or keep Years / months below.</span>
                     <label>Years<input aria-label={`Experience ${i+1} years`} value={x.years||''} onChange={ev=>setEntry(i,'years',ev.target.value.replace(/[^\d.]/g,''))} placeholder="0" inputMode="decimal" style={rowInp}/></label>
                     <label>Months<input aria-label={`Experience ${i+1} months`} value={x.months||''} onChange={ev=>setEntry(i,'months',ev.target.value.replace(/[^\d]/g,''))} placeholder="0" inputMode="numeric" style={rowInp}/></label>
                   </>}
@@ -3276,6 +3278,9 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
                 const resolveDept=(d)=>{ try{ return (window.staffDeptShow?window.staffDeptShow(d):d)||d; }catch(e){ return d; } };
                 const selDepts=[...new Set(selRaw.map(resolveDept).filter(Boolean))];
                 const allowedKeys=(S.deptPrivilegeKeysFor)?S.deptPrivilegeKeysFor(selDepts,f.role||'Nurse'):null;
+                // Existing grants must remain visible and removable even if the department
+                // catalogue has changed since this staff record was saved.
+                if(allowedKeys&&existing&&existing.privileges) Object.keys(existing.privileges).forEach(k=>{if(existing.privileges[k])allowedKeys.add(k);});
                 // Still worth calling out a department that resolves to nothing the
                 // catalogue knows (deleted or renamed since the record was written) —
                 // but only AFTER the alias has been tried, and naming what is on the

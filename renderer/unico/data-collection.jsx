@@ -5763,15 +5763,18 @@ function StaffPrintOptions({role,onDone}){
     const ink = '#111a26', line = '#8e9aa8', soft = '#4f5d6e';
     const MatchSymbols = ({ pairCode }) => {
       const hex = pairCode.slice(5);
-      return <span aria-label="Matching block symbols" style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-        {Array.from({ length: 6 }, (_, i) => {
-          const bits = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-          return <svg key={i} data-block-symbol={bits} width="28" height="28" viewBox="0 0 34 34" aria-hidden="true" style={{ display: 'block' }}>
-            <rect x=".5" y=".5" width="33" height="33" fill="white" stroke="black" />
-            {Array.from({ length: 9 }, (_, cell) => (cell === 4 || (bits & (1 << (cell < 4 ? cell : cell - 1))))
-              ? <rect key={cell} x={2 + (cell % 3) * 10} y={2 + Math.floor(cell / 3) * 10} width="10" height="10" fill="black" /> : null)}
+      return <span aria-label="Matching OMR symbols" style={{ display: 'flex', alignItems: 'center', gap: 1, padding: '2px 4px', border: '1px solid black', background: 'white', flexShrink: 0 }}>
+        <span style={{ width: 4, height: 16, background: 'black', marginRight: 3 }} />
+        {Array.from({ length: 12 }, (_, i) => {
+          const code = parseInt(hex[i], 16), shape = code % 8;
+          const polygons = { 2:'12,4 21,20 3,20', 3:'12,3 21,12 12,21 3,12', 4:'9,3 15,3 15,9 21,9 21,15 15,15 15,21 9,21 9,15 3,15 3,9 9,9', 5:'12,2 15,8 22,9 17,14 18,21 12,18 6,21 7,14 2,9 9,8', 6:'7,4 17,4 22,12 17,20 7,20 2,12', 7:'4,4 20,4 14,12 20,20 4,20 10,12' };
+          return <svg key={i} data-block-symbol={code} width="18" height="22" viewBox="0 0 24 24" aria-hidden="true" style={{ display: 'block' }}>
+            <g fill={code < 8 ? 'black' : 'white'} stroke="black" strokeWidth="1.6" strokeLinejoin="miter">
+              {shape === 0 ? <rect x="5" y="5" width="14" height="14" /> : shape === 1 ? <circle cx="12" cy="12" r="7.5" /> : <polygon points={polygons[shape]} />}
+            </g>
           </svg>;
         })}
+        <span style={{ width: 4, height: 16, background: 'black', marginLeft: 3 }} />
       </span>;
     };
     const PageMatch = ({ page, pairCode, number }) => (

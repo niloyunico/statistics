@@ -13,14 +13,14 @@ const sharp = require('sharp');
       files.set(pathname, file); return file;
     },
     async head(id) { if (!files.has(id)) throw new Error('Not found'); return files.get(id); },
-    async del(url) { for (const [id, file] of files) if (file.url === url) files.delete(id); },
+    async del(url) { for (const [id, file] of files) if (file.url === url || id === url) files.delete(id); },
     async list(opts) {
       const rows = [...files.values()].filter(f => f.pathname.startsWith(opts.prefix || ''));
       const offset = Number(opts.cursor || 0), end = offset + opts.limit;
       return { blobs: rows.slice(offset, end), hasMore: end < rows.length, cursor: String(end) };
     },
   };
-  const env = { BLOB_READ_WRITE_TOKEN: 'test-secret' };
+  const env = { PRIVATE_READ_WRITE_TOKEN: 'test-secret' };
   const context = { module: { exports: {} }, Buffer, process: { env }, require: name => name === '@vercel/blob' ? sdk : require(name) };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../storage-blob.js'), 'utf8'), context);
   const storage = context.module.exports;
@@ -28,6 +28,7 @@ const sharp = require('sharp');
   const up = await storage.uploadBuffer(png, { folder: 'unico/staff' });
   assert.ok(storage.isBlobId(up.publicId));
   assert.ok(up.publicId.startsWith('unico/staff/'));
+  assert.ok(up.url.startsWith('/api/media/file?pathname='), 'images use the authenticated same-origin route');
   assert.equal(up.format, 'avif');
   assert.equal(up.width, 120);
   assert.equal(up.height, 80);
@@ -35,7 +36,7 @@ const sharp = require('sharp');
   const encoded = await sharp(calls[0].buf).metadata();
   assert.equal(encoded.compression, 'av1', 'the uploaded data must really be AVIF');
   assert.equal(encoded.hasAlpha, true, 'preserve transparent PNG pixels');
-  assert.equal(calls[0].opts.access, 'public');
+  assert.equal(calls[0].opts.access, 'private');
   assert.equal(calls[0].opts.allowOverwrite, false);
   assert.equal(calls[0].opts.contentType, 'image/avif');
   assert.equal((await storage.getAsset(up.publicId)).url, up.url);
@@ -69,7 +70,7 @@ const sharp = require('sharp');
     assert.ok((await storage.listAssets({ folder: 'unico/staff', resourceType: 'image' })).assets.some(a => a.publicId === converted.publicId), 'AVIF appears in the image library');
     assert.equal((await storage.deleteByPublicId(converted.publicId)).ok, true);
   }
-  delete env.BLOB_READ_WRITE_TOKEN;
+  delete env.PRIVATE_READ_WRITE_TOKEN;
   assert.equal(storage.status().configured, false);
   assert.equal((await storage.ping()).ok, false);
   await assert.rejects(storage.uploadBuffer(png), /not configured/);

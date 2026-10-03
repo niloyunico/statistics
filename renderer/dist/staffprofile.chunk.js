@@ -3480,7 +3480,16 @@ function StaffProfile({
 }
 function initPriorEntries(ex) {
   const S = window.STAFF;
-  if (!ex) return [];
+  const blank = () => ({
+    org: '',
+    dept: '',
+    mode: 'dates',
+    fromDate: '',
+    toDate: '',
+    years: '',
+    months: ''
+  });
+  if (!ex) return [blank()];
   if (Array.isArray(ex.prior_experience_entries) && ex.prior_experience_entries.length) return ex.prior_experience_entries;
   const unico = S.unicoYearsOf(ex);
   const total = S.expYears(ex);
@@ -3494,7 +3503,7 @@ function initPriorEntries(ex) {
       months: String(mo || '')
     }];
   }
-  return [];
+  return [blank()];
 }
 function MultiSelectDropdown({
   value,
@@ -4139,7 +4148,7 @@ function PrivilegesEditor({
     const items = qn ? g.items.filter(it => it.toLowerCase().includes(qn)) : g.items;
     if (qn && items.length === 0) return null;
     const gGranted = g.items.filter(it => p[S.privKey(g.group, it)]).length;
-    const open = qn ? true : allowedKeys ? true : openG.has(g.group);
+    const open = qn ? true : openG.has(g.group);
     return React.createElement("div", {
       key: g.group,
       style: {
@@ -7059,7 +7068,7 @@ function StaffForm({
     designation: designation || '',
     current_department: '',
     doj: '',
-    prior_experience_entries: [],
+    prior_experience_entries: initPriorEntries(null),
     previous_experience: '',
     special_training: '',
     extracurricular: '',
@@ -7313,6 +7322,11 @@ function StaffForm({
   const setEntry = (i, k, v) => set('prior_experience_entries', entries.map((x, j) => j === i ? {
     ...x,
     [k]: v
+  } : x));
+  const setEntryDate = (i, k, v) => set('prior_experience_entries', entries.map((x, j) => j === i ? {
+    ...x,
+    [k]: v,
+    mode: v ? 'dates' : x.mode
   } : x));
   const addEntry = () => set('prior_experience_entries', [...entries, {
     org: '',
@@ -7768,11 +7782,11 @@ function StaffForm({
       fontSize: 12,
       color: 'var(--muted)'
     }
-  }, "Duration: ", S.fmtYM(entYears(x))), S.experienceUsesDates(x) ? React.createElement(React.Fragment, null, React.createElement("label", null, "From date", React.createElement("input", {
+  }, "Duration: ", S.fmtYM(entYears(x))), React.createElement("label", null, "From date", React.createElement("input", {
     "aria-label": `Experience ${i + 1} from date`,
     type: "date",
     value: x.fromDate || '',
-    onChange: ev => setEntry(i, 'fromDate', ev.target.value),
+    onChange: ev => setEntryDate(i, 'fromDate', ev.target.value),
     style: rowInp
   })), React.createElement("label", null, "To date", React.createElement("input", {
     "aria-label": `Experience ${i + 1} to date`,
@@ -7780,9 +7794,15 @@ function StaffForm({
     min: x.fromDate || undefined,
     max: f.doj || undefined,
     value: x.toDate || '',
-    onChange: ev => setEntry(i, 'toDate', ev.target.value),
+    onChange: ev => setEntryDate(i, 'toDate', ev.target.value),
     style: rowInp
-  }))) : React.createElement(React.Fragment, null, React.createElement("label", null, "Years", React.createElement("input", {
+  })), !S.experienceUsesDates(x) && React.createElement(React.Fragment, null, React.createElement("span", {
+    style: {
+      gridColumn: '1 / -1',
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "Saved duration is preserved. Enter both dates above to calculate it automatically, or keep Years / months below."), React.createElement("label", null, "Years", React.createElement("input", {
     "aria-label": `Experience ${i + 1} years`,
     value: x.years || '',
     onChange: ev => setEntry(i, 'years', ev.target.value.replace(/[^\d.]/g, '')),
@@ -7892,6 +7912,9 @@ function StaffForm({
     };
     const selDepts = [...new Set(selRaw.map(resolveDept).filter(Boolean))];
     const allowedKeys = S.deptPrivilegeKeysFor ? S.deptPrivilegeKeysFor(selDepts, f.role || 'Nurse') : null;
+    if (allowedKeys && existing && existing.privileges) Object.keys(existing.privileges).forEach(k => {
+      if (existing.privileges[k]) allowedKeys.add(k);
+    });
     const unknownDepts = selRaw.filter(d => !deptOpts.includes(resolveDept(d)));
     const hint = selDepts.length === 0 ? 'Select a department above first — privileges are assigned per department, in Settings → Department Privileges.' : unknownDepts.length ? `“${unknownDepts.join(', ')}” isn't a department Settings → Department Privileges recognises — re-pick the department above from the dropdown (it may have been renamed), then assign its privileges in Settings.` : `No privileges have been assigned to ${selDepts.join(', ')} yet for this role. Assign them in Settings → Department Privileges.`;
     return React.createElement(React.Fragment, null, React.createElement("div", {

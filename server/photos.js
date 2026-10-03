@@ -106,6 +106,28 @@ function decodeImage(dataUri) {
 function mount(app, opts) {
   const requireApi = (opts && opts.requireApi) || ((req, res, next) => { req.user = null; next(); });
 
+  // Same-origin cookies let every image, preview and printed portrait use this URL.
+  // Never redirect to Blob: the storage token and private location stay server-side.
+  app.get('/api/media/file', requireApi, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    if (!req.user) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+    const a = await access.forRequest(req);
+    if (!a) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+    const store = require('./storage-blob');
+    const pathname = String(req.query.pathname || '');
+    if (!store.isBlobId(pathname) || !pathname.startsWith('unico/')) return res.status(400).json({ ok: false, error: 'Invalid file.' });
+    try {
+      const result = await store.readAsset(pathname);
+      if (!result || result.statusCode !== 200) return res.status(404).json({ ok: false, error: 'File not found.' });
+      res.setHeader('Content-Type', result.blob.contentType);
+      require('node:stream').Readable.fromWeb(result.stream).pipe(res);
+    } catch (e) {
+      return res.status(404).json({ ok: false, error: 'File not found.' });
+    }
+  });
+
   // Resolve the caller's live authority and check it may upload this kind. Returns
   // the kind spec, or null after having already answered the request.
   async function allow(req, res, rawKind) {

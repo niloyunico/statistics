@@ -516,7 +516,16 @@ function WorkforceDashboard({store, setRoute, role='Nurse', group=role}){
           <button className="btn sm" disabled={store.refreshing} onClick={()=>store.refresh()}><Ic d={I.activity} s={15}/>{store.refreshing?'Refreshing…':'Refresh'}</button>
           {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role,designation:group==='Trainee'?'Trainee Nurse':''})}><Ic d={I.plus} s={15}/>Add {group==='Trainee'?'Trainee Nurse':role}</button>}</>}/>
       {store.refreshError&&<div role="alert" style={{color:'#b4232f',fontSize:13}}>{store.refreshError}</div>}
-      <div className="card" style={{padding:'12px 14px'}}><label>Department <select aria-label="Dashboard department" value={department} onChange={e=>setDepartment(e.target.value)}><option value="">All departments</option>{departmentOptions.map(d=><option key={d} value={d}>{staffDeptLabel(d)}</option>)}</select></label></div>
+      <div className="card staff-dashboard-filters">
+        <div className="field staff-dashboard-department">
+          <label htmlFor="staff-dashboard-department">Department</label>
+          <select id="staff-dashboard-department" aria-label="Dashboard department" value={department} onChange={e=>setDepartment(e.target.value)}>
+            <option value="">All departments</option>{departmentOptions.map(d=><option key={d} value={d}>{staffDeptLabel(d)}</option>)}
+          </select>
+        </div>
+        <span className="staff-dashboard-filter-summary">Showing <b>{fmt(list.length)}</b> active {group==='Trainee'?'trainee nurses':group==='PCA'?'PCA':group==='Nurse'?'nurses':'staff'}{department?' in '+staffDeptLabel(department):' across all departments'}</span>
+        {department&&<button className="btn sm" onClick={()=>setDepartment('')}>Clear filter</button>}
+      </div>
       <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))'}}>
         {Object.entries({All:'All Staff',Nurse:'Nurses',Trainee:'Trainee Nurses',PCA:'PCA'}).map(([key,name])=><button key={key} aria-label={`View ${name} dashboard`} onClick={()=>setRoute({view:dashboardViews[key]})} style={{border:0,padding:0,background:'transparent',textAlign:'left',font:'inherit',cursor:'pointer'}}><Kpi label={name} val={fmt(counts[key])} foot={key==='All'?'includes nurses, trainees and PCA':'active staff in selected departments'} color={key==='Trainee'?'#e08a1e':key==='PCA'?'#6a52d4':'#0090ca'}/></button>)}
       </div>
