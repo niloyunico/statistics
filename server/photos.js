@@ -119,10 +119,16 @@ function mount(app, opts) {
     const pathname = String(req.query.pathname || '');
     if (!store.isBlobId(pathname) || !pathname.startsWith('unico/')) return res.status(400).json({ ok: false, error: 'Invalid file.' });
     try {
-      const result = await store.readAsset(pathname);
-      if (!result || result.statusCode !== 200) return res.status(404).json({ ok: false, error: 'File not found.' });
-      res.setHeader('Content-Type', result.blob.contentType);
-      require('node:stream').Readable.fromWeb(result.stream).pipe(res);
+      const result = await store.readCachedAsset(pathname);
+      if (!result) return res.status(404).json({ ok: false, error: 'File not found.' });
+      // The browser keeps bytes privately but MUST revalidate login on every reuse.
+      res.setHeader('Cache-Control', 'private, no-cache, must-revalidate');
+      res.setHeader('Vary', 'Cookie, Authorization');
+      res.setHeader('ETag', result.etag);
+      res.setHeader('Content-Type', result.contentType);
+      const tags = String(req.headers['if-none-match'] || '').split(',').map(t => t.trim().replace(/^W\//, ''));
+      if (tags.includes(result.etag) || tags.includes('*')) return res.status(304).end();
+      res.send(result.data);
     } catch (e) {
       return res.status(404).json({ ok: false, error: 'File not found.' });
     }

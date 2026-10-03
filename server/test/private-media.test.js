@@ -11,7 +11,7 @@ const sharp = require('sharp');
   let reads = 0, active = true;
   const privateStore = {
     isBlobId: require('../storage-blob').isBlobId,
-    readAsset: async () => { reads++; return { statusCode: 200, blob: { contentType: 'image/avif' }, stream: new ReadableStream({ start(controller) { controller.enqueue(image); controller.close(); } }) }; },
+    readCachedAsset: async () => { reads++; return { data:image,contentType:'image/avif',etag:'"test-image"' }; },
   };
   const deps = { './storage': {}, './activity-log': {}, './access': { forRequest: async () => active ? {} : null }, './db': {}, './cache': {}, './storage-blob': privateStore };
   const context = { module: { exports: {} }, Buffer, require: name => deps[name] || require(name) };
@@ -28,14 +28,20 @@ const sharp = require('sharp');
     const allowed = await fetch(url, { headers: { 'x-test-login': '1' } });
     assert.equal(allowed.status, 200);
     assert.equal(allowed.headers.get('content-type'), 'image/avif');
-    assert.equal(allowed.headers.get('cache-control'), 'private, no-store');
+    assert.equal(allowed.headers.get('cache-control'), 'private, no-cache, must-revalidate');
     assert.equal(allowed.headers.get('location'), null, 'never redirect to a Blob URL');
     assert.deepEqual(Buffer.from(await allowed.arrayBuffer()), image, 'the preview receives decodable AVIF bytes');
+    const etag=allowed.headers.get('etag');
+    const repeated=await fetch(url,{headers:{'x-test-login':'1','if-none-match':etag}});
+    assert.equal(repeated.status,304,'unchanged authenticated images send no body');
+    assert.equal((await repeated.arrayBuffer()).byteLength,0);
+    const loggedOutCached=await fetch(url,{headers:{'if-none-match':etag}});
+    assert.equal(loggedOutCached.status,401,'cached images still require login');
     active = false;
     assert.equal((await fetch(url, { headers: { 'x-test-login': '1' } })).status, 401, 'revoked accounts cannot read images');
     active = true;
     assert.equal((await fetch(url.replace(encodeURIComponent(pathname), encodeURIComponent('../secret')), { headers: { 'x-test-login': '1' } })).status, 400);
-    assert.equal(reads, 1);
-    console.log('Private AVIF delivery, login/revocation guards and no-cache checks passed.');
+    assert.equal(reads, 2);
+    console.log('Private AVIF delivery, login/revocation guards and authenticated cache revalidation checks passed.');
   } finally { await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

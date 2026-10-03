@@ -2,7 +2,23 @@
 // The read/write token stays on the server. IDs retain the upload-kind folder.
 const blob = require('@vercel/blob');
 const sharp = require('sharp');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
+const mediaCache = new Map(), pendingReads = new Map();
+const CACHE_TTL = 10 * 60 * 1000, CACHE_BYTES = 16 * 1024 * 1024;
+let cachedBytes = 0, cacheEpoch = 0;
+function evict(pathname) {
+  const entry = mediaCache.get(pathname);
+  if (entry) { cachedBytes -= entry.data.length; mediaCache.delete(pathname); }
+}
+function remember(pathname, data, contentType) {
+  const entry = { data, contentType, etag: '"' + createHash('sha256').update(data).digest('hex') + '"', expires: Date.now() + CACHE_TTL };
+  evict(pathname);
+  if (data.length <= 2 * 1024 * 1024) {
+    while (mediaCache.size && (cachedBytes + data.length > CACHE_BYTES || mediaCache.size >= 512)) evict(mediaCache.keys().next().value);
+    mediaCache.set(pathname, entry); cachedBytes += data.length;
+  }
+  return entry;
+}
 
 const configured = () => !!process.env.PRIVATE_READ_WRITE_TOKEN;
 function options(extra = {}) {
@@ -52,6 +68,8 @@ async function uploadBuffer(buf, opts = {}) {
   const pathname = folder + '/blob_' + randomUUID() + '.' + ext;
   const result = await blob.put(pathname, buf, options({ access: 'private', addRandomSuffix: false,
     allowOverwrite: false, contentType: ext === 'pdf' ? 'application/pdf' : 'image/' + (ext === 'jpg' ? 'jpeg' : ext) }));
+  // The upload already has the encoded bytes, so its first preview needs no Blob read.
+  remember(pathname, buf, ext === 'pdf' ? 'application/pdf' : 'image/' + (ext === 'jpg' ? 'jpeg' : ext));
   return { ...mapFile({ ...result, size: buf.length }), ...dimensions, bytes: buf.length };
 }
 async function getAsset(publicId) {
@@ -61,7 +79,7 @@ async function getAsset(publicId) {
   return mapFile(file);
 }
 async function deleteByPublicId(publicId) {
-  try { await getAsset(publicId); await blob.del(publicId, options()); return { ok: true }; }
+  try { await getAsset(publicId); await blob.del(publicId, options()); cacheEpoch++; evict(publicId); return { ok: true }; }
   catch (e) { return { ok: false, error: String(e.message || e) }; }
 }
 async function listAssets(opts = {}) {
@@ -103,6 +121,29 @@ async function usage() {
 function status() { return { provider: 'vercel-blob', configured: configured(), cloudName: 'Vercel Blob' }; }
 async function readAsset(pathname) {
   if (!isBlobId(pathname) || !pathname.startsWith('unico/')) throw new Error('Invalid Vercel Blob asset.');
-  return blob.get(pathname, options({ access: 'private', useCache: false }));
+  return blob.get(pathname, options({ access: 'private', useCache: true }));
 }
-module.exports = { uploadBuffer, deleteByPublicId, getAsset, isBlobId, listAssets, listFolders, ping, usage, status, readAsset, appUrl };
+async function readCachedAsset(pathname) {
+  options();
+  if (!isBlobId(pathname) || !pathname.startsWith('unico/')) throw new Error('Invalid Vercel Blob asset.');
+  const cached = mediaCache.get(pathname);
+  if (cached && cached.expires > Date.now()) {
+    mediaCache.delete(pathname); mediaCache.set(pathname, cached);
+    return cached;
+  }
+  evict(pathname);
+  if (pendingReads.has(pathname)) return pendingReads.get(pathname);
+  const epoch = cacheEpoch;
+  const pending = (async () => {
+    const result = await readAsset(pathname);
+    if (!result || result.statusCode !== 200) return null;
+    const chunks = [];
+    for await (const chunk of require('node:stream').Readable.fromWeb(result.stream)) chunks.push(chunk);
+    const data = Buffer.concat(chunks);
+    if (epoch !== cacheEpoch) return { data, contentType: result.blob.contentType, etag: '"' + createHash('sha256').update(data).digest('hex') + '"' };
+    return remember(pathname, data, result.blob.contentType);
+  })();
+  pendingReads.set(pathname, pending);
+  try { return await pending; } finally { pendingReads.delete(pathname); }
+}
+module.exports = { uploadBuffer, deleteByPublicId, getAsset, isBlobId, listAssets, listFolders, ping, usage, status, readAsset, readCachedAsset, appUrl };

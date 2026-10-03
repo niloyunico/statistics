@@ -6,13 +6,21 @@ const sharp = require('sharp');
 
 (async () => {
   const calls = [], files = new Map();
+  let reads = 0, now = Date.now();
+  class Clock extends Date { static now() { return now; } }
   const sdk = {
     async put(pathname, buf, opts) {
       calls.push({ pathname, opts, buf });
-      const file = { pathname, url: 'https://test.public.blob.vercel-storage.com/' + pathname, size: buf.length, uploadedAt: new Date() };
+      const file = { pathname, url: 'https://test.private.blob.vercel-storage.com/' + pathname, size: buf.length, uploadedAt: new Date(), data: buf, contentType: opts.contentType };
       files.set(pathname, file); return file;
     },
     async head(id) { if (!files.has(id)) throw new Error('Not found'); return files.get(id); },
+    async get(id) {
+      reads++;
+      const file = files.get(id);
+      if (!file) return null;
+      return { statusCode:200, blob:{contentType:file.contentType}, stream:new ReadableStream({start(controller){controller.enqueue(file.data);controller.close();}}) };
+    },
     async del(url) { for (const [id, file] of files) if (file.url === url || id === url) files.delete(id); },
     async list(opts) {
       const rows = [...files.values()].filter(f => f.pathname.startsWith(opts.prefix || ''));
@@ -21,7 +29,7 @@ const sharp = require('sharp');
     },
   };
   const env = { PRIVATE_READ_WRITE_TOKEN: 'test-secret' };
-  const context = { module: { exports: {} }, Buffer, process: { env }, require: name => name === '@vercel/blob' ? sdk : require(name) };
+  const context = { module: { exports: {} }, Buffer, Date: Clock, process: { env }, require: name => name === '@vercel/blob' ? sdk : require(name) };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../storage-blob.js'), 'utf8'), context);
   const storage = context.module.exports;
   const png = await sharp({ create: { width: 120, height: 80, channels: 4, background: { r: 32, g: 120, b: 240, alpha: 0.5 } } }).png().toBuffer();
@@ -40,6 +48,13 @@ const sharp = require('sharp');
   assert.equal(calls[0].opts.allowOverwrite, false);
   assert.equal(calls[0].opts.contentType, 'image/avif');
   assert.equal((await storage.getAsset(up.publicId)).url, up.url);
+  assert.equal((await storage.readCachedAsset(up.publicId)).data,calls[0].buf,'saving primes the AVIF preview cache');
+  await storage.readCachedAsset(up.publicId);
+  assert.equal(reads,0,'repeated previews do not download Blob bytes');
+  now+=10*60*1000+1;
+  const [first,second]=await Promise.all([storage.readCachedAsset(up.publicId),storage.readCachedAsset(up.publicId)]);
+  assert.equal(reads,1,'expired concurrent reads share one storage request');
+  assert.equal(first,second);
   await assert.rejects(storage.uploadBuffer(Buffer.from('RIFFnot-an-image')), /Unsupported/);
   await assert.rejects(storage.uploadBuffer(png, { folder: '../staff' }), /Invalid storage folder/);
   assert.equal((await storage.deleteByPublicId('https://example.com/file.png')).ok, false);
@@ -52,6 +67,7 @@ const sharp = require('sharp');
   assert.equal((await storage.listFolders('unico')).map(f => f.name).join(','), 'files,staff');
   assert.equal((await storage.usage()).resources, 2);
   assert.equal((await storage.deleteByPublicId(up.publicId)).ok, true);
+  assert.equal(await storage.readCachedAsset(up.publicId),null,'deletion invalidates cached bytes');
   assert.ok(files.has(pdf.publicId));
   assert.equal(calls[1].opts.contentType, 'application/pdf');
   assert.equal(calls[1].buf.toString(), '%PDF-1.7', 'documents remain byte-identical');
@@ -70,6 +86,14 @@ const sharp = require('sharp');
     assert.ok((await storage.listAssets({ folder: 'unico/staff', resourceType: 'image' })).assets.some(a => a.publicId === converted.publicId), 'AVIF appears in the image library');
     assert.equal((await storage.deleteByPublicId(converted.publicId)).ok, true);
   }
+  const bigPdf=Buffer.alloc(2*1024*1024,32);bigPdf.write('%PDF-1.7');
+  const saved=[];
+  for(let i=0;i<9;i++) saved.push(await storage.uploadBuffer(bigPdf,{folder:'unico/files'}));
+  const before=reads;
+  await storage.readCachedAsset(saved[8].publicId);
+  assert.equal(reads,before,'recent files remain in cache');
+  await storage.readCachedAsset(saved[0].publicId);
+  assert.equal(reads,before+1,'older entries are evicted within the memory budget');
   delete env.PRIVATE_READ_WRITE_TOKEN;
   assert.equal(storage.status().configured, false);
   assert.equal((await storage.ping()).ok, false);

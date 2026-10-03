@@ -5784,6 +5784,7 @@ function StaffPrintOptions({role,onDone}){
     // Nurse designations always offer "Trainee Nurse" (added once, even before STAFF.DESIGNATIONS carries it).
     if (!isPCA && !desigs.some((d) => d.toLowerCase() === 'trainee nurse')) desigs.push('Trainee Nurse');
     const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const sheetStyle = { fontFamily: "'IBM Plex Sans',system-ui,'Segoe UI',sans-serif", color: ink, padding: '7mm 9mm', minHeight: '283mm', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' };
     // Sized to print on EXACTLY 2 A4 portrait sheets: page 1 = header + sections 1-3, page 2 = the rest.
     const Sec = ({ n, title, children }) => (
       <div style={{ marginTop: 7, breakInside: 'avoid', pageBreakInside: 'avoid' }}>
@@ -5821,8 +5822,7 @@ function StaffPrintOptions({role,onDone}){
         {/* Own A4 page rule instead of .pdf-page's named page (rpt-port): switching to a named page forces a
             break, which added an empty first sheet. */}
         <style>{"@media print{@page{size:A4 portrait;margin:6mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .regform-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}}"}</style>
-        {forms.map((form, index) => <section key={form.number} className="regform-sheet" style={{ fontFamily: "'IBM Plex Sans',system-ui,'Segoe UI',sans-serif", color: ink, padding: '7mm 9mm', breakBefore: index ? 'page' : 'auto', pageBreakBefore: index ? 'always' : 'auto' }}>
-          <PageMatch page={1} {...form} />
+        {forms.map((form, index) => <React.Fragment key={form.number}><section className="regform-sheet" style={{ ...sheetStyle, breakBefore: index ? 'page' : 'auto', pageBreakBefore: index ? 'always' : 'auto' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, borderBottom: '2px solid #1f3b5a', paddingBottom: 6 }}>
             <img src="unico/logo.svg" alt="UNICO Hospitals" style={{ height: 36 }} />
             <div style={{ flex: 1, textAlign: 'center' }}>
@@ -5862,8 +5862,9 @@ function StaffPrintOptions({role,onDone}){
             </Row>
           </Sec>
 
-          <div style={{ breakBefore: 'page', pageBreakBefore: 'always' }}>
-            <PageMatch page={2} {...form} />
+          <footer style={{ marginTop: 'auto', paddingTop: '5mm' }}><PageMatch page={1} {...form} /></footer>
+          </section>
+          <section className="regform-sheet" style={{ ...sheetStyle, breakBefore: 'page', pageBreakBefore: 'always' }}>
             <Sec n={4} title="Compliance & registration">
               <Ticks label="Special training" items={trains} cols={5} />
               <One label="Hepatitis-B vaccination:" items={vacc} />
@@ -5901,12 +5902,15 @@ function StaffPrintOptions({role,onDone}){
               <Row><Ln label="BNMC verified:  ☐ Yes  ☐ No   ·   Verified on:" w={1} /><Ln label="Documents received:  ☐ NID  ☐ Certificates  ☐ BNMC  ☐ Photo" w={0.4} /></Row>
             </div>
 
-            <div style={{ marginTop: 8, fontSize: '7.5pt', color: soft, borderTop: '1px solid #cfd6de', paddingTop: 4, display: 'flex', justifyContent: 'space-between' }}>
+            <footer style={{ marginTop: 'auto', paddingTop: '5mm' }}>
+            <div style={{ marginBottom: 5, fontSize: '7.5pt', color: soft, paddingTop: 4, display: 'flex', justifyContent: 'space-between' }}>
               <span>UNICO Hospitals PLC · Staff Information Form ({isPCA ? 'PCA' : 'Nurse'}) · HR-NUR-REG-01</span>
               <span>Printed {today}</span>
             </div>
-          </div>
-        </section>)}
+            <PageMatch page={2} {...form} />
+            </footer>
+          </section>
+        </React.Fragment>)}
       </div>,
       root
     );

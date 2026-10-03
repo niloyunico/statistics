@@ -14298,6 +14298,15 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       month: 'short',
       year: 'numeric'
     });
+    const sheetStyle = {
+      fontFamily: "'IBM Plex Sans',system-ui,'Segoe UI',sans-serif",
+      color: ink,
+      padding: '7mm 9mm',
+      minHeight: '283mm',
+      boxSizing: 'border-box',
+      display: 'flex',
+      flexDirection: 'column'
+    };
     const Sec = ({
       n,
       title,
@@ -14453,19 +14462,16 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, React.createElement(Box, null), x)));
     return ReactDOM.createPortal(React.createElement("div", {
       className: "pdf-doc portrait"
-    }, React.createElement("style", null, "@media print{@page{size:A4 portrait;margin:6mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .regform-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}}"), forms.map((form, index) => React.createElement("section", {
-      key: form.number,
+    }, React.createElement("style", null, "@media print{@page{size:A4 portrait;margin:6mm}html,body{height:auto !important;min-height:0 !important}body.regform-print>*:not(#pdf-root){display:none !important}body.regform-print #pdf-root{display:block !important;position:static !important;margin:0 !important;padding:0 !important}body.regform-print #pdf-root .regform-sheet{page:auto !important;box-sizing:border-box;width:100%;background:#fff}}"), forms.map((form, index) => React.createElement(React.Fragment, {
+      key: form.number
+    }, React.createElement("section", {
       className: "regform-sheet",
       style: {
-        fontFamily: "'IBM Plex Sans',system-ui,'Segoe UI',sans-serif",
-        color: ink,
-        padding: '7mm 9mm',
+        ...sheetStyle,
         breakBefore: index ? 'page' : 'auto',
         pageBreakBefore: index ? 'always' : 'auto'
       }
-    }, React.createElement(PageMatch, _extends({
-      page: 1
-    }, form)), React.createElement("div", {
+    }, React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -14615,14 +14621,21 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }), React.createElement(Ln, {
       label: "Total experience:",
       w: 0.8
-    }))), React.createElement("div", {
+    }))), React.createElement("footer", {
       style: {
+        marginTop: 'auto',
+        paddingTop: '5mm'
+      }
+    }, React.createElement(PageMatch, _extends({
+      page: 1
+    }, form)))), React.createElement("section", {
+      className: "regform-sheet",
+      style: {
+        ...sheetStyle,
         breakBefore: 'page',
         pageBreakBefore: 'always'
       }
-    }, React.createElement(PageMatch, _extends({
-      page: 2
-    }, form)), React.createElement(Sec, {
+    }, React.createElement(Sec, {
       n: 4,
       title: "Compliance & registration"
     }, React.createElement(Ticks, {
@@ -14726,17 +14739,23 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }), React.createElement(Ln, {
       label: "Documents received:  \u2610 NID  \u2610 Certificates  \u2610 BNMC  \u2610 Photo",
       w: 0.4
-    }))), React.createElement("div", {
+    }))), React.createElement("footer", {
       style: {
-        marginTop: 8,
+        marginTop: 'auto',
+        paddingTop: '5mm'
+      }
+    }, React.createElement("div", {
+      style: {
+        marginBottom: 5,
         fontSize: '7.5pt',
         color: soft,
-        borderTop: '1px solid #cfd6de',
         paddingTop: 4,
         display: 'flex',
         justifyContent: 'space-between'
       }
-    }, React.createElement("span", null, "UNICO Hospitals PLC \xB7 Staff Information Form (", isPCA ? 'PCA' : 'Nurse', ") \xB7 HR-NUR-REG-01"), React.createElement("span", null, "Printed ", today)))))), root);
+    }, React.createElement("span", null, "UNICO Hospitals PLC \xB7 Staff Information Form (", isPCA ? 'PCA' : 'Nurse', ") \xB7 HR-NUR-REG-01"), React.createElement("span", null, "Printed ", today)), React.createElement(PageMatch, _extends({
+      page: 2
+    }, form))))))), root);
   }
   if (typeof window !== 'undefined') window.UnicoStaffRegForm = UnicoStaffRegForm;
   function CollectorStaffRequests({
