@@ -407,8 +407,12 @@ function Reports({depts}){
   React.useEffect(()=>{ if(window.unicoSig) window.unicoSig.save(sig); },[sig]);
   const [showSig,setShowSig]=React.useState(RB.showSig!=null?RB.showSig:true);
   const [showCover,setShowCover]=React.useState(RB.showCover!=null?RB.showCover:true); // title cover sheet before the content pages
+  // Headline figures on the cover sheet — each one can be hidden (ids listed in coverHide).
+  const COVER_STATS=[['depts','Departments'],['total','Total patients'],['peak','Peak month'],['months','Months covered']];
+  const [coverHide,setCoverHide]=React.useState(Array.isArray(RB.coverHide)?RB.coverHide:[]);
+  const toggleCoverStat=id=>setCoverHide(a=>a.includes(id)?a.filter(x=>x!==id):[...a,id]);
   // Persist the whole config on every change, so the last report generation is restored next visit.
-  React.useEffect(()=>{ try{ localStorage.setItem(RB_KEY, JSON.stringify({sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover})); }catch(e){} },[sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover]);
+  React.useEffect(()=>{ try{ localStorage.setItem(RB_KEY, JSON.stringify({sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover,coverHide})); }catch(e){} },[sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover,coverHide]);
   const toggle=id=>setSel(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
   const chosen=depts.filter(d=>sel.includes(d.id));
 
@@ -492,6 +496,7 @@ function Reports({depts}){
     const mTot={}; rows.forEach(({d,fs})=>fs.forEach(r=>{ mTot[r.month]=(mTot[r.month]||0)+(r[d.primary]||0); }));
     const peakM=Object.keys(mTot).sort((a,b)=>mTot[b]-mTot[a])[0];
     const typeLabel={summary:'Department Summary Report',detail:'Detailed Statistical Report',compare:'Cross-Department Comparison',board:'Executive Board Report'}[type]||'Statistical Report';
+    const stats=[['depts','Departments',String(chosen.length),PALETTE[0]],['total','Total patients',fmt(totAll),PALETTE[1]],['peak','Peak month',peakM?peakM.split('-')[0]+' 20'+peakM.split('-')[1]:'—',PALETTE[2]],['months','Months covered',String(pMonths.length),PALETTE[3]]].filter(c=>!coverHide.includes(c[0]));
     return (
       <div className="qc-rpage">
         <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',textAlign:'center',padding:'60px 20px 30px',flex:'1 0 auto'}}>
@@ -500,14 +505,14 @@ function Reports({depts}){
           <h1 style={{fontSize:32,fontWeight:700,color:'var(--ink)',margin:'14px 0 6px',letterSpacing:'-.5px'}}>{hdrTitle||'Patient Statistics Report'}</h1>
           <div style={{fontSize:13,color:'var(--muted)'}}>{hdrSub?hdrSub+' · ':''}{typeLabel}</div>
           <div style={{fontSize:14,color:'var(--ink-2)',marginTop:10,fontWeight:600}}>{rangeLabel}</div>
-          <div style={{display:'flex',gap:26,marginTop:34,flexWrap:'wrap',justifyContent:'center'}}>
-            {[['Departments',String(chosen.length),PALETTE[0]],['Total patients',fmt(totAll),PALETTE[1]],['Peak month',peakM?peakM.split('-')[0]+' 20'+peakM.split('-')[1]:'—',PALETTE[2]],['Months covered',String(pMonths.length),PALETTE[3]]].map(c=>(
+          {stats.length>0&&<div style={{display:'flex',gap:26,marginTop:34,flexWrap:'wrap',justifyContent:'center'}}>
+            {stats.map(c=>(
               <div key={c[0]} style={{textAlign:'center'}}>
-                <div className="num" style={{fontSize:26,fontWeight:700,color:c[2]}}>{c[1]}</div>
-                <div style={{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,marginTop:2}}>{c[0]}</div>
+                <div className="num" style={{fontSize:26,fontWeight:700,color:c[3]}}>{c[2]}</div>
+                <div style={{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,marginTop:2}}>{c[1]}</div>
               </div>
             ))}
-          </div>
+          </div>}
           {confidential&&<div style={{marginTop:34,fontSize:10.5,color:'var(--rose)',fontWeight:700,textTransform:'uppercase',letterSpacing:1,border:'1px solid #f1c6cd',borderRadius:6,padding:'6px 14px'}}>Confidential — for authorised recipients only</div>}
           <div style={{fontSize:10,color:'var(--faint)',marginTop:20}}>Generated {new Date().toLocaleDateString('en-US')}</div>
           {showSig&&(sig.prepared||sig.reviewed||sig.recommended||sig.approved)&&(
@@ -1193,7 +1198,11 @@ function Reports({depts}){
       const peakM=Object.keys(mTot).sort((a,b)=>mTot[b]-mTot[a])[0];
       const typeLabel={summary:'Department Summary Report',detail:'Detailed Statistical Report',compare:'Cross-Department Comparison',board:'Executive Board Report'}[type]||'Statistical Report';
       const hasSig=!!(sig.prepared||sig.reviewed||sig.recommended||sig.approved);
-      const totalH=(logo?92:0)+16+58+17+28+82+(confidential?54:0)+29+(hasSig?SIGH:0);
+      const stats=[['depts','Departments',String(chosen.length),PALV[0]],['total','Total patients',fmt(totAll),PALV[1]],
+       ['peak','Peak month',peakM?(peakM.split('-')[0]+' 20'+peakM.split('-')[1]):'—',PALV[2]],['months','Months covered',String(pMonths.length),PALV[3]]]
+       .filter(s3=>!coverHide.includes(s3[0]));
+      const statH=stats.length?82:0;
+      const totalH=(logo?92:0)+16+58+17+28+statH+(confidential?54:0)+29+(hasSig?SIGH:0);
       let y=MT+Math.max(24,(FOOTY-MT-totalH)/2+15);
       if(logo){const w2=66*(logo.w/logo.h);drawLogo(pageW/2-w2/2,y,66);y+=92;}
       font('bold',13,C.blue);doc.text(String(hospitalName).toUpperCase(),X(pageW/2),X(y+11),{align:'center',charSpace:1.5*S});y+=16;
@@ -1201,12 +1210,11 @@ function Reports({depts}){
       font('normal',13,C.muted);T((hdrSub?hdrSub+' · ':'')+typeLabel,pageW/2,y+12,{align:'center'});y+=17;
       font('bold',14,C.ink2);T(rangeLabel,pageW/2,y+21,{align:'center'});y+=28;
       const sw=CWx/4;
-      [['Departments',String(chosen.length),PALV[0]],['Total patients',fmt(totAll),PALV[1]],
-       ['Peak month',peakM?(peakM.split('-')[0]+' 20'+peakM.split('-')[1]):'—',PALV[2]],['Months covered',String(pMonths.length),PALV[3]]]
-      .forEach((s3,i)=>{const x=MX+i*sw+sw/2;
-        font('bold',26,s3[2]);T(s3[1],x,y+58,{align:'center'});
-        font('normal',9.5,C.muted);doc.text(String(s3[0]).toUpperCase(),X(x),X(y+72),{align:'center',charSpace:0.4*S});});
-      y+=82;
+      /* shown figures stay centred as a group when some are hidden */
+      stats.forEach((s3,i)=>{const x=pageW/2+(i-(stats.length-1)/2)*sw;
+        font('bold',26,s3[3]);T(s3[2],x,y+58,{align:'center'});
+        font('normal',9.5,C.muted);doc.text(String(s3[1]).toUpperCase(),X(x),X(y+72),{align:'center',charSpace:0.4*S});});
+      y+=statH;
       if(confidential){
         font('bold',10.5,C.rose);const t2='CONFIDENTIAL — FOR AUTHORISED RECIPIENTS ONLY';const w2=tw(t2)+28;
         doc.setDrawColor(C.roseLine[0],C.roseLine[1],C.roseLine[2]);doc.setLineWidth(1*S);
@@ -1327,7 +1335,7 @@ function Reports({depts}){
       hbar:rows.map(({d,st})=>({label:d.short,value:st.total,color:toneOf(d)})).sort((a,b)=>b.value-a.value),
       rows:rows.map(({d,st})=>({name:d.name,group:d.group||'',latest:st.latest[d.primary]||0,total:st.total,peak:st.peak,avg:st.avg,delta:st.delta})),
     };
-    const cover={typeLabel,deptCount:chosen.length,totAll,peakMonthLabel:peakM?(peakM.split('-')[0]+' 20'+peakM.split('-')[1]):'—',monthsCovered:pMonths.length};
+    const cover={typeLabel,deptCount:chosen.length,totAll,peakMonthLabel:peakM?(peakM.split('-')[0]+' 20'+peakM.split('-')[1]):'—',monthsCovered:pMonths.length,hide:coverHide};
     return {
       doc:{type,pageSize,orient,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,
         showCover:showCover&&chosen.length>0,showSig,rangeLabel,genDate:new Date().toLocaleDateString('en-US'),
@@ -1634,6 +1642,20 @@ function Reports({depts}){
                   <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-2)'}}><input type="checkbox" checked={confidential} onChange={e=>setConfidential(e.target.checked)}/>Confidential mark</label>
                   <label title="A title sheet (org name, report title, period, headline stats) as page 1" style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--ink-2)'}}><input type="checkbox" checked={showCover} onChange={e=>{setShowCover(e.target.checked);setPageIdx(0);}}/>Cover page</label>
                 </div>
+                {showCover&&(
+                  <div>
+                    <div style={{fontSize:11,color:'var(--muted)',marginBottom:6}}>Cover page figures — click to show or hide</div>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                      {COVER_STATS.map(([id,l])=>{
+                        const on=!coverHide.includes(id);
+                        return <button key={id} onClick={()=>toggleCoverStat(id)} title={on?'Shown on the cover — click to hide':'Hidden — click to show'}
+                          style={{display:'flex',alignItems:'center',gap:4,padding:'5px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,cursor:'pointer',
+                            border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>
+                          {on&&<Ic d={I.check} s={11} sw={3}/>}{l}</button>;
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             <div>

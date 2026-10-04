@@ -983,6 +983,9 @@ function Reports({
   }, [sig]);
   const [showSig, setShowSig] = React.useState(RB.showSig != null ? RB.showSig : true);
   const [showCover, setShowCover] = React.useState(RB.showCover != null ? RB.showCover : true);
+  const COVER_STATS = [['depts', 'Departments'], ['total', 'Total patients'], ['peak', 'Peak month'], ['months', 'Months covered']];
+  const [coverHide, setCoverHide] = React.useState(Array.isArray(RB.coverHide) ? RB.coverHide : []);
+  const toggleCoverStat = id => setCoverHide(a => a.includes(id) ? a.filter(x => x !== id) : [...a, id]);
   React.useEffect(() => {
     try {
       localStorage.setItem(RB_KEY, JSON.stringify({
@@ -999,10 +1002,11 @@ function Reports({
         pageSize,
         orient,
         showSig,
-        showCover
+        showCover,
+        coverHide
       }));
     } catch (e) {}
-  }, [sel, type, period, chartStyles, hdrTitle, hdrSub, hospitalName, showLogo, confidential, footerNote, pageSize, orient, showSig, showCover]);
+  }, [sel, type, period, chartStyles, hdrTitle, hdrSub, hospitalName, showLogo, confidential, footerNote, pageSize, orient, showSig, showCover, coverHide]);
   const toggle = id => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   const chosen = depts.filter(d => sel.includes(d.id));
   const allMonths = [...new Set(depts.flatMap(d => d.months))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b));
@@ -1198,6 +1202,7 @@ function Reports({
       compare: 'Cross-Department Comparison',
       board: 'Executive Board Report'
     }[type] || 'Statistical Report';
+    const stats = [['depts', 'Departments', String(chosen.length), PALETTE[0]], ['total', 'Total patients', fmt(totAll), PALETTE[1]], ['peak', 'Peak month', peakM ? peakM.split('-')[0] + ' 20' + peakM.split('-')[1] : '—', PALETTE[2]], ['months', 'Months covered', String(pMonths.length), PALETTE[3]]].filter(c => !coverHide.includes(c[0]));
     return React.createElement("div", {
       className: "qc-rpage"
     }, React.createElement("div", {
@@ -1245,7 +1250,7 @@ function Reports({
         marginTop: 10,
         fontWeight: 600
       }
-    }, rangeLabel), React.createElement("div", {
+    }, rangeLabel), stats.length > 0 && React.createElement("div", {
       style: {
         display: 'flex',
         gap: 26,
@@ -1253,7 +1258,7 @@ function Reports({
         flexWrap: 'wrap',
         justifyContent: 'center'
       }
-    }, [['Departments', String(chosen.length), PALETTE[0]], ['Total patients', fmt(totAll), PALETTE[1]], ['Peak month', peakM ? peakM.split('-')[0] + ' 20' + peakM.split('-')[1] : '—', PALETTE[2]], ['Months covered', String(pMonths.length), PALETTE[3]]].map(c => React.createElement("div", {
+    }, stats.map(c => React.createElement("div", {
       key: c[0],
       style: {
         textAlign: 'center'
@@ -1263,9 +1268,9 @@ function Reports({
       style: {
         fontSize: 26,
         fontWeight: 700,
-        color: c[2]
+        color: c[3]
       }
-    }, c[1]), React.createElement("div", {
+    }, c[2]), React.createElement("div", {
       style: {
         fontSize: 9.5,
         color: 'var(--muted)',
@@ -1273,7 +1278,7 @@ function Reports({
         letterSpacing: .4,
         marginTop: 2
       }
-    }, c[0])))), confidential && React.createElement("div", {
+    }, c[1])))), confidential && React.createElement("div", {
       style: {
         marginTop: 34,
         fontSize: 10.5,
@@ -2622,7 +2627,9 @@ function Reports({
         board: 'Executive Board Report'
       }[type] || 'Statistical Report';
       const hasSig = !!(sig.prepared || sig.reviewed || sig.recommended || sig.approved);
-      const totalH = (logo ? 92 : 0) + 16 + 58 + 17 + 28 + 82 + (confidential ? 54 : 0) + 29 + (hasSig ? SIGH : 0);
+      const stats = [['depts', 'Departments', String(chosen.length), PALV[0]], ['total', 'Total patients', fmt(totAll), PALV[1]], ['peak', 'Peak month', peakM ? peakM.split('-')[0] + ' 20' + peakM.split('-')[1] : '—', PALV[2]], ['months', 'Months covered', String(pMonths.length), PALV[3]]].filter(s3 => !coverHide.includes(s3[0]));
+      const statH = stats.length ? 82 : 0;
+      const totalH = (logo ? 92 : 0) + 16 + 58 + 17 + 28 + statH + (confidential ? 54 : 0) + 29 + (hasSig ? SIGH : 0);
       let y = MT + Math.max(24, (FOOTY - MT - totalH) / 2 + 15);
       if (logo) {
         const w2 = 66 * (logo.w / logo.h);
@@ -2651,19 +2658,19 @@ function Reports({
       });
       y += 28;
       const sw = CWx / 4;
-      [['Departments', String(chosen.length), PALV[0]], ['Total patients', fmt(totAll), PALV[1]], ['Peak month', peakM ? peakM.split('-')[0] + ' 20' + peakM.split('-')[1] : '—', PALV[2]], ['Months covered', String(pMonths.length), PALV[3]]].forEach((s3, i) => {
-        const x = MX + i * sw + sw / 2;
-        font('bold', 26, s3[2]);
-        T(s3[1], x, y + 58, {
+      stats.forEach((s3, i) => {
+        const x = pageW / 2 + (i - (stats.length - 1) / 2) * sw;
+        font('bold', 26, s3[3]);
+        T(s3[2], x, y + 58, {
           align: 'center'
         });
         font('normal', 9.5, C.muted);
-        doc.text(String(s3[0]).toUpperCase(), X(x), X(y + 72), {
+        doc.text(String(s3[1]).toUpperCase(), X(x), X(y + 72), {
           align: 'center',
           charSpace: 0.4 * S
         });
       });
-      y += 82;
+      y += statH;
       if (confidential) {
         font('bold', 10.5, C.rose);
         const t2 = 'CONFIDENTIAL — FOR AUTHORISED RECIPIENTS ONLY';
@@ -2942,7 +2949,8 @@ function Reports({
       deptCount: chosen.length,
       totAll,
       peakMonthLabel: peakM ? peakM.split('-')[0] + ' 20' + peakM.split('-')[1] : '—',
-      monthsCovered: pMonths.length
+      monthsCovered: pMonths.length,
+      hide: coverHide
     };
     return {
       doc: {
@@ -3610,7 +3618,43 @@ function Reports({
       setShowCover(e.target.checked);
       setPageIdx(0);
     }
-  }), "Cover page")))), React.createElement("div", null, fieldLabel('Signatures — saved automatically, shared with every report'), React.createElement("div", {
+  }), "Cover page")), showCover && React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      marginBottom: 6
+    }
+  }, "Cover page figures \u2014 click to show or hide"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, COVER_STATS.map(([id, l]) => {
+    const on = !coverHide.includes(id);
+    return React.createElement("button", {
+      key: id,
+      onClick: () => toggleCoverStat(id),
+      title: on ? 'Shown on the cover — click to hide' : 'Hidden — click to show',
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '5px 10px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 600,
+        cursor: 'pointer',
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue-50)' : '#fff',
+        color: on ? 'var(--blue-700)' : 'var(--muted)'
+      }
+    }, on && React.createElement(Ic, {
+      d: I.check,
+      s: 11,
+      sw: 3
+    }), l);
+  }))))), React.createElement("div", null, fieldLabel('Signatures — saved automatically, shared with every report'), React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',

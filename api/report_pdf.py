@@ -798,7 +798,15 @@ class Report:
         has_sig = bool(sig.get("prepared") or sig.get("reviewed") or sig.get("recommended") or sig.get("approved"))
         confidential = self.doc.get("confidential")
         SIGH = 113
-        totalH = 16 + 58 + 17 + 28 + 82 + (54 if confidential else 0) + 29 + (SIGH if has_sig else 0)
+        PALV = [hx(c) for c in (self.doc.get("palette") or BARC)]
+        hide = set(cov.get("hide") or [])  # headline figures the builder switched off
+        stats = [s for s in [("depts", "Departments", str(cov.get("deptCount", 0)), PALV[0]),
+                             ("total", "Total patients", fmt(cov.get("totAll", 0)), PALV[1 % len(PALV)]),
+                             ("peak", "Peak month", cov.get("peakMonthLabel") or "—", PALV[2 % len(PALV)]),
+                             ("months", "Months covered", str(cov.get("monthsCovered", 0)), PALV[3 % len(PALV)])]
+                 if s[0] not in hide]
+        statH = 82 if stats else 0
+        totalH = 16 + 58 + 17 + 28 + statH + (54 if confidential else 0) + 29 + (SIGH if has_sig else 0)
         y = MT + max(24, (self.FOOTY - MT - totalH) / 2 + 15)
         p.font("bold", 13, C["blue"])
         p.text(str(self.doc.get("hospitalName", "")).upper(), self.pageW / 2, y + 11, "center")
@@ -814,18 +822,13 @@ class Report:
         p.text(self.doc.get("rangeLabel", ""), self.pageW / 2, y + 21, "center")
         y += 28
         sw = CWx / 4
-        PALV = [hx(c) for c in (self.doc.get("palette") or BARC)]
-        stats = [("Departments", str(cov.get("deptCount", 0)), PALV[0]),
-                 ("Total patients", fmt(cov.get("totAll", 0)), PALV[1 % len(PALV)]),
-                 ("Peak month", cov.get("peakMonthLabel") or "—", PALV[2 % len(PALV)]),
-                 ("Months covered", str(cov.get("monthsCovered", 0)), PALV[3 % len(PALV)])]
-        for i, (lbl, val, col) in enumerate(stats):
-            x = MX + i * sw + sw / 2
+        for i, (_id, lbl, val, col) in enumerate(stats):
+            x = self.pageW / 2 + (i - (len(stats) - 1) / 2) * sw  # shown figures stay centred as a group
             p.font("bold", 26, col)
             p.text(val, x, y + 58, "center")
             p.font("normal", 9.5, C["muted"])
             p.text(str(lbl).upper(), x, y + 72, "center")
-        y += 82
+        y += statH
         if confidential:
             p.font("bold", 10.5, C["rose"])
             t = "CONFIDENTIAL — FOR AUTHORISED RECIPIENTS ONLY"
@@ -1210,7 +1213,7 @@ def build_model_from_params(params):
     }
     cover = {"typeLabel": type_label, "deptCount": len(chosen), "totAll": tot_all,
              "peakMonthLabel": (peak_m.split("-")[0] + " 20" + peak_m.split("-")[1]) if peak_m else "—",
-             "monthsCovered": len(pmonths)}
+             "monthsCovered": len(pmonths), "hide": params.get("coverHide") or []}
 
     doc = {
         "type": rtype, "pageSize": params.get("pageSize", "A4"), "orient": params.get("orient", "portrait"),
