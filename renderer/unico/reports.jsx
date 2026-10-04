@@ -411,10 +411,11 @@ function Reports({depts}){
   const COVER_STATS=[['depts','Departments'],['total','Total patients'],['peak','Peak month'],['months','Months covered']];
   const [coverHide,setCoverHide]=React.useState(Array.isArray(RB.coverHide)?RB.coverHide:[]);
   const toggleCoverStat=id=>setCoverHide(a=>a.includes(id)?a.filter(x=>x!==id):[...a,id]);
+  const [deptSort,setDeptSort]=React.useState(RB.deptSort||'group');   // group | alpha | total
+  const [areaOrder,setAreaOrder]=React.useState(Array.isArray(RB.areaOrder)?RB.areaOrder:[]);   // user's own area serial (empty = default)
   // Persist the whole config on every change, so the last report generation is restored next visit.
-  React.useEffect(()=>{ try{ localStorage.setItem(RB_KEY, JSON.stringify({sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover,coverHide})); }catch(e){} },[sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover,coverHide]);
+  React.useEffect(()=>{ try{ localStorage.setItem(RB_KEY, JSON.stringify({sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover,coverHide,deptSort,areaOrder})); }catch(e){} },[sel,type,period,chartStyles,hdrTitle,hdrSub,hospitalName,showLogo,confidential,footerNote,pageSize,orient,showSig,showCover,coverHide,deptSort,areaOrder]);
   const toggle=id=>setSel(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
-  const chosen=depts.filter(d=>sel.includes(d.id));
 
   const allMonths=[...new Set(depts.flatMap(d=>d.months))].sort((a,b)=>MO.indexOf(a)-MO.indexOf(b));
   // Latest calendar year present in the data — drives the Q1/April presets dynamically.
@@ -438,6 +439,30 @@ function Reports({depts}){
     const lv=fs.length?(fs[fs.length-1][d.primary]||0):0, pv=fs.length>1?(fs[fs.length-2][d.primary]||0):0;
     const delta=fs.length<2?0:(pv===0?(lv>0?100:0):Math.round(((lv-pv)/pv)*100));
     return {total,latest,peak,avg,delta};};
+
+  // Area (service line) serial: critical & emergency first, then out-patient, in-patient wards,
+  // procedural, anything else last — until the user moves an area (areaOrder then wins).
+  const areaRank=g=>{ const s=String(g||'').toLowerCase();
+    return /critical|emergency|intensive|icu/.test(s)?0 : /out.?patient|opd/.test(s)?1 : /in.?patient|ward/.test(s)?2 : /procedur|surg|theatre/.test(s)?3 : 4; };
+  const areas=(()=>{ const key=g=>{ const i=areaOrder.indexOf(g); return i>=0?i:1000+areaRank(g); };
+    return [...new Set(depts.map(d=>d.group))].sort((a,b)=>key(a)-key(b)); })();
+  const moveArea=(g,dir)=>{ const a=areas.slice(), i=a.indexOf(g), j=i+dir; if(i<0||j<0||j>=a.length) return;
+    a[i]=a[j]; a[j]=g; setAreaOrder(a); setPageIdx(0); };
+  // Department serial for the picker AND the report pages (cover totals, pages, PDF).
+  const ordered=(()=>{
+    if(deptSort==='alpha') return [...depts].sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+    if(deptSort==='total'){ const tot={}; depts.forEach(d=>{ tot[d.id]=statOf(d,fseriesOf(d)).total; }); return [...depts].sort((a,b)=>tot[b.id]-tot[a.id]); }
+    return [...depts].sort((a,b)=>areas.indexOf(a.group)-areas.indexOf(b.group));   // stable sort: order inside an area is kept
+  })();
+  const chosen=ordered.filter(d=>sel.includes(d.id));
+  const deptChip=d=>(
+    <button key={d.id} onClick={()=>toggle(d.id)}
+      style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,cursor:'pointer',
+        border:'1px solid '+(sel.includes(d.id)?'var(--blue)':'var(--line)'),
+        background:sel.includes(d.id)?'var(--blue-50)':'#fff',color:sel.includes(d.id)?'var(--blue-700)':'var(--muted)'}}>
+      {sel.includes(d.id)&&<Ic d={I.check} s={12} sw={3}/>}{d.short}
+    </button>
+  );
 
   const [base,ratio]=PAGE_SIZES[pageSize];
   const portrait=orient==='portrait';
@@ -1686,16 +1711,27 @@ function Reports({depts}){
                 <button onClick={()=>setSel(sel.length===depts.length?[]:depts.map(d=>d.id))} style={{border:0,background:'none',color:'var(--blue)',fontSize:11,fontWeight:600,cursor:'pointer'}}>
                   {sel.length===depts.length?'Clear all':'Select all'}</button>
               </div>
-              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                {depts.map(d=>(
-                  <button key={d.id} onClick={()=>toggle(d.id)}
-                    style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,cursor:'pointer',
-                      border:'1px solid '+(sel.includes(d.id)?'var(--blue)':'var(--line)'),
-                      background:sel.includes(d.id)?'var(--blue-50)':'#fff',color:sel.includes(d.id)?'var(--blue-700)':'var(--muted)'}}>
-                    {sel.includes(d.id)&&<Ic d={I.check} s={12} sw={3}/>}{d.short}
-                  </button>
-                ))}
+              <div style={{display:'flex',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:8}}>
+                <span style={{fontSize:11,color:'var(--muted)'}}>Order</span>
+                <div className="seg">
+                  {[['group','By area','Critical areas first, then OPD, wards and procedural — use the arrows to change the serial'],['alpha','A–Z','Alphabetical by department name'],['total','Most patients','Highest patient total in the selected period first']].map(([id,l,tip])=>(
+                    <button key={id} title={tip} className={deptSort===id?'on':''} onClick={()=>{setDeptSort(id);setPageIdx(0);}}>{l}</button>
+                  ))}
+                </div>
               </div>
+              {deptSort==='group'
+                /* one block per area, in report order — the arrows move a whole area earlier / later */
+                ? areas.map((g,gi)=>(
+                  <div key={g} style={{marginBottom:9}}>
+                    <div style={{display:'flex',alignItems:'center',gap:3,fontSize:10.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.3,marginBottom:5}}>
+                      <span>{gi+1}. {g}</span><span className="spacer"/>
+                      <button className="icon-btn" style={{width:20,height:20}} title="Move this area earlier" disabled={gi===0} onClick={()=>moveArea(g,-1)}><Ic d={I.chevR} s={12} style={{transform:'rotate(-90deg)'}}/></button>
+                      <button className="icon-btn" style={{width:20,height:20}} title="Move this area later" disabled={gi===areas.length-1} onClick={()=>moveArea(g,1)}><Ic d={I.chevR} s={12} style={{transform:'rotate(90deg)'}}/></button>
+                    </div>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:6}}>{ordered.filter(d=>d.group===g).map(deptChip)}</div>
+                  </div>
+                ))
+                : <div style={{display:'flex',flexWrap:'wrap',gap:6}}>{ordered.map(deptChip)}</div>}
             </div>
             <div style={{background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:8,padding:'11px 13px',fontSize:12,color:'var(--muted)'}}>
               <b style={{color:'var(--ink)'}}>{chosen.length}</b> departments · <b style={{color:'var(--ink)'}}>{type}</b> · {pageSize} {orient} · {pMonths.length} month{pMonths.length!==1?'s':''}

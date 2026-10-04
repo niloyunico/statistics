@@ -986,6 +986,8 @@ function Reports({
   const COVER_STATS = [['depts', 'Departments'], ['total', 'Total patients'], ['peak', 'Peak month'], ['months', 'Months covered']];
   const [coverHide, setCoverHide] = React.useState(Array.isArray(RB.coverHide) ? RB.coverHide : []);
   const toggleCoverStat = id => setCoverHide(a => a.includes(id) ? a.filter(x => x !== id) : [...a, id]);
+  const [deptSort, setDeptSort] = React.useState(RB.deptSort || 'group');
+  const [areaOrder, setAreaOrder] = React.useState(Array.isArray(RB.areaOrder) ? RB.areaOrder : []);
   React.useEffect(() => {
     try {
       localStorage.setItem(RB_KEY, JSON.stringify({
@@ -1003,12 +1005,13 @@ function Reports({
         orient,
         showSig,
         showCover,
-        coverHide
+        coverHide,
+        deptSort,
+        areaOrder
       }));
     } catch (e) {}
-  }, [sel, type, period, chartStyles, hdrTitle, hdrSub, hospitalName, showLogo, confidential, footerNote, pageSize, orient, showSig, showCover, coverHide]);
+  }, [sel, type, period, chartStyles, hdrTitle, hdrSub, hospitalName, showLogo, confidential, footerNote, pageSize, orient, showSig, showCover, coverHide, deptSort, areaOrder]);
   const toggle = id => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
-  const chosen = depts.filter(d => sel.includes(d.id));
   const allMonths = [...new Set(depts.flatMap(d => d.months))].sort((a, b) => MO.indexOf(a) - MO.indexOf(b));
   const lyy = allMonths.length ? String(allMonths[allMonths.length - 1]).split('-')[1] : String(new Date().getFullYear() % 100);
   const pMonths = (() => {
@@ -1043,6 +1046,60 @@ function Reports({
       delta
     };
   };
+  const areaRank = g => {
+    const s = String(g || '').toLowerCase();
+    return /critical|emergency|intensive|icu/.test(s) ? 0 : /out.?patient|opd/.test(s) ? 1 : /in.?patient|ward/.test(s) ? 2 : /procedur|surg|theatre/.test(s) ? 3 : 4;
+  };
+  const areas = (() => {
+    const key = g => {
+      const i = areaOrder.indexOf(g);
+      return i >= 0 ? i : 1000 + areaRank(g);
+    };
+    return [...new Set(depts.map(d => d.group))].sort((a, b) => key(a) - key(b));
+  })();
+  const moveArea = (g, dir) => {
+    const a = areas.slice(),
+      i = a.indexOf(g),
+      j = i + dir;
+    if (i < 0 || j < 0 || j >= a.length) return;
+    a[i] = a[j];
+    a[j] = g;
+    setAreaOrder(a);
+    setPageIdx(0);
+  };
+  const ordered = (() => {
+    if (deptSort === 'alpha') return [...depts].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    if (deptSort === 'total') {
+      const tot = {};
+      depts.forEach(d => {
+        tot[d.id] = statOf(d, fseriesOf(d)).total;
+      });
+      return [...depts].sort((a, b) => tot[b.id] - tot[a.id]);
+    }
+    return [...depts].sort((a, b) => areas.indexOf(a.group) - areas.indexOf(b.group));
+  })();
+  const chosen = ordered.filter(d => sel.includes(d.id));
+  const deptChip = d => React.createElement("button", {
+    key: d.id,
+    onClick: () => toggle(d.id),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 5,
+      padding: '5px 10px',
+      borderRadius: 20,
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer',
+      border: '1px solid ' + (sel.includes(d.id) ? 'var(--blue)' : 'var(--line)'),
+      background: sel.includes(d.id) ? 'var(--blue-50)' : '#fff',
+      color: sel.includes(d.id) ? 'var(--blue-700)' : 'var(--muted)'
+    }
+  }, sel.includes(d.id) && React.createElement(Ic, {
+    d: I.check,
+    s: 12,
+    sw: 3
+  }), d.short);
   const [base, ratio] = PAGE_SIZES[pageSize];
   const portrait = orient === 'portrait';
   const pageW = portrait ? base : Math.round(base * ratio);
@@ -3757,30 +3814,88 @@ function Reports({
   }, sel.length === depts.length ? 'Clear all' : 'Select all')), React.createElement("div", {
     style: {
       display: 'flex',
+      alignItems: 'center',
       flexWrap: 'wrap',
-      gap: 6
+      gap: 8,
+      marginBottom: 8
     }
-  }, depts.map(d => React.createElement("button", {
-    key: d.id,
-    onClick: () => toggle(d.id),
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "Order"), React.createElement("div", {
+    className: "seg"
+  }, [['group', 'By area', 'Critical areas first, then OPD, wards and procedural — use the arrows to change the serial'], ['alpha', 'A–Z', 'Alphabetical by department name'], ['total', 'Most patients', 'Highest patient total in the selected period first']].map(([id, l, tip]) => React.createElement("button", {
+    key: id,
+    title: tip,
+    className: deptSort === id ? 'on' : '',
+    onClick: () => {
+      setDeptSort(id);
+      setPageIdx(0);
+    }
+  }, l)))), deptSort === 'group' ? areas.map((g, gi) => React.createElement("div", {
+    key: g,
+    style: {
+      marginBottom: 9
+    }
+  }, React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
-      gap: 5,
-      padding: '5px 10px',
-      borderRadius: 20,
-      fontSize: 11.5,
-      fontWeight: 600,
-      cursor: 'pointer',
-      border: '1px solid ' + (sel.includes(d.id) ? 'var(--blue)' : 'var(--line)'),
-      background: sel.includes(d.id) ? 'var(--blue-50)' : '#fff',
-      color: sel.includes(d.id) ? 'var(--blue-700)' : 'var(--muted)'
+      gap: 3,
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: 'var(--muted)',
+      textTransform: 'uppercase',
+      letterSpacing: .3,
+      marginBottom: 5
     }
-  }, sel.includes(d.id) && React.createElement(Ic, {
-    d: I.check,
+  }, React.createElement("span", null, gi + 1, ". ", g), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "icon-btn",
+    style: {
+      width: 20,
+      height: 20
+    },
+    title: "Move this area earlier",
+    disabled: gi === 0,
+    onClick: () => moveArea(g, -1)
+  }, React.createElement(Ic, {
+    d: I.chevR,
     s: 12,
-    sw: 3
-  }), d.short)))), React.createElement("div", {
+    style: {
+      transform: 'rotate(-90deg)'
+    }
+  })), React.createElement("button", {
+    className: "icon-btn",
+    style: {
+      width: 20,
+      height: 20
+    },
+    title: "Move this area later",
+    disabled: gi === areas.length - 1,
+    onClick: () => moveArea(g, 1)
+  }, React.createElement(Ic, {
+    d: I.chevR,
+    s: 12,
+    style: {
+      transform: 'rotate(90deg)'
+    }
+  }))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, ordered.filter(d => d.group === g).map(deptChip)))) : React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6
+    }
+  }, ordered.map(deptChip))), React.createElement("div", {
     style: {
       background: 'var(--panel-2)',
       border: '1px solid var(--line)',
