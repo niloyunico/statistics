@@ -920,7 +920,8 @@ class Report:
             row = [r.get("month" if detailed else "full", "")]
             for c in cols:
                 v = r.get(c["id"])
-                row.append("–" if v is None else ((str(v) + "%") if c.get("pct") else fmt(v)))
+                v = 0 if v is None or v == "" else v  # an empty figure prints as 0, as in the preview
+                row.append((str(v) + "%") if c.get("pct") else fmt(v))
             rows.append(row)
         if detailed and cols:
             trow = ["TOTAL"]

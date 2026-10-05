@@ -4,8 +4,8 @@ const CHART_STYLE_LABEL={bar3d:'3D Bars',bar:'Bar',line:'Line',area:'Area + Targ
 const REPORT_STYLES=[['bar3d','3D'],['bar','Bar'],['line','Line'],['area','Area'],['combo','Bar+Line'],['grouped','Grouped'],['stacked','Stacked'],['pct','100%'],['horizontal','Horizontal'],['donut','Donut']];
 function reportSeries(d){ return d.cols.filter(c=>c.id!==d.primary&&!c.pct).slice(0,6).map((c,i)=>({id:c.id,label:c.label,color:PALETTE[i%PALETTE.length]})); }
 // TR-IN (transfer-in) is clinically an admission — a patient entering the unit — so the
-// TREND + COMPOSITION GRAPHS fold it into "Admission". This is GRAPH-ONLY: the data table
-// and KPI figures keep the raw Admission and TR-IN columns. It only fires for
+// TREND + COMPOSITION GRAPHS and the KPI tiles fold it into "Admission" (the tiles say what
+// they add up — rptFoldNote); the data table keeps the raw Admission and TR-IN columns. It only fires for
 // admission-primary flow departments (MICU/CCU/wards); "total"-primary departments
 // (ED, dialysis…) are untouched, since their TR-IN already sits inside the total.
 function rptTransferInCol(d){
@@ -23,6 +23,11 @@ function rptMergeTin(d){ return rptAdmitsPrimary(d) ? rptTransferInCol(d) : null
 // fs rows with TR-IN folded into the primary field, for primary-keyed charts. Raw fs is
 // left untouched (tables/KPIs read it); only the returned copy carries the merged primary.
 function rptChartRows(d,fs){ const t=rptMergeTin(d); if(!t) return fs; return fs.map(r=>({...r,[d.primary]:(r[d.primary]||0)+(r[t.id]||0)})); }
+// What a folded headline figure is made of — ["Admission 25","+ TR-IN 22"] — shown beside the
+// KPI so a tile reading 47 is not taken for 47 new admissions. null when nothing is folded in.
+function rptFoldNote(d,rows){ const t=rptMergeTin(d); if(!t||!rows.length) return null;
+  const pc=(d.cols||[]).find(c=>c.id===d.primary)||{}, sum=id=>rows.reduce((s,r)=>s+(r[id]||0),0);
+  return [(pc.label||d.primaryLabel||'Admission')+' '+fmt(sum(d.primary)), '+ '+t.label+' '+fmt(sum(t.id))]; }
 // Composition donut groups. Most departments have ONE donut = every non-primary count
 // column. Dialysis is special: IPD/OPD (patient location) and Conventional/Modi-SLED/SLED
 // (dialysis modality) are TWO independent breakdowns of the SAME Total — one combined
@@ -95,6 +100,8 @@ function rptTableMetrics(heads,widths,o){
   const maxL=Math.max(1,...lines.map(l=>l.length));
   return {fs,rpt,hfs,padX,padY,lh,lines,rowH:Math.round(fs*1.3+padY*2),hH:Math.round(maxL*lh+padY*2+2)};
 }
+// One table cell. An empty value prints as 0 — the month was reported, that figure simply had none — never a dash.
+function rptCell(c,v){ if(v==null||v==='') v=0; return c.pct?v+'%':fmt(v); }
 // The department table's shape — font and compact ('rpt') layout — shared by the preview and the PDF.
 function rptDeptTable(d,detailed){ const ncol=d.cols.length+1; return {font:ncol>10?8:ncol>8?8.5:ncol>6?9.5:(detailed?10.5:11), rpt:detailed||ncol>7}; }
 function rptFlow(G){ const pages=[[]]; const F={y:G.TOPY,top:G.TOPY,pages,
@@ -734,10 +741,13 @@ function Reports({depts}){
             </div>
           )}
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:16}}>
-            {[[st.latest.full||'Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Average',fmt(st.avg)]].map(([l,v],i)=>(
-              <div key={i} style={{background:'var(--panel-2)',borderRadius:7,padding:'9px 11px',borderLeft:'3px solid '+tone}}>
+            {[[st.latest.full||'Latest',fmt(st.latest[d.primary]||0),rptFoldNote(d,fs.slice(-1))],['Total',fmt(st.total),rptFoldNote(d,fs)],['Peak',fmt(st.peak)],['Average',fmt(st.avg)]].map(([l,v,n],i)=>(
+              <div key={i} style={{background:'var(--panel-2)',borderRadius:7,padding:'9px 11px',borderLeft:'3px solid '+tone,minWidth:0}}>
                 <div style={{fontSize:9.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.3}}>{l}</div>
-                <div className="num" style={{fontSize:18,fontWeight:600}}>{v}</div>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div className="num" style={{fontSize:18,fontWeight:600}}>{v}</div>
+                  {n&&<div style={{fontSize:8.5,lineHeight:1.2,color:'var(--muted)',whiteSpace:'nowrap',overflow:'hidden',minWidth:0}}>{n[0]}<br/>{n[1]}</div>}
+                </div>
               </div>
             ))}
           </div>
@@ -756,7 +766,7 @@ function Reports({depts}){
           <table className={(tb.rpt?'tbl rpt':'tbl')+fitCls(plan)} style={fitStyle(plan,tb.rpt,{marginTop:14,fontSize:tblFont})}>
             <thead><tr>{heads.map((h,i)=><th key={i} style={thStyle(i)}>{HM?HM.lines[i].map((l,li)=><div key={li} style={{whiteSpace:'nowrap'}}>{l}</div>):h}</th>)}</tr></thead>
             <tbody>{fs.map((r,i)=>(
-              <tr key={i}><td>{tb.rpt?r.month:r.full}</td>{d.cols.map(c=><td key={c.id}>{r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id]))}</td>)}</tr>
+              <tr key={i}><td>{tb.rpt?r.month:r.full}</td>{d.cols.map(c=><td key={c.id}>{rptCell(c,r[c.id])}</td>)}</tr>
             ))}
             {detailed&&<tr className="tot"><td>TOTAL</td>{d.cols.map(c=><td key={c.id}>{c.pct?'—':fmt(fs.reduce((s,r)=>s+(r[c.id]||0),0))}</td>)}</tr>}
             </tbody>
@@ -965,7 +975,11 @@ function Reports({depts}){
       items.forEach((it,i)=>{const x=MX+i*(w2+gap);
         FR(x,y,w2,56,C.panel2,7);FR(x,y,3,56,it.tone,1.5);
         font('normal',9.5,C.muted);doc.text(String(it.label).toUpperCase(),X(x+14),X(y+19),{charSpace:0.3*S});
-        font('bold',18,C.ink);T(it.value,x+14,y+41);});
+        font('bold',18,C.ink);T(it.value,x+14,y+41);
+        if(it.note){   // what the figure adds up (rptFoldNote), beside it; shrunk if the tile is narrow
+          const vx=x+14+tw(it.value)+8;
+          font('normal',8.5,C.muted);const f=Math.min(1,(x+w2-8-vx)/Math.max(1,...it.note.map(l=>tw(l))));
+          font('normal',8.5*f,C.muted);it.note.forEach((l,li)=>T(l,vx,y+33.5+li*10));}});
       return y+56+16;
     };
 
@@ -1278,7 +1292,7 @@ function Reports({depts}){
       const widths=[firstW].concat(d.cols.map(()=>(CWx-firstW)/d.cols.length));
       const M=rptTableMetrics(['Month'].concat(d.cols.map(c=>c.label)),widths,{fs:t.font,rpt:t.rpt,pad:plan.pad});
       // compact tables label the month "Aug-25" — the full name never fits their 58px column
-      const rows=fs2.map(r=>[t.rpt?r.month:r.full].concat(d.cols.map(c=>r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id])))));
+      const rows=fs2.map(r=>[t.rpt?r.month:r.full].concat(d.cols.map(c=>rptCell(c,r[c.id]))));
       if(detailed)rows.push(['TOTAL'].concat(d.cols.map(c=>c.pct?'—':fmt(fs2.reduce((s3,r)=>s3+(r[c.id]||0),0)))));
       const tbl=tableAt(M,widths,rows,{totalRow:detailed});
       const hrows=rowsC.map((r,i)=>({label:r.full,value:r[d.primary]||0,color:PALV[i%PALV.length]})),hmax=Math.max(1,...hrows.map(r=>r.value));
@@ -1302,8 +1316,8 @@ function Reports({depts}){
           FR(MX,it.y,CWx,24,C.panel2,6);
           richText(segs,MX+10,it.y+15,1e5,10*Math.min(1,(CWx-20)/w),14,C.muted);},
         // preview: all four KPI tiles carry the DEPARTMENT tone
-        kpi:it=>kpiRow(it.y,[[st.latest.full||'Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Average',fmt(st.avg)]]
-          .map(p=>({label:p[0],value:p[1],tone}))),
+        kpi:it=>kpiRow(it.y,[[st.latest.full||'Latest',fmt(st.latest[d.primary]||0),rptFoldNote(d,fs2.slice(-1))],['Total',fmt(st.total),rptFoldNote(d,fs2)],['Peak',fmt(st.peak)],['Average',fmt(st.avg)]]
+          .map(p=>({label:p[0],value:p[1],tone,note:p[2]}))),
         cap:it=>capLine(it.y,CHART_STYLE_LABEL[it.cs]||it.cs),
         chart:it=>drawChart(it.cs,it.y,d,rowsC,tone,compGroups,it.h),
         hbar:it=>hbarRows(it.y,hrows,it.from,it.to,hmax),

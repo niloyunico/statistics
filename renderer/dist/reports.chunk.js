@@ -43,6 +43,13 @@ function rptChartRows(d, fs) {
     [d.primary]: (r[d.primary] || 0) + (r[t.id] || 0)
   }));
 }
+function rptFoldNote(d, rows) {
+  const t = rptMergeTin(d);
+  if (!t || !rows.length) return null;
+  const pc = (d.cols || []).find(c => c.id === d.primary) || {},
+    sum = id => rows.reduce((s, r) => s + (r[id] || 0), 0);
+  return [(pc.label || d.primaryLabel || 'Admission') + ' ' + fmt(sum(d.primary)), '+ ' + t.label + ' ' + fmt(sum(t.id))];
+}
 function compositionGroups(d, fs) {
   const sum = id => fs.reduce((s, r) => s + (r[id] || 0), 0);
   const colBy = id => (d.cols || []).find(c => c.id === id);
@@ -290,6 +297,10 @@ function rptTableMetrics(heads, widths, o) {
     rowH: Math.round(fs * 1.3 + padY * 2),
     hH: Math.round(maxL * lh + padY * 2 + 2)
   };
+}
+function rptCell(c, v) {
+  if (v == null || v === '') v = 0;
+  return c.pct ? v + '%' : fmt(v);
 }
 function rptDeptTable(d, detailed) {
   const ncol = d.cols.length + 1;
@@ -1804,13 +1815,14 @@ function Reports({
         gap: 10,
         marginBottom: 16
       }
-    }, [[st.latest.full || 'Latest', fmt(st.latest[d.primary] || 0)], ['Total', fmt(st.total)], ['Peak', fmt(st.peak)], ['Average', fmt(st.avg)]].map(([l, v], i) => React.createElement("div", {
+    }, [[st.latest.full || 'Latest', fmt(st.latest[d.primary] || 0), rptFoldNote(d, fs.slice(-1))], ['Total', fmt(st.total), rptFoldNote(d, fs)], ['Peak', fmt(st.peak)], ['Average', fmt(st.avg)]].map(([l, v, n], i) => React.createElement("div", {
       key: i,
       style: {
         background: 'var(--panel-2)',
         borderRadius: 7,
         padding: '9px 11px',
-        borderLeft: '3px solid ' + tone
+        borderLeft: '3px solid ' + tone,
+        minWidth: 0
       }
     }, React.createElement("div", {
       style: {
@@ -1820,12 +1832,27 @@ function Reports({
         letterSpacing: .3
       }
     }, l), React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, React.createElement("div", {
       className: "num",
       style: {
         fontSize: 18,
         fontWeight: 600
       }
-    }, v)))), rptStyles(chartStyles, compGroups).map((cs, ci, all) => React.createElement("div", {
+    }, v), n && React.createElement("div", {
+      style: {
+        fontSize: 8.5,
+        lineHeight: 1.2,
+        color: 'var(--muted)',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        minWidth: 0
+      }
+    }, n[0], React.createElement("br", null), n[1]))))), rptStyles(chartStyles, compGroups).map((cs, ci, all) => React.createElement("div", {
       key: ci,
       style: {
         margin: '4px 0 8px'
@@ -1882,7 +1909,7 @@ function Reports({
       key: i
     }, React.createElement("td", null, tb.rpt ? r.month : r.full), d.cols.map(c => React.createElement("td", {
       key: c.id
-    }, r[c.id] == null ? '–' : c.pct ? r[c.id] + '%' : fmt(r[c.id]))))), detailed && React.createElement("tr", {
+    }, rptCell(c, r[c.id]))))), detailed && React.createElement("tr", {
       className: "tot"
     }, React.createElement("td", null, "TOTAL"), d.cols.map(c => React.createElement("td", {
       key: c.id
@@ -2371,6 +2398,13 @@ function Reports({
         });
         font('bold', 18, C.ink);
         T(it.value, x + 14, y + 41);
+        if (it.note) {
+          const vx = x + 14 + tw(it.value) + 8;
+          font('normal', 8.5, C.muted);
+          const f = Math.min(1, (x + w2 - 8 - vx) / Math.max(1, ...it.note.map(l => tw(l))));
+          font('normal', 8.5 * f, C.muted);
+          it.note.forEach((l, li) => T(l, vx, y + 33.5 + li * 10));
+        }
       });
       return y + 56 + 16;
     };
@@ -2933,7 +2967,7 @@ function Reports({
         rpt: t.rpt,
         pad: plan.pad
       });
-      const rows = fs2.map(r => [t.rpt ? r.month : r.full].concat(d.cols.map(c => r[c.id] == null ? '–' : c.pct ? r[c.id] + '%' : fmt(r[c.id]))));
+      const rows = fs2.map(r => [t.rpt ? r.month : r.full].concat(d.cols.map(c => rptCell(c, r[c.id]))));
       if (detailed) rows.push(['TOTAL'].concat(d.cols.map(c => c.pct ? '—' : fmt(fs2.reduce((s3, r) => s3 + (r[c.id] || 0), 0)))));
       const tbl = tableAt(M, widths, rows, {
         totalRow: detailed
@@ -2976,10 +3010,11 @@ function Reports({
           FR(MX, it.y, CWx, 24, C.panel2, 6);
           richText(segs, MX + 10, it.y + 15, 1e5, 10 * Math.min(1, (CWx - 20) / w), 14, C.muted);
         },
-        kpi: it => kpiRow(it.y, [[st.latest.full || 'Latest', fmt(st.latest[d.primary] || 0)], ['Total', fmt(st.total)], ['Peak', fmt(st.peak)], ['Average', fmt(st.avg)]].map(p => ({
+        kpi: it => kpiRow(it.y, [[st.latest.full || 'Latest', fmt(st.latest[d.primary] || 0), rptFoldNote(d, fs2.slice(-1))], ['Total', fmt(st.total), rptFoldNote(d, fs2)], ['Peak', fmt(st.peak)], ['Average', fmt(st.avg)]].map(p => ({
           label: p[0],
           value: p[1],
-          tone
+          tone,
+          note: p[2]
         }))),
         cap: it => capLine(it.y, CHART_STYLE_LABEL[it.cs] || it.cs),
         chart: it => drawChart(it.cs, it.y, d, rowsC, tone, compGroups, it.h),
