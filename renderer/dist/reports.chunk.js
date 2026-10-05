@@ -84,13 +84,14 @@ function compositionGroups(d, fs) {
     data
   }] : [];
 }
-function reportChartEl(d, style, tone, fs, compGroups) {
+function reportChartEl(d, style, tone, fs, compGroups, k) {
   const has = n => typeof window[n] === 'function';
+  const H = h => Math.round(h * (k || 1));
   if (style === 'bar') return React.createElement(BarChart, {
     data: fs,
     x: "month",
     y: d.primary,
-    height: 195,
+    height: H(195),
     color: tone,
     flat: true
   });
@@ -98,7 +99,7 @@ function reportChartEl(d, style, tone, fs, compGroups) {
     data: fs,
     x: "full",
     y: d.primary,
-    height: 195,
+    height: H(195),
     color: tone,
     flat: true
   });
@@ -109,7 +110,7 @@ function reportChartEl(d, style, tone, fs, compGroups) {
       x: "full",
       y: d.primary,
       target: avg,
-      height: 200,
+      height: H(200),
       color: tone,
       flat: true
     });
@@ -126,7 +127,7 @@ function reportChartEl(d, style, tone, fs, compGroups) {
       lineColor: "#e08a1e",
       barLabel: (d.cols.find(c => c.id === d.primary) || {}).label || 'Value',
       lineLabel: (d.cols.find(c => c.id === lineKey) || {}).label || 'Trend',
-      height: 210,
+      height: H(210),
       flat: true
     });
   }
@@ -136,12 +137,12 @@ function reportChartEl(d, style, tone, fs, compGroups) {
       data: fs,
       x: "month",
       series: sr,
-      height: 210
+      height: H(210)
     }) : React.createElement(BarChart, {
       data: fs,
       x: "month",
       y: d.primary,
-      height: 195,
+      height: H(195),
       color: tone,
       flat: true
     });
@@ -152,12 +153,12 @@ function reportChartEl(d, style, tone, fs, compGroups) {
       data: fs,
       x: "month",
       series: sr,
-      height: 210
+      height: H(210)
     }) : React.createElement(BarChart, {
       data: fs,
       x: "month",
       y: d.primary,
-      height: 195,
+      height: H(195),
       color: tone,
       flat: true
     });
@@ -168,13 +169,13 @@ function reportChartEl(d, style, tone, fs, compGroups) {
       data: fs,
       x: "month",
       series: sr,
-      height: 210,
+      height: H(210),
       flat: true
     }) : React.createElement(BarChart, {
       data: fs,
       x: "month",
       y: d.primary,
-      height: 195,
+      height: H(195),
       color: tone,
       flat: true
     });
@@ -214,7 +215,7 @@ function reportChartEl(d, style, tone, fs, compGroups) {
     data: fs,
     x: "month",
     y: d.primary,
-    height: 205,
+    height: H(205),
     color: tone,
     flat: true
   });
@@ -222,10 +223,308 @@ function reportChartEl(d, style, tone, fs, compGroups) {
     data: fs,
     x: "month",
     y: d.primary,
-    height: 205,
+    height: H(205),
     color: tone,
     flat: true
   });
+}
+const RPT_FITS = [[1, 1], [.8, 1], [.8, .9], [.65, .9], [.65, .8], [.5, .8], [.5, .7], [.4, .7], [.35, .62]];
+function rptGeom(pageW, pageMinH) {
+  const MT = 28,
+    FOOTY = pageMinH - MT - 21;
+  return {
+    MX: 30,
+    MT,
+    CWx: pageW - 60,
+    TOPY: MT + 52 + 18,
+    FOOTY,
+    LIMIT: FOOTY - 12
+  };
+}
+function rptTextW(t, px) {
+  let w = 0;
+  for (const ch of String(t)) w += " IJ.,:;|!'/".indexOf(ch) >= 0 ? .3 : 'MW'.indexOf(ch) >= 0 ? .92 : '-()'.indexOf(ch) >= 0 ? .34 : ch >= '0' && ch <= '9' ? .56 : .76;
+  return w * px;
+}
+function rptHeadWrap(label, w, px) {
+  const fit = w / .82,
+    parts = [];
+  String(label).split(/\s+/).filter(Boolean).forEach(wd => {
+    const n = Math.min(3, Math.ceil(rptTextW(wd, px) / (fit * 1.1))),
+      size = Math.ceil(wd.length / n);
+    if (n < 2 || wd.length < 6) {
+      parts.push(wd);
+      return;
+    }
+    for (let i = 0; i * size < wd.length; i++) parts.push(wd.slice(i * size, (i + 1) * size) + ((i + 1) * size < wd.length ? '-' : ''));
+  });
+  const lines = [];
+  parts.forEach(wd => {
+    const cur = lines[lines.length - 1];
+    if (cur != null && cur.slice(-1) !== '-' && rptTextW(cur + ' ' + wd, px) <= fit) lines[lines.length - 1] = cur + ' ' + wd;else lines.push(wd);
+  });
+  while (lines.length > 4) {
+    const t = lines.pop(),
+      p = lines[lines.length - 1];
+    lines[lines.length - 1] = p.slice(-1) === '-' ? p.slice(0, -1) + t : p + ' ' + t;
+  }
+  return lines.length ? lines : [''];
+}
+function rptTableMetrics(heads, widths, o) {
+  const fs = o.fs || 12.5,
+    rpt = !!o.rpt,
+    hfs = rpt ? fs : 10.5,
+    padX = rpt ? 6 : 12,
+    padY = (rpt ? 5 : 8) * (o.pad || 1),
+    lh = hfs * 1.18;
+  const lines = heads.map((h, i) => rpt ? rptHeadWrap(String(h).toUpperCase(), Math.max(10, widths[i] - padX - 4), hfs) : [String(h).toUpperCase()]);
+  const maxL = Math.max(1, ...lines.map(l => l.length));
+  return {
+    fs,
+    rpt,
+    hfs,
+    padX,
+    padY,
+    lh,
+    lines,
+    rowH: Math.round(fs * 1.3 + padY * 2),
+    hH: Math.round(maxL * lh + padY * 2 + 2)
+  };
+}
+function rptDeptTable(d, detailed) {
+  const ncol = d.cols.length + 1;
+  return {
+    font: ncol > 10 ? 8 : ncol > 8 ? 8.5 : ncol > 6 ? 9.5 : detailed ? 10.5 : 11,
+    rpt: detailed || ncol > 7
+  };
+}
+function rptFlow(G) {
+  const pages = [[]];
+  const F = {
+    y: G.TOPY,
+    top: G.TOPY,
+    pages,
+    put(it) {
+      pages[pages.length - 1].push(it);
+    },
+    brk(cont) {
+      pages.push([]);
+      F.y = G.TOPY;
+      if (cont) {
+        F.put({
+          k: 'cont',
+          y: F.y,
+          text: cont
+        });
+        F.y += 22;
+      }
+      F.top = F.y;
+    }
+  };
+  return F;
+}
+function rptFlowTable(F, G, T, n, cont) {
+  if (F.y > F.top && Math.floor((G.LIMIT - F.y - T.hH) / T.rowH + 1e-6) < Math.min(n, 4)) F.brk(cont);
+  let i = 0;
+  for (;;) {
+    F.put({
+      k: 'thead',
+      y: F.y
+    });
+    F.y += T.hH;
+    let take = Math.max(1, Math.min(n - i, Math.floor((G.LIMIT - F.y) / T.rowH + 1e-6)));
+    const left = n - i - take;
+    if (left > 0 && left < 3 && take > 3) take -= 3 - left;
+    F.put({
+      k: 'rows',
+      y: F.y,
+      from: i,
+      to: i + take
+    });
+    F.y += take * T.rowH;
+    i += take;
+    if (i >= n) break;
+    F.brk(cont);
+  }
+}
+function rptFlowHBar(F, G, n, cont) {
+  let i = 0;
+  while (i < n) {
+    let fit = 0,
+      yy = F.y;
+    while (i + fit < n && yy + 20 <= G.LIMIT) {
+      fit++;
+      yy += 24;
+    }
+    if (!fit) {
+      F.brk(cont);
+      continue;
+    }
+    F.put({
+      k: 'hbar',
+      y: F.y,
+      from: i,
+      to: i + fit
+    });
+    F.y = yy;
+    i += fit;
+    if (i < n) F.brk(cont);
+  }
+  F.y += -9 + 4;
+}
+function rptStyles(chartStyles, compGroups) {
+  const st = chartStyles.filter(cs => cs !== 'donut' || compGroups.length > 0);
+  return st.length ? st : ['bar3d'];
+}
+function rptChartBlockH(cs, k, compGroups) {
+  if (cs === 'donut') return compGroups.length ? compGroups.length * 213 : Math.round(205 * k);
+  return Math.round((cs === 'bar' || cs === 'line' ? 195 : cs === 'area' ? 200 : cs === 'combo' || cs === 'grouped' || cs === 'stacked' || cs === 'pct' ? 210 : 205) * k);
+}
+function rptLayoutDept(d, fs, compGroups, o) {
+  const G = o.G,
+    F = rptFlow(G),
+    cont = d.name + ' — continued';
+  F.put({
+    k: 'title',
+    y: F.y
+  });
+  F.y += 31;
+  if (!fs.length) {
+    F.put({
+      k: 'empty',
+      y: F.y
+    });
+    F.y += 96;
+    return F.pages;
+  }
+  if (fs.length < o.nMonths) {
+    F.put({
+      k: 'note',
+      y: F.y
+    });
+    F.y += 34;
+  }
+  F.put({
+    k: 'kpi',
+    y: F.y
+  });
+  F.y += 72;
+  const styles = rptStyles(o.chartStyles, compGroups),
+    cap = styles.length > 1 ? 18 : 0;
+  styles.forEach(cs => {
+    const h = cs === 'horizontal' ? Math.max(1, fs.length) * 24 - 5 : rptChartBlockH(cs, o.k, compGroups);
+    if (F.y + cap + h + 12 > G.LIMIT && F.y > F.top) F.brk(cont);
+    F.y += 4;
+    if (cap) {
+      F.put({
+        k: 'cap',
+        y: F.y,
+        cs
+      });
+      F.y += 18;
+    }
+    if (cs === 'horizontal') rptFlowHBar(F, G, fs.length, cont);else {
+      F.put({
+        k: 'chart',
+        y: F.y,
+        cs,
+        h
+      });
+      F.y += h;
+    }
+    F.y += 8;
+  });
+  if (o.chartStyles.indexOf('donut') < 0) compGroups.forEach(g => {
+    const boxH = Math.max(124, g.data.length * 21 - 6 + 20);
+    if (F.y + 6 + boxH > G.LIMIT) F.brk(cont);
+    F.put({
+      k: 'comp',
+      y: F.y + 6,
+      g
+    });
+    F.y += 6 + boxH;
+  });
+  const t = rptDeptTable(d, o.detailed),
+    firstW = t.rpt ? 58 : 100;
+  const T = rptTableMetrics(['Month'].concat(d.cols.map(c => c.label)), [firstW].concat(d.cols.map(() => (G.CWx - firstW) / d.cols.length)), {
+    fs: t.font,
+    rpt: t.rpt,
+    pad: o.pad
+  });
+  F.y += 14;
+  rptFlowTable(F, G, T, fs.length + (o.detailed ? 1 : 0), cont);
+  return F.pages;
+}
+const RPT_LIST = {
+  compare: {
+    fs: 11.5,
+    heads: ['Department', 'Service line', 'Latest', 'Total', 'Peak', 'Avg', 'Trend'],
+    w: [.27, .21, .10, .11, .09, .09, .13]
+  },
+  board: {
+    fs: 11,
+    heads: ['Department', 'Service line', 'Total', 'Share', 'Avg / month', 'Trend'],
+    w: [.30, .22, .12, .10, .13, .13]
+  }
+};
+function rptLayoutList(type, n, trendN, o) {
+  const G = o.G,
+    F = rptFlow(G),
+    L = RPT_LIST[type],
+    cont = (type === 'board' ? 'Executive Board Report' : 'Cross-department comparison') + ' — continued';
+  F.put({
+    k: 'title',
+    y: F.y
+  });
+  F.y += 31;
+  if (type === 'board') {
+    F.put({
+      k: 'kpi',
+      y: F.y
+    });
+    F.y += 72;
+    if (trendN > 1) {
+      const h = Math.round(170 * o.k);
+      F.put({
+        k: 'cap',
+        y: F.y,
+        text: 'Hospital volume — monthly trend'
+      });
+      F.y += 18;
+      F.put({
+        k: 'trend',
+        y: F.y,
+        h
+      });
+      F.y += h + 12;
+    }
+    F.put({
+      k: 'cap',
+      y: F.y,
+      text: 'Department ranking (period total)'
+    });
+    F.y += 20;
+  }
+  rptFlowHBar(F, G, n, cont);
+  F.y += type === 'board' ? 14 : 16;
+  rptFlowTable(F, G, rptTableMetrics(L.heads, L.w.map(x => x * G.CWx), {
+    fs: L.fs,
+    pad: o.pad
+  }), n, cont);
+  return F.pages;
+}
+function rptPlan(layout) {
+  let best = null;
+  for (const f of RPT_FITS) {
+    const pages = layout(f[0], f[1]);
+    if (!best || pages.length < best.pages.length) best = {
+      pad: f[0],
+      k: f[1],
+      pages
+    };
+    if (pages.length === 1) break;
+  }
+  return best;
 }
 const MONO = "'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace";
 function msEsc(s) {
@@ -1105,8 +1404,43 @@ function Reports({
   const pageW = portrait ? base : Math.round(base * ratio);
   const pageMinH = portrait ? Math.round(base * ratio) : base;
   const coverOn = showCover && chosen.length > 0;
-  const basePages = type === 'compare' || type === 'board' ? 1 : Math.max(1, chosen.length);
-  const pages = basePages + (coverOn ? 1 : 0);
+  const G = rptGeom(pageW, pageMinH);
+  const listType = type === 'compare' || type === 'board';
+  const deptPlans = listType ? [] : chosen.map(d => {
+    const fs = fseriesOf(d),
+      cg = compositionGroups(d, fs);
+    return rptPlan((pad, k) => rptLayoutDept(d, fs, cg, {
+      chartStyles,
+      detailed: type === 'detail',
+      nMonths: pMonths.length,
+      G,
+      pad,
+      k
+    }));
+  });
+  const listPlan = listType && chosen.length ? (() => {
+    const seen = {};
+    chosen.forEach(d => fseriesOf(d).forEach(r => {
+      seen[r.month] = 1;
+    }));
+    return rptPlan((pad, k) => rptLayoutList(type, chosen.length, type === 'board' ? pMonths.filter(m => seen[m]).length : 0, {
+      G,
+      pad,
+      k
+    }));
+  })() : null;
+  const secLens = (coverOn ? [1] : []).concat(listType ? [listPlan ? listPlan.pages.length : 1] : chosen.length ? deptPlans.map(p => p.pages.length) : [1]);
+  const totalPages = secLens.reduce((a, b) => a + b, 0);
+  const secLabel = i => {
+    const s0 = secLens.slice(0, i).reduce((a, b) => a + b, 0) + 1,
+      n = secLens[i] || 1;
+    return (n > 1 ? 'Pages ' + s0 + '–' + (s0 + n - 1) : 'Page ' + s0) + ' of ' + totalPages;
+  };
+  const fitStyle = (plan, rpt, o) => Object.assign({}, o, plan && plan.pad < 1 ? {
+    '--rpt-py': (rpt ? 5 : 8) * plan.pad + 'px'
+  } : null);
+  const fitCls = plan => plan && plan.pad < 1 ? ' rpt-fit' : '';
+  const pages = secLens.length;
   const pi = Math.min(pageIdx, pages - 1);
   const contentIdx = coverOn ? pi - 1 : pi;
   const pageDept = chosen[Math.max(0, contentIdx)] || depts[0];
@@ -1169,8 +1503,7 @@ function Reports({
     }
   }, new Date().toLocaleDateString('en-US'))));
   const Footer = ({
-    n,
-    total
+    label
   }) => React.createElement("div", {
     className: "pdf-foot",
     style: {
@@ -1183,7 +1516,7 @@ function Reports({
     }
   }, React.createElement("span", null, hospitalName), React.createElement("span", {
     className: "spacer"
-  }), React.createElement("span", null, "Page ", n, " of ", total), React.createElement("span", {
+  }), React.createElement("span", null, label), React.createElement("span", {
     className: "spacer"
   }), React.createElement("span", null, footerNote ? footerNote + ' · ' : '', confidential ? 'Confidential · ' : '', pageSize, " ", orient));
   const SigBlock = () => React.createElement("div", {
@@ -1232,8 +1565,7 @@ function Reports({
     }
   }, role)))));
   function CoverPage({
-    n,
-    total
+    label
   }) {
     const rows = chosen.map(d => {
       const fs = fseriesOf(d);
@@ -1360,22 +1692,35 @@ function Reports({
         textAlign: 'left'
       }
     }, React.createElement(SigBlock, null))), React.createElement(Footer, {
-      n: n,
-      total: total
+      label: label
     }));
   }
   function DeptPage({
     d,
-    n,
-    total
+    label,
+    plan
   }) {
     const tone = PALETTE[d.id.charCodeAt(0) % PALETTE.length];
     const fs = fseriesOf(d);
     const st = statOf(d, rptChartRows(d, fs));
     const compGroups = compositionGroups(d, fs);
     const detailed = type === 'detail';
-    const ncol = d.cols.length + 1;
-    const tblFont = ncol > 10 ? 8 : ncol > 8 ? 8.5 : ncol > 6 ? 9.5 : detailed ? 10.5 : 11;
+    const tb = rptDeptTable(d, detailed),
+      tblFont = tb.font;
+    const heads = ['Month'].concat(d.cols.map(c => c.label));
+    const colW = (G.CWx - 58) / Math.max(1, d.cols.length);
+    const HM = tb.rpt ? rptTableMetrics(heads, [58].concat(d.cols.map(() => colW)), {
+      fs: tblFont,
+      rpt: true
+    }) : null;
+    const thStyle = i => {
+      if (!HM) return undefined;
+      const avail = (i ? colW : 58) - 10,
+        w = Math.max(...HM.lines[i].map(l => rptTextW(l, tblFont)));
+      return w > avail ? {
+        fontSize: Math.max(5, tblFont * avail / w)
+      } : undefined;
+    };
     const partial = fs.length > 0 && fs.length < pMonths.length;
     if (fs.length === 0) {
       return React.createElement("div", {
@@ -1412,8 +1757,7 @@ function Reports({
           fontSize: 12.5
         }
       }, "No data reported for ", d.name, " in the selected period (", rangeLabel, ").")), React.createElement(Footer, {
-        n: n,
-        total: total
+        label: label
       }));
     }
     return React.createElement("div", {
@@ -1481,12 +1825,12 @@ function Reports({
         fontSize: 18,
         fontWeight: 600
       }
-    }, v)))), chartStyles.map((cs, ci) => React.createElement("div", {
+    }, v)))), rptStyles(chartStyles, compGroups).map((cs, ci, all) => React.createElement("div", {
       key: ci,
       style: {
         margin: '4px 0 8px'
       }
-    }, chartStyles.length > 1 && React.createElement("div", {
+    }, all.length > 1 && React.createElement("div", {
       style: {
         fontSize: 9.5,
         fontWeight: 700,
@@ -1495,7 +1839,7 @@ function Reports({
         letterSpacing: .4,
         margin: '8px 0 2px'
       }
-    }, CHART_STYLE_LABEL[cs] || cs), reportChartEl(d, cs, tone, rptChartRows(d, fs), compGroups))), !chartStyles.includes('donut') && compGroups.map((g, gi) => React.createElement("div", {
+    }, CHART_STYLE_LABEL[cs] || cs), reportChartEl(d, cs, tone, rptChartRows(d, fs), compGroups, plan ? plan.k : 1))), !chartStyles.includes('donut') && compGroups.map((g, gi) => React.createElement("div", {
       key: gi,
       style: {
         display: 'flex',
@@ -1521,29 +1865,34 @@ function Reports({
       thickness: 20,
       flat: true
     }))), React.createElement("table", {
-      className: detailed || ncol > 7 ? 'tbl rpt' : 'tbl',
-      style: {
+      className: (tb.rpt ? 'tbl rpt' : 'tbl') + fitCls(plan),
+      style: fitStyle(plan, tb.rpt, {
         marginTop: 14,
         fontSize: tblFont
+      })
+    }, React.createElement("thead", null, React.createElement("tr", null, heads.map((h, i) => React.createElement("th", {
+      key: i,
+      style: thStyle(i)
+    }, HM ? HM.lines[i].map((l, li) => React.createElement("div", {
+      key: li,
+      style: {
+        whiteSpace: 'nowrap'
       }
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Month"), d.cols.map(c => React.createElement("th", {
-      key: c.id
-    }, c.label)))), React.createElement("tbody", null, fs.map((r, i) => React.createElement("tr", {
+    }, l)) : h)))), React.createElement("tbody", null, fs.map((r, i) => React.createElement("tr", {
       key: i
-    }, React.createElement("td", null, detailed ? r.month : r.full), d.cols.map(c => React.createElement("td", {
+    }, React.createElement("td", null, tb.rpt ? r.month : r.full), d.cols.map(c => React.createElement("td", {
       key: c.id
     }, r[c.id] == null ? '–' : c.pct ? r[c.id] + '%' : fmt(r[c.id]))))), detailed && React.createElement("tr", {
       className: "tot"
     }, React.createElement("td", null, "TOTAL"), d.cols.map(c => React.createElement("td", {
       key: c.id
     }, c.pct ? '—' : fmt(fs.reduce((s, r) => s + (r[c.id] || 0), 0)))))))), React.createElement(Footer, {
-      n: n,
-      total: total
+      label: label
     }));
   }
   function ComparePage({
-    n = 1,
-    total = 1
+    label,
+    plan
   }) {
     const rows = chosen.map(d => {
       const fs = fseriesOf(d);
@@ -1580,10 +1929,10 @@ function Reports({
     }, React.createElement(HBar, {
       rows: hbar
     })), React.createElement("table", {
-      className: "tbl",
-      style: {
+      className: 'tbl' + fitCls(plan),
+      style: fitStyle(plan, false, {
         fontSize: 11.5
-      }
+      })
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Department"), React.createElement("th", null, "Service line"), React.createElement("th", null, "Latest"), React.createElement("th", null, "Total"), React.createElement("th", null, "Peak"), React.createElement("th", null, "Avg"), React.createElement("th", null, "Trend"))), React.createElement("tbody", null, rows.map(({
       d,
       st
@@ -1600,13 +1949,12 @@ function Reports({
     }, React.createElement(Delta, {
       v: st.delta
     }))))))), React.createElement(Footer, {
-      n: n,
-      total: total
+      label: label
     }));
   }
   function BoardPage({
-    n = 1,
-    total = 1
+    label,
+    plan
   }) {
     const rows = chosen.map(d => {
       const fs = fseriesOf(d);
@@ -1713,7 +2061,7 @@ function Reports({
       data: trend,
       x: 'label',
       y: 'val',
-      height: 170,
+      height: Math.round(170 * (plan ? plan.k : 1)),
       color: PALETTE[0],
       flat: true
     })), React.createElement("div", {
@@ -1732,10 +2080,10 @@ function Reports({
     }, React.createElement(HBar, {
       rows: hbar
     })), React.createElement("table", {
-      className: "tbl",
-      style: {
+      className: 'tbl' + fitCls(plan),
+      style: fitStyle(plan, false, {
         fontSize: 11
-      }
+      })
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Department"), React.createElement("th", null, "Service line"), React.createElement("th", null, "Total"), React.createElement("th", null, "Share"), React.createElement("th", null, "Avg / month"), React.createElement("th", null, "Trend"))), React.createElement("tbody", null, rows.slice().sort((a, b) => b.st.total - a.st.total).map(({
       d,
       st
@@ -1752,8 +2100,7 @@ function Reports({
     }, React.createElement(Delta, {
       v: st.delta
     }))))))), React.createElement(Footer, {
-      n: n,
-      total: total
+      label: label
     }));
   }
   const [exporting, setExporting] = React.useState(false);
@@ -1806,7 +2153,6 @@ function Reports({
       MT = 28,
       CWx = pageW - 60;
     const FOOTY = pageMinH - MT - 21;
-    const LIMIT = FOOTY - 12;
     const genDate = new Date().toLocaleDateString('en-US');
     const font = (style, size, color) => {
       doc.setFont('helvetica', style);
@@ -2011,10 +2357,6 @@ function Reports({
       });
       LN(MX, MT + 52, pageW - MX, MT + 52, C.blue, 2);
       return MT + 52 + 18;
-    };
-    const newPage = () => {
-      doc.addPage(fmtP, ori);
-      return pageHeader();
     };
     const kpiRow = (y, items) => {
       const gap = 10,
@@ -2360,11 +2702,9 @@ function Reports({
       });
       return y0 + hgt;
     };
-    const vHBarRows = (y0, rows) => {
-      const max = Math.max(1, ...rows.map(r => r.value));
+    const hbarRows = (y0, rows, from, to, max) => {
       let y = y0;
-      rows.forEach(r => {
-        if (y + 20 > LIMIT) y = newPage();
+      rows.slice(from, to).forEach(r => {
         font('bold', 12, C.ink2);
         T(clip(r.label, 116), MX, y + 12);
         const tx = MX + 130,
@@ -2377,7 +2717,6 @@ function Reports({
         });
         y += 24;
       });
-      return y - 9 + 4;
     };
     const vDonut = (x, y, size, thickness, data, centerValue, centerLabel) => {
       const total = data.reduce((s3, d) => s3 + d.value, 0) || 1;
@@ -2451,70 +2790,55 @@ function Reports({
       donutLegend(dx0 + 104 + 18, y0 + (boxH - legH) / 2, data);
       return y0 + boxH;
     };
-    const vTable = (y, heads, widths, rows, o) => {
+    const tableAt = (M, widths, rows, o) => {
       o = o || {};
-      const fs2 = o.fs || 12.5,
-        rpt = !!o.rpt;
-      const hfs = rpt ? fs2 : 10.5,
-        padX = rpt ? 6 : 12,
-        padY = rpt ? 5 : 8;
-      const rowH = Math.round(fs2 * 1.3 + padY * 2),
-        lh = hfs * 1.18;
       const xs = [];
       let ax = MX;
       widths.forEach(w2 => {
         xs.push(ax);
         ax += w2;
       });
-      const drawHead = yy => {
-        font('bold', hfs, C.muted);
-        const wrapped = heads.map((h2, i) => doc.splitTextToSize(String(h2).toUpperCase(), X(Math.max(10, widths[i] - padX - 4))));
-        const maxL = Math.max(1, ...wrapped.map(w2 => w2.length));
-        const hH = Math.round(maxL * lh + padY * 2 + 2);
-        FR(MX, yy, CWx, hH, C.panel2);
-        wrapped.forEach((lines, i) => {
-          const right = i > 0;
-          const tx = right ? xs[i] + widths[i] - padX : xs[i] + padX;
-          const sy = yy + hH - padY - 3 - (lines.length - 1) * lh;
-          lines.forEach((ln2, li) => T(ln2, tx, sy + li * lh, right ? {
-            align: 'right'
-          } : undefined));
-        });
-        LN(MX, yy + hH, MX + CWx, yy + hH, C.line, 1);
-        return yy + hH;
-      };
-      {
-        font('bold', hfs, C.muted);
-        const wrapped0 = heads.map((h2, i) => doc.splitTextToSize(String(h2).toUpperCase(), X(Math.max(10, widths[i] - padX - 4))));
-        const hH0 = Math.round(Math.max(1, ...wrapped0.map(w2 => w2.length)) * lh + padY * 2 + 2);
-        if (y + hH0 + rowH > LIMIT) y = newPage();
-      }
-      y = drawHead(y);
-      rows.forEach((r, ri) => {
-        if (y + rowH > LIMIT) {
-          y = newPage();
-          y = drawHead(y);
-        }
-        const tot = o.totalRow && ri === rows.length - 1;
-        if (tot) {
-          FR(MX, y, CWx, rowH, C.panel2);
-          LN(MX, y, MX + CWx, y, C.line, 2);
-        }
-        r.forEach((cell, ci) => {
-          if (o.deltaCol === ci) {
-            deltaChip(xs[ci] + widths[ci] - padX, y + (rowH - 18) / 2, Number(cell) || 0);
-            return;
+      return {
+        head: y => {
+          FR(MX, y, CWx, M.hH, C.panel2);
+          M.lines.forEach((lines, i) => {
+            const right = i > 0,
+              avail = Math.max(10, widths[i] - M.padX - 4);
+            font('bold', M.hfs, C.muted);
+            const wMax = Math.max(...lines.map(l => tw(l)));
+            if (wMax > avail) font('bold', M.hfs * avail / wMax, C.muted);
+            const tx = right ? xs[i] + widths[i] - M.padX : xs[i] + M.padX;
+            const sy = y + M.hH - M.padY - 3 - (lines.length - 1) * M.lh;
+            lines.forEach((ln2, li) => T(ln2, tx, sy + li * M.lh, right ? {
+              align: 'right'
+            } : undefined));
+          });
+          LN(MX, y + M.hH, MX + CWx, y + M.hH, C.line, 1);
+        },
+        rows: (y, from, to) => {
+          for (let ri = from; ri < to; ri++) {
+            const r = rows[ri],
+              tot = o.totalRow && ri === rows.length - 1;
+            if (tot) {
+              FR(MX, y, CWx, M.rowH, C.panel2);
+              LN(MX, y, MX + CWx, y, C.line, 2);
+            }
+            r.forEach((cell, ci) => {
+              if (o.deltaCol === ci) {
+                deltaChip(xs[ci] + widths[ci] - M.padX, y + (M.rowH - 18) / 2, Number(cell) || 0);
+                return;
+              }
+              const right = ci > 0;
+              font(ci === 0 || tot ? 'bold' : 'normal', M.fs, tot ? C.ink : ci === 0 ? C.ink : C.ink2);
+              T(clip(cell, widths[ci] - M.padX - 4), right ? xs[ci] + widths[ci] - M.padX : xs[ci] + M.padX, y + M.rowH - M.padY - M.fs * 0.24, right ? {
+                align: 'right'
+              } : undefined);
+            });
+            LN(MX, y + M.rowH, MX + CWx, y + M.rowH, C.line2, 1);
+            y += M.rowH;
           }
-          const right = ci > 0;
-          font(ci === 0 || tot ? 'bold' : 'normal', fs2, tot ? C.ink : ci === 0 ? C.ink : C.ink2);
-          T(clip(cell, widths[ci] - padX - 4), right ? xs[ci] + widths[ci] - padX : xs[ci] + padX, y + rowH - padY - fs2 * 0.24, right ? {
-            align: 'right'
-          } : undefined);
-        });
-        LN(MX, y + rowH, MX + CWx, y + rowH, C.line2, 1);
-        y += rowH;
-      });
-      return y;
+        }
+      };
     };
     const sigBlockAt = (x0, wAll, y) => {
       y += 26;
@@ -2539,127 +2863,131 @@ function Reports({
     };
     const sigBlockPx = y => sigBlockAt(MX, CWx, y);
     const SIGH = 113;
-    const chartH = (cs, fs2, compGroups) => {
-      if (cs === 'horizontal') return Math.max(1, fs2.length) * 24 - 5;
-      if (cs === 'donut') return compGroups.length ? Math.max(205, compGroups.length * 210 - 5) : 205;
-      if (cs === 'combo' || cs === 'pct') return 231;
-      if (cs === 'grouped' || cs === 'stacked') return 210;
-      if (cs === 'area') return 200;
-      if (cs === 'bar' || cs === 'line') return 195;
-      return 205;
-    };
-    const drawChart = (cs, y, d, fs2, tone, compGroups) => {
-      const prim = d.primary;
-      if (cs === 'bar') return vBarFlat(y, fs2, 'month', prim, 195);
-      if (cs === 'line') return vLine(y, fs2, 'full', prim, tone, 195);
+    const drawChart = (cs, y, d, fs2, tone, compGroups, h) => {
+      const prim = d.primary,
+        hb = Math.round(h * 195 / 210);
+      if (cs === 'bar') return vBarFlat(y, fs2, 'month', prim, h);
+      if (cs === 'line') return vLine(y, fs2, 'full', prim, tone, h);
       if (cs === 'area') {
         const avg = fs2.length ? Math.round(fs2.reduce((s3, r) => s3 + (r[prim] || 0), 0) / fs2.length) : 0;
-        return vArea(y, fs2, 'full', prim, tone, avg, 200);
+        return vArea(y, fs2, 'full', prim, tone, avg, h);
       }
       if (cs === 'combo') {
         const pctCol = d.cols.find(c => c.pct);
         const lineKey = pctCol ? pctCol.id : (d.cols.find(c => c.id !== prim && !c.pct) || {}).id || prim;
-        return vCombo(y, fs2, 'month', prim, lineKey, tone, hx('#e08a1e'), (d.cols.find(c => c.id === prim) || {}).label || 'Value', (d.cols.find(c => c.id === lineKey) || {}).label || 'Trend', 210);
+        return vCombo(y, fs2, 'month', prim, lineKey, tone, hx('#e08a1e'), (d.cols.find(c => c.id === prim) || {}).label || 'Value', (d.cols.find(c => c.id === lineKey) || {}).label || 'Trend', h);
       }
       if (cs === 'grouped') {
         const sr = reportSeries(d);
-        return sr.length ? vGrouped(y, fs2, 'month', sr, 210) : vBarFlat(y, fs2, 'month', prim, 195);
+        return sr.length ? vGrouped(y, fs2, 'month', sr, h) : vBarFlat(y, fs2, 'month', prim, hb);
       }
       if (cs === 'stacked') {
         const sr = reportSeries(d);
-        return sr.length ? vStacked(y, fs2, 'month', sr, 210) : vBarFlat(y, fs2, 'month', prim, 195);
+        return sr.length ? vStacked(y, fs2, 'month', sr, h) : vBarFlat(y, fs2, 'month', prim, hb);
       }
       if (cs === 'pct') {
         const sr = reportSeries(d);
-        return sr.length ? vPct(y, fs2, 'month', sr, 210) : vBarFlat(y, fs2, 'month', prim, 195);
+        return sr.length ? vPct(y, fs2, 'month', sr, h) : vBarFlat(y, fs2, 'month', prim, hb);
       }
-      if (cs === 'horizontal') return vHBarRows(y, fs2.map((r, i) => ({
-        label: r.full,
-        value: r[prim] || 0,
-        color: PALV[i % PALV.length]
-      })));
-      if (cs === 'donut') return compGroups.length ? compGroups.reduce((yy, g) => vDonutBlock(yy, g.data, 205) + 8, y) : vBar3D(y, fs2, 'month', prim, 205);
-      return vBar3D(y, fs2, 'month', prim, 205);
+      if (cs === 'donut') return compGroups.length ? compGroups.reduce((yy, g) => vDonutBlock(yy, g.data, 205) + 8, y) : vBar3D(y, fs2, 'month', prim, h);
+      return vBar3D(y, fs2, 'month', prim, h);
     };
-    const deptPage = (d, isLast) => {
-      let y = pageHeader();
+    const G = rptGeom(pageW, pageMinH);
+    const runPages = (pages, draw) => pages.forEach((items, pi) => {
+      if (pi > 0) doc.addPage(fmtP, ori);
+      pageHeader();
+      items.forEach(it => draw[it.k](it));
+    });
+    const contLine = it => {
+      font('bold', 11, C.muted);
+      T(it.text, MX, it.y + 12);
+    };
+    const capLine = (y, txt) => {
+      font('bold', 9.5, C.muted);
+      doc.text(String(txt).toUpperCase(), X(MX), X(y + 12), {
+        charSpace: 0.4 * S
+      });
+    };
+    const deptPage = d => {
       const fs2 = fseriesOf(d),
-        st = statOf(d, fs2);
+        rowsC = rptChartRows(d, fs2),
+        st = statOf(d, rowsC);
       const toneHex = PALETTE[d.id.charCodeAt(0) % PALETTE.length],
         tone = hx(toneHex);
-      drawIcon(DEPT_ICON[d.id] || I.activity, MX, y + 1, 18, toneHex);
-      font('bold', 15, C.ink);
-      T(d.name, MX + 27, y + 15);
-      tagChip(MX + 27 + tw(d.name) + 9, y + 2, d.group || '');
-      if (fs2.length) deltaChip(pageW - MX, y + 1, st.delta);
-      y += 31;
-      if (!fs2.length) {
-        try {
-          doc.setLineDashPattern([4 * S, 3 * S], 0);
-        } catch (e) {}
-        doc.setDrawColor(C.line[0], C.line[1], C.line[2]);
-        doc.setLineWidth(1 * S);
-        doc.roundedRect(X(MX), X(y), X(CWx), X(96), X(10), X(10), 'S');
-        try {
-          doc.setLineDashPattern([], 0);
-        } catch (e) {}
-        font('normal', 12.5, C.muted);
-        T('No data reported for ' + d.name + ' in the selected period (' + rangeLabel + ').', MX + CWx / 2, y + 52, {
-          align: 'center'
-        });
-        y += 96;
-        return;
-      }
-      if (fs2.length < pMonths.length) {
-        const segs = [['Reported data covers ', false], [fs2[0].full + ' – ' + fs2[fs2.length - 1].full, true], [' (' + fs2.length + ' of the ' + pMonths.length + ' months in the selected period); months without a report are not plotted.', false]];
-        font('normal', 10, C.muted);
-        const lines = doc.splitTextToSize(segs.map(s3 => s3[0]).join(''), X(CWx - 20)).length;
-        const boxH = lines * 14 + 10;
-        FR(MX, y, CWx, boxH, C.panel2, 6);
-        richText(segs, MX + 10, y + 15, CWx - 20, 10, 14, C.muted);
-        y += boxH + 10;
-      }
-      y = kpiRow(y, [[st.latest.full || 'Latest', fmt(st.latest[d.primary] || 0)], ['Total', fmt(st.total)], ['Peak', fmt(st.peak)], ['Average', fmt(st.avg)]].map(p => ({
-        label: p[0],
-        value: p[1],
-        tone
-      })));
-      const compGroups = compositionGroups(d, fs2);
-      chartStyles.forEach(cs => {
-        const capH = chartStyles.length > 1 ? 18 : 0;
-        const need = capH + chartH(cs, fs2, compGroups) + 12;
-        if (y + need > LIMIT && y > MT + 71) y = newPage();
-        y += 4;
-        if (chartStyles.length > 1) {
-          font('bold', 9.5, C.muted);
-          doc.text(String(CHART_STYLE_LABEL[cs] || cs).toUpperCase(), X(MX), X(y + 12), {
-            charSpace: 0.4 * S
-          });
-          y += 18;
-        }
-        y = drawChart(cs, y, d, rptChartRows(d, fs2), tone, compGroups);
-        y += 8;
-      });
-      if (!chartStyles.includes('donut')) {
-        compGroups.forEach(g => {
-          const boxH = Math.max(124, g.data.length * 21 - 6 + 20);
-          if (y + 6 + boxH > LIMIT) y = newPage();
-          y = compositionStrip(y + 6, g.data, g.title);
-        });
-      }
-      const detailed = type === 'detail';
-      const ncol = d.cols.length + 1;
-      const tblFont = ncol > 10 ? 8 : ncol > 8 ? 8.5 : ncol > 6 ? 9.5 : detailed ? 10.5 : 11;
-      const rpt = detailed || ncol > 7;
-      font('bold', tblFont);
-      const firstW = rpt ? 58 : Math.min(120, Math.max(76, ...fs2.map(r => tw(detailed ? r.month : r.full) + 24)));
+      const compGroups = compositionGroups(d, fs2),
+        detailed = type === 'detail';
+      const plan = rptPlan((pad, k) => rptLayoutDept(d, fs2, compGroups, {
+        chartStyles,
+        detailed,
+        nMonths: pMonths.length,
+        G,
+        pad,
+        k
+      }));
+      const t = rptDeptTable(d, detailed);
+      font('bold', t.font);
+      const firstW = t.rpt ? 58 : Math.min(120, Math.max(76, ...fs2.map(r => tw(r.full) + 24)));
       const widths = [firstW].concat(d.cols.map(() => (CWx - firstW) / d.cols.length));
-      const rows = fs2.map(r => [detailed ? r.month : r.full].concat(d.cols.map(c => r[c.id] == null ? '–' : c.pct ? r[c.id] + '%' : fmt(r[c.id]))));
+      const M = rptTableMetrics(['Month'].concat(d.cols.map(c => c.label)), widths, {
+        fs: t.font,
+        rpt: t.rpt,
+        pad: plan.pad
+      });
+      const rows = fs2.map(r => [t.rpt ? r.month : r.full].concat(d.cols.map(c => r[c.id] == null ? '–' : c.pct ? r[c.id] + '%' : fmt(r[c.id]))));
       if (detailed) rows.push(['TOTAL'].concat(d.cols.map(c => c.pct ? '—' : fmt(fs2.reduce((s3, r) => s3 + (r[c.id] || 0), 0)))));
-      y = vTable(y + 14, ['Month'].concat(d.cols.map(c => c.label)), widths, rows, {
-        fs: tblFont,
-        rpt: rpt,
+      const tbl = tableAt(M, widths, rows, {
         totalRow: detailed
+      });
+      const hrows = rowsC.map((r, i) => ({
+          label: r.full,
+          value: r[d.primary] || 0,
+          color: PALV[i % PALV.length]
+        })),
+        hmax = Math.max(1, ...hrows.map(r => r.value));
+      runPages(plan.pages, {
+        title: it => {
+          drawIcon(DEPT_ICON[d.id] || I.activity, MX, it.y + 1, 18, toneHex);
+          font('bold', 15, C.ink);
+          T(d.name, MX + 27, it.y + 15);
+          tagChip(MX + 27 + tw(d.name) + 9, it.y + 2, d.group || '');
+          if (fs2.length) deltaChip(pageW - MX, it.y + 1, st.delta);
+        },
+        empty: it => {
+          try {
+            doc.setLineDashPattern([4 * S, 3 * S], 0);
+          } catch (e) {}
+          doc.setDrawColor(C.line[0], C.line[1], C.line[2]);
+          doc.setLineWidth(1 * S);
+          doc.roundedRect(X(MX), X(it.y), X(CWx), X(96), X(10), X(10), 'S');
+          try {
+            doc.setLineDashPattern([], 0);
+          } catch (e) {}
+          font('normal', 12.5, C.muted);
+          T('No data reported for ' + d.name + ' in the selected period (' + rangeLabel + ').', MX + CWx / 2, it.y + 52, {
+            align: 'center'
+          });
+        },
+        note: it => {
+          const segs = [['Reported data covers ', false], [fs2[0].full + ' – ' + fs2[fs2.length - 1].full, true], [' (' + fs2.length + ' of the ' + pMonths.length + ' months in the selected period); months without a report are not plotted.', false]];
+          const w = segs.reduce((s3, sg) => {
+            font(sg[1] ? 'bold' : 'normal', 10, C.muted);
+            return s3 + tw(sg[0]);
+          }, 0);
+          FR(MX, it.y, CWx, 24, C.panel2, 6);
+          richText(segs, MX + 10, it.y + 15, 1e5, 10 * Math.min(1, (CWx - 20) / w), 14, C.muted);
+        },
+        kpi: it => kpiRow(it.y, [[st.latest.full || 'Latest', fmt(st.latest[d.primary] || 0)], ['Total', fmt(st.total)], ['Peak', fmt(st.peak)], ['Average', fmt(st.avg)]].map(p => ({
+          label: p[0],
+          value: p[1],
+          tone
+        }))),
+        cap: it => capLine(it.y, CHART_STYLE_LABEL[it.cs] || it.cs),
+        chart: it => drawChart(it.cs, it.y, d, rowsC, tone, compGroups, it.h),
+        hbar: it => hbarRows(it.y, hrows, it.from, it.to, hmax),
+        comp: it => compositionStrip(it.y, it.g.data, it.g.title),
+        cont: contLine,
+        thead: it => tbl.head(it.y),
+        rows: it => tbl.rows(it.y, it.from, it.to)
       });
     };
     const coverPage = () => {
@@ -2747,32 +3075,9 @@ function Reports({
       y += 29;
       if (showSig && hasSig) sigBlockAt(Math.max(MX, (pageW - 600) / 2), Math.min(600, CWx), y);
     };
-    const comparePage = () => {
-      let y = pageHeader();
-      const rows = chosen.map(d => {
-        const fsr = fseriesOf(d);
-        return {
-          d,
-          st: statOf(d, fsr)
-        };
-      });
-      font('bold', 15, C.ink);
-      T('Cross-department comparison · ' + chosen.length + ' departments', MX, y + 14);
-      y += 31;
-      const hbar = rows.map(rr => ({
-        label: rr.d.short,
-        value: rr.st.total,
-        color: PALV[rr.d.id.charCodeAt(0) % PALV.length]
-      })).sort((a, b) => b.value - a.value);
-      y = vHBarRows(y, hbar) + 16;
-      const widths = [CWx * 0.22, CWx * 0.18, CWx * 0.11, CWx * 0.11, CWx * 0.11, CWx * 0.11, CWx * 0.16];
-      y = vTable(y, ['Department', 'Service line', 'Latest', 'Total', 'Peak', 'Avg', 'Trend'], widths, rows.map(rr => [rr.d.name, rr.d.group, fmt(rr.st.latest[rr.d.primary] || 0), fmt(rr.st.total), fmt(rr.st.peak), fmt(rr.st.avg), rr.st.delta]), {
-        fs: 11.5,
-        deltaCol: 6
-      });
-    };
-    const boardPage = () => {
-      let y = pageHeader();
+    const listPage = () => {
+      const board = type === 'board',
+        L = RPT_LIST[type];
       const rows = chosen.map(d => {
         const fsr = fseriesOf(d);
         return {
@@ -2782,64 +3087,71 @@ function Reports({
         };
       });
       const totAll = rows.reduce((s3, r) => s3 + r.st.total, 0);
-      const top = rows.slice().sort((a, b) => b.st.total - a.st.total)[0];
+      const ranked = rows.slice().sort((a, b) => b.st.total - a.st.total),
+        top = ranked[0];
       const mTot = {};
       rows.forEach(rr => rr.fs.forEach(r => {
         mTot[r.month] = (mTot[r.month] || 0) + (r[rr.d.primary] || 0);
       }));
-      const trend = pMonths.filter(m => mTot[m] != null).map(m => ({
+      const trend = board ? pMonths.filter(m => mTot[m] != null).map(m => ({
         label: m.split('-')[0],
         val: mTot[m]
-      }));
+      })) : [];
       const peakM = trend.slice().sort((a, b) => b.val - a.val)[0];
-      drawIcon(I.doc, MX, y + 1, 18, PALETTE[0]);
-      font('bold', 15, C.ink);
-      T('Executive Board Report', MX + 27, y + 15);
-      tagChip(MX + 27 + tw('Executive Board Report') + 9, y + 2, rangeLabel);
-      font('bold', 10.5, C.blue700);
-      tagChip(pageW - MX - (tw(String(rows.length) + ' DEPARTMENTS') + 16), y + 2, rows.length + ' departments');
-      y += 31;
-      y = kpiRow(y, [['Total patients', fmt(totAll)], ['Departments', String(rows.length)], ['Busiest dept', top ? top.d.short : '—'], ['Peak month', peakM ? peakM.label : '—']].map((p, i) => ({
-        label: p[0],
-        value: p[1],
-        tone: PALV[i % PALV.length]
-      })));
-      if (trend.length > 1) {
-        font('bold', 9.5, C.muted);
-        doc.text('HOSPITAL VOLUME — MONTHLY TREND', X(MX), X(y + 12), {
-          charSpace: 0.4 * S
+      const plan = rptPlan((pad, k) => rptLayoutList(type, rows.length, trend.length, {
+        G,
+        pad,
+        k
+      }));
+      const widths = L.w.map(x => x * CWx),
+        M = rptTableMetrics(L.heads, widths, {
+          fs: L.fs,
+          pad: plan.pad
         });
-        y += 18;
-        y = vBarFlat(y, trend, 'label', 'val', 170) + 12;
-      }
-      font('bold', 9.5, C.muted);
-      doc.text('DEPARTMENT RANKING (PERIOD TOTAL)', X(MX), X(y + 12), {
-        charSpace: 0.4 * S
+      const cells = board ? ranked.map(rr => [rr.d.name, rr.d.group, fmt(rr.st.total), totAll ? Math.round(rr.st.total * 100 / totAll) + '%' : '—', fmt(rr.st.avg), rr.st.delta]) : rows.map(rr => [rr.d.name, rr.d.group, fmt(rr.st.latest[rr.d.primary] || 0), fmt(rr.st.total), fmt(rr.st.peak), fmt(rr.st.avg), rr.st.delta]);
+      const tbl = tableAt(M, widths, cells, {
+        deltaCol: L.heads.length - 1
       });
-      y += 20;
       const hbar = rows.map(rr => ({
         label: rr.d.short,
         value: rr.st.total,
         color: PALV[rr.d.id.charCodeAt(0) % PALV.length]
       })).sort((a, b) => b.value - a.value);
-      y = vHBarRows(y, hbar) + 14;
-      const ranked = rows.slice().sort((a, b) => b.st.total - a.st.total);
-      const widths = [CWx * 0.24, CWx * 0.20, CWx * 0.13, CWx * 0.11, CWx * 0.16, CWx * 0.16];
-      y = vTable(y, ['Department', 'Service line', 'Total', 'Share', 'Avg / month', 'Trend'], widths, ranked.map(rr => [rr.d.name, rr.d.group, fmt(rr.st.total), totAll ? Math.round(rr.st.total * 100 / totAll) + '%' : '—', fmt(rr.st.avg), rr.st.delta]), {
-        fs: 11,
-        deltaCol: 5
+      const hmax = Math.max(1, ...hbar.map(r => r.value));
+      runPages(plan.pages, {
+        title: it => {
+          if (!board) {
+            font('bold', 15, C.ink);
+            T('Cross-department comparison · ' + chosen.length + ' departments', MX, it.y + 14);
+            return;
+          }
+          drawIcon(I.doc, MX, it.y + 1, 18, PALETTE[0]);
+          font('bold', 15, C.ink);
+          T('Executive Board Report', MX + 27, it.y + 15);
+          tagChip(MX + 27 + tw('Executive Board Report') + 9, it.y + 2, rangeLabel);
+          font('bold', 10.5, C.blue700);
+          tagChip(pageW - MX - (tw(String(rows.length) + ' DEPARTMENTS') + 16), it.y + 2, rows.length + ' departments');
+        },
+        kpi: it => kpiRow(it.y, [['Total patients', fmt(totAll)], ['Departments', String(rows.length)], ['Busiest dept', top ? top.d.short : '—'], ['Peak month', peakM ? peakM.label : '—']].map((p, i) => ({
+          label: p[0],
+          value: p[1],
+          tone: PALV[i % PALV.length]
+        }))),
+        cap: it => capLine(it.y, it.text),
+        trend: it => vBarFlat(it.y, trend, 'label', 'val', it.h),
+        hbar: it => hbarRows(it.y, hbar, it.from, it.to, hmax),
+        cont: contLine,
+        thead: it => tbl.head(it.y),
+        rows: it => tbl.rows(it.y, it.from, it.to)
       });
     };
     if (showCover && chosen.length > 0) coverPage();
-    if (type === 'compare') {
+    if (type === 'compare' || type === 'board') {
       if (showCover) doc.addPage(fmtP, ori);
-      comparePage();
-    } else if (type === 'board') {
-      if (showCover) doc.addPage(fmtP, ori);
-      boardPage();
+      listPage();
     } else chosen.forEach((d, di) => {
       if (showCover || di > 0) doc.addPage(fmtP, ori);
-      deptPage(d, di === chosen.length - 1);
+      deptPage(d);
     });
     const total = doc.getNumberOfPages();
     for (let p = 1; p <= total; p++) {
@@ -3035,7 +3347,7 @@ function Reports({
     };
   };
   const tryServerPDF = async () => {
-    if (window.__UNICO_SERVER_PDF__ === false) return false;
+    if (window.__UNICO_SERVER_PDF__ !== true) return false;
     try {
       const res = await fetch('/api/report-pdf', {
         method: 'POST',
@@ -3379,7 +3691,7 @@ function Reports({
     style: {
       gap: 16
     }
-  }, React.createElement("style", null, '.qc-rpage{display:flex;flex-direction:column;flex:1 0 auto}.qc-rpage .pdf-foot{margin-top:auto}@media print{.qc-rpage{display:block}.qc-rpage .pdf-foot{margin-top:12px}}'), React.createElement(SectionTitle, {
+  }, React.createElement("style", null, '.qc-rpage{display:flex;flex-direction:column;flex:1 0 auto}.qc-rpage .pdf-foot{margin-top:auto}@media print{.qc-rpage{display:block}.qc-rpage .pdf-foot{margin-top:12px}}' + 'table.tbl.rpt-fit th,table.tbl.rpt-fit td{padding-top:var(--rpt-py);padding-bottom:var(--rpt-py)}'), React.createElement(SectionTitle, {
     icon: I.doc,
     title: "Report Builder",
     sub: "Compose and export board-ready statistical reports",
@@ -3446,25 +3758,24 @@ function Reports({
   }, coverOn && React.createElement("section", {
     className: "pdf-page"
   }, React.createElement(CoverPage, {
-    n: 1,
-    total: pages
+    label: secLabel(0)
   })), chosen.length > 0 && (type === 'compare' ? React.createElement("section", {
     className: "pdf-page"
   }, React.createElement(ComparePage, {
-    n: coverOn ? 2 : 1,
-    total: pages
+    label: secLabel(coverOn ? 1 : 0),
+    plan: listPlan
   })) : type === 'board' ? React.createElement("section", {
     className: "pdf-page"
   }, React.createElement(BoardPage, {
-    n: coverOn ? 2 : 1,
-    total: pages
+    label: secLabel(coverOn ? 1 : 0),
+    plan: listPlan
   })) : chosen.map((d, i) => React.createElement("section", {
     className: "pdf-page",
     key: d.id
   }, React.createElement(DeptPage, {
     d: d,
-    n: i + 1 + (coverOn ? 1 : 0),
-    total: pages
+    label: secLabel(i + (coverOn ? 1 : 0)),
+    plan: deptPlans[i]
   }))))), pdfRoot), React.createElement("div", {
     className: "grid",
     style: {
@@ -3946,7 +4257,7 @@ function Reports({
     }
   })), React.createElement("span", {
     className: "tag num"
-  }, "Page ", pi + 1, " of ", pages), React.createElement("button", {
+  }, secLabel(pi)), React.createElement("button", {
     className: "icon-btn",
     style: {
       width: 28,
@@ -3984,18 +4295,17 @@ function Reports({
       padding: '60px 0'
     }
   }, "Select at least one department.") : coverOn && pi === 0 ? React.createElement(CoverPage, {
-    n: 1,
-    total: pages
+    label: secLabel(0)
   }) : type === 'compare' ? React.createElement(ComparePage, {
-    n: pi + 1,
-    total: pages
+    label: secLabel(pi),
+    plan: listPlan
   }) : type === 'board' ? React.createElement(BoardPage, {
-    n: pi + 1,
-    total: pages
+    label: secLabel(pi),
+    plan: listPlan
   }) : React.createElement(DeptPage, {
     d: pageDept,
-    n: pi + 1,
-    total: pages
+    label: secLabel(pi),
+    plan: deptPlans[Math.max(0, contentIdx)]
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];

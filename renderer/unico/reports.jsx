@@ -48,21 +48,133 @@ function compositionGroups(d, fs){
   const data=list.map((x,i)=>({label:x.label,value:x.value,color:PALETTE[i%PALETTE.length]})).filter(x=>x.value>0);
   return data.length>1?[{title:'Composition',data}]:[];
 }
-function reportChartEl(d,style,tone,fs,compGroups){
+function reportChartEl(d,style,tone,fs,compGroups,k){
   const has=n=>typeof window[n]==='function';
-  if(style==='bar') return <BarChart data={fs} x="month" y={d.primary} height={195} color={tone} flat/>;
-  if(style==='line') return <LineChart data={fs} x="full" y={d.primary} height={195} color={tone} flat/>;
-  if(style==='area'&&has('AreaTargetChart')){ const avg=fs.length?Math.round(fs.reduce((s,r)=>s+(r[d.primary]||0),0)/fs.length):0; return <AreaTargetChart data={fs} x="full" y={d.primary} target={avg} height={200} color={tone} flat/>; }
-  if(style==='combo'&&has('ComboChart')){ const pctCol=d.cols.find(c=>c.pct); const lineKey=pctCol?pctCol.id:((d.cols.find(c=>c.id!==d.primary&&!c.pct)||{}).id||d.primary); return <ComboChart data={fs} x="month" barKey={d.primary} lineKey={lineKey} barColor={tone} lineColor="#e08a1e" barLabel={(d.cols.find(c=>c.id===d.primary)||{}).label||'Value'} lineLabel={(d.cols.find(c=>c.id===lineKey)||{}).label||'Trend'} height={210} flat/>; }
-  if(style==='grouped'){ const sr=reportSeries(d); return sr.length?<GroupedBar data={fs} x="month" series={sr} height={210}/>:<BarChart data={fs} x="month" y={d.primary} height={195} color={tone} flat/>; }
-  if(style==='stacked'){ const sr=reportSeries(d); return sr.length?<StackedBar data={fs} x="month" series={sr} height={210}/>:<BarChart data={fs} x="month" y={d.primary} height={195} color={tone} flat/>; }
-  if(style==='pct'&&has('StackedPctBar')){ const sr=reportSeries(d); return sr.length?<StackedPctBar data={fs} x="month" series={sr} height={210} flat/>:<BarChart data={fs} x="month" y={d.primary} height={195} color={tone} flat/>; }
+  const H=h=>Math.round(h*(k||1));   // page-fit: charts shrink by the same factor the PDF uses
+  if(style==='bar') return <BarChart data={fs} x="month" y={d.primary} height={H(195)} color={tone} flat/>;
+  if(style==='line') return <LineChart data={fs} x="full" y={d.primary} height={H(195)} color={tone} flat/>;
+  if(style==='area'&&has('AreaTargetChart')){ const avg=fs.length?Math.round(fs.reduce((s,r)=>s+(r[d.primary]||0),0)/fs.length):0; return <AreaTargetChart data={fs} x="full" y={d.primary} target={avg} height={H(200)} color={tone} flat/>; }
+  if(style==='combo'&&has('ComboChart')){ const pctCol=d.cols.find(c=>c.pct); const lineKey=pctCol?pctCol.id:((d.cols.find(c=>c.id!==d.primary&&!c.pct)||{}).id||d.primary); return <ComboChart data={fs} x="month" barKey={d.primary} lineKey={lineKey} barColor={tone} lineColor="#e08a1e" barLabel={(d.cols.find(c=>c.id===d.primary)||{}).label||'Value'} lineLabel={(d.cols.find(c=>c.id===lineKey)||{}).label||'Trend'} height={H(210)} flat/>; }
+  if(style==='grouped'){ const sr=reportSeries(d); return sr.length?<GroupedBar data={fs} x="month" series={sr} height={H(210)}/>:<BarChart data={fs} x="month" y={d.primary} height={H(195)} color={tone} flat/>; }
+  if(style==='stacked'){ const sr=reportSeries(d); return sr.length?<StackedBar data={fs} x="month" series={sr} height={H(210)}/>:<BarChart data={fs} x="month" y={d.primary} height={H(195)} color={tone} flat/>; }
+  if(style==='pct'&&has('StackedPctBar')){ const sr=reportSeries(d); return sr.length?<StackedPctBar data={fs} x="month" series={sr} height={H(210)} flat/>:<BarChart data={fs} x="month" y={d.primary} height={H(195)} color={tone} flat/>; }
   if(style==='horizontal'&&has('HBarChart')) return <HBarChart data={fs.map(r=>({label:r.full,val:r[d.primary]||0}))} x="label" y="val" height={Math.max(150,fs.length*30)} flat/>;
   if(style==='donut') return compGroups.length
     ? <div style={{display:'flex',flexWrap:'wrap',gap:18,justifyContent:'space-around',alignItems:'center',minHeight:205}}>{compGroups.map((g,gi)=><div key={gi} style={{display:'grid',placeItems:'center'}}><Donut data={g.data} size={compGroups.length>1?152:188} centerValue={fmt(g.data.reduce((s,x)=>s+x.value,0))} centerLabel={compGroups.length>1?g.title:'Total'} flat/></div>)}</div>
-    : <Bar3D data={fs} x="month" y={d.primary} height={205} color={tone} flat/>;
-  return <Bar3D data={fs} x="month" y={d.primary} height={205} color={tone} flat/>; // bar3d + default
+    : <Bar3D data={fs} x="month" y={d.primary} height={H(205)} color={tone} flat/>;
+  return <Bar3D data={fs} x="month" y={d.primary} height={H(205)} color={tone} flat/>; // bar3d + default
 }
+
+/* ---- Report page plan ---------------------------------------------------------------
+   ONE layout rule for the preview's page numbers AND the PDF export, so "Page n of N"
+   always agrees between them. Heights are preview px (the PDF scales them uniformly).
+   A section that would spill a few table rows onto a second sheet is tightened — row
+   padding first, then chart height (RPT_FITS) — until it fits one page; only a section
+   that cannot fit even then continues on a following page under a "— continued" line. */
+const RPT_FITS=[[1,1],[.8,1],[.8,.9],[.65,.9],[.65,.8],[.5,.8],[.5,.7],[.4,.7],[.35,.62]];   // [row padding, chart height]
+function rptGeom(pageW,pageMinH){ const MT=28, FOOTY=pageMinH-MT-21; return {MX:30,MT,CWx:pageW-60,TOPY:MT+52+18,FOOTY,LIMIT:FOOTY-12}; }
+// Approximate bold-caps text width — it only DECIDES where a table header wraps (the PDF then
+// shrinks a label that is still too wide), so the header height never depends on a font metric.
+function rptTextW(t,px){ let w=0; for(const ch of String(t)) w+=" IJ.,:;|!'/".indexOf(ch)>=0?.3:'MW'.indexOf(ch)>=0?.92:'-()'.indexOf(ch)>=0?.34:(ch>='0'&&ch<='9')?.56:.76; return w*px; }
+function rptHeadWrap(label,w,px){   // whole words; at most 4 lines
+  const fit=w/.82, parts=[];   // the PDF may shrink a label ~18% before a word has to be split
+  String(label).split(/\s+/).filter(Boolean).forEach(wd=>{
+    // a word wider than its column is hyphenated in BALANCED parts (ADMIS-SION), never one stray letter
+    const n=Math.min(3,Math.ceil(rptTextW(wd,px)/(fit*1.1))), size=Math.ceil(wd.length/n);
+    if(n<2||wd.length<6){ parts.push(wd); return; }
+    for(let i=0;i*size<wd.length;i++) parts.push(wd.slice(i*size,(i+1)*size)+((i+1)*size<wd.length?'-':''));
+  });
+  const lines=[]; parts.forEach(wd=>{ const cur=lines[lines.length-1];
+    if(cur!=null&&cur.slice(-1)!=='-'&&rptTextW(cur+' '+wd,px)<=fit) lines[lines.length-1]=cur+' '+wd; else lines.push(wd); });
+  while(lines.length>4){ const t=lines.pop(), p=lines[lines.length-1]; lines[lines.length-1]=p.slice(-1)==='-'?p.slice(0,-1)+t:p+' '+t; }
+  return lines.length?lines:[''];
+}
+function rptTableMetrics(heads,widths,o){
+  const fs=o.fs||12.5, rpt=!!o.rpt, hfs=rpt?fs:10.5, padX=rpt?6:12, padY=(rpt?5:8)*(o.pad||1), lh=hfs*1.18;
+  const lines=heads.map((h,i)=>rpt?rptHeadWrap(String(h).toUpperCase(),Math.max(10,widths[i]-padX-4),hfs):[String(h).toUpperCase()]);
+  const maxL=Math.max(1,...lines.map(l=>l.length));
+  return {fs,rpt,hfs,padX,padY,lh,lines,rowH:Math.round(fs*1.3+padY*2),hH:Math.round(maxL*lh+padY*2+2)};
+}
+// The department table's shape — font and compact ('rpt') layout — shared by the preview and the PDF.
+function rptDeptTable(d,detailed){ const ncol=d.cols.length+1; return {font:ncol>10?8:ncol>8?8.5:ncol>6?9.5:(detailed?10.5:11), rpt:detailed||ncol>7}; }
+function rptFlow(G){ const pages=[[]]; const F={y:G.TOPY,top:G.TOPY,pages,
+  put(it){ pages[pages.length-1].push(it); },
+  brk(cont){ pages.push([]); F.y=G.TOPY; if(cont){ F.put({k:'cont',y:F.y,text:cont}); F.y+=22; } F.top=F.y; } };
+  return F; }
+function rptFlowTable(F,G,T,n,cont){
+  // start on a fresh page unless at least 4 rows (or the whole table) fit under the header here
+  if(F.y>F.top&&Math.floor((G.LIMIT-F.y-T.hH)/T.rowH+1e-6)<Math.min(n,4)) F.brk(cont);
+  let i=0;
+  for(;;){
+    F.put({k:'thead',y:F.y}); F.y+=T.hH;
+    let take=Math.max(1,Math.min(n-i,Math.floor((G.LIMIT-F.y)/T.rowH+1e-6)));
+    const left=n-i-take; if(left>0&&left<3&&take>3) take-=3-left;   // never strand 1–2 rows on a new page
+    F.put({k:'rows',y:F.y,from:i,to:i+take}); F.y+=take*T.rowH; i+=take;
+    if(i>=n) break;
+    F.brk(cont);
+  }
+}
+function rptFlowHBar(F,G,n,cont){   // label · track · value rows, 24px each
+  let i=0;
+  while(i<n){
+    let fit=0, yy=F.y; while(i+fit<n&&yy+20<=G.LIMIT){ fit++; yy+=24; }
+    if(!fit){ F.brk(cont); continue; }
+    F.put({k:'hbar',y:F.y,from:i,to:i+fit}); F.y=yy; i+=fit;
+    if(i<n) F.brk(cont);
+  }
+  F.y+=-9+4;
+}
+// Chart styles that apply to ONE department: 'donut' needs a composition to show.
+function rptStyles(chartStyles,compGroups){ const st=chartStyles.filter(cs=>cs!=='donut'||compGroups.length>0); return st.length?st:['bar3d']; }
+function rptChartBlockH(cs,k,compGroups){
+  if(cs==='donut') return compGroups.length?compGroups.length*213:Math.round(205*k);
+  return Math.round((cs==='bar'||cs==='line'?195:cs==='area'?200:(cs==='combo'||cs==='grouped'||cs==='stacked'||cs==='pct')?210:205)*k);
+}
+function rptLayoutDept(d,fs,compGroups,o){   // o: {chartStyles,detailed,nMonths,G,pad,k}
+  const G=o.G, F=rptFlow(G), cont=d.name+' — continued';
+  F.put({k:'title',y:F.y}); F.y+=31;
+  if(!fs.length){ F.put({k:'empty',y:F.y}); F.y+=96; return F.pages; }
+  if(fs.length<o.nMonths){ F.put({k:'note',y:F.y}); F.y+=34; }
+  F.put({k:'kpi',y:F.y}); F.y+=72;
+  const styles=rptStyles(o.chartStyles,compGroups), cap=styles.length>1?18:0;
+  styles.forEach(cs=>{
+    const h=cs==='horizontal'?Math.max(1,fs.length)*24-5:rptChartBlockH(cs,o.k,compGroups);
+    if(F.y+cap+h+12>G.LIMIT&&F.y>F.top) F.brk(cont);   // an over-tall horizontal chart then paginates row-wise
+    F.y+=4;
+    if(cap){ F.put({k:'cap',y:F.y,cs}); F.y+=18; }
+    if(cs==='horizontal') rptFlowHBar(F,G,fs.length,cont);
+    else { F.put({k:'chart',y:F.y,cs,h}); F.y+=h; }
+    F.y+=8;
+  });
+  if(o.chartStyles.indexOf('donut')<0) compGroups.forEach(g=>{
+    const boxH=Math.max(124,g.data.length*21-6+20);
+    if(F.y+6+boxH>G.LIMIT) F.brk(cont);
+    F.put({k:'comp',y:F.y+6,g}); F.y+=6+boxH;
+  });
+  const t=rptDeptTable(d,o.detailed), firstW=t.rpt?58:100;
+  const T=rptTableMetrics(['Month'].concat(d.cols.map(c=>c.label)),[firstW].concat(d.cols.map(()=>(G.CWx-firstW)/d.cols.length)),{fs:t.font,rpt:t.rpt,pad:o.pad});
+  F.y+=14;
+  rptFlowTable(F,G,T,fs.length+(o.detailed?1:0),cont);
+  return F.pages;
+}
+const RPT_LIST={compare:{fs:11.5,heads:['Department','Service line','Latest','Total','Peak','Avg','Trend'],w:[.27,.21,.10,.11,.09,.09,.13]},
+  board:{fs:11,heads:['Department','Service line','Total','Share','Avg / month','Trend'],w:[.30,.22,.12,.10,.13,.13]}};
+function rptLayoutList(type,n,trendN,o){   // comparison / board page; o: {G,pad,k}
+  const G=o.G, F=rptFlow(G), L=RPT_LIST[type], cont=(type==='board'?'Executive Board Report':'Cross-department comparison')+' — continued';
+  F.put({k:'title',y:F.y}); F.y+=31;
+  if(type==='board'){
+    F.put({k:'kpi',y:F.y}); F.y+=72;
+    if(trendN>1){ const h=Math.round(170*o.k); F.put({k:'cap',y:F.y,text:'Hospital volume — monthly trend'}); F.y+=18; F.put({k:'trend',y:F.y,h}); F.y+=h+12; }
+    F.put({k:'cap',y:F.y,text:'Department ranking (period total)'}); F.y+=20;
+  }
+  rptFlowHBar(F,G,n,cont); F.y+=type==='board'?14:16;
+  rptFlowTable(F,G,rptTableMetrics(L.heads,L.w.map(x=>x*G.CWx),{fs:L.fs,pad:o.pad}),n,cont);
+  return F.pages;
+}
+// Loosest fit that keeps the section on ONE page; failing that, the loosest fit with the fewest pages.
+function rptPlan(layout){ let best=null;
+  for(const f of RPT_FITS){ const pages=layout(f[0],f[1]); if(!best||pages.length<best.pages.length) best={pad:f[0],k:f[1],pages}; if(pages.length===1) break; }
+  return best; }
 
 /* ==================================================================
    Monthly Statistics Report — board-ready statistical reporting.
@@ -472,8 +584,22 @@ function Reports({depts}){
   // Page list = optional cover sheet + the content pages; page numbers are ABSOLUTE
   // (cover = page 1) so the printed footer, pager and sig-on-last-page all agree.
   const coverOn = showCover && chosen.length>0;
-  const basePages = (type==='compare'||type==='board') ? 1 : Math.max(1,chosen.length);
-  const pages = basePages + (coverOn?1:0);
+  // One SECTION per department (or the single comparison / board section). The shared page
+  // plan says how many physical pages each section takes, so the pager, the printed footers
+  // and the exported PDF all number pages the same way.
+  const G=rptGeom(pageW,pageMinH);
+  const listType = type==='compare'||type==='board';
+  const deptPlans = listType ? [] : chosen.map(d=>{ const fs=fseriesOf(d), cg=compositionGroups(d,fs);
+    return rptPlan((pad,k)=>rptLayoutDept(d,fs,cg,{chartStyles,detailed:type==='detail',nMonths:pMonths.length,G,pad,k})); });
+  const listPlan = listType&&chosen.length ? (()=>{ const seen={}; chosen.forEach(d=>fseriesOf(d).forEach(r=>{ seen[r.month]=1; }));
+    return rptPlan((pad,k)=>rptLayoutList(type,chosen.length,type==='board'?pMonths.filter(m=>seen[m]).length:0,{G,pad,k})); })() : null;
+  const secLens = (coverOn?[1]:[]).concat(listType ? [listPlan?listPlan.pages.length:1] : (chosen.length?deptPlans.map(p=>p.pages.length):[1]));
+  const totalPages = secLens.reduce((a,b)=>a+b,0);
+  const secLabel = i=>{ const s0=secLens.slice(0,i).reduce((a,b)=>a+b,0)+1, n=secLens[i]||1;
+    return (n>1?'Pages '+s0+'–'+(s0+n-1):'Page '+s0)+' of '+totalPages; };
+  const fitStyle=(plan,rpt,o)=>Object.assign({},o,plan&&plan.pad<1?{'--rpt-py':((rpt?5:8)*plan.pad)+'px'}:null);
+  const fitCls=plan=>plan&&plan.pad<1?' rpt-fit':'';
+  const pages = secLens.length;                      // sections the pager steps through
   const pi=Math.min(pageIdx,pages-1);
   const contentIdx = coverOn ? pi-1 : pi;            // -1 = the cover sheet itself
   const pageDept = chosen[Math.max(0,contentIdx)] || depts[0];
@@ -491,9 +617,9 @@ function Reports({depts}){
       <div className="spacer"/><div style={{textAlign:'right',fontSize:10,color:'var(--faint)'}}>Generated<br/><b className="num" style={{color:'var(--ink-2)'}}>{new Date().toLocaleDateString('en-US')}</b></div>
     </div>
   );
-  const Footer=({n,total})=>(
+  const Footer=({label})=>(
     <div className="pdf-foot" style={{borderTop:'1px solid var(--line)',paddingTop:8,fontSize:9.5,color:'var(--faint)',display:'flex',flex:'0 0 auto'}}>
-      <span>{hospitalName}</span><span className="spacer"/><span>Page {n} of {total}</span><span className="spacer"/><span>{footerNote?footerNote+' · ':''}{confidential?'Confidential · ':''}{pageSize} {orient}</span>
+      <span>{hospitalName}</span><span className="spacer"/><span>{label}</span><span className="spacer"/><span>{footerNote?footerNote+' · ':''}{confidential?'Confidential · ':''}{pageSize} {orient}</span>
     </div>
   );
   // Authorisation sign-off (Prepared / Checked / Approved by) — rendered on the LAST
@@ -515,7 +641,7 @@ function Reports({depts}){
 
   /* Cover sheet — org name, report title, period + headline stats over the SELECTED
      departments and period (same aggregates BoardPage uses), confidential mark. */
-  function CoverPage({n,total}){
+  function CoverPage({label}){
     const rows=chosen.map(d=>{const fs=fseriesOf(d);const st=statOf(d,fs);return {d,st,fs};});
     const totAll=rows.reduce((s,r)=>s+r.st.total,0);
     const mTot={}; rows.forEach(({d,fs})=>fs.forEach(r=>{ mTot[r.month]=(mTot[r.month]||0)+(r[d.primary]||0); }));
@@ -546,12 +672,12 @@ function Reports({depts}){
             <div style={{width:'100%',maxWidth:600,textAlign:'left'}}><SigBlock/></div>
           )}
         </div>
-        <Footer n={n} total={total}/>
+        <Footer label={label}/>
       </div>
     );
   }
 
-  function DeptPage({d, n, total}){
+  function DeptPage({d, label, plan}){
     const tone=PALETTE[(d.id.charCodeAt(0))%PALETTE.length];
     // KPIs are computed over the SAME rows the chart/donut plot (TR-in folded into the
     // Admission primary for admission-flow depts) so the headline figures, the trend chart
@@ -562,8 +688,15 @@ function Reports({depts}){
     // ALL metric columns, always — the summary table used to slice to the first 5,
     // silently dropping the rest for wide departments (Dialysis lost Total, ER lost
     // half its census). Width is handled by the adaptive font + fixed layout below.
-    const ncol=d.cols.length+1;
-    const tblFont=ncol>10?8:ncol>8?8.5:ncol>6?9.5:(detailed?10.5:11);
+    const tb=rptDeptTable(d,detailed), tblFont=tb.font;
+    // Compact tables: the header uses the SAME whole-word lines the PDF draws (rptHeadWrap) —
+    // the browser's own wrapping broke labels mid-word ("ADMISSI / ON"). A line still too
+    // wide for its column is shrunk, as in the PDF.
+    const heads=['Month'].concat(d.cols.map(c=>c.label));
+    const colW=(G.CWx-58)/Math.max(1,d.cols.length);
+    const HM=tb.rpt?rptTableMetrics(heads,[58].concat(d.cols.map(()=>colW)),{fs:tblFont,rpt:true}):null;
+    const thStyle=i=>{ if(!HM) return undefined; const avail=(i?colW:58)-10, w=Math.max(...HM.lines[i].map(l=>rptTextW(l,tblFont)));
+      return w>avail?{fontSize:Math.max(5,tblFont*avail/w)}:undefined; };
     // Coverage note: the axis only plots REPORTED months, so when the dept's data
     // covers less than the selected period, say so instead of looking broken.
     const partial=fs.length>0&&fs.length<pMonths.length;
@@ -582,7 +715,7 @@ function Reports({depts}){
             </div>
             {/* authorisation now shown on the cover page only */}
           </div>
-          <Footer n={n} total={total}/>
+          <Footer label={label}/>
         </div>
       );
     }
@@ -608,10 +741,10 @@ function Reports({depts}){
               </div>
             ))}
           </div>
-          {chartStyles.map((cs,ci)=>(
+          {rptStyles(chartStyles,compGroups).map((cs,ci,all)=>(
             <div key={ci} style={{margin:'4px 0 8px'}}>
-              {chartStyles.length>1&&<div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,margin:'8px 0 2px'}}>{CHART_STYLE_LABEL[cs]||cs}</div>}
-              {reportChartEl(d,cs,tone,rptChartRows(d,fs),compGroups)}
+              {all.length>1&&<div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,margin:'8px 0 2px'}}>{CHART_STYLE_LABEL[cs]||cs}</div>}
+              {reportChartEl(d,cs,tone,rptChartRows(d,fs),compGroups,plan?plan.k:1)}
             </div>
           ))}
           {!chartStyles.includes('donut')&&compGroups.map((g,gi)=>(
@@ -620,22 +753,22 @@ function Reports({depts}){
               <Donut data={g.data} size={104} thickness={20} flat/>
             </div>
           ))}
-          <table className={(detailed||ncol>7)?'tbl rpt':'tbl'} style={{marginTop:14,fontSize:tblFont}}>
-            <thead><tr><th>Month</th>{d.cols.map(c=><th key={c.id}>{c.label}</th>)}</tr></thead>
+          <table className={(tb.rpt?'tbl rpt':'tbl')+fitCls(plan)} style={fitStyle(plan,tb.rpt,{marginTop:14,fontSize:tblFont})}>
+            <thead><tr>{heads.map((h,i)=><th key={i} style={thStyle(i)}>{HM?HM.lines[i].map((l,li)=><div key={li} style={{whiteSpace:'nowrap'}}>{l}</div>):h}</th>)}</tr></thead>
             <tbody>{fs.map((r,i)=>(
-              <tr key={i}><td>{detailed?r.month:r.full}</td>{d.cols.map(c=><td key={c.id}>{r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id]))}</td>)}</tr>
+              <tr key={i}><td>{tb.rpt?r.month:r.full}</td>{d.cols.map(c=><td key={c.id}>{r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id]))}</td>)}</tr>
             ))}
             {detailed&&<tr className="tot"><td>TOTAL</td>{d.cols.map(c=><td key={c.id}>{c.pct?'—':fmt(fs.reduce((s,r)=>s+(r[c.id]||0),0))}</td>)}</tr>}
             </tbody>
           </table>
           {/* authorisation now shown on the cover page only */}
         </div>
-        <Footer n={n} total={total}/>
+        <Footer label={label}/>
       </div>
     );
   }
 
-  function ComparePage({n=1,total=1}){
+  function ComparePage({label, plan}){
     const rows=chosen.map(d=>{const fs=fseriesOf(d);const st=statOf(d,fs);return {d,st};});
     const hbar=rows.map(({d,st})=>({label:d.short,value:st.total,color:PALETTE[(d.id.charCodeAt(0))%PALETTE.length]})).sort((a,b)=>b.value-a.value);
     return (
@@ -644,7 +777,7 @@ function Reports({depts}){
         <div style={{marginTop:18}}>
           <div style={{fontWeight:700,fontSize:15,marginBottom:12}}>Cross-department comparison · {chosen.length} departments</div>
           <div style={{marginBottom:16}}><HBar rows={hbar}/></div>
-          <table className="tbl" style={{fontSize:11.5}}>
+          <table className={'tbl'+fitCls(plan)} style={fitStyle(plan,false,{fontSize:11.5})}>
             <thead><tr><th>Department</th><th>Service line</th><th>Latest</th><th>Total</th><th>Peak</th><th>Avg</th><th>Trend</th></tr></thead>
             <tbody>{rows.map(({d,st})=>(
               <tr key={d.id}><td>{d.name}</td><td style={{fontFamily:"'IBM Plex Sans'"}}>{d.group}</td>
@@ -654,7 +787,7 @@ function Reports({depts}){
           </table>
           {/* authorisation now shown on the cover page only */}
         </div>
-        <Footer n={n} total={total}/>
+        <Footer label={label}/>
       </div>
     );
   }
@@ -662,7 +795,7 @@ function Reports({depts}){
   /* Board Report — hospital-level executive page: headline KPIs, department ranking,
      aggregate monthly trend and share-of-volume table, closed by the authorisation
      sign-off. One page, board-meeting ready. */
-  function BoardPage({n=1,total=1}){
+  function BoardPage({label, plan}){
     const rows=chosen.map(d=>{const fs=fseriesOf(d);const st=statOf(d,fs);return {d,st,fs};});
     const totAll=rows.reduce((s,r)=>s+r.st.total,0);
     const top=rows.slice().sort((a,b)=>b.st.total-a.st.total)[0];
@@ -697,12 +830,12 @@ function Reports({depts}){
           {trend.length>1&&typeof window.BarChart==='function'&&(
             <div style={{margin:'4px 0 12px'}}>
               <div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,margin:'8px 0 2px'}}>Hospital volume — monthly trend</div>
-              {window.BarChart({data:trend,x:'label',y:'val',height:170,color:PALETTE[0],flat:true})}
+              {window.BarChart({data:trend,x:'label',y:'val',height:Math.round(170*(plan?plan.k:1)),color:PALETTE[0],flat:true})}
             </div>
           )}
           <div style={{fontSize:9.5,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,margin:'8px 0 6px'}}>Department ranking (period total)</div>
           <div style={{marginBottom:14}}><HBar rows={hbar}/></div>
-          <table className="tbl" style={{fontSize:11}}>
+          <table className={'tbl'+fitCls(plan)} style={fitStyle(plan,false,{fontSize:11})}>
             <thead><tr><th>Department</th><th>Service line</th><th>Total</th><th>Share</th><th>Avg / month</th><th>Trend</th></tr></thead>
             <tbody>{rows.slice().sort((a,b)=>b.st.total-a.st.total).map(({d,st})=>(
               <tr key={d.id}><td>{d.name}</td><td style={{fontFamily:"'IBM Plex Sans'"}}>{d.group}</td>
@@ -712,7 +845,7 @@ function Reports({depts}){
           </table>
           {/* authorisation now shown on the cover page only */}
         </div>
-        <Footer n={n} total={total}/>
+        <Footer label={label}/>
       </div>
     );
   }
@@ -752,7 +885,6 @@ function Reports({depts}){
     const S=PW/pageW, X=v=>v*S;
     const MX=30, MT=28, CWx=pageW-60;              // preview page padding: 28px 30px
     const FOOTY=pageMinH-MT-21;                    // footer border-top y (px)
-    const LIMIT=FOOTY-12;                          // content floor before a page break
     const genDate=new Date().toLocaleDateString('en-US');
 
     const font=(style,size,color)=>{doc.setFont('helvetica',style);doc.setFontSize(size*S);const c=color||C.ink;doc.setTextColor(c[0],c[1],c[2]);};
@@ -826,7 +958,6 @@ function Reports({depts}){
       LN(MX,MT+52,pageW-MX,MT+52,C.blue,2);
       return MT+52+18;
     };
-    const newPage=()=>{doc.addPage(fmtP,ori);return pageHeader();};
 
     // KPI tiles — panel-2, 3px accent, label + big number (preview: h=56)
     const kpiRow=(y,items)=>{
@@ -1005,20 +1136,16 @@ function Reports({depts}){
       return y0+hgt;
     };
     // charts.jsx HBar / charts-extra.jsx HBarChart — label · track · value rows.
-    // Paginates per row (a 16-department ranking on landscape would otherwise
-    // run under the footer and clip past the page edge).
-    const vHBarRows=(y0,rows)=>{
-      const max=Math.max(1,...rows.map(r=>r.value));
+    // The page plan (rptFlowHBar) says which rows land on which page; this draws that slice.
+    const hbarRows=(y0,rows,from,to,max)=>{
       let y=y0;
-      rows.forEach(r=>{
-        if(y+20>LIMIT)y=newPage();
+      rows.slice(from,to).forEach(r=>{
         font('bold',12,C.ink2);T(clip(r.label,116),MX,y+12);
         const tx=MX+130,twd=CWx-130-64;
         FR(tx,y+1.5,twd,15,C.grid,5);
         if(r.value>0)FR(tx,y+1.5,Math.max(4,twd*(r.value/max)),15,r.color,5);
         font('bold',12.5,C.ink);T(fmt(r.value),MX+CWx,y+12.5,{align:'right'});
         y+=24;});
-      return y-9+4;
     };
     // charts.jsx Donut (flat) — wedge ring + centre value + legend
     const vDonut=(x,y,size,thickness,data,centerValue,centerLabel)=>{
@@ -1064,49 +1191,38 @@ function Reports({depts}){
       return y0+boxH;
     };
 
-    // theme.css table.tbl / .tbl.rpt — wrapped headers, right-aligned numeric cells
-    const vTable=(y,heads,widths,rows,o)=>{
+    // theme.css table.tbl / .tbl.rpt — right-aligned numeric cells. The header and each run of
+    // rows are drawn where the page plan puts them (M = rptTableMetrics). Header labels wrap on
+    // whole words; one that is still too wide is shrunk to its column, never split mid-word.
+    const tableAt=(M,widths,rows,o)=>{
       o=o||{};
-      const fs2=o.fs||12.5,rpt=!!o.rpt;
-      const hfs=rpt?fs2:10.5,padX=rpt?6:12,padY=rpt?5:8;
-      const rowH=Math.round(fs2*1.3+padY*2),lh=hfs*1.18;
       const xs=[];let ax=MX;widths.forEach(w2=>{xs.push(ax);ax+=w2;});
-      const drawHead=(yy)=>{
-        font('bold',hfs,C.muted);
-        const wrapped=heads.map((h2,i)=>doc.splitTextToSize(String(h2).toUpperCase(),X(Math.max(10,widths[i]-padX-4))));
-        const maxL=Math.max(1,...wrapped.map(w2=>w2.length));
-        const hH=Math.round(maxL*lh+padY*2+2);
-        FR(MX,yy,CWx,hH,C.panel2);
-        wrapped.forEach((lines,i)=>{const right=i>0;
-          const tx=right?xs[i]+widths[i]-padX:xs[i]+padX;
-          const sy=yy+hH-padY-3-(lines.length-1)*lh;
-          lines.forEach((ln2,li)=>T(ln2,tx,sy+li*lh,right?{align:'right'}:undefined));});
-        LN(MX,yy+hH,MX+CWx,yy+hH,C.line,1);
-        return yy+hH;
-      };
-      // the initial header must also fit (with at least one row) above the footer,
-      // else it would paint across the footer rule and duplicate on the next page
-      {
-        font('bold',hfs,C.muted);
-        const wrapped0=heads.map((h2,i)=>doc.splitTextToSize(String(h2).toUpperCase(),X(Math.max(10,widths[i]-padX-4))));
-        const hH0=Math.round(Math.max(1,...wrapped0.map(w2=>w2.length))*lh+padY*2+2);
-        if(y+hH0+rowH>LIMIT)y=newPage();
-      }
-      y=drawHead(y);
-      rows.forEach((r,ri)=>{
-        if(y+rowH>LIMIT){y=newPage();y=drawHead(y);}
-        const tot=o.totalRow&&ri===rows.length-1;
-        if(tot){FR(MX,y,CWx,rowH,C.panel2);LN(MX,y,MX+CWx,y,C.line,2);}
-        r.forEach((cell,ci)=>{
-          if(o.deltaCol===ci){deltaChip(xs[ci]+widths[ci]-padX,y+(rowH-18)/2,Number(cell)||0);return;}
-          const right=ci>0;
-          font(ci===0||tot?'bold':'normal',fs2,tot?C.ink:(ci===0?C.ink:C.ink2));
-          T(clip(cell,widths[ci]-padX-4),right?xs[ci]+widths[ci]-padX:xs[ci]+padX,y+rowH-padY-fs2*0.24,right?{align:'right'}:undefined);
-        });
-        LN(MX,y+rowH,MX+CWx,y+rowH,C.line2,1);
-        y+=rowH;
-      });
-      return y;
+      return {
+        head:y=>{
+          FR(MX,y,CWx,M.hH,C.panel2);
+          M.lines.forEach((lines,i)=>{const right=i>0,avail=Math.max(10,widths[i]-M.padX-4);
+            font('bold',M.hfs,C.muted);
+            const wMax=Math.max(...lines.map(l=>tw(l)));
+            if(wMax>avail)font('bold',M.hfs*avail/wMax,C.muted);
+            const tx=right?xs[i]+widths[i]-M.padX:xs[i]+M.padX;
+            const sy=y+M.hH-M.padY-3-(lines.length-1)*M.lh;
+            lines.forEach((ln2,li)=>T(ln2,tx,sy+li*M.lh,right?{align:'right'}:undefined));});
+          LN(MX,y+M.hH,MX+CWx,y+M.hH,C.line,1);
+        },
+        rows:(y,from,to)=>{
+          for(let ri=from;ri<to;ri++){
+            const r=rows[ri],tot=o.totalRow&&ri===rows.length-1;
+            if(tot){FR(MX,y,CWx,M.rowH,C.panel2);LN(MX,y,MX+CWx,y,C.line,2);}
+            r.forEach((cell,ci)=>{
+              if(o.deltaCol===ci){deltaChip(xs[ci]+widths[ci]-M.padX,y+(M.rowH-18)/2,Number(cell)||0);return;}
+              const right=ci>0;
+              font(ci===0||tot?'bold':'normal',M.fs,tot?C.ink:(ci===0?C.ink:C.ink2));
+              T(clip(cell,widths[ci]-M.padX-4),right?xs[ci]+widths[ci]-M.padX:xs[ci]+M.padX,y+M.rowH-M.padY-M.fs*0.24,right?{align:'right'}:undefined);
+            });
+            LN(MX,y+M.rowH,MX+CWx,y+M.rowH,C.line2,1);
+            y+=M.rowH;
+          }
+        }};
     };
 
     // Authorisation sign-off (SigBlock) — includes its own 26px top margin
@@ -1124,94 +1240,77 @@ function Reports({depts}){
     const sigBlockPx=y=>sigBlockAt(MX,CWx,y);
     const SIGH=113;
 
-    // reportChartEl equivalent — block height estimate + renderer per style
-    const chartH=(cs,fs2,compGroups)=>{
-      if(cs==='horizontal')return Math.max(1,fs2.length)*24-5;
-      if(cs==='donut')return compGroups.length?Math.max(205,compGroups.length*210-5):205;
-      if(cs==='combo'||cs==='pct')return 231;
-      if(cs==='grouped'||cs==='stacked')return 210;
-      if(cs==='area')return 200;
-      if(cs==='bar'||cs==='line')return 195;
-      return 205;
-    };
-    const drawChart=(cs,y,d,fs2,tone,compGroups)=>{
-      const prim=d.primary;
-      if(cs==='bar')return vBarFlat(y,fs2,'month',prim,195);
-      if(cs==='line')return vLine(y,fs2,'full',prim,tone,195);
-      if(cs==='area'){const avg=fs2.length?Math.round(fs2.reduce((s3,r)=>s3+(r[prim]||0),0)/fs2.length):0;return vArea(y,fs2,'full',prim,tone,avg,200);}
+    // reportChartEl equivalent — one chart style, drawn in the block height the page plan gave it
+    const drawChart=(cs,y,d,fs2,tone,compGroups,h)=>{
+      const prim=d.primary,hb=Math.round(h*195/210);   // grouped/stacked/100% fall back to flat bars
+      if(cs==='bar')return vBarFlat(y,fs2,'month',prim,h);
+      if(cs==='line')return vLine(y,fs2,'full',prim,tone,h);
+      if(cs==='area'){const avg=fs2.length?Math.round(fs2.reduce((s3,r)=>s3+(r[prim]||0),0)/fs2.length):0;return vArea(y,fs2,'full',prim,tone,avg,h);}
       if(cs==='combo'){const pctCol=d.cols.find(c=>c.pct);const lineKey=pctCol?pctCol.id:((d.cols.find(c=>c.id!==prim&&!c.pct)||{}).id||prim);
-        return vCombo(y,fs2,'month',prim,lineKey,tone,hx('#e08a1e'),(d.cols.find(c=>c.id===prim)||{}).label||'Value',(d.cols.find(c=>c.id===lineKey)||{}).label||'Trend',210);}
-      if(cs==='grouped'){const sr=reportSeries(d);return sr.length?vGrouped(y,fs2,'month',sr,210):vBarFlat(y,fs2,'month',prim,195);}
-      if(cs==='stacked'){const sr=reportSeries(d);return sr.length?vStacked(y,fs2,'month',sr,210):vBarFlat(y,fs2,'month',prim,195);}
-      if(cs==='pct'){const sr=reportSeries(d);return sr.length?vPct(y,fs2,'month',sr,210):vBarFlat(y,fs2,'month',prim,195);}
-      if(cs==='horizontal')return vHBarRows(y,fs2.map((r,i)=>({label:r.full,value:r[prim]||0,color:PALV[i%PALV.length]})));
-      if(cs==='donut')return compGroups.length?compGroups.reduce((yy,g)=>vDonutBlock(yy,g.data,205)+8,y):vBar3D(y,fs2,'month',prim,205);
-      return vBar3D(y,fs2,'month',prim,205); // bar3d + default
+        return vCombo(y,fs2,'month',prim,lineKey,tone,hx('#e08a1e'),(d.cols.find(c=>c.id===prim)||{}).label||'Value',(d.cols.find(c=>c.id===lineKey)||{}).label||'Trend',h);}
+      if(cs==='grouped'){const sr=reportSeries(d);return sr.length?vGrouped(y,fs2,'month',sr,h):vBarFlat(y,fs2,'month',prim,hb);}
+      if(cs==='stacked'){const sr=reportSeries(d);return sr.length?vStacked(y,fs2,'month',sr,h):vBarFlat(y,fs2,'month',prim,hb);}
+      if(cs==='pct'){const sr=reportSeries(d);return sr.length?vPct(y,fs2,'month',sr,h):vBarFlat(y,fs2,'month',prim,hb);}
+      if(cs==='donut')return compGroups.length?compGroups.reduce((yy,g)=>vDonutBlock(yy,g.data,205)+8,y):vBar3D(y,fs2,'month',prim,h);
+      return vBar3D(y,fs2,'month',prim,h); // bar3d + default
     };
 
+    /* ---------- section pages: every block is drawn exactly where the shared page plan
+       (rptPlan — the same one the preview numbers its pages from) puts it ---------- */
+    const G=rptGeom(pageW,pageMinH);
+    const runPages=(pages,draw)=>pages.forEach((items,pi)=>{
+      if(pi>0)doc.addPage(fmtP,ori);
+      pageHeader();
+      items.forEach(it=>draw[it.k](it));});
+    const contLine=it=>{font('bold',11,C.muted);T(it.text,MX,it.y+12);};
+    const capLine=(y,txt)=>{font('bold',9.5,C.muted);doc.text(String(txt).toUpperCase(),X(MX),X(y+12),{charSpace:0.4*S});};
+
     /* ---------- DeptPage ---------- */
-    const deptPage=(d,isLast)=>{
-      let y=pageHeader();
-      const fs2=fseriesOf(d),st=statOf(d,fs2);
+    const deptPage=d=>{
+      // KPIs over the SAME rows the chart plots (TR-in folded into Admission), as the preview does
+      const fs2=fseriesOf(d),rowsC=rptChartRows(d,fs2),st=statOf(d,rowsC);
       const toneHex=PALETTE[(d.id.charCodeAt(0))%PALETTE.length],tone=hx(toneHex);
-      drawIcon(DEPT_ICON[d.id]||I.activity,MX,y+1,18,toneHex);
-      font('bold',15,C.ink);T(d.name,MX+27,y+15);
-      tagChip(MX+27+tw(d.name)+9,y+2,d.group||'');
-      if(fs2.length)deltaChip(pageW-MX,y+1,st.delta);
-      y+=31;
-      if(!fs2.length){
-        try{doc.setLineDashPattern([4*S,3*S],0);}catch(e){}
-        doc.setDrawColor(C.line[0],C.line[1],C.line[2]);doc.setLineWidth(1*S);
-        doc.roundedRect(X(MX),X(y),X(CWx),X(96),X(10),X(10),'S');
-        try{doc.setLineDashPattern([],0);}catch(e){}
-        font('normal',12.5,C.muted);
-        T('No data reported for '+d.name+' in the selected period ('+rangeLabel+').',MX+CWx/2,y+52,{align:'center'});
-        y+=96;
-        /* authorisation drawn on the cover page only */
-        return;
-      }
-      if(fs2.length<pMonths.length){
-        const segs=[['Reported data covers ',false],[fs2[0].full+' – '+fs2[fs2.length-1].full,true],
-          [' ('+fs2.length+' of the '+pMonths.length+' months in the selected period); months without a report are not plotted.',false]];
-        font('normal',10,C.muted);
-        const lines=doc.splitTextToSize(segs.map(s3=>s3[0]).join(''),X(CWx-20)).length;
-        const boxH=lines*14+10;
-        FR(MX,y,CWx,boxH,C.panel2,6);
-        richText(segs,MX+10,y+15,CWx-20,10,14,C.muted);
-        y+=boxH+10;
-      }
-      // preview: all four KPI tiles carry the DEPARTMENT tone
-      y=kpiRow(y,[[st.latest.full||'Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Average',fmt(st.avg)]]
-        .map(p=>({label:p[0],value:p[1],tone})));
-      const compGroups=compositionGroups(d,fs2);
-      chartStyles.forEach(cs=>{
-        const capH=chartStyles.length>1?18:0;
-        const need=capH+chartH(cs,fs2,compGroups)+12;
-        // break to a fresh page whenever the block doesn't fit — unless we're already
-        // at the top of one (an over-tall horizontal chart then paginates row-wise)
-        if(y+need>LIMIT&&y>MT+71)y=newPage();
-        y+=4;
-        if(chartStyles.length>1){font('bold',9.5,C.muted);doc.text(String(CHART_STYLE_LABEL[cs]||cs).toUpperCase(),X(MX),X(y+12),{charSpace:0.4*S});y+=18;}
-        y=drawChart(cs,y,d,rptChartRows(d,fs2),tone,compGroups);
-        y+=8;
-      });
-      if(!chartStyles.includes('donut')){
-        compGroups.forEach(g=>{
-          const boxH=Math.max(124,g.data.length*21-6+20);
-          if(y+6+boxH>LIMIT)y=newPage();
-          y=compositionStrip(y+6,g.data,g.title);
-        });
-      }
-      const detailed=type==='detail';
-      const ncol=d.cols.length+1;
-      const tblFont=ncol>10?8:ncol>8?8.5:ncol>6?9.5:(detailed?10.5:11);
-      const rpt=detailed||ncol>7;
-      font('bold',tblFont);
-      const firstW=rpt?58:Math.min(120,Math.max(76,...fs2.map(r=>tw(detailed?r.month:r.full)+24)));
+      const compGroups=compositionGroups(d,fs2),detailed=type==='detail';
+      const plan=rptPlan((pad,k)=>rptLayoutDept(d,fs2,compGroups,{chartStyles,detailed,nMonths:pMonths.length,G,pad,k}));
+      const t=rptDeptTable(d,detailed);
+      font('bold',t.font);
+      const firstW=t.rpt?58:Math.min(120,Math.max(76,...fs2.map(r=>tw(r.full)+24)));
       const widths=[firstW].concat(d.cols.map(()=>(CWx-firstW)/d.cols.length));
-      const rows=fs2.map(r=>[detailed?r.month:r.full].concat(d.cols.map(c=>r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id])))));
+      const M=rptTableMetrics(['Month'].concat(d.cols.map(c=>c.label)),widths,{fs:t.font,rpt:t.rpt,pad:plan.pad});
+      // compact tables label the month "Aug-25" — the full name never fits their 58px column
+      const rows=fs2.map(r=>[t.rpt?r.month:r.full].concat(d.cols.map(c=>r[c.id]==null?'–':(c.pct?r[c.id]+'%':fmt(r[c.id])))));
       if(detailed)rows.push(['TOTAL'].concat(d.cols.map(c=>c.pct?'—':fmt(fs2.reduce((s3,r)=>s3+(r[c.id]||0),0)))));
-      y=vTable(y+14,['Month'].concat(d.cols.map(c=>c.label)),widths,rows,{fs:tblFont,rpt:rpt,totalRow:detailed});
+      const tbl=tableAt(M,widths,rows,{totalRow:detailed});
+      const hrows=rowsC.map((r,i)=>({label:r.full,value:r[d.primary]||0,color:PALV[i%PALV.length]})),hmax=Math.max(1,...hrows.map(r=>r.value));
+      runPages(plan.pages,{
+        title:it=>{
+          drawIcon(DEPT_ICON[d.id]||I.activity,MX,it.y+1,18,toneHex);
+          font('bold',15,C.ink);T(d.name,MX+27,it.y+15);
+          tagChip(MX+27+tw(d.name)+9,it.y+2,d.group||'');
+          if(fs2.length)deltaChip(pageW-MX,it.y+1,st.delta);},
+        empty:it=>{
+          try{doc.setLineDashPattern([4*S,3*S],0);}catch(e){}
+          doc.setDrawColor(C.line[0],C.line[1],C.line[2]);doc.setLineWidth(1*S);
+          doc.roundedRect(X(MX),X(it.y),X(CWx),X(96),X(10),X(10),'S');
+          try{doc.setLineDashPattern([],0);}catch(e){}
+          font('normal',12.5,C.muted);
+          T('No data reported for '+d.name+' in the selected period ('+rangeLabel+').',MX+CWx/2,it.y+52,{align:'center'});},
+        note:it=>{   // one line always (the plan reserves exactly that); shrunk if the page is too narrow
+          const segs=[['Reported data covers ',false],[fs2[0].full+' – '+fs2[fs2.length-1].full,true],
+            [' ('+fs2.length+' of the '+pMonths.length+' months in the selected period); months without a report are not plotted.',false]];
+          const w=segs.reduce((s3,sg)=>{font(sg[1]?'bold':'normal',10,C.muted);return s3+tw(sg[0]);},0);
+          FR(MX,it.y,CWx,24,C.panel2,6);
+          richText(segs,MX+10,it.y+15,1e5,10*Math.min(1,(CWx-20)/w),14,C.muted);},
+        // preview: all four KPI tiles carry the DEPARTMENT tone
+        kpi:it=>kpiRow(it.y,[[st.latest.full||'Latest',fmt(st.latest[d.primary]||0)],['Total',fmt(st.total)],['Peak',fmt(st.peak)],['Average',fmt(st.avg)]]
+          .map(p=>({label:p[0],value:p[1],tone}))),
+        cap:it=>capLine(it.y,CHART_STYLE_LABEL[it.cs]||it.cs),
+        chart:it=>drawChart(it.cs,it.y,d,rowsC,tone,compGroups,it.h),
+        hbar:it=>hbarRows(it.y,hrows,it.from,it.to,hmax),
+        comp:it=>compositionStrip(it.y,it.g.data,it.g.title),
+        cont:contLine,
+        thead:it=>tbl.head(it.y),
+        rows:it=>tbl.rows(it.y,it.from,it.to)});
       /* authorisation drawn on the cover page only */
     };
 
@@ -1250,57 +1349,46 @@ function Reports({depts}){
       if(showSig&&hasSig)sigBlockAt(Math.max(MX,(pageW-600)/2),Math.min(600,CWx),y);
     };
 
-    /* ---------- ComparePage ---------- */
-    const comparePage=()=>{
-      let y=pageHeader();
-      const rows=chosen.map(d=>{const fsr=fseriesOf(d);return {d,st:statOf(d,fsr)};});
-      font('bold',15,C.ink);T('Cross-department comparison · '+chosen.length+' departments',MX,y+14);y+=31;
-      const hbar=rows.map(rr=>({label:rr.d.short,value:rr.st.total,color:PALV[(rr.d.id.charCodeAt(0))%PALV.length]})).sort((a,b)=>b.value-a.value);
-      y=vHBarRows(y,hbar)+16;
-      const widths=[CWx*0.22,CWx*0.18,CWx*0.11,CWx*0.11,CWx*0.11,CWx*0.11,CWx*0.16];
-      y=vTable(y,['Department','Service line','Latest','Total','Peak','Avg','Trend'],widths,
-        rows.map(rr=>[rr.d.name,rr.d.group,fmt(rr.st.latest[rr.d.primary]||0),fmt(rr.st.total),fmt(rr.st.peak),fmt(rr.st.avg),rr.st.delta]),
-        {fs:11.5,deltaCol:6});
-      /* authorisation drawn on the cover page only */
-    };
-
-    /* ---------- BoardPage ---------- */
-    const boardPage=()=>{
-      let y=pageHeader();
+    /* ---------- ComparePage / BoardPage ---------- */
+    const listPage=()=>{
+      const board=type==='board',L=RPT_LIST[type];
       const rows=chosen.map(d=>{const fsr=fseriesOf(d);return {d,st:statOf(d,fsr),fs:fsr};});
       const totAll=rows.reduce((s3,r)=>s3+r.st.total,0);
-      const top=rows.slice().sort((a,b)=>b.st.total-a.st.total)[0];
+      const ranked=rows.slice().sort((a,b)=>b.st.total-a.st.total),top=ranked[0];
       const mTot={};rows.forEach(rr=>rr.fs.forEach(r=>{mTot[r.month]=(mTot[r.month]||0)+(r[rr.d.primary]||0);}));
-      const trend=pMonths.filter(m=>mTot[m]!=null).map(m=>({label:m.split('-')[0],val:mTot[m]}));
+      const trend=board?pMonths.filter(m=>mTot[m]!=null).map(m=>({label:m.split('-')[0],val:mTot[m]})):[];
       const peakM=trend.slice().sort((a,b)=>b.val-a.val)[0];
-      drawIcon(I.doc,MX,y+1,18,PALETTE[0]);
-      font('bold',15,C.ink);T('Executive Board Report',MX+27,y+15);
-      tagChip(MX+27+tw('Executive Board Report')+9,y+2,rangeLabel);
-      font('bold',10.5,C.blue700);
-      tagChip(pageW-MX-(tw(String(rows.length)+' DEPARTMENTS')+16),y+2,rows.length+' departments');
-      y+=31;
-      y=kpiRow(y,[['Total patients',fmt(totAll)],['Departments',String(rows.length)],['Busiest dept',top?top.d.short:'—'],['Peak month',peakM?peakM.label:'—']]
-        .map((p,i)=>({label:p[0],value:p[1],tone:PALV[i%PALV.length]})));
-      if(trend.length>1){
-        font('bold',9.5,C.muted);doc.text('HOSPITAL VOLUME — MONTHLY TREND',X(MX),X(y+12),{charSpace:0.4*S});y+=18;
-        y=vBarFlat(y,trend,'label','val',170)+12;
-      }
-      font('bold',9.5,C.muted);doc.text('DEPARTMENT RANKING (PERIOD TOTAL)',X(MX),X(y+12),{charSpace:0.4*S});y+=20;
+      const plan=rptPlan((pad,k)=>rptLayoutList(type,rows.length,trend.length,{G,pad,k}));
+      const widths=L.w.map(x=>x*CWx),M=rptTableMetrics(L.heads,widths,{fs:L.fs,pad:plan.pad});
+      const cells=board
+        ?ranked.map(rr=>[rr.d.name,rr.d.group,fmt(rr.st.total),totAll?Math.round(rr.st.total*100/totAll)+'%':'—',fmt(rr.st.avg),rr.st.delta])
+        :rows.map(rr=>[rr.d.name,rr.d.group,fmt(rr.st.latest[rr.d.primary]||0),fmt(rr.st.total),fmt(rr.st.peak),fmt(rr.st.avg),rr.st.delta]);
+      const tbl=tableAt(M,widths,cells,{deltaCol:L.heads.length-1});
       const hbar=rows.map(rr=>({label:rr.d.short,value:rr.st.total,color:PALV[(rr.d.id.charCodeAt(0))%PALV.length]})).sort((a,b)=>b.value-a.value);
-      y=vHBarRows(y,hbar)+14;
-      const ranked=rows.slice().sort((a,b)=>b.st.total-a.st.total);
-      const widths=[CWx*0.24,CWx*0.20,CWx*0.13,CWx*0.11,CWx*0.16,CWx*0.16];
-      y=vTable(y,['Department','Service line','Total','Share','Avg / month','Trend'],widths,
-        ranked.map(rr=>[rr.d.name,rr.d.group,fmt(rr.st.total),totAll?Math.round(rr.st.total*100/totAll)+'%':'—',fmt(rr.st.avg),rr.st.delta]),
-        {fs:11,deltaCol:5});
+      const hmax=Math.max(1,...hbar.map(r=>r.value));
+      runPages(plan.pages,{
+        title:it=>{
+          if(!board){font('bold',15,C.ink);T('Cross-department comparison · '+chosen.length+' departments',MX,it.y+14);return;}
+          drawIcon(I.doc,MX,it.y+1,18,PALETTE[0]);
+          font('bold',15,C.ink);T('Executive Board Report',MX+27,it.y+15);
+          tagChip(MX+27+tw('Executive Board Report')+9,it.y+2,rangeLabel);
+          font('bold',10.5,C.blue700);
+          tagChip(pageW-MX-(tw(String(rows.length)+' DEPARTMENTS')+16),it.y+2,rows.length+' departments');},
+        kpi:it=>kpiRow(it.y,[['Total patients',fmt(totAll)],['Departments',String(rows.length)],['Busiest dept',top?top.d.short:'—'],['Peak month',peakM?peakM.label:'—']]
+          .map((p,i)=>({label:p[0],value:p[1],tone:PALV[i%PALV.length]}))),
+        cap:it=>capLine(it.y,it.text),
+        trend:it=>vBarFlat(it.y,trend,'label','val',it.h),
+        hbar:it=>hbarRows(it.y,hbar,it.from,it.to,hmax),
+        cont:contLine,
+        thead:it=>tbl.head(it.y),
+        rows:it=>tbl.rows(it.y,it.from,it.to)});
       /* authorisation drawn on the cover page only */
     };
 
     /* ---------- assemble ---------- */
     if(showCover&&chosen.length>0)coverPage();
-    if(type==='compare'){if(showCover)doc.addPage(fmtP,ori);comparePage();}
-    else if(type==='board'){if(showCover)doc.addPage(fmtP,ori);boardPage();}
-    else chosen.forEach((d,di)=>{if(showCover||di>0)doc.addPage(fmtP,ori);deptPage(d,di===chosen.length-1);});
+    if(type==='compare'||type==='board'){if(showCover)doc.addPage(fmtP,ori);listPage();}
+    else chosen.forEach((d,di)=>{if(showCover||di>0)doc.addPage(fmtP,ori);deptPage(d);});
 
     // footers on every page (needs the final page count)
     const total=doc.getNumberOfPages();
@@ -1370,7 +1458,9 @@ function Reports({depts}){
   };
   // Try the Python report service; resolves true on a real PDF download, false to fall back.
   const tryServerPDF=async()=>{
-    if(window.__UNICO_SERVER_PDF__===false) return false;
+    // Opt-in only (window.__UNICO_SERVER_PDF__=true): the service paginates by its own rules, so its
+    // page numbers would not match the preview. The vector export below follows the shared page plan.
+    if(window.__UNICO_SERVER_PDF__!==true) return false;
     try{
       const res=await fetch('/api/report-pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(buildRenderModel())});
       // On localhost:8080 (no Vercel router) the catch-all returns index.html with 200 —
@@ -1402,10 +1492,9 @@ function Reports({depts}){
       finally{ document.body.classList.remove('pdf-export-mode'); setExporting(false); }
       return;
     }
-    // Web, PREFERRED: the Python report service (api/report_pdf.py, ReportLab on
-    // Vercel). Generated server-side from a resolved render model. Any failure
-    // (offline, localhost without the function, non-PDF response) silently falls
-    // through to the client-side jsPDF vector path below — export never breaks.
+    // Web, OPT-IN: the server renderers (headless-browser HTML render, Python ReportLab
+    // model). Both are off unless their window flag is set; any failure falls through
+    // to the client-side jsPDF vector path below — export never breaks.
     if(chosen.length>0){
       setExporting('Generating PDF…'); setNote(null);
       // OPT-IN exact-preview render via the local report service (headless browser).
@@ -1418,7 +1507,6 @@ function Reports({depts}){
           }
         }catch(e){ /* fall through */ }
       }
-      // PREFERRED: server ReportLab model (also used on Vercel).
       try{
         if(await tryServerPDF()){
           setNote({ok:true,text:'PDF downloaded.'});
@@ -1427,7 +1515,7 @@ function Reports({depts}){
         }
       }catch(e){ /* fall through to vector */ }
     }
-    // Web fallback #1: TRUE VECTOR PDF — drawn with jsPDF primitives. Selectable text,
+    // Web DEFAULT: TRUE VECTOR PDF — drawn with jsPDF primitives. Selectable text,
     // razor-sharp at any zoom, ~100 KB, and ~1 s even for a 17-page all-departments
     // run (the raster path below needed 25-40 s of html2canvas captures).
     // The PDF libraries load on demand (index.html); a failed load leaves the print dialog path below.
@@ -1584,7 +1672,8 @@ function Reports({depts}){
 
   return (
     <div className="grid" style={{gap:16}}>
-      <style>{'.qc-rpage{display:flex;flex-direction:column;flex:1 0 auto}.qc-rpage .pdf-foot{margin-top:auto}@media print{.qc-rpage{display:block}.qc-rpage .pdf-foot{margin-top:12px}}'}</style>
+      <style>{'.qc-rpage{display:flex;flex-direction:column;flex:1 0 auto}.qc-rpage .pdf-foot{margin-top:auto}@media print{.qc-rpage{display:block}.qc-rpage .pdf-foot{margin-top:12px}}'
+        +'table.tbl.rpt-fit th,table.tbl.rpt-fit td{padding-top:var(--rpt-py);padding-bottom:var(--rpt-py)}'}</style>
       <SectionTitle icon={I.doc} title="Report Builder" sub="Compose and export board-ready statistical reports"
         right={<div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           {modeSeg}
@@ -1601,12 +1690,12 @@ function Reports({depts}){
       )}
       {pdfRoot && ReactDOM.createPortal(
         <div className={"pdf-doc"+(orient==='portrait'?' portrait':'')}>
-          {coverOn && <section className="pdf-page"><CoverPage n={1} total={pages}/></section>}
+          {coverOn && <section className="pdf-page"><CoverPage label={secLabel(0)}/></section>}
           {chosen.length>0 && (type==='compare'
-            ? <section className="pdf-page"><ComparePage n={coverOn?2:1} total={pages}/></section>
+            ? <section className="pdf-page"><ComparePage label={secLabel(coverOn?1:0)} plan={listPlan}/></section>
             : type==='board'
-            ? <section className="pdf-page"><BoardPage n={coverOn?2:1} total={pages}/></section>
-            : chosen.map((d,i)=><section className="pdf-page" key={d.id}><DeptPage d={d} n={i+1+(coverOn?1:0)} total={pages}/></section>))}
+            ? <section className="pdf-page"><BoardPage label={secLabel(coverOn?1:0)} plan={listPlan}/></section>
+            : chosen.map((d,i)=><section className="pdf-page" key={d.id}><DeptPage d={d} label={secLabel(i+(coverOn?1:0))} plan={deptPlans[i]}/></section>))}
         </div>,
         pdfRoot
       )}
@@ -1744,17 +1833,17 @@ function Reports({depts}){
           <div className="card-h"><h3>Live Preview</h3><span className="sub">{pageSize} · {orient}</span><span className="spacer"/>
             <div style={{display:'flex',alignItems:'center',gap:6}}>
               <button className="icon-btn" style={{width:28,height:28}} disabled={pi<=0} onClick={()=>setPageIdx(p=>Math.max(0,p-1))}><Ic d={I.chevR} s={15} style={{transform:'rotate(180deg)'}}/></button>
-              <span className="tag num">Page {pi+1} of {pages}</span>
+              <span className="tag num">{secLabel(pi)}</span>
               <button className="icon-btn" style={{width:28,height:28}} disabled={pi>=pages-1} onClick={()=>setPageIdx(p=>Math.min(pages-1,p+1))}><Ic d={I.chevR} s={15}/></button>
             </div>
           </div>
           <div style={{padding:26,background:'#eef1f5',overflowX:'auto'}}>
             <div style={{background:'#fff',borderRadius:4,boxShadow:'0 4px 18px rgba(0,0,0,.12)',padding:'28px 30px',width:pageW,minHeight:pageMinH,boxSizing:'border-box',display:'flex',flexDirection:'column',margin:'0 auto',transition:'width .25s'}}>
               {chosen.length===0?<div style={{textAlign:'center',color:'var(--faint)',padding:'60px 0'}}>Select at least one department.</div>
-                : coverOn&&pi===0?<CoverPage n={1} total={pages}/>
-                : type==='compare'?<ComparePage n={pi+1} total={pages}/>
-                : type==='board'?<BoardPage n={pi+1} total={pages}/>
-                : <DeptPage d={pageDept} n={pi+1} total={pages}/>}
+                : coverOn&&pi===0?<CoverPage label={secLabel(0)}/>
+                : type==='compare'?<ComparePage label={secLabel(pi)} plan={listPlan}/>
+                : type==='board'?<BoardPage label={secLabel(pi)} plan={listPlan}/>
+                : <DeptPage d={pageDept} label={secLabel(pi)} plan={deptPlans[Math.max(0,contentIdx)]}/>}
             </div>
           </div>
         </div>
