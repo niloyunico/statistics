@@ -27,6 +27,7 @@ function restoredOnly(field, live, before) {
 }
 function sameRow(live, before) {
   for (const k of new Set([...Object.keys(live), ...Object.keys(before)])) {
+    if (k === 'updated_at') continue; // server metadata is not a competing personnel edit
     if (!equal(live[k], before[k]) && !restoredOnly(k, live[k], before[k])) return false;
   }
   return true;
@@ -48,6 +49,7 @@ function mergeStaffChanges(baseRaw, incomingRaw, currentRaw) {
     if (!live) throw conflict('This staff record was removed in another session. Refresh the directory.');
     const merged = { ...live };
     for (const field of new Set([...Object.keys(before), ...Object.keys(next)])) {
+      if (field === 'updated_at') continue; // preserve the server's save timestamp
       if (equal(before[field], next[field])) continue;
       if (!equal(live[field], before[field]) && !equal(live[field], next[field])
         && !restoredOnly(field, live[field], before[field])) throw conflict();
@@ -63,4 +65,19 @@ function mergeStaffChanges(baseRaw, incomingRaw, currentRaw) {
   }
   return JSON.stringify([...current.values()]);
 }
-module.exports = { KEY, conflict, mergeStaffChanges };
+// Track real edits to existing personnel records on the database save path.
+// Opening a record, a new entry, or toggling a favourite is not an info update.
+function stampStaffUpdates(previousRaw, nextRaw, at = Date.now()) {
+  const previous = new Map(parse(previousRaw).map(row => [String(row.id), row]));
+  const info = row => Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'updated_at' && key !== 'fav'));
+  return JSON.stringify(parse(nextRaw).map(row => {
+    const before = previous.get(String(row.id));
+    const out = { ...row };
+    if (!before) { delete out.updated_at; return out; }
+    if (!equal(info(before), info(row))) out.updated_at = at;
+    else if (Object.prototype.hasOwnProperty.call(before, 'updated_at')) out.updated_at = before.updated_at;
+    else delete out.updated_at;
+    return out;
+  }));
+}
+module.exports = { KEY, conflict, mergeStaffChanges, stampStaffUpdates };

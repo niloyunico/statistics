@@ -441,6 +441,27 @@
   function recentJoiners(list,n=6){
     return list.filter(e=>e.is_active&&e.doj).sort((a,b)=>b.doj.localeCompare(a.doj)).slice(0,n);
   }
+  function staffTimestamp(value){
+    if(value==null || value==='') return NaN;
+    return typeof value==='number'||/^\d+$/.test(String(value)) ? Number(value) : Date.parse(value);
+  }
+  function staffEntryTime(e){ return staffTimestamp(e&&(e.created_at||e.import_source&&e.import_source.imported_at)); }
+  function staffUpdateTime(e){ return staffTimestamp(e&&e.updated_at); }
+  // Last N calendar days, including today, in the hospital's Bangladesh timezone.
+  function recentStaffRecords(list,days,now,timeOf){
+    const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Dhaka',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(now));
+    const part=type=>parts.find(p=>p.type===type).value;
+    const today=part('year')+'-'+part('month')+'-'+part('day');
+    const startOfToday=Date.parse(today+'T00:00:00+06:00');
+    const cutoff=startOfToday-(days-1)*86400000;
+    // Save timestamps come from the server, whose clock may be ahead of this
+    // device. Include the whole current calendar day so a confirmed save is
+    // visible immediately; dates from tomorrow onward remain excluded.
+    const endOfToday=startOfToday+86400000;
+    return list.filter(e=>{const at=timeOf(e);return Number.isFinite(at)&&at>=cutoff&&at<endOfToday;});
+  }
+  function recentStaffEntries(list,days=15,now=Date.now()){ return recentStaffRecords(list,days,now,staffEntryTime); }
+  function recentStaffUpdates(list,days=15,now=Date.now()){ return recentStaffRecords(list,days,now,staffUpdateTime); }
   function compliance(list){
     const a=list.filter(e=>e.is_active);
     const missing_vaccination=a.filter(e=>["Not Completed","Unknown","1 dose"].includes(e.hepatitis_b_vaccination));
@@ -629,6 +650,12 @@
   const shared={staff:null,version:0,busy:null,refreshing:false,error:'',subs:new Set(),mounted:0,timer:null};
   const rosterNow=()=>{ if(shared.staff===null) shared.staff=load()||realSeed(); return shared.staff; };
   const notify=()=>shared.subs.forEach(fn=>{ try{ fn(); }catch(e){} });
+  window.addEventListener('unico:overlay-merged',e=>{
+    if(!e.detail || !Array.isArray(e.detail.keys) || !e.detail.keys.includes(KEY)) return;
+    const saved=load();
+    if(!Array.isArray(saved)) return;
+    shared.version++; shared.staff=saved; notify();
+  });
   function setStaff(change){
     const next=typeof change==='function'?change(rosterNow()):change;
     // Persist local edits immediately, so a Refresh in the same tick can flush
@@ -721,6 +748,6 @@
     deptGroupsFor,setDeptGroups,
     fieldOptList,addFieldOpt,removeFieldOpt,
     customFields,addCustomField,removeCustomField,renameCustomField,addCustomFieldOption,removeCustomFieldOption,
-    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,birthdays,byRole,uniqueVals,staffGroupOf,matchesStaffGroup,staffCounts,experienceUsesDates,experienceDateError,experienceYearsOf};
+    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,staffEntryTime,recentStaffEntries,staffUpdateTime,recentStaffUpdates,compliance,anniversaries,birthdays,byRole,uniqueVals,staffGroupOf,matchesStaffGroup,staffCounts,experienceUsesDates,experienceDateError,experienceYearsOf};
   window.useStaffStore=useStaffStore;
 })();

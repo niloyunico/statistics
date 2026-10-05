@@ -1,7 +1,15 @@
 const assert = require('node:assert/strict');
-const { mergeStaffChanges } = require('../staff-merge');
+const { mergeStaffChanges, stampStaffUpdates } = require('../staff-merge');
 const stringify = JSON.stringify;
 const merge = (base, next, current) => JSON.parse(mergeStaffChanges(stringify(base), stringify(next), stringify(current)));
+const stamp = (before,next,at=500) => JSON.parse(stampStaffUpdates(stringify(before),stringify(next),at));
+const original={id:91,name:'Nurse',phone:'01700000000',updated_at:100};
+assert.equal(stamp([original],[{...original,phone:'01700000001'}])[0].updated_at,500,'info edits receive the server time');
+assert.equal(stamp([original],[{...original,fav:true,updated_at:999}])[0].updated_at,100,'favourites and client timestamps do not create update events');
+assert.equal(stamp([original],[original])[0].updated_at,100,'unchanged saves preserve timestamps');
+assert.equal(stamp([], [{id:92,name:'New',updated_at:999}])[0].updated_at,undefined,'new staff belongs to the entries list');
+const mergedFields=merge([original],[{...original,phone:'01700000001'}],[{...original,name:'New name',updated_at:200}]);
+assert.equal(stamp([{...original,name:'New name',updated_at:200}],mergedFields)[0].name,'New name','stamping retains another editor’s saved information');
 const old = [{id:1,name:'Nurse',extracurricular:'Singing',is_active:true}];
 const live = [{...old[0],extracurricular:'Singing, Gardening'}, {id:2,name:'New nurse',is_active:true}];
 const stale = [{...old[0],name:'Correct name'}];

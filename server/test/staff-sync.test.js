@@ -52,11 +52,12 @@ async function formSaveTest() {
   const end=source.indexOf('  // The overlay owns the route change',start);
   let created=0,updated=0,confirmed=0,accept=false;
   const ctx={
-    f:{name:'New nurse',role:'Nurse',extracurricular:'Singing'},entries:[],directPrior:0,
+    f:{name:'New nurse',role:'Nurse',extracurricular:'Singing',custom:{emergency:'012345'},privileges:{assessment:true},photo:{url:'portrait'}},entries:[],directPrior:0,
+    customQ:'Special qualification',customT:'Custom training',customX:'Chess',customL:'French',
     S:{unicoYearsOf:()=>0,fmtYM:()=>''},entYears:()=>0,initialForm:{current:{}},
     pendingId:{current:null},saveLock:{current:false},chipsOf:()=>[],
     setErr:()=>{},setSaving:()=>{},setSaved:()=>{confirmed++;},
-    store:{create:()=>{created++;return 7;},update:()=>{updated++;}},
+    store:{create:data=>{created++;ctx.savedData=data;return 7;},update:(id,data)=>{updated++;ctx.savedData=data;}},
     window:{unicoFlushNow:async()=>({ok:accept,error:'Offline'})},
   };
   vm.runInNewContext(source.slice(start,end)+'\nthis.save=save;',ctx);
@@ -64,6 +65,32 @@ async function formSaveTest() {
   assert.equal(created,1);
   accept=true;await ctx.save();assert.equal(confirmed,1);
   assert.equal(created,1,'retry must not create a duplicate nurse');assert.equal(updated,1);
+  assert.equal(ctx.savedData.extracurricular,'Singing, Chess');
+  assert.equal(ctx.savedData.qualification,'Special qualification');
+  assert.equal(ctx.savedData.special_training,'Custom training');
+  assert.equal(ctx.savedData.languages,'French');
+  assert.deepEqual(ctx.savedData.custom,ctx.f.custom);
+  assert.deepEqual(ctx.savedData.privileges,ctx.f.privileges);
+  assert.deepEqual(ctx.savedData.photo,ctx.f.photo);
+}
+
+async function parkedConflictTest() {
+  let local={[key]:JSON.stringify(old)},conflict=true,calls=0;
+  const w={__UNICO_SNAPSHOT__:{...local},unicoSnapshotAll:()=>({...local})};
+  const ctx={window:w,setTimeout,console,document:{createElement:()=>({setAttribute(){},style:{}}),body:{appendChild(){}}},fetch:async()=>{
+    calls++;
+    return {ok:!conflict,status:conflict?409:200,json:async()=>conflict?{ok:false,error:'Conflicting staff edit'}:{ok:true}};
+  }};
+  vm.runInNewContext(read('web-native.js'),ctx);
+  local[key]=JSON.stringify(latest);
+  assert.equal((await w.unicoNative.persist(local)).ok,false);
+  assert.equal((await w.unicoNative.persist(local)).ok,false,'parked staff cannot be reported as saved');
+  assert.equal(calls,1,'conflicts are not blindly retried');
+  conflict=false;local.unico_quality_v2='{}';
+  assert.equal((await w.unicoNative.persist(local)).conflict,true,'other saves do not confirm a blocked staff edit');
+  assert.equal(calls,2,'other modules continue saving');
+  w.unicoNative.acceptSnapshot({[key]:JSON.stringify(old)});
+  assert.equal((await w.unicoNative.persist(local)).ok,true,'an explicitly refreshed baseline can save again');
 }
 
 async function storeTest() {
@@ -103,6 +130,11 @@ async function storeTest() {
   assert.equal(store.staff.length,0,'empty server roster stays empty');
   doc.visibilityState='visible';response=latest;interval();await store.refresh();store=render();
   assert.equal(store.staff.length,2,'polling updates the rendered store');
+  storage.set(key,JSON.stringify(latest.map(row=>({...row,remarks:'Merged on server'}))));
+  events['unico:overlay-merged']({detail:{keys:[key]}});store=render();
+  assert.equal(store.staff[0].remarks,'Merged on server','server merges update the shared staff store');
+  store.update(1,{phone:'01700000000'});store=render();
+  assert.equal(store.staff[0].remarks,'Merged on server','the next local edit retains merged fields');
   const before=fetches;w.unicoCan=()=>false;await store.refresh();assert.equal(fetches,before,'no staff access makes no roster request');
 }
 
@@ -143,7 +175,7 @@ async function sharedRosterRaceTest(label,act,check) {
   assert(check(JSON.parse(server),id),label);
 }
 
-(async()=>{await bridgeTest();await storeTest();await formSaveTest();
+(async()=>{await bridgeTest();await parkedConflictTest();await storeTest();await formSaveTest();
   await sharedRosterRaceTest('a staff record created during a refresh stays saved',s=>s.create({name:'New nurse',role:'Nurse',extracurricular:'Singing'}),(rows,id)=>rows.some(r=>r.id===id&&r.extracurricular==='Singing'));
   await sharedRosterRaceTest('activities entered during a refresh stay saved',s=>{s.update(1,{extracurricular:'Dancing'});return 1;},rows=>rows[0].extracurricular==='Dancing');
   console.log('STAFF_SYNC_TEST_PASS: refresh, polling, local edits, failures, empty lists, partial saves, database confirmation and shared-roster save races');})().catch(e=>{console.error(e);process.exitCode=1;});

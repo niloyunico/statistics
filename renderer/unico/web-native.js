@@ -119,7 +119,7 @@
         // the only way out (reload) threw them all away. Park the staff key and save the rest.
         var msg = (result && result.error) || 'The staff register changed on the server.';
         var parked = Object.prototype.hasOwnProperty.call(patch.data, 'unico_staff_v3') || patch.removed.indexOf('unico_staff_v3') >= 0;
-        if (parked) conflicted.unico_staff_v3 = true;
+        if (parked) conflicted.unico_staff_v3 = msg;
         warnSaveFailed();
         if (saveBanner) saveBanner.textContent = msg + ' Refresh the staff list to continue — your other changes are still being saved.';
         if (!parked) return { ok: false, error: msg, conflict: true };
@@ -161,7 +161,12 @@
   function persist(data) {
     saveQueue = saveQueue.catch(function(){}).then(function() {
       var current = typeof window.unicoSnapshotAll === 'function' ? window.unicoSnapshotAll() : data;
-      return attemptPersist(current, 0);
+      return attemptPersist(current, 0).then(function(result) {
+        // Other modules may save while staff is parked, but a staff Save must
+        // never interpret that successful no-op as database confirmation.
+        if (conflicted.unico_staff_v3) return { ok:false, conflict:true, error:conflicted.unico_staff_v3 };
+        return result;
+      });
     });
     return saveQueue;
   }

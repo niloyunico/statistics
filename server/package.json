@@ -19,7 +19,7 @@
     "test:med": "node test/medicines.test.js",
     "test:photos": "node test/photos.test.js && node test/imagekit.test.js && node test/blob.test.js && node test/private-media.test.js",
     "test:access": "node test/access.test.js",
-    "test:staff": "node test/staff-groups-experience.test.js && node test/staff-roster.test.js && node test/staff-sync.test.js",
+    "test:staff": "node test/staff-groups-experience.test.js && node test/staff-roster.test.js && node test/staff-sync.test.js && node test/staff-merge.test.js && node test/staff-updates.test.js",
     "test:data": "node test/submissions.test.js && node test/approval-integrity.test.js && node test/submission-dashboard.test.js && node test/overlay-newest-wins.test.js && node test/field-requests.test.js && node test/user-scope.test.js",
     "test:cache": "node test/cache.test.js",
     "test:lb": "node test/loadbalancer.test.js",

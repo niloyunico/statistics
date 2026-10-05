@@ -299,6 +299,12 @@ function App(){
   } else if(route.view==='staffAll'){
     crumbs=['UNICO','Staff Management','All Staff Directory'];
     body=<ManageStaff store={staff} setRoute={setRoute} role="Nurse" group="All"/>;
+  } else if(route.view==='staffNewEntries'){
+    crumbs=['UNICO','Staff Management','New Entry Staff'];
+    body=<ManageStaff key="recentEntries" store={staff} setRoute={setRoute} role="Nurse" group="All" recentDays={15}/>;
+  } else if(route.view==='staffRecentUpdates'){
+    crumbs=['UNICO','Staff Management','Last Updated Staff Info'];
+    body=<ManageStaff key="recentUpdates" store={staff} setRoute={setRoute} role="Nurse" group="All" recentDays={15} recentKind="update"/>;
   } else if(route.view==='trainees'){
     crumbs=['UNICO','Staff Management','Trainee Nurses'];
     body=<ManageStaff store={staff} setRoute={setRoute} role="Nurse" group="Trainee"/>;
@@ -365,7 +371,7 @@ function App(){
     body=<StaffProfile store={staff} empId={route.emp} setRoute={setRoute}/>;
   } else if(route.view==='staffForm'){
     crumbs=['UNICO','Staff Management',route.emp?'Edit Staff':`Add ${route.role||'Staff'}`];
-    body=<StaffForm store={staff} empId={route.emp} setRoute={setRoute} role={route.role} designation={route.designation} depts={depts}/>;
+    body=<StaffForm key={route.emp||'new'} store={staff} empId={route.emp} setRoute={setRoute} role={route.role} designation={route.designation} depts={depts}/>;
   }
 
   if(window.unicoSession && window.unicoSession.configured() && !authed){ return <CloudLogin onLogin={()=>setAuthed(true)}/>; }

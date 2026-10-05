@@ -797,9 +797,14 @@ function StaffCompliance({store, setRoute, role='Nurse'}){
 // it, and "back" dumped you at the top of an unfiltered list. Filters + scroll are
 // remembered here (per role, module scope: survives navigation, resets on reload).
 const DIR_MEMO = {};
-function ManageStaff({store, setRoute, role, group=role}){
+function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKind='entry'}){
   const S=window.STAFF;
-  const M=DIR_MEMO[group]||{};
+  const updates=recentKind==='update';
+  const recentTitle=updates?'Last Updated Staff Info':'New Entry Staff';
+  const recentTime=updates?S.staffUpdateTime:S.staffEntryTime;
+  const memoKey=recentDays?group+'-recent-'+recentKind+'-'+recentDays:group;
+  const M=DIR_MEMO[memoKey]||{};
+  React.useEffect(()=>{ if(recentDays&&store.refresh) store.refresh(); },[recentDays,recentKind,store.refresh]);
   const [q,setQ]=React.useState(M.q||'');
   const [chip,setChip]=React.useState(M.chip||'all');
   const [dept,setDept]=React.useState(M.dept||'');
@@ -808,22 +813,23 @@ function ManageStaff({store, setRoute, role, group=role}){
   const [qual,setQual]=React.useState(M.qual||'');
   const [expB,setExpB]=React.useState(M.expB||'');
   const [training,setTraining]=React.useState(M.training||'');
-  const [sortBy,setSortBy]=React.useState(M.sortBy||'name');
+  const [sortBy,setSortBy]=React.useState(M.sortBy||(recentDays?'entry':'name'));
   const [showInactive,setShowInactive]=React.useState(!!M.showInactive);
   // Remember the filters as they change…
-  React.useEffect(()=>{ DIR_MEMO[group]=Object.assign({},DIR_MEMO[group],{q,chip,dept,desig,vacc,qual,expB,training,sortBy,showInactive}); });
+  React.useEffect(()=>{ DIR_MEMO[memoKey]=Object.assign({},DIR_MEMO[memoKey],{q,chip,dept,desig,vacc,qual,expB,training,sortBy,showInactive}); });
   // …and the scroll position, tracked live (an unmount-time read is too late: the
   // list is gone and .content has already collapsed by the time cleanup runs).
   React.useEffect(()=>{
     const el=document.querySelector('.content'); if(!el) return;
-    const saved=(DIR_MEMO[group]||{}).scroll||0;
+    const saved=(DIR_MEMO[memoKey]||{}).scroll||0;
     if(saved){ let tries=0; const restore=()=>{ el.scrollTop=saved; if(Math.abs(el.scrollTop-saved)>4&&++tries<12) requestAnimationFrame(restore); }; requestAnimationFrame(restore); }
-    const onScroll=()=>{ DIR_MEMO[group]=Object.assign({},DIR_MEMO[group],{scroll:el.scrollTop}); };
+    const onScroll=()=>{ DIR_MEMO[memoKey]=Object.assign({},DIR_MEMO[memoKey],{scroll:el.scrollTop}); };
     el.addEventListener('scroll',onScroll,{passive:true});
     return ()=>el.removeEventListener('scroll',onScroll);
   },[]);  // eslint-disable-line
   const tone= role==='PCA'?'#6a52d4':'#0090ca';
-  const all=store.staff.filter(e=>S.matchesStaffGroup(e,group));
+  const roster=recentDays?(updates?S.recentStaffUpdates:S.recentStaffEntries)(store.staff,recentDays):store.staff;
+  const all=roster.filter(e=>S.matchesStaffGroup(e,group));
   const label=({All:'All Staff',Nurse:'Nurse',Trainee:'Trainee Nurse',PCA:'PCA'})[group];
   /* Appraisal standing, merged in from the Performance module — the reason that module
      no longer keeps a staff directory of its own. Null for an account without 'perf',
@@ -881,6 +887,7 @@ function ManageStaff({store, setRoute, role, group=role}){
     return true;
   });
   const sorted=[...filtered].sort((a,b)=>{
+    if(sortBy==='entry')return recentTime(b)-recentTime(a)||(a.name||'').localeCompare(b.name||'');
     if(sortBy==='exp'){const ya=S.expYears(a),yb=S.expYears(b);
       return (yb==null?-1:yb)-(ya==null?-1:ya)||(a.name||'').localeCompare(b.name||'');}
     if(sortBy==='appraisal'){const sa=stOf(a),sb=stOf(b);
@@ -900,16 +907,18 @@ function ManageStaff({store, setRoute, role, group=role}){
   return (
     <div className="grid" style={{gap:14}}>
       <div style={{display:'flex',alignItems:'flex-end',gap:12,flexWrap:'wrap'}}>
-        <div style={{flexShrink:0}}><div style={{fontSize:22,fontWeight:800,color:'var(--ink)',letterSpacing:'-.3px',whiteSpace:'nowrap'}}>{label} Directory</div>
-          <div style={{fontSize:12,color:'var(--muted)'}}>Dedicated {label} roster{!showInactive&&all.length>active.length?` · ${all.length-active.length} inactive hidden`:''}</div></div>
+        <div style={{flexShrink:0}}><div style={{fontSize:22,fontWeight:800,color:'var(--ink)',letterSpacing:'-.3px',whiteSpace:'nowrap'}}>{recentDays?recentTitle:label+' Directory'}</div>
+          <div style={{fontSize:12,color:'var(--muted)'}}>{recentDays?`Staff records ${updates?'updated':'added'} in the last ${recentDays} days, including today · Bangladesh time`:`Dedicated ${label} roster`}{!showInactive&&all.length>active.length?` · ${all.length-active.length} inactive hidden`:''}</div></div>
         <span className="spacer" style={{flex:1}}/>
-        <RoleSwitch role={group} setRoute={setRoute} views={{All:'staffAll',Nurse:'nurses',Trainee:'trainees',PCA:'pca'}}/>
+        {!recentDays&&<RoleSwitch role={group} setRoute={setRoute} views={{All:'staffAll',Nurse:'nurses',Trainee:'trainees',PCA:'pca'}}/>}
+        {recentDays>0&&store.refresh&&<button className="btn sm" disabled={store.refreshing} onClick={()=>store.refresh()}>{store.refreshing?'Refreshing…':'Refresh'}</button>}
         <button className="btn sm" onClick={()=>setShowInactive(v=>!v)}>{showInactive?'Hide inactive':'Show inactive'}</button>
-        {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role,designation:group==='Trainee'?'Trainee Nurse':''})}><Ic d={I.plus} s={15}/>Add {group==='Trainee'?'Trainee Nurse':role}</button>}
+        {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role,designation:group==='Trainee'?'Trainee Nurse':''})}><Ic d={I.plus} s={15}/>Add {recentDays?'Staff':group==='Trainee'?'Trainee Nurse':role}</button>}
         <span className="num" style={{fontSize:12.5,color:'var(--muted)',fontWeight:600}}>{active.length} employee(s)</span>
       </div>
 
       {/* quick chips */}
+      {recentDays>0&&store.refreshError&&<div role="alert" className="card" style={{padding:'10px 14px',color:'var(--neg)'}}>{store.refreshError}</div>}
       <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
         {chips.map(([id,label])=>(
           <button key={id} onClick={()=>setChip(id)} style={{padding:'7px 14px',borderRadius:8,fontSize:12.5,fontWeight:600,cursor:'pointer',
@@ -927,7 +936,7 @@ function ManageStaff({store, setRoute, role, group=role}){
         {qualOpts.length>0&&<select style={sel} value={qual} onChange={e=>setQual(e.target.value)}><option value="">All Qualifications</option>{qualOpts.map(d=><option key={d}>{d}</option>)}</select>}
         <select style={sel} value={expB} onChange={e=>setExpB(e.target.value)}><option value="">All Experience</option>{['<1','1-3','3-5','5-10','10+'].map(x=><option key={x} value={x}>{x} yrs</option>)}</select>
         <select style={sel} value={training} onChange={e=>setTraining(e.target.value)}><option value="">Any Training</option><option value="has">Has training</option><option value="none">No training</option></select>
-        <select style={sel} value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="name">Sort: Name</option><option value="exp">Sort: Experience</option><option value="doj">Sort: Newest hire</option><option value="dept">Sort: Department</option>{apprOn&&<option value="appraisal">Sort: Appraisal score</option>}</select>
+        <select style={sel} value={sortBy} onChange={e=>setSortBy(e.target.value)}>{recentDays>0&&<option value="entry">Sort: {updates?'Latest update':'Newest entry'}</option>}<option value="name">Sort: Name</option><option value="exp">Sort: Experience</option><option value="doj">Sort: Newest hire</option><option value="dept">Sort: Department</option>{apprOn&&<option value="appraisal">Sort: Appraisal score</option>}</select>
         <button className="btn pri sm" style={{opacity:anyFilter?1:.5}} onClick={()=>{setQ('');setDept('');setDesig('');setVacc('');setQual('');setExpB('');setTraining('');setChip('all');}}>Clear filters</button>
         <ExportMenu rows={sorted} role={label}/>
       </div>
@@ -936,7 +945,7 @@ function ManageStaff({store, setRoute, role, group=role}){
       <div className="card" style={{overflow:'hidden'}}>
         <div style={{overflowX:'auto'}}>
           <table className="tbl">
-            <thead><tr><th style={{textAlign:'center',width:34}}>★</th><th style={{textAlign:'left'}}>Emp ID</th><th style={{textAlign:'left'}}>Name</th><th style={{textAlign:'left'}}>Designation</th><th style={{textAlign:'left'}}>Department</th><th>Experience</th><th style={{textAlign:'left'}}>Vaccination</th>{apprOn&&<th style={{textAlign:'left'}}>Appraisal</th>}<th style={{textAlign:'left'}}>Phone</th><th style={{textAlign:'right'}}>Manage</th></tr></thead>
+            <thead><tr><th style={{textAlign:'center',width:34}}>★</th><th style={{textAlign:'left'}}>Emp ID</th><th style={{textAlign:'left'}}>Name</th>{recentDays>0&&<th style={{textAlign:'left'}}>{updates?'Last Updated':'Entry Date'}</th>}<th style={{textAlign:'left'}}>Designation</th><th style={{textAlign:'left'}}>Department</th><th>Experience</th><th style={{textAlign:'left'}}>Vaccination</th>{apprOn&&<th style={{textAlign:'left'}}>Appraisal</th>}<th style={{textAlign:'left'}}>Phone</th><th style={{textAlign:'right'}}>Manage</th></tr></thead>
             <tbody>
               {sorted.map(e=>(
                 <tr key={e.id} style={{opacity:e.is_active?1:.55}}>
@@ -950,6 +959,7 @@ function ManageStaff({store, setRoute, role, group=role}){
                       return <span title={(ex?'BNMC licence EXPIRED':'BNMC verified')+(p.regNo?' · Reg '+p.regNo:'')+' · register checked '+(String(v.at||'').slice(0,10)||'—')}
                         style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:14,height:14,borderRadius:'50%',background:c,flex:'0 0 auto',fontSize:10,fontWeight:800,color:'#fff',lineHeight:1}}>
                         {ex?'!':<Ic d={I.check} s={9} c="#fff"/>}</span>;})():null}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
+                  {recentDays>0&&<td className="num" style={{textAlign:'left',whiteSpace:'nowrap'}}>{updates?new Date(recentTime(e)).toLocaleString('en-GB',{timeZone:'Asia/Dhaka',dateStyle:'short',timeStyle:'short'}):new Date(recentTime(e)).toLocaleDateString('en-GB',{timeZone:'Asia/Dhaka'})}</td>}
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDesig(e.designation)||'—'}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
@@ -982,7 +992,7 @@ function ManageStaff({store, setRoute, role, group=role}){
               ))}
             </tbody>
           </table>
-          {sorted.length===0&&<div style={{textAlign:'center',color:'var(--faint)',padding:'34px',fontSize:13}}>No {role} match these filters.</div>}
+          {sorted.length===0&&<div style={{textAlign:'center',color:'var(--faint)',padding:'34px',fontSize:13}}>{recentDays?`No staff ${updates?'updates':'entries'} in the last ${recentDays} days match these filters.`:`No ${role} match these filters.`}{updates&&<div style={{marginTop:8}}>Saved staff information changes appear here automatically.</div>}</div>}
         </div>
       </div>
     </div>

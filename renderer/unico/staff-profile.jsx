@@ -3080,6 +3080,11 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
       previous_experience: rowsHave
         ? cleanEntries.map(x=>`${[x.org||'Prior role',(x.dept||'').trim()].filter(Boolean).join(' — ')} (${S.experienceUsesDates(x)?x.fromDate+' to '+x.toDate+' · ':''}${S.fmtYM(entYears(x))})`).join('; ')
         : (f.previous_experience||'')};
+    // Save text still sitting in an Add-another input as part of this record.
+    for(const [key,draft] of Object.entries({qualification:customQ,special_training:customT,extracurricular:customX,languages:customL})){
+      const value=(draft||'').trim();
+      if(value) data[key]=[...new Set([...String(data[key]||'').split(',').map(x=>x.trim()).filter(Boolean),value])].join(', ');
+    }
     // A failed write must NOT look like a success: only the confirmation path routes away.
     saveLock.current=true; setSaving(true);
     try{

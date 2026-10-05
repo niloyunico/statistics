@@ -64,7 +64,7 @@ const UNICO_MODULES = [
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
   datacol:['dcReview','dcPatient','dcQuality','input','dcSettings','dcShare','dcFields','dcAnalytics'],
-  staff:  ['staffHome','staffAll','traineeHome','trainees','nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests'],
+  staff:  ['staffHome','staffAll','staffNewEntries','staffRecentUpdates','traineeHome','trainees','nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
@@ -229,6 +229,8 @@ function unicoSidebarGroups(moduleId){
     // what the live Sidebar actually renders.
     {sec:'Staff Management', items:[{id:'staffHome',label:'Dashboard',icon:I.grid,match:['staffHome','nurseHome','pcaHome']},
       {id:'staffAll',label:'Directory',icon:I.layers,match:['staffAll','nurses','pca']},
+      {id:'staffNewEntries',label:'New Entry Staff',icon:I.plus},
+      {id:'staffRecentUpdates',label:'Last Updated Staff Info',icon:I.edit},
       {id:'traineeHome',label:'Trainee Nurses',icon:I.steth,match:['traineeHome','trainees']},
       {id:'nurseCompliance',label:'Compliance',icon:I.heart,match:['nurseCompliance','pcaCompliance']},
       {id:'staffPrevious',label:'Previous Staff',icon:I.doc},
@@ -476,6 +478,8 @@ function unicoWorkspaceSub(view){
   if(mod==='staff' || mod==='perf' || mod==='roster') return [
     { label:'Dashboard',      view:'staffHome',       mod:'staff', match:['staffHome','nurseHome','pcaHome'] },
     { label:'Directory',      view:'staffAll',        mod:'staff', match:['staffAll','nurses','pca'] },
+    { label:'New Entry Staff', view:'staffNewEntries', mod:'staff' },
+    { label:'Last Updated Staff Info', view:'staffRecentUpdates', mod:'staff' },
     { label:'Trainee Nurses', view:'traineeHome',     mod:'staff', match:['traineeHome','trainees'] },
     { label:'Compliance',     view:'nurseCompliance', mod:'staff', match:['nurseCompliance','pcaCompliance'] },
     { label:'Previous Staff', view:'staffPrevious',   mod:'staff' },

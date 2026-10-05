@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=72ff58cfba","reports":"/dist/reports.chunk.js?v=ec2b08c755","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=450a08877b","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=c3ef997bda","reports":"/dist/reports.chunk.js?v=ec2b08c755","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=450a08877b","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -2152,6 +2152,27 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   function recentJoiners(list,n=6){
     return list.filter(e=>e.is_active&&e.doj).sort((a,b)=>b.doj.localeCompare(a.doj)).slice(0,n);
   }
+  function staffTimestamp(value){
+    if(value==null || value==='') return NaN;
+    return typeof value==='number'||/^\d+$/.test(String(value)) ? Number(value) : Date.parse(value);
+  }
+  function staffEntryTime(e){ return staffTimestamp(e&&(e.created_at||e.import_source&&e.import_source.imported_at)); }
+  function staffUpdateTime(e){ return staffTimestamp(e&&e.updated_at); }
+  // Last N calendar days, including today, in the hospital's Bangladesh timezone.
+  function recentStaffRecords(list,days,now,timeOf){
+    const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Dhaka',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(now));
+    const part=type=>parts.find(p=>p.type===type).value;
+    const today=part('year')+'-'+part('month')+'-'+part('day');
+    const startOfToday=Date.parse(today+'T00:00:00+06:00');
+    const cutoff=startOfToday-(days-1)*86400000;
+    // Save timestamps come from the server, whose clock may be ahead of this
+    // device. Include the whole current calendar day so a confirmed save is
+    // visible immediately; dates from tomorrow onward remain excluded.
+    const endOfToday=startOfToday+86400000;
+    return list.filter(e=>{const at=timeOf(e);return Number.isFinite(at)&&at>=cutoff&&at<endOfToday;});
+  }
+  function recentStaffEntries(list,days=15,now=Date.now()){ return recentStaffRecords(list,days,now,staffEntryTime); }
+  function recentStaffUpdates(list,days=15,now=Date.now()){ return recentStaffRecords(list,days,now,staffUpdateTime); }
   function compliance(list){
     const a=list.filter(e=>e.is_active);
     const missing_vaccination=a.filter(e=>["Not Completed","Unknown","1 dose"].includes(e.hepatitis_b_vaccination));
@@ -2340,6 +2361,12 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
   const shared={staff:null,version:0,busy:null,refreshing:false,error:'',subs:new Set(),mounted:0,timer:null};
   const rosterNow=()=>{ if(shared.staff===null) shared.staff=load()||realSeed(); return shared.staff; };
   const notify=()=>shared.subs.forEach(fn=>{ try{ fn(); }catch(e){} });
+  window.addEventListener('unico:overlay-merged',e=>{
+    if(!e.detail || !Array.isArray(e.detail.keys) || !e.detail.keys.includes(KEY)) return;
+    const saved=load();
+    if(!Array.isArray(saved)) return;
+    shared.version++; shared.staff=saved; notify();
+  });
   function setStaff(change){
     const next=typeof change==='function'?change(rosterNow()):change;
     // Persist local edits immediately, so a Refresh in the same tick can flush
@@ -2432,7 +2459,7 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
     deptGroupsFor,setDeptGroups,
     fieldOptList,addFieldOpt,removeFieldOpt,
     customFields,addCustomField,removeCustomField,renameCustomField,addCustomFieldOption,removeCustomFieldOption,
-    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,compliance,anniversaries,birthdays,byRole,uniqueVals,staffGroupOf,matchesStaffGroup,staffCounts,experienceUsesDates,experienceDateError,experienceYearsOf};
+    seedStaff,kpis,countBy,vaccinationBreakdown,experienceBuckets,expYears,expLabel,priorYearsOf,unicoYearsOf,fmtYM,joinersByYear,recentJoiners,staffEntryTime,recentStaffEntries,staffUpdateTime,recentStaffUpdates,compliance,anniversaries,birthdays,byRole,uniqueVals,staffGroupOf,matchesStaffGroup,staffCounts,experienceUsesDates,experienceDateError,experienceYearsOf};
   window.useStaffStore=useStaffStore;
 })();
 
@@ -9873,7 +9900,7 @@ const UNICO_MODULES = [{
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
   datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
-  staff: ['staffHome', 'staffAll', 'traineeHome', 'trainees', 'nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests'],
+  staff: ['staffHome', 'staffAll', 'staffNewEntries', 'staffRecentUpdates', 'traineeHome', 'trainees', 'nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
   supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport'],
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
@@ -10049,6 +10076,14 @@ function unicoSidebarGroups(moduleId) {
       label: 'Directory',
       icon: I.layers,
       match: ['staffAll', 'nurses', 'pca']
+    }, {
+      id: 'staffNewEntries',
+      label: 'New Entry Staff',
+      icon: I.plus
+    }, {
+      id: 'staffRecentUpdates',
+      label: 'Last Updated Staff Info',
+      icon: I.edit
     }, {
       id: 'traineeHome',
       label: 'Trainee Nurses',
@@ -10464,6 +10499,14 @@ function unicoWorkspaceSub(view) {
     view: 'staffAll',
     mod: 'staff',
     match: ['staffAll', 'nurses', 'pca']
+  }, {
+    label: 'New Entry Staff',
+    view: 'staffNewEntries',
+    mod: 'staff'
+  }, {
+    label: 'Last Updated Staff Info',
+    view: 'staffRecentUpdates',
+    mod: 'staff'
   }, {
     label: 'Trainee Nurses',
     view: 'traineeHome',
@@ -20642,10 +20685,19 @@ function ManageStaff({
   store,
   setRoute,
   role,
-  group = role
+  group = role,
+  recentDays = 0,
+  recentKind = 'entry'
 }) {
   const S = window.STAFF;
-  const M = DIR_MEMO[group] || {};
+  const updates = recentKind === 'update';
+  const recentTitle = updates ? 'Last Updated Staff Info' : 'New Entry Staff';
+  const recentTime = updates ? S.staffUpdateTime : S.staffEntryTime;
+  const memoKey = recentDays ? group + '-recent-' + recentKind + '-' + recentDays : group;
+  const M = DIR_MEMO[memoKey] || {};
+  React.useEffect(() => {
+    if (recentDays && store.refresh) store.refresh();
+  }, [recentDays, recentKind, store.refresh]);
   const [q, setQ] = React.useState(M.q || '');
   const [chip, setChip] = React.useState(M.chip || 'all');
   const [dept, setDept] = React.useState(M.dept || '');
@@ -20654,10 +20706,10 @@ function ManageStaff({
   const [qual, setQual] = React.useState(M.qual || '');
   const [expB, setExpB] = React.useState(M.expB || '');
   const [training, setTraining] = React.useState(M.training || '');
-  const [sortBy, setSortBy] = React.useState(M.sortBy || 'name');
+  const [sortBy, setSortBy] = React.useState(M.sortBy || (recentDays ? 'entry' : 'name'));
   const [showInactive, setShowInactive] = React.useState(!!M.showInactive);
   React.useEffect(() => {
-    DIR_MEMO[group] = Object.assign({}, DIR_MEMO[group], {
+    DIR_MEMO[memoKey] = Object.assign({}, DIR_MEMO[memoKey], {
       q,
       chip,
       dept,
@@ -20673,7 +20725,7 @@ function ManageStaff({
   React.useEffect(() => {
     const el = document.querySelector('.content');
     if (!el) return;
-    const saved = (DIR_MEMO[group] || {}).scroll || 0;
+    const saved = (DIR_MEMO[memoKey] || {}).scroll || 0;
     if (saved) {
       let tries = 0;
       const restore = () => {
@@ -20683,7 +20735,7 @@ function ManageStaff({
       requestAnimationFrame(restore);
     }
     const onScroll = () => {
-      DIR_MEMO[group] = Object.assign({}, DIR_MEMO[group], {
+      DIR_MEMO[memoKey] = Object.assign({}, DIR_MEMO[memoKey], {
         scroll: el.scrollTop
       });
     };
@@ -20693,7 +20745,8 @@ function ManageStaff({
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
   const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
-  const all = store.staff.filter(e => S.matchesStaffGroup(e, group));
+  const roster = recentDays ? (updates ? S.recentStaffUpdates : S.recentStaffEntries)(store.staff, recentDays) : store.staff;
+  const all = roster.filter(e => S.matchesStaffGroup(e, group));
   const label = {
     All: 'All Staff',
     Nurse: 'Nurse',
@@ -20775,6 +20828,7 @@ function ManageStaff({
     return true;
   });
   const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'entry') return recentTime(b) - recentTime(a) || (a.name || '').localeCompare(b.name || '');
     if (sortBy === 'exp') {
       const ya = S.expYears(a),
         yb = S.expYears(b);
@@ -20828,17 +20882,17 @@ function ManageStaff({
       letterSpacing: '-.3px',
       whiteSpace: 'nowrap'
     }
-  }, label, " Directory"), React.createElement("div", {
+  }, recentDays ? recentTitle : label + ' Directory'), React.createElement("div", {
     style: {
       fontSize: 12,
       color: 'var(--muted)'
     }
-  }, "Dedicated ", label, " roster", !showInactive && all.length > active.length ? ` · ${all.length - active.length} inactive hidden` : '')), React.createElement("span", {
+  }, recentDays ? `Staff records ${updates ? 'updated' : 'added'} in the last ${recentDays} days, including today · Bangladesh time` : `Dedicated ${label} roster`, !showInactive && all.length > active.length ? ` · ${all.length - active.length} inactive hidden` : '')), React.createElement("span", {
     className: "spacer",
     style: {
       flex: 1
     }
-  }), React.createElement(RoleSwitch, {
+  }), !recentDays && React.createElement(RoleSwitch, {
     role: group,
     setRoute: setRoute,
     views: {
@@ -20847,7 +20901,11 @@ function ManageStaff({
       Trainee: 'trainees',
       PCA: 'pca'
     }
-  }), React.createElement("button", {
+  }), recentDays > 0 && store.refresh && React.createElement("button", {
+    className: "btn sm",
+    disabled: store.refreshing,
+    onClick: () => store.refresh()
+  }, store.refreshing ? 'Refreshing…' : 'Refresh'), React.createElement("button", {
     className: "btn sm",
     onClick: () => setShowInactive(v => !v)
   }, showInactive ? 'Hide inactive' : 'Show inactive'), (!window.unicoCan || window.unicoCan('staff', 'add')) && React.createElement("button", {
@@ -20864,14 +20922,21 @@ function ManageStaff({
   }, React.createElement(Ic, {
     d: I.plus,
     s: 15
-  }), "Add ", group === 'Trainee' ? 'Trainee Nurse' : role), React.createElement("span", {
+  }), "Add ", recentDays ? 'Staff' : group === 'Trainee' ? 'Trainee Nurse' : role), React.createElement("span", {
     className: "num",
     style: {
       fontSize: 12.5,
       color: 'var(--muted)',
       fontWeight: 600
     }
-  }, active.length, " employee(s)")), React.createElement("div", {
+  }, active.length, " employee(s)")), recentDays > 0 && store.refreshError && React.createElement("div", {
+    role: "alert",
+    className: "card",
+    style: {
+      padding: '10px 14px',
+      color: 'var(--neg)'
+    }
+  }, store.refreshError), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
@@ -20988,7 +21053,9 @@ function ManageStaff({
     style: sel,
     value: sortBy,
     onChange: e => setSortBy(e.target.value)
-  }, React.createElement("option", {
+  }, recentDays > 0 && React.createElement("option", {
+    value: "entry"
+  }, "Sort: ", updates ? 'Latest update' : 'Newest entry'), React.createElement("option", {
     value: "name"
   }, "Sort: Name"), React.createElement("option", {
     value: "exp"
@@ -21040,7 +21107,11 @@ function ManageStaff({
     style: {
       textAlign: 'left'
     }
-  }, "Name"), React.createElement("th", {
+  }, "Name"), recentDays > 0 && React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, updates ? 'Last Updated' : 'Entry Date'), React.createElement("th", {
     style: {
       textAlign: 'left'
     }
@@ -21152,7 +21223,19 @@ function ManageStaff({
       color: 'var(--faint)',
       fontFamily: "'IBM Plex Sans'"
     }
-  }, e.qualification)))), React.createElement("td", {
+  }, e.qualification)))), recentDays > 0 && React.createElement("td", {
+    className: "num",
+    style: {
+      textAlign: 'left',
+      whiteSpace: 'nowrap'
+    }
+  }, updates ? new Date(recentTime(e)).toLocaleString('en-GB', {
+    timeZone: 'Asia/Dhaka',
+    dateStyle: 'short',
+    timeStyle: 'short'
+  }) : new Date(recentTime(e)).toLocaleDateString('en-GB', {
+    timeZone: 'Asia/Dhaka'
+  })), React.createElement("td", {
     style: {
       textAlign: 'left',
       fontFamily: "'IBM Plex Sans'"
@@ -21291,7 +21374,11 @@ function ManageStaff({
       padding: '34px',
       fontSize: 13
     }
-  }, "No ", role, " match these filters."))));
+  }, recentDays ? `No staff ${updates ? 'updates' : 'entries'} in the last ${recentDays} days match these filters.` : `No ${role} match these filters.`, updates && React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, "Saved staff information changes appear here automatically.")))));
 }
 function PreviousStaff({
   store,
@@ -24901,6 +24988,27 @@ function App() {
       role: "Nurse",
       group: "All"
     });
+  } else if (route.view === 'staffNewEntries') {
+    crumbs = ['UNICO', 'Staff Management', 'New Entry Staff'];
+    body = React.createElement(ManageStaff, {
+      key: "recentEntries",
+      store: staff,
+      setRoute: setRoute,
+      role: "Nurse",
+      group: "All",
+      recentDays: 15
+    });
+  } else if (route.view === 'staffRecentUpdates') {
+    crumbs = ['UNICO', 'Staff Management', 'Last Updated Staff Info'];
+    body = React.createElement(ManageStaff, {
+      key: "recentUpdates",
+      store: staff,
+      setRoute: setRoute,
+      role: "Nurse",
+      group: "All",
+      recentDays: 15,
+      recentKind: "update"
+    });
   } else if (route.view === 'trainees') {
     crumbs = ['UNICO', 'Staff Management', 'Trainee Nurses'];
     body = React.createElement(ManageStaff, {
@@ -25044,6 +25152,7 @@ function App() {
   } else if (route.view === 'staffForm') {
     crumbs = ['UNICO', 'Staff Management', route.emp ? 'Edit Staff' : `Add ${route.role || 'Staff'}`];
     body = React.createElement(StaffForm, {
+      key: route.emp || 'new',
       store: staff,
       empId: route.emp,
       setRoute: setRoute,

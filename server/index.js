@@ -291,6 +291,7 @@ app.put('/api/data', requireAuth, access.attach, async (req, res) => {
         throw staffMerge.conflict('Please reload the app before saving staff. This older session cannot safely update the register.');
       }
       merged[staffKey] = staffMerge.mergeStaffChanges(req.body.staffBase, merged[staffKey], ((current && current.data) || {})[staffKey]);
+      merged[staffKey] = staffMerge.stampStaffUpdates(((current && current.data) || {})[staffKey], merged[staffKey]);
     }
     // Pass the baseline we just read so only the keys that changed are written — see
     // setAppData(). Without it every save rewrote the whole blob and the last writer won.
@@ -303,6 +304,13 @@ app.put('/api/data', requireAuth, access.attach, async (req, res) => {
     const stored = (current && current.data) || {};
     const bases = (req.body && req.body.bases && typeof req.body.bases === 'object' && !Array.isArray(req.body.bases)) ? req.body.bases : null;
     const mergedBack = {};
+    // Return the actual saved register after a three-way merge. Otherwise the
+    // browser acknowledges its stale sent copy and later edits conflict with
+    // changes that were already successfully merged into the database.
+    if (Object.prototype.hasOwnProperty.call(data, staffKey) && merged[staffKey] !== data[staffKey]) {
+      const scoped = await access.scopeSnapshot(req.access, { [staffKey]: merged[staffKey] });
+      if (scoped[staffKey] !== data[staffKey]) mergedBack[staffKey] = scoped[staffKey];
+    }
     if (bases) {
       const { mergeKey } = require('./appdata-merge');
       Object.keys(merged).forEach((k) => {
